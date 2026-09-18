@@ -99,8 +99,14 @@ func resolveReconcilerFor(t *testing.T, item categorytaxonomy.Product, categorie
 	return NewReconciler(cache.AsReadOnly(productCache), cache.AsReadOnly(categoryCache), statusClient, &fakeCompletionClient{err: errors.New("must not call")})
 }
 
+// decodeResolvedCategory decodes patch.Resolved, treating a nil/empty raw
+// value (patch.Resolved left unset — no category to report and no stale
+// cached payload to clear) the same as an explicit {"category":null}.
 func decodeResolvedCategory(t *testing.T, raw json.RawMessage) resolvedCategory {
 	t.Helper()
+	if len(raw) == 0 {
+		return resolvedCategory{}
+	}
 	var out resolvedCategory
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("decode resolved.category: %v", err)
@@ -280,6 +286,113 @@ func TestReconcileActive_TerminatingProductNeverWritesCategoryStatus(t *testing.
 	if len(statusClient.patches) != 0 {
 		t.Fatalf("patches = %d, want 0 (deletion path must not write CategoryResolved/Ready)", len(statusClient.patches))
 	}
+}
+
+// TestReconcileActive_CategoryNotFoundSteadyStateIsNoOp is a regression test
+// for a P1 finding on PR #426: reconciling a Product that is already
+// converged at CategoryResolved=False/CategoryNotFound (patch.Resolved
+// previously left unset per the fix above, current.Status.Resolved nil to
+// match) must be a true no-op — not rewrite status (and bump
+// resourceVersion) on every single reconcile forever.
+func TestReconcileActive_CategoryNotFoundSteadyStateIsNoOp(t *testing.T) {
+	statusClient := &fakeStatusClient{}
+	now := time.Now()
+	item := categorytaxonomy.Product{
+		Namespace: "acme", Name: "widget", ResourceVersion: "1", Generation: 1,
+		CategoryRefName: "gadgets",
+		Status: status.ResourceStatus{
+			ResourceVersion:    "1",
+			ObservedGeneration: 1,
+			Conditions: []*status.Condition{
+				admissionAcceptedCondition(),
+				{Type: "CategoryResolved", Status: statusFalse, Reason: "CategoryNotFound", Message: "spec.categoryRef does not resolve to an existing CategoryTaxonomy in this namespace.", ObservedGeneration: 1, LastTransitionTime: now},
+				{Type: "Ready", Status: statusFalse, Reason: "CategoryUnresolved", Message: "AdmissionAccepted and CategoryResolved must both be True.", ObservedGeneration: 1, LastTransitionTime: now},
+			},
+			Resolved: nil,
+		},
+	}
+	r := resolveReconcilerFor(t, item, nil, statusClient)
+
+	result := r.Reconcile(context.Background(), productKey())
+	if _, ok := result.(types.RequeueAfter); !ok {
+		t.Fatalf("result = %T, want requeue (FR-011 bounded retry still applies)", result)
+	}
+	if len(statusClient.patches) != 0 {
+		t.Fatalf("patches = %d, want 0 (already-converged CategoryNotFound must be a no-op, not rewritten every reconcile)", len(statusClient.patches))
+	}
+}
+
+// TestReconcileActive_NoCategoryRefSteadyStateIsNoOp mirrors the above for
+// the no-categoryRef-at-all case.
+func TestReconcileActive_NoCategoryRefSteadyStateIsNoOp(t *testing.T) {
+	statusClient := &fakeStatusClient{}
+	now := time.Now()
+	item := categorytaxonomy.Product{
+		Namespace: "acme", Name: "widget", ResourceVersion: "1", Generation: 1,
+		CategoryRefName: "",
+		Status: status.ResourceStatus{
+			ResourceVersion:    "1",
+			ObservedGeneration: 1,
+			Conditions: []*status.Condition{
+				admissionAcceptedCondition(),
+				{Type: "CategoryResolved", Status: statusTrue, Reason: "NoCategoryReference", Message: "spec.categoryRef is not set; the Product is uncategorized.", ObservedGeneration: 1, LastTransitionTime: now},
+				{Type: "Ready", Status: statusTrue, Reason: "ProductReady", Message: "AdmissionAccepted and CategoryResolved are both True.", ObservedGeneration: 1, LastTransitionTime: now},
+			},
+			Resolved: nil,
+		},
+	}
+	r := resolveReconcilerFor(t, item, nil, statusClient)
+
+	result := r.Reconcile(context.Background(), productKey())
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("result = %T, want success", result)
+	}
+	if len(statusClient.patches) != 0 {
+		t.Fatalf("patches = %d, want 0 (already-converged no-categoryRef must be a no-op, not rewritten every reconcile)", len(statusClient.patches))
+	}
+}
+
+// listPanicsCategoryCache implements cache.CacheAccessor[CategoryTaxonomy]
+// with a working Get but a List that panics — structural proof that a code
+// path never falls back to a full-cache scan, rather than just a
+// correctness check that would pass identically against the old O(n) scan.
+type listPanicsCategoryCache struct {
+	entries map[types.WorkItemKey]categorytaxonomy.CategoryTaxonomy
+}
+
+func (c listPanicsCategoryCache) Get(key types.WorkItemKey) (categorytaxonomy.CategoryTaxonomy, bool) {
+	v, ok := c.entries[key]
+	return v, ok
+}
+
+func (listPanicsCategoryCache) List() []categorytaxonomy.CategoryTaxonomy {
+	panic("resolveCategory must never scan the CategoryTaxonomy cache (PR-003)")
+}
+
+// TestResolveCategory_NeverScansCategoryCache proves PR-003 for a P1 finding
+// on PR #426: resolution must be an O(1) keyed lookup, never a scan of the
+// CategoryTaxonomy cache — at 5,000,000 Products x categories, a per-Product
+// scan is the exact capacity violation PR-003 forbids.
+func TestResolveCategory_NeverScansCategoryCache(t *testing.T) {
+	statusClient := &fakeStatusClient{}
+	key := types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: "acme", Name: "laptops"}
+	categoryCache := listPanicsCategoryCache{entries: map[types.WorkItemKey]categorytaxonomy.CategoryTaxonomy{
+		key: {Namespace: "acme", Name: "laptops", UID: "Q2F0ZWdvcnk6MQ=="},
+	}}
+	productCache := cache.New[categorytaxonomy.Product]()
+	productCache.Set(productKey(), categorytaxonomy.Product{
+		Namespace: "acme", Name: "widget", ResourceVersion: "1", Generation: 1,
+		CategoryRefName: "laptops",
+		Status:          status.ResourceStatus{ResourceVersion: "1", Conditions: []*status.Condition{admissionAcceptedCondition()}},
+	})
+	r := NewReconciler(cache.AsReadOnly(productCache), categoryCache, statusClient, &fakeCompletionClient{err: errors.New("must not call")})
+
+	result := r.Reconcile(context.Background(), productKey())
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("result = %T, want success", result)
+	}
+	patch := statusClient.patches[0]
+	assertCondition(t, patch.Conditions, "CategoryResolved", statusTrue, "CategoryFound")
 }
 
 func assertCondition(t *testing.T, conditions []*status.Condition, conditionType, wantStatus, wantReason string) {

@@ -111,11 +111,21 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 		ObservedGeneration: &generation,
 		Conditions:         conditions,
 	}
-	resolvedJSON, err := json.Marshal(resolvedCategory{Category: resolved})
-	if err != nil {
-		return types.ResultTransient(fmt.Errorf("product: marshal resolved status: %w", err))
+	// Leave patch.Resolved as Go nil when there is nothing to report and the
+	// cache doesn't hold a stale resolved payload either — the list/watch
+	// conversion (graphql_listwatcher.go) leaves current.Status.Resolved nil
+	// whenever resolved.category is absent, never a marshaled `{}`. Without
+	// this, an uncategorized or unresolved Product would never satisfy
+	// IsNoOp's Resolved comparison (a freshly marshaled `{}` never equals a
+	// nil cached value), causing every such Product to be rewritten on every
+	// reconcile forever instead of settling once its conditions persist.
+	if resolved != nil || current.Status.Resolved != nil {
+		resolvedJSON, err := json.Marshal(resolvedCategory{Category: resolved})
+		if err != nil {
+			return types.ResultTransient(fmt.Errorf("product: marshal resolved status: %w", err))
+		}
+		patch.Resolved = resolvedJSON
 	}
-	patch.Resolved = resolvedJSON
 
 	if !patch.IsNoOp(current.Status) {
 		if err := r.statusClient.Apply(ctx, key, patch); err != nil {
@@ -141,29 +151,34 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 }
 
 // resolveCategory looks up current.CategoryRefName in the CategoryTaxonomy
-// cache, scoped to current.Namespace. A match counts as found only when it
-// is not itself Terminating (no DeletionTimestamp, no foreground-deletion
-// finalizer) — research.md R8's Terminating-as-not-found rule, which is
-// what makes DecoupleCategoryProducts' transient CategoryDeleted reason
-// converge to CategoryNotFound instead of flapping back through True.
+// cache via its work-item key, scoped to current.Namespace — an O(1) lookup,
+// never a scan of the cache (PR-003: resolution must be a bounded, indexed
+// lookup per Product, not proportional to Products x Categories). A match
+// counts as found only when it is not itself Terminating (no
+// DeletionTimestamp, no foreground-deletion finalizer) — research.md R8's
+// Terminating-as-not-found rule, which is what makes
+// DecoupleCategoryProducts' transient CategoryDeleted reason converge to
+// CategoryNotFound instead of flapping back through True.
 func (r *Reconciler) resolveCategory(current categorytaxonomy.Product) (found bool, ref *resolvedCategoryRef) {
 	if current.CategoryRefName == "" {
 		return false, nil
 	}
-	for _, candidate := range r.categoryCache.List() {
-		if candidate.Namespace != current.Namespace || candidate.Name != current.CategoryRefName {
-			continue
-		}
-		if candidate.DeletionTimestamp != nil || slices.Contains(candidate.Finalizers, foregroundDeletionFinalizer) {
-			return false, nil
-		}
-		// candidate.UID is already the Relay-encoded id: it is populated
-		// straight from the metadata.uid GraphQL field, which every kind's
-		// resolver already encodes API-side. This process has no access to
-		// that encoding scheme and must never attempt to re-derive it.
-		return true, &resolvedCategoryRef{Name: candidate.Name, UID: candidate.UID}
+	candidate, ok := r.categoryCache.Get(types.WorkItemKey{
+		Kind:      "CategoryTaxonomy",
+		Namespace: current.Namespace,
+		Name:      current.CategoryRefName,
+	})
+	if !ok {
+		return false, nil
 	}
-	return false, nil
+	if candidate.DeletionTimestamp != nil || slices.Contains(candidate.Finalizers, foregroundDeletionFinalizer) {
+		return false, nil
+	}
+	// candidate.UID is already the Relay-encoded id: it is populated
+	// straight from the metadata.uid GraphQL field, which every kind's
+	// resolver already encodes API-side. This process has no access to
+	// that encoding scheme and must never attempt to re-derive it.
+	return true, &resolvedCategoryRef{Name: candidate.Name, UID: candidate.UID}
 }
 
 // mergeCategoryConditions builds fresh CategoryResolved/Ready conditions and
