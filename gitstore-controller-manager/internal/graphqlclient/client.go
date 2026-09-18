@@ -116,14 +116,17 @@ func (c *Client) do(ctx context.Context, doc string, vars map[string]any, out an
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode >= 300 {
-		// Consume bounded error bodies so net/http can reuse the connection.
-		// Rate-limit bursts otherwise leave thousands of short-lived sockets in
-		// TIME_WAIT and can exhaust a controller replica's ephemeral port range.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		// Read (rather than discard) a bounded error body: it still fully
+		// drains the response so net/http can reuse the connection (rate-limit
+		// bursts otherwise leave thousands of short-lived sockets in TIME_WAIT
+		// and can exhaust a controller replica's ephemeral port range), but
+		// keeps the body available in the error instead of silently losing
+		// diagnostic detail like a GraphQL schema-validation message.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		if resp.StatusCode == http.StatusTooManyRequests {
 			return fmt.Errorf("%w: HTTP status %d", types.ErrRateLimited, resp.StatusCode)
 		}
-		return fmt.Errorf("graphqlclient: unexpected HTTP status %d", resp.StatusCode)
+		return fmt.Errorf("graphqlclient: unexpected HTTP status %d: %s", resp.StatusCode, body)
 	}
 
 	var gr gqlResponse
