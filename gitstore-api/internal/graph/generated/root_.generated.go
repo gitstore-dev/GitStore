@@ -377,6 +377,7 @@ type ComplexityRoot struct {
 		UpdateCategoryStatus               func(childComplexity int, input model.UpdateCategoryStatusInput) int
 		UpdateCollection                   func(childComplexity int, input model.UpdateCollectionInput) int
 		UpdateNamespace                    func(childComplexity int, input model.UpdateNamespaceInput) int
+		UpdateNamespaceStatus              func(childComplexity int, input model.UpdateNamespaceStatusInput) int
 		UpdateProduct                      func(childComplexity int, input model.UpdateProductInput) int
 		UpdateProductStatus                func(childComplexity int, input model.UpdateProductStatusInput) int
 		UpdateRepository                   func(childComplexity int, input model.UpdateRepositoryInput) int
@@ -846,6 +847,10 @@ type ComplexityRoot struct {
 	}
 
 	UpdateNamespacePayload struct {
+		Namespace func(childComplexity int) int
+	}
+
+	UpdateNamespaceStatusPayload struct {
 		Namespace func(childComplexity int) int
 	}
 
@@ -2324,6 +2329,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.UpdateNamespace(childComplexity, args["input"].(model.UpdateNamespaceInput)), true
+
+	case "Mutation.updateNamespaceStatus":
+		if e.ComplexityRoot.Mutation.UpdateNamespaceStatus == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateNamespaceStatus_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateNamespaceStatus(childComplexity, args["input"].(model.UpdateNamespaceStatusInput)), true
 
 	case "Mutation.updateProduct":
 		if e.ComplexityRoot.Mutation.UpdateProduct == nil {
@@ -4317,6 +4334,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateNamespacePayload.Namespace(childComplexity), true
 
+	case "UpdateNamespaceStatusPayload.namespace":
+		if e.ComplexityRoot.UpdateNamespaceStatusPayload.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateNamespaceStatusPayload.Namespace(childComplexity), true
+
 	case "UpdateProductPayload.product":
 		if e.ComplexityRoot.UpdateProductPayload.Product == nil {
 			break
@@ -4481,6 +4505,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputUpdateCategoryStatusInput,
 		ec.unmarshalInputUpdateCollectionInput,
 		ec.unmarshalInputUpdateNamespaceInput,
+		ec.unmarshalInputUpdateNamespaceStatusInput,
 		ec.unmarshalInputUpdateProductInput,
 		ec.unmarshalInputUpdateProductStatusInput,
 		ec.unmarshalInputUpdateRepositoryInput,
@@ -5818,6 +5843,18 @@ type UpdateNamespacePayload {
   namespace: Namespace
 }
 
+input UpdateNamespaceStatusInput {
+  name: String!
+  resourceVersion: String!
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [ConditionInput!]
+}
+
+type UpdateNamespaceStatusPayload {
+  namespace: Namespace!
+}
+
 """
 The successful result of requesting Namespace termination.
 """
@@ -5892,6 +5929,9 @@ extend type Mutation {
   Update a non-bootstrap namespace by committing and admitting its manifest.
   """
   updateNamespace(input: UpdateNamespaceInput!): UpdateNamespacePayload!
+
+  """Write controller-owned Namespace status with optimistic concurrency."""
+  updateNamespaceStatus(input: UpdateNamespaceStatusInput!): UpdateNamespaceStatusPayload!
 
   """
   Delete a namespace.
@@ -8982,6 +9022,14 @@ func (ec *executionContext) childFields_UpdateNamespacePayload(ctx context.Conte
 		return ec.fieldContext_UpdateNamespacePayload_namespace(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateNamespacePayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateNamespaceStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "namespace":
+		return ec.fieldContext_UpdateNamespaceStatusPayload_namespace(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateNamespaceStatusPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateProductPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

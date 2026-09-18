@@ -261,6 +261,18 @@ type UpdateNamespacePayload {
   namespace: Namespace
 }
 
+input UpdateNamespaceStatusInput {
+  name: String!
+  resourceVersion: String!
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [ConditionInput!]
+}
+
+type UpdateNamespaceStatusPayload {
+  namespace: Namespace!
+}
+
 """
 The successful result of requesting Namespace termination.
 """
@@ -335,6 +347,9 @@ extend type Mutation {
   Update a non-bootstrap namespace by committing and admitting its manifest.
   """
   updateNamespace(input: UpdateNamespaceInput!): UpdateNamespacePayload!
+
+  """Write controller-owned Namespace status with optimistic concurrency."""
+  updateNamespaceStatus(input: UpdateNamespaceStatusInput!): UpdateNamespaceStatusPayload!
 
   """
   Delete a namespace.

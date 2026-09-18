@@ -37,6 +37,40 @@ func (r *mutationResolver) UpdateNamespace(ctx context.Context, input model.Upda
 	return &model.UpdateNamespacePayload{Namespace: DatastoreNamespaceToGraphQL(ns)}, nil
 }
 
+// UpdateNamespaceStatus is the resolver for the updateNamespaceStatus field.
+func (r *mutationResolver) UpdateNamespaceStatus(ctx context.Context, input model.UpdateNamespaceStatusInput) (*model.UpdateNamespaceStatusPayload, error) {
+	namespace, err := r.service.GetNamespaceByName(ctx, input.Name)
+	if err != nil {
+		return nil, err
+	}
+	patch := datastore.NamespaceStatusPatch{ResourceVersion: input.ResourceVersion}
+	if input.ObservedGeneration != nil {
+		generation := int64(*input.ObservedGeneration)
+		patch.ObservedGeneration = &generation
+	}
+	patch.LastAppliedRevision = input.LastAppliedRevision
+	if input.Conditions != nil {
+		patch.Conditions = toConditions(input.Conditions)
+	}
+	if err := datastore.ApplyNamespaceStatusPatch(namespace, patch); err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			return nil, statusConflictError("Namespace", "", input.Name, namespace.ResourceVersion)
+		}
+		return nil, gqlerror.Errorf("update Namespace status: %v", err)
+	}
+	if err := r.service.Store().UpdateNamespace(ctx, namespace, input.ResourceVersion); err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			current, getErr := r.service.GetNamespaceByName(ctx, input.Name)
+			if getErr != nil {
+				return nil, gqlerror.Errorf("Namespace status update conflict")
+			}
+			return nil, statusConflictError("Namespace", "", input.Name, current.ResourceVersion)
+		}
+		return nil, gqlerror.Errorf("update Namespace status: %v", err)
+	}
+	return &model.UpdateNamespaceStatusPayload{Namespace: DatastoreNamespaceToGraphQL(namespace)}, nil
+}
+
 // DeleteNamespace is the resolver for the deleteNamespace field.
 func (r *mutationResolver) DeleteNamespace(ctx context.Context, input model.DeleteNamespaceInput) (*model.DeleteNamespacePayload, error) {
 	if input.ID == nil {

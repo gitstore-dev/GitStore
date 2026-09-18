@@ -1528,6 +1528,18 @@ type UpdateNamespacePayload struct {
 	Namespace *Namespace `json:"namespace,omitempty"`
 }
 
+type UpdateNamespaceStatusInput struct {
+	Name                string            `json:"name"`
+	ResourceVersion     string            `json:"resourceVersion"`
+	ObservedGeneration  *int32            `json:"observedGeneration,omitempty"`
+	LastAppliedRevision *string           `json:"lastAppliedRevision,omitempty"`
+	Conditions          []*ConditionInput `json:"conditions,omitempty"`
+}
+
+type UpdateNamespaceStatusPayload struct {
+	Namespace *Namespace `json:"namespace"`
+}
+
 type UpdateProductInput struct {
 	APIVersion string            `json:"apiVersion"`
 	Kind       string            `json:"kind"`
