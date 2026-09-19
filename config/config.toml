@@ -103,6 +103,7 @@ default_stall_threshold = "5m"
 checkpoint_dir = "/var/lib/gitstore/checkpoints"
 checkpoint_flush_interval_events = 100
 max_watch_backoff = "30s"
+resync_interval = "10m"
 
 [features]
 namespace_repository_fence = "auto"

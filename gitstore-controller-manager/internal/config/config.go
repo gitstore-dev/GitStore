@@ -69,6 +69,12 @@ type ControllerConfig struct {
 	// MaxWatchBackoffStr is parsed at startup into MaxWatchBackoff.
 	MaxWatchBackoffStr string        `mapstructure:"max_watch_backoff"`
 	MaxWatchBackoff    time.Duration `mapstructure:"-"`
+
+	// ResyncIntervalStr is parsed at startup into ResyncInterval. It applies
+	// uniformly to every registered kind's listwatch.Runner: "0s" disables
+	// resync entirely.
+	ResyncIntervalStr string        `mapstructure:"resync_interval"`
+	ResyncInterval    time.Duration `mapstructure:"-"`
 }
 
 // LogConfig holds logger settings.
@@ -115,6 +121,7 @@ func load(path string) (*Config, error) {
 	v.SetDefault("controller.checkpoint_dir", "/var/lib/gitstore/checkpoints")
 	v.SetDefault("controller.checkpoint_flush_interval_events", 100)
 	v.SetDefault("controller.max_watch_backoff", "30s")
+	v.SetDefault("controller.resync_interval", "10m")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 
@@ -185,6 +192,15 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("controller.max_watch_backoff is not a valid duration: %w", err)
 	}
 	cfg.Controller.MaxWatchBackoff = maxBackoff
+
+	resyncInterval, err := time.ParseDuration(cfg.Controller.ResyncIntervalStr)
+	if err != nil {
+		return fmt.Errorf("controller.resync_interval is not a valid duration: %w", err)
+	}
+	if resyncInterval < 0 {
+		return fmt.Errorf("controller.resync_interval must not be negative")
+	}
+	cfg.Controller.ResyncInterval = resyncInterval
 
 	if err := validateLogFormat(&cfg.Log); err != nil {
 		return err

@@ -101,6 +101,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Controller.MaxWatchBackoff != 30*time.Second {
 		t.Errorf("MaxWatchBackoff = %v, want 30s", cfg.Controller.MaxWatchBackoff)
 	}
+	if cfg.Controller.ResyncInterval != 10*time.Minute {
+		t.Errorf("ResyncInterval = %v, want 10m", cfg.Controller.ResyncInterval)
+	}
 	if cfg.Log.Level != "info" {
 		t.Errorf("Log.Level = %q, want info", cfg.Log.Level)
 	}
@@ -118,6 +121,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 		"GITSTORE_CONTROLLER__CHECKPOINT_DIR", "/tmp/checkpoints",
 		"GITSTORE_CONTROLLER__CHECKPOINT_FLUSH_INTERVAL_EVENTS", "50",
 		"GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF", "1m",
+		"GITSTORE_CONTROLLER__RESYNC_INTERVAL", "20m",
 		"GITSTORE_CONTROLLER__SERVICEACCOUNT__ASSERTION_AUDIENCE", "controller-token-exchange",
 		"GITSTORE_CONTROLLER__SERVICEACCOUNT__ACCESS_TOKEN_AUDIENCE", "controller-api",
 		"GITSTORE_LOG__LEVEL", "debug",
@@ -149,6 +153,9 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	}
 	if cfg.Controller.MaxWatchBackoff != time.Minute {
 		t.Errorf("MaxWatchBackoff = %v, want 1m", cfg.Controller.MaxWatchBackoff)
+	}
+	if cfg.Controller.ResyncInterval != 20*time.Minute {
+		t.Errorf("ResyncInterval = %v, want 20m", cfg.Controller.ResyncInterval)
 	}
 	if cfg.Controller.ServiceAccountAssertionAudience != "controller-token-exchange" {
 		t.Errorf("ServiceAccountAssertionAudience = %q", cfg.Controller.ServiceAccountAssertionAudience)
@@ -255,6 +262,18 @@ func TestLoad_ValidationErrors(t *testing.T) {
 			envKey:  "GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF",
 			envVal:  "not-a-duration",
 			wantErr: "controller.max_watch_backoff",
+		},
+		{
+			name:    "invalid resync interval",
+			envKey:  "GITSTORE_CONTROLLER__RESYNC_INTERVAL",
+			envVal:  "not-a-duration",
+			wantErr: "controller.resync_interval",
+		},
+		{
+			name:    "negative resync interval",
+			envKey:  "GITSTORE_CONTROLLER__RESYNC_INTERVAL",
+			envVal:  "-1s",
+			wantErr: "controller.resync_interval",
 		},
 		{
 			name:    "invalid log format",

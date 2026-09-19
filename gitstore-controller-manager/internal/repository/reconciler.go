@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
@@ -39,6 +40,16 @@ const (
 
 	conflictRequeueDelay  = 100 * time.Millisecond
 	rateLimitRequeueDelay = time.Second
+
+	// storageRevalidationInterval bounds how long a cached StorageProvisioned=True
+	// observation may be trusted without calling EnsureStorage again. Bare Git
+	// storage can disappear out-of-band (lost volume, filesystem restore,
+	// rolling replacement of git-service) without any Repository spec or
+	// status change, so a persisted condition alone is not proof the storage
+	// still exists. This is deliberately not tied to the Runner's
+	// ResyncInterval config, which only controls how often a reconcile
+	// happens at all, not whether this reconciler chooses to re-verify.
+	storageRevalidationInterval = 10 * time.Minute
 )
 
 // Repository is the cache entity populated by RepositoryListWatcher.
@@ -84,6 +95,14 @@ type Reconciler struct {
 	statusClient     status.StatusClient
 	storageClient    StorageClient
 	completionClient CompletionClient
+
+	// lastStorageVerification records, per key, the last time this process
+	// actually confirmed storage with EnsureStorage (as opposed to trusting
+	// the cached StorageProvisioned condition). It is in-memory only and
+	// empty after every restart — deliberately: a restart is the cheapest
+	// time to re-verify, so losing this map on restart is a feature, not a
+	// gap.
+	lastStorageVerification sync.Map // types.WorkItemKey -> time.Time
 }
 
 // NewReconciler returns a Repository reconciler.
@@ -119,16 +138,20 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 	var resolvedJSON json.RawMessage
 	var provisionErr error
 	switch {
-	case admitted && storageProvisionedCurrent(current):
-		// Storage was already provisioned for this generation: re-invoking
-		// EnsureStorage on every reconcile (including the one triggered by
-		// this reconciler's own prior status write) would call gRPC
-		// CreateRepository forever without ever advancing state.
+	case admitted && storageProvisionedCurrent(current) && !r.storageVerificationDue(key):
+		// Storage was already provisioned for this generation and verified
+		// recently: re-invoking EnsureStorage on every reconcile (including
+		// the one triggered by this reconciler's own prior status write)
+		// would call gRPC CreateRepository forever without ever advancing
+		// state. storageVerificationDue still forces a periodic real check,
+		// since a persisted condition alone is not proof storage still
+		// exists on disk.
 		resolvedJSON = current.Status.Resolved
 	case admitted:
 		resolved, err := r.storageClient.EnsureStorage(ctx, current.Namespace, current.Name)
 		provisionErr = err
 		if err == nil {
+			r.lastStorageVerification.Store(key, time.Now())
 			resolvedJSON, err = json.Marshal(resolved)
 			if err != nil {
 				return types.ResultTransient(fmt.Errorf("repository: marshal resolved status: %w", err))
@@ -203,6 +226,17 @@ func storageProvisionedCurrent(current Repository) bool {
 		}
 	}
 	return false
+}
+
+// storageVerificationDue reports whether it has been long enough since this
+// process last actually called EnsureStorage for key that the cached
+// StorageProvisioned condition should no longer be trusted on its own.
+func (r *Reconciler) storageVerificationDue(key types.WorkItemKey) bool {
+	last, ok := r.lastStorageVerification.Load(key)
+	if !ok {
+		return true
+	}
+	return time.Since(last.(time.Time)) >= storageRevalidationInterval
 }
 
 func mergeControllerConditions(current Repository, admitted, storageReady bool, provisionErr error) []*status.Condition {

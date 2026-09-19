@@ -73,6 +73,14 @@ type Runner[T any] struct {
 	// RelatedReplayKeys instead.
 	DisableReplay bool
 
+	// ResyncInterval, when non-zero, periodically re-enqueues every key
+	// currently in Cache regardless of whether it changed. This lets a
+	// reconciler revalidate its object against external system state that
+	// the watch stream itself cannot observe (e.g. a Repository's bare Git
+	// storage disappearing without a spec-generation change). Zero disables
+	// resync entirely (default).
+	ResyncInterval time.Duration
+
 	FlushIntervalEvents int           // events between checkpoint persists; default 100
 	MaxBackoff          time.Duration // cap on reconnect backoff; default 30s
 
@@ -243,6 +251,15 @@ func (r *Runner[T]) watchLoop(ctx context.Context, pendingDedup map[types.WorkIt
 	reconnectBackoff.Multiplier = defaultReconnectMultiplier
 	reconnectBackoff.Reset()
 
+	// resyncC persists across reconnects (unlike per-connection watcher
+	// state) so a resync tick is never lost to a watch reconnect/relist.
+	var resyncC <-chan time.Time
+	if r.ResyncInterval > 0 {
+		ticker := time.NewTicker(r.ResyncInterval)
+		defer ticker.Stop()
+		resyncC = ticker.C
+	}
+
 	for {
 		watcher, err := r.ListWatcher.Watch(ctx, r.currentRV)
 		if err != nil {
@@ -265,7 +282,7 @@ func (r *Runner[T]) watchLoop(ctx context.Context, pendingDedup map[types.WorkIt
 		}
 		reconnectBackoff.Reset()
 
-		closeErr, processErr := r.drainWatcher(ctx, watcher, pendingDedup)
+		closeErr, processErr := r.drainWatcher(ctx, watcher, pendingDedup, resyncC)
 		watcher.Stop()
 		if processErr != nil {
 			return processErr
@@ -311,12 +328,16 @@ func (r *Runner[T]) sleepBackoff(ctx context.Context, b *backoff.ExponentialBack
 }
 
 // drainWatcher processes events from watcher until its channel closes or
-// ctx is cancelled, returning watcher.Err() in the former case.
-func (r *Runner[T]) drainWatcher(ctx context.Context, watcher Watcher[T], pendingDedup map[types.WorkItemKey]string) (error, error) {
+// ctx is cancelled, returning watcher.Err() in the former case. A resync
+// tick (resyncC, nil when disabled) re-enqueues every cached key without
+// otherwise interrupting event processing.
+func (r *Runner[T]) drainWatcher(ctx context.Context, watcher Watcher[T], pendingDedup map[types.WorkItemKey]string, resyncC <-chan time.Time) (error, error) {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, nil
+		case <-resyncC:
+			r.resync()
 		case ev, ok := <-watcher.Events():
 			if !ok {
 				return watcher.Err(), nil
@@ -325,6 +346,17 @@ func (r *Runner[T]) drainWatcher(ctx context.Context, watcher Watcher[T], pendin
 				return nil, err
 			}
 		}
+	}
+}
+
+// resync re-enqueues every key currently in Cache so its reconciler gets a
+// chance to revalidate against external system state the watch stream
+// itself cannot observe. It deliberately does not touch the cache or replay
+// tracking: a resync tick lost to a crash is corrected by the next tick, not
+// by checkpoint replay.
+func (r *Runner[T]) resync() {
+	for _, item := range r.Cache.List() {
+		r.enqueue(r.KeyFunc(item))
 	}
 }
 
