@@ -88,7 +88,7 @@ func TestIntegration_CategoryDeletionResumesAfterControllerRestart(t *testing.T)
 	assert.Equal(t, 1, deletion.completions)
 
 	categories.Delete(key)
-	_, terminal := firstController.Reconcile(context.Background(), key).(types.TerminalFailure)
-	assert.True(t, terminal, "a post-delete stale requeue performs no second completion")
+	_, alreadyReconciled := firstController.Reconcile(context.Background(), key).(types.Success)
+	assert.True(t, alreadyReconciled, "a post-delete stale requeue performs no second completion")
 	assert.Equal(t, 1, deletion.completions)
 }

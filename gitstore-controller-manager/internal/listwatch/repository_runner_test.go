@@ -102,6 +102,41 @@ func TestRepositoryRunnerResumesCheckpointWithoutRelist(t *testing.T) {
 	}
 }
 
+func TestRepositoryRunnerResyncReenqueuesUnchangedCachedKeys(t *testing.T) {
+	idle := &repositoryTestWatch{ch: make(chan WatchEvent[repository.Repository])}
+	lw := &repositoryTestListWatch{lists: []ListResponse[repository.Repository]{{Items: []repository.Repository{repo("1")}, ResourceVersion: "1"}}, watches: []*repositoryTestWatch{idle}}
+	var enqueued []types.WorkItemKey
+	r := repositoryRunner(t, lw, checkpoint.NewMemoryStore(), &enqueued)
+	r.ResyncInterval = 5 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	_ = r.Run(ctx)
+	// One bootstrap enqueue plus at least two resync ticks for the same,
+	// never-updated key: a reconciler must get repeated chances to
+	// revalidate external state the watch stream cannot observe.
+	if len(enqueued) < 3 {
+		t.Fatalf("enqueues=%v, want bootstrap enqueue plus at least two resync re-enqueues", enqueued)
+	}
+	for _, key := range enqueued {
+		if key != (types.WorkItemKey{Kind: "Repository", Namespace: "acme", Name: "catalog"}) {
+			t.Fatalf("unexpected enqueued key %#v", key)
+		}
+	}
+}
+
+func TestRepositoryRunnerNoResyncByDefault(t *testing.T) {
+	idle := &repositoryTestWatch{ch: make(chan WatchEvent[repository.Repository])}
+	lw := &repositoryTestListWatch{lists: []ListResponse[repository.Repository]{{Items: []repository.Repository{repo("1")}, ResourceVersion: "1"}}, watches: []*repositoryTestWatch{idle}}
+	var enqueued []types.WorkItemKey
+	r := repositoryRunner(t, lw, checkpoint.NewMemoryStore(), &enqueued)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	_ = r.Run(ctx)
+	if len(enqueued) != 1 {
+		t.Fatalf("enqueues=%v, want only the bootstrap enqueue with ResyncInterval unset", enqueued)
+	}
+}
+
 func TestRepositoryRunnerExpiryRelistsAndEnqueuesChangedRevision(t *testing.T) {
 	first := &repositoryTestWatch{ch: make(chan WatchEvent[repository.Repository]), err: ErrWatchExpired}
 	close(first.ch)

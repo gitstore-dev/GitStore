@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
@@ -149,6 +150,96 @@ func TestReconcileAdmittedRepositoryProvisionsStorageAndMarksReady(t *testing.T)
 	}
 	if gotResolved != storage.resolved {
 		t.Errorf("patch.Resolved = %#v, want %#v", gotResolved, storage.resolved)
+	}
+}
+
+func repositoryFixtureAlreadyProvisioned(t *testing.T) (Repository, json.RawMessage) {
+	t.Helper()
+	resolved := ResolvedStorage{StoragePath: "/data/acme/catalog.git", StorageClass: "standard"}
+	resolvedJSON, err := json.Marshal(resolved)
+	if err != nil {
+		t.Fatalf("marshal resolved: %v", err)
+	}
+	current := repositoryFixture(func(repository *Repository) {
+		repository.Status = status.ResourceStatus{
+			ResourceVersion:    "2",
+			ObservedGeneration: 1,
+			Conditions: []*status.Condition{
+				admissionAccepted(1),
+				{Type: conditionStorageProvisioned, Status: statusTrue, ObservedGeneration: 1, Reason: "StorageReady", Message: "bare Git repository exists"},
+				{Type: conditionReady, Status: statusTrue, ObservedGeneration: 1, Reason: "RepositoryReady", Message: "repository admission and storage provisioning are complete"},
+			},
+			Resolved: resolvedJSON,
+		}
+	})
+	return current, resolvedJSON
+}
+
+func TestReconcileSkipsStorageProvisioningWhenRecentlyVerified(t *testing.T) {
+	current, _ := repositoryFixtureAlreadyProvisioned(t)
+	storage := &fakeStorageClient{}
+	statuses := &fakeStatusClient{}
+	r := NewReconciler(seedRepositoryCache(t, current), statuses, storage, &fakeCompletionClient{})
+	key := repositoryKey("acme", "catalog")
+	// Simulate having already verified storage recently (e.g. the previous
+	// reconcile): storageVerificationDue must not fire again immediately.
+	r.lastStorageVerification.Store(key, time.Now())
+
+	result := r.Reconcile(context.Background(), key)
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %T, want types.Success", result)
+	}
+	if len(storage.calls) != 0 {
+		t.Fatalf("storage calls = %#v, want none: a recently verified repository must not re-invoke EnsureStorage", storage.calls)
+	}
+	if len(statuses.patches) != 0 {
+		t.Fatalf("status patches = %#v, want none: an unchanged status must not be re-applied", statuses.patches)
+	}
+}
+
+func TestReconcileRevalidatesStorageWhenNeverVerifiedByThisProcess(t *testing.T) {
+	current, resolvedJSON := repositoryFixtureAlreadyProvisioned(t)
+	var gotResolved ResolvedStorage
+	if err := json.Unmarshal(resolvedJSON, &gotResolved); err != nil {
+		t.Fatalf("unmarshal resolvedJSON: %v", err)
+	}
+	storage := &fakeStorageClient{resolved: gotResolved}
+	statuses := &fakeStatusClient{}
+	// A freshly constructed reconciler (e.g. right after a controller
+	// restart) has never verified this key in-process, even though the
+	// cached condition says StorageProvisioned=True. It must call
+	// EnsureStorage once to confirm the storage still exists (a lost git-
+	// service volume would otherwise leave Ready=True forever with no
+	// self-heal path).
+	r := NewReconciler(seedRepositoryCache(t, current), statuses, storage, &fakeCompletionClient{})
+
+	result := r.Reconcile(context.Background(), repositoryKey("acme", "catalog"))
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %T, want types.Success", result)
+	}
+	if len(storage.calls) != 1 {
+		t.Fatalf("storage calls = %#v, want exactly one revalidation call", storage.calls)
+	}
+}
+
+func TestReconcileRevalidatesStorageAfterRevalidationWindowElapses(t *testing.T) {
+	current, resolvedJSON := repositoryFixtureAlreadyProvisioned(t)
+	var gotResolved ResolvedStorage
+	if err := json.Unmarshal(resolvedJSON, &gotResolved); err != nil {
+		t.Fatalf("unmarshal resolvedJSON: %v", err)
+	}
+	storage := &fakeStorageClient{resolved: gotResolved}
+	statuses := &fakeStatusClient{}
+	r := NewReconciler(seedRepositoryCache(t, current), statuses, storage, &fakeCompletionClient{})
+	key := repositoryKey("acme", "catalog")
+	r.lastStorageVerification.Store(key, time.Now().Add(-storageRevalidationInterval-time.Second))
+
+	result := r.Reconcile(context.Background(), key)
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %T, want types.Success", result)
+	}
+	if len(storage.calls) != 1 {
+		t.Fatalf("storage calls = %#v, want exactly one revalidation call once the window elapsed", storage.calls)
 	}
 }
 

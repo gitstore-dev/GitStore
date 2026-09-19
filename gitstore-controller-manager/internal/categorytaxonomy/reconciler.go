@@ -105,7 +105,9 @@ func NewReconciler(c cache.CacheAccessor[CategoryTaxonomy], statusClient status.
 func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
 	current, ok := r.cache.Get(key)
 	if !ok {
-		return types.ResultTerminal(fmt.Errorf("categorytaxonomy: %s/%s not found in cache", key.Namespace, key.Name))
+		// A queued key can outlive its object after watch replay, deletion, or a
+		// checkpointed controller restart. Absence is the reconciled state.
+		return types.ResultOK()
 	}
 
 	parentMap := make(map[string]string)

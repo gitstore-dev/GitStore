@@ -209,6 +209,7 @@ func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStor
 		},
 		FlushIntervalEvents: cfg.Controller.CheckpointFlushIntervalEvents,
 		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
+		ResyncInterval:      cfg.Controller.ResyncInterval,
 		Log:                 log,
 	}
 	reconciler := namespacecontroller.NewReconciler(
@@ -267,6 +268,7 @@ func registerRepository(
 		},
 		FlushIntervalEvents: cfg.Controller.CheckpointFlushIntervalEvents,
 		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
+		ResyncInterval:      cfg.Controller.ResyncInterval,
 		Log:                 log,
 	}
 	reconciler := repositorycontroller.NewReconciler(
@@ -333,6 +335,7 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 		ShouldEnqueueUpdate: categorytaxonomy.ShouldEnqueueWatchUpdate,
 		FlushIntervalEvents: cfg.Controller.CheckpointFlushIntervalEvents,
 		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
+		ResyncInterval:      cfg.Controller.ResyncInterval,
 		Log:                 log,
 	}
 
@@ -429,6 +432,7 @@ func registerProductWatch(ctx context.Context, mgr *manager.Manager, checkpointS
 		// crash cannot lose an affected CategoryTaxonomy key.
 		FlushIntervalEvents: 1,
 		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
+		ResyncInterval:      cfg.Controller.ResyncInterval,
 		Log:                 log,
 	}
 	reconciler := productcontroller.NewReconciler(

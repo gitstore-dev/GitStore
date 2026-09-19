@@ -64,10 +64,12 @@ two honest shapes, both of which model "two replicas" as strictly
   reconciled and asserted to reach `types.Success`, with the fake's counters
   proving the drain-then-complete sequence ran exactly once end-to-end
   (`decouples == 2`, `completions == 1`). A final reconcile after the record
-  is deleted from the cache asserts a `types.TerminalFailure` and that
-  `completions` is still `1` — a stale requeue after completion must not run
-  `CompleteDeletion` a second time. There are no `go func` goroutines in this
-  test at all.
+  is deleted from the cache asserts a `types.Success` (a queued key whose
+  object is gone is already-reconciled, not an error — see
+  `docs/runbooks/controller-poisoned-item.md`'s note on cache-miss handling)
+  and that `completions` is still `1` — a stale requeue after completion
+  must not run `CompleteDeletion` a second time. There are no `go func`
+  goroutines in this test at all.
 - **Real Runner+Manager pair, torn down before the "second replica" starts.**
   Worked example:
   `gitstore-controller-manager/tests/integration/reconcile_retry_resume_test.go`,
