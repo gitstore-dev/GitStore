@@ -1153,7 +1153,7 @@ func (ec *executionContext) unmarshalInputCreateRepositoryInput(ctx context.Cont
 			it.Kind = data
 		case "metadata":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
-			data, err := ec.unmarshalNMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMetadataInput(ctx, v)
+			data, err := ec.unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -1200,8 +1200,8 @@ func (ec *executionContext) unmarshalInputDeleteRepositoryInput(ctx context.Cont
 	return it, nil
 }
 
-func (ec *executionContext) unmarshalInputMetadataInput(ctx context.Context, obj any) (model.MetadataInput, error) {
-	var it model.MetadataInput
+func (ec *executionContext) unmarshalInputObjectMetaInput(ctx context.Context, obj any) (model.ObjectMetaInput, error) {
+	var it model.ObjectMetaInput
 	if obj == nil {
 		return it, nil
 	}
@@ -1484,7 +1484,7 @@ func (ec *executionContext) unmarshalInputUpdateRepositoryInput(ctx context.Cont
 			it.Kind = data
 		case "metadata":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
-			data, err := ec.unmarshalNMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMetadataInput(ctx, v)
+			data, err := ec.unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -2281,8 +2281,8 @@ func (ec *executionContext) marshalNDeleteRepositoryPayload2ᚖgithubᚗcomᚋgi
 	return ec._DeleteRepositoryPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMetadataInput(ctx context.Context, v any) (*model.MetadataInput, error) {
-	res, err := ec.unmarshalInputMetadataInput(ctx, v)
+func (ec *executionContext) unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx context.Context, v any) (*model.ObjectMetaInput, error) {
+	res, err := ec.unmarshalInputObjectMetaInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 

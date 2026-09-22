@@ -143,7 +143,7 @@ input ProductOptionDefinitionInput {
 input CreateProductInput {
   apiVersion: String! = "catalog.gitstore.dev/v1beta1"
   kind: String! = "Product"
-  metadata: MetadataInput!
+  metadata: ObjectMetaInput!
   spec: ProductSpecInput!
   body: String
 }
@@ -151,7 +151,7 @@ input CreateProductInput {
 input UpdateProductInput {
   apiVersion: String! = "catalog.gitstore.dev/v1beta1"
   kind: String! = "Product"
-  metadata: MetadataInput!
+  metadata: ObjectMetaInput!
   spec: ProductSpecInput!
   body: String
 }

@@ -53,7 +53,7 @@ func TestProductWatchAuthorizationRunsBeforeCursorHandling(t *testing.T) {
 
 func TestProductMutationAuthorizationMatrix(t *testing.T) {
 	productID := "Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC9wcm9kLXVpZA=="
-	metadata := &model.MetadataInput{Namespace: "acme", Name: "widget"}
+	metadata := &model.ObjectMetaInput{Namespace: "acme", Name: "widget"}
 	store := &testutil.StubStore{
 		GetProductFunc: func(context.Context, string) (*datastore.Product, error) {
 			return &datastore.Product{UID: "prod-uid", Name: "widget", Namespace: "acme", CreationActor: "author"}, nil

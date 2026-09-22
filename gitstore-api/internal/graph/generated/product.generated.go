@@ -2127,7 +2127,7 @@ func (ec *executionContext) unmarshalInputCreateProductInput(ctx context.Context
 			it.Kind = data
 		case "metadata":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
-			data, err := ec.unmarshalNMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMetadataInput(ctx, v)
+			data, err := ec.unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -2506,7 +2506,7 @@ func (ec *executionContext) unmarshalInputUpdateProductInput(ctx context.Context
 			it.Kind = data
 		case "metadata":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
-			data, err := ec.unmarshalNMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMetadataInput(ctx, v)
+			data, err := ec.unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx, v)
 			if err != nil {
 				return it, err
 			}

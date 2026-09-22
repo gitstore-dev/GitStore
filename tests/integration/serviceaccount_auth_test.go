@@ -74,11 +74,13 @@ func (h *serviceAccountAuthHarness) createServiceAccount(namespace, name, public
 	mutation := `
 		mutation CreateServiceAccount($input: CreateServiceAccountInput!) {
 			createServiceAccount(input: $input) {
-				metadata {
-					uid
-					namespace
-					name
-					creationTimestamp
+				serviceAccount {
+					metadata {
+						uid
+						namespace
+						name
+						creationTimestamp
+					}
 				}
 			}
 		}
@@ -124,9 +126,11 @@ func (h *serviceAccountAuthHarness) createServiceAccount(namespace, name, public
 	var result struct {
 		Data struct {
 			CreateServiceAccount struct {
-				Metadata struct {
-					UID string `json:"uid"`
-				} `json:"metadata"`
+				ServiceAccount struct {
+					Metadata struct {
+						UID string `json:"uid"`
+					} `json:"metadata"`
+				} `json:"serviceAccount"`
 			} `json:"createServiceAccount"`
 		} `json:"data"`
 		Errors []map[string]any `json:"errors"`
@@ -134,9 +138,9 @@ func (h *serviceAccountAuthHarness) createServiceAccount(namespace, name, public
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	require.NoError(h.t, err)
 	require.Empty(h.t, result.Errors, "GraphQL errors: %v", result.Errors)
-	require.NotEmpty(h.t, result.Data.CreateServiceAccount.Metadata.UID)
+	require.NotEmpty(h.t, result.Data.CreateServiceAccount.ServiceAccount.Metadata.UID)
 
-	return result.Data.CreateServiceAccount.Metadata.UID
+	return result.Data.CreateServiceAccount.ServiceAccount.Metadata.UID
 }
 
 // issueServiceAccountToken calls the issueServiceAccountToken mutation with a signed assertion.
@@ -149,9 +153,11 @@ func (h *serviceAccountAuthHarness) issueServiceAccountToken(namespace, name, ui
 	mutation := `
 		mutation IssueServiceAccountToken($input: IssueServiceAccountTokenInput!) {
 			issueServiceAccountToken(input: $input) {
-				status {
-					token
-					expiresAt
+				tokenRequest {
+					status {
+						token
+						expirationTimestamp
+					}
 				}
 			}
 		}
@@ -166,8 +172,8 @@ func (h *serviceAccountAuthHarness) issueServiceAccountToken(namespace, name, ui
 				"name":      name,
 			},
 			"spec": map[string]any{
-				"audience":   "gitstore-api",
-				"ttlSeconds": 600,
+				"audiences":         []string{"gitstore-api"},
+				"expirationSeconds": 600,
 			},
 		},
 	}
@@ -195,9 +201,11 @@ func (h *serviceAccountAuthHarness) issueServiceAccountToken(namespace, name, ui
 	var result struct {
 		Data struct {
 			IssueServiceAccountToken struct {
-				Status struct {
-					Token string `json:"token"`
-				} `json:"status"`
+				TokenRequest struct {
+					Status struct {
+						Token string `json:"token"`
+					} `json:"status"`
+				} `json:"tokenRequest"`
 			} `json:"issueServiceAccountToken"`
 		} `json:"data"`
 		Errors []map[string]any `json:"errors"`
@@ -205,9 +213,9 @@ func (h *serviceAccountAuthHarness) issueServiceAccountToken(namespace, name, ui
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	require.NoError(h.t, err)
 	require.Empty(h.t, result.Errors, "GraphQL errors: %v", result.Errors)
-	require.NotEmpty(h.t, result.Data.IssueServiceAccountToken.Status.Token)
+	require.NotEmpty(h.t, result.Data.IssueServiceAccountToken.TokenRequest.Status.Token)
 
-	return result.Data.IssueServiceAccountToken.Status.Token
+	return result.Data.IssueServiceAccountToken.TokenRequest.Status.Token
 }
 
 // signClientAssertion creates a client assertion JWT signed with the private key.
@@ -463,14 +471,14 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 	require.Empty(t, authorized["errors"])
 
 	issueMutation := `mutation Issue($input: IssueServiceAccountTokenInput!) {
-		issueServiceAccountToken(input: $input) { status { token } }
+		issueServiceAccountToken(input: $input) { tokenRequest { status { token } } }
 	}`
 	issueInput := map[string]any{
 		"input": map[string]any{
 			"apiVersion": "gitstore.dev/v1beta1",
 			"kind":       "TokenRequest",
 			"metadata":   map[string]any{"namespace": namespace, "name": name},
-			"spec":       map[string]any{"audience": "gitstore-api", "ttlSeconds": 3600},
+			"spec":       map[string]any{"audiences": []string{"gitstore-api"}, "expirationSeconds": 3600},
 		},
 	}
 	for _, assertion := range []string{
@@ -499,7 +507,7 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 
 	replacementPrivateKey := generateEd25519PEM(t)
 	rotateMutation := `mutation Rotate($input: RotateServiceAccountKeyInput!) {
-		rotateServiceAccountKey(input: $input) { keyIDs }
+		rotateServiceAccountKey(input: $input) { serviceAccount { keyIDs } }
 	}`
 	rotated := gqlQueryWithURL(t, h.apiURL, h.token, rotateMutation, map[string]any{
 		"input": map[string]any{
@@ -515,11 +523,13 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 	require.Empty(t, rotated.Errors, "rotation must retain a valid key set")
 	var rotateData struct {
 		RotateServiceAccountKey struct {
-			KeyIDs []string `json:"keyIDs"`
+			ServiceAccount struct {
+				KeyIDs []string `json:"keyIDs"`
+			} `json:"serviceAccount"`
 		} `json:"rotateServiceAccountKey"`
 	}
 	require.NoError(t, json.Unmarshal(rotated.Data, &rotateData))
-	require.Equal(t, []string{"key-2"}, rotateData.RotateServiceAccountKey.KeyIDs)
+	require.Equal(t, []string{"key-2"}, rotateData.RotateServiceAccountKey.ServiceAccount.KeyIDs)
 
 	oldAssertion := h.signClientAssertion(namespace, name, uid, privateKey)
 	require.NotEmpty(t, gqlQueryWithURL(t, h.apiURL, oldAssertion, issueMutation, issueInput).Errors,
@@ -529,7 +539,7 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 		"an assertion signed by the replacement key must be accepted")
 
 	deleteMutation := `mutation Delete($input: DeleteServiceAccountInput!) {
-		deleteServiceAccount(input: $input) { metadata { uid } }
+		deleteServiceAccount(input: $input) { serviceAccount { metadata { uid } } }
 	}`
 	deleted := gqlQueryWithURL(t, h.apiURL, h.token, deleteMutation, map[string]any{
 		"input": map[string]any{

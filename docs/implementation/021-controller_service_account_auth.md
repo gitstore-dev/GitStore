@@ -325,32 +325,50 @@ replacing kubelet attestation with a portable signed client assertion.
 type Mutation {
   issueServiceAccountToken(input: IssueServiceAccountTokenInput!): IssueServiceAccountTokenPayload!
   createServiceAccount(input: CreateServiceAccountInput!): CreateServiceAccountPayload!
-  rotateServiceAccountKey(input: RotateServiceAccountKeyInput!): CreateServiceAccountPayload!
+  rotateServiceAccountKey(input: RotateServiceAccountKeyInput!): RotateServiceAccountKeyPayload!
   deleteServiceAccount(input: DeleteServiceAccountInput!): DeleteServiceAccountPayload!
+}
+
+type ServiceAccount implements Actor {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  keyIDs: [String!]!
+  status: ActorStatus!
+}
+
+type TokenRequest {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: TokenRequestSpec!
+  status: TokenRequestStatus!
 }
 
 input IssueServiceAccountTokenInput {
   apiVersion: String! = "authentication.gitstore.dev/v1beta1"
   kind: String! = "TokenRequest"
   metadata: ObjectMetaInput! # contains namespace and name of the ServiceAccount to issue for
-  spec: TokenRequestSpec!
+  spec: TokenRequestSpecInput!
 }
 
-input TokenRequestSpec {
-    audience: String        # defaults to "gitstore-api"
-    ttlSeconds: Int         # server clamps to auth.serviceaccount.max_ttl
+input TokenRequestSpecInput {
+    audiences: [String!]        # defaults to "gitstore-api"
+    expirationSeconds: Int      # server clamps to auth.serviceaccount.max_ttl
+}
+
+type TokenRequestSpec {
+    audiences: [String!]
+    expirationSeconds: Int
 }
 
 type IssueServiceAccountTokenPayload {
-    apiVersion: String!
-    kind: String!
-    metadata: ObjectMeta!
-    status: TokenRequestStatus!
+    tokenRequest: TokenRequest
 }
 
 type TokenRequestStatus {
   token: String!
-  expiresAt: DateTime!
+  expirationTimestamp: DateTime!
 }
 
 input CreateServiceAccountInput {
@@ -373,17 +391,21 @@ input RotateServiceAccountKeyInput {
 }
 
 type CreateServiceAccountPayload {
-  apiVersion: String!
-  kind: String!
-  metadata: ObjectMeta!   # contains creationTimestamp, namespace, name and uid of the ServiceAccount created
-  keyIDs: [String!]!
-  disabled: Boolean!
+  serviceAccount: ServiceAccount
+}
+
+type RotateServiceAccountKeyPayload {
+  serviceAccount: ServiceAccount
 }
 
 input DeleteServiceAccountInput {
   apiVersion: String! = "authentication.gitstore.dev/v1beta1"
   kind: String! = "ServiceAccount"
   metadata: ObjectMetaInput! # contains namespace and name of the ServiceAccount to delete
+}
+
+type DeleteServiceAccountPayload {
+  serviceAccount: ServiceAccount
 }
 ```
 

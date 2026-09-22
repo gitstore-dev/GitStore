@@ -165,7 +165,7 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 			object: "Mutation", field: "createRepository", args: map[string]any{"input": model.CreateRepositoryInput{
 				APIVersion: "gitstore.dev/v1beta1",
 				Kind:       "Repository",
-				Metadata:   &model.MetadataInput{Name: "new-catalog", Namespace: h.sourceNamespace.Name},
+				Metadata:   &model.ObjectMetaInput{Name: "new-catalog", Namespace: h.sourceNamespace.Name},
 				Spec:       &model.RepositorySpecInput{},
 			}},
 		},
@@ -175,7 +175,7 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 			object: "Mutation", field: "updateRepository", args: map[string]any{"input": model.UpdateRepositoryInput{
 				APIVersion: "gitstore.dev/v1beta1",
 				Kind:       "Repository",
-				Metadata:   &model.MetadataInput{Name: h.repository.Name, Namespace: h.sourceNamespace.Name},
+				Metadata:   &model.ObjectMetaInput{Name: h.repository.Name, Namespace: h.sourceNamespace.Name},
 				Spec:       &model.RepositorySpecInput{},
 			}},
 		},

@@ -173,11 +173,7 @@ type ComplexityRoot struct {
 	}
 
 	CreateServiceAccountPayload struct {
-		APIVersion func(childComplexity int) int
-		Disabled   func(childComplexity int) int
-		KeyIDs     func(childComplexity int) int
-		Kind       func(childComplexity int) int
-		Metadata   func(childComplexity int) int
+		ServiceAccount func(childComplexity int) int
 	}
 
 	DeleteCategoryPayload struct {
@@ -205,9 +201,7 @@ type ComplexityRoot struct {
 	}
 
 	DeleteServiceAccountPayload struct {
-		APIVersion func(childComplexity int) int
-		Kind       func(childComplexity int) int
-		Metadata   func(childComplexity int) int
+		ServiceAccount func(childComplexity int) int
 	}
 
 	EligibilityDefinition struct {
@@ -288,10 +282,7 @@ type ComplexityRoot struct {
 	}
 
 	IssueServiceAccountTokenPayload struct {
-		APIVersion func(childComplexity int) int
-		Kind       func(childComplexity int) int
-		Metadata   func(childComplexity int) int
-		Status     func(childComplexity int) int
+		TokenRequest func(childComplexity int) int
 	}
 
 	LabelSelector struct {
@@ -737,6 +728,10 @@ type ComplexityRoot struct {
 		StoragePath  func(childComplexity int) int
 	}
 
+	RotateServiceAccountKeyPayload struct {
+		ServiceAccount func(childComplexity int) int
+	}
+
 	SchemaValidationDefaults struct {
 		Phase          func(childComplexity int) int
 		TimeoutSeconds func(childComplexity int) int
@@ -754,11 +749,12 @@ type ComplexityRoot struct {
 		Value func(childComplexity int) int
 	}
 
-	ServiceAccountObjectMeta struct {
-		CreationTimestamp func(childComplexity int) int
-		Name              func(childComplexity int) int
-		Namespace         func(childComplexity int) int
-		UID               func(childComplexity int) int
+	ServiceAccount struct {
+		APIVersion func(childComplexity int) int
+		KeyIDs     func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Status     func(childComplexity int) int
 	}
 
 	StrategyDefinition struct {
@@ -774,9 +770,22 @@ type ComplexityRoot struct {
 		WatchResources    func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 	}
 
+	TokenRequest struct {
+		APIVersion func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
+	}
+
+	TokenRequestSpec struct {
+		Audiences         func(childComplexity int) int
+		ExpirationSeconds func(childComplexity int) int
+	}
+
 	TokenRequestStatus struct {
-		ExpiresAt func(childComplexity int) int
-		Token     func(childComplexity int) int
+		ExpirationTimestamp func(childComplexity int) int
+		Token               func(childComplexity int) int
 	}
 
 	TokenResponse struct {
@@ -1370,40 +1379,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CreateRepositoryPayload.Repository(childComplexity), true
 
-	case "CreateServiceAccountPayload.apiVersion":
-		if e.ComplexityRoot.CreateServiceAccountPayload.APIVersion == nil {
+	case "CreateServiceAccountPayload.serviceAccount":
+		if e.ComplexityRoot.CreateServiceAccountPayload.ServiceAccount == nil {
 			break
 		}
 
-		return e.ComplexityRoot.CreateServiceAccountPayload.APIVersion(childComplexity), true
-
-	case "CreateServiceAccountPayload.disabled":
-		if e.ComplexityRoot.CreateServiceAccountPayload.Disabled == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CreateServiceAccountPayload.Disabled(childComplexity), true
-
-	case "CreateServiceAccountPayload.keyIDs":
-		if e.ComplexityRoot.CreateServiceAccountPayload.KeyIDs == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CreateServiceAccountPayload.KeyIDs(childComplexity), true
-
-	case "CreateServiceAccountPayload.kind":
-		if e.ComplexityRoot.CreateServiceAccountPayload.Kind == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CreateServiceAccountPayload.Kind(childComplexity), true
-
-	case "CreateServiceAccountPayload.metadata":
-		if e.ComplexityRoot.CreateServiceAccountPayload.Metadata == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CreateServiceAccountPayload.Metadata(childComplexity), true
+		return e.ComplexityRoot.CreateServiceAccountPayload.ServiceAccount(childComplexity), true
 
 	case "DeleteCategoryPayload.deletedCategoryId":
 		if e.ComplexityRoot.DeleteCategoryPayload.DeletedCategoryID == nil {
@@ -1468,26 +1449,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.DeleteRepositoryPayload.Repository(childComplexity), true
 
-	case "DeleteServiceAccountPayload.apiVersion":
-		if e.ComplexityRoot.DeleteServiceAccountPayload.APIVersion == nil {
+	case "DeleteServiceAccountPayload.serviceAccount":
+		if e.ComplexityRoot.DeleteServiceAccountPayload.ServiceAccount == nil {
 			break
 		}
 
-		return e.ComplexityRoot.DeleteServiceAccountPayload.APIVersion(childComplexity), true
-
-	case "DeleteServiceAccountPayload.kind":
-		if e.ComplexityRoot.DeleteServiceAccountPayload.Kind == nil {
-			break
-		}
-
-		return e.ComplexityRoot.DeleteServiceAccountPayload.Kind(childComplexity), true
-
-	case "DeleteServiceAccountPayload.metadata":
-		if e.ComplexityRoot.DeleteServiceAccountPayload.Metadata == nil {
-			break
-		}
-
-		return e.ComplexityRoot.DeleteServiceAccountPayload.Metadata(childComplexity), true
+		return e.ComplexityRoot.DeleteServiceAccountPayload.ServiceAccount(childComplexity), true
 
 	case "EligibilityDefinition.constraints":
 		if e.ComplexityRoot.EligibilityDefinition.Constraints == nil {
@@ -1755,33 +1722,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.InventoryDefinition.StockLocationRefs(childComplexity), true
 
-	case "IssueServiceAccountTokenPayload.apiVersion":
-		if e.ComplexityRoot.IssueServiceAccountTokenPayload.APIVersion == nil {
+	case "IssueServiceAccountTokenPayload.tokenRequest":
+		if e.ComplexityRoot.IssueServiceAccountTokenPayload.TokenRequest == nil {
 			break
 		}
 
-		return e.ComplexityRoot.IssueServiceAccountTokenPayload.APIVersion(childComplexity), true
-
-	case "IssueServiceAccountTokenPayload.kind":
-		if e.ComplexityRoot.IssueServiceAccountTokenPayload.Kind == nil {
-			break
-		}
-
-		return e.ComplexityRoot.IssueServiceAccountTokenPayload.Kind(childComplexity), true
-
-	case "IssueServiceAccountTokenPayload.metadata":
-		if e.ComplexityRoot.IssueServiceAccountTokenPayload.Metadata == nil {
-			break
-		}
-
-		return e.ComplexityRoot.IssueServiceAccountTokenPayload.Metadata(childComplexity), true
-
-	case "IssueServiceAccountTokenPayload.status":
-		if e.ComplexityRoot.IssueServiceAccountTokenPayload.Status == nil {
-			break
-		}
-
-		return e.ComplexityRoot.IssueServiceAccountTokenPayload.Status(childComplexity), true
+		return e.ComplexityRoot.IssueServiceAccountTokenPayload.TokenRequest(childComplexity), true
 
 	case "LabelSelector.matchExpressions":
 		if e.ComplexityRoot.LabelSelector.MatchExpressions == nil {
@@ -3844,6 +3790,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ResolvedRepositoryDefinition.StoragePath(childComplexity), true
 
+	case "RotateServiceAccountKeyPayload.serviceAccount":
+		if e.ComplexityRoot.RotateServiceAccountKeyPayload.ServiceAccount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RotateServiceAccountKeyPayload.ServiceAccount(childComplexity), true
+
 	case "SchemaValidationDefaults.phase":
 		if e.ComplexityRoot.SchemaValidationDefaults.Phase == nil {
 			break
@@ -3900,33 +3853,40 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.SelectedOptionDefinition.Value(childComplexity), true
 
-	case "ServiceAccountObjectMeta.creationTimestamp":
-		if e.ComplexityRoot.ServiceAccountObjectMeta.CreationTimestamp == nil {
+	case "ServiceAccount.apiVersion":
+		if e.ComplexityRoot.ServiceAccount.APIVersion == nil {
 			break
 		}
 
-		return e.ComplexityRoot.ServiceAccountObjectMeta.CreationTimestamp(childComplexity), true
+		return e.ComplexityRoot.ServiceAccount.APIVersion(childComplexity), true
 
-	case "ServiceAccountObjectMeta.name":
-		if e.ComplexityRoot.ServiceAccountObjectMeta.Name == nil {
+	case "ServiceAccount.keyIDs":
+		if e.ComplexityRoot.ServiceAccount.KeyIDs == nil {
 			break
 		}
 
-		return e.ComplexityRoot.ServiceAccountObjectMeta.Name(childComplexity), true
+		return e.ComplexityRoot.ServiceAccount.KeyIDs(childComplexity), true
 
-	case "ServiceAccountObjectMeta.namespace":
-		if e.ComplexityRoot.ServiceAccountObjectMeta.Namespace == nil {
+	case "ServiceAccount.kind":
+		if e.ComplexityRoot.ServiceAccount.Kind == nil {
 			break
 		}
 
-		return e.ComplexityRoot.ServiceAccountObjectMeta.Namespace(childComplexity), true
+		return e.ComplexityRoot.ServiceAccount.Kind(childComplexity), true
 
-	case "ServiceAccountObjectMeta.uid":
-		if e.ComplexityRoot.ServiceAccountObjectMeta.UID == nil {
+	case "ServiceAccount.metadata":
+		if e.ComplexityRoot.ServiceAccount.Metadata == nil {
 			break
 		}
 
-		return e.ComplexityRoot.ServiceAccountObjectMeta.UID(childComplexity), true
+		return e.ComplexityRoot.ServiceAccount.Metadata(childComplexity), true
+
+	case "ServiceAccount.status":
+		if e.ComplexityRoot.ServiceAccount.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceAccount.Status(childComplexity), true
 
 	case "StrategyDefinition.type":
 		if e.ComplexityRoot.StrategyDefinition.Type == nil {
@@ -4007,12 +3967,61 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Subscription.WatchResources(childComplexity, args["kind"].(string), args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
-	case "TokenRequestStatus.expiresAt":
-		if e.ComplexityRoot.TokenRequestStatus.ExpiresAt == nil {
+	case "TokenRequest.apiVersion":
+		if e.ComplexityRoot.TokenRequest.APIVersion == nil {
 			break
 		}
 
-		return e.ComplexityRoot.TokenRequestStatus.ExpiresAt(childComplexity), true
+		return e.ComplexityRoot.TokenRequest.APIVersion(childComplexity), true
+
+	case "TokenRequest.kind":
+		if e.ComplexityRoot.TokenRequest.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequest.Kind(childComplexity), true
+
+	case "TokenRequest.metadata":
+		if e.ComplexityRoot.TokenRequest.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequest.Metadata(childComplexity), true
+
+	case "TokenRequest.spec":
+		if e.ComplexityRoot.TokenRequest.Spec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequest.Spec(childComplexity), true
+
+	case "TokenRequest.status":
+		if e.ComplexityRoot.TokenRequest.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequest.Status(childComplexity), true
+
+	case "TokenRequestSpec.audiences":
+		if e.ComplexityRoot.TokenRequestSpec.Audiences == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequestSpec.Audiences(childComplexity), true
+
+	case "TokenRequestSpec.expirationSeconds":
+		if e.ComplexityRoot.TokenRequestSpec.ExpirationSeconds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequestSpec.ExpirationSeconds(childComplexity), true
+
+	case "TokenRequestStatus.expirationTimestamp":
+		if e.ComplexityRoot.TokenRequestStatus.ExpirationTimestamp == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequestStatus.ExpirationTimestamp(childComplexity), true
 
 	case "TokenRequestStatus.token":
 		if e.ComplexityRoot.TokenRequestStatus.Token == nil {
@@ -4237,7 +4246,6 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputLabelSelectorRequirementInput,
 		ec.unmarshalInputLoginInput,
 		ec.unmarshalInputMediaDefinitionInput,
-		ec.unmarshalInputMetadataInput,
 		ec.unmarshalInputNamespaceBy,
 		ec.unmarshalInputNamespaceMetadataInput,
 		ec.unmarshalInputNamespacePushPolicyDefaultsInput,
@@ -4263,7 +4271,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputResolvedProductStatusInput,
 		ec.unmarshalInputRotateServiceAccountKeyInput,
 		ec.unmarshalInputServiceAccountPublicKeyInput,
-		ec.unmarshalInputTokenRequestSpec,
+		ec.unmarshalInputTokenRequestSpecInput,
 		ec.unmarshalInputUpdateCategoryStatusInput,
 		ec.unmarshalInputUpdateCollectionInput,
 		ec.unmarshalInputUpdateNamespaceInput,
@@ -5664,7 +5672,7 @@ input ProductOptionDefinitionInput {
 input CreateProductInput {
   apiVersion: String! = "catalog.gitstore.dev/v1beta1"
   kind: String! = "Product"
-  metadata: MetadataInput!
+  metadata: ObjectMetaInput!
   spec: ProductSpecInput!
   body: String
 }
@@ -5672,7 +5680,7 @@ input CreateProductInput {
 input UpdateProductInput {
   apiVersion: String! = "catalog.gitstore.dev/v1beta1"
   kind: String! = "Product"
-  metadata: MetadataInput!
+  metadata: ObjectMetaInput!
   spec: ProductSpecInput!
   body: String
 }
@@ -6491,7 +6499,7 @@ extend type Mutation {
 }
 
 """Author-controlled metadata shared by declarative resource mutations."""
-input MetadataInput {
+input ObjectMetaInput {
   name: String!
   namespace: String!
   labels: JSON
@@ -6517,7 +6525,7 @@ type ProvisionRepositoryStoragePayload {
 input CreateRepositoryInput {
   apiVersion: String! = "gitstore.dev/v1beta1"
   kind: String! = "Repository"
-  metadata: MetadataInput!
+  metadata: ObjectMetaInput!
   spec: RepositorySpecInput!
 }
 
@@ -6528,7 +6536,7 @@ type CreateRepositoryPayload {
 input UpdateRepositoryInput {
   apiVersion: String! = "gitstore.dev/v1beta1"
   kind: String! = "Repository"
-  metadata: MetadataInput!
+  metadata: ObjectMetaInput!
   spec: RepositorySpecInput!
 }
 
@@ -6597,6 +6605,32 @@ interface Node {
   Globally unique identifier (format: [type]_[base62])
   """
   id: ID!
+}
+
+"""
+An object that has a human-readable name. This represents both the Subject and the Delegate:
+- creation_actor
+- update_actor
+- creation_on_behalf_of_actor OR creation_subject
+- update_on_behalf_of_actor OR update_subject
+
+Implemented by
+- User
+- ServiceAccount
+"""
+interface Actor {
+  metadata: ObjectMeta!
+  status: ActorStatus!
+}
+
+"""
+An object that can be published or unpublished. Implemented by
+- Product
+- ProductVariant
+"""
+interface Publishable {
+  published: Boolean!
+  # publications: PublicationConnection!
 }
 
 """
@@ -6783,7 +6817,7 @@ input ConditionInput {
 }
 
 # ============================================================================
-# Scalars & Enums
+# Scalars
 # ============================================================================
 
 """
@@ -6843,6 +6877,14 @@ enum ConditionStatus {
   TRUE
   FALSE
   UNKNOWN
+}
+
+enum ActorStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  INVITED
+  PENDING_VERIFICATION
 }
 
 """
@@ -6933,26 +6975,15 @@ input ProductVariantNamespacePath {
 # replacing kubelet attestation with a portable signed client assertion.
 
 """
-Identity metadata for a ServiceAccount create/rotate/delete request
-(Relay-style input, not the full ObjectMeta envelope used by catalog
-resources — a ServiceAccount is identified purely by namespace/name).
+A GitStore-issued non-human identity. Implements the Actor interface so it can
+appear anywhere a Subject/Delegate is referenced.
 """
-input ObjectMetaInput {
-  """Convention string grouping related service accounts, e.g. "controllers". Not a GitStore Namespace resource."""
-  namespace: String!
-
-  """Names the process/identity, e.g. "gitstore-controller-manager"."""
-  name: String!
-}
-
-"""
-System-managed identity metadata returned for a ServiceAccount.
-"""
-type ServiceAccountObjectMeta {
-  namespace: String!
-  name: String!
-  uid: ID!
-  creationTimestamp: DateTime!
+type ServiceAccount implements Actor {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  keyIDs: [String!]!
+  status: ActorStatus!
 }
 
 """
@@ -6962,27 +6993,36 @@ input IssueServiceAccountTokenInput {
   apiVersion: String! = "authentication.gitstore.dev/v1beta1"
   kind: String! = "TokenRequest"
   metadata: ObjectMetaInput!
-  spec: TokenRequestSpec!
+  spec: TokenRequestSpecInput!
 }
 
 """
 Requested parameters for a ServiceAccount access token.
 """
-input TokenRequestSpec {
-  """Requested audience. Defaults to auth.serviceaccount.audience (typically "gitstore-api") when omitted."""
-  audience: String
+input TokenRequestSpecInput {
+  """Requested audiences. Defaults to auth.serviceaccount.audience (typically "gitstore-api") when omitted."""
+  audiences: [String!]
 
   """Requested token lifetime in seconds. Clamped to auth.serviceaccount.max_ttl regardless of the requested value."""
-  ttlSeconds: Int
+  expirationSeconds: Int
 }
 
 """
-issueServiceAccountToken mutation payload (Relay pattern).
+Resolved parameters echoed back on an issued token.
 """
-type IssueServiceAccountTokenPayload {
+type TokenRequestSpec {
+  audiences: [String!]
+  expirationSeconds: Int
+}
+
+"""
+A short-lived ServiceAccount access token result.
+"""
+type TokenRequest {
   apiVersion: String!
   kind: String!
-  metadata: ServiceAccountObjectMeta!
+  metadata: ObjectMeta!
+  spec: TokenRequestSpec!
   status: TokenRequestStatus!
 }
 
@@ -6991,7 +7031,14 @@ Issued access token result.
 """
 type TokenRequestStatus {
   token: String!
-  expiresAt: DateTime!
+  expirationTimestamp: DateTime!
+}
+
+"""
+issueServiceAccountToken mutation payload.
+"""
+type IssueServiceAccountTokenPayload {
+  tokenRequest: TokenRequest
 }
 
 """
@@ -7009,7 +7056,7 @@ input ServiceAccountPublicKeyInput {
 }
 
 """
-createServiceAccount mutation input (Relay pattern).
+createServiceAccount mutation input.
 """
 input CreateServiceAccountInput {
   apiVersion: String! = "authentication.gitstore.dev/v1beta1"
@@ -7021,29 +7068,34 @@ input CreateServiceAccountInput {
 }
 
 """
-rotateServiceAccountKey mutation input (Relay pattern). add and removeKids
+createServiceAccount mutation payload.
+"""
+type CreateServiceAccountPayload {
+  serviceAccount: ServiceAccount
+}
+
+"""
+rotateServiceAccountKey mutation input. add and removeKids
 may both be non-empty in the same call to support an overlap window during
 rotation.
 """
 input RotateServiceAccountKeyInput {
+  apiVersion: String! = "authentication.gitstore.dev/v1beta1"
+  kind: String! = "ServiceAccount"
   metadata: ObjectMetaInput!
   add: [ServiceAccountPublicKeyInput!]!
   removeKids: [String!]!
 }
 
 """
-createServiceAccount/rotateServiceAccountKey mutation payload (Relay pattern).
+rotateServiceAccountKey mutation payload.
 """
-type CreateServiceAccountPayload {
-  apiVersion: String!
-  kind: String!
-  metadata: ServiceAccountObjectMeta!
-  keyIDs: [String!]!
-  disabled: Boolean!
+type RotateServiceAccountKeyPayload {
+  serviceAccount: ServiceAccount
 }
 
 """
-deleteServiceAccount mutation input (Relay pattern).
+deleteServiceAccount mutation input.
 """
 input DeleteServiceAccountInput {
   apiVersion: String! = "authentication.gitstore.dev/v1beta1"
@@ -7052,12 +7104,10 @@ input DeleteServiceAccountInput {
 }
 
 """
-deleteServiceAccount mutation payload (Relay pattern).
+deleteServiceAccount mutation payload.
 """
 type DeleteServiceAccountPayload {
-  apiVersion: String!
-  kind: String!
-  metadata: ServiceAccountObjectMeta!
+  serviceAccount: ServiceAccount
 }
 
 # Add ServiceAccount mutations to the Mutation type
@@ -7081,7 +7131,7 @@ extend type Mutation {
   supporting an overlap window during key rotation. Requires rbac-local
   action "serviceaccount.key.rotate".
   """
-  rotateServiceAccountKey(input: RotateServiceAccountKeyInput!): CreateServiceAccountPayload!
+  rotateServiceAccountKey(input: RotateServiceAccountKeyInput!): RotateServiceAccountKeyPayload!
 
   """
   Delete a ServiceAccount. Idempotent: deleting an already-deleted account
@@ -7375,16 +7425,8 @@ func (ec *executionContext) childFields_CreateRepositoryPayload(ctx context.Cont
 
 func (ec *executionContext) childFields_CreateServiceAccountPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "apiVersion":
-		return ec.fieldContext_CreateServiceAccountPayload_apiVersion(ctx, field)
-	case "kind":
-		return ec.fieldContext_CreateServiceAccountPayload_kind(ctx, field)
-	case "metadata":
-		return ec.fieldContext_CreateServiceAccountPayload_metadata(ctx, field)
-	case "keyIDs":
-		return ec.fieldContext_CreateServiceAccountPayload_keyIDs(ctx, field)
-	case "disabled":
-		return ec.fieldContext_CreateServiceAccountPayload_disabled(ctx, field)
+	case "serviceAccount":
+		return ec.fieldContext_CreateServiceAccountPayload_serviceAccount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CreateServiceAccountPayload", field.Name)
 }
@@ -7439,12 +7481,8 @@ func (ec *executionContext) childFields_DeleteRepositoryPayload(ctx context.Cont
 
 func (ec *executionContext) childFields_DeleteServiceAccountPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "apiVersion":
-		return ec.fieldContext_DeleteServiceAccountPayload_apiVersion(ctx, field)
-	case "kind":
-		return ec.fieldContext_DeleteServiceAccountPayload_kind(ctx, field)
-	case "metadata":
-		return ec.fieldContext_DeleteServiceAccountPayload_metadata(ctx, field)
+	case "serviceAccount":
+		return ec.fieldContext_DeleteServiceAccountPayload_serviceAccount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DeleteServiceAccountPayload", field.Name)
 }
@@ -7605,14 +7643,8 @@ func (ec *executionContext) childFields_InventoryDefinition(ctx context.Context,
 
 func (ec *executionContext) childFields_IssueServiceAccountTokenPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "apiVersion":
-		return ec.fieldContext_IssueServiceAccountTokenPayload_apiVersion(ctx, field)
-	case "kind":
-		return ec.fieldContext_IssueServiceAccountTokenPayload_kind(ctx, field)
-	case "metadata":
-		return ec.fieldContext_IssueServiceAccountTokenPayload_metadata(ctx, field)
-	case "status":
-		return ec.fieldContext_IssueServiceAccountTokenPayload_status(ctx, field)
+	case "tokenRequest":
+		return ec.fieldContext_IssueServiceAccountTokenPayload_tokenRequest(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type IssueServiceAccountTokenPayload", field.Name)
 }
@@ -8403,6 +8435,14 @@ func (ec *executionContext) childFields_ResolvedRepositoryDefinition(ctx context
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedRepositoryDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_RotateServiceAccountKeyPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "serviceAccount":
+		return ec.fieldContext_RotateServiceAccountKeyPayload_serviceAccount(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RotateServiceAccountKeyPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_SchemaValidationDefaults(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "phase":
@@ -8437,18 +8477,20 @@ func (ec *executionContext) childFields_SelectedOptionDefinition(ctx context.Con
 	return nil, fmt.Errorf("no field named %q was found under type SelectedOptionDefinition", field.Name)
 }
 
-func (ec *executionContext) childFields_ServiceAccountObjectMeta(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+func (ec *executionContext) childFields_ServiceAccount(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "namespace":
-		return ec.fieldContext_ServiceAccountObjectMeta_namespace(ctx, field)
-	case "name":
-		return ec.fieldContext_ServiceAccountObjectMeta_name(ctx, field)
-	case "uid":
-		return ec.fieldContext_ServiceAccountObjectMeta_uid(ctx, field)
-	case "creationTimestamp":
-		return ec.fieldContext_ServiceAccountObjectMeta_creationTimestamp(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_ServiceAccount_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_ServiceAccount_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_ServiceAccount_metadata(ctx, field)
+	case "keyIDs":
+		return ec.fieldContext_ServiceAccount_keyIDs(ctx, field)
+	case "status":
+		return ec.fieldContext_ServiceAccount_status(ctx, field)
 	}
-	return nil, fmt.Errorf("no field named %q was found under type ServiceAccountObjectMeta", field.Name)
+	return nil, fmt.Errorf("no field named %q was found under type ServiceAccount", field.Name)
 }
 
 func (ec *executionContext) childFields_StrategyDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8459,12 +8501,38 @@ func (ec *executionContext) childFields_StrategyDefinition(ctx context.Context, 
 	return nil, fmt.Errorf("no field named %q was found under type StrategyDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_TokenRequest(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "apiVersion":
+		return ec.fieldContext_TokenRequest_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_TokenRequest_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_TokenRequest_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_TokenRequest_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_TokenRequest_status(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TokenRequest", field.Name)
+}
+
+func (ec *executionContext) childFields_TokenRequestSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "audiences":
+		return ec.fieldContext_TokenRequestSpec_audiences(ctx, field)
+	case "expirationSeconds":
+		return ec.fieldContext_TokenRequestSpec_expirationSeconds(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TokenRequestSpec", field.Name)
+}
+
 func (ec *executionContext) childFields_TokenRequestStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "token":
 		return ec.fieldContext_TokenRequestStatus_token(ctx, field)
-	case "expiresAt":
-		return ec.fieldContext_TokenRequestStatus_expiresAt(ctx, field)
+	case "expirationTimestamp":
+		return ec.fieldContext_TokenRequestStatus_expirationTimestamp(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type TokenRequestStatus", field.Name)
 }

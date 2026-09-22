@@ -216,7 +216,7 @@ func TestServiceAccountSource_UsesConfiguredAudiencesAndSigningLifetime(t *testi
 		Variables struct {
 			Input struct {
 				Spec struct {
-					Audience string `json:"audience"`
+					Audiences []string `json:"audiences"`
 				} `json:"spec"`
 			} `json:"input"`
 		} `json:"variables"`
@@ -244,7 +244,7 @@ func TestServiceAccountSource_UsesConfiguredAudiencesAndSigningLifetime(t *testi
 	assert.Equal(t, assertionSigningLifetime, signer.ttl)
 	assert.Equal(t, "controller-token-exchange", signer.audience)
 	signer.mu.Unlock()
-	assert.Equal(t, "controller-api", request.Variables.Input.Spec.Audience)
+	assert.Equal(t, []string{"controller-api"}, request.Variables.Input.Spec.Audiences)
 }
 
 func TestServiceAccountSource_RecoversAfterBackoff(t *testing.T) {
@@ -377,8 +377,8 @@ func TestServiceAccountSource_ExchangeHasBoundedTimeout(t *testing.T) {
 
 func tokenExchangeResponse(token string) map[string]any {
 	return map[string]any{
-		"data": map[string]any{"issueServiceAccountToken": map[string]any{"status": map[string]any{
-			"token": token, "expiresAt": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
-		}}},
+		"data": map[string]any{"issueServiceAccountToken": map[string]any{"tokenRequest": map[string]any{"status": map[string]any{
+			"token": token, "expirationTimestamp": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		}}}},
 	}
 }

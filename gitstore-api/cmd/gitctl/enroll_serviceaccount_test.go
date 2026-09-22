@@ -33,7 +33,7 @@ func TestEnrollServiceAccountIsIdempotentAndDoesNotWriteCredentials(t *testing.T
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if requests == 1 {
-			_, _ = w.Write([]byte(`{"data":{"createServiceAccount":{"metadata":{"uid":"uid-1"}}}}`))
+			_, _ = w.Write([]byte(`{"data":{"createServiceAccount":{"serviceAccount":{"metadata":{"uid":"uid-1"}}}}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"errors":[{"message":"service account controllers:manager already exists"}]}`))
@@ -139,7 +139,7 @@ func TestEnrollServiceAccountBootstrapsAdminSessionAndWritesIdentity(t *testing.
 		if got := request.Header.Get("Authorization"); got != "Bearer "+accessToken {
 			t.Errorf("Authorization = %q, want access token", got)
 		}
-		_, _ = w.Write([]byte(`{"data":{"createServiceAccount":{"metadata":{"uid":"service-account-uid"}}}}`))
+		_, _ = w.Write([]byte(`{"data":{"createServiceAccount":{"serviceAccount":{"metadata":{"uid":"service-account-uid"}}}}}`))
 	}))
 	defer server.Close()
 

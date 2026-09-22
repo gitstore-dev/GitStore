@@ -24,7 +24,7 @@ func TestProductLifecycleSchemaContract(t *testing.T) {
 	for _, inputName := range []string{"CreateProductInput", "UpdateProductInput"} {
 		requireGraphQLField(t, schema, inputName, "apiVersion", "String!")
 		requireGraphQLField(t, schema, inputName, "kind", "String!")
-		requireGraphQLField(t, schema, inputName, "metadata", "MetadataInput!")
+		requireGraphQLField(t, schema, inputName, "metadata", "ObjectMetaInput!")
 		requireGraphQLField(t, schema, inputName, "spec", "ProductSpecInput!")
 		assert.Nil(t, schema.Types[inputName].Fields.ForName("repository"), "%s must route through persisted provenance", inputName)
 		assert.Nil(t, schema.Types[inputName].Fields.ForName("path"), "%s must route through persisted provenance", inputName)

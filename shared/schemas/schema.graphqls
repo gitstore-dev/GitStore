@@ -22,6 +22,32 @@ interface Node {
 }
 
 """
+An object that has a human-readable name. This represents both the Subject and the Delegate:
+- creation_actor
+- update_actor
+- creation_on_behalf_of_actor OR creation_subject
+- update_on_behalf_of_actor OR update_subject
+
+Implemented in
+- User
+- ServiceAccount
+"""
+interface Actor {
+  metadata: ObjectMeta!
+  status: ActorStatus!
+}
+
+"""
+An object that can be published or unpublished. Implemented in
+- Product
+- ProductVariant
+"""
+interface Publishable {
+  published: Boolean!
+  # publications: PublicationConnection!
+}
+
+"""
 Information about pagination in a connection
 """
 type PageInfo {
@@ -205,7 +231,7 @@ input ConditionInput {
 }
 
 # ============================================================================
-# Scalars & Enums
+# Scalars
 # ============================================================================
 
 """
@@ -265,6 +291,14 @@ enum ConditionStatus {
   TRUE
   FALSE
   UNKNOWN
+}
+
+enum ActorStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  INVITED
+  PENDING_VERIFICATION
 }
 
 """

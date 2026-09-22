@@ -286,7 +286,7 @@ func TestGraphQLWebSocketConnectionClosesWhenServiceAccountDeleted(t *testing.T)
 	conn := env.dial(t)
 	require.Equal(t, "connection_ack", initWebSocket(t, conn, map[string]any{"Authorization": "Bearer valid"})["type"])
 
-	body := strings.NewReader(`{"query":"mutation { deleteServiceAccount(input: {apiVersion: \"v1\", kind: \"ServiceAccount\", metadata: {namespace: \"controllers\", name: \"controller\"}}) { metadata { uid } } }"}`)
+	body := strings.NewReader(`{"query":"mutation { deleteServiceAccount(input: {apiVersion: \"v1\", kind: \"ServiceAccount\", metadata: {namespace: \"controllers\", name: \"controller\"}}) { serviceAccount { metadata { uid } } } }"}`)
 	request, err := http.NewRequest(http.MethodPost, env.server.URL+"/graphql", body)
 	require.NoError(t, err)
 	request.Header.Set("Authorization", "Bearer valid")

@@ -22,7 +22,7 @@ func (r *mutationResolver) CreateServiceAccount(ctx context.Context, input model
 }
 
 // RotateServiceAccountKey is the resolver for the rotateServiceAccountKey field.
-func (r *mutationResolver) RotateServiceAccountKey(ctx context.Context, input model.RotateServiceAccountKeyInput) (*model.CreateServiceAccountPayload, error) {
+func (r *mutationResolver) RotateServiceAccountKey(ctx context.Context, input model.RotateServiceAccountKeyInput) (*model.RotateServiceAccountKeyPayload, error) {
 	return r.Resolver.RotateServiceAccountKey(ctx, &input)
 }
 

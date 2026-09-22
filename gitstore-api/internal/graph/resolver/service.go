@@ -176,7 +176,7 @@ func (s *Service) GetProductByName(ctx context.Context, namespace, name string) 
 // CommitProductManifest routes Product authoring through Git and the shared
 // committed-admission boundary. GraphQL never writes Product desired state
 // directly to the datastore.
-func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind string, metadata *model.MetadataInput, spec *model.ProductSpecInput, body *string, caller string, create bool) (*datastore.Product, error) {
+func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind string, metadata *model.ObjectMetaInput, spec *model.ProductSpecInput, body *string, caller string, create bool) (*datastore.Product, error) {
 	if apiVersion != "catalog.gitstore.dev/v1beta1" || kind != "Product" || metadata == nil || spec == nil || metadata.Name == "" || metadata.Namespace == "" {
 		return nil, gqlerror.Errorf("invalid Product resource envelope")
 	}
@@ -668,7 +668,7 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 // CommitRepositoryManifest writes one Repository envelope and synchronously
 // materializes that exact committed file through the shared admission runtime.
 // The post-receive batch path uses the same runtime asynchronously.
-func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind string, metadata *model.MetadataInput, spec *model.RepositorySpecInput, callerUsername string, create bool) (*admission.CommittedManifestResult, error) {
+func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind string, metadata *model.ObjectMetaInput, spec *model.RepositorySpecInput, callerUsername string, create bool) (*admission.CommittedManifestResult, error) {
 	if apiVersion != repositoryAPIVersion || kind != repositoryKind || metadata == nil || spec == nil {
 		return nil, gqlerror.Errorf("invalid Repository resource envelope")
 	}

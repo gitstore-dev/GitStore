@@ -50,7 +50,7 @@ type MutationResolver interface {
 	CompleteRepositoryDeletion(ctx context.Context, input model.CompleteRepositoryDeletionInput) (*model.CompleteRepositoryDeletionPayload, error)
 	IssueServiceAccountToken(ctx context.Context, input model.IssueServiceAccountTokenInput) (*model.IssueServiceAccountTokenPayload, error)
 	CreateServiceAccount(ctx context.Context, input model.CreateServiceAccountInput) (*model.CreateServiceAccountPayload, error)
-	RotateServiceAccountKey(ctx context.Context, input model.RotateServiceAccountKeyInput) (*model.CreateServiceAccountPayload, error)
+	RotateServiceAccountKey(ctx context.Context, input model.RotateServiceAccountKeyInput) (*model.RotateServiceAccountKeyPayload, error)
 	DeleteServiceAccount(ctx context.Context, input model.DeleteServiceAccountInput) (*model.DeleteServiceAccountPayload, error)
 }
 type QueryResolver interface {
@@ -2441,8 +2441,8 @@ func (ec *executionContext) _Mutation_rotateServiceAccountKey(ctx context.Contex
 			return ec.Resolvers.Mutation().RotateServiceAccountKey(ctx, fc.Args["input"].(model.RotateServiceAccountKeyInput))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.CreateServiceAccountPayload) graphql.Marshaler {
-			return ec.marshalNCreateServiceAccountPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateServiceAccountPayload(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.RotateServiceAccountKeyPayload) graphql.Marshaler {
+			return ec.marshalNRotateServiceAccountKeyPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRotateServiceAccountKeyPayload(ctx, selections, v)
 		},
 		true,
 		true,
@@ -2455,7 +2455,7 @@ func (ec *executionContext) fieldContext_Mutation_rotateServiceAccountKey(ctx co
 		IsMethod:   true,
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_CreateServiceAccountPayload(ctx, field)
+			return ec.childFields_RotateServiceAccountKeyPayload(ctx, field)
 		},
 	}
 	defer func() {
@@ -4539,6 +4539,26 @@ func (ec *executionContext) unmarshalInputUpdateResourceStatusInput(ctx context.
 
 // region    ************************** interface.gotpl ***************************
 
+func (ec *executionContext) _Actor(ctx context.Context, sel ast.SelectionSet, obj model.Actor) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.ServiceAccount:
+		return ec._ServiceAccount(ctx, sel, &obj)
+	case *model.ServiceAccount:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ServiceAccount(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of Actor must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
 func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj model.Node) graphql.Marshaler {
 	switch obj := (obj).(type) {
 	case nil:
@@ -4597,6 +4617,19 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			return typedObj
 		} else {
 			panic(fmt.Errorf("unexpected type %T; non-generated variants of Node must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
+func (ec *executionContext) _Publishable(ctx context.Context, sel ast.SelectionSet, obj model.Publishable) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of Publishable must implement graphql.Marshaler", obj))
 		}
 	}
 }
@@ -5506,6 +5539,16 @@ func (ec *executionContext) _WatchEvent(ctx context.Context, sel ast.SelectionSe
 // endregion **************************** object.gotpl ****************************
 
 // region    ***************************** type.gotpl *****************************
+
+func (ec *executionContext) unmarshalNActorStatus2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐActorStatus(ctx context.Context, v any) (model.ActorStatus, error) {
+	var res model.ActorStatus
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNActorStatus2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐActorStatus(ctx context.Context, sel ast.SelectionSet, v model.ActorStatus) graphql.Marshaler {
+	return v
+}
 
 func (ec *executionContext) unmarshalNCategoryBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryBy(ctx context.Context, v any) (model.CategoryBy, error) {
 	res, err := ec.unmarshalInputCategoryBy(ctx, v)
