@@ -210,7 +210,7 @@ func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Tim
 
 	const mutation = `mutation IssueServiceAccountToken($input: IssueServiceAccountTokenInput!) {
 		issueServiceAccountToken(input: $input) {
-			status { token expiresAt }
+			tokenRequest { status { token expirationTimestamp } }
 		}
 	}`
 	requestBody, err := json.Marshal(gqlRequest{
@@ -223,8 +223,8 @@ func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Tim
 				"name":      s.name,
 			},
 			"spec": map[string]any{
-				"audience":   s.accessTokenAudience,
-				"ttlSeconds": int(ttl.Seconds()),
+				"audiences":         []string{s.accessTokenAudience},
+				"expirationSeconds": int(ttl.Seconds()),
 			},
 		}},
 	})
@@ -251,10 +251,12 @@ func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Tim
 	var result struct {
 		Data struct {
 			IssueServiceAccountToken struct {
-				Status struct {
-					Token     string    `json:"token"`
-					ExpiresAt time.Time `json:"expiresAt"`
-				} `json:"status"`
+				TokenRequest struct {
+					Status struct {
+						Token               string    `json:"token"`
+						ExpirationTimestamp time.Time `json:"expirationTimestamp"`
+					} `json:"status"`
+				} `json:"tokenRequest"`
 			} `json:"issueServiceAccountToken"`
 		} `json:"data"`
 		Errors []*Error `json:"errors"`
@@ -265,10 +267,10 @@ func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Tim
 	if len(result.Errors) > 0 {
 		return "", time.Time{}, result.Errors[0]
 	}
-	if result.Data.IssueServiceAccountToken.Status.Token == "" || result.Data.IssueServiceAccountToken.Status.ExpiresAt.IsZero() {
+	if result.Data.IssueServiceAccountToken.TokenRequest.Status.Token == "" || result.Data.IssueServiceAccountToken.TokenRequest.Status.ExpirationTimestamp.IsZero() {
 		return "", time.Time{}, fmt.Errorf("token exchange returned an empty token or expiry")
 	}
-	return result.Data.IssueServiceAccountToken.Status.Token, result.Data.IssueServiceAccountToken.Status.ExpiresAt, nil
+	return result.Data.IssueServiceAccountToken.TokenRequest.Status.Token, result.Data.IssueServiceAccountToken.TokenRequest.Status.ExpirationTimestamp, nil
 }
 
 // nextBackoff returns the next backoff deadline with jitter.

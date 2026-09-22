@@ -75,27 +75,53 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 		return nil, err
 	}
 
-	keyIDs := make([]string, len(pubKeys))
-	for i, pk := range pubKeys {
-		keyIDs[i] = pk.KeyID
-	}
-
 	return &model.CreateServiceAccountPayload{
-		APIVersion: "v1",
-		Kind:       "ServiceAccount",
-		Metadata: &model.ServiceAccountObjectMeta{
-			Namespace:         sa.Namespace,
-			Name:              sa.Name,
-			UID:               sa.UID,
-			CreationTimestamp: sa.CreationTimestamp,
-		},
-		KeyIDs:   keyIDs,
-		Disabled: sa.Disabled,
+		ServiceAccount: serviceAccountToModel(sa),
 	}, nil
 }
 
+// serviceAccountObjectMeta projects a datastore ServiceAccount onto the shared
+// ObjectMeta envelope. A ServiceAccount does not carry the full catalog
+// envelope, so the fields it lacks are populated with safe defaults: nil
+// labels/annotations, no revision, and — importantly — empty (non-nil) slices
+// for the non-null OwnerReferences/Finalizers list fields, without which
+// gqlgen marshaling would fail at runtime. The UID is returned raw (a
+// ServiceAccount is not a Relay Node).
+func serviceAccountObjectMeta(sa *datastore.ServiceAccount) *model.ObjectMeta {
+	return &model.ObjectMeta{
+		Name:              sa.Name,
+		Namespace:         sa.Namespace,
+		UID:               sa.UID,
+		ResourceVersion:   sa.ResourceVersion,
+		Generation:        int32(sa.Generation),
+		CreationTimestamp: sa.CreationTimestamp,
+		OwnerReferences:   []*model.OwnerReference{},
+		Finalizers:        []string{},
+	}
+}
+
+// serviceAccountToModel builds the GraphQL ServiceAccount object returned by
+// the create/rotate/delete payloads.
+func serviceAccountToModel(sa *datastore.ServiceAccount) *model.ServiceAccount {
+	keyIDs := make([]string, len(sa.PublicKeys))
+	for i, pk := range sa.PublicKeys {
+		keyIDs[i] = pk.KeyID
+	}
+	status := model.ActorStatusActive
+	if sa.Disabled {
+		status = model.ActorStatusInactive
+	}
+	return &model.ServiceAccount{
+		APIVersion: "authentication.gitstore.dev/v1beta1",
+		Kind:       "ServiceAccount",
+		Metadata:   serviceAccountObjectMeta(sa),
+		KeyIDs:     keyIDs,
+		Status:     status,
+	}
+}
+
 // RotateServiceAccountKey updates the public keys for a service account.
-func (r *Resolver) RotateServiceAccountKey(ctx context.Context, input *model.RotateServiceAccountKeyInput) (*model.CreateServiceAccountPayload, error) {
+func (r *Resolver) RotateServiceAccountKey(ctx context.Context, input *model.RotateServiceAccountKeyInput) (*model.RotateServiceAccountKeyPayload, error) {
 	if input == nil || input.Metadata == nil {
 		return nil, gqlerror.Errorf("metadata is required")
 	}
@@ -129,22 +155,8 @@ func (r *Resolver) RotateServiceAccountKey(ctx context.Context, input *model.Rot
 		return nil, gqlerror.Errorf("rotation would result in empty public key set")
 	}
 
-	keyIDs := make([]string, len(updated.PublicKeys))
-	for i, pk := range updated.PublicKeys {
-		keyIDs[i] = pk.KeyID
-	}
-
-	return &model.CreateServiceAccountPayload{
-		APIVersion: "v1",
-		Kind:       "ServiceAccount",
-		Metadata: &model.ServiceAccountObjectMeta{
-			Namespace:         updated.Namespace,
-			Name:              updated.Name,
-			UID:               updated.UID,
-			CreationTimestamp: updated.CreationTimestamp,
-		},
-		KeyIDs:   keyIDs,
-		Disabled: updated.Disabled,
+	return &model.RotateServiceAccountKeyPayload{
+		ServiceAccount: serviceAccountToModel(updated),
 	}, nil
 }
 
@@ -158,15 +170,10 @@ func (r *Resolver) DeleteServiceAccount(ctx context.Context, input *model.Delete
 
 	sa, err := r.store.GetServiceAccountBySubject(ctx, namespace, name)
 	if err == datastore.ErrNotFound {
-		// Idempotent: already deleted
-		return &model.DeleteServiceAccountPayload{
-			APIVersion: "v1",
-			Kind:       "ServiceAccount",
-			Metadata: &model.ServiceAccountObjectMeta{
-				Namespace: namespace,
-				Name:      name,
-			},
-		}, nil
+		// Idempotent: the account is already absent. The payload field is
+		// nullable, so return null rather than fabricating a zero-valued
+		// ServiceAccount that would misreport status ACTIVE.
+		return &model.DeleteServiceAccountPayload{ServiceAccount: nil}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -182,14 +189,7 @@ func (r *Resolver) DeleteServiceAccount(ctx context.Context, input *model.Delete
 	}
 
 	return &model.DeleteServiceAccountPayload{
-		APIVersion: "v1",
-		Kind:       "ServiceAccount",
-		Metadata: &model.ServiceAccountObjectMeta{
-			Namespace:         sa.Namespace,
-			Name:              sa.Name,
-			UID:               sa.UID,
-			CreationTimestamp: sa.CreationTimestamp,
-		},
+		ServiceAccount: serviceAccountToModel(sa),
 	}, nil
 }
 
@@ -232,20 +232,23 @@ func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.Is
 	if principal.ServiceAccountUID != sa.UID {
 		return nil, gqlerror.Errorf("service account identity does not match the current service account")
 	}
-	// Determine audience: use input or configured default
+	// Determine audience: use input or configured default. Every requested
+	// audience must match the single configured value.
 	audience := r.serviceAccountAudience
-	if input.Spec.Audience != nil && *input.Spec.Audience != "" {
-		// Validate that requested audience matches configured value
-		if *input.Spec.Audience != r.serviceAccountAudience {
-			return nil, gqlerror.Errorf("requested audience %q does not match configured audience %q", *input.Spec.Audience, r.serviceAccountAudience)
+	for _, requested := range input.Spec.Audiences {
+		if requested == "" {
+			continue
 		}
-		audience = *input.Spec.Audience
+		if requested != r.serviceAccountAudience {
+			return nil, gqlerror.Errorf("requested audience %q does not match configured audience %q", requested, r.serviceAccountAudience)
+		}
+		audience = requested
 	}
 
 	// Determine TTL: use input or provider default
 	ttlSeconds := 600 // default 10 minutes
-	if input.Spec.TTLSeconds != nil {
-		ttlSeconds = int(*input.Spec.TTLSeconds)
+	if input.Spec.ExpirationSeconds != nil {
+		ttlSeconds = int(*input.Spec.ExpirationSeconds)
 	}
 
 	// Issue token via the provider chain
@@ -256,18 +259,23 @@ func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.Is
 		return nil, err
 	}
 
+	// Echo the effective lifetime the provider actually issued (after any
+	// max-TTL clamping or default substitution), not the raw request, so
+	// spec.expirationSeconds agrees with status.expirationTimestamp.
+	effectiveTTL := int32(time.Until(expiresAt).Round(time.Second) / time.Second)
 	return &model.IssueServiceAccountTokenPayload{
-		APIVersion: "v1",
-		Kind:       "ServiceAccount",
-		Metadata: &model.ServiceAccountObjectMeta{
-			Namespace:         sa.Namespace,
-			Name:              sa.Name,
-			UID:               sa.UID,
-			CreationTimestamp: sa.CreationTimestamp,
-		},
-		Status: &model.TokenRequestStatus{
-			Token:     token,
-			ExpiresAt: expiresAt,
+		TokenRequest: &model.TokenRequest{
+			APIVersion: "authentication.gitstore.dev/v1beta1",
+			Kind:       "TokenRequest",
+			Metadata:   serviceAccountObjectMeta(sa),
+			Spec: &model.TokenRequestSpec{
+				Audiences:         []string{audience},
+				ExpirationSeconds: &effectiveTTL,
+			},
+			Status: &model.TokenRequestStatus{
+				Token:               token,
+				ExpirationTimestamp: expiresAt,
+			},
 		},
 	}, nil
 }

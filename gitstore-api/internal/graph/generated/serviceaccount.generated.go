@@ -29,13 +29,141 @@ import (
 
 // region    **************************** field.gotpl *****************************
 
-func (ec *executionContext) _CreateServiceAccountPayload_apiVersion(ctx context.Context, field graphql.CollectedField, obj *model.CreateServiceAccountPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _CreateServiceAccountPayload_serviceAccount(ctx context.Context, field graphql.CollectedField, obj *model.CreateServiceAccountPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CreateServiceAccountPayload_apiVersion(ctx, field)
+			return ec.fieldContext_CreateServiceAccountPayload_serviceAccount(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ServiceAccount, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ServiceAccount) graphql.Marshaler {
+			return ec.marshalOServiceAccount2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐServiceAccount(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_CreateServiceAccountPayload_serviceAccount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CreateServiceAccountPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ServiceAccount(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeleteServiceAccountPayload_serviceAccount(ctx context.Context, field graphql.CollectedField, obj *model.DeleteServiceAccountPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DeleteServiceAccountPayload_serviceAccount(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ServiceAccount, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ServiceAccount) graphql.Marshaler {
+			return ec.marshalOServiceAccount2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐServiceAccount(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_DeleteServiceAccountPayload_serviceAccount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeleteServiceAccountPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ServiceAccount(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IssueServiceAccountTokenPayload_tokenRequest(ctx context.Context, field graphql.CollectedField, obj *model.IssueServiceAccountTokenPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_IssueServiceAccountTokenPayload_tokenRequest(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TokenRequest, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.TokenRequest) graphql.Marshaler {
+			return ec.marshalOTokenRequest2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTokenRequest(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_IssueServiceAccountTokenPayload_tokenRequest(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IssueServiceAccountTokenPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TokenRequest(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RotateServiceAccountKeyPayload_serviceAccount(ctx context.Context, field graphql.CollectedField, obj *model.RotateServiceAccountKeyPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RotateServiceAccountKeyPayload_serviceAccount(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ServiceAccount, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ServiceAccount) graphql.Marshaler {
+			return ec.marshalOServiceAccount2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐServiceAccount(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_RotateServiceAccountKeyPayload_serviceAccount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RotateServiceAccountKeyPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ServiceAccount(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ServiceAccount_apiVersion(ctx context.Context, field graphql.CollectedField, obj *model.ServiceAccount) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceAccount_apiVersion(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
 			return obj.APIVersion, nil
@@ -48,17 +176,17 @@ func (ec *executionContext) _CreateServiceAccountPayload_apiVersion(ctx context.
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_CreateServiceAccountPayload_apiVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CreateServiceAccountPayload", field, false, false, errors.New("field of type String does not have child fields"))
+func (ec *executionContext) fieldContext_ServiceAccount_apiVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceAccount", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _CreateServiceAccountPayload_kind(ctx context.Context, field graphql.CollectedField, obj *model.CreateServiceAccountPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _ServiceAccount_kind(ctx context.Context, field graphql.CollectedField, obj *model.ServiceAccount) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CreateServiceAccountPayload_kind(ctx, field)
+			return ec.fieldContext_ServiceAccount_kind(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
 			return obj.Kind, nil
@@ -71,49 +199,49 @@ func (ec *executionContext) _CreateServiceAccountPayload_kind(ctx context.Contex
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_CreateServiceAccountPayload_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CreateServiceAccountPayload", field, false, false, errors.New("field of type String does not have child fields"))
+func (ec *executionContext) fieldContext_ServiceAccount_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceAccount", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _CreateServiceAccountPayload_metadata(ctx context.Context, field graphql.CollectedField, obj *model.CreateServiceAccountPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _ServiceAccount_metadata(ctx context.Context, field graphql.CollectedField, obj *model.ServiceAccount) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CreateServiceAccountPayload_metadata(ctx, field)
+			return ec.fieldContext_ServiceAccount_metadata(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
 			return obj.Metadata, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.ServiceAccountObjectMeta) graphql.Marshaler {
-			return ec.marshalNServiceAccountObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐServiceAccountObjectMeta(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ObjectMeta) graphql.Marshaler {
+			return ec.marshalNObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMeta(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_CreateServiceAccountPayload_metadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_ServiceAccount_metadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
-		Object:     "CreateServiceAccountPayload",
+		Object:     "ServiceAccount",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_ServiceAccountObjectMeta(ctx, field)
+			return ec.childFields_ObjectMeta(ctx, field)
 		},
 	}
 	return fc, nil
 }
 
-func (ec *executionContext) _CreateServiceAccountPayload_keyIDs(ctx context.Context, field graphql.CollectedField, obj *model.CreateServiceAccountPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _ServiceAccount_keyIDs(ctx context.Context, field graphql.CollectedField, obj *model.ServiceAccount) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CreateServiceAccountPayload_keyIDs(ctx, field)
+			return ec.fieldContext_ServiceAccount_keyIDs(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
 			return obj.KeyIDs, nil
@@ -126,118 +254,40 @@ func (ec *executionContext) _CreateServiceAccountPayload_keyIDs(ctx context.Cont
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_CreateServiceAccountPayload_keyIDs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CreateServiceAccountPayload", field, false, false, errors.New("field of type String does not have child fields"))
+func (ec *executionContext) fieldContext_ServiceAccount_keyIDs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceAccount", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _CreateServiceAccountPayload_disabled(ctx context.Context, field graphql.CollectedField, obj *model.CreateServiceAccountPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _ServiceAccount_status(ctx context.Context, field graphql.CollectedField, obj *model.ServiceAccount) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CreateServiceAccountPayload_disabled(ctx, field)
+			return ec.fieldContext_ServiceAccount_status(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Disabled, nil
+			return obj.Status, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
-			return ec.marshalNBoolean2bool(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v model.ActorStatus) graphql.Marshaler {
+			return ec.marshalNActorStatus2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐActorStatus(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_CreateServiceAccountPayload_disabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CreateServiceAccountPayload", field, false, false, errors.New("field of type Boolean does not have child fields"))
+func (ec *executionContext) fieldContext_ServiceAccount_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceAccount", field, false, false, errors.New("field of type ActorStatus does not have child fields"))
 }
 
-func (ec *executionContext) _DeleteServiceAccountPayload_apiVersion(ctx context.Context, field graphql.CollectedField, obj *model.DeleteServiceAccountPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _TokenRequest_apiVersion(ctx context.Context, field graphql.CollectedField, obj *model.TokenRequest) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_DeleteServiceAccountPayload_apiVersion(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.APIVersion, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_DeleteServiceAccountPayload_apiVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("DeleteServiceAccountPayload", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _DeleteServiceAccountPayload_kind(ctx context.Context, field graphql.CollectedField, obj *model.DeleteServiceAccountPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_DeleteServiceAccountPayload_kind(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Kind, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_DeleteServiceAccountPayload_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("DeleteServiceAccountPayload", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _DeleteServiceAccountPayload_metadata(ctx context.Context, field graphql.CollectedField, obj *model.DeleteServiceAccountPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_DeleteServiceAccountPayload_metadata(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Metadata, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.ServiceAccountObjectMeta) graphql.Marshaler {
-			return ec.marshalNServiceAccountObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐServiceAccountObjectMeta(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_DeleteServiceAccountPayload_metadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "DeleteServiceAccountPayload",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_ServiceAccountObjectMeta(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _IssueServiceAccountTokenPayload_apiVersion(ctx context.Context, field graphql.CollectedField, obj *model.IssueServiceAccountTokenPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_IssueServiceAccountTokenPayload_apiVersion(ctx, field)
+			return ec.fieldContext_TokenRequest_apiVersion(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
 			return obj.APIVersion, nil
@@ -250,17 +300,17 @@ func (ec *executionContext) _IssueServiceAccountTokenPayload_apiVersion(ctx cont
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_IssueServiceAccountTokenPayload_apiVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("IssueServiceAccountTokenPayload", field, false, false, errors.New("field of type String does not have child fields"))
+func (ec *executionContext) fieldContext_TokenRequest_apiVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TokenRequest", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _IssueServiceAccountTokenPayload_kind(ctx context.Context, field graphql.CollectedField, obj *model.IssueServiceAccountTokenPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _TokenRequest_kind(ctx context.Context, field graphql.CollectedField, obj *model.TokenRequest) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_IssueServiceAccountTokenPayload_kind(ctx, field)
+			return ec.fieldContext_TokenRequest_kind(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
 			return obj.Kind, nil
@@ -273,49 +323,81 @@ func (ec *executionContext) _IssueServiceAccountTokenPayload_kind(ctx context.Co
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_IssueServiceAccountTokenPayload_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("IssueServiceAccountTokenPayload", field, false, false, errors.New("field of type String does not have child fields"))
+func (ec *executionContext) fieldContext_TokenRequest_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TokenRequest", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _IssueServiceAccountTokenPayload_metadata(ctx context.Context, field graphql.CollectedField, obj *model.IssueServiceAccountTokenPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _TokenRequest_metadata(ctx context.Context, field graphql.CollectedField, obj *model.TokenRequest) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_IssueServiceAccountTokenPayload_metadata(ctx, field)
+			return ec.fieldContext_TokenRequest_metadata(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
 			return obj.Metadata, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.ServiceAccountObjectMeta) graphql.Marshaler {
-			return ec.marshalNServiceAccountObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐServiceAccountObjectMeta(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ObjectMeta) graphql.Marshaler {
+			return ec.marshalNObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMeta(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_IssueServiceAccountTokenPayload_metadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_TokenRequest_metadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
-		Object:     "IssueServiceAccountTokenPayload",
+		Object:     "TokenRequest",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_ServiceAccountObjectMeta(ctx, field)
+			return ec.childFields_ObjectMeta(ctx, field)
 		},
 	}
 	return fc, nil
 }
 
-func (ec *executionContext) _IssueServiceAccountTokenPayload_status(ctx context.Context, field graphql.CollectedField, obj *model.IssueServiceAccountTokenPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _TokenRequest_spec(ctx context.Context, field graphql.CollectedField, obj *model.TokenRequest) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_IssueServiceAccountTokenPayload_status(ctx, field)
+			return ec.fieldContext_TokenRequest_spec(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Spec, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.TokenRequestSpec) graphql.Marshaler {
+			return ec.marshalNTokenRequestSpec2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTokenRequestSpec(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TokenRequest_spec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TokenRequest",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TokenRequestSpec(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TokenRequest_status(ctx context.Context, field graphql.CollectedField, obj *model.TokenRequest) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TokenRequest_status(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
 			return obj.Status, nil
@@ -328,9 +410,9 @@ func (ec *executionContext) _IssueServiceAccountTokenPayload_status(ctx context.
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_IssueServiceAccountTokenPayload_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_TokenRequest_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
-		Object:     "IssueServiceAccountTokenPayload",
+		Object:     "TokenRequest",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
@@ -341,96 +423,50 @@ func (ec *executionContext) fieldContext_IssueServiceAccountTokenPayload_status(
 	return fc, nil
 }
 
-func (ec *executionContext) _ServiceAccountObjectMeta_namespace(ctx context.Context, field graphql.CollectedField, obj *model.ServiceAccountObjectMeta) (ret graphql.Marshaler) {
+func (ec *executionContext) _TokenRequestSpec_audiences(ctx context.Context, field graphql.CollectedField, obj *model.TokenRequestSpec) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ServiceAccountObjectMeta_namespace(ctx, field)
+			return ec.fieldContext_TokenRequestSpec_audiences(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Namespace, nil
+			return obj.Audiences, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalOString2ᚕstringᚄ(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
-func (ec *executionContext) fieldContext_ServiceAccountObjectMeta_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ServiceAccountObjectMeta", field, false, false, errors.New("field of type String does not have child fields"))
+func (ec *executionContext) fieldContext_TokenRequestSpec_audiences(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TokenRequestSpec", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _ServiceAccountObjectMeta_name(ctx context.Context, field graphql.CollectedField, obj *model.ServiceAccountObjectMeta) (ret graphql.Marshaler) {
+func (ec *executionContext) _TokenRequestSpec_expirationSeconds(ctx context.Context, field graphql.CollectedField, obj *model.TokenRequestSpec) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ServiceAccountObjectMeta_name(ctx, field)
+			return ec.fieldContext_TokenRequestSpec_expirationSeconds(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Name, nil
+			return obj.ExpirationSeconds, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *int32) graphql.Marshaler {
+			return ec.marshalOInt2ᚖint32(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
-func (ec *executionContext) fieldContext_ServiceAccountObjectMeta_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ServiceAccountObjectMeta", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ServiceAccountObjectMeta_uid(ctx context.Context, field graphql.CollectedField, obj *model.ServiceAccountObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ServiceAccountObjectMeta_uid(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.UID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNID2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ServiceAccountObjectMeta_uid(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ServiceAccountObjectMeta", field, false, false, errors.New("field of type ID does not have child fields"))
-}
-
-func (ec *executionContext) _ServiceAccountObjectMeta_creationTimestamp(ctx context.Context, field graphql.CollectedField, obj *model.ServiceAccountObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ServiceAccountObjectMeta_creationTimestamp(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.CreationTimestamp, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
-			return ec.marshalNDateTime2timeᚐTime(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ServiceAccountObjectMeta_creationTimestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ServiceAccountObjectMeta", field, false, false, errors.New("field of type DateTime does not have child fields"))
+func (ec *executionContext) fieldContext_TokenRequestSpec_expirationSeconds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TokenRequestSpec", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _TokenRequestStatus_token(ctx context.Context, field graphql.CollectedField, obj *model.TokenRequestStatus) (ret graphql.Marshaler) {
@@ -456,16 +492,16 @@ func (ec *executionContext) fieldContext_TokenRequestStatus_token(_ context.Cont
 	return graphql.NewScalarFieldContext("TokenRequestStatus", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _TokenRequestStatus_expiresAt(ctx context.Context, field graphql.CollectedField, obj *model.TokenRequestStatus) (ret graphql.Marshaler) {
+func (ec *executionContext) _TokenRequestStatus_expirationTimestamp(ctx context.Context, field graphql.CollectedField, obj *model.TokenRequestStatus) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_TokenRequestStatus_expiresAt(ctx, field)
+			return ec.fieldContext_TokenRequestStatus_expirationTimestamp(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.ExpiresAt, nil
+			return obj.ExpirationTimestamp, nil
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
@@ -475,7 +511,7 @@ func (ec *executionContext) _TokenRequestStatus_expiresAt(ctx context.Context, f
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_TokenRequestStatus_expiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_TokenRequestStatus_expirationTimestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("TokenRequestStatus", field, false, false, errors.New("field of type DateTime does not have child fields"))
 }
 
@@ -640,48 +676,11 @@ func (ec *executionContext) unmarshalInputIssueServiceAccountTokenInput(ctx cont
 			it.Metadata = data
 		case "spec":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("spec"))
-			data, err := ec.unmarshalNTokenRequestSpec2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTokenRequestSpec(ctx, v)
+			data, err := ec.unmarshalNTokenRequestSpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTokenRequestSpecInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Spec = data
-		}
-	}
-	return it, nil
-}
-
-func (ec *executionContext) unmarshalInputObjectMetaInput(ctx context.Context, obj any) (model.ObjectMetaInput, error) {
-	var it model.ObjectMetaInput
-	if obj == nil {
-		return it, nil
-	}
-
-	asMap := map[string]any{}
-	for k, v := range obj.(map[string]any) {
-		asMap[k] = v
-	}
-
-	fieldsInOrder := [...]string{"namespace", "name"}
-	for _, k := range fieldsInOrder {
-		v, ok := asMap[k]
-		if !ok {
-			continue
-		}
-		switch k {
-		case "namespace":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
-			data, err := ec.unmarshalNString2string(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Namespace = data
-		case "name":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
-			data, err := ec.unmarshalNString2string(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Name = data
 		}
 	}
 	return it, nil
@@ -698,13 +697,34 @@ func (ec *executionContext) unmarshalInputRotateServiceAccountKeyInput(ctx conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"metadata", "add", "removeKids"}
+	if _, present := asMap["apiVersion"]; !present {
+		asMap["apiVersion"] = "authentication.gitstore.dev/v1beta1"
+	}
+	if _, present := asMap["kind"]; !present {
+		asMap["kind"] = "ServiceAccount"
+	}
+
+	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "add", "removeKids"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
+		case "apiVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("apiVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.APIVersion = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
 		case "metadata":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
 			data, err := ec.unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx, v)
@@ -775,8 +795,8 @@ func (ec *executionContext) unmarshalInputServiceAccountPublicKeyInput(ctx conte
 	return it, nil
 }
 
-func (ec *executionContext) unmarshalInputTokenRequestSpec(ctx context.Context, obj any) (model.TokenRequestSpec, error) {
-	var it model.TokenRequestSpec
+func (ec *executionContext) unmarshalInputTokenRequestSpecInput(ctx context.Context, obj any) (model.TokenRequestSpecInput, error) {
+	var it model.TokenRequestSpecInput
 	if obj == nil {
 		return it, nil
 	}
@@ -786,27 +806,27 @@ func (ec *executionContext) unmarshalInputTokenRequestSpec(ctx context.Context, 
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"audience", "ttlSeconds"}
+	fieldsInOrder := [...]string{"audiences", "expirationSeconds"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "audience":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("audience"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+		case "audiences":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("audiences"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.Audience = data
-		case "ttlSeconds":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("ttlSeconds"))
+			it.Audiences = data
+		case "expirationSeconds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expirationSeconds"))
 			data, err := ec.unmarshalOInt2ᚖint32(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.TTLSeconds = data
+			it.ExpirationSeconds = data
 		}
 	}
 	return it, nil
@@ -831,31 +851,8 @@ func (ec *executionContext) _CreateServiceAccountPayload(ctx context.Context, se
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("CreateServiceAccountPayload")
-		case "apiVersion":
-			out.Values[i] = ec._CreateServiceAccountPayload_apiVersion(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "kind":
-			out.Values[i] = ec._CreateServiceAccountPayload_kind(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "metadata":
-			out.Values[i] = ec._CreateServiceAccountPayload_metadata(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "keyIDs":
-			out.Values[i] = ec._CreateServiceAccountPayload_keyIDs(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "disabled":
-			out.Values[i] = ec._CreateServiceAccountPayload_disabled(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
+		case "serviceAccount":
+			out.Values[i] = ec._CreateServiceAccountPayload_serviceAccount(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -890,21 +887,8 @@ func (ec *executionContext) _DeleteServiceAccountPayload(ctx context.Context, se
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("DeleteServiceAccountPayload")
-		case "apiVersion":
-			out.Values[i] = ec._DeleteServiceAccountPayload_apiVersion(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "kind":
-			out.Values[i] = ec._DeleteServiceAccountPayload_kind(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "metadata":
-			out.Values[i] = ec._DeleteServiceAccountPayload_metadata(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
+		case "serviceAccount":
+			out.Values[i] = ec._DeleteServiceAccountPayload_serviceAccount(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -939,23 +923,100 @@ func (ec *executionContext) _IssueServiceAccountTokenPayload(ctx context.Context
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("IssueServiceAccountTokenPayload")
+		case "tokenRequest":
+			out.Values[i] = ec._IssueServiceAccountTokenPayload_tokenRequest(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var rotateServiceAccountKeyPayloadImplementors = []string{"RotateServiceAccountKeyPayload"}
+
+func (ec *executionContext) _RotateServiceAccountKeyPayload(ctx context.Context, sel ast.SelectionSet, obj *model.RotateServiceAccountKeyPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, rotateServiceAccountKeyPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RotateServiceAccountKeyPayload")
+		case "serviceAccount":
+			out.Values[i] = ec._RotateServiceAccountKeyPayload_serviceAccount(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var serviceAccountImplementors = []string{"ServiceAccount", "Actor"}
+
+func (ec *executionContext) _ServiceAccount(ctx context.Context, sel ast.SelectionSet, obj *model.ServiceAccount) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, serviceAccountImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ServiceAccount")
 		case "apiVersion":
-			out.Values[i] = ec._IssueServiceAccountTokenPayload_apiVersion(ctx, field, obj)
+			out.Values[i] = ec._ServiceAccount_apiVersion(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		case "kind":
-			out.Values[i] = ec._IssueServiceAccountTokenPayload_kind(ctx, field, obj)
+			out.Values[i] = ec._ServiceAccount_kind(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		case "metadata":
-			out.Values[i] = ec._IssueServiceAccountTokenPayload_metadata(ctx, field, obj)
+			out.Values[i] = ec._ServiceAccount_metadata(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "keyIDs":
+			out.Values[i] = ec._ServiceAccount_keyIDs(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		case "status":
-			out.Values[i] = ec._IssueServiceAccountTokenPayload_status(ctx, field, obj)
+			out.Values[i] = ec._ServiceAccount_status(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -982,37 +1043,80 @@ func (ec *executionContext) _IssueServiceAccountTokenPayload(ctx context.Context
 	return out
 }
 
-var serviceAccountObjectMetaImplementors = []string{"ServiceAccountObjectMeta"}
+var tokenRequestImplementors = []string{"TokenRequest"}
 
-func (ec *executionContext) _ServiceAccountObjectMeta(ctx context.Context, sel ast.SelectionSet, obj *model.ServiceAccountObjectMeta) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, serviceAccountObjectMetaImplementors)
+func (ec *executionContext) _TokenRequest(ctx context.Context, sel ast.SelectionSet, obj *model.TokenRequest) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, tokenRequestImplementors)
 
 	out := graphql.NewFieldSet(fields)
 	deferred := make(map[string]*graphql.FieldSet)
 	for i, field := range fields {
 		switch field.Name {
 		case "__typename":
-			out.Values[i] = graphql.MarshalString("ServiceAccountObjectMeta")
-		case "namespace":
-			out.Values[i] = ec._ServiceAccountObjectMeta_namespace(ctx, field, obj)
+			out.Values[i] = graphql.MarshalString("TokenRequest")
+		case "apiVersion":
+			out.Values[i] = ec._TokenRequest_apiVersion(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "name":
-			out.Values[i] = ec._ServiceAccountObjectMeta_name(ctx, field, obj)
+		case "kind":
+			out.Values[i] = ec._TokenRequest_kind(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "uid":
-			out.Values[i] = ec._ServiceAccountObjectMeta_uid(ctx, field, obj)
+		case "metadata":
+			out.Values[i] = ec._TokenRequest_metadata(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "creationTimestamp":
-			out.Values[i] = ec._ServiceAccountObjectMeta_creationTimestamp(ctx, field, obj)
+		case "spec":
+			out.Values[i] = ec._TokenRequest_spec(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "status":
+			out.Values[i] = ec._TokenRequest_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var tokenRequestSpecImplementors = []string{"TokenRequestSpec"}
+
+func (ec *executionContext) _TokenRequestSpec(ctx context.Context, sel ast.SelectionSet, obj *model.TokenRequestSpec) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, tokenRequestSpecImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TokenRequestSpec")
+		case "audiences":
+			out.Values[i] = ec._TokenRequestSpec_audiences(ctx, field, obj)
+		case "expirationSeconds":
+			out.Values[i] = ec._TokenRequestSpec_expirationSeconds(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -1052,8 +1156,8 @@ func (ec *executionContext) _TokenRequestStatus(ctx context.Context, sel ast.Sel
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "expiresAt":
-			out.Values[i] = ec._TokenRequestStatus_expiresAt(ctx, field, obj)
+		case "expirationTimestamp":
+			out.Values[i] = ec._TokenRequestStatus_expirationTimestamp(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -1141,24 +1245,23 @@ func (ec *executionContext) marshalNIssueServiceAccountTokenPayload2ᚖgithubᚗ
 	return ec._IssueServiceAccountTokenPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx context.Context, v any) (*model.ObjectMetaInput, error) {
-	res, err := ec.unmarshalInputObjectMetaInput(ctx, v)
-	return &res, graphql.ErrorOnPath(ctx, err)
-}
-
 func (ec *executionContext) unmarshalNRotateServiceAccountKeyInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRotateServiceAccountKeyInput(ctx context.Context, v any) (model.RotateServiceAccountKeyInput, error) {
 	res, err := ec.unmarshalInputRotateServiceAccountKeyInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNServiceAccountObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐServiceAccountObjectMeta(ctx context.Context, sel ast.SelectionSet, v *model.ServiceAccountObjectMeta) graphql.Marshaler {
+func (ec *executionContext) marshalNRotateServiceAccountKeyPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRotateServiceAccountKeyPayload(ctx context.Context, sel ast.SelectionSet, v model.RotateServiceAccountKeyPayload) graphql.Marshaler {
+	return ec._RotateServiceAccountKeyPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRotateServiceAccountKeyPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRotateServiceAccountKeyPayload(ctx context.Context, sel ast.SelectionSet, v *model.RotateServiceAccountKeyPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
 		}
 		return graphql.Null
 	}
-	return ec._ServiceAccountObjectMeta(ctx, sel, v)
+	return ec._RotateServiceAccountKeyPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNServiceAccountPublicKeyInput2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐServiceAccountPublicKeyInputᚄ(ctx context.Context, v any) ([]*model.ServiceAccountPublicKeyInput, error) {
@@ -1181,8 +1284,18 @@ func (ec *executionContext) unmarshalNServiceAccountPublicKeyInput2ᚖgithubᚗc
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalNTokenRequestSpec2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTokenRequestSpec(ctx context.Context, v any) (*model.TokenRequestSpec, error) {
-	res, err := ec.unmarshalInputTokenRequestSpec(ctx, v)
+func (ec *executionContext) marshalNTokenRequestSpec2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTokenRequestSpec(ctx context.Context, sel ast.SelectionSet, v *model.TokenRequestSpec) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._TokenRequestSpec(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNTokenRequestSpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTokenRequestSpecInput(ctx context.Context, v any) (*model.TokenRequestSpecInput, error) {
+	res, err := ec.unmarshalInputTokenRequestSpecInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
@@ -1194,6 +1307,20 @@ func (ec *executionContext) marshalNTokenRequestStatus2ᚖgithubᚗcomᚋgitstor
 		return graphql.Null
 	}
 	return ec._TokenRequestStatus(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOServiceAccount2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐServiceAccount(ctx context.Context, sel ast.SelectionSet, v *model.ServiceAccount) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ServiceAccount(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOTokenRequest2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTokenRequest(ctx context.Context, sel ast.SelectionSet, v *model.TokenRequest) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._TokenRequest(ctx, sel, v)
 }
 
 // endregion ***************************** type.gotpl *****************************

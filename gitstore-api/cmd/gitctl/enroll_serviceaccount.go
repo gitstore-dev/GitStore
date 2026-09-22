@@ -34,14 +34,14 @@ const (
     kind: "ServiceAccount"
     metadata: { namespace: $namespace, name: $name }
     publicKeys: [{ kid: $keyID, algorithm: $algorithm, publicKeyPEM: $publicKey }]
-  }) { metadata { uid } }
+  }) { serviceAccount { metadata { uid } } }
 }`
 	rotateServiceAccountKeyMutation = `mutation RotateServiceAccountKey($namespace: String!, $name: String!, $keyID: String!, $algorithm: String!, $publicKey: String!) {
   rotateServiceAccountKey(input: {
     metadata: { namespace: $namespace, name: $name }
     add: [{ kid: $keyID, algorithm: $algorithm, publicKeyPEM: $publicKey }]
     removeKids: [$keyID]
-  }) { metadata { uid } }
+  }) { serviceAccount { metadata { uid } } }
 }`
 )
 
@@ -414,14 +414,16 @@ func (c enrollmentClient) graphQL(ctx context.Context, enrollment serviceAccount
 
 func serviceAccountUID(payload json.RawMessage, field string) (string, error) {
 	var data map[string]struct {
-		Metadata struct {
-			UID string `json:"uid"`
-		} `json:"metadata"`
+		ServiceAccount struct {
+			Metadata struct {
+				UID string `json:"uid"`
+			} `json:"metadata"`
+		} `json:"serviceAccount"`
 	}
-	if err := json.Unmarshal(payload, &data); err != nil || data[field].Metadata.UID == "" {
+	if err := json.Unmarshal(payload, &data); err != nil || data[field].ServiceAccount.Metadata.UID == "" {
 		return "", errors.New("ServiceAccount response does not contain an identity")
 	}
-	return data[field].Metadata.UID, nil
+	return data[field].ServiceAccount.Metadata.UID, nil
 }
 
 func runGenerateServiceAccountKey(args []string, stdout, stderr io.Writer) int {

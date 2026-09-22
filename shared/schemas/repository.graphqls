@@ -217,7 +217,7 @@ extend type Mutation {
 }
 
 """Author-controlled metadata shared by declarative resource mutations."""
-input MetadataInput {
+input ObjectMetaInput {
   name: String!
   namespace: String!
   labels: JSON
@@ -243,7 +243,7 @@ type ProvisionRepositoryStoragePayload {
 input CreateRepositoryInput {
   apiVersion: String! = "gitstore.dev/v1beta1"
   kind: String! = "Repository"
-  metadata: MetadataInput!
+  metadata: ObjectMetaInput!
   spec: RepositorySpecInput!
 }
 
@@ -254,7 +254,7 @@ type CreateRepositoryPayload {
 input UpdateRepositoryInput {
   apiVersion: String! = "gitstore.dev/v1beta1"
   kind: String! = "Repository"
-  metadata: MetadataInput!
+  metadata: ObjectMetaInput!
   spec: RepositorySpecInput!
 }
 

@@ -12,11 +12,34 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// An object that has a human-readable name. This represents both the Subject and the Delegate:
+// - creation_actor
+// - update_actor
+// - creation_on_behalf_of_actor OR creation_subject
+// - update_on_behalf_of_actor OR update_subject
+//
+// Implemented by
+// - User
+// - ServiceAccount
+type Actor interface {
+	IsActor()
+	GetMetadata() *ObjectMeta
+	GetStatus() ActorStatus
+}
+
 // An object with a globally unique ID
 type Node interface {
 	IsNode()
 	// Globally unique identifier (format: [type]_[base62])
 	GetID() string
+}
+
+// An object that can be published or unpublished. Implemented by
+// - Product
+// - ProductVariant
+type Publishable interface {
+	IsPublishable()
+	GetPublished() bool
 }
 
 type AdmissionControlDefaults struct {
@@ -295,7 +318,7 @@ type CreateNamespacePayload struct {
 type CreateProductInput struct {
 	APIVersion string            `json:"apiVersion"`
 	Kind       string            `json:"kind"`
-	Metadata   *MetadataInput    `json:"metadata"`
+	Metadata   *ObjectMetaInput  `json:"metadata"`
 	Spec       *ProductSpecInput `json:"spec"`
 	Body       *string           `json:"body,omitempty"`
 }
@@ -307,7 +330,7 @@ type CreateProductPayload struct {
 type CreateRepositoryInput struct {
 	APIVersion string               `json:"apiVersion"`
 	Kind       string               `json:"kind"`
-	Metadata   *MetadataInput       `json:"metadata"`
+	Metadata   *ObjectMetaInput     `json:"metadata"`
 	Spec       *RepositorySpecInput `json:"spec"`
 }
 
@@ -315,7 +338,7 @@ type CreateRepositoryPayload struct {
 	Repository *Repository `json:"repository"`
 }
 
-// createServiceAccount mutation input (Relay pattern).
+// createServiceAccount mutation input.
 type CreateServiceAccountInput struct {
 	APIVersion string           `json:"apiVersion"`
 	Kind       string           `json:"kind"`
@@ -324,13 +347,9 @@ type CreateServiceAccountInput struct {
 	PublicKeys []*ServiceAccountPublicKeyInput `json:"publicKeys"`
 }
 
-// createServiceAccount/rotateServiceAccountKey mutation payload (Relay pattern).
+// createServiceAccount mutation payload.
 type CreateServiceAccountPayload struct {
-	APIVersion string                    `json:"apiVersion"`
-	Kind       string                    `json:"kind"`
-	Metadata   *ServiceAccountObjectMeta `json:"metadata"`
-	KeyIDs     []string                  `json:"keyIDs"`
-	Disabled   bool                      `json:"disabled"`
+	ServiceAccount *ServiceAccount `json:"serviceAccount,omitempty"`
 }
 
 // Input for deleting a category
@@ -393,18 +412,16 @@ type DeleteRepositoryPayload struct {
 	Outcome    ResourceDeletionOutcome `json:"outcome"`
 }
 
-// deleteServiceAccount mutation input (Relay pattern).
+// deleteServiceAccount mutation input.
 type DeleteServiceAccountInput struct {
 	APIVersion string           `json:"apiVersion"`
 	Kind       string           `json:"kind"`
 	Metadata   *ObjectMetaInput `json:"metadata"`
 }
 
-// deleteServiceAccount mutation payload (Relay pattern).
+// deleteServiceAccount mutation payload.
 type DeleteServiceAccountPayload struct {
-	APIVersion string                    `json:"apiVersion"`
-	Kind       string                    `json:"kind"`
-	Metadata   *ServiceAccountObjectMeta `json:"metadata"`
+	ServiceAccount *ServiceAccount `json:"serviceAccount,omitempty"`
 }
 
 // Gate that controls when a price template is eligible.
@@ -508,18 +525,15 @@ type InventoryDefinition struct {
 
 // issueServiceAccountToken mutation input.
 type IssueServiceAccountTokenInput struct {
-	APIVersion string            `json:"apiVersion"`
-	Kind       string            `json:"kind"`
-	Metadata   *ObjectMetaInput  `json:"metadata"`
-	Spec       *TokenRequestSpec `json:"spec"`
+	APIVersion string                 `json:"apiVersion"`
+	Kind       string                 `json:"kind"`
+	Metadata   *ObjectMetaInput       `json:"metadata"`
+	Spec       *TokenRequestSpecInput `json:"spec"`
 }
 
-// issueServiceAccountToken mutation payload (Relay pattern).
+// issueServiceAccountToken mutation payload.
 type IssueServiceAccountTokenPayload struct {
-	APIVersion string                    `json:"apiVersion"`
-	Kind       string                    `json:"kind"`
-	Metadata   *ServiceAccountObjectMeta `json:"metadata"`
-	Status     *TokenRequestStatus       `json:"status"`
+	TokenRequest *TokenRequest `json:"tokenRequest,omitempty"`
 }
 
 // A label selector that matches products by their labels.
@@ -585,14 +599,6 @@ type MediaDefinition struct {
 
 type MediaDefinitionInput struct {
 	FileRef *FileReferenceInput `json:"fileRef"`
-}
-
-// Author-controlled metadata shared by declarative resource mutations.
-type MetadataInput struct {
-	Name        string         `json:"name"`
-	Namespace   string         `json:"namespace"`
-	Labels      map[string]any `json:"labels,omitempty"`
-	Annotations map[string]any `json:"annotations,omitempty"`
 }
 
 type Mutation struct {
@@ -739,14 +745,12 @@ type ObjectMeta struct {
 	DeletionTimestamp *time.Time        `json:"deletionTimestamp,omitempty"`
 }
 
-// Identity metadata for a ServiceAccount create/rotate/delete request
-// (Relay-style input, not the full ObjectMeta envelope used by catalog
-// resources — a ServiceAccount is identified purely by namespace/name).
+// Author-controlled metadata shared by declarative resource mutations.
 type ObjectMetaInput struct {
-	// Convention string grouping related service accounts, e.g. "controllers". Not a GitStore Namespace resource.
-	Namespace string `json:"namespace"`
-	// Names the process/identity, e.g. "gitstore-controller-manager".
-	Name string `json:"name"`
+	Name        string         `json:"name"`
+	Namespace   string         `json:"namespace"`
+	Labels      map[string]any `json:"labels,omitempty"`
+	Annotations map[string]any `json:"annotations,omitempty"`
 }
 
 type OwnerReference struct {
@@ -1299,13 +1303,20 @@ type ResolvedRepositoryDefinition struct {
 	StorageClass string `json:"storageClass"`
 }
 
-// rotateServiceAccountKey mutation input (Relay pattern). add and removeKids
+// rotateServiceAccountKey mutation input. add and removeKids
 // may both be non-empty in the same call to support an overlap window during
 // rotation.
 type RotateServiceAccountKeyInput struct {
+	APIVersion string                          `json:"apiVersion"`
+	Kind       string                          `json:"kind"`
 	Metadata   *ObjectMetaInput                `json:"metadata"`
 	Add        []*ServiceAccountPublicKeyInput `json:"add"`
 	RemoveKids []string                        `json:"removeKids"`
+}
+
+// rotateServiceAccountKey mutation payload.
+type RotateServiceAccountKeyPayload struct {
+	ServiceAccount *ServiceAccount `json:"serviceAccount,omitempty"`
 }
 
 type SchemaValidationDefaults struct {
@@ -1328,13 +1339,19 @@ type SelectedOptionDefinition struct {
 	Value string `json:"value"`
 }
 
-// System-managed identity metadata returned for a ServiceAccount.
-type ServiceAccountObjectMeta struct {
-	Namespace         string    `json:"namespace"`
-	Name              string    `json:"name"`
-	UID               string    `json:"uid"`
-	CreationTimestamp time.Time `json:"creationTimestamp"`
+// A GitStore-issued non-human identity. Implements the Actor interface so it can
+// appear anywhere a Subject/Delegate is referenced.
+type ServiceAccount struct {
+	APIVersion string      `json:"apiVersion"`
+	Kind       string      `json:"kind"`
+	Metadata   *ObjectMeta `json:"metadata"`
+	KeyIDs     []string    `json:"keyIDs"`
+	Status     ActorStatus `json:"status"`
 }
+
+func (ServiceAccount) IsActor()                      {}
+func (this ServiceAccount) GetMetadata() *ObjectMeta { return this.Metadata }
+func (this ServiceAccount) GetStatus() ActorStatus   { return this.Status }
 
 // Enrolled public key supplied on create/rotate.
 type ServiceAccountPublicKeyInput struct {
@@ -1355,18 +1372,33 @@ type StrategyDefinition struct {
 type Subscription struct {
 }
 
-// Requested parameters for a ServiceAccount access token.
+// A short-lived ServiceAccount access token result.
+type TokenRequest struct {
+	APIVersion string              `json:"apiVersion"`
+	Kind       string              `json:"kind"`
+	Metadata   *ObjectMeta         `json:"metadata"`
+	Spec       *TokenRequestSpec   `json:"spec"`
+	Status     *TokenRequestStatus `json:"status"`
+}
+
+// Resolved parameters echoed back on an issued token.
 type TokenRequestSpec struct {
-	// Requested audience. Defaults to auth.serviceaccount.audience (typically "gitstore-api") when omitted.
-	Audience *string `json:"audience,omitempty"`
+	Audiences         []string `json:"audiences,omitempty"`
+	ExpirationSeconds *int32   `json:"expirationSeconds,omitempty"`
+}
+
+// Requested parameters for a ServiceAccount access token.
+type TokenRequestSpecInput struct {
+	// Requested audiences. Defaults to auth.serviceaccount.audience (typically "gitstore-api") when omitted.
+	Audiences []string `json:"audiences,omitempty"`
 	// Requested token lifetime in seconds. Clamped to auth.serviceaccount.max_ttl regardless of the requested value.
-	TTLSeconds *int32 `json:"ttlSeconds,omitempty"`
+	ExpirationSeconds *int32 `json:"expirationSeconds,omitempty"`
 }
 
 // Issued access token result.
 type TokenRequestStatus struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	Token               string    `json:"token"`
+	ExpirationTimestamp time.Time `json:"expirationTimestamp"`
 }
 
 // OIDC-compatible token response.
@@ -1454,7 +1486,7 @@ type UpdateNamespaceStatusPayload struct {
 type UpdateProductInput struct {
 	APIVersion string            `json:"apiVersion"`
 	Kind       string            `json:"kind"`
-	Metadata   *MetadataInput    `json:"metadata"`
+	Metadata   *ObjectMetaInput  `json:"metadata"`
 	Spec       *ProductSpecInput `json:"spec"`
 	Body       *string           `json:"body,omitempty"`
 }
@@ -1484,7 +1516,7 @@ type UpdateProductStatusPayload struct {
 type UpdateRepositoryInput struct {
 	APIVersion string               `json:"apiVersion"`
 	Kind       string               `json:"kind"`
-	Metadata   *MetadataInput       `json:"metadata"`
+	Metadata   *ObjectMetaInput     `json:"metadata"`
 	Spec       *RepositorySpecInput `json:"spec"`
 }
 
@@ -1543,6 +1575,67 @@ type WatchEvent struct {
 	// JSON-boxed because the generic watchResources path has no
 	// compile-time-known shape for CRD kinds.
 	Object map[string]any `json:"object,omitempty"`
+}
+
+type ActorStatus string
+
+const (
+	ActorStatusActive              ActorStatus = "ACTIVE"
+	ActorStatusInactive            ActorStatus = "INACTIVE"
+	ActorStatusSuspended           ActorStatus = "SUSPENDED"
+	ActorStatusInvited             ActorStatus = "INVITED"
+	ActorStatusPendingVerification ActorStatus = "PENDING_VERIFICATION"
+)
+
+var AllActorStatus = []ActorStatus{
+	ActorStatusActive,
+	ActorStatusInactive,
+	ActorStatusSuspended,
+	ActorStatusInvited,
+	ActorStatusPendingVerification,
+}
+
+func (e ActorStatus) IsValid() bool {
+	switch e {
+	case ActorStatusActive, ActorStatusInactive, ActorStatusSuspended, ActorStatusInvited, ActorStatusPendingVerification:
+		return true
+	}
+	return false
+}
+
+func (e ActorStatus) String() string {
+	return string(e)
+}
+
+func (e *ActorStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ActorStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ActorStatus", str)
+	}
+	return nil
+}
+
+func (e ActorStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ActorStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ActorStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 type ConditionStatus string

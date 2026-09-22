@@ -165,10 +165,10 @@ func TestCreateServiceAccountValidatesKeysAndDuplicates(t *testing.T) {
 	created, err := h.resolver.CreateServiceAccount(ctx, input)
 	require.NoError(t, err)
 	require.NotNil(t, created)
-	assert.Equal(t, []string{"key-1"}, created.KeyIDs)
-	assert.NotEmpty(t, created.Metadata.UID)
-	assert.Equal(t, "controllers", created.Metadata.Namespace)
-	assert.Equal(t, "manager", created.Metadata.Name)
+	assert.Equal(t, []string{"key-1"}, created.ServiceAccount.KeyIDs)
+	assert.NotEmpty(t, created.ServiceAccount.Metadata.UID)
+	assert.Equal(t, "controllers", created.ServiceAccount.Metadata.Namespace)
+	assert.Equal(t, "manager", created.ServiceAccount.Metadata.Name)
 
 	persisted, err := h.store.GetServiceAccountBySubject(ctx, "controllers", "manager")
 	require.NoError(t, err)
@@ -196,16 +196,16 @@ func TestRotateServiceAccountKeyPreservesOverlapAndRejectsEmptyRotation(t *testi
 		Add:      []*model.ServiceAccountPublicKeyInput{serviceAccountPublicKeyInput(t, "new")},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"old", "new"}, overlap.KeyIDs)
-	assert.Equal(t, created.Metadata.UID, overlap.Metadata.UID)
+	assert.Equal(t, []string{"old", "new"}, overlap.ServiceAccount.KeyIDs)
+	assert.Equal(t, created.ServiceAccount.Metadata.UID, overlap.ServiceAccount.Metadata.UID)
 
 	rotated, err := h.resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{
 		Metadata:   &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
 		RemoveKids: []string{"old"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"new"}, rotated.KeyIDs)
-	assert.Equal(t, created.Metadata.UID, rotated.Metadata.UID)
+	assert.Equal(t, []string{"new"}, rotated.ServiceAccount.KeyIDs)
+	assert.Equal(t, created.ServiceAccount.Metadata.UID, rotated.ServiceAccount.Metadata.UID)
 
 	_, err = h.resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{
 		Metadata:   &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
@@ -239,7 +239,7 @@ func TestDeleteServiceAccountIsIdempotentAndRevokesAuthentication(t *testing.T) 
 		Metadata: &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, created.Metadata.UID, deleted.Metadata.UID)
+	assert.Equal(t, created.ServiceAccount.Metadata.UID, deleted.ServiceAccount.Metadata.UID)
 
 	_, decision, err = h.resolver.registry.AuthN().Authenticate(ctx, auth.AuthRequest{
 		Header: http.Header{"Authorization": []string{"Bearer " + token}},
@@ -251,8 +251,7 @@ func TestDeleteServiceAccountIsIdempotentAndRevokesAuthentication(t *testing.T) 
 		Metadata: &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
 	})
 	require.NoError(t, err)
-	assert.Empty(t, deleted.Metadata.UID)
-
+	assert.Nil(t, deleted.ServiceAccount, "deleting an absent account returns a null serviceAccount")
 }
 
 func TestIssueServiceAccountTokenRequiresMatchingAssertionIdentityAndClampsTTL(t *testing.T) {
@@ -263,36 +262,35 @@ func TestIssueServiceAccountTokenRequiresMatchingAssertionIdentityAndClampsTTL(t
 	ttl := int32(7200)
 	input := &model.IssueServiceAccountTokenInput{
 		Metadata: &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
-		Spec:     &model.TokenRequestSpec{Audience: stringPtr("gitstore-api"), TTLSeconds: &ttl},
+		Spec:     &model.TokenRequestSpecInput{Audiences: []string{"gitstore-api"}, ExpirationSeconds: &ttl},
 	}
 	assertionCtx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
 		Subject:           datastore.ServiceAccountSubject("controllers", "manager"),
 		AuthMethod:        "serviceaccount-assertion",
-		ServiceAccountUID: created.Metadata.UID,
+		ServiceAccountUID: created.ServiceAccount.Metadata.UID,
 	})
 	before := time.Now()
 	issued, err := h.resolver.IssueServiceAccountToken(assertionCtx, input)
 	require.NoError(t, err)
-	assert.NotEmpty(t, issued.Status.Token)
-	assert.WithinDuration(t, before.Add(time.Hour), issued.Status.ExpiresAt, 2*time.Second)
+	assert.NotEmpty(t, issued.TokenRequest.Status.Token)
+	assert.WithinDuration(t, before.Add(time.Hour), issued.TokenRequest.Status.ExpirationTimestamp, 2*time.Second)
+	// spec.expirationSeconds echoes the effective (clamped) lifetime, not the 7200s request.
+	require.NotNil(t, issued.TokenRequest.Spec.ExpirationSeconds)
+	assert.InDelta(t, 3600, *issued.TokenRequest.Spec.ExpirationSeconds, 2)
 
 	principal, decision, err := h.resolver.registry.AuthN().Authenticate(assertionCtx, auth.AuthRequest{
-		Header: http.Header{"Authorization": []string{"Bearer " + issued.Status.Token}},
+		Header: http.Header{"Authorization": []string{"Bearer " + issued.TokenRequest.Status.Token}},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
-	assert.Equal(t, created.Metadata.UID, principal.ServiceAccountUID)
+	assert.Equal(t, created.ServiceAccount.Metadata.UID, principal.ServiceAccountUID)
 
 	for _, principal := range []*auth.Principal{
-		{Subject: datastore.ServiceAccountSubject("controllers", "other"), AuthMethod: "serviceaccount-assertion", ServiceAccountUID: created.Metadata.UID},
+		{Subject: datastore.ServiceAccountSubject("controllers", "other"), AuthMethod: "serviceaccount-assertion", ServiceAccountUID: created.ServiceAccount.Metadata.UID},
 		{Subject: datastore.ServiceAccountSubject("controllers", "manager"), AuthMethod: "serviceaccount-assertion", ServiceAccountUID: "other-uid"},
 		{Subject: "admin", AuthMethod: "static-admin"},
 	} {
 		_, err := h.resolver.IssueServiceAccountToken(auth.ContextWithPrincipal(context.Background(), principal), input)
 		require.Error(t, err)
 	}
-}
-
-func stringPtr(value string) *string {
-	return &value
 }

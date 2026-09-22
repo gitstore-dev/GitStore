@@ -12,44 +12,54 @@ replacing kubelet attestation with a portable signed client assertion.
 type Mutation {
   issueServiceAccountToken(input: IssueServiceAccountTokenInput!): IssueServiceAccountTokenPayload!
   createServiceAccount(input: CreateServiceAccountInput!): CreateServiceAccountPayload!
-  rotateServiceAccountKey(input: RotateServiceAccountKeyInput!): CreateServiceAccountPayload!
+  rotateServiceAccountKey(input: RotateServiceAccountKeyInput!): RotateServiceAccountKeyPayload!
   deleteServiceAccount(input: DeleteServiceAccountInput!): DeleteServiceAccountPayload!
 }
 
-input ObjectMetaInput {
-  namespace: String!
-  name: String!
+# `ObjectMetaInput` and `ObjectMeta` are the shared, catalog-wide declarative
+# metadata envelope (see repository.graphqls) — not SA-specific. The SA plane
+# reads only `namespace`/`name` from the input.
+
+type ServiceAccount implements Actor {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  keyIDs: [String!]!
+  status: ActorStatus!
 }
 
-type ObjectMeta {
-  namespace: String!
-  name: String!
-  uid: String!
-  creationTimestamp: DateTime!
+type TokenRequest {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: TokenRequestSpec!
+  status: TokenRequestStatus!
 }
 
 input IssueServiceAccountTokenInput {
   apiVersion: String! = "authentication.gitstore.dev/v1beta1"
   kind: String! = "TokenRequest"
   metadata: ObjectMetaInput!
-  spec: TokenRequestSpec!
+  spec: TokenRequestSpecInput!
 }
 
-input TokenRequestSpec {
-  audience: String    # defaults to "gitstore-api"
-  ttlSeconds: Int      # server clamps to auth.serviceaccount.max_ttl
+input TokenRequestSpecInput {
+  audiences: [String!]        # defaults to "gitstore-api"
+  expirationSeconds: Int      # server clamps to auth.serviceaccount.max_ttl
+}
+
+type TokenRequestSpec {
+  audiences: [String!]
+  expirationSeconds: Int
 }
 
 type IssueServiceAccountTokenPayload {
-  apiVersion: String!
-  kind: String!
-  metadata: ObjectMeta!
-  status: TokenRequestStatus!
+  tokenRequest: TokenRequest
 }
 
 type TokenRequestStatus {
   token: String!
-  expiresAt: DateTime!
+  expirationTimestamp: DateTime!
 }
 
 input ServiceAccountPublicKeyInput {
@@ -72,11 +82,11 @@ input RotateServiceAccountKeyInput {
 }
 
 type CreateServiceAccountPayload {
-  apiVersion: String!
-  kind: String!
-  metadata: ObjectMeta!
-  keyIDs: [String!]!
-  disabled: Boolean!
+  serviceAccount: ServiceAccount
+}
+
+type RotateServiceAccountKeyPayload {
+  serviceAccount: ServiceAccount
 }
 
 input DeleteServiceAccountInput {
@@ -86,9 +96,7 @@ input DeleteServiceAccountInput {
 }
 
 type DeleteServiceAccountPayload {
-  apiVersion: String!
-  kind: String!
-  metadata: ObjectMeta!
+  serviceAccount: ServiceAccount
 }
 ```
 
@@ -107,5 +115,5 @@ type DeleteServiceAccountPayload {
 
 - `createServiceAccount`: reject if a `ServiceAccount` already exists for `metadata.namespace`/`metadata.name` (FR-003); reject if `publicKeys` is empty (FR-003, Edge Cases).
 - `rotateServiceAccountKey`: `add` and `removeKids` may both be non-empty in the same call (overlap-window rotation, FR-004); reject if the resulting key set would be empty (mirrors `createServiceAccount`'s zero-key rejection — an account must always have at least one enrolled key while enabled).
-- `issueServiceAccountToken`: `spec.ttlSeconds`, if provided, is clamped to `auth.serviceaccount.max_ttl`, never exceeded (FR-013's TTL edge case); `spec.audience`, if provided, must be a value the server is configured to issue for (default `gitstore-api`).
+- `issueServiceAccountToken`: `spec.expirationSeconds`, if provided, is clamped to `auth.serviceaccount.max_ttl`, never exceeded (FR-013's TTL edge case); each entry in `spec.audiences`, if provided, must be a value the server is configured to issue for (default `gitstore-api`).
 - `deleteServiceAccount`: idempotent — deleting an already-deleted account (by UID) is a no-op success, mirroring the general pattern already used for `deleteRepository`-style idempotent deletion elsewhere in this codebase.
