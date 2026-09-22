@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.4](https://github.com/gitstore-dev/GitStore/compare/v1.0.0-alpha.3...v1.0.0-alpha.4) (2026-09-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** MetadataInput is renamed to ObjectMetaInput; ServiceAccount mutation payloads are reshaped to object-typed (serviceAccount/tokenRequest); TokenRequestSpec input becomes TokenRequestSpecInput with audiences/ expirationSeconds; TokenRequestStatus.expiresAt becomes expirationTimestamp.
+
+### Features
+
+* **api:** object-typed ServiceAccount surface and unified ObjectMetaInput ([#429](https://github.com/gitstore-dev/GitStore/issues/429)) ([9a13196](https://github.com/gitstore-dev/GitStore/commit/9a13196ad23c70c3af687e2d9538baee7b706c51))
+* product category and readiness reconciliation ([#426](https://github.com/gitstore-dev/GitStore/issues/426)) ([0a38bd9](https://github.com/gitstore-dev/GitStore/commit/0a38bd9c91ae6254b88605103c8ecfead78045c0))
+
+
+### Bug Fixes
+
+* **controller-manager:** stop Repository/CategoryTaxonomy/Namespace reconcile self-trigger loops ([#428](https://github.com/gitstore-dev/GitStore/issues/428)) ([8fef66d](https://github.com/gitstore-dev/GitStore/commit/8fef66ddc96bcaabb07a767b33724d4db8e60a48))
+
 ## [1.0.0-alpha.3](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.3...v1.0.0-alpha.3) (2026-09-18)
 
 
