@@ -170,14 +170,10 @@ func (r *Resolver) DeleteServiceAccount(ctx context.Context, input *model.Delete
 
 	sa, err := r.store.GetServiceAccountBySubject(ctx, namespace, name)
 	if err == datastore.ErrNotFound {
-		// Idempotent: already deleted. Echo the requested identity with an
-		// otherwise-empty envelope.
-		return &model.DeleteServiceAccountPayload{
-			ServiceAccount: serviceAccountToModel(&datastore.ServiceAccount{
-				Namespace: namespace,
-				Name:      name,
-			}),
-		}, nil
+		// Idempotent: the account is already absent. The payload field is
+		// nullable, so return null rather than fabricating a zero-valued
+		// ServiceAccount that would misreport status ACTIVE.
+		return &model.DeleteServiceAccountPayload{ServiceAccount: nil}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -263,7 +259,10 @@ func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.Is
 		return nil, err
 	}
 
-	resolvedTTL := int32(ttlSeconds)
+	// Echo the effective lifetime the provider actually issued (after any
+	// max-TTL clamping or default substitution), not the raw request, so
+	// spec.expirationSeconds agrees with status.expirationTimestamp.
+	effectiveTTL := int32(time.Until(expiresAt).Round(time.Second) / time.Second)
 	return &model.IssueServiceAccountTokenPayload{
 		TokenRequest: &model.TokenRequest{
 			APIVersion: "authentication.gitstore.dev/v1beta1",
@@ -271,7 +270,7 @@ func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.Is
 			Metadata:   serviceAccountObjectMeta(sa),
 			Spec: &model.TokenRequestSpec{
 				Audiences:         []string{audience},
-				ExpirationSeconds: &resolvedTTL,
+				ExpirationSeconds: &effectiveTTL,
 			},
 			Status: &model.TokenRequestStatus{
 				Token:               token,

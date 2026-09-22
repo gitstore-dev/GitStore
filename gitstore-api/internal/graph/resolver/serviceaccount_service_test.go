@@ -251,8 +251,7 @@ func TestDeleteServiceAccountIsIdempotentAndRevokesAuthentication(t *testing.T) 
 		Metadata: &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
 	})
 	require.NoError(t, err)
-	assert.Empty(t, deleted.ServiceAccount.Metadata.UID)
-
+	assert.Nil(t, deleted.ServiceAccount, "deleting an absent account returns a null serviceAccount")
 }
 
 func TestIssueServiceAccountTokenRequiresMatchingAssertionIdentityAndClampsTTL(t *testing.T) {
@@ -275,6 +274,9 @@ func TestIssueServiceAccountTokenRequiresMatchingAssertionIdentityAndClampsTTL(t
 	require.NoError(t, err)
 	assert.NotEmpty(t, issued.TokenRequest.Status.Token)
 	assert.WithinDuration(t, before.Add(time.Hour), issued.TokenRequest.Status.ExpirationTimestamp, 2*time.Second)
+	// spec.expirationSeconds echoes the effective (clamped) lifetime, not the 7200s request.
+	require.NotNil(t, issued.TokenRequest.Spec.ExpirationSeconds)
+	assert.InDelta(t, 3600, *issued.TokenRequest.Spec.ExpirationSeconds, 2)
 
 	principal, decision, err := h.resolver.registry.AuthN().Authenticate(assertionCtx, auth.AuthRequest{
 		Header: http.Header{"Authorization": []string{"Bearer " + issued.TokenRequest.Status.Token}},
@@ -291,8 +293,4 @@ func TestIssueServiceAccountTokenRequiresMatchingAssertionIdentityAndClampsTTL(t
 		_, err := h.resolver.IssueServiceAccountToken(auth.ContextWithPrincipal(context.Background(), principal), input)
 		require.Error(t, err)
 	}
-}
-
-func stringPtr(value string) *string {
-	return &value
 }
