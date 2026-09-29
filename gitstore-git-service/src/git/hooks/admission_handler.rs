@@ -104,7 +104,6 @@ impl AdmissionHandler for AdmissionControlHandler {
                     new_commit_sha,
                     changed_paths,
                     actor_subject,
-                    ..Default::default()
                 };
                 if let Err(e) = client.admit_resources(req).await {
                     error!(

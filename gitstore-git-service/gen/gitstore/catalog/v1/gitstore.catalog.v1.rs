@@ -136,7 +136,6 @@ pub struct AdmitResourcesRequest {
     #[prost(string, tag="3")]
     pub old_commit_sha: ::prost::alloc::string::String,
     /// new_commit_sha is the ref tip after the accepted update.
-    /// If empty, consumers must use commit_sha for backwards compatibility.
     #[prost(string, tag="4")]
     pub new_commit_sha: ::prost::alloc::string::String,
     /// changed_paths optionally carries repository-relative paths known to have

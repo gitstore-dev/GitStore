@@ -163,7 +163,6 @@ message AdmitResourcesRequest {
   string old_commit_sha = 3;
 
   // new_commit_sha is the ref tip after the accepted update.
-  // If empty, consumers must use commit_sha for backwards compatibility.
   string new_commit_sha = 4;
 
   // changed_paths optionally carries repository-relative paths known to have
