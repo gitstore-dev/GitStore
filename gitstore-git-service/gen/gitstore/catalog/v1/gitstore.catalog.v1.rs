@@ -128,12 +128,6 @@ pub struct AdmitResourcesRequest {
     /// repository_id is the stable UUIDv7 of the repository.
     #[prost(string, tag="15")]
     pub repository_id: ::prost::alloc::string::String,
-    /// commit_sha is the full SHA of the accepted push commit.
-    /// Deprecated for new callers in favor of new_commit_sha, but retained as
-    /// the canonical new commit for older git-service versions.
-    #[deprecated]
-    #[prost(string, tag="1")]
-    pub commit_sha: ::prost::alloc::string::String,
     /// ref_name is the fully-qualified ref that was updated, e.g. "refs/heads/main".
     #[prost(string, tag="2")]
     pub ref_name: ::prost::alloc::string::String,

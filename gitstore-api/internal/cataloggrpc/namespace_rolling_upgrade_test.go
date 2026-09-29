@@ -22,7 +22,6 @@ func TestValidationProtobufFieldNumbersAndKindsRemainStable(t *testing.T) {
 	assertProtoField(t, (&catalogv1.ResourceValidationTree{}).ProtoReflect().Descriptor(), "proposed_blobs", 2, protoreflect.MessageKind, true)
 	assertProtoField(t, (&catalogv1.ValidateResourceDeletionsRequest{}).ProtoReflect().Descriptor(), "trees", 1, protoreflect.MessageKind, true)
 	assertProtoField(t, (&catalogv1.ValidateResourceDeletionsRequest{}).ProtoReflect().Descriptor(), "repository_id", 15, protoreflect.StringKind, false)
-	assertProtoField(t, (&catalogv1.AdmitResourcesRequest{}).ProtoReflect().Descriptor(), "commit_sha", 1, protoreflect.StringKind, false)
 
 	errorDescriptor := (&catalogv1.ValidationError{}).ProtoReflect().Descriptor()
 	assertProtoField(t, errorDescriptor, "file_path", 1, protoreflect.StringKind, false)
@@ -36,8 +35,6 @@ func TestValidationProtobufFieldNumbersAndKindsRemainStable(t *testing.T) {
 	method := service.Methods().ByName("ValidateCategoryTaxonomyDeletion")
 	require.NotNil(t, method)
 	assert.True(t, method.Options().(*descriptorpb.MethodOptions).GetDeprecated())
-	field := (&catalogv1.AdmitResourcesRequest{}).ProtoReflect().Descriptor().Fields().ByName("commit_sha")
-	assert.True(t, field.Options().(*descriptorpb.FieldOptions).GetDeprecated())
 }
 
 func assertProtoField(

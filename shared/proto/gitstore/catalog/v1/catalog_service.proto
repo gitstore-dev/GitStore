@@ -149,13 +149,11 @@ message ValidateCategoryTaxonomyDeletionResponse {
 // gitstore-api fetches, parses, and stores resources independently using its own
 // GitService client — the git service does not send blobs for admission.
 message AdmitResourcesRequest {
+  reserved 1;
+  reserved "commit_sha";
+
   // repository_id is the stable UUIDv7 of the repository.
   string repository_id = 15;
-
-  // commit_sha is the full SHA of the accepted push commit.
-  // Deprecated for new callers in favor of new_commit_sha, but retained as
-  // the canonical new commit for older git-service versions.
-  string commit_sha = 1 [deprecated = true];
 
   // ref_name is the fully-qualified ref that was updated, e.g. "refs/heads/main".
   string ref_name = 2;

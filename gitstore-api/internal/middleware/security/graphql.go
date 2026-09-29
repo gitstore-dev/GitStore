@@ -969,7 +969,7 @@ func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.Fi
 		return nil
 	}
 
-	if operation == "" || repo == nil || len(namespaces) == 0 {
+	if repo == nil || len(namespaces) == 0 {
 		return nil
 	}
 	if _, err := a.authorizeRepositoryTenant(ctx, principal, operation, repo, namespaces...); err != nil {

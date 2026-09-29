@@ -69,11 +69,13 @@ message PushPolicy {
 // PushContext is attached to the first chunk of every ReceivePackRequest stream.
 // It is immutable for the lifetime of the stream.
 message PushContext {
+  reserved 5;
+  reserved "actor";
+
   string namespace               = 1;
   string repository_name         = 2;
   string repository_id           = 3; // MUST match the repository_id field on the enclosing chunk
   string config_resource_version = 4; // opaque audit tag; not interpreted by git-service
-  AuthContext actor              = 5 [deprecated = true];
   PushPolicy  policy             = 6;
   RequestAuthorization authorization = 14;
 }

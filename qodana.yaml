@@ -1,0 +1,56 @@
+#-------------------------------------------------------------------------------#
+#               Qodana analysis is configured by qodana.yaml file               #
+#             https://www.jetbrains.com/help/qodana/qodana-yaml.html            #
+#-------------------------------------------------------------------------------#
+
+#################################################################################
+#              WARNING: Do not store sensitive information in this file,        #
+#               as its contents will be included in the Qodana report.          #
+#################################################################################
+version: "1.0"
+
+#Specify inspection profile for code analysis
+profile:
+  name: qodana.starter
+
+#Enable inspections
+#include:
+#  - name: <SomeEnabledInspectionId>
+
+# Disable inspections on mechanically generated code: protoc/tonic-build
+# output for gitstore-git-service and gqlgen's non-editable execution/model
+# files for gitstore-api. gqlgen's *.resolvers.go stubs are intentionally NOT
+# excluded here: gqlgen only scaffolds them once and preserves hand-written
+# bodies on regeneration, so they carry real business logic.
+exclude:
+  - name: All
+    paths:
+      - gitstore-git-service/gen
+      - gitstore-api/internal/graph/generated
+      - gitstore-api/internal/graph/model/models_gen.go
+
+#Specify Qodana linter for analysis (Applied in CI/CD pipeline)
+linter: jetbrains/qodana-poly:2026.2
+
+#Execute shell command before Qodana execution (Applied in CI/CD pipeline)
+#bootstrap: sh ./prepare-qodana.sh
+
+#Install IDE plugins before Qodana execution (Applied in CI/CD pipeline)
+#plugins:
+#  - id: <plugin.id> #(plugin id can be found at https://plugins.jetbrains.com)
+
+# Quality gate. Will fail the CI/CD pipeline if any condition is not met
+# severityThresholds - configures maximum thresholds for different problem severities
+# testCoverageThresholds - configures minimum code coverage on a whole project and newly added code
+# dependencyLicenses - fails the run on prohibited or unknown dependency licenses
+# Code Coverage is available in Ultimate and Ultimate Plus plans
+#failureConditions:
+#  severityThresholds:
+#    any: 15
+#    critical: 5
+#  testCoverageThresholds:
+#    fresh: 70
+#    total: 50
+#  dependencyLicenses:
+#    failOnProhibited: true
+#    failOnUnknown: false

@@ -64,9 +64,6 @@ pub struct PushContext {
     /// opaque audit tag; not interpreted by git-service
     #[prost(string, tag="4")]
     pub config_resource_version: ::prost::alloc::string::String,
-    #[deprecated]
-    #[prost(message, optional, tag="5")]
-    pub actor: ::core::option::Option<AuthContext>,
     #[prost(message, optional, tag="6")]
     pub policy: ::core::option::Option<PushPolicy>,
     #[prost(message, optional, tag="14")]

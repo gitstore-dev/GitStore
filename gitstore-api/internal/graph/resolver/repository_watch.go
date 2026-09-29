@@ -99,7 +99,7 @@ func projectRepositoryJournalEvent(event datastore.ResourceWatchEvent, selector 
 	case !previousMatches && currentMatches:
 		event.Type = datastore.ResourceWatchAdded
 		return event, true
-	case previousMatches && !currentMatches:
+	case previousMatches:
 		event.Type = datastore.ResourceWatchDeleted
 		event.Payload = nil
 		event.SelectorLabels = event.PreviousSelectorLabels

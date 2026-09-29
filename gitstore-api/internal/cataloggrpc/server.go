@@ -1109,10 +1109,6 @@ func (s *Server) AdmitResources(
 
 	newCommit := req.GetNewCommitSha()
 	if newCommit == "" {
-		//lint:ignore SA1019 compatibility fallback for pre-new_commit_sha git-service releases
-		newCommit = req.GetCommitSha()
-	}
-	if newCommit == "" {
 		s.log.Warn("admit_resources: missing new commit sha",
 			zap.String("repository_id", req.RepositoryId),
 			zap.String("ref_name", req.RefName))
@@ -2380,7 +2376,7 @@ func (s *Server) admitProduct(
 		return
 	}
 
-	if op == admission.OperationCreate || existing == nil {
+	if op == admission.OperationCreate {
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
 		if !ok {
 			return
@@ -2524,7 +2520,7 @@ func (s *Server) admitCollection(
 		return
 	}
 
-	if op == admission.OperationCreate || existing == nil {
+	if op == admission.OperationCreate {
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
 		if !ok {
 			return

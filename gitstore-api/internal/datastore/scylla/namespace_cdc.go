@@ -221,7 +221,7 @@ func namespaceCDCDispositionFor(before *datastore.Namespace, beforeCommitted boo
 	if after != nil && !afterCommitted {
 		return namespaceCDCSuppress
 	}
-	if before != nil && !beforeCommitted && after != nil && afterCommitted {
+	if before != nil && !beforeCommitted && after != nil {
 		return namespaceCDCPromotedAddition
 	}
 	return namespaceCDCRegular
