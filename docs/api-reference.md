@@ -733,7 +733,7 @@ mutation DeleteRepository($id: ID!) {
 
 ### updateCategoryStatus
 
-Controller-only, partial-merge write to a `CategoryTaxonomy`'s `.status` sub-resource. Only non-null input fields are changed; existing status fields not mentioned in the input are left unchanged. Requires `resourceVersion` to match the resource's current value, or the request returns a `conflict` payload (not an error) carrying the resource's actual current version. Requires controller-level authorization (`category.status.write`), independent of whether `resourceVersion` matches. Never alters `.spec` or author-controlled `.metadata` — the input type has no such fields.
+Controller-only, partial-merge write to a `CategoryTaxonomy`'s `.status` sub-resource. Only non-null input fields are changed; existing status fields not mentioned in the input are left unchanged. Requires `resourceVersion` to match the resource's current value, or the request returns a `conflict` payload (not an error) carrying the resource's actual current version. Requires controller-level authorization (`categoryTaxonomy.status.write`), independent of whether `resourceVersion` matches. Never alters `.spec` or author-controlled `.metadata` — the input type has no such fields.
 
 ```graphql
 mutation UpdateCategoryStatus($input: UpdateCategoryStatusInput!) {

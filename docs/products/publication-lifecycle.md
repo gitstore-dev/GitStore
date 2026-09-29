@@ -362,8 +362,9 @@ Before the API creates a release snapshot, all of the following must hold:
 
 The Git service authenticates its internal notification to the API with the
 existing service-to-service mechanism. The API additionally authorizes author
-actions such as `catalogrelease.create`, `publication.create`, and
-`publication.read`. A controller service account receives only the
+actions such as `catalogRelease.create`, `publication.create`, and
+`publication.read` — domain (`<kind>.<verb>`) actions under the canonical grammar of
+[ADR 0010 — Authorization Model](../ADRs/0010-authorization-model.md). A controller service account receives only the
 prepare/ensure-tag/activate/deactivate operations for its assigned namespaces;
 the API checks its lease epoch as well as its action. Storefront authorization is
 defined by the OPA semantic-scope contract below.

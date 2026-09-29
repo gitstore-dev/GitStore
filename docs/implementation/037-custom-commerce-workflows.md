@@ -495,7 +495,10 @@ OPA/RBAC actions should distinguish configuration management from execution:
 `workflow.definition.manage`, `workflow.profile.manage`,
 `workflow.binding.manage`, `workflow.bundle.install`,
 `workflow.release.approve`, `workflow.execution.transition`, and narrowly scoped
-`workflow.action.<capability>`. Storefront principals receive only the
+`workflow.action.<capability>`. These are domain (`<kind>.<verb>`) actions under the canonical
+grammar of [ADR 0010 — Authorization Model](../ADRs/0010-authorization-model.md); "executions the
+principal owns" is the `when: owner` rule condition, and scope is decided by the binding tier —
+neither is expressed with `.own`/`.any` suffixes. Storefront principals receive only the
 buyer-command permissions and only for executions they own or may lawfully act
 on. A profile's UI metadata is not authority to invoke its transition.
 
