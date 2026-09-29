@@ -28,14 +28,14 @@ and a controller-side `CredentialSource` for this.
 
 These answer different questions and neither subsumes the other:
 
-| | Resource secret (ADR 0001) | Process identity (spec 061) |
-|---|---|---|
-| Question | "Where is the secret material this resource needs?" | "How does this process prove who it is?" |
-| Plane | Data plane | Control plane |
-| Authored by | A resource spec in Git | Deployment configuration |
-| Consumer | A reconciler acting *on behalf of* a resource | A client acting *as itself* |
-| Direction | GitStore reads a secret to call **out** | GitStore proves identity to call **in** |
-| Failure mode | Reconciliation blocked, `SecretResolved=False` | Process cannot authenticate at all |
+|              | Resource secret (ADR 0001)                          | Process identity (spec 061)              |
+|--------------|-----------------------------------------------------|------------------------------------------|
+| Question     | "Where is the secret material this resource needs?" | "How does this process prove who it is?" |
+| Plane        | Data plane                                          | Control plane                            |
+| Authored by  | A resource spec in Git                              | Deployment configuration                 |
+| Consumer     | A reconciler acting *on behalf of* a resource       | A client acting *as itself*              |
+| Direction    | GitStore reads a secret to call **out**             | GitStore proves identity to call **in**  |
+| Failure mode | Reconciliation blocked, `SecretResolved=False`      | Process cannot authenticate at all       |
 
 The problem this ADR fixes is not that these two concepts overlap — it is that
 **both ultimately need secret bytes loaded into a process, and each was inventing
@@ -70,9 +70,9 @@ outside a `SecretResolver` implementation.
                                             │  SecretResolver  │──▶ provider
                                             └──────────────────┘   (Vault, K8s,
                                                       ▲             AWS, file…)
-                    ┌──────────────────────────────┐  │
+                    ┌───────────────────────────────┐  │
    deployment    ──▶│  identity: bootstrap SecretRef│──┘
-   configuration    └──────────────────────────────┘
+   configuration    └───────────────────────────────┘
 ```
 
 `SecretRef` remains the single reference primitive. `CredentialsRef` (§2) adds
@@ -101,11 +101,11 @@ credentialsRef:
     name: catalog-assets-writer
 ```
 
-| Field       | Required | Description                                                                       |
-|-------------|----------|-----------------------------------------------------------------------------------|
-| `kind`      | yes      | Literal discriminator. Must be `CredentialsRef`.                                  |
+| Field       | Required | Description                                                                           |
+|-------------|----------|---------------------------------------------------------------------------------------|
+| `kind`      | yes      | Literal discriminator. Must be `CredentialsRef`.                                      |
 | `type`      | yes      | Credential type identifier with an explicit version suffix, e.g. `aws-access-key/v1`. |
-| `secretRef` | yes      | An ADR 0001 `SecretRef` locating the material.                                     |
+| `secretRef` | yes      | An ADR 0001 `SecretRef` locating the material.                                        |
 
 A credential `type` defines the required key set within the resolved secret.
 Resolution fails with ADR 0001's `MissingKey` when a required key for the
@@ -118,6 +118,12 @@ ADR 0001's temporary short form — a `credentialsRef` field holding a bare
 consumer-defined default credential type, load the whole record." New resource
 contracts MUST use the explicit `CredentialsRef` form.
 
+For File, spec 063 ends this temporary allowance in its strict release:
+operators must migrate existing documents and projections before deployment,
+and that release rejects all bare credential references. Its plan defines the
+compatible preparation and rollback boundary; no post-cutover legacy mode is
+provided.
+
 ### 3. Bootstrap tier for process identity
 
 A process's own identity credential is subject to a constraint no resource
@@ -128,10 +134,10 @@ private key through a resolver that itself requires an authenticated call to
 
 Therefore `SecretResolver` implementations are classified into two tiers:
 
-| Tier | May be used for | Network dependency | Providers |
-|---|---|---|---|
+| Tier          | May be used for                                                                          | Network dependency                                                                  | Providers                                                                                                                                                            |
+|---------------|------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Bootstrap** | A process's own identity material, resolved during startup before any authenticated call | MUST NOT perform any network call that itself requires a GitStore-issued credential | Local file, environment variable, mounted volume, process supervisor, or a secret manager reachable with ambient platform credentials (e.g. IRSA, workload identity) |
-| **Runtime** | Resource-referenced secret material (`SecretRef`/`CredentialsRef` in a resource spec) | Unrestricted | Any ADR 0001 provider |
+| **Runtime**   | Resource-referenced secret material (`SecretRef`/`CredentialsRef` in a resource spec)    | Unrestricted                                                                        | Any ADR 0001 provider                                                                                                                                                |
 
 Rules:
 
@@ -175,9 +181,17 @@ Both tiers and both consumers inherit ADR 0001's rules without modification:
 
 - Fail closed. No component continues with unauthenticated or anonymous
   behavior when required material cannot be resolved.
-- Secret bytes never appear in Git, resource `status`, projections, GraphQL
-  responses, logs, errors, metrics labels, traces, or audit diffs. This
-  explicitly covers access tokens, client assertions, and private keys.
+- Resolved provider material and private keys never appear in Git, resource
+  `status`, projections, GraphQL responses, logs, errors, metrics labels,
+  traces, or audit diffs. Access tokens and client assertions likewise never
+  appear in persisted records or observability output. Their intended
+  authentication-protocol use is permitted: a client assertion may authenticate
+  a token request, and an issued access token may be delivered to the authorized
+  requesting process through spec 061's token-issuance response (normalized by
+  #429 as `tokenRequest.status.token`). That response is transient protocol
+  output, not persisted resource `status`. This narrow delivery exception does
+  not permit returning resolved provider material or private keys, echoing
+  client assertions, or exposing tokens through other GraphQL responses.
 - Resolved material stays in process memory; persisted caches are out of scope.
   In-memory caches carry bounded TTLs and are disabled for private keys unless
   a component explicitly owns that risk.

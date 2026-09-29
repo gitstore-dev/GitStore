@@ -41,6 +41,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - Existing Product/ProductVariant lifecycle fields and owner-reference projections; add Product CDC source/migration/progress and bounded Product projection over the existing Resource Watch journal in Scylla and memdb; no publication storage (055-product-deletion-safety)
 - Go 1.25 (`gitstore-api`, `gitstore-controller-manager`) + `github.com/99designs/gqlgen v0.17.90` (schema/resolver codegen), existing `internal/graphqlclient.Client`, existing `internal/status.StatusPatch`/`StatusClient` (`gitstore-controller-manager`), existing `internal/cache.Cache[T]`/`CacheAccessor[T]` (spec 026), existing `internal/listwatch.Runner[T]` (spec 036/042), existing `internal/manager.Manager` reconciler registration (spec 026); no new external dependency in either service. (062-product-category-readiness)
 - No new storage. Reuses the existing `datastore.Product.Status` JSON blob (`catalog.ProductStatus`) already read/written by `updateProductStatus`; no schema migration. (062-product-category-readiness)
+- Go 1.25 module baseline (API and controller); existing Rust Git service; current Go container builders use 1.26.1. + Existing gqlgen, validator, zap, Prometheus client, JWT/crypto and standard library; new repository-local `shared/secretmaterial` Go module, no new third-party dependency. (063-implement-secret-adrs)
+- Existing File spec JSON projections in memdb/Scylla and Git manifests; no table migration. Provider-owned local records and bounded process memory only; no persisted secret cache. (063-implement-secret-adrs)
 
 ## Commands
 
@@ -90,9 +92,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 063-implement-secret-adrs: Added Go 1.25 module baseline (API and controller); existing Rust Git service; current Go container builders use 1.26.1. + Existing gqlgen, validator, zap, Prometheus client, JWT/crypto and standard library; new repository-local `shared/secretmaterial` Go module, no new third-party dependency.
 - 062-product-category-readiness: Added Go 1.25 (`gitstore-api`, `gitstore-controller-manager`) + `github.com/99designs/gqlgen v0.17.90` (schema/resolver codegen), existing `internal/graphqlclient.Client`, existing `internal/status.StatusPatch`/`StatusClient` (`gitstore-controller-manager`), existing `internal/cache.Cache[T]`/`CacheAccessor[T]` (spec 026), existing `internal/listwatch.Runner[T]` (spec 036/042), existing `internal/manager.Manager` reconciler registration (spec 026); no new external dependency in either service.
 - 055-product-deletion-safety: Added Go 1.25 (`gitstore-api`, `gitstore-controller-manager`); Rust 1.x (`gitstore-git-service`) + Existing gqlgen v0.17.90, gocqlx/gocql, go-memdb, Git writer/catalog gRPC, `internal/watchjournal`, Scylla CDC, Prometheus, zap, controller ListWatcher/Runner/cache/status interfaces; no new dependency
-- 050-namespace-watch-contract: Added Go 1.25 (`gitstore-api`); gqlgen v0.17.90 generated GraphQL contracts + Existing gocqlx/gocql Scylla stack, go-memdb, gqlgen WebSocket transport, zap, Prometheus client; new `github.com/scylladb/scylla-cdc-go v1.2.1` for production CDC stream/topology/progress handling
 
 
 <!-- MANUAL ADDITIONS START -->
@@ -128,7 +130,7 @@ Common bootstrap variables:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/050-namespace-watch-contract/plan.md
+at specs/063-implement-secret-adrs/plan.md
 <!-- SPECKIT END -->
 
 ## graphify

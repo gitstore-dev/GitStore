@@ -217,7 +217,7 @@ directive @catalogView(mode: CatalogView!) on FIELD
 
 This directive is **not part of v1**. If implemented, it expresses client intent only. Middleware
 passes the requested view to OPA, and OPA clamps it to the principal's entitlement. Requesting
-`MANAGEMENT` without the unpublished-read entitlement returns the policy-selected `PUBLIC` scope or
+`MANAGEMENT` without the management-read entitlement returns the policy-selected `PUBLIC` scope or
 `FORBIDDEN`, according to the field's documented contract; it never grants management access.
 
 ## 6. OPA Evaluation Model
@@ -512,22 +512,69 @@ changes during refresh, evaluation denies and retries according to the caller's 
 Multi-replica API processes maintain independent in-memory OPA stores but converge through the same
 authoritative revision check. No correctness requirement depends on process-local invalidation alone.
 
+### 8.5 Cluster tier, visibility bands, and instance grants
+
+The hybrid IAM model of §8.1–§8.4 is the **namespace tier**. Per
+[ADR 0010 — Authorization Model](../ADRs/0010-authorization-model.md), authorization also has a
+**cluster tier** above the namespace boundary, and two ABAC/instance refinements that the Rego
+encoding must honor. All of this is expressed through the unchanged
+`Authorize(principal, action, ResourceContext)` contract.
+
+**Cluster tier.** Cluster-scoped resources (`namespace`, `serviceAccount`) and cross-namespace grants
+live in cluster-scoped entities that sit above the namespace subtree:
+
+```text
+IAMClusterRole
+  name, allow[], deny[], built_in=false, resource_version
+
+IAMClusterRoleBinding
+  name, roleRef, subjects[], resource_version
+
+IAMResourceGrant                      # instance-level grant (§7 of ADR 0010)
+  namespace, subject|group, resources[], verbs[], resourceNames[], resource_version
+```
+
+`data.gitstore.cluster.roles` / `data.gitstore.cluster.role_bindings` hold the cluster subtree; it is
+refreshed under its own revision, analogous to the per-namespace revision in §8.4. Precedence is:
+explicit deny → `system:masters` → instance grant (`IAMResourceGrant`) → namespace binding → cluster
+binding → default deny.
+
+**Ownership** replaces the retired `.own` suffix: a rule condition `when: owner` that Rego evaluates
+by testing `input.resource.owner_sub` (`ResourceContext.OwnerSub`) against
+`{input.principal.subject} ∪ input.principal.groups`. Cross-tenant reach (the retired `.any`) is an
+`IAMClusterRoleBinding`.
+
+**Visibility bands** (`private`/`internal`/`public`) are ABAC conditions on
+`input.resource.attrs.visibility` (`ResourceContext.Attrs["visibility"]`). Denial of a read on a
+non-visible resource fails closed to `NOT_FOUND`, consistent with the enumeration semantics of §13.
+
+**Tier gating** for `namespace.create` (ORGANIZATION vs USER) is a condition on
+`input.resource.attrs.tier`; there is no `namespace.create.organization` action variant.
+
+Consistent with §8.3, the cluster tier introduces **no role inheritance and no nested groups**; a
+subject's effective permission set is the flat union of matching cluster and namespace rules minus
+explicit denies.
+
 ## 9. Catalog Actions and Semantic Scopes
 
-The first catalog action vocabulary is:
+The catalog action vocabulary conforms to the canonical grammar of
+[ADR 0010 §2/§5](../ADRs/0010-authorization-model.md), which has no qualifier position: the
+management-scope entitlement is the resource's `management` subresource, not a suffix on `read`/`list`.
 
-| Action | Meaning | Base result |
-|---|---|---|
-| `product.read` | Read one Product | `PUBLIC` when allowed |
-| `product.list` | List/count Products | `PUBLIC` when allowed |
-| `product.read.unpublished` | Include non-public Products | upgrades Product scope to `MANAGEMENT` |
-| `productVariant.read` | Read one ProductVariant | `PUBLIC` when allowed |
-| `productVariant.list` | List/count ProductVariants | `PUBLIC` when allowed |
-| `productVariant.read.unpublished` | Include non-public ProductVariants | upgrades ProductVariant scope to `MANAGEMENT` |
+| Action                           | Meaning                                            | Base result                                   |
+|----------------------------------|----------------------------------------------------|-----------------------------------------------|
+| `product.read`                   | Read one Product                                   | `PUBLIC` when allowed                         |
+| `product.list`                   | List/count Products                                | `PUBLIC` when allowed                         |
+| `product.management.read`        | Include a non-public Product in a read             | upgrades Product scope to `MANAGEMENT`        |
+| `product.management.list`        | Include non-public Products in a list/count        | upgrades Product scope to `MANAGEMENT`        |
+| `productVariant.read`            | Read one ProductVariant                            | `PUBLIC` when allowed                         |
+| `productVariant.list`            | List/count ProductVariants                         | `PUBLIC` when allowed                         |
+| `productVariant.management.read` | Include a non-public ProductVariant in a read      | upgrades ProductVariant scope to `MANAGEMENT` |
+| `productVariant.management.list` | Include non-public ProductVariants in a list/count | upgrades ProductVariant scope to `MANAGEMENT` |
 
-The base read/list permission is necessary for either scope. An unpublished-read grant does not grant
+The base read/list permission is necessary for either scope. A management-read grant does not grant
 the base action by itself. OPA returns `MANAGEMENT` only when both the requested base action and the
-corresponding unpublished entitlement are effective for the namespace.
+corresponding management entitlement are effective for the namespace.
 
 The additional entitlement may originate from a direct subject grant, built-in role, custom role, or
 group-derived role. Schema/resolver code does not distinguish those sources.
@@ -539,11 +586,11 @@ not authorization roles. OPA resolves `serviceaccount:<namespace>:<name>` throug
 and namespace binding model used for humans.
 
 Controller roles are immutable built-ins in the OPA bundle. A controller receives management visibility
-only for resource kinds whose role explicitly grants the matching unpublished-read action. For example,
-the CategoryTaxonomy controller needs `product.list` and `product.read.unpublished` if product counts
+only for resource kinds whose role explicitly grants the matching management-read action. For example,
+the CategoryTaxonomy controller needs `product.list` and `product.management.read` if product counts
 must include admitted-but-unpublished Products. It receives no ProductVariant management scope unless a
 separate reconciler requirement explicitly grants `productVariant.list` and
-`productVariant.read.unpublished`.
+`productVariant.management.read`.
 
 Long-lived subscriptions retain the decision made for their authenticated connection only until the
 connection is re-authorized or closed under 021's expiry/revocation rules. A future catalog subscription
@@ -599,14 +646,14 @@ snapshot, without changing the `catalog.visibility` authorization scope.
 
 Every authorized access pattern has a physical or indexed query path for both scopes:
 
-| GraphQL access | `PUBLIC` | `MANAGEMENT` |
-|---|---|---|
-| Product list by namespace | target-specific public Product projection | existing complete Product namespace table |
-| Product by name/UID | target-specific public Product lookup | existing complete name/UID lookup |
-| Category/Collection Products | target-specific public relationship projection | complete relationship projection |
-| ProductVariant list by namespace | target-specific public variant projection | existing complete variant namespace table |
-| ProductVariant by name/UID/SKU | target-specific public variant lookup projections | existing complete lookup projections |
-| Product.productVariants | target-specific public variants-by-product projection | complete variants-by-product projection |
+| GraphQL access                   | `PUBLIC`                                              | `MANAGEMENT`                              |
+|----------------------------------|-------------------------------------------------------|-------------------------------------------|
+| Product list by namespace        | target-specific public Product projection             | existing complete Product namespace table |
+| Product by name/UID              | target-specific public Product lookup                 | existing complete name/UID lookup         |
+| Category/Collection Products     | target-specific public relationship projection        | complete relationship projection          |
+| ProductVariant list by namespace | target-specific public variant projection             | existing complete variant namespace table |
+| ProductVariant by name/UID/SKU   | target-specific public variant lookup projections     | existing complete lookup projections      |
+| Product.productVariants          | target-specific public variants-by-product projection | complete variants-by-product projection   |
 
 Concrete table names and migration ordering belong to the implementation specification. The naming
 convention should make public tables and their target partition unmistakable, for
@@ -642,14 +689,14 @@ pre-pagination selection. It may not post-filter an already-paginated result.
 
 ## 13. GraphQL Error and Enumeration Semantics
 
-| Condition | GraphQL behavior |
-|---|---|
-| Missing base action | `FORBIDDEN`; resolver is not called |
-| OPA unavailable/invalid/timeout/stale IAM | stable authorization error with `FORBIDDEN`; details only in logs |
+| Condition                                                  | GraphQL behavior                                                   |
+|------------------------------------------------------------|--------------------------------------------------------------------|
+| Missing base action                                        | `FORBIDDEN`; resolver is not called                                |
+| OPA unavailable/invalid/timeout/stale IAM                  | stable authorization error with `FORBIDDEN`; details only in logs  |
 | Public direct lookup of unpublished Product/ProductVariant | `null` or existing `NOT_FOUND` shape, identical to absent resource |
-| Public list | ineligible resources absent; no per-edge errors |
-| Invalid/mismatched semantic scope | `FORBIDDEN`; no fallback to management query |
-| Management lookup of existing unpublished resource | returned normally when base + unpublished entitlements allow it |
+| Public list                                                | ineligible resources absent; no per-edge errors                    |
+| Invalid/mismatched semantic scope                          | `FORBIDDEN`; no fallback to management query                       |
+| Management lookup of existing unpublished resource         | returned normally when base + management entitlements allow it     |
 
 Direct lookup behavior prevents resource enumeration. The API must not reveal whether a Product or
 ProductVariant exists but is outside the caller's view through messages, timing classes, counts, or
@@ -784,7 +831,13 @@ cardinality review.
 
 Compatibility guarantees:
 
-- `AuthZProvider.Authorize` and existing action strings do not change.
+- `AuthZProvider.Authorize` and `ResourceContext` do not change. The **action-string vocabulary**
+  migrates to the canonical grammar of [ADR 0010](../ADRs/0010-authorization-model.md) — which has no
+  qualifier position — under `rbac.authorization.gitstore.dev/v1beta1`; legacy `X.verb.own` →
+  `X.verb` + `when: owner`, `X.verb.any` → cluster-tier grant, `category.*` → `categoryTaxonomy.*`,
+  `X.read.management`/`X.read.unpublished` → `X.management.read`, and `X.delete.complete` → `X.purge`
+  are honored by a compat shim for one deprecation window. The decision semantics (Allow/Deny,
+  `PUBLIC`/`MANAGEMENT`) are unchanged.
 - Existing providers may leave new Decision fields empty; `CHECK` calls continue to work.
 - A `SCOPE` field fails closed when the active provider cannot produce the required semantic scope.
 - `rbac-local` remains usable for existing checks; it must be extended or wrapped before it can serve

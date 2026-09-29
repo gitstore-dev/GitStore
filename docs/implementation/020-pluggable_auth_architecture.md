@@ -145,7 +145,9 @@ type ResourceContext struct {
 type AuthZProvider interface {
     Name() string
     // Authorize returns Allow or Deny for the given action on the resource.
-    // action follows a dot-notation: "namespace.delete.any", "repository.write".
+    // action follows the canonical grammar <kind>[.<subresource>].<verb> per ADR 0010
+    // (no qualifier position — the last dot-segment is always the verb):
+    // e.g. "namespace.delete", "repository.contents.read", "product.management.read".
     Authorize(ctx context.Context, p *Principal, action string, res ResourceContext) (Decision, error)
 }
 
@@ -526,66 +528,65 @@ func (p *RBACLocalProvider) Authorize(ctx context.Context, principal *auth.Princ
 
 **Policy YAML schema:**
 
+> **Vocabulary:** action strings, verbs, subresources, scope tiers, and capability
+> qualifiers follow the canonical model in
+> [ADR 0010 — Authorization Model](../ADRs/0010-authorization-model.md). The
+> `.own`/`.any` suffixes shown in earlier drafts are **removed**: ownership is a
+> rule condition (`when: owner`, evaluated against `ResourceContext.OwnerSub`) and
+> cluster reach is a `ClusterRoleBinding`. The document below uses the
+> `rbac.authorization.gitstore.dev/v1beta1` shape.
+
+`clusterRoles`/`roles` are maps keyed by role name (rule-sets); the namespace of a grant comes from the
+binding. Subresources are slash paths (`repository/contents`); ownership and visibility are `when`
+conditions; instance scope is `resourceNames` on the rule; subjects and `roleRef` are structured. See
+[ADR 0010 §10](../ADRs/0010-authorization-model.md) for the complete annotated example.
+
 ```yaml
-# policy.yaml — rbac-local policy file
-# Version must be "v1".
-version: v1
+apiVersion: rbac.authorization.gitstore.dev/v1beta1
+kind: RbacLocalConfiguration
 
-# roles maps role name → permissions
-roles:
-  admin:
-    allow:
-      - "*"                  # wildcard: all actions
-    deny: []
+clusterRoles:
+  cluster-admin:
+    rules:
+      - resources: ["*"]
+        verbs: ["*"]
+  namespace-owner:                               # cluster-tier role, gated to owned namespaces
+    rules:
+      - resources: ["namespace"]
+        verbs: ["read", "update", "delete"]
+        when: owner                              # OwnerSub ∈ {principal.subject} ∪ principal.groups
 
-  namespace-owner:
-    allow:
-      - namespace.read
-      - namespace.update
-      - namespace.delete.own  # only own namespaces
-      - repository.read
-      - repository.write
-      - repository.create.own
-      - repository.rename.own
-      - repository.transfer.own
-      - repository.delete.own
-      - repository.read.own
-    deny:
-      - namespace.delete.any  # cannot delete other owners' namespaces
-
+roles:                                           # namespaced rule-sets; namespace comes from binding
   developer:
-    allow:
-      - namespace.read
-      - repository.read
-      - repository.write
-      - repository.read.any
-    deny: []
+    rules:
+      - resources: ["repository"]
+        verbs: ["read", "list", "watch"]
+      - resources: ["repository/contents"]       # git fetch/push via subresource path
+        verbs: ["read", "write"]
 
-  anonymous:
-    allow:
-      - namespace.read
-      - repository.read
-      - repository.read.any
-    deny:
-      - repository.write
-      - namespace.create
-      - namespace.delete.any
+clusterRoleBindings:
+  - roleRef: { kind: ClusterRole, name: cluster-admin }
+    subjects: [ { kind: Group, name: "system:masters" } ]
+  - roleRef: { kind: ClusterRole, name: namespace-owner }
+    subjects: [ { kind: User, name: "alice" } ]
 
-# default_deny applies when no role rule matches.
-default_deny: true
+roleBindings:
+  - namespace: acme-store
+    roleRef: { kind: Role, name: developer }     # kind may be ClusterRole to apply its rules in this namespace
+    subjects: [ { kind: Group, name: "system:group:engineering" } ]
 
-# role_bindings maps subject → list of roles (used when UserDir is none)
-role_bindings:
-  "admin":
-    - admin
+defaultDeny: true
 ```
 
-Repository GraphQL control-plane operations use
-`repository.<operation>.own` when the caller owns every affected namespace and
-`repository.<operation>.any` for cross-tenant access. Git smart HTTP uses the
-same `repository.read.own|any` and `repository.write.own|any` vocabulary; the
+Repository control-plane operations use the canonical verbs
+(`repository.create|read|list|watch|update|delete`) with scope decided by the
+binding tier (`ClusterRoleBinding` for cross-namespace reach) or `resourceNames`
+for specific instances — not `.own`/`.any` suffixes. Git smart HTTP uses the
+`repository.contents.read` / `repository.contents.write` subresource actions; the
 API passes the approved action and repository scope to GitService in a
-non-secret authorization envelope.
+non-secret authorization envelope. See
+[ADR 0010 §7 (instance grants)](../ADRs/0010-authorization-model.md) and
+[§8 (visibility bands)](../ADRs/0010-authorization-model.md).
 
 ### 2e. anonymous (AuthN)
 
@@ -699,13 +700,17 @@ Before:
   }
 
 After:
-  decision, err := authz.Authorize(ctx, principal, "namespace.create.organisation",
+  decision, err := authz.Authorize(ctx, principal, "namespace.create",
       auth.ResourceContext{Kind: "namespace", Attrs: map[string]any{"tier": tier}})
   if decision.Outcome != auth.OutcomeAllow {
       return ErrForbidden(decision.Reason)
   }
 ```
-The `rbac-local` policy grants `namespace.create.organization` only to the `admin` role; `allow-all` permits it unconditionally; behaviour is identical to the current check in both cases.
+The verb is the canonical `namespace.create`; the ORGANIZATION-vs-USER tier gate is a rule
+condition on `attrs.tier` ([ADR 0010 §9](../ADRs/0010-authorization-model.md)), not a
+`namespace.create.organization` action variant. The `rbac-local` policy grants unconditional
+`namespace.create` only to the `admin`/`cluster-admin` role; `allow-all` permits it
+unconditionally; behaviour is identical to the current check.
 
 **deleteNamespace (owner-or-admin):**
 ```text
@@ -715,17 +720,18 @@ Before:
   }
 
 After:
-  action := "namespace.delete.own"
-  if ns.OwnerUsername != principal.Subject {
-      action = "namespace.delete.any"
-  }
-  decision, err := authz.Authorize(ctx, principal, action,
+  decision, err := authz.Authorize(ctx, principal, "namespace.delete",
       auth.ResourceContext{Kind: "namespace", Name: ns.Name, OwnerSub: ns.OwnerUsername})
   if decision.Outcome != auth.OutcomeAllow {
       return ErrForbidden(decision.Reason)
   }
 ```
-The `rbac-local` policy grants `namespace.delete.any` only to `admin`, and `namespace.delete.own` to `namespace-owner` and `admin`; semantically identical to the current check.
+The verb is the canonical `namespace.delete`; the caller no longer pre-computes ownership into the
+action string. Ownership is a rule condition (`when: owner`, comparing `ResourceContext.OwnerSub`
+against `{principal.subject} ∪ principal.groups`) and cross-tenant reach is a `ClusterRoleBinding`
+([ADR 0010 §4](../ADRs/0010-authorization-model.md)). The `rbac-local` policy grants unrestricted
+`namespace.delete` at the cluster tier to `admin`/`cluster-admin`, and owner-scoped
+`namespace.delete` to `namespace-owner`; semantically identical to the current check.
 
 ### 3c. Fixing callerUsernameOrAnon
 
@@ -1095,8 +1101,9 @@ therefore has no remote dependency. See `022-opa-data-authorization.md` §6 and 
 
 **Trade-off weighed:** OpenFGA is purpose-built for Relationship-Based Access Control (ReBAC) and excels at "does user X have permission Y on object Z via a chain of relationships?" — exactly the model needed if GitStore later implements org membership hierarchies, inherited repository permissions, or team-scoped access. OPA uses Rego, a general-purpose policy language, and its policy file model maps directly onto the `rbac-local` YAML schema used in phase 1, making the migration from `rbac-local` → OPA a matter of translating the YAML policy into Rego without changing the `AuthZProvider` interface or the action name vocabulary. OpenFGA requires a running relational store (PostgreSQL/MySQL) and a tuple-loading pipeline from GitStore's data — infrastructure that does not exist today.
 
-**Constraint on future providers:** The action name vocabulary (`namespace.delete.any`,
-`repository.write`, etc.) and `ResourceContext` struct are the contract between GraphQL middleware
+**Constraint on future providers:** The canonical action vocabulary (`namespace.delete`,
+`repository.contents.read`, `product.management.read`, etc.; see
+[ADR 0010](../ADRs/0010-authorization-model.md)) and `ResourceContext` struct are the contract between GraphQL middleware
 and the AuthZ provider. OPA Rego receives a minimized, typed projection of `(principal, action,
 ResourceContext)` plus allowlisted GraphQL field metadata. The raw GraphQL operation, schema,
 credentials, claims map, and unrelated variables are not policy input. `AuthZProvider.Authorize`
@@ -1157,7 +1164,7 @@ BasicAuthenticator → RepoResolver → GitHttpAuthorizer → [PushContextInsert
 - 401 + `WWW-Authenticate: Basic realm="GitStore"` on credential rejection.
 - 503 on transient auth errors (chain returns `err != nil`).
 - 404 pkt-line on unknown namespace/repository.
-- 403 on insufficient permissions (`repository.read.own|any` required for upload-pack, `repository.write.own|any` for receive-pack).
+- 403 on insufficient permissions (`repository.contents.read` required for upload-pack, `repository.contents.write` for receive-pack; scope decided by binding tier / `resourceNames` per ADR 0010).
 - `resource_exhausted` gRPC status when `max_pack_size_bytes` or `max_file_size_bytes` exceeded.
 - `invalid_argument` gRPC status when `push_context` is missing or inconsistent.
 
@@ -1171,11 +1178,11 @@ BasicAuthenticator → RepoResolver → GitHttpAuthorizer → [PushContextInsert
 **Deliverable:** GraphQL authentication moved from Gin route middleware to gqlgen operation middleware (`AroundOperations`) via `GraphQLAuthenticator`. A new `GraphQLAuthorizer` operation middleware provides a centralized GraphQL security seam and enforces authentication for non-login mutations. Principal and raw bearer token propagation now occur in GraphQL middleware context instead of Gin route hooks.
 **Affected packages:** `gitstore-api/internal/app/`, `gitstore-api/internal/middleware/security/`, `gitstore-api/cmd/server/`
 **Test strategy:** Unit tests for GraphQL middleware decision paths (valid bearer, invalid bearer, anonymous mutation deny, login allow) plus GraphQL handler test for invalid bearer rejection.
-**Auth responsibility boundary:** GraphQL authn/authz checks for mutation access and namespace policy decisions (`namespace.create.organization`, `namespace.delete.{own,any}`) run in gqlgen middleware (`AroundOperations` + `AroundFields`). Resolver/service layers keep business validation and datastore rules only.
+**Auth responsibility boundary:** GraphQL authn/authz checks for mutation access and namespace policy decisions (canonical `namespace.create` gated on `attrs.tier`, `namespace.delete` with the `when: owner` condition / cluster tier per ADR 0010) run in gqlgen middleware (`AroundOperations` + `AroundFields`). Resolver/service layers keep business validation and datastore rules only.
 **Justified exceptions:** `login` intentionally performs credential verification inside its resolver because credentials are GraphQL input payloads (not request headers). `logout`/`refreshToken` resolvers keep token lifecycle execution (revoke/refresh calls), while authentication gating and bearer-token presence requirements are enforced by middleware.
 **Rollback trigger:** GraphQL login or authenticated mutation flows regress, or unauthenticated mutations are no longer blocked.
 
-### Phase 7 — OIDC JWT provider
+### Phase 7 — OIDC JWT provider ✅ COMPLETE
 **Milestone:** `auth-framework-v2`
 **Deliverable:** `OIDCJWTProvider`; `go-oidc/v3` added to `go.mod`; local-secure profile end-to-end tested.
 **Affected packages:** `gitstore-api/internal/auth/provider/oidcjwt/`, `go.mod`
