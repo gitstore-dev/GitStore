@@ -21,11 +21,13 @@ func TestReceivePackRequest_PushContextFirstChunkOnly(t *testing.T) {
 		RepositoryName:        "catalog",
 		RepositoryId:          "01960000-0000-7000-8000-000000000001",
 		ConfigResourceVersion: "rv-42",
-		Actor: &gitv1.AuthContext{
-			Subject:    "admin",
-			Issuer:     "static-admin",
-			AuthMethod: "basic",
-			Roles:      []string{"admin"},
+		Authorization: &gitv1.RequestAuthorization{
+			Actor: &gitv1.AuthContext{
+				Subject:    "admin",
+				Issuer:     "static-admin",
+				AuthMethod: "basic",
+				Roles:      []string{"admin"},
+			},
 		},
 		Policy: &gitv1.PushPolicy{
 			MaxPackSizeBytes: 0, // unlimited
@@ -58,7 +60,7 @@ func TestReceivePackRequest_PushContextFirstChunkOnly(t *testing.T) {
 
 	assert.Equal(t, first.RepositoryId, decoded.RepositoryId)
 	require.NotNil(t, decoded.PushContext)
-	assert.Equal(t, "admin", decoded.PushContext.Actor.Subject)
+	assert.Equal(t, "admin", decoded.PushContext.Authorization.Actor.Subject)
 	assert.Equal(t, "gitstore-test", decoded.PushContext.Namespace)
 	assert.Equal(t, int64(0), decoded.PushContext.Policy.MaxPackSizeBytes)
 	assert.Equal(t, int64(0), decoded.PushContext.Policy.MaxFileSizeBytes)

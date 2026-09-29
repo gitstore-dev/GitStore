@@ -5,6 +5,7 @@ package scylla
 
 import (
 	"context"
+	"errors"
 	"math"
 	"time"
 
@@ -55,7 +56,7 @@ func (s *scyllaDatastore) IsSessionRevoked(ctx context.Context, jti string) (boo
 	err := s.session.Session.Query(
 		`SELECT expires_at FROM auth_session_revocations WHERE jti = ?`, jti,
 	).WithContext(ctx).Scan(&expiresAt)
-	if err == gocql.ErrNotFound {
+	if errors.Is(err, gocql.ErrNotFound) {
 		return false, nil
 	}
 	if err != nil {

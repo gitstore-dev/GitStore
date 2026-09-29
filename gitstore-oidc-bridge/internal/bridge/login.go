@@ -5,6 +5,7 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -50,7 +51,7 @@ func (h *LoginHandler) Handle(c *gin.Context) {
 
 	identity, err := h.kratos.WhoAmI(c.Request.Context(), c.GetHeader("Cookie"))
 	if err != nil {
-		if err == kratosclient.ErrNoSession {
+		if errors.Is(err, kratosclient.ErrNoSession) {
 			h.redirectToKratosLogin(c, challenge)
 			return
 		}

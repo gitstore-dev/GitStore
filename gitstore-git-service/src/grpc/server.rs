@@ -2441,7 +2441,6 @@ mod tests {
             config_resource_version: String::new(),
             policy: None,
             authorization: test_authorization(repo_id, "repository.write.any"),
-            ..Default::default()
         }
     }
 
@@ -2527,7 +2526,6 @@ mod tests {
                 max_file_size_bytes: 0,
             }),
             authorization: test_authorization(TEST_REPO_I, "repository.write.any"),
-            ..Default::default()
         };
 
         // Build a pack payload: minimal data > 1 byte to trip the limit
@@ -2585,7 +2583,6 @@ mod tests {
                 max_file_size_bytes: 1, // 1 byte — any blob will exceed this
             }),
             authorization: test_authorization(target_id, "repository.write.any"),
-            ..Default::default()
         };
 
         let chunk = ReceivePackRequest {
@@ -2631,7 +2628,6 @@ mod tests {
                 max_file_size_bytes: 0,
             }),
             authorization: test_authorization(TEST_REPO_H, "repository.write.any"),
-            ..Default::default()
         };
         let chunk = delete_ref_cmd_with_ctx(TEST_REPO_H, "refs/heads/main", &head_oid, ctx);
         let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;

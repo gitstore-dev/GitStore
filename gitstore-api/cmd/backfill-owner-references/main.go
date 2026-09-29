@@ -158,7 +158,7 @@ func categoryReferences(ctx context.Context, store datastore.Datastore, category
 				APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy", Name: parent.Name,
 				UID: parent.UID, BlockOwnerDeletion: true, RepositoryID: parent.RepositoryID,
 			})
-		} else if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+		} else if !errors.Is(err, datastore.ErrNotFound) {
 			return nil, fmt.Errorf("resolve category parent %s/%s: %w", category.Namespace, category.ParentName, err)
 		}
 	}
@@ -181,7 +181,7 @@ func productReferences(ctx context.Context, store datastore.Datastore, product *
 			APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy", Name: category.Name,
 			UID: category.UID, BlockOwnerDeletion: false, RepositoryID: category.RepositoryID,
 		})
-	} else if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+	} else if !errors.Is(err, datastore.ErrNotFound) {
 		return nil, fmt.Errorf("resolve product category %s/%s: %w", product.Namespace, spec.CategoryRef.Name, err)
 	}
 	return json.Marshal(references)

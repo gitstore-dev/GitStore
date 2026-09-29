@@ -104,9 +104,6 @@ impl AdmissionHandler for AdmissionControlHandler {
                     new_commit_sha,
                     changed_paths,
                     actor_subject,
-                    // `commit_sha` is deprecated. Leave it at its protobuf
-                    // default for rolling readers rather than writing it.
-                    ..Default::default()
                 };
                 if let Err(e) = client.admit_resources(req).await {
                     error!(
