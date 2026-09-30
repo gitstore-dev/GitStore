@@ -1,6 +1,6 @@
 {
   "name": "gitstore-admin-ui",
-  "version": "1.0.0-alpha.3",
+  "version": "1.0.0-alpha.4",
   "type": "module",
   "scripts": {
     "dev": "astro dev",

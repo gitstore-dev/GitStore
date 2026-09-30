@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.0.0-alpha.4](https://github.com/gitstore-dev/GitStore/compare/v1.0.0-alpha.3...v1.0.0-alpha.4) (2026-09-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** MetadataInput is renamed to ObjectMetaInput; ServiceAccount mutation payloads are reshaped to object-typed (serviceAccount/tokenRequest); TokenRequestSpec input becomes TokenRequestSpecInput with audiences/ expirationSeconds; TokenRequestStatus.expiresAt becomes expirationTimestamp.
+
+### Features
+
+* **api:** ADR-0010 §14 ownership assignment and transfer foundation ([#433](https://github.com/gitstore-dev/GitStore/issues/433)) ([2f50d2e](https://github.com/gitstore-dev/GitStore/commit/2f50d2e716a0614f7f232e3feb38939c14e0ba07))
+* **api:** object-typed ServiceAccount surface and unified ObjectMetaInput ([#429](https://github.com/gitstore-dev/GitStore/issues/429)) ([9a13196](https://github.com/gitstore-dev/GitStore/commit/9a13196ad23c70c3af687e2d9538baee7b706c51))
+* product category and readiness reconciliation ([#426](https://github.com/gitstore-dev/GitStore/issues/426)) ([0a38bd9](https://github.com/gitstore-dev/GitStore/commit/0a38bd9c91ae6254b88605103c8ecfead78045c0))
+
+
+### Bug Fixes
+
+* **controller-manager:** stop Repository/CategoryTaxonomy/Namespace reconcile self-trigger loops ([#428](https://github.com/gitstore-dev/GitStore/issues/428)) ([8fef66d](https://github.com/gitstore-dev/GitStore/commit/8fef66ddc96bcaabb07a767b33724d4db8e60a48))
+* resolve controller-manager and API shutdown test flakes ([#435](https://github.com/gitstore-dev/GitStore/issues/435)) ([0f87057](https://github.com/gitstore-dev/GitStore/commit/0f87057d87be3f5ab00e7c7b3a58cab36699f2eb))
+* resolve Qodana findings and remove two dead proto fields ([#432](https://github.com/gitstore-dev/GitStore/issues/432)) ([5f5ee2a](https://github.com/gitstore-dev/GitStore/commit/5f5ee2a9c6552745bf1fe3eb2e8ab3fd22fe2cae))
+
+
+### Documentation
+
+* add ADR 0012 (admin/storefront endpoints) and ADR 0013 (Markdown IR) ([#434](https://github.com/gitstore-dev/GitStore/issues/434)) ([a7871e3](https://github.com/gitstore-dev/GitStore/commit/a7871e3484eabae6501d8ff555aa09f3c17a86d0))
+* add secret material ADRs and authorization docs for spec 063 ([#431](https://github.com/gitstore-dev/GitStore/issues/431)) ([f384044](https://github.com/gitstore-dev/GitStore/commit/f3840447aaea1bc2d1ee140ccf87fcf937c95cca))
+
 ## [1.0.0-alpha.3](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.3...v1.0.0-alpha.3) (2026-09-18)
 
 
