@@ -5,6 +5,21 @@
 > This document is authoritative for the embedded OPA provider, GraphQL read authorization,
 > semantic catalog scopes, hybrid IAM data, and authorization-aware Product/ProductVariant reads.
 
+> **Amended by [ADR 0012](../ADRs/0012-admin-storefront-graphql-endpoints.md)** (separate Admin and
+> Storefront GraphQL endpoints). Where this document and ADR 0012 disagree, ADR 0012 wins:
+>
+> - The `PUBLIC`/`MANAGEMENT` catalog scope is **fixed by the endpoint**, not emitted by the policy
+>   per request. The Storefront API is always `PUBLIC`; the Admin API is always `MANAGEMENT`.
+> - No GraphQL field carries two physical query plans. The per-field `mode: SCOPE` usage in §5.1,
+>   the per-node scope in §5.2, and the "upgrade" semantics in §9 are superseded; catalog fields
+>   use `mode: CHECK` on both schemas.
+> - The `Authorized*Query` types (§7.2) keep their "unavailable by construction" role, split per
+>   endpoint: storefront resolvers can only build `PUBLIC` snapshot queries, admin resolvers only
+>   `MANAGEMENT` current-row queries.
+> - The embedded OPA provider, input/decision model, IAM ownership (§8), publication boundary (§11)
+>   and projection rule (§12) are unchanged. §12's `PUBLIC` column is read by the Storefront API and
+>   the `MANAGEMENT` column by the Admin API.
+
 ## 1. Executive Decision
 
 GitStore will add an **embedded Open Policy Agent (OPA) AuthZ provider** to the existing
@@ -15,14 +30,15 @@ operation to OPA on each request.
 
 The public GraphQL contract will use server-owned SDL metadata to identify the authorization
 action and whether the field requires a binary check or a data scope. gqlgen middleware makes
-the policy decision before catalog access. Resolvers may consume a validated semantic scope
-such as `PUBLIC` or `MANAGEMENT`, but they must not inspect roles, groups, direct grants, or
-permissions. Service and datastore entry points require that validated scope, making an
-unscoped catalog read unavailable by construction.
+the policy decision before catalog access. Resolvers must not inspect roles, groups, direct grants,
+or permissions. Service and datastore entry points require a semantic scope (`PUBLIC` or
+`MANAGEMENT`), making an unscoped catalog read unavailable by construction. Per ADR 0012 that scope
+is fixed by the endpoint the resolver belongs to (Storefront API → `PUBLIC`, Admin API →
+`MANAGEMENT`) rather than selected by the policy per request.
 
 For Relay connections, authorization changes the physical query plan before pagination. Public
-reads use public Product/ProductVariant projections; management reads use the complete catalog
-projections. GitStore never fetches a page and removes unauthorized nodes afterward, and it
+reads (Storefront API) use public Product/ProductVariant projections; management reads (Admin API)
+use the complete catalog projections. GitStore never fetches a page and removes unauthorized nodes afterward, and it
 never relies on CQL `ALLOW FILTERING` for authorization.
 
 OPA remains opt-in. This design does not change the default provider or implement any runtime
@@ -142,7 +158,13 @@ in `AroundOperations`; common extraction, logging, decision validation, and dyna
 handling remain in shared field middleware, following gqlgen's
 [middleware model](https://gqlgen.com/reference/middlewares/).
 
-Representative schema usage:
+> **Superseded by ADR 0012 §3.** The catalog fields below no longer use `mode: SCOPE`. On the Admin
+> API they are `CHECK` fields guarded by `product.management.read`/`.list` (and the
+> `productVariant.*` equivalents). On the Storefront API the equivalent `Storefront*` fields are
+> `CHECK` fields guarded by `product.read`/`.list`. `SCOPE` is retained in the directive grammar
+> for non-catalog uses, if any are identified (ADR 0011 §9). The example is kept for history.
+
+Representative schema usage (pre-ADR 0012):
 
 ```graphql
 extend type Query {
@@ -184,6 +206,11 @@ Their common field authorizer decodes GitStore's opaque global ID before resolvi
 - ProductVariant ID → evaluate `productVariant.read` and attach a ProductVariant scope for that ID.
 - Other kinds → use that kind's existing or future action without manufacturing a catalog scope.
 - Invalid or unknown IDs retain the current invalid/not-found behavior without disclosing existence.
+
+Per ADR 0012 §5, each endpoint has its own `node`/`nodes` and global-ID kinds. The Admin API decodes
+admin kinds and checks the kind's management-read action; the Storefront API decodes `Storefront*`
+kinds and checks the public read action. Neither endpoint attaches a per-node catalog scope; a
+cross-endpoint ID returns `NOT_FOUND`.
 
 For `nodes`, decisions are associated with the normalized global ID, not only the resource kind, so
 a mixed batch cannot accidentally reuse one node's decision for another. A later provider extension
@@ -561,6 +588,13 @@ The catalog action vocabulary conforms to the canonical grammar of
 [ADR 0010 §2/§5](../ADRs/0010-authorization-model.md), which has no qualifier position: the
 management-scope entitlement is the resource's `management` subresource, not a suffix on `read`/`list`.
 
+> **Amended by ADR 0012 §3.** The action strings are unchanged, but the endpoint, not an upgrade
+> decision, selects which action is checked: the Storefront API checks the base `read`/`list`
+> action and reads `PUBLIC` snapshots; the Admin API checks the `management.read`/`management.list`
+> action and reads `MANAGEMENT` current rows. The "Base result" column below describes the
+> pre-ADR 0012 single-endpoint model. Built-in authoring roles include `product.management.read`
+> so authors can read their own drafts.
+
 | Action                           | Meaning                                            | Base result                                   |
 |----------------------------------|----------------------------------------------------|-----------------------------------------------|
 | `product.read`                   | Read one Product                                   | `PUBLIC` when allowed                         |
@@ -585,6 +619,7 @@ Service-account authentication follows 021. Tokens and ServiceAccount records ca
 not authorization roles. OPA resolves `serviceaccount:<namespace>:<name>` through the same built-in role
 and namespace binding model used for humans.
 
+Controllers call the Admin API only (ADR 0012 §1), so every catalog read they make is `MANAGEMENT`.
 Controller roles are immutable built-ins in the OPA bundle. A controller receives management visibility
 only for resource kinds whose role explicitly grants the matching management-read action. For example,
 the CategoryTaxonomy controller needs `product.list` and `product.management.read` if product counts

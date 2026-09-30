@@ -6,6 +6,22 @@
 
 **Audience**: GitStore API and GraphQL schema authors.
 
+> **Amended by [ADR 0012](0012-admin-storefront-graphql-endpoints.md)** (separate Admin and
+> Storefront GraphQL endpoints):
+>
+> - `@authorize` applies to **both** schemas, the same directive, builder registry (§5) and
+>   middleware. Catalog fields on both use `mode: CHECK`: the Admin API's `Product`/`ProductVariant`
+>   types are guarded by `product.management.read` / `productVariant.management.read`, and the
+>   Storefront API's `Storefront*` types by `product.read` / `productVariant.read`.
+> - §9's `SCOPE` rationale no longer covers the Product/ProductVariant catalog split, and the
+>   explicit `mode: SCOPE` fields it lists (`Query.product`, `Query.products`, `Category.products`,
+>   `Collection.products`, `Product.productVariants`, `ProductWatchEvent.product`) become `CHECK`.
+>   The endpoint fixes the scope; no field emits one.
+> - **Re-evaluation of `SCOPE`.** The only remaining candidate is §7's list-level visibility-band
+>   filtering (for example `Query.repositories` on the Admin API), where the allowed band set is a
+>   policy output consumed by a typed query. `SCOPE` stays in the directive grammar for that case;
+>   no v1 field declares it.
+
 ## Context
 
 [ADR 0010](0010-authorization-model.md) fixes the action-string vocabulary and scope model passed
@@ -197,6 +213,12 @@ unaffected by which provider is active:
 
 ### 9. `mode: SCOPE` is declared per field, never at `OBJECT`/`INTERFACE`/`UNION` level
 
+> **Amended by ADR 0012 §3.** The catalog motivation below is historical. With separate endpoints the
+> Admin API's `type Product` is a `CHECK` on `product.management.read`, and "a caller denied their own
+> just-created resource" is prevented by role design (authoring roles include
+> `product.management.read`, ADR 0010 §5) rather than by where `SCOPE` is declared. The placement
+> rule itself still holds for any future `SCOPE` use (§7).
+
 Every core mutation returns a Relay-style payload wrapper that nests the kind rather than returning it
 directly — `createProduct(input): CreateProductPayload!` where `CreateProductPayload { product: Product }`
 (`shared/schemas/product.graphqls`). §2's static propagation therefore never reaches `Mutation.createProduct`
@@ -236,7 +258,9 @@ payload's nested kind field, which inherits the type's `CHECK`-only base permiss
 grants `product.create` without `product.read` will see the mutation succeed with `payload.product` denied
 — an existing consequence of ADR 0010's separately-grantable verbs, not something this ADR changes.
 
-**Subscriptions.** GitStore has two subscription shapes, and they get different guarantees:
+**Subscriptions.** GitStore has two subscription shapes, and they get different guarantees. (Per ADR
+0012, both live on the Admin API, where `ProductWatchEvent.product` is a `CHECK` on
+`product.management.read` rather than a `SCOPE` field. Storefront subscriptions are deferred.)
 
 - *Dedicated, typed* (`watchProducts(...): ProductWatchEvent!`, `ProductWatchEvent { product: Product }`,
   `shared/schemas/product.graphqls`): the root field needs its own explicit, coarse

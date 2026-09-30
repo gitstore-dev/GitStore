@@ -7,6 +7,13 @@
 > GraphQL operation cost, per-principal cost budgets, the per-IP request limiter, structural
 > request limits, and how all of them are reported to clients.
 
+> **Amended by [ADR 0012](../ADRs/0012-admin-storefront-graphql-endpoints.md)** (separate Admin and
+> Storefront GraphQL endpoints). Limits are applied as **per-endpoint profiles** (§8.4). Everything
+> else in this document describes the **admin profile**, served at `/admin/graphql` on the shared
+> listener or `/graphql` on `api.admin.port`. The storefront profile (`/storefront/graphql` or
+> `/graphql` on `api.storefront.port`) reuses the same pipeline and `ratelimit.Limiter` with the
+> differences in §8.4.
+
 ## 1. Executive Decision
 
 `gitstore-api` bounds GraphQL work in four ordered layers, cheapest first:
@@ -347,6 +354,26 @@ already carry controller traffic today. L0 is also mounted on the Git smart-HTTP
 with its own `git` policy, because clone/fetch/push are heavy per request. Charging cost for Git
 traffic is out of scope.
 
+### 8.4 Endpoint profiles (ADR 0012 §6)
+
+Each GraphQL handler is built by `newGraphQLHandler(schema, profile)` with its own profile. The pipeline
+in §4 is identical; the profile decides which layers run and with which values.
+
+| Layer | Admin profile | Storefront profile |
+|---|---|---|
+| L0 per-IP | `ip` policy (50/s, burst 100) | `storefront_ip` policy, higher default. Keyed on `GitStore-Storefront-Buyer-IP` when the request carries a valid storefront access token, otherwise on the trusted-proxy client IP. |
+| Structural limits (§7) | yes | yes, same defaults |
+| Static cost and `max_operation_cost` | 1 000 | 1 000 |
+| L1 per-principal bucket | yes; §8.2 exemption | **none**. Buyer reads aren't budgeted (Shopify Storefront model). `extensions.cost` still reports `requestedQueryCost`/`actualQueryCost`, without `throttleStatus`. |
+| Write throttle | — | cart/checkout creation per buyer and per storefront token, on the same `Limiter` with a `checkout` policy; `THROTTLED` via `throttleWriter` (HTTP 429) |
+| Introspection | `authenticated` | `all`; the storefront schema is a public contract |
+| `GitStore-GraphQL-Cost` | `report`/`validate` | `report`/`validate` |
+
+- The buyer-IP header is ignored on any request without a storefront access token, so it can't be
+  used to spoof L0 keys (same class as C7).
+- The storefront handler exists only when `api.storefront.enabled = true` (ADR 0012 §1).
+- Bot and crawler protection stays with the operator's CDN or WAF in alpha.
+
 ## 9. Multi-Replica, Restart, and Rolling-Upgrade Semantics
 
 - **Per-replica budgets (alpha, `memdb` provider).** With N replicas behind a load balancer,
@@ -520,6 +547,16 @@ restore_rate = 50
 maximum_available = 2000
 restore_rate = 100
 
+[api.storefront.graphql.limits]   # storefront profile (§8.4); unset keys inherit [api.graphql.limits]
+rate_limit_per_second = 200       # L0 "storefront_ip" policy
+rate_limit_burst = 400
+max_operation_cost = 1000
+introspection = "all"
+
+[api.storefront.graphql.checkout] # write throttle, per buyer and per storefront token
+rate_limit_per_second = 1
+rate_limit_burst = 5
+
 [api.git.ratelimit]               # L0 "git" policy on the smart-HTTP server
 rate_limit_per_second = 20
 rate_limit_burst = 40
@@ -552,6 +589,7 @@ rate_limit_burst = 40
    - `valkey` provider (Lua GCRA/token bucket with atomic refund).
    - Policy-driven tiers for third-party apps and CRD controllers.
    - Per-namespace budgets.
+   - Storefront profile (§8.4), shipped with the Storefront API behind `api.storefront.enabled`.
 
 ## 14. Observability
 

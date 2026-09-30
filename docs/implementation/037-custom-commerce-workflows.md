@@ -22,6 +22,11 @@ machine nor two unrelated features.
   snapshots that identity and all commercial policies onto the cart line/order.
   A later category or workflow edit can therefore affect a new release, but
   cannot rewrite an in-flight order or return.
+- Per [ADR 0012](../ADRs/0012-admin-storefront-graphql-endpoints.md), the
+  seller plane is served by the **Admin API** (`/admin/graphql`) and the buyer
+  plane by the **Storefront API** (`/storefront/graphql`). Buyer commands
+  (cart, checkout, order, return) are Storefront roots; seller workflow
+  definitions, profiles, bindings and approvals are Admin mutations.
 
 This is a shared commercial lifecycle, with an explicit hand-off rather than a
 shared mutable state. It lets a restaurant use order-ahead and pickup while a
@@ -498,7 +503,9 @@ OPA/RBAC actions should distinguish configuration management from execution:
 `workflow.action.<capability>`. These are domain (`<kind>.<verb>`) actions under the canonical
 grammar of [ADR 0010 — Authorization Model](../ADRs/0010-authorization-model.md); "executions the
 principal owns" is the `when: owner` rule condition, and scope is decided by the binding tier —
-neither is expressed with `.own`/`.any` suffixes. Storefront principals receive only the
+neither is expressed with `.own`/`.any` suffixes. The `workflow.*.manage`,
+`workflow.bundle.install` and `workflow.release.approve` actions are checked only on the Admin API;
+buyer-command actions only on the Storefront API (ADR 0012 §3–§4). Storefront principals receive only the
 buyer-command permissions and only for executions they own or may lawfully act
 on. A profile's UI metadata is not authority to invoke its transition.
 
