@@ -76,11 +76,15 @@ func main() {
 	}
 	client := graphqlclient.New(cfg.Controller.ApiURI, credentials)
 
-	if _, err = registerNamespace(ctx, mgr, checkpointStore, cfg, log, client); err != nil {
+	// runners tracks every kind's list-then-watch goroutine so shutdown can
+	// wait for each Runner's final checkpoint flush before the process exits.
+	var runners sync.WaitGroup
+
+	if _, err = registerNamespace(ctx, &runners, mgr, checkpointStore, cfg, log, client); err != nil {
 		log.Fatal("failed to register Namespace reconciler", zap.Error(err))
 	}
 	if _, err = registerRepository(
-		ctx, mgr, checkpointStore, cfg, log, client,
+		ctx, &runners, mgr, checkpointStore, cfg, log, client,
 		listwatch.NewRepositoryListWatcher(client),
 		repositorycontroller.NewGraphQLStorageClient(client),
 	); err != nil {
@@ -101,7 +105,7 @@ func main() {
 
 	var productRunnerMu sync.RWMutex
 	var productRunner *listwatch.Runner[categorytaxonomy.Product]
-	_, err = registerCategoryTaxonomy(ctx, mgr, checkpointStore, cfg, log, client, categoryCache, productCategoryIndex, func(key types.WorkItemKey) {
+	_, err = registerCategoryTaxonomy(ctx, &runners, mgr, checkpointStore, cfg, log, client, categoryCache, productCategoryIndex, func(key types.WorkItemKey) {
 		productRunnerMu.RLock()
 		runner := productRunner
 		productRunnerMu.RUnlock()
@@ -114,7 +118,7 @@ func main() {
 	}
 
 	productRunnerMu.Lock()
-	productRunner = registerProductWatch(ctx, mgr, checkpointStore, cfg, log, client, cache.AsReadOnly(categoryCache), productCategoryIndex)
+	productRunner = registerProductWatch(ctx, &runners, mgr, checkpointStore, cfg, log, client, cache.AsReadOnly(categoryCache), productCategoryIndex)
 	productRunnerMu.Unlock()
 
 	addr := fmt.Sprintf(":%d", cfg.Controller.Port)
@@ -135,8 +139,21 @@ func main() {
 		log.Error("manager exited with error", zap.Error(err))
 	}
 
+	// Stop the runners even when the manager exited on its own error, then
+	// wait (bounded) for their final checkpoint flushes.
+	stop()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
+	runnersDone := make(chan struct{})
+	go func() {
+		runners.Wait()
+		close(runnersDone)
+	}()
+	select {
+	case <-runnersDone:
+	case <-shutdownCtx.Done():
+		log.Warn("list-watch runners did not stop before shutdown timeout")
+	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Warn("HTTP server shutdown error", zap.Error(err))
 	}
@@ -193,7 +210,7 @@ func credentialReadiness(source graphqlclient.CredentialSource) health.Credentia
 
 // registerNamespace wires Namespace list/watch, repository provisioning,
 // status writeback, and foreground-deletion reconciliation into mgr.
-func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client) (*listwatch.Runner[namespacecontroller.Namespace], error) {
+func registerNamespace(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client) (*listwatch.Runner[namespacecontroller.Namespace], error) {
 	namespaceCache := cache.New[namespacecontroller.Namespace]()
 	runner := &listwatch.Runner[namespacecontroller.Namespace]{
 		Kind:        "Namespace",
@@ -230,11 +247,11 @@ func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStor
 		return nil, fmt.Errorf("register Namespace: %w", err)
 	}
 
-	go func() {
+	runners.Go(func() {
 		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
 			log.Error("Namespace runner exited with error", zap.Error(err))
 		}
-	}()
+	})
 	return runner, nil
 }
 
@@ -245,6 +262,7 @@ func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStor
 // server-side API contract rather than teach the controller a second transport.
 func registerRepository(
 	ctx context.Context,
+	runners *sync.WaitGroup,
 	mgr *manager.Manager,
 	checkpointStore *checkpoint.FilesystemStore,
 	cfg *config.Config,
@@ -287,11 +305,11 @@ func registerRepository(
 	}); err != nil {
 		return nil, fmt.Errorf("register Repository: %w", err)
 	}
-	go func() {
+	runners.Go(func() {
 		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
 			log.Error("Repository runner exited with error", zap.Error(err))
 		}
-	}()
+	})
 	return runner, nil
 }
 
@@ -309,7 +327,7 @@ func buildMux(mgr *manager.Manager, credentialReadiness ...health.CredentialRead
 // list-then-watch adapters (spec 040's client side, deferred to spec 039),
 // and the CategoryTaxonomy reconciler into mgr, then starts its
 // listwatch.Runner on a background goroutine. Per specs/039-category-taxonomy-reconciler/quickstart.md.
-func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client, catCache *cache.Cache[categorytaxonomy.CategoryTaxonomy], productCategoryIndex *categorytaxonomy.ProductCategoryIndex, onRelatedSuccess func(types.WorkItemKey)) (*listwatch.Runner[categorytaxonomy.CategoryTaxonomy], error) {
+func registerCategoryTaxonomy(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client, catCache *cache.Cache[categorytaxonomy.CategoryTaxonomy], productCategoryIndex *categorytaxonomy.ProductCategoryIndex, onRelatedSuccess func(types.WorkItemKey)) (*listwatch.Runner[categorytaxonomy.CategoryTaxonomy], error) {
 	listWatcher := listwatch.NewCategoryTaxonomyListWatcher(client)
 	statusClient := status.NewGraphQLStatusClient(client)
 
@@ -385,11 +403,11 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 		_ = mgr.Enqueue(key)
 	}))
 
-	go func() {
+	runners.Go(func() {
 		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
 			log.Error("CategoryTaxonomy runner exited with error", zap.Error(err))
 		}
-	}()
+	})
 
 	return runner, nil
 }
@@ -400,7 +418,7 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 // (research.md R1, spec 042). Its cache event handlers enqueue the
 // already-registered "CategoryTaxonomy" kind via mgr.Enqueue whenever a
 // Product's categoryRef appears, disappears, or changes.
-func registerProductWatch(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client, categoryCache cache.CacheAccessor[categorytaxonomy.CategoryTaxonomy], productCategoryIndex *categorytaxonomy.ProductCategoryIndex) *listwatch.Runner[categorytaxonomy.Product] {
+func registerProductWatch(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client, categoryCache cache.CacheAccessor[categorytaxonomy.CategoryTaxonomy], productCategoryIndex *categorytaxonomy.ProductCategoryIndex) *listwatch.Runner[categorytaxonomy.Product] {
 	listWatcher := listwatch.NewProductListWatcher(client)
 
 	productCache := cache.New[categorytaxonomy.Product]()
@@ -451,10 +469,10 @@ func registerProductWatch(ctx context.Context, mgr *manager.Manager, checkpointS
 	productCache.AddEventHandler(categorytaxonomy.NewProductCategoryEnqueueHandler(enqueueCategory))
 	productCache.AddEventHandler(categorytaxonomy.NewProductCategoryIndexHandler(productCategoryIndex))
 
-	go func() {
+	runners.Go(func() {
 		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
 			log.Error("Product runner exited with error", zap.Error(err))
 		}
-	}()
+	})
 	return runner
 }

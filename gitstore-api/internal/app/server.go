@@ -911,6 +911,11 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 		}
 	}
 	if _, err := r.materializer.AppendBookmark(ctx, lease); err != nil {
+		// Shutdown releases the lease (LeaseManager.Maintain), so a bookmark
+		// racing cancellation fails as a stale lease; report the cancellation.
+		if parent.Err() != nil {
+			return parent.Err()
+		}
 		r.log.Error("Namespace materializer initial bookmark failed", zap.Error(err))
 		return err
 	}
@@ -927,6 +932,9 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 			return err
 		case <-bookmark.C:
 			if _, err := r.materializer.AppendBookmark(ctx, lease); err != nil {
+				if parent.Err() != nil {
+					return parent.Err()
+				}
 				r.log.Error("Namespace materializer bookmark failed", zap.Error(err))
 				return err
 			}
