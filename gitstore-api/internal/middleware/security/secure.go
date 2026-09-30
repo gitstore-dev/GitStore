@@ -74,13 +74,18 @@ func (a *Authorize) authorizeRepositoryTenant(ctx context.Context, principal *au
 			return "", errors.New("repository authorization namespace is missing")
 		}
 		if index == 0 {
-			owner = namespace.CreationActor
+			owner = namespace.EffectiveOwnerSub()
 			attrs["namespace"] = namespace.Name
 		} else {
 			attrs["targetNamespace"] = namespace.Name
-			attrs["targetOwnerSub"] = namespace.CreationActor
+			attrs["targetOwnerSub"] = namespace.EffectiveOwnerSub()
 		}
-		if namespace.CreationActor == "" || namespace.CreationActor != principal.Subject {
+		// TODO(ADR-0010 §14, follow-up vocabulary spec): this pre-computes
+		// .own/.any in Go against the mutable owner subject; Authorize does
+		// not yet consume ResourceContext.OwnerSub itself (rbaclocal
+		// discards it). See ownerMatchesPrincipal and the ADR-0010 §14
+		// addendum in docs/ADRs/0010-authorization-model.md.
+		if !ownerMatchesPrincipal(namespace.EffectiveOwnerSub(), principal) {
 			scope = "any"
 		}
 	}

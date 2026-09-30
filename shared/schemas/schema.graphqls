@@ -258,6 +258,34 @@ scalar Long
   @specifiedBy(url: "https://scalars.graphql.org/apollographql/long-v0.1.html")
 
 """
+The principal type that can own a resource (ADR-0010 §14/§7).
+"""
+enum OwnerKind {
+  USER
+  GROUP
+  SERVICE_ACCOUNT
+}
+
+"""
+The resource's current owner subject (ADR-0010 §14). Distinct from
+OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
+delete relationship, not a principal-ownership one.
+"""
+type ResourceOwner {
+  kind: OwnerKind!
+  name: String!
+}
+
+"""
+Input shape for naming a target owner, e.g. transferNamespaceOwner's
+targetOwnerRef (ADR-0010 §14).
+"""
+input ResourceOwnerInput {
+  kind: OwnerKind!
+  name: String!
+}
+
+"""
 System-managed metadata shared by core catalog resources.
 """
 type ObjectMeta {
@@ -271,6 +299,7 @@ type ObjectMeta {
   creationTimestamp: DateTime!
   revision: String
   ownerReferences: [OwnerReference!]!
+  owner: ResourceOwner!
   finalizers: [String!]!
   deletionTimestamp: DateTime
 }

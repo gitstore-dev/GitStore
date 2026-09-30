@@ -754,6 +754,38 @@ func (ec *executionContext) fieldContext_NamespaceMetadata_ownerReferences(_ con
 	return fc, nil
 }
 
+func (ec *executionContext) _NamespaceMetadata_owner(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_NamespaceMetadata_owner(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Owner, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ResourceOwner) graphql.Marshaler {
+			return ec.marshalNResourceOwner2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceOwner(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_NamespaceMetadata_owner(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NamespaceMetadata",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ResourceOwner(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _NamespaceMetadata_finalizers(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1524,6 +1556,38 @@ func (ec *executionContext) fieldContext_SchemaValidationDefaults_timeoutSeconds
 	return graphql.NewScalarFieldContext("SchemaValidationDefaults", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
+func (ec *executionContext) _TransferNamespaceOwnerPayload_namespace(ctx context.Context, field graphql.CollectedField, obj *model.TransferNamespaceOwnerPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TransferNamespaceOwnerPayload_namespace(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Namespace, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Namespace) graphql.Marshaler {
+			return ec.marshalNNamespace2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespace(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TransferNamespaceOwnerPayload_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TransferNamespaceOwnerPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Namespace(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _UpdateNamespacePayload_namespace(ctx context.Context, field graphql.CollectedField, obj *model.UpdateNamespacePayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1941,6 +2005,43 @@ func (ec *executionContext) unmarshalInputProvisionNamespaceSystemRepositoryInpu
 				return it, err
 			}
 			it.Namespace = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputTransferNamespaceOwnerInput(ctx context.Context, obj any) (model.TransferNamespaceOwnerInput, error) {
+	var it model.TransferNamespaceOwnerInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"namespaceId", "targetOwnerRef"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "namespaceId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespaceId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.NamespaceID = data
+		case "targetOwnerRef":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("targetOwnerRef"))
+			data, err := ec.unmarshalNResourceOwnerInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceOwnerInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TargetOwnerRef = data
 		}
 	}
 	return it, nil
@@ -2462,6 +2563,11 @@ func (ec *executionContext) _NamespaceMetadata(ctx context.Context, sel ast.Sele
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "owner":
+			out.Values[i] = ec._NamespaceMetadata_owner(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "finalizers":
 			out.Values[i] = ec._NamespaceMetadata_finalizers(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -2837,6 +2943,45 @@ func (ec *executionContext) _SchemaValidationDefaults(ctx context.Context, sel a
 	return out
 }
 
+var transferNamespaceOwnerPayloadImplementors = []string{"TransferNamespaceOwnerPayload"}
+
+func (ec *executionContext) _TransferNamespaceOwnerPayload(ctx context.Context, sel ast.SelectionSet, obj *model.TransferNamespaceOwnerPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, transferNamespaceOwnerPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TransferNamespaceOwnerPayload")
+		case "namespace":
+			out.Values[i] = ec._TransferNamespaceOwnerPayload_namespace(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var updateNamespacePayloadImplementors = []string{"UpdateNamespacePayload"}
 
 func (ec *executionContext) _UpdateNamespacePayload(ctx context.Context, sel ast.SelectionSet, obj *model.UpdateNamespacePayload) graphql.Marshaler {
@@ -3129,6 +3274,25 @@ func (ec *executionContext) unmarshalNResourceDeletionOutcome2githubᚗcomᚋgit
 
 func (ec *executionContext) marshalNResourceDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceDeletionOutcome(ctx context.Context, sel ast.SelectionSet, v model.ResourceDeletionOutcome) graphql.Marshaler {
 	return v
+}
+
+func (ec *executionContext) unmarshalNTransferNamespaceOwnerInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTransferNamespaceOwnerInput(ctx context.Context, v any) (model.TransferNamespaceOwnerInput, error) {
+	res, err := ec.unmarshalInputTransferNamespaceOwnerInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNTransferNamespaceOwnerPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTransferNamespaceOwnerPayload(ctx context.Context, sel ast.SelectionSet, v model.TransferNamespaceOwnerPayload) graphql.Marshaler {
+	return ec._TransferNamespaceOwnerPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNTransferNamespaceOwnerPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTransferNamespaceOwnerPayload(ctx context.Context, sel ast.SelectionSet, v *model.TransferNamespaceOwnerPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._TransferNamespaceOwnerPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNUpdateNamespaceInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateNamespaceInput(ctx context.Context, v any) (model.UpdateNamespaceInput, error) {
