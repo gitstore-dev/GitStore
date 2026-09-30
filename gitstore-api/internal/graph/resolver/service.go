@@ -786,10 +786,18 @@ func (s *Service) UpdateNamespace(ctx context.Context, input model.UpdateNamespa
 		s.recordNamespaceGraphQLError("UPDATE", namespaceInputName(input.Metadata), err)
 		return nil, err
 	}
-	if existing, lookupErr := s.store.GetNamespaceByName(ctx, resource.Metadata.Name); lookupErr == nil {
+	// A missing Namespace is reported by evaluateNamespacePolicy below; any
+	// other lookup failure fails closed so the owner-annotation guard cannot
+	// be bypassed.
+	existing, lookupErr := s.store.GetNamespaceByName(ctx, resource.Metadata.Name)
+	switch {
+	case lookupErr == nil:
 		if err := guardOwnerAnnotationUnchanged(existing.Annotations, resource.Metadata.Annotations); err != nil {
 			return nil, err
 		}
+	case !errors.Is(lookupErr, datastore.ErrNotFound):
+		s.recordNamespaceGraphQLError("UPDATE", resource.Metadata.Name, lookupErr)
+		return nil, gqlerror.Errorf("failed to validate Namespace operation")
 	}
 	preflight, err := s.evaluateNamespacePolicy(ctx, resource, admission.OperationUpdate)
 	if err != nil {
@@ -801,14 +809,18 @@ func (s *Service) UpdateNamespace(ctx context.Context, input model.UpdateNamespa
 
 // TransferNamespaceOwner reassigns a namespace's owner via a git commit that
 // updates the reserved owner annotation (ADR-0010 §14). The two-condition
-// transfer rule is authorized by the caller (GraphQLFieldAuthorizer) before
-// this method runs — this method does not re-check it and deliberately does
-// not call guardOwnerAnnotationUnchanged, since changing the owner is exactly
-// what this method exists to do.
-func (s *Service) TransferNamespaceOwner(ctx context.Context, uid, targetOwnerSub, callerUsername string) (*datastore.Namespace, error) {
-	ns, err := s.store.GetNamespace(ctx, uid)
+// transfer rule is authorized by the caller (GraphQLFieldAuthorizer) against
+// authorized before this method runs; this method only rejects the transfer
+// if the owner changed since that decision. It deliberately does not call
+// guardOwnerAnnotationUnchanged, since changing the owner is exactly what
+// this method exists to do.
+func (s *Service) TransferNamespaceOwner(ctx context.Context, authorized *datastore.Namespace, targetOwnerSub, callerUsername string) (*datastore.Namespace, error) {
+	ns, err := s.store.GetNamespace(ctx, authorized.UID)
 	if err != nil {
 		return nil, gqlerror.Errorf("namespace not found")
+	}
+	if ns.EffectiveOwnerSub() != authorized.EffectiveOwnerSub() {
+		return nil, gqlerror.Errorf("namespace owner changed since authorization; retry the transfer")
 	}
 	var spec catalog.NamespaceSpec
 	if len(ns.Spec) > 0 {

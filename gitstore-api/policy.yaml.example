@@ -28,6 +28,7 @@ roles:
       - namespace.read
       - namespace.update
       - namespace.delete.own     # only own namespaces
+      - namespace.transfer       # API also requires caller owns the namespace and is a member of the target owner
       - repository.read
       - repository.write
       - repository.create.own

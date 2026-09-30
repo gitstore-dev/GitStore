@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"unicode"
@@ -365,39 +364,13 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			return nil, gqlerror.Errorf("authorization error")
 		}
 		targetKind, _ := nestedStringPath(fc.Args, "input", "targetOwnerRef", "kind")
-		targetName, ok := nestedStringPath(fc.Args, "input", "targetOwnerRef", "name")
-		if !ok || targetName == "" {
-			return nil, gqlerror.Errorf("targetOwnerRef.name is required")
+		targetName, _ := nestedStringPath(fc.Args, "input", "targetOwnerRef", "name")
+		// Enforced here rather than by AuthZProvider (see the TODO on
+		// ownerMatchesPrincipal).
+		targetOwnerSub, err := checkOwnerTransfer(ns.EffectiveOwnerSub(), targetKind, targetName, principal)
+		if err != nil {
+			return nil, gqlerror.Errorf("%s", err.Error())
 		}
-		// ADR-0010 §14 two-condition transfer rule, enforced here rather than
-		// by AuthZProvider (see the TODO on ownerMatchesPrincipal): (1) the
-		// caller currently owns the namespace, or is admin; (2) the caller is
-		// a member of the target owner, or is admin. principal.IsAdmin()
-		// stands in for the ADR's "unconditional cluster-tier grant," which
-		// has no distinct primitive yet.
-		if !ownerMatchesPrincipal(ns.EffectiveOwnerSub(), principal) && !principal.IsAdmin() {
-			return nil, gqlerror.Errorf("permission denied: caller does not own this namespace")
-		}
-		isMember := principal.IsAdmin()
-		switch targetKind {
-		case "USER":
-			isMember = isMember || targetName == principal.Subject
-		case "GROUP":
-			if slices.Contains(principal.Groups, targetName) {
-				isMember = true
-			}
-		}
-		if !isMember {
-			return nil, gqlerror.Errorf("permission denied: caller is not a member of the target owner")
-		}
-		ownerKind := datastore.OwnerKindUser
-		switch targetKind {
-		case "GROUP":
-			ownerKind = datastore.OwnerKindGroup
-		case "SERVICE_ACCOUNT":
-			ownerKind = datastore.OwnerKindServiceAccount
-		}
-		targetOwnerSub := datastore.EncodeOwnerSubject(ownerKind, targetName)
 		decision, err := authz.Authorize(ctx, principal, "namespace.transfer", auth.ResourceContext{
 			Kind: "namespace", Name: ns.Name, OwnerSub: ns.EffectiveOwnerSub(),
 			Attrs: map[string]any{"targetOwnerSub": targetOwnerSub},
