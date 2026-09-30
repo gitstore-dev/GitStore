@@ -172,6 +172,12 @@ Selection is closed over required catalog dependencies:
 - The snapshot records required category, collection, translation, and File
   manifest dependencies used by selected content. A missing or unready required
   dependency makes release preparation fail closed.
+- Each selected resource's Markdown body is stored as its resolved
+  intermediate representation (IR), with interpolation evaluated against this
+  closure and raw HTML dropped
+  ([ADR 0013 §4](../ADRs/0013-markdown-body-intermediate-representation.md#4-pipeline-parse-at-admission-resolve-at-publication)).
+  The snapshot digest covers it, so a published body can't change without a
+  new release.
 
 Resolved release status includes the pinned commit SHA, admission receipt ID,
 observed tag object ID when present, selected resource identities, snapshot
@@ -393,21 +399,27 @@ an arbitrary result.
 ## Public and management read contracts
 
 This design follows the `catalog.visibility` semantic scope in
-[OPA data-aware authorization](../implementation/022-opa-data-authorization.md).
-OPA decides whether a caller receives `PUBLIC` or `MANAGEMENT`; publication
-decides which records are in the `PUBLIC` projection. OPA does not recreate tag,
+[OPA data-aware authorization](../implementation/022-opa-data-authorization.md),
+as amended by [ADR 0012](../ADRs/0012-admin-storefront-graphql-endpoints.md):
+the scope is fixed by the endpoint. The **Admin API** always reads
+`MANAGEMENT`; the **Storefront API** always reads `PUBLIC`. Publication decides
+which records are in the `PUBLIC` projection. OPA does not recreate tag,
 schedule, lifecycle, or snapshot rules.
 
-Management reads use the admitted, current Git-backed rows. `PUBLIC` reads use
-the target's active snapshot projection. This scope-specific plan is required on
-every existing Product/ProductVariant access path: direct lookup, Relay list,
-global node, Product variants, Category/Collection relationships, counts, and
-watches. It is not sufficient to protect a new root alone. A storefront facade
-may still be offered, for example:
+Management reads (Admin API) use the admitted, current Git-backed rows. `PUBLIC`
+reads (Storefront API) use the target's active snapshot projection. Each
+endpoint has exactly one plan, and it applies on every Product/ProductVariant
+access path that endpoint exposes: direct lookup, Relay list, global node,
+Product variants, Category/Collection relationships, counts, and watches. No
+field on either endpoint switches plans per caller. The Storefront API's entry
+points ([ADR 0012 §2](../ADRs/0012-admin-storefront-graphql-endpoints.md)) are:
 
 ```graphql
-storefrontCatalog(target: StorefrontTargetInput!): StorefrontCatalog!
+products(first: Int, after: String, last: Int, before: String, query: String): StorefrontProductConnection!
+search(first: Int, after: String, last: Int, before: String, query: String!): SearchResultConnection!
 ```
+
+The target comes from the request's storefront identity, not a root argument.
 
 The API resolves a validated target's active snapshot, applies the request-time
 checks above, and returns `NOT_FOUND` or `null` for public direct lookups of

@@ -189,6 +189,15 @@ presence causes the authorizer to *emit* `MANAGEMENT` for that request; a resour
 "management" flag that policy reads. Modeling the entitlement as a subresource rather than a verb
 qualifier changes nothing about that output contract — it only changes how the grant is spelled.
 
+> **Amended by [ADR 0012](0012-admin-storefront-graphql-endpoints.md) §3.** The grammar is
+> unchanged, but the scope is no longer emitted per request: the endpoint selects which action is
+> checked. The **Storefront API** checks `product.read`/`product.list` (and the `productVariant`
+> equivalents) and reads `PUBLIC` publication snapshots. The **Admin API** checks
+> `product.management.read`/`product.management.list` and reads `MANAGEMENT` current rows. Because
+> the Admin API's `Product` type is guarded by `product.management.read`, every built-in authoring
+> role (for example `merchandiser` in §10) includes the `product/management` subresource, so an
+> author can always read the drafts they create.
+
 ### 6. Two scope tiers
 
 Authorization has a **cluster tier** above the existing namespace IAM boundary:
@@ -257,6 +266,10 @@ Resource visibility (`private` / `internal` / `public`) is an ABAC condition on 
 Denial of a read on a non-visible resource **fails closed to `NOT_FOUND`**, not `FORBIDDEN`, to
 preserve the enumeration protection of [022 §13](../implementation/022-opa-data-authorization.md).
 
+For Product and ProductVariant, visibility bands apply to the **Storefront API**'s `product.read`/
+`product.list` checks ([ADR 0012](0012-admin-storefront-graphql-endpoints.md) §3), for example via
+`public-reader`. The Admin API's `management` checks are not band-gated.
+
 ### 9. Tier gating is an ABAC condition
 
 Namespace creation gated on tier (`ORGANIZATION` vs `USER`) is `namespace.create` with a rule
@@ -303,6 +316,8 @@ roles:                                             # namespaced rule-sets; names
     rules:
       - resources: ["product", "productVariant", "collection"]
         verbs: ["create", "read", "list", "update", "delete"]
+      - resources: ["product/management", "productVariant/management"]  # read own drafts on the Admin API (ADR 0012 §3)
+        verbs: ["read", "list"]
   internal-reader:
     rules:
       - resources: ["repository/contents"]
