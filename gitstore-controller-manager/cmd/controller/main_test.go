@@ -164,6 +164,9 @@ func TestRegisterRepositoryAcrossTwoControllerManagers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 2)
+	// runners is waited on before the test returns so each Runner's final
+	// checkpoint flush finishes before t.TempDir cleanup removes its directory.
+	var runners sync.WaitGroup
 	for replica := 0; replica < 2; replica++ {
 		mgr := manager.New().WithLogger(zap.NewNop())
 		store, err := checkpoint.NewFilesystemStore(t.TempDir())
@@ -172,7 +175,7 @@ func TestRegisterRepositoryAcrossTwoControllerManagers(t *testing.T) {
 		}
 		client := graphqlclient.New(server.URL, graphqlclient.NewStaticToken("controller-token"))
 		if _, err := registerRepository(
-			ctx, mgr, store, cfg, zap.NewNop(), client,
+			ctx, &runners, mgr, store, cfg, zap.NewNop(), client,
 			&repositoryRegistrationListWatcher{item: item},
 			repositorycontroller.NewGraphQLStorageClient(client),
 		); err != nil {
@@ -206,4 +209,5 @@ func TestRegisterRepositoryAcrossTwoControllerManagers(t *testing.T) {
 			t.Fatalf("replica %d manager did not stop", replica)
 		}
 	}
+	runners.Wait()
 }
