@@ -464,3 +464,53 @@ type ServiceAccountPublicKey struct {
 	PublicKey  []byte // raw public key bytes (PEM-decoded at load, stored decoded)
 	EnrolledAt time.Time
 }
+
+// EffectiveOwnerSub returns the resource's current owner subject: the
+// reserved OwnerAnnotationKey if the author (or a transfer) has set one,
+// else the immutable CreationActor (ADR-0010 §14 default).
+func (n *Namespace) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(n.Annotations, n.CreationActor)
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject (see
+// Namespace.EffectiveOwnerSub).
+func (r *Repository) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(r.Annotations, r.CreationActor)
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject (see
+// Namespace.EffectiveOwnerSub).
+func (c *CategoryTaxonomy) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(c.Annotations, c.CreationActor)
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject (see
+// Namespace.EffectiveOwnerSub).
+func (p *Product) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(p.Annotations, p.CreationActor)
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject (see
+// Namespace.EffectiveOwnerSub).
+func (v *ProductVariant) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(v.Annotations, v.CreationActor)
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject (see
+// Namespace.EffectiveOwnerSub).
+func (c *Collection) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(c.Annotations, c.CreationActor)
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject (see
+// Namespace.EffectiveOwnerSub).
+func (f *File) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(f.Annotations, f.CreationActor)
+}
+
+func effectiveOwnerSub(annotations map[string]string, creationActor string) string {
+	if v, ok := annotations[OwnerAnnotationKey]; ok && v != "" {
+		return v
+	}
+	return creationActor
+}

@@ -98,6 +98,23 @@ func (r *mutationResolver) DeleteNamespace(ctx context.Context, input model.Dele
 	}, nil
 }
 
+// TransferNamespaceOwner is the resolver for the transferNamespaceOwner field.
+func (r *mutationResolver) TransferNamespaceOwner(ctx context.Context, input model.TransferNamespaceOwnerInput) (*model.TransferNamespaceOwnerPayload, error) {
+	uid, err := decodeNodeIDAs(nodeKindNamespace, input.NamespaceID)
+	if err != nil {
+		return nil, gqlerror.Errorf("invalid namespace ID")
+	}
+	authorized, ok := security.AuthorizedNamespaceForTransfer(ctx)
+	if !ok || authorized.Namespace == nil || namespaceUID(authorized.Namespace) != uid {
+		return nil, gqlerror.Errorf("namespace transfer authorization context is missing")
+	}
+	ns, err := r.service.TransferNamespaceOwner(ctx, authorized.Namespace, authorized.TargetOwnerSub, callerUsernameOrAnon(ctx, r))
+	if err != nil {
+		return nil, err
+	}
+	return &model.TransferNamespaceOwnerPayload{Namespace: DatastoreNamespaceToGraphQL(ns)}, nil
+}
+
 // CompleteNamespaceDeletion is the resolver for the completeNamespaceDeletion field.
 func (r *mutationResolver) CompleteNamespaceDeletion(ctx context.Context, input model.CompleteNamespaceDeletionInput) (*model.CompleteNamespaceDeletionPayload, error) {
 	deleted, err := r.service.CompleteNamespaceDeletion(ctx, input.Identifier, input.ResourceVersion)

@@ -203,6 +203,9 @@ func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind st
 		if lookupErr != nil {
 			return nil, gqlerror.Errorf("product not found")
 		}
+		if err := guardOwnerAnnotationUnchanged(existing.Annotations, annotations); err != nil {
+			return nil, err
+		}
 		repositoryID, path = existing.RepositoryID, existing.SourcePath
 		if repositoryID == "" || path == "" {
 			return nil, gqlerror.Errorf("Product provenance is unavailable")
@@ -704,7 +707,7 @@ func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind
 	if spec.StorageClass != nil {
 		resource.Spec.StorageClass = *spec.StorageClass
 	}
-	if err := s.preflightRepositoryManifestOperation(ctx, metadata.Namespace, metadata.Name, resource.Spec.StorageClass, create); err != nil {
+	if err := s.preflightRepositoryManifestOperation(ctx, metadata.Namespace, metadata.Name, resource.Spec.StorageClass, annotations, create); err != nil {
 		return nil, err
 	}
 	content, err := yaml.Marshal(resource)
@@ -735,7 +738,7 @@ func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind
 	return result, nil
 }
 
-func (s *Service) preflightRepositoryManifestOperation(ctx context.Context, namespace, name, proposedStorageClass string, create bool) error {
+func (s *Service) preflightRepositoryManifestOperation(ctx context.Context, namespace, name, proposedStorageClass string, annotations map[string]string, create bool) error {
 	mapping, err := s.store.LookupRepository(ctx, namespace, name)
 	if errors.Is(err, datastore.ErrNotFound) {
 		if create {
@@ -752,6 +755,9 @@ func (s *Service) preflightRepositoryManifestOperation(ctx context.Context, name
 	existing, err := s.store.GetRepository(ctx, mapping.RepositoryID)
 	if err != nil {
 		return gqlerror.Errorf("failed to validate Repository operation")
+	}
+	if err := guardOwnerAnnotationUnchanged(existing.Annotations, annotations); err != nil {
+		return err
 	}
 	if repositoryStorageClassDowngrade(existing.StorageClass, proposedStorageClass) {
 		return gqlerror.Errorf("repository storageClass downgrade is not allowed")
@@ -780,9 +786,69 @@ func (s *Service) UpdateNamespace(ctx context.Context, input model.UpdateNamespa
 		s.recordNamespaceGraphQLError("UPDATE", namespaceInputName(input.Metadata), err)
 		return nil, err
 	}
+	// A missing Namespace is reported by evaluateNamespacePolicy below; any
+	// other lookup failure fails closed so the owner-annotation guard cannot
+	// be bypassed.
+	existing, lookupErr := s.store.GetNamespaceByName(ctx, resource.Metadata.Name)
+	switch {
+	case lookupErr == nil:
+		if err := guardOwnerAnnotationUnchanged(existing.Annotations, resource.Metadata.Annotations); err != nil {
+			return nil, err
+		}
+	case !errors.Is(lookupErr, datastore.ErrNotFound):
+		s.recordNamespaceGraphQLError("UPDATE", resource.Metadata.Name, lookupErr)
+		return nil, gqlerror.Errorf("failed to validate Namespace operation")
+	}
 	preflight, err := s.evaluateNamespacePolicy(ctx, resource, admission.OperationUpdate)
 	if err != nil {
 		s.recordNamespaceGraphQLError("UPDATE", resource.Metadata.Name, err)
+		return nil, err
+	}
+	return s.commitAndAdmitNamespace(ctx, resource, content, callerUsername, false, preflight)
+}
+
+// TransferNamespaceOwner reassigns a namespace's owner via a git commit that
+// updates the reserved owner annotation (ADR-0010 §14). The two-condition
+// transfer rule is authorized by the caller (GraphQLFieldAuthorizer) against
+// authorized before this method runs; this method only rejects the transfer
+// if the owner changed since that decision. It deliberately does not call
+// guardOwnerAnnotationUnchanged, since changing the owner is exactly what
+// this method exists to do.
+func (s *Service) TransferNamespaceOwner(ctx context.Context, authorized *datastore.Namespace, targetOwnerSub, callerUsername string) (*datastore.Namespace, error) {
+	ns, err := s.store.GetNamespace(ctx, authorized.UID)
+	if err != nil {
+		return nil, gqlerror.Errorf("namespace not found")
+	}
+	if ns.EffectiveOwnerSub() != authorized.EffectiveOwnerSub() {
+		return nil, gqlerror.Errorf("namespace owner changed since authorization; retry the transfer")
+	}
+	var spec catalog.NamespaceSpec
+	if len(ns.Spec) > 0 {
+		if err := json.Unmarshal(ns.Spec, &spec); err != nil {
+			return nil, gqlerror.Errorf("failed to decode current Namespace spec: %v", err)
+		}
+	}
+	annotations := make(map[string]string, len(ns.Annotations)+1)
+	for k, v := range ns.Annotations {
+		annotations[k] = v
+	}
+	annotations[datastore.OwnerAnnotationKey] = targetOwnerSub
+	resource := &catalog.NamespaceResource{
+		APIVersion: ns.APIVersion,
+		Kind:       ns.Kind,
+		Metadata: catalog.ObjectMeta{
+			Name:        ns.Name,
+			Labels:      ns.Labels,
+			Annotations: annotations,
+		},
+		Spec: spec,
+	}
+	content, err := validateNamespaceResource(resource)
+	if err != nil {
+		return nil, err
+	}
+	preflight, err := s.evaluateNamespacePolicy(ctx, resource, admission.OperationUpdate)
+	if err != nil {
 		return nil, err
 	}
 	return s.commitAndAdmitNamespace(ctx, resource, content, callerUsername, false, preflight)

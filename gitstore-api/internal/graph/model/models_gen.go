@@ -18,7 +18,7 @@ import (
 // - creation_on_behalf_of_actor OR creation_subject
 // - update_on_behalf_of_actor OR update_subject
 //
-// Implemented by
+// Implemented in
 // - User
 // - ServiceAccount
 type Actor interface {
@@ -34,7 +34,7 @@ type Node interface {
 	GetID() string
 }
 
-// An object that can be published or unpublished. Implemented by
+// An object that can be published or unpublished. Implemented in
 // - Product
 // - ProductVariant
 type Publishable interface {
@@ -665,6 +665,7 @@ type NamespaceMetadata struct {
 	CreationTimestamp time.Time         `json:"creationTimestamp"`
 	Revision          *string           `json:"revision,omitempty"`
 	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
+	Owner             *ResourceOwner    `json:"owner"`
 	Finalizers        []string          `json:"finalizers"`
 }
 
@@ -741,6 +742,7 @@ type ObjectMeta struct {
 	CreationTimestamp time.Time         `json:"creationTimestamp"`
 	Revision          *string           `json:"revision,omitempty"`
 	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
+	Owner             *ResourceOwner    `json:"owner"`
 	Finalizers        []string          `json:"finalizers"`
 	DeletionTimestamp *time.Time        `json:"deletionTimestamp,omitempty"`
 }
@@ -1303,6 +1305,21 @@ type ResolvedRepositoryDefinition struct {
 	StorageClass string `json:"storageClass"`
 }
 
+// The resource's current owner subject (ADR-0010 §14). Distinct from
+// OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
+// delete relationship, not a principal-ownership one.
+type ResourceOwner struct {
+	Kind OwnerKind `json:"kind"`
+	Name string    `json:"name"`
+}
+
+// Input shape for naming a target owner, e.g. transferNamespaceOwner's
+// targetOwnerRef (ADR-0010 §14).
+type ResourceOwnerInput struct {
+	Kind OwnerKind `json:"kind"`
+	Name string    `json:"name"`
+}
+
 // rotateServiceAccountKey mutation input. add and removeKids
 // may both be non-empty in the same call to support an overlap window during
 // rotation.
@@ -1418,6 +1435,18 @@ type TokenResponse struct {
 	// OIDC ID token when available.
 	// GitStore local providers currently do not issue this field.
 	IDToken *string `json:"idToken,omitempty"`
+}
+
+// Reassign a namespace's owner (ADR-0010 §14). Distinct from transferRepository,
+// which relocates a repository between namespaces and is unrelated to
+// principal ownership.
+type TransferNamespaceOwnerInput struct {
+	NamespaceID    string              `json:"namespaceId"`
+	TargetOwnerRef *ResourceOwnerInput `json:"targetOwnerRef"`
+}
+
+type TransferNamespaceOwnerPayload struct {
+	Namespace *Namespace `json:"namespace"`
 }
 
 type UpdateCategoryStatusInput struct {
@@ -1926,6 +1955,64 @@ func (e *NamespaceTier) UnmarshalJSON(b []byte) error {
 }
 
 func (e NamespaceTier) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// The principal type that can own a resource (ADR-0010 §14/§7).
+type OwnerKind string
+
+const (
+	OwnerKindUser           OwnerKind = "USER"
+	OwnerKindGroup          OwnerKind = "GROUP"
+	OwnerKindServiceAccount OwnerKind = "SERVICE_ACCOUNT"
+)
+
+var AllOwnerKind = []OwnerKind{
+	OwnerKindUser,
+	OwnerKindGroup,
+	OwnerKindServiceAccount,
+}
+
+func (e OwnerKind) IsValid() bool {
+	switch e {
+	case OwnerKindUser, OwnerKindGroup, OwnerKindServiceAccount:
+		return true
+	}
+	return false
+}
+
+func (e OwnerKind) String() string {
+	return string(e)
+}
+
+func (e *OwnerKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = OwnerKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid OwnerKind", str)
+	}
+	return nil
+}
+
+func (e OwnerKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *OwnerKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e OwnerKind) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

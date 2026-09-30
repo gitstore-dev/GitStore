@@ -84,6 +84,7 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 			CreationTimestamp: ns.CreationTimestamp,
 			Revision:          revision,
 			OwnerReferences:   ownerReferences,
+			Owner:             resourceOwnerFromSub(ns.EffectiveOwnerSub()),
 			Finalizers:        append([]string{}, ns.Finalizers...),
 		},
 		Spec:   spec,
@@ -396,6 +397,7 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 		Generation:        gen,
 		CreationTimestamp: p.CreationTimestamp,
 		OwnerReferences:   ownerRefsFromJSON(p.OwnerReferences),
+		Owner:             resourceOwnerFromSub(p.EffectiveOwnerSub()),
 		Finalizers:        append([]string{}, p.Finalizers...),
 		DeletionTimestamp: p.DeletionTimestamp,
 	}
@@ -504,6 +506,7 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 		Generation:        gen,
 		CreationTimestamp: c.CreationTimestamp,
 		OwnerReferences:   ownerRefsFromJSON(c.OwnerReferences),
+		Owner:             resourceOwnerFromSub(c.EffectiveOwnerSub()),
 		Finalizers:        append([]string{}, c.Finalizers...),
 		DeletionTimestamp: c.DeletionTimestamp,
 	}
@@ -576,6 +579,7 @@ func DatastoreFileToGraphQL(f *datastore.File) *model.File {
 		Annotations: stringMapToJSONMap(f.Annotations), UID: mustEncodeNodeID(nodeKindFile, f.UID),
 		ResourceVersion: f.ResourceVersion, Generation: int32(f.Generation),
 		CreationTimestamp: f.CreationTimestamp, OwnerReferences: ownerRefs,
+		Owner:      resourceOwnerFromSub(f.EffectiveOwnerSub()),
 		Finalizers: append([]string{}, f.Finalizers...), DeletionTimestamp: f.DeletionTimestamp,
 	}
 	if f.Revision != "" {
@@ -700,6 +704,7 @@ func DatastoreCollectionToGraphQL(c *datastore.Collection) *model.Collection {
 		Generation:        gen,
 		CreationTimestamp: c.CreationTimestamp,
 		OwnerReferences:   ownerRefsFromJSON(c.OwnerReferences),
+		Owner:             resourceOwnerFromSub(c.EffectiveOwnerSub()),
 		Finalizers:        append([]string{}, c.Finalizers...),
 		DeletionTimestamp: c.DeletionTimestamp,
 	}
@@ -878,6 +883,7 @@ func DatastoreVariantToGraphQL(v *datastore.ProductVariant) *model.ProductVarian
 		Generation:        gen,
 		CreationTimestamp: v.CreationTimestamp,
 		OwnerReferences:   ownerRefsFromJSON(v.OwnerReferences),
+		Owner:             resourceOwnerFromSub(v.EffectiveOwnerSub()),
 		Finalizers:        append([]string{}, v.Finalizers...),
 	}
 	if v.Revision != "" {
@@ -1214,6 +1220,7 @@ func datastoreRepositoryToModelStrict(r *datastore.Repository, ns *datastore.Nam
 			CreationTimestamp: repository.CreationTimestamp,
 			Revision:          revision,
 			OwnerReferences:   ownerReferences,
+			Owner:             resourceOwnerFromSub(repository.EffectiveOwnerSub()),
 			Finalizers:        append([]string{}, repository.Finalizers...),
 		},
 		Spec:   spec,

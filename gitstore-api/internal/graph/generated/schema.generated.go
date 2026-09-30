@@ -35,6 +35,7 @@ type MutationResolver interface {
 	UpdateNamespace(ctx context.Context, input model.UpdateNamespaceInput) (*model.UpdateNamespacePayload, error)
 	UpdateNamespaceStatus(ctx context.Context, input model.UpdateNamespaceStatusInput) (*model.UpdateNamespaceStatusPayload, error)
 	DeleteNamespace(ctx context.Context, input model.DeleteNamespaceInput) (*model.DeleteNamespacePayload, error)
+	TransferNamespaceOwner(ctx context.Context, input model.TransferNamespaceOwnerInput) (*model.TransferNamespaceOwnerPayload, error)
 	CompleteNamespaceDeletion(ctx context.Context, input model.CompleteNamespaceDeletionInput) (*model.CompleteNamespaceDeletionPayload, error)
 	ProvisionNamespaceSystemRepository(ctx context.Context, input model.ProvisionNamespaceSystemRepositoryInput) (*model.ProvisionNamespaceSystemRepositoryPayload, error)
 	CreateProduct(ctx context.Context, input model.CreateProductInput) (*model.CreateProductPayload, error)
@@ -354,6 +355,20 @@ func (ec *executionContext) field_Mutation_rotateServiceAccountKey_args(ctx cont
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.RotateServiceAccountKeyInput, error) {
 			return ec.unmarshalNRotateServiceAccountKeyInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRotateServiceAccountKeyInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_transferNamespaceOwner_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.TransferNamespaceOwnerInput, error) {
+			return ec.unmarshalNTransferNamespaceOwnerInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTransferNamespaceOwnerInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -1768,6 +1783,50 @@ func (ec *executionContext) fieldContext_Mutation_deleteNamespace(ctx context.Co
 	return fc, nil
 }
 
+func (ec *executionContext) _Mutation_transferNamespaceOwner(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_transferNamespaceOwner(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().TransferNamespaceOwner(ctx, fc.Args["input"].(model.TransferNamespaceOwnerInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.TransferNamespaceOwnerPayload) graphql.Marshaler {
+			return ec.marshalNTransferNamespaceOwnerPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTransferNamespaceOwnerPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_transferNamespaceOwner(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TransferNamespaceOwnerPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_transferNamespaceOwner_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Mutation_completeNamespaceDeletion(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2755,6 +2814,38 @@ func (ec *executionContext) fieldContext_ObjectMeta_ownerReferences(_ context.Co
 	return fc, nil
 }
 
+func (ec *executionContext) _ObjectMeta_owner(ctx context.Context, field graphql.CollectedField, obj *model.ObjectMeta) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ObjectMeta_owner(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Owner, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ResourceOwner) graphql.Marshaler {
+			return ec.marshalNResourceOwner2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceOwner(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ObjectMeta_owner(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ObjectMeta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ResourceOwner(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ObjectMeta_finalizers(ctx context.Context, field graphql.CollectedField, obj *model.ObjectMeta) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -3583,6 +3674,52 @@ func (ec *executionContext) fieldContext_Query___schema(_ context.Context, field
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _ResourceOwner_kind(ctx context.Context, field graphql.CollectedField, obj *model.ResourceOwner) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ResourceOwner_kind(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Kind, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.OwnerKind) graphql.Marshaler {
+			return ec.marshalNOwnerKind2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐOwnerKind(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ResourceOwner_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ResourceOwner", field, false, false, errors.New("field of type OwnerKind does not have child fields"))
+}
+
+func (ec *executionContext) _ResourceOwner_name(ctx context.Context, field graphql.CollectedField, obj *model.ResourceOwner) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ResourceOwner_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ResourceOwner_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ResourceOwner", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _Subscription_watchResources(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
@@ -4456,6 +4593,43 @@ func (ec *executionContext) unmarshalInputProductVariantNamespacePath(ctx contex
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputResourceOwnerInput(ctx context.Context, obj any) (model.ResourceOwnerInput, error) {
+	var it model.ResourceOwnerInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"kind", "name"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNOwnerKind2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐOwnerKind(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputUpdateResourceStatusInput(ctx context.Context, obj any) (model.UpdateResourceStatusInput, error) {
 	var it model.UpdateResourceStatusInput
 	if obj == nil {
@@ -4803,6 +4977,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "transferNamespaceOwner":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_transferNamespaceOwner(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "completeNamespaceDeletion":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_completeNamespaceDeletion(ctx, field)
@@ -4994,6 +5175,11 @@ func (ec *executionContext) _ObjectMeta(ctx context.Context, sel ast.SelectionSe
 			out.Values[i] = ec._ObjectMeta_revision(ctx, field, obj)
 		case "ownerReferences":
 			out.Values[i] = ec._ObjectMeta_ownerReferences(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "owner":
+			out.Values[i] = ec._ObjectMeta_owner(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -5412,6 +5598,50 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 	return out
 }
 
+var resourceOwnerImplementors = []string{"ResourceOwner"}
+
+func (ec *executionContext) _ResourceOwner(ctx context.Context, sel ast.SelectionSet, obj *model.ResourceOwner) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, resourceOwnerImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ResourceOwner")
+		case "kind":
+			out.Values[i] = ec._ResourceOwner_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._ResourceOwner_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var subscriptionImplementors = []string{"Subscription"}
 
 func (ec *executionContext) _Subscription(ctx context.Context, sel ast.SelectionSet) func(ctx context.Context) graphql.Marshaler {
@@ -5674,6 +5904,16 @@ func (ec *executionContext) marshalNObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdev�
 	return ec._ObjectMeta(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNOwnerKind2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐOwnerKind(ctx context.Context, v any) (model.OwnerKind, error) {
+	var res model.OwnerKind
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNOwnerKind2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐOwnerKind(ctx context.Context, sel ast.SelectionSet, v model.OwnerKind) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) marshalNPageInfo2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPageInfo(ctx context.Context, sel ast.SelectionSet, v *model.PageInfo) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -5692,6 +5932,21 @@ func (ec *executionContext) unmarshalNProductBy2githubᚗcomᚋgitstoreᚑdevᚋ
 func (ec *executionContext) unmarshalNProductVariantBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantBy(ctx context.Context, v any) (model.ProductVariantBy, error) {
 	res, err := ec.unmarshalInputProductVariantBy(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNResourceOwner2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceOwner(ctx context.Context, sel ast.SelectionSet, v *model.ResourceOwner) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ResourceOwner(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNResourceOwnerInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceOwnerInput(ctx context.Context, v any) (*model.ResourceOwnerInput, error) {
+	res, err := ec.unmarshalInputResourceOwnerInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) unmarshalNUpdateResourceStatusInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateResourceStatusInput(ctx context.Context, v any) (model.UpdateResourceStatusInput, error) {

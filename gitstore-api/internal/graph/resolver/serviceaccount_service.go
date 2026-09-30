@@ -86,13 +86,16 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 // labels/annotations, no revision, and — importantly — empty (non-nil) slices
 // for the non-null OwnerReferences/Finalizers list fields, without which
 // gqlgen marshaling would fail at runtime. The UID is returned raw (a
-// ServiceAccount is not a Relay Node).
+// ServiceAccount is not a Relay Node). ServiceAccount is out of scope for
+// ADR-0010 §14 mutable ownership (audit-only, no Annotations field), so Owner
+// always reflects CreationActor.
 func serviceAccountObjectMeta(sa *datastore.ServiceAccount) *model.ObjectMeta {
 	return &model.ObjectMeta{
 		Name:              sa.Name,
 		Namespace:         sa.Namespace,
 		UID:               sa.UID,
 		ResourceVersion:   sa.ResourceVersion,
+		Owner:             resourceOwnerFromSub(sa.CreationActor),
 		Generation:        int32(sa.Generation),
 		CreationTimestamp: sa.CreationTimestamp,
 		OwnerReferences:   []*model.OwnerReference{},

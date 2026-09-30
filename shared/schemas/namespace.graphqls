@@ -74,6 +74,7 @@ type NamespaceMetadata {
   creationTimestamp: DateTime!
   revision: String
   ownerReferences: [OwnerReference!]!
+  owner: ResourceOwner!
   finalizers: [String!]!
 }
 
@@ -301,6 +302,20 @@ type DeleteNamespacePayload {
   outcome: ResourceDeletionOutcome!
 }
 
+"""
+Reassign a namespace's owner (ADR-0010 §14). Distinct from transferRepository,
+which relocates a repository between namespaces and is unrelated to
+principal ownership.
+"""
+input TransferNamespaceOwnerInput {
+  namespaceId: ID!
+  targetOwnerRef: ResourceOwnerInput!
+}
+
+type TransferNamespaceOwnerPayload {
+  namespace: Namespace!
+}
+
 type CompleteNamespaceDeletionPayload {
   id: ID
 }
@@ -357,6 +372,13 @@ extend type Mutation {
   Deletion is blocked when the namespace contains repositories.
   """
   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
+
+  """
+  Reassign a namespace's owner (ADR-0010 §14). Requires authentication.
+  Caller must currently be the namespace owner (or isAdmin), and must be a
+  member of the target owner (or isAdmin).
+  """
+  transferNamespaceOwner(input: TransferNamespaceOwnerInput!): TransferNamespaceOwnerPayload!
 
   """
   Permanently delete a terminating namespace after its repositories are gone.

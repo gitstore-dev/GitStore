@@ -25,7 +25,24 @@ import (
 
 type remoteAddrContextKey struct{}
 type authorizedNamespaceDeleteContextKey struct{}
+type authorizedNamespaceTransferContextKey struct{}
 type authorizationLedgerContextKey struct{}
+
+// AuthorizedNamespaceTransfer carries the exact namespace record and encoded
+// target owner subject authorized by GraphQLFieldAuthorizer's
+// "transferNamespaceOwner" case (ADR-0010 §14), for the resolver to consume
+// without re-fetching or re-authorizing.
+type AuthorizedNamespaceTransfer struct {
+	Namespace      *datastore.Namespace
+	TargetOwnerSub string
+}
+
+// AuthorizedNamespaceForTransfer returns the namespace/target owner pair
+// whose transfer was authorized by GraphQLFieldAuthorizer.
+func AuthorizedNamespaceForTransfer(ctx context.Context) (*AuthorizedNamespaceTransfer, bool) {
+	t, ok := ctx.Value(authorizedNamespaceTransferContextKey{}).(*AuthorizedNamespaceTransfer)
+	return t, ok && t != nil
+}
 
 // authorizationLedger is deliberately operation-scoped. gqlgen can execute
 // sibling fields concurrently, while a subscription invokes the response hook
@@ -321,7 +338,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
 			Kind:     "namespace",
 			Name:     ns.Name,
-			OwnerSub: ns.CreationActor,
+			OwnerSub: ns.EffectiveOwnerSub(),
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
@@ -330,6 +347,41 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
 		}
 		ctx = context.WithValue(ctx, authorizedNamespaceDeleteContextKey{}, ns)
+	case "transferNamespaceOwner":
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		encodedID, ok := nestedStringArg(fc.Args, "input", "namespaceId")
+		if !ok || encodedID == "" {
+			return nil, gqlerror.Errorf("invalid namespace ID")
+		}
+		uid, err := decodeGlobalIDAs("Namespace", encodedID)
+		if err != nil {
+			return nil, gqlerror.Errorf("invalid namespace ID")
+		}
+		ns, err := a.store.GetNamespace(ctx, uid)
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		targetKind, _ := nestedStringPath(fc.Args, "input", "targetOwnerRef", "kind")
+		targetName, _ := nestedStringPath(fc.Args, "input", "targetOwnerRef", "name")
+		// Enforced here rather than by AuthZProvider (see the TODO on
+		// ownerMatchesPrincipal).
+		targetOwnerSub, err := checkOwnerTransfer(ns.EffectiveOwnerSub(), targetKind, targetName, principal)
+		if err != nil {
+			return nil, gqlerror.Errorf("%s", err.Error())
+		}
+		decision, err := authz.Authorize(ctx, principal, "namespace.transfer", auth.ResourceContext{
+			Kind: "namespace", Name: ns.Name, OwnerSub: ns.EffectiveOwnerSub(),
+			Attrs: map[string]any{"targetOwnerSub": targetOwnerSub},
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
+		}
+		ctx = context.WithValue(ctx, authorizedNamespaceTransferContextKey{}, &AuthorizedNamespaceTransfer{Namespace: ns, TargetOwnerSub: targetOwnerSub})
 	case "completeNamespaceDeletion":
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
@@ -480,7 +532,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			return nil, gqlerror.Errorf("authorization error")
 		}
 		decision, err := authz.Authorize(ctx, principal, "category.delete", auth.ResourceContext{
-			Kind: "categoryTaxonomy", Name: category.Name, OwnerSub: category.CreationActor,
+			Kind: "categoryTaxonomy", Name: category.Name, OwnerSub: category.EffectiveOwnerSub(),
 			Attrs: map[string]any{"namespace": category.Namespace, "repositoryID": category.RepositoryID},
 		})
 		if err != nil {
@@ -668,7 +720,7 @@ func (a *Authorize) authorizeStoredProductAction(ctx context.Context, authz auth
 		}
 		return gqlerror.Errorf("authorization error")
 	}
-	return authorizeProductAction(ctx, authz, principal, action, product.Name, product.Namespace, product.CreationActor)
+	return authorizeProductAction(ctx, authz, principal, action, product.Name, product.Namespace, product.EffectiveOwnerSub())
 }
 
 func authorizeProductAction(ctx context.Context, authz auth.AuthZProvider, principal *auth.Principal, action, name, namespace, ownerSub string) error {
@@ -705,7 +757,7 @@ func (a *Authorize) authorizeProductQueryField(ctx context.Context, fc *graphql.
 				return gqlerror.Errorf("authorization error")
 			}
 			if ns != nil {
-				owner = ns.CreationActor
+				owner = ns.EffectiveOwnerSub()
 			}
 		}
 		return authorizeProductAction(ctx, authz, principal, "product.read", "", namespace, owner)
@@ -737,7 +789,7 @@ func (a *Authorize) authorizeProductQueryField(ctx context.Context, fc *graphql.
 		}
 		return gqlerror.Errorf("authorization error")
 	}
-	return authorizeProductAction(ctx, authz, principal, "product.read", product.Name, product.Namespace, product.CreationActor)
+	return authorizeProductAction(ctx, authz, principal, "product.read", product.Name, product.Namespace, product.EffectiveOwnerSub())
 }
 
 // authorizeProductNodeField adds Product checks to mixed Node/Nodes queries.
@@ -767,7 +819,7 @@ func (a *Authorize) authorizeProductNodeField(ctx context.Context, fc *graphql.F
 			}
 			return gqlerror.Errorf("authorization error")
 		}
-		if err := authorizeProductAction(ctx, authz, principal, "product.read", product.Name, product.Namespace, product.CreationActor); err != nil {
+		if err := authorizeProductAction(ctx, authz, principal, "product.read", product.Name, product.Namespace, product.EffectiveOwnerSub()); err != nil {
 			return err
 		}
 	}
@@ -1108,7 +1160,12 @@ func (a *Authorize) namespaceDeleteAction(ctx context.Context, name string, prin
 	if err != nil {
 		return nil, "", err
 	}
-	if ns.CreationActor == principal.Subject {
+	// TODO(ADR-0010 §14, follow-up vocabulary spec): this pre-computes
+	// .own/.any in Go against the mutable owner subject; Authorize does not
+	// yet consume ResourceContext.OwnerSub itself (rbaclocal discards it).
+	// See ownerMatchesPrincipal and the ADR-0010 §14 addendum in
+	// docs/ADRs/0010-authorization-model.md.
+	if ownerMatchesPrincipal(ns.EffectiveOwnerSub(), principal) {
 		return ns, "namespace.delete.own", nil
 	}
 	return ns, "namespace.delete.any", nil

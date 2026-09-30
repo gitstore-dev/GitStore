@@ -445,6 +445,20 @@ duplicating in every future provider. `internal/middleware/security/secure.go` a
 `Authorize` in the same feature spec that implements this section — not carried forward as a second
 ownership code path once `OwnerRef` exists.
 
+> **Implementation addendum (foundation spec).** The foundation implementation of this section
+> represents the mutable owner as a reserved `metadata.annotations` key
+> (`rbac.authorization.gitstore.dev/owner`, ADR-§12-prefix-encoded) rather than a new structured
+> `OwnerRef` datastore field — annotations already round-trip generically through every git-authored
+> manifest and the existing `Annotations` datastore column, so no schema migration is needed. It
+> also migrates `secure.go`/`graphql.go` to compare against this mutable owner subject via a new
+> `ownerMatchesPrincipal` helper — a real improvement, since ownership can now move — but this is
+> still a Go-level pre-computation, not `Authorize` deciding ownership: neither `rbaclocal` nor
+> `allowall` reads `ResourceContext` at all today. **Full compliance with "must be migrated to call
+> `Authorize`" is deferred to the follow-up §2–§13 vocabulary/policy-engine spec**, which must teach
+> a provider to evaluate `ResourceContext.OwnerSub` directly. Both migrated call sites and the
+> `ownerMatchesPrincipal` helper carry a `TODO(ADR-0010 §14, follow-up vocabulary spec)` comment
+> recording this.
+
 ## Consequences
 
 - **Verbs are pure and the authorizer regains its decision.** Callers stop pre-computing ownership;

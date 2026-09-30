@@ -330,6 +330,7 @@ type ComplexityRoot struct {
 		ProvisionRepositoryStorage         func(childComplexity int, input model.ProvisionRepositoryStorageInput) int
 		RefreshToken                       func(childComplexity int, input model.RefreshTokenInput) int
 		RotateServiceAccountKey            func(childComplexity int, input model.RotateServiceAccountKeyInput) int
+		TransferNamespaceOwner             func(childComplexity int, input model.TransferNamespaceOwnerInput) int
 		UpdateCategoryStatus               func(childComplexity int, input model.UpdateCategoryStatusInput) int
 		UpdateCollection                   func(childComplexity int, input model.UpdateCollectionInput) int
 		UpdateNamespace                    func(childComplexity int, input model.UpdateNamespaceInput) int
@@ -369,6 +370,7 @@ type ComplexityRoot struct {
 		Generation        func(childComplexity int) int
 		Labels            func(childComplexity int) int
 		Name              func(childComplexity int) int
+		Owner             func(childComplexity int) int
 		OwnerReferences   func(childComplexity int) int
 		ResourceVersion   func(childComplexity int) int
 		Revision          func(childComplexity int) int
@@ -417,6 +419,7 @@ type ComplexityRoot struct {
 		Labels            func(childComplexity int) int
 		Name              func(childComplexity int) int
 		Namespace         func(childComplexity int) int
+		Owner             func(childComplexity int) int
 		OwnerReferences   func(childComplexity int) int
 		ResourceVersion   func(childComplexity int) int
 		Revision          func(childComplexity int) int
@@ -728,6 +731,11 @@ type ComplexityRoot struct {
 		StoragePath  func(childComplexity int) int
 	}
 
+	ResourceOwner struct {
+		Kind func(childComplexity int) int
+		Name func(childComplexity int) int
+	}
+
 	RotateServiceAccountKeyPayload struct {
 		ServiceAccount func(childComplexity int) int
 	}
@@ -795,6 +803,10 @@ type ComplexityRoot struct {
 		RefreshToken func(childComplexity int) int
 		Scope        func(childComplexity int) int
 		TokenType    func(childComplexity int) int
+	}
+
+	TransferNamespaceOwnerPayload struct {
+		Namespace func(childComplexity int) int
 	}
 
 	UpdateCategoryStatusPayload struct {
@@ -2032,6 +2044,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.RotateServiceAccountKey(childComplexity, args["input"].(model.RotateServiceAccountKeyInput)), true
 
+	case "Mutation.transferNamespaceOwner":
+		if e.ComplexityRoot.Mutation.TransferNamespaceOwner == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_transferNamespaceOwner_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.TransferNamespaceOwner(childComplexity, args["input"].(model.TransferNamespaceOwnerInput)), true
+
 	case "Mutation.updateCategoryStatus":
 		if e.ComplexityRoot.Mutation.UpdateCategoryStatus == nil {
 			break
@@ -2266,6 +2290,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.NamespaceMetadata.Name(childComplexity), true
 
+	case "NamespaceMetadata.owner":
+		if e.ComplexityRoot.NamespaceMetadata.Owner == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceMetadata.Owner(childComplexity), true
+
 	case "NamespaceMetadata.ownerReferences":
 		if e.ComplexityRoot.NamespaceMetadata.OwnerReferences == nil {
 			break
@@ -2475,6 +2506,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ObjectMeta.Namespace(childComplexity), true
+
+	case "ObjectMeta.owner":
+		if e.ComplexityRoot.ObjectMeta.Owner == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ObjectMeta.Owner(childComplexity), true
 
 	case "ObjectMeta.ownerReferences":
 		if e.ComplexityRoot.ObjectMeta.OwnerReferences == nil {
@@ -3790,6 +3828,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ResolvedRepositoryDefinition.StoragePath(childComplexity), true
 
+	case "ResourceOwner.kind":
+		if e.ComplexityRoot.ResourceOwner.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResourceOwner.Kind(childComplexity), true
+
+	case "ResourceOwner.name":
+		if e.ComplexityRoot.ResourceOwner.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResourceOwner.Name(childComplexity), true
+
 	case "RotateServiceAccountKeyPayload.serviceAccount":
 		if e.ComplexityRoot.RotateServiceAccountKeyPayload.ServiceAccount == nil {
 			break
@@ -4072,6 +4124,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.TokenResponse.TokenType(childComplexity), true
 
+	case "TransferNamespaceOwnerPayload.namespace":
+		if e.ComplexityRoot.TransferNamespaceOwnerPayload.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TransferNamespaceOwnerPayload.Namespace(childComplexity), true
+
 	case "UpdateCategoryStatusPayload.category":
 		if e.ComplexityRoot.UpdateCategoryStatusPayload.Category == nil {
 			break
@@ -4269,9 +4328,11 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputResolvedCategoryRefInput,
 		ec.unmarshalInputResolvedCategoryTaxonomyInput,
 		ec.unmarshalInputResolvedProductStatusInput,
+		ec.unmarshalInputResourceOwnerInput,
 		ec.unmarshalInputRotateServiceAccountKeyInput,
 		ec.unmarshalInputServiceAccountPublicKeyInput,
 		ec.unmarshalInputTokenRequestSpecInput,
+		ec.unmarshalInputTransferNamespaceOwnerInput,
 		ec.unmarshalInputUpdateCategoryStatusInput,
 		ec.unmarshalInputUpdateCollectionInput,
 		ec.unmarshalInputUpdateNamespaceInput,
@@ -5211,6 +5272,7 @@ type NamespaceMetadata {
   creationTimestamp: DateTime!
   revision: String
   ownerReferences: [OwnerReference!]!
+  owner: ResourceOwner!
   finalizers: [String!]!
 }
 
@@ -5438,6 +5500,20 @@ type DeleteNamespacePayload {
   outcome: ResourceDeletionOutcome!
 }
 
+"""
+Reassign a namespace's owner (ADR-0010 §14). Distinct from transferRepository,
+which relocates a repository between namespaces and is unrelated to
+principal ownership.
+"""
+input TransferNamespaceOwnerInput {
+  namespaceId: ID!
+  targetOwnerRef: ResourceOwnerInput!
+}
+
+type TransferNamespaceOwnerPayload {
+  namespace: Namespace!
+}
+
 type CompleteNamespaceDeletionPayload {
   id: ID
 }
@@ -5494,6 +5570,13 @@ extend type Mutation {
   Deletion is blocked when the namespace contains repositories.
   """
   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
+
+  """
+  Reassign a namespace's owner (ADR-0010 §14). Requires authentication.
+  Caller must currently be the namespace owner (or isAdmin), and must be a
+  member of the target owner (or isAdmin).
+  """
+  transferNamespaceOwner(input: TransferNamespaceOwnerInput!): TransferNamespaceOwnerPayload!
 
   """
   Permanently delete a terminating namespace after its repositories are gone.
@@ -6614,7 +6697,7 @@ An object that has a human-readable name. This represents both the Subject and t
 - creation_on_behalf_of_actor OR creation_subject
 - update_on_behalf_of_actor OR update_subject
 
-Implemented by
+Implemented in
 - User
 - ServiceAccount
 """
@@ -6624,7 +6707,7 @@ interface Actor {
 }
 
 """
-An object that can be published or unpublished. Implemented by
+An object that can be published or unpublished. Implemented in
 - Product
 - ProductVariant
 """
@@ -6844,6 +6927,34 @@ scalar Long
   @specifiedBy(url: "https://scalars.graphql.org/apollographql/long-v0.1.html")
 
 """
+The principal type that can own a resource (ADR-0010 §14/§7).
+"""
+enum OwnerKind {
+  USER
+  GROUP
+  SERVICE_ACCOUNT
+}
+
+"""
+The resource's current owner subject (ADR-0010 §14). Distinct from
+OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
+delete relationship, not a principal-ownership one.
+"""
+type ResourceOwner {
+  kind: OwnerKind!
+  name: String!
+}
+
+"""
+Input shape for naming a target owner, e.g. transferNamespaceOwner's
+targetOwnerRef (ADR-0010 §14).
+"""
+input ResourceOwnerInput {
+  kind: OwnerKind!
+  name: String!
+}
+
+"""
 System-managed metadata shared by core catalog resources.
 """
 type ObjectMeta {
@@ -6857,6 +6968,7 @@ type ObjectMeta {
   creationTimestamp: DateTime!
   revision: String
   ownerReferences: [OwnerReference!]!
+  owner: ResourceOwner!
   finalizers: [String!]!
   deletionTimestamp: DateTime
 }
@@ -7757,6 +7869,8 @@ func (ec *executionContext) childFields_NamespaceMetadata(ctx context.Context, f
 		return ec.fieldContext_NamespaceMetadata_revision(ctx, field)
 	case "ownerReferences":
 		return ec.fieldContext_NamespaceMetadata_ownerReferences(ctx, field)
+	case "owner":
+		return ec.fieldContext_NamespaceMetadata_owner(ctx, field)
 	case "finalizers":
 		return ec.fieldContext_NamespaceMetadata_finalizers(ctx, field)
 	}
@@ -7851,6 +7965,8 @@ func (ec *executionContext) childFields_ObjectMeta(ctx context.Context, field gr
 		return ec.fieldContext_ObjectMeta_revision(ctx, field)
 	case "ownerReferences":
 		return ec.fieldContext_ObjectMeta_ownerReferences(ctx, field)
+	case "owner":
+		return ec.fieldContext_ObjectMeta_owner(ctx, field)
 	case "finalizers":
 		return ec.fieldContext_ObjectMeta_finalizers(ctx, field)
 	case "deletionTimestamp":
@@ -8435,6 +8551,16 @@ func (ec *executionContext) childFields_ResolvedRepositoryDefinition(ctx context
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedRepositoryDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_ResourceOwner(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "kind":
+		return ec.fieldContext_ResourceOwner_kind(ctx, field)
+	case "name":
+		return ec.fieldContext_ResourceOwner_name(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ResourceOwner", field.Name)
+}
+
 func (ec *executionContext) childFields_RotateServiceAccountKeyPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "serviceAccount":
@@ -8553,6 +8679,14 @@ func (ec *executionContext) childFields_TokenResponse(ctx context.Context, field
 		return ec.fieldContext_TokenResponse_idToken(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type TokenResponse", field.Name)
+}
+
+func (ec *executionContext) childFields_TransferNamespaceOwnerPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "namespace":
+		return ec.fieldContext_TransferNamespaceOwnerPayload_namespace(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TransferNamespaceOwnerPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateCategoryStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
