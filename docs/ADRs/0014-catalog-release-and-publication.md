@@ -66,7 +66,8 @@ revision, and every write stays reviewable in Git.
    an activation window.
 4. The Storefront API ([ADR 0012](0012-admin-storefront-graphql-endpoints.md)) reads only the
    target's active snapshot plus explicit request-time values. It never falls back to the mutable
-   current catalog rows.
+   current catalog rows. **Expiry is enforced on the read path** (§5). It doesn't depend on the
+   controller reaching `effectiveUntilTime` on time.
 5. Unpublishing is a first-class operation with defined semantics at three granularities (§6).
 
 ### 1. Resources and storage
@@ -196,6 +197,18 @@ snapshot keeps serving. A rollback is a new Publication that points at an earlie
 release and supersedes the active one. Overlay semantics (two publications composed on one
 target) are out of scope.
 
+**The pointer carries its own window.** A target pointer stores the snapshot ID, the publication
+identity and that publication's `effectiveUntilTime`.
+
+- A Storefront read whose request time is at or after `effectiveUntilTime` treats the target as
+  empty, exactly as if the pointer had been cleared.
+- Shortening `effectiveUntilTime` updates the pointer's copy in the same fenced compare-and-swap
+  that admits the change.
+- The controller's later deactivation only finalizes state: it clears the pointer, marks the
+  publication `Expired` and emits watch events. A late or unavailable controller can delay that
+  bookkeeping, but it can never extend public visibility.
+- Activation is symmetric: the API refuses to swap a pointer in before `effectiveFromTime`.
+
 ### 6. Unpublishing
 
 Unpublishing never rewrites a snapshot and never deletes one that may still be referenced. It
@@ -203,7 +216,7 @@ either moves a target's pointer to empty or swaps in a smaller snapshot.
 
 | Intent                                   | Mechanism                                                                 | Result                                                                                                                                                            |
 |------------------------------------------|---------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Take a whole target offline on schedule  | `effectiveUntilTime` reached                                              | The publication becomes `Expired` and the target pointer becomes empty. The target serves **nothing**; there is no implicit fallback to a predecessor.            |
+| Take a whole target offline on schedule  | `effectiveUntilTime` reached                                              | Reads stop serving the target at that instant (§5). The controller then marks the publication `Expired` and clears the pointer. The target serves **nothing**; there is no implicit fallback to a predecessor. |
 | Take a whole target offline now          | Delete the `Publication` manifest, or shorten `effectiveUntilTime` to now | The finalizer `publication.gitstore.dev/deactivate` makes the API fence-swap the pointer to empty before the row is removed. The publication becomes `Withdrawn`. |
 | Remove specific products or variants now | A **derived release** plus a `supersedesRef` Publication (below)          | The target swaps atomically to a snapshot without them. There is no storefront gap.                                                                               |
 | Retire permanently                       | `spec.lifecycle.state: RETIRED` on the Product or ProductVariant          | Excluded from every **new** snapshot. It does **not** unpublish an active snapshot by itself.                                                                     |
@@ -252,7 +265,7 @@ requires a normal release from an admitted commit.
 
 Emergency suppression is a datastore-only `PublicationSuppression` record. It removes named
 identities from a target's served results without a Git change. It requires the dedicated
-`publication.suppress` action ([ADR 0010](0010-authorization-model.md)) and a reason code, and it
+`publicationSuppression.create` action ([ADR 0010](0010-authorization-model.md)) and a reason code, and it
 is audited. It must carry an expiry of at most 7 days, and it is cleared automatically once a
 Publication that excludes the identities becomes active. It fails closed: if suppression state
 can't be read, the suppressed identities are not served. Its full contract belongs in the
@@ -317,7 +330,7 @@ Negative:
 - [ADR 0004](0004-product-lifecycle.md), [ADR 0005](0005-product-variant-lifecycle.md): source
   resources, and `spec.lifecycle.state`.
 - [ADR 0010](0010-authorization-model.md): `catalogRelease.*`, `publication.*` and
-  `publication.suppress` actions.
+  `publicationSuppression.create` actions.
 - [ADR 0012](0012-admin-storefront-graphql-endpoints.md): Admin endpoints read `MANAGEMENT`;
   Storefront endpoints read `PUBLIC`.
 - [ADR 0013](0013-markdown-body-intermediate-representation.md): resolved bodies in snapshots.

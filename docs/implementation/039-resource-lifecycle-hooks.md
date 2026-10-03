@@ -121,13 +121,14 @@ spec:
   onLargePush: Defer                 # Defer | Reject
   largePushObjects: 500
   circuit: { failureRatio: 0.5, window: 30s, openFor: 60s }
+  contextFields: [object, oldObject, operation, ref]   # sent and cache-keyed (§3); default all
   version: "2026-09-01"              # part of the decision-cache key
 ```
 
 Admission rejects the manifest in any of these cases:
 
 - it appears outside `gitstore-system/gitstore-system`;
-- the pusher lacks `admissionHook.create`;
+- the pusher lacks `admissionHookConfiguration.create`;
 - `type: Mutating` matches any Git-backed kind;
 - the endpoint host isn't in the egress allowlist;
 - any value exceeds a static limit.
@@ -179,7 +180,7 @@ spec:
 - The gate digest is the SHA-256 of the canonical JSON of `materialInputs`, together with the
   subject UID and generation.
 - An approval is a datastore-only `ApprovalCertificate` holding `(gate, subject UID, digest,
-  principal, time, signature)`, created through `lifecycleGate.approve`. An attestation is a
+  principal, time, signature)`, created through `approvalCertificate.create`. An attestation is a
   signed statement verified against the issuer's registered key.
 - The controller patches the condition `Gate/<name>`. For `Delete` transitions it adds the
   finalizer `lifecycle.gitstore.dev/<name>`.
@@ -287,6 +288,8 @@ Envelope rules:
 - `fieldPath` is mapped to a line and column through YAML node positions. `path` alone produces a
   line-1 annotation.
 - Secrets, raw push credentials and non-matched objects are never sent (036 §8.2).
+- Only the context fields named in the hook's `contextFields` are sent. The example above shows
+  all of them. This is what lets the decision cache (§3) key on exactly what the hook saw.
 - Request bodies are capped (default 4 MiB). Above the cap, `onLargePush` applies.
 
 ## 3. Lane A execution
@@ -312,8 +315,18 @@ sequenceDiagram
 - `admission.limits.push_deadline_ms` is the push-wide budget (default 5000). Hook timeouts are
   individually ≤ the remaining budget. After the deadline every pending hook is treated as timed
   out.
-- **Decision cache.** The key is `(blobOID, hook name, hook version, policy digest, params
-  digest)`. The value is the per-object result. Entries are stored in the datastore with a TTL
+- **Decision cache.** The key is `(hook name, hook version, policy digest, params digest,
+  context digest)`. The context digest is the SHA-256 of the canonical JSON of exactly the fields
+  sent to the hook for that object.
+  - The fields are selected by the hook's `contextFields` from: `object` (by blob OID),
+    `oldObject` (by blob OID), `operation`, `repository`, `ref`, `path`, `pusher` and
+    `pushOptions`.
+  - Fields not listed in `contextFields` are **omitted from the envelope** (§2), so a hook can
+    never decide on input that the key doesn't cover.
+  - The default `contextFields` is every field, which means no cross-request reuse. Hooks opt in
+    to narrower context for a better hit rate.
+
+  The value is the per-object result. Entries are stored in the datastore with a TTL
   (default 7 days) so that every API replica shares them. Only `allowed` and deterministic `deny`
   results are cached, never failures.
 - **Circuit breaker.** The breaker is per hook per replica. An open circuit applies
@@ -425,18 +438,26 @@ deadline bounds the whole chain (default 2 s, matching commercetools' default).
 
 ## 8. Authorization actions
 
-Actions are added to [ADR 0010](../ADRs/0010-authorization-model.md):
+These actions follow the [ADR 0010](../ADRs/0010-authorization-model.md) grammar
+`<kind>[.<subresource>].<verb>`. `<kind>` is the singular camelCase kind, and the verb comes from
+the control-plane set `create · read · list · watch · update · delete`.
 
-- `admissionHook.{get,list,create}`, cluster scope only
-- `admissionPolicy.{get,list,watch}`
-- `admissionReport.{get,list,watch}`
-- `lifecycleGate.{get,list,approve}`
-- `eventSubscription.{get,list,replay}`
-- `functionBinding.{get,list}`
-- `hook.suspend`
+- `admissionHookConfiguration.{read,list,watch,create,update,delete}`, cluster scope only
+- `validatingAdmissionPolicy.{read,list,watch}`, `validatingAdmissionPolicyBinding.{read,list,watch}`,
+  `mutatingAdmissionPolicy.{read,list,watch}`
+- `admissionReport.{read,list,watch}`
+- `lifecycleGate.{read,list,watch}`
+- `approvalCertificate.{create,read,list}`, which satisfies an `approval` gate (§1.3)
+- `eventSubscription.{read,list,watch}`
+- `eventSubscription.deliveries.replay`, which replays from a sequence (§6)
+- `functionBinding.{read,list,watch}`
+- `hookSuspension.{create,read,list,delete}`
+
+`create`/`update`/`delete` on Git-backed registration kinds are exercised only by admission of a
+push. Datastore-only kinds (`approvalCertificate`, `hookSuspension`) are written through the API.
 
 Creating a registration requires push permission on the `gitstore-system` repository it is
-admitted from. Remote webhooks additionally require `admissionHook.create`.
+admitted from. Remote webhooks additionally require `admissionHookConfiguration.create`.
 
 ## 9. Rollout
 
@@ -465,7 +486,7 @@ older replicas would accept. New policies default to `validationActions: [Warn]`
 - **Rolling upgrade.** A mixed-version API fleet gives stable verdicts for the same push. Old
   replicas ignore unknown registration kinds without failing admission.
 - **AuthN/AuthZ.** A namespace admin can't bind a policy outside their namespace. T2/T3 can't
-  obtain a synchronous slot. `hook.suspend` is enforced. Webhook secrets never appear in logs,
+  obtain a synchronous slot. `hookSuspension.create` is enforced. Webhook secrets never appear in logs,
   reports or envelopes.
 - **Registration location.**
   - An `AdmissionHookConfiguration` pushed to any repository other than

@@ -90,7 +90,7 @@ manifest. Where a registration is admitted decides its scope and trust, followin
 - **Cluster-scoped registrations** are admitted only from `gitstore-system/gitstore-system`, the
   same rule that applies to `Namespace` manifests. Examples are every `AdmissionHookConfiguration`
   (remote T0/T1 webhooks) and cluster-wide policies and bindings. Admission rejects them in any
-  other repository, and creating one also requires `admissionHook.create`
+  other repository, and creating one also requires `admissionHookConfiguration.create`
   ([ADR 0010](0010-authorization-model.md)).
 - **Namespace-scoped registrations** are admitted only from `<namespace>/gitstore-system` and
   apply only in that namespace. These are `ValidatingAdmissionPolicy`,
@@ -110,7 +110,7 @@ manifest. Where a registration is admitted decides its scope and trust, followin
   If these lived in Git, anyone with push access to `gitstore-system` could loosen the limits
   that constrain them.
 - **Revocation is a datastore-only kill switch** (`HookSuspension`). It is effective within one
-  registry refresh interval and requires the `hook.suspend` action. It is the break-glass path for
+  registry refresh interval and requires the `hookSuspension.create` action. It is the break-glass path for
   stopping a misbehaving hook without a Git push or review.
 - A registration takes effect for pushes **after** its own admission. A push that both installs a
   policy and violates it is judged by the policies in force before the push.
@@ -136,8 +136,12 @@ it. This is the same exemption Kubernetes applies to its webhook configuration o
    - **One batched call per hook per push**, carrying every matched object.
    - All hooks run as a **parallel fan-out under one push deadline**, with a per-hook timeout
      and a per-hook circuit breaker.
-   - A **content-addressed decision cache** keyed on `(blob OID, hook ID, hook version, policy
-     digest)`. A re-push or a rebase that doesn't change a blob costs no call.
+   - A **decision cache** whose key covers **everything the hook was sent**: hook ID and version,
+     policy and params digests, plus a digest of the per-object request context. A cached
+     decision can therefore never apply to a request the hook didn't see. Hooks declare
+     `contextFields` (for example `[object, oldObject, operation, ref]`), and only those fields
+     are sent and keyed. Narrower fields give more cache hits on re-pushes and rebases. Wider
+     fields, such as `pusher`, give fewer.
    - `onLargePush: Defer | Reject` for pushes above a matched-object threshold. `Defer` moves the
      hook to Lane B for that push. `Reject` fails the push with a remedy message.
    - `failurePolicy: Fail | Ignore` on timeout or open circuit. `Ignore` also records a Lane B
@@ -269,8 +273,8 @@ Negative:
 
 - [ADR 0001](0001-secretref-reference-contract.md): webhook and signing secrets.
 - [ADR 0008](0008-file-lifecycle.md): File readiness gates.
-- [ADR 0010](0010-authorization-model.md): `hook.*`, `hook.suspend`, and approval-certificate
-  actions.
+- [ADR 0010](0010-authorization-model.md): registration, `hookSuspension` and
+  `approvalCertificate` actions ([039 §8](../implementation/039-resource-lifecycle-hooks.md#8-authorization-actions)).
 - [ADR 0014](0014-catalog-release-and-publication.md): the `ReleaseEligible` gate.
 - [ADR 0016](0016-custom-resource-definitions.md): CRDs inherit this matrix through their declared
   storage group.

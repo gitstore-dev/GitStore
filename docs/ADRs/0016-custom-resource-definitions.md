@@ -158,8 +158,13 @@ CRD instances automatically get:
 - admission (structural schema, then `x-gitstore-validations`, then bound policies and webhooks);
 - a watch journal source, so they get `watchResources` and event subscriptions;
 - GraphQL list/get/watch types generated from the served versions;
-- authorization actions derived from the plural (`pricingtables.get`, `.list`, `.watch`, and for
-  datastore-only kinds `.create`/`.update`/`.delete`).
+- authorization actions in the [ADR 0010](0010-authorization-model.md) grammar.
+  - The `<kind>` slug is `names.kind` in lower camelCase (`PricingTable` → `pricingTable`).
+  - The verbs are `read`, `list` and `watch`, plus `create`/`update`/`delete` for datastore-only
+    kinds. For Git-backed kinds those writes happen only through push admission.
+  - A status subresource adds `<kind>.status.write` for its controller's service account.
+  - The slug must be unique across core kinds and installed CRDs. A CRD whose slug collides is
+    rejected at admission.
 
 A CRD can opt into catalog release selection with `x-gitstore-releaseable: true`. Its instances
 can then appear in a `CatalogRelease` selection and in Storefront snapshots
