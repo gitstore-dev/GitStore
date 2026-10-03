@@ -537,7 +537,7 @@ architecture.
 ### Operational Notes
 
 - Controller-visible state is derived from ScyllaDB projections and status conditions, not directly from Git blobs.
-- Release semantics are event-driven (`tag-created` / `release-created`) and reflected on `CatalogRelease` and `Publication` status. Source resources carry no `Published` condition ([ADR 0014](../ADRs/0014-catalog-release-and-publication.md)).
+- Release semantics should be event-driven (`tag-created` / `release-created`) and reflected via `Published` conditions.
 - Redis/Valkey remains optional and should be introduced only if measured read pressure exceeds ScyllaDB tuning headroom.
 
 ---
@@ -764,11 +764,8 @@ Standard conditions for catalogue resources:
 | Condition type      | Meaning                                                                      |
 |---------------------|------------------------------------------------------------------------------|
 | `AdmissionAccepted` | Resource passed all schema and admission validation layers                   |
+| `Published`         | Resource is live to storefront (set when a release tag targets the resource) |
 | `Ready`             | Resource is projected and queryable                                          |
-
-Storefront visibility is not a source-resource condition. It is derived per channel/market target
-from the active `Publication` snapshot
-([ADR 0014](../ADRs/0014-catalog-release-and-publication.md)).
 
 Example:
 
@@ -780,9 +777,9 @@ status:
       reason: SchemaMismatch
       message: "spec.pricing.priceSet.prices[0].money.amount must be > 0"
       lastTransitionTime: "2026-05-22T10:00:00Z"
-    - type: Ready
+    - type: Published
       status: "False"
-      reason: SchemaMismatch
+      reason: NoReleaseTag
       lastTransitionTime: "2026-05-22T10:00:00Z"
 ```
 
