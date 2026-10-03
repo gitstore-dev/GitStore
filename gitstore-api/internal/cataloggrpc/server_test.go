@@ -2001,6 +2001,7 @@ metadata:
   name: widget
   namespace: gitstore
 spec:
+  title: Widget
   categoryRef:
     kind: CategoryTaxonomy
 ---

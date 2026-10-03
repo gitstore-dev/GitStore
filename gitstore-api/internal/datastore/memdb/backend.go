@@ -24,8 +24,6 @@ import (
 // Items are sorted by (created_at DESC, id DESC) — newest first.
 // The getKey function extracts (createdAt, id) from each item.
 func paginateSlice[T any](items []*T, page datastore.PageParams, getKey func(*T) (time.Time, string)) *datastore.PageResult[T] {
-	totalCount := int32(len(items))
-
 	// Sort by created_at DESC, id DESC (newest first)
 	sort.Slice(items, func(i, j int) bool {
 		iTime, iID := getKey(items[i])
@@ -38,7 +36,7 @@ func paginateSlice[T any](items []*T, page datastore.PageParams, getKey func(*T)
 	})
 
 	if len(items) == 0 {
-		return &datastore.PageResult[T]{Items: []*T{}, TotalCount: totalCount}
+		return &datastore.PageResult[T]{Items: []*T{}}
 	}
 
 	limit := page.Limit()
@@ -83,7 +81,6 @@ func paginateSlice[T any](items []*T, page datastore.PageParams, getKey func(*T)
 		return &datastore.PageResult[T]{
 			Items:       []*T{},
 			HasPrevious: start > 0,
-			TotalCount:  totalCount,
 		}
 	}
 
@@ -111,7 +108,6 @@ func paginateSlice[T any](items []*T, page datastore.PageParams, getKey func(*T)
 		Items:       window,
 		HasNext:     hasNext,
 		HasPrevious: hasPrevious,
-		TotalCount:  totalCount,
 	}
 }
 

@@ -230,18 +230,16 @@ func TestRepositoryReadContract_ListUsesResolvedNamespaceWithoutPerRowLookups(t 
 	assert.Equal(t, 1, byIdentifierCalls, "list resolver should resolve the namespace exactly once")
 }
 
-func TestBuildRepositoryConnectionPreservesUnknownCountAndBody(t *testing.T) {
+func TestBuildRepositoryConnectionPreservesBody(t *testing.T) {
 	h := newRepositoryReadHarness(t)
 	connection, err := resolver.BuildRepositoryConnection(
 		&datastore.PageResult[datastore.Repository]{
-			Items:      []*datastore.Repository{h.repos[0]},
-			TotalCount: -1,
+			Items: []*datastore.Repository{h.repos[0]},
 		},
 		h.namespace,
 		repositoryReadDataDir,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, int32(-1), connection.TotalCount)
 	require.Len(t, connection.Edges, 1)
 	require.NotNil(t, connection.Edges[0].Node.Body)
 	assert.Equal(t, h.repos[0].Body, *connection.Edges[0].Node.Body)

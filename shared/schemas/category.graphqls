@@ -194,11 +194,6 @@ type CategoryConnection {
   Pagination information
   """
   pageInfo: PageInfo!
-
-  """
-  Total count of categories
-  """
-  totalCount: Int!
 }
 
 # ============================================================================

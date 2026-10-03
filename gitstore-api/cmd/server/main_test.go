@@ -262,7 +262,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	assert.Equal(t, "alice", response.Data.CreateNamespace.Namespace.Metadata.Name)
 
 	listReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
-		"query": "query { namespaces(first: 10) { edges { cursor node { metadata { name } } } pageInfo { hasNextPage endCursor } totalCount } }"
+		"query": "query { namespaces(first: 10) { edges { cursor node { metadata { name } } } pageInfo { hasNextPage endCursor } } }"
 	}`))
 	listReq.Header.Set("Content-Type", "application/json")
 	listW := httptest.NewRecorder()
@@ -281,7 +281,6 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 						} `json:"metadata"`
 					} `json:"node"`
 				} `json:"edges"`
-				TotalCount int `json:"totalCount"`
 			} `json:"namespaces"`
 		} `json:"data"`
 		Errors []struct {
@@ -293,7 +292,6 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.Len(t, listResponse.Data.Namespaces.Edges, 2)
 	assert.NotEmpty(t, listResponse.Data.Namespaces.Edges[0].Cursor)
 	assert.Equal(t, "alice", listResponse.Data.Namespaces.Edges[0].Node.Metadata.Name)
-	assert.Equal(t, 2, listResponse.Data.Namespaces.TotalCount)
 }
 
 func TestGraphQLHandlerRejectsLoginWithInvalidCredentials(t *testing.T) {

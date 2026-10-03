@@ -49,16 +49,16 @@ where the commit is written.
 
 ## Spec Fields
 
-All spec fields are individually optional. Constraints apply when the field is present.
+`spec.title` is required; all other spec fields are individually optional. Constraints apply when an optional field is present.
 
-| Field              | Type                      | Constraint                                             |
-|--------------------|---------------------------|--------------------------------------------------------|
-| `spec.title`       | string                    | Max 200 characters                                     |
-| `spec.categoryRef` | object                    | If present, `categoryRef.name` is required             |
-| `spec.tags`        | []string                  | No per-tag length constraint                           |
-| `spec.media`       | []MediaDefinition         | Each entry: `fileRef.name` and `fileRef.kind` required |
-| `spec.options`     | []ProductOptionDefinition | Each entry: `name` required and unique within the list |
-| `spec.lifecycle.state` | `ACTIVE` or `RETIRED` | Defaults to `ACTIVE`; `RETIRED` remains private desired state and is excluded from future release candidates |
+| Field                  | Type                      | Constraint                                                                                                   |
+|------------------------|---------------------------|--------------------------------------------------------------------------------------------------------------|
+| `spec.title`           | string                    | Required; max 200 characters                                                                                 |
+| `spec.categoryRef`     | object                    | If present, `categoryRef.name` is required                                                                   |
+| `spec.tags`            | []string                  | No per-tag length constraint                                                                                 |
+| `spec.media`           | []MediaDefinition         | Each entry: `fileRef.name` and `fileRef.kind` required                                                       |
+| `spec.options`         | []ProductOptionDefinition | Each entry: `name` required and unique within the list                                                       |
+| `spec.lifecycle.state` | `ACTIVE` or `RETIRED`     | Defaults to `ACTIVE`; `RETIRED` remains private desired state and is excluded from future release candidates |
 
 ### MediaDefinition
 

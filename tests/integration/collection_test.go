@@ -172,7 +172,6 @@ type collectionQueryResult struct {
 		PageInfo struct {
 			HasNextPage bool `json:"hasNextPage"`
 		} `json:"pageInfo"`
-		TotalCount int `json:"totalCount"`
 	} `json:"products"`
 }
 
@@ -196,7 +195,6 @@ func queryCollection(t *testing.T, namespace, name string) *collectionQueryResul
 				products(first: 50) {
 					edges { node { metadata { name } } }
 					pageInfo { hasNextPage }
-					totalCount
 				}
 			}
 		}
@@ -236,7 +234,6 @@ func tryQueryCollection(t *testing.T, namespace, name string) (*collectionQueryR
 				products(first: 50) {
 					edges { node { metadata { name } } }
 					pageInfo { hasNextPage }
-					totalCount
 				}
 			}
 		}

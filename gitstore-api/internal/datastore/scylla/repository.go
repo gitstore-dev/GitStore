@@ -428,7 +428,6 @@ func (s *scyllaDatastore) listRepositories(ctx context.Context, namespace string
 		return nil, err
 	}
 	result := buildPageResult(items, limit, page)
-	result.TotalCount = -1
 	return result, nil
 }
 

@@ -126,6 +126,11 @@ CREATE TABLE IF NOT EXISTS namespaces_by_bucket (
 ) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)
   AND gc_grace_seconds = 864000;
 
+-- Resolves a namespace/name path to its repository UID. Partitioned by
+-- namespace so lookups by (namespace, name) are single-partition reads.
+-- Kept in sync with namespace_mappings_by_repository below by the
+-- repository mapping saga (see namespace_mapping.go); drift between the
+-- two is detected and fixed by repair.go.
 CREATE TABLE IF NOT EXISTS namespace_mappings (
     namespace      text,
     name           text,
@@ -133,6 +138,10 @@ CREATE TABLE IF NOT EXISTS namespace_mappings (
     PRIMARY KEY ((namespace), name)
 ) WITH gc_grace_seconds = 864000;
 
+-- Reverse index of namespace_mappings: resolves a repository UID back to
+-- its current namespace/name path. Partitioned by repository_id so this
+-- direction is also a single-partition read instead of a scan over
+-- namespace_mappings.
 CREATE TABLE IF NOT EXISTS namespace_mappings_by_repository (
     repository_id uuid PRIMARY KEY,
     namespace     text,

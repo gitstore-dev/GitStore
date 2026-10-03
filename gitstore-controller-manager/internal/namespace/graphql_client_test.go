@@ -72,7 +72,7 @@ func TestGraphQLRepositoryClientAcceptsIdempotentProvisioning(t *testing.T) {
 func TestGraphQLRepositoryClientReportsRepositoryPresence(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"repositories":{"totalCount":2}}}`))
+		_, _ = w.Write([]byte(`{"data":{"repositories":{"edges":[{"cursor":"abc"}]}}}`))
 	}))
 	defer srv.Close()
 
@@ -83,6 +83,23 @@ func TestGraphQLRepositoryClientReportsRepositoryPresence(t *testing.T) {
 	}
 	if !hasRepositories {
 		t.Fatal("HasRepositories = false, want true")
+	}
+}
+
+func TestGraphQLRepositoryClientReportsRepositoryAbsence(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"repositories":{"edges":[]}}}`))
+	}))
+	defer srv.Close()
+
+	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
+	hasRepositories, err := client.HasRepositories(context.Background(), "acme")
+	if err != nil {
+		t.Fatalf("HasRepositories failed: %v", err)
+	}
+	if hasRepositories {
+		t.Fatal("HasRepositories = true, want false")
 	}
 }
 

@@ -537,7 +537,7 @@ architecture.
 ### Operational Notes
 
 - Controller-visible state is derived from ScyllaDB projections and status conditions, not directly from Git blobs.
-- Release semantics should be event-driven (`tag-created` / `release-created`) and reflected via `Published` conditions.
+- Release semantics are event-driven (`tag-created` / `release-created`) and reflected on `CatalogRelease` and `Publication` status. Source resources carry no `Published` condition ([ADR 0014](../ADRs/0014-catalog-release-and-publication.md)).
 - Redis/Valkey remains optional and should be introduced only if measured read pressure exceeds ScyllaDB tuning headroom.
 
 ---
@@ -586,11 +586,12 @@ from its authoritative row. Projection repair is therefore a roll-forward from
 authoritative data, not a source for reconstructing or overwriting it.
 
 Namespace and Repository ordering uses
-`(creation_timestamp DESC, uid DESC)` keysets. Repository pages may report
-`totalCount = -1` when an exact count would require scanning historical
-partitions; `-1` means unknown. Global Repository listing is available only
-through the datastore's bounded monthly listing capability—resolvers must not
-fetch every row and sort in memory.
+`(creation_timestamp DESC, uid DESC)` keysets. Connections do not expose a
+`totalCount` field: an exact count would require scanning historical
+partitions in ScyllaDB, which keyset pagination is specifically designed to
+avoid. Global Repository listing is available only through the datastore's
+bounded monthly listing capability—resolvers must not fetch every row and
+sort in memory.
 
 Canonical names are semantic boundaries: `uid` is resource identity,
 `repository_id` references a Repository UID, `owner_references` is canonical
@@ -642,7 +643,6 @@ query ListNamespaces {
       }
     }
     pageInfo { hasNextPage endCursor }
-    totalCount
   }
 }
 
@@ -764,8 +764,11 @@ Standard conditions for catalogue resources:
 | Condition type      | Meaning                                                                      |
 |---------------------|------------------------------------------------------------------------------|
 | `AdmissionAccepted` | Resource passed all schema and admission validation layers                   |
-| `Published`         | Resource is live to storefront (set when a release tag targets the resource) |
 | `Ready`             | Resource is projected and queryable                                          |
+
+Storefront visibility is not a source-resource condition. It is derived per channel/market target
+from the active `Publication` snapshot
+([ADR 0014](../ADRs/0014-catalog-release-and-publication.md)).
 
 Example:
 
@@ -777,9 +780,9 @@ status:
       reason: SchemaMismatch
       message: "spec.pricing.priceSet.prices[0].money.amount must be > 0"
       lastTransitionTime: "2026-05-22T10:00:00Z"
-    - type: Published
+    - type: Ready
       status: "False"
-      reason: NoReleaseTag
+      reason: SchemaMismatch
       lastTransitionTime: "2026-05-22T10:00:00Z"
 ```
 

@@ -516,7 +516,6 @@ func TestMemdb_ListRepositoriesGlobal(t *testing.T) {
 	assert.Len(t, result.Items, 1)
 	assert.Equal(t, second.UID, result.Items[0].UID)
 	assert.True(t, result.HasNext)
-	assert.Equal(t, int32(2), result.TotalCount)
 
 	cursor := base64.StdEncoding.EncodeToString([]byte(
 		"keyset|" + result.Items[0].CreationTimestamp.Format(time.RFC3339Nano) + "|" + result.Items[0].UID,
@@ -527,7 +526,6 @@ func TestMemdb_ListRepositoriesGlobal(t *testing.T) {
 	assert.Equal(t, first.UID, next.Items[0].UID)
 	assert.True(t, next.HasPrevious)
 	assert.False(t, next.HasNext)
-	assert.Equal(t, int32(2), next.TotalCount)
 }
 
 func TestMemdb_UpdateRepository(t *testing.T) {

@@ -207,7 +207,6 @@ Paginated connection for collections (Relay pattern).
 type CollectionConnection {
   edges: [CollectionEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }
 
 # ============================================================================

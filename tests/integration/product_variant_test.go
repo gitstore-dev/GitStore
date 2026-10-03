@@ -611,7 +611,6 @@ type listVariantsResult struct {
 		StartCursor     *string `json:"startCursor"`
 		EndCursor       *string `json:"endCursor"`
 	} `json:"pageInfo"`
-	TotalCount int `json:"totalCount"`
 }
 
 // listVariants fetches all ProductVariants for a namespace (up to first=50).
@@ -630,7 +629,6 @@ func listVariants(t *testing.T, namespace string) *listVariantsResult {
 					}
 				}
 				pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-				totalCount
 			}
 		}
 	`, map[string]any{"ns": namespace})
@@ -774,9 +772,8 @@ func TestProductVariant_ListByNamespace(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// TotalCount is -1 on ScyllaDB (expensive to compute); check edges instead.
-	if result.TotalCount >= 0 && result.TotalCount < 2 {
-		t.Errorf("expected at least 2 variants in namespace, got totalCount=%d", result.TotalCount)
+	if len(result.Edges) < 2 {
+		t.Errorf("expected at least 2 variants in namespace, got %d", len(result.Edges))
 	}
 	// Check that both pushed variants appear in the connection.
 	foundNames := make(map[string]bool)
@@ -843,7 +840,6 @@ func TestProductVariant_ProductVariantsConnection(t *testing.T) {
 							spec { sku }
 						}
 					}
-					totalCount
 				}
 			}
 		}
@@ -866,7 +862,6 @@ func TestProductVariant_ProductVariantsConnection(t *testing.T) {
 					} `json:"spec"`
 				} `json:"node"`
 			} `json:"edges"`
-			TotalCount int `json:"totalCount"`
 		} `json:"productVariants"`
 	}
 	type data struct {
@@ -882,9 +877,6 @@ func TestProductVariant_ProductVariantsConnection(t *testing.T) {
 	// The Product.productVariants field returns variants filtered by productRef;
 	// since it currently returns all variants (not yet filtered), just assert
 	// the connection is non-nil and the pushed variant appears.
-	if d.Product.ProductVariants.TotalCount < 0 {
-		t.Errorf("totalCount should be non-negative, got %d", d.Product.ProductVariants.TotalCount)
-	}
 	found := false
 	for _, e := range d.Product.ProductVariants.Edges {
 		if e.Node.Metadata.Name == variantName {
@@ -1501,7 +1493,6 @@ func TestProductVariant_ProductVariantsPageInfo(t *testing.T) {
 			StartCursor     *string `json:"startCursor"`
 			EndCursor       *string `json:"endCursor"`
 		} `json:"pageInfo"`
-		TotalCount int `json:"totalCount"`
 	}
 	var pv conn // populated after the wait loop + paged query below
 	deadline := time.Now().Add(5 * time.Second)
@@ -1510,7 +1501,7 @@ func TestProductVariant_ProductVariantsPageInfo(t *testing.T) {
 			query($ns: String!, $name: String!) {
 				product(by: { namespacePath: { namespace: $ns, name: $name } }) {
 					productVariants(first: 50) {
-						totalCount
+						edges { cursor }
 					}
 				}
 			}
@@ -1528,14 +1519,16 @@ func TestProductVariant_ProductVariantsPageInfo(t *testing.T) {
 		var probe struct {
 			Product *struct {
 				ProductVariants struct {
-					TotalCount int `json:"totalCount"`
+					Edges []struct {
+						Cursor string `json:"cursor"`
+					} `json:"edges"`
 				} `json:"productVariants"`
 			} `json:"product"`
 		}
 		if err := json.Unmarshal(resp.Data, &probe); err != nil {
 			t.Fatalf("decode probe response: %v", err)
 		}
-		if probe.Product != nil && probe.Product.ProductVariants.TotalCount >= 3 {
+		if probe.Product != nil && len(probe.Product.ProductVariants.Edges) >= 3 {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -1551,7 +1544,6 @@ func TestProductVariant_ProductVariantsPageInfo(t *testing.T) {
 				productVariants(first: 2) {
 					edges { cursor node { metadata { name } spec { sku } } }
 					pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-					totalCount
 				}
 			}
 		}
@@ -1576,9 +1568,6 @@ func TestProductVariant_ProductVariantsPageInfo(t *testing.T) {
 	if len(pv.Edges) != 2 {
 		t.Errorf("expected 2 edges with first:2, got %d", len(pv.Edges))
 	}
-	if pv.TotalCount < 3 {
-		t.Errorf("totalCount: expected >= 3, got %d", pv.TotalCount)
-	}
 	if !pv.PageInfo.HasNextPage {
 		t.Errorf("hasNextPage should be true when 3 variants exist and first:2 requested")
 	}
@@ -1599,7 +1588,6 @@ func TestProductVariant_ProductVariantsPageInfo(t *testing.T) {
 				productVariants(first: 2, after: $after) {
 					edges { node { metadata { name } } }
 					pageInfo { hasNextPage hasPreviousPage }
-					totalCount
 				}
 			}
 		}

@@ -153,7 +153,6 @@ type PageResult[T any] struct {
 	Items       []*T
 	HasNext     bool
 	HasPrevious bool
-	TotalCount  int32 // -1 if unknown/expensive to compute
 }
 
 // OwnerReferenceScope restricts dependent lookups to the owner's repository.
@@ -196,8 +195,7 @@ type CategoryTaxonomyDeletionStore interface {
 }
 
 // GlobalRepositoryLister is the optional contract for backends that provide a
-// globally ordered Repository connection. Backends whose exact count requires
-// scanning historical partitions return TotalCount = -1.
+// globally ordered Repository connection.
 type GlobalRepositoryLister interface {
 	ListRepositories(ctx context.Context, page PageParams) (*PageResult[Repository], error)
 }

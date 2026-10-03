@@ -65,9 +65,8 @@ type ComplexityRoot struct {
 	}
 
 	CategoryConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
 	}
 
 	CategoryEdge struct {
@@ -108,9 +107,8 @@ type ComplexityRoot struct {
 	}
 
 	CollectionConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
 	}
 
 	CollectionEdge struct {
@@ -353,9 +351,8 @@ type ComplexityRoot struct {
 	}
 
 	NamespaceConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
 	}
 
 	NamespaceEdge struct {
@@ -485,9 +482,8 @@ type ComplexityRoot struct {
 	}
 
 	ProductConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
 	}
 
 	ProductEdge struct {
@@ -532,9 +528,8 @@ type ComplexityRoot struct {
 	}
 
 	ProductVariantConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
 	}
 
 	ProductVariantEdge struct {
@@ -621,9 +616,8 @@ type ComplexityRoot struct {
 	}
 
 	RepositoryConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
 	}
 
 	RepositoryEdge struct {
@@ -1043,13 +1037,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CategoryConnection.PageInfo(childComplexity), true
 
-	case "CategoryConnection.totalCount":
-		if e.ComplexityRoot.CategoryConnection.TotalCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CategoryConnection.TotalCount(childComplexity), true
-
 	case "CategoryEdge.cursor":
 		if e.ComplexityRoot.CategoryEdge.Cursor == nil {
 			break
@@ -1222,13 +1209,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CollectionConnection.PageInfo(childComplexity), true
-
-	case "CollectionConnection.totalCount":
-		if e.ComplexityRoot.CollectionConnection.TotalCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CollectionConnection.TotalCount(childComplexity), true
 
 	case "CollectionEdge.cursor":
 		if e.ComplexityRoot.CollectionEdge.Cursor == nil {
@@ -2227,13 +2207,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.NamespaceConnection.PageInfo(childComplexity), true
 
-	case "NamespaceConnection.totalCount":
-		if e.ComplexityRoot.NamespaceConnection.TotalCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceConnection.TotalCount(childComplexity), true
-
 	case "NamespaceEdge.cursor":
 		if e.ComplexityRoot.NamespaceEdge.Cursor == nil {
 			break
@@ -2799,13 +2772,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ProductConnection.PageInfo(childComplexity), true
 
-	case "ProductConnection.totalCount":
-		if e.ComplexityRoot.ProductConnection.TotalCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ProductConnection.TotalCount(childComplexity), true
-
 	case "ProductEdge.cursor":
 		if e.ComplexityRoot.ProductEdge.Cursor == nil {
 			break
@@ -2980,13 +2946,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ProductVariantConnection.PageInfo(childComplexity), true
-
-	case "ProductVariantConnection.totalCount":
-		if e.ComplexityRoot.ProductVariantConnection.TotalCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ProductVariantConnection.TotalCount(childComplexity), true
 
 	case "ProductVariantEdge.cursor":
 		if e.ComplexityRoot.ProductVariantEdge.Cursor == nil {
@@ -3421,13 +3380,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RepositoryConnection.PageInfo(childComplexity), true
-
-	case "RepositoryConnection.totalCount":
-		if e.ComplexityRoot.RepositoryConnection.TotalCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.RepositoryConnection.TotalCount(childComplexity), true
 
 	case "RepositoryEdge.cursor":
 		if e.ComplexityRoot.RepositoryEdge.Cursor == nil {
@@ -4747,11 +4699,6 @@ type CategoryConnection {
   Pagination information
   """
   pageInfo: PageInfo!
-
-  """
-  Total count of categories
-  """
-  totalCount: Int!
 }
 
 # ============================================================================
@@ -5075,7 +5022,6 @@ Paginated connection for collections (Relay pattern).
 type CollectionConnection {
   edges: [CollectionEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }
 
 # ============================================================================
@@ -5365,11 +5311,6 @@ type NamespaceConnection {
   Pagination information.
   """
   pageInfo: PageInfo!
-
-  """
-  Total count of namespaces.
-  """
-  totalCount: Int!
 }
 
 """
@@ -5699,7 +5640,10 @@ type Product implements Node {
 }
 
 type ProductSpec {
-  title: String
+  """
+  Human-readable display title for the product.
+  """
+  title: String!
   categoryRef: CatalogObjectReference
   tags: [String!]!
   media: [MediaDefinition!]!
@@ -5721,7 +5665,7 @@ input ProductLifecycleSpecInput {
 }
 
 input ProductSpecInput {
-  title: String
+  title: String!
   categoryRef: CatalogObjectReferenceInput
   tags: [String!]
   media: [MediaDefinitionInput!]
@@ -5938,7 +5882,6 @@ type ProductEdge {
 type ProductConnection {
   edges: [ProductEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/product_variant.graphqls", Input: `# ProductVariant Entity GraphQL Types (Kubernetes-style resource envelope)
@@ -6344,7 +6287,6 @@ Paginated connection for ProductVariants (Relay pattern).
 type ProductVariantConnection {
   edges: [ProductVariantEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }
 
 # ---------------------------------------------------------------------------
@@ -6464,7 +6406,6 @@ type RepositoryEdge {
 type RepositoryConnection {
   edges: [RepositoryEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }
 
 # ============================================================================
@@ -7325,8 +7266,6 @@ func (ec *executionContext) childFields_CategoryConnection(ctx context.Context, 
 		return ec.fieldContext_CategoryConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_CategoryConnection_pageInfo(ctx, field)
-	case "totalCount":
-		return ec.fieldContext_CategoryConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CategoryConnection", field.Name)
 }
@@ -7411,8 +7350,6 @@ func (ec *executionContext) childFields_CollectionConnection(ctx context.Context
 		return ec.fieldContext_CollectionConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_CollectionConnection_pageInfo(ctx, field)
-	case "totalCount":
-		return ec.fieldContext_CollectionConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CollectionConnection", field.Name)
 }
@@ -7833,8 +7770,6 @@ func (ec *executionContext) childFields_NamespaceConnection(ctx context.Context,
 		return ec.fieldContext_NamespaceConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_NamespaceConnection_pageInfo(ctx, field)
-	case "totalCount":
-		return ec.fieldContext_NamespaceConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type NamespaceConnection", field.Name)
 }
@@ -8097,8 +8032,6 @@ func (ec *executionContext) childFields_ProductConnection(ctx context.Context, f
 		return ec.fieldContext_ProductConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_ProductConnection_pageInfo(ctx, field)
-	case "totalCount":
-		return ec.fieldContext_ProductConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ProductConnection", field.Name)
 }
@@ -8191,8 +8124,6 @@ func (ec *executionContext) childFields_ProductVariantConnection(ctx context.Con
 		return ec.fieldContext_ProductVariantConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_ProductVariantConnection_pageInfo(ctx, field)
-	case "totalCount":
-		return ec.fieldContext_ProductVariantConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ProductVariantConnection", field.Name)
 }
@@ -8335,8 +8266,6 @@ func (ec *executionContext) childFields_RepositoryConnection(ctx context.Context
 		return ec.fieldContext_RepositoryConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_RepositoryConnection_pageInfo(ctx, field)
-	case "totalCount":
-		return ec.fieldContext_RepositoryConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type RepositoryConnection", field.Name)
 }
