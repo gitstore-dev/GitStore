@@ -3,7 +3,7 @@
 
 // gRPC service implementation for the GitService contract (gitstore.git.v1).
 
-#![allow(clippy::result_large_err, clippy::double_must_use)]
+#![allow(clippy::result_large_err)]
 
 use dashmap::DashMap;
 use std::fs::{File, OpenOptions};
