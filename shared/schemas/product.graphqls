@@ -87,7 +87,10 @@ type Product implements Node {
 }
 
 type ProductSpec {
-  title: String
+  """
+  Human-readable display title for the product.
+  """
+  title: String!
   categoryRef: CatalogObjectReference
   tags: [String!]!
   media: [MediaDefinition!]!
@@ -109,7 +112,7 @@ input ProductLifecycleSpecInput {
 }
 
 input ProductSpecInput {
-  title: String
+  title: String!
   categoryRef: CatalogObjectReferenceInput
   tags: [String!]
   media: [MediaDefinitionInput!]
@@ -326,5 +329,4 @@ type ProductEdge {
 type ProductConnection {
   edges: [ProductEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }

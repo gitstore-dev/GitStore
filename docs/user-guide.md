@@ -254,7 +254,6 @@ query ListProducts {
       hasNextPage
       endCursor
     }
-    totalCount
   }
 }
 ```
@@ -357,7 +356,13 @@ query ListCollections {
           }
         }
         products(first: 5) {
-          totalCount
+          edges {
+            node {
+              metadata {
+                name
+              }
+            }
+          }
         }
       }
     }
@@ -370,7 +375,7 @@ query ListCollections {
 ```bash
 curl -s http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
-  -d '{"query":"query { products(namespace: \"gitstore-test\", first: 5) { totalCount } }"}' | jq .
+  -d '{"query":"query { products(namespace: \"gitstore-test\", first: 5) { edges { node { metadata { name } } } } }"}' | jq .
 ```
 
 ## Control-plane Operations

@@ -251,7 +251,6 @@ query ListNamespaces {
       hasNextPage
       endCursor
     }
-    totalCount
   }
 }
 ```
@@ -303,7 +302,6 @@ query ListRepositories($namespace: String!) {
         }
       }
     }
-    totalCount
   }
 }
 ```
@@ -385,7 +383,6 @@ query ListProducts {
       startCursor
       endCursor
     }
-    totalCount
   }
 }
 ```
@@ -479,7 +476,6 @@ query ListProductVariants {
         }
       }
     }
-    totalCount
   }
 }
 ```
@@ -544,7 +540,6 @@ query ListCategories {
         depth
       }
     }
-    totalCount
   }
 }
 ```
@@ -578,7 +573,13 @@ query GetCollection {
       }
     }
     products(first: 10) {
-      totalCount
+      edges {
+        node {
+          metadata {
+            name
+          }
+        }
+      }
     }
   }
 }
@@ -606,7 +607,6 @@ query ListCollections {
         }
       }
     }
-    totalCount
   }
 }
 ```
@@ -986,7 +986,6 @@ query PageProducts($after: String) {
       hasNextPage
       endCursor
     }
-    totalCount
   }
 }
 ```

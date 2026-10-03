@@ -586,11 +586,12 @@ from its authoritative row. Projection repair is therefore a roll-forward from
 authoritative data, not a source for reconstructing or overwriting it.
 
 Namespace and Repository ordering uses
-`(creation_timestamp DESC, uid DESC)` keysets. Repository pages may report
-`totalCount = -1` when an exact count would require scanning historical
-partitions; `-1` means unknown. Global Repository listing is available only
-through the datastore's bounded monthly listing capability—resolvers must not
-fetch every row and sort in memory.
+`(creation_timestamp DESC, uid DESC)` keysets. Connections do not expose a
+`totalCount` field: an exact count would require scanning historical
+partitions in ScyllaDB, which keyset pagination is specifically designed to
+avoid. Global Repository listing is available only through the datastore's
+bounded monthly listing capability—resolvers must not fetch every row and
+sort in memory.
 
 Canonical names are semantic boundaries: `uid` is resource identity,
 `repository_id` references a Repository UID, `owner_references` is canonical
@@ -642,7 +643,6 @@ query ListNamespaces {
       }
     }
     pageInfo { hasNextPage endCursor }
-    totalCount
   }
 }
 

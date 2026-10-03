@@ -40,7 +40,7 @@ type ObjectMeta struct {
 
 // ProductSpec is the author-controlled declarative specification for a product.
 type ProductSpec struct {
-	Title       string                    `yaml:"title"      validate:"omitempty,max=200"`
+	Title       string                    `yaml:"title"      validate:"required,max=200"`
 	CategoryRef *ObjectReference          `yaml:"categoryRef"`
 	Tags        []string                  `yaml:"tags"`
 	Media       []MediaDefinition         `yaml:"media"               validate:"omitempty,dive"`

@@ -50,7 +50,7 @@ Check GraphQL:
 ```bash
 curl -s http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
-  -d '{"query":"query { namespaces(first: 1) { totalCount } }"}' | jq .
+  -d '{"query":"query { namespaces(first: 1) { pageInfo { hasNextPage } } }"}' | jq .
 ```
 
 ## Bootstrap Checklist

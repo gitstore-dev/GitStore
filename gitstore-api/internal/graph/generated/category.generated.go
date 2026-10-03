@@ -476,29 +476,6 @@ func (ec *executionContext) fieldContext_CategoryConnection_pageInfo(_ context.C
 	return fc, nil
 }
 
-func (ec *executionContext) _CategoryConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.CategoryConnection) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CategoryConnection_totalCount(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.TotalCount, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
-			return ec.marshalNInt2int32(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CategoryConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CategoryConnection", field, false, false, errors.New("field of type Int does not have child fields"))
-}
-
 func (ec *executionContext) _CategoryEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.CategoryEdge) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1375,11 +1352,6 @@ func (ec *executionContext) _CategoryConnection(ctx context.Context, sel ast.Sel
 			}
 		case "pageInfo":
 			out.Values[i] = ec._CategoryConnection_pageInfo(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "totalCount":
-			out.Values[i] = ec._CategoryConnection_totalCount(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

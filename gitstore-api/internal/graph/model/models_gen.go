@@ -116,8 +116,6 @@ type CategoryConnection struct {
 	Edges []*CategoryEdge `json:"edges"`
 	// Pagination information
 	PageInfo *PageInfo `json:"pageInfo"`
-	// Total count of categories
-	TotalCount int32 `json:"totalCount"`
 }
 
 // Edge type for Category connection (Relay pattern)
@@ -198,9 +196,8 @@ type CollectionBy struct {
 
 // Paginated connection for collections (Relay pattern).
 type CollectionConnection struct {
-	Edges      []*CollectionEdge `json:"edges"`
-	PageInfo   *PageInfo         `json:"pageInfo"`
-	TotalCount int32             `json:"totalCount"`
+	Edges    []*CollectionEdge `json:"edges"`
+	PageInfo *PageInfo         `json:"pageInfo"`
 }
 
 // Edge type for Collection connection (Relay pattern).
@@ -641,8 +638,6 @@ type NamespaceConnection struct {
 	Edges []*NamespaceEdge `json:"edges"`
 	// Pagination information.
 	PageInfo *PageInfo `json:"pageInfo"`
-	// Total count of namespaces.
-	TotalCount int32 `json:"totalCount"`
 }
 
 // Edge type for Namespace connection (Relay pattern).
@@ -859,9 +854,8 @@ type ProductBy struct {
 
 // Connection type for paginated products (Relay pattern).
 type ProductConnection struct {
-	Edges      []*ProductEdge `json:"edges"`
-	PageInfo   *PageInfo      `json:"pageInfo"`
-	TotalCount int32          `json:"totalCount"`
+	Edges    []*ProductEdge `json:"edges"`
+	PageInfo *PageInfo      `json:"pageInfo"`
 }
 
 // Edge type for Product connection (Relay pattern).
@@ -897,7 +891,8 @@ type ProductOptionDefinitionInput struct {
 }
 
 type ProductSpec struct {
-	Title       *string                    `json:"title,omitempty"`
+	// Human-readable display title for the product.
+	Title       string                     `json:"title"`
 	CategoryRef *CatalogObjectReference    `json:"categoryRef,omitempty"`
 	Tags        []string                   `json:"tags"`
 	Media       []*MediaDefinition         `json:"media"`
@@ -906,7 +901,7 @@ type ProductSpec struct {
 }
 
 type ProductSpecInput struct {
-	Title       *string                         `json:"title,omitempty"`
+	Title       string                          `json:"title"`
 	CategoryRef *CatalogObjectReferenceInput    `json:"categoryRef,omitempty"`
 	Tags        []string                        `json:"tags,omitempty"`
 	Media       []*MediaDefinitionInput         `json:"media,omitempty"`
@@ -956,9 +951,8 @@ type ProductVariantBy struct {
 
 // Paginated connection for ProductVariants (Relay pattern).
 type ProductVariantConnection struct {
-	Edges      []*ProductVariantEdge `json:"edges"`
-	PageInfo   *PageInfo             `json:"pageInfo"`
-	TotalCount int32                 `json:"totalCount"`
+	Edges    []*ProductVariantEdge `json:"edges"`
+	PageInfo *PageInfo             `json:"pageInfo"`
 }
 
 // Edge type for ProductVariant connection (Relay pattern).
@@ -1108,9 +1102,8 @@ type RepositoryBy struct {
 }
 
 type RepositoryConnection struct {
-	Edges      []*RepositoryEdge `json:"edges"`
-	PageInfo   *PageInfo         `json:"pageInfo"`
-	TotalCount int32             `json:"totalCount"`
+	Edges    []*RepositoryEdge `json:"edges"`
+	PageInfo *PageInfo         `json:"pageInfo"`
 }
 
 type RepositoryEdge struct {

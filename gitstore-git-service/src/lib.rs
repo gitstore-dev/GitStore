@@ -4,6 +4,14 @@
 // GitStore Server Library
 // Structured logging setup using tracing
 
+// async_trait-generated trait methods return a pinned boxed Future, which
+// Clippy's newer double_must_use already treats as #[must_use]; async_trait
+// also marks the method #[must_use] with no message, tripping the lint on
+// every async_trait trait definition in this crate (hand-written and
+// buf-generated alike). Allowed crate-wide rather than per module/file,
+// since new inclusions of the generated proto code keep adding occurrences.
+#![allow(clippy::double_must_use)]
+
 pub mod auth;
 pub mod config;
 pub mod git;

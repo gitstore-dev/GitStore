@@ -438,5 +438,4 @@ func TestListRepositoriesUsesOptionalGlobalLister(t *testing.T) {
 	result, err := svc.ListRepositories(ctx, datastore.PageParams{First: 1})
 	require.NoError(t, err)
 	require.Len(t, result.Items, 1)
-	assert.LessOrEqual(t, result.TotalCount, int32(2))
 }
