@@ -7,12 +7,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 const (
@@ -70,6 +74,7 @@ type ServiceAccountSource struct {
 	maxTTL              time.Duration
 	maxBackoff          time.Duration
 	exchangeTimeout     time.Duration
+	metrics             *credentialMetrics
 
 	// State
 	mu           sync.Mutex
@@ -118,6 +123,7 @@ func NewServiceAccountSource(
 		maxTTL:              maxTTL,
 		maxBackoff:          30 * time.Second, // Configurable; 30s is reasonable default
 		exchangeTimeout:     exchangeHTTPTimeout,
+		metrics:             defaultCredentialMetrics,
 		inFlight:            make(chan struct{}, 1),
 	}
 }
@@ -161,7 +167,10 @@ func (s *ServiceAccountSource) Current(ctx context.Context) (string, error) {
 	}
 	s.mu.Unlock()
 
+	started := time.Now()
+	s.metrics.start()
 	token, expiresAt, err := s.issueToken(ctx)
+	s.metrics.finish(err, time.Since(started))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -292,7 +301,11 @@ func (s *ServiceAccountSource) nextBackoff() time.Time {
 		delay = s.maxBackoff
 	}
 	jitter := time.Duration(rand.Int64N(int64(delay/5)*2+1)) - delay/5
-	return time.Now().Add(min(delay+jitter, s.maxBackoff))
+	delay = min(delay+jitter, s.maxBackoff)
+	if s.metrics != nil {
+		s.metrics.retry(delay)
+	}
+	return time.Now().Add(delay)
 }
 
 // LastError returns the most recent error, if any. Used for health/readiness reporting.
@@ -316,4 +329,80 @@ func (s *ServiceAccountSource) Close() error {
 		return closer.Close()
 	}
 	return nil
+}
+
+type credentialMetrics struct {
+	exchanges                        *prometheus.CounterVec
+	duration                         prometheus.Histogram
+	inflight, peakInflight, maxRetry prometheus.Gauge
+	mu                               sync.Mutex
+	active, peak                     int
+	retryPeak                        time.Duration
+}
+
+var defaultCredentialMetrics = newCredentialMetrics(prometheus.DefaultRegisterer)
+
+func newCredentialMetrics(registerer prometheus.Registerer) *credentialMetrics {
+	factory := promauto.With(registerer)
+	metrics := &credentialMetrics{
+		exchanges: factory.NewCounterVec(prometheus.CounterOpts{
+			Name: "gitstore_controller_credential_exchange_total",
+			Help: "Actual assertion/signing/token exchange outcomes; excludes token-cache and backoff reuse.",
+		}, []string{"result"}),
+		duration: factory.NewHistogram(prometheus.HistogramOpts{
+			Name:    "gitstore_controller_credential_exchange_duration_seconds",
+			Help:    "Time spent resolving, signing and exchanging a controller assertion.",
+			Buckets: []float64{.001, .005, .01, .05, .1, .5, 1, 2, 5, 10},
+		}),
+		inflight: factory.NewGauge(prometheus.GaugeOpts{
+			Name: "gitstore_controller_credential_exchange_inflight",
+			Help: "Active token exchanges across this process's credential sources.",
+		}),
+		peakInflight: factory.NewGauge(prometheus.GaugeOpts{
+			Name: "gitstore_controller_credential_exchange_peak_inflight",
+			Help: "Maximum simultaneous token exchanges observed since process start.",
+		}),
+		maxRetry: factory.NewGauge(prometheus.GaugeOpts{
+			Name: "gitstore_controller_credential_retry_max_seconds",
+			Help: "Maximum actual jittered retry delay scheduled since process start.",
+		}),
+	}
+	for _, outcome := range []string{"success", "failed", "canceled", "deadline_exceeded"} {
+		metrics.exchanges.WithLabelValues(outcome)
+	}
+	return metrics
+}
+
+func (m *credentialMetrics) start() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.active++
+	m.peak = max(m.peak, m.active)
+	m.inflight.Set(float64(m.active))
+	m.peakInflight.Set(float64(m.peak))
+}
+
+func (m *credentialMetrics) finish(err error, duration time.Duration) {
+	outcome := "success"
+	switch {
+	case errors.Is(err, context.Canceled):
+		outcome = "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		outcome = "deadline_exceeded"
+	case err != nil:
+		outcome = "failed"
+	}
+	m.exchanges.WithLabelValues(outcome).Inc()
+	m.duration.Observe(duration.Seconds())
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.active--
+	m.inflight.Set(float64(m.active))
+}
+
+func (m *credentialMetrics) retry(delay time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.retryPeak = max(m.retryPeak, delay)
+	m.maxRetry.Set(m.retryPeak.Seconds())
 }

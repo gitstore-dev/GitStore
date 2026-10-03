@@ -178,7 +178,7 @@ test-owned controller container, with confirmation.
 - Checkpoint tests preserve group/replica-specific snapshots, cursors, pending
   and related replay keys; main registration tests inspect the final flushed
   checkpoint after cancellation.
-- `make test-secret-integration` runs the real two-API/two-controller bootstrap
+- `make test TARGET=secret-integration` runs the real two-API/two-controller bootstrap
   and rotation harness. See the [rotation runbook](../../docs/runbooks/secret-material-rotation.md)
   for test-deployment ownership, 60-second API TTL, identity and token-file
   prerequisites. Compilation or a skipped test is not deployed evidence.
@@ -214,12 +214,59 @@ observations, incomplete per-process measurements, multi-Git topology, absent
 fault/recovery proofs and exact threshold violations. These typed unit fixtures
 establish verifier rules, not measurements of a deployed capacity workload.
 
-**Not production-capacity-ready:** T050, T052-T056 and T058 remain open. The controller
-restart profile and rejection/dispatch guards exist, but the bounded File
-workload, complete scheduled fault/domain verifier, five-million-Product dataset
-proof and full production run are not complete. The secret flag now fails
-explicitly rather than silently running Repository-only load. Diagnostic or
-functional results cannot satisfy that gate. The code graph was refreshed.
+T050's shell and file-based evidence rejection tests now pass through
+`make test`, including race testing. The reusable loader
+strictly decodes a complete JSON observation bundle, verifies actual artifact
+sizes/digests and process coverage, and scans bounded files for credential
+patterns/private markers without echoing content. These helpers are connected to
+the collector and final whole-run scan required by T055.
+No additional deployment or production-capacity evidence was generated.
+
+The guarded lifecycle path now includes the bounded real Git File-push kernel,
+cross-API typed projection checks, local regular-file resolution and measured
+32-caller/16-slot contention, deadline and denial probes. It writes separate
+`secret/file-workload.json` component observations, never a passing scenario
+envelope. New controller exchange metrics distinguish successful issuance from
+acquisition and expose peak inflight/post-jitter retry delay. Local bare-Git,
+provider, scheduler and controller race suites passed; no new deployed capacity
+run has been performed.
+
+Offline dataset verification is now connected before workload resource creation:
+the root Makefile exports `REPOSITORY_CAPACITY_SECRET_DATASET_MANIFEST`,
+`REPOSITORY_CAPACITY_SECRET_DATASET_NAMESPACE` and
+`REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE`. The bounded verifier checks
+acknowledged titled Products against both APIs, emits `secret/dataset.json`,
+and rejects undersized production fixtures. Process-identified controller
+snapshots also record actual authentication/reconciliation progress before and
+after load. These are guarded component observations, not evidence of a
+five-million-row deployment or scheduled fault recovery.
+
+**Implementation checkpoint:** The owned stack, minute-15 outage, minute-30
+rotation/retirement and minute-45 confirmed controller restart are connected.
+Resource accounting covers original/replacement Go processes and singleton Git;
+both RSS segments use the original warmed baseline. Bounded process logs and
+metrics include both replacements. The dispatcher closes verifier/postflight
+writers before assembling, hashing and scanning `secret-evidence.json`; changed
+source state, failed components, missing artifacts or contamination prevent a pass.
+Component-to-bundle positive/negative fixtures and the full `make pr-ready`
+workflow pass. The code graph was refreshed (18 pre-existing inputs still yield
+no nodes).
+
+The complete #439 branch/worktree redundancy review retained required generated,
+service-adapter and layered-test surfaces. It removed an unused exported raw-env
+provider wrapper, a duplicate controller configuration table, unrelated TODO-only
+changes and stale preparation/implementation wording. The wrapper's mapping and
+case-fold rejection coverage remains in the shared-module race suite. Capacity
+helpers reuse existing files and Compose configuration; no second capacity test
+selector or command path was retained.
+
+**T058 remains blocked, not passed:** No new deployment, five-million-Product
+fixture or full scheduled capacity run was performed. Production requires a clean
+committed verifier, matching release images, an explicitly owned two-API/
+two-controller/Scylla/singleton-Git deployment, an acknowledged dataset manifest
+and explicit `CHAOS_CONFIRM=1` approval. Local commit, isolated preparation and
+the full fault run are now authorized; no production bundle exists yet.
+Diagnostic and functional results cannot satisfy this gate.
 
 Update File storage/lifecycle docs, controller identity enrollment/rotation
 runbooks, provider-format/config docs, root command help and agent command

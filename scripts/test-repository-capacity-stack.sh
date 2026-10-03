@@ -25,6 +25,18 @@ EOF
 chmod +x "${test_dir}/bin/curl"
 
 export REPOSITORY_CAPACITY_DOCKER_LOG="${test_dir}/docker.log"
+: >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
+for flag in 1 true 2 -1; do
+  if PATH="${test_dir}/bin:${PATH}" CHAOS_CONFIRM=0 REPOSITORY_CAPACITY_SECRET_SCENARIO="${flag}" \
+    "${repo_root}/scripts/repository-capacity-stack.sh" local-alpha >"${test_dir}/secret-preflight.log" 2>&1; then
+    echo "managed stack accepted unavailable or invalid secret scenario" >&2
+    exit 1
+  fi
+done
+[[ ! -s "${REPOSITORY_CAPACITY_DOCKER_LOG}" ]] || {
+  echo "secret scenario guard ran Docker before rejecting the request" >&2
+  exit 1
+}
 PATH="${test_dir}/bin:${PATH}" \
   CAPACITY_GIT_REVISION=0123456789abcdef0123456789abcdef01234567 \
   REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/state" \
@@ -84,6 +96,42 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     ((.services["capacity-serviceaccount-enrollment"].ports // []) | length) == 0 and
     (.services["api-a"].depends_on["api-b"] == null)
   ' "${rendered}" >/dev/null
+
+  secret_rendered="${test_dir}/compose-secret.json"
+  REPOSITORY_CAPACITY_SECRET_SCENARIO=1 \
+    CAPACITY_API_IMAGE="localhost/api@sha256:$(printf '%064d' 1)" \
+    CAPACITY_CONTROLLER_IMAGE="localhost/controller@sha256:$(printf '%064d' 2)" \
+    CAPACITY_GIT_SERVICE_IMAGE="localhost/git@sha256:$(printf '%064d' 3)" \
+    CAPACITY_CONTROLLER_A_CONFIG_FILE="${test_dir}/owned-fixture/controller-a/config.toml" \
+    CAPACITY_CONTROLLER_B_CONFIG_FILE="${test_dir}/owned-fixture/controller-b/config.toml" \
+    CAPACITY_CONTROLLER_A_SECRET_SOURCE="${test_dir}/owned-fixture/controller-a/provider" \
+    CAPACITY_CONTROLLER_B_SECRET_SOURCE="${test_dir}/owned-fixture/controller-b/provider" \
+    docker compose -p capacity-render-test --profile capacity-stack \
+      -f "${repo_root}/compose.yml" \
+      -f "${repo_root}/compose.scylla.cluster.yml" \
+      -f "${repo_root}/compose.capacity.yml" config --format json >"${secret_rendered}"
+  jq -e --arg root "${test_dir}/owned-fixture" '
+    (.services["api-a"].image | startswith("localhost/api@sha256:")) and
+    (.services["api-b"].image == .services["api-a"].image) and
+    (.services["controller-manager-a"].image | startswith("localhost/controller@sha256:")) and
+    (.services["controller-manager-b"].image == .services["controller-manager-a"].image) and
+    (.services["capacity-git-service"].image | startswith("localhost/git@sha256:")) and
+    (.services["api-a"].environment.REPOSITORY_CAPACITY_SECRET_SCENARIO == "1") and
+    (.services["api-b"].environment.REPOSITORY_CAPACITY_SECRET_SCENARIO == "1") and
+    (.services["api-a"].command[-1] | contains("GITSTORE_AUTH__SERVICEACCOUNT__MAX_TTL=60s")) and
+    (.services["capacity-git-service"].environment.GITSTORE_CATALOG_SERVICE__URI == "http://api-a:6000") and
+    ([.services["controller-manager-a"], .services["controller-manager-b"]] |
+      all((.volumes | length) == 4 and
+          ([.volumes[] | select(.target == "/run/secrets" and .read_only == true)] | length) == 1 and
+          ([.volumes[] | select(.target == "/etc/gitstore/gitstore.toml" and .read_only == true)] | length) == 1 and
+          ([.volumes[] | select(.source == "controller-serviceaccount-secrets")] | length) == 0)) and
+    ([.services["controller-manager-a"].volumes[] | select(.target == "/run/secrets")][0].source == ($root + "/controller-a/provider")) and
+    ([.services["controller-manager-b"].volumes[] | select(.target == "/run/secrets")][0].source == ($root + "/controller-b/provider")) and
+    ([.services["controller-manager-a"].volumes[] | select(.target == "/etc/gitstore/gitstore.toml")][0].source == ($root + "/controller-a/config.toml")) and
+    ([.services["controller-manager-b"].volumes[] | select(.target == "/etc/gitstore/gitstore.toml")][0].source == ($root + "/controller-b/config.toml")) and
+    ([.services["controller-manager-a"].volumes[] | select(.target == "/var/lib/gitstore/checkpoints")][0].source !=
+     [.services["controller-manager-b"].volumes[] | select(.target == "/var/lib/gitstore/checkpoints")][0].source)
+  ' "${secret_rendered}" >/dev/null
 fi
 
 # A verifier failure before the replacement trigger must reap the watcher and

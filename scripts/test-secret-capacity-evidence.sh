@@ -19,22 +19,42 @@ if REPOSITORY_CAPACITY_SECRET_SCENARIO=1 CAPACITY_DRY_RUN=1 "$dispatcher" namesp
 fi
 REPOSITORY_CAPACITY_SECRET_SCENARIO=1 CAPACITY_DRY_RUN=1 "$dispatcher" repository lifecycle diagnostic >"$test_dir/output"
 grep -q 'REPOSITORY_CAPACITY_SECRET_SCENARIO=1' "$test_dir/output"
-if REPOSITORY_CAPACITY_SECRET_SCENARIO=1 "$repo_root/scripts/repository-capacity-stack.sh" local-alpha >"$test_dir/output" 2>&1; then
-  echo "managed stack accepted an unimplemented secret workload" >&2
+if CHAOS_CONFIRM=0 REPOSITORY_CAPACITY_SECRET_SCENARIO=1 "$repo_root/scripts/repository-capacity-stack.sh" local-alpha >"$test_dir/output" 2>&1; then
+  echo "managed stack accepted secret faults without approval" >&2
   exit 1
 fi
-grep -q 'refusing to start' "$test_dir/output"
-if REPOSITORY_CAPACITY_SECRET_SCENARIO=1 "$dispatcher" repository lifecycle diagnostic >"$test_dir/output" 2>&1; then
+grep -q 'CHAOS_CONFIRM=1' "$test_dir/output"
+if CHAOS_CONFIRM=0 REPOSITORY_CAPACITY_SECRET_SCENARIO=1 "$dispatcher" repository lifecycle diagnostic >"$test_dir/output" 2>&1; then
   echo "secret scenario ran the existing Repository-only verifier" >&2
   exit 1
 fi
-grep -q 'not implemented' "$test_dir/output"
+grep -q 'provisioned explicitly owned deployment' "$test_dir/output"
 
 mkdir "$test_dir/evidence"
-if REPOSITORY_CAPACITY_SECRET_SCENARIO=1 "$repo_root/scripts/validate-capacity-evidence.sh" "$test_dir/evidence" repository lifecycle diagnostic >"$test_dir/output" 2>&1; then
-  echo "secret scenario accepted without its implemented domain verifier" >&2
+printf '%s\n' '{"schemaVersion":1,"scenario":"repository-lifecycle-secrets/v1"}' >"$test_dir/evidence/secret-evidence.json"
+if REPOSITORY_CAPACITY_SECRET_SCENARIO=0 "$repo_root/scripts/validate-capacity-evidence.sh" "$test_dir/evidence" repository lifecycle diagnostic >"$test_dir/output" 2>&1; then
+  echo "secret artifacts accepted as Repository-only evidence without the scenario flag" >&2
   exit 1
 fi
+grep -q 'requires REPOSITORY_CAPACITY_SECRET_SCENARIO=1' "$test_dir/output"
+rm "$test_dir/evidence/secret-evidence.json"
+if REPOSITORY_CAPACITY_SECRET_SCENARIO=1 "$repo_root/scripts/validate-capacity-evidence.sh" "$test_dir/evidence" repository lifecycle diagnostic >"$test_dir/output" 2>&1; then
+  echo "secret scenario accepted without owned fixtures and fault approval" >&2
+  exit 1
+fi
+
+for phase in preflight postflight; do
+  for mode in diagnostic alpha production; do
+    if REPOSITORY_CAPACITY_SECRET_SCENARIO=1 "$repo_root/scripts/validate-capacity-evidence.sh" "$test_dir/evidence" repository lifecycle "$mode" "$phase" >"$test_dir/output" 2>&1; then
+      echo "secret scenario without prerequisites accepted during $phase in $mode" >&2
+      exit 1
+    fi
+    [[ ! -e "$test_dir/evidence/$phase-environment.json" ]] || {
+      echo "failed secret scenario emitted success-shaped environment evidence" >&2
+      exit 1
+    }
+  done
+done
 
 if CHAOS_CONFIRM=0 CHAOS_TARGET=gitstore-controller-test "$repo_root/scripts/run-chaos.sh" controller-restart >"$test_dir/output" 2>&1; then
   echo "controller restart accepted without confirmation" >&2

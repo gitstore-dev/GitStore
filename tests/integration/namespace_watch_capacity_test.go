@@ -637,6 +637,11 @@ type capacityWireEvent struct {
 }
 
 func dialCapacityWatch(apiURL, token, cursor string, timeout time.Duration) (*websocket.Conn, error) {
+	return dialCapacitySubscription(apiURL, token, "namespace-capacity", capacitySubscription,
+		map[string]any{"cursor": cursor}, timeout)
+}
+
+func dialCapacitySubscription(apiURL, token, subscriptionID, query string, variables map[string]any, timeout time.Duration) (*websocket.Conn, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
@@ -663,8 +668,8 @@ func dialCapacityWatch(apiURL, token, cursor string, timeout time.Duration) (*we
 		}
 		if err == nil {
 			err = conn.WriteJSON(map[string]any{
-				"id": "namespace-capacity", "type": "subscribe",
-				"payload": map[string]any{"query": capacitySubscription, "variables": map[string]any{"cursor": cursor}},
+				"id": subscriptionID, "type": "subscribe",
+				"payload": map[string]any{"query": query, "variables": variables},
 			})
 		}
 		if err == nil {
@@ -1678,6 +1683,8 @@ func endpointReady(client *http.Client, endpoint string) bool {
 }
 
 type capacityProcessMetrics struct {
+	instanceID   string
+	goroutines   float64
 	available    bool
 	cpu          float64
 	resident     float64
@@ -1847,6 +1854,10 @@ func TestSameCapacityProcessAllowsFractionalCollectorJitter(t *testing.T) {
 }
 
 func fetchCapacityMetrics(client *http.Client, endpoint string) (capacityProcessMetrics, error) {
+	return fetchCapacityMetricsObserved(client, endpoint, nil)
+}
+
+func fetchCapacityMetricsObserved(client *http.Client, endpoint string, observe func([]byte) error) (capacityProcessMetrics, error) {
 	request, err := http.NewRequest(http.MethodGet, endpoint+"/metrics", nil)
 	if err != nil {
 		return capacityProcessMetrics{}, err
@@ -1859,16 +1870,49 @@ func fetchCapacityMetrics(client *http.Client, endpoint string) (capacityProcess
 	if response.StatusCode/100 != 2 {
 		return capacityProcessMetrics{}, fmt.Errorf("metrics returned %s", response.Status)
 	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 8*1024*1024+1))
+	if err != nil || len(body) > 8*1024*1024 {
+		return capacityProcessMetrics{}, errors.New("metrics response exceeds bounds or could not be read")
+	}
+	if observe != nil {
+		if err := observe(body); err != nil {
+			return capacityProcessMetrics{}, err
+		}
+	}
+	return parseCapacityMetrics(body)
+}
+
+func parseCapacityMetrics(body []byte) (capacityProcessMetrics, error) {
 	values := map[string]float64{}
-	scanner := bufio.NewScanner(response.Body)
+	instanceID := ""
+	scanner := bufio.NewScanner(bytes.NewReader(body))
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
-		if len(fields) != 2 {
+		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
 			continue
 		}
 		switch fields[0] {
-		case "process_cpu_seconds_total", "process_resident_memory_bytes", "process_start_time_seconds", "go_sched_gomaxprocs_threads":
-			values[fields[0]], _ = strconv.ParseFloat(fields[1], 64)
+		case "process_cpu_seconds_total", "process_resident_memory_bytes", "process_start_time_seconds", "go_sched_gomaxprocs_threads", "go_goroutines":
+			if len(fields) != 2 {
+				return capacityProcessMetrics{}, errors.New("invalid process metric fields")
+			}
+			value, err := strconv.ParseFloat(fields[1], 64)
+			if _, duplicate := values[fields[0]]; duplicate || err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+				return capacityProcessMetrics{}, errors.New("invalid or duplicate process metric")
+			}
+			values[fields[0]] = value
+			if (fields[0] == "go_sched_gomaxprocs_threads" || fields[0] == "go_goroutines") && math.Trunc(value) != value {
+				return capacityProcessMetrics{}, errors.New("fractional process count metric")
+			}
+		default:
+			for _, prefix := range []string{`gitstore_api_process_instance_info{instance_id="`, `gitstore_controller_process_instance_info{instance_id="`} {
+				if strings.HasPrefix(fields[0], prefix) {
+					if len(fields) != 2 || instanceID != "" || fields[1] != "1" || !strings.HasSuffix(fields[0], `"}`) {
+						return capacityProcessMetrics{}, errors.New("ambiguous process identity metric")
+					}
+					instanceID = strings.TrimSuffix(strings.TrimPrefix(fields[0], prefix), `"}`)
+				}
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -1882,6 +1926,7 @@ func fetchCapacityMetrics(client *http.Client, endpoint string) (capacityProcess
 		return capacityProcessMetrics{}, errors.New("required process metrics are absent")
 	}
 	return capacityProcessMetrics{
+		instanceID: instanceID, goroutines: values["go_goroutines"],
 		available: true, cpu: cpu, resident: resident, processStart: processStart, gomaxprocs: gomaxprocs,
 	}, nil
 }

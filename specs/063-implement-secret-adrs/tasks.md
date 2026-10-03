@@ -89,15 +89,16 @@ External integration is now demonstrated by the combined deployed bootstrap/
 rotation harness (see the later acceptance checkpoint). The capacity scenario
 extension remains open.
 
-**Production-evidence blocker**: T058 cannot be certified from this dirty,
-uncommitted checkout. It additionally requires clean release images, the
-specified external topology, five-million-row dataset and full-duration run.
-T050 and T052-T055 remain incomplete. T051's typed observation assertions are
-implemented, but are not deployed evidence. Routing guards explicitly refuse to substitute
-the old Repository-only workload for the secret scenario, and the controller
-restart profile exists, but the File workload, scheduled faults and complete
-capacity evidence verifier are not implemented. Functional integration and
-image builds do not substitute for them.
+**Production-evidence boundary**: T058 requires a clean committed verifier,
+matching release images, the specified owned topology, five-million-row dataset
+and full-duration run. Local commit and isolated deployment/fault preparation
+are authorized; certification remains pending actual observations.
+T052-T056 implementation is connected and locally validated, including owned
+fixtures, scheduled faults, process resource/log capture and immutable whole-run
+assembly/scanning. Missing prerequisites still fail closed, rather than running
+Repository-only load. No full scheduled capacity deployment or passing production
+bundle has been produced; functional integration and image builds cannot replace
+that evidence.
 
 ## Phase 3: User Story 1 - Reference Integration Credentials Safely (P1)
 
@@ -207,16 +208,36 @@ this is not production capacity evidence.
 **Purpose**: Prove the exact workload/topology/thresholds, not a proxy.
 Tests for new dispatcher/verifier behavior precede their implementation.
 
-- [ ] T050 [P] Add secret-scenario dispatch/preflight/evidence negative tests in `scripts/test-capacity-dispatch.sh`, `scripts/test-repository-capacity-stack.sh` and `scripts/test-secret-capacity-evidence.sh`; reject missing scenario flags/fault proofs, multiple Git instances or any Git HA claim, raw-secret artifacts and diagnostic evidence presented as a passing gate.
-- [X] T051 [P] Add bounded workload/fault-verifier assertions in the focused `tests/integration/secret_capacity_contract_test.go` companion to `repository_lifecycle_capacity_test.go` for the exact tables in `specs/063-implement-secret-adrs/contracts/capacity-and-rollout.md`; cover 5,000,000 titled Product fixtures with offline pagination/count proof, real File pushes, required latency/resource thresholds and fail-closed evidence completeness before implementing the scenario. Typed observation fixtures exercise rejection boundaries; they are not deployed evidence. `make test` runs this matrix; T052-T055 must still collect and connect real observations.
-- [ ] T052 Wire `REPOSITORY_CAPACITY_SECRET_SCENARIO=1` through `Makefile`, `scripts/run-capacity-target.sh`, `scripts/repository-capacity-stack.sh`, `compose.capacity.yml` and `scripts/validate-capacity-evidence.sh`; preserve old-profile meaning and existing singleton Git URI/callback checks, record >=2 API/controller process identities and exactly one active Git instance in every mode, and include sanitized scenario/build provenance. Git sharding/replication/HA is out of scope, not a prerequisite.
-- [ ] T053 Implement the contract's sustained and burst File workload, local resolver measurements, faults and domain verifier in `tests/integration/repository_lifecycle_capacity_test.go`; enforce 100-File pool, <=10 Files/128 KiB per push, 32 workers/256 queue, 10 pushes/s for 60m and 100-push/1s minute bursts, measure drops, integrity, bounded calls/memory/goroutines, expiry-spanning outage, atomic rotation, replacement and <=60s recovery on both controllers.
-- [ ] T054 Add `tests/chaos/profiles/controller-restart.json` with the supported restart action and 60s objective, verify explicit-target handling in `scripts/run-chaos.sh`, and connect the minute-45 experiment plus minute-15 isolated-record withdrawal/restore and minute-30 rotation to the domain verifier in `tests/integration/repository_lifecycle_capacity_test.go`; clean up only test-owned records on cancellation and preserve existing API replacement/overflow coverage.
-- [ ] T055 Extend evidence scanning/validation in `scripts/validate-capacity-evidence.sh` and `scripts/test-secret-capacity-evidence.sh` to cover every new artifact, logs/errors/metrics/traces and unauthorized API output; exclude private records, tokens, assertions, raw environment/config dumps, fail on any marker leakage and require authorized issuance success plus unauthorized denial without storing response bodies.
-- [ ] T056 Update `tests/capacity/README.md`, `docs/development/secret-material.md`, `docs/runbooks/secret-material-rotation.md`, `AGENTS.md` and `specs/063-implement-secret-adrs/quickstart.md` with all root commands, alert/readiness interpretation, matching binary/config snapshots, the direct alpha File breaking change, deferred ADR boundaries and required sanitized evidence locations; diagnostic runs do not establish production readiness.
+- [X] T050 [P] Add secret-scenario dispatch/preflight/evidence negative tests in `scripts/test-capacity-dispatch.sh`, `scripts/test-repository-capacity-stack.sh` and `scripts/test-secret-capacity-evidence.sh`; reject missing scenario flags/fault proofs, multiple Git instances or any Git HA claim, raw-secret artifacts and diagnostic evidence presented as a passing gate. File-based JSON, digest, completeness and leakage fixtures live in `tests/integration/secret_capacity_contract_test.go` and reuse T051's assertions; `make test` runs both shell and race suites. No deployed collector or gate pass is claimed.
+- [X] T051 [P] Add bounded workload/fault-verifier assertions in the focused `tests/integration/secret_capacity_contract_test.go` companion to `repository_lifecycle_capacity_test.go` for the exact tables in `specs/063-implement-secret-adrs/contracts/capacity-and-rollout.md`; cover 5,000,000 titled Product fixtures with offline pagination/count proof, real File pushes, required latency/resource thresholds and fail-closed evidence completeness before implementing the scenario. Typed observation fixtures exercise rejection boundaries; they are not deployed evidence. `make test` runs this matrix; T052-T055 connect the real collectors, with deployed certification tracked separately by T058.
+- [X] T052 Wire `REPOSITORY_CAPACITY_SECRET_SCENARIO=1` through `Makefile`, `scripts/run-capacity-target.sh`, `scripts/repository-capacity-stack.sh`, `compose.capacity.yml` and `scripts/validate-capacity-evidence.sh`; preserve old-profile meaning and existing singleton Git URI/callback checks, record >=2 API/controller process identities and exactly one active Git instance in every mode, and include sanitized scenario/build provenance. Git sharding/replication/HA is out of scope, not a prerequisite.
+- [X] T053 Implement the contract's sustained and burst File workload, local resolver measurements, faults and domain verifier in `tests/integration/repository_lifecycle_capacity_test.go`; enforce 100-File pool, <=10 Files/128 KiB per push, 32 workers/256 queue, 10 pushes/s for 60m and 100-push/1s minute bursts, measure drops, integrity, bounded calls/memory/goroutines, expiry-spanning outage, atomic rotation, replacement and <=60s recovery on both controllers.
+- [X] T054 Add `tests/chaos/profiles/controller-restart.json` with the supported restart action and 60s objective, verify explicit-target handling in `scripts/run-chaos.sh`, and connect the minute-45 experiment plus minute-15 isolated-record withdrawal/restore and minute-30 rotation to the domain verifier in `tests/integration/repository_lifecycle_capacity_test.go`; clean up only test-owned records on cancellation and preserve existing API replacement/overflow coverage.
+- [X] T055 Extend evidence scanning/validation in `scripts/validate-capacity-evidence.sh` and `scripts/test-secret-capacity-evidence.sh` to cover every new artifact, logs/errors/metrics/traces and unauthorized API output; exclude private records, tokens, assertions, raw environment/config dumps, fail on any marker leakage and require authorized issuance success plus unauthorized denial without storing response bodies.
+- [X] T056 Update `tests/capacity/README.md`, `docs/development/secret-material.md`, `docs/runbooks/secret-material-rotation.md`, `AGENTS.md` and `specs/063-implement-secret-adrs/quickstart.md` with all root commands, alert/readiness interpretation, matching binary/config snapshots, the direct alpha File breaking change, deferred ADR boundaries and required sanitized evidence locations; diagnostic runs do not establish production readiness.
 - [X] T057 Run the documented unit/race/schema/hook/config/build slices via `Makefile`, independently build API/controller images with `GOWORK=off`, and run `make pr-ready`; reconcile failures caused by this feature and record actual outcomes in `specs/063-implement-secret-adrs/quickstart.md`, leaving unrelated existing failures explicitly identified rather than silently changing their code.
 - [ ] T058 Run `make capacity TARGET=repository PROFILE=lifecycle MODE=production REPOSITORY_CAPACITY_SECRET_SCENARIO=1` with the scheduled confirmed controller-restart chaos experiment; retain the sanitized passing bundle under the configured `tests/capacity/` evidence location and reference it from `specs/063-implement-secret-adrs/quickstart.md`; if clean release images, topology, data, duration or permissions are unavailable, leave this task blocked, never replace the gate with alpha/diagnostic evidence.
-- [X] T059 Perform the release-readiness review against `specs/063-implement-secret-adrs/contracts/capacity-and-rollout.md` and record artifact versions, evidence digests and remaining limitations in `specs/063-implement-secret-adrs/quickstart.md`; run `graphify update .` after implementation without claiming unperformed deployments or capacity gates. Outcome: not production-capacity-ready; T050, T052-T056 and T058 remain open. No preparation release, inventory audit or File-write restriction is required.
+- [X] T059 Perform the release-readiness review against `specs/063-implement-secret-adrs/contracts/capacity-and-rollout.md` and record artifact versions, evidence digests and remaining limitations in `specs/063-implement-secret-adrs/quickstart.md`; run `graphify update .` after implementation without claiming unperformed deployments or capacity gates. Outcome: implementation connected, not production-capacity-certified; T058 remains blocked. No preparation release, inventory audit or File-write restriction is required.
+
+**Connected collector and reuse checkpoint**: Owned key generation, atomic regular-file
+records, signing/issuance probes, cancellation restoration, process-identified
+recovery and the minute-15/30/45 schedule now live in the existing
+`tests/integration/secret_bootstrap_test.go`. The existing Repository lifecycle
+capacity runner contains the File workload and dataset helpers; evidence
+contracts and negative fixtures remain in `secret_capacity_contract_test.go`.
+Controller exchange telemetry and its tests were folded into the existing
+credential files. No new Go helper file or secret-specific Compose overlay is
+retained. `compose.capacity.yml` uses parameterized controller config/provider
+mounts while retaining normal shared-key defaults and singleton Git routing.
+Capacity regressions run in the ordinary `make test` suite, not a second
+capacity entry point. CPU/RSS/goroutine accounting and original/replacement log
+capture feed the finalizer after verifier/postflight writers close. The finalizer
+checks component/run/source consistency and scans/hashes the complete artifact
+set. Dataset counts/digests must agree across both APIs before load begins.
+Positive component-to-bundle fixtures, malformed/partial/mixed/contaminated
+observations, bounded logs, ownership and metric parsing are covered locally.
+The full `make pr-ready` workflow passed; no deployed scheduled-fault run or
+production-capacity pass is claimed.
 
 ## Dependencies and Execution Order
 
@@ -262,11 +283,11 @@ T001 -> T002 -> T003
 
 ## Parallel Examples by Story
 
-| Story | Safe parallel batch | Join before implementation |
-| --- | --- | --- |
-| US1 | T011 catalog/fixture tests, T012 gRPC tests, T013 output/schema tests | T018 |
-| US2 | T026 config tests, T027 bootstrap/startup tests, T028 deployment/enrollment tests, T029 API tests | T030 |
-| US3 | T042 client tests, T043 shared record/runtime tests, T044 deployed tests | T045 |
+| Story | Safe parallel batch                                                                               | Join before implementation |
+|-------|---------------------------------------------------------------------------------------------------|----------------------------|
+| US1   | T011 catalog/fixture tests, T012 gRPC tests, T013 output/schema tests                             | T018                       |
+| US2   | T026 config tests, T027 bootstrap/startup tests, T028 deployment/enrollment tests, T029 API tests | T030                       |
+| US3   | T042 client tests, T043 shared record/runtime tests, T044 deployed tests                          | T045                       |
 
 Foundational T004/T005 and cross-cutting T050/T051 are also independent test
 batches. `[P]` is not permission to implement before the expected failing tests
@@ -274,29 +295,29 @@ or to modify shared fixtures concurrently.
 
 ## Requirement Coverage
 
-| Requirement | Tasks supplying implementation and acceptance |
-| --- | --- |
-| FR-001 canonical references | T004-T006, T011-T012, T018-T021 |
-| FR-002 explicit typed wrapper | T007, T011-T025 |
-| FR-003 seven classified failures | T004-T010, T027, T035-T037 |
+| Requirement                                  | Tasks supplying implementation and acceptance  |
+|----------------------------------------------|------------------------------------------------|
+| FR-001 canonical references                  | T004-T006, T011-T012, T018-T021                |
+| FR-002 explicit typed wrapper                | T007, T011-T025                                |
+| FR-003 seven classified failures             | T004-T010, T027, T035-T037                     |
 | FR-004 no material/private-key/token leakage | T006, T010, T013, T029, T037, T041, T044, T055 |
-| FR-005 shared boundary/separate contexts | T001-T010, T022, T035-T036 |
-| FR-006 bootstrap without credential cycle | T027-T029, T035-T036, T041 |
-| FR-007 owning-service source isolation | T028-T029, T032-T035, T039-T041 |
-| FR-008 bounded material lifetime | T005-T010, T042-T049, T051-T055 |
-| FR-009 safe observations | T010, T027, T037, T055-T056 |
-| FR-010 File integration/deferred runtime | T011-T025, T043, T049 |
-| FR-011 typed nested config/migration | T026-T034, T038-T040, T056 |
-| PR-001 replica safety | T038-T041, T044, T049-T059 |
-| PR-002 multi-user security | T004, T012, T022, T027-T029, T041, T044, T055 |
-| PR-003 keyed admission at scale | T012, T021, T051-T053 |
-| PR-004 bounded backpressure | T005-T010, T042, T047, T051-T055 |
-| PR-005 capacity evidence | T050-T058 |
-| PR-006 fault recovery | T038, T042-T049, T053-T058 |
-| SC-001 classified fail-closed cases | T004-T013, T022, T027-T029, T042-T049 |
-| SC-002 exhaustive exercised leakage cases | T010, T013, T029, T037, T041, T044, T055 |
-| SC-003 compatible rolling replacement | T038, T041, T044, T053-T059 |
-| SC-004 bounded outage/recovery | T042-T049, T050-T058 |
+| FR-005 shared boundary/separate contexts     | T001-T010, T022, T035-T036                     |
+| FR-006 bootstrap without credential cycle    | T027-T029, T035-T036, T041                     |
+| FR-007 owning-service source isolation       | T028-T029, T032-T035, T039-T041                |
+| FR-008 bounded material lifetime             | T005-T010, T042-T049, T051-T055                |
+| FR-009 safe observations                     | T010, T027, T037, T055-T056                    |
+| FR-010 File integration/deferred runtime     | T011-T025, T043, T049                          |
+| FR-011 typed nested config/migration         | T026-T034, T038-T040, T056                     |
+| PR-001 replica safety                        | T038-T041, T044, T049-T059                     |
+| PR-002 multi-user security                   | T004, T012, T022, T027-T029, T041, T044, T055  |
+| PR-003 keyed admission at scale              | T012, T021, T051-T053                          |
+| PR-004 bounded backpressure                  | T005-T010, T042, T047, T051-T055               |
+| PR-005 capacity evidence                     | T050-T058                                      |
+| PR-006 fault recovery                        | T038, T042-T049, T053-T058                     |
+| SC-001 classified fail-closed cases          | T004-T013, T022, T027-T029, T042-T049          |
+| SC-002 exhaustive exercised leakage cases    | T010, T013, T029, T037, T041, T044, T055       |
+| SC-003 compatible rolling replacement        | T038, T041, T044, T053-T059                    |
+| SC-004 bounded outage/recovery               | T042-T049, T050-T058                           |
 
 ## Implementation Strategy and Release Gates
 

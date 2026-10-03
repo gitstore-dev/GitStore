@@ -7,7 +7,7 @@
 > `secret_provider_bootstrap` and checkpoint settings are rejected. See the
 > [configuration contract](../../specs/063-implement-secret-adrs/contracts/configuration.md)
 > for the full rename map, mandatory migration, old-key rejection and rollout
-> requirements. This is a design update; the loader refactor is not yet shipped.
+> requirements.
 
 > Generated 2026-08-09 via deep-research workflow (102 agents, 20 sources, 21 verified claims) plus direct source inspection of `gitstore-api` and `gitstore-controller-manager`.
 > Extends `020-pluggable_auth_architecture.md` (Phases 1–6 shipped; this document specifies the deferred Phase 7 "OIDC JWT provider" slot as a **GitStore-issued service-account provider** instead, and supersedes spec 040 research.md's "controller = ordinary bearer-JWT admin principal" interim decision).

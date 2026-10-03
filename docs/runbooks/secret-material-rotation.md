@@ -81,6 +81,30 @@ expire, and confirm its readiness becomes false while the peer still works.
 Restore the complete valid record and confirm fresh issuance on both sources.
 Do not inject faults into an operator's real credentials.
 
+For renewal, require increases in
+`gitstore_controller_credential_exchange_total{result="success"}` on each
+controller, together with authenticated reconciliation progress. A successful
+`gitstore_secret_resolution_total` read alone does not prove key parsing or
+token issuance. Monitor `gitstore_controller_credential_exchange_peak_inflight`
+(one with the current single-source process) and
+`gitstore_controller_credential_retry_max_seconds` (at most 30). These gauges
+reset on process replacement; correlate them with the process-instance identity,
+not just the endpoint. A canceled waiter is not an exchange attempt, and
+caller cancellation does not schedule shared retry backoff.
+
+The guarded capacity observer now brackets each health read with two
+process-identified metrics scrapes. It rejects a process change or counter reset
+during the observation, requires explicit credential readiness, and treats
+HTTP 503 with exhausted credentials as an observed failure state. Original
+processes must increase both fresh-token and Repository-success counters;
+a replacement must have a new identity and its own positive counters, not
+subtract the old process's totals. Before/after-load snapshots are not recovery
+timers. The guarded owned-record scheduler now measures the outage, renewal and
+restart windows separately. Process resource accounting and final evidence
+assembly are now connected, with original and replacement logs retained and
+scanned after all writers close. Running this scenario requires explicitly owned
+fixtures and `CHAOS_CONFIRM=1`; no full production-capacity acceptance is claimed.
+
 The in-process regression exercises two independent credential sources and
 HTTP token verifiers, atomic replacement, cached-token reuse, mismatched pairs,
 expiry-spanning provider failure, peer progress, restoration and a new source.
@@ -90,7 +114,7 @@ production capacity gate; the separate deployed evidence below covers the former
 The deployed acceptance harness is available through:
 
 ```bash
-make test-secret-integration \
+make test TARGET=secret-integration \
   SECRET_TEST_OWNED_DEPLOYMENT=1 \
   SECRET_TEST_API_A=http://127.0.0.1:14000 \
   SECRET_TEST_API_B=http://127.0.0.1:14001 \

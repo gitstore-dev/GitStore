@@ -78,3 +78,49 @@ measure bounded acquisition, not successful authentication. Parsing or token
 issuance can still fail after a successful read; readiness requires an unexpired
 issued token. Labels contain only fixed consumer/purpose/tier/provider/reason
 categories. Failures never log references, provider paths or bytes.
+
+Controller exchange telemetry is separate from acquisition:
+`gitstore_controller_credential_exchange_total{result}` counts actual signing/
+exchange attempts (`success`, `failed`, `canceled`, `deadline_exceeded`), not
+cache/backoff reuse. `gitstore_controller_credential_exchange_duration_seconds`
+covers resolution through the token response. The `exchange_inflight`,
+`exchange_peak_inflight` and `retry_max_seconds` metrics under the same
+`gitstore_controller_credential_` prefix expose active/peak exchanges and the
+largest actual post-jitter retry delay. They are process-local, reset on process
+replacement, and contain no subject, key ID, endpoint or token labels. Do not
+sum replica gauges and mistake the result for concurrency within one source.
+
+Capacity evidence contracts are exercised by `make test`
+without starting services. The strict JSON bundle reader reuses the production
+observation assertions and verifies actual artifact sizes/digests, per-process
+log/metric completeness, path containment and bounded credential scans.
+Private marker values stay in the private owned fixture ledger, not the bundle. See
+[capacity evidence](../../tests/capacity/README.md) for the wire format and limits.
+The collector and finalizer are connected to the existing capacity dispatcher;
+local assertions are not a deployed workload or production-capacity result.
+
+The File-load kernel now performs real Git commits/pushes with a fixed 100-File
+pool partitioned across 32 authoring repositories on the **same singleton Git
+service**. It measures bounded queueing, dropped offers, sustained/minute-burst
+scheduling and typed-reference latency, checks each acknowledged projection
+through both APIs, and runs local file-backed runtime resolution separately from
+admission. This is a contract consumer, not a production File reconciler.
+Its guarded lifecycle integration writes component observations, including
+failed/canceled runs, without producing a scenario pass. Local bare-Git and
+provider tests do not establish deployed capacity. Owned-stack orchestration
+now schedules outage/rotation/restart, collects process resources/logs and
+assembles/scans the immutable bundle after all writers finish.
+
+The guarded runner also streams a strictly ordered acknowledged Product manifest
+and verifies bounded pagination on both APIs before creating workload resources.
+It compares exact namespace/name/title/revision content using counts and a
+bounded-memory digest, requires five million rows in production, and persists
+only sanitized dataset observations. Controller snapshots correlate readiness
+with process identity and actual exchange/Repository reconciliation counters;
+resets, missing metrics and ambiguous samples fail instead of becoming zero
+defaults. The observer reuses the repository's Prometheus parser packages in
+the integration module. Neither these snapshots nor local HTTP fixtures prove
+scheduled-fault recovery or sustained CPU/RSS/goroutine compliance. Those require
+the full run with explicit fault approval, owned fixtures and dataset. The
+collector rejects changed source provenance, incomplete components or missing
+replacement logs rather than treating them as successful observations.

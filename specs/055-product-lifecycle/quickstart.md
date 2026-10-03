@@ -55,8 +55,11 @@ durable Product watch fleet-wide.
 Recorded 2026-09-17 after the Product durable-watch recovery and Product CDC
 migration changes:
 
-- `make test-datastore-contracts` — passed.
-- `make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042` — passed
+Test commands below use their current selector-based names; the historical
+results were recorded under the former standalone targets, not rerun here.
+
+- `make test TARGET=datastore` — passed.
+- `make test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=127.0.0.1:9042` — passed
   against the local single-node Scylla Compose service.
 - `make capacity TARGET=product PROFILE=lifecycle MODE=alpha` — passed; the
   two-replica domain verifier recorded `replicaChecks: 2` in

@@ -6,7 +6,7 @@
 package oidcjwt
 
 // Opt-in integration test against a live OIDC issuer — mirroring
-// `make test-scylla-integration`'s "requires an external instance" pattern.
+// `make test TARGET=datastore DATASTORE=scylla`'s "requires an external instance" pattern.
 // Usage (with the reference stack running per spec 059's quickstart):
 //
 //	OIDC_INTEGRATION_ISSUER_URI=http://localhost:4444 \

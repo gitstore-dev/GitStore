@@ -126,9 +126,18 @@ REPOSITORY_REPLACEMENT_TRIGGER_FILE ?=
 REPOSITORY_TOKEN ?=
 REPOSITORY_TOKEN_FILE ?=
 REPOSITORY_CAPACITY_NAMESPACE ?=repository-capacity
+REPOSITORY_CAPACITY_SECRET_DATASET_MANIFEST ?=
+REPOSITORY_CAPACITY_SECRET_DATASET_NAMESPACE ?=$(REPOSITORY_CAPACITY_NAMESPACE)
+REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE ?=1000
+export REPOSITORY_CAPACITY_SECRET_DATASET_MANIFEST REPOSITORY_CAPACITY_SECRET_DATASET_NAMESPACE REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE
+REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR ?=
+REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT ?=0
+REPOSITORY_CAPACITY_SECRET_FIXTURE_ACTION ?=
+export REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT REPOSITORY_CAPACITY_SECRET_FIXTURE_ACTION
 CAPACITY_PROFILE ?= api-readiness
 MODE ?= diagnostic
 TARGET ?= api
+TEST_TARGET = $(if $(filter pr-ready,$(MAKECMDGOALS)),all,$(if $(filter file undefined default,$(origin TARGET)),all,$(TARGET)))
 CAPACITY_RUN_ID ?=
 CAPACITY_EVIDENCE_DIR ?= $(ROOT)/.gitstore/capacity
 CAPACITY_ENV_FILE ?=
@@ -163,7 +172,7 @@ export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CAC
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla ps logs stop down
-.PHONY: build test lint pr-ready check clean bootstrap secret capacity capacity-dispatch-test chaos test-datastore-contracts test-scylla-integration
+.PHONY: build test lint pr-ready check clean bootstrap secret capacity chaos
 .PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-repository-lifecycle _capacity-repository-overflow _capacity-observability _capacity-observability-down
 .PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
 .PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
@@ -219,6 +228,8 @@ help: ## Show available targets and common variables.
 	@printf "  REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT=%s  Per-node laptop alpha Scylla limit\n" "$(REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT)"
 	@printf "  BOOTSTRAP_TOKEN=<token>   Use an existing bearer token for bootstrap\n"
 	@printf "  TARGET=<value>            Required selector for check, clean, bootstrap, secret, and capacity\n"
+	@printf "  test TARGET=<value>       all (default), datastore, or secret-integration\n"
+	@printf "  test TARGET=datastore DATASTORE=scylla  Run external Scylla contracts; default DATASTORE=memdb needs no external database\n"
 	@printf "  NAMESPACE=%s REPOSITORY=%s DEFAULT_BRANCH=%s\n" "$(NAMESPACE)" "$(REPOSITORY)" "$(DEFAULT_BRANCH)"
 
 git: ## Run gitstore-git-service locally in the foreground.
@@ -455,8 +466,8 @@ build: ## Build Rust/Go services and the shared secret-material module.
 		( cd "$$dir" && go build -v ./... ) || exit 1; \
 	done
 
-.PHONY: test-secret-integration
-test-secret-integration: ## Run real secret bootstrap/rotation acceptance against an explicitly owned two-API deployment.
+test: ## Run tests; TARGET=all (default), datastore, or secret-integration. Datastore tests use DATASTORE=memdb|scylla.
+ifeq ($(TEST_TARGET),secret-integration)
 	@test "$(SECRET_TEST_OWNED_DEPLOYMENT)" = "1" || { echo "SECRET_TEST_OWNED_DEPLOYMENT=1 is required"; exit 2; }
 	@test -n "$(SECRET_TEST_API_A)" -a -n "$(SECRET_TEST_API_B)" -a -n "$(SECRET_TEST_TOKEN_FILE)" || { echo "SECRET_TEST_API_A, SECRET_TEST_API_B and SECRET_TEST_TOKEN_FILE are required"; exit 2; }
 	@binary=$$(mktemp "$${TMPDIR:-/tmp}/gitstore-secret-controller.XXXXXX"); \
@@ -469,7 +480,16 @@ test-secret-integration: ## Run real secret bootstrap/rotation acceptance agains
 		SECRET_TEST_NAMESPACE="$(SECRET_TEST_NAMESPACE)" SECRET_TEST_SERVICEACCOUNT="$(SECRET_TEST_SERVICEACCOUNT)" \
 		GOWORK=off go test -v -count=1 -timeout 10m -run '^TestSecretBootstrapRotationDeployed$$' .
 
-test: ## Run Rust/Go and shared secret-material test suites.
+else ifeq ($(TEST_TARGET),datastore)
+ifeq ($(DATASTORE),memdb)
+	@cd "$(API_DIR)" && go test -tags memdb -count=1 ./internal/datastore/... ./tests/contract/datastore/...
+else ifeq ($(DATASTORE),scylla)
+	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
+		go test -tags scylla -count=1 -timeout 10m ./internal/datastore/scylla/... ./tests/contract/datastore/...
+else
+	@echo "test TARGET=datastore requires DATASTORE=memdb or DATASTORE=scylla" >&2; exit 2
+endif
+else ifeq ($(TEST_TARGET),all)
 	@bash ./scripts/test-secret-config.sh
 	@bash ./scripts/test-secret-capacity-evidence.sh
 	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity' .
@@ -482,6 +502,9 @@ test: ## Run Rust/Go and shared secret-material test suites.
 		echo "==> go test $$dir"; \
 		( cd "$$dir" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./... ) || exit 1; \
 	done
+else
+	@echo "test TARGET must be all, datastore, or secret-integration" >&2; exit 2
+endif
 
 capacity: ## Run a capacity scenario; set TARGET, PROFILE, and MODE.
 ifeq ($(TARGET)/$(PROFILE)/$(MODE),repository/lifecycle/alpha)
@@ -515,9 +538,6 @@ else
 		CAPACITY_DATASTORE_CONTAINERS="$(CAPACITY_DATASTORE_CONTAINERS)" \
 		./scripts/run-capacity-target.sh "$(TARGET)" "$(PROFILE)" "$(MODE)"
 endif
-
-capacity-dispatch-test: ## Validate capacity target/profile routing without starting load.
-	@./scripts/test-capacity-dispatch.sh
 
 _capacity-observability:
 	@test -n "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" || { echo "CAPACITY_PROMETHEUS_TARGETS_FILE is required"; exit 2; }
@@ -558,13 +578,6 @@ chaos: ## Inject an opt-in container fault and retain structured evidence.
 		CHAOS_EVIDENCE_DIR="$(CHAOS_EVIDENCE_DIR)" \
 		PUMBA_IMAGE="$(PUMBA_IMAGE)" \
 		./scripts/run-chaos.sh "$(CHAOS_PROFILE)"
-
-test-datastore-contracts: ## Run backend-neutral datastore contract tests without an external Scylla instance.
-	@cd "$(API_DIR)" && go test -tags memdb -count=1 ./internal/datastore/... ./tests/contract/datastore/...
-
-test-scylla-integration: ## Run tagged datastore hardening tests against Scylla.
-	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
-		go test -tags scylla -count=1 -timeout 10m ./internal/datastore/scylla/... ./tests/contract/datastore/...
 
 _capacity-scylla-soak:
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \

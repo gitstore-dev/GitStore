@@ -397,7 +397,6 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	gqlServer.SetQueryCache(lru.New[*ast.QueryDocument](1000))
 
 	gqlServer.Use(extension.Introspection{})
-	// TODO: make it configurable whether memdb or via valkey or other external cache
 	gqlServer.Use(extension.AutomaticPersistedQuery{
 		Cache: lru.New[string](100),
 	})

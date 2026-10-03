@@ -6,6 +6,7 @@ package graphqlclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -381,4 +384,86 @@ func tokenExchangeResponse(token string) map[string]any {
 			"token": token, "expirationTimestamp": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 		}}}},
 	}
+}
+
+func TestCredentialMetricsMeasureExchangeNotAcquisition(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics := newCredentialMetrics(registry)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"issueServiceAccountToken": map[string]any{"tokenRequest": map[string]any{"status": map[string]any{
+				"token": "private-access-token", "expirationTimestamp": time.Now().Add(time.Minute),
+			}}},
+		}})
+	}))
+	defer server.Close()
+	source := NewServiceAccountSource(server.URL, "private-namespace", "private-name",
+		&mockTokenSigner{assertion: "private-assertion"}, "assertion", "access", time.Minute, time.Minute)
+	source.metrics = metrics
+	var callers sync.WaitGroup
+	for range 32 {
+		callers.Add(1)
+		go func() {
+			defer callers.Done()
+			_, err := source.Current(t.Context())
+			if err != nil {
+				t.Error("credential exchange failed")
+			}
+		}()
+	}
+	callers.Wait()
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.exchanges.WithLabelValues("success")))
+	require.Zero(t, testutil.ToFloat64(metrics.inflight))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.peakInflight))
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	data, err := json.Marshal(families)
+	require.NoError(t, err)
+	for _, marker := range []string{"private-access-token", "private-assertion", "private-name", "private-namespace"} {
+		require.NotContains(t, string(data), marker)
+	}
+}
+
+func TestCredentialMetricsFailureCancellationAndRetry(t *testing.T) {
+	metrics := newCredentialMetrics(prometheus.NewRegistry())
+	source := NewServiceAccountSource("", "ns", "name", &mockTokenSigner{err: errors.New("private-provider-error")},
+		"assertion", "access", time.Minute, time.Minute)
+	source.metrics = metrics
+	_, err := source.Current(t.Context())
+	require.Error(t, err)
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.exchanges.WithLabelValues("failed")))
+	require.Zero(t, testutil.ToFloat64(metrics.exchanges.WithLabelValues("success")))
+	require.Zero(t, testutil.ToFloat64(metrics.inflight))
+	require.Greater(t, testutil.ToFloat64(metrics.maxRetry), float64(0))
+	require.LessOrEqual(t, testutil.ToFloat64(metrics.maxRetry), float64(30))
+	_, err = source.Current(t.Context())
+	require.Error(t, err)
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.exchanges.WithLabelValues("failed")), "backoff reuse is not another exchange")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	source.backoffUntil = time.Time{}
+	_, err = source.Current(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, testutil.ToFloat64(metrics.exchanges.WithLabelValues("canceled")), "a canceled waiter did not attempt issuance")
+}
+
+func TestCredentialMetricsCanceledExchangeReturnsToZero(t *testing.T) {
+	metrics := newCredentialMetrics(prometheus.NewRegistry())
+	source := NewServiceAccountSource("", "ns", "name", waitingSigner{}, "assertion", "access", time.Minute, time.Minute)
+	source.metrics = metrics
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := source.Current(ctx)
+		done <- err
+	}()
+	require.Eventually(t, func() bool { return testutil.ToFloat64(metrics.inflight) == 1 }, time.Second, time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.exchanges.WithLabelValues("canceled")))
+	require.Zero(t, testutil.ToFloat64(metrics.inflight))
+	require.Zero(t, testutil.ToFloat64(metrics.maxRetry))
+	require.Nil(t, source.LastError(), "caller cancellation must not poison shared backoff")
 }

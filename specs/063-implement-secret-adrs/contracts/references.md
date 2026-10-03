@@ -95,8 +95,7 @@ projections (ADRs 0013/0014/0016).
 
 This is a breaking field-type change. Do not disguise the nested object as
 the old type or return fabricated empty names. gqlgen output is regenerated
-from source schemas. Preparatory readers and clients must satisfy the rollout
-contract before strict deployment.
+from source schemas.
 
 ## Verification fixtures
 

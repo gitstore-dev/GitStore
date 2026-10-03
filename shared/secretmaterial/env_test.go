@@ -86,9 +86,17 @@ func TestLegacyEnvironmentMappingIsFrozenToConfiguredReference(t *testing.T) {
 	ref := reference()
 	ref.Name = "controller-manager"
 	ref.Key = ptr("private_key.pem")
-	name := "GITSTORE_SECRET__CONTROLLER_DASH_MANAGER__PRIVATE_UNDERSCORE_KEY_DOT_PEM"
+	name, err := BootstrapEnvironmentVariable("GITSTORE_SECRET__", ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "GITSTORE_SECRET__CONTROLLER_DASH_MANAGER__PRIVATE_UNDERSCORE_KEY_DOT_PEM" {
+		t.Fatal("legacy mapping changed")
+	}
 	t.Setenv(name, marker)
-	p, err := NewRawBootstrapEnvironmentProvider("GITSTORE_SECRET__", ref)
+	p, err := NewEnvironmentProvider(FormatRaw, []EnvBinding{{
+		Scope: Scope{Tier: TierBootstrap}, Name: ref.Name, Key: *ref.Key, Variable: name,
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}

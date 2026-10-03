@@ -36,13 +36,12 @@ make capacity TARGET=repository PROFILE=lifecycle MODE=production \
   REPOSITORY_CAPACITY_SECRET_SCENARIO=1
 ```
 
-`REPOSITORY_CAPACITY_SECRET_SCENARIO` is recognized but explicitly rejected
-before starting a stack or workload: the File workload and scheduled fault
-verifier are not implemented yet. Previously it was silently ignored, allowing
-the old Repository-only profile to run. T051's production observation assertion
-matrix is implemented, but is not a workload collector or deployed evidence.
-Keep the fail-closed guards until T052-T055 connect the complete scenario.
-Require it for spec-063 acceptance. Wire it through Makefile,
+`REPOSITORY_CAPACITY_SECRET_SCENARIO` selects the connected workload, owned fault
+driver, resource collector and final bundle validation. It requires explicit
+`CHAOS_CONFIRM=1`, private provisioned owned fixtures and the acknowledged dataset.
+Missing prerequisites or failed observations are rejected; local assertion
+fixtures do not constitute deployed evidence. Require the flag for spec-063
+acceptance. Preserve its wiring through Makefile,
 dispatcher, stack setup, sanitized manifests, evidence validation, domain
 verifier and docs. Existing runs without it retain their existing meaning and
 cannot count as spec-063 passes.

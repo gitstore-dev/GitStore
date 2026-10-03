@@ -62,21 +62,6 @@ func NewEnvironmentProvider(format Format, bindings []EnvBinding) (*EnvironmentP
 	return p, nil
 }
 
-// The legacy transformation is applied once to a single configured reference,
-// never to arbitrary runtime keys whose case folding could create aliases.
-func NewRawBootstrapEnvironmentProvider(prefix string, ref SecretRef) (*EnvironmentProvider, error) {
-	if ref.Key == nil {
-		return nil, failure(ErrInvalidRef, "environment-binding", nil)
-	}
-	name, err := BootstrapEnvironmentVariable(prefix, ref)
-	if err != nil {
-		return nil, err
-	}
-	return NewEnvironmentProvider(FormatRaw, []EnvBinding{{
-		Scope: Scope{Tier: TierBootstrap}, Name: ref.Name, Key: *ref.Key, Variable: name,
-	}})
-}
-
 // BootstrapEnvironmentVariable names one configured binding, not arbitrary
 // runtime references. Whole-record bindings omit the keyed suffix.
 func BootstrapEnvironmentVariable(prefix string, ref SecretRef) (string, error) {
