@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"sync"
@@ -165,6 +166,9 @@ func (s *ServiceAccountSource) Current(ctx context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("service account exchange canceled: %w", ctx.Err())
+		}
 		s.lastErr = err
 		s.lastErrTime = time.Now()
 		s.failures++
@@ -187,6 +191,8 @@ func (s *ServiceAccountSource) hasReusableToken(now time.Time) bool {
 
 // issueToken signs an assertion and exchanges it for an access token.
 func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Time, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.exchangeTimeout)
+	defer cancel()
 	if s.signer == nil {
 		return "", time.Time{}, fmt.Errorf("service account signer is nil")
 	}
@@ -231,9 +237,7 @@ func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Tim
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("marshal token exchange request: %w", err)
 	}
-	exchangeCtx, cancel := context.WithTimeout(ctx, s.exchangeTimeout)
-	defer cancel()
-	request, err := http.NewRequestWithContext(exchangeCtx, http.MethodPost, s.endpoint, bytes.NewReader(requestBody))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(requestBody))
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("build token exchange request: %w", err)
 	}
@@ -277,14 +281,18 @@ func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Tim
 // Implements exponential backoff up to maxBackoff.
 func (s *ServiceAccountSource) nextBackoff() time.Time {
 	delay := time.Second
-	for attempts := uint(1); attempts < s.failures && delay < s.maxBackoff/2; attempts++ {
-		delay *= 2
+	for attempts := uint(1); attempts < s.failures && delay < s.maxBackoff; attempts++ {
+		if delay > s.maxBackoff/2 {
+			delay = s.maxBackoff
+		} else {
+			delay *= 2
+		}
 	}
 	if delay > s.maxBackoff {
 		delay = s.maxBackoff
 	}
 	jitter := time.Duration(rand.Int64N(int64(delay/5)*2+1)) - delay/5
-	return time.Now().Add(delay + jitter)
+	return time.Now().Add(min(delay+jitter, s.maxBackoff))
 }
 
 // LastError returns the most recent error, if any. Used for health/readiness reporting.
@@ -300,4 +308,12 @@ func (s *ServiceAccountSource) Ready() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.token != "" && !s.expiresAt.IsZero() && time.Now().Before(s.expiresAt)
+}
+
+// Close releases provider handles after the controller's tracked work stops.
+func (s *ServiceAccountSource) Close() error {
+	if closer, ok := s.signer.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
 }

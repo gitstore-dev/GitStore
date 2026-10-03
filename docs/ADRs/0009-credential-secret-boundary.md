@@ -118,11 +118,11 @@ ADR 0001's temporary short form — a `credentialsRef` field holding a bare
 consumer-defined default credential type, load the whole record." New resource
 contracts MUST use the explicit `CredentialsRef` form.
 
-For File, spec 063 ends this temporary allowance in its strict release:
-operators must migrate existing documents and projections before deployment,
-and that release rejects all bare credential references. Its plan defines the
-compatible preparation and rollback boundary; no post-cutover legacy mode is
-provided.
+For File, spec 063 ends this temporary allowance directly. GitStore is alpha,
+has no production deployments, and permits File breaking changes until Release
+Candidate. Bare references are rejected; development fixtures and clients use
+the explicit wrapper. No preparation release, transitional schema, migration
+audit or legacy acceptance mode is provided. Git history is not rewritten.
 
 ### 3. Bootstrap tier for process identity
 

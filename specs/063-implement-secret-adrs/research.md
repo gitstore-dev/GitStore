@@ -52,10 +52,10 @@ on every push introduce unnecessary outages and unbounded external work.
 
 ## R3. Resolve legacy compatibility explicitly
 
-**Decision**: User selected migration before strict deployment; the strict
-release rejects every bare File credential reference. A separately versioned
-preparation baseline supports migration and compatible readers before that
-cutover. No permanent dual shape or post-cutover acceptance flag.
+**Decision (superseding the original migration design)**: GitStore is alpha
+with no production deployments, and File breaking changes are permitted until
+Release Candidate. Reject bare references directly. No preparation release,
+dual-shaped GraphQL object, migration audit or mirror inventory is needed.
 
 **Evidence**: ADR-0009's temporary legacy allowance conflicts with spec 063's
 strict new contract unless explicitly scoped. Both the current JSON schema
@@ -63,15 +63,14 @@ and GraphQL type describe the old object, not the new wrapper. Here "bare"
 means `{kind: SecretRef, name: ...}`, not a scalar string. Do not confuse
 object parsing with support for the new nested wrapper.
 
-**Rationale**: Requiring migration without first providing compatible readers
-can silently lose projected metadata or break client reads. A zero-legacy
-audit and declared rollback floor reconcile the user's decision with
-independently deployable service requirements.
+**Rationale**: The earlier migration design assumed deployed data that does
+not exist. Update development fixtures and GraphQL selections to the strict
+contract without maintaining an unused compatibility schema. Independent
+builds, replica correctness and bounded identity renewal still require evidence.
 
-**Alternatives considered**: Indefinite dual support was declined by the user.
-A simultaneous fleet restart or direct projection edits would violate rolling
-deployment/Git authority. Assuming old Go decoders understand nested fields is
-not sufficient compatibility evidence.
+**Alternatives considered**: Preparation/audit tooling and indefinite dual
+support were rejected as unnecessary. Do not rewrite Git history, mutate
+admission input or automatically edit persisted development data.
 
 ## R4. Scope runtime resources honestly
 
@@ -194,3 +193,89 @@ renewal. Both scoped tests and deployed evidence are necessary.
 **Alternatives considered**: A new public capacity entry point, diagnostic-only
 results labeled production, or a Pumba success used as recovery proof are
 rejected. Do not generalize a singleton Git volume into an HA claim.
+
+**Topology correction (2026-10-03)**: The two-Git requirement in the original
+plan/capacity contract was wrong. Constitution v2.0.0, introduced by `5f69102`
+(#363), required replicas for every core service; its templates and architecture
+guidance propagated that assumption into spec 063 in `f384044` (#431). The user
+confirmed that Git is not replica-safe and repository sharding is unimplemented.
+Constitution v3.0.0 and its dependent guidance now require singleton Git.
+Keep the existing single-Git URI/callback checks for all capacity modes and
+retain two-API/two-controller evidence. Separate volumes do not establish
+supported routing or writer safety. Git HA is not an acceptance prerequisite.
+
+## R10. Normalize configuration before extending bootstrap wiring
+
+**Decision (2026-10-03)**: Follow API's nested typed configuration convention,
+not controller's flat TOML schema/custom environment aliases. Use
+`controller.serviceaccount.*`, `controller.secret_providers.bootstrap.*`,
+`controller.checkpoint.*`, `controller.reconcile.*` and `controller.watch.*`.
+Decode once and pass typed values. The user requires migration before
+deployment and explicit rejection of old names; no alias/normalization layer.
+
+**Evidence**: Re-inspected current checkout `d065d08`, after #431 committed the
+plan and subsequent fixes/features landed. Both
+`gitstore-api/internal/config/config.go` and
+`gitstore-controller-manager/internal/config/config.go` already call
+`SetEnvPrefix("GITSTORE")`, replace `.` with `__`, and use `AutomaticEnv`.
+API registers leaf defaults and unmarshals nested structs. Controller then
+adds `bindServiceAccountEnvironment` and `readServiceAccountConfig`, duplicating
+the mapping with a manual `GetString` pass. Rust
+`gitstore-git-service/src/config.rs` uses prefix separator `_` and path separator
+`__`. The issue is not a missing prefix; it is incompatible configuration shape
+and duplicate hydration. API's explicit source-provenance check is intentional.
+
+**Rationale**: New resolver fields must not expand a flawed mapping. Matching
+file paths, environment names and typed fields removes ambiguity and reduces
+duplicate configuration code. Checkpoint/watch/reconcile nesting also prevents
+another flat group from persisting beside the new identity tree.
+
+**Alternatives considered**: Preserving the old names merely for consistency
+was the original design error. A temporary compatibility alias layer was
+offered and declined. A generic cross-service config framework is not justified
+by similar setup calls alone; service validation and provenance remain local.
+
+**Consequences**: The [configuration contract](contracts/configuration.md)
+defines every relocation, the env-only default-registration requirement,
+source-scoped old/unknown-key rejection, all producer/consumer updates, and
+version-matched rollout/rollback snapshots. Raw provider material remains
+supported under canonical new names; this does not grandfather old config.
+Unrelated uncommitted implementation edits were not part of this design change.
+
+## R11. Incorporate post-plan commits without implementing every new ADR
+
+**Decision (2026-10-03)**: Use `d065d08` as the reviewed integration baseline.
+Treat new proposed ADRs as design constraints while retaining spec 063's
+explicit runtime-consumer and publication exclusions.
+
+| Change since #431 | Consequence for this feature |
+| --- | --- |
+| #432 | Use `new_commit_sha` and `authorization.actor`; removed proto fields remain reserved |
+| #433 / ADR-0010 | Preserve mutable-owner annotations and current ownership authorization during resource updates; ServiceAccount ownership remains audit-only |
+| #435 | Preserve runner tracking, final checkpoint flush and cancellation classification |
+| #437 / ADR-0017 | Product title is mandatory; `totalCount` removed; audit via complete pagination, never live aggregate fields |
+| ADR-0012 / #434 | Admin-only identity/watch/credential surfaces; defer URI/schema move to N/N+1/N+2 rollout |
+| ADR-0011 amendments | No new `mode`/`SCOPE` directive contract; no framework implementation here |
+| ADR-0013 | No Markdown parsing/IR added; resolved material must never enter body output |
+| ADR-0014 | No release/publication feature; resolved material cannot enter snapshots/public indexes |
+| ADR-0015 | Validating-only Git admission; payload facts are asynchronous; future webhook secrets use runtime context |
+| ADR-0016 | SecretRef remains inline external material, not a CRD ownership/readiness edge |
+| ADR-0018 / #438 | Group-owned checkpoints/RBAC; conditional existing writes; no lease for read-only resolution or independent token renewal |
+
+**Evidence**: Reviewed `f384044..d065d08` and the current ADR text. The committed
+API handler still exposes `/graphql`, not the proposed split. Current
+`internal/checkpoint/filesystem.go` atomically stores a complete per-kind
+snapshot/cursor; `checkpoint.go` retains related replay keys. Atomic rename is
+not controller fencing. #435 tracks runners and waits for final flush with a
+5s shutdown budget.
+
+**Rationale**: Ignoring these changes risks stale generated contracts, skipped
+audit data, broken shutdown or overstated controller safety. Implementing all
+proposed ADRs would instead introduce unrelated endpoints, controllers and
+datastore work.
+
+**Alternatives considered**: Rebase assumptions on #429 alone (too old);
+immediately move all callers to `/admin/graphql` (server does not serve it);
+add a group lease for token renewal (unnecessary and not a safety proof);
+count via removed `totalCount` or cached aggregate hints (cannot prove audit
+completeness). All rejected.

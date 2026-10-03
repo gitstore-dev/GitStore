@@ -5,254 +5,192 @@ package secret
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest/observer"
+	"github.com/gitstore-dev/gitstore/secretmaterial"
 )
 
-func TestFileResolverResolve(t *testing.T) {
-	resolver, err := NewBootstrapResolver(BootstrapProviderConfig{
-		Type:     ProviderFile,
-		BasePath: filepath.Join("testdata", "files"),
-	}, nil)
+func testResolver(t *testing.T, cfg BootstrapProviderConfig, ref Ref, keyID string) *BootstrapResolver {
+	t.Helper()
+	r, err := NewBootstrapResolver(cfg, "controller", ref, keyID, nil)
 	if err != nil {
-		t.Fatalf("NewBootstrapResolver() error: %v", err)
+		t.Fatal(err)
 	}
-
-	value, err := resolver.Resolve(context.Background(), Ref{
-		Kind: "SecretRef",
-		Name: "controller-manager",
-		Key:  "privateKey",
+	t.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			t.Error(err)
+		}
 	})
-	if err != nil {
-		t.Fatalf("Resolve() error: %v", err)
-	}
-	if got, want := string(value), "test-private-key\n"; got != want {
-		t.Errorf("Resolve() = %q, want %q", got, want)
+	return r
+}
+
+func TestFileResolverResolve(t *testing.T) {
+	r := testResolver(t, BootstrapProviderConfig{Type: ProviderFile, BasePath: filepath.Join("testdata", "files")},
+		Ref{Kind: "SecretRef", Name: "controller-manager", Key: "privateKey"}, "enrolled-id")
+	value, id, err := r.SigningKey(context.Background())
+	defer clear(value)
+	if err != nil || string(value) != "test-private-key\n" || id != "enrolled-id" {
+		t.Fatalf("raw signing material failed: %v", err)
 	}
 }
 
-func TestFileResolverErrorsAreClassifiedAndFailClosed(t *testing.T) {
-	resolver, err := NewBootstrapResolver(BootstrapProviderConfig{
-		Type:     ProviderFile,
-		BasePath: filepath.Join("testdata", "files"),
-	}, nil)
-	if err != nil {
-		t.Fatalf("NewBootstrapResolver() error: %v", err)
+func TestBootstrapReadEnforcesSharedSizeLimit(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "controller"), 0700); err != nil {
+		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "controller", "privateKey"),
+		[]byte(strings.Repeat("x", secretmaterial.MaxItemBytes+1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r := testResolver(t, BootstrapProviderConfig{Type: ProviderFile, BasePath: root},
+		Ref{Kind: "SecretRef", Name: "controller", Key: "privateKey"}, "enrolled-id")
+	value, _, err := r.SigningKey(context.Background())
+	if !errors.Is(err, secretmaterial.ErrValueTooLarge) || value != nil {
+		t.Fatal("bootstrap accepted material outside the shared byte limit")
+	}
+}
 
-	tests := []struct {
-		name string
+func TestBootstrapFailuresUseSharedClasses(t *testing.T) {
+	for _, tc := range []struct {
 		ref  Ref
 		want error
 	}{
-		{
-			name: "missing secret",
-			ref:  Ref{Kind: "SecretRef", Name: "missing", Key: "privateKey"},
-			want: ErrNotFound,
-		},
-		{
-			name: "missing key",
-			ref:  Ref{Kind: "SecretRef", Name: "controller-manager", Key: "missing"},
-			want: ErrMissingKey,
-		},
-		{
-			name: "invalid kind",
-			ref:  Ref{Kind: "CredentialsRef", Name: "controller-manager", Key: "privateKey"},
-			want: ErrInvalidRef,
-		},
-		{
-			name: "path traversal in name",
-			ref:  Ref{Kind: "SecretRef", Name: "../controller-manager", Key: "privateKey"},
-			want: ErrInvalidRef,
-		},
-		{
-			name: "path traversal in key",
-			ref:  Ref{Kind: "SecretRef", Name: "controller-manager", Key: "../privateKey"},
-			want: ErrInvalidRef,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			value, err := resolver.Resolve(context.Background(), tt.ref)
-			if err == nil {
-				t.Fatal("Resolve() error = nil")
-			}
+		{Ref{Kind: "SecretRef", Name: "missing", Key: "privateKey"}, secretmaterial.ErrNotFound},
+		{Ref{Kind: "SecretRef", Name: "controller-manager", Key: "missing"}, secretmaterial.ErrMissingKey},
+		{Ref{Kind: "CredentialsRef", Name: "controller-manager", Key: "privateKey"}, secretmaterial.ErrInvalidRef},
+		{Ref{Kind: "SecretRef", Name: "../controller-manager", Key: "privateKey"}, secretmaterial.ErrInvalidRef},
+		{Ref{Kind: "SecretRef", Name: "controller-manager", Key: "../privateKey"}, secretmaterial.ErrInvalidRef},
+	} {
+		r, err := NewBootstrapResolver(BootstrapProviderConfig{
+			Type: ProviderFile, BasePath: filepath.Join("testdata", "files"),
+		}, "controller", tc.ref, "enrolled-id", nil)
+		if err == nil {
+			value, _, resolveErr := r.SigningKey(context.Background())
 			if value != nil {
-				t.Errorf("Resolve() returned material on error: %q", value)
+				clear(value)
+				t.Fatal("returned partial material on failure")
 			}
-			if !errors.Is(err, tt.want) {
-				t.Errorf("Resolve() error = %v, want errors.Is(..., %v)", err, tt.want)
-			}
-			var resolutionErr *ResolutionError
-			if !errors.As(err, &resolutionErr) {
-				t.Errorf("Resolve() error = %T, want *ResolutionError", err)
-			}
-		})
+			err = errors.Join(resolveErr, r.Close())
+		}
+		if !errors.Is(err, tc.want) {
+			t.Fatalf("unexpected classification: %v", err)
+		}
 	}
 }
 
-func TestBootstrapResolverRejectsUnavailableFileProvider(t *testing.T) {
-	_, err := NewBootstrapResolver(BootstrapProviderConfig{
-		Type:     ProviderFile,
-		BasePath: filepath.Join("testdata", "does-not-exist"),
-	}, nil)
-	if !errors.Is(err, ErrProviderUnavailable) {
-		t.Fatalf("NewBootstrapResolver() error = %v, want ProviderUnavailable", err)
-	}
-}
-
-func TestEnvironmentResolverResolve(t *testing.T) {
+func TestEnvironmentResolverAndCancellation(t *testing.T) {
 	ref := Ref{Kind: "SecretRef", Name: "controller-manager", Key: "privateKey"}
-	config := BootstrapProviderConfig{Type: ProviderEnvironment, EnvPrefix: "TEST_SECRET__"}
-	t.Setenv(EnvironmentVariableName(config.EnvPrefix, ref), "test-private-key")
-
-	resolver, err := NewBootstrapResolver(config, nil)
+	variable, err := secretmaterial.BootstrapEnvironmentVariable("TEST_SECRET__", ref.SecretRef())
 	if err != nil {
-		t.Fatalf("NewBootstrapResolver() error: %v", err)
+		t.Fatal(err)
 	}
-	value, err := resolver.Resolve(context.Background(), ref)
-	if err != nil {
-		t.Fatalf("Resolve() error: %v", err)
+	if variable != "TEST_SECRET__CONTROLLER_DASH_MANAGER__PRIVATEKEY" {
+		t.Fatal("raw bootstrap environment mapping changed")
 	}
-	if got, want := string(value), "test-private-key"; got != want {
-		t.Errorf("Resolve() = %q, want %q", got, want)
+	r := testResolver(t, BootstrapProviderConfig{Type: ProviderEnvironment, EnvPrefix: "TEST_SECRET__"}, ref, "enrolled-id")
+	if _, _, err := r.SigningKey(context.Background()); !errors.Is(err, secretmaterial.ErrNotFound) {
+		t.Fatalf("missing variable: %v", err)
 	}
-}
-
-func TestEnvironmentResolverErrorsAreClassifiedAndDoNotLeakValue(t *testing.T) {
-	config := BootstrapProviderConfig{Type: ProviderEnvironment, EnvPrefix: "TEST_SECRET__"}
-	resolver, err := NewBootstrapResolver(config, nil)
-	if err != nil {
-		t.Fatalf("NewBootstrapResolver() error: %v", err)
+	t.Setenv(variable, "")
+	if _, _, err := r.SigningKey(context.Background()); !errors.Is(err, secretmaterial.ErrMissingKey) {
+		t.Fatalf("empty variable: %v", err)
 	}
-
-	missing := Ref{Kind: "SecretRef", Name: "missing", Key: "privateKey"}
-	value, err := resolver.Resolve(context.Background(), missing)
-	if err == nil || !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Resolve(missing) error = %v, want NotFound", err)
-	}
-	if value != nil {
-		t.Errorf("Resolve(missing) returned material: %q", value)
-	}
-
-	empty := Ref{Kind: "SecretRef", Name: "controller-manager", Key: "emptyKey"}
-	t.Setenv(EnvironmentVariableName(config.EnvPrefix, empty), "")
-	value, err = resolver.Resolve(context.Background(), empty)
-	if err == nil || !errors.Is(err, ErrMissingKey) {
-		t.Fatalf("Resolve(empty) error = %v, want MissingKey", err)
-	}
-	if value != nil {
-		t.Errorf("Resolve(empty) returned material: %q", value)
-	}
-
-	invalid := Ref{Kind: "SecretRef", Name: "controller-manager", Key: ""}
-	value, err = resolver.Resolve(context.Background(), invalid)
-	if err == nil || !errors.Is(err, ErrInvalidRef) {
-		t.Fatalf("Resolve(invalid) error = %v, want InvalidRef", err)
-	}
-	if value != nil {
-		t.Errorf("Resolve(invalid) returned material: %q", value)
-	}
-}
-
-func TestBootstrapResolverRejectsInvalidProviderConfiguration(t *testing.T) {
-	tests := []BootstrapProviderConfig{
-		{},
-		{Type: "vault"},
-		{Type: ProviderFile},
-		{Type: ProviderEnvironment},
-		{Type: ProviderEnvironment, EnvPrefix: "invalid-prefix"},
-	}
-
-	for _, config := range tests {
-		t.Run(config.Type, func(t *testing.T) {
-			if _, err := NewBootstrapResolver(config, nil); err == nil {
-				t.Fatal("NewBootstrapResolver() error = nil")
-			}
-		})
-	}
-}
-
-func TestResolveHonorsCanceledContext(t *testing.T) {
-	resolver, err := NewBootstrapResolver(BootstrapProviderConfig{
-		Type:     ProviderFile,
-		BasePath: filepath.Join("testdata", "files"),
-	}, nil)
-	if err != nil {
-		t.Fatalf("NewBootstrapResolver() error: %v", err)
+	t.Setenv(variable, "synthetic-private-material")
+	value, _, err := r.SigningKey(context.Background())
+	defer clear(value)
+	if err != nil || string(value) != "synthetic-private-material" {
+		t.Fatalf("environment resolution failed: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-
-	value, err := resolver.Resolve(ctx, Ref{
-		Kind: "SecretRef",
-		Name: "controller-manager",
-		Key:  "privateKey",
-	})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Resolve() error = %v, want context.Canceled", err)
-	}
-	if value != nil {
-		t.Errorf("Resolve() returned material: %q", value)
+	value, _, err = r.SigningKey(ctx)
+	if value != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation did not fail closed: %v", err)
 	}
 }
 
-func TestResolveNeverLogsSecretMaterial(t *testing.T) {
-	core, logs := observer.New(zap.DebugLevel)
-	resolver, err := NewBootstrapResolver(BootstrapProviderConfig{
-		Type:     ProviderFile,
-		BasePath: filepath.Join("testdata", "files"),
-	}, zap.New(core))
+func TestBootstrapRejectsInvalidBindingsBeforeProviderAccess(t *testing.T) {
+	valid := Ref{Kind: "SecretRef", Name: "controller", Key: "privateKey"}
+	for _, tc := range []struct {
+		cfg   BootstrapProviderConfig
+		owner string
+		ref   Ref
+		keyID string
+		want  error
+	}{
+		{BootstrapProviderConfig{Type: ProviderFile}, "", valid, "id", secretmaterial.ErrForbidden},
+		{BootstrapProviderConfig{Type: ProviderFile}, "controller", valid, "", secretmaterial.ErrInvalidRef},
+		{BootstrapProviderConfig{Type: ProviderFile, Format: "json-record"}, "controller", valid, "id", secretmaterial.ErrInvalidRef},
+		{BootstrapProviderConfig{Type: "vault"}, "controller", valid, "id", secretmaterial.ErrUnsupportedType},
+		{BootstrapProviderConfig{Type: ProviderEnvironment, EnvPrefix: "invalid-prefix"}, "controller", valid, "id", secretmaterial.ErrInvalidRef},
+		{BootstrapProviderConfig{Type: ProviderFile, BasePath: filepath.Join(t.TempDir(), "missing")}, "controller", valid, "id", secretmaterial.ErrProviderUnavailable},
+	} {
+		if _, err := NewBootstrapResolver(tc.cfg, tc.owner, tc.ref, tc.keyID, nil); !errors.Is(err, tc.want) {
+			t.Fatalf("invalid binding classification: %v", err)
+		}
+	}
+}
+
+func writeSigningRecord(t *testing.T, root, privateKey, keyID, format string) {
+	t.Helper()
+	values := map[string]string{}
+	if privateKey != "" {
+		values["privateKey"] = base64.StdEncoding.EncodeToString([]byte(privateKey))
+	}
+	if keyID != "" {
+		values["keyID"] = base64.StdEncoding.EncodeToString([]byte(keyID))
+	}
+	data, err := json.Marshal(map[string]any{"format": format, "values": values})
 	if err != nil {
-		t.Fatalf("NewBootstrapResolver() error: %v", err)
+		t.Fatal(err)
 	}
-
-	if _, err := resolver.Resolve(context.Background(), Ref{
-		Kind: "SecretRef",
-		Name: "controller-manager",
-		Key:  "privateKey",
-	}); err != nil {
-		t.Fatalf("Resolve() error: %v", err)
+	temp := filepath.Join(root, "next.json")
+	if err := os.WriteFile(temp, data, 0600); err != nil {
+		t.Fatal(err)
 	}
-
-	for _, entry := range logs.All() {
-		if strings.Contains(entry.Message, "test-private-key") {
-			t.Fatalf("log message leaked secret material: %q", entry.Message)
-		}
-		for _, field := range entry.Context {
-			if strings.Contains(field.String, "test-private-key") {
-				t.Fatalf("log field leaked secret material: %+v", field)
-			}
-		}
+	if err := os.Rename(temp, filepath.Join(root, "controller.json")); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestEnvironmentVariableNameEscapesIdentifierSeparators(t *testing.T) {
-	prefix := "TEST_SECRET__"
-	withDash := EnvironmentVariableName(prefix, Ref{
-		Kind: "SecretRef",
-		Name: "a-b",
-		Key:  "key",
-	})
-	withUnderscore := EnvironmentVariableName(prefix, Ref{
-		Kind: "SecretRef",
-		Name: "a_b",
-		Key:  "key",
-	})
-	withDot := EnvironmentVariableName(prefix, Ref{
-		Kind: "SecretRef",
-		Name: "a.b",
-		Key:  "key",
-	})
-
-	if withDash == withUnderscore || withDash == withDot || withUnderscore == withDot {
-		t.Fatalf("environment names must not collide: dash=%q underscore=%q dot=%q",
-			withDash, withUnderscore, withDot)
+func TestAtomicSigningRecordRotationAndFailure(t *testing.T) {
+	root := t.TempDir()
+	r := testResolver(t, BootstrapProviderConfig{Type: ProviderFile, Format: "json-record", BasePath: root},
+		Ref{Kind: "SecretRef", Name: "controller"}, "")
+	for _, id := range []string{"arbitrary-enrolled-id", "next-enrolled-id", " opaque / enrolled: ID "} {
+		writeSigningRecord(t, root, "private-"+id, id, "serviceaccount-signing-key/v1")
+		key, gotID, err := r.SigningKey(context.Background())
+		if err != nil || gotID != id || string(key) != "private-"+id {
+			t.Fatalf("atomic revision not observed: %v", err)
+		}
+		clear(key)
+	}
+	for _, tc := range []struct {
+		key, id, format string
+		want            error
+	}{
+		{"private", "", "serviceaccount-signing-key/v1", secretmaterial.ErrMissingKey},
+		{"", "id", "serviceaccount-signing-key/v1", secretmaterial.ErrMissingKey},
+		{"private", "id", "secret-record/v1", secretmaterial.ErrUnsupportedType},
+		{"private", " \t\n", "serviceaccount-signing-key/v1", secretmaterial.ErrInvalidRef},
+	} {
+		writeSigningRecord(t, root, tc.key, tc.id, tc.format)
+		key, id, err := r.SigningKey(context.Background())
+		if !errors.Is(err, tc.want) || key != nil || id != "" {
+			t.Fatalf("invalid record did not fail closed: %v", err)
+		}
+	}
+	writeSigningRecord(t, root, "private", "record-id", "serviceaccount-signing-key/v1")
+	pinned := testResolver(t, BootstrapProviderConfig{Type: ProviderFile, Format: "json-record", BasePath: root},
+		Ref{Kind: "SecretRef", Name: "controller"}, "different-id")
+	if key, _, err := pinned.SigningKey(context.Background()); key != nil || !errors.Is(err, secretmaterial.ErrInvalidRef) {
+		t.Fatal("configured and record key IDs were mixed")
 	}
 }

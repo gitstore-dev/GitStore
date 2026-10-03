@@ -4,5 +4,6 @@ use (
 	./gitstore-api
 	./gitstore-controller-manager
 	./gitstore-oidc-bridge
+	./shared/secretmaterial
 	./tests/integration
 )

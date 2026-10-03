@@ -14,6 +14,25 @@ Valid target/profile pairs are `api/readiness`, `namespace/admission`,
 two-replica soak. `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
 The dispatcher is the only public capacity entry point.
 
+Spec 063's `REPOSITORY_CAPACITY_SECRET_SCENARIO=1` is recognized but currently
+fails closed before stack startup or offered load. Its bounded File-push
+workload and scheduled secret-fault/domain verifier are not implemented; the
+old Repository-only workload must not be presented as secret-scenario evidence.
+`make test-secret-integration` provides separate functional bootstrap/rotation
+acceptance, not capacity certification. See the
+[rotation runbook](../../docs/runbooks/secret-material-rotation.md) and
+[capacity contract](../../specs/063-implement-secret-adrs/contracts/capacity-and-rollout.md).
+The secret topology retains exactly one active Git service in every mode;
+repository sharding and multi-Git operation are not supported.
+
+`make test` runs the secret production-contract assertion matrix in
+`tests/integration/secret_capacity_contract_test.go`. It covers exact offered
+load, burst timing/drain, bounded client/provider work, offline titled-Product
+count proof, all latency/resource thresholds and scheduled fault/recovery
+requirements. The assertions require offline pages of at most 1,000 rows. Synthetic
+observation fixtures cannot certify a deployment; the actual collector and
+its connection to the capacity gate remain required before enabling the flag.
+
 Modes classify acceptance independently of workload. `diagnostic` records
 results but can never set `passed: true`. `alpha` keeps correctness, error,
 recovery, CPU, and memory requirements hard, enforces Namespace visibility p95

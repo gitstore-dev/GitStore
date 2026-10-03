@@ -18,6 +18,8 @@ import (
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/gitstore-dev/gitstore/secretmaterial"
 )
 
 const assertionTokenType = "gitstore-sa-assertion+jwt"
@@ -38,18 +40,19 @@ func NewPrivateKeyTokenSigner(privateKeyPEM []byte, keyID, serviceAccountUID str
 	defer clear(privateKeyPEM)
 
 	if strings.TrimSpace(keyID) == "" {
-		return nil, fmt.Errorf("service account key ID must not be empty")
+		return nil, fmt.Errorf("service account key ID must not be empty: %w", secretmaterial.ErrInvalidRef)
 	}
 	if strings.TrimSpace(serviceAccountUID) == "" {
-		return nil, fmt.Errorf("service account UID must not be empty")
+		return nil, fmt.Errorf("service account UID must not be empty: %w", secretmaterial.ErrInvalidRef)
 	}
 	block, rest := pem.Decode(privateKeyPEM)
 	if block == nil || block.Type != "PRIVATE KEY" || len(strings.TrimSpace(string(rest))) != 0 {
-		return nil, fmt.Errorf("service account private key must be one PKCS#8 PEM block")
+		return nil, fmt.Errorf("service account private key must be one PKCS#8 PEM block: %w", secretmaterial.ErrInvalidRef)
 	}
+	defer clear(block.Bytes)
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("parse service account private key: %w", err)
+		return nil, fmt.Errorf("parse service account private key: %w", secretmaterial.ErrInvalidRef)
 	}
 
 	switch key := parsed.(type) {
@@ -62,7 +65,7 @@ func NewPrivateKeyTokenSigner(privateKeyPEM []byte, keyID, serviceAccountUID str
 		}, nil
 	case *ecdsa.PrivateKey:
 		if key.Curve != elliptic.P256() {
-			return nil, fmt.Errorf("service account ECDSA key must use P-256")
+			return nil, fmt.Errorf("service account ECDSA key must use P-256: %w", secretmaterial.ErrUnsupportedType)
 		}
 		return &PrivateKeyTokenSigner{
 			keyID:             keyID,
@@ -71,8 +74,15 @@ func NewPrivateKeyTokenSigner(privateKeyPEM []byte, keyID, serviceAccountUID str
 			ecdsaKey:          key,
 		}, nil
 	default:
-		return nil, fmt.Errorf("service account private key must be Ed25519 or ECDSA P-256")
+		return nil, fmt.Errorf("service account private key must be Ed25519 or ECDSA P-256: %w", secretmaterial.ErrUnsupportedType)
 	}
+}
+
+func (s *PrivateKeyTokenSigner) clear() {
+	clear(s.ed25519Key)
+	s.ed25519Key = nil
+	// Go does not expose a supported way to erase parsed ECDSA key internals.
+	s.ecdsaKey = nil
 }
 
 // SignAssertion creates a short-lived proof-of-possession JWT.

@@ -17,6 +17,18 @@ esac
 
 evidence_file="${evidence_dir}/${phase}-environment.json"
 
+case "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" in
+  0) ;;
+  1)
+    echo "secret capacity evidence is unavailable: the File workload and scheduled fault verifier are not yet implemented; Repository-only evidence cannot pass spec 063" >&2
+    exit 2
+    ;;
+  *)
+    echo "REPOSITORY_CAPACITY_SECRET_SCENARIO must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+
 if [[ "${mode}" == "diagnostic" ]]; then
   jq -n --arg target "${target}" --arg profile "${profile}" --arg mode "${mode}" \
     '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,passed:true}' \

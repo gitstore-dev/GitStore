@@ -17,6 +17,27 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  secret-material-test:
+    name: Shared Secret Material Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./shared/secretmaterial
+    env:
+      GOWORK: 'off'
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.x'
+        cache: false
+    - name: Check formatting
+      run: test -z "$(gofmt -l .)"
+    - name: Build and vet independently
+      run: go build ./... && go vet ./...
+    - name: Test contracts with race detection
+      run: go test -race -count=1 ./...
+
   git-service-test:
     name: Git Service Tests
     runs-on: ubuntu-latest

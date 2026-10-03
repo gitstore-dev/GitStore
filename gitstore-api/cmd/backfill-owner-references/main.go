@@ -31,6 +31,7 @@ type report struct {
 	DryRun            bool   `json:"dryRun"`
 }
 
+// TODO: Move to sub-command of gitctl.
 func main() {
 	var (
 		hosts       string

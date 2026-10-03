@@ -279,7 +279,7 @@ func (m *repositoryCDCProgressManager) sourceName() string {
 
 func (m *repositoryCDCProgressManager) GetCurrentGeneration(ctx context.Context) (time.Time, error) {
 	progress, err := m.journal.LoadProgress(ctx, m.sourceName()+":"+repositoryCDCGenerationProgress)
-	if err == datastore.ErrNotFound {
+	if errors.Is(err, datastore.ErrNotFound) {
 		return time.Time{}, nil
 	}
 	if err != nil {
@@ -301,7 +301,7 @@ func (m *repositoryCDCProgressManager) StartGeneration(ctx context.Context, gene
 }
 func (m *repositoryCDCProgressManager) GetProgress(ctx context.Context, generation time.Time, table string, streamID scyllacdc.StreamID) (scyllacdc.Progress, error) {
 	progress, err := m.journal.LoadProgress(ctx, m.sourceName()+":"+repositoryCDCProgressKey(generation, table, streamID))
-	if err == datastore.ErrNotFound {
+	if errors.Is(err, datastore.ErrNotFound) {
 		return scyllacdc.Progress{}, nil
 	}
 	if err != nil {

@@ -6,6 +6,7 @@ package scylla
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -121,7 +122,7 @@ func (s *scyllaDatastore) HasBlockingOwnerDependents(ctx context.Context, scope 
 	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(
 		scope.Namespace, scope.RepositoryID, ownerUID, true,
 	).GetRelease(&row); err != nil {
-		if err == gocql.ErrNotFound {
+		if errors.Is(err, gocql.ErrNotFound) {
 			return false, nil
 		}
 		return false, fmt.Errorf("scylla: check blocking owner dependents: %w", err)

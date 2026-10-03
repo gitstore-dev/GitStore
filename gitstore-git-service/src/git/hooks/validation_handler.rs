@@ -395,6 +395,64 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_file_credentials_delegate_without_rewriting_metadata() {
+        let typed = include_str!(
+            "../../../../gitstore-api/internal/validate/testdata/file/product-hero.md"
+        );
+        let bare = typed.replace(
+            "kind: CredentialsRef\n      type: aws-access-key/v1\n      secretRef:\n        kind: SecretRef\n        name: media-credentials",
+            "kind: SecretRef\n      name: media-credentials",
+        );
+        assert_ne!(bare, typed);
+        for (content, accepted) in [(typed.to_owned(), true), (bare, false)] {
+            let expected = content.as_bytes().to_vec();
+            let addr = start_mock_server(move |req| {
+                assert_eq!(req.repository_id, "file-repository");
+                assert_eq!(req.blobs.len(), 1);
+                assert_eq!(req.blobs[0].path, "files/product-hero.md");
+                assert_eq!(req.blobs[0].content, expected);
+                Ok(ValidateResourcesResponse {
+                    accepted,
+                    errors: if accepted {
+                        vec![]
+                    } else {
+                        vec![ValidationError {
+                            file_path: "files/product-hero.md".into(),
+                            field: "spec.source.credentialsRef".into(),
+                            constraint: "InvalidRef".into(),
+                            message: "validate: spec.source.credentialsRef: InvalidRef".into(),
+                        }]
+                    },
+                })
+            })
+            .await;
+            let handler = SchemaValidationHandler::connect(
+                &addr,
+                Duration::from_secs(5),
+                "file-repository".into(),
+            )
+            .await
+            .unwrap();
+            let blobs = vec![make_blob("files/product-hero.md", content.as_bytes())];
+            let decision = handler
+                .validate(&blobs, &HookContext::default())
+                .await
+                .unwrap();
+            assert_eq!(blobs[0].content, content.as_bytes());
+            match decision {
+                AdmissionDecision::Accept => assert!(accepted),
+                AdmissionDecision::Reject(message) => {
+                    assert!(!accepted);
+                    assert!(message.contains("files/product-hero.md"));
+                    assert!(message.contains("spec.source.credentialsRef"));
+                    assert!(!message.contains("media-credentials"));
+                    assert!(!message.contains("s3://"));
+                }
+            }
+        }
+    }
+
     // T010b: mock returning accepted=false with two ValidationErrors → Reject with aggregated message
     #[tokio::test]
     async fn test_rejected_response_aggregates_errors() {

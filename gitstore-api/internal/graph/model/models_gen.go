@@ -349,6 +349,12 @@ type CreateServiceAccountPayload struct {
 	ServiceAccount *ServiceAccount `json:"serviceAccount,omitempty"`
 }
 
+type CredentialsRef struct {
+	Kind      string     `json:"kind"`
+	Type      string     `json:"type"`
+	SecretRef *SecretRef `json:"secretRef"`
+}
+
 // Input for deleting a category
 type DeleteCategoryInput struct {
 	// Category ID to delete
@@ -471,10 +477,10 @@ type FileReferenceInput struct {
 }
 
 type FileSource struct {
-	Type           string        `json:"type"`
-	URI            string        `json:"uri"`
-	Checksum       *FileChecksum `json:"checksum,omitempty"`
-	CredentialsRef *SecretRef    `json:"credentialsRef,omitempty"`
+	Type           string          `json:"type"`
+	URI            string          `json:"uri"`
+	Checksum       *FileChecksum   `json:"checksum,omitempty"`
+	CredentialsRef *CredentialsRef `json:"credentialsRef,omitempty"`
 }
 
 type FileSpec struct {

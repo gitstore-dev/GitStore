@@ -5,8 +5,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -62,7 +64,7 @@ func main() {
 	// checkpointStore is shared across every kind's listwatch.Runner[T]
 	// (spec 036): each Runner persists into its own file within this
 	// directory (checkpoint.FilesystemStore, one file per kind).
-	checkpointStore, err := checkpoint.NewFilesystemStore(cfg.Controller.CheckpointDir)
+	checkpointStore, err := checkpoint.NewFilesystemStore(cfg.Controller.Checkpoint.Dir)
 	if err != nil {
 		log.Fatal("failed to init checkpoint store", zap.Error(err))
 	}
@@ -73,6 +75,13 @@ func main() {
 	credentials, err := buildCredentialSource(ctx, cfg, log)
 	if err != nil {
 		log.Fatal("failed to build credential source", zap.Error(err))
+	}
+	if closer, ok := credentials.(io.Closer); ok {
+		defer func() {
+			if err := closer.Close(); err != nil {
+				log.Warn("failed to close bootstrap provider", zap.Error(err))
+			}
+		}()
 	}
 	client := graphqlclient.New(cfg.Controller.ApiURI, credentials)
 
@@ -129,7 +138,7 @@ func main() {
 
 	go func() {
 		log.Info("HTTP server listening", zap.String("addr", addr))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("HTTP server error", zap.Error(err))
 		}
 	}()
@@ -171,33 +180,27 @@ func parseConfigFile(args []string) (string, error) {
 
 func buildCredentialSource(ctx context.Context, cfg *config.Config, log *zap.Logger) (graphqlclient.CredentialSource, error) {
 	controller := cfg.Controller
-	if controller.ServiceAccountKeyRef.Name == "" {
-		return nil, fmt.Errorf("configure controller.serviceaccount_key_ref")
+	if controller.ServiceAccount.KeyRef.Name == "" {
+		return nil, fmt.Errorf("configure controller.serviceaccount.key_ref")
 	}
 
-	resolver, err := secret.NewBootstrapResolver(controller.SecretProviderBootstrap, log)
+	owner := "serviceaccount:" + controller.ServiceAccount.Namespace + ":" + controller.ServiceAccount.Name + ":" + controller.ServiceAccount.UID
+	resolver, err := secret.NewBootstrapResolver(controller.SecretProviders.Bootstrap, owner,
+		controller.ServiceAccount.KeyRef, controller.ServiceAccount.KeyID, secret.NewObserver(log))
 	if err != nil {
 		return nil, fmt.Errorf("create bootstrap secret resolver: %w", err)
 	}
-	privateKey, err := resolver.Resolve(ctx, controller.ServiceAccountKeyRef)
+	signer, err := graphqlclient.NewResolvingTokenSigner(ctx, resolver, controller.ServiceAccount.UID)
 	if err != nil {
-		return nil, fmt.Errorf("resolve service account signing key: %w", err)
-	}
-	signer, err := graphqlclient.NewPrivateKeyTokenSigner(
-		privateKey,
-		controller.ServiceAccountKeyID,
-		controller.ServiceAccountUID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create service account signer: %w", err)
+		return nil, fmt.Errorf("create service account signer: %w", errors.Join(err, resolver.Close()))
 	}
 	return graphqlclient.NewServiceAccountSource(
 		controller.ApiURI,
-		controller.ServiceAccountNamespace,
-		controller.ServiceAccountName,
+		controller.ServiceAccount.Namespace,
+		controller.ServiceAccount.Name,
 		signer,
-		controller.ServiceAccountAssertionAudience,
-		controller.ServiceAccountAccessTokenAudience,
+		controller.ServiceAccount.AssertionAudience,
+		controller.ServiceAccount.AccessTokenAudience,
 		10*time.Minute,
 		time.Hour,
 	), nil
@@ -224,9 +227,9 @@ func registerNamespace(ctx context.Context, runners *sync.WaitGroup, mgr *manage
 		RevisionFunc: func(item namespacecontroller.Namespace) string {
 			return item.ResourceVersion
 		},
-		FlushIntervalEvents: cfg.Controller.CheckpointFlushIntervalEvents,
-		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
-		ResyncInterval:      cfg.Controller.ResyncInterval,
+		FlushIntervalEvents: cfg.Controller.Checkpoint.FlushIntervalEvents,
+		MaxBackoff:          cfg.Controller.Watch.MaxBackoff,
+		ResyncInterval:      cfg.Controller.Watch.ResyncInterval,
 		Log:                 log,
 	}
 	reconciler := namespacecontroller.NewReconciler(
@@ -241,8 +244,8 @@ func registerNamespace(ctx context.Context, runners *sync.WaitGroup, mgr *manage
 		Reconciler:     reconciler,
 		Cache:          namespaceCache,
 		OnSuccess:      runner.MarkCompleted,
-		MaxAttempts:    cfg.Controller.DefaultMaxAttempts,
-		StallThreshold: cfg.Controller.DefaultStallThreshold,
+		MaxAttempts:    cfg.Controller.Reconcile.MaxAttempts,
+		StallThreshold: cfg.Controller.Reconcile.StallThreshold,
 	}); err != nil {
 		return nil, fmt.Errorf("register Namespace: %w", err)
 	}
@@ -284,9 +287,9 @@ func registerRepository(
 		RevisionFunc: func(item repositorycontroller.Repository) string {
 			return item.ResourceVersion
 		},
-		FlushIntervalEvents: cfg.Controller.CheckpointFlushIntervalEvents,
-		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
-		ResyncInterval:      cfg.Controller.ResyncInterval,
+		FlushIntervalEvents: cfg.Controller.Checkpoint.FlushIntervalEvents,
+		MaxBackoff:          cfg.Controller.Watch.MaxBackoff,
+		ResyncInterval:      cfg.Controller.Watch.ResyncInterval,
 		Log:                 log,
 	}
 	reconciler := repositorycontroller.NewReconciler(
@@ -300,8 +303,8 @@ func registerRepository(
 		Reconciler:     reconciler,
 		Cache:          repositoryCache,
 		OnSuccess:      runner.MarkCompleted,
-		MaxAttempts:    cfg.Controller.DefaultMaxAttempts,
-		StallThreshold: cfg.Controller.DefaultStallThreshold,
+		MaxAttempts:    cfg.Controller.Reconcile.MaxAttempts,
+		StallThreshold: cfg.Controller.Reconcile.StallThreshold,
 	}); err != nil {
 		return nil, fmt.Errorf("register Repository: %w", err)
 	}
@@ -351,9 +354,9 @@ func registerCategoryTaxonomy(ctx context.Context, runners *sync.WaitGroup, mgr 
 		RevisionFunc:        func(c categorytaxonomy.CategoryTaxonomy) string { return c.ResourceVersion },
 		AcceptUpdate:        categorytaxonomy.AcceptWatchUpdate,
 		ShouldEnqueueUpdate: categorytaxonomy.ShouldEnqueueWatchUpdate,
-		FlushIntervalEvents: cfg.Controller.CheckpointFlushIntervalEvents,
-		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
-		ResyncInterval:      cfg.Controller.ResyncInterval,
+		FlushIntervalEvents: cfg.Controller.Checkpoint.FlushIntervalEvents,
+		MaxBackoff:          cfg.Controller.Watch.MaxBackoff,
+		ResyncInterval:      cfg.Controller.Watch.ResyncInterval,
 		Log:                 log,
 	}
 
@@ -367,8 +370,8 @@ func registerCategoryTaxonomy(ctx context.Context, runners *sync.WaitGroup, mgr 
 				onRelatedSuccess(key)
 			}
 		},
-		MaxAttempts:    cfg.Controller.DefaultMaxAttempts,
-		StallThreshold: cfg.Controller.DefaultStallThreshold,
+		MaxAttempts:    cfg.Controller.Reconcile.MaxAttempts,
+		StallThreshold: cfg.Controller.Reconcile.StallThreshold,
 	}); err != nil {
 		return nil, fmt.Errorf("register CategoryTaxonomy: %w", err)
 	}
@@ -449,8 +452,8 @@ func registerProductWatch(ctx context.Context, runners *sync.WaitGroup, mgr *man
 		// Persist each Product event before advancing the watch cursor so a
 		// crash cannot lose an affected CategoryTaxonomy key.
 		FlushIntervalEvents: 1,
-		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
-		ResyncInterval:      cfg.Controller.ResyncInterval,
+		MaxBackoff:          cfg.Controller.Watch.MaxBackoff,
+		ResyncInterval:      cfg.Controller.Watch.ResyncInterval,
 		Log:                 log,
 	}
 	reconciler := productcontroller.NewReconciler(
@@ -461,7 +464,7 @@ func registerProductWatch(ctx context.Context, runners *sync.WaitGroup, mgr *man
 	)
 	if err := mgr.Register(manager.ReconcilerRegistration{
 		Kind: "Product", Reconciler: reconciler, Cache: productCache,
-		OnSuccess: runner.MarkCompleted, MaxAttempts: cfg.Controller.DefaultMaxAttempts, StallThreshold: cfg.Controller.DefaultStallThreshold,
+		OnSuccess: runner.MarkCompleted, MaxAttempts: cfg.Controller.Reconcile.MaxAttempts, StallThreshold: cfg.Controller.Reconcile.StallThreshold,
 	}); err != nil {
 		log.Error("failed to register Product reconciler", zap.Error(err))
 		return nil

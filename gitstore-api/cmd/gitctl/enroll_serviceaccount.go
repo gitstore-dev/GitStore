@@ -27,6 +27,8 @@ import (
 
 var errServiceAccountAlreadyExists = errors.New("service account already exists")
 
+const signingRecordRotationHint = "For hot rotation, enroll a distinct key ID, atomically replace the controller-only signing record, and observe all replicas before retiring the old key. Never put private records in Git or shared config."
+
 const (
 	createServiceAccountMutation = `mutation CreateServiceAccount($namespace: String!, $name: String!, $keyID: String!, $algorithm: String!, $publicKey: String!) {
   createServiceAccount(input: {
@@ -130,6 +132,7 @@ func runEnrollServiceAccount(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintln(stdout, "ServiceAccount enrollment created.")
+		fmt.Fprintln(stdout, signingRecordRotationHint)
 		return 0
 	case errors.Is(err, errServiceAccountAlreadyExists) && !enrollment.replaceKey && !generated:
 		if err := requireServiceAccountIdentity(enrollment.identityPath); err != nil {
@@ -153,6 +156,7 @@ func runEnrollServiceAccount(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintln(stdout, "ServiceAccount enrollment key replaced.")
+		fmt.Fprintln(stdout, signingRecordRotationHint)
 		return 0
 	case errors.Is(err, errServiceAccountAlreadyExists):
 		fmt.Fprintln(stderr, "enroll-serviceaccount already exists; refusing to persist an unverified private key without --replace-existing-key")

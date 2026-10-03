@@ -155,8 +155,8 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX Performance optimization across all stories
 - [ ] TXXX [P] Additional unit tests (if requested) in tests/unit/
 - [ ] TXXX Security hardening
-- [ ] TXXX Multi-replica and process-replacement integration tests
-- [ ] TXXX Rolling-upgrade compatibility validation
+- [ ] TXXX API/controller concurrent-replica and process-replacement integration tests; document unverified paths
+- [ ] TXXX API/controller rolling-upgrade validation; Git singleton persistent-storage recovery and non-overlapping replacement where affected
 - [ ] TXXX Multi-user AuthN/AuthZ and isolation tests
 - [ ] TXXX Sustained load/soak and backpressure validation
 - [ ] TXXX Record a passing `make capacity TARGET=<target> PROFILE=<scenario> MODE=<alpha|production>` evidence bundle, including topology/dataset proof and domain-verifier result
@@ -253,7 +253,8 @@ With multiple developers:
 - [Story] label maps task to specific user story for traceability
 - Each user story should be independently completable and testable
 - Verify tests fail before implementing
-- For core-service changes, include replica safety and process-replacement tasks
+- For API/controller changes, include replica safety and process-replacement tasks
+- Git is singleton-only: do not add multi-Git topology, autoscaling or HA tasks unless repository sharding/routing/writer safety is explicitly approved feature scope; disjoint volumes do not make it supported
 - For protected paths, include multi-user AuthN/AuthZ and isolation tasks
 - For load-bearing paths, include sustained-load, backpressure, and recovery tasks
 - Commit after each task or logical group

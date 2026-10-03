@@ -70,6 +70,21 @@ case "${target}/${profile}" in
   *) usage; exit 2 ;;
 esac
 
+case "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" in
+  0) ;;
+  1)
+    if [[ "${target}/${profile}" != "repository/lifecycle" ]]; then
+      echo "REPOSITORY_CAPACITY_SECRET_SCENARIO is only valid for repository/lifecycle" >&2
+      exit 2
+    fi
+    command+=("REPOSITORY_CAPACITY_SECRET_SCENARIO=1")
+    ;;
+  *)
+    echo "REPOSITORY_CAPACITY_SECRET_SCENARIO must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+
 if [[ "${target}/${profile}" == "repository/lifecycle" ]]; then
   export NAMESPACE_WATCH_API_A="${REPOSITORY_API_A:-}"
   export NAMESPACE_WATCH_API_B="${REPOSITORY_API_B:-}"
@@ -91,6 +106,10 @@ if [[ "${CAPACITY_DRY_RUN:-0}" == "1" ]]; then
 fi
 
 cd "${repo_root}"
+if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == "1" ]]; then
+  echo "secret capacity File workload and scheduled fault verifier are not implemented; Repository-only evidence cannot pass spec 063" >&2
+  exit 2
+fi
 run_id="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 evidence_root="${CAPACITY_EVIDENCE_DIR:-${repo_root}/.gitstore/capacity}"
 evidence_dir="${evidence_root}/${target}/${profile}/${mode}/${run_id}"

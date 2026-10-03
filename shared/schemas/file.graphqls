@@ -40,7 +40,13 @@ type FileSource {
   type: String!
   uri: String!
   checksum: FileChecksum
-  credentialsRef: SecretRef
+  credentialsRef: CredentialsRef
+}
+
+type CredentialsRef {
+  kind: String!
+  type: String!
+  secretRef: SecretRef!
 }
 
 type FileChecksum {

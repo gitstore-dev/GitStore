@@ -5,10 +5,12 @@ FROM golang:1.26.1-alpine3.23 AS builder
 
 RUN apk add --no-cache git
 
-WORKDIR /build
+WORKDIR /build/gitstore-controller-manager
+ENV GOWORK=off
 
 # Copy go modules manifests
 COPY gitstore-controller-manager/go.mod gitstore-controller-manager/go.sum ./
+COPY shared/secretmaterial/go.mod /build/shared/secretmaterial/go.mod
 
 # Download dependencies
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -16,11 +18,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Copy source code
 COPY gitstore-controller-manager/ ./
+COPY shared/secretmaterial/ /build/shared/secretmaterial/
 
 # Build application
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -o controller-manager ./cmd/controller
+    CGO_ENABLED=0 GOOS=linux go build -o /build/controller-manager ./cmd/controller
 
 # Runtime stage
 FROM alpine:3.23.3

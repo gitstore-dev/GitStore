@@ -2,6 +2,11 @@
 
 **Branch**: `063-implement-secret-adrs` | **Date**: 2026-09-22 | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `specs/063-implement-secret-adrs/spec.md`
+**Configuration design revised**: 2026-10-03 against checkout `d065d08`;
+prior configuration assumptions are superseded by [configuration contract](contracts/configuration.md).
+**Post-plan integration review**: 2026-10-03, commits #432 through #438;
+see research R11. Shipped changes are prerequisites; proposed ADR features
+are compatibility constraints, not additional implementation scope.
 
 ## Summary
 
@@ -12,14 +17,23 @@ services, and replace the controller's process-lifetime signing-key capture
 with resolution at credential renewal. Preserve the normalized #429 exchange,
 authorization, public-key enrollment, and existing single-flight token cache.
 
-The user selected mandatory migration before strict File enforcement and
-contract-tested resource-runtime resolution without a production File consumer.
+Normalize controller configuration before adding resolver options: nested
+typed structs, one unmarshal, and the API/Git-service `GITSTORE_` plus `__`
+environment convention. Do not perpetuate flat keys or post-unmarshal manual
+hydration. Operators migrate renamed configuration before deploying new
+instances; old keys are rejected, not silently aliased.
+
+The latest user clarification supersedes the migration design: GitStore is
+alpha with no production deployments and permits File breaking changes until
+Release Candidate. Apply the strict contract directly, without preparation
+readers, a transitional schema, mirror scanning or migration audit tooling.
+Resource-runtime resolution remains contract-tested without a production File consumer.
 No File reconciler, payload fetch, object-store write, Secret resource, cloud
 provider SDK, or change to spec 056 deletion semantics is included.
 
 ## Technical Context
 
-**Language/Version**: Go 1.25 module baseline (API and controller); existing Rust Git service; current Go container builders use 1.26.1.
+**Language/Version**: API/controller modules currently require Go 1.26.0; the shared library retains a Go 1.25 baseline. Existing Rust Git service; current Go container builders use 1.26.1.
 **Primary Dependencies**: Existing gqlgen, validator, zap, Prometheus client, JWT/crypto and standard library; new repository-local `shared/secretmaterial` Go module, no new third-party dependency.
 **Storage**: Existing File spec JSON projections in memdb/Scylla and Git manifests; no table migration. Provider-owned local records and bounded process memory only; no persisted secret cache.
 **Testing**: Go table/contract/race tests, existing catalog gRPC isolation tests, Rust hook integration tests, schema fixtures, deployed identity tests, root capacity/chaos runners.
@@ -28,7 +42,7 @@ provider SDK, or change to spec 056 deletion semantics is included.
 **Performance Goals**: Per-File reference validation p95 <=5ms/p99 <=20ms; local resolution p95 <=10ms/p99 <=50ms under healthy load; authenticated recovery <=60s after provider restoration. Full workload gates below.
 **Constraints**: No provider I/O in stateless validation; no secret-read API; no private-key cache between exchange attempts; no background refresh goroutine per reference; no unbounded reads.
 **Scale/Scope**: 5,000,000 background Product rows, bounded File batches, two APIs and controllers, sustained Git admission plus token renewal.
-**Replica/Scaling Model**: Stateless validation on API replicas; existing durable identity/public-key datastore and resource-version concurrency; controller-local token caches are disposable and never authoritative.
+**Replica/Scaling Model**: Stateless validation on API replicas; existing durable identity/public-key datastore and resource-version concurrency; controller-local token caches are disposable and never authoritative. Exactly one active Git service; no sharding, replication or Git HA scope.
 **Authentication/Authorization**: Existing pluggable AuthN/AuthZ remains authoritative. Bootstrap resolution is owning-process-only; runtime context is namespace-bound and supplied by the authenticated consumer, never authored by the resource.
 **Load/Backpressure Model**: At most 16 in-flight provider calls per resolver, no internal wait queue, 2s resolution budget, caller deadline wins; one controller exchange at a time with existing 10s exchange budget and capped jittered backoff.
 **Capacity Profile**: Extend `make capacity TARGET=repository PROFILE=lifecycle` and `tests/integration/repository_lifecycle_capacity_test.go` with the opt-in secret scenario specified in [capacity contract](contracts/capacity-and-rollout.md); do not substitute Namespace-only load for File validation.
@@ -39,6 +53,10 @@ provider SDK, or change to spec 056 deletion semantics is included.
 Pre-design review found three risks, resolved by the design: legacy File shape
 compatibility, absence of a File runtime consumer, and static `kid` during key
 rotation. No non-negotiable principle is waived.
+
+Topology correction (2026-10-03): constitution v3.0.0 supersedes the unsupported
+all-service replication mandate. API/controller concurrency remains an evidence
+requirement, not a blanket HA claim; Git remains singleton-only.
 
 | Gate                  | Pre-design disposition                         | Post-design disposition                                                  |
 |-----------------------|------------------------------------------------|--------------------------------------------------------------------------|
@@ -51,7 +69,7 @@ rotation. No non-negotiable principle is waived.
 | Repeatable evidence   | Existing lifecycle runner reusable             | `make capacity` extension plus `make chaos`; domain verifier required    |
 | Bounded work          | Bootstrap read and key lifetime gaps           | Explicit byte/concurrency/deadline/backoff bounds                        |
 | Observability         | Resolver logs exist, metrics incomplete        | Fixed-label outcomes/latency/inflight; redacted errors and readiness     |
-| Incremental delivery  | Old File readers cannot be presumed compatible | Preparation baseline, migration, then strict rolling release             |
+| Incremental delivery  | Alpha File contract may break until RC         | Direct strict schema; no deployed-data compatibility or migration tool   |
 | Simplicity            | No existing cross-service Go module            | One small shared module; no File controller or remote SDK                |
 
 **Gate result**: PASS for planning after the documented user clarifications.
@@ -74,10 +92,12 @@ specs/063-implement-secret-adrs/
     resolver.md
     bootstrap-identity.md
     capacity-and-rollout.md
+    configuration.md
   checklists/requirements.md
 ```
 
-`tasks.md` is deliberately not generated by this command.
+`tasks.md` contains the dependency-ordered implementation checklist generated
+after the post-plan integration review.
 
 ### Source Code (existing unless marked proposed)
 
@@ -91,7 +111,7 @@ gitstore-api/
   internal/validate/
   internal/cataloggrpc/
   internal/graph/{resolver,model,generated}/
-  cmd/gitctl/                             migration audit integration
+  cmd/gitctl/                             canonical enrollment configuration
 gitstore-controller-manager/
   internal/secret/                        adapter to shared contract
   internal/graphqlclient/
@@ -128,9 +148,80 @@ already supplies file/env bootstrap resolution, process-fatal startup failures,
 token single-flight/backoff, per-controller mounts, and the #429 token client.
 Remaining work is precise validation, complete error/size contracts, reusable
 runtime context, observability, reloadable signing with atomic key-ID pairing,
-and honest migration/capacity evidence.
+and honest replica/capacity evidence.
 
 ## Phase 1: Design
+
+### Typed configuration prerequisite
+
+Follow [configuration.md](contracts/configuration.md) for the complete tree,
+rename matrix, defaults, source precedence and migration policy. Introduce
+`Controller.ServiceAccount`, `SecretProviders.Bootstrap`, `Checkpoint`,
+`Reconcile` and `Watch` config groups; the root alone owns `controller`.
+Remove `bindServiceAccountEnvironment` and `readServiceAccountConfig`, register
+all leaf defaults for environment-only decoding, unmarshal once, and pass
+typed values to consumers. Preserve API's intentional source-provenance checks.
+
+Migrate config files, environment examples, deployment/CLI/bootstrap producers,
+checkpoint cleanup and capacity consumers together. Fail on legacy/unknown
+controller keys without rejecting sibling service sections in shared config.
+New and old replicas use version-matched config snapshots; rollback restores
+the matching config as well as the binary. This is a configuration-only
+behavior change, not a change in identity, checkpoint paths or retry defaults.
+
+### Current integration baseline and deferred endpoint split
+
+Use checkout `d065d08` or a descendant preserving #432, #433, #435 and #437.
+#429 remains the identity protocol baseline, not the entire compatibility
+baseline. All new admission fixtures use `new_commit_sha` and
+`authorization.actor`; do not restore removed protobuf fields/fallbacks.
+Product fixtures require `spec.title`; list code uses `pageInfo`, never
+removed `totalCount` fields.
+
+Token issuance, controller watches and File credential
+metadata belong to the Admin API under ADR-0012. The current server still
+serves `/graphql`, so preserve that default now. If ADR-0012 ships first,
+use its three-release sequence: N adds `/admin/graphql` plus deprecated alias,
+N+1 moves clients, N+2 removes the shared-listener alias. Dedicated admin
+listeners retain `/graphql`. Never infer a URI change from config nesting or
+remove the endpoint alias under this feature's unrelated no-config-alias rule.
+After schema relocation, target admin plus common schemas, not a glob spanning
+Storefront. No endpoint split or directive framework is implemented here.
+
+Preserve ADR-0010's shipped ownership foundation: resource updates retain reserved
+owner annotations and permissions use current mutable-owner behavior
+where supported, not creator-as-owner assumptions. ServiceAccount ownership
+remains audit-only. Do not claim full provider-side ownership decisions or
+introduce ADR-0011's removed `mode`/`SCOPE` machinery.
+
+### Controller operation safety and checkpoint ownership
+
+Apply ADR-0018 without adding a new controller or lease subsystem:
+
+| Operation | Safety/ownership contract |
+| --- | --- |
+| Reference validation / provider read | Read-only, bounded and independently repeatable; no lease |
+| Assertion signing / token renewal | Per-process single-flight, existing identity checks; replicas may independently obtain tokens; no group leader |
+| Existing reconcile/status writes | Preserve version checks and idempotency; recompute on conflict, never replay stale patches |
+| Operator key enrollment / record rotation | Existing authorization, distinct IDs and ordered overlap; provider record replaced atomically, not a new reconciler side effect |
+| Watch checkpoint | Group-owned recovery hint, not write authorization; atomic snapshot/cursor record, bounded shutdown flush and replay-safe recovery |
+
+Treat `checkpoint.dir` as an operator-assigned namespace for the configured
+controller deployment's groups. Unrelated deployments/groups must not reuse
+the same physical checkpoint root or a secondary-watch cursor. Within the
+current fixed registration set, preserve existing kind-specific records and
+related replay keys; document the primary writer and consuming group for each
+registered watch. Do not infer cross-process write coordination from atomic
+file rename or a materializer lease. A resumed older checkpoint may replay
+work; existing conditional/idempotent reconciliation must make that safe.
+Changing subscription scope requires a separate checkpoint namespace.
+
+No new field manager, group-election mechanism, external side effect or File
+status writer is introduced. Future non-idempotent consumers must select CAS,
+API-validated fencing or external idempotency under ADR-0018 before adding
+their operations. Preserve #435's tracked runners and final checkpoint flush
+under the existing bounded shutdown deadline; test cancellation during renewal
+and process replacement rather than reverting to untracked goroutines.
 
 ### Resource metadata and stateless validation
 
@@ -146,11 +237,21 @@ to that service; extend its rejection tests, not its material-handling code.
 Manually maintained JSON schema and GraphQL output contracts must match the Go
 contract. Run existing gqlgen generation rather than hand-edit generated files.
 
+Use `CredentialsRef { kind: String!, type: String!, secretRef: SecretRef! }`
+directly, with no legacy top-level name/key/namespace fields.
+
 File GraphQL `credentialsRef: SecretRef` -> `CredentialsRef` is a breaking
 contract, not an additive rename. Publish it as a Conventional Commit/PR
-breaking change, apply repository release-version policy, and require the
-preparation baseline and client migration in the rollout contract. Preserve all
+breaking change, apply repository release-version policy, and update development
+clients and fixtures together. No compatibility release is required. Preserve all
 auth, API version, Git path, File deletion and File status semantics.
+
+ADR-0015 forbids mutating Git-backed admission: authored changes are explicit
+commits, never automatic writeback. File payload facts never block
+a push. ADRs 0013/0014/0016 add no IR, publication, CRD or readiness work here:
+secret material cannot enter IR/snapshots/public projections; inline SecretRef
+is not an owned core/CRD reference. Future webhook signing is runtime-tier
+consumption, not access to a controller bootstrap identity.
 
 ### Shared resolver and production bootstrap consumer
 
@@ -172,8 +273,9 @@ Later token exchanges resolve fresh key material through the same boundary;
 there is no retained private signer between exchanges. Keep usable access
 tokens in the existing cache, with no stale extension after the refresh cutoff.
 Use a versioned atomic identity record carrying `privateKey` and `keyID` for
-rotation; preserve existing keyed/raw file/env configuration as a static-ID
-compatibility adapter, not as a claim of overlapping-key hot rotation.
+rotation; preserve keyed/raw file/env material semantics as a static-ID
+compatibility adapter under the new nested config, not legacy config names
+or a claim of overlapping-key hot rotation.
 
 ### Bounds and errors
 
@@ -229,46 +331,49 @@ Do not add a module that works only through a developer's workspace.
 
 1. **Foundational contracts and packaging**: add the shared module and fixtures;
    prove validation, error redaction, limits, tier separation and independent
-   builds before wiring consumers. Specify migration audit and dry-run behavior.
-2. **US1 / preparation baseline**: add explicit File readers/validators,
-   GraphQL conversion and schema parity, temporarily preserving legacy decoding
-   only in the separately versioned preparation release. Migrate consumers and
-   current manifests/projections. Supply paginated/read-only audit through
-   `gitctl`, exposed by proposed `make check TARGET=secret-migration`.
-3. **US1 / strict release**: after the zero-legacy audit, remove preparation
-   compatibility and require the wrapper everywhere. No hidden compatibility
-   flag ships in the strict release; malformed legacy documents fail closed.
-4. **US2 / bootstrap**: adapt existing file/env loading to the shared interface,
+   builds before wiring consumers.
+   Before production bootstrap integration, normalize typed controller
+   configuration and its producers/consumers per the configuration contract,
+   with old-key rejection and env-only tests. This US2 prerequisite can proceed
+   independently of US1's File metadata work.
+2. **US1 / strict File contract**: require the explicit wrapper in readers,
+   validators, GraphQL and JSON schema. Update development clients/fixtures.
+   Bare documents fail closed; no compatibility flag or migration API ships.
+3. **US2 / bootstrap**: adapt existing file/env loading to the shared interface,
    exact grammar, bounded reads, classified errors, config/mount validation and
    metrics. Preserve #429 token payloads and existing pluggable AuthN/AuthZ.
-5. **US3 / rotation**: resolver-backed exchange signer, atomic key/ID bundle,
+4. **US3 / rotation**: resolver-backed exchange signer, atomic key/ID bundle,
    public-key overlap and renewal/backoff tests; runtime fake-consumer rotation
    without adding a File operation.
-6. **Production evidence and docs**: extend the existing lifecycle capacity
+5. **Production evidence and docs**: extend the existing lifecycle capacity
    gate, add controller restart chaos and isolated record-outage fixture,
    verify cross-replica recovery/redaction, update File and identity runbooks.
 
-The preparation/strict release split is a compatibility prerequisite, not
-permission to accept legacy references after strict deployment. Existing
-history is not rewritten; restored historical manifests must be migrated
-before being submitted as new desired state.
+There is no preparation/strict release split. Existing Git history is not
+rewritten; restored bare manifests must be edited before being submitted as
+new desired state. Replica tests use the supported strict contract, not an
+obsolete alpha schema. Production-scale goals are test requirements, not
+claims that production installations exist.
 
-| Verification layer | Required evidence                                                                                                                         |
-|--------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
-| Shared contracts   | Boundary lengths, traversal/URI/whitespace, explicit namespace, whole-record/item semantics, all seven failures, wrong tier and principal |
-| Material types     | `aws-access-key/v1` required keys, unsupported type, no provider call on invalid input, no typed object on error                          |
-| API/hook           | Same invalid fixture rejected by validation and admission; no durable write; Rust receives redacted file/field reason                     |
-| GraphQL/schema     | Nested wrapper preserved; no material field; generated schemas agree; old clients explicitly migrated                                     |
-| Identity           | Startup fails closed; no secret in config/logs; renewal resolves fresh pair; overlap with distinct key IDs; revoked/mismatched key denied |
-| Authorization      | Namespace isolation, denied runtime binding, owning-subject-only issuance, enabled AuthN/AuthZ providers unaffected                       |
-| Concurrency/fault  | Single-flight, <=16 provider calls, caller cancellation, bounded retry, outage spanning token expiry, no stale fallback                   |
-| Deployment         | Independent API/controller image builds; controller-only mounts; two replicas and replacement; preparation/strict mixed-version run       |
-| Production         | [Capacity contract](contracts/capacity-and-rollout.md), including true File pushes and provider restoration correctness                   |
+| Verification layer | Required evidence                                                                                                                                                          |
+|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Shared contracts   | Boundary lengths, traversal/URI/whitespace, explicit namespace, whole-record/item semantics, all seven failures, wrong tier and principal                                  |
+| Configuration      | Nested struct decoding, every env-only leaf, TOML/env precedence, preserved defaults/units, obsolete-key rejection, shared-file sibling sections, version-matched rollback |
+| Integration baseline | Current protobuf fields, required Product titles, bounded pagination, mutable ownership preservation, Admin-only endpoint/schema intent |
+| Checkpoint recovery | Independent group roots, secondary-watch ownership, related replay keys, conditional duplicate-safe work and tracked final flush on shutdown |
+| Material types     | `aws-access-key/v1` required keys, unsupported type, no provider call on invalid input, no typed object on error                                                           |
+| API/hook           | Same invalid fixture rejected by validation and admission; no durable write; Rust receives redacted file/field reason                                                      |
+| GraphQL/schema     | Nested wrapper preserved; no material field; generated schemas agree; development clients updated                                                                      |
+| Identity           | Startup fails closed; no secret in config/logs; renewal resolves fresh pair; overlap with distinct key IDs; revoked/mismatched key denied                                  |
+| Authorization      | Namespace isolation, denied runtime binding, owning-subject-only issuance, enabled AuthN/AuthZ providers unaffected                                                        |
+| Concurrency/fault  | Single-flight, <=16 provider calls, caller cancellation, bounded retry, outage spanning token expiry, no stale fallback                                                    |
+| Deployment         | Independent API/controller image builds; controller-only mounts; two replicas and replacement on the supported strict contract                                        |
+| Production         | [Capacity contract](contracts/capacity-and-rollout.md), including true File pushes and provider restoration correctness                                                    |
 
-For unaffected Rust production code, run hook integration with at least two
-Git-service instances assigned distinct repositories; do not imply that two
-writers sharing an unfenced bare-repository volume is supported. The existing
-managed alpha stack has one Git service and cannot establish Git-service HA.
+Run Rust hook integration and the lifecycle workload with exactly one active
+Git service, matching the existing gate. Repository sharding and placement-aware
+routing are not implemented; disjoint volumes do not make multi-Git deployment
+supported. Git HA is outside this feature, not a blocked acceptance prerequisite.
 
 ## Complexity Tracking
 

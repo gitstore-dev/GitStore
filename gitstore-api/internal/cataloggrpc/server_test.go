@@ -669,7 +669,7 @@ func TestValidateResources_FileDuplicateIdentityRejected(t *testing.T) {
 
 func TestValidateResources_FileAggregatesVariantAndCredentialsErrors(t *testing.T) {
 	srv := newCatalogServer(t, newTestDatastore(t), nil)
-	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: broken\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/broken\n    credentialsRef:\n      kind: Secret\n      name: cloud\n      namespace: other\n  processing:\n    image:\n      variants:\n        - name: \"\"\n---\n")
+	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: broken\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/broken\n    credentialsRef:\n      kind: CredentialsRef\n      type: aws-access-key/v1\n      secretRef:\n        kind: SecretRef\n        name: cloud\n        namespace: other\n  processing:\n    image:\n      variants:\n        - name: \"\"\n---\n")
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs:        []*catalogv1.ResourceBlob{{Path: "files/broken.md", Content: content}},
@@ -678,7 +678,7 @@ func TestValidateResources_FileAggregatesVariantAndCredentialsErrors(t *testing.
 	require.False(t, resp.Accepted)
 	require.GreaterOrEqual(t, len(resp.Errors), 2)
 	messages := collectMessages(resp.Errors)
-	assert.Contains(t, strings.Join(messages, "\n"), "credentialsRef.namespace")
+	assert.Contains(t, strings.Join(messages, "\n"), "credentialsRef.secretRef.namespace")
 	assert.Contains(t, strings.Join(messages, "\n"), "variants[0].name")
 }
 

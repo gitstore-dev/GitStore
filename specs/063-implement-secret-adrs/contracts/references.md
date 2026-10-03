@@ -16,15 +16,15 @@ credentialsRef:
 
 Only `SecretRef` may carry optional `key` and `namespace`.
 
-| Field | Validation |
-| --- | --- |
-| `CredentialsRef.kind` | Exactly `CredentialsRef` |
-| `CredentialsRef.type` | `^[a-z][a-z0-9-]*/v[1-9][0-9]*$`, max 128 ASCII characters |
-| `CredentialsRef.secretRef` | Required non-null object |
-| `SecretRef.kind` | Exactly `SecretRef` |
-| `SecretRef.name` | `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, length 1..63 |
-| `SecretRef.key` | If present, `^[A-Za-z0-9._-]+$`, length 1..253, not `.` or `..` |
-| `SecretRef.namespace` | If present, nonempty valid namespace name equal to containing File namespace |
+| Field                      | Validation                                                                   |
+|----------------------------|------------------------------------------------------------------------------|
+| `CredentialsRef.kind`      | Exactly `CredentialsRef`                                                     |
+| `CredentialsRef.type`      | `^[a-z][a-z0-9-]*/v[1-9][0-9]*$`, max 128 ASCII characters                   |
+| `CredentialsRef.secretRef` | Required non-null object                                                     |
+| `SecretRef.kind`           | Exactly `SecretRef`                                                          |
+| `SecretRef.name`           | `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, length 1..63                              |
+| `SecretRef.key`            | If present, `^[A-Za-z0-9._-]+$`, length 1..253, not `.` or `..`              |
+| `SecretRef.namespace`      | If present, nonempty valid namespace name equal to containing File namespace |
 
 Reject unknown properties at both levels, explicit null optional fields,
 empty optional strings, wrong scalar types, path separators, URI fragments
@@ -61,6 +61,11 @@ runtime consumer as `UnsupportedType`, not during stateless schema validation.
 
 ## GraphQL output
 
+`FileSource.credentialsRef` returns the strict object below directly.
+GitStore is alpha with no production deployments: there is no transitional
+schema or legacy-reader guarantee. Update development clients to select nested
+metadata. No type is inferred and no secret material is exposed.
+
 ```graphql
 type CredentialsRef {
   kind: String!
@@ -79,6 +84,14 @@ type SecretRef {
 Change `FileSource.credentialsRef` to nullable `CredentialsRef`. Preserve all
 other FileSource fields and existing authorization. No secret value, provider
 binding, resolved material or private key field is added.
+
+This is an Admin projection under ADR-0012. If schemas have moved at
+implementation time, modify admin/common sources and their generator inputs,
+never a glob loading both endpoints. Do not add Storefront fields or resurrect
+ADR-0011's removed directive `mode`/`SCOPE`. Inline SecretRef is not a
+core/CRD object-reference edge and carries no ownership/readiness lifecycle.
+Resolved bytes cannot enter Markdown IR, release snapshots or public
+projections (ADRs 0013/0014/0016).
 
 This is a breaking field-type change. Do not disguise the nested object as
 the old type or return fabricated empty names. gqlgen output is regenerated
@@ -100,3 +113,6 @@ Use the same fixture matrix in Go and schema tests:
 Schema/Go outcome parity excludes only documented contextual checks such as
 namespace equality. Add API projection/GraphQL round-trip and Rust-hook
 rejection tests, with no provider invocation for any stateless fixture.
+Use current `new_commit_sha` and `authorization.actor` protobuf fields.
+Git-backed admission is validating-only (ADR-0015); rejected legacy references
+are migrated by operator-authored commits, not admission mutation/writeback.

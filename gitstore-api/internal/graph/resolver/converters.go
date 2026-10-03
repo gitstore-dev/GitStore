@@ -602,12 +602,12 @@ func DatastoreFileToGraphQL(f *datastore.File) *model.File {
 	}
 	if spec.Source.CredentialsRef != nil {
 		ref := spec.Source.CredentialsRef
-		fileSpec.Source.CredentialsRef = &model.SecretRef{Kind: ref.Kind, Name: ref.Name}
-		if ref.Key != "" {
-			fileSpec.Source.CredentialsRef.Key = &ref.Key
-		}
-		if ref.Namespace != "" {
-			fileSpec.Source.CredentialsRef.Namespace = &ref.Namespace
+		fileSpec.Source.CredentialsRef = &model.CredentialsRef{
+			Kind: ref.Kind, Type: ref.Type,
+			SecretRef: &model.SecretRef{
+				Kind: ref.SecretRef.Kind, Name: ref.SecretRef.Name,
+				Key: ref.SecretRef.Key, Namespace: ref.SecretRef.Namespace,
+			},
 		}
 	}
 	if spec.Processing != nil && spec.Processing.Image != nil {

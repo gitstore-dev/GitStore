@@ -6,6 +6,17 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-}"
+case "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" in
+  0) ;;
+  1)
+    echo "secret capacity File workload and scheduled fault verifier are not implemented; refusing to start a Repository-only stack for spec 063" >&2
+    exit 2
+    ;;
+  *)
+    echo "REPOSITORY_CAPACITY_SECRET_SCENARIO must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
 capacity_target="${CAPACITY_STACK_TARGET:-repository}"
 capacity_profile="${CAPACITY_STACK_PROFILE:-lifecycle}"
 controller_kind="${CAPACITY_STACK_CONTROLLER_KIND:-${capacity_target^}}"

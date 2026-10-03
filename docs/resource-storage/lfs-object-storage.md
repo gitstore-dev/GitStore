@@ -116,9 +116,24 @@ source:
   type: s3
   uri: s3://catalog-assets/products/product-hero.jpg
   credentialsRef:
-    kind: SecretRef
-    name: catalog-assets-writer
+    kind: CredentialsRef
+    type: aws-access-key/v1
+    secretRef:
+      kind: SecretRef
+      name: catalog-assets-writer
 ```
+
+File credentials require this explicit typed wrapper; bare references are
+rejected. GitStore is alpha with no production deployments, so this is a direct
+breaking contract change, not a migration release. GraphQL exposes
+`credentialsRef { kind type secretRef { kind name key namespace } }`.
+Admission validates only metadata, never provider existence or secret values.
+Production File credential resolution, source operations and credential-readiness
+reconciliation remain deferred; the shared runtime resolver is contract-tested.
+
+The nested `SecretRef` is an external reference, not a CRD ownership or readiness
+edge. Resolved material must never enter Git, GraphQL, status, Markdown IR,
+publication snapshots or Storefront projections.
 
 The `SecretRef` target is not a Git-backed secret. It should resolve through the
 deployment secret manager or Kubernetes secret integration.

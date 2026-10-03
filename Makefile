@@ -8,7 +8,8 @@ API_DIR := $(ROOT)/gitstore-api
 CONTROLLER_MANAGER_DIR := $(ROOT)/gitstore-controller-manager
 GIT_SERVICE_DIR := $(ROOT)/gitstore-git-service
 OIDC_BRIDGE_DIR := $(ROOT)/gitstore-oidc-bridge
-GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR)
+SECRET_MATERIAL_DIR := $(ROOT)/shared/secretmaterial
+GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR)
 
 API_ENV_FILE ?= $(API_DIR)/.env
 CONFIG_FILE ?= ./config/config.toml
@@ -285,7 +286,7 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 		test -n "$$resolved_uid" || { echo "Enrolled ServiceAccount identity file is missing a UID."; exit 2; }; \
 	fi; \
 	cd "$(CONTROLLER_MANAGER_DIR)" && \
-		GITSTORE_CONTROLLER__CHECKPOINT_DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
+		GITSTORE_CONTROLLER__CHECKPOINT__DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID="$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
@@ -293,7 +294,7 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME="$(CONTROLLER_SECRET_NAME)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY="$(CONTROLLER_SECRET_KEY)" \
-		GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
+		GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
 		go run ./cmd/controller
 
 api: ## Run gitstore-api locally in the foreground.
@@ -390,7 +391,7 @@ dev: ## Run local git service and API together in the foreground.
 	fi; \
 	( set +e; \
 		cd "$(CONTROLLER_MANAGER_DIR)" || { printf 'controller 1\n' > "$$fifo"; exit 0; }; \
-		GITSTORE_CONTROLLER__CHECKPOINT_DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
+		GITSTORE_CONTROLLER__CHECKPOINT__DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID="$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
@@ -398,7 +399,7 @@ dev: ## Run local git service and API together in the foreground.
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME="$(CONTROLLER_SECRET_NAME)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY="$(CONTROLLER_SECRET_KEY)" \
-		GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
+		GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
 		go run ./cmd/controller & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
 		wait "$$child"; status=$$?; \
@@ -448,13 +449,30 @@ stop: ## Stop compose services; optionally pass SERVICE=<name>.
 down: ## Stop and remove compose services and networks.
 	@$(LIFECYCLE_COMPOSE) down --remove-orphans
 
-build: ## Build Rust and Go services.
+build: ## Build Rust/Go services and the shared secret-material module.
 	@cd "$(GIT_SERVICE_DIR)" && cargo build --verbose
 	@for dir in $(GO_MODULE_DIRS); do \
-		cd "$$dir" && go build -v ./...; \
+		( cd "$$dir" && go build -v ./... ) || exit 1; \
 	done
 
-test: ## Run Rust and Go test suites.
+.PHONY: test-secret-integration
+test-secret-integration: ## Run real secret bootstrap/rotation acceptance against an explicitly owned two-API deployment.
+	@test "$(SECRET_TEST_OWNED_DEPLOYMENT)" = "1" || { echo "SECRET_TEST_OWNED_DEPLOYMENT=1 is required"; exit 2; }
+	@test -n "$(SECRET_TEST_API_A)" -a -n "$(SECRET_TEST_API_B)" -a -n "$(SECRET_TEST_TOKEN_FILE)" || { echo "SECRET_TEST_API_A, SECRET_TEST_API_B and SECRET_TEST_TOKEN_FILE are required"; exit 2; }
+	@binary=$$(mktemp "$${TMPDIR:-/tmp}/gitstore-secret-controller.XXXXXX"); \
+		trap 'rm -f "$$binary"' EXIT INT TERM; \
+		(cd "$(CONTROLLER_MANAGER_DIR)" && GOWORK=off go build -o "$$binary" ./cmd/controller) && \
+		cd "$(ROOT)/tests/integration" && \
+		SECRET_TEST_RUN=1 SECRET_TEST_OWNED_DEPLOYMENT=1 \
+		SECRET_TEST_CONTROLLER_BINARY="$$binary" SECRET_TEST_API_A="$(SECRET_TEST_API_A)" \
+		SECRET_TEST_API_B="$(SECRET_TEST_API_B)" SECRET_TEST_TOKEN_FILE="$(abspath $(SECRET_TEST_TOKEN_FILE))" \
+		SECRET_TEST_NAMESPACE="$(SECRET_TEST_NAMESPACE)" SECRET_TEST_SERVICEACCOUNT="$(SECRET_TEST_SERVICEACCOUNT)" \
+		GOWORK=off go test -v -count=1 -timeout 10m -run '^TestSecretBootstrapRotationDeployed$$' .
+
+test: ## Run Rust/Go and shared secret-material test suites.
+	@bash ./scripts/test-secret-config.sh
+	@bash ./scripts/test-secret-capacity-evidence.sh
+	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity' .
 	@./scripts/test-make-workflow-dispatch.sh
 	@./scripts/test-capacity-dispatch.sh
 	@./scripts/test-capacity-prometheus-export.sh
@@ -601,6 +619,7 @@ _capacity-namespace-recovery:
 
 _capacity-repository-lifecycle:
 	@cd "$(ROOT)/tests/integration" && \
+		REPOSITORY_CAPACITY_SECRET_SCENARIO="$(REPOSITORY_CAPACITY_SECRET_SCENARIO)" \
 		REPOSITORY_API_A="$(REPOSITORY_API_A)" \
 		REPOSITORY_API_B="$(REPOSITORY_API_B)" \
 		REPOSITORY_OVERFLOW_API="$(REPOSITORY_OVERFLOW_API)" \
@@ -647,7 +666,7 @@ _capacity-repository-overflow:
 		MODE="$(MODE)" REPOSITORY_LIFECYCLE_OVERFLOW_RUN=1 \
 		go test -v -count=1 -timeout 0 -run '^TestRepositoryLifecycle_OverflowOnly$$' .
 
-lint: ## Run Rust formatting/clippy and Go formatting/vet/staticcheck.
+lint: ## Run Rust and Go lint checks, including shared secret material.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check
 	@cd "$(GIT_SERVICE_DIR)" && cargo clippy --all-targets --all-features -- -D warnings
 	@for dir in $(GO_MODULE_DIRS); do \
@@ -658,11 +677,11 @@ lint: ## Run Rust formatting/clippy and Go formatting/vet/staticcheck.
 		fi; \
 	done
 	@for dir in $(GO_MODULE_DIRS); do \
-		cd "$$dir" && go vet ./...; \
+		( cd "$$dir" && go vet ./... ) || exit 1; \
 	done
 	@cd "$(API_DIR)" && go install honnef.co/go/tools/cmd/staticcheck@latest
 	@for dir in $(GO_MODULE_DIRS); do \
-		cd "$$dir" && "$$(go env GOPATH)"/bin/staticcheck ./...; \
+		( cd "$$dir" && "$$(go env GOPATH)"/bin/staticcheck ./... ) || exit 1; \
 	done
 
 check: ## Run validation checks; set TARGET=all, config, compose, licenses, or credentials.

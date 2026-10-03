@@ -1,0 +1,10 @@
+[
+  {"valid":true,"ref":{"kind":"SecretRef","name":"catalog"}},
+  {"valid":true,"ref":{"kind":"SecretRef","name":"catalog","key":"private_key.pem","namespace":"shop"}},
+  {"valid":false,"ref":{"kind":"Secret","name":"catalog"}},
+  {"valid":false,"ref":{"kind":"SecretRef","name":"../catalog"}},
+  {"valid":false,"ref":{"kind":"SecretRef","name":"catalog","key":null}},
+  {"valid":false,"ref":{"kind":"SecretRef","name":"catalog","namespace":""}},
+  {"valid":false,"ref":{"kind":"SecretRef","name":"catalog","namespace":"other"}},
+  {"valid":false,"ref":{"kind":"SecretRef","name":"catalog","value":"synthetic-marker"}}
+]

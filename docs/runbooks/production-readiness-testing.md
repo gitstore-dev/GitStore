@@ -1,14 +1,16 @@
 # Production Readiness Testing Patterns
 
-The constitution's Principle 4 ("Production Readiness") is non-negotiable:
-load/soak, failover, rolling-upgrade, and security/capacity runbook
-validation must exist before a feature affecting `gitstore-api`,
-`gitstore-controller-manager`, or `gitstore-git-service` is considered
-production-ready (`.specify/memory/constitution.md`, Quality Gates: "Core-service
-changes document and test behavior with multiple replicas," "Load-bearing
-changes meet declared capacity and sustained-load objectives," "Protected
-operations include authentication and authorization tests," "Contract
-changes document compatibility, rollout, and rollback").
+The constitution's Principles VIII and X and Quality Gates require
+service-specific replica safety, load/soak, recovery and security/capacity
+evidence before production readiness is claimed. API/controller changes must
+verify concurrent-replica behavior and rolling upgrades on affected paths.
+**Git service is stateful and singleton-only**, including in production-mode
+capacity runs: use retained storage and non-overlapping replacement, not Git HA.
+Repository sharding and placement-aware routing are not implemented; neither
+disjoint volumes nor multiple containers prove support. Do not require them
+unless implementing those capabilities is explicitly approved feature scope.
+Readiness claims must identify remaining limitations, including AuthN/AuthZ,
+checkpoint coordination and non-idempotent side effects.
 
 Every spec so far (046, 048, 052, ...) has independently reinvented the same
 four structural test patterns to satisfy that gate. There is no missing code

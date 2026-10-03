@@ -9,6 +9,7 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -41,7 +42,7 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 	if err == nil && existing != nil {
 		return nil, gqlerror.Errorf("service account %s:%s already exists", namespace, name)
 	}
-	if err != nil && err != datastore.ErrNotFound {
+	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
 		return nil, err
 	}
 
@@ -172,7 +173,7 @@ func (r *Resolver) DeleteServiceAccount(ctx context.Context, input *model.Delete
 	name := input.Metadata.Name
 
 	sa, err := r.store.GetServiceAccountBySubject(ctx, namespace, name)
-	if err == datastore.ErrNotFound {
+	if errors.Is(err, datastore.ErrNotFound) {
 		// Idempotent: the account is already absent. The payload field is
 		// nullable, so return null rather than fabricating a zero-valued
 		// ServiceAccount that would misreport status ACTIVE.

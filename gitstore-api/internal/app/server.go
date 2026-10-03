@@ -397,6 +397,7 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	gqlServer.SetQueryCache(lru.New[*ast.QueryDocument](1000))
 
 	gqlServer.Use(extension.Introspection{})
+	// TODO: make it configurable whether memdb or via valkey or other external cache
 	gqlServer.Use(extension.AutomaticPersistedQuery{
 		Cache: lru.New[string](100),
 	})
@@ -850,52 +851,44 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 	defer r.metrics.SetLeader(false)
 
 	errCh := make(chan error, 4)
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
+	workers.Go(func() {
 		errCh <- r.leaseManager.Maintain(ctx, lease)
-	}()
+	})
 	if r.runner != nil || r.repositoryRunner != nil || r.productRunner != nil {
 		ready := make(chan struct{}, 3)
 		readyCount := 0
 		if r.runner != nil {
 			readyCount++
-			workers.Add(1)
-			go func() {
-				defer workers.Done()
+			workers.Go(func() {
 				errCh <- r.runner.RunNamespaceCDC(
 					ctx, r.materializer, lease,
 					time.Duration(r.cfg.CDCRetentionSeconds)*time.Second,
 					time.Duration(r.cfg.CDCConfidenceWindowMillis)*time.Millisecond,
 					func() { ready <- struct{}{} },
 				)
-			}()
+			})
 		}
 		if r.repositoryRunner != nil {
 			readyCount++
-			workers.Add(1)
-			go func() {
-				defer workers.Done()
+			workers.Go(func() {
 				errCh <- r.repositoryRunner.RunRepositoryCDC(
 					ctx, r.materializer, lease,
 					time.Duration(r.cfg.CDCRetentionSeconds)*time.Second,
 					time.Duration(r.cfg.CDCConfidenceWindowMillis)*time.Millisecond,
 					func() { ready <- struct{}{} },
 				)
-			}()
+			})
 		}
 		if r.productRunner != nil {
 			readyCount++
-			workers.Add(1)
-			go func() {
-				defer workers.Done()
+			workers.Go(func() {
 				errCh <- r.productRunner.RunProductCDC(
 					ctx, r.materializer, lease,
 					time.Duration(r.cfg.CDCRetentionSeconds)*time.Second,
 					time.Duration(r.cfg.CDCConfidenceWindowMillis)*time.Millisecond,
 					func() { ready <- struct{}{} },
 				)
-			}()
+			})
 		}
 		for range readyCount {
 			select {

@@ -193,6 +193,7 @@ func newMux(deps SmartHttpDeps, withPushCtx bool) http.Handler {
 		authorizeMiddleware = security.NewAuthorize(deps.Registry, deps.Logger)
 	}
 
+	// TODO: Register ratelimiter middleware
 	r.Use(requestIdMiddleware.RequestIdInserter)
 	r.Use(authenticateMiddleware.BasicAuthenticator)
 

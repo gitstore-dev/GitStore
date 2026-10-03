@@ -35,6 +35,34 @@ func TestResourceSchemasRejectEmptyRequiredStrings(t *testing.T) {
 	}
 }
 
+func TestFileSchemaCredentialForm(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "schemas", "gitstore", "v1beta1", "file.schema.json"))
+	require.NoError(t, err)
+	var schema map[string]any
+	require.NoError(t, json.Unmarshal(raw, &schema))
+	defs := objectMap(schema["$defs"])
+	typed := defs["CredentialsRef"]
+	require.NotNil(t, typed, "schema must describe explicit typed credentials")
+	require.Equal(t, false, typed["additionalProperties"])
+	require.ElementsMatch(t, []string{"kind", "type", "secretRef"}, stringSlice(typed["required"]))
+	fields := objectMap(typed["properties"])
+	require.Equal(t, "CredentialsRef", fields["kind"]["const"])
+	require.Equal(t, "^[a-z][a-z0-9-]*/v[1-9][0-9]*$", fields["type"]["pattern"])
+	require.Equal(t, float64(128), fields["type"]["maxLength"])
+	secret := defs["SecretRef"]
+	require.Equal(t, false, secret["additionalProperties"])
+	fields = objectMap(secret["properties"])
+	require.Equal(t, "SecretRef", fields["kind"]["const"])
+	require.Equal(t, float64(63), fields["name"]["maxLength"])
+	require.Equal(t, float64(253), fields["key"]["maxLength"])
+	require.Equal(t, "^[A-Za-z0-9._-]+$", fields["key"]["pattern"])
+	source := objectMap(defs["FileSourceDefinition"]["properties"])
+	require.Equal(t, "#/$defs/CredentialsRef", source["credentialsRef"]["$ref"])
+	require.NotContains(t, source["credentialsRef"], "oneOf", "no legacy schema alternative")
+}
+
 func assertRequiredStringsAreConstrained(t *testing.T, node map[string]any, path string) {
 	t.Helper()
 

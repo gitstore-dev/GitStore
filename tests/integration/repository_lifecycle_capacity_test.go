@@ -84,6 +84,7 @@ type repositoryCapacityLoadResult struct {
 
 func runRepositoryLifecycleCapacity(t *testing.T) {
 	t.Helper()
+	require.NoError(t, validateSecretCapacityAvailability(os.Getenv("REPOSITORY_CAPACITY_SECRET_SCENARIO")))
 	if os.Getenv("REPOSITORY_LIFECYCLE_CAPACITY_RUN") != "1" {
 		t.Skip("run through make capacity TARGET=repository PROFILE=lifecycle MODE=alpha or MODE=production against a deployed two-API/two-controller stack")
 	}
@@ -212,6 +213,26 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	metricsEnd = stabilizeRepositoryCapacityMemory(t, client, cfg, metricsEnd)
 	assertCapacityMetricsWithLimits(t, metricsStart, metricsEnd, metricsElapsed, recovery, false, repositoryCapacityMemoryLimits(cfg.mode))
 	t.Logf("Repository lifecycle capacity passed: mode=%s replay=%d replay_p95=%s subscribers=%d admitted=%d duration=%s", cfg.mode, cfg.replayEvents, replayP95, cfg.subscribers, load.admitted, time.Since(soakStarted))
+}
+
+func validateSecretCapacityAvailability(value string) error {
+	switch value {
+	case "", "0":
+		return nil
+	case "1":
+		return errors.New("secret capacity File workload and scheduled fault verifier are not implemented; Repository-only evidence cannot pass spec 063")
+	default:
+		return errors.New("REPOSITORY_CAPACITY_SECRET_SCENARIO must be 0 or 1")
+	}
+}
+
+func TestSecretCapacityCannotUseRepositoryOnlyEvidence(t *testing.T) {
+	for _, value := range []string{"", "0"} {
+		require.NoError(t, validateSecretCapacityAvailability(value))
+	}
+	for _, value := range []string{"1", "true", "2", "-1"} {
+		require.Error(t, validateSecretCapacityAvailability(value))
+	}
 }
 
 func repositoryCapacityMemoryLimits(mode capacityMode) capacityMemoryLimits {

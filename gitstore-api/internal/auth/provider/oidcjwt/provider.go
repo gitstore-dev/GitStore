@@ -76,8 +76,8 @@ func discover(ctx context.Context, issuerURI string) (*oidc.Provider, string, er
 	}
 	msg := err.Error()
 	const marker = "did not match the issuer URL returned by provider (\""
-	if i := strings.Index(msg, marker); i >= 0 {
-		rest := msg[i+len(marker):]
+	if _, after, ok := strings.Cut(msg, marker); ok {
+		rest := after
 		if j := strings.Index(rest, "\")"); j > 0 {
 			canonical := rest[:j]
 			provider, retryErr := oidc.NewProvider(ctx, canonical)

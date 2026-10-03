@@ -384,29 +384,30 @@ uri = "http://localhost:6000"
 **`.env` file**: `.env` (optional, current working directory)
 **Env var prefix**: `GITSTORE_`
 
-| Key                                               | Env Var                                                      | Type     | Default                             | Required         | Sensitive | Description                                                         |
-|---------------------------------------------------|--------------------------------------------------------------|----------|-------------------------------------|------------------|-----------|---------------------------------------------------------------------|
-| `controller.port`                                 | `GITSTORE_CONTROLLER__PORT`                                  | integer  | `5001`                              | No               | No        | HTTP port for `/health`, `/metrics`, and `/controller/v1/*`         |
-| `controller.api_uri`                              | `GITSTORE_CONTROLLER__API_URI`                               | string   | `http://localhost:4000/graphql`     | No               | No        | GraphQL API URI used by reconcilers                                 |
-| `controller.serviceaccount_namespace`             | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE`             | string   | (empty)                             | **Yes**          | No        | Enrolled ServiceAccount namespace                                   |
-| `controller.serviceaccount_name`                  | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME`                  | string   | `gitstore-controller-manager`       | **Yes**          | No        | Enrolled ServiceAccount name                                        |
-| `controller.serviceaccount_key_id`                | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID`                | string   | (empty)                             | **Yes**          | No        | Enrolled public-key ID (`kid`) for controller assertions            |
-| `controller.serviceaccount_uid`                   | `GITSTORE_CONTROLLER__SERVICEACCOUNT__UID`                   | string   | (empty)                             | **Yes**          | No        | Enrolled ServiceAccount UID; prevents identity reuse after deletion |
-| `controller.serviceaccount_key_ref.kind`          | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND`         | string   | (empty)                             | **Yes**          | No        | Must be `SecretRef`                                                 |
-| `controller.serviceaccount_key_ref.name`          | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME`         | string   | (empty)                             | **Yes**          | No        | Logical bootstrap-secret name, not a filesystem path                |
-| `controller.serviceaccount_key_ref.key`           | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY`          | string   | (empty)                             | **Yes**          | No        | Logical key name in the bootstrap secret                            |
-| `controller.serviceaccount_assertion_audience`    | `GITSTORE_CONTROLLER__SERVICEACCOUNT__ASSERTION_AUDIENCE`    | string   | `gitstore-api/serviceaccount-token` | **Yes**          | No        | Audience for the signed assertion used to exchange a token          |
-| `controller.serviceaccount_access_token_audience` | `GITSTORE_CONTROLLER__SERVICEACCOUNT__ACCESS_TOKEN_AUDIENCE` | string   | `gitstore-api`                      | **Yes**          | No        | Audience requested for the exchanged access token                   |
-| `controller.secret_provider_bootstrap.type`       | `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__TYPE`       | string   | `file`                              | No               | No        | Bootstrap resolver type: `file` or `env`                            |
-| `controller.secret_provider_bootstrap.base_path`  | `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH`  | string   | `/run/secrets`                      | With `type=file` | No        | Directory containing controller-only mounted bootstrap secrets      |
-| `controller.secret_provider_bootstrap.env_prefix` | `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__ENV_PREFIX` | string   | `GITSTORE_SECRET__`                 | With `type=env`  | No        | Prefix used to resolve bootstrap-secret environment variables       |
-| `controller.default_max_attempts`                 | `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`                  | integer  | `5`                                 | No               | No        | Retry limit before quarantine                                       |
-| `controller.default_stall_threshold`              | `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD`               | duration | `5m`                                | No               | No        | Worker stall threshold                                              |
-| `controller.checkpoint_dir`                       | `GITSTORE_CONTROLLER__CHECKPOINT_DIR`                        | string   | `/var/lib/gitstore/checkpoints`     | No               | No        | Directory for the filesystem checkpoint store (one file per kind)   |
-| `controller.checkpoint_flush_interval_events`     | `GITSTORE_CONTROLLER__CHECKPOINT_FLUSH_INTERVAL_EVENTS`      | integer  | `100`                               | No               | No        | Watch events between checkpoint persists                            |
-| `controller.max_watch_backoff`                    | `GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF`                     | duration | `30s`                               | No               | No        | Cap on exponential backoff between watch-stream reconnect attempts  |
-| `log.level`                                       | `GITSTORE_LOG__LEVEL`                                        | string   | `info`                              | No               | No        | `debug` \| `info` \| `warn` \| `error`                              |
-| `log.format`                                      | `GITSTORE_LOG__FORMAT`                                       | string   | `json`                              | No               | No        | `json` \| `text`                                                    |
+| Key                                                | Env Var                                                        | Type     | Default                             | Required         | Sensitive | Description                                                         |
+|----------------------------------------------------|----------------------------------------------------------------|----------|-------------------------------------|------------------|-----------|---------------------------------------------------------------------|
+| `controller.port`                                  | `GITSTORE_CONTROLLER__PORT`                                    | integer  | `5001`                              | No               | No        | HTTP port for `/health`, `/metrics`, and `/controller/v1/*`         |
+| `controller.api_uri`                               | `GITSTORE_CONTROLLER__API_URI`                                 | string   | `http://localhost:4000/graphql`     | No               | No        | GraphQL API URI used by reconcilers                                 |
+| `controller.serviceaccount.namespace`              | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE`               | string   | (empty)                             | **Yes**          | No        | Enrolled ServiceAccount namespace                                   |
+| `controller.serviceaccount.name`                   | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME`                    | string   | `gitstore-controller-manager`       | **Yes**          | No        | Enrolled ServiceAccount name                                        |
+| `controller.serviceaccount.key_id`                 | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID`                  | string   | (empty)                             | Raw mode         | No        | Enrolled public-key ID (`kid`); omit for whole-record hot rotation  |
+| `controller.serviceaccount.uid`                    | `GITSTORE_CONTROLLER__SERVICEACCOUNT__UID`                     | string   | (empty)                             | **Yes**          | No        | Enrolled ServiceAccount UID; prevents identity reuse after deletion |
+| `controller.serviceaccount.key_ref.kind`           | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND`           | string   | (empty)                             | **Yes**          | No        | Must be `SecretRef`                                                 |
+| `controller.serviceaccount.key_ref.name`           | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME`           | string   | (empty)                             | **Yes**          | No        | Logical bootstrap-secret name, not a filesystem path                |
+| `controller.serviceaccount.key_ref.key`            | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY`            | string   | (empty)                             | Raw mode         | No        | Logical item; must be omitted for atomic signing records            |
+| `controller.serviceaccount.assertion_audience`     | `GITSTORE_CONTROLLER__SERVICEACCOUNT__ASSERTION_AUDIENCE`      | string   | `gitstore-api/serviceaccount-token` | **Yes**          | No        | Audience for the signed assertion used to exchange a token          |
+| `controller.serviceaccount.access_token_audience`  | `GITSTORE_CONTROLLER__SERVICEACCOUNT__ACCESS_TOKEN_AUDIENCE`   | string   | `gitstore-api`                      | **Yes**          | No        | Audience requested for the exchanged access token                   |
+| `controller.secret_providers.bootstrap.type`       | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__TYPE`       | string   | `file`                              | No               | No        | Bootstrap resolver type: `file` or `env`                            |
+| `controller.secret_providers.bootstrap.format`     | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__FORMAT`     | string   | `raw`                               | No               | No        | `raw` keyed material or an atomic `json-record` signing bundle      |
+| `controller.secret_providers.bootstrap.base_path`  | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH`  | string   | `/run/secrets`                      | With `type=file` | No        | Directory containing controller-only mounted bootstrap secrets      |
+| `controller.secret_providers.bootstrap.env_prefix` | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__ENV_PREFIX` | string   | `GITSTORE_SECRET__`                 | With `type=env`  | No        | Prefix used to resolve bootstrap-secret environment variables       |
+| `controller.reconcile.max_attempts`                | `GITSTORE_CONTROLLER__RECONCILE__MAX_ATTEMPTS`                 | integer  | `5`                                 | No               | No        | Retry limit before quarantine                                       |
+| `controller.reconcile.stall_threshold`             | `GITSTORE_CONTROLLER__RECONCILE__STALL_THRESHOLD`              | duration | `5m`                                | No               | No        | Worker stall threshold                                              |
+| `controller.checkpoint.dir`                        | `GITSTORE_CONTROLLER__CHECKPOINT__DIR`                         | string   | `/var/lib/gitstore/checkpoints`     | No               | No        | Directory for the filesystem checkpoint store (one file per kind)   |
+| `controller.checkpoint.flush_interval_events`      | `GITSTORE_CONTROLLER__CHECKPOINT__FLUSH_INTERVAL_EVENTS`       | integer  | `100`                               | No               | No        | Watch events between checkpoint persists                            |
+| `controller.watch.max_backoff`                     | `GITSTORE_CONTROLLER__WATCH__MAX_BACKOFF`                      | duration | `30s`                               | No               | No        | Cap on exponential backoff between watch-stream reconnect attempts  |
+| `log.level`                                        | `GITSTORE_LOG__LEVEL`                                          | string   | `info`                              | No               | No        | `debug` \| `info` \| `warn` \| `error`                              |
+| `log.format`                                       | `GITSTORE_LOG__FORMAT`                                         | string   | `json`                              | No               | No        | `json` \| `text`                                                    |
 
 Example:
 
@@ -414,25 +415,34 @@ Example:
 [controller]
 port = 5001
 api_uri = "http://localhost:4000/graphql"
-serviceaccount_namespace = "controllers"
-serviceaccount_name = "gitstore-controller-manager"
-serviceaccount_key_id = "controller-2026-09"
-serviceaccount_uid = "<enrolled-service-account-uid>"
-serviceaccount_assertion_audience = "gitstore-api/serviceaccount-token"
-serviceaccount_access_token_audience = "gitstore-api"
-default_max_attempts = 5
-default_stall_threshold = "5m"
-checkpoint_dir = "/var/lib/gitstore/checkpoints"
-checkpoint_flush_interval_events = 100
-max_watch_backoff = "30s"
+[controller.serviceaccount]
+namespace = "controllers"
+name = "gitstore-controller-manager"
+key_id = "controller-2026-09"
+uid = "<enrolled-service-account-uid>"
+assertion_audience = "gitstore-api/serviceaccount-token"
+access_token_audience = "gitstore-api"
 
-[controller.serviceaccount_key_ref]
+[controller.reconcile]
+max_attempts = 5
+stall_threshold = "5m"
+
+[controller.checkpoint]
+dir = "/var/lib/gitstore/checkpoints"
+flush_interval_events = 100
+
+[controller.watch]
+max_backoff = "30s"
+resync_interval = "10m"
+
+[controller.serviceaccount.key_ref]
 kind = "SecretRef"
 name = "controller-manager"
 key = "privateKey"
 
-[controller.secret_provider_bootstrap]
+[controller.secret_providers.bootstrap]
 type = "file"
+format = "raw"
 base_path = "/run/secrets"
 
 [log]
@@ -453,7 +463,7 @@ authentication](runbooks/controller-auth.md) for enrollment, rotation,
 readiness, and recovery procedures.
 
 List-then-watch bootstrap, restart resume, and expired-watch-cursor recovery for registered
-resource kinds (spec 036) persist a per-kind restart checkpoint under `checkpoint_dir`. Each
+resource kinds (spec 036) persist a per-kind restart checkpoint under `controller.checkpoint.dir`. Each
 checkpoint contains the `resourceVersion`, cache snapshot, and deletion replay keys needed to
 restore volatile controller state without losing queued reconciliation work.
 Checkpoint health — last successful write time, replay backlog, and write-failure count — is

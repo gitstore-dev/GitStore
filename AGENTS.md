@@ -51,7 +51,10 @@ Deltas not covered above: 028 (branch-deletion admission, no new Go deps), 029 (
 - `make bootstrap TARGET=<all|token|namespace|repository> [ADMIN_PASSWORD=<password>]` — authenticate/cache a token or create selected bootstrap resources. `repository` requires the namespace to exist.
 - `make clean TARGET=<git-data|controller-checkpoints> CONFIRM=1` — remove only the selected local runtime state; never removes Docker volumes.
 - `make build`, `make test`, `make lint`, `make check TARGET=all`, `make pr-ready` — aggregate development and PR readiness checks.
+- The Go build/test/lint aggregates include `shared/secretmaterial`; its dependency-free module also builds and tests independently with `GOWORK=off`.
 - `make test-datastore-contracts` — run backend-neutral datastore contracts without an external Scylla instance.
+- `make test-secret-integration SECRET_TEST_OWNED_DEPLOYMENT=1 SECRET_TEST_API_A=<base-url> SECRET_TEST_API_B=<base-url> SECRET_TEST_TOKEN_FILE=<path>` — run real controller bootstrap, isolated provider outage, enrolled-key overlap/retirement and process replacement against an isolated two-API deployment sharing Scylla. Both APIs must clamp ServiceAccount tokens to 60s. The existing `controllers/gitstore-controller-manager` identity must have controller RBAC permissions; optional `SECRET_TEST_NAMESPACE`/`SECRET_TEST_SERVICEACCOUNT` select another test identity. Only test-generated keys are enrolled/removed; controllers, private records and checkpoints are test-owned. Never point this at an operator deployment.
+- `REPOSITORY_CAPACITY_SECRET_SCENARIO=1 make capacity TARGET=repository PROFILE=lifecycle MODE=<mode>` is recognized but fails closed until the secret File workload and scheduled fault verifier are implemented. The existing Repository-only profile cannot substitute for spec-063 capacity evidence.
 - `make test-scylla-integration SCYLLA_TEST_ADDR=<host:port>` — run tagged Scylla datastore contracts.
 - `make capacity TARGET=<api|namespace|repository|scylla> PROFILE=<scenario> MODE=<diagnostic|alpha|production>` — the only public capacity interface. Valid target/profile pairs are `api/readiness`, `namespace/admission`, `namespace/validation`, `namespace/watch`, `namespace/recovery`, `repository/lifecycle`, and `scylla/soak`. Repository lifecycle is the real two-API/two-controller Git-admission, durable-watch, load, overflow, rolling-replacement, and recovery gate. Diagnostic evidence cannot pass a gate; alpha watch evidence enforces visibility p95 ≤2s and warns above the unchanged 1s production target; production enforces p95 ≤1s and p99 ≤3s. Set `CAPACITY_OBSERVABILITY=prometheus` and `CAPACITY_PROMETHEUS_TARGETS=<host:port,...>` to have the dispatcher manage an isolated scraper and export current-run API phase queries into the evidence bundle.
 - `make admin-compose`, `make admin-stop`, `make admin-down`, `make admin-logs` — optional admin compose wrappers.
@@ -99,10 +102,19 @@ Common bootstrap variables:
 - Use Conventional Commits. PR titles are CI-enforced Conventional Commits (`.github/workflows/pr-title-lint.yml`) since squash-merge makes the PR title the commit message Release Please parses.
 - Releases are automated via Release Please (`.github/workflows/release-please.yml`); see [Release Process](docs/runbooks/release-process.md) for versioning scheme, graduation between alpha/beta/stable, and troubleshooting.
 - After implementing a feature update the documentation in [`docs/`](docs/).
-- For changes to `gitstore-api`, `gitstore-controller-manager`, or
-  `gitstore-git-service`, plans and tests must cover multi-replica correctness,
-  rolling upgrades, pluggable AuthN/AuthZ, production-scale bounded work, and
+- For `gitstore-api` and `gitstore-controller-manager`, plans and tests must
+  cover concurrent-replica correctness and rolling upgrades. These are
+  requirements to verify per path, not blanket claims of implemented HA.
+  All core-service changes must cover pluggable AuthN/AuthZ, bounded work and
   sustained Git push or reconciliation load where applicable.
+- **Git service is stateful and singleton-only: exactly one active process per
+  deployment.** Repository sharding and placement-aware routing are not
+  implemented. Neither separate repository volumes nor a shared volume makes
+  multiple Git instances supported. Do not add Git replication/autoscaling/HA
+  requirements to specs, plans, tasks or capacity gates unless that work is
+  explicitly approved feature scope. Use retained storage and non-overlapping
+  Git replacement; do not claim zero-downtime Git failover. See constitution
+  Principle VIII and `docs/architecture/README.md`.
 - Never resolve a count/sum/other aggregate over a set of related resources
   (e.g. products in a category, variants for a product, inventory totals) with
   a live datastore query in a `gitstore-api` GraphQL resolver — ScyllaDB has no

@@ -98,7 +98,7 @@ manifest. Where a registration is admitted decides its scope and trust, followin
 - **Tier is derived from where a registration is admitted, never declared by its author.** A
   remote webhook found anywhere except `gitstore-system/gitstore-system` is rejected.
 - **The API owns the registry** and reads it from its own datastore. This answers 036 §18: the
-  stateless Git service never reads a dynamic registry.
+  singleton Git service never reads a dynamic registry.
 - **Operator safety limits stay in static config**, because they bound what Git-declared hooks may
   do:
   - whether remote webhooks are allowed at all;
@@ -146,13 +146,19 @@ it. This is the same exemption Kubernetes applies to its webhook configuration o
      hook to Lane B for that push. `Reject` fails the push with a remedy message.
    - `failurePolicy: Fail | Ignore` on timeout or open circuit. `Ignore` also records a Lane B
      re-check, so the result is never lost.
-3. **Diagnostics.** Git forwards pre-receive stdout/stderr to the pushing client
-   ([githooks](https://git-scm.com/docs/githooks)), so rejections are printed as `remote:` lines
-   with `path:line:column`, taken from YAML node positions. For example:
-   `remote: error products/coat.md:7:3 [price-floor] spec.price below floor`.
+3. **Diagnostics.** GitStore does not execute standard Git hook programs or capture their
+   stdout/stderr. Its in-process Rust `HookPipeline` receives a typed rejection from
+   `SchemaValidationHandler`; that handler calls `CatalogService.ValidateResources` and flattens
+   its structured validation errors to `path: message` entries, separated by `; `. The Git service
+   returns the rejection in the receive-pack `report-status` response as `ng <ref> <reason>` for
+   every ref in the push, and the HTTP Git endpoint forwards that packet stream unchanged. Git
+   clients render this as their normal remote-rejection output; the current contract does **not**
+   guarantee `remote:` formatting, error codes, or YAML `line:column` positions. For example, a
+   two-error rejection is carried as:
+   `ng refs/heads/main products/coat.md: spec.price below floor; products/coat.md: status is system-managed and must not be set by authors`.
 
-Any deny in Lane A rejects every ref in the push. Git does not update any ref when pre-receive
-exits non-zero.
+Any deny in Lane A rejects every ref in the push. GitStore does not update any ref when its
+in-process pre-receive phase returns a rejection.
 
 **Lane B: asynchronous and receipted (post-receive, `AdmitResources`).** Heavy checks run here:
 cross-resource checks, deferred webhooks, and anything with `mode: Async`.
@@ -239,11 +245,11 @@ without redefining it.
 
 ### 8. Service responsibilities
 
-| Service                         | Owns                                                                                                                                                                                         |
-|---------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **gitstore-git-service**        | Relaying Lane A diagnostics as `remote:` lines; forwarding push options; excluding and protecting `refs/notes/*`; writing notes only on API command. It holds **no hook registry**           |
-| **gitstore-api**                | The registry (Git-admitted registrations, bounded by static safety limits); the admission `Chain`; Lane A and B execution; the decision cache; `AdmissionReport`; the journal; Function host |
-| **gitstore-controller-manager** | Gate evaluation and condition patching; event subscription outboxes and delivery; notes projection requests; Function host for controller-side targets                                       |
+| Service                         | Owns                                                                                                                                                                                                                                                                |
+|---------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **gitstore-git-service**        | Running the in-process Lane A pipeline and returning its rejection reason in receive-pack `report-status` (`ng <ref> <reason>`); forwarding push options; excluding and protecting `refs/notes/*`; writing notes only on API command. It holds **no hook registry** |
+| **gitstore-api**                | The registry (Git-admitted registrations, bounded by static safety limits); the admission `Chain`; Lane A and B execution; the decision cache; `AdmissionReport`; the journal; Function host                                                                        |
+| **gitstore-controller-manager** | Gate evaluation and condition patching; event subscription outboxes and delivery; notes projection requests; Function host for controller-side targets                                                                                                              |
 
 036's remaining Git-service extension scope is narrowed to Git-protocol and ref-level policy for
 T0/T1 operators (ref naming, signed commits, tag protection). This is policy that cannot be
@@ -284,9 +290,11 @@ Negative:
 
 ### Keep the extension registry in the Git service (036 Phases 1–3)
 
-Rejected as the primary path. The Git service is stateless and has no datastore. Each replica
-would need a consistent dynamic registry (036 §18), and resource-level policy would be duplicated
-across Rust and Go. The API already parses and admits every resource.
+Rejected as the primary path. The Git service owns persistent bare repositories
+and is singleton-only; it has no catalogue datastore or dynamic extension
+registry. Adding that registry would require synchronization with the API
+(036 §18), and resource-level policy would be duplicated across Rust and Go.
+The API already parses and admits every resource.
 
 ### Allow mutating webhooks on Git-backed resources and write the patch back as a commit
 

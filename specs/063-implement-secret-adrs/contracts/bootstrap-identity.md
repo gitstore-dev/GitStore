@@ -27,25 +27,37 @@ token for this identity without its private key.
 
 ## Configuration
 
-Retain existing controller config names for service-account identity,
-audiences, `serviceaccount_key_ref` and `secret_provider_bootstrap`. Add the
-provider-format selection documented in the resolver contract; do not introduce
-a raw private-key path alternative or inline private-key option.
+This is an Admin API protocol (ADR-0012). Use the configured Admin URI for
+issuance and watches; preserve `/graphql` until the endpoint migration's
+N+1 client release, and retain `/graphql` on dedicated Admin listeners.
+No Storefront route/schema may expose issuance or credential metadata.
+Bootstrap resolution and per-process issuance require no group lease;
+existing conditional reconciliation remains the write-safety mechanism
+(ADR-0018). Renewal cancellation must preserve tracked-runner shutdown and
+final checkpoint flushing introduced by #435.
+
+Use the canonical nested structs and file/environment mapping in
+[configuration.md](configuration.md). The API's decode-once convention is the
+baseline, not the controller's former flat keys or custom environment aliases.
+Operators must migrate renamed keys before deployment; legacy spellings fail
+with actionable errors. Do not introduce a raw private-key path alternative
+or inline private-key option.
 
 For overlap rotation, the stable keyRef identifies a whole JSON signing record:
 
 ```text
-serviceaccount_key_ref.kind = SecretRef
-serviceaccount_key_ref.name = controller-signing-key
-serviceaccount_key_ref.key = omitted
-secret_provider_bootstrap.type = file
-secret_provider_bootstrap.format = json-record
+controller.serviceaccount.key_ref.kind = SecretRef
+controller.serviceaccount.key_ref.name = controller-signing-key
+controller.serviceaccount.key_ref.key = omitted
+controller.secret_providers.bootstrap.type = file
+controller.secret_providers.bootstrap.format = json-record
 ```
 
-Actual TOML nesting/environment aliases must follow existing config binding
-patterns. These lines describe logical fields, not an unverified ready-to-paste
-config block. Existing raw/keyed config continues to use configured
-`serviceaccount_key_id`; record format uses the record's `keyID`. Reject
+These lines describe logical fields; the configuration contract supplies the
+TOML example and mechanically derived environment names. Raw/keyed provider
+material continues to use configured `controller.serviceaccount.key_id`;
+this preserves material semantics, not old config spellings.
+Record format uses the record's `keyID`. Reject
 ambiguous simultaneous configured and record IDs unless they agree; hot-rotation
 deployments must remove the static ID before switching records.
 Configuration validation requires the static ID only for raw/keyed mode; in
