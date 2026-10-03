@@ -57,10 +57,10 @@ Production paths must also define:
 - sustained Git push load and downstream backpressure behavior;
 - repeatable replica, failover, load, soak, and recovery validation.
 
-Future controllers and multi-controller deployments must also follow the
-[controller ownership and replica-group design](architecture/controller-ownership-and-replica-groups.md),
-which distinguishes logical ownership, optimistic concurrency, and CDC
-materializer leases from API-enforced controller fencing.
+Future controllers and multi-controller deployments must also follow
+[ADR 0018 — Controller Ownership, Concurrency and Fencing](ADRs/0018-controller-ownership-concurrency-and-fencing.md).
+It separates logical ownership and conditional writes, which provide safety, from per-key leases,
+which only provide liveness. It also separates CDC materializer leases from controller fencing.
 
 Repository-wide capacity and fault tooling is exposed through the root
 Makefile. Use `make capacity TARGET=<target> PROFILE=<scenario>

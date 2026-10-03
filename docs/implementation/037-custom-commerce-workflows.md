@@ -5,6 +5,26 @@
 **Audience:** catalog and storefront designers; API, Git service, and
 controller-manager maintainers
 
+> **Superseded in part by [ADR 0015 — Resource Lifecycle Hooks](../ADRs/0015-resource-lifecycle-hooks.md)**
+> and aligned with [ADR 0014 — Catalog Release and Publication](../ADRs/0014-catalog-release-and-publication.md).
+> The workflow model below stands. Its extension mechanics are now the generic ones:
+>
+> - **Gates.** The gate vocabulary (`requiredFields`, `expression`, `coreCondition`, `approval`,
+>   `externalAttestation`, `allOf`/`anyOf`/`noneOf`) is defined once in ADR 0015 §5 and used here
+>   unchanged.
+> - **Seller plane.** A seller workflow reaching `APPROVED` satisfies the `ReleaseEligible`
+>   lifecycle gate that `PrepareCatalogRelease` checks for each selected resource (ADR 0014 §2).
+> - **Buyer plane.** Buyer transitions are gates and Functions on datastore-only
+>   Order/Checkout/Return transitions.
+> - **Actions.** Asynchronous `actions` are **event subscriptions** delivered from the durable
+>   watch journal (ADR 0015 §6). Side-effect-free logic that would have been a WASI action
+>   (pricing, eligibility, routing) is a **Function** (ADR 0015 §7). Side-effecting logic is an
+>   external subscriber that reports back through an attestation.
+> - **Custom resources.** `Workflow*` resources are custom resources under
+>   [ADR 0016](../ADRs/0016-custom-resource-definitions.md).
+>
+> Contracts are in [039](039-resource-lifecycle-hooks.md).
+
 ## Decision
 
 Seller and buyer workflows are **separate definitions and separate executions,
@@ -90,10 +110,13 @@ when the digest is unchanged. The certificate retains the reviewed generation
 as audit provenance, but generation alone is not its eligibility key.
 
 The publication controller remains responsible for its existing release work:
-pinning the source revision, ensuring the immutable release tag, preparing the
-snapshot, and activating the `Publication` at its effective time. A custom
-seller workflow may gate that work; it cannot bypass it or write a public
-projection itself.
+pinning the source revision, preparing the snapshot, verifying or ensuring the
+immutable release tag, and activating the `Publication` at its effective time
+([ADR 0014](../ADRs/0014-catalog-release-and-publication.md)). A custom seller
+workflow gates that work only through the `ReleaseEligible` lifecycle gate
+([ADR 0015 §5](../ADRs/0015-resource-lifecycle-hooks.md#5-lifecycle-gates)). The
+gate is satisfied by an approval certificate for the same material-input digest.
+The workflow cannot bypass the gate or write a public projection itself.
 
 ### Buyer: browse to settlement
 
@@ -401,14 +424,15 @@ gates, required human tasks, notification templates, and a registry of
 capability-named actions. This is inspectable in Git, testable at admission,
 and usable from an Admin UI without requiring authors to write code.
 
-An imported bundle may later add a sandboxed WASI action module for specialized
-integration logic. It runs under the controller-manager's asynchronous action
-runner, not in the Git receive path or a storefront request. The module receives
-a narrow, versioned input and capability token; by default it has no filesystem,
-network, datastore, secret, or arbitrary GraphQL access. Each granted capability
-is named, policy-checked, resource/time/memory bounded, and invoked through an
-idempotent API command. The API verifies every resulting transition against the
-definition before it becomes durable.
+> **Superseded by ADR 0015 §6–§7.** A capability-named `action` is delivered
+> as an `EventSubscription` from the watch journal. An external integration
+> performs the side effect and reports back as an `externalAttestation`. A
+> bundle's specialized *computation* (pricing, eligibility, routing) is a pure,
+> deterministic WASM **Function** bound by digest in a `FunctionBinding`. It has
+> no network, clock, filesystem or datastore access. Its inputs come from a
+> declared input query, and its output is verified by the API before any
+> transition becomes durable. There is no general-purpose WASI action runner
+> with granted capabilities.
 
 The following remain core API invariants and cannot be overridden by a bundle:
 
@@ -431,10 +455,13 @@ This preserves the three-service boundary:
 | **gitstore-api**                | Admit/version workflow configuration; resolve bindings for releases; expose safe storefront contracts; authorize and transactionally persist workflow commands, snapshots, events, tasks, outbox records, and fenced results. | Poll timers, directly mutate Git refs, or let an extension bypass payment/inventory/order invariants.            |
 | **gitstore-controller-manager** | Watch/reconcile configurations and executions; wake scheduled work; acquire per-key leases; deliver asynchronous actions and report idempotent results.                                                                       | Directly write the datastore, serve storefront requests, trust unverified event payloads, or grant capabilities. |
 
-As with publication, replicas are active/passive per side-effect key, not a
-single global workflow leader. The API supplies a durable lease epoch and rejects
-stale results. Outbox event IDs, transition idempotency keys, and the current
-execution version make replay safe after a controller or integration failure.
+Concurrency follows [ADR 0018](../ADRs/0018-controller-ownership-concurrency-and-fencing.md),
+as publication does. There is no single global workflow leader. The following make replay safe
+after a controller or integration failure:
+
+- transitions are conditional on the execution's `resourceVersion`;
+- outbox event IDs and transition idempotency keys deduplicate retries;
+- on-demand per-execution leases only avoid duplicate work.
 
 ## Importing custom categories and workflows
 
@@ -522,8 +549,9 @@ Delivery should be phased:
    and the standard buyer checkout/return contract without custom code.
 2. Add declarative definitions, task queues, gates, event/outbox processing,
    Admin UI forms, and bundle preview/import.
-3. Add constrained WASI actions only after its capability model, multi-replica
-   replay tests, limits, and operational audit trail are proven.
+3. Add bundle-supplied WASM Functions and event subscriptions once the ADR 0015
+   Function host and journal-backed delivery ([039 §9](039-resource-lifecycle-hooks.md#9-rollout)
+   R4/R6) have passed their multi-replica replay, limits and audit tests.
 
 This starts with the workflows that GitStore itself can safely explain and
 operate, while retaining a controlled path to the category-specific models

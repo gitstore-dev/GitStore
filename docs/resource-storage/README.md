@@ -184,7 +184,9 @@ Subresources should use the same storage decision as the data they represent:
 - [Namespace Resource Contract](../namespace/namespace-spec.md)
 - [Product Spec Reference](../products/product-spec.md)
 - [ProductVariant Spec Reference](../products/product-variant-spec.md)
-- [Product and Variant Publication Lifecycle](../products/publication-lifecycle.md)
+- [Product and Variant Publication Lifecycle](../products/publication-lifecycle.md) ([ADR 0014](../ADRs/0014-catalog-release-and-publication.md))
+- [Resource Lifecycle Hooks](../ADRs/0015-resource-lifecycle-hooks.md): which hooks each storage group allows ([contracts](../implementation/039-resource-lifecycle-hooks.md))
+- [Custom Resource Definitions](../ADRs/0016-custom-resource-definitions.md): how Extension/CRD resources are defined
 - [Custom Seller and Buyer Workflows](../implementation/037-custom-commerce-workflows.md)
 - [CategoryTaxonomy Spec Reference](../categories/category-taxonomy-spec.md)
 - [Collection Spec Reference](../collections/collection-spec.md)
