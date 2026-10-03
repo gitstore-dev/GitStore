@@ -17,10 +17,13 @@
 >   explicit `mode: SCOPE` fields it lists (`Query.product`, `Query.products`, `Category.products`,
 >   `Collection.products`, `Product.productVariants`, `ProductWatchEvent.product`) become `CHECK`.
 >   The endpoint fixes the scope; no field emits one.
-> - **Re-evaluation of `SCOPE`.** The only remaining candidate is §7's list-level visibility-band
->   filtering (for example `Query.repositories` on the Admin API), where the allowed band set is a
->   policy output consumed by a typed query. `SCOPE` stays in the directive grammar for that case;
->   no v1 field declares it.
+> - **`SCOPE` is removed, not kept unused (2026-10-01).** With the catalog split gone, `mode`/`AuthzMode`
+>   had zero live consumers — the only remaining candidate, §7's list-level visibility-band filtering,
+>   is still speculative. Per YAGNI, `@authorize` drops `mode` entirely (§1, §6) rather than carry an
+>   enum for one unspecified future case. This supersedes the "stays in the grammar" line above; if
+>   §7's case becomes concrete, reintroducing a scope-output mechanism is its own future amendment, not
+>   a standing feature of this directive today. **ADR-0012's own body text, which currently repeats
+>   "`SCOPE` stays in the directive grammar," needs the matching correction.**
 
 ## Context
 
@@ -48,15 +51,7 @@ tracks the number of *kinds*, not the number of *fields*.
 ### 1. Directive shape
 
 ```graphql
-enum AuthzMode {
-  CHECK
-  SCOPE
-}
-
-directive @authorize(
-  permission: String
-  mode: AuthzMode = CHECK
-) on OBJECT | INTERFACE | UNION | FIELD_DEFINITION
+directive @authorize(permission: String) on OBJECT | INTERFACE | UNION | FIELD_DEFINITION
 ```
 
 This drops doc 022's separate `resource: String!` argument. [ADR 0010 §2](0010-authorization-model.md#2-canonical-action-grammar)
@@ -85,8 +80,9 @@ repetition. Only a field-specific override (like `cost`, a narrower permission t
 its own `@authorize`. This is what keeps the permission module's size bound to the number of kinds: a new
 kind adds one directive usage on its own type definition, not N call sites.
 
-The type-level directive intentionally omits `mode` (defaulting to `CHECK`) — see §9 for why `SCOPE` must
-never be declared here.
+`mode`/`AuthzMode` has been removed from the directive entirely (§6) — there is nothing to omit here
+anymore. §9 keeps the gqlgen mechanical fact that motivated the original CHECK/SCOPE placement rule, as
+background for if a scope-output mechanism is ever reintroduced.
 
 ### 3. Abstract types never declare a permission; the field that returns them does
 
@@ -132,6 +128,15 @@ Denial renders `NOT_FOUND` for reads (preserving the enumeration protection alre
 `repositoryNotFoundError`/`namespaceNotFoundError` and doc 022 §13) and `FORBIDDEN` for mutations, where
 there is no pre-existing resource identity to hide.
 
+**Per-listener schema binding (ADR 0012).** With two gqlgen exec packages — Admin and Storefront, each
+with its own generated `DirectiveRoot` and its own parsed schema — the "read the concrete type's
+permission off the parsed schema" step needs no request-time resolution. Each listener's handler is
+constructed once, at bootstrap, from exactly one schema; a request is always routed to exactly one
+listener. The directive implementation (or whatever lookup helper it uses) is simply instantiated once
+per listener, closed over that listener's own schema — identical in shape to how a single-schema setup
+would already have to work, just built twice. There is no point in request handling where "which schema"
+is ambiguous, so nothing needs to be threaded through `ctx`.
+
 ### 5. The `ResourceContext` builder registry is per-kind and colocated
 
 The directive needs, per GraphQL type name, a function `func(obj any) (auth.ResourceContext, error)`.
@@ -153,27 +158,25 @@ func init() {
 The directive package holds only the registry's storage and lookup. A new kind touches its own resolver
 file and its own `.graphqls` file — never `middleware/security/graphql.go`, never the directive package.
 
-### 6. `AuthzMode` is directive/middleware-only; it never crosses the `Authorize` boundary
+### 6. `mode`/`AuthzMode` is removed from the directive (YAGNI)
 
-`AuthZProvider.Authorize(ctx, principal, action, resource) (Decision, error)` is frozen by ADR 0010 §1
-and takes no mode. `mode` governs only what the directive does with the returned `Decision`:
+Doc 022 and earlier drafts of this ADR carried a `CHECK`/`SCOPE` mode so the directive could, on
+`SCOPE`, require `Decision.Scopes` to carry exactly one entry and thread that value through context to
+the resolver (doc 022 §5.3/§6.3/§7.2) — the mechanism behind the catalog `PUBLIC`/`MANAGEMENT` split.
+[ADR 0012](0012-admin-storefront-graphql-endpoints.md) removes that split's need for a per-request
+scope entirely: which view a field serves is now a fact of which endpoint/schema it's compiled into,
+checked with a plain `CHECK`-shaped `Authorize` call (`product.read` on the Storefront API,
+`product.management.read` on the Admin API). That was `SCOPE`'s only concrete consumer. The remaining
+candidate — §7's list-level visibility-band filtering — is still unspecified.
 
-- **`CHECK`**: require `Outcome == Allow`; never inspect `Decision.Scopes`.
-- **`SCOPE`**: additionally require `Decision.Scopes` contains exactly one entry matching the field's
-  resource kind (doc 022 §6.3's fail-closed checklist — zero, multiple, or mismatched scopes all deny),
-  then store that single scope value in context, keyed by response path + resource kind + identifier
-  (doc 022 §5.3), before calling `next(ctx)`. The resolver reads it back (doc 022 §7.2's
-  `authz.RequiredCatalogVisibility(ctx, "product")` pattern) to pick a physical projection.
-
-The directive contains no provider-specific branch. `Decision.Scopes` is additive and provider-neutral
-(doc 022 §7.1); whether a provider ever populates it is that provider's own concern. `rbac-local` today
-never does, so any `mode: SCOPE` field simply fails the "exactly one scope" check and denies closed under
-it — consistent with doc 022 §17 ("`rbac-local` ... must be extended or wrapped before it can serve
-scoped catalog reads"), with no `if provider == "opa"` anywhere in the directive.
-
-`mode` is declared on the shared, kind-agnostic `@authorize` rather than a bespoke `@catalogVisibility`
-directive specifically so it generalizes past Product/ProductVariant without new directive machinery —
-see §7.
+With zero live fields needing anything beyond "require `Outcome == Allow`," `@authorize` drops `mode`
+entirely rather than carry an enum for one unspecified future case. `AuthZProvider.Authorize(ctx,
+principal, action, resource) (Decision, error)` is unaffected either way — it was always frozen by
+ADR 0010 §1 and never took a mode — so this removal is purely a directive-grammar simplification, not a
+contract change. `Decision.Scopes` remains defined (doc 022 §7.1) and provider-neutral; the directive
+simply never reads it today. If §7's case becomes concrete, reintroducing a scope-output mechanism —
+whether by bringing `mode` back or something else — is a future amendment to make at that point, with a
+concrete field to design it against, not now.
 
 ### 7. ADR 0010 §8 visibility bands need no new mechanism for single-resource reads
 
@@ -189,35 +192,36 @@ cannot see out of a paginated list cannot be done by calling `Authorize` per row
 post-fetch (the same anti-pattern doc 022 §12.2 forbids for catalog reads — it breaks `totalCount`,
 cursors, and requires `ALLOW FILTERING`). Unlike Product's publication snapshot, a visibility band is not
 a fixed two-way materialized split — "private" is owner-specific. Filtering a list by visibility band is
-therefore the same *shape* of problem `catalog.visibility` solves, just with a richer payload than one
-`PUBLIC`/`MANAGEMENT` enum (a set of allowed bands, plus possibly a `resourceNames` allow-list for
-individually-granted private resources). When this becomes concrete, it is a new entry in doc 022 §7.1's
-scope registry (e.g. `repository` / `visibility.bands`) and a resolver-side typed query
-(`AuthorizedRepositoryListQuery`, mirroring `AuthorizedProductQuery`) — not a directive change. This ADR
-does not implement that registry entry; it only notes that `mode: SCOPE` already generalizes to it.
+therefore the same *shape* of problem `catalog.visibility` used to solve, just with a richer payload than
+one `PUBLIC`/`MANAGEMENT` enum (a set of allowed bands, plus possibly a `resourceNames` allow-list for
+individually-granted private resources). This ADR does not implement that today, and — now that `mode`
+has been removed (§6) — doesn't have a scope-output mechanism sitting ready for it either. When this
+becomes concrete, it needs: a new entry in doc 022 §7.1's scope registry (e.g. `repository` /
+`visibility.bands`), a resolver-side typed query (`AuthorizedRepositoryListQuery`, mirroring
+`AuthorizedProductQuery`), and a directive-grammar amendment to carry the scope back out — three things
+to design together at that point, against a real field, rather than a mechanism kept warm on spec.
 
 ### 8. Forward compatibility with a ReBAC/OpenFGA provider
 
 Per [ADR 0010 §14](0010-authorization-model.md#14-ownership-assignment-and-transfer), a Zanzibar-style
 provider evaluates `Authorize` against its own relation-tuple graph rather than reading
-`ResourceContext.OwnerSub`/`Attrs` as authority. The directive and `Decision.Scopes` contract are
-unaffected by which provider is active:
-
-- `mode: CHECK` maps to a single `Check(user, relation, object)` call.
-- `mode: SCOPE` on a list has no OpenFGA-native predicate/filter equivalent (OpenFGA has no partial
-  evaluation either) — the adapter answers a small, bounded number of `Check`s against a synthetic
-  namespace-scoped object to learn which visibility bands are allowed, plus a bounded `ListObjects` call
-  scoped to the namespace for individually-granted private resources, and packs both into the same
-  `Decision.Scopes`/`resourceNames` shape the directive already expects. No directive or resolver code
-  changes.
+`ResourceContext.OwnerSub`/`Attrs` as authority. The directive's `CHECK`-only call maps to a single
+`Check(user, relation, object)` — nothing provider-specific. A future scope-output mechanism (§7) would,
+under such a provider, answer a small bounded number of `Check`s against a synthetic namespace-scoped
+object plus a bounded `ListObjects` call for individually-granted private resources — OpenFGA has no
+partial evaluation either, so this would be the adapter's job regardless of which provider ends up
+implementing §7, not something to design now.
 
 ### 9. `mode: SCOPE` is declared per field, never at `OBJECT`/`INTERFACE`/`UNION` level
 
-> **Amended by ADR 0012 §3.** The catalog motivation below is historical. With separate endpoints the
-> Admin API's `type Product` is a `CHECK` on `product.management.read`, and "a caller denied their own
-> just-created resource" is prevented by role design (authoring roles include
-> `product.management.read`, ADR 0010 §5) rather than by where `SCOPE` is declared. The placement
-> rule itself still holds for any future `SCOPE` use (§7).
+> **Amended by ADR 0012 §3, and by §6 above.** The catalog motivation below is historical. With separate
+> endpoints the Admin API's `type Product` is a `CHECK` on `product.management.read`, and "a caller
+> denied their own just-created resource" is prevented by role design (authoring roles include
+> `product.management.read`, ADR 0010 §5) rather than by where `SCOPE` is declared. §6 then removed
+> `mode`/`SCOPE` from the directive entirely, so there is no live placement rule to follow today. This
+> section is kept as the record of *why* that rule existed — the gqlgen mechanical fact that stacking a
+> field-level directive can't suppress one propagated from the return type — in case a scope-output
+> mechanism is ever reintroduced (§7) and needs the same placement discipline.
 
 Every core mutation returns a Relay-style payload wrapper that nests the kind rather than returning it
 directly — `createProduct(input): CreateProductPayload!` where `CreateProductPayload { product: Product }`
@@ -267,11 +271,11 @@ grants `product.create` without `product.read` will see the mutation succeed wit
   `@authorize(permission: "product.watch", mode: CHECK)`, evaluated once at subscribe time — gqlgen calls
   a field's directive when the field resolver is invoked to *produce* the event stream, not once per
   emitted value. The nested `product` field, however, is resolved fresh for **every emitted event**, so
-  it inherits `Product`'s type-level directive (and, per §9, should carry its own explicit
-  `@authorize(permission: "product.read", mode: SCOPE)`) and re-runs the full check — including scope
-  validation — per event. This gives per-event re-authorization for free, stronger than doc 022 §10's
-  stated connection-scoped-decision model: a product that becomes unpublished mid-stream stops appearing
-  in `product` payloads for callers without management-read, without waiting for reconnect.
+  it inherits `Product`'s type-level `CHECK` directive (`product.management.read` on the Admin API, per
+  ADR 0012) and re-runs that check per event, with no extra directive needed. This gives per-event
+  re-authorization for free, stronger than doc 022 §10's stated connection-scoped-decision model: a
+  caller whose `product.management.read` grant is revoked mid-stream stops receiving `product` payloads
+  without waiting for reconnect.
 - *Generic* (`watchResources(kind: String!, ...): WatchEvent!`, `WatchEvent { object: JSON }`,
   `shared/schemas/schema.graphqls`): `object` is untyped JSON — there is no field for a return-type
   directive to attach to, so no per-event re-authorization is structurally possible. The only gate is the
@@ -289,13 +293,16 @@ grants `product.create` without `product.read` will see the mutation succeed wit
 - No change to `AuthZProvider.Authorize`'s signature or to `ResourceContext`'s fields.
 - No new scope names/values are added to doc 022 §7.1's registry by this ADR; §7's `visibility.bands`
   sketch is illustrative of the pattern, not a commitment to implement it now.
+- No `mode`/`AuthzMode` or scope-output mechanism remains in the directive (§6, removed 2026-10-01 for
+  YAGNI) — reintroducing one is deferred until §7's case is actually specified.
 - No per-event visibility filtering for the generic `watchResources` JSON path (§10) — this is a
   structural ceiling of an untyped payload, not something a future revision of this directive can lift.
 
 ## Migration path off `middleware/security/graphql.go`
 
 1. Land the directive, the registry, and the per-kind builders additively — both the directive and the
-   existing `GraphQLFieldAuthorizer` enforce in parallel; nothing is deleted yet.
+   existing `GraphQLFieldAuthorizer` enforce in parallel; nothing is deleted yet. Per ADR 0012, this
+   happens once per listener (Admin, Storefront), each instance closed over its own schema (§4).
 2. Port the most uniform switch cases first (`serviceAccount.*` mutations), deleting each case as its SDL
    equivalent lands.
 3. Port `product`/`products`/`node`/`nodes` next — the actually-polymorphic paths — since they are the
@@ -323,13 +330,9 @@ grants `product.create` without `product.read` will see the mutation succeed wit
   resolver package, never a new case in a shared file.
 - The Product-via-`node`/`nodes` authorization gap identified in doc 022 §3 has a concrete, general
   mechanism to close, rather than a per-field patch.
-- `mode` stays meaningful and reusable beyond Product/ProductVariant without further directive changes,
-  because it carries no catalog-specific vocabulary — that vocabulary lives entirely in doc 022 §7.1's
-  registry.
-- Because `SCOPE` is confined to explicit field declarations (§9), mutation payloads and any other
-  field that merely echoes an already-fetched or already-written resource safely inherit only the
-  type's `CHECK`-only base permission — a caller cannot be denied their own just-created, unpublished
-  resource by the same directive that gates public catalog reads.
+- The directive carries only `permission` (§1, §6) — a mutation payload or any other field that merely
+  echoes an already-fetched or already-written resource always inherits the type's plain `CHECK`
+  permission; there is no second mode that could deny a caller their own just-created resource.
 - Dedicated typed subscriptions get per-event re-authorization as a side effect of ordinary field
   propagation (§10), with no extra mechanism; the generic `watchResources` path does not and structurally
   cannot, which is now an explicit, documented constraint rather than an implicit assumption.

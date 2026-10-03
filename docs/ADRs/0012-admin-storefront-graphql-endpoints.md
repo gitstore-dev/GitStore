@@ -186,12 +186,12 @@ union SearchResultItem = StorefrontProduct | StorefrontCollection | StorefrontCa
 - **Action strings are unchanged.** ADR 0010 already separates the public view (`product.read`)
   from the management view (`product.management.read`). The endpoint decides which of the two is
   checked. That choice no longer comes from a per-request decision scope.
-- **`mode: SCOPE` is not needed for the Product/ProductVariant catalog split.** Both schemas use
-  `CHECK`. On the Admin API, `type Product @authorize(permission: "product.management.read")`
-  propagates to mutation payloads as ADR 0011 §2 describes. The built-in authoring roles therefore
-  include `product.management.read`, because anyone who creates or edits drafts must be able to read
-  them. ADR 0011 §9's concern, "a caller denied their own just-created resource", becomes a role
-  design rule instead of a directive-mode rule.
+- **No `SCOPE` mode is needed for the Product/ProductVariant catalog split, and `@authorize` carries no
+  mode argument at all** (ADR 0011 §6). On the Admin API, `type Product @authorize(permission:
+  "product.management.read")` propagates to mutation payloads as ADR 0011 §2 describes. The built-in
+  authoring roles therefore include `product.management.read`, because anyone who creates or edits
+  drafts must be able to read them. ADR 0011 §9's concern, "a caller denied their own just-created
+  resource", becomes a role design rule instead of a directive-mode rule.
 
 ### 4. Identity per endpoint
 
@@ -290,9 +290,14 @@ union SearchResultItem = StorefrontProduct | StorefrontCollection | StorefrontCa
     `product.read` vs `product.management.read`. Built-in authoring roles include
     `product.management.read`.
   - **[ADR 0011](0011-graphql-authorization-directive.md):**
-    - `@authorize` applies to both schemas in `CHECK` mode.
-    - §9's `SCOPE` rationale no longer covers the Product/ProductVariant catalog split.
-    - Whether any `SCOPE` use remains (e.g. list-level visibility bands) is re-evaluated.
+    - `@authorize` applies to both schemas, `permission` only — no mode argument.
+    - §9's `SCOPE` rationale no longer covers the Product/ProductVariant catalog split, and is kept
+      only as historical record of the gqlgen stacking fact behind the placement rule.
+    - **Resolved, not left open:** with the catalog split gone, `mode`/`AuthzMode` had no remaining
+      live consumer, so ADR 0011 §6 removes it from the directive entirely (YAGNI) rather than keep it
+      declared with zero fields using it. List-level visibility-band filtering (§7 of ADR 0011) stays
+      deferred; reintroducing a scope-output mechanism for it is a future amendment against a concrete
+      field, not a standing feature of `@authorize` today.
   - **[Doc 037](../implementation/037-custom-commerce-workflows.md):** the seller plane is the Admin
     API and the buyer plane is the Storefront API.
   - **[Doc 038](../implementation/038-graphql-cost-and-rate-limits.md):** limits become per-endpoint

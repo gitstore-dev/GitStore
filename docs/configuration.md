@@ -311,16 +311,14 @@ Secrets in the users file and `auth.jwt.secret` must remain outside committed op
 
 ### Hook Phase Toggles
 
-Nested hook keys may be set in `gitstore.toml`. Environment variable overrides use `__` (double-underscore) as the separator.
-
-| Config Key                                             | Default | Description                                   |
-|--------------------------------------------------------|---------|-----------------------------------------------|
-| `hooks.git_receive_pack.pre_receive.enabled`           | `true`  | Enable the `pre-receive` hook phase           |
-| `hooks.git_receive_pack.update.enabled`                | `false` | Enable the `update` hook phase                |
-| `hooks.git_receive_pack.post_receive.enabled`          | `true`  | Enable the `post-receive` hook phase          |
-| `hooks.git_receive_pack.proc_receive.enabled`          | `false` | Enable the `proc-receive` hook phase          |
-| `hooks.git_receive_pack.post_update.enabled`           | `false` | Enable the `post-update` hook phase           |
-| `hooks.git_receive_pack.reference_transaction.enabled` | `false` | Enable the `reference-transaction` hook phase |
+| Config Key                                             | Env Var                                                            | Default | Description                                   |
+|--------------------------------------------------------|--------------------------------------------------------------------|---------|-----------------------------------------------|
+| `hooks.git_receive_pack.pre_receive.enabled`           | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED`           | `true`  | Enable the `pre-receive` hook phase           |
+| `hooks.git_receive_pack.update.enabled`                | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED`                | `false` | Enable the `update` hook phase                |
+| `hooks.git_receive_pack.post_receive.enabled`          | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED`          | `true`  | Enable the `post-receive` hook phase          |
+| `hooks.git_receive_pack.proc_receive.enabled`          | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PROC_RECEIVE__ENABLED`          | `false` | Enable the `proc-receive` hook phase          |
+| `hooks.git_receive_pack.post_update.enabled`           | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_UPDATE__ENABLED`           | `false` | Enable the `post-update` hook phase           |
+| `hooks.git_receive_pack.reference_transaction.enabled` | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__REFERENCE_TRANSACTION__ENABLED` | `false` | Enable the `reference-transaction` hook phase |
 
 ### Validation and Admission
 
