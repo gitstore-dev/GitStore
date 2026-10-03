@@ -45,10 +45,10 @@ connection reads return the same body unchanged. Author metadata, spec, or body
 changes advance `generation`; status-only changes do not.
 
 Repository and Namespace connections use bounded keyset pagination over monthly
-projections and hydrate only the requested page. `totalCount` is `-1` when an
-exact value would require scanning unbounded historical buckets; consumers must
-treat that value as unknown rather than as an empty result. Fetch-all-then-sort
-is not an accepted pagination implementation.
+projections and hydrate only the requested page. Connections do not expose a
+`totalCount` field — an exact count would require scanning unbounded historical
+buckets, which this pagination model is specifically designed to avoid.
+Fetch-all-then-sort is not an accepted pagination implementation.
 
 The resource list is anchored in the Kubernetes-style frontmatter initiative
 tracked by `gitstore-dev/GitStore#40`. That initiative currently covers

@@ -167,11 +167,6 @@ type NamespaceConnection {
   Pagination information.
   """
   pageInfo: PageInfo!
-
-  """
-  Total count of namespaces.
-  """
-  totalCount: Int!
 }
 
 """

@@ -983,7 +983,6 @@ func TestNamespaceContract_NamespacesConnectionProjectsDeclarativeFields(t *test
 					hasNextPage
 					endCursor
 				}
-				totalCount
 			}
 		}
 	`, nil)
@@ -996,7 +995,6 @@ func TestNamespaceContract_NamespacesConnectionProjectsDeclarativeFields(t *test
 			Edges []struct {
 				Node *namespaceContractNamespace `json:"node"`
 			} `json:"edges"`
-			TotalCount int `json:"totalCount"`
 		} `json:"namespaces"`
 	}
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
@@ -1005,8 +1003,8 @@ func TestNamespaceContract_NamespacesConnectionProjectsDeclarativeFields(t *test
 	if data.Namespaces == nil {
 		t.Fatal("namespaces connection is nil")
 	}
-	if data.Namespaces.TotalCount < 1 {
-		t.Fatalf("namespaces.totalCount = %d, want at least 1", data.Namespaces.TotalCount)
+	if len(data.Namespaces.Edges) < 1 {
+		t.Fatalf("namespaces.edges = %d, want at least 1", len(data.Namespaces.Edges))
 	}
 
 	for _, edge := range data.Namespaces.Edges {

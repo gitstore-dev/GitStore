@@ -12,7 +12,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -326,7 +325,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expected[1:], namespaceTargetIDs(forward.Items, expected))
-		assertPaginationTotalCount(t, ds, forward.TotalCount, int32(len(namespaces)))
 
 		oldest := namespaces[len(namespaces)-1]
 		backward, err := ds.ListNamespaces(ctx, datastore.PageParams{
@@ -335,7 +333,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expected[:len(expected)-1], namespaceTargetIDs(backward.Items, expected))
-		assertPaginationTotalCount(t, ds, backward.TotalCount, int32(len(namespaces)))
 	})
 
 	t.Run("Repositories/ForwardPagination", func(t *testing.T) {
@@ -467,7 +464,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expected[1:], repositoryTargetIDs(forward.Items, expected))
-		assertPaginationTotalCount(t, ds, forward.TotalCount, int32(len(repositories)))
 
 		oldest := repositories[len(repositories)-1]
 		backward, err := ds.ListRepositoriesByNamespace(ctx, namespace.Name, datastore.PageParams{
@@ -476,7 +472,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expected[:len(expected)-1], repositoryTargetIDs(backward.Items, expected))
-		assertPaginationTotalCount(t, ds, backward.TotalCount, int32(len(repositories)))
 	})
 
 	t.Run("Repositories/ThreeMonthGlobalForwardBackwardWithEmptyBucket", func(t *testing.T) {
@@ -502,7 +497,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expected[1:], repositoryTargetIDs(forward.Items, expected))
-		assertPaginationTotalCount(t, ds, forward.TotalCount, int32(len(repositories)))
 
 		oldest := repositories[len(repositories)-1]
 		backward, err := global.ListRepositories(ctx, datastore.PageParams{
@@ -511,7 +505,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expected[:len(expected)-1], repositoryTargetIDs(backward.Items, expected))
-		assertPaginationTotalCount(t, ds, backward.TotalCount, int32(len(repositories)))
 	})
 
 	t.Run("EmptyResult/Products", func(t *testing.T) {
@@ -533,23 +526,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		assert.Empty(t, result.Items)
 		assert.False(t, result.HasNext)
 		assert.False(t, result.HasPrevious)
-	})
-
-	t.Run("TotalCount", func(t *testing.T) {
-		ctx := context.Background()
-		ns := "test-" + newID()[:8]
-
-		for range 5 {
-			require.NoError(t, ds.CreateProduct(ctx, newProductInNS(ns)))
-		}
-
-		result, err := ds.ListProducts(ctx, ns, datastore.PageParams{First: 2})
-		require.NoError(t, err)
-		assert.Len(t, result.Items, 2)
-		// memdb returns exact count; scylla may return -1
-		if result.TotalCount >= 0 {
-			assert.Equal(t, int32(5), result.TotalCount)
-		}
 	})
 
 	t.Run("Ordering/NewestFirst", func(t *testing.T) {
@@ -747,13 +723,4 @@ func repositoryTargetIDs(items []*datastore.Repository, targetIDs []string) []st
 		}
 	}
 	return ids
-}
-
-func assertPaginationTotalCount(t *testing.T, ds datastore.Datastore, got, minimum int32) {
-	t.Helper()
-	if strings.Contains(fmt.Sprintf("%T", ds), "scylla.") {
-		assert.Equal(t, int32(-1), got, "Scylla must not scan historical buckets for an exact count")
-		return
-	}
-	assert.GreaterOrEqual(t, got, minimum, "backend-neutral stores may provide an exact count")
 }

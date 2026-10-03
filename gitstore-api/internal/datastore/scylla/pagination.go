@@ -211,6 +211,5 @@ func buildPageResult[T any](items []*T, limit int, page datastore.PageParams) *d
 		Items:       items,
 		HasNext:     hasNext,
 		HasPrevious: hasPrevious,
-		TotalCount:  -1, // expensive to compute in ScyllaDB
 	}
 }

@@ -131,8 +131,7 @@ func TestProductResolver_SpecHydratedViaResolver(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.NotNil(t, got.Spec)
-	require.NotNil(t, got.Spec.Title)
-	assert.Equal(t, "My Widget", *got.Spec.Title)
+	assert.Equal(t, "My Widget", got.Spec.Title)
 	assert.Equal(t, []string{"featured"}, got.Spec.Tags)
 }
 

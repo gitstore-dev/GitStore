@@ -99,7 +99,6 @@ type RepositoryEdge {
 type RepositoryConnection {
   edges: [RepositoryEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }
 
 # ============================================================================

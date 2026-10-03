@@ -975,7 +975,6 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, err)
 		require.Len(t, result.Items, 1)
 		assert.True(t, result.HasNext)
-		assert.True(t, result.TotalCount == -1 || result.TotalCount >= 2)
 	})
 
 	t.Run("Repository/TestMappingRenameAndTransfer", func(t *testing.T) {

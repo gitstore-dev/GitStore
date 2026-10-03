@@ -50,7 +50,8 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: minimal-product
-spec: {}
+spec:
+  title: Minimal Product
 ---
 body
 `
@@ -64,6 +65,21 @@ body
 	assert.NotEmpty(t, body)
 }
 
+func TestParse_Product_MissingTitle_Rejected(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: minimal-product
+spec: {}
+---
+body
+`
+	_, _, err := parseProduct(strings.NewReader(doc))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "spec.title")
+}
+
 func TestParse_ValidProduct_LabelsAndAnnotations(t *testing.T) {
 	doc := `---
 apiVersion: catalog.gitstore.dev/v1beta1
@@ -75,7 +91,8 @@ metadata:
     tier: premium
   annotations:
     owner: catalog-team
-spec: {}
+spec:
+  title: Labelled Product
 ---
 body
 `
@@ -493,6 +510,7 @@ kind: Product
 metadata:
   name: my-product
 spec:
+  title: My Product
   media:
     - fileRef:
         name: "hero-image"
@@ -565,6 +583,7 @@ kind: Product
 metadata:
   name: my-product
 spec:
+  title: My Product
   options: []
 ---
 body
@@ -581,7 +600,8 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: my-product
-spec: {}
+spec:
+  title: My Product
 ---
 body
 `
@@ -811,7 +831,8 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: my-product
-spec: {}
+spec:
+  title: My Product
 ---
 body
 `
@@ -921,6 +942,7 @@ kind: Product
 metadata:
   name: my-product
 spec:
+  title: My Product
   categoryRef:
     name: electronics
     kind: CategoryTaxonomy
@@ -940,7 +962,8 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: my-product
-spec: {}
+spec:
+  title: My Product
 ---
 body
 `

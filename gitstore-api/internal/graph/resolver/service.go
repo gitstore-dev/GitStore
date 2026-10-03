@@ -325,10 +325,7 @@ func (s *Service) CompleteProductDeletion(ctx context.Context, namespace, name, 
 }
 
 func productManifestSpec(spec *model.ProductSpecInput) map[string]any {
-	result := map[string]any{"tags": spec.Tags}
-	if spec.Title != nil {
-		result["title"] = *spec.Title
-	}
+	result := map[string]any{"tags": spec.Tags, "title": spec.Title}
 	if spec.CategoryRef != nil {
 		result["categoryRef"] = productReferenceManifest(spec.CategoryRef)
 	}

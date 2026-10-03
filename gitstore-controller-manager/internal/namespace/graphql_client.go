@@ -18,10 +18,10 @@ mutation($input: ProvisionNamespaceSystemRepositoryInput!) {
   }
 }`
 
-const repositoriesCountQuery = `
+const repositoriesExistQuery = `
 query($namespace: String!) {
   repositories(namespace: $namespace, first: 1) {
-    totalCount
+    edges { cursor }
   }
 }`
 
@@ -77,13 +77,15 @@ func (c *GraphQLRepositoryClient) EnsureSystemRepository(ctx context.Context, na
 func (c *GraphQLRepositoryClient) HasRepositories(ctx context.Context, namespace string) (bool, error) {
 	var response struct {
 		Repositories struct {
-			TotalCount int `json:"totalCount"`
+			Edges []struct {
+				Cursor string `json:"cursor"`
+			} `json:"edges"`
 		} `json:"repositories"`
 	}
-	if err := c.client.Query(ctx, repositoriesCountQuery, map[string]any{"namespace": namespace}, &response); err != nil {
+	if err := c.client.Query(ctx, repositoriesExistQuery, map[string]any{"namespace": namespace}, &response); err != nil {
 		return false, fmt.Errorf("namespace repository client: list repositories: %w", err)
 	}
-	return response.Repositories.TotalCount > 0, nil
+	return len(response.Repositories.Edges) > 0, nil
 }
 
 // GraphQLDeletionClient completes foreground Namespace deletion through the
