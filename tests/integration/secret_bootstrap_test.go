@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -670,10 +671,96 @@ func secretCapacityOwnedCommand(ctx context.Context, name string, args ...string
 	return output.buffer.Bytes(), nil
 }
 
+type secretCapacityOwnedMount struct {
+	Type        string `json:"Type"`
+	Source      string `json:"Source"`
+	Destination string `json:"Destination"`
+	RW          bool   `json:"RW"`
+}
+
+func secretCapacityDockerDesktopMounts(ctx context.Context, hostOS string) (bool, error) {
+	if hostOS != "darwin" {
+		return false, nil
+	}
+	// DOCKER_CONTEXT overrides DOCKER_HOST, just as it does for inspect.
+	endpoint := os.Getenv("DOCKER_HOST")
+	if dockerContext := os.Getenv("DOCKER_CONTEXT"); dockerContext != "" || endpoint == "" {
+		args := []string{"context", "inspect", "--format", "{{.Endpoints.docker.Host}}"}
+		if dockerContext != "" {
+			args = append(args, dockerContext)
+		}
+		body, err := secretCapacityOwnedCommand(ctx, "docker", args...)
+		if err != nil {
+			return false, err
+		}
+		endpoint = strings.TrimSpace(string(body))
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "unix" || parsed.Host != "" || !filepath.IsAbs(parsed.Path) {
+		return false, nil
+	}
+	body, err := secretCapacityOwnedCommand(ctx, "docker", "info", "--format", "{{.OperatingSystem}}")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(body)) == "Docker Desktop", nil
+}
+
+func validateSecretCapacityServiceMounts(root string, index int, mounts []secretCapacityOwnedMount, desktop bool) error {
+	ownedProvider, ownedConfig := false, false
+	for _, mount := range mounts {
+		source := filepath.Clean(mount.Source)
+		if desktop {
+			// Desktop can translate directory binds but leave file binds unchanged.
+			if strings.HasPrefix(source, "/host_mnt/") {
+				source = strings.TrimPrefix(source, "/host_mnt")
+			}
+			if mount.Type == "bind" {
+				var err error
+				source, err = filepath.EvalSymlinks(source)
+				if err != nil {
+					return errors.New("secret capacity: cannot resolve local Docker Desktop bind source")
+				}
+			}
+		}
+		if !filepath.IsAbs(source) {
+			return errors.New("secret capacity: mount source must be absolute")
+		}
+		overlap := source == root || source == string(os.PathSeparator) ||
+			strings.HasPrefix(source, root+string(os.PathSeparator)) ||
+			strings.HasPrefix(root, source+string(os.PathSeparator))
+		if overlap {
+			if index >= 2 || mount.RW || mount.Type != "bind" {
+				return errors.New("secret capacity: provider mounts are writable or visible to another service or not bind mounts")
+			}
+			role := []string{"controller-a", "controller-b"}[index]
+			switch {
+			case source == filepath.Join(root, role, "provider") && mount.Destination == "/run/secrets":
+				ownedProvider = true
+			case source == filepath.Join(root, role, "config.toml") && mount.Destination == "/etc/gitstore/gitstore.toml":
+				ownedConfig = true
+			default:
+				return errors.New("secret capacity: unexpected access to owned private fixture files")
+			}
+		} else if index < 2 && mount.Destination != "/var/lib/gitstore/checkpoints" &&
+			!(mount.Destination == "/run/controller-bootstrap" && !mount.RW) {
+			return errors.New("secret capacity: unexpected controller mount outside owned provider scope")
+		}
+	}
+	if index < 2 && (!ownedProvider || !ownedConfig || len(mounts) != 4) {
+		return errors.New("secret capacity: controllers require owned read-only config/provider, UID and checkpoint mounts")
+	}
+	return nil
+}
+
 func validateSecretCapacityOwnedMounts(ctx context.Context, root, project string) error {
 	root, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return errors.New("secret capacity: cannot resolve owned fixture root")
+	}
+	desktop, err := secretCapacityDockerDesktopMounts(ctx, runtime.GOOS)
+	if err != nil {
+		return err
 	}
 	topology, err := secretCapacityOwnedCommand(ctx, "docker", "ps", "--filter", "label=com.docker.compose.project="+project,
 		"--format", `{{.Names}} {{.Label "com.docker.compose.service"}}`)
@@ -692,42 +779,15 @@ func validateSecretCapacityOwnedMounts(ctx context.Context, root, project string
 			return err
 		}
 		var inspected struct {
-			Project string `json:"project"`
-			Running bool   `json:"running"`
-			Mounts  []struct {
-				Source      string `json:"Source"`
-				Destination string `json:"Destination"`
-				RW          bool   `json:"RW"`
-			} `json:"mounts"`
+			Project string                     `json:"project"`
+			Running bool                       `json:"running"`
+			Mounts  []secretCapacityOwnedMount `json:"mounts"`
 		}
 		if json.Unmarshal(body, &inspected) != nil || inspected.Project != project || !inspected.Running {
 			return errors.New("secret capacity: container is not in the owned running project")
 		}
-		ownedProvider, ownedConfig := false, false
-		for _, mount := range inspected.Mounts {
-			source := filepath.Clean(mount.Source)
-			overlap := source == root || strings.HasPrefix(source, root+string(os.PathSeparator)) ||
-				strings.HasPrefix(root, source+string(os.PathSeparator))
-			if overlap {
-				if i >= 2 || mount.RW {
-					return errors.New("secret capacity: provider mounts are writable or visible to another service")
-				}
-				role := []string{"controller-a", "controller-b"}[i]
-				switch {
-				case source == filepath.Join(root, role, "provider") && mount.Destination == "/run/secrets":
-					ownedProvider = true
-				case source == filepath.Join(root, role, "config.toml") && mount.Destination == "/etc/gitstore/gitstore.toml":
-					ownedConfig = true
-				default:
-					return errors.New("secret capacity: unexpected access to owned private fixture files")
-				}
-			} else if i < 2 && mount.Destination != "/var/lib/gitstore/checkpoints" &&
-				!(mount.Destination == "/run/controller-bootstrap" && !mount.RW) {
-				return errors.New("secret capacity: unexpected controller mount outside owned provider scope")
-			}
-		}
-		if i < 2 && (!ownedProvider || !ownedConfig || len(inspected.Mounts) != 4) {
-			return errors.New("secret capacity: controllers require owned read-only config/provider, UID and checkpoint mounts")
+		if err := validateSecretCapacityServiceMounts(root, i, inspected.Mounts, desktop); err != nil {
+			return err
 		}
 	}
 	return nil

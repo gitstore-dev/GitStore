@@ -32,6 +32,157 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSecretCapacityDockerDesktopMounts(t *testing.T) {
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(`#!/bin/sh
+case "$1" in
+  context)
+    [ "$2" = inspect ] && [ "$3" = --format ] || exit 1
+    [ "$5" = "$DOCKER_CONTEXT" ] || exit 1
+    printf '%s\n' "$TEST_DOCKER_ENDPOINT"
+    ;;
+  info)
+    [ "$TEST_DOCKER_INFO_FAILURE" != true ] || exit 1
+    printf '%s\n' "$TEST_DOCKER_OS"
+    ;;
+  *) exit 1 ;;
+esac
+`), 0700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, tc := range []struct {
+		name, hostOS, context, host, endpoint, daemonOS string
+		infoFailure, want, wantError                    bool
+	}{
+		{name: "local Desktop context", hostOS: "darwin", endpoint: "unix:///local/docker.sock", daemonOS: "Docker Desktop", want: true},
+		{name: "explicit local host", hostOS: "darwin", host: "unix:///local/docker.sock", endpoint: "ssh://remote", daemonOS: "Docker Desktop", want: true},
+		{name: "context overrides remote host", hostOS: "darwin", context: "desktop", host: "tcp://remote:2376", endpoint: "unix:///local/docker.sock", daemonOS: "Docker Desktop", want: true},
+		{name: "remote context overrides local host", hostOS: "darwin", context: "remote", host: "unix:///local/docker.sock", endpoint: "ssh://remote", daemonOS: "Docker Desktop"},
+		{name: "remote host overrides default context", hostOS: "darwin", host: "tcp://remote:2376", endpoint: "unix:///local/docker.sock", daemonOS: "Docker Desktop"},
+		{name: "Linux does not translate", hostOS: "linux", endpoint: "unix:///var/run/docker.sock", daemonOS: "Docker Desktop"},
+		{name: "other local engine", hostOS: "darwin", endpoint: "unix:///local/docker.sock", daemonOS: "Ubuntu"},
+		{name: "Desktop name alone is insufficient", hostOS: "darwin", context: "desktop-linux", endpoint: "ssh://remote", daemonOS: "Docker Desktop"},
+		{name: "relative socket rejected", hostOS: "darwin", endpoint: "unix:docker.sock", daemonOS: "Docker Desktop"},
+		{name: "socket authority rejected", hostOS: "darwin", endpoint: "unix://remote/docker.sock", daemonOS: "Docker Desktop"},
+		{name: "malformed endpoint rejected", hostOS: "darwin", endpoint: "%invalid", daemonOS: "Docker Desktop"},
+		{name: "daemon lookup fails closed", hostOS: "darwin", endpoint: "unix:///local/docker.sock", infoFailure: true, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("DOCKER_CONTEXT", tc.context)
+			t.Setenv("DOCKER_HOST", tc.host)
+			t.Setenv("TEST_DOCKER_ENDPOINT", tc.endpoint)
+			t.Setenv("TEST_DOCKER_OS", tc.daemonOS)
+			t.Setenv("TEST_DOCKER_INFO_FAILURE", strconv.FormatBool(tc.infoFailure))
+			got, err := secretCapacityDockerDesktopMounts(t.Context(), tc.hostOS)
+			require.Equal(t, tc.wantError, err != nil)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestSecretCapacityOwnedMounts(t *testing.T) {
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	root := filepath.Join(parent, "owned-run")
+	for _, run := range []string{"owned-run", "owned-run-other"} {
+		for _, role := range []string{"controller-a", "controller-b"} {
+			require.NoError(t, os.MkdirAll(filepath.Join(parent, run, role, "provider"), 0700))
+			require.NoError(t, os.WriteFile(filepath.Join(parent, run, role, "config.toml"), nil, 0600))
+		}
+	}
+	alias := filepath.Join(parent, "alias")
+	require.NoError(t, os.Symlink(root, alias))
+	for _, representation := range []struct {
+		name                      string
+		desktop, provider, config bool
+	}{
+		{name: "Linux"},
+		{name: "Desktop native", desktop: true},
+		{name: "Desktop mixed directory", desktop: true, provider: true},
+		{name: "Desktop mixed file", desktop: true, config: true},
+		{name: "Desktop translated", desktop: true, provider: true, config: true},
+	} {
+		for index, role := range []string{"controller-a", "controller-b"} {
+			t.Run(representation.name+"/"+role, func(t *testing.T) {
+				mounts := []secretCapacityOwnedMount{
+					{Type: "bind", Source: filepath.Join(root, role, "provider"), Destination: "/run/secrets"},
+					{Type: "bind", Source: filepath.Join(root, role, "config.toml"), Destination: "/etc/gitstore/gitstore.toml"},
+					{Type: "volume", Source: "/var/lib/docker/volumes/checkpoint/_data", Destination: "/var/lib/gitstore/checkpoints", RW: true},
+					{Type: "volume", Source: "/var/lib/docker/volumes/bootstrap/_data", Destination: "/run/controller-bootstrap"},
+				}
+				translate := func(mounts []secretCapacityOwnedMount) {
+					if representation.provider {
+						mounts[0].Source = "/host_mnt" + mounts[0].Source
+					}
+					if representation.config {
+						mounts[1].Source = "/host_mnt" + mounts[1].Source
+					}
+				}
+				valid := append([]secretCapacityOwnedMount(nil), mounts...)
+				translate(valid)
+				require.NoError(t, validateSecretCapacityServiceMounts(root, index, valid, representation.desktop))
+				if representation.provider || representation.config {
+					require.Error(t, validateSecretCapacityServiceMounts(root, index, valid, false))
+				}
+				for _, tc := range []struct {
+					name   string
+					change func([]secretCapacityOwnedMount) []secretCapacityOwnedMount
+				}{
+					{"writable provider", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[0].RW = true; return m }},
+					{"writable config", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[1].RW = true; return m }},
+					{"wrong provider destination", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[0].Destination = "/wrong"; return m }},
+					{"wrong config destination", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[1].Destination = "/wrong"; return m }},
+					{"provider is not a bind", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[0].Type = "volume"; return m }},
+					{"peer provider", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount {
+						m[0].Source = filepath.Join(root, []string{"controller-b", "controller-a"}[index], "provider")
+						return m
+					}},
+					{"peer config", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount {
+						m[1].Source = filepath.Join(root, []string{"controller-b", "controller-a"}[index], "config.toml")
+						return m
+					}},
+					{"other run", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount {
+						m[0].Source = filepath.Join(parent, "owned-run-other", role, "provider")
+						return m
+					}},
+					{"fixture root", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[0].Source = root; return m }},
+					{"fixture ancestor", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[0].Source = parent; return m }},
+					{"filesystem root", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[0].Source = "/"; return m }},
+					{"missing provider", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { return m[1:] }},
+					{"duplicate mount", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { return append(m, m[0]) }},
+					{"writable bootstrap", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[3].RW = true; return m }},
+					{"fixture through checkpoint", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount {
+						m[2].Type, m[2].Source = "bind", root
+						return m
+					}},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						invalid := tc.change(append([]secretCapacityOwnedMount(nil), mounts...))
+						for i := range invalid {
+							if representation.desktop && (representation.provider || representation.config) && invalid[i].Type == "bind" {
+								invalid[i].Source = "/host_mnt" + invalid[i].Source
+							}
+						}
+						require.Error(t, validateSecretCapacityServiceMounts(root, index, invalid, representation.desktop))
+					})
+				}
+				for _, service := range []int{2, 3, 4} {
+					require.Error(t, validateSecretCapacityServiceMounts(root, service, valid[:1], representation.desktop))
+					require.NoError(t, validateSecretCapacityServiceMounts(root, service, mounts[2:3], representation.desktop))
+					ancestor := secretCapacityOwnedMount{Type: "bind", Source: "/", Destination: "/host"}
+					require.Error(t, validateSecretCapacityServiceMounts(root, service, []secretCapacityOwnedMount{ancestor}, representation.desktop))
+				}
+				if representation.desktop {
+					aliased := append([]secretCapacityOwnedMount(nil), mounts...)
+					aliased[0].Source = "/host_mnt" + filepath.Join(alias, role, "provider")
+					require.NoError(t, validateSecretCapacityServiceMounts(root, index, aliased, true))
+					aliased[0].Source = "/host_mnt" + filepath.Join(parent, "missing")
+					require.Error(t, validateSecretCapacityServiceMounts(root, index, aliased, true))
+				}
+			})
+		}
+	}
+}
+
 func TestSecretCapacityProductionEvidence(t *testing.T) {
 	require.NoError(t, validateSecretCapacityEvidence(secretCapacityEvidenceFixture()))
 	cases := []struct {

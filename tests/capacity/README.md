@@ -95,6 +95,16 @@ scenario flag is set. No secret-specific Compose overlay or public Make target
 is needed. Missing ownership/fault prerequisites are rejected before startup;
 missing observations prevent final bundle acceptance.
 
+On macOS, the owned-mount verifier accepts Docker Desktop's mixed bind-source
+representations (`/host_mnt/Users/...` for a directory and `/Users/...` for a
+file) only after confirming a local Unix-socket Docker endpoint and the daemon's
+`Docker Desktop` operating-system identity. `DOCKER_CONTEXT` takes precedence
+over `DOCKER_HOST`. Translated and native bind sources must resolve on the host;
+the same exact per-controller paths, read-only flags, destinations and four-mount
+limit still apply. Linux and remote endpoints receive no Desktop translation.
+Mounts exposing the fixture root, its ancestors or another controller's files
+remain invalid, including mounts on APIs or the singleton Git service.
+
 `make test` also runs these contracts under the race detector,
 including JSON/file-based negative fixtures. The bundle loader in
 `tests/integration/secret_capacity_contract_test.go` requires a closed

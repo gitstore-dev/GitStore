@@ -105,6 +105,18 @@ assembly are now connected, with original and replacement logs retained and
 scanned after all writers close. Running this scenario requires explicitly owned
 fixtures and `CHAOS_CONFIRM=1`; no full production-capacity acceptance is claimed.
 
+For local macOS Docker Desktop runs, Docker may report provider directory binds
+with `/host_mnt` while reporting config file binds without it. The verifier
+normalizes these only for a verified local Desktop Unix-socket endpoint, resolves
+host bind paths and still enforces read-only, replica-owned provider/config
+mounts. Do not broaden mounts or disable ownership checks to work around path
+differences; see the [capacity guide](../../tests/capacity/README.md).
+The production attempt recorded in #441 stopped at this pre-load mount check,
+after five million acknowledged Product writes but before dataset pagination,
+File load or scheduled faults. It is not T058 acceptance: reuse the preserved
+dataset only with its acknowledged manifest and owned deployment, then rerun
+the complete production gate.
+
 The in-process regression exercises two independent credential sources and
 HTTP token verifiers, atomic replacement, cached-token reuse, mismatched pairs,
 expiry-spanning provider failure, peer progress, restoration and a new source.
