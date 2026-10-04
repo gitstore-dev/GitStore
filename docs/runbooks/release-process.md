@@ -7,9 +7,9 @@ This page covers how GitStore's automated release pipeline (Release Please) work
 [Release Please](https://github.com/googleapis/release-please) watches every squash-merge to `main`. It maintains a standing **release PR** that accumulates a version bump and changelog from Conventional Commit PR titles since the last release. Merging that release PR is what actually cuts a release:
 
 1. Release Please pushes a tag (e.g. `v0.1.0-alpha.1`) and creates the GitHub Release with generated notes.
-2. `.github/workflows/cd.yml`'s existing `on.push.tags: ['v*']` trigger fires independently and builds+pushes all 4 Docker images (`api`, `controller-manager`, `git-service`, `admin`) to `ghcr.io`, tagged with that exact version.
+2. `.github/workflows/cd.yml`'s existing `on.push.tags: ['v*']` trigger fires independently and builds+pushes the 3 core Docker images (`api`, `controller-manager`, `git-service`) to `ghcr.io`, tagged with that exact version. `.github/workflows/cd-optional.yml` fires on the same trigger, decoupled from the core pipeline, and builds+pushes images for optional services (`admin`, `oidc-bridge`) the same way — an optional service failing to build never blocks or gates the core release.
 
-The two workflows (`release-please.yml` and `cd.yml`) are fully decoupled — `release-please.yml` never invokes or waits on `cd.yml`; it only pushes a tag, and `cd.yml`'s own trigger does the rest.
+All three workflows (`release-please.yml`, `cd.yml`, `cd-optional.yml`) are fully decoupled from each other — `release-please.yml` never invokes or waits on either CD workflow; it only pushes a tag, and each CD workflow's own trigger does the rest. `cd.yml` and `cd-optional.yml` are likewise independent of each other, by design: a build failure in the optional-images workflow must never block or gate the core release.
 
 ## Required One-Time Setup (manual, not in version control)
 
@@ -82,7 +82,7 @@ Use the same mechanism for:
 
 ## Docker `latest` Tag Behavior
 
-`docker/metadata-action`'s built-in `flavor: latest=auto` does **not** do what this repo needs: by design, it never applies `latest` to a prerelease tag at all, regardless of whether a stable release exists yet (confirmed against its own docs — prerelease tags "will only extend `{{version}}` as tag"). So `cd.yml` computes this explicitly instead, in a `compute-latest-eligibility` job that runs before the 4 image builds and feeds each one's `flavor: | latest=${{ ... }}` with an explicit `true`/`false`:
+`docker/metadata-action`'s built-in `flavor: latest=auto` does **not** do what this repo needs: by design, it never applies `latest` to a prerelease tag at all, regardless of whether a stable release exists yet (confirmed against its own docs — prerelease tags "will only extend `{{version}}` as tag"). So `cd.yml` and `cd-optional.yml` each compute this explicitly instead, in their own `compute-latest-eligibility` job that runs before that workflow's image builds and feeds each one's `flavor: | latest=${{ ... }}` with an explicit `true`/`false` (the logic is duplicated between the two workflows rather than shared, since they're deliberately independent pipelines):
 
 - **A stable tag** (no `-alpha`/`-beta`/`-rc` suffix) is always latest-eligible.
 - **A prerelease tag** is latest-eligible only if `gh release list` shows no stable (non-prerelease) release has ever been published to this repo.
@@ -115,7 +115,8 @@ Adding the `PR Title Lint` workflow only makes the check run and report — it d
 ## Related
 
 - `.github/workflows/release-please.yml` — the release-PR/tag/release-creation workflow.
-- `.github/workflows/cd.yml` — the Docker build/push pipeline, triggered independently by the tag Release Please pushes.
+- `.github/workflows/cd.yml` — the core Docker build/push pipeline (`api`, `controller-manager`, `git-service`), triggered independently by the tag Release Please pushes.
+- `.github/workflows/cd-optional.yml` — the optional-services Docker build/push pipeline (`admin`, `oidc-bridge`), same trigger, fully decoupled from `cd.yml`.
 - `.github/workflows/pr-title-lint.yml` — Conventional Commits enforcement on PR titles.
 - `release-please-config.json` / `.release-please-manifest.json` — repo root, the source of truth for the current version and per-file sync targets.
 - [Docker Deployment Troubleshooting](docker-troubleshooting.md)
