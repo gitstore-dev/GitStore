@@ -106,6 +106,7 @@ Common bootstrap variables:
 - Use Conventional Commits. PR titles are CI-enforced Conventional Commits (`.github/workflows/pr-title-lint.yml`) since squash-merge makes the PR title the commit message Release Please parses.
 - Releases are automated via Release Please (`.github/workflows/release-please.yml`); see [Release Process](docs/runbooks/release-process.md) for versioning scheme, graduation between alpha/beta/stable, and troubleshooting.
 - After implementing a feature update the documentation in [`docs/`](docs/).
+- `gitstore-dev/quickstart` hand-copies several things from this repo rather than sharing them, so it silently drifts when any of the following change here: `compose.yml` (base services, ports, dependencies, health checks, networks, volumes, primary `ghcr.io` images), `compose.local.yml`/`compose.scylla.yml`/`compose.scylla.cluster.yml`/`compose.oidc.yml` (overlay wiring, env vars, images), the `config.toml` schema (section/key names, defaults), `users.yaml`/`policy.yaml` formats, the OIDC reference stack (`config/oidc/hydra/config.yaml`, `config/oidc/kratos/kratos.yml`, `identity.schema.json`), or the `ghcr.io` image list/tagging convention. Flag any PR touching those for a follow-up update on the quickstart side.
 - For `gitstore-api` and `gitstore-controller-manager`, plans and tests must
   cover concurrent-replica correctness and rolling upgrades. These are
   requirements to verify per path, not blanket claims of implemented HA.
