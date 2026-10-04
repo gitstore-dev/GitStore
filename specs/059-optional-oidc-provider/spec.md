@@ -3,7 +3,7 @@
 **Feature Branch**: `059-optional-oidc-provider`
 
 **Created**: 2026-08-29  
-**Status**: Draft (replayed against `main` 2026-09-04 — see Clarifications Session 2026-09-04)  
+**Status**: In progress (replayed against `main` 2026-09-04 — see Clarifications Session 2026-09-04)  
 **Input**: User description: "GitStore's AuthN/AuthZ architecture documents a Phase 7 OIDC JWT provider (`OIDCJWTProvider`) that is a generic, issuer-agnostic OIDC Relying Party — it already works against any standards-compliant OIDC issuer with zero code changes, and that design must not change. GitStore is 'bring your own' for everything optional (storefront, admin, and now identity), but for anyone who does not already have an OIDC IdP and wants something that 'just works,' ship an optional, separately-deployable first-party reference OIDC provider backed by Ory Kratos as the identity/session source of truth. A side-by-side experiment compared two architectures — Dex+Oathkeeper+Kratos vs. Ory Hydra+Kratos — and Hydra+Kratos was chosen. Kratos is the first-class supported identity directory for now; other directories are future work based on demand."
 
 ## Clarifications

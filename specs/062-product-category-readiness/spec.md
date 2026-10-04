@@ -2,7 +2,7 @@
 
 **Feature Branch**: `062-product-category-readiness`
 **Created**: 2026-09-18
-**Status**: Draft
+**Status**: Closed
 **Input**: User description: "Product category and readiness reconciliation: the Product controller (gitstore-controller-manager/internal/product) currently only handles foreground-deletion completion. Per ADR-0004 (docs/ADRs/0004-product-lifecycle.md), the controller must also resolve spec.categoryRef against the existing CategoryTaxonomy datastore/cache and write CategoryResolved and Ready conditions onto Product status via the updateProductStatus GraphQL mutation. MediaResolved is explicitly out of scope (deferred to Phase 2 / GH#244 per the ADR). CategoryResolved=False with reason CategoryNotFound is non-blocking (push accepted, controller retries). Must reuse the existing Product list-watch cache and CategoryTaxonomy cache already wired in gitstore-controller-manager/cmd/controller/main.go, mirroring the existing pattern used for Repository's status.resolved writeback and CategoryTaxonomy's own parent-resolution reconciler as prior art. Must preserve spec 055's constraint that Terminating stays derived (never independently written) and that the existing Product-to-CategoryTaxonomy count fan-out (spec 042) is unaffected."
 
 ## Clarifications

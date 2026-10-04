@@ -2,7 +2,7 @@
 
 **Feature Branch**: `063-implement-secret-adrs`  
 **Created**: 2026-09-21  
-**Status**: Draft  
+**Status**: In progress  
 **Input**: User description: "Spec 056 (PR#381) is open and may depend on ADR-001 and ADR-009. Let's implement the ADRs"
 
 ## Clarifications

@@ -2,7 +2,7 @@
 
 **Feature Branch**: `055-product-deletion-safety`
 **Created**: 2026-09-16
-**Status**: Draft
+**Status**: Closed
 **Input**: Extend Product deletion safety into the complete Product lifecycle: Git push and GraphQL mutation paths; GraphQL read, authentication, and authorization coverage; durable Product watches; Product controller reconciliation; owner references, blocking dependents, background deletion, finalizers, and `metadata.deletionTimestamp`.
 
 ## Clarifications
