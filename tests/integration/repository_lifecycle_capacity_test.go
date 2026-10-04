@@ -127,6 +127,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	if secretCapacityRequested() {
 		secretFaultDriver = prepareSecretCapacityFaultDriver(t, cfg)
 		dataset = prepareSecretCapacityDataset(t, cfg)
+		waitForSecretCapacityControllerRecovery(t, client, cfg)
 	}
 	ensureRepositoryCapacityNamespace(t, cfg)
 	runID := strconv.FormatInt(time.Now().UnixNano(), 36)
@@ -139,7 +140,6 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		fileWorkload.dataset = dataset
 		secretFaultDriver.fixture.RuntimeMarkers = append([]string{}, fileWorkload.runtime.markers...)
 		require.NoError(t, writeSecretCapacityPrivateJSON(filepath.Join(secretFaultDriver.root, "owned-fixture.json"), secretFaultDriver.fixture))
-		waitForSecretCapacityControllerRecovery(t, client, cfg)
 	}
 
 	metricsStart := map[string]capacityProcessMetrics{

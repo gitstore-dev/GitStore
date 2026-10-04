@@ -600,23 +600,3 @@ func watchEventMatchesSelector(kind string, ev eventbus.Event, selector *model.L
 		return categoryEventMatchesSelector(ev, selector)
 	}
 }
-
-// toProductWatchEvent maps an eventbus.Event to the strongly-typed
-// ProductWatchEvent, mirroring toCategoryWatchEvent.
-func toProductWatchEvent(ev eventbus.Event) *model.ProductWatchEvent {
-	out := &model.ProductWatchEvent{
-		Type:            toWatchEventType(ev.Type),
-		Name:            ev.Name,
-		ResourceVersion: ev.Cursor,
-	}
-	if ev.Namespace != "" {
-		ns := ev.Namespace
-		out.Namespace = &ns
-	}
-	if ev.Type != eventbus.Deleted {
-		if p, ok := ev.Object.(*datastore.Product); ok {
-			out.Product = DatastoreProductToGraphQL(p)
-		}
-	}
-	return out
-}

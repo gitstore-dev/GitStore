@@ -6,7 +6,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 
 Baseline stack, established in early specs (025-035) and reused unchanged by every later spec unless a delta is called out below:
 - **Go** 1.25 (`gitstore-api`, `gitstore-controller-manager`; container builders on 1.26.1) — `gqlgen v0.17.90` (GraphQL schema/resolver codegen + `transport.Websocket` subscriptions), `go-playground/validator/v10`, `go.uber.org/zap`, `google/uuid`, `encoding/json`, `github.com/prometheus/client_golang v1.23.2`, `github.com/google/cel-go/cel` (admission rule evaluation), `golang-jwt/v5 v5.3.1`, `golang.org/x/crypto` (bcrypt), `github.com/spf13/viper`.
-- **Controller manager** adds: `golang.org/x/time` (queue rate limiting), `github.com/alitto/pond/v2 v2.7.1` (worker pools), `github.com/cenkalti/backoff/v5 v5.0.3` (retry/backoff).
+- **Controller manager** adds: `golang.org/x/time` (queue rate limiting), `github.com/alitto/pond/v2 v2.7.1` (worker pools), `github.com/cenkalti/backoff/v5 v5.0.3` (retry/backoff), `github.com/syndtr/goleveldb v1.0.0` (bounded disk-backed controller projections, work and indexes).
 - **Rust** 1.x (`gitstore-git-service`) — `gix 0.84.0` (+ `gix-ref 0.64.0`), `tokio 1.35`, `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`, `async-trait 0.1`, `serde 1.0`, `serde_yaml 0.9`.
 - **Storage**: bare Git repositories on local filesystem for Git-backed resources; `datastore.Datastore` abstraction backed by `go-memdb v1.3.5` in development and `gocqlx/v3 v3.0.4` + `gocql` (ScyllaDB 5.x+) in production. Cross-service auth uses a shared `GITSTORE_AUTH__GRPC__HMAC_SECRET`.
 
@@ -14,15 +14,17 @@ Reusable internal interfaces, defined once and instantiated unchanged by later s
 - `internal/types.Reconciler`/`ReconcileResult`, `internal/status.StatusClient`/`StatusPatch` (`gitstore-controller-manager`, spec 026)
 - `internal/listwatch.ListWatcher[T]`/`Watcher[T]`/`Runner[T]`/`WatchEvent[T]` (spec 036)
 - `internal/cache.Cache[T]`/`CacheAccessor[T]`/`EventHandler[T]`, `internal/manager.Manager` (spec 026)
+- Production controllers use `internal/listwatch.PagedListWatcher[T]`, `internal/checkpoint.DiskStore` and error-returning `internal/cache.LookupFunc[T]`; the full-snapshot/memory adapters remain for compatibility fixtures.
 - `internal/graphqlclient.Client` driving `POST /graphql` + `graphql-transport-ws` subscriptions against `gitstore-api`'s `transport.Websocket` (spec 039)
-- `gitstore-api/internal/eventbus.Bus` (in-memory, no durability across restart) — now only CategoryTaxonomy's and File's client-facing watch subscriptions, plus Product's internal status-update fan-out for downstream consumers (e.g. category-count/readiness); Namespace, Repository, and Product's own durable watch subscriptions have since moved to `watchjournal` (spec 040 origin, superseded per-resource by specs 050/058/055)
-- `gitstore-api/internal/watchjournal` (Scylla CDC-backed, replica-safe durable watch journal) — Namespace (spec 050), Repository (spec 058), Product (spec 055)
+- `gitstore-api/internal/eventbus.Bus` (in-memory, no durability across restart) — CategoryTaxonomy's client-facing watch and remaining internal publications; controller Product-to-Category notifications use the durable Product stream, not the event bus.
+- `gitstore-api/internal/watchjournal` (Scylla CDC-backed, replica-safe durable watch journal) — Namespace (spec 050), Repository (spec 058), Product (spec 055), File (migration 014). Typed and generic Product watches fail closed without a configured journal; no event-bus fallback.
 
 Storage/schema notes:
 - Most resources (Repository since spec 045, reused by 058; Namespace via spec 046) carry `Generation`, `ResourceVersion`, `Status json.RawMessage`, `DeletionTimestamp`, `Finalizers`, and an optimistic-concurrency `Update*(ctx, r, expectedResourceVersion)` method — later specs reuse these fields/methods rather than adding schema.
 - Namespace/Repository/CategoryTaxonomy/Product existence and ownership checks reuse existing indexed `RepositoryID`/`NamespaceID` fields and the `status` JSON blob column; no migrations required (specs 039-042, 062).
 - Scylla migration 006 (spec 050) added full-preimage/postimage CDC with 14-day TTL on `namespaces_by_uid` plus bounded journal clock/events, CDC progress, and materializer lease tables, consumed in production via `github.com/scylladb/scylla-cdc-go v1.2.1`; memdb uses an in-process implementation of the same journal contract for development. Specs 058 and 055 extend the same CDC/journal pattern to Repository and Product respectively.
 - Spec 063 adds a repository-local `shared/secretmaterial` Go module (no new third-party dependency); provider-owned secret records are bounded in-process memory only, no persisted secret cache.
+- Controller state uses `<Kind>.disk-v2` directories on existing per-replica checkpoint volumes. Legacy JSON checkpoints are retained but not loaded; the first upgrade streams a cold list. Never overlap processes on one checkpoint directory. Pending work, retry deadlines, quarantine, relation counts and bounded fan-out cursors are durable; lookups must preserve I/O errors rather than returning false absence.
 
 Deltas not covered above: 028 (branch-deletion admission, no new Go deps), 029 (`config 0.15.22`, `regex 1`, already in Rust `Cargo.toml`), 033 (`cmd/gitctl` replaces `cmd/hashpw`), 035 (`github.com/gin-gonic/gin`, `go-grpc-prometheus`; push-policy fields on `datastore.Repository`), 048 (Scylla query-specific denormalized tables, `go-memdb` as dev/contract-test backend).
 

@@ -86,12 +86,6 @@ func productToJSONMap(product *datastore.Product) map[string]any {
 }
 
 func (r *Resolver) watchProductResources(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.ProductWatchEvent, error) {
-	// Keep the event-bus adapter only for single-process development and
-	// compatibility tests that deliberately do not wire a journal. Production
-	// ResolverDeps always provide the durable subscriber.
-	if r.resourceJournal == nil {
-		return r.watchLegacyProducts(ctx, namespace, selector, resourceVersion)
-	}
 	if err := r.repositoryWatchAvailable(); err != nil {
 		return nil, err
 	}
@@ -143,44 +137,6 @@ func (r *Resolver) watchProductResources(ctx context.Context, namespace *string,
 					if streamCtx.Err() == nil {
 						addRepositoryWatchSubscriptionError(ctx, repositoryWatchGraphQLError(err))
 					}
-					return
-				}
-			}
-		}
-	}()
-	return out, nil
-}
-
-func (r *Resolver) watchLegacyProducts(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.ProductWatchEvent, error) {
-	if r.eventBus == nil {
-		return nil, gqlerror.Errorf("watch subscriptions are not available")
-	}
-	cursor := ""
-	if resourceVersion != nil {
-		cursor = *resourceVersion
-	}
-	events, unsubscribe, _, err := r.eventBus.SubscribeWithCursor("Product", cursor)
-	if err != nil {
-		return nil, gqlerror.Errorf("watch subscription failed: %v", err)
-	}
-	out := make(chan *model.ProductWatchEvent, 16)
-	go func() {
-		defer close(out)
-		defer unsubscribe()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case event, ok := <-events:
-				if !ok {
-					return
-				}
-				if (namespace != nil && *namespace != "" && event.Namespace != *namespace) || !productEventMatchesSelector(event, selector) {
-					continue
-				}
-				select {
-				case out <- toProductWatchEvent(event):
-				case <-ctx.Done():
 					return
 				}
 			}

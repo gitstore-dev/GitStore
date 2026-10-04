@@ -429,7 +429,10 @@ func TestManager_ReconcilerPanic_LogsStackTrace(t *testing.T) {
 		t.Fatal("expected item to be quarantined after panic")
 	}
 	// Stack trace presence is validated indirectly via PanicError.Error() in PoisonItem.LastError.
-	items := mgr.AllPoisonItems()
+	items, _, err := mgr.ListPoisonPage(ctx, "_all", "", 256)
+	if err != nil {
+		t.Fatal(err)
+	}
 	found := false
 	for _, pi := range items {
 		if pi.Key == key {

@@ -6,6 +6,7 @@ package listwatch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
@@ -130,37 +131,18 @@ func NewRepositoryListWatcher(client *graphqlclient.Client) *RepositoryListWatch
 }
 
 func (lw *RepositoryListWatcher) List(ctx context.Context) (ListResponse[repositorycontroller.Repository], error) {
-	watcher, err := lw.Watch(ctx, repositoryWatchBootstrapCursor)
+	return collectList[repositorycontroller.Repository](ctx, lw)
+}
+
+func (lw *RepositoryListWatcher) ListPages(ctx context.Context, visit func([]repositorycontroller.Repository) error) (string, error) {
+	if visit == nil {
+		return "", errors.New("listwatch: missing repository page visitor")
+	}
+	cursor, err := bootstrapCursor[repositorycontroller.Repository](ctx, lw, repositoryWatchBootstrapCursor)
 	if err != nil {
-		return ListResponse[repositorycontroller.Repository]{}, fmt.Errorf("listwatch: establish repository watch cursor: %w", err)
+		return "", err
 	}
-	defer watcher.Stop()
-
-	var cursorEvent WatchEvent[repositorycontroller.Repository]
-	select {
-	case event, ok := <-watcher.Events():
-		if !ok {
-			if err := watcher.Err(); err != nil {
-				return ListResponse[repositorycontroller.Repository]{}, fmt.Errorf("listwatch: establish repository watch cursor: %w", err)
-			}
-			return ListResponse[repositorycontroller.Repository]{}, fmt.Errorf("listwatch: repository watch closed before bookmark")
-		}
-		cursorEvent = event
-	case <-ctx.Done():
-		return ListResponse[repositorycontroller.Repository]{}, ctx.Err()
-	}
-	if cursorEvent.Type != Bookmark || cursorEvent.ResourceVersion == "" {
-		return ListResponse[repositorycontroller.Repository]{}, fmt.Errorf("listwatch: repository watch did not return a bootstrap bookmark")
-	}
-	watcher.Stop()
-
-	namespaces, err := listNamespaceIdentifiers(ctx, lw.client)
-	if err != nil {
-		return ListResponse[repositorycontroller.Repository]{}, err
-	}
-
-	var items []repositorycontroller.Repository
-	for _, namespace := range namespaces {
+	err = visitNamespaceIdentifiers(ctx, lw.client, func(namespace string) error {
 		var after *string
 		for {
 			var response repositoriesControllerListResponse
@@ -169,19 +151,27 @@ func (lw *RepositoryListWatcher) List(ctx context.Context) (ListResponse[reposit
 				vars["after"] = *after
 			}
 			if err := lw.client.Query(ctx, repositoriesControllerListQuery, vars, &response); err != nil {
-				return ListResponse[repositorycontroller.Repository]{}, fmt.Errorf("listwatch: list repositories: %w", err)
+				return fmt.Errorf("listwatch: list repositories: %w", err)
 			}
 			observeListPage(ctx, len(response.Repositories.Edges))
+			items := make([]repositorycontroller.Repository, 0, len(response.Repositories.Edges))
 			for _, edge := range response.Repositories.Edges {
 				items = append(items, edge.Node.toRepository())
 			}
-			if !response.Repositories.PageInfo.HasNextPage || response.Repositories.PageInfo.EndCursor == nil {
-				break
+			if err := visit(items); err != nil {
+				return err
 			}
-			after = response.Repositories.PageInfo.EndCursor
+			var err error
+			after, err = nextListCursor(response.Repositories.PageInfo.HasNextPage, response.Repositories.PageInfo.EndCursor, after)
+			if err != nil || after == nil {
+				return err
+			}
 		}
+	})
+	if err != nil {
+		return "", err
 	}
-	return ListResponse[repositorycontroller.Repository]{Items: items, ResourceVersion: cursorEvent.ResourceVersion}, nil
+	return cursor, nil
 }
 
 func (lw *RepositoryListWatcher) Watch(ctx context.Context, resourceVersion string) (Watcher[repositorycontroller.Repository], error) {
@@ -196,7 +186,7 @@ func (lw *RepositoryListWatcher) Watch(ctx context.Context, resourceVersion stri
 		}
 		return nil, fmt.Errorf("listwatch: watch repositories: %w", err)
 	}
-	w := &repositoryWatcher{subscription: subscription, events: make(chan WatchEvent[repositorycontroller.Repository], 16)}
+	w := &repositoryWatcher{watchStop: newWatchStop(subscription.Stop), subscription: subscription, events: make(chan WatchEvent[repositorycontroller.Repository], 16)}
 	go w.run()
 	return w, nil
 }
@@ -210,6 +200,7 @@ type repositoryWatchEventJSON struct {
 }
 
 type repositoryWatcher struct {
+	*watchStop
 	subscription graphqlclient.Subscription
 	events       chan WatchEvent[repositorycontroller.Repository]
 	err          error
@@ -219,7 +210,6 @@ func (w *repositoryWatcher) Events() <-chan WatchEvent[repositorycontroller.Repo
 	return w.events
 }
 func (w *repositoryWatcher) Err() error { return w.err }
-func (w *repositoryWatcher) Stop()      { w.subscription.Stop() }
 func (w *repositoryWatcher) run() {
 	defer close(w.events)
 	for raw := range w.subscription.Next() {
@@ -249,7 +239,9 @@ func (w *repositoryWatcher) run() {
 		if event.Repository != nil {
 			item = event.Repository.toRepository()
 		}
-		w.events <- WatchEvent[repositorycontroller.Repository]{Type: eventType, Object: item, ResourceVersion: event.ResourceVersion}
+		if !sendWatchEvent(w.watchStop, w.events, WatchEvent[repositorycontroller.Repository]{Type: eventType, Object: item, ResourceVersion: event.ResourceVersion}) {
+			return
+		}
 	}
 	if err := w.subscription.Err(); err != nil {
 		if isWatchExpiredErr(err) {

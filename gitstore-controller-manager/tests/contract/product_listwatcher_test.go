@@ -6,14 +6,18 @@ package contract_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
 )
 
 func serveProductBootstrapBookmark(t *testing.T, w http.ResponseWriter, r *http.Request, cursor string) bool {
@@ -132,6 +136,38 @@ func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 	if resp.ResourceVersion != "42" {
 		t.Errorf("ResourceVersion = %q, want durable journal cursor %q", resp.ResourceVersion, "42")
 	}
+}
+
+func TestProductListPagesBackpressuresNamespaceAndProductPagination(t *testing.T) {
+	var namespaces, products atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveProductBootstrapBookmark(t, w, r, "journal-cursor") {
+			return
+		}
+		var req struct {
+			Query string `json:"query"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(req.Query, "namespaces(") {
+			namespaces.Add(1)
+			_, _ = w.Write([]byte(`{"data":{"namespaces":{"edges":[{"node":{"metadata":{"name":"acme"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"namespace-page"}}}}`))
+			return
+		}
+		products.Add(1)
+		_, _ = w.Write([]byte(`{"data":{"products":{"edges":[{"node":{"metadata":{"uid":"one","name":"widget","namespace":"acme","resourceVersion":"1"},"spec":{}}}],"pageInfo":{"hasNextPage":true,"endCursor":"product-page"}}}}`))
+	}))
+	defer srv.Close()
+	lw := listwatch.NewProductListWatcher(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test")))
+	failure := errors.New("projection write failed")
+	cursor, err := lw.ListPages(t.Context(), func(items []categorytaxonomy.Product) error {
+		require.Len(t, items, 1)
+		return failure
+	})
+	require.ErrorIs(t, err, failure)
+	require.Empty(t, cursor, "failed streaming snapshot returned a publishable cursor")
+	require.EqualValues(t, 1, namespaces.Load(), "namespace inventory was accumulated ahead of its consumer")
+	require.EqualValues(t, 1, products.Load(), "product pagination ignored storage backpressure")
 }
 
 func TestProductList_EmptyDatasetReturnsNonEmptySentinelResourceVersion(t *testing.T) {

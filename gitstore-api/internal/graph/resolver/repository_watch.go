@@ -142,7 +142,7 @@ func addRepositoryWatchSubscriptionError(ctx context.Context, err error) {
 }
 
 func (r *Resolver) repositoryWatchAvailable() error {
-	if r.namespaceSubscriber == nil || !r.namespaceWatch.ReadersEnabled {
+	if r.resourceJournal == nil || r.namespaceSubscriber == nil || !r.namespaceWatch.ReadersEnabled {
 		return repositoryWatchGraphQLError(&watchjournal.TerminalError{Code: watchjournal.CodeUnavailable, Reason: "MATERIALIZER_NOT_READY"})
 	}
 	return nil

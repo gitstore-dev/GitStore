@@ -24,6 +24,25 @@ type updatePolicyItem struct {
 	Version    string
 }
 
+func TestWatchStopUnblocksBackpressuredOutput(t *testing.T) {
+	calls := 0
+	control := newWatchStop(func() { calls++ })
+	events := make(chan WatchEvent[updatePolicyItem], 1)
+	events <- WatchEvent[updatePolicyItem]{Type: Bookmark}
+	done := make(chan bool, 1)
+	go func() { done <- sendWatchEvent(control, events, WatchEvent[updatePolicyItem]{Type: Bookmark}) }()
+	control.Stop()
+	control.Stop()
+	select {
+	case sent := <-done:
+		if sent || calls != 1 {
+			t.Fatalf("backpressured shutdown: sent=%v stop_calls=%d", sent, calls)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stopping a full watch left its producer blocked")
+	}
+}
+
 func TestProductListUsesBoundedThousandRowPagesAndReportsRetryHighWater(t *testing.T) {
 	if !strings.Contains(productsListQueryByNamespace, "first: 1000,") {
 		t.Fatal("Product recovery must use 1000-row pages")

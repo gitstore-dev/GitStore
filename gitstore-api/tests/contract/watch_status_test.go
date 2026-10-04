@@ -39,6 +39,28 @@ func newWatchTestResolver(t *testing.T) (*resolver.Resolver, datastore.Datastore
 	return r, store, bus
 }
 
+func newDurableWatchTestResolver(t *testing.T) (*resolver.Resolver, func(datastore.ResourceWatchEvent)) {
+	t.Helper()
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	lease, acquired, err := journal.AcquireLease(t.Context(), t.Name(), time.Now(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	publish := func(event datastore.ResourceWatchEvent) {
+		event.At = time.Now()
+		_, err := journal.Append(t.Context(), lease, event, time.Hour)
+		require.NoError(t, err)
+	}
+	publish(datastore.ResourceWatchEvent{Type: datastore.ResourceWatchBookmark})
+	r, err := resolver.NewResolver(resolver.ResolverDeps{
+		Store: store, Logger: zap.NewNop(), ResourceJournal: journal, NamespaceWatch: resourceContractWatchConfig(),
+	})
+	require.NoError(t, err)
+	return r, publish
+}
+
 func mustReceiveCategoryEvent(t *testing.T, ch <-chan *model.CategoryWatchEvent) *model.CategoryWatchEvent {
 	t.Helper()
 	select {
@@ -60,7 +82,7 @@ func requireNoCategoryEvent(t *testing.T, ch <-chan *model.CategoryWatchEvent) {
 }
 
 func TestWatchFiles_DeliversTypedPayloadAndFiltersNamespace(t *testing.T) {
-	r, _, bus := newWatchTestResolver(t)
+	r, publish := newDurableWatchTestResolver(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	events, err := r.Subscription().WatchFiles(ctx, strptr("acme"), nil, nil)
@@ -71,8 +93,10 @@ func TestWatchFiles_DeliversTypedPayloadAndFiltersNamespace(t *testing.T) {
 		Spec: json.RawMessage(`{"ContentType":"image/jpeg","Source":{"Type":"s3","URI":"s3://bucket/hero"}}`),
 		Body: "alt text",
 	}
-	bus.Publish(eventbus.Event{Type: eventbus.Added, Kind: "File", Namespace: "other", Name: "ignored", ResourceVersion: "6", Object: file})
-	bus.Publish(eventbus.Event{Type: eventbus.Added, Kind: "File", Namespace: "acme", Name: "hero", ResourceVersion: "7", Object: file})
+	payload, err := json.Marshal(file)
+	require.NoError(t, err)
+	publish(datastore.ResourceWatchEvent{Type: datastore.ResourceWatchAdded, Kind: "File", Namespace: "other", Name: "ignored", Payload: payload})
+	publish(datastore.ResourceWatchEvent{Type: datastore.ResourceWatchAdded, Kind: "File", Namespace: "acme", Name: "hero", Payload: payload})
 	select {
 	case ev := <-events:
 		require.Equal(t, "hero", ev.Name)
@@ -88,7 +112,7 @@ func TestWatchFiles_DeliversTypedPayloadAndFiltersNamespace(t *testing.T) {
 func strptr(s string) *string { return &s }
 
 func TestWatchFiles_PreservesDuplicateEventsInCursorOrder(t *testing.T) {
-	r, _, bus := newWatchTestResolver(t)
+	r, publish := newDurableWatchTestResolver(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	events, err := r.Subscription().WatchFiles(ctx, nil, nil, nil)
@@ -98,8 +122,10 @@ func TestWatchFiles_PreservesDuplicateEventsInCursorOrder(t *testing.T) {
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File",
 	}
 
+	payload, err := json.Marshal(file)
+	require.NoError(t, err)
 	for i := 0; i < 2; i++ {
-		bus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "File", Namespace: "acme", Name: "hero", Object: file})
+		publish(datastore.ResourceWatchEvent{Type: datastore.ResourceWatchModified, Kind: "File", Namespace: "acme", Name: "hero", Payload: payload})
 	}
 	first := <-events
 	second := <-events
@@ -109,7 +135,7 @@ func TestWatchFiles_PreservesDuplicateEventsInCursorOrder(t *testing.T) {
 }
 
 func TestWatchFiles_PreservesPublishedOrderWhenResourceVersionsAreOutOfOrder(t *testing.T) {
-	r, _, bus := newWatchTestResolver(t)
+	r, publish := newDurableWatchTestResolver(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	events, err := r.Subscription().WatchFiles(ctx, nil, nil, nil)
@@ -118,12 +144,17 @@ func TestWatchFiles_PreservesPublishedOrderWhenResourceVersionsAreOutOfOrder(t *
 		UID: "00000000-0000-0000-0000-000000000064", Namespace: "acme", Name: "hero",
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File",
 	}
-	bus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "File", Namespace: "acme", Name: "hero", ResourceVersion: "9", Object: file})
-	bus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "File", Namespace: "acme", Name: "hero", ResourceVersion: "8", Object: file})
+	for _, version := range []string{"9", "8"} {
+		file.ResourceVersion = version
+		payload, err := json.Marshal(file)
+		require.NoError(t, err)
+		publish(datastore.ResourceWatchEvent{Type: datastore.ResourceWatchModified, Kind: "File", Namespace: "acme", Name: "hero", Payload: payload})
+	}
 	first := <-events
 	second := <-events
-	require.Equal(t, "1", first.ResourceVersion)
-	require.Equal(t, "2", second.ResourceVersion)
+	require.NotEqual(t, first.ResourceVersion, second.ResourceVersion)
+	require.Equal(t, "9", first.File.Metadata.ResourceVersion)
+	require.Equal(t, "8", second.File.Metadata.ResourceVersion)
 }
 
 // T014: watchCategories delivers Added/Modified/Deleted in admission order.
@@ -212,7 +243,7 @@ func TestWatchResources_GenericPathParitiesWithWatchCategories(t *testing.T) {
 }
 
 func TestWatchResources_FileProjectsObject(t *testing.T) {
-	r, _, bus := newWatchTestResolver(t)
+	r, publish := newDurableWatchTestResolver(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	events, err := r.Subscription().WatchResources(ctx, "File", nil, nil, nil)
@@ -222,13 +253,15 @@ func TestWatchResources_FileProjectsObject(t *testing.T) {
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "8",
 		Spec: json.RawMessage(`{"ContentType":"image/png","Source":{"Type":"git","URI":"blob://hero"}}`),
 	}
-	bus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "File", Namespace: "acme", Name: "hero", ResourceVersion: "8", Object: file})
+	payload, err := json.Marshal(file)
+	require.NoError(t, err)
+	publish(datastore.ResourceWatchEvent{Type: datastore.ResourceWatchModified, Kind: "File", Namespace: "acme", Name: "hero", Payload: payload})
 	select {
 	case ev := <-events:
 		require.Equal(t, "File", ev.Kind)
-		require.Equal(t, "1", ev.ResourceVersion)
-		require.Equal(t, "hero", ev.Object["Name"])
-		require.Equal(t, "image/png", ev.Object["Spec"].(map[string]any)["ContentType"])
+		require.NotEmpty(t, ev.ResourceVersion)
+		require.Equal(t, "hero", ev.Object["metadata"].(map[string]any)["name"])
+		require.Equal(t, "image/png", ev.Object["spec"].(map[string]any)["contentType"])
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for generic File watch event")
 	}

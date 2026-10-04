@@ -51,11 +51,15 @@ const (
 // single dedicated goroutine — this is what satisfies "at most one active
 // list-or-watch loop per kind" without any additional locking.
 type Runner[T any] struct {
-	Kind        string
-	ListWatcher ListWatcher[T]
-	Cache       *cache.Cache[T] // mutable — Runner is the sole writer (Set/Delete/MarkSynced)
-	Store       checkpoint.Store
-	Enqueue     func(types.WorkItemKey) error
+	Kind               string
+	ListWatcher        ListWatcher[T]
+	Cache              *cache.Cache[T] // mutable — Runner is the sole writer (Set/Delete/MarkSynced)
+	Store              checkpoint.Store
+	Disk               *checkpoint.DiskStore
+	DiskIndexes        func(T) []string
+	DiskRelated        func(T) []types.WorkItemKey
+	DiskRelatedVersion func(T) string
+	Enqueue            func(types.WorkItemKey) error
 	// ReplayEnqueue receives related replay keys restored from the checkpoint.
 	// It is used when this runner observes changes whose durable work belongs to
 	// another controller kind.
@@ -108,6 +112,9 @@ type Runner[T any] struct {
 // caller is responsible for not starting a second Runner for the same kind.
 func (r *Runner[T]) Run(ctx context.Context) error {
 	r.applyDefaults()
+	if r.Disk != nil {
+		return r.runDisk(ctx)
+	}
 	defer r.finalFlush(ctx)
 	if err := r.Cache.BeginRecovery(ctx); err != nil {
 		return err
@@ -119,6 +126,258 @@ func (r *Runner[T]) Run(ctx context.Context) error {
 	}
 
 	return r.watchLoop(ctx, pendingDedup)
+}
+
+// Lookup preserves storage errors; a recovering dependency is not "not found".
+func (r *Runner[T]) Lookup(ctx context.Context, key types.WorkItemKey) (T, bool, error) {
+	var value T
+	if !r.Cache.HasSynced() || r.Cache.RecoveryState().Recovering {
+		return value, false, checkpoint.ErrSnapshotInProgress
+	}
+	if r.Disk == nil {
+		value, found := r.Cache.Get(key)
+		return value, found, nil
+	}
+	item, found, _, err := r.Disk.Read(ctx, key)
+	if err != nil || !found {
+		return value, found, err
+	}
+	if err := json.Unmarshal(item.Value, &value); err != nil {
+		return value, false, fmt.Errorf("decode %s projection: %w", r.Kind, err)
+	}
+	if r.KeyFunc(value) != key || r.RevisionFunc(value) != item.Version {
+		return value, false, fmt.Errorf("%s stored projection identity mismatch", r.Kind)
+	}
+	return value, true, nil
+}
+
+func (r *Runner[T]) diskItem(value T) (checkpoint.DiskItem, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return checkpoint.DiskItem{}, err
+	}
+	item := checkpoint.DiskItem{Key: r.KeyFunc(value), Version: r.RevisionFunc(value), Value: data}
+	if r.DiskIndexes != nil {
+		item.Indexes = r.DiskIndexes(value)
+	}
+	if r.DiskRelated != nil {
+		item.Related = r.DiskRelated(value)
+	}
+	if r.DiskRelatedVersion != nil {
+		item.RelatedVersion = r.DiskRelatedVersion(value)
+	}
+	return item, nil
+}
+
+func (r *Runner[T]) diskRetry(ctx context.Context, action func() error) error {
+	b := backoff.NewExponentialBackOff()
+	b.InitialInterval = defaultListRetryInitialInterval
+	b.MaxInterval = r.MaxBackoff
+	_, err := backoff.Retry(ctx, func() (struct{}, error) {
+		return struct{}{}, action()
+	}, backoff.WithMaxElapsedTime(0), backoff.WithBackOff(b),
+		backoff.WithNotify(func(err error, delay time.Duration) {
+			r.log().Warn("durable controller operation failed; retrying",
+				zap.String("kind", r.Kind), zap.Duration("backoff", delay), zap.Error(err))
+		}))
+	return err
+}
+
+func (r *Runner[T]) listToDisk(ctx context.Context, lw PagedListWatcher[T]) error {
+	return r.diskRetry(ctx, func() error {
+		generation, err := r.Disk.BeginSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		progress := &listProgress{observe: r.Cache.ObserveListProgress}
+		listCtx := context.WithValue(ctx, listProgressKey{}, progress)
+		cursor, err := lw.ListPages(listCtx, func(items []T) error {
+			var page []checkpoint.DiskItem
+			size := 0
+			flush := func() error {
+				if len(page) == 0 {
+					return nil
+				}
+				if err := r.Disk.PutSnapshotPage(ctx, generation, page); err != nil {
+					return err
+				}
+				clear(page)
+				page, size = page[:0], 0
+				return nil
+			}
+			for _, value := range items {
+				item, err := r.diskItem(value)
+				if err != nil {
+					return err
+				}
+				encoded, err := json.Marshal(item)
+				if err != nil {
+					return err
+				}
+				if len(page) == checkpoint.DiskPageItems || size+len(encoded) > checkpoint.DiskPageBytes/4 {
+					if err := flush(); err != nil {
+						return err
+					}
+				}
+				page = append(page, item)
+				size += len(encoded)
+			}
+			return flush()
+		})
+		if err != nil {
+			return err
+		}
+		if err := r.Disk.FinishSnapshot(ctx, generation, cursor, func(pages int64) {
+			r.Cache.ObserveListProgress(progress.pages+pages, progress.rows)
+		}); err != nil {
+			return err
+		}
+		r.currentRV = cursor
+		r.Cache.MarkSynced()
+		return nil
+	})
+}
+
+func (r *Runner[T]) applyDiskEvent(ctx context.Context, event WatchEvent[T]) error {
+	if event.Type == Bookmark {
+		return r.Disk.AdvanceCursor(ctx, event.ResourceVersion)
+	}
+	if event.Type != Added && event.Type != Modified && event.Type != Deleted {
+		return fmt.Errorf("unknown %s watch event type %d", r.Kind, event.Type)
+	}
+	if event.Type == Deleted {
+		return r.Disk.Apply(ctx, checkpoint.DiskItem{Key: r.KeyFunc(event.Object)}, true, true, event.ResourceVersion)
+	}
+	item, err := r.diskItem(event.Object)
+	if err != nil {
+		return err
+	}
+	prior, exists, _, err := r.Disk.Read(ctx, item.Key)
+	if err != nil {
+		return err
+	}
+	enqueue := true
+	if exists {
+		var old T
+		if err := json.Unmarshal(prior.Value, &old); err != nil {
+			return fmt.Errorf("decode prior %s projection: %w", r.Kind, err)
+		}
+		if prior.Version == item.Version || r.AcceptUpdate != nil && !r.AcceptUpdate(old, event.Object) {
+			return r.Disk.AdvanceCursor(ctx, event.ResourceVersion)
+		}
+		if r.ShouldEnqueueUpdate != nil {
+			enqueue = r.ShouldEnqueueUpdate(old, event.Object)
+		}
+	}
+	return r.Disk.Apply(ctx, item, false, enqueue, event.ResourceVersion)
+}
+
+func (r *Runner[T]) collectDiskGarbage(ctx context.Context) error {
+	progress := r.Cache.RecoveryState()
+	return r.diskRetry(ctx, func() error {
+		return r.Disk.CollectGarbage(ctx, func(pages int64) {
+			r.Cache.ObserveListProgress(progress.Pages+pages, progress.Rows)
+		})
+	})
+}
+
+func (r *Runner[T]) runDisk(ctx context.Context) error {
+	lw, ok := r.ListWatcher.(PagedListWatcher[T])
+	if !ok {
+		return fmt.Errorf("%s disk runner requires streaming listing", r.Kind)
+	}
+	if err := r.Cache.BeginRecovery(ctx); err != nil {
+		return err
+	}
+	active, cursor, err := r.Disk.Active(ctx)
+	if err != nil {
+		return err
+	}
+	if active == 0 {
+		if err := r.listToDisk(ctx, lw); err != nil {
+			return err
+		}
+	} else {
+		if err := r.Disk.DiscardStaging(ctx); err != nil {
+			return err
+		}
+		r.currentRV = cursor
+		r.Cache.MarkSynced()
+	}
+	reconnect := backoff.NewExponentialBackOff()
+	if err := r.collectDiskGarbage(ctx); err != nil {
+		return err
+	}
+	reconnect.InitialInterval = defaultReconnectInitialInterval
+	reconnect.MaxInterval = r.MaxBackoff
+	reconnect.Reset()
+	for ctx.Err() == nil {
+		watcher, err := lw.Watch(ctx, r.currentRV)
+		if err == nil {
+			if !r.WaitForWatchBookmark {
+				r.Cache.EndRecovery()
+			}
+			opened := time.Now()
+			err = r.consumeDiskWatch(ctx, watcher, reconnect.Reset)
+			if time.Since(opened) >= time.Second {
+				reconnect.Reset()
+			}
+			watcher.Stop()
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(err, ErrWatchExpired) {
+			if err := r.Cache.BeginRecovery(ctx); err != nil {
+				return err
+			}
+			if err := r.listToDisk(ctx, lw); err != nil {
+				return err
+			}
+			if err := r.collectDiskGarbage(ctx); err != nil {
+				return err
+			}
+			reconnect.Reset()
+			continue
+		}
+		delay := reconnect.NextBackOff()
+		r.log().Warn("durable watch disconnected; reconnecting", zap.String("kind", r.Kind),
+			zap.Duration("backoff", delay), zap.Error(err))
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return ctx.Err()
+}
+
+func (r *Runner[T]) consumeDiskWatch(ctx context.Context, watcher Watcher[T], onProgress func()) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case event, ok := <-watcher.Events():
+			if !ok {
+				return watcher.Err()
+			}
+			if err := r.diskRetry(ctx, func() error {
+				if err := r.applyDiskEvent(ctx, event); err != nil {
+					return errors.Join(err, r.Cache.BeginRecovery(ctx))
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			r.currentRV = event.ResourceVersion
+			onProgress()
+			if !r.WaitForWatchBookmark || event.Type == Bookmark {
+				r.Cache.EndRecovery()
+			}
+		}
+	}
 }
 
 func (r *Runner[T]) applyDefaults() {

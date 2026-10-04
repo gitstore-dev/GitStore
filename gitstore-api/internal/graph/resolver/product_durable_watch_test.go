@@ -13,6 +13,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/prometheus/client_golang/prometheus"
@@ -77,6 +78,34 @@ func TestTypedAndGenericProductWatchShareDurableJournal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.WatchEventTypeDeleted, receiveTypedProductEvent(t, typed).Type)
 	assert.Equal(t, model.WatchEventTypeDeleted, receiveGenericProductEvent(t, generic).Type)
+}
+
+func TestProductWatchNeverFallsBackToEventBusWithoutJournal(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	bus := eventbus.New(16)
+	bus.Publish(eventbus.Event{Kind: "Product", Type: eventbus.Added, Name: "legacy"})
+	for _, cfg := range []config.NamespaceWatchConfig{{}, {ReadersEnabled: true}} {
+		r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop(), EventBus: bus, NamespaceWatch: cfg})
+		require.NoError(t, err)
+		_, err = r.Subscription().WatchProducts(t.Context(), nil, nil, nil)
+		require.Error(t, err)
+		require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
+		_, err = r.Subscription().WatchResources(t.Context(), "Product", nil, nil, nil)
+		require.Error(t, err)
+		require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
+	}
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	r, err := NewResolver(repositoryWatchResolverDeps(store, journal))
+	require.NoError(t, err)
+	require.NotNil(t, r.namespaceSubscriber)
+	r.resourceJournal = nil
+	_, err = r.Subscription().WatchProducts(t.Context(), nil, nil, nil)
+	require.Error(t, err)
+	require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
+	_, err = r.Subscription().WatchResources(t.Context(), "Product", nil, nil, nil)
+	require.Error(t, err)
+	require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
 }
 
 func TestTypedProductWatchBootstrapCursorNormalizes(t *testing.T) {

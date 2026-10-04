@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
 
@@ -42,7 +43,10 @@ type ReconcilerRegistration struct {
 	Reconciler Reconciler
 
 	// Cache gates dispatch until HasSynced() returns true (FR-013).
-	Cache syncChecker
+	Cache          syncChecker
+	Disk           *checkpoint.DiskStore
+	RelatedEnqueue func(context.Context, WorkItemKey) error
+	ResyncInterval time.Duration
 
 	// OnSuccess is called after a work item reconciles successfully. A
 	// list-watch runner can use it to remove completed work from its durable

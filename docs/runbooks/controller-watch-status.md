@@ -4,6 +4,12 @@
 
 A controller's `watchCategories`/`watchResources` subscription disconnects and reconnects (a normal occurrence), or its `updateCategoryStatus`/`updateResourceStatus` writes are being rejected. This runbook helps distinguish a transient, self-healing disconnect from a cursor that has actually expired (requiring a re-list), and helps interpret a sustained status-write-conflict rate.
 
+The event-bus metrics in the first sections apply to CategoryTaxonomy.
+Namespace, Repository, Product and File use the durable journal instead; inspect
+`gitstore_namespace_watch_expired_total{reason=...}` and
+`gitstore_namespace_watch_overflow_total`, plus the controller recovery metrics
+below. Increasing event-bus capacity does not change durable journal retention.
+
 ## Diagnostic Steps: Watch Disconnects
 
 1. Check the rate of subscriptions being opened for the affected kind:
@@ -74,17 +80,20 @@ for a bookmark on the resumed watch, not merely a successful asynchronous
 WebSocket open. Cancellation does not reopen admission or discard the old
 checkpoint cursor while listing is incomplete.
 
-Product enumeration uses 1,000-row pages: five million rows require 5,000
+Product enumeration streams 1,000-row pages: five million rows require 5,000
 Product requests rather than 50,000. Successful enumeration pages report a
 high-water count; revisiting the same pages after a failed list does not reset
 the no-progress watchdog. The existing stall threshold still applies to a
-recovery that stops making progress.
+recovery that stops making progress. Disk merge and retirement batches also
+advance recovery progress; the page counter is not exclusively an HTTP-request
+counter.
 
 `GET /health` distinguishes liveness from readiness: progressing recovery can
 return HTTP 200 with `ready:false`, `kinds.<Kind>.recovering:true` and recovery
 page/row/timestamp details. Consumers that require a reconciled controller
 must check `ready`, not just HTTP status. Capacity setup waits at most ten
-minutes for recovery before baseline collection; unhealthy or unauthenticated
+minutes for recovery before creating the authoring Namespace/Repository/File
+fixtures, not after the first Git clone; unhealthy or unauthenticated
 controllers still fail immediately. Load and final acceptance require readiness.
 No retry is counted as successful reconciliation.
 
@@ -106,10 +115,10 @@ For historical metrics, enable the capacity scraper with both API and controller
 targets as described in `tests/capacity/README.md`; unscripted `/metrics` reads
 cannot recover counters after a process has exited.
 
-This coordination is per process and changes no persisted checkpoint schema.
-During rolling upgrades, old controllers retain the stale-cache dispatch
-behavior. The updated secret-capacity observer requires the new health shape
-on both replicas; do not use mixed-version results to claim this recovery fix.
+This coordination is per process. The disk-backed rollout below introduces a
+new checkpoint format; old controllers still use the memory-backed path.
+The updated secret-capacity observer requires the new health shape on both
+replicas; do not use mixed-version results to claim bounded-memory recovery.
 
 The controller shares one outbound request budget across all reconciliation
 kinds, list/status requests and WebSocket upgrades. Defaults are
@@ -159,10 +168,133 @@ run. The capacity harness now persists valid controller samples before checking
 health and reports overall health separately from credential readiness, without
 relaxing either requirement.
 
+## Bounded disk-backed controllers
+
+The production Namespace, Repository, CategoryTaxonomy and Product controllers
+use the pure-Go LevelDB store for projections, relation indexes and pending
+reconciliation obligations. Listing applies backpressure between bounded
+pages, never collecting the catalog into a slice. The in-memory cache object
+only holds recovery/admission state; reconciliation uses error-returning disk
+lookups. A storage failure is not treated as a missing resource.
+Cross-kind readers yield during long generation operations rather than holding
+another controller's dispatch slot behind a multi-million-row merge.
+
+Each kind uses a locked `<Kind>.disk-v2` directory on the existing checkpoint
+volume. Separate replicas must retain separate directories; this is local
+recovery state, not a shared coordination database. Replacement of a replica
+must be non-overlapping on its volume: stop its old process before starting
+another writer. The other replica keeps its own independent store.
+The engine uses a 4 MiB write buffer, an 8 MiB block cache and a 32-file cache.
+Application pages are limited to 256 entries and 4 MiB, and projections to 1 MiB.
+These are component bounds, not a claim that a whole controller fits in their sum.
+
+Snapshots are staged without replacing the active generation. Publication
+atomically switches the generation and watch cursor after preserving unfinished
+and deleted-resource work. Related work is generation-scoped too, so an
+unpublished category membership cannot be dispatched. Synchronous transactions
+couple watch changes with their cursor and work obligations; acknowledgements
+must match the captured work token. A stale completion cannot erase newer work.
+Interrupted staging is discarded before resuming the last published cursor.
+Expired cursors trigger a streamed replacement. Retired generations are removed
+in bounded batches before recovered work is released; LevelDB compaction may
+reclaim their physical table space later. Budget storage for simultaneous
+generations and compaction, not just one steady-state catalog. Cleanup advances
+an exclusive key cursor instead of repeatedly scanning already-deleted keys;
+interrupted cleanup resumes safely from the remaining persisted rows.
+
+The manager reserves at most its configured worker count. Ready-work indexes
+prioritize live changes over snapshot replay; absolute retry deadlines and
+quarantine records are stored on disk, not in a timer or map per key. Periodic
+resync does not bypass existing deferred or quarantined work or restart an
+already-running sweep. Relation fan-out
+has a durable, paginated scan cursor, and restarts that cursor when its source
+generation changes. Cross-kind notifications are acknowledged only after the
+destination work is durably recorded.
+Queue depth includes deferred obligations, but a future deadline alone does
+not make an idle controller stalled; stall detection uses runnable work. This
+backlog is a disk-backed count, not the size of an in-memory queue. Existing
+checkpoint last-write/failure metrics now include durable queue and staging
+transactions; use the recovery state to distinguish progress from publication.
+
+Product/category membership and child counts are maintained transactionally
+with projections, then materialized into API status by reconcilers. They do not
+require live API aggregates or a full Product listing for each category.
+Category ancestry walks retain at most 128 names, matching the existing signed
+8-bit depth representation; deeper hierarchies fail explicitly rather than
+overflowing depth or consuming unbounded memory. Cycle participants retain their
+previous depth/path. The Repository storage-verification cache is capped at
+4,096 entries; eviction only causes an earlier storage recheck.
+
+Corruption, incompatible schemas and I/O failures return errors rather than an
+empty catalog. Watch persistence failures close recovery admission until
+durable progress resumes. Quarantine listing is paginated; see
+[controller-poisoned-item.md](./controller-poisoned-item.md).
+
+Legacy JSON checkpoints and experimental `disk-v1` directories are neither
+loaded nor removed. The first upgrade performs a bounded cold list into v2;
+later process replacements resume v2. Retain the per-replica volume. An old
+binary cannot read v2 and still has the original memory behavior; rolling back
+is not a supported way to recover a five-million-row controller. This changes
+no API datastore schema, authentication mechanism or Docker memory allocation.
+
+The initial, pre-integration storage proof `checkpoint-proof-20261004-02` wrote five million
+realistic Product projections, reopened the store, replaced the full snapshot,
+and reopened it again. All 5,000,000 initial pending keys survived; after
+acknowledging 256 keys, the replacement retained exactly 4,999,744 pending keys.
+The complete test took 623.05 seconds with a sampled peak Go heap of 58,949,632
+bytes (56.2 MiB). Its container had a 512 MiB hard memory limit with no additional
+swap allowance, exited successfully and was not OOM-killed. This did not change
+the Docker VM allocation or touch the production dataset/checkpoint volumes.
+Local evidence is retained under `.gitstore/checkpoint-proof-20261004-02/`;
+the task-owned scratch container and volume were removed.
+
+The integrated v2 proof `checkpoint-proof-20261004-04` also completed with five
+million projections, under the same 512 MiB hard limit and no additional swap.
+The real Product reconciler and manager acknowledged 256 items through at most
+four active workers, with 256 writes to a stubbed status API. Full replacement
+and reopening retained all five million projections and exactly 4,999,744
+pending items. The test passed in 1,205.41 seconds, with sampled peak Go
+`HeapInuse` of 60,252,160 bytes (57.5 MiB); Docker recorded exit 0 and no OOM.
+Heap measurements are not total process RSS or container memory usage.
+
+| v2 proof phase | Logical file bytes | Allocated filesystem bytes |
+| --- | ---: | ---: |
+| Initial snapshot/reopen | 953,050,349 | 953,761,792 |
+| Replacement before retirement | 1,974,342,756 | 1,975,816,192 |
+| Sampled peak over the run | 2,084,242,403 | 2,086,227,968 |
+| After retirement/reopen | 2,083,468,964 | 2,085,462,016 |
+
+Disk usage was sampled every second. Logical retirement does not force LSM
+compaction: the final approximately 1.94 GiB allocation can still include
+obsolete table entries and deletion markers. It is not a fully compacted
+steady-state footprint, nor a measurement of the deployed Product dataset.
+The preceding v2 attempt `checkpoint-proof-20261004-03` timed out after 45 minutes
+during cleanup without an OOM; advancing cleanup past each deleted page fixed
+the repeated tombstone scan. Both runs retain logs, source/binary digests and
+container inspection evidence under their respective `.gitstore/` directories.
+Their task-owned scratch containers and volumes were removed; production
+volumes and Docker memory allocation were unchanged.
+
+Separate contracts cover process-kill/reopen durability, incomplete-snapshot
+isolation, concurrent updates, stale acknowledgements, rejected oversized pages,
+membership reassignment and kind/replica isolation. Integration contracts cover
+streamed restart/expiry recovery, bounded dispatch, newer in-flight work,
+durable schedules, fan-out across generations and paginated poison reads.
+The full-size fixture is an isolated storage/dispatch diagnostic, **not
+production capacity acceptance**. Its status API and related-work destination
+are stubbed; the deployed controllers still need a new live gate covering real
+API traffic, concurrent replicas, rolling replacement and sustained load.
+
+The secondary Product subscription uses the existing durable Product journal in
+production. Both typed and generic Product watches now require that journal:
+the legacy event-bus fallback has been removed. Development and tests must wire
+the existing memdb journal too; a missing journal returns `WATCH_UNAVAILABLE`.
+CategoryTaxonomy's own event-bus subscription is unchanged.
+
 ## Recovery Actions: Status-Write Conflicts
 
 - **Occasional conflicts, low rate**: no action needed — this is the optimistic-concurrency mechanism working as intended.
-- **Sustained conflicts on the same resource**: identify the two writers (e.g. two controller replicas reconciling the same kind, which is unsupported per this feature's Assumptions — leader election is out of scope) and ensure only one writer is active.
+- **Sustained conflicts on the same resource**: identify the writers and their observed resource versions. Replica races can produce expected optimistic-concurrency conflicts; investigate stale projections or failed recovery admission rather than disabling a healthy replica solely because conflicts occurred.
 - **Sustained conflicts across many resources of one kind, correlated with watch-expiry or event-drop signals for that kind**: the reconciler is working from stale cache data. Fix the underlying watch-consumption lag first (see above); the conflict rate should subside once the cache catches up.
 
 ## Verification

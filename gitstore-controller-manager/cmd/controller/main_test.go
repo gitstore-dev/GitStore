@@ -22,17 +22,82 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
+	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
 	repositorycontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/repository"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gitstore-dev/gitstore/secretmaterial"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestProductionRegistrationUsesDiskForEveryKind(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{Controller: config.ControllerConfig{Checkpoint: config.CheckpointConfig{Dir: dir}}}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	mgr := manager.New()
+	var runners sync.WaitGroup
+	client := graphqlclient.New("http://unused.invalid/graphql", graphqlclient.NewStaticToken("test"))
+	closeStores, err := registerDiskControllers(ctx, &runners, mgr, cfg, zap.NewNop(), client)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = closeStores() })
+	runners.Wait()
+	keys := []types.WorkItemKey{
+		{Kind: "Namespace", Name: "probe"},
+		{Kind: "Repository", Namespace: "shop", Name: "probe"},
+		{Kind: "CategoryTaxonomy", Namespace: "shop", Name: "probe"},
+		{Kind: "Product", Namespace: "shop", Name: "probe"},
+	}
+	for _, key := range keys {
+		require.NoError(t, mgr.Enqueue(key))
+		require.True(t, mgr.KindStats()[key.Kind].Registered)
+	}
+	require.NoError(t, closeStores())
+	for _, key := range keys {
+		store, err := checkpoint.OpenDiskStore(dir, key.Kind)
+		require.NoError(t, err)
+		pending, err := store.Pending(t.Context(), "", 1)
+		require.NoError(t, err)
+		require.Len(t, pending, 1)
+		require.Equal(t, key, pending[0].Key, "production registration did not persist its work")
+		require.NoError(t, store.Close())
+	}
+}
+
+func TestPoisonRequeueSupportsClusterScopedDiskKeys(t *testing.T) {
+	store, err := checkpoint.OpenDiskStore(t.TempDir(), "Namespace")
+	require.NoError(t, err)
+	defer store.Close()
+	key := types.WorkItemKey{Kind: "Namespace", Name: "example"}
+	require.NoError(t, store.Enqueue(t.Context(), key))
+	pending, err := store.Pending(t.Context(), "", 1)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	ok, err := store.DeferWork(t.Context(), key, pending[0].Token, 0, "test failure", 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	mgr := manager.New()
+	require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+		Kind: "Namespace", Disk: store,
+		Cache: cache.New[string](),
+		Reconciler: namespacecontroller.NewReconcilerWithLookup(
+			func(context.Context, types.WorkItemKey) (namespacecontroller.Namespace, bool, error) {
+				return namespacecontroller.Namespace{}, false, nil
+			}, nil, nil, nil),
+	}))
+	response := httptest.NewRecorder()
+	buildMux(mgr).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/controller/v1/poison/Namespace/example/requeue", nil))
+	require.Equal(t, http.StatusNoContent, response.Code)
+	require.False(t, mgr.IsQuarantined(key))
+}
 
 func TestParseConfigFile(t *testing.T) {
 	path, err := parseConfigFile([]string{"--config-file", "/config/shared.toml"})

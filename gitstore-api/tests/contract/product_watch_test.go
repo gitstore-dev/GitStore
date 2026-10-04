@@ -28,6 +28,13 @@ import (
 // Typed and generic Product streams are projections of the same durable
 // cursor. This contract intentionally bypasses the process-local event bus so
 // replay and selector behavior cannot regress to replica-local state.
+func resourceContractWatchConfig() config.NamespaceWatchConfig {
+	return config.NamespaceWatchConfig{
+		ReadersEnabled: true, ReadBatchSize: 32, MaxReplayEvents: 32, SubscriberBuffer: 8,
+		SubscriberBackpressureMillis: 100, PollMinMillis: 1, PollMaxMillis: 5, MaxMaterializerLagSeconds: 60,
+	}
+}
+
 func TestProductDurableWatchContract_TypedGenericBootstrapReplayAndSelector(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -40,7 +47,7 @@ func TestProductDurableWatchContract_TypedGenericBootstrapReplayAndSelector(t *t
 	require.NoError(t, err)
 	r, err := resolver.NewResolver(resolver.ResolverDeps{
 		Store: store, Logger: zap.NewNop(), ResourceJournal: journal,
-		NamespaceWatch: config.NamespaceWatchConfig{ReadersEnabled: true, ReadBatchSize: 32, MaxReplayEvents: 32, SubscriberBuffer: 8, SubscriberBackpressureMillis: 100, PollMinMillis: 1, PollMaxMillis: 5, MaxMaterializerLagSeconds: 60},
+		NamespaceWatch: resourceContractWatchConfig(),
 	})
 	require.NoError(t, err)
 	bootstrap := watchjournal.BootstrapCursor
@@ -180,10 +187,12 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	r, err := resolver.NewResolver(resolver.ResolverDeps{
-		Store:    store,
-		Logger:   zap.NewNop(),
-		Clock:    apiruntime.SystemClock{},
-		EventBus: bus,
+		Store:           store,
+		Logger:          zap.NewNop(),
+		Clock:           apiruntime.SystemClock{},
+		EventBus:        bus,
+		ResourceJournal: store.(datastore.ResourceWatchCapable).ResourceWatchJournal(),
+		NamespaceWatch:  resourceContractWatchConfig(),
 	})
 	require.NoError(t, err)
 
@@ -273,10 +282,12 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	r, err := resolver.NewResolver(resolver.ResolverDeps{
-		Store:    store,
-		Logger:   zap.NewNop(),
-		Clock:    apiruntime.SystemClock{},
-		EventBus: bus,
+		Store:           store,
+		Logger:          zap.NewNop(),
+		Clock:           apiruntime.SystemClock{},
+		EventBus:        bus,
+		ResourceJournal: store.(datastore.ResourceWatchCapable).ResourceWatchJournal(),
+		NamespaceWatch:  resourceContractWatchConfig(),
 	})
 	require.NoError(t, err)
 
