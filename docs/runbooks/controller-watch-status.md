@@ -95,13 +95,23 @@ recovery that stops making progress. Disk merge and retirement batches also
 advance recovery progress; the page counter is not exclusively an HTTP-request
 counter.
 
+The capacity dataset verifier also uses at most 250 rows per request. Its
+read-only page requests retry HTTP 429 with bounded exponential backoff,
+honoring `Retry-After` when supplied, without advancing the cursor. Each page
+gets at most eight attempts within the existing 30-minute verification deadline.
+Authentication, transport and other HTTP failures still fail the verification;
+mutations are not automatically retried. This accommodates the existing API
+quota rather than exempting capacity clients from it.
+
 `GET /health` distinguishes liveness from readiness: progressing recovery can
 return HTTP 200 with `ready:false`, `kinds.<Kind>.recovering:true` and recovery
 page/row/timestamp details. Consumers that require a reconciled controller
 must check `ready`, not just HTTP status. Capacity setup waits at most ten
 minutes for recovery before creating the authoring Namespace/Repository/File
 fixtures, not after the first Git clone; unhealthy or unauthenticated
-controllers still fail immediately. Load and final acceptance require readiness.
+controllers still fail immediately. Readiness confirms recovery has completed,
+not that the pending reconciliation backlog is empty; also inspect queue depth
+and its drain rate. Load and final acceptance require readiness.
 No retry is counted as successful reconciliation.
 
 Correlate these per-kind metrics by scrape instance and

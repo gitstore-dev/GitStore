@@ -1469,7 +1469,7 @@ func TestSecretCapacityFilePoolErrorsAreClassifiedAndRedacted(t *testing.T) {
 		status         int
 		body, expected string
 	}{
-		{"rate limit", 429, "private-response-marker", "HTTP status 429"},
+		{"rate limit", 429, "private-response-marker", "HTTP 429"},
 		{"GraphQL", 200, `{"errors":[{"message":"private-response-marker"}]}`, "operation errors"},
 		{"malformed", 200, "private-response-marker", "malformed GraphQL response"},
 		{"null data", 200, `{"data":null}`, "missing or malformed GraphQL data"},
@@ -1503,6 +1503,38 @@ func TestSecretCapacityGraphQLErrorsDoNotExposeBodies(t *testing.T) {
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "private-response-marker")
 	require.NotContains(t, err.Error(), "private-token")
+}
+
+func TestSecretCapacityGraphQLDoesNotRetryMutations(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "2")
+		http.Error(w, "private-response-marker", http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	err := secretCapacityGraphQL(t.Context(), server.Client(), server.URL, "private-token", "mutation { write }", nil, &struct{}{})
+	var statusErr *capacityHTTPStatusError
+	require.ErrorAs(t, err, &statusErr)
+	require.Equal(t, 2*time.Second, statusErr.retryAfter)
+	require.EqualValues(t, 1, calls.Load())
+	require.NotContains(t, err.Error(), "private-response-marker")
+	require.NotContains(t, err.Error(), "private-token")
+}
+
+func TestCapacityRetryAfter(t *testing.T) {
+	now := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"2", 2 * time.Second},
+		{now.Add(3 * time.Second).Format(http.TimeFormat), 3 * time.Second},
+		{now.Add(-time.Second).Format(http.TimeFormat), 0},
+		{"", 0}, {"invalid", 0}, {"-1", 0}, {"999999999999999999999", 0},
+	} {
+		require.Equal(t, tc.want, capacityRetryAfter(tc.value, now), tc.value)
+	}
 }
 
 func TestSecretCapacityFailedComponentPersistsWithoutPassingGate(t *testing.T) {
@@ -2116,6 +2148,7 @@ func TestSecretCapacityDatasetVerifiesBothPaginatedReplicas(t *testing.T) {
 	writeSecretCapacityAcknowledgments(t, path, rows)
 	var calls atomic.Int64
 	var fault atomic.Int64
+	var throttles atomic.Int64
 	handler := func(peer bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, request *http.Request) {
 			calls.Add(1)
@@ -2134,6 +2167,23 @@ func TestSecretCapacityDatasetVerifiesBothPaginatedReplicas(t *testing.T) {
 			}
 			if strings.Contains(input.Query, "totalCount") {
 				t.Error("dataset verification must not request an aggregate")
+			}
+			if fault.Load() == 8 && input.Variables.After != nil && throttles.Add(1)%2 == 1 {
+				require.Equal(t, "2", *input.Variables.After)
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "private-response-marker", http.StatusTooManyRequests)
+				return
+			}
+			if fault.Load() == 9 {
+				http.Error(w, "private-response-marker", http.StatusUnauthorized)
+				return
+			}
+			if fault.Load() == 10 || fault.Load() == 11 {
+				if fault.Load() == 10 {
+					w.Header().Set("Retry-After", "60")
+				}
+				http.Error(w, "private-response-marker", http.StatusTooManyRequests)
+				return
 			}
 			start, end, next := 0, 2, true
 			if input.Variables.After != nil {
@@ -2199,6 +2249,41 @@ func TestSecretCapacityDatasetVerifiesBothPaginatedReplicas(t *testing.T) {
 		_, err = verifySecretCapacityDataset(t.Context(), a.Client(), endpoints, "token", "dataset", path, 2, capacityModeDiagnostic)
 		require.Error(t, err, "absent pagination metadata cannot imply the final page")
 	}
+	t.Run("rate limit retries preserve the page and dataset", func(t *testing.T) {
+		fault.Store(8)
+		before, started := calls.Load(), time.Now()
+		proof, err := verifySecretCapacityDataset(t.Context(), a.Client(), endpoints, "token", "dataset", path, 2, capacityModeDiagnostic)
+		require.NoError(t, err)
+		require.EqualValues(t, 6, calls.Load()-before)
+		require.EqualValues(t, 3, proof.Proof.Rows)
+		require.EqualValues(t, 2, proof.Proof.Pages)
+		require.GreaterOrEqual(t, time.Since(started), 2*time.Second)
+	})
+	t.Run("authentication errors are not retried", func(t *testing.T) {
+		fault.Store(9)
+		before := calls.Load()
+		_, err := verifySecretCapacityDataset(t.Context(), a.Client(), endpoints, "token", "dataset", path, 2, capacityModeDiagnostic)
+		require.ErrorContains(t, err, "api_a page 1 request: HTTP 401")
+		require.NotContains(t, err.Error(), "private-response-marker")
+		require.EqualValues(t, 1, calls.Load()-before)
+	})
+	t.Run("retry wait respects cancellation", func(t *testing.T) {
+		fault.Store(10)
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
+		before := calls.Load()
+		_, err := verifySecretCapacityDataset(ctx, a.Client(), endpoints, "token", "dataset", path, 2, capacityModeDiagnostic)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.EqualValues(t, 1, calls.Load()-before)
+	})
+	t.Run("persistent throttling exhausts bounded attempts", func(t *testing.T) {
+		fault.Store(11)
+		before := calls.Load()
+		_, err := verifySecretCapacityDataset(t.Context(), a.Client(), endpoints, "token", "dataset", path, 2, capacityModeDiagnostic)
+		require.ErrorContains(t, err, "api_a page 1 request: HTTP 429")
+		require.NotContains(t, err.Error(), "private-response-marker")
+		require.EqualValues(t, 8, calls.Load()-before)
+	})
 	fault.Store(0)
 	before := calls.Load()
 	for _, pageSize := range []int{-1, 0, 251, 1000} {

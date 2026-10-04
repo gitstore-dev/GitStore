@@ -1764,7 +1764,10 @@ func secretCapacityGraphQLBounded(ctx context.Context, client *http.Client, endp
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("secret capacity: GraphQL HTTP status %d", response.StatusCode)
+		return &capacityHTTPStatusError{
+			status: response.StatusCode, body: "secret capacity: GraphQL operation failed",
+			retryAfter: capacityRetryAfter(response.Header.Get("Retry-After"), time.Now()),
+		}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil || int64(len(body)) > limit {
@@ -2502,17 +2505,32 @@ func verifySecretCapacityDataset(ctx context.Context, client *http.Client, endpo
 					} `json:"pageInfo"`
 				} `json:"products"`
 			}
-			err := secretCapacityGraphQLBounded(ctx, client, endpoint, token, `query($namespace:String!,$first:Int!,$after:String) {
+			var err error
+			for attempt := 0; attempt < 8; attempt++ {
+				err = secretCapacityGraphQLBounded(ctx, client, endpoint, token, `query($namespace:String!,$first:Int!,$after:String) {
 				products(namespace:$namespace,first:$first,after:$after) {
 					edges { cursor node { metadata { namespace name revision } spec { title } } }
 					pageInfo { hasNextPage endCursor }
 				}
 			}`, map[string]any{"namespace": namespace, "first": pageSize, "after": after}, &data, 8*1024*1024)
+				var statusErr *capacityHTTPStatusError
+				if !errors.As(err, &statusErr) || statusErr.status != http.StatusTooManyRequests || attempt == 7 {
+					break
+				}
+				delay := max(statusErr.retryAfter, min(100*time.Millisecond*time.Duration(1<<attempt), 5*time.Second))
+				timer := time.NewTimer(delay)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return secretCapacityDatasetObservations{}, ctx.Err()
+				case <-timer.C:
+				}
+			}
 			if err != nil {
 				if ctx.Err() != nil {
 					return secretCapacityDatasetObservations{}, ctx.Err()
 				}
-				return secretCapacityDatasetObservations{}, invalid
+				return secretCapacityDatasetObservations{}, fmt.Errorf("%w: %s page %d request: %w", invalid, proof.Role, proof.Pages+1, err)
 			}
 			page := data.Products
 			if len(page.Edges) == 0 || len(page.Edges) > pageSize || page.PageInfo == nil ||

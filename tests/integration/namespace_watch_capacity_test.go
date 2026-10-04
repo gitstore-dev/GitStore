@@ -1246,11 +1246,22 @@ type capacityGraphQLErrors struct{ raw string }
 func (e *capacityGraphQLErrors) Error() string { return "GraphQL errors: " + e.raw }
 
 type capacityHTTPStatusError struct {
-	status int
-	body   string
+	status     int
+	body       string
+	retryAfter time.Duration
 }
 
 func (e *capacityHTTPStatusError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.status, e.body) }
+
+func capacityRetryAfter(value string, now time.Time) time.Duration {
+	if seconds, err := strconv.ParseUint(value, 10, 31); err == nil {
+		return time.Duration(seconds) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		return max(0, at.Sub(now))
+	}
+	return 0
+}
 
 func capacityCreateRetryable(err error) bool {
 	var graphqlErr *capacityGraphQLErrors
