@@ -3,7 +3,7 @@
 **Feature Branch**: `058-repository-git-backed-lifecycle`
 
 **Created**: 2026-08-29
-**Status**: Draft
+**Status**: Closed
 **Input**: User description: "Repository Git-Backed Lifecycle, Admission, and Reconciler. Context: `Repository` has zero git-backed lifecycle today — `createRepository`/`renameRepository`/`transferRepository`/`deleteRepository` are 100% direct datastore writes with no admission dispatch case, no `gitstore-controller-manager/internal/repository` reconciler, and no finalizer/`Terminating` lifecycle, even though `docs/ADRs/0003-repository-lifecycle.md` (status: Proposed) already describes the git-backed design this spec implements. Adopt ADR-0003's Phase 1 scope: git-backed create (and, by the same admission mechanism, update) via a `Repository` manifest pushed to the owning namespace's own `gitstore-system` repository at `repositories/<name>.md`; a foreground-deletion finalizer and `Terminating` lifecycle reusing spec 041's existing `HasCatalogResources` drain check; and a new `gitstore-controller-manager/internal/repository` reconciler with `StorageProvisioned`/`Ready` conditions mirroring `internal/namespace/reconciler.go`. `renameRepository`/`transferRepository` are explicitly deferred and must return `Unimplemented`, matching ADR-0003's own Phase 1 recommendation — reversing the current shipped behavior, which contradicts that recommendation by performing real datastore-only rename/transfer today. No existing GitHub issue tracks this specifically; the closest related, already-closed issue is #249 (Repository Resource Contract, spec 045)."
 
 ## User Scenarios & Testing *(mandatory)*

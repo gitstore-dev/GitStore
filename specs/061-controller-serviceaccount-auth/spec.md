@@ -3,7 +3,7 @@
 **Feature Branch**: `061-controller-serviceaccount-auth`
 
 **Created**: 2026-08-29
-**Status**: Draft
+**Status**: Closed
 **Input**: User description: "Formalize `docs/implementation/021-controller_service_account_auth.md` (Status: Proposed, no code changes made) as a Spec Kit feature spec, scoped urgently to unblock spec 060 (`specs/060-local-multiuser-authn/`, open draft PR #405). Spec 060 removes the `static-admin` AuthN provider entirely and replaces it with `static-users`, a local multi-user human-identity provider. `gitstore-controller-manager`'s only way to obtain a working credential today is a `static-admin`-issued bearer JWT (`Roles: ['admin']`) manually minted and pasted into `GITSTORE_CONTROLLER__API_TOKEN`. Doc 021 already decided (§5, §17) to extend GitStore's pluggable AuthN architecture with a GitStore-issued service-account identity plane — a `serviceaccount-jwt` AuthN provider plus a `serviceaccount-assertion` proof-of-possession issuance provider, modeled on Kubernetes ServiceAccount/TokenRequest properties without requiring Kubernetes. This spec formalizes doc 021's already-designed interfaces (§8), claim contracts (§9), and phased rollout (§14) into Spec Kit format, scoped so its own User Story 1/P1 is exactly 'the controller-manager can obtain and use a working credential without `static-admin` (or, after spec 060, `static-users`) existing' — the minimum needed to keep spec 060 from forcing the controller-manager to either keep a deleted provider alive or be re-plumbed through a human multi-user credential mechanism it structurally does not belong in."
 
 ## Relationship to Specs 059, 060, Doc 021, and ADR 0009 *(mandatory context — read before Requirements)*
