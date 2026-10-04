@@ -492,12 +492,19 @@ func (a *Authorize) PushContextInserter(c *gin.Context) {
 
 // RateLimiter rate limiting prevents abuse, brute-force attacks, and resource exhaustion.
 func (r *RateLimit) RateLimiter(c *gin.Context) {
-	ip := c.ClientIP()
-	r.mu.Lock()
-	if _, exists := r.clients[ip]; !exists {
-		r.clients[ip] = &client{limiter: rate.NewLimiter(r.limit, r.burst)}
+	key := c.ClientIP()
+	if c.Request.Method == http.MethodGet {
+		switch c.FullPath() {
+		case "/health", "/ready", "/metrics":
+			// Keep each operational route bounded without sharing application quota.
+			key += "|" + c.FullPath()
+		}
 	}
-	cl := r.clients[ip]
+	r.mu.Lock()
+	if _, exists := r.clients[key]; !exists {
+		r.clients[key] = &client{limiter: rate.NewLimiter(r.limit, r.burst)}
+	}
+	cl := r.clients[key]
 	cl.lastSeen = time.Now()
 	r.mu.Unlock()
 	if !cl.limiter.Allow() {

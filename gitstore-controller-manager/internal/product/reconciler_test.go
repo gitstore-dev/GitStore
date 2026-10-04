@@ -12,6 +12,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
@@ -319,6 +320,69 @@ func TestReconcileActive_CategoryNotFoundSteadyStateIsNoOp(t *testing.T) {
 	}
 	if len(statusClient.patches) != 0 {
 		t.Fatalf("patches = %d, want 0 (already-converged CategoryNotFound must be a no-op, not rewritten every reconcile)", len(statusClient.patches))
+	}
+}
+
+func TestReconcileActive_DiskRoundTripPreservesNoOp(t *testing.T) {
+	for _, category := range []string{"", "missing"} {
+		t.Run("category="+category, func(t *testing.T) {
+			item := categorytaxonomy.Product{
+				Namespace: "acme", Name: "widget", ResourceVersion: "240", Generation: 1,
+				CategoryRefName: category,
+				Status: status.ResourceStatus{
+					ResourceVersion: "240", ObservedGeneration: 1,
+					Conditions: []*status.Condition{admissionAcceptedCondition()},
+				},
+			}
+			item.Status.Conditions = mergeCategoryConditions(item, false, category == "", true)
+			dir := t.TempDir()
+			store, err := checkpoint.OpenDiskStore(dir, "Product")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			generation, err := store.BeginSnapshot(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(item)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.PutSnapshotPage(t.Context(), generation, []checkpoint.DiskItem{{
+				Key: productKey(), Version: item.ResourceVersion, Value: data,
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.FinishSnapshot(t.Context(), generation, "cursor"); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = checkpoint.OpenDiskStore(dir, "Product")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored, found, _, err := store.Read(t.Context(), productKey())
+			if err != nil || !found {
+				t.Fatalf("read persisted Product: found=%t err=%v", found, err)
+			}
+			var restored categorytaxonomy.Product
+			if err := json.Unmarshal(stored.Value, &restored); err != nil {
+				t.Fatal(err)
+			}
+			client := &fakeStatusClient{}
+			result := resolveReconcilerFor(t, restored, nil, client).Reconcile(t.Context(), productKey())
+			switch result.(type) {
+			case types.Success, types.RequeueAfter:
+			default:
+				t.Fatalf("unexpected result: %T", result)
+			}
+			if len(client.patches) != 0 {
+				t.Fatalf("disk round trip introduced %d unnecessary status writes", len(client.patches))
+			}
+		})
 	}
 }
 

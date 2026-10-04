@@ -353,6 +353,13 @@ already carry controller traffic today. L0 is also mounted on the Git smart-HTTP
 with its own `git` policy, because clone/fetch/push are heavy per request. Charging cost for Git
 traffic is out of scope.
 
+Operational `GET /health`, `GET /ready` and `GET /metrics` have independent
+per-IP, per-route buckets at the configured rate and burst. Preserve this
+isolation when moving L0 behind the common limiter interface: application
+traffic must not exhaust probe or scrape quota, and operational routes must
+not become unlimited. GraphQL HTTP and WebSocket upgrades share the application
+bucket.
+
 ### 8.4 Endpoint profiles (ADR 0012 §6)
 
 Each GraphQL handler is built by `newGraphQLHandler(schema, profile)` with its own profile. The pipeline

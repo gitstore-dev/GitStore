@@ -17,6 +17,51 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
 
+func TestResourceStatusJSONPreservesAbsentResolvedPayload(t *testing.T) {
+	for _, tc := range []struct {
+		name, data, want string
+	}{
+		{"missing", `{"ResourceVersion":"240"}`, ""},
+		{"null", `{"ResourceVersion":"240","Resolved":null}`, ""},
+		{"lowercase-null", `{"resourceVersion":"240","resolved": null }`, ""},
+		{"empty-object", `{"ResourceVersion":"240","Resolved":{}}`, "{}"},
+		{"category", `{"ResourceVersion":"240","Resolved":{"category":{"name":"tools"}}}`, `{"category":{"name":"tools"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var current status.ResourceStatus
+			if err := json.Unmarshal([]byte(tc.data), &current); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if current.ResourceVersion != "240" || string(current.Resolved) != tc.want {
+					t.Fatalf("decoded status: %+v, want resolved %q", current, tc.want)
+				}
+				if tc.want == "" && current.Resolved != nil {
+					t.Fatalf("absent payload must be nil, got %q", current.Resolved)
+				}
+				data, err := json.Marshal(current)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(data, &current); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+	var malformed status.ResourceStatus
+	if err := json.Unmarshal([]byte(`{"ObservedGeneration":"invalid"}`), &malformed); err == nil {
+		t.Fatal("malformed status must fail decoding")
+	}
+	partial := status.ResourceStatus{ResourceVersion: "240", ObservedGeneration: 1, Resolved: json.RawMessage(`{}`)}
+	if err := json.Unmarshal([]byte(`{"Resolved":null}`), &partial); err != nil {
+		t.Fatal(err)
+	}
+	if partial.ResourceVersion != "240" || partial.ObservedGeneration != 1 || partial.Resolved != nil {
+		t.Fatalf("partial decode changed unspecified fields or failed to clear resolved: %+v", partial)
+	}
+}
+
 func productTestKey() types.WorkItemKey {
 	return types.WorkItemKey{Kind: "Product", Namespace: "acme", Name: "widget"}
 }

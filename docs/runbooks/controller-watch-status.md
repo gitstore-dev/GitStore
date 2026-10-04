@@ -159,6 +159,12 @@ controllers that will read that shared config support the new keys; older
 binaries reject unknown settings. Mixed-version fleets can still experience
 throttling from unpaced old controllers.
 
+Operational `GET /health`, `GET /ready` and `GET /metrics` requests use
+independent per-IP, per-route buckets with the same configured rate and burst.
+They remain rate-limited, but application traffic cannot consume their quota.
+GraphQL HTTP requests and WebSocket upgrades continue sharing the application
+bucket. This changes neither authentication nor authorization.
+
 The owned production run `441-file-journal-production-20261004-b513016`
 cleared dataset verification and persisted File bootstrap but failed the
 pre-load controller health/authentication guard. Logs showed 429s on Product
@@ -229,6 +235,11 @@ Corruption, incompatible schemas and I/O failures return errors rather than an
 empty catalog. Watch persistence failures close recovery admission until
 durable progress resumes. Quarantine listing is paginated; see
 [controller-poisoned-item.md](./controller-poisoned-item.md).
+Decoded status normalizes an absent or JSON-null `resolved` payload to nil.
+Otherwise a disk round trip turns nil into non-nil `"null"` bytes, causing
+already-converged Products to rewrite status and repeatedly enqueue themselves.
+Normalization also applies to existing v2 projections; no volume wipe or
+checkpoint-format migration is required.
 
 Legacy JSON checkpoints and experimental `disk-v1` directories are neither
 loaded nor removed. The first upgrade performs a bounded cold list into v2;
@@ -284,6 +295,23 @@ The full-size fixture is an isolated storage/dispatch diagnostic, **not
 production capacity acceptance**. Its status API and related-work destination
 are stubbed; the deployed controllers still need a new live gate covering real
 API traffic, concurrent replicas, rolling replacement and sustained load.
+
+The first integrated live attempt, `441-disk-production-20261004-719396d`,
+recovered the five-million-Product dataset in 388.33 and 394.17 seconds from
+controller process start. Neither replica OOMed or restarted. Prometheus-sampled
+peak RSS was 85.6/85.1 MiB; observed cgroup `memory.peak` was 948.4/961.2 MiB,
+including filesystem cache. Checkpoint allocation at the final sample was
+768.8/767.2 MiB per replica. These are different memory/storage measurements.
+
+That attempt failed before sustained load after 1,306.10 seconds when API A's
+`/metrics` request received HTTP 429 from the shared application bucket.
+Separately, the null-payload round-trip bug kept the Product backlog near five
+million and generated 24,502 conflict requeues across the two replicas.
+The quota-isolation and null-normalization fixes address reproduced regressions,
+but the failed run proves neither sustained throughput nor rolling recovery.
+Its closed evidence remains under the matching run directory in
+`.gitstore/spec063-prod-20261004/evidence/`; supplemental cgroup and storage
+samples remain in `.gitstore/spec063-prod-20261004/rerun-disk-719396d/`.
 
 The secondary Product subscription uses the existing durable Product journal in
 production. Both typed and generic Product watches now require that journal:

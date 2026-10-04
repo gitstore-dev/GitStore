@@ -27,6 +27,35 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+func TestRateLimiterIsolatesOperationalEndpointsWithoutExemptingThem(t *testing.T) {
+	router := gin.New()
+	limiter := NewRateLimit(0.000001, 1)
+	router.Use(limiter.RateLimiter)
+	handler := func(c *gin.Context) { c.Status(http.StatusNoContent) }
+	router.POST("/graphql", handler)
+	router.GET("/graphql", handler)
+	router.GET("/playground", handler)
+	for _, path := range []string{"/metrics", "/health", "/ready"} {
+		router.GET(path, handler)
+	}
+	request := func(method, path string, want int) {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		req.RemoteAddr = "192.0.2.1:12345"
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		require.Equal(t, want, response.Code, "%s %s", method, path)
+	}
+	request(http.MethodPost, "/graphql", http.StatusNoContent)
+	request(http.MethodGet, "/graphql", http.StatusTooManyRequests)
+	request(http.MethodGet, "/playground", http.StatusTooManyRequests)
+	for _, path := range []string{"/metrics", "/health", "/ready"} {
+		request(http.MethodGet, path, http.StatusNoContent)
+		request(http.MethodGet, path, http.StatusTooManyRequests)
+	}
+	request(http.MethodPost, "/graphql", http.StatusTooManyRequests)
+}
+
 func newTestRegistry(t *testing.T) (*auth.ProviderRegistry, *staticusers.StaticUsersProvider) {
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.MinCost)
