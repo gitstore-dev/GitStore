@@ -174,3 +174,33 @@ func TestEnrollServiceAccountBootstrapsAdminSessionAndWritesIdentity(t *testing.
 		}
 	}
 }
+
+func TestEnrollServiceAccountSurfacesLoginFailureDetail(t *testing.T) {
+	const adminPassword = "wrong-password-must-not-be-printed"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":null,"errors":[{"message":"invalid username or password"}]}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("GITSTORE_BOOTSTRAP_ADMIN_USERNAME", "admin")
+	t.Setenv("GITSTORE_BOOTSTRAP_ADMIN_PASSWORD", adminPassword)
+	root := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{
+		"enroll-serviceaccount",
+		"--api-url", server.URL,
+		"--private-key-path", filepath.Join(root, "private-key.pem"),
+		"--identity-output-path", filepath.Join(root, "serviceaccount.env"),
+	}, strings.NewReader(""), &stdout, &stderr); got != 1 {
+		t.Fatalf("enrollment exit code = %d, want 1", got)
+	}
+	// The real server-side cause must surface, not just the generic
+	// "bootstrap authentication failed" wrapper around it.
+	if !strings.Contains(stderr.String(), "invalid username or password") {
+		t.Errorf("stderr = %q, want it to contain the underlying GraphQL error", stderr.String())
+	}
+	if strings.Contains(stdout.String()+stderr.String(), adminPassword) {
+		t.Error("command output leaked bootstrap credentials")
+	}
+}
