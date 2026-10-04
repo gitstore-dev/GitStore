@@ -41,8 +41,9 @@ GitStore uses **one unified semantic version** for the whole project, not indepe
 - **During a prerelease phase, qualifying commits only increment the trailing prerelease counter — but only if the semver core is already anchored at the right boundary for that commit's severity.** Specifically (from `PrereleaseMinorVersionUpdate`/`PrereleaseMajorVersionUpdate`/`PrereleasePatchVersionUpdate` in release-please's source):
   - `fix:` commits always just bump the prerelease counter, regardless of the current patch value.
   - `feat:` commits only just bump the prerelease counter if `patch === 0`; otherwise they do a normal minor bump (reset patch to 0, increment minor) and restart the prerelease counter at `.0`. **This is exactly what broke the very first release attempt** — the manifest was originally seeded at `0.0.1-alpha.0` (patch `1`), so the first `feat:` commit bumped it to `0.1.0-alpha.0` instead of staying at `0.0.1-alpha.1`.
-  - Breaking changes only just bump the prerelease counter if `minor === 0 && patch === 0`; otherwise a normal major bump + counter restart.
-  - **Practical consequence**: because this repo will have ongoing `feat:` commits throughout the whole alpha phase, the version must stay minor-anchored (`0.1.0-alpha.N`, patch always `0`) for the "just bump the counter" behavior to hold indefinitely. Never manually edit the manifest to a non-zero patch while a prerelease is active — the next `feat:` commit will silently core-bump again.
+  - Breaking changes only just bump the prerelease counter if `minor === 0 && patch === 0`; otherwise, **without `bump-minor-pre-major: true` set, release-please does a normal major bump + counter restart even though `major` is still `0`.** This is exactly what happened on 2026-10 (PR #439): the manifest was at `0.1.0-alpha.3` (`minor === 1`), a legitimate breaking-change PR landed, and release-please correctly-per-its-code bumped straight to `1.0.0-alpha.3` — a real release, tagged and shipped with Docker images, well before the project was ready to leave alpha semantics.
+  - **`bump-minor-pre-major: true`** (set in `release-please-config.json` since the above incident) changes this: while `version.isPreMajor` (`major === 0`), a breaking change bumps **minor** instead of major, regardless of the current minor/patch values — this is release-please's standard "pre-1.0, breaking changes don't count as `major`" semantics, matching how most pre-1.0 Conventional-Commits projects behave. `feat:`'s patch-anchoring behavior (previous bullet) is unaffected by this flag.
+  - **Practical consequence**: because this repo will have ongoing `feat:` commits throughout the whole alpha phase, the version must stay minor-anchored (`0.1.0-alpha.N`, patch always `0`) for the "just bump the counter" behavior to hold indefinitely. Never manually edit the manifest to a non-zero patch while a prerelease is active — the next `feat:` commit will silently core-bump again. `bump-minor-pre-major` only protects against breaking changes bumping `major`; it does nothing for patch-anchoring.
 - **Phase names (`alpha` → `beta` → stable) never change automatically.** Moving from one phase to the next is a deliberate human action — see Graduation below.
 
 ## Reviewing and Merging a Release PR
@@ -54,18 +55,24 @@ The release PR is titled something like `chore: release 0.1.0-alpha.4` and its d
 
 ## Graduating: Alpha → Beta → Stable
 
-This is a manual, operator-driven action — never automatic. To force the next release to a specific version regardless of what the accumulated commits would otherwise compute:
+This is a manual, operator-driven action — never automatic. To force the next release to a specific version regardless of what the accumulated commits would otherwise compute, push an empty commit carrying a `Release-As:` footer. **Direct pushes to `main` are blocked by the "PR to main" repository ruleset**, so this has to land via a merged PR, not `git push origin main` directly:
 
 ```bash
+git checkout -b release-as-override
 git commit --allow-empty -m "chore: release main" -m "Release-As: 0.1.0-beta.1"
-git push origin main
+git push -u origin release-as-override
+gh pr create --title "chore: release main" --body "Release-As: 0.1.0-beta.1"
+# then merge via rebase (not squash) so this exact commit — footer intact — lands on main unchanged:
+gh pr merge --rebase
 ```
+
+Rebase merge matters here: a squash merge may rewrite the commit message to the PR title alone and drop the `Release-As:` footer from what actually lands on `main`, which is what release-please parses.
 
 (Verify the exact `Release-As:` footer syntax against the pinned `googleapis/release-please-action` version's current docs before relying on it — this convention has been stable across recent majors but confirm before your first graduation.)
 
 Use the same mechanism for:
 - **Alpha → beta**: `Release-As: 0.1.0-beta.1` (keep patch at `0` — the same minor-anchoring requirement applies to beta, since `feat:` commits will keep landing there too)
-- **Beta → stable**: `Release-As: 0.1.0` (no prerelease suffix — this is what permanently flips Docker's `latest` tag behavior, see below)
+- **Beta → stable**: `Release-As: 0.1.0` (no prerelease suffix — this is what permanently flips Docker's `latest` tag behavior, see below). At this point also remove `bump-minor-pre-major` from `release-please-config.json` — it only exists to keep the project pre-`1.0.0` through alpha/beta; once `1.0.0` ships for real, breaking changes should resume normal major bumps.
 - **Any one-off correction**: e.g. a bad automatic bump, or a hotfix that needs a specific version out of band.
 
 ## Docker `latest` Tag Behavior
