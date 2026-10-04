@@ -39,8 +39,14 @@ The guarded File-load path now reuses the Repository lifecycle runner: it seeds
 on the one Git service to avoid client-side non-fast-forward contention, and
 offers real pushes through a queue capped at 256. Missed schedules and drops are
 counted rather than hidden by ticker coalescing or retries. Every acknowledged
-batch is checked through both APIs' existing `nodes` query; initial IDs come
-from `watchFiles`, not a new File inventory API. Local resolution and explicit
+batch is checked through both APIs' existing `nodes` query. Initial IDs come
+from persisted `file(namespace:, name:)` lookups of the 100 known fixture names
+on each API: ten aliases per request, a five-second request timeout, and a
+30-second bootstrap deadline. This is not an inventory scan or a subscription
+snapshot; subscribing after seed pushes cannot discover already-existing Files.
+Missing, duplicate or invalid projections fail closed, and transport/HTTP/GraphQL
+failures are classified without logging response bodies or credentials.
+Local resolution and explicit
 32-caller/16-slot contention/deadline/authorization probes use test-owned regular
 provider files. No File payload operation is performed.
 

@@ -111,6 +111,10 @@ type productCDCRunner interface {
 	RunProductCDC(context.Context, *watchjournal.Materializer, datastore.ResourceWatchLease, time.Duration, time.Duration, func()) error
 }
 
+type fileCDCRunner interface {
+	RunFileCDC(context.Context, *watchjournal.Materializer, datastore.ResourceWatchLease, time.Duration, time.Duration, func()) error
+}
+
 type namespaceWatchRuntime struct {
 	journal          datastore.NamespaceWatchJournal
 	materializer     *watchjournal.Materializer
@@ -119,6 +123,7 @@ type namespaceWatchRuntime struct {
 	runner           namespaceCDCRunner
 	repositoryRunner repositoryCDCRunner
 	productRunner    productCDCRunner
+	fileRunner       fileCDCRunner
 	cfg              config.NamespaceWatchConfig
 	log              *zap.Logger
 	cancel           context.CancelFunc
@@ -189,6 +194,9 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		}
 		if runner, ok := rawStore.(productCDCRunner); ok {
 			namespaceWatch.productRunner = runner
+		}
+		if runner, ok := rawStore.(fileCDCRunner); ok {
+			namespaceWatch.fileRunner = runner
 		}
 	}
 	store := datastore.NewInstrumentedDatastore(rawStore, cfg.Datastore.Backend, log)
@@ -849,12 +857,12 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 	r.metrics.SetLeader(true)
 	defer r.metrics.SetLeader(false)
 
-	errCh := make(chan error, 4)
+	errCh := make(chan error, 5)
 	workers.Go(func() {
 		errCh <- r.leaseManager.Maintain(ctx, lease)
 	})
-	if r.runner != nil || r.repositoryRunner != nil || r.productRunner != nil {
-		ready := make(chan struct{}, 3)
+	if r.runner != nil || r.repositoryRunner != nil || r.productRunner != nil || r.fileRunner != nil {
+		ready := make(chan struct{}, 4)
 		readyCount := 0
 		if r.runner != nil {
 			readyCount++
@@ -882,6 +890,17 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 			readyCount++
 			workers.Go(func() {
 				errCh <- r.productRunner.RunProductCDC(
+					ctx, r.materializer, lease,
+					time.Duration(r.cfg.CDCRetentionSeconds)*time.Second,
+					time.Duration(r.cfg.CDCConfidenceWindowMillis)*time.Millisecond,
+					func() { ready <- struct{}{} },
+				)
+			})
+		}
+		if r.fileRunner != nil {
+			readyCount++
+			workers.Go(func() {
+				errCh <- r.fileRunner.RunFileCDC(
 					ctx, r.materializer, lease,
 					time.Duration(r.cfg.CDCRetentionSeconds)*time.Second,
 					time.Duration(r.cfg.CDCConfidenceWindowMillis)*time.Millisecond,

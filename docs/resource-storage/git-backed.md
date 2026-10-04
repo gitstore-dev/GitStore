@@ -466,3 +466,31 @@ File status writes require the `file.status.write` authorization action. Both
 the typed `watchFiles` subscription and generic `watchResources(kind: "File")`
 subscription require `file.watch`; authorization receives the requested
 namespace as resource context and is evaluated before the event stream opens.
+
+Read an existing File with `file(namespace: String!, name: String!): File`.
+This uses the persisted name index, returns `null` when absent, and requires
+`file.read`. File access through `node` and `nodes` requires the same
+namespace-scoped permission, including the namespace owner context.
+
+Both File watches use the shared durable resource journal: Scylla migration 014
+enables full preimage/postimage CDC on `files_by_namespace`, and the fenced
+materializer records committed creation, metadata/spec/status updates and
+deletion. Replica B can replay a cursor issued by replica A. The development
+memdb backend implements the same journal contract only within its process; it
+does not provide durability across process loss.
+
+The durable generic stream's `object` uses the same public File projection as
+the typed stream, including Relay `id` and `metadata`, rather than the former
+flat datastore representation. Update generic clients along with cursor reset
+during the gated migration.
+
+An omitted cursor follows future events, not an inventory snapshot. The private
+`__file_watch_bootstrap__` cursor emits a BOOKMARK at the current journal head;
+resume its opaque cursor on either API. Numeric event-bus cursors are expired,
+not translated. Retention expiry requires rebuilding client state. Selector
+entry emits ADDED, exit emits a payload-free DELETED, and bookmarks preserve
+progress across filtered events. Slow clients receive bounded backpressure
+failure rather than an unbounded queue. Disabled/unready journal readers fail
+closed, with no event-bus fallback. See the
+[File rollout procedure](../runbooks/controller-watch-status.md#file-durable-watch-rollout)
+before upgrading or rolling back a mixed-version fleet.

@@ -74,6 +74,42 @@ A controller's `watchCategories`/`watchResources` subscription disconnects and r
 - `rate(gitstore_eventbus_events_dropped_total{kind}[5m])` returns to `0`.
 - `rate(gitstore_status_write_conflicts_total{kind}[5m])` returns to its prior baseline (occasional, not sustained).
 
+## File durable-watch rollout
+
+`watchFiles` and `watchResources(kind: "File")` share the Namespace/Repository/
+Product durable journal, lease, metrics, and `watch.namespace` configuration.
+CategoryTaxonomy remains on its existing event bus.
+
+1. Deny **both File watch fields fleet-wide**, including already-open streams,
+   before introducing new replicas. An old materializer can keep shared journal
+   health fresh without consuming File CDC; shared readiness alone cannot prove
+   File migration readiness during a mixed-version rollout. Do not accept File
+   cursors in this interval.
+2. Apply additive migration 014 and verify full preimage/postimage CDC with
+   14-day TTL on `files_by_namespace`. CDC does not synthesize an inventory of
+   older rows. Keep the new `file` lookup out of mixed-version ingress as well.
+3. Upgrade every API/materializer candidate. Drain the old lease holder and
+   verify that the new holder starts **all four** CDC sources. New leaders wait
+   for File source readiness before publishing their initial shared bookmark.
+   Leave other resource watches running only if their existing rollout contract
+   permits it; do not disable their shared gates just to gate File.
+4. From controlled new-version endpoints, prove a committed File create,
+   status update and delete from API A can be replayed on API B and after
+   materializer replacement. Then enable File ingress. Discard legacy numeric
+   cursors. Capture a fresh bootstrap BOOKMARK, read persisted state for the
+   known File names, then replay from that bookmark so concurrent changes are
+   not lost between the read and subscription. Generic clients must consume
+   the public File `object` projection (`id`, `metadata`, `spec`, `status`),
+   replacing the old event bus's flat datastore fields.
+
+For rollback to a version without File CDC, deny/drain File watches **before**
+any old API or materializer candidate returns. Keep migration 014 and retained
+journal/progress tables; never fall back to the event bus under a durable cursor.
+Re-enable only after fleet convergence and the cross-replica probe above.
+Same-version API/materializer replacements resume retained journal/CDC progress;
+the migration itself does not promise uninterrupted mixed-version File watches.
+None of this changes the singleton-only Git service requirement.
+
 ## Namespace durable-watch rollout and recovery
 
 Namespace uses a durable Scylla CDC journal rather than the process-local event

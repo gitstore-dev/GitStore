@@ -217,13 +217,6 @@ func (s *Server) publishProductEvent(evType eventbus.EventType, p *datastore.Pro
 	})
 }
 
-func (s *Server) publishFileEvent(evType eventbus.EventType, f *datastore.File) {
-	if s.eventBus == nil || f == nil {
-		return
-	}
-	s.eventBus.Publish(eventbus.Event{Type: evType, Kind: "File", Namespace: f.Namespace, Name: f.Name, ResourceVersion: f.ResourceVersion, Object: f})
-}
-
 func (s *Server) publishNamespaceEvent(evType eventbus.EventType, namespace *datastore.Namespace) {
 	if s.eventBus == nil || namespace == nil {
 		return
@@ -2234,7 +2227,6 @@ func (s *Server) admitFile(
 		}
 		f.Status = fileAdmissionStatus(1, admCtx.Revision, admCtx.Now)
 		if err := s.store.CreateFile(ctx, f); err == nil {
-			s.publishFileEvent(eventbus.Added, f)
 			return
 		} else if !errors.Is(err, datastore.ErrAlreadyExists) {
 			s.log.Error("admit_resources: create file failed", zap.Error(err))
@@ -2280,7 +2272,6 @@ func (s *Server) admitFile(
 		existing.Status = fileAdmissionStatus(gen, admCtx.Revision, admCtx.Now)
 		err := s.store.UpdateFile(ctx, existing, expectedResourceVersion)
 		if err == nil {
-			s.publishFileEvent(eventbus.Modified, existing)
 			return
 		}
 		if !errors.Is(err, datastore.ErrConflict) {

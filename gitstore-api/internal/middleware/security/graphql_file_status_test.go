@@ -5,11 +5,14 @@ package security
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"testing"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -148,6 +151,31 @@ func TestGraphQLFieldAuthorizerAuthorizesGenericFileWatch(t *testing.T) {
 	assert.True(t, called)
 	assert.Equal(t, "file.watch", authz.Action)
 	assert.Equal(t, "acme-store", authz.Resource.Attrs["namespace"])
+}
+
+func TestFileReadsAuthorizeLookupAndRelayNodesBeforeResolver(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	file := &datastore.File{UID: "00000000-0000-0000-0000-000000000123", Namespace: "private", Name: "hero"}
+	require.NoError(t, store.CreateFile(t.Context(), file))
+	id := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/File/" + file.UID))
+	for _, field := range []string{"file", "node", "nodes"} {
+		t.Run(field, func(t *testing.T) {
+			authz := testutil.NewDenyAllAuthZ(t)
+			mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), store, zap.NewNop())
+			args := map[string]any{"namespace": "private", "name": "hero", "id": id, "ids": []string{id}}
+			ctx := graphql.WithFieldContext(t.Context(), &graphql.FieldContext{
+				Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: field}}, Args: args,
+			})
+			called := false
+			_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
+			require.Error(t, err)
+			require.False(t, called)
+			require.Equal(t, "file.read", authz.Action)
+			require.Equal(t, "File", authz.Resource.Kind)
+			require.Equal(t, "private", authz.Resource.Attrs["namespace"])
+		})
+	}
 }
 
 func TestGraphQLFieldAuthorizerAuthorizesProductWatches(t *testing.T) {

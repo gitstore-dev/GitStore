@@ -6,6 +6,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,11 +15,13 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
@@ -45,6 +48,8 @@ func (p *webSocketAuthProvider) Capabilities() auth.Capability {
 
 func (p *webSocketAuthProvider) Authenticate(ctx context.Context, request auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
 	switch request.Header.Get("Authorization") {
+	case "Bearer file-pool-test":
+		return p.principal(p.expiresAt), auth.Allow(p.Name(), "valid File pool test credential"), nil
 	case "Bearer expired":
 		return p.principal(time.Now().Add(-time.Second)), auth.Allow(p.Name(), "expired test credential"), nil
 	case "Bearer valid":
@@ -115,6 +120,8 @@ func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTe
 		Registry:           registry,
 		IDs:                apiruntime.NewSequenceIDGenerator(),
 		EventBus:           eventBus,
+		ResourceJournal:    store.(datastore.ResourceWatchCapable).ResourceWatchJournal(),
+		NamespaceWatch:     config.NamespaceWatchConfig{ReadersEnabled: true, SubscriberBuffer: 16, MaxMaterializerLagSeconds: 60},
 		ConnectionRegistry: connections,
 	})
 	require.NoError(t, err)
@@ -233,27 +240,93 @@ func TestGraphQLWebSocketConnectionClosesAtTokenExpiry(t *testing.T) {
 	assert.Equal(t, websocket.CloseNormalClosure, closeErr.Code)
 }
 
+func TestGraphQLFilePoolLookupAcceptsBoundedAliasesAndTypedProjection(t *testing.T) {
+	env := newWebSocketTestEnvironment(t, time.Now().Add(time.Minute))
+	for i := range 100 {
+		file := &datastore.File{
+			UID: fmt.Sprintf("00000000-0000-0000-0000-%012d", i+1000), Namespace: "pool", Name: fmt.Sprintf("file-%d", i),
+			Kind: "File", APIVersion: "storage.gitstore.dev/v1beta1", ResourceVersion: "1",
+			Annotations: map[string]string{"secret-capacity.gitstore.dev/sequence": "0"},
+			Spec:        json.RawMessage(`{"contentType":"image/jpeg","type":"gitstore.dev/media","source":{"type":"s3","uri":"s3://fixture","credentialsRef":{"kind":"CredentialsRef","type":"aws-access-key/v1","secretRef":{"kind":"SecretRef","name":"capacity-media"}}}}`),
+		}
+		require.NoError(t, env.store.CreateFile(t.Context(), file))
+	}
+	for offset := 0; offset < 100; offset += 10 {
+		var query strings.Builder
+		query.WriteString("query {")
+		for index := range 10 {
+			fmt.Fprintf(&query, `f%d:file(namespace:"pool",name:"file-%d"){id metadata{name namespace annotations} spec{contentType type source{type uri credentialsRef{kind type secretRef{kind name key namespace}}}}}`, index, offset+index)
+		}
+		query.WriteString(`missing:file(namespace:"other-namespace",name:"file-0"){id}}`)
+		body, err := json.Marshal(map[string]any{"query": query.String()})
+		require.NoError(t, err)
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, env.server.URL+"/graphql", strings.NewReader(string(body)))
+		require.NoError(t, err)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer file-pool-test")
+		response, err := env.server.Client().Do(request)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, response.StatusCode)
+		var result struct {
+			Data map[string]*struct {
+				ID       string
+				Metadata struct{ Name, Namespace string }
+				Spec     struct {
+					ContentType string
+					Source      struct {
+						CredentialsRef *struct {
+							Type      string
+							SecretRef struct {
+								Name           string
+								Key, Namespace *string
+							}
+						}
+					}
+				}
+			}
+			Errors json.RawMessage
+		}
+		err = json.NewDecoder(response.Body).Decode(&result)
+		require.NoError(t, response.Body.Close())
+		require.NoError(t, err)
+		require.Empty(t, result.Errors, "%s", result.Errors)
+		require.Nil(t, result.Data["missing"])
+		for index := range 10 {
+			file := result.Data[fmt.Sprintf("f%d", index)]
+			require.NotNil(t, file)
+			require.NotEmpty(t, file.ID)
+			require.Equal(t, fmt.Sprintf("file-%d", offset+index), file.Metadata.Name)
+			require.Equal(t, "pool", file.Metadata.Namespace)
+			require.Equal(t, "image/jpeg", file.Spec.ContentType)
+			require.NotNil(t, file.Spec.Source.CredentialsRef)
+			require.Equal(t, "aws-access-key/v1", file.Spec.Source.CredentialsRef.Type)
+			require.Equal(t, "capacity-media", file.Spec.Source.CredentialsRef.SecretRef.Name)
+			require.Nil(t, file.Spec.Source.CredentialsRef.SecretRef.Key)
+			require.Nil(t, file.Spec.Source.CredentialsRef.SecretRef.Namespace)
+		}
+	}
+}
+
 func TestGraphQLWebSocketConnectionInitPrincipalAuthorizesSubscription(t *testing.T) {
 	env := newWebSocketTestEnvironment(t, time.Now().Add(time.Minute))
 	conn := env.dial(t)
 	require.Equal(t, "connection_ack", initWebSocket(t, conn, map[string]any{"Authorization": "Bearer valid"})["type"])
 
-	env.eventBus.Publish(eventbus.Event{
-		Type:      eventbus.Added,
-		Kind:      "File",
+	journal := env.store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	bounds, err := journal.Bounds(t.Context())
+	require.NoError(t, err)
+	cursor := watchjournal.EncodeCursor(bounds.Epoch, bounds.HighWater)
+	require.NoError(t, env.store.CreateFile(t.Context(), &datastore.File{
+		UID:       "00000000-0000-0000-0000-000000000102",
 		Namespace: webSocketTestNamespace,
 		Name:      "watched-file",
-		Object: &datastore.File{
-			UID:       "00000000-0000-0000-0000-000000000102",
-			Namespace: webSocketTestNamespace,
-			Name:      "watched-file",
-		},
-	})
+	}))
 	require.NoError(t, conn.WriteJSON(map[string]any{
 		"id":   "file-watch",
 		"type": "subscribe",
 		"payload": map[string]any{
-			"query": `subscription { watchFiles(namespace: "controllers", resourceVersion: "0") { name } }`,
+			"query":     `subscription($cursor:String!) { watchFiles(namespace: "controllers", resourceVersion: $cursor) { name } }`,
+			"variables": map[string]any{"cursor": cursor},
 		},
 	}))
 

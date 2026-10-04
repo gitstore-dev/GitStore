@@ -1410,6 +1410,89 @@ func TestSecretCapacityProjectionReadsNullableGraphQLFields(t *testing.T) {
 	require.Error(t, validateSecretCapacityFile(projection, "ns", name, 1))
 }
 
+func TestSecretCapacityFilePoolReadsPersistedStateWithoutWatchHistory(t *testing.T) {
+	var reads atomic.Int64
+	var missing, duplicate, wrongNamespace atomic.Bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reads.Add(1)
+		require.Equal(t, http.MethodPost, r.Method)
+		var request gqlRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		require.NotContains(t, request.Query, "watchFiles")
+		require.Len(t, request.Variables, 11, "ten known-name lookups per bounded batch")
+		data := make(map[string]any)
+		for i := range 10 {
+			name := request.Variables[fmt.Sprintf("name%d", i)].(string)
+			namespace := "ns"
+			if wrongNamespace.Load() {
+				namespace = "another-namespace"
+			}
+			id := "id-" + name
+			if duplicate.Load() {
+				id = "duplicate-id"
+			}
+			data[fmt.Sprintf("file%d", i)] = map[string]any{
+				"id": id, "metadata": map[string]any{"name": name, "namespace": namespace,
+					"annotations": map[string]string{"secret-capacity.gitstore.dev/sequence": "0"}},
+				"spec": map[string]any{"contentType": "image/jpeg", "type": "gitstore.dev/media",
+					"source": map[string]any{"type": "s3", "uri": "s3://capacity-fixture/" + name + ".jpg",
+						"credentialsRef": map[string]any{"kind": "CredentialsRef", "type": "aws-access-key/v1",
+							"secretRef": map[string]any{"kind": "SecretRef", "name": "capacity-media"}}}},
+			}
+		}
+		if missing.Load() {
+			data["file0"] = nil
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+	})
+	a, b := httptest.NewServer(handler), httptest.NewServer(handler)
+	defer a.Close()
+	defer b.Close()
+	first, err := secretCapacityReadFileIDs(t.Context(), a.URL, "test-token", "ns", "fixture")
+	require.NoError(t, err)
+	second, err := secretCapacityReadFileIDs(t.Context(), b.URL, "test-token", "ns", "fixture")
+	require.NoError(t, err)
+	require.Len(t, first, 100)
+	require.Equal(t, first, second, "a replica with no event history must return the same persisted IDs")
+	require.EqualValues(t, 20, reads.Load())
+	for _, flag := range []*atomic.Bool{&missing, &duplicate, &wrongNamespace} {
+		flag.Store(true)
+		_, err := secretCapacityReadFileIDs(t.Context(), b.URL, "test-token", "ns", "fixture")
+		require.Error(t, err)
+		flag.Store(false)
+	}
+}
+
+func TestSecretCapacityFilePoolErrorsAreClassifiedAndRedacted(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		status         int
+		body, expected string
+	}{
+		{"rate limit", 429, "private-response-marker", "HTTP status 429"},
+		{"GraphQL", 200, `{"errors":[{"message":"private-response-marker"}]}`, "operation errors"},
+		{"malformed", 200, "private-response-marker", "malformed GraphQL response"},
+		{"null data", 200, `{"data":null}`, "missing or malformed GraphQL data"},
+		{"missing File", 200, `{"data":{}}`, "missing projection"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			_, err := secretCapacityReadFileIDs(t.Context(), server.URL, "private-token", "ns", "fixture")
+			require.ErrorContains(t, err, tc.expected)
+			require.NotContains(t, err.Error(), "private-response-marker")
+			require.NotContains(t, err.Error(), "private-token")
+		})
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := secretCapacityReadFileIDs(ctx, "http://127.0.0.1:1", "private-token", "ns", "fixture")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestSecretCapacityGraphQLErrorsDoNotExposeBodies(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"errors":[{"message":"private-response-marker"}]}`)

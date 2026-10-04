@@ -80,6 +80,9 @@ func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, 
 	if kind == "Product" {
 		return r.watchProductGenericResources(ctx, namespace, selector, resourceVersion)
 	}
+	if kind == "File" {
+		return watchFileJournal(ctx, r.Resolver, namespace, selector, resourceVersion, "generic", fileJournalEventToGeneric)
+	}
 	if r.eventBus == nil {
 		return nil, gqlerror.Errorf("watch subscriptions are not available")
 	}

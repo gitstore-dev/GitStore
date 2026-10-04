@@ -61,4 +61,20 @@ func TestResourceWatchJournalMigrationAddsIdentityColumnsAtomically(t *testing.T
 			assert.NotContains(t, line, ";", "gocqlx/migrate treats semicolons in line comments as statement delimiters")
 		}
 	}
+
+}
+
+func TestFileWatchMigrationEnablesAuthoritativeFullImageCDC(t *testing.T) {
+	raw, err := migrations.Files.ReadFile("014_file_watch_cdc.cql")
+	require.NoError(t, err)
+	cql := strings.ToLower(string(raw))
+	assert.False(t, strings.HasPrefix(strings.TrimSpace(cql), "--"))
+	assert.Contains(t, cql, "alter table files_by_namespace with cdc")
+	assert.Contains(t, cql, "'enabled': 'true'")
+	assert.Contains(t, cql, "'preimage': 'full'")
+	assert.Contains(t, cql, "'postimage': 'true'")
+	assert.Contains(t, cql, "'ttl': '1209600'")
+	assert.NotContains(t, cql, "create table")
+	assert.NotContains(t, cql, "drop")
+	assert.NotContains(t, cql, "truncate")
 }

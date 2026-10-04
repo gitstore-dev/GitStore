@@ -117,6 +117,16 @@ File load or scheduled faults. It is not T058 acceptance: reuse the preserved
 dataset only with its acknowledged manifest and owned deployment, then rerun
 the complete production gate.
 
+The `441-production-20261004-0e801dc` rerun passed the mount check and verified
+all five million Products on each API, but stopped before offered load or faults
+because File bootstrap subscribed after the seed writes. An empty watch cursor
+does not replay existing state, and the former process-local File bus could not
+provide cross-replica discovery. The harness now reads the 100 known File names
+from persisted `file(namespace:, name:)` queries on both APIs before retaining
+the existing `nodes` checks. File subscriptions separately use the shared CDC
+journal. Neither this correction nor functional CDC coverage is T058 acceptance;
+a new complete production evidence bundle is still required.
+
 The in-process regression exercises two independent credential sources and
 HTTP token verifiers, atomic replacement, cached-token reuse, mismatched pairs,
 expiry-spanning provider failure, peer progress, restoration and a new source.

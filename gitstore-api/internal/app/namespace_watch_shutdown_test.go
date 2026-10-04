@@ -36,6 +36,62 @@ func (r *readyProductCDCRunner) RunProductCDC(ctx context.Context, _ *watchjourn
 	return ctx.Err()
 }
 
+type gatedFileCDCRunner struct {
+	started    chan struct{}
+	allowReady chan struct{}
+}
+
+func (r *gatedFileCDCRunner) RunFileCDC(ctx context.Context, _ *watchjournal.Materializer, _ datastore.ResourceWatchLease, _ time.Duration, _ time.Duration, ready func()) error {
+	close(r.started)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.allowReady:
+		ready()
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestFileCDCReadinessGatesSharedBookmarksAndShutdownReleasesLease(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	journal := store.(datastore.ResourceWatchJournal)
+	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
+	require.NoError(t, err)
+	clock := apiruntime.SystemClock{}
+	runner := &gatedFileCDCRunner{started: make(chan struct{}), allowReady: make(chan struct{})}
+	runtime := &namespaceWatchRuntime{
+		journal: journal, materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Clock: clock, Metrics: metrics}),
+		leaseManager: watchjournal.NewLeaseManager(journal, "leader", time.Minute, time.Second, clock),
+		metrics:      metrics, productRunner: &readyProductCDCRunner{}, fileRunner: runner,
+		cfg: config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60, CDCRetentionSeconds: 60, CDCConfidenceWindowMillis: 1}, log: zap.NewNop(),
+	}
+	lease, acquired, err := runtime.leaseManager.Acquire(t.Context())
+	require.NoError(t, err)
+	require.True(t, acquired)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runtime.runAsLeader(ctx, lease) }()
+	<-runner.started
+	require.Never(t, func() bool {
+		bounds, err := journal.Bounds(t.Context())
+		require.NoError(t, err)
+		return bounds.HighWater > 0
+	}, 50*time.Millisecond, 5*time.Millisecond)
+	close(runner.allowReady)
+	require.Eventually(t, func() bool {
+		bounds, err := journal.Bounds(t.Context())
+		return err == nil && bounds.HighWater > 0
+	}, time.Second, 10*time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	_, acquired, err = journal.AcquireLease(t.Context(), "replacement", time.Now().UTC(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+}
+
 func TestNamespaceWatchLeaderReleasesLeaseBeforeReturning(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)

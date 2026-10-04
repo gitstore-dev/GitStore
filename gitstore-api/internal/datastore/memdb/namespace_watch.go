@@ -232,6 +232,7 @@ func (m *memdbDatastore) recordCommittedProduct(eventType datastore.ResourceWatc
 	if product == nil {
 		return
 	}
+
 	now := time.Now().UTC()
 	var payload []byte
 	if eventType == datastore.ResourceWatchAdded || eventType == datastore.ResourceWatchModified {
@@ -246,6 +247,23 @@ func (m *memdbDatastore) recordCommittedProduct(eventType datastore.ResourceWatc
 		Type: eventType, Kind: "Product", Namespace: product.Namespace, Name: product.Name, Payload: payload,
 		SelectorLabels: cloneStringMap(product.Labels), PreviousSelectorLabels: cloneStringMap(previousLabels),
 		DeduplicationKey: fmt.Sprintf("memdb:%s:%s:%d", eventType, product.UID, m.namespaceWatchSequence),
+		At:               now,
+	})
+}
+
+// File writes hold fileMutationMu through commit and publication so concurrent
+// writers cannot publish versions in the opposite order to their commits.
+func (m *memdbDatastore) recordCommittedFile(eventType datastore.ResourceWatchEventType, file *datastore.File, previousLabels map[string]string, payload json.RawMessage) {
+	now := time.Now().UTC()
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	m.pruneLocked(now.Add(-m.namespaceWatchRetention))
+	m.namespaceWatchSequence++
+	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.ResourceWatchEvent{
+		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
+		Type: eventType, Kind: "File", Namespace: file.Namespace, Name: file.Name, Payload: payload,
+		SelectorLabels: cloneStringMap(file.Labels), PreviousSelectorLabels: cloneStringMap(previousLabels),
+		DeduplicationKey: fmt.Sprintf("memdb:%s:%s:%d", eventType, file.UID, m.namespaceWatchSequence),
 		At:               now,
 	})
 }

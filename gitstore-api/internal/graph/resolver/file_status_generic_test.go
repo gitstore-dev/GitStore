@@ -8,10 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -48,4 +52,125 @@ func TestUpdateResourceStatusFileResolvedAndConflict(t *testing.T) {
 	require.True(t, errors.As(err, &graphErr))
 	require.Equal(t, "RESOURCE_VERSION_CONFLICT", graphErr.Extensions["code"])
 	require.Equal(t, "2", graphErr.Extensions["resourceVersion"])
+}
+
+func TestFileWatchUsesDurableJournalAcrossReplicasAndReplacement(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	a, err := NewResolver(repositoryWatchResolverDeps(store, journal))
+	require.NoError(t, err)
+	b, err := NewResolver(repositoryWatchResolverDeps(store, journal))
+	require.NoError(t, err)
+	file := &datastore.File{UID: uuid.NewString(), Namespace: "ns", Name: "hero", Kind: "File",
+		ResourceVersion: "1", Labels: map[string]string{"team": "media"},
+		Spec: json.RawMessage(`{"contentType":"image/jpeg","source":{"type":"s3","uri":"s3://fixture"}}`)}
+	require.NoError(t, store.CreateFile(t.Context(), file))
+	for _, replica := range []*Resolver{a, b} {
+		got, err := replica.Query().File(t.Context(), "ns", "hero")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Equal(t, mustEncodeNodeID(nodeKindFile, file.UID), got.ID)
+	}
+	bootstrap := fileWatchBootstrapCursor
+	bookmarks, err := a.Subscription().WatchFiles(t.Context(), &file.Namespace, nil, &bootstrap)
+	require.NoError(t, err)
+	bookmark := receiveFileWatchEvent(t, bookmarks)
+	require.Equal(t, model.WatchEventTypeBookmark, bookmark.Type)
+	require.Nil(t, bookmark.File)
+
+	// These writes precede the new subscriptions; both replicas must replay.
+	updated, err := store.UpdateFileStatus(t.Context(), "ns", "hero", datastore.FileStatusPatch{ResourceVersion: "1"})
+	require.NoError(t, err)
+	updated.Labels = map[string]string{"team": "other"}
+	updated.ResourceVersion = "3"
+	require.NoError(t, store.UpdateFile(t.Context(), updated, "2"))
+	selector := &model.LabelSelectorInput{MatchLabels: map[string]any{"team": "media"}}
+	typed, err := b.Subscription().WatchFiles(t.Context(), &file.Namespace, selector, &bookmark.ResourceVersion)
+	require.NoError(t, err)
+	generic, err := a.Subscription().WatchResources(t.Context(), "File", &file.Namespace, selector, &bookmark.ResourceVersion)
+	require.NoError(t, err)
+	observed := receiveFileWatchEvent(t, typed)
+	require.Equal(t, model.WatchEventTypeModified, observed.Type)
+	require.NotNil(t, observed.File)
+	genericEvent := receiveGenericProductEvent(t, generic)
+	require.Equal(t, observed.ResourceVersion, genericEvent.ResourceVersion)
+	require.Equal(t, observed.File.ID, genericEvent.Object["id"])
+	require.Equal(t, model.WatchEventTypeDeleted, receiveFileWatchEvent(t, typed).Type)
+	require.Equal(t, model.WatchEventTypeDeleted, receiveGenericProductEvent(t, generic).Type)
+
+	replacement, err := NewResolver(repositoryWatchResolverDeps(store, journal))
+	require.NoError(t, err)
+	require.NoError(t, store.DeleteFile(t.Context(), file.UID))
+	replayed, err := replacement.Subscription().WatchFiles(t.Context(), &file.Namespace, nil, &observed.ResourceVersion)
+	require.NoError(t, err)
+	require.Equal(t, model.WatchEventTypeModified, receiveFileWatchEvent(t, replayed).Type)
+	deleted := receiveFileWatchEvent(t, replayed)
+	require.Equal(t, model.WatchEventTypeDeleted, deleted.Type)
+	require.Nil(t, deleted.File)
+}
+
+func TestFileWatchRejectsLegacyCursorsAndNeverFallsBackToEventBus(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	bus := eventbus.New(16)
+	bus.Publish(eventbus.Event{Kind: "File", Type: eventbus.Added, Name: "legacy"})
+	for _, cfg := range []config.NamespaceWatchConfig{{}, {ReadersEnabled: true}} {
+		r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop(), EventBus: bus, NamespaceWatch: cfg})
+		require.NoError(t, err)
+		_, err = r.Subscription().WatchFiles(t.Context(), nil, nil, nil)
+		require.Error(t, err)
+		require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
+		_, err = r.Subscription().WatchResources(t.Context(), "File", nil, nil, nil)
+		require.Error(t, err)
+	}
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	r, err := NewResolver(repositoryWatchResolverDeps(store, journal))
+	require.NoError(t, err)
+	_, err = r.Subscription().WatchFiles(t.Context(), nil, nil, nil)
+	require.Error(t, err)
+	require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
+	lease := acquireRepositoryWatchLease(t, journal)
+	_, err = journal.Append(t.Context(), lease, datastore.ResourceWatchEvent{Type: datastore.ResourceWatchBookmark, At: time.Now()}, time.Hour)
+	require.NoError(t, err)
+	for _, cursor := range []string{"0", "42", "invalid"} {
+		_, err = r.Subscription().WatchFiles(t.Context(), nil, nil, &cursor)
+		require.Error(t, err)
+		require.Equal(t, watchjournal.CodeExpired, err.(*gqlerror.Error).Extensions["code"])
+	}
+}
+
+func TestFileWatchFiltersNamespacesAndSelectorEntry(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	file := &datastore.File{UID: uuid.NewString(), Namespace: "ns", Name: "hero", ResourceVersion: "1", Labels: map[string]string{"team": "other"}}
+	require.NoError(t, store.CreateFile(t.Context(), file))
+	deps := repositoryWatchResolverDeps(store, journal)
+	r, err := NewResolver(deps)
+	require.NoError(t, err)
+	selector := &model.LabelSelectorInput{MatchLabels: map[string]any{"team": "media"}}
+	stream, err := r.Subscription().WatchFiles(t.Context(), &file.Namespace, selector, nil)
+	require.NoError(t, err)
+	peer := &datastore.File{UID: uuid.NewString(), Namespace: "other", Name: "private", Labels: map[string]string{"team": "media"}}
+	require.NoError(t, store.CreateFile(t.Context(), peer))
+	file.Labels = map[string]string{"team": "media"}
+	file.ResourceVersion = "2"
+	require.NoError(t, store.UpdateFile(t.Context(), file, "1"))
+	entry := receiveFileWatchEvent(t, stream)
+	require.Equal(t, "hero", entry.Name, "a different namespace must not leak into the stream")
+	require.Equal(t, model.WatchEventTypeAdded, entry.Type)
+	require.NotNil(t, entry.File)
+}
+
+func receiveFileWatchEvent(t *testing.T, events <-chan *model.FileWatchEvent) *model.FileWatchEvent {
+	t.Helper()
+	select {
+	case event, ok := <-events:
+		require.True(t, ok, "File stream closed unexpectedly")
+		return event
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for durable File event")
+		return nil
+	}
 }

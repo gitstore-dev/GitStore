@@ -22,18 +22,131 @@ const (
 	namespaceWatchBootstrapCursor  = "__namespace_watch_bootstrap__"
 	repositoryWatchBootstrapCursor = "__repository_watch_bootstrap__"
 	productWatchBootstrapCursor    = "__product_watch_bootstrap__"
+	fileWatchBootstrapCursor       = "__file_watch_bootstrap__"
 )
 
 // normalizeResourceWatchCursor preserves the private typed-watch bootstrap
-// sentinels while the Namespace and Repository projections share one generic
+// sentinels while resource projections share one generic
 // durable journal. Ordinary opaque cursors are returned unchanged.
 func normalizeResourceWatchCursor(raw string) string {
 	switch raw {
-	case namespaceWatchBootstrapCursor, repositoryWatchBootstrapCursor, productWatchBootstrapCursor:
+	case namespaceWatchBootstrapCursor, repositoryWatchBootstrapCursor, productWatchBootstrapCursor, fileWatchBootstrapCursor:
 		return watchjournal.BootstrapCursor
 	default:
 		return raw
 	}
+}
+
+func fileFromJournalEvent(event datastore.ResourceWatchEvent) (*datastore.File, error) {
+	if event.Type == datastore.ResourceWatchDeleted || event.Type == datastore.ResourceWatchBookmark {
+		return nil, nil
+	}
+	if len(event.Payload) == 0 {
+		return nil, gqlerror.Errorf("File journal data event has no payload")
+	}
+	var file datastore.File
+	if err := json.Unmarshal(event.Payload, &file); err != nil {
+		return nil, gqlerror.Errorf("decode File journal payload")
+	}
+	return &file, nil
+}
+
+func fileJournalEventToGraphQL(event datastore.ResourceWatchEvent) (*model.FileWatchEvent, error) {
+	file, err := fileFromJournalEvent(event)
+	if err != nil {
+		return nil, err
+	}
+	return &model.FileWatchEvent{
+		Type: model.WatchEventType(event.Type), Namespace: &event.Namespace, Name: event.Name,
+		ResourceVersion: watchjournal.EncodeCursor(event.Epoch, event.Sequence),
+		File:            DatastoreFileToGraphQL(file),
+	}, nil
+}
+
+func fileJournalEventToGeneric(event datastore.ResourceWatchEvent) (*model.WatchEvent, error) {
+	file, err := fileFromJournalEvent(event)
+	if err != nil {
+		return nil, err
+	}
+	out := &model.WatchEvent{
+		Type: model.WatchEventType(event.Type), Kind: "File", Namespace: &event.Namespace,
+		Name: event.Name, ResourceVersion: watchjournal.EncodeCursor(event.Epoch, event.Sequence),
+	}
+	if file != nil {
+		raw, err := json.Marshal(DatastoreFileToGraphQL(file))
+		if err != nil {
+			return nil, gqlerror.Errorf("encode File watch projection")
+		}
+		if err := json.Unmarshal(raw, &out.Object); err != nil {
+			return nil, gqlerror.Errorf("decode File watch projection")
+		}
+	}
+	return out, nil
+}
+
+// Both File projections read the same durable envelope and bounded subscriber;
+// neither can fall back to a process-local event-bus cursor.
+func watchFileJournal[T any](ctx context.Context, r *Resolver, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string, path string, convert func(datastore.ResourceWatchEvent) (T, error)) (<-chan T, error) {
+	if err := r.repositoryWatchAvailable(); err != nil {
+		return nil, err
+	}
+	cursor := ""
+	if resourceVersion != nil {
+		cursor = normalizeResourceWatchCursor(*resourceVersion)
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream, err := r.namespaceSubscriber.SubscribePath(streamCtx, cursor, path)
+	if err != nil {
+		cancel()
+		return nil, namespaceWatchGraphQLError(err)
+	}
+	out := make(chan T, r.namespaceWatch.SubscriberBuffer)
+	go func() {
+		defer cancel()
+		defer close(out)
+		for events, errs := stream.Events, stream.Errors; events != nil || errs != nil; {
+			select {
+			case <-ctx.Done():
+				return
+			case err, ok := <-errs:
+				if !ok {
+					errs = nil
+					continue
+				}
+				if err != nil {
+					addNamespaceWatchSubscriptionError(ctx, namespaceWatchGraphQLError(err))
+					return
+				}
+			case event, ok := <-events:
+				if !ok {
+					events = nil
+					continue
+				}
+				if event.Type != datastore.ResourceWatchBookmark &&
+					(event.Kind != "File" || !repositoryJournalEventMatchesNamespace(event, namespace)) {
+					continue
+				}
+				// Selector transitions depend only on envelope labels, independent
+				// of resource kind; the shared projector also preserves tombstones.
+				projected, matches := projectResourceJournalSelector(event, selector)
+				if !matches {
+					continue
+				}
+				value, err := convert(projected)
+				if err != nil {
+					addNamespaceWatchSubscriptionError(ctx, err)
+					return
+				}
+				if err := sendNamespaceWatchOutput(streamCtx, out, value, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond, r.namespaceMetrics); err != nil {
+					if streamCtx.Err() == nil {
+						addNamespaceWatchSubscriptionError(ctx, namespaceWatchGraphQLError(err))
+					}
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }
 
 // publishCategoryTaxonomyStatusEvent fans out a Modified event after a
@@ -190,7 +303,7 @@ func namespaceJournalEventMatchesKind(event datastore.ResourceWatchEvent) bool {
 func namespaceWatchGraphQLError(err error) *gqlerror.Error {
 	terminal, ok := watchjournal.AsTerminal(err)
 	if !ok {
-		return gqlerror.Errorf("namespace watch failed")
+		return gqlerror.Errorf("durable resource watch failed")
 	}
 	return &gqlerror.Error{
 		Message:    terminal.Error(),
@@ -201,7 +314,7 @@ func namespaceWatchGraphQLError(err error) *gqlerror.Error {
 func addNamespaceWatchSubscriptionError(ctx context.Context, err error) {
 	var gqlErr *gqlerror.Error
 	if !errors.As(err, &gqlErr) {
-		gqlErr = gqlerror.Errorf("namespace watch failed")
+		gqlErr = gqlerror.Errorf("durable resource watch failed")
 	}
 	transport.AddSubscriptionError(ctx, gqlErr)
 }
@@ -335,32 +448,6 @@ func toCategoryWatchEvent(ev eventbus.Event) *model.CategoryWatchEvent {
 	return out
 }
 
-func fileEventMatchesSelector(ev eventbus.Event, selector *model.LabelSelectorInput) bool {
-	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
-		return true
-	}
-	file, ok := ev.Object.(*datastore.File)
-	return ok && file != nil && matchesWatchSelector(selector, file.Labels)
-}
-
-func toFileWatchEvent(ev eventbus.Event) *model.FileWatchEvent {
-	out := &model.FileWatchEvent{
-		Type:            toWatchEventType(ev.Type),
-		Name:            ev.Name,
-		ResourceVersion: ev.Cursor,
-	}
-	if ev.Namespace != "" {
-		ns := ev.Namespace
-		out.Namespace = &ns
-	}
-	if ev.Type != eventbus.Deleted {
-		if file, ok := ev.Object.(*datastore.File); ok {
-			out.File = DatastoreFileToGraphQL(file)
-		}
-	}
-	return out
-}
-
 // toGenericWatchEvent maps an eventbus.Event to the JSON-boxed WatchEvent
 // used by the generic watchResources subscription (spec 040 FR-006). The
 // object is marshaled through model conversion where a typed converter is
@@ -382,8 +469,6 @@ func toGenericWatchEvent(kind string, ev eventbus.Event) *model.WatchEvent {
 			out.Object = categoryTaxonomyToJSONMap(c)
 		} else if namespace, ok := ev.Object.(*datastore.Namespace); ok {
 			out.Object = namespaceToJSONMap(namespace)
-		} else if file, ok := ev.Object.(*datastore.File); ok {
-			out.Object = fileToJSONMap(file)
 		} else if repository, ok := ev.Object.(*datastore.Repository); ok {
 			out.Object = repositoryToJSONMap(repository)
 		}
@@ -509,8 +594,6 @@ func watchEventMatchesSelector(kind string, ev eventbus.Event, selector *model.L
 	switch kind {
 	case "Repository":
 		return repositoryEventMatchesSelector(ev, selector)
-	case "File":
-		return fileEventMatchesSelector(ev, selector)
 	case "Product":
 		return productEventMatchesSelector(ev, selector)
 	default:

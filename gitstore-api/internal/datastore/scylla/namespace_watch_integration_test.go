@@ -580,6 +580,120 @@ func TestProductCDCReaderMaterializesTerminationEvent(t *testing.T) {
 	t.Fatal("Product creation was not materialized into the durable journal")
 }
 
+func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *testing.T) {
+	store := newTestStore(t)
+	peer := newTestStore(t)
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	peerJournal := peer.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	acquire := func(holder string) datastore.ResourceWatchLease {
+		lease, acquired, err := journal.AcquireLease(t.Context(), holder, time.Now().UTC(), 5*time.Minute)
+		require.NoError(t, err)
+		require.True(t, acquired)
+		return lease
+	}
+	start := func(backend datastore.Datastore, lease datastore.ResourceWatchLease) func() {
+		runner := backend.(interface {
+			RunFileCDC(context.Context, *watchjournal.Materializer, datastore.ResourceWatchLease, time.Duration, time.Duration, func()) error
+		})
+		materializer := watchjournal.NewMaterializer(backend.(datastore.ResourceWatchCapable).ResourceWatchJournal(), watchjournal.MaterializerConfig{EventTTL: time.Hour})
+		ctx, cancel := context.WithCancel(t.Context())
+		done, ready := make(chan error, 2), make(chan struct{}, 2)
+		go func() {
+			done <- runner.RunFileCDC(ctx, materializer, lease, 14*24*time.Hour, 500*time.Millisecond, func() { ready <- struct{}{} })
+		}()
+		go func() {
+			done <- backend.(productCDCTestRunner).RunProductCDC(ctx, materializer, lease, 14*24*time.Hour, 500*time.Millisecond, func() { ready <- struct{}{} })
+		}()
+		var stopped bool
+		stop := func() {
+			if stopped {
+				return
+			}
+			stopped = true
+			cancel()
+			for range 2 {
+				select {
+				case err := <-done:
+					if err != nil {
+						require.ErrorIs(t, err, context.Canceled)
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatal("catalog CDC worker did not stop")
+				}
+			}
+			require.NoError(t, journal.ReleaseLease(t.Context(), lease))
+		}
+		t.Cleanup(stop)
+		for range 2 {
+			select {
+			case <-ready:
+			case err := <-done:
+				t.Fatalf("catalog CDC reader stopped before readiness: %v", err)
+			case <-time.After(30 * time.Second):
+				t.Fatal("catalog CDC reader did not become ready")
+			}
+		}
+		return stop
+	}
+	lease := acquire("file-cdc-integration-a")
+	stop := start(store, lease)
+	bounds, err := peerJournal.Bounds(t.Context())
+	require.NoError(t, err)
+	cursor := datastore.ResourceWatchCursor{Epoch: bounds.Epoch, Sequence: bounds.HighWater}
+	file := &datastore.File{UID: newID(), Namespace: "cdc-files", Name: "hero-" + newID()[:8],
+		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "1", Generation: 1,
+		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond), RepositoryID: newID(),
+		Labels: map[string]string{"team": "media"}, Spec: json.RawMessage(`{"contentType":"image/jpeg","source":{"type":"s3","uri":"s3://fixture"}}`)}
+	next := func(eventType datastore.ResourceWatchEventType, version string) datastore.ResourceWatchEvent {
+		var found datastore.ResourceWatchEvent
+		require.Eventually(t, func() bool {
+			events, err := peerJournal.ReadAfter(t.Context(), cursor, 256)
+			require.NoError(t, err)
+			for _, event := range events {
+				cursor.Sequence = event.Sequence
+				if event.Kind != "File" || event.Name != file.Name || event.Type != eventType {
+					continue
+				}
+				if eventType != datastore.ResourceWatchDeleted {
+					var observed datastore.File
+					require.NoError(t, json.Unmarshal(event.Payload, &observed))
+					if observed.ResourceVersion != version {
+						continue
+					}
+					require.Equal(t, file.UID, observed.UID)
+					require.Equal(t, file.RepositoryID, observed.RepositoryID)
+					require.JSONEq(t, string(file.Spec), string(observed.Spec))
+				}
+				found = event
+				return true
+			}
+			return false
+		}, 75*time.Second, 100*time.Millisecond, "File CDC event %s version %s was not persisted", eventType, version)
+		return found
+	}
+	require.NoError(t, store.CreateFile(t.Context(), file))
+	added := next(datastore.ResourceWatchAdded, "1")
+	require.Equal(t, file.Labels, added.SelectorLabels)
+	stop()
+
+	file.ResourceVersion = "2"
+	file.Labels = map[string]string{"team": "catalog"}
+	require.NoError(t, store.UpdateFile(t.Context(), file, "1"), "write while no materializer is running")
+	lease = acquire("file-cdc-integration-b")
+	stopPeer := start(peer, lease)
+	modified := next(datastore.ResourceWatchModified, "2")
+	require.Equal(t, "media", modified.PreviousSelectorLabels["team"])
+	require.Equal(t, "catalog", modified.SelectorLabels["team"])
+	_, err = peer.UpdateFileStatus(t.Context(), file.Namespace, file.Name, datastore.FileStatusPatch{ResourceVersion: "2"})
+	require.NoError(t, err)
+	next(datastore.ResourceWatchModified, "3")
+	require.NoError(t, store.DeleteFileWithResourceVersion(t.Context(), file.UID, "3"))
+	deleted := next(datastore.ResourceWatchDeleted, "")
+	require.Empty(t, deleted.Payload)
+	require.Equal(t, "catalog", deleted.SelectorLabels["team"])
+	stopPeer()
+}
+
 func namespaceCDCRowCount(t *testing.T) int64 {
 	t.Helper()
 	session := newRawSession(t)

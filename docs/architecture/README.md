@@ -529,7 +529,7 @@ architecture-beta
 
 `Resource Watch` is a kind-agnostic contract, not a Namespace-only subsystem.
 It covers every Git-backed resource and carries resumable `resourceVersion`
-streams to controllers and agents. Namespace and Repository already use the
+streams to controllers and agents. Namespace, Repository, Product, and File use the
 durable resource journal; CategoryTaxonomy has a shipped watch surface but must
 move from its event-bus backend to the journal before it satisfies this target
 architecture.
@@ -717,9 +717,9 @@ For quickstart examples and `curl`-based testing, see [`specs/009-api-namespaces
 ## Accepted Architecture: Admission, Namespace Watch, and Reconciliation
 
 This is the implemented baseline. It applies directly to the current Git-backed
-admission path. Namespace and Repository use the shared durable resource-watch
-journal; CategoryTaxonomy, Product, and File retain their current event-bus
-backends. It does not imply that the Proposal 3 components have shipped.
+admission path. Namespace, Repository, Product, and File use the shared durable
+resource-watch journal; CategoryTaxonomy retains its event-bus backend.
+It does not imply that the Proposal 3 components have shipped.
 
 ### End-to-End Flow
 
@@ -816,9 +816,10 @@ The API surface stays GraphQL-first while preserving Kubernetes-style watch sema
   bootstraps with a durable BOOKMARK, lists, drains buffered events, and resumes
   strictly after its persisted cursor. Continuity failures return explicit
   `WATCH_EXPIRED`; materializer unavailability returns `WATCH_UNAVAILABLE`.
-- CategoryTaxonomy, Product, and File retain their event-bus watch backends
-  until their own durable-watch migrations land; they must not be represented
-  as Namespace journal consumers.
+- Repository, Product, and File use kind-filtered projections of the same
+  durable journal. File CDC is enabled by migration 014; its legacy event-bus
+  cursors cannot be resumed. CategoryTaxonomy retains its event-bus watch
+  backend until its own durable-watch migration lands.
 
 ### Reconciliation Model
 

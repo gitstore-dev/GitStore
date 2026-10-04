@@ -18,17 +18,26 @@ import (
 )
 
 const productCDCSource = "Product"
+const fileCDCSource = "File"
 
 // RunProductCDC consumes the Product authoritative/list projection. Product
 // rows are list-visible in this same table, so a postimage can enter the
 // shared journal without a secondary projection fence.
 func (s *scyllaDatastore) RunProductCDC(ctx context.Context, materializer *watchjournal.Materializer, lease datastore.ResourceWatchLease, changeAgeLimit, confidenceWindow time.Duration, ready func()) error {
+	return s.runCatalogResourceCDC(ctx, materializer, lease, changeAgeLimit, confidenceWindow, ready, productCDCSource, "products_by_namespace")
+}
+
+func (s *scyllaDatastore) RunFileCDC(ctx context.Context, materializer *watchjournal.Materializer, lease datastore.ResourceWatchLease, changeAgeLimit, confidenceWindow time.Duration, ready func()) error {
+	return s.runCatalogResourceCDC(ctx, materializer, lease, changeAgeLimit, confidenceWindow, ready, fileCDCSource, "files_by_namespace")
+}
+
+func (s *scyllaDatastore) runCatalogResourceCDC(ctx context.Context, materializer *watchjournal.Materializer, lease datastore.ResourceWatchLease, changeAgeLimit, confidenceWindow time.Duration, ready func(), kind, table string) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	sequencer := newNamespaceCDCSequencer(materializer, lease)
-	progress := &repositoryCDCProgressManager{journal: s, lease: lease, source: productCDCSource}
+	progress := &repositoryCDCProgressManager{journal: s, lease: lease, source: kind}
 	progress.beginGeneration = func(generationCtx context.Context, generation time.Time) error {
-		streams, err := s.resourceCDCGenerationStreams(generationCtx, generation, "products_by_namespace", productCDCSource)
+		streams, err := s.resourceCDCGenerationStreams(generationCtx, generation, table, kind)
 		if err != nil {
 			return err
 		}
@@ -36,16 +45,16 @@ func (s *scyllaDatastore) RunProductCDC(ctx context.Context, materializer *watch
 	}
 	sequencerErr := make(chan error, 1)
 	go func() { sequencerErr <- sequencer.Run(runCtx); cancel() }()
-	factory := &productCDCConsumerFactory{sequencer: sequencer, onReady: ready}
+	factory := &productCDCConsumerFactory{sequencer: sequencer, onReady: ready, kind: kind}
 	reader, err := scyllacdc.NewReader(runCtx, &scyllacdc.ReaderConfig{
-		Session: s.session.Session, TableNames: []string{s.keyspace + ".products_by_namespace"}, Consistency: gocql.Quorum,
+		Session: s.session.Session, TableNames: []string{s.keyspace + "." + table}, Consistency: gocql.Quorum,
 		ChangeConsumerFactory: factory, ProgressManager: progress, Logger: zapCDCLogger{s.log},
 		Advanced: scyllacdc.AdvancedReaderConfig{ChangeAgeLimit: changeAgeLimit, ConfidenceWindowSize: confidenceWindow,
 			PostEmptyQueryDelay: 100 * time.Millisecond, PostNonEmptyQueryDelay: 100 * time.Millisecond,
 			PostFailedQueryDelay: 100 * time.Millisecond, MaxPostFailedQueryDelay: 2 * time.Second, TableMissingRetryLimit: 30},
 	})
 	if err != nil {
-		return fmt.Errorf("create Product CDC reader: %w", err)
+		return fmt.Errorf("create %s CDC reader: %w", kind, err)
 	}
 	readerErr := reader.Run(runCtx)
 	cancel()
@@ -63,6 +72,7 @@ type productCDCConsumerFactory struct {
 	sequencer *namespaceCDCSequencer
 	onReady   func()
 	readyOnce sync.Once
+	kind      string
 }
 
 func (f *productCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, input scyllacdc.CreateChangeConsumerInput) (scyllacdc.ChangeConsumer, error) {
@@ -78,6 +88,7 @@ func (f *productCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, in
 		streamID:  streamID,
 		reporter:  input.ProgressReporter,
 		onReady:   f.markReady,
+		kind:      f.kind,
 	}, nil
 }
 
@@ -98,16 +109,21 @@ type productCDCConsumer struct {
 	streamID  string
 	reporter  *scyllacdc.ProgressReporter
 	onReady   func()
+	kind      string
 }
 
 func (c *productCDCConsumer) Consume(ctx context.Context, change scyllacdc.Change) error {
-	before := productCDCPostimage(change.PreImage)
-	after := productCDCPostimage(change.PostImage)
-	beforeJSON, err := marshalOptionalProduct(before)
+	before := catalogCDCRow(change.PreImage)
+	after := catalogCDCRow(change.PostImage)
+	kind := c.kind
+	if kind == "" {
+		kind = productCDCSource
+	}
+	beforeJSON, err := marshalCatalogCDCPostimage(before, kind)
 	if err != nil {
 		return err
 	}
-	afterJSON, err := marshalOptionalProduct(after)
+	afterJSON, err := marshalCatalogCDCPostimage(after, kind)
 	if err != nil {
 		return err
 	}
@@ -121,7 +137,7 @@ func (c *productCDCConsumer) Consume(ctx context.Context, change scyllacdc.Chang
 		markProgress: func(markCtx context.Context) error {
 			return c.reporter.MarkProgress(markCtx, scyllacdc.Progress{LastProcessedRecordTime: change.Time})
 		},
-		change: watchjournal.Change{Kind: productCDCSource, Namespace: namespace, StreamID: c.streamID, Position: change.Time.Bytes(), DeduplicationKey: c.streamID + ":" + change.Time.String(), Name: name, Before: beforeJSON, After: afterJSON, At: change.Time.Time().UTC()},
+		change: watchjournal.Change{Kind: kind, Namespace: namespace, StreamID: c.streamID, Position: change.Time.Bytes(), DeduplicationKey: c.streamID + ":" + change.Time.String(), Name: name, Before: beforeJSON, After: afterJSON, At: change.Time.Time().UTC()},
 	})
 	if err == nil && c.onReady != nil {
 		c.onReady()
@@ -142,6 +158,14 @@ func (c *productCDCConsumer) Empty(ctx context.Context, ackTime gocql.UUID) erro
 func (c *productCDCConsumer) End() error { return c.sequencer.Unregister(c.streamID) }
 
 func productCDCPostimage(rows []*scyllacdc.ChangeRow) *datastore.Product {
+	row := catalogCDCRow(rows)
+	if row == nil {
+		return nil
+	}
+	return fromProductRow(row)
+}
+
+func catalogCDCRow(rows []*scyllacdc.ChangeRow) *productRow {
 	if len(rows) == 0 || rows[0] == nil {
 		return nil
 	}
@@ -171,16 +195,37 @@ func productCDCPostimage(rows []*scyllacdc.ChangeRow) *datastore.Product {
 	assignCDC(row, "spec", &scyllaRow.Spec)
 	assignCDC(row, "body", &scyllaRow.Body)
 	assignCDC(row, "status", &scyllaRow.Status)
-	return fromProductRow(scyllaRow)
+	return scyllaRow
 }
 
 func marshalOptionalProduct(product *datastore.Product) (json.RawMessage, error) {
 	if product == nil {
 		return nil, nil
 	}
+
 	raw, err := json.Marshal(product)
 	if err != nil {
 		return nil, fmt.Errorf("marshal Product CDC postimage: %w", err)
+	}
+	return raw, nil
+}
+
+func marshalCatalogCDCPostimage(row *productRow, kind string) (json.RawMessage, error) {
+	if row == nil {
+		return nil, nil
+	}
+	if kind == productCDCSource {
+		return marshalOptionalProduct(fromProductRow(row))
+	}
+	if kind != fileCDCSource {
+		return nil, fmt.Errorf("unsupported catalog CDC kind %q", kind)
+	}
+	// Both authoritative tables share the same column layout. Convert through
+	// their row types so File payloads retain their own datastore representation.
+	file := fromFileRow((*fileRow)(row))
+	raw, err := json.Marshal(file)
+	if err != nil {
+		return nil, fmt.Errorf("marshal File CDC postimage: %w", err)
 	}
 	return raw, nil
 }

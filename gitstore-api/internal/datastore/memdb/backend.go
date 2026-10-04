@@ -6,6 +6,7 @@ package memdb
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"reflect"
@@ -150,6 +151,7 @@ type memdbDatastore struct {
 	db *gomemdb.MemDB
 
 	namespaceMutationMu     sync.Mutex
+	fileMutationMu          sync.Mutex
 	namespaceWatchMu        sync.RWMutex
 	namespaceWatchEpoch     string
 	namespaceWatchSequence  uint64
@@ -223,6 +225,9 @@ func (m *memdbDatastore) CreateFile(_ context.Context, f *datastore.File) error 
 	if f == nil {
 		return fmt.Errorf("%w: file is nil", datastore.ErrInvalidArgument)
 	}
+	m.fileMutationMu.Lock()
+	defer m.fileMutationMu.Unlock()
+	f = cloneFile(f)
 	txn := m.db.Txn(true)
 	if raw, _ := txn.First("file", "id", f.UID); raw != nil {
 		txn.Abort()
@@ -231,6 +236,11 @@ func (m *memdbDatastore) CreateFile(_ context.Context, f *datastore.File) error 
 	if raw, _ := txn.First("file", "name_namespace", f.Namespace, f.Name); raw != nil {
 		txn.Abort()
 		return fmt.Errorf("%w: file %s/%s", datastore.ErrAlreadyExists, f.Namespace, f.Name)
+	}
+	payload, err := json.Marshal(f)
+	if err != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: serialize File journal payload: %v", datastore.ErrInvalidArgument, err)
 	}
 	if err := txn.Insert("file", cloneFile(f)); err != nil {
 		txn.Abort()
@@ -241,6 +251,7 @@ func (m *memdbDatastore) CreateFile(_ context.Context, f *datastore.File) error 
 		return err
 	}
 	txn.Commit()
+	m.recordCommittedFile(datastore.ResourceWatchAdded, f, nil, payload)
 	return nil
 }
 
@@ -282,6 +293,9 @@ func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File, expect
 	if f == nil {
 		return fmt.Errorf("%w: file is nil", datastore.ErrInvalidArgument)
 	}
+	m.fileMutationMu.Lock()
+	defer m.fileMutationMu.Unlock()
+	f = cloneFile(f)
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("file", "id", f.UID)
 	if raw == nil {
@@ -292,9 +306,19 @@ func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File, expect
 		txn.Abort()
 		return fmt.Errorf("%w: file uid %s", datastore.ErrConflict, f.UID)
 	}
+	previous := raw.(*datastore.File)
+	if reflect.DeepEqual(previous, f) {
+		txn.Abort()
+		return nil
+	}
 	if raw, _ := txn.First("file", "name_namespace", f.Namespace, f.Name); raw != nil && raw.(*datastore.File).UID != f.UID {
 		txn.Abort()
 		return fmt.Errorf("%w: file %s/%s", datastore.ErrAlreadyExists, f.Namespace, f.Name)
+	}
+	payload, err := json.Marshal(f)
+	if err != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: serialize File journal payload: %v", datastore.ErrInvalidArgument, err)
 	}
 	if err := txn.Insert("file", cloneFile(f)); err != nil {
 		txn.Abort()
@@ -305,6 +329,7 @@ func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File, expect
 		return err
 	}
 	txn.Commit()
+	m.recordCommittedFile(datastore.ResourceWatchModified, f, previous.Labels, payload)
 	return nil
 }
 
@@ -317,6 +342,8 @@ func (m *memdbDatastore) DeleteFileWithResourceVersion(_ context.Context, uid, e
 }
 
 func (m *memdbDatastore) deleteFile(uid, expectedResourceVersion string, checkResourceVersion bool) error {
+	m.fileMutationMu.Lock()
+	defer m.fileMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("file", "id", uid)
 	if raw == nil {
@@ -338,10 +365,13 @@ func (m *memdbDatastore) deleteFile(uid, expectedResourceVersion string, checkRe
 		return err
 	}
 	txn.Commit()
+	m.recordCommittedFile(datastore.ResourceWatchDeleted, file, nil, nil)
 	return nil
 }
 
 func (m *memdbDatastore) UpdateFileStatus(_ context.Context, namespace, name string, patch datastore.FileStatusPatch) (*datastore.File, error) {
+	m.fileMutationMu.Lock()
+	defer m.fileMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, err := txn.First("file", "name_namespace", namespace, name)
 	if err != nil || raw == nil {
@@ -353,11 +383,17 @@ func (m *memdbDatastore) UpdateFileStatus(_ context.Context, namespace, name str
 		txn.Abort()
 		return nil, err
 	}
+	payload, err := json.Marshal(updated)
+	if err != nil {
+		txn.Abort()
+		return nil, fmt.Errorf("%w: serialize File journal payload: %v", datastore.ErrInvalidArgument, err)
+	}
 	if err := txn.Insert("file", updated); err != nil {
 		txn.Abort()
 		return nil, fmt.Errorf("memdb: update file status: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedFile(datastore.ResourceWatchModified, updated, raw.(*datastore.File).Labels, payload)
 	return cloneFile(updated), nil
 }
 

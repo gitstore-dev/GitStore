@@ -586,6 +586,7 @@ type ComplexityRoot struct {
 		Category        func(childComplexity int, by model.CategoryBy) int
 		Collection      func(childComplexity int, by model.CollectionBy) int
 		Collections     func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		File            func(childComplexity int, namespace string, name string) int
 		Namespace       func(childComplexity int, by model.NamespaceBy) int
 		Namespaces      func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Node            func(childComplexity int, id string) int
@@ -3176,6 +3177,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.Collections(childComplexity, args["namespace"].(string), args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
 
+	case "Query.file":
+		if e.ComplexityRoot.Query.File == nil {
+			break
+		}
+
+		args, err := ec.field_Query_file_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.File(childComplexity, args["namespace"].(string), args["name"].(string)), true
+
 	case "Query.namespace":
 		if e.ComplexityRoot.Query.Namespace == nil {
 			break
@@ -5086,9 +5099,19 @@ type DeleteCollectionPayload {
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/file.graphqls", Input: `# File Resource — typed watch contract
 
+extend type Query {
+  """
+  Read one persisted File by namespace and name. This does not subscribe to events.
+  """
+  file(namespace: String!, name: String!): File
+}
+
 extend type Subscription {
   """
-  Dedicated, compile-time-typed watch entry point for File resources.
+  Durable File changes, resumable across API replicas within journal retention.
+  An omitted cursor watches future changes, not an initial snapshot.
+  Use the shared bootstrap cursor to capture a bookmark before reading current
+  state, then resume from that bookmark. Legacy event-bus cursors are expired.
   """
   watchFiles(
     namespace: String

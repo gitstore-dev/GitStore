@@ -11,7 +11,6 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
@@ -199,9 +198,6 @@ func (r *mutationResolver) updateFileStatusGeneric(ctx context.Context, input mo
 			return nil, &gqlerror.Error{Message: fmt.Sprintf("File %s/%s not found", input.Namespace, input.Name), Extensions: map[string]any{"code": "NOT_FOUND"}}
 		}
 		return nil, gqlerror.Errorf("update resource status: %v", err)
-	}
-	if r.eventBus != nil {
-		r.eventBus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "File", Namespace: updated.Namespace, Name: updated.Name, ResourceVersion: updated.ResourceVersion, Object: updated})
 	}
 	return &model.UpdateResourceStatusPayload{Object: fileToJSONMap(updated)}, nil
 }
