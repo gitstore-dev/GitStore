@@ -90,6 +90,14 @@ Use the same mechanism for:
 - **After the first stable release** (e.g. `0.1.0`): `latest` permanently stops tracking prereleases. Any alpha/beta/rc published *after* that point will never become `latest` again — only a newer stable release can move it.
 - **Practical implication for consumers**: once a stable release exists, anyone who wants "whatever's newest, prereleases included" must pin to the exact version tag (e.g. `:0.2.0-beta.1`), not `:latest`.
 
+## Override Log
+
+A running record of `Release-As:` overrides applied via the mechanism above, for audit purposes.
+
+| Date       | Override           | Reason                                                                                                                                                           |
+|------------|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 2026-10-04 | `0.1.0-alpha.4`     | Resets the manifest below `1.0.0` after PR #439 (`feat(secrets)!`) hit the `bump-minor-pre-major`-less `prerelease` strategy and bumped straight to `1.0.0-alpha.3` — see the breaking-change bullet above. The first attempt at this override (PR #444) used `git commit --allow-empty` and was silently dropped by rebase-merge (`main` never advanced); this entry corresponds to the corrected, non-empty-commit attempt. |
+
 ## Troubleshooting
 
 **No release PR appears after merging PRs to `main`.**
