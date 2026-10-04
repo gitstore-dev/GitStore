@@ -95,31 +95,56 @@ var defaults = map[string]any{
 	"log.format":                                       "json",
 }
 
-func Load() (*Config, error) { return load("") }
+func Load() (*Config, error) { return load(nil) }
 
 func LoadFrom(path string) (*Config, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("config file path must not be empty")
 	}
-	return load(path)
+	return load([]string{path})
 }
 
-func load(path string) (*Config, error) {
+// LoadFromFiles loads configuration by reading paths[0] and additively
+// merging each subsequent path on top (a later file's keys win), so an
+// overlay only needs to specify the deltas from the base file. Each path
+// is required to exist and be readable.
+func LoadFromFiles(paths []string) (*Config, error) {
+	if len(paths) == 0 {
+		return nil, errors.New("config file path must not be empty")
+	}
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			return nil, errors.New("config file path must not be empty")
+		}
+	}
+	return load(paths)
+}
+
+func load(paths []string) (*Config, error) {
 	if err := godotenv.Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, errors.New("could not read controller environment file")
 	}
 	v := viper.New()
-	if path != "" {
-		v.SetConfigFile(path)
-	} else {
+	if len(paths) == 0 {
 		v.SetConfigName("config")
 		v.SetConfigType("toml")
 		v.AddConfigPath(".")
-	}
-	if err := v.ReadInConfig(); err != nil {
-		var notFound viper.ConfigFileNotFoundError
-		if path != "" || !errors.As(err, &notFound) {
-			return nil, errors.New("could not read controller configuration file")
+		if err := v.ReadInConfig(); err != nil {
+			var notFound viper.ConfigFileNotFoundError
+			if !errors.As(err, &notFound) {
+				return nil, errors.New("could not read controller configuration file")
+			}
+		}
+	} else {
+		for i, p := range paths {
+			v.SetConfigFile(p)
+			if i == 0 {
+				if err := v.ReadInConfig(); err != nil {
+					return nil, errors.New("could not read controller configuration file")
+				}
+			} else if err := v.MergeInConfig(); err != nil {
+				return nil, errors.New("could not read controller configuration file")
+			}
 		}
 	}
 	for _, root := range []string{"controller", "log"} {

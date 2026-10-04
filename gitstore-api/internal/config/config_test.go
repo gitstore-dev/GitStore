@@ -374,6 +374,60 @@ func TestLoadFrom_MissingExplicitFileFails(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestLoadFromFiles_OverlayMergesOnTopOfBase(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	dir := t.TempDir()
+
+	basePath := filepath.Join(dir, "base.toml")
+	base := `
+[api]
+port = 4000
+[git.grpc]
+uri = "dns:///localhost:50051"
+[auth.jwt]
+secret = "base-secret-at-least-32-characters-x"
+[auth.grpc]
+hmac_secret = "base-hmac-secret"
+[datastore]
+backend = "memdb"
+`
+	require.NoError(t, os.WriteFile(basePath, []byte(base), 0600))
+
+	overlayPath := filepath.Join(dir, "overlay.toml")
+	overlay := `
+[datastore]
+backend = "scylla"
+[datastore.scylla]
+hosts = ["scylla:9042"]
+keyspace = "gitstore"
+`
+	require.NoError(t, os.WriteFile(overlayPath, []byte(overlay), 0600))
+
+	cfg, err := LoadFromFiles([]string{basePath, overlayPath})
+	require.NoError(t, err)
+	// Overlay-only key wins.
+	assert.Equal(t, "scylla", cfg.Datastore.Backend)
+	assert.Equal(t, []string{"scylla:9042"}, cfg.Datastore.Scylla.Hosts)
+	// Base-only key is preserved, not wiped by the overlay.
+	assert.Equal(t, 4000, cfg.Api.Port)
+	assert.Equal(t, "dns:///localhost:50051", cfg.Git.Grpc.Uri)
+}
+
+func TestLoadFromFiles_MissingOverlayFails(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base.toml")
+	require.NoError(t, os.WriteFile(basePath, []byte("[api]\nport = 4000\n"), 0600))
+
+	_, err := LoadFromFiles([]string{basePath, filepath.Join(dir, "missing-overlay.toml")})
+	require.Error(t, err)
+}
+
+func TestLoadFromFiles_EmptyFails(t *testing.T) {
+	_, err := LoadFromFiles(nil)
+	require.Error(t, err)
+}
+
 // T007: startup log redaction test
 
 func TestLoad_StartupLogRedactsSensitiveFields(t *testing.T) {
@@ -858,19 +912,26 @@ chain = ["static-users", "serviceaccount-jwt", "anonymous"]
 
 func TestValidateServiceAccountSigningKeySource_IgnoresNonSharedPath(t *testing.T) {
 	cfg := &Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"serviceaccount-jwt"}}}}
-	err := validateServiceAccountSigningKeySource(cfg, "/some/other/path.toml", "signing-key-material")
+	err := validateServiceAccountSigningKeySource(cfg, []string{"/some/other/path.toml"}, "signing-key-material")
 	assert.NoError(t, err)
 }
 
 func TestValidateServiceAccountSigningKeySource_IgnoresWhenProviderNotChained(t *testing.T) {
 	cfg := &Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"static-users", "anonymous"}}}}
-	err := validateServiceAccountSigningKeySource(cfg, sharedServiceConfigMountPath, "signing-key-material")
+	err := validateServiceAccountSigningKeySource(cfg, []string{sharedServiceConfigMountPath}, "signing-key-material")
 	assert.NoError(t, err)
 }
 
 func TestValidateServiceAccountSigningKeySource_RejectsSharedPathWithKeyMaterial(t *testing.T) {
 	cfg := &Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"serviceaccount-jwt"}}}}
-	err := validateServiceAccountSigningKeySource(cfg, sharedServiceConfigMountPath, "signing-key-material")
+	err := validateServiceAccountSigningKeySource(cfg, []string{sharedServiceConfigMountPath}, "signing-key-material")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), sharedServiceConfigMountPath)
+}
+
+func TestValidateServiceAccountSigningKeySource_RejectsSharedPathAmongOverlays(t *testing.T) {
+	cfg := &Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"serviceaccount-jwt"}}}}
+	err := validateServiceAccountSigningKeySource(cfg, []string{"/some/other/path.toml", sharedServiceConfigMountPath}, "signing-key-material")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), sharedServiceConfigMountPath)
 }

@@ -59,6 +59,64 @@ func TestLoadFrom_MissingExplicitFileFails(t *testing.T) {
 	}
 }
 
+func TestLoadFromFiles_OverlayMergesOnTopOfBase(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base.toml")
+	base := `[controller]
+port = 5001
+api_uri = "http://api:4000/graphql"
+[controller.serviceaccount]
+namespace = "controllers"
+name = "gitstore-controller-manager"
+key_id = "key-1"
+uid = "sa-uid-1"
+key_ref = { kind = "SecretRef", name = "controller-manager", key = "privateKey" }
+[log]
+level = "info"
+format = "json"
+`
+	if err := os.WriteFile(basePath, []byte(base), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	overlayPath := filepath.Join(dir, "overlay.toml")
+	overlay := `[controller]
+api_uri = "http://overlay-api:4000/graphql"
+`
+	if err := os.WriteFile(overlayPath, []byte(overlay), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadFromFiles([]string{basePath, overlayPath})
+	if err != nil {
+		t.Fatalf("LoadFromFiles() error: %v", err)
+	}
+	if cfg.Controller.ApiURI != "http://overlay-api:4000/graphql" {
+		t.Fatalf("ApiURI = %q, want overlay value", cfg.Controller.ApiURI)
+	}
+	// Base-only key must survive the merge.
+	if cfg.Controller.Port != 5001 {
+		t.Fatalf("Port = %d, want 5001 (preserved from base)", cfg.Controller.Port)
+	}
+}
+
+func TestLoadFromFiles_MissingOverlayFails(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base.toml")
+	if err := os.WriteFile(basePath, []byte("[controller]\nport = 5001\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadFromFiles([]string{basePath, filepath.Join(dir, "missing-overlay.toml")}); err == nil {
+		t.Fatal("expected missing overlay file error")
+	}
+}
+
+func TestLoadFromFiles_EmptyFails(t *testing.T) {
+	if _, err := config.LoadFromFiles(nil); err == nil {
+		t.Fatal("expected empty paths error")
+	}
+}
+
 // setenv sets environment variables for a test and clears them on cleanup.
 func setenv(t *testing.T, pairs ...string) {
 	t.Helper()
