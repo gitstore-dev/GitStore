@@ -13,6 +13,37 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
 )
 
+func TestLoadAPIClientBudgetDefaultsOverridesAndValidation(t *testing.T) {
+	setenv(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Controller.APIClient.RequestsPerSecond != 40 || cfg.Controller.APIClient.Burst != 10 {
+		t.Fatalf("unexpected default API budget: %+v", cfg.Controller.APIClient)
+	}
+	t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__REQUESTS_PER_SECOND", "20")
+	t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__BURST", "5")
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Controller.APIClient.RequestsPerSecond != 20 || cfg.Controller.APIClient.Burst != 5 {
+		t.Fatal("API client environment overrides ignored")
+	}
+	for _, key := range []string{"REQUESTS_PER_SECOND", "BURST"} {
+		t.Run(key, func(t *testing.T) {
+			for _, value := range []string{"0", "-1", "MUST-NOT-LEAK"} {
+				t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__"+key, value)
+				_, err := config.Load()
+				if err == nil || strings.Contains(err.Error(), "MUST-NOT-LEAK") {
+					t.Fatalf("invalid API request budget did not fail safely: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadCanonicalProviderAndWatchLeaves(t *testing.T) {
 	setenv(t)
 	for key, value := range map[string]string{

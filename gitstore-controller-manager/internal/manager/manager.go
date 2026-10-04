@@ -321,18 +321,34 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 		m.handleTransient(ctx, ks, key, r, retryCfg, log)
 
 	case types.RequeueAfter:
-		health.ReconcileTotal.WithLabelValues(key.Kind, "requeue_after").Inc()
-		time.AfterFunc(r.After, func() {
-			if err := ks.q.Enqueue(key); err != nil {
-				m.log.Warn("RequeueAfter lost — queue shut down before timer fired",
-					zap.String("kind", key.Kind),
-					zap.String("namespace", key.Namespace),
-					zap.String("name", key.Name),
-					zap.Duration("after", r.After),
-					zap.Error(err),
-				)
-			}
-		})
+		m.scheduleRequeue(ks, key, r.After)
+	}
+}
+
+func (m *Manager) scheduleRequeue(ks *kindState, key WorkItemKey, after time.Duration) {
+	health.ReconcileTotal.WithLabelValues(key.Kind, "requeue_after").Inc()
+	time.AfterFunc(after, func() {
+		if err := ks.q.Enqueue(key); err != nil {
+			m.log.Warn("RequeueAfter lost — queue shut down before timer fired",
+				zap.String("kind", key.Kind), zap.String("namespace", key.Namespace),
+				zap.String("name", key.Name), zap.Duration("after", after), zap.Error(err))
+		}
+	})
+}
+
+func (m *Manager) requeueThrottled(ctx context.Context, ks *kindState, key WorkItemKey, delay time.Duration, log *zap.Logger) {
+	log.Warn("API throttled reconciliation; deferring without quarantine", zap.Duration("backoff", delay))
+	health.ReconcileTotal.WithLabelValues(key.Kind, "requeue_after").Inc()
+	// Hold only the bounded worker slot, not a timer/goroutine per pending key.
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+	}
+	if err := ks.q.Enqueue(key); err != nil {
+		log.Warn("throttled reconciliation could not be requeued", zap.Error(err))
 	}
 }
 
@@ -348,6 +364,13 @@ func (m *Manager) handleTransient(
 	retryCfg retry.Config,
 	log *zap.Logger,
 ) {
+	if ctx.Err() != nil {
+		return
+	}
+	if errors.Is(r.Err, types.ErrRateLimited) {
+		m.requeueThrottled(ctx, ks, key, max(time.Second, r.BackoffHint), log)
+		return
+	}
 	if r.BackoffHint > 0 {
 		select {
 		case <-ctx.Done():
@@ -375,7 +398,12 @@ func (m *Manager) handleTransient(
 		_ = m.logPanic(log, key, inner)
 		switch iv := inner.(type) {
 		case types.TransientFailure:
+			if errors.Is(iv.Err, types.ErrRateLimited) {
+				return backoff.Permanent(iv.Err)
+			}
 			return iv.Err
+		case types.RequeueAfter:
+			return backoff.Permanent(&requeueDuringRetryError{after: iv.After})
 		case types.TerminalFailure:
 			// backoff.Permanent short-circuits the retry loop immediately so the
 			// remaining budget is not consumed. errors.As unwraps through
@@ -386,6 +414,18 @@ func (m *Manager) handleTransient(
 		}
 	})
 
+	if ctx.Err() != nil {
+		return
+	}
+	if errors.Is(lastErr, types.ErrRateLimited) {
+		m.requeueThrottled(ctx, ks, key, time.Second, log)
+		return
+	}
+	var deferred *requeueDuringRetryError
+	if errors.As(lastErr, &deferred) {
+		m.scheduleRequeue(ks, key, deferred.after)
+		return
+	}
 	var tdr *terminalDuringRetryError
 	if errors.As(lastErr, &tdr) {
 		log.Error("terminal failure during retry — quarantining immediately", zap.Error(tdr.cause))
@@ -452,6 +492,10 @@ type terminalDuringRetryError struct{ cause error }
 
 func (e *terminalDuringRetryError) Error() string { return e.cause.Error() }
 func (e *terminalDuringRetryError) Unwrap() error { return e.cause }
+
+type requeueDuringRetryError struct{ after time.Duration }
+
+func (e *requeueDuringRetryError) Error() string { return "reconciliation deferred during retry" }
 
 func applyDefaults(reg *ReconcilerRegistration) {
 	if reg.MaxAttempts <= 0 {

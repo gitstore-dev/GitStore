@@ -5,16 +5,60 @@ package listwatch
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
+	"github.com/cenkalti/backoff/v5"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type updatePolicyItem struct {
 	Name       string
 	Generation int64
 	Version    string
+}
+
+type longRetryListWatch struct{}
+
+func (longRetryListWatch) List(context.Context) (ListResponse[updatePolicyItem], error) {
+	return ListResponse[updatePolicyItem]{}, backoff.RetryAfter(16 * 60)
+}
+
+func (longRetryListWatch) Watch(context.Context, string) (Watcher[updatePolicyItem], error) {
+	return nil, errors.New("watch must not open before list completes")
+}
+
+func TestListRetryHasNoFifteenMinuteElapsedLimit(t *testing.T) {
+	logs, observed := observer.New(zap.WarnLevel)
+	runner := &Runner[updatePolicyItem]{Kind: "Product", ListWatcher: longRetryListWatch{}, Log: zap.New(logs)}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := runner.retryList(ctx); done <- err }()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for observed.Len() == 0 {
+		select {
+		case err := <-done:
+			t.Fatalf("list retry exited instead of waiting beyond 15 minutes: %v", err)
+		case <-deadline.C:
+			t.Fatal("list retry was not scheduled")
+		case <-ticker.C:
+		}
+	}
+	if got := observed.All()[0].ContextMap()["backoff"]; got != 16*time.Minute {
+		t.Fatalf("retry delay = %v, want 16 minutes", got)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("list retry did not stop on cancellation: %v", err)
+	}
 }
 
 func TestRunnerModifiedEventUpdatePolicies(t *testing.T) {

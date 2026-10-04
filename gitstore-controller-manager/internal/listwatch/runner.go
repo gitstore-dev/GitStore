@@ -227,6 +227,7 @@ func (r *Runner[T]) retryList(ctx context.Context) (ListResponse[T], error) {
 	return backoff.Retry(ctx, func() (ListResponse[T], error) {
 		return r.ListWatcher.List(ctx)
 	},
+		backoff.WithMaxElapsedTime(0),
 		backoff.WithBackOff(b),
 		backoff.WithNotify(func(err error, d time.Duration) {
 			r.log().Warn("list failed; retrying",

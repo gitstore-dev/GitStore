@@ -28,11 +28,17 @@ type Config struct {
 type ControllerConfig struct {
 	Port            int                   `mapstructure:"port"`
 	ApiURI          string                `mapstructure:"api_uri"`
+	APIClient       APIClientConfig       `mapstructure:"api_client"`
 	ServiceAccount  ServiceAccountConfig  `mapstructure:"serviceaccount"`
 	SecretProviders SecretProvidersConfig `mapstructure:"secret_providers"`
 	Checkpoint      CheckpointConfig      `mapstructure:"checkpoint"`
 	Reconcile       ReconcileConfig       `mapstructure:"reconcile"`
 	Watch           WatchConfig           `mapstructure:"watch"`
+}
+
+type APIClientConfig struct {
+	RequestsPerSecond int `mapstructure:"requests_per_second"`
+	Burst             int `mapstructure:"burst"`
 }
 
 type ServiceAccountConfig struct {
@@ -72,6 +78,8 @@ type LogConfig struct {
 var defaults = map[string]any{
 	"controller.port":                                  5001,
 	"controller.api_uri":                               "http://localhost:4000/graphql",
+	"controller.api_client.requests_per_second":        40,
+	"controller.api_client.burst":                      10,
 	"controller.serviceaccount.namespace":              "",
 	"controller.serviceaccount.name":                   "gitstore-controller-manager",
 	"controller.serviceaccount.uid":                    "",
@@ -262,6 +270,9 @@ func validate(cfg *Config) error {
 	}
 	if strings.TrimSpace(c.ApiURI) == "" {
 		return errors.New("controller.api_uri must not be empty")
+	}
+	if c.APIClient.RequestsPerSecond < 1 || c.APIClient.Burst < 1 {
+		return errors.New("controller.api_client.requests_per_second and burst must be positive")
 	}
 	ref := c.ServiceAccount.KeyRef.SecretRef()
 	if err := secretmaterial.ValidateSecretRef(ref, ""); err != nil {

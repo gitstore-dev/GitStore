@@ -62,6 +62,56 @@ A controller's `watchCategories`/`watchResources` subscription disconnects and r
 
    If the same `namespace`/`name` pair appears repeatedly in a short window, two writers are racing on that specific resource. If many different resources of the same kind are conflicting, the reconciler for that kind may be operating on a stale cache snapshot (e.g. a watch resume gap — cross-reference with the watch-disconnect signals above).
 
+## Controller API throttling and recovery
+
+The controller shares one outbound request budget across all reconciliation
+kinds, list/status requests and WebSocket upgrades. Defaults are
+`controller.api_client.requests_per_second = 40` and `burst = 10`, leaving
+headroom under the API's unchanged 50 requests/second, burst-100 per-IP limit
+for token exchange. Budget waits happen after potentially slow credential
+renewal, preventing a burst when exchange waiters wake up. Cached service-account
+tokens are revalidated after the wait so expired or replaced credentials are
+not sent. Waits obey caller cancellation and do not accumulate a separate
+unbounded request queue.
+An HTTP 429 applies a one-second cooldown to this shared client. Mutations are
+not automatically replayed by the HTTP client.
+
+Token renewal remains independent and singleflight. A failed early renewal
+preserves the cached token **only until its actual expiry**, including during
+exchange backoff. The failure remains observable through credential exchange
+metrics and the credential source's last error. Expired tokens are never
+returned. Token-exchange and WebSocket-upgrade HTTP 429 responses retain the
+same retryable throttle classification as HTTP queries and mutations.
+
+The manager defers throttled work without quarantine or a successful-reconcile
+acknowledgement, including throttles encountered during an existing retry.
+Throttle waits occupy bounded worker slots and are canceled at shutdown;
+checkpoint replay keys remain pending until real success. Non-throttle
+failures still use the existing retry/quarantine policy. A delayed requeue
+returned during retry is also preserved instead of being mistaken for success.
+Initial/recovery list retries continue with capped exponential delay until
+success or cancellation, without the backoff library's default 15-minute
+elapsed-time cutoff.
+
+Request budgets are **per controller process**, not a fleet-wide reservation.
+If multiple controllers or other clients share one egress IP to an API replica,
+size their aggregate budgets below that replica's per-IP limit with renewal
+headroom. Do not bypass authentication or raise API limits merely to hide 429s.
+During rolling upgrades, new binaries accept the old configuration and use
+these defaults. Add explicit `controller.api_client` settings only after all
+controllers that will read that shared config support the new keys; older
+binaries reject unknown settings. Mixed-version fleets can still experience
+throttling from unpaced old controllers.
+
+The owned production run `441-file-journal-production-20261004-b513016`
+cleared dataset verification and persisted File bootstrap but failed the
+pre-load controller health/authentication guard. Logs showed 429s on Product
+status writes and token exchange, Product runner exits after 15 minutes, and
+quarantine on controller B. The fixes above do not replace a new full production
+run. The capacity harness now persists valid controller samples before checking
+health and reports overall health separately from credential readiness, without
+relaxing either requirement.
+
 ## Recovery Actions: Status-Write Conflicts
 
 - **Occasional conflicts, low rate**: no action needed — this is the optimistic-concurrency mechanism working as intended.

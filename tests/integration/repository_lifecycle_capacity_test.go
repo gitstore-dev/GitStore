@@ -2169,9 +2169,6 @@ func recordSecretCapacityControllers(t *testing.T, client *http.Client, cfg repo
 		var err error
 		samples[i], err = sampleSecretCapacityController(t.Context(), client, endpoint)
 		require.NoError(t, err, "collect process-identified controller authentication and progress")
-		require.True(t, samples[i].Healthy && samples[i].CredentialReady, "controller must be authenticated outside fault windows")
-		require.Positive(t, samples[i].FreshTokens)
-		require.Positive(t, samples[i].Reconciliations)
 	}
 	require.NotEqual(t, samples[0].ID, samples[1].ID, "controller samples must identify distinct replicas")
 	runID := os.Getenv("CAPACITY_RUN_ID")
@@ -2184,6 +2181,12 @@ func recordSecretCapacityControllers(t *testing.T, client *http.Client, cfg repo
 		Controllers   [2]secretCapacityControllerSample `json:"controllers"`
 	}{1, "secret-controller-snapshot/v1", runID, cfg.mode, samples}
 	require.NoError(t, writeSecretCapacityComponent(os.Getenv("CAPACITY_EVIDENCE_DIR"), component, observation))
+	for i, sample := range samples {
+		require.True(t, sample.Healthy && sample.CredentialReady,
+			"controller %d must be healthy and authenticated outside fault windows (healthy=%t credentialReady=%t)", i+1, sample.Healthy, sample.CredentialReady)
+		require.Positive(t, sample.FreshTokens)
+		require.Positive(t, sample.Reconciliations)
+	}
 	return samples
 }
 

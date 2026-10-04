@@ -83,7 +83,11 @@ func main() {
 			}
 		}()
 	}
-	client := graphqlclient.New(cfg.Controller.ApiURI, credentials)
+	client, err := graphqlclient.NewWithRateLimit(cfg.Controller.ApiURI, credentials,
+		cfg.Controller.APIClient.RequestsPerSecond, cfg.Controller.APIClient.Burst)
+	if err != nil {
+		log.Fatal("create API client", zap.Error(err))
+	}
 
 	// runners tracks every kind's list-then-watch goroutine so shutdown can
 	// wait for each Runner's final checkpoint flush before the process exits.
