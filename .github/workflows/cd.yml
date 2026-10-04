@@ -60,8 +60,15 @@ jobs:
         elif [[ "$REF_NAME" != v*-* ]]; then
           echo "latest_enable=true" >> "$GITHUB_OUTPUT"
         else
-          has_stable=$(gh release list --repo "$REPO" --json tagName,isPrerelease --limit 100 \
-            | jq 'any(.isPrerelease == false)')
+          # gh release list --limit is a page cap, not an all-history guarantee:
+          # past 100 releases it would miss an older stable release and
+          # incorrectly re-enable latest for a new prerelease. Paginate
+          # through the full release history instead.
+          if gh api "repos/$REPO/releases" --paginate --jq '.[] | select(.prerelease == false) | .tag_name' | grep -q .; then
+            has_stable=true
+          else
+            has_stable=false
+          fi
           if [ "$has_stable" = "true" ]; then
             echo "latest_enable=false" >> "$GITHUB_OUTPUT"
           else
