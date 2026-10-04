@@ -43,9 +43,9 @@ func TestWatchStopUnblocksBackpressuredOutput(t *testing.T) {
 	}
 }
 
-func TestProductListUsesBoundedThousandRowPagesAndReportsRetryHighWater(t *testing.T) {
-	if !strings.Contains(productsListQueryByNamespace, "first: 1000,") {
-		t.Fatal("Product recovery must use 1000-row pages")
+func TestProductListUsesBoundedPagesAndReportsRetryHighWater(t *testing.T) {
+	if !strings.Contains(productsListQueryByNamespace, "first: 250,") {
+		t.Fatal("Product recovery must honor the 250-row connection limit")
 	}
 	c := cache.New[updatePolicyItem]()
 	if err := c.BeginRecovery(t.Context()); err != nil {
@@ -53,11 +53,11 @@ func TestProductListUsesBoundedThousandRowPagesAndReportsRetryHighWater(t *testi
 	}
 	for range 2 {
 		ctx := context.WithValue(t.Context(), listProgressKey{}, &listProgress{observe: c.ObserveListProgress})
-		observeListPage(ctx, 1000)
-		observeListPage(ctx, 500)
+		observeListPage(ctx, 250)
+		observeListPage(ctx, 125)
 	}
 	state := c.RecoveryState()
-	if state.Pages != 2 || state.Rows != 1500 {
+	if state.Pages != 2 || state.Rows != 375 {
 		t.Fatalf("retry duplicated progress: %+v", state)
 	}
 }

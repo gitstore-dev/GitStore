@@ -2201,6 +2201,11 @@ func TestSecretCapacityDatasetVerifiesBothPaginatedReplicas(t *testing.T) {
 	}
 	fault.Store(0)
 	before := calls.Load()
+	for _, pageSize := range []int{-1, 0, 251, 1000} {
+		_, err := verifySecretCapacityDataset(t.Context(), a.Client(), endpoints, "token", "dataset", path, pageSize, capacityModeDiagnostic)
+		require.ErrorContains(t, err, "page size must be between 1 and 250")
+		require.Equal(t, before, calls.Load(), "invalid page sizes must fail before API requests")
+	}
 	_, err = verifySecretCapacityDataset(t.Context(), a.Client(), endpoints, "token", "dataset", path, 2, capacityModeProduction)
 	require.Error(t, err, "a smaller fixture cannot certify the five-million-row gate")
 	require.Equal(t, before, calls.Load(), "reject undersized production fixtures before requesting pages")

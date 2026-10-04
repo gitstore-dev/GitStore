@@ -98,7 +98,7 @@ services:
         mkdir -p /run/controller-secrets/gitstore-controller-manager-signing-key
         rm -f /run/controller-bootstrap/serviceaccount.env
         /app/gitctl generate-signing-key --private-key-path /run/api-issuer/serviceaccount-signing-key
-        /app/gitctl generate-signing-key --private-key-path /run/controller-secrets/gitstore-controller-manager-signing-key/privateKey
+        /app/gitctl generate-signing-key --private-key-path /run/controller-secrets/gitstore-controller-manager-signing-key/privateKey --record-output-path /run/controller-secrets/gitstore-controller-manager-signing-key.json --key-id controller-key
     environment: {}
     ports: []
     volumes:

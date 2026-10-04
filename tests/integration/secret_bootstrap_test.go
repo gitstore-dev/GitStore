@@ -74,7 +74,6 @@ uid = %q
 key_ref = { kind = "SecretRef", name = "controller" }
 [controller.secret_providers.bootstrap]
 type = "file"
-format = "json-record"
 base_path = %q
 [controller.checkpoint]
 dir = %q
@@ -613,7 +612,6 @@ uid = %q
 key_ref = {kind = "SecretRef", name = "controller"}
 [controller.secret_providers.bootstrap]
 type = "file"
-format = "json-record"
 base_path = "/run/secrets"
 [controller.checkpoint]
 dir = "/var/lib/gitstore/checkpoints"

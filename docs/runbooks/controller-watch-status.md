@@ -86,8 +86,9 @@ for a bookmark on the resumed watch, not merely a successful asynchronous
 WebSocket open. Cancellation does not reopen admission or discard the old
 checkpoint cursor while listing is incomplete.
 
-Product enumeration streams 1,000-row pages: five million rows require 5,000
-Product requests rather than 50,000. Successful enumeration pages report a
+Product enumeration streams 250-row pages, honoring proposal 038 without a
+controller exemption: five million rows require 20,000 Product requests.
+Successful enumeration pages report a
 high-water count; revisiting the same pages after a failed list does not reset
 the no-progress watchdog. The existing stall threshold still applies to a
 recovery that stops making progress. Disk merge and retirement batches also

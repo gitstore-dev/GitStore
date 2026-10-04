@@ -81,7 +81,7 @@ controllers and apps, including future CRD controllers and GitStore apps, are no
 | C8  | The Git smart-HTTP server (`api.git_port`) has no limiter at all.                                                                                                                                                                                                                                          | `server.go:291`                                                            |
 | C9  | Authentication runs in `AroundOperations`, after gqlgen's `CreateOperationContext` (parse, validate, `MutateOperationContext`). A cost computed in `MutateOperationContext` is therefore principal-agnostic. The bucket charge must happen in an operation interceptor registered after the authenticator. | `server.go:406-409`, gqlgen `executor.go`                                  |
 | C10 | gqlgen chooses the HTTP status itself: 200, or 422 (`application/json`) / 400 (`application/graphql-response+json`) for `KindProtocol` errors. There is no hook that produces 429.                                                                                                                         | gqlgen `transport/http_get.go:112-129`                                     |
-| C11 | Controllers page with `first: 100` today.                                                                                                                                                                                                                                                                  | `gitstore-controller-manager/internal/listwatch/*.go`                      |
+| C11 | Product controllers page with `first: 250`; the other controller connection queries use 100 or fewer. All remain subject to the page cap. | `gitstore-controller-manager/internal/listwatch/*.go` |
 | C12 | Connections expose only `edges` and `pageInfo` (no `nodes` shortcut, no `totalCount` — removed 2026-10 since ScyllaDB has no cheap cross-partition count).                                                                                                                                                | `shared/schemas/*.graphqls`                                                |
 | C13 | Controller principals are service accounts issued by the API itself, with `Subject = "serviceaccount:controllers:gitstore-controller-manager"`.                                                                                                                                                            | `config/policy.yaml:35`, `auth/provider/serviceaccountjwt/provider.go:159` |
 
@@ -231,7 +231,8 @@ products(first: Int, after: String, last: Int, before: String, …): ProductConn
   silently clamping. A value `< 0` or `> max_page_size` is a request error, `MAX_PAGE_SIZE_EXCEEDED`.
   The cap is enforced twice: in the cost walker (before execution) and in `PageParams`
   normalisation (defence in depth for gRPC and internal callers). `DefaultPageSize` stays 100,
-  so controllers (C11) are unaffected.
+  while Product controllers explicitly request 250. Controllers must honor the
+  same cap; their rate-budget exemption does not exempt structural limits.
 - **Multiple slicing arguments.** When `first` and `last` are both given, the walker uses the
   larger value. IBM: "static analysis should consider their largest value to ensure producing
   upper bounds." `requireOneSlicingArgument: false` because both arguments are optional in

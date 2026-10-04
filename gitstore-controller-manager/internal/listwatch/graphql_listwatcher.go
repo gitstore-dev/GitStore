@@ -400,7 +400,7 @@ const productFields = `
 // then paginates this query once per namespace.
 const productsListQueryByNamespace = `
 query($namespace: String!, $after: String) {
-  products(namespace: $namespace, first: 1000, after: $after) {
+  products(namespace: $namespace, first: 250, after: $after) {
     edges {
       cursor
       node {

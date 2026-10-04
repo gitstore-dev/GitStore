@@ -270,7 +270,20 @@ func writeServiceAccountIdentity(path, uid string) error {
 	if !validServiceAccountUID(uid) {
 		return errors.New("ServiceAccount UID is empty")
 	}
-	return writeNewFile(path, []byte("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="+uid+"\n"))
+	value := []byte("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID=" + uid + "\n")
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > 4096 {
+			return errors.New("existing ServiceAccount identity must be a private regular file")
+		}
+		existing, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(existing, value) {
+			return errors.New("existing ServiceAccount identity does not match the enrolled account")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.New("cannot inspect ServiceAccount identity destination")
+	}
+	return writeNewFile(path, value)
 }
 
 func requireServiceAccountIdentity(path string) error {
@@ -434,8 +447,15 @@ func runGenerateServiceAccountKey(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("generate-signing-key", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("private-key-path", "", "explicit secure local private-key file path")
+	recordPath := flags.String("record-output-path", "", "optional absolute path for an atomic controller signing record")
+	keyID := flags.String("key-id", "", "enrolled key ID required with --record-output-path")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || strings.TrimSpace(*path) == "" || !filepath.IsAbs(*path) {
 		fmt.Fprintln(stderr, "generate-signing-key requires an absolute --private-key-path")
+		return 2
+	}
+	if (*recordPath != "" && (!filepath.IsAbs(*recordPath) || strings.TrimSpace(*keyID) == "" || *recordPath == *path)) ||
+		(*recordPath == "" && *keyID != "") {
+		fmt.Fprintln(stderr, "a signing record requires a distinct absolute --record-output-path and --key-id")
 		return 2
 	}
 	key, generated, err := loadOrGeneratePrivateKey(*path)
@@ -443,15 +463,68 @@ func runGenerateServiceAccountKey(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "generate-signing-key could not use the private-key path")
 		return 1
 	}
-	if !generated {
-		fmt.Fprintln(stdout, "Signing key already exists; no changes made.")
-		return 0
-	}
 	privateKey, _, _, err := encodeEnrollmentKeyPair(key)
-	if err != nil || writePrivateKey(*path, privateKey) != nil {
+	if err != nil {
+		fmt.Fprintln(stderr, "generate-signing-key could not encode the private key")
+		return 1
+	}
+	defer clear(privateKey)
+	if generated && writePrivateKey(*path, privateKey) != nil {
 		fmt.Fprintln(stderr, "generate-signing-key could not securely persist the private key")
 		return 1
 	}
-	fmt.Fprintln(stdout, "Signing key created.")
+	if *recordPath != "" {
+		if err := writeSigningRecord(*recordPath, privateKey, *keyID); err != nil {
+			fmt.Fprintf(stderr, "generate-signing-key could not publish the signing record: %v\n", err)
+			return 1
+		}
+	}
+	if generated {
+		fmt.Fprintln(stdout, "Signing key created.")
+	} else {
+		fmt.Fprintln(stdout, "Existing signing key preserved.")
+	}
 	return 0
+}
+
+func writeSigningRecord(path string, key []byte, keyID string) error {
+	record := struct {
+		Format string            `json:"format"`
+		Values map[string][]byte `json:"values"`
+	}{"serviceaccount-signing-key/v1", map[string][]byte{"privateKey": key, "keyID": []byte(keyID)}}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return errors.New("cannot encode signing record")
+	}
+	defer clear(data)
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > 64*1024 {
+			return errors.New("existing signing record must be a private regular file")
+		}
+		existing, err := os.ReadFile(path)
+		defer clear(existing)
+		if err != nil || !bytes.Equal(existing, data) {
+			return errors.New("existing signing record differs; use the explicit key-rotation procedure")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.New("cannot inspect signing record destination")
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".signing-record-*")
+	if err != nil {
+		return errors.New("cannot create private signing record")
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	if _, err := file.Write(data); err != nil {
+		return errors.New("cannot write signing record")
+	}
+	if err := file.Sync(); err != nil {
+		return errors.New("cannot sync signing record")
+	}
+	// Publish only a complete record, without overwriting a concurrently-created one.
+	if err := os.Link(file.Name(), path); err != nil {
+		return errors.New("cannot publish signing record without replacing an existing file")
+	}
+	return nil
 }

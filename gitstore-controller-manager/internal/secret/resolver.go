@@ -42,7 +42,6 @@ type BootstrapResolver struct {
 	resolver *secretmaterial.Resolver
 	ref      secretmaterial.SecretRef
 	owner    string
-	keyID    string
 	closer   io.Closer
 }
 
@@ -64,9 +63,9 @@ func NewBootstrapResolver(cfg BootstrapProviderConfig, owner string, ref Ref, ob
 		provider, err = secretmaterial.NewFileProvider(cfg.BasePath, secretmaterial.FormatJSONRecord)
 	case ProviderEnvironment:
 		provider, err = secretmaterial.NewEnvironmentProvider(secretmaterial.FormatJSONRecord, []secretmaterial.EnvBinding{{
-				Scope: secretmaterial.Scope{Tier: secretmaterial.TierBootstrap},
-				Name: ref.Name, Variable: cfg.EnvVariable,
-			}})
+			Scope: secretmaterial.Scope{Tier: secretmaterial.TierBootstrap},
+			Name:  ref.Name, Variable: cfg.EnvVariable,
+		}})
 	default:
 		return nil, secretmaterial.ErrUnsupportedType
 	}

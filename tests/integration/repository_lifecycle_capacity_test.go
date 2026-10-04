@@ -2442,6 +2442,8 @@ type secretCapacityDatasetObservations struct {
 	Elapsed        time.Duration                  `json:"elapsed"`
 }
 
+const secretCapacityDatasetMaxPageSize = 250
+
 func verifySecretCapacityDataset(ctx context.Context, client *http.Client, endpoints []string, token, namespace, manifest string,
 	pageSize int, mode capacityMode,
 ) (secretCapacityDatasetObservations, error) {
@@ -2450,7 +2452,10 @@ func verifySecretCapacityDataset(ctx context.Context, client *http.Client, endpo
 	if err := ctx.Err(); err != nil {
 		return observation, err
 	}
-	if len(endpoints) != 2 || endpoints[0] == endpoints[1] || token == "" || pageSize < 1 || pageSize > 1000 ||
+	if pageSize < 1 || pageSize > secretCapacityDatasetMaxPageSize {
+		return observation, fmt.Errorf("secret capacity: dataset page size must be between 1 and %d", secretCapacityDatasetMaxPageSize)
+	}
+	if len(endpoints) != 2 || endpoints[0] == endpoints[1] || token == "" ||
 		(mode != capacityModeDiagnostic && mode != capacityModeAlpha && mode != capacityModeProduction) {
 		return observation, invalid
 	}
@@ -2915,7 +2920,7 @@ func prepareSecretCapacityDataset(t *testing.T, cfg repositoryCapacityConfig) se
 	proof, err := verifySecretCapacityDataset(t.Context(), client, []string{cfg.apiA, cfg.apiB}, cfg.token,
 		getEnv("REPOSITORY_CAPACITY_SECRET_DATASET_NAMESPACE", cfg.namespace),
 		os.Getenv("REPOSITORY_CAPACITY_SECRET_DATASET_MANIFEST"),
-		capacityEnvInt(t, "REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE", 1000), cfg.mode)
+		capacityEnvInt(t, "REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE", secretCapacityDatasetMaxPageSize), cfg.mode)
 	require.NoError(t, err, "verify acknowledged titled Products offline before any offered load")
 	proof.RunID = os.Getenv("CAPACITY_RUN_ID")
 	require.NotEmpty(t, proof.RunID)

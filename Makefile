@@ -289,6 +289,9 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 		echo "Generate one with: make secret TARGET=signing-key DESTINATION_PATH=$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
 		exit 2; \
 	}
+	@cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key \
+		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
+		--record-output-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json" --key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)"
 	@set -u; \
 	resolved_uid="$(CONTROLLER_SERVICEACCOUNT_UID)"; \
 	if [ -z "$$resolved_uid" ]; then \
@@ -303,11 +306,9 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 		GITSTORE_CONTROLLER__CHECKPOINT__DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
-		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID="$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$resolved_uid" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME="$(CONTROLLER_SECRET_NAME)" \
-		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY="$(CONTROLLER_SECRET_KEY)" \
 		GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
 		go run ./cmd/controller
 
@@ -330,6 +331,9 @@ dev: ## Run local git service and API together in the foreground.
 		mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"; \
 		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ); \
 	fi; \
+	( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key \
+		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
+		--record-output-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json" --key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" ) || exit $$?; \
 	if [ ! -f "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ]; then \
 		mkdir -p "$$(dirname "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")"; \
 		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ); \
@@ -408,11 +412,9 @@ dev: ## Run local git service and API together in the foreground.
 		GITSTORE_CONTROLLER__CHECKPOINT__DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
-		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID="$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$resolved_uid" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME="$(CONTROLLER_SECRET_NAME)" \
-		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY="$(CONTROLLER_SECRET_KEY)" \
 		GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
 		go run ./cmd/controller & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
@@ -591,6 +593,8 @@ _capacity-scylla-soak:
 		go test -tags scylla -count=1 -timeout 0 -run TestScyllaCapacity ./internal/datastore/scylla/...
 
 _capacity-namespace-admission:
+	@cd "$(API_DIR)" && go test -list '^TestNamespaceValidationCapacity$$' ./internal/cataloggrpc | \
+		grep -qx 'TestNamespaceValidationCapacity' || { echo "Namespace validation capacity test is missing" >&2; exit 2; }
 	@cd "$(API_DIR)" && \
 		GITSTORE_NAMESPACE_CAPACITY_DURATION="$(NAMESPACE_CAPACITY_DURATION)" \
 		GITSTORE_NAMESPACE_CAPACITY_RUN=1 \

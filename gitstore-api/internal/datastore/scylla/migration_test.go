@@ -317,6 +317,40 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 	require.NoError(t, scylla.RunMigrations(ctx, session, scyllaKeyspace, uuid.New().String(), log))
 }
 
+func TestSchemaValidationDoesNotWriteOrIgnorePartialMigrations(t *testing.T) {
+	session := newRawSession(t)
+	cfg := testScyllaConfig(t)
+	require.NoError(t, scylla.Migrate(t.Context(), cfg, zap.NewNop()))
+	cfg.AutoMigrate = false
+	readWrites := func() map[string]int64 {
+		result := make(map[string]int64)
+		iter := session.Query("SELECT name, writetime(done) FROM gocqlx_migrate").Iter()
+		var name string
+		var written int64
+		for iter.Scan(&name, &written) {
+			result[name] = written
+		}
+		require.NoError(t, iter.Close())
+		return result
+	}
+	before := readWrites()
+	store, err := scylla.New(cfg, zap.NewNop())
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	require.Equal(t, before, readWrites(), "disabled auto-migration must not rewrite the ledger")
+
+	const name = "009_service_account.cql"
+	var done int
+	require.NoError(t, session.Query("SELECT done FROM gocqlx_migrate WHERE name=?", name).Scan(&done))
+	require.NoError(t, session.Query("UPDATE gocqlx_migrate SET done=? WHERE name=?", done-1, name).Exec())
+	t.Cleanup(func() {
+		assert.NoError(t, session.Query("UPDATE gocqlx_migrate SET done=? WHERE name=?", done, name).Exec())
+	})
+	store, err = scylla.New(cfg, zap.NewNop())
+	require.ErrorContains(t, err, "incompatible schema")
+	require.Nil(t, store)
+}
+
 // The per-resource baseline has no supported rollback below itself: a binary
 // embedding only a prefix of the baseline must refuse a newer keyspace, and
 // the complete set must remain re-runnable.

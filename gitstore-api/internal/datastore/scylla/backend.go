@@ -289,9 +289,7 @@ type namespaceIndexRow struct {
 	UID               gocql.UUID `db:"uid"`
 }
 
-// New opens a ScyllaDB connection, runs pending migrations, and returns a Datastore.
-// The keyspace must already exist; it is the operator's responsibility to provision it.
-func New(cfg config.ScyllaConfig, log *zap.Logger, watchBucketSize ...int) (datastore.Datastore, error) {
+func openSession(cfg config.ScyllaConfig) (*gocql.Session, error) {
 	parsedHosts, port := parseHosts(cfg.Hosts)
 	cluster := gocql.NewCluster(parsedHosts...)
 	cluster.Keyspace = cfg.Keyspace
@@ -311,15 +309,32 @@ func New(cfg config.ScyllaConfig, log *zap.Logger, watchBucketSize ...int) (data
 		}
 	}
 
+	if cfg.TLS {
+		cluster.SslOpts = &gocql.SslOptions{EnableHostVerification: true}
+	}
 	rawSession, err := cluster.CreateSession()
 	if err != nil {
 		return nil, fmt.Errorf("scylla: open session: %w", err)
 	}
+	return rawSession, nil
+}
 
-	instanceID := uuid.New().String()
-	if err := RunMigrations(context.Background(), rawSession, cfg.Keyspace, instanceID, log); err != nil {
+// New opens an existing keyspace, optionally migrates it, and validates its
+// migration history before exposing the datastore.
+func New(cfg config.ScyllaConfig, log *zap.Logger, watchBucketSize ...int) (datastore.Datastore, error) {
+	rawSession, err := openSession(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.AutoMigrate {
+		if err := RunMigrations(context.Background(), rawSession, cfg.Keyspace, uuid.New().String(), log); err != nil {
+			rawSession.Close()
+			return nil, fmt.Errorf("scylla: migrations: %w", err)
+		}
+	}
+	if err := ValidateSchema(context.Background(), rawSession); err != nil {
 		rawSession.Close()
-		return nil, fmt.Errorf("scylla: migrations: %w", err)
+		return nil, err
 	}
 
 	bucketSize := int64(watchjournal.DefaultBucketSize)

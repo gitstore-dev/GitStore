@@ -207,6 +207,7 @@ type DatastoreConfig struct {
 // ScyllaConfig holds ScyllaDB connection parameters.
 // Credentials and TLS are optional (FR-013).
 type ScyllaConfig struct {
+	AutoMigrate           bool     `mapstructure:"auto_migrate"`
 	Hosts                 []string `mapstructure:"hosts"`
 	Keyspace              string   `mapstructure:"keyspace"`
 	Username              string   `mapstructure:"username"`
@@ -290,6 +291,7 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("auth.oidc.username_claim", "sub")
 	v.SetDefault("datastore.backend", "memdb")
 	v.SetDefault("datastore.scylla.hosts", []string{"localhost:9042"})
+	v.SetDefault("datastore.scylla.auto_migrate", true)
 	v.SetDefault("datastore.scylla.keyspace", "gitstore")
 	v.SetDefault("datastore.scylla.username", "")
 	v.SetDefault("datastore.scylla.password", "")

@@ -170,6 +170,23 @@ key; the controller private key is configured through its `SecretRef` below.
 
 ### Datastore
 
+Automatic startup migration defaults to enabled. To prepare schemas using an
+init container or a separate operator step, set
+`datastore.scylla.auto_migrate = false` (environment:
+`GITSTORE_DATASTORE__SCYLLA__AUTO_MIGRATE=false`) on the API and run the matching
+image's `gitctl migrate --hosts scylla:9042 --keyspace gitstore --timeout 5m`
+before starting it. The command also accepts the existing Scylla environment
+variables, including password, so private connection material need not appear
+in arguments.
+
+The operator must create the keyspace first. `gitctl migrate` uses the same
+distributed migration lock as API startup, exits nonzero on failure and starts
+no API listeners or CDC readers. Both startup modes require a complete,
+unchanged migration history for the current binary. Disabled mode checks that
+history with read-only queries and does not create even the migration ledger
+or lock table. It is not a bypass for a breaking schema baseline or a
+partially-applied migration.
+
 | Key                                         | Env Var                                                   | Type            | Default          | Required | Sensitive | Description                                    |
 |---------------------------------------------|-----------------------------------------------------------|-----------------|------------------|----------|-----------|------------------------------------------------|
 | `datastore.backend`                         | `GITSTORE_DATASTORE__BACKEND`                             | string          | `memdb`          | No       | No        | Active datastore backend: `memdb` or `scylla`  |

@@ -64,7 +64,7 @@ Product JSONL manifest against bounded `products` pagination on **both APIs**.
 `REPOSITORY_CAPACITY_SECRET_DATASET_MANIFEST` must be an absolute regular-file
 path; `REPOSITORY_CAPACITY_SECRET_DATASET_NAMESPACE` defaults to
 `REPOSITORY_CAPACITY_NAMESPACE`, and
-`REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE` defaults to 1,000 (maximum 1,000).
+`REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE` defaults to 250 (maximum 250).
 Each line contains exactly `namespace`, `name`, `title`, `revision` (the exact
 API value: `<branch>@sha1:<40 lowercase hex characters>`, or a bare SHA-1 for
 preloaded fixtures) and `acknowledged: true`. Names must be strictly sorted

@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,9 +15,45 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 )
+
+func TestMigrateRunsExplicitlyWithDeadlineAndReportsFailure(t *testing.T) {
+	original := migrateSchema
+	t.Cleanup(func() { migrateSchema = original })
+	calls := 0
+	var failure error
+	migrateSchema = func(ctx context.Context, cfg config.ScyllaConfig, log *zap.Logger) error {
+		calls++
+		if cfg.Keyspace != "prepared" || len(cfg.Hosts) != 1 || cfg.Hosts[0] != "scylla:9042" {
+			t.Fatalf("unexpected migration connection")
+		}
+		if _, ok := ctx.Deadline(); !ok || log == nil {
+			t.Fatal("migration needs a bounded context and logger")
+		}
+		return failure
+	}
+	var stdout, stderr bytes.Buffer
+	args := []string{"migrate", "--hosts", "scylla:9042", "--keyspace", "prepared", "--timeout", "1m"}
+	if code := run(args, strings.NewReader(""), &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), "complete") {
+		t.Fatalf("migration code=%d stderr=%s", code, stderr.String())
+	}
+	failure = errors.New("schema is incompatible")
+	stdout.Reset()
+	if code := run(args, strings.NewReader(""), &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), failure.Error()) {
+		t.Fatalf("migration error was hidden: code=%d stderr=%s", code, stderr.String())
+	}
+	for _, invalid := range [][]string{{"migrate", "--timeout", "0s"}, {"migrate", "unexpected"}} {
+		if code := run(invalid, strings.NewReader(""), &stdout, &stderr); code != 2 {
+			t.Fatalf("invalid migration arguments: code=%d", code)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("invalid arguments opened a migration connection: %d calls", calls)
+	}
+}
 
 func TestUsersAddCreatesFileWithHashedPassword(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.yaml")
