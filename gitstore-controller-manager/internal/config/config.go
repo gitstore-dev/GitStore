@@ -6,90 +6,97 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
+	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
+	"github.com/gitstore-dev/gitstore/secretmaterial"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 	"go.uber.org/zap/zapcore"
 )
 
-// Config holds the complete controller-manager configuration.
 type Config struct {
 	Controller ControllerConfig `mapstructure:"controller"`
 	Log        LogConfig        `mapstructure:"log"`
 }
 
-// ControllerConfig holds runtime settings for the controller manager.
 type ControllerConfig struct {
-	// Port is the HTTP listen port for /health, /metrics, and /controller/v1/*.
-	Port int `mapstructure:"port" validate:"min=1,max=65535"`
-
-	// ApiURI is the gitstore-api GraphQL URI used as the Watch event source.
-	ApiURI string `mapstructure:"api_uri"`
-
-	// ServiceAccountNamespace identifies the controller's ServiceAccount.
-	ServiceAccountNamespace string `mapstructure:"serviceaccount_namespace"`
-	// ServiceAccountName identifies the controller's ServiceAccount.
-	ServiceAccountName string `mapstructure:"serviceaccount_name"`
-	// ServiceAccountKeyID identifies the enrolled public key used to sign
-	// client assertions.
-	ServiceAccountKeyID string `mapstructure:"serviceaccount_key_id"`
-	// ServiceAccountUID prevents a deleted and recreated ServiceAccount from
-	// being mistaken for its predecessor.
-	ServiceAccountUID string `mapstructure:"serviceaccount_uid"`
-	// ServiceAccountKeyRef resolves the private key through the bootstrap
-	// SecretResolver; it is deliberately not a filesystem path.
-	ServiceAccountKeyRef secret.Ref `mapstructure:"serviceaccount_key_ref"`
-	// ServiceAccountAssertionAudience is the audience for the signed client
-	// assertion sent to the API token exchange endpoint.
-	ServiceAccountAssertionAudience string `mapstructure:"serviceaccount_assertion_audience"`
-	// ServiceAccountAccessTokenAudience is the audience requested for the
-	// exchanged controller access token.
-	ServiceAccountAccessTokenAudience string `mapstructure:"serviceaccount_access_token_audience"`
-	// SecretProviderBootstrap selects the local bootstrap secret provider.
-	SecretProviderBootstrap secret.BootstrapProviderConfig `mapstructure:"secret_provider_bootstrap"`
-
-	// DefaultMaxAttempts is the global retry limit before quarantine.
-	DefaultMaxAttempts int `mapstructure:"default_max_attempts"`
-
-	// DefaultStallThreshold is parsed at startup into StallThreshold.
-	DefaultStallThresholdStr string        `mapstructure:"default_stall_threshold"`
-	DefaultStallThreshold    time.Duration `mapstructure:"-"`
-
-	// CheckpointDir is the directory used by the filesystem CheckpointStore
-	// (one JSON file per registered kind).
-	CheckpointDir string `mapstructure:"checkpoint_dir"`
-
-	// CheckpointFlushIntervalEvents is the number of watch events processed
-	// between checkpoint persists (an event count, not a duration).
-	CheckpointFlushIntervalEvents int `mapstructure:"checkpoint_flush_interval_events"`
-
-	// MaxWatchBackoffStr is parsed at startup into MaxWatchBackoff.
-	MaxWatchBackoffStr string        `mapstructure:"max_watch_backoff"`
-	MaxWatchBackoff    time.Duration `mapstructure:"-"`
-
-	// ResyncIntervalStr is parsed at startup into ResyncInterval. It applies
-	// uniformly to every registered kind's listwatch.Runner: "0s" disables
-	// resync entirely.
-	ResyncIntervalStr string        `mapstructure:"resync_interval"`
-	ResyncInterval    time.Duration `mapstructure:"-"`
+	Port            int                   `mapstructure:"port"`
+	ApiURI          string                `mapstructure:"api_uri"`
+	ServiceAccount  ServiceAccountConfig  `mapstructure:"serviceaccount"`
+	SecretProviders SecretProvidersConfig `mapstructure:"secret_providers"`
+	Checkpoint      CheckpointConfig      `mapstructure:"checkpoint"`
+	Reconcile       ReconcileConfig       `mapstructure:"reconcile"`
+	Watch           WatchConfig           `mapstructure:"watch"`
 }
 
-// LogConfig holds logger settings.
+type ServiceAccountConfig struct {
+	Namespace           string     `mapstructure:"namespace"`
+	Name                string     `mapstructure:"name"`
+	UID                 string     `mapstructure:"uid"`
+	KeyID               string     `mapstructure:"key_id"`
+	KeyRef              secret.Ref `mapstructure:"key_ref"`
+	AssertionAudience   string     `mapstructure:"assertion_audience"`
+	AccessTokenAudience string     `mapstructure:"access_token_audience"`
+}
+
+type SecretProvidersConfig struct {
+	Bootstrap secret.BootstrapProviderConfig `mapstructure:"bootstrap"`
+}
+
+type CheckpointConfig struct {
+	Dir                 string `mapstructure:"dir"`
+	FlushIntervalEvents int    `mapstructure:"flush_interval_events"`
+}
+
+type ReconcileConfig struct {
+	MaxAttempts    int           `mapstructure:"max_attempts"`
+	StallThreshold time.Duration `mapstructure:"stall_threshold"`
+}
+
+type WatchConfig struct {
+	MaxBackoff     time.Duration `mapstructure:"max_backoff"`
+	ResyncInterval time.Duration `mapstructure:"resync_interval"`
+}
+
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
 	Format string `mapstructure:"format"`
 }
 
-// Load reads configuration from environment variables and optional .env file.
-func Load() (*Config, error) {
-	return load("")
+var defaults = map[string]any{
+	"controller.port":                                  5001,
+	"controller.api_uri":                               "http://localhost:4000/graphql",
+	"controller.serviceaccount.namespace":              "",
+	"controller.serviceaccount.name":                   "gitstore-controller-manager",
+	"controller.serviceaccount.uid":                    "",
+	"controller.serviceaccount.key_id":                 "",
+	"controller.serviceaccount.key_ref.kind":           "",
+	"controller.serviceaccount.key_ref.name":           "",
+	"controller.serviceaccount.key_ref.key":            "",
+	"controller.serviceaccount.assertion_audience":     "gitstore-api/serviceaccount-token",
+	"controller.serviceaccount.access_token_audience":  "gitstore-api",
+	"controller.secret_providers.bootstrap.type":       "file",
+	"controller.secret_providers.bootstrap.format":     "raw",
+	"controller.secret_providers.bootstrap.base_path":  "/run/secrets",
+	"controller.secret_providers.bootstrap.env_prefix": "GITSTORE_SECRET__",
+	"controller.reconcile.max_attempts":                5,
+	"controller.reconcile.stall_threshold":             "5m",
+	"controller.checkpoint.dir":                        "/var/lib/gitstore/checkpoints",
+	"controller.checkpoint.flush_interval_events":      100,
+	"controller.watch.max_backoff":                     "30s",
+	"controller.watch.resync_interval":                 "10m",
+	"log.level":                                        "info",
+	"log.format":                                       "json",
 }
 
-// LoadFrom loads the explicitly selected configuration file. The file is
-// required; Load retains optional current-directory discovery compatibility.
+func Load() (*Config, error) { return load("") }
+
 func LoadFrom(path string) (*Config, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("config file path must not be empty")
@@ -98,33 +105,10 @@ func LoadFrom(path string) (*Config, error) {
 }
 
 func load(path string) (*Config, error) {
-	_ = godotenv.Load()
-
+	if err := godotenv.Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, errors.New("could not read controller environment file")
+	}
 	v := viper.New()
-
-	v.SetDefault("controller.port", 5001)
-	v.SetDefault("controller.api_uri", "http://localhost:4000/graphql")
-	v.SetDefault("controller.serviceaccount_namespace", "")
-	v.SetDefault("controller.serviceaccount_name", "gitstore-controller-manager")
-	v.SetDefault("controller.serviceaccount_key_id", "")
-	v.SetDefault("controller.serviceaccount_uid", "")
-	v.SetDefault("controller.serviceaccount_key_ref.kind", "")
-	v.SetDefault("controller.serviceaccount_key_ref.name", "")
-	v.SetDefault("controller.serviceaccount_key_ref.key", "")
-	v.SetDefault("controller.serviceaccount_assertion_audience", "gitstore-api/serviceaccount-token")
-	v.SetDefault("controller.serviceaccount_access_token_audience", "gitstore-api")
-	v.SetDefault("controller.secret_provider_bootstrap.type", "file")
-	v.SetDefault("controller.secret_provider_bootstrap.base_path", "/run/secrets")
-	v.SetDefault("controller.secret_provider_bootstrap.env_prefix", "GITSTORE_SECRET__")
-	v.SetDefault("controller.default_max_attempts", 5)
-	v.SetDefault("controller.default_stall_threshold", "5m")
-	v.SetDefault("controller.checkpoint_dir", "/var/lib/gitstore/checkpoints")
-	v.SetDefault("controller.checkpoint_flush_interval_events", 100)
-	v.SetDefault("controller.max_watch_backoff", "30s")
-	v.SetDefault("controller.resync_interval", "10m")
-	v.SetDefault("log.level", "info")
-	v.SetDefault("log.format", "json")
-
 	if path != "" {
 		v.SetConfigFile(path)
 	} else {
@@ -135,161 +119,202 @@ func load(path string) (*Config, error) {
 	if err := v.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError
 		if path != "" || !errors.As(err, &notFound) {
-			return nil, err
+			return nil, errors.New("could not read controller configuration file")
 		}
 	}
-
+	for _, root := range []string{"controller", "log"} {
+		if v.IsSet(root) {
+			if err := validateSource(root, v.Get(root)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, variable := range os.Environ() {
+		name, _, _ := strings.Cut(variable, "=")
+		if name == "GITSTORE_CONTROLLER" || name == "GITSTORE_LOG" ||
+			strings.HasPrefix(name, "GITSTORE_CONTROLLER_") || strings.HasPrefix(name, "GITSTORE_LOG_") {
+			path := strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(name, "GITSTORE_")), "__", ".")
+			if _, ok := defaults[path]; !ok {
+				return nil, sourceError(path, name)
+			}
+		}
+	}
+	for key, value := range defaults {
+		v.SetDefault(key, value)
+	}
 	v.SetEnvPrefix("GITSTORE")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
+	v.AllowEmptyEnv(true)
 	v.AutomaticEnv()
-	bindServiceAccountEnvironment(v)
-
 	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
+	if err := v.Unmarshal(&cfg, viper.DecodeHook(decodeValue)); err != nil {
 		return nil, err
 	}
-	readServiceAccountConfig(v, &cfg.Controller)
-
 	if err := validate(&cfg); err != nil {
 		return nil, err
 	}
-
 	return &cfg, nil
 }
 
-func validate(cfg *Config) error {
-	if cfg.Controller.Port < 1 || cfg.Controller.Port > 65535 {
-		return fmt.Errorf("controller.port must be between 1 and 65535, got %d", cfg.Controller.Port)
-	}
-	if cfg.Controller.ApiURI == "" {
-		return fmt.Errorf("controller.api_uri must not be empty")
-	}
-	if err := validateServiceAccountConfig(&cfg.Controller); err != nil {
-		return err
-	}
-	if !hasServiceAccountKeyRef(cfg.Controller.ServiceAccountKeyRef) {
-		return fmt.Errorf("controller.serviceaccount_key_ref must be configured")
-	}
-	if cfg.Controller.DefaultMaxAttempts < 1 {
-		return fmt.Errorf("controller.default_max_attempts must be >= 1")
-	}
-
-	d, err := time.ParseDuration(cfg.Controller.DefaultStallThresholdStr)
-	if err != nil {
-		return fmt.Errorf("controller.default_stall_threshold is not a valid duration: %w", err)
-	}
-	cfg.Controller.DefaultStallThreshold = d
-
-	if cfg.Controller.CheckpointDir == "" {
-		return fmt.Errorf("controller.checkpoint_dir must not be empty")
-	}
-	if cfg.Controller.CheckpointFlushIntervalEvents < 1 {
-		return fmt.Errorf("controller.checkpoint_flush_interval_events must be >= 1")
-	}
-
-	maxBackoff, err := time.ParseDuration(cfg.Controller.MaxWatchBackoffStr)
-	if err != nil {
-		return fmt.Errorf("controller.max_watch_backoff is not a valid duration: %w", err)
-	}
-	cfg.Controller.MaxWatchBackoff = maxBackoff
-
-	resyncInterval, err := time.ParseDuration(cfg.Controller.ResyncIntervalStr)
-	if err != nil {
-		return fmt.Errorf("controller.resync_interval is not a valid duration: %w", err)
-	}
-	if resyncInterval < 0 {
-		return fmt.Errorf("controller.resync_interval must not be negative")
-	}
-	cfg.Controller.ResyncInterval = resyncInterval
-
-	if err := validateLogFormat(&cfg.Log); err != nil {
-		return err
-	}
-	return nil
-}
-
-func bindServiceAccountEnvironment(v *viper.Viper) {
-	for key, env := range map[string]string{
-		"controller.serviceaccount_namespace":             "GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE",
-		"controller.serviceaccount_name":                  "GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME",
-		"controller.serviceaccount_key_id":                "GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID",
-		"controller.serviceaccount_uid":                   "GITSTORE_CONTROLLER__SERVICEACCOUNT__UID",
-		"controller.serviceaccount_key_ref.kind":          "GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND",
-		"controller.serviceaccount_key_ref.name":          "GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME",
-		"controller.serviceaccount_key_ref.key":           "GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY",
-		"controller.serviceaccount_assertion_audience":    "GITSTORE_CONTROLLER__SERVICEACCOUNT__ASSERTION_AUDIENCE",
-		"controller.serviceaccount_access_token_audience": "GITSTORE_CONTROLLER__SERVICEACCOUNT__ACCESS_TOKEN_AUDIENCE",
-		"controller.secret_provider_bootstrap.type":       "GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__TYPE",
-		"controller.secret_provider_bootstrap.base_path":  "GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH",
-		"controller.secret_provider_bootstrap.env_prefix": "GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__ENV_PREFIX",
-	} {
-		_ = v.BindEnv(key, env)
-	}
-}
-
-func readServiceAccountConfig(v *viper.Viper, controller *ControllerConfig) {
-	controller.ServiceAccountNamespace = v.GetString("controller.serviceaccount_namespace")
-	controller.ServiceAccountName = v.GetString("controller.serviceaccount_name")
-	controller.ServiceAccountKeyID = v.GetString("controller.serviceaccount_key_id")
-	controller.ServiceAccountUID = v.GetString("controller.serviceaccount_uid")
-	controller.ServiceAccountKeyRef = secret.Ref{
-		Kind: v.GetString("controller.serviceaccount_key_ref.kind"),
-		Name: v.GetString("controller.serviceaccount_key_ref.name"),
-		Key:  v.GetString("controller.serviceaccount_key_ref.key"),
-	}
-	controller.ServiceAccountAssertionAudience = v.GetString("controller.serviceaccount_assertion_audience")
-	controller.ServiceAccountAccessTokenAudience = v.GetString("controller.serviceaccount_access_token_audience")
-	controller.SecretProviderBootstrap = secret.BootstrapProviderConfig{
-		Type:      v.GetString("controller.secret_provider_bootstrap.type"),
-		BasePath:  v.GetString("controller.secret_provider_bootstrap.base_path"),
-		EnvPrefix: v.GetString("controller.secret_provider_bootstrap.env_prefix"),
-	}
-}
-
-func hasServiceAccountKeyRef(ref secret.Ref) bool {
-	return ref.Kind != "" || ref.Name != "" || ref.Key != ""
-}
-
-func validateServiceAccountConfig(controller *ControllerConfig) error {
-	if !hasServiceAccountKeyRef(controller.ServiceAccountKeyRef) {
+func validateSource(path string, value any) error {
+	if _, ok := defaults[path]; ok {
 		return nil
 	}
-	if controller.ServiceAccountKeyRef.Kind != "SecretRef" ||
-		strings.TrimSpace(controller.ServiceAccountKeyRef.Name) == "" ||
-		strings.TrimSpace(controller.ServiceAccountKeyRef.Key) == "" {
-		return fmt.Errorf("controller.serviceaccount_key_ref must be a complete SecretRef")
+	knownGroup := false
+	for leaf := range defaults {
+		if strings.HasPrefix(leaf, path+".") {
+			knownGroup = true
+			break
+		}
 	}
-	for _, required := range []struct {
-		key   string
-		value string
-	}{
-		{"controller.serviceaccount_namespace", controller.ServiceAccountNamespace},
-		{"controller.serviceaccount_name", controller.ServiceAccountName},
-		{"controller.serviceaccount_key_id", controller.ServiceAccountKeyID},
-		{"controller.serviceaccount_uid", controller.ServiceAccountUID},
-		{"controller.serviceaccount_assertion_audience", controller.ServiceAccountAssertionAudience},
-		{"controller.serviceaccount_access_token_audience", controller.ServiceAccountAccessTokenAudience},
-	} {
-		key, value := required.key, required.value
-		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("%s must not be empty when controller.serviceaccount_key_ref is configured", key)
+	values, ok := value.(map[string]any)
+	if !knownGroup || !ok {
+		return sourceError(path, "")
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		if err := validateSource(path+"."+key, values[key]); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func validateLogFormat(log *LogConfig) error {
-	switch strings.ToLower(log.Format) {
-	case "json":
-		log.Format = "json"
-	case "text":
-		log.Format = "text"
-	default:
-		return fmt.Errorf("invalid log format %q; valid values: json, text", log.Format)
+func sourceError(path, env string) error {
+	replacement := strings.Replace(path, "controller.controller.", "controller.", 1)
+	for old, next := range map[string]string{
+		"serviceaccount_namespace":             "serviceaccount.namespace",
+		"serviceaccount_name":                  "serviceaccount.name",
+		"serviceaccount_uid":                   "serviceaccount.uid",
+		"serviceaccount_key_id":                "serviceaccount.key_id",
+		"serviceaccount_key_ref":               "serviceaccount.key_ref",
+		"serviceaccount_assertion_audience":    "serviceaccount.assertion_audience",
+		"serviceaccount_access_token_audience": "serviceaccount.access_token_audience",
+		"secret_provider_bootstrap":            "secret_providers.bootstrap",
+		"checkpoint_dir":                       "checkpoint.dir",
+		"checkpoint_flush_interval_events":     "checkpoint.flush_interval_events",
+		"default_max_attempts":                 "reconcile.max_attempts",
+		"default_stall_threshold":              "reconcile.stall_threshold",
+		"max_watch_backoff":                    "watch.max_backoff",
+		"resync_interval":                      "watch.resync_interval",
+		"api_token":                            "serviceaccount.key_ref",
+	} {
+		prefix := "controller." + old
+		if replacement == prefix || strings.HasPrefix(replacement, prefix+".") {
+			replacement = "controller." + next + strings.TrimPrefix(replacement, prefix)
+			break
+		}
 	}
-	_, err := zapcore.ParseLevel(log.Level)
-	if err != nil {
-		return fmt.Errorf("invalid log level %q: %w", log.Level, err)
+	if env != "" {
+		path = env
+		replacement = "GITSTORE_" + strings.ToUpper(strings.ReplaceAll(replacement, ".", "__"))
+	}
+	if replacement != path {
+		return fmt.Errorf("obsolete configuration path %s; use %s", path, replacement)
+	}
+	return fmt.Errorf("unknown configuration path %s; use canonical nested settings", path)
+}
+
+// Decode errors contain paths and expectations, never supplied values.
+func decodeValue(from, to reflect.Type, value any) (any, error) {
+	if to == reflect.TypeFor[time.Duration]() {
+		if from.Kind() != reflect.String {
+			return nil, errors.New("must be a duration string")
+		}
+		duration, err := time.ParseDuration(value.(string))
+		if err != nil {
+			return nil, errors.New("must be a valid duration")
+		}
+		return duration, nil
+	}
+	switch to.Kind() {
+	case reflect.String:
+		if from.Kind() != reflect.String {
+			return nil, errors.New("must be a string")
+		}
+	case reflect.Int:
+		if from.Kind() == reflect.String {
+			n, err := strconv.Atoi(value.(string))
+			if err != nil {
+				return nil, errors.New("must be an integer")
+			}
+			return n, nil
+		}
+		if from.Kind() != reflect.Int && from.Kind() != reflect.Int64 {
+			return nil, errors.New("must be an integer")
+		}
+	case reflect.Struct:
+		if from.Kind() != reflect.Map {
+			return nil, errors.New("must be nested settings")
+		}
+	}
+	return value, nil
+}
+
+func validate(cfg *Config) error {
+	c := &cfg.Controller
+	if c.Port < 1 || c.Port > 65535 {
+		return errors.New("controller.port must be between 1 and 65535")
+	}
+	if strings.TrimSpace(c.ApiURI) == "" {
+		return errors.New("controller.api_uri must not be empty")
+	}
+	ref := c.ServiceAccount.KeyRef.SecretRef()
+	if err := secretmaterial.ValidateSecretRef(ref, ""); err != nil {
+		return errors.New("controller.serviceaccount.key_ref must be a valid SecretRef")
+	}
+	provider := c.SecretProviders.Bootstrap
+	if provider.Format != "raw" && provider.Format != "json-record" {
+		return errors.New("controller.secret_providers.bootstrap.format must be raw or json-record")
+	}
+	for _, required := range []struct{ path, value string }{
+		{"controller.serviceaccount.namespace", c.ServiceAccount.Namespace},
+		{"controller.serviceaccount.name", c.ServiceAccount.Name},
+		{"controller.serviceaccount.uid", c.ServiceAccount.UID},
+		{"controller.serviceaccount.assertion_audience", c.ServiceAccount.AssertionAudience},
+		{"controller.serviceaccount.access_token_audience", c.ServiceAccount.AccessTokenAudience},
+	} {
+		if strings.TrimSpace(required.value) == "" {
+			return fmt.Errorf("%s must not be empty", required.path)
+		}
+	}
+	if provider.Format == "raw" && (ref.Key == nil || c.ServiceAccount.KeyID == "") {
+		return errors.New("controller.serviceaccount.key_ref.key and key_id are required for raw bootstrap material")
+	}
+	if provider.Format == "json-record" && ref.Key != nil {
+		return errors.New("controller.serviceaccount.key_ref.key must be omitted for atomic signing records")
+	}
+	if provider.Type != "file" && provider.Type != "env" {
+		return errors.New("controller.secret_providers.bootstrap.type must be file or env")
+	}
+	if provider.Type == "file" && strings.TrimSpace(provider.BasePath) == "" {
+		return errors.New("controller.secret_providers.bootstrap.base_path must not be empty")
+	}
+	if provider.Type == "env" && strings.TrimSpace(provider.EnvPrefix) == "" {
+		return errors.New("controller.secret_providers.bootstrap.env_prefix must not be empty")
+	}
+	if c.Reconcile.MaxAttempts < 1 {
+		return errors.New("controller.reconcile.max_attempts must be >= 1")
+	}
+	if c.Checkpoint.Dir == "" {
+		return errors.New("controller.checkpoint.dir must not be empty")
+	}
+	if c.Checkpoint.FlushIntervalEvents < 1 {
+		return errors.New("controller.checkpoint.flush_interval_events must be >= 1")
+	}
+	if c.Watch.ResyncInterval < 0 {
+		return errors.New("controller.watch.resync_interval must not be negative")
+	}
+	cfg.Log.Format = strings.ToLower(cfg.Log.Format)
+	if cfg.Log.Format != "json" && cfg.Log.Format != "text" {
+		return errors.New("invalid log format at log.format; use json or text")
+	}
+	if _, err := zapcore.ParseLevel(cfg.Log.Level); err != nil {
+		return errors.New("invalid log level at log.level")
 	}
 	return nil
 }

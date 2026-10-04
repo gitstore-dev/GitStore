@@ -5,23 +5,36 @@ No GraphQL/gRPC endpoint is added.
 
 ## API boundary
 
-Conceptual Go signatures, finalized before implementation tests:
+The exported contracts live in `shared/secretmaterial/types.go`; the module
+path is `github.com/gitstore-dev/gitstore/secretmaterial`. Services currently
+use Go 1.26; the dependency-free library retains a Go 1.25 baseline.
+Concrete entry points:
 
 ```go
 type SecretResolver interface {
     ResolveSecret(ctx context.Context, ref SecretRef, req ResolutionRequest) (SecretMaterial, error)
 }
 
-type SecretMaterial struct {
-    Values   map[string][]byte
-    Metadata SecretMetadata
-}
+func ValidateSecretRef(ref SecretRef, namespace string) error
+func ValidateCredentialsRef(ref CredentialsRef, namespace string) error
+func NewBootstrapResolver(p Provider, binding BootstrapBinding, observer Observer) (*Resolver, error)
+func NewRuntimeResolver(p Provider, binding RuntimeBinding, observer Observer) (*Resolver, error)
+func (r *Resolver) ResolveCredentials(ctx context.Context, ref CredentialsRef, req ResolutionRequest) (SecretMaterial, error)
 ```
 
-`SecretRef` follows [references.md](references.md); request/metadata fields
+`SecretMaterial` keeps its values private and offers explicit `Value`, `Values`,
+`RecordFormat` and `Clear` methods. Value access returns copies; formatting is
+redacted and JSON/YAML serialization fails. This narrows the conceptual public
+map to prevent accidental default serialization. `SecretRef` follows
+[references.md](references.md); request/metadata fields
 follow [data-model.md](../data-model.md). Constructors bind an instance to one
 tier, one operator-owned provider configuration and a trusted authorization
 policy. Request fields cannot override those bindings.
+Bootstrap binding freezes the owner and logical reference; runtime binding
+freezes environment/namespace and requires an explicit authorizer. Runtime
+requests carry the authenticated principal and resource identity. Provider
+`Read` receives only the constructor-selected scope. Observations use fixed
+bootstrap identity/runtime contract categories, never request-supplied labels.
 
 Provide pure `ValidateSecretRef`/`ValidateCredentialsRef` functions and a typed
 resolution operation that validates the reference, checks type support, resolves
@@ -31,13 +44,13 @@ The initial supported runtime type is `aws-access-key/v1`; require nonempty
 
 ## Tier and authorization isolation
 
-| Context | Required behavior |
-| --- | --- |
-| Bootstrap | Owning service identity and logical ref from deployment config; no resource namespace; no GitStore-authenticated provider call |
-| Runtime | Authenticated consumer principal, owning resource namespace/environment; explicit binding authorization before provider access |
-| Wrong tier | `Forbidden`, zero provider calls |
-| Foreign explicit namespace | `InvalidRef` / `CrossNamespaceRef`, zero provider calls |
-| Unauthorized subject/binding | `Forbidden`, zero provider calls |
+| Context                      | Required behavior                                                                                                              |
+|------------------------------|--------------------------------------------------------------------------------------------------------------------------------|
+| Bootstrap                    | Owning service identity and logical ref from deployment config; no resource namespace; no GitStore-authenticated provider call |
+| Runtime                      | Authenticated consumer principal, owning resource namespace/environment; explicit binding authorization before provider access |
+| Wrong tier                   | `Forbidden`, zero provider calls                                                                                               |
+| Foreign explicit namespace   | `InvalidRef` / `CrossNamespaceRef`, zero provider calls                                                                        |
+| Unauthorized subject/binding | `Forbidden`, zero provider calls                                                                                               |
 
 No permissive default authorizer. The bootstrap constructor allows only the
 configured owning process; a runtime consumer supplies its policy-bound

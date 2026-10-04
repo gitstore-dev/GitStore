@@ -207,8 +207,8 @@ input NamespaceSpecInput {
 Declarative resource envelope for creating a namespace.
 """
 input CreateNamespaceInput {
-  apiVersion: String!
-  kind: String!
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Namespace"
   metadata: NamespaceMetadataInput!
   spec: NamespaceSpecInput!
 }
@@ -217,8 +217,8 @@ input CreateNamespaceInput {
 Declarative resource envelope for updating a namespace.
 """
 input UpdateNamespaceInput {
-  apiVersion: String!
-  kind: String!
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Namespace"
   metadata: NamespaceMetadataInput!
   spec: NamespaceSpecInput!
 }

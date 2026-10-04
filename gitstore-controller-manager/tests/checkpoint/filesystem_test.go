@@ -7,11 +7,49 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
+
+func TestFilesystemStore_ReplacementPreservesGroupAndReplicaIsolation(t *testing.T) {
+	root := t.TempDir()
+	records := make(map[string]checkpoint.Record)
+	for _, name := range []string{"products/replica-a", "products/replica-b", "categories/replica-a"} {
+		dir := filepath.Join(root, name)
+		store, err := checkpoint.NewFilesystemStore(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := checkpoint.Record{
+			Kind: "Product", ResourceVersion: "cursor-" + name,
+			Snapshot:          []byte(`[{"uid":"product-1","name":"widget"}]`),
+			ReplayKeys:        []types.WorkItemKey{{Kind: "Product", Namespace: "shop", Name: "widget"}},
+			RelatedReplayKeys: []types.WorkItemKey{{Kind: "CategoryTaxonomy", Namespace: "shop", Name: "tools"}},
+			WrittenAt:         time.Now().UTC().Truncate(time.Second),
+		}
+		if err := store.Save(t.Context(), rec); err != nil {
+			t.Fatal(err)
+		}
+		records[name] = rec
+	}
+	for name, want := range records {
+		replacement, err := checkpoint.NewFilesystemStore(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := replacement.Load(t.Context(), want.Kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatal("replacement lost its scoped snapshot, cursor or replay work")
+		}
+	}
+}
 
 func TestFilesystemStore_SaveThenLoad_RoundTrips(t *testing.T) {
 	dir := t.TempDir()

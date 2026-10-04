@@ -64,8 +64,8 @@ Cover:
 Start the repository's Scylla test services, then:
 
 ```bash
-make test-datastore-contracts
-make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042
+make test TARGET=datastore
+make test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=127.0.0.1:9042
 ```
 
 Required assertions:
@@ -578,8 +578,8 @@ Completed:
 Commands exercised:
 
 ```bash
-make test-datastore-contracts
-make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042
+make test TARGET=datastore
+make test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=127.0.0.1:9042
 NAMESPACE_WATCH_API_A=http://127.0.0.1:4100 \
 NAMESPACE_WATCH_API_B=http://127.0.0.1:4101 \
 NAMESPACE_WATCH_API_REPLACEMENT=http://127.0.0.1:4100 \

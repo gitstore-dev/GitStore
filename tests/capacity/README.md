@@ -14,6 +14,135 @@ Valid target/profile pairs are `api/readiness`, `namespace/admission`,
 two-replica soak. `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
 The dispatcher is the only public capacity entry point.
 
+Spec 063's `REPOSITORY_CAPACITY_SECRET_SCENARIO=1` selects the connected File-push,
+owned-record fault, resource and evidence collector. It requires explicit
+`CHAOS_CONFIRM=1`, provisioned test-owned fixtures and an acknowledged Product
+manifest before running; the old Repository-only workload cannot establish
+secret-scenario acceptance. The full deployed capacity run has not been certified.
+`make test TARGET=secret-integration` provides separate functional bootstrap/rotation
+acceptance, not capacity certification. See the
+[rotation runbook](../../docs/runbooks/secret-material-rotation.md) and
+[capacity contract](../../specs/063-implement-secret-adrs/contracts/capacity-and-rollout.md).
+The secret topology retains exactly one active Git service in every mode;
+repository sharding and multi-Git operation are not supported.
+
+`make test` runs the secret production-contract assertion matrix in
+`tests/integration/secret_capacity_contract_test.go`. It covers exact offered
+load, burst timing/drain, bounded client/provider work, offline titled-Product
+count proof, all latency/resource thresholds and scheduled fault/recovery
+requirements. The assertions require offline pages of at most 1,000 rows. Synthetic
+observation fixtures cannot certify a deployment; only a complete measured
+run can produce a passing production bundle.
+
+The guarded File-load path now reuses the Repository lifecycle runner: it seeds
+100 typed Files before baseline, uses 32 disjoint authoring worktrees/repositories
+on the one Git service to avoid client-side non-fast-forward contention, and
+offers real pushes through a queue capped at 256. Missed schedules and drops are
+counted rather than hidden by ticker coalescing or retries. Every acknowledged
+batch is checked through both APIs' existing `nodes` query; initial IDs come
+from `watchFiles`, not a new File inventory API. Local resolution and explicit
+32-caller/16-slot contention/deadline/authorization probes use test-owned regular
+provider files. No File payload operation is performed.
+
+`secret/file-workload.json` is a **component observation**, written atomically
+even when the enclosing workload is canceled. It records actual counts, timings
+and denials, distinguishes nominal duration from elapsed offering time, and has
+no `passed` field. It cannot replace `secret-evidence.json`, dataset verification,
+resource measurements or the scheduled fault proofs. The dispatcher assembles
+the final bundle only after the verifier, captured logs and postflight finish.
+The local checks use real bare-Git pushes and regular-file providers; they do not
+claim a deployed API/Git/controller run.
+
+Before pool creation or offered load, the guarded path verifies an acknowledged
+Product JSONL manifest against bounded `products` pagination on **both APIs**.
+`REPOSITORY_CAPACITY_SECRET_DATASET_MANIFEST` must be an absolute regular-file
+path; `REPOSITORY_CAPACITY_SECRET_DATASET_NAMESPACE` defaults to
+`REPOSITORY_CAPACITY_NAMESPACE`, and
+`REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE` defaults to 1,000 (maximum 1,000).
+Each line contains exactly `namespace`, `name`, `title`, `revision` (the exact
+API value: `<branch>@sha1:<40 lowercase hex characters>`, or a bare SHA-1 for
+preloaded fixtures) and `acknowledged: true`. Names must be strictly sorted
+and unique. Limits are 4 KiB/line, 8 GiB/file, 10 million rows and 30 minutes for
+the complete verification. Production rejects fewer than five million rows
+before requesting pages. No aggregate query or Scylla counter is used.
+
+`secret/dataset.json` contains counts, per-replica page observations, manifest
+SHA-256 and an order-independent row-content digest, not the manifest or Product
+contents. Count plus digest comparison rejects missing, duplicated or changed
+namespace/name/title/revision rows without retaining millions of names.
+`secret/controllers-before-load.json` and `secret/controllers-after-load.json`
+record process-local exchange/reconciliation counters and resource snapshots.
+The observer brackets readiness with identity-checked metrics scrapes, bounds
+responses to 2 MiB and each sample to five seconds, and rejects malformed,
+missing, duplicate, nonfinite or regressing required metrics. HTTP 503 with
+explicit exhausted credential readiness is observable, never healthy.
+
+These component snapshots have no `passed` field and cannot replace sustained
+resource sampling or establish a production dataset run. The guarded fault
+driver now schedules owned record withdrawal/restoration at minute 15, key
+overlap/retirement at minute 30, and an explicitly confirmed root chaos restart
+at minute 45. It observes fresh authentication and reconciliation within the
+recovery budget and restores withdrawn records on cancellation.
+
+Owned provisioning reuses `compose.capacity.yml`: the stack owner selects each
+controller's config and read-only provider source with
+`CAPACITY_CONTROLLER_{A,B}_CONFIG_FILE` and
+`CAPACITY_CONTROLLER_{A,B}_SECRET_SOURCE`. Normal runs retain their existing
+shared-key defaults. Secret runs keep the shared nonsecret UID volume and
+separate checkpoint volumes, but neither controller mounts the other's private
+provider directory. The existing API command clamps token TTL only when the
+scenario flag is set. No secret-specific Compose overlay or public Make target
+is needed. Missing ownership/fault prerequisites are rejected before startup;
+missing observations prevent final bundle acceptance.
+
+`make test` also runs these contracts under the race detector,
+including JSON/file-based negative fixtures. The bundle loader in
+`tests/integration/secret_capacity_contract_test.go` requires a closed
+`secret-evidence.json` envelope with `schemaVersion: 1`, `runID`, `gitRevision`,
+`observations` and `artifacts`. Every observation field is required, including
+zero error/drop counters; durations use integer nanoseconds. Unknown, duplicate,
+case-folded, null or omitted fields fail. The caller must supply the expected run
+and revision from independent provenance.
+`duration` is the nominal hour-long schedule; `offeredDuration` is measured and
+must cover that schedule without drifting by more than one 100 ms cadence.
+
+Each artifact declares a relative `path`, `kind` (`log`, `metrics`, `trace` or
+`summary`), `processID`, byte count and SHA-256. Logs and metrics are required for
+each measured process and both replacement processes (API B and controller A). Unlisted, missing,
+modified, duplicate, symlink or nonregular artifacts fail. The bounded scanner
+checks actual files, including the envelope, for private-key/token patterns,
+provider records, raw controller configuration/environment and caller-supplied
+private markers (including encoded forms). It never echoes offending content.
+Bounds are 2 MiB per JSON envelope, 512 files, 128 MiB per artifact, 512 MiB
+total, 1,024 directory entries and 16 directory levels.
+
+These helpers validate a **completed immutable collection**, not a live log.
+They do not authenticate the origin of observations, collect deployment
+telemetry, or replace the existing release-image/Scylla/lifecycle preflights.
+The connected collector captures original logs before API removal, bounded
+replacement logs, process-identified Go metrics and singleton Git cgroup-v2 CPU/
+proc RSS counters. CPU accounting splits at replacement; both RSS segments use
+the original warmed baseline. Source revision/state must remain unchanged through
+finalization. Secret artifacts cannot enter the old Repository-only path.
+
+For an explicitly owned deployment, use the existing stack lifecycle with the
+scenario flag and `CHAOS_CONFIRM=1`. It stages per-controller read-only provider/
+config mounts in `compose.capacity.yml`; no extra Compose overlay is needed.
+The managed alpha run defaults to 60m load, 32 authoring repositories, 5m baseline
+and 10m stabilization. Direct runs additionally require
+`REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT=1`,
+`REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR` and a matching `CAPACITY_RUN_ID`.
+Private fixture records/markers stay outside evidence and are removed by the
+owned stack cleanup; never target an operator deployment. Completed evidence is
+under `${CAPACITY_EVIDENCE_DIR}/repository/lifecycle/<mode>/<run-id>/`, defaulting
+to `.gitstore/capacity`, with root `secret-evidence.json`. A failed finalizer
+removes that envelope and marks `metadata.json` failed.
+
+Prebuilt production images can be selected with `CAPACITY_API_IMAGE`,
+`CAPACITY_CONTROLLER_IMAGE` and `CAPACITY_GIT_SERVICE_IMAGE` (digest-pinned
+references). The existing stack and replacement watcher reuse these references
+without rebuilding them; unspecified images retain the normal local build tags.
+
 Modes classify acceptance independently of workload. `diagnostic` records
 results but can never set `passed: true`. `alpha` keeps correctness, error,
 recovery, CPU, and memory requirements hard, enforces Namespace visibility p95
@@ -24,10 +153,10 @@ change.
 
 Repository lifecycle has separate minimum scales for the two evidence tiers:
 
-| Mode | Duration | Transition interval | Subscribers | Replay events | Replay samples | Resources | Overflow transitions | Burst | Visibility | API CPU | API RSS |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | --- |
-| `alpha` | 10m | 500ms | 100 | 1,000 | 5 | 20 | 256 | 20 | p95 ≤2s, p99 ≤3s | <80% | <75% growth and <256 MiB per API |
-| `production` | 60m | 100ms | 1,000 | 10,000 | 20 | 50 | 1,000 | 100 | p95 ≤1s, p99 ≤3s | <80% | <10% growth |
+| Mode         | Duration | Transition interval | Subscribers | Replay events | Replay samples | Resources | Overflow transitions | Burst | Visibility       | API CPU | API RSS                          |
+|--------------|---------:|--------------------:|------------:|--------------:|---------------:|----------:|---------------------:|------:|------------------|--------:|----------------------------------|
+| `alpha`      |      10m |               500ms |         100 |         1,000 |              5 |        20 |                  256 |    20 | p95 ≤2s, p99 ≤3s |    <80% | <75% growth and <256 MiB per API |
+| `production` |      60m |               100ms |       1,000 |        10,000 |             20 |        50 |                1,000 |   100 | p95 ≤1s, p99 ≤3s |    <80% | <10% growth                      |
 
 Both modes require two real API processes, two real controller-manager
 processes, shared durable storage, an observed replacement of the selected API

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/secretmaterial"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,13 +29,17 @@ func TestFileStatusRoundTrip(t *testing.T) {
 }
 
 func TestFileSpecSourceValidation(t *testing.T) {
+	namespace := "store"
 	require.NoError(t, (FileSpec{
 		ContentType: "image/jpeg",
 		Source:      FileSourceDefinition{Type: "s3", URI: "s3://bucket/key"},
 	}).Validate("store"))
 	require.NoError(t, (FileSpec{
 		ContentType: "image/jpeg", Source: FileSourceDefinition{
-			Type: "s3", URI: "s3://bucket/key", CredentialsRef: &SecretRef{Kind: "Secret", Name: "cloud", Namespace: "store"},
+			Type: "s3", URI: "s3://bucket/key", CredentialsRef: &secretmaterial.CredentialsRef{
+				Kind: "CredentialsRef", Type: "aws-access-key/v1",
+				SecretRef: secretmaterial.SecretRef{Kind: "SecretRef", Name: "cloud", Namespace: &namespace},
+			},
 		},
 	}).Validate("store"))
 	require.Error(t, (FileSpec{ContentType: "image/jpeg"}).Validate("store"))

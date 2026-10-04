@@ -3,7 +3,12 @@
 
 package catalog
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/gitstore-dev/gitstore/secretmaterial"
+)
 
 const FileAPIVersion = "storage.gitstore.dev/v1beta1"
 
@@ -22,10 +27,10 @@ type FileSpec struct {
 }
 
 type FileSourceDefinition struct {
-	Type           string        `yaml:"type" validate:"required"`
-	URI            string        `yaml:"uri" validate:"required"`
-	Checksum       *FileChecksum `yaml:"checksum,omitempty"`
-	CredentialsRef *SecretRef    `yaml:"credentialsRef,omitempty"`
+	Type           string                         `yaml:"type" validate:"required"`
+	URI            string                         `yaml:"uri" validate:"required"`
+	Checksum       *FileChecksum                  `yaml:"checksum,omitempty"`
+	CredentialsRef *secretmaterial.CredentialsRef `yaml:"credentialsRef,omitempty"`
 }
 
 type FileChecksum struct {
@@ -33,11 +38,22 @@ type FileChecksum struct {
 	Value     string `yaml:"value" validate:"required"`
 }
 
-type SecretRef struct {
-	Kind      string `yaml:"kind" validate:"required"`
-	Name      string `yaml:"name" validate:"required"`
-	Key       string `yaml:"key,omitempty"`
-	Namespace string `yaml:"namespace,omitempty"`
+// ValidateFileCredentialsInput runs before YAML struct binding can discard
+// unknown fields or collapse explicit null optionals into absent values.
+func ValidateFileCredentialsInput(input any) error {
+	fields, ok := input.(map[string]any)
+	if !ok {
+		return fmt.Errorf("validate: spec.source.credentialsRef: %w", secretmaterial.ErrInvalidRef)
+	}
+	data, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("validate: spec.source.credentialsRef: %w", secretmaterial.ErrInvalidRef)
+	}
+	var ref secretmaterial.CredentialsRef
+	if err := json.Unmarshal(data, &ref); err != nil {
+		return fmt.Errorf("validate: spec.source.credentialsRef: %w", secretmaterial.ErrInvalidRef)
+	}
+	return nil
 }
 
 type FileProcessingDefinition struct {
@@ -79,9 +95,14 @@ func (s FileSpec) Validate(resourceNamespace string) error {
 	if s.Source.Checksum != nil && (s.Source.Checksum.Algorithm == "" || s.Source.Checksum.Value == "") {
 		return fmt.Errorf("validate: spec.source.checksum.algorithm and value are required together")
 	}
-	if s.Source.CredentialsRef != nil && s.Source.CredentialsRef.Namespace != "" &&
-		s.Source.CredentialsRef.Namespace != resourceNamespace {
-		return fmt.Errorf("validate: spec.source.credentialsRef.namespace must match the resource namespace")
+	if s.Source.CredentialsRef != nil {
+		ref := s.Source.CredentialsRef
+		if ref.SecretRef.Namespace != nil && *ref.SecretRef.Namespace != resourceNamespace {
+			return fmt.Errorf("validate: spec.source.credentialsRef.secretRef.namespace: CrossNamespaceRef")
+		}
+		if err := secretmaterial.ValidateCredentialsRef(*ref, resourceNamespace); err != nil {
+			return fmt.Errorf("validate: spec.source.credentialsRef: %w", err)
+		}
 	}
 	if s.Processing != nil && s.Processing.Image != nil {
 		for i, variant := range s.Processing.Image.Variants {

@@ -27,6 +27,14 @@
 **Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]  
 **Scale/Scope**: [dataset, users, repositories, and sustained workload or NEEDS CLARIFICATION]
 **Replica/Scaling Model**: [affected core services, state ownership, coordination, failover, and autoscaling behavior or N/A]
+
+**Topology constraint**: Git service is stateful and singleton-only (one active
+process per deployment). Sharding and placement-aware routing are not
+implemented; separate volumes do not establish support. Do not introduce
+multi-Git requirements unless implementing those capabilities is explicitly
+approved feature scope. API/controller replica requirements are obligations to
+verify, not blanket claims about current implementations.
+
 **Authentication/Authorization**: [user/service identities, policy enforcement points, and isolation impact or N/A]
 **Load/Backpressure Model**: [peak and sustained workload, queue/concurrency bounds, timeouts, retries, and soak target or N/A]
 **Capacity Profile**: [`tests/capacity/profiles/<profile>.js`, declared thresholds, correctness verifier, evidence location, or N/A with justification]
@@ -39,13 +47,13 @@
 - **Test-First**: Contracts and failing tests are identified before implementation.
 - **API/Contract-First**: GraphQL, gRPC, datastore, event, and error semantics are defined first.
 - **Core-Service Boundary**: Impact on API, controller manager, and Git service is explicit.
-- **Replica Safety**: Core-service changes remain correct with at least two replicas and rolling upgrades.
+- **Replica Safety**: Affected API/controller paths remain correct with at least two replicas and rolling upgrades; name unverified paths. Git remains singleton-only with retained storage and non-overlapping replacement.
 - **Multi-User Security**: AuthN/AuthZ enforcement and namespace/repository isolation are explicit.
 - **Production Capacity**: Plans address 5,000,000-product scale and sustained Git push load where applicable.
 - **Repeatable Evidence**: Load-bearing plans use `make capacity` for offered-load evidence and `make chaos` for declared failure/recovery scenarios; a tool exit code alone never substitutes for domain correctness verification.
 - **Bounded Work**: Queries, queues, workers, retries, payloads, and partitions have explicit bounds.
 - **Observability**: Logs, metrics, readiness, saturation, and recovery signals are designed.
-- **Incremental Delivery**: Slices can deploy independently across mixed-version replicas.
+- **Incremental Delivery**: Slices deploy independently; API/controller replicas may overlap, but Git replacements must not.
 - **Simplicity**: Added complexity is justified by measured or contractual production needs.
 
 ## Project Structure

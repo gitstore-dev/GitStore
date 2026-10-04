@@ -8,10 +8,14 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +30,7 @@ import (
 	repositorycontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/repository"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
+	"github.com/gitstore-dev/gitstore/secretmaterial"
 	"go.uber.org/zap"
 )
 
@@ -50,17 +55,23 @@ func TestBuildCredentialSourceUsesResolvedServiceAccountKey(t *testing.T) {
 	}
 	ref := secret.Ref{Kind: "SecretRef", Name: "controller-manager", Key: "privateKey"}
 	provider := secret.BootstrapProviderConfig{Type: secret.ProviderEnvironment, EnvPrefix: "TEST_SECRET__"}
-	t.Setenv(secret.EnvironmentVariableName(provider.EnvPrefix, ref), string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})))
+	variable, err := secretmaterial.BootstrapEnvironmentVariable(provider.EnvPrefix, ref.SecretRef())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(variable, string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})))
 
 	source, err := buildCredentialSource(context.Background(), &config.Config{
 		Controller: config.ControllerConfig{
-			ApiURI:                  "http://api.example.test/graphql",
-			ServiceAccountNamespace: "controllers",
-			ServiceAccountName:      "gitstore-controller-manager",
-			ServiceAccountKeyID:     "key-1",
-			ServiceAccountUID:       "sa-uid-1",
-			ServiceAccountKeyRef:    ref,
-			SecretProviderBootstrap: provider,
+			ApiURI: "http://api.example.test/graphql",
+			ServiceAccount: config.ServiceAccountConfig{
+				Namespace: "controllers",
+				Name:      "gitstore-controller-manager",
+				KeyID:     "key-1",
+				UID:       "sa-uid-1",
+				KeyRef:    ref,
+			},
+			SecretProviders: config.SecretProvidersConfig{Bootstrap: provider},
 		},
 	}, zap.NewNop())
 	if err != nil {
@@ -77,6 +88,58 @@ func TestBuildCredentialSourceUsesResolvedServiceAccountKey(t *testing.T) {
 func TestBuildCredentialSourceRejectsMissingCredentialConfiguration(t *testing.T) {
 	if _, err := buildCredentialSource(context.Background(), &config.Config{}, zap.NewNop()); err == nil {
 		t.Fatal("buildCredentialSource() error = nil")
+	}
+}
+
+func TestBuildCredentialSourceFailsClosedOnInvalidRecords(t *testing.T) {
+	record := func(format string, values map[string]string) []byte {
+		t.Helper()
+		encoded := make(map[string]string, len(values))
+		for name, value := range values {
+			encoded[name] = base64.StdEncoding.EncodeToString([]byte(value))
+		}
+		data, err := json.Marshal(map[string]any{"format": format, "values": encoded})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want error
+	}{
+		{"absent", nil, secretmaterial.ErrNotFound},
+		{"missing-id", record("serviceaccount-signing-key/v1", map[string]string{"privateKey": "MUST-NOT-LEAK"}), secretmaterial.ErrMissingKey},
+		{"malformed-key", record("serviceaccount-signing-key/v1", map[string]string{"privateKey": "MUST-NOT-LEAK", "keyID": "id"}), secretmaterial.ErrInvalidRef},
+		{"oversized-key", record("serviceaccount-signing-key/v1", map[string]string{"privateKey": strings.Repeat("x", secretmaterial.MaxItemBytes+1), "keyID": "id"}), secretmaterial.ErrValueTooLarge},
+		{"runtime-record", record("secret-record/v1", map[string]string{"privateKey": "MUST-NOT-LEAK", "keyID": "id"}), secretmaterial.ErrUnsupportedType},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tc.data != nil {
+				if err := os.WriteFile(filepath.Join(root, "controller.json"), tc.data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg := &config.Config{Controller: config.ControllerConfig{
+				ApiURI: "http://must-not-call.invalid",
+				ServiceAccount: config.ServiceAccountConfig{
+					Namespace: "controllers", Name: "manager", UID: "uid",
+					KeyRef: secret.Ref{Kind: "SecretRef", Name: "controller"},
+				},
+				SecretProviders: config.SecretProvidersConfig{Bootstrap: secret.BootstrapProviderConfig{
+					Type: "file", Format: "json-record", BasePath: root,
+				}},
+			}}
+			source, err := buildCredentialSource(context.Background(), cfg, zap.NewNop())
+			if source != nil || !errors.Is(err, tc.want) {
+				t.Fatalf("invalid bootstrap produced a source or wrong classification: %v", err)
+			}
+			if strings.Contains(err.Error(), "MUST-NOT-LEAK") {
+				t.Fatal("bootstrap diagnostic leaked private material")
+			}
+		})
 	}
 }
 
@@ -155,10 +218,9 @@ func TestRegisterRepositoryAcrossTwoControllerManagers(t *testing.T) {
 		}}},
 	}
 	cfg := &config.Config{Controller: config.ControllerConfig{
-		DefaultMaxAttempts:            1,
-		DefaultStallThreshold:         time.Minute,
-		CheckpointFlushIntervalEvents: 1,
-		MaxWatchBackoff:               time.Millisecond,
+		Reconcile:  config.ReconcileConfig{MaxAttempts: 1, StallThreshold: time.Minute},
+		Checkpoint: config.CheckpointConfig{FlushIntervalEvents: 1},
+		Watch:      config.WatchConfig{MaxBackoff: time.Millisecond},
 	}}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -167,9 +229,12 @@ func TestRegisterRepositoryAcrossTwoControllerManagers(t *testing.T) {
 	// runners is waited on before the test returns so each Runner's final
 	// checkpoint flush finishes before t.TempDir cleanup removes its directory.
 	var runners sync.WaitGroup
+	var checkpointRoots []string
 	for replica := 0; replica < 2; replica++ {
 		mgr := manager.New().WithLogger(zap.NewNop())
-		store, err := checkpoint.NewFilesystemStore(t.TempDir())
+		root := t.TempDir()
+		checkpointRoots = append(checkpointRoots, root)
+		store, err := checkpoint.NewFilesystemStore(root)
 		if err != nil {
 			t.Fatalf("replica %d checkpoint store: %v", replica, err)
 		}
@@ -210,4 +275,21 @@ func TestRegisterRepositoryAcrossTwoControllerManagers(t *testing.T) {
 		}
 	}
 	runners.Wait()
+	for _, root := range checkpointRoots {
+		replacement, err := checkpoint.NewFilesystemStore(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec, err := replacement.Load(context.Background(), "Repository")
+		if err != nil {
+			t.Fatalf("final checkpoint not available to replacement: %v", err)
+		}
+		var restored []repositorycontroller.Repository
+		if err := json.Unmarshal(rec.Snapshot, &restored); err != nil {
+			t.Fatal(err)
+		}
+		if rec.ResourceVersion != "rwv1:test:1" || len(restored) != 1 || restored[0].UID != item.UID {
+			t.Fatal("shutdown flush did not retain the replacement snapshot and cursor")
+		}
+	}
 }

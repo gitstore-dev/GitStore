@@ -190,8 +190,8 @@ go test -count=1 -race ./...
 go test -count=1 -tags=memdb ./tests/contract/datastore
 
 cd ..
-make test-datastore-contracts
-make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9142
+make test TARGET=datastore
+make test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=127.0.0.1:9142
 graphify update .
 make pr-ready
 ```
@@ -211,8 +211,8 @@ go test -count=1 -race ./...
 go test -count=1 -race -tags=memdb ./tests/contract/datastore
 
 cd ..
-make test-datastore-contracts
-make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042
+make test TARGET=datastore
+make test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=127.0.0.1:9042
 graphify update .
 make pr-ready
 ```

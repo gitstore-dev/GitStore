@@ -193,8 +193,11 @@ spec:
       algorithm: sha256           # author-writable; changing triggers re-verification
       value: <hex>
     credentialsRef:
-      kind: SecretRef             # same-namespace only (ADR-0001)
-      name: s3-catalog-assets
+      kind: CredentialsRef
+      type: aws-access-key/v1
+      secretRef:
+        kind: SecretRef           # same-namespace only (ADR-0001)
+        name: s3-catalog-assets
   processing:                     # author-writable; changing triggers reprocessing
     image:
       variants:
@@ -524,18 +527,18 @@ add, mirroring `ResolvedProductDefinition.Media`.
 
 ## 12. Security and threat model
 
-| Threat | Mitigation |
-|---|---|
-| SSRF via `source.type: url` or misused S3 endpoint override | **Allowlist, not denylist**, of permitted hosts/schemes at admission (verified: OWASP SSRF cheat sheet explicitly frames denylisting as bypass-prone "last resort"; raw user-supplied URLs must not be parsed/validated ad hoc — use a structured allowlist check, not regex on the URL string). |
-| Presigned URL misuse (bearer-token nature) | Scope to single object key, shortest workable TTL, single action (PUT-only for upload URLs, GET-only for download URLs) — verified: presigned URLs inherit exactly the signer's permissions and require no further identity check, so narrow scoping is the only real control. |
-| Content-type spoofing | Never trust client-supplied `Content-Type` for security decisions (verified, OWASP File Upload Cheat Sheet) — verify server-side via magic-byte sniffing before setting `spec.contentType` as confirmed. |
-| Decompression bombs / oversized renditions | Bound *decompressed* output size in the processing pipeline, not just upload size (verified, CWE-409) — image/video processors must enforce a max-pixel-count or max-decoded-bytes ceiling before allocating buffers. |
-| Malware in uploaded binaries | Out of scope for File controller itself; recommend an optional AV-scan hook in the processing pipeline as a Phase 2+ extension point, not a v1 blocker. |
-| Path traversal in `source.uri` (git-sourced files) | Reuse existing git-service path-normalization/validation (already required for any git-backed file read); reject `..`-containing relative paths. |
-| Cross-tenant leakage via signed URLs | Presigned URL generation must include the namespace in the object key prefix (`s3://bucket/<namespace>/...`) and the File controller must refuse to generate a URL for an object outside the requesting namespace's prefix. |
-| Secrets in Git/GraphQL/status/logs | `credentialsRef` only ever resolves through `SecretRef` (ADR-0001); the resolved secret value must never appear in `File.status`, in `resolvedVariants` output, or in controller logs — log the `credentialsRef.name`, never the resolved value. |
-| Authorization for upload/download/processing/purge | Each mutation checks the caller's namespace-scoped RBAC action (`file.create`, `file.upload`, `file.purge`, etc.) via the existing `AuthZProvider` — `purgeFilePayload` specifically should require a distinct, higher-privilege action than `deleteFile`. |
-| Audit events | Every `requestFileUpload`/`completeFileUpload`/`purgeFilePayload` call should emit an audit log entry (who, when, which object key) — object storage operations are the one place GitStore's Git-history audit trail doesn't naturally cover. |
+| Threat                                                      | Mitigation                                                                                                                                                                                                                                                                                                                                                                      |
+|-------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| SSRF via `source.type: url` or misused S3 endpoint override | **Allowlist, not denylist**, of permitted hosts/schemes at admission (verified: OWASP SSRF cheat sheet explicitly frames denylisting as bypass-prone "last resort"; raw user-supplied URLs must not be parsed/validated ad hoc — use a structured allowlist check, not regex on the URL string).                                                                                |
+| Presigned URL misuse (bearer-token nature)                  | Scope to single object key, shortest workable TTL, single action (PUT-only for upload URLs, GET-only for download URLs) — verified: presigned URLs inherit exactly the signer's permissions and require no further identity check, so narrow scoping is the only real control.                                                                                                  |
+| Content-type spoofing                                       | Never trust client-supplied `Content-Type` for security decisions (verified, OWASP File Upload Cheat Sheet) — verify server-side via magic-byte sniffing before setting `spec.contentType` as confirmed.                                                                                                                                                                        |
+| Decompression bombs / oversized renditions                  | Bound *decompressed* output size in the processing pipeline, not just upload size (verified, CWE-409) — image/video processors must enforce a max-pixel-count or max-decoded-bytes ceiling before allocating buffers.                                                                                                                                                           |
+| Malware in uploaded binaries                                | Out of scope for File controller itself; recommend an optional AV-scan hook in the processing pipeline as a Phase 2+ extension point, not a v1 blocker.                                                                                                                                                                                                                         |
+| Path traversal in `source.uri` (git-sourced files)          | Reuse existing git-service path-normalization/validation (already required for any git-backed file read); reject `..`-containing relative paths.                                                                                                                                                                                                                                |
+| Cross-tenant leakage via signed URLs                        | Presigned URL generation must include the namespace in the object key prefix (`s3://bucket/<namespace>/...`) and the File controller must refuse to generate a URL for an object outside the requesting namespace's prefix.                                                                                                                                                     |
+| Secrets in Git/GraphQL/status/logs                          | `credentialsRef` is a typed wrapper around external `secretRef` (ADR-0009), not a CRD ownership/readiness edge. Resolved bytes must never enter status, logs, IR, publication or Storefront projections; observability uses fixed provider/reason categories, not secret names. Production File resolution and credential-readiness reconciliation remain deferred by spec 063. |
+| Authorization for upload/download/processing/purge          | Each mutation checks the caller's namespace-scoped RBAC action (`file.create`, `file.upload`, `file.purge`, etc.) via the existing `AuthZProvider` — `purgeFilePayload` specifically should require a distinct, higher-privilege action than `deleteFile`.                                                                                                                      |
+| Audit events                                                | Every `requestFileUpload`/`completeFileUpload`/`purgeFilePayload` call should emit an audit log entry (who, when, which object key) — object storage operations are the one place GitStore's Git-history audit trail doesn't naturally cover.                                                                                                                                   |
 
 ## 13. Performance and scaling model
 

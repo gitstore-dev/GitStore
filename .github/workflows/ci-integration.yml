@@ -123,7 +123,7 @@ jobs:
       run: go test -count=1 -v -timeout 240s ./...
 
     - name: Run backend-neutral datastore hardening
-      run: make test-datastore-contracts
+      run: make test TARGET=datastore
 
     - name: Collect logs on failure
       if: failure()
@@ -204,7 +204,7 @@ jobs:
         run: go test -count=1 -v -timeout 240s ./...
 
       - name: Run tagged Scylla datastore hardening and failure injection
-        run: make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042
+        run: make test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=127.0.0.1:9042
 
       - name: Collect logs on failure
         if: failure()

@@ -32,7 +32,7 @@ Run the focused checks (validated on 2026-08-20):
 
 The focused unit, resolver, admission, backfill, controller, and Git-hook
 checks pass. The tagged Scylla contract suite requires a reachable Scylla
-instance and is run by `make test-scylla-integration`.
+instance and is run by `make test TARGET=datastore DATASTORE=scylla`.
 
 Before enabling enforcement against an upgraded production keyspace, dry-run
 the idempotent backfill and retain its `resumeAfter` cursor if it must be

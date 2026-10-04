@@ -174,6 +174,12 @@ type ComplexityRoot struct {
 		ServiceAccount func(childComplexity int) int
 	}
 
+	CredentialsRef struct {
+		Kind      func(childComplexity int) int
+		SecretRef func(childComplexity int) int
+		Type      func(childComplexity int) int
+	}
+
 	DeleteCategoryPayload struct {
 		DeletedCategoryID  func(childComplexity int) int
 		OrphanedProductIds func(childComplexity int) int
@@ -1377,6 +1383,27 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CreateServiceAccountPayload.ServiceAccount(childComplexity), true
+
+	case "CredentialsRef.kind":
+		if e.ComplexityRoot.CredentialsRef.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CredentialsRef.Kind(childComplexity), true
+
+	case "CredentialsRef.secretRef":
+		if e.ComplexityRoot.CredentialsRef.SecretRef == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CredentialsRef.SecretRef(childComplexity), true
+
+	case "CredentialsRef.type":
+		if e.ComplexityRoot.CredentialsRef.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CredentialsRef.Type(childComplexity), true
 
 	case "DeleteCategoryPayload.deletedCategoryId":
 		if e.ComplexityRoot.DeleteCategoryPayload.DeletedCategoryID == nil {
@@ -5099,7 +5126,13 @@ type FileSource {
   type: String!
   uri: String!
   checksum: FileChecksum
-  credentialsRef: SecretRef
+  credentialsRef: CredentialsRef
+}
+
+type CredentialsRef {
+  kind: String!
+  type: String!
+  secretRef: SecretRef!
 }
 
 type FileChecksum {
@@ -5351,8 +5384,8 @@ input NamespaceSpecInput {
 Declarative resource envelope for creating a namespace.
 """
 input CreateNamespaceInput {
-  apiVersion: String!
-  kind: String!
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Namespace"
   metadata: NamespaceMetadataInput!
   spec: NamespaceSpecInput!
 }
@@ -5361,8 +5394,8 @@ input CreateNamespaceInput {
 Declarative resource envelope for updating a namespace.
 """
 input UpdateNamespaceInput {
-  apiVersion: String!
-  kind: String!
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Namespace"
   metadata: NamespaceMetadataInput!
   spec: NamespaceSpecInput!
 }
@@ -7478,6 +7511,18 @@ func (ec *executionContext) childFields_CreateServiceAccountPayload(ctx context.
 		return ec.fieldContext_CreateServiceAccountPayload_serviceAccount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CreateServiceAccountPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CredentialsRef(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "kind":
+		return ec.fieldContext_CredentialsRef_kind(ctx, field)
+	case "type":
+		return ec.fieldContext_CredentialsRef_type(ctx, field)
+	case "secretRef":
+		return ec.fieldContext_CredentialsRef_secretRef(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CredentialsRef", field.Name)
 }
 
 func (ec *executionContext) childFields_DeleteCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

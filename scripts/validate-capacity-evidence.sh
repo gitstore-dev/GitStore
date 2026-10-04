@@ -17,6 +17,28 @@ esac
 
 evidence_file="${evidence_dir}/${phase}-environment.json"
 
+case "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" in
+  0)
+    if [[ -e "${evidence_dir}/secret-evidence.json" || -L "${evidence_dir}/secret-evidence.json" ||
+          -e "${evidence_dir}/secret" || -L "${evidence_dir}/secret" ]]; then
+      echo "secret capacity evidence requires REPOSITORY_CAPACITY_SECRET_SCENARIO=1; it cannot be validated as Repository-only evidence" >&2
+      exit 2
+    fi
+    ;;
+  1)
+    [[ "${target}/${profile}" == repository/lifecycle &&
+       "${CHAOS_CONFIRM:-0}" == 1 && "${REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT:-0}" == 1 &&
+       -r "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR:-}/owned-fixture.json" ]] || {
+      echo "secret capacity requires repository/lifecycle, CHAOS_CONFIRM=1 and provisioned owned fixtures" >&2
+      exit 2
+    }
+    ;;
+  *)
+    echo "REPOSITORY_CAPACITY_SECRET_SCENARIO must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+
 if [[ "${mode}" == "diagnostic" ]]; then
   jq -n --arg target "${target}" --arg profile "${profile}" --arg mode "${mode}" \
     '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,passed:true}' \
@@ -203,7 +225,8 @@ validate_release_service_containers() {
       '.[$index] += {container:$container,containerID:$id}' <<<"${live_api_replicas}")"
   done
   release_service_containers="$(jq -c --argjson identities "${container_identities}" '
-    map(if .role == "api" then . as $service | . + ($identities[] | select(.name == $service.name) | {instanceID,processStartTimeSeconds}) else . end)
+    map((if .role == "api" then . as $service | . + ($identities[] | select(.name == $service.name) | {instanceID,processStartTimeSeconds}) else . end)
+      | . + {argumentCount:(.arguments | length),approvedExecutable:true} | del(.arguments))
   ' <<<"${release_service_containers}")"
 }
 

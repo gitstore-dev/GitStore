@@ -23,6 +23,9 @@ specs/
 
 # Environment
 .env*
+**/.env*
+.gitstore/
+graphify-out/
 
 # Example/template files — never needed at build or run time
 *.example
@@ -40,13 +43,16 @@ specs/
 
 # Build artifacts (will be rebuilt in container)
 target/
+**/target/
 node_modules/
+**/node_modules/
 dist/
 build/
 bin/
 
 # Logs
 *.log
+**/*.log
 logs/
 
 # Test files

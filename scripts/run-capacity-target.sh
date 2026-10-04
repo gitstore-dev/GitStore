@@ -70,6 +70,21 @@ case "${target}/${profile}" in
   *) usage; exit 2 ;;
 esac
 
+case "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" in
+  0) ;;
+  1)
+    if [[ "${target}/${profile}" != "repository/lifecycle" ]]; then
+      echo "REPOSITORY_CAPACITY_SECRET_SCENARIO is only valid for repository/lifecycle" >&2
+      exit 2
+    fi
+    command+=("REPOSITORY_CAPACITY_SECRET_SCENARIO=1")
+    ;;
+  *)
+    echo "REPOSITORY_CAPACITY_SECRET_SCENARIO must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+
 if [[ "${target}/${profile}" == "repository/lifecycle" ]]; then
   export NAMESPACE_WATCH_API_A="${REPOSITORY_API_A:-}"
   export NAMESPACE_WATCH_API_B="${REPOSITORY_API_B:-}"
@@ -91,6 +106,13 @@ if [[ "${CAPACITY_DRY_RUN:-0}" == "1" ]]; then
 fi
 
 cd "${repo_root}"
+if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == "1" ]]; then
+  [[ "${CHAOS_CONFIRM:-0}" == 1 && "${REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT:-0}" == 1 &&
+     -r "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR:-}/owned-fixture.json" ]] || {
+    echo "secret capacity requires CHAOS_CONFIRM=1 and a provisioned explicitly owned deployment" >&2
+    exit 2
+  }
+fi
 run_id="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 evidence_root="${CAPACITY_EVIDENCE_DIR:-${repo_root}/.gitstore/capacity}"
 evidence_dir="${evidence_root}/${target}/${profile}/${mode}/${run_id}"
@@ -138,13 +160,16 @@ worktree_dirty=false
 if [[ "${CAPACITY_TEST_FORCE_DIRTY:-0}" == "1" || -n "$(git status --porcelain=v1)" ]]; then
   worktree_dirty=true
 fi
-source_state_sha256="$({
-  git status --porcelain=v1
-  git diff --binary HEAD
-  while IFS= read -r -d '' untracked; do
-    shasum -a 256 "${untracked}"
-  done < <(git ls-files --others --exclude-standard -z)
-} | shasum -a 256 | awk '{print $1}')"
+capacity_source_state_sha256() {
+  {
+    git status --porcelain=v1
+    git diff --binary HEAD
+    while IFS= read -r -d '' untracked; do
+      shasum -a 256 "${untracked}"
+    done < <(git ls-files --others --exclude-standard -z)
+  } | shasum -a 256 | awk '{print $1}'
+}
+source_state_sha256="$(capacity_source_state_sha256)"
 jq -n \
   --arg target "${target}" --arg profile "${profile}" --arg mode "${mode}" \
   --arg run_id "${run_id}" --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -237,14 +262,39 @@ if (( status == 0 && prometheus_status != 0 )); then
   status=${prometheus_status}
 fi
 
+source_state_unchanged=false
+if [[ "$(git rev-parse HEAD)" == "${git_revision}" &&
+      "$(capacity_source_state_sha256)" == "${source_state_sha256}" ]]; then
+  source_state_unchanged=true
+elif [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]]; then
+  echo "secret capacity verifier source changed during the run" >&2
+  source_status=2
+  status=2
+fi
 jq --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --argjson source_state_unchanged "${source_state_unchanged}" \
   --argjson exit_code "${status}" --argjson preflight_exit_code "${preflight_status}" \
   --argjson source_exit_code "${source_status}" \
   --argjson verifier_exit_code "${verifier_status}" --argjson datastore_exit_code "${container_check_status}" \
   --argjson postflight_exit_code "${postflight_status}" \
   --argjson prometheus_exit_code "${prometheus_status}" \
-  '. + {completedAt:$completed_at,exitCode:$exit_code,sourceStateExitCode:$source_exit_code,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:(.mode != "diagnostic" and ((.target == "namespace" and (.profile == "watch" or .profile == "recovery")) or (.target == "repository" and .profile == "lifecycle"))),postflightExitCode:$postflight_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic" and .worktreeDirty == false)}' \
+  '. + {completedAt:$completed_at,exitCode:$exit_code,sourceStateExitCode:$source_exit_code,sourceStateUnchanged:$source_state_unchanged,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:(.mode != "diagnostic" and ((.target == "namespace" and (.profile == "watch" or .profile == "recovery")) or (.target == "repository" and .profile == "lifecycle"))),postflightExitCode:$postflight_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic" and .worktreeDirty == false)}' \
   "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
+if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]] && (( status == 0 )); then
+  # All captured streams, including verifier/tee and postflight, are closed.
+  # Do not append to evidence after the finalizer hashes its complete contents.
+  set +e
+  CAPACITY_EVIDENCE_DIR="${evidence_dir}" MODE="${mode}" REPOSITORY_CAPACITY_SECRET_FINALIZE=1 \
+    GOWORK=off go -C "${repo_root}/tests/integration" test -count=1 -run '^TestSecretCapacityFinalizeEvidence$' .
+  status=$?
+  set -e
+  if (( status != 0 )); then
+    rm -f "${evidence_dir}/secret-evidence.json"
+    jq --argjson status "${status}" '. + {passed:false,exitCode:$status,secretFinalizationExitCode:$status}' \
+      "${metadata}" >"${metadata}.tmp"
+    mv "${metadata}.tmp" "${metadata}"
+  fi
+fi
 echo "capacity evidence: ${evidence_dir}"
 exit "${status}"

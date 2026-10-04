@@ -6,6 +6,19 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-}"
+case "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" in
+  0) ;;
+  1)
+    [[ "${CHAOS_CONFIRM:-0}" == 1 ]] || {
+      echo "secret capacity requires explicit CHAOS_CONFIRM=1 before starting its owned fault scenario" >&2
+      exit 2
+    }
+    ;;
+  *)
+    echo "REPOSITORY_CAPACITY_SECRET_SCENARIO must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
 capacity_target="${CAPACITY_STACK_TARGET:-repository}"
 capacity_profile="${CAPACITY_STACK_PROFILE:-lifecycle}"
 controller_kind="${CAPACITY_STACK_CONTROLLER_KIND:-${capacity_target^}}"
@@ -17,6 +30,7 @@ project="${REPOSITORY_CAPACITY_PROJECT:-gitstore-repository-capacity}"
 replacement_watcher="${REPOSITORY_CAPACITY_REPLACEMENT_WATCHER:-${repo_root}/scripts/watch-repository-capacity-replacement.sh}"
 capacity_runner="${REPOSITORY_CAPACITY_RUNNER:-${repo_root}/scripts/run-capacity-target.sh}"
 watcher_pid=""
+owned_stack_started=0
 
 compose=(docker compose -p "${project}" --profile capacity-stack
   -f "${repo_root}/compose.yml"
@@ -28,6 +42,15 @@ export CAPACITY_GIT_REVISION="${revision}"
 # in the parent harness too, so the post-k6 Git/watch probe appends to that
 # same immutable run directory rather than a sibling with an empty name.
 export CAPACITY_RUN_ID="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]]; then
+  export REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR="${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR:-${state_dir}/secret-fixtures/${CAPACITY_RUN_ID}}"
+  export REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT=1
+  export REPOSITORY_CAPACITY_PROJECT="${project}"
+  export CAPACITY_CONTROLLER_A_CONFIG_FILE="${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}/controller-a/config.toml"
+  export CAPACITY_CONTROLLER_B_CONFIG_FILE="${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}/controller-b/config.toml"
+  export CAPACITY_CONTROLLER_A_SECRET_SOURCE="${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}/controller-a/provider"
+  export CAPACITY_CONTROLLER_B_SECRET_SOURCE="${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}/controller-b/provider"
+fi
 export CONFIG_FILE="${CONFIG_FILE:-${repo_root}/config/config.toml}"
 export SCYLLA_CLUSTER_SMP="${SCYLLA_CLUSTER_SMP:-1}"
 export SCYLLA_CLUSTER_MEMORY_LIMIT="${SCYLLA_CLUSTER_MEMORY_LIMIT:-1536m}"
@@ -108,17 +131,28 @@ capture_local_stack_failure() {
 cleanup_local_stack() {
   local status="${1:-0}"
   cleanup_replacement_watcher
+  if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 && "${owned_stack_started}" != 1 ]]; then
+    return "${status}"
+  fi
   if (( status != 0 )); then
     capture_local_stack_failure
   fi
+  if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 &&
+        -f "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}/owned-fixture.json" ]]; then
+    secret_fixtures cleanup || {
+        echo "owned secret fixture cleanup failed; retaining a nonzero result" >&2
+        status=1
+      }
+  fi
   "${compose[@]}" down -v --remove-orphans || true
   rm -f "${trigger_file}" "${token_file}"
+  return "${status}"
 }
 
 finish_local_stack() {
   local status=$?
   trap - EXIT INT TERM
-  cleanup_local_stack "${status}"
+  cleanup_local_stack "${status}" || status=$?
   exit "${status}"
 }
 
@@ -172,6 +206,13 @@ write_manifests() {
 }
 
 run_alpha() {
+  local duration=10m pool=20 baseline=1m post_load=1m
+  if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]]; then
+    duration=60m
+    pool=32
+    baseline=5m
+    post_load=10m
+  fi
   wait_stack
   [[ -r "${token_file}" ]] || bootstrap_token
   write_manifests
@@ -212,19 +253,19 @@ run_alpha() {
   REPOSITORY_API_REPLACEMENT=http://127.0.0.1:4001 \
   REPOSITORY_REPLACEMENT_TRIGGER_FILE="${trigger_file}" \
   REPOSITORY_TOKEN_FILE="${token_file}" \
-  REPOSITORY_CAPACITY_DURATION="${REPOSITORY_CAPACITY_DURATION:-10m}" \
+  REPOSITORY_CAPACITY_DURATION="${REPOSITORY_CAPACITY_DURATION:-${duration}}" \
   REPOSITORY_CAPACITY_SUBSCRIBERS="${REPOSITORY_CAPACITY_SUBSCRIBERS:-100}" \
   REPOSITORY_CAPACITY_REPLAY_EVENTS="${REPOSITORY_CAPACITY_REPLAY_EVENTS:-1000}" \
   REPOSITORY_CAPACITY_REPLAY_SAMPLES="${REPOSITORY_CAPACITY_REPLAY_SAMPLES:-5}" \
-  REPOSITORY_CAPACITY_RESOURCE_POOL="${REPOSITORY_CAPACITY_RESOURCE_POOL:-20}" \
+  REPOSITORY_CAPACITY_RESOURCE_POOL="${REPOSITORY_CAPACITY_RESOURCE_POOL:-${pool}}" \
   REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS="${REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS:-256}" \
   REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT="${REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT:-31s}" \
   REPOSITORY_CAPACITY_BURST_INTERVAL="${REPOSITORY_CAPACITY_BURST_INTERVAL:-1m}" \
   REPOSITORY_CAPACITY_BURST_SIZE="${REPOSITORY_CAPACITY_BURST_SIZE:-20}" \
   REPOSITORY_CAPACITY_TRANSITION_INTERVAL="${REPOSITORY_CAPACITY_TRANSITION_INTERVAL:-500ms}" \
   REPOSITORY_CAPACITY_REPLACEMENT_DELAY="${REPOSITORY_CAPACITY_REPLACEMENT_DELAY:-5m}" \
-  REPOSITORY_CAPACITY_BASELINE_STABILIZATION="${REPOSITORY_CAPACITY_BASELINE_STABILIZATION:-1m}" \
-  REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION="${REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION:-1m}" \
+  REPOSITORY_CAPACITY_BASELINE_STABILIZATION="${REPOSITORY_CAPACITY_BASELINE_STABILIZATION:-${baseline}}" \
+  REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION="${REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION:-${post_load}}" \
   "${capacity_runner}" "${capacity_target}" "${capacity_profile}" alpha
   if [[ "${capacity_target}" == "product" ]]; then
     local product_evidence_dir product_probe_status
@@ -267,13 +308,54 @@ run_alpha() {
   trap - EXIT INT TERM
 }
 
+secret_fixtures() {
+  (
+    cd "${repo_root}/tests/integration"
+    REPOSITORY_CAPACITY_SECRET_FIXTURE_ACTION="$1" \
+      REPOSITORY_TOKEN_FILE="${token_file}" REPOSITORY_API_A=http://127.0.0.1:4000 \
+      GOWORK=off go test -count=1 -run '^TestSecretCapacityFixtureProvision$' .
+  )
+}
+
+start_owned_stack() {
+  local build_args=(--build)
+  if [[ -n "${CAPACITY_API_IMAGE:-}${CAPACITY_GIT_SERVICE_IMAGE:-}${CAPACITY_CONTROLLER_IMAGE:-}" ]]; then
+    build_args=()
+  fi
+  if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" != 1 ]]; then
+    "${compose[@]}" up -d "${build_args[@]}" api-a api-b controller-manager-a controller-manager-b
+    return
+  fi
+  [[ "${CHAOS_CONFIRM:-0}" == 1 ]] || {
+    echo "secret capacity requires explicit CHAOS_CONFIRM=1 for its owned controller restart" >&2
+    return 2
+  }
+  [[ -z "$(docker ps -aq --filter 'name=^/gitstore-capacity-')" ]] || {
+    echo "refusing to replace existing capacity containers with an owned secret stack" >&2
+    return 2
+  }
+  [[ ! -e "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}" && ! -L "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}" ]] || {
+    echo "refusing to reuse an existing owned-fixture directory" >&2
+    return 2
+  }
+  owned_stack_started=1
+  mkdir -p "$(dirname "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}")"
+  "${compose[@]}" up -d "${build_args[@]}" api-a api-b capacity-serviceaccount-enrollment
+  wait_http http://127.0.0.1:4000/ready "API A readiness"
+  wait_http http://127.0.0.1:4001/ready "API B readiness"
+  "${compose[@]}" wait capacity-serviceaccount-enrollment
+  bootstrap_token
+  secret_fixtures provision
+  "${compose[@]}" up -d "${build_args[@]}" --no-deps controller-manager-a controller-manager-b
+}
+
 run_local_alpha() {
   mkdir -p "${state_dir}"
   rm -f "${trigger_file}"
   trap finish_local_stack EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  "${compose[@]}" up -d --build api-a api-b controller-manager-a controller-manager-b
+  start_owned_stack
   # Keep run_alpha's watcher-only traps scoped to the verifier so the outer
   # stack teardown remains installed for every success and failure path.
   (run_alpha)
@@ -285,7 +367,7 @@ case "${action}" in
   up)
     mkdir -p "${state_dir}"
     rm -f "${trigger_file}"
-    "${compose[@]}" up -d --build api-a api-b controller-manager-a controller-manager-b
+    start_owned_stack
     ;;
   wait) wait_stack ;;
   token) wait_stack; bootstrap_token ;;

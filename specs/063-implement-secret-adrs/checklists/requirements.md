@@ -40,7 +40,17 @@
 - Authorized token delivery is explicitly distinguished from secret leakage
   in the acceptance scenarios, FR-004, SC-002, and ADR-0009. Provider material,
   private keys, and authentication observability remain protected.
-- Planning clarifications on 2026-09-22 require migration before the strict
-  File release and defer production File runtime consumption. Resource-runtime
+- The latest alpha clarification supersedes the original File migration and
+  preparation-schema decisions: no production deployments exist, so the strict
+  contract ships directly without audit or compatibility tooling. Resource-runtime
   behavior is proven with contract consumers; bootstrap identity is proven
   end to end. The plan must not claim File reconciliation was delivered.
+- Configuration design rechecked against checkout `d065d08` on 2026-10-03.
+  FR-011 and Story 2 cover nested settings and mandatory migration; the plan
+  and configuration contract define typed decoding, canonical names,
+  environment precedence and version-matched rollout. The previous instruction
+  to retain flat controller names is superseded.
+- Post-plan ADR/commit review is recorded in research R11 and the plan before
+  task generation. Admin endpoint sequencing, group/checkpoint ownership,
+  current authorization, protobuf, Product title/pagination and shutdown
+  requirements are explicit; no deferred ADR feature is added to scope.

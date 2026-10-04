@@ -68,14 +68,35 @@
     },
     "SecretRef": {
       "type": "object",
-      "description": "Reference to credentials used to fetch the source content. If namespace is set, it must match this resource's own namespace.",
       "additionalProperties": false,
       "required": ["kind", "name"],
       "properties": {
-        "kind": { "type": "string", "minLength": 1, "description": "Required. Kind of the secret-holding resource." },
-        "name": { "type": "string", "minLength": 1, "description": "Required. Name of the secret-holding resource." },
-        "key": { "type": "string", "description": "Optional key within the referenced secret." },
-        "namespace": { "type": "string", "description": "Optional. Must match this File's own namespace if set." }
+        "kind": { "const": "SecretRef" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "not": { "enum": [".", ".."] }
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "When set, must match the containing File namespace; equality is checked by admission."
+        }
+      }
+    },
+    "CredentialsRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "type", "secretRef"],
+      "properties": {
+        "kind": { "const": "CredentialsRef" },
+        "type": { "type": "string", "maxLength": 128, "pattern": "^[a-z][a-z0-9-]*/v[1-9][0-9]*$" },
+        "secretRef": { "$ref": "#/$defs/SecretRef" }
       }
     },
     "FileSourceDefinition": {
@@ -91,7 +112,7 @@
         },
         "uri": { "type": "string", "minLength": 1, "description": "Required. Location of the content, interpreted according to type." },
         "checksum": { "$ref": "#/$defs/ChecksumDefinition" },
-        "credentialsRef": { "$ref": "#/$defs/SecretRef" }
+        "credentialsRef": { "$ref": "#/$defs/CredentialsRef" }
       }
     },
     "FileVariantRequest": {

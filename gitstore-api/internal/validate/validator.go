@@ -332,6 +332,15 @@ func preParseChecks(fmRaw []byte) error {
 	if _, ok := raw["spec"]; !ok {
 		return fmt.Errorf("validate: spec is required")
 	}
+	if raw["kind"] == "File" {
+		spec, _ := raw["spec"].(map[string]any)
+		source, _ := spec["source"].(map[string]any)
+		if ref, present := source["credentialsRef"]; present {
+			if err := catalog.ValidateFileCredentialsInput(ref); err != nil {
+				return err
+			}
+		}
+	}
 
 	// Status is system-managed and written only through the status path; it
 	// must never appear in an author-controlled Git manifest.

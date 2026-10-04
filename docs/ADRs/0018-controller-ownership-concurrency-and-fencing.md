@@ -13,8 +13,12 @@ Other ADRs and implementation docs cite its sections; they don't restate the mec
 
 ## Context
 
-GitStore runs every core service as independently scaled replicas. For controllers this raises
-three separate questions, which earlier designs mixed together:
+GitStore's API/controller architecture must account for concurrent replicas;
+that requirement does not prove every current path is replica-safe. The Git
+service is stateful and singleton-only until repository sharding, placement-aware
+routing and writer safety are implemented. This proposed ADR does not implement
+those capabilities or controller fencing. For controllers it addresses three
+separate questions, which earlier designs mixed together:
 
 1. **Who may write what?** Which controller owns a kind's status, finalizers and side effects.
 2. **What keeps concurrent writers correct?** Several replicas, or replicas mid-failover, act at

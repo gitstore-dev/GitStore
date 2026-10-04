@@ -27,6 +27,19 @@ assert_dispatch repository lifecycle '_capacity-repository-lifecycle'
 assert_dispatch product lifecycle 'CAPACITY_PROFILE=product-lifecycle'
 assert_dispatch scylla soak '_capacity-scylla-soak'
 
+secret_output="$(REPOSITORY_CAPACITY_SECRET_SCENARIO=1 CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle production)"
+[[ "${secret_output}" == *"_capacity-repository-lifecycle"* ]]
+[[ "${secret_output}" == *"REPOSITORY_CAPACITY_SECRET_SCENARIO=1"* ]]
+normal_output="$(REPOSITORY_CAPACITY_SECRET_SCENARIO=0 CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle production)"
+[[ "${normal_output}" != *"REPOSITORY_CAPACITY_SECRET_SCENARIO=1"* ]]
+for target_profile in 'namespace watch' 'product lifecycle' 'api readiness' 'scylla soak'; do
+  read -r other_target other_profile <<<"${target_profile}"
+  if REPOSITORY_CAPACITY_SECRET_SCENARIO=1 CAPACITY_DRY_RUN=1 "${dispatcher}" "${other_target}" "${other_profile}" production >/dev/null 2>&1; then
+    echo "secret scenario flag accepted on an unrelated capacity profile" >&2
+    exit 1
+  fi
+done
+
 if CAPACITY_DRY_RUN=1 "${dispatcher}" namespace unknown alpha >/dev/null 2>&1; then
   echo "invalid target/profile combination unexpectedly succeeded" >&2
   exit 1

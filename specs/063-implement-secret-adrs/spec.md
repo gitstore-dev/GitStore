@@ -10,12 +10,29 @@
 ### Session 2026-09-22
 
 - Q: How should existing bare File credential references be handled? A:
-  Require migration before the strict release; reject all bare references
-  immediately in that release, with no legacy acceptance mode.
+  Reject all bare references with no legacy acceptance mode. The initial
+  migration prerequisite is superseded by the alpha scope correction below.
 - Q: Does this feature introduce a File runtime consumer? A: Implement the
   reusable runtime resolver and typed-material validation with contract tests,
   wire production bootstrap identity now, and defer File runtime consumption.
   No File credential-readiness reconciler or source operation is added.
+
+### Session 2026-10-03
+
+- Controller configuration must follow the API's typed, nested configuration
+  convention and the shared `GITSTORE_` prefix / `__` path separator, rather
+  than preserve flat settings and duplicate manual hydration.
+- Q: How should renamed configuration keys be handled? A: Require migration
+  before deployment; reject legacy keys with actionable errors. No deprecated
+  alias/normalization layer.
+- Alpha scope correction: GitStore has no production deployments. File may
+  undergo breaking changes until Release Candidate. Apply the strict typed
+  contract directly; no preparation release, transitional GraphQL object,
+  migration audit, mirror scan or deployment-inventory gate is required.
+  This supersedes the earlier migration and transitional-schema decisions.
+  Update development fixtures and clients without rewriting Git history or
+  automatically modifying runtime data. Replica, authorization and bounded-work
+  requirements remain in force.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -79,6 +96,12 @@ credential.
    response delivers that token to the requesting process; no resolved provider
    material or private key is returned, and neither the token nor its client
    assertion appears in persisted records or observability output.
+5. **Given** equivalent nested configuration in a file or environment variables,
+   **When** the process loads it, **Then** it obtains the same validated
+   settings with environment overrides taking precedence.
+6. **Given** obsolete or accidentally duplicated controller configuration paths,
+   **When** the process starts, **Then** it rejects them with a field-specific
+   migration error, without printing values or silently using defaults.
 
 ---
 
@@ -169,8 +192,17 @@ old nor new values appear in GitStore records or observability output.
   this feature. Runtime resource resolution and typed-material validation MUST
   be delivered as a reusable, contract-tested boundary; production File
   consumption and credential-readiness reconciliation are deferred. Existing
-  bare File references MUST be migrated before the strict release, which MUST
-  reject them without a legacy acceptance mode.
+  bare File references MUST be rejected directly without a legacy acceptance
+  mode, preparation release or migration tooling. Update authored development
+  fixtures to the new contract; no deployed-data compatibility is required.
+- **FR-011**: Controller settings MUST use one canonical nested configuration
+  structure with consistent file/environment mapping, matching the API and
+  Git-service prefix/separator convention. Settings MUST be decoded once into
+  validated typed configuration rather than independently re-read into fields.
+  Operators MUST migrate renamed keys before deployment; obsolete and malformed
+  controller paths MUST fail with actionable, value-redacted errors rather
+  than aliases or silent defaults. Relocation MUST preserve effective defaults,
+  units, source precedence, identity and checkpoint behavior.
 
 ### Production Requirements *(mandatory for core-service or load-bearing changes)*
 
@@ -195,6 +227,9 @@ old nor new values appear in GitStore records or observability output.
 - **PR-005 Capacity Evidence**: The implementation must extend the applicable
   `make capacity` admission or controller scenario with a resolver-outage and
   recovery check, proving bounded work and the declared correctness outcome.
+  The topology uses two or more APIs/controllers and exactly one active Git
+  service. Git is not replica-safe; repository sharding, routing and Git HA are
+  outside this feature, not prerequisites for its capacity evidence.
 - **PR-006 Fault Recovery**: After a provider outage or process replacement,
   affected operations must remain blocked without data corruption and recover
   within the documented retry window after valid material becomes available.
@@ -235,12 +270,17 @@ old nor new values appear in GitStore records or observability output.
   their identity context with resource-namespace secret resolution. Existing
   assertion-based issuance authorization and public-key enrollment/rotation
   remain unchanged.
-- ADR-0009's temporary bare-reference allowance ends for File in this feature's
-  strict release. Deployment is conditional on migrated Git manifests and
-  projections and compatible readers; the plan must define a preparation and
-  rollback sequence rather than assume old readers understand the wrapper.
+- ADR-0009's temporary bare-reference allowance ends for File in this feature.
+  The alpha contract changes directly; old readers and old GraphQL selections
+  are not promised compatibility. No production installations exist to migrate.
+  Keep current identity protocol, replica safety and bounded recovery coverage.
 - Operators, rather than Git-backed resource authors, own physical provider
   selection, material provisioning, rotation, and service-specific access.
+- Post-plan integration follows the shipped #432/#433/#435/#437 contracts and
+  proposed ADR-0012/ADR-0018 constraints: Admin-only identity interfaces,
+  current ownership semantics, group-isolated checkpoints and conditional
+  reconciliation. Endpoint splitting, CRDs, publication, Markdown IR,
+  lifecycle-hook delivery and new controller leases remain outside this feature.
 
 ## Success Criteria *(mandatory)*
 

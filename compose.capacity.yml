@@ -4,7 +4,7 @@
 services:
   api-a: &capacity-api
     profiles: [capacity-stack]
-    image: gitstore-capacity-api:${CAPACITY_GIT_REVISION:-unknown}
+    image: ${CAPACITY_API_IMAGE:-gitstore-capacity-api:${CAPACITY_GIT_REVISION:-unknown}}
     build:
       context: .
       dockerfile: docker/api.Dockerfile
@@ -15,9 +15,14 @@ services:
       - /bin/sh
       - -ec
       - |
+        if [ "$${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" = 1 ]; then
+          export GITSTORE_AUTH__SERVICEACCOUNT__DEFAULT_TTL=60s
+          export GITSTORE_AUTH__SERVICEACCOUNT__MAX_TTL=60s
+        fi
         export GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat /run/secrets/serviceaccount-signing-key)"
         exec /app/api --config-file /etc/gitstore/gitstore.toml
     environment: &capacity-api-environment
+      REPOSITORY_CAPACITY_SECRET_SCENARIO: ${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}
       GITSTORE_DATASTORE__BACKEND: scylla
       GITSTORE_DATASTORE__SCYLLA__HOSTS: scylla-1:9042,scylla-2:9042,scylla-3:9042
       GITSTORE_DATASTORE__SCYLLA__KEYSPACE: gitstore
@@ -138,7 +143,7 @@ services:
 
   capacity-git-service:
     profiles: [capacity-stack]
-    image: gitstore-capacity-git-service:${CAPACITY_GIT_REVISION:-unknown}
+    image: ${CAPACITY_GIT_SERVICE_IMAGE:-gitstore-capacity-git-service:${CAPACITY_GIT_REVISION:-unknown}}
     build:
       context: .
       dockerfile: docker/git-service.Dockerfile
@@ -156,7 +161,7 @@ services:
 
   controller-manager-a: &capacity-controller
     profiles: [capacity-stack]
-    image: gitstore-capacity-controller-manager:${CAPACITY_GIT_REVISION:-unknown}
+    image: ${CAPACITY_CONTROLLER_IMAGE:-gitstore-capacity-controller-manager:${CAPACITY_GIT_REVISION:-unknown}}
     build:
       context: .
       dockerfile: docker/controller-manager.Dockerfile
@@ -176,9 +181,9 @@ services:
     ports:
       - "5001:5001"
     volumes:
-      - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
+      - ${CAPACITY_CONTROLLER_A_CONFIG_FILE:-${CONFIG_FILE:-./config/config.toml}}:/etc/gitstore/gitstore.toml:ro
       - controller-checkpoints-a:/var/lib/gitstore/checkpoints
-      - controller-serviceaccount-secrets:/run/secrets:ro
+      - ${CAPACITY_CONTROLLER_A_SECRET_SOURCE:-controller-serviceaccount-secrets}:/run/secrets:ro
       - controller-serviceaccount-identity:/run/controller-bootstrap:ro
     depends_on:
       capacity-serviceaccount-enrollment:
@@ -200,9 +205,9 @@ services:
     ports:
       - "5002:5001"
     volumes:
-      - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
+      - ${CAPACITY_CONTROLLER_B_CONFIG_FILE:-${CONFIG_FILE:-./config/config.toml}}:/etc/gitstore/gitstore.toml:ro
       - controller-checkpoints-b:/var/lib/gitstore/checkpoints
-      - controller-serviceaccount-secrets:/run/secrets:ro
+      - ${CAPACITY_CONTROLLER_B_SECRET_SOURCE:-controller-serviceaccount-secrets}:/run/secrets:ro
       - controller-serviceaccount-identity:/run/controller-bootstrap:ro
 
   scylla-1:

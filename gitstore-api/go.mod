@@ -2,6 +2,10 @@ module github.com/gitstore-dev/gitstore/api
 
 go 1.26.0
 
+replace github.com/gitstore-dev/gitstore/secretmaterial => ../shared/secretmaterial
+
+require github.com/gitstore-dev/gitstore/secretmaterial v0.0.0
+
 require (
 	github.com/99designs/gqlgen v0.17.90
 	github.com/adrg/frontmatter v0.2.0

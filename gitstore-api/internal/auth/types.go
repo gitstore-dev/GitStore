@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 )
 
@@ -75,12 +76,7 @@ type Principal struct {
 // In particular, static-users principals are role-free until rbac-local (or
 // another AuthZ provider) resolves their bindings.
 func (p *Principal) IsAdmin() bool {
-	for _, r := range p.Roles {
-		if r == "admin" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.Roles, "admin")
 }
 
 // Anonymous returns a Principal with no identity.

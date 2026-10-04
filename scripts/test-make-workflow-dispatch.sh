@@ -50,12 +50,42 @@ for public_target in check clean bootstrap secret; do
   [[ "${output}" == *"family=${public_target}"* ]]
 done
 
-for removed_target in validate-local-config compose-config-check license-check credential-output-check credential-leakage-check git-clean-data bootstrap-token bootstrap-namespace bootstrap-repository gen-jwt-secret gen-hmac-secret; do
+for removed_target in validate-local-config compose-config-check license-check credential-output-check credential-leakage-check git-clean-data bootstrap-token bootstrap-namespace bootstrap-repository gen-jwt-secret gen-hmac-secret capacity-dispatch-test test-datastore-contracts test-scylla-integration test-secret-integration; do
   if rg -q "^${removed_target}:" "${repo_root}/Makefile"; then
     echo "removed public target ${removed_target} is still defined" >&2
     exit 1
   fi
 done
+
+all_tests="$(env -u TARGET -u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES make --no-print-directory -C "${repo_root}" -n test)"
+[[ "${all_tests}" == *"cargo test"* && "${all_tests}" == *"test-secret-config.sh"* &&
+   "${all_tests}" == *"test-repository-capacity-stack.sh"* && "${all_tests}" == *"TestSecretCapacity"* ]]
+[[ "${all_tests}" != *"SECRET_TEST_RUN=1"* && "${all_tests}" != *"-tags scylla"* ]]
+explicit_all="$(env -u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES make --no-print-directory -C "${repo_root}" -n test TARGET=all)"
+[[ "${all_tests}" == "${explicit_all}" ]]
+datastore_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=datastore DATASTORE=memdb)"
+[[ "${datastore_tests}" == *"-tags memdb"* && "${datastore_tests}" != *"-tags scylla"* ]]
+scylla_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=127.0.0.1:9142)"
+[[ "${scylla_tests}" == *"-tags scylla"* && "${scylla_tests}" == *"127.0.0.1:9142"* ]]
+secret_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=secret-integration)"
+[[ "${secret_tests}" == *"SECRET_TEST_OWNED_DEPLOYMENT=1 is required"* &&
+   "${secret_tests}" == *"TestSecretBootstrapRotationDeployed"* ]]
+pr_ready="$(make --no-print-directory -C "${repo_root}" -n pr-ready TARGET=datastore)"
+[[ "${pr_ready}" == *"cargo test"* && "${pr_ready}" == *"test-secret-config.sh"* ]]
+for invalid in unknown api capacity ""; do
+  if make --no-print-directory -C "${repo_root}" test TARGET="${invalid}" >"${test_dir}/invalid-test.log" 2>&1; then
+    echo "test accepted an invalid TARGET=${invalid}" >&2
+    exit 1
+  fi
+done
+if make --no-print-directory -C "${repo_root}" test TARGET=datastore DATASTORE=unknown >/dev/null 2>&1; then
+  echo "datastore tests accepted an unknown backend" >&2
+  exit 1
+fi
+if make --no-print-directory -C "${repo_root}" test TARGET=secret-integration SECRET_TEST_OWNED_DEPLOYMENT=0 >/dev/null 2>&1; then
+  echo "secret integration tests ran without explicit deployment ownership" >&2
+  exit 1
+fi
 
 printf '[api\nport = 4000\n' >"${test_dir}/invalid-config.toml"
 if make --no-print-directory -C "${repo_root}" check TARGET=config \

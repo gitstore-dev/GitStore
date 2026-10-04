@@ -15,8 +15,11 @@ spec:
       algorithm: sha256
       value: "<hex>"
     credentialsRef:
-      kind: SecretRef
-      name: media-credentials
+      kind: CredentialsRef
+      type: aws-access-key/v1
+      secretRef:
+        kind: SecretRef
+        name: media-credentials
   processing:
     image:
       variants:

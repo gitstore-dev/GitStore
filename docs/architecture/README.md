@@ -8,7 +8,7 @@ This document describes the architecture of the AI-native commerce engine: the s
 - Allow AI agents to perform safe, structured mutations.
 - Serve storefront reads from low-latency indexed data.
 - Decouple write acceptance from heavy validation and indexing work.
-- Run the API, controller manager, and Git service as independently autoscaled replicas.
+- Support independently scaled API/controller replicas with verified per-path safety; retain one active Git service.
 - Support concurrent users and agents through pluggable authentication and authorization.
 - Sustain catalogues with millions of products and prolonged peak Git push workloads.
 
@@ -51,15 +51,24 @@ All proposals share the same core building blocks, arranged with different contr
 
 ### Production Deployment Model
 
-The API, controller manager, and Git service are the core services. Each must
-support multiple replicas and autoscaling without depending on process affinity.
+The API, controller manager, and Git service are independently deployable core
+services, not three interchangeable stateless replica pools. API/controller
+replica safety must be verified per operation and deployment; it is not a
+blanket HA guarantee.
 
 - API correctness state, authentication, authorization, sessions, revocation,
   and idempotency must remain consistent across replicas.
 - Controller reconciliation must be idempotent and use an explicit
   coordination, partitioning, or duplicate-safe work model.
-- Git-service deployment must define repository placement, reference-update
-  serialization, durable storage, sharding, routing, and failover without divergent refs.
+- **Git service is stateful and singleton-only: one active process per
+  deployment.** Repository sharding and placement-aware routing are not
+  implemented. Disjoint volumes do not create a supported sharded topology;
+  shared volumes do not make concurrent writers safe. Retain repository storage
+  and stop the old process before starting its replacement; downtime is expected.
+- Git replication/autoscaling/HA requires separately approved implementation
+  and evidence for repository placement, routing, writer safety, durability and
+  recovery. Do not infer this work as a prerequisite of unrelated features or
+  require multiple Git instances in their capacity gates.
 - Routine catalogue paths must remain bounded at 5,000,000 or more products.
 - Git push validation, admission, projection, and reconciliation must use
   bounded concurrency and backpressure and must pass sustained-load testing.

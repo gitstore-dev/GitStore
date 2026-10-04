@@ -55,6 +55,11 @@ func TestEnrollServiceAccountIsIdempotentAndDoesNotWriteCredentials(t *testing.T
 	if got := run(args, strings.NewReader(""), &stdout, &stderr); got != 0 {
 		t.Fatalf("first enrollment exit code = %d, stderr = %q", got, stderr.String())
 	}
+	for _, instruction := range []string{"distinct key ID", "atomically", "all replicas"} {
+		if !strings.Contains(stdout.String(), instruction) {
+			t.Errorf("enrollment output missing rotation instruction %q", instruction)
+		}
+	}
 	privateKey, err := os.ReadFile(keyPath)
 	if err != nil {
 		t.Fatalf("read generated private key: %v", err)

@@ -85,8 +85,11 @@ ServiceAccount UID, namespace, name and audiences stay in deployment config.
 The record does not authorize a different subject. For this record the
 deployment keyRef omits `key`; it addresses the whole record.
 
-Existing raw/keyed configurations retain the configured key ID. Operators
-migrate to the record form before claiming hot rotation with distinct IDs.
+Raw/keyed material retains the configured key ID under
+`controller.serviceaccount.key_id`; old flat config names are not retained.
+The typed configuration tree and provider binding nesting are defined in
+[configuration.md](contracts/configuration.md). Operators migrate to the
+record form before claiming hot rotation with distinct IDs.
 
 ## State transitions
 

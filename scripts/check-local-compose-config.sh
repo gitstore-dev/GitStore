@@ -4,85 +4,83 @@
 
 set -eu
 
+fail() {
+  echo "local Compose: $1" >&2
+  exit 1
+}
+
 config_file=${CONFIG_FILE:-./config/config.toml}
 policy_file=${POLICY_FILE:-./config/policy.yaml}
-grep -q '"serviceaccount-assertion"' "$config_file"
-grep -q '"serviceaccount-jwt"' "$config_file"
-grep -q '^serviceaccount_key_ref = ' "$config_file"
-grep -A1 '^  serviceaccount:controllers:gitstore-controller-manager:$' "$policy_file" | grep -q '^    - controller$'
-if grep -q '^api_token = ' "$config_file"; then
-  echo "local Compose must bootstrap the controller ServiceAccount instead of setting controller.api_token" >&2
-  exit 1
-fi
-if grep -q '^signing_key = ' "$config_file"; then
-  echo "local Compose must source the API issuer key from its isolated mount" >&2
-  exit 1
+command -v jq >/dev/null 2>&1 || fail "jq is required to validate rendered mounts"
+grep -q '"serviceaccount-assertion"' "$config_file" || fail "enable serviceaccount-assertion"
+grep -q '"serviceaccount-jwt"' "$config_file" || fail "enable serviceaccount-jwt"
+grep -q '^\[controller.serviceaccount\]' "$config_file" || fail "use controller.serviceaccount settings"
+grep -q '^key_ref = ' "$config_file" || fail "configure controller.serviceaccount.key_ref"
+grep -A1 '^  serviceaccount:controllers:gitstore-controller-manager:$' "$policy_file" |
+  grep -q '^    - controller$' || fail "bind the controller ServiceAccount to its role"
+if grep -Eq '^[[:space:]]*(api_token|signing_key)[[:space:]]*=' "$config_file"; then
+  fail "shared config must reference isolated identity material, not contain tokens or signing keys"
 fi
 
 output=$(CONFIG_FILE="$config_file" docker compose --profile local \
-  -f compose.yml -f compose.local.yml config)
+  -f compose.yml -f compose.local.yml config --format json) || fail "cannot render configuration"
+config_path="$(cd "$(dirname "$config_file")" && pwd)/$(basename "$config_file")"
 
-service_block() {
-  awk -v service="$1" '
-    $0 == "  " service ":" { printing = 1 }
-    printing && $0 ~ /^  [[:alnum:]_-]+:$/ && $0 != "  " service ":" { exit }
-    printing { print }
-  '
+check() {
+  printf '%s\n' "$output" |
+    jq -e --arg config "$config_path" "$1" >/dev/null 2>&1 || fail "$2"
 }
 
-mount_source() {
-  awk -v target="$1" '
-    $1 == "source:" { source = $2 }
-    $1 == "target:" && $2 == target { print source; exit }
-  '
-}
+check '
+  [.services["git-service"], .services.api, .services["controller-manager"]] |
+  all(.[];
+    (.command | tostring | contains("--config-file")) and
+    ([.volumes[] | select(.target == "/etc/gitstore/gitstore.toml")] |
+      length == 1 and all(.[]; .source == $config and .read_only == true)))
+' "each core service must mount the selected config read-only and use --config-file"
 
-count_source() {
-  awk -v source="$1" '$1 == "source:" && $2 == source { count++ } END { print count + 0 }'
-}
+check '
+  [.services[].volumes[]? | select(.target == "/etc/gitstore/gitstore.toml")] | length == 3
+' "shared config must be mounted only by the three core services"
+check '
+  [.services[].volumes[]? | select(.target == "/etc/gitstore/policy.yaml")] |
+  length == 1 and all(.[]; .read_only == true)
+' "policy must have one read-only mount"
 
-for service in git-service api controller-manager; do
-  service_config=$(printf '%s\n' "$output" | service_block "$service")
-  printf '%s\n' "$service_config" | grep -q -- '--config-file'
-  printf '%s\n' "$service_config" | grep -q 'target: /etc/gitstore/gitstore.toml'
-done
+check '
+  def mounts($service; $target):
+    [.services[$service].volumes[]? | select(.target == $target)];
+  . as $root |
+  mounts("api"; "/run/secrets") as $api |
+  mounts("controller-manager"; "/run/secrets") as $controller |
+  ($api | length == 1) and ($controller | length == 1) and
+  ($api[0].read_only == true) and ($controller[0].read_only == true) and
+  ($api[0].source | type == "string" and length > 0) and
+  ($controller[0].source | type == "string" and length > 0) and
+  ($api[0].source != $controller[0].source) and
+  (mounts("credential-bootstrap"; "/run/api-issuer") | length == 1 and .[0].source == $api[0].source) and
+  (mounts("credential-bootstrap"; "/run/controller-secrets") | length == 1 and .[0].source == $controller[0].source) and
+  (mounts("serviceaccount-enrollment"; "/run/controller-secrets") |
+    length == 1 and .[0].source == $controller[0].source) and
+  ([$root.services[].volumes[]? | select(.source == $api[0].source)] | length == 2) and
+  ([$root.services[].volumes[]? | select(.source == $controller[0].source)] | length == 3)
+' "API/controller key mounts must be distinct, read-only for consumers and restricted to their provisioning services"
 
-test "$(printf '%s\n' "$output" | grep -c 'target: /etc/gitstore/gitstore.toml')" -eq 3
-test "$(printf '%s\n' "$output" | grep -c 'target: /etc/gitstore/policy.yaml')" -eq 1
-test "$(printf '%s\n' "$output" | grep -c 'read_only: true')" -ge 7
-printf '%s\n' "$output" | grep -q "source: $(cd "$(dirname "$config_file")" && pwd)/$(basename "$config_file")"
+check '
+  [.services["credential-bootstrap"].volumes[]? | select(.target == "/run/controller-bootstrap")] as $bootstrap |
+  [.services["serviceaccount-enrollment"].volumes[]? | select(.target == "/run/controller-bootstrap")] as $enrollment |
+  ($bootstrap | length == 1) and ($enrollment | length == 1) and
+  ($bootstrap[0].source | type == "string" and length > 0) and
+  ($bootstrap[0].source == $enrollment[0].source)
+' "bootstrap and enrollment must share the identity-output mount"
 
-api_config=$(printf '%s\n' "$output" | service_block api)
-controller_config=$(printf '%s\n' "$output" | service_block controller-manager)
-bootstrap_config=$(printf '%s\n' "$output" | service_block credential-bootstrap)
-enrollment_config=$(printf '%s\n' "$output" | service_block serviceaccount-enrollment)
-git_config=$(printf '%s\n' "$output" | service_block git-service)
-api_key_source=$(printf '%s\n' "$api_config" | mount_source /run/secrets)
-controller_key_source=$(printf '%s\n' "$controller_config" | mount_source /run/secrets)
-bootstrap_identity_source=$(printf '%s\n' "$bootstrap_config" | mount_source /run/controller-bootstrap)
-enrollment_identity_source=$(printf '%s\n' "$enrollment_config" | mount_source /run/controller-bootstrap)
-
-test -n "$api_key_source"
-test -n "$controller_key_source"
-test -n "$bootstrap_identity_source"
-test "$bootstrap_identity_source" = "$enrollment_identity_source"
-test "$api_key_source" != "$controller_key_source"
-test "$(printf '%s\n' "$api_config" | grep -c 'target: /run/secrets')" -eq 1
-test "$(printf '%s\n' "$controller_config" | grep -c 'target: /run/secrets')" -eq 1
-test "$(printf '%s\n' "$bootstrap_config" | mount_source /run/api-issuer)" = "$api_key_source"
-test "$(printf '%s\n' "$bootstrap_config" | mount_source /run/controller-secrets)" = "$controller_key_source"
-test "$(printf '%s\n' "$enrollment_config" | mount_source /run/controller-secrets)" = "$controller_key_source"
-test "$(printf '%s\n' "$api_config" | count_source "$controller_key_source")" -eq 0
-test "$(printf '%s\n' "$controller_config" | count_source "$api_key_source")" -eq 0
-test "$(printf '%s\n' "$git_config" | count_source "$api_key_source")" -eq 0
-test "$(printf '%s\n' "$git_config" | count_source "$controller_key_source")" -eq 0
-test "$(printf '%s\n' "$output" | count_source "$api_key_source")" -eq 2
-test "$(printf '%s\n' "$output" | count_source "$controller_key_source")" -eq 3
-printf '%s\n' "$api_config" | grep -A2 -q 'credential-bootstrap:'
-printf '%s\n' "$controller_config" | grep -A2 -q 'serviceaccount-enrollment:'
-printf '%s\n' "$enrollment_config" | grep -A2 -q 'api:'
-printf '%s\n' "$enrollment_config" | grep -A1 '^    networks:$' | grep -q '^      gitstore-network: null$'
-printf '%s\n' "$bootstrap_config" | grep -q 'rm -f /run/controller-bootstrap/serviceaccount.env'
-printf '%s\n' "$enrollment_config" | grep -q -- '--replace-existing-key'
+check '
+  .services.api.depends_on["credential-bootstrap"] != null and
+  .services["controller-manager"].depends_on["serviceaccount-enrollment"] != null and
+  .services["serviceaccount-enrollment"].depends_on.api != null and
+  (.services["serviceaccount-enrollment"].networks | has("gitstore-network")) and
+  (.services["credential-bootstrap"].command | tostring | contains("rm -f /run/controller-bootstrap/serviceaccount.env")) and
+  (.services["serviceaccount-enrollment"].command | tostring | contains("--replace-existing-key"))
+' "bootstrap/enrollment dependencies, network and identity replacement must be wired"
 
 echo "local Compose configuration is valid for $config_file"

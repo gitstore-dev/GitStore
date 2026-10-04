@@ -91,18 +91,29 @@ policy_file = "/etc/gitstore/policy.yaml"
 port = 5001
 api_uri = "http://api:4000/graphql"
 # The UID is provisioned by the Compose enrollment job into a controller-only mount.
-serviceaccount_namespace = "controllers"
-serviceaccount_name = "gitstore-controller-manager"
-serviceaccount_key_id = "controller-key"
-serviceaccount_key_ref = { kind = "SecretRef", name = "gitstore-controller-manager-signing-key", key = "privateKey" }
-serviceaccount_assertion_audience = "gitstore-api/serviceaccount-token"
-serviceaccount_access_token_audience = "gitstore-api"
-secret_provider_bootstrap = { type = "file", base_path = "/run/secrets" }
-default_max_attempts = 5
-default_stall_threshold = "5m"
-checkpoint_dir = "/var/lib/gitstore/checkpoints"
-checkpoint_flush_interval_events = 100
-max_watch_backoff = "30s"
+[controller.serviceaccount]
+namespace = "controllers"
+name = "gitstore-controller-manager"
+key_id = "controller-key"
+key_ref = { kind = "SecretRef", name = "gitstore-controller-manager-signing-key", key = "privateKey" }
+assertion_audience = "gitstore-api/serviceaccount-token"
+access_token_audience = "gitstore-api"
+
+[controller.secret_providers.bootstrap]
+type = "file"
+format = "raw"
+base_path = "/run/secrets"
+
+[controller.reconcile]
+max_attempts = 5
+stall_threshold = "5m"
+
+[controller.checkpoint]
+dir = "/var/lib/gitstore/checkpoints"
+flush_interval_events = 100
+
+[controller.watch]
+max_backoff = "30s"
 resync_interval = "10m"
 
 [features]
