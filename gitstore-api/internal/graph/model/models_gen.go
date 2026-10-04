@@ -212,10 +212,6 @@ type CollectionNamespacePath struct {
 	Name      string `json:"name"`
 }
 
-type CollectionOptimisticLockConflict struct {
-	Current *Collection `json:"current"`
-}
-
 // Author-controlled specification for a Collection resource.
 type CollectionSpec struct {
 	// Human-readable display title for the collection.
@@ -290,14 +286,6 @@ type ConditionInput struct {
 	Message            *string         `json:"message,omitempty"`
 }
 
-type CreateCollectionInput struct {
-	Name string `json:"name"`
-}
-
-type CreateCollectionPayload struct {
-	Collection *Collection `json:"collection,omitempty"`
-}
-
 // Declarative resource envelope for creating a namespace.
 type CreateNamespaceInput struct {
 	APIVersion string                  `json:"apiVersion"`
@@ -367,14 +355,6 @@ type DeleteCategoryPayload struct {
 	DeletedCategoryID *string `json:"deletedCategoryId,omitempty"`
 	// Orphaned product IDs (products that referenced this category)
 	OrphanedProductIds []string `json:"orphanedProductIds,omitempty"`
-}
-
-type DeleteCollectionInput struct {
-	ID string `json:"id"`
-}
-
-type DeleteCollectionPayload struct {
-	DeletedCollectionID *string `json:"deletedCollectionId,omitempty"`
 }
 
 // Input for deleting a namespace.
@@ -1475,15 +1455,6 @@ type UpdateCategoryStatusPayload struct {
 	Category *Category `json:"category,omitempty"`
 	// True when another bounded Product page remains to be processed.
 	HasMoreProductDependents bool `json:"hasMoreProductDependents"`
-}
-
-type UpdateCollectionInput struct {
-	ID string `json:"id"`
-}
-
-type UpdateCollectionPayload struct {
-	Collection *Collection                       `json:"collection,omitempty"`
-	Conflict   *CollectionOptimisticLockConflict `json:"conflict,omitempty"`
 }
 
 // Declarative resource envelope for updating a namespace.

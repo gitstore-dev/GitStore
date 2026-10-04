@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
@@ -30,16 +29,12 @@ type GitClient interface {
 }
 
 type SmartHttpDeps struct {
-	GitClient        GitClient
-	RepoResolverFunc RepoResolverFunc
-	Store            datastore.Datastore
-	Logger           *zap.Logger
-	Ids              apiruntime.IDGenerator
-	Registry         *auth.ProviderRegistry
+	GitClient GitClient
+	Store     datastore.Datastore
+	Logger    *zap.Logger
+	Ids       apiruntime.IDGenerator
+	Registry  *auth.ProviderRegistry
 }
-
-// RepoResolverFunc resolves (namespace, repo) to a stable repository ID.
-type RepoResolverFunc func(namespace, repo string) (string, bool)
 
 // handler holds the dependencies for Git smart HTTP request handlers.
 type handler struct {
@@ -161,79 +156,29 @@ func (h *handler) receivePackHandler(c *gin.Context) {
 	h.log.Info("receive_pack complete", zap.String("repo_id", repoID), zap.Int("report_status_bytes", len(reportStatus)))
 }
 
-// NewMux is an alias for NewMuxWithStore retained for backward compatibility.
-// For production push support use NewMuxWithStoreAndAuthz.
-func NewMux(deps SmartHttpDeps) http.Handler { return NewMuxWithStore(deps) }
-
-// NewMuxWithStore creates an http.Handler with all Git smart HTTP routes registered,
-// including RepoResolver and GitHttpAuthorizer middleware.
-// PushContextInserter is NOT wired; pushes will be rejected by the git-service because
-// push_context is required. Use NewMuxWithStoreAndAuthz for production push support.
-func NewMuxWithStore(deps SmartHttpDeps) http.Handler {
-	return newMux(deps, false)
-}
-
-// NewMuxWithStoreAndAuthz is like NewMuxWithStore but also wires PushContextInserter
-// on the receive-pack route. Used when the full push-policy pipeline is needed.
-func NewMuxWithStoreAndAuthz(deps SmartHttpDeps) http.Handler {
-	return newMux(deps, true)
-}
-
-func newMux(deps SmartHttpDeps, withPushCtx bool) http.Handler {
+// NewMux creates the only supported Git smart-HTTP pipeline: datastore-backed
+// repository resolution, tenant-aware authorization, and push context insertion.
+func NewMux(deps SmartHttpDeps) http.Handler {
+	if deps.Store == nil {
+		panic("githttp: datastore is required")
+	}
 	h := newHandler(deps.GitClient, deps.Logger)
 	r := gin.New()
 
 	requestIdMiddleware := middleware.NewRequestId(deps.Ids)
 	authenticateMiddleware := security.NewAuthenticate(deps.Registry, deps.Logger, prometheus.DefaultRegisterer)
 
-	var authorizeMiddleware security.Authorize
-	if deps.Store != nil {
-		authorizeMiddleware = security.NewAuthorizeWithStore(deps.Registry, deps.Store, deps.Logger)
-	} else {
-		authorizeMiddleware = security.NewAuthorize(deps.Registry, deps.Logger)
-	}
+	authorizeMiddleware := security.NewAuthorizeWithStore(deps.Registry, deps.Store, deps.Logger)
 
 	r.Use(requestIdMiddleware.RequestIdInserter)
 	r.Use(authenticateMiddleware.BasicAuthenticator)
 
-	var repoResolverMW gin.HandlerFunc
-	if deps.Store != nil {
-		repoResolverMW = RepoResolver(deps.Store, deps.Logger)
-	} else {
-		// Legacy path: use the injected RepoResolverFunc and set repoIDKey manually.
-		repoResolverMW = legacyRepoResolver(deps.RepoResolverFunc, deps.Logger)
-	}
-	r.Use(repoResolverMW)
+	r.Use(RepoResolver(deps.Store, deps.Logger))
 	r.Use(authorizeMiddleware.GitHttpAuthorizer)
 
 	r.GET("/:namespace/:repo/info/refs", h.infoRefsHandler)
 	r.POST("/:namespace/:repo/git-upload-pack", h.uploadPackHandler)
-	if withPushCtx && deps.Store != nil {
-		r.POST("/:namespace/:repo/git-receive-pack",
-			authorizeMiddleware.PushContextInserter,
-			h.receivePackHandler,
-		)
-	} else {
-		r.POST("/:namespace/:repo/git-receive-pack", h.receivePackHandler)
-	}
+	r.POST("/:namespace/:repo/git-receive-pack", authorizeMiddleware.PushContextInserter, h.receivePackHandler)
 
 	return r
-}
-
-// legacyRepoResolver wraps the old RepoResolverFunc in a gin middleware that sets repoIDKey.
-func legacyRepoResolver(resolver RepoResolverFunc, log *zap.Logger) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		namespace := c.Param("namespace")
-		repo := strings.TrimSuffix(c.Param("repo"), ".git")
-		repoID, ok := resolver(namespace, repo)
-		if !ok {
-			if _, err := gitPktLineErrorRaw(c.Writer, http.StatusNotFound, "repository not found"); err != nil {
-				log.Error("failed to write pkt-line error response", zap.Error(err))
-			}
-			c.Abort()
-			return
-		}
-		c.Set(repoIDKey, repoID)
-		c.Next()
-	}
 }

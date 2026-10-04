@@ -127,7 +127,7 @@ type AuthNConfig struct {
 
 // AuthZConfig selects the active authorization provider.
 type AuthZConfig struct {
-	// Provider is the AuthZ provider name. Defaults to "allow-all".
+	// Provider is the AuthZ provider name. Defaults to "rbac-local".
 	Provider string `mapstructure:"provider"`
 }
 
@@ -273,7 +273,7 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("auth.jwt.refresh_grace", "60s")
 	v.SetDefault("auth.grpc.hmac_secret", "")
 	v.SetDefault("auth.authn.chain", []string{"static-users", "anonymous"})
-	v.SetDefault("auth.authz.provider", "allow-all")
+	v.SetDefault("auth.authz.provider", "rbac-local")
 	v.SetDefault("auth.userdir.provider", "none")
 	v.SetDefault("auth.rbac.policy_file", "policy.yaml")
 	v.SetDefault("auth.serviceaccount.issuer", "gitstore")

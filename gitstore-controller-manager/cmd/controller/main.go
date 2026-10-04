@@ -317,7 +317,7 @@ func buildCredentialSource(ctx context.Context, cfg *config.Config, log *zap.Log
 
 	owner := "serviceaccount:" + controller.ServiceAccount.Namespace + ":" + controller.ServiceAccount.Name + ":" + controller.ServiceAccount.UID
 	resolver, err := secret.NewBootstrapResolver(controller.SecretProviders.Bootstrap, owner,
-		controller.ServiceAccount.KeyRef, controller.ServiceAccount.KeyID, secret.NewObserver(log))
+		controller.ServiceAccount.KeyRef, secret.NewObserver(log))
 	if err != nil {
 		return nil, fmt.Errorf("create bootstrap secret resolver: %w", err)
 	}

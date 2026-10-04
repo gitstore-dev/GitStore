@@ -201,6 +201,7 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 		RepositoryId: repoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
+		ActorSubject: "test-admission",
 	})
 	require.NoError(t, err)
 
@@ -293,6 +294,7 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 		OldCommitSha: zero,
 		NewCommitSha: a,
 		RefName:      "refs/heads/main",
+		ActorSubject: "test-admission",
 	})
 	require.NoError(t, err)
 
@@ -309,6 +311,7 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 		OldCommitSha: a,
 		NewCommitSha: b,
 		RefName:      "refs/heads/main",
+		ActorSubject: "test-admission",
 	})
 	require.NoError(t, err)
 

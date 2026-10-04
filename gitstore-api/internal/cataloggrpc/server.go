@@ -196,17 +196,16 @@ func (s *Server) ValidateResources(
 	structuralStarted := time.Now()
 	var allErrors []*catalogv1.ValidationError
 	if len(req.GetTrees()) == 0 {
-		allErrors = append(allErrors, s.validateResourceBlobs(ctx, req.RepositoryId, req.Blobs)...)
-	} else {
-		for _, tree := range req.GetTrees() {
-			allErrors = append(allErrors, s.validateResourceBlobs(ctx, req.RepositoryId, tree.GetProposedBlobs())...)
-			allErrors = append(allErrors, s.validateImmutableResourceChanges(tree.GetOldBlobs(), tree.GetProposedBlobs())...)
-			deletionErrors, err := s.validateRepositoryDeletions(ctx, req.RepositoryId, tree.GetOldBlobs(), tree.GetProposedBlobs())
-			if err != nil {
-				return nil, grpcstatus.Error(codes.Unavailable, "repository deletion validation unavailable")
-			}
-			allErrors = append(allErrors, deletionErrors...)
+		return nil, grpcstatus.Error(codes.InvalidArgument, "validation trees are required")
+	}
+	for _, tree := range req.GetTrees() {
+		allErrors = append(allErrors, s.validateResourceBlobs(ctx, req.RepositoryId, tree.GetProposedBlobs())...)
+		allErrors = append(allErrors, s.validateImmutableResourceChanges(tree.GetOldBlobs(), tree.GetProposedBlobs())...)
+		deletionErrors, err := s.validateRepositoryDeletions(ctx, req.RepositoryId, tree.GetOldBlobs(), tree.GetProposedBlobs())
+		if err != nil {
+			return nil, grpcstatus.Error(codes.Unavailable, "repository deletion validation unavailable")
 		}
+		allErrors = append(allErrors, deletionErrors...)
 	}
 	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.PhaseStructural, time.Since(structuralStarted))
 
@@ -275,11 +274,10 @@ func (s *Server) validateNamespacePolicies(
 		}
 	}
 	if len(req.GetTrees()) == 0 {
-		appendCandidates(nil, req.GetBlobs(), false)
-	} else {
-		for _, tree := range req.GetTrees() {
-			appendCandidates(tree.GetOldBlobs(), tree.GetProposedBlobs(), true)
-		}
+		return nil, false, grpcstatus.Error(codes.InvalidArgument, "validation trees are required")
+	}
+	for _, tree := range req.GetTrees() {
+		appendCandidates(tree.GetOldBlobs(), tree.GetProposedBlobs(), true)
 	}
 
 	var validationErrors []*catalogv1.ValidationError
@@ -763,33 +761,6 @@ func (s *Server) ValidateResourceDeletions(
 	return &catalogv1.ValidateResourceDeletionsResponse{Accepted: true}, nil
 }
 
-// ValidateCategoryTaxonomyDeletion is retained for mixed-version Git services.
-// New callers use ValidateResourceDeletions, which applies the same proposed
-// tree semantics to every supported resource kind.
-func (s *Server) ValidateCategoryTaxonomyDeletion(
-	ctx context.Context,
-	req *catalogv1.ValidateCategoryTaxonomyDeletionRequest,
-) (*catalogv1.ValidateCategoryTaxonomyDeletionResponse, error) {
-	trees := make([]*catalogv1.ResourceValidationTree, 0, len(req.GetTrees()))
-	for _, tree := range req.GetTrees() {
-		trees = append(trees, &catalogv1.ResourceValidationTree{
-			OldBlobs:      tree.GetOldBlobs(),
-			ProposedBlobs: tree.GetProposedBlobs(),
-		})
-	}
-	response, err := s.ValidateResourceDeletions(ctx, &catalogv1.ValidateResourceDeletionsRequest{
-		RepositoryId: req.GetRepositoryId(),
-		Trees:        trees,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &catalogv1.ValidateCategoryTaxonomyDeletionResponse{
-		Accepted: response.GetAccepted(),
-		Reason:   response.GetReason(),
-	}, nil
-}
-
 func proposedCategoryReleasesParent(entries []*parsedEntry, dependent datastore.OwnerDependent, deletedParent string) bool {
 	if dependent.DependentKind != "CategoryTaxonomy" {
 		return false
@@ -1067,8 +1038,7 @@ func (s *Server) AdmitResources(
 	now := s.clock.Now().UTC()
 	actorSubject := strings.TrimSpace(req.GetActorSubject())
 	if actorSubject == "" {
-		// Preserve compatibility with git-service replicas that predate actor_subject.
-		actorSubject = "admission"
+		return nil, grpcstatus.Error(codes.InvalidArgument, "admission actor is required")
 	}
 
 	branch := strings.TrimPrefix(req.RefName, "refs/heads/")

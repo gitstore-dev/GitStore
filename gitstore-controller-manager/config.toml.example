@@ -8,15 +8,13 @@ api_uri = "http://localhost:4000/graphql"
 [controller.serviceaccount]
 namespace = "controllers"
 name = "gitstore-controller-manager"
-key_id = "controller-key"
 uid = ""
 assertion_audience = "gitstore-api/serviceaccount-token"
 access_token_audience = "gitstore-api"
-key_ref = { kind = "SecretRef", name = "gitstore-controller-manager-signing-key", key = "privateKey" }
+key_ref = { kind = "SecretRef", name = "gitstore-controller-manager-signing-key" }
 
 [controller.secret_providers.bootstrap]
 type = "file"
-format = "raw"
 base_path = "/run/secrets"
 
 [controller.reconcile]

@@ -116,10 +116,6 @@ type ComplexityRoot struct {
 		Node   func(childComplexity int) int
 	}
 
-	CollectionOptimisticLockConflict struct {
-		Current func(childComplexity int) int
-	}
-
 	CollectionSpec struct {
 		Media    func(childComplexity int) int
 		Selector func(childComplexity int) int
@@ -154,10 +150,6 @@ type ComplexityRoot struct {
 		Type               func(childComplexity int) int
 	}
 
-	CreateCollectionPayload struct {
-		Collection func(childComplexity int) int
-	}
-
 	CreateNamespacePayload struct {
 		Namespace func(childComplexity int) int
 	}
@@ -183,10 +175,6 @@ type ComplexityRoot struct {
 	DeleteCategoryPayload struct {
 		DeletedCategoryID  func(childComplexity int) int
 		OrphanedProductIds func(childComplexity int) int
-	}
-
-	DeleteCollectionPayload struct {
-		DeletedCollectionID func(childComplexity int) int
 	}
 
 	DeleteNamespacePayload struct {
@@ -316,13 +304,11 @@ type ComplexityRoot struct {
 		CompleteNamespaceDeletion          func(childComplexity int, input model.CompleteNamespaceDeletionInput) int
 		CompleteProductDeletion            func(childComplexity int, input model.CompleteProductDeletionInput) int
 		CompleteRepositoryDeletion         func(childComplexity int, input model.CompleteRepositoryDeletionInput) int
-		CreateCollection                   func(childComplexity int, input model.CreateCollectionInput) int
 		CreateNamespace                    func(childComplexity int, input model.CreateNamespaceInput) int
 		CreateProduct                      func(childComplexity int, input model.CreateProductInput) int
 		CreateRepository                   func(childComplexity int, input model.CreateRepositoryInput) int
 		CreateServiceAccount               func(childComplexity int, input model.CreateServiceAccountInput) int
 		DeleteCategory                     func(childComplexity int, input model.DeleteCategoryInput) int
-		DeleteCollection                   func(childComplexity int, input model.DeleteCollectionInput) int
 		DeleteNamespace                    func(childComplexity int, input model.DeleteNamespaceInput) int
 		DeleteProduct                      func(childComplexity int, input model.DeleteProductInput) int
 		DeleteRepository                   func(childComplexity int, input model.DeleteRepositoryInput) int
@@ -336,7 +322,6 @@ type ComplexityRoot struct {
 		RotateServiceAccountKey            func(childComplexity int, input model.RotateServiceAccountKeyInput) int
 		TransferNamespaceOwner             func(childComplexity int, input model.TransferNamespaceOwnerInput) int
 		UpdateCategoryStatus               func(childComplexity int, input model.UpdateCategoryStatusInput) int
-		UpdateCollection                   func(childComplexity int, input model.UpdateCollectionInput) int
 		UpdateNamespace                    func(childComplexity int, input model.UpdateNamespaceInput) int
 		UpdateNamespaceStatus              func(childComplexity int, input model.UpdateNamespaceStatusInput) int
 		UpdateProduct                      func(childComplexity int, input model.UpdateProductInput) int
@@ -815,11 +800,6 @@ type ComplexityRoot struct {
 		HasMoreProductDependents func(childComplexity int) int
 	}
 
-	UpdateCollectionPayload struct {
-		Collection func(childComplexity int) int
-		Conflict   func(childComplexity int) int
-	}
-
 	UpdateNamespacePayload struct {
 		Namespace func(childComplexity int) int
 	}
@@ -1231,13 +1211,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CollectionEdge.Node(childComplexity), true
 
-	case "CollectionOptimisticLockConflict.current":
-		if e.ComplexityRoot.CollectionOptimisticLockConflict.Current == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CollectionOptimisticLockConflict.Current(childComplexity), true
-
 	case "CollectionSpec.media":
 		if e.ComplexityRoot.CollectionSpec.Media == nil {
 			break
@@ -1350,13 +1323,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Condition.Type(childComplexity), true
 
-	case "CreateCollectionPayload.collection":
-		if e.ComplexityRoot.CreateCollectionPayload.Collection == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CreateCollectionPayload.Collection(childComplexity), true
-
 	case "CreateNamespacePayload.namespace":
 		if e.ComplexityRoot.CreateNamespacePayload.Namespace == nil {
 			break
@@ -1419,13 +1385,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.DeleteCategoryPayload.OrphanedProductIds(childComplexity), true
-
-	case "DeleteCollectionPayload.deletedCollectionId":
-		if e.ComplexityRoot.DeleteCollectionPayload.DeletedCollectionID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.DeleteCollectionPayload.DeletedCollectionID(childComplexity), true
 
 	case "DeleteNamespacePayload.namespace":
 		if e.ComplexityRoot.DeleteNamespacePayload.Namespace == nil {
@@ -1841,18 +1800,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.CompleteRepositoryDeletion(childComplexity, args["input"].(model.CompleteRepositoryDeletionInput)), true
 
-	case "Mutation.createCollection":
-		if e.ComplexityRoot.Mutation.CreateCollection == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_createCollection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.CreateCollection(childComplexity, args["input"].(model.CreateCollectionInput)), true
-
 	case "Mutation.createNamespace":
 		if e.ComplexityRoot.Mutation.CreateNamespace == nil {
 			break
@@ -1912,18 +1859,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.DeleteCategory(childComplexity, args["input"].(model.DeleteCategoryInput)), true
-
-	case "Mutation.deleteCollection":
-		if e.ComplexityRoot.Mutation.DeleteCollection == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_deleteCollection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.DeleteCollection(childComplexity, args["input"].(model.DeleteCollectionInput)), true
 
 	case "Mutation.deleteNamespace":
 		if e.ComplexityRoot.Mutation.DeleteNamespace == nil {
@@ -2075,18 +2010,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.UpdateCategoryStatus(childComplexity, args["input"].(model.UpdateCategoryStatusInput)), true
-
-	case "Mutation.updateCollection":
-		if e.ComplexityRoot.Mutation.UpdateCollection == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_updateCollection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.UpdateCollection(childComplexity, args["input"].(model.UpdateCollectionInput)), true
 
 	case "Mutation.updateNamespace":
 		if e.ComplexityRoot.Mutation.UpdateNamespace == nil {
@@ -4137,20 +4060,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateCategoryStatusPayload.HasMoreProductDependents(childComplexity), true
 
-	case "UpdateCollectionPayload.collection":
-		if e.ComplexityRoot.UpdateCollectionPayload.Collection == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateCollectionPayload.Collection(childComplexity), true
-
-	case "UpdateCollectionPayload.conflict":
-		if e.ComplexityRoot.UpdateCollectionPayload.Conflict == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateCollectionPayload.Conflict(childComplexity), true
-
 	case "UpdateNamespacePayload.namespace":
 		if e.ComplexityRoot.UpdateNamespacePayload.Namespace == nil {
 			break
@@ -4280,13 +4189,11 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCompleteProductDeletionInput,
 		ec.unmarshalInputCompleteRepositoryDeletionInput,
 		ec.unmarshalInputConditionInput,
-		ec.unmarshalInputCreateCollectionInput,
 		ec.unmarshalInputCreateNamespaceInput,
 		ec.unmarshalInputCreateProductInput,
 		ec.unmarshalInputCreateRepositoryInput,
 		ec.unmarshalInputCreateServiceAccountInput,
 		ec.unmarshalInputDeleteCategoryInput,
-		ec.unmarshalInputDeleteCollectionInput,
 		ec.unmarshalInputDeleteNamespaceInput,
 		ec.unmarshalInputDeleteProductInput,
 		ec.unmarshalInputDeleteRepositoryInput,
@@ -4326,7 +4233,6 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputTokenRequestSpecInput,
 		ec.unmarshalInputTransferNamespaceOwnerInput,
 		ec.unmarshalInputUpdateCategoryStatusInput,
-		ec.unmarshalInputUpdateCollectionInput,
 		ec.unmarshalInputUpdateNamespaceInput,
 		ec.unmarshalInputUpdateNamespaceStatusInput,
 		ec.unmarshalInputUpdateProductInput,
@@ -4875,26 +4781,6 @@ extend type Query {
   ): CollectionConnection!
 }
 
-extend type Mutation {
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  createCollection(input: CreateCollectionInput!): CreateCollectionPayload!
-
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  updateCollection(input: UpdateCollectionInput!): UpdateCollectionPayload!
-
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  deleteCollection(input: DeleteCollectionInput!): DeleteCollectionPayload!
-}
-
 """
 A Collection is a namespace-scoped catalog resource that groups products via
 a declarative label selector. Defined by git push; mutations are not supported.
@@ -5063,39 +4949,6 @@ Paginated connection for collections (Relay pattern).
 type CollectionConnection {
   edges: [CollectionEdge!]!
   pageInfo: PageInfo!
-}
-
-# ============================================================================
-# Minimal stub inputs (legacy mutations deprecated — managed via git push)
-# ============================================================================
-
-input CreateCollectionInput {
-  name: String!
-}
-
-type CreateCollectionPayload {
-  collection: Collection
-}
-
-input UpdateCollectionInput {
-  id: ID!
-}
-
-type UpdateCollectionPayload {
-  collection: Collection
-  conflict: CollectionOptimisticLockConflict
-}
-
-type CollectionOptimisticLockConflict {
-  current: Collection!
-}
-
-input DeleteCollectionInput {
-  id: ID!
-}
-
-type DeleteCollectionPayload {
-  deletedCollectionId: ID
 }
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/file.graphqls", Input: `# File Resource — typed watch contract
@@ -7421,14 +7274,6 @@ func (ec *executionContext) childFields_CollectionEdge(ctx context.Context, fiel
 	return nil, fmt.Errorf("no field named %q was found under type CollectionEdge", field.Name)
 }
 
-func (ec *executionContext) childFields_CollectionOptimisticLockConflict(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "current":
-		return ec.fieldContext_CollectionOptimisticLockConflict_current(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type CollectionOptimisticLockConflict", field.Name)
-}
-
 func (ec *executionContext) childFields_CollectionSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "title":
@@ -7497,14 +7342,6 @@ func (ec *executionContext) childFields_Condition(ctx context.Context, field gra
 	return nil, fmt.Errorf("no field named %q was found under type Condition", field.Name)
 }
 
-func (ec *executionContext) childFields_CreateCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "collection":
-		return ec.fieldContext_CreateCollectionPayload_collection(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type CreateCollectionPayload", field.Name)
-}
-
 func (ec *executionContext) childFields_CreateNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "namespace":
@@ -7557,14 +7394,6 @@ func (ec *executionContext) childFields_DeleteCategoryPayload(ctx context.Contex
 		return ec.fieldContext_DeleteCategoryPayload_orphanedProductIds(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DeleteCategoryPayload", field.Name)
-}
-
-func (ec *executionContext) childFields_DeleteCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "deletedCollectionId":
-		return ec.fieldContext_DeleteCollectionPayload_deletedCollectionId(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type DeleteCollectionPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_DeleteNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8695,16 +8524,6 @@ func (ec *executionContext) childFields_UpdateCategoryStatusPayload(ctx context.
 		return ec.fieldContext_UpdateCategoryStatusPayload_hasMoreProductDependents(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateCategoryStatusPayload", field.Name)
-}
-
-func (ec *executionContext) childFields_UpdateCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "collection":
-		return ec.fieldContext_UpdateCollectionPayload_collection(ctx, field)
-	case "conflict":
-		return ec.fieldContext_UpdateCollectionPayload_conflict(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type UpdateCollectionPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

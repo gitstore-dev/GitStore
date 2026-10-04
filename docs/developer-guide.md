@@ -39,7 +39,6 @@ graph TD
 | `gitstore-api`                |  `6000` | CatalogService gRPC called by the Git service          |
 | `gitstore-git-service`        | `50051` | GitService gRPC storage and transport                  |
 | `gitstore-controller-manager` |  `5001` | `/health`, `/metrics`, poison-item API                 |
-| `gitstore-admin`              |  `3000` | Optional browser UI                                    |
 
 ## Production Design Constraints
 
@@ -368,32 +367,12 @@ go test ./...
 
 Operations runbooks:
 
-| Runbook | Symptom |
-|---------|---------|
-| [`controller-lag`](runbooks/controller-lag.md) | Queue depth growing, reconciles falling behind |
-| [`controller-replay-window-exceeded`](runbooks/controller-replay-window-exceeded.md) | Watch cursor expired / relist triggered |
-| [`controller-poisoned-item`](runbooks/controller-poisoned-item.md) | A resource repeatedly fails reconciliation |
-| [`controller-auth`](runbooks/controller-auth.md) | Controller credential enrollment, renewal, or revocation failure |
-
-### `gitstore-admin`
-
-Purpose:
-
-- Optional Astro/React UI.
-- GraphQL client of `gitstore-api`.
-- Browser-facing attachment point for future Git-backed editing workflows.
-
-Commands:
-
-```bash
-make admin-compose DETACH=1
-cd gitstore-admin
-npm install
-npm run dev
-npm run build
-npm run test
-npm run test:e2e
-```
+| Runbook                                                                              | Symptom                                                          |
+|--------------------------------------------------------------------------------------|------------------------------------------------------------------|
+| [`controller-lag`](runbooks/controller-lag.md)                                       | Queue depth growing, reconciles falling behind                   |
+| [`controller-replay-window-exceeded`](runbooks/controller-replay-window-exceeded.md) | Watch cursor expired / relist triggered                          |
+| [`controller-poisoned-item`](runbooks/controller-poisoned-item.md)                   | A resource repeatedly fails reconciliation                       |
+| [`controller-auth`](runbooks/controller-auth.md)                                     | Controller credential enrollment, renewal, or revocation failure |
 
 ## Generated Schema And Proto Workflow
 

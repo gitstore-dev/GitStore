@@ -55,10 +55,11 @@ services:
       - /bin/sh
       - -ec
       - |
-        mkdir -p /run/controller-secrets/gitstore-controller-manager-signing-key
         rm -f /run/controller-bootstrap/serviceaccount.env
         /app/gitctl generate-signing-key --private-key-path /run/api-issuer/serviceaccount-signing-key
-        /app/gitctl generate-signing-key --private-key-path /run/controller-secrets/gitstore-controller-manager-signing-key/privateKey
+        /app/gitctl generate-signing-key --private-key-path /run/controller-secrets/.controller-enrollment-key
+        private_key=$$(base64 < /run/controller-secrets/.controller-enrollment-key | tr -d '\n')
+        printf '{"format":"serviceaccount-signing-key/v1","values":{"privateKey":"%s","keyID":"Y29udHJvbGxlci1rZXk="}}\n' "$$private_key" > /run/controller-secrets/gitstore-controller-manager-signing-key.json
     volumes:
       - api-serviceaccount-issuer-key:/run/api-issuer
       - controller-serviceaccount-secrets:/run/controller-secrets
@@ -86,7 +87,7 @@ services:
       - controller-key
       - --replace-existing-key
       - --private-key-path
-      - /run/controller-secrets/gitstore-controller-manager-signing-key/privateKey
+      - /run/controller-secrets/.controller-enrollment-key
       - --identity-output-path
       - /run/controller-bootstrap/serviceaccount.env
     depends_on:

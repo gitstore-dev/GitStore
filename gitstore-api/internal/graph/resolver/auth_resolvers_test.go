@@ -87,7 +87,7 @@ func TestLogout_AuthenticatedBearer_ReturnsSuccess(t *testing.T) {
 	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	token, exp, err := p.IssueToken("admin")
+	token, exp, err := p.IssueSession(context.Background(), "admin")
 	require.NoError(t, err)
 
 	principal := &authpkg.Principal{
@@ -153,7 +153,7 @@ func TestRefreshToken_ValidToken_ReturnsNewSession(t *testing.T) {
 	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	token, _, err := p.IssueToken("admin")
+	token, _, err := p.IssueSession(context.Background(), "admin")
 	require.NoError(t, err)
 
 	payload, err := r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: token})
@@ -172,7 +172,7 @@ func TestRefreshToken_ExpiredWithinGrace_Succeeds(t *testing.T) {
 	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	token, _, err := p.IssueToken("admin")
+	token, _, err := p.IssueSession(context.Background(), "admin")
 	require.NoError(t, err)
 
 	payload, err := r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: token})
@@ -186,7 +186,7 @@ func TestRefreshToken_ExpiredBeyondGrace_ReturnsError(t *testing.T) {
 	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	token, _, err := p.IssueToken("admin")
+	token, _, err := p.IssueSession(context.Background(), "admin")
 	require.NoError(t, err)
 
 	_, err = r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: token})
@@ -198,7 +198,7 @@ func TestRefreshToken_RevokedToken_ReturnsError(t *testing.T) {
 	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	token, exp, err := p.IssueToken("admin")
+	token, exp, err := p.IssueSession(context.Background(), "admin")
 	require.NoError(t, err)
 	// Revoke by doing a first refresh
 	jti := extractJTI(t, p, token)
@@ -224,7 +224,7 @@ func TestRefreshToken_UnsupportedScope_ReturnsError(t *testing.T) {
 	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	token, _, err := p.IssueToken("admin")
+	token, _, err := p.IssueSession(context.Background(), "admin")
 	require.NoError(t, err)
 	scope := "catalog:read"
 	_, err = r.RefreshToken(context.Background(), model.RefreshTokenInput{

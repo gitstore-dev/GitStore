@@ -72,8 +72,10 @@ impl ValidationHandler for SchemaValidationHandler {
             } else {
                 hook_ctx.repository_id.clone()
             },
-            blobs: blobs.iter().cloned().map(to_proto_blob).collect(),
-            trees: vec![],
+            trees: vec![ResourceValidationTree {
+                old_blobs: vec![],
+                proposed_blobs: blobs.iter().cloned().map(to_proto_blob).collect(),
+            }],
         };
         self.call(req, file_count, start).await
     }
@@ -135,17 +137,12 @@ impl SchemaValidationHandler {
             .iter()
             .map(|tree| tree.proposed_blobs.len())
             .sum::<usize>();
-        let proto_blobs = trees
-            .iter()
-            .flat_map(|tree| tree.proposed_blobs.clone())
-            .collect();
         let req = ValidateResourcesRequest {
             repository_id: if hook_ctx.repository_id.is_empty() {
                 self.repository_id.clone()
             } else {
                 hook_ctx.repository_id.clone()
             },
-            blobs: proto_blobs,
             trees,
         };
         self.call(req, file_count, start).await
@@ -235,8 +232,7 @@ mod tests {
     use super::*;
     use catalog_proto::{
         catalog_service_server::{CatalogService, CatalogServiceServer},
-        AdmitResourcesRequest, AdmitResourcesResponse, ValidateCategoryTaxonomyDeletionRequest,
-        ValidateCategoryTaxonomyDeletionResponse, ValidateResourceDeletionsRequest,
+        AdmitResourcesRequest, AdmitResourcesResponse, ValidateResourceDeletionsRequest,
         ValidateResourceDeletionsResponse, ValidateResourcesResponse, ValidationError,
     };
     use std::sync::Arc;
@@ -266,16 +262,6 @@ mod tests {
             _req: Request<AdmitResourcesRequest>,
         ) -> Result<Response<AdmitResourcesResponse>, Status> {
             Ok(Response::new(AdmitResourcesResponse {}))
-        }
-
-        async fn validate_category_taxonomy_deletion(
-            &self,
-            _req: Request<ValidateCategoryTaxonomyDeletionRequest>,
-        ) -> Result<Response<ValidateCategoryTaxonomyDeletionResponse>, Status> {
-            Ok(Response::new(ValidateCategoryTaxonomyDeletionResponse {
-                accepted: true,
-                reason: String::new(),
-            }))
         }
 
         async fn validate_resource_deletions(
@@ -354,9 +340,10 @@ mod tests {
     async fn test_repository_authoring_target_rejection_is_propagated() {
         let addr = start_mock_server(|req| {
             assert_eq!(req.repository_id, "namespace-system-repository");
-            assert_eq!(req.blobs.len(), 1);
-            assert_eq!(req.blobs[0].path, "repositories/payments.md");
-            assert!(String::from_utf8_lossy(&req.blobs[0].content).contains("kind: Repository"));
+            assert_eq!(req.trees.len(), 1);
+            assert_eq!(req.trees[0].proposed_blobs.len(), 1);
+            assert_eq!(req.trees[0].proposed_blobs[0].path, "repositories/payments.md");
+            assert!(String::from_utf8_lossy(&req.trees[0].proposed_blobs[0].content).contains("kind: Repository"));
             Ok(ValidateResourcesResponse {
                 accepted: false,
                 errors: vec![ValidationError {
@@ -409,9 +396,10 @@ mod tests {
             let expected = content.as_bytes().to_vec();
             let addr = start_mock_server(move |req| {
                 assert_eq!(req.repository_id, "file-repository");
-                assert_eq!(req.blobs.len(), 1);
-                assert_eq!(req.blobs[0].path, "files/product-hero.md");
-                assert_eq!(req.blobs[0].content, expected);
+                assert_eq!(req.trees.len(), 1);
+                assert_eq!(req.trees[0].proposed_blobs.len(), 1);
+                assert_eq!(req.trees[0].proposed_blobs[0].path, "files/product-hero.md");
+                assert_eq!(req.trees[0].proposed_blobs[0].content, expected);
                 Ok(ValidateResourcesResponse {
                     accepted,
                     errors: if accepted {

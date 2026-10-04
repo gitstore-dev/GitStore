@@ -421,16 +421,6 @@ Create a namespace and repository manually when you need custom provisioning. Se
 
 Catalogue writes are Git-driven today. Product, category, collection, and variant CRUD over GraphQL will be documented after the Git-backed design is finalized.
 
-## Admin UI
-
-The optional admin UI runs on http://localhost:3000:
-
-```bash
-make admin-compose DETACH=1
-```
-
-See [Admin docs](admin/README.md) for setup and current limitations.
-
 ## Troubleshooting
 
 ### Stack Is Not Healthy

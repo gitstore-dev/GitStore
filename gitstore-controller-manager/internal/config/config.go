@@ -45,7 +45,6 @@ type ServiceAccountConfig struct {
 	Namespace           string     `mapstructure:"namespace"`
 	Name                string     `mapstructure:"name"`
 	UID                 string     `mapstructure:"uid"`
-	KeyID               string     `mapstructure:"key_id"`
 	KeyRef              secret.Ref `mapstructure:"key_ref"`
 	AssertionAudience   string     `mapstructure:"assertion_audience"`
 	AccessTokenAudience string     `mapstructure:"access_token_audience"`
@@ -83,16 +82,13 @@ var defaults = map[string]any{
 	"controller.serviceaccount.namespace":              "",
 	"controller.serviceaccount.name":                   "gitstore-controller-manager",
 	"controller.serviceaccount.uid":                    "",
-	"controller.serviceaccount.key_id":                 "",
 	"controller.serviceaccount.key_ref.kind":           "",
 	"controller.serviceaccount.key_ref.name":           "",
-	"controller.serviceaccount.key_ref.key":            "",
 	"controller.serviceaccount.assertion_audience":     "gitstore-api/serviceaccount-token",
 	"controller.serviceaccount.access_token_audience":  "gitstore-api",
 	"controller.secret_providers.bootstrap.type":       "file",
-	"controller.secret_providers.bootstrap.format":     "raw",
 	"controller.secret_providers.bootstrap.base_path":  "/run/secrets",
-	"controller.secret_providers.bootstrap.env_prefix": "GITSTORE_SECRET__",
+	"controller.secret_providers.bootstrap.env_variable": "",
 	"controller.reconcile.max_attempts":                5,
 	"controller.reconcile.stall_threshold":             "5m",
 	"controller.checkpoint.dir":                        "/var/lib/gitstore/checkpoints",
@@ -304,9 +300,6 @@ func validate(cfg *Config) error {
 		return errors.New("controller.serviceaccount.key_ref must be a valid SecretRef")
 	}
 	provider := c.SecretProviders.Bootstrap
-	if provider.Format != "raw" && provider.Format != "json-record" {
-		return errors.New("controller.secret_providers.bootstrap.format must be raw or json-record")
-	}
 	for _, required := range []struct{ path, value string }{
 		{"controller.serviceaccount.namespace", c.ServiceAccount.Namespace},
 		{"controller.serviceaccount.name", c.ServiceAccount.Name},
@@ -318,10 +311,7 @@ func validate(cfg *Config) error {
 			return fmt.Errorf("%s must not be empty", required.path)
 		}
 	}
-	if provider.Format == "raw" && (ref.Key == nil || c.ServiceAccount.KeyID == "") {
-		return errors.New("controller.serviceaccount.key_ref.key and key_id are required for raw bootstrap material")
-	}
-	if provider.Format == "json-record" && ref.Key != nil {
+	if ref.Key != nil {
 		return errors.New("controller.serviceaccount.key_ref.key must be omitted for atomic signing records")
 	}
 	if provider.Type != "file" && provider.Type != "env" {
@@ -330,8 +320,8 @@ func validate(cfg *Config) error {
 	if provider.Type == "file" && strings.TrimSpace(provider.BasePath) == "" {
 		return errors.New("controller.secret_providers.bootstrap.base_path must not be empty")
 	}
-	if provider.Type == "env" && strings.TrimSpace(provider.EnvPrefix) == "" {
-		return errors.New("controller.secret_providers.bootstrap.env_prefix must not be empty")
+	if provider.Type == "env" && strings.TrimSpace(provider.EnvVariable) == "" {
+		return errors.New("controller.secret_providers.bootstrap.env_variable must not be empty")
 	}
 	if c.Reconcile.MaxAttempts < 1 {
 		return errors.New("controller.reconcile.max_attempts must be >= 1")

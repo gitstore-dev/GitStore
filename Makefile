@@ -17,7 +17,7 @@ AUTH_CONFIG_DIR ?= $(ROOT)/config
 POLICY_FILE ?= $(AUTH_CONFIG_DIR)/policy.yaml
 USERS_FILE ?= $(AUTH_CONFIG_DIR)/users.yaml
 LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
-LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml -f compose.admin.yml $(IDENTITY_COMPOSE_FILE)
+LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml $(IDENTITY_COMPOSE_FILE)
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
 GIT_GRPC_PORT ?= 50051
 CONTROLLER_CHECKPOINT_DIR ?= $(ROOT)/.gitstore/checkpoints
@@ -178,7 +178,7 @@ export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 .PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-repository-lifecycle _capacity-repository-overflow _capacity-observability _capacity-observability-down
 .PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
 .PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
-.PHONY: admin-compose admin-down admin-stop admin-logs add-user add-role assign-role hash-user-password enroll-controller-serviceaccount
+.PHONY: add-user add-role assign-role hash-user-password enroll-controller-serviceaccount
 .PHONY: oidc
 
 help: ## Show available targets and common variables.
@@ -973,15 +973,3 @@ _clean-controller-checkpoints:
 	fi
 	@echo "Removing controller checkpoints only: $(abspath $(CONTROLLER_CHECKPOINT_DIR))"
 	@rm -rf "$(abspath $(CONTROLLER_CHECKPOINT_DIR))"
-
-admin-compose: _check-local-config ## Run the optional admin compose stack.
-	@$(LOCAL_COMPOSE) -f compose.admin.yml up --build $(DETACH_FLAG) admin
-
-admin-down: ## Stop and remove the admin compose stack.
-	@$(LOCAL_COMPOSE) -f compose.admin.yml down
-
-admin-stop: ## Stop only the admin compose service.
-	@$(LOCAL_COMPOSE) -f compose.admin.yml stop admin
-
-admin-logs: ## Follow admin compose logs.
-	@$(LOCAL_COMPOSE) -f compose.admin.yml logs -f admin

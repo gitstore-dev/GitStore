@@ -28,11 +28,6 @@
           "jsonpath": "$.package.version"
         },
         {
-          "type": "json",
-          "path": "gitstore-admin/package.json",
-          "jsonpath": "$.version"
-        },
-        {
           "type": "generic",
           "path": "gitstore-api/internal/app/server.go"
         },

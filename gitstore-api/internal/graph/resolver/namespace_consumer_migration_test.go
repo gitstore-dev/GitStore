@@ -22,7 +22,6 @@ func TestNamespaceConsumersAvoidDeprecatedOutputSelections(t *testing.T) {
 	var offenders []string
 
 	for _, relativeRoot := range []string{
-		"gitstore-admin/src",
 		"gitstore-api/internal/graph/resolver",
 		"gitstore-controller-manager",
 		"tests/integration",

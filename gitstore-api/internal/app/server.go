@@ -273,7 +273,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	gitHttpHandler := githttp.NewMuxWithStoreAndAuthz(githttp.SmartHttpDeps{
+	gitHttpHandler := githttp.NewMux(githttp.SmartHttpDeps{
 		GitClient: gitClient,
 		Store:     store,
 		Logger:    log,
@@ -671,8 +671,7 @@ func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, lo
 		}
 		authzProvider = p
 		rbacProvider = p
-	case "allow-all", "":
-		// Default to allow-all so existing deployments without explicit config are unaffected.
+	case "allow-all":
 		authzProvider = allowall.New(log)
 	default:
 		cleanup()
