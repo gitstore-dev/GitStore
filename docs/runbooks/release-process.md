@@ -72,7 +72,7 @@ Rebase merge matters here: a squash merge may rewrite the commit message to the 
 
 Use the same mechanism for:
 - **Alpha → beta**: `Release-As: 0.1.0-beta.1` (keep patch at `0` — the same minor-anchoring requirement applies to beta, since `feat:` commits will keep landing there too)
-- **Beta → stable**: `Release-As: 0.1.0` (no prerelease suffix — this is what permanently flips Docker's `latest` tag behavior, see below). At this point also remove `bump-minor-pre-major` from `release-please-config.json` — it only exists to keep the project pre-`1.0.0` through alpha/beta; once `1.0.0` ships for real, breaking changes should resume normal major bumps.
+- **Beta → stable**: `Release-As: 0.1.0` (no prerelease suffix — this is what permanently flips Docker's `latest` tag behavior, see below). **Do not remove `bump-minor-pre-major` here** — `0.1.0` is still `major === 0` (a pre-1.0 stable release), so the flag still applies; removing it now would let the very next breaking-change commit jump straight to a premature `1.0.0-alpha`, recreating the incident above. Release-please's own docs describe this option as applying for the entire `0.x` line, not just prereleases. Keep it set through every `0.x` release (alpha, beta, and stable `0.y.z`) and only remove it when actually graduating to `1.0.0` — which itself should be a deliberate `Release-As: 1.0.0` override, not something an organic breaking commit is left to trigger.
 - **Any one-off correction**: e.g. a bad automatic bump, or a hotfix that needs a specific version out of band.
 
 ## Docker `latest` Tag Behavior
