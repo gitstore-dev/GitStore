@@ -340,12 +340,16 @@ func load(paths []string) (*Config, error) {
 		}
 	}
 
-	// Captured before AutomaticEnv is wired below, so this reflects only the
-	// config-file/default value, never an environment-variable override.
-	// Used by validateServiceAccountSigningKeySource (FR-015c) to detect key
-	// material placed in a config file shared across services, even if an
-	// env var ultimately overrides the effective value.
-	fileServiceAccountSigningKey := v.GetString("auth.serviceaccount.signing_key")
+	// Read independently of the merge above: a later overlay that sets
+	// auth.serviceaccount.signing_key = "" would otherwise erase the shared
+	// file's value from v before it's inspected, letting key material that
+	// physically still sits in the shared mount (read directly by git-service
+	// and controller-manager, bypassing this process's merge order) slip past
+	// validateServiceAccountSigningKeySource undetected.
+	sharedFileServiceAccountSigningKey, err := signingKeyInFile(paths, sharedServiceConfigMountPath)
+	if err != nil {
+		return nil, err
+	}
 
 	// Environment variables
 	v.SetEnvPrefix("GITSTORE")
@@ -360,7 +364,7 @@ func load(paths []string) (*Config, error) {
 	if err := validateConfig(&cfg); err != nil {
 		return nil, err
 	}
-	if err := validateServiceAccountSigningKeySource(&cfg, paths, fileServiceAccountSigningKey); err != nil {
+	if err := validateServiceAccountSigningKeySource(&cfg, paths, sharedFileServiceAccountSigningKey); err != nil {
 		return nil, err
 	}
 
@@ -493,6 +497,25 @@ func validateServiceAccountAuthChainConfig(auth *AuthConfig) error {
 // A var (not const) so tests can safely override it to a temp path instead
 // of writing to the real /config directory on the host.
 var sharedServiceConfigMountPath = "/etc/gitstore/gitstore.toml"
+
+// signingKeyInFile reads auth.serviceaccount.signing_key from path on its
+// own, independent of any other file in paths, if path appears in paths.
+// Used instead of inspecting the final merged viper state, because a later
+// overlay that sets the key to "" would otherwise erase evidence that the
+// shared file itself carries key material — material git-service and
+// controller-manager would still read directly from that same file on disk,
+// regardless of what this process's merge order computes.
+func signingKeyInFile(paths []string, path string) (string, error) {
+	if !slices.Contains(paths, path) {
+		return "", nil
+	}
+	single := viper.New()
+	single.SetConfigFile(path)
+	if err := single.ReadInConfig(); err != nil {
+		return "", err
+	}
+	return single.GetString("auth.serviceaccount.signing_key"), nil
+}
 
 // validateServiceAccountSigningKeySource enforces FR-015c: refuses startup
 // if a service-account AuthN provider is chained in and its signing key was

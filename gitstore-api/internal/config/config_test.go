@@ -910,6 +910,40 @@ chain = ["static-users", "serviceaccount-jwt", "anonymous"]
 	assert.NotEmpty(t, cfg.Auth.ServiceAccount.SigningKey)
 }
 
+func TestLoadFromFiles_RefusesServiceAccountSigningKeyFromSharedMountPathEvenWhenOverlayClearsIt(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	sharedPath := withTempSharedServiceConfigMountPath(t)
+
+	sharedContent := `[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[auth.authn]
+chain = ["static-users", "serviceaccount-jwt", "anonymous"]
+[auth.serviceaccount]
+signing_key = "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----"
+`
+	require.NoError(t, os.WriteFile(sharedPath, []byte(sharedContent), 0600))
+
+	// An overlay that merges on top and explicitly blanks the key — e.g. an
+	// operator trying to signal "the real key comes from the env" — must not
+	// be able to hide the fact that the shared file on disk still carries
+	// key material: git-service and controller-manager mount and read that
+	// same file directly, independent of this process's merge order.
+	overlayPath := filepath.Join(t.TempDir(), "overlay.toml")
+	require.NoError(t, os.WriteFile(overlayPath, []byte("[auth.serviceaccount]\nsigning_key = \"\"\n"), 0600))
+
+	os.Setenv("GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY", "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----")
+
+	_, err := LoadFromFiles([]string{sharedPath, overlayPath})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be set in")
+	assert.Contains(t, err.Error(), sharedPath)
+}
+
 func TestValidateServiceAccountSigningKeySource_IgnoresNonSharedPath(t *testing.T) {
 	cfg := &Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"serviceaccount-jwt"}}}}
 	err := validateServiceAccountSigningKeySource(cfg, []string{"/some/other/path.toml"}, "signing-key-material")

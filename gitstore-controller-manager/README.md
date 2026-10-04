@@ -58,10 +58,14 @@ blanket production HA. Git service remains singleton-only.
 ## Configuration Highlights
 
 Pass `--config-file PATH` to require and load an explicit TOML file. Environment
-variables override file values. Root `make compose` supplies the shared local
-configuration. The controller resolves its private signing key from its own
-bootstrap provider and exchanges an assertion for a token; shared config never
-contains a bearer token or private key.
+variables override file values. Repeat the flag to layer additive overlays on
+top of a base file — `--config-file base.toml --config-file overlay.toml` —
+each later file is merged on top of the previous ones (later file wins per
+key), so an overlay only needs to declare the keys it changes. Root
+`make compose` supplies the shared local configuration. The controller
+resolves its private signing key from its own bootstrap provider and
+exchanges an assertion for a token; shared config never contains a bearer
+token or private key.
 
 Settings use nested `serviceaccount`, `secret_providers.bootstrap`,
 `checkpoint`, `reconcile` and `watch` groups, decoded once into typed structs.
