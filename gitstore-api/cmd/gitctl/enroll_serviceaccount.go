@@ -103,7 +103,7 @@ func runEnrollServiceAccount(args []string, stdout, stderr io.Writer) int {
 	if enrollment.adminToken == "" {
 		token, err := client.login(context.Background(), enrollment)
 		if err != nil {
-			fmt.Fprintln(stderr, "enroll-serviceaccount bootstrap authentication failed")
+			fmt.Fprintf(stderr, "enroll-serviceaccount bootstrap authentication failed: %v\n", err)
 			return 1
 		}
 		enrollment.adminToken = token
@@ -378,11 +378,11 @@ func (c enrollmentClient) graphQL(ctx context.Context, enrollment serviceAccount
 		Variables map[string]string `json:"variables"`
 	}{Query: query, Variables: variables})
 	if err != nil {
-		return nil, errors.New("could not encode GraphQL request")
+		return nil, fmt.Errorf("could not encode GraphQL request: %w", err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, enrollment.apiURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, errors.New("could not create GraphQL request")
+		return nil, fmt.Errorf("could not create GraphQL request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	if enrollment.adminToken != "" {
@@ -390,11 +390,11 @@ func (c enrollmentClient) graphQL(ctx context.Context, enrollment serviceAccount
 	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return nil, errors.New("could not reach GraphQL API")
+		return nil, fmt.Errorf("could not reach GraphQL API: %w", err)
 	}
 	defer response.Body.Close() //nolint:errcheck
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, errors.New("GraphQL API returned an unsuccessful status")
+		return nil, fmt.Errorf("GraphQL API returned an unsuccessful status: %s", response.Status)
 	}
 	var payload struct {
 		Data   json.RawMessage `json:"data"`
@@ -403,7 +403,7 @@ func (c enrollmentClient) graphQL(ctx context.Context, enrollment serviceAccount
 		} `json:"errors"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&payload); err != nil {
-		return nil, errors.New("could not decode GraphQL response")
+		return nil, fmt.Errorf("could not decode GraphQL response: %w", err)
 	}
 	for _, graphQLError := range payload.Errors {
 		if strings.Contains(strings.ToLower(graphQLError.Message), "already exists") {
@@ -411,7 +411,7 @@ func (c enrollmentClient) graphQL(ctx context.Context, enrollment serviceAccount
 		}
 	}
 	if len(payload.Errors) != 0 {
-		return nil, errors.New("GraphQL API returned an error")
+		return nil, fmt.Errorf("GraphQL API returned an error: %s", payload.Errors[0].Message)
 	}
 	return payload.Data, nil
 }
