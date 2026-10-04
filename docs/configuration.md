@@ -22,6 +22,14 @@ explicit path is required to exist and be readable. Without the flag, the Go
 services retain optional `config.toml` discovery and the Git service retains
 optional `gitstore.toml` discovery in the working directory.
 
+**`gitstore-api` and `gitstore-controller-manager` only**: `--config-file` may
+be repeated to layer additive overlays on top of a base file — e.g.
+`--config-file base.toml --config-file overlay.toml`. The first occurrence is
+read as the base; each one after it is merged on top (later file wins, key by
+key), so an overlay only needs to declare the keys it changes rather than
+duplicating the whole base file. `gitstore-git-service` does not support this
+— it only accepts a single `--config-file`.
+
 For production-friendly local templates, copy the per-service example files in
 this repo:
 
@@ -64,7 +72,7 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 
 **Config file**: `config.toml` (optional, current working directory)
 
-**Explicit file**: `gitstore-api --config-file /path/to/config.toml` (required when selected)
+**Explicit file**: `gitstore-api --config-file /path/to/config.toml` (required when selected). Repeat the flag to layer overlays: `--config-file base.toml --config-file overlay.toml` (later file wins per key).
 
 **`.env` file**: `.env` (optional, current working directory)
 **Env var prefix**: `GITSTORE_`
@@ -379,7 +387,7 @@ uri = "http://localhost:6000"
 
 **Config file**: `config.toml` (optional, current working directory)
 
-**Explicit file**: `gitstore-controller-manager --config-file /path/to/config.toml` (required when selected)
+**Explicit file**: `gitstore-controller-manager --config-file /path/to/config.toml` (required when selected). Repeat the flag to layer overlays: `--config-file base.toml --config-file overlay.toml` (later file wins per key).
 
 **`.env` file**: `.env` (optional, current working directory)
 **Env var prefix**: `GITSTORE_`

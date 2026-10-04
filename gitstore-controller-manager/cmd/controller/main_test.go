@@ -35,12 +35,26 @@ import (
 )
 
 func TestParseConfigFile(t *testing.T) {
-	path, err := parseConfigFile([]string{"--config-file", "/config/shared.toml"})
+	paths, err := parseConfigFiles([]string{"--config-file", "/config/shared.toml"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != "/config/shared.toml" {
-		t.Fatalf("path = %q", path)
+	if len(paths) != 1 || paths[0] != "/config/shared.toml" {
+		t.Fatalf("paths = %v", paths)
+	}
+}
+
+func TestParseConfigFilesRepeated(t *testing.T) {
+	paths, err := parseConfigFiles([]string{
+		"--config-file", "/config/shared.toml",
+		"--config-file", "/config/overlay.toml",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/config/shared.toml", "/config/overlay.toml"}
+	if len(paths) != len(want) || paths[0] != want[0] || paths[1] != want[1] {
+		t.Fatalf("paths = %v", paths)
 	}
 }
 
