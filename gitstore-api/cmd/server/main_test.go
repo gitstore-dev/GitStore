@@ -75,9 +75,18 @@ func TestMain(m *testing.M) {
 }
 
 func TestParseConfigFile(t *testing.T) {
-	path, err := parseConfigFile([]string{"--config-file", "/config/shared.toml"})
+	paths, err := parseConfigFiles([]string{"--config-file", "/config/shared.toml"})
 	require.NoError(t, err)
-	assert.Equal(t, "/config/shared.toml", path)
+	assert.Equal(t, []string{"/config/shared.toml"}, paths)
+}
+
+func TestParseConfigFilesRepeated(t *testing.T) {
+	paths, err := parseConfigFiles([]string{
+		"--config-file", "/config/shared.toml",
+		"--config-file", "/config/overlay.toml",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/config/shared.toml", "/config/overlay.toml"}, paths)
 }
 
 func (m *mockGitWriter) CommitFile(_ context.Context, p gitclient.CommitFileParams) (string, error) {
