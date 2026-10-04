@@ -111,21 +111,13 @@ normalizes these only for a verified local Desktop Unix-socket endpoint, resolve
 host bind paths and still enforces read-only, replica-owned provider/config
 mounts. Do not broaden mounts or disable ownership checks to work around path
 differences; see the [capacity guide](../../tests/capacity/README.md).
-The production attempt recorded in #441 stopped at this pre-load mount check,
-after five million acknowledged Product writes but before dataset pagination,
-File load or scheduled faults. It is not T058 acceptance: reuse the preserved
-dataset only with its acknowledged manifest and owned deployment, then rerun
-the complete production gate.
 
-The `441-production-20261004-0e801dc` rerun passed the mount check and verified
-all five million Products on each API, but stopped before offered load or faults
-because File bootstrap subscribed after the seed writes. An empty watch cursor
-does not replay existing state, and the former process-local File bus could not
-provide cross-replica discovery. The harness now reads the 100 known File names
-from persisted `file(namespace:, name:)` queries on both APIs before retaining
-the existing `nodes` checks. File subscriptions separately use the shared CDC
-journal. Neither this correction nor functional CDC coverage is T058 acceptance;
-a new complete production evidence bundle is still required.
+File bootstrap in the capacity harness reads the known File names from persisted
+`file(namespace:, name:)` queries on both APIs before subscribing, because an
+empty watch cursor does not replay existing state. File subscriptions use the
+shared durable journal. Functional CDC coverage does not satisfy full
+production-readiness acceptance; that requires a complete production evidence
+bundle.
 
 The in-process regression exercises two independent credential sources and
 HTTP token verifiers, atomic replacement, cached-token reuse, mismatched pairs,
@@ -170,9 +162,7 @@ API/controller metrics were scanned for PEM/JWT material and credential markers;
 the isolated API logs contained no PEM/JWT matches. Test-owned services, volumes,
 records and token files were removed.
 
-Sanitized logs, artifact identities and an explicitly non-production summary are
-under `.gitstore/capacity/secret-functional/20261003/`. This is a local functional
-record from a dirty checkout, not clean release provenance or a capacity pass.
+This deployed functional test is not release provenance or a capacity pass.
 
 Preserve deployment/group-specific checkpoint roots during replacement.
 Changing config names must not change effective checkpoint paths, related replay

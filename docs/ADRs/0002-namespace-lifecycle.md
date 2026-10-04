@@ -41,6 +41,10 @@ all subsequent management is git-backed via the `gitstore-system/gitstore-system
 | Status          | Datastore; controller-managed                                                   |
 | Finalizers      | Datastore; controller-managed                                                   |
 
+Namespace is cluster-scoped, so it has no namespace partition key: its
+authoritative datastore row, and the durable watch journal's CDC source, is
+`namespaces_by_uid`.
+
 The `gitstore-system` & `default` namespaces and the `gitstore-system` repository it creates are datastore-only
 records. All other namespaces are git-backed and should only be created in `gitstore-system/gitstore-system`
 repository unless the operator explicitly designates additional bootstrap namespaces.

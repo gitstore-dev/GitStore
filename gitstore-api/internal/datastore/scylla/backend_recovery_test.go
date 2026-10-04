@@ -57,7 +57,7 @@ func TestCatalogueRowsPreserveCanonicalEnvelope(t *testing.T) {
 	assert.Equal(t, category, fromCategoryTaxonomyRow(categoryRow))
 
 	collection := &datastore.Collection{
-		UID: uid, Namespace: "shop", Name: "collection", APIVersion: "catalog/v1", Kind: "Collection",
+		UID: uid, Namespace: "shop", Name: "collections_by_namespace", APIVersion: "catalog/v1", Kind: "Collection",
 		Generation: 4, ResourceVersion: "7", Revision: "main@sha", CreationTimestamp: now,
 		CreationActor: "creator", UpdateTimestamp: now.Add(time.Minute), UpdateActor: "updater",
 		Labels: product.Labels, Annotations: product.Annotations, OwnerReferences: owners,

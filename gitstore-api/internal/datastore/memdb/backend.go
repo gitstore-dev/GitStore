@@ -152,6 +152,7 @@ type memdbDatastore struct {
 
 	namespaceMutationMu     sync.Mutex
 	fileMutationMu          sync.Mutex
+	categoryMutationMu      sync.Mutex
 	namespaceWatchMu        sync.RWMutex
 	namespaceWatchEpoch     string
 	namespaceWatchSequence  uint64
@@ -763,6 +764,8 @@ func (m *memdbDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.
 		return fmt.Errorf("%w: category taxonomy is nil", datastore.ErrInvalidArgument)
 	}
 	stored := cloneCategoryTaxonomy(c)
+	m.categoryMutationMu.Lock()
+	defer m.categoryMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	if raw, _ := txn.First("category_taxonomy", "id", c.UID); raw != nil {
 		txn.Abort()
@@ -781,6 +784,7 @@ func (m *memdbDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.
 		return err
 	}
 	txn.Commit()
+	m.recordCommittedCategoryTaxonomy(datastore.ResourceWatchAdded, stored, nil)
 	return nil
 }
 
@@ -831,8 +835,11 @@ func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.
 	if c == nil {
 		return fmt.Errorf("%w: category taxonomy is nil", datastore.ErrInvalidArgument)
 	}
+	m.categoryMutationMu.Lock()
+	defer m.categoryMutationMu.Unlock()
 	txn := m.db.Txn(true)
-	if raw, _ := txn.First("category_taxonomy", "id", c.UID); raw == nil {
+	previous, _ := txn.First("category_taxonomy", "id", c.UID)
+	if previous == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: category_taxonomy uid %s", datastore.ErrNotFound, c.UID)
 	}
@@ -840,7 +847,8 @@ func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.
 		txn.Abort()
 		return fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrAlreadyExists, c.Namespace, c.Name)
 	}
-	if err := txn.Insert("category_taxonomy", cloneCategoryTaxonomy(c)); err != nil {
+	stored := cloneCategoryTaxonomy(c)
+	if err := txn.Insert("category_taxonomy", stored); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: update category_taxonomy: %w", err)
 	}
@@ -849,10 +857,13 @@ func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.
 		return err
 	}
 	txn.Commit()
+	m.recordCommittedCategoryTaxonomy(datastore.ResourceWatchModified, stored, previous.(*datastore.CategoryTaxonomy).Labels)
 	return nil
 }
 
 func (m *memdbDatastore) UpdateCategoryTaxonomyStatus(_ context.Context, namespace, name string, patch datastore.CategoryTaxonomyStatusPatch) (*datastore.CategoryTaxonomy, error) {
+	m.categoryMutationMu.Lock()
+	defer m.categoryMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, err := txn.First("category_taxonomy", "name_namespace", namespace, name)
 	if err != nil || raw == nil {
@@ -875,10 +886,13 @@ func (m *memdbDatastore) UpdateCategoryTaxonomyStatus(_ context.Context, namespa
 		return nil, err
 	}
 	txn.Commit()
+	m.recordCommittedCategoryTaxonomy(datastore.ResourceWatchModified, updated, raw.(*datastore.CategoryTaxonomy).Labels)
 	return cloneCategoryTaxonomy(updated), nil
 }
 
 func (m *memdbDatastore) DeleteCategoryTaxonomy(_ context.Context, uid string) error {
+	m.categoryMutationMu.Lock()
+	defer m.categoryMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("category_taxonomy", "id", uid)
 	if raw == nil {
@@ -894,6 +908,7 @@ func (m *memdbDatastore) DeleteCategoryTaxonomy(_ context.Context, uid string) e
 		return fmt.Errorf("memdb: delete category_taxonomy: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedCategoryTaxonomy(datastore.ResourceWatchDeleted, raw.(*datastore.CategoryTaxonomy), nil)
 	return nil
 }
 

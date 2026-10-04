@@ -13,7 +13,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/prometheus/client_golang/prometheus"
@@ -26,8 +25,7 @@ import (
 
 // Product's typed and generic streams must be two projections of the same
 // durable record, including selector entry/exit semantics. This guards the
-// controller's typed stream from accidentally falling back to process-local
-// eventbus cursors.
+// controller's typed stream from depending on process-local cursors.
 func TestTypedAndGenericProductWatchShareDurableJournal(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -80,13 +78,11 @@ func TestTypedAndGenericProductWatchShareDurableJournal(t *testing.T) {
 	assert.Equal(t, model.WatchEventTypeDeleted, receiveGenericProductEvent(t, generic).Type)
 }
 
-func TestProductWatchNeverFallsBackToEventBusWithoutJournal(t *testing.T) {
+func TestProductWatchFailsClosedWithoutJournal(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
-	bus := eventbus.New(16)
-	bus.Publish(eventbus.Event{Kind: "Product", Type: eventbus.Added, Name: "legacy"})
 	for _, cfg := range []config.NamespaceWatchConfig{{}, {ReadersEnabled: true}} {
-		r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop(), EventBus: bus, NamespaceWatch: cfg})
+		r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop(), NamespaceWatch: cfg})
 		require.NoError(t, err)
 		_, err = r.Subscription().WatchProducts(t.Context(), nil, nil, nil)
 		require.Error(t, err)
@@ -126,13 +122,13 @@ func TestProductWatchOutputRecordsBoundedOverflowMetrics(t *testing.T) {
 	assert.Equal(t, watchjournal.CodeExpired, terminal.Code)
 	assert.Equal(t, watchjournal.ReasonSubscriberOverflow, terminal.Reason)
 	require.NoError(t, testutil.GatherAndCompare(registry, strings.NewReader(`
-# HELP gitstore_namespace_watch_expired_total Namespace watches terminated because continuity was not provable.
-# TYPE gitstore_namespace_watch_expired_total counter
-gitstore_namespace_watch_expired_total{reason="SUBSCRIBER_OVERFLOW"} 1
-# HELP gitstore_namespace_watch_overflow_total Namespace subscriber buffer overflows.
-# TYPE gitstore_namespace_watch_overflow_total counter
-gitstore_namespace_watch_overflow_total 1
-`), "gitstore_namespace_watch_expired_total", "gitstore_namespace_watch_overflow_total"))
+# HELP gitstore_resource_watch_expired_total Resource watches terminated because continuity was not provable.
+# TYPE gitstore_resource_watch_expired_total counter
+gitstore_resource_watch_expired_total{reason="SUBSCRIBER_OVERFLOW"} 1
+# HELP gitstore_resource_watch_overflow_total Resource watch subscriber buffer overflows.
+# TYPE gitstore_resource_watch_overflow_total counter
+gitstore_resource_watch_overflow_total 1
+`), "gitstore_resource_watch_expired_total", "gitstore_resource_watch_overflow_total"))
 }
 
 // Product watches must fail closed when the shared journal materializer is not

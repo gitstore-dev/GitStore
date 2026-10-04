@@ -267,3 +267,24 @@ func (m *memdbDatastore) recordCommittedFile(eventType datastore.ResourceWatchEv
 		At:               now,
 	})
 }
+
+// CategoryTaxonomy writes hold categoryMutationMu through commit and
+// publication, mirroring File, so journal order matches commit order.
+func (m *memdbDatastore) recordCommittedCategoryTaxonomy(eventType datastore.ResourceWatchEventType, category *datastore.CategoryTaxonomy, previousLabels map[string]string) {
+	now := time.Now().UTC()
+	var payload []byte
+	if eventType == datastore.ResourceWatchAdded || eventType == datastore.ResourceWatchModified {
+		payload, _ = json.Marshal(category)
+	}
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	m.pruneLocked(now.Add(-m.namespaceWatchRetention))
+	m.namespaceWatchSequence++
+	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.ResourceWatchEvent{
+		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
+		Type: eventType, Kind: "CategoryTaxonomy", Namespace: category.Namespace, Name: category.Name, Payload: payload,
+		SelectorLabels: cloneStringMap(category.Labels), PreviousSelectorLabels: cloneStringMap(previousLabels),
+		DeduplicationKey: fmt.Sprintf("memdb:%s:%s:%d", eventType, category.UID, m.namespaceWatchSequence),
+		At:               now,
+	})
+}

@@ -31,5 +31,5 @@ func (r *queryResolver) File(ctx context.Context, namespace string, name string)
 
 // WatchFiles is the resolver for the watchFiles field.
 func (r *subscriptionResolver) WatchFiles(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.FileWatchEvent, error) {
-	return watchFileJournal(ctx, r.Resolver, namespace, selector, resourceVersion, "typed", fileJournalEventToGraphQL)
+	return watchCatalogJournal(ctx, r.Resolver, "File", namespace, selector, resourceVersion, "typed", fileJournalEventToGraphQL)
 }

@@ -24,8 +24,8 @@ type namespaceCDCTestRunner interface {
 	RunNamespaceCDC(context.Context, *watchjournal.Materializer, datastore.NamespaceWatchLease, time.Duration, time.Duration, func()) error
 }
 
-type productCDCTestRunner interface {
-	RunProductCDC(context.Context, *watchjournal.Materializer, datastore.ResourceWatchLease, time.Duration, time.Duration, func()) error
+type catalogCDCTestRunner interface {
+	RunCatalogCDC(context.Context, string, *watchjournal.Materializer, datastore.ResourceWatchLease, time.Duration, time.Duration, func()) error
 }
 
 type namespaceWatchBatchAppender interface {
@@ -34,14 +34,14 @@ type namespaceWatchBatchAppender interface {
 
 func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *testing.T) {
 	raw := newRawSession(t)
-	require.NoError(t, raw.Query("TRUNCATE namespace_watch_events").Exec())
-	require.NoError(t, raw.Query("TRUNCATE namespace_watch_clock").Exec())
+	require.NoError(t, raw.Query("TRUNCATE resource_watch_events").Exec())
+	require.NoError(t, raw.Query("TRUNCATE resource_watch_clock").Exec())
 	raw.Close()
 	t.Cleanup(func() {
 		cleanup := newRawSession(t)
 		defer cleanup.Close()
-		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_events").Exec())
-		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_clock").Exec())
+		require.NoError(t, cleanup.Query("TRUNCATE resource_watch_events").Exec())
+		require.NoError(t, cleanup.Query("TRUNCATE resource_watch_clock").Exec())
 	})
 
 	store := newTestStoreWithWatchBucket(t, 3)
@@ -176,12 +176,12 @@ func TestNamespaceWatchBoundsPerStreamProgressAcrossGenerations(t *testing.T) {
 	defer raw.Close()
 	dynamic := map[string]any{}
 	require.NoError(t, raw.Query(
-		"SELECT TTL(position) AS ttl FROM namespace_watch_clock WHERE journal=? AND stream_id=?",
+		"SELECT TTL(position) AS ttl FROM resource_watch_clock WHERE journal=? AND stream_id=?",
 	).Bind("resource", "generation:table:stream").MapScan(dynamic))
 	require.NotNil(t, dynamic["ttl"])
 	durable := map[string]any{}
 	require.NoError(t, raw.Query(
-		"SELECT TTL(position) AS ttl FROM namespace_watch_clock WHERE journal=? AND stream_id=?",
+		"SELECT TTL(position) AS ttl FROM resource_watch_clock WHERE journal=? AND stream_id=?",
 	).Bind("resource", "__namespace_cdc_generation__").MapScan(durable))
 	require.Equal(t, 0, durable["ttl"])
 }
@@ -222,14 +222,14 @@ func TestNamespaceWatchHidesStagedNamespaceFromBootstrapReads(t *testing.T) {
 func TestNamespaceWatchRejectsBucketLayoutMismatch(t *testing.T) {
 	first := newTestStore(t).(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
 	raw := newRawSession(t)
-	require.NoError(t, raw.Query("TRUNCATE namespace_watch_events").Exec())
-	require.NoError(t, raw.Query("TRUNCATE namespace_watch_clock").Exec())
+	require.NoError(t, raw.Query("TRUNCATE resource_watch_events").Exec())
+	require.NoError(t, raw.Query("TRUNCATE resource_watch_clock").Exec())
 	raw.Close()
 	t.Cleanup(func() {
 		cleanup := newRawSession(t)
 		defer cleanup.Close()
-		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_events").Exec())
-		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_clock").Exec())
+		require.NoError(t, cleanup.Query("TRUNCATE resource_watch_events").Exec())
+		require.NoError(t, cleanup.Query("TRUNCATE resource_watch_clock").Exec())
 	})
 
 	_, acquired, err := first.AcquireLease(context.Background(), "replica-a", time.Now().UTC(), time.Minute)
@@ -244,13 +244,13 @@ func TestNamespaceWatchRejectsBucketLayoutMismatch(t *testing.T) {
 func TestNamespaceWatchInitializesBucketLayoutForMigrationFirstClock(t *testing.T) {
 	journal := newTestStore(t).(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
 	raw := newRawSession(t)
-	require.NoError(t, raw.Query("TRUNCATE namespace_watch_events").Exec())
-	require.NoError(t, raw.Query("TRUNCATE namespace_watch_clock").Exec())
+	require.NoError(t, raw.Query("TRUNCATE resource_watch_events").Exec())
+	require.NoError(t, raw.Query("TRUNCATE resource_watch_clock").Exec())
 	epoch, err := gocql.RandomUUID()
 	require.NoError(t, err)
 	zeroExpiry := time.Unix(0, 0).UTC()
 	require.NoError(t, raw.Query(
-		"INSERT INTO namespace_watch_clock (journal,stream_id,epoch,high_water,oldest,update_timestamp,cdc_progress_timestamp,lease_holder,fencing_token,lease_expiration_timestamp) VALUES (?,?,?,?,?,?,?,?,?,?)",
+		"INSERT INTO resource_watch_clock (journal,stream_id,epoch,high_water,oldest,update_timestamp,cdc_progress_timestamp,lease_holder,fencing_token,lease_expiration_timestamp) VALUES (?,?,?,?,?,?,?,?,?,?)",
 	).Bind("resource", "__clock__", epoch, int64(0), int64(0), time.Now().UTC(), zeroExpiry, "", int64(0), zeroExpiry).Exec())
 	raw.Close()
 
@@ -262,21 +262,21 @@ func TestNamespaceWatchInitializesBucketLayoutForMigrationFirstClock(t *testing.
 	verify := newRawSession(t)
 	defer verify.Close()
 	var bucketSize int64
-	require.NoError(t, verify.Query("SELECT bucket_size FROM namespace_watch_clock WHERE journal=? LIMIT 1").Bind("resource").Scan(&bucketSize))
+	require.NoError(t, verify.Query("SELECT bucket_size FROM resource_watch_clock WHERE journal=? LIMIT 1").Bind("resource").Scan(&bucketSize))
 	require.Equal(t, int64(watchjournal.DefaultBucketSize), bucketSize)
 }
 
 func TestNamespaceWatchBoundsAdvanceAfterTTLExpiry(t *testing.T) {
 	store := newTestStoreWithWatchBucket(t, 2)
 	raw := newRawSession(t)
-	require.NoError(t, raw.Query("TRUNCATE namespace_watch_events").Exec())
-	require.NoError(t, raw.Query("TRUNCATE namespace_watch_clock").Exec())
+	require.NoError(t, raw.Query("TRUNCATE resource_watch_events").Exec())
+	require.NoError(t, raw.Query("TRUNCATE resource_watch_clock").Exec())
 	raw.Close()
 	t.Cleanup(func() {
 		cleanup := newRawSession(t)
 		defer cleanup.Close()
-		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_events").Exec())
-		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_clock").Exec())
+		require.NoError(t, cleanup.Query("TRUNCATE resource_watch_events").Exec())
+		require.NoError(t, cleanup.Query("TRUNCATE resource_watch_clock").Exec())
 	})
 
 	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
@@ -334,7 +334,7 @@ func namespaceWatchEventCount(t *testing.T, count *int64) error {
 	t.Helper()
 	raw := newRawSession(t)
 	defer raw.Close()
-	return raw.Query("SELECT count(*) FROM namespace_watch_events").Scan(count)
+	return raw.Query("SELECT count(*) FROM resource_watch_events").Scan(count)
 }
 
 func TestNamespaceAuthoritativeCommitsProduceCDCButRejectedWritesDoNot(t *testing.T) {
@@ -498,7 +498,7 @@ func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
 // controller can complete the finalizer.
 func TestProductCDCReaderMaterializesTerminationEvent(t *testing.T) {
 	store := newTestStore(t)
-	runner, ok := store.(productCDCTestRunner)
+	runner, ok := store.(catalogCDCTestRunner)
 	require.True(t, ok)
 	capable, ok := store.(datastore.ResourceWatchCapable)
 	require.True(t, ok)
@@ -514,7 +514,7 @@ func TestProductCDCReaderMaterializesTerminationEvent(t *testing.T) {
 	errCh := make(chan error, 1)
 	ready := make(chan struct{})
 	go func() {
-		errCh <- runner.RunProductCDC(ctx, materializer, lease, 14*24*time.Hour, 500*time.Millisecond, func() { close(ready) })
+		errCh <- runner.RunCatalogCDC(ctx, "Product", materializer, lease, 14*24*time.Hour, 500*time.Millisecond, func() { close(ready) })
 	}()
 	select {
 	case <-ready:
@@ -592,17 +592,15 @@ func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *tes
 		return lease
 	}
 	start := func(backend datastore.Datastore, lease datastore.ResourceWatchLease) func() {
-		runner := backend.(interface {
-			RunFileCDC(context.Context, *watchjournal.Materializer, datastore.ResourceWatchLease, time.Duration, time.Duration, func()) error
-		})
+		runner := backend.(catalogCDCTestRunner)
 		materializer := watchjournal.NewMaterializer(backend.(datastore.ResourceWatchCapable).ResourceWatchJournal(), watchjournal.MaterializerConfig{EventTTL: time.Hour})
 		ctx, cancel := context.WithCancel(t.Context())
 		done, ready := make(chan error, 2), make(chan struct{}, 2)
 		go func() {
-			done <- runner.RunFileCDC(ctx, materializer, lease, 14*24*time.Hour, 500*time.Millisecond, func() { ready <- struct{}{} })
+			done <- runner.RunCatalogCDC(ctx, "File", materializer, lease, 14*24*time.Hour, 500*time.Millisecond, func() { ready <- struct{}{} })
 		}()
 		go func() {
-			done <- backend.(productCDCTestRunner).RunProductCDC(ctx, materializer, lease, 14*24*time.Hour, 500*time.Millisecond, func() { ready <- struct{}{} })
+			done <- runner.RunCatalogCDC(ctx, "Product", materializer, lease, 14*24*time.Hour, 500*time.Millisecond, func() { ready <- struct{}{} })
 		}()
 		var stopped bool
 		stop := func() {
@@ -724,4 +722,84 @@ func waitForNamespaceCDCRows(t *testing.T, previous int64) int64 {
 	}
 	t.Fatalf("Namespace CDC rows did not advance beyond %d", previous)
 	return previous
+}
+
+// CategoryTaxonomy CDC decodes the hierarchy columns that the shared catalog
+// envelope lacks, and journals the whole foreground-deletion lifecycle.
+func TestCategoryTaxonomyCDCReaderMaterializesLifecycle(t *testing.T) {
+	store := newTestStore(t)
+	runner, ok := store.(catalogCDCTestRunner)
+	require.True(t, ok)
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	lease, acquired, err := journal.AcquireLease(context.Background(), "category-integration-reader", time.Now().UTC(), 2*time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
+	materializer := watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: 7 * 24 * time.Hour})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	ready := make(chan struct{})
+	go func() {
+		errCh <- runner.RunCatalogCDC(ctx, "CategoryTaxonomy", materializer, lease, 14*24*time.Hour, 500*time.Millisecond, func() { close(ready) })
+	}()
+	select {
+	case <-ready:
+	case runErr := <-errCh:
+		require.NoError(t, runErr)
+	case <-time.After(10 * time.Second):
+		t.Fatal("CategoryTaxonomy CDC reader did not become ready")
+	}
+
+	category := newCategoryTaxonomy("cdc-categories", "laptops-"+newID()[:8])
+	category.ParentName = "computers"
+	category.AncestorPath = "electronics/computers/" + category.Name
+	category.ResourceVersion = "1"
+	require.NoError(t, store.CreateCategoryTaxonomy(context.Background(), category))
+
+	bounds, err := journal.Bounds(context.Background())
+	require.NoError(t, err)
+	cursor := datastore.ResourceWatchCursor{Epoch: bounds.Epoch}
+	if bounds.Oldest > 0 {
+		cursor.Sequence = bounds.Oldest - 1
+	}
+	next := func(eventType datastore.ResourceWatchEventType) datastore.ResourceWatchEvent {
+		t.Helper()
+		deadline := time.Now().Add(75 * time.Second)
+		for time.Now().Before(deadline) {
+			events, readErr := journal.ReadAfter(context.Background(), cursor, 256)
+			require.NoError(t, readErr)
+			for _, event := range events {
+				cursor.Sequence = event.Sequence
+				if event.Kind == "CategoryTaxonomy" && event.Name == category.Name && event.Type == eventType {
+					require.Equal(t, "cdc-categories", event.Namespace)
+					return event
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Fatalf("CategoryTaxonomy %s event was not materialized into the durable journal", eventType)
+		return datastore.ResourceWatchEvent{}
+	}
+
+	added := next(datastore.ResourceWatchAdded)
+	var observed datastore.CategoryTaxonomy
+	require.NoError(t, json.Unmarshal(added.Payload, &observed))
+	require.Equal(t, category.UID, observed.UID)
+	require.Equal(t, "computers", observed.ParentName)
+	require.Equal(t, category.AncestorPath, observed.AncestorPath)
+
+	deletion := store.(datastore.CategoryTaxonomyDeletionStore)
+	terminating, err := deletion.MarkCategoryTaxonomyDeletion(context.Background(), category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
+	require.NoError(t, err)
+	modified := next(datastore.ResourceWatchModified)
+	require.NoError(t, json.Unmarshal(modified.Payload, &observed))
+	require.Equal(t, terminating.ResourceVersion, observed.ResourceVersion)
+	require.NotNil(t, observed.DeletionTimestamp)
+
+	_, err = deletion.CompleteCategoryTaxonomyDeletion(context.Background(), category.Namespace, category.Name, terminating.ResourceVersion)
+	require.NoError(t, err)
+	deleted := next(datastore.ResourceWatchDeleted)
+	require.Empty(t, deleted.Payload)
 }

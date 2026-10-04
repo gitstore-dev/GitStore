@@ -25,7 +25,7 @@ func TestNamespaceWatchDocumentationContract(t *testing.T) {
 		"INCOMPATIBLE_CURSOR", "INVALID_CURSOR", "REPLAY_LIMIT", "SUBSCRIBER_OVERFLOW",
 		"JOURNAL_DISCONTINUITY", "ADDED", "MODIFIED", "DELETED", "BOOKMARK",
 		"Terminating", "finalizers", "at-least-once", "namespace.watch",
-		"watchResources(kind: \"Namespace\")", "deletionTimestamp", "spec 047",
+		"watchResources(kind: \"Namespace\")", "deletionTimestamp",
 	} {
 		if !strings.Contains(doc, required) {
 			t.Errorf("documentation is missing %q", required)

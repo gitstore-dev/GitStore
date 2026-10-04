@@ -1,3 +1,5 @@
+-- ServiceAccount, listing projection and assertion replay protection;
+
 CREATE TABLE IF NOT EXISTS service_accounts_by_namespace (
     namespace          text,
     creation_timestamp timestamp,
@@ -22,4 +24,17 @@ CREATE TABLE IF NOT EXISTS service_accounts_by_name (
 CREATE TABLE IF NOT EXISTS service_accounts_by_uid (
     uid uuid, namespace text, creation_timestamp timestamp,
     PRIMARY KEY ((uid))
+);
+
+CREATE TABLE IF NOT EXISTS service_accounts_by_bucket (
+    bucket             text,
+    creation_timestamp timestamp,
+    uid                uuid,
+    namespace          text,
+    PRIMARY KEY ((bucket), creation_timestamp, uid)
+) WITH gc_grace_seconds = 864000;
+
+CREATE TABLE IF NOT EXISTS service_account_assertion_replays (
+    jti_digest text PRIMARY KEY,
+    consumed_at timestamp
 );

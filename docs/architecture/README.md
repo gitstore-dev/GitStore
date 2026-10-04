@@ -710,8 +710,6 @@ Deletion is blocked while the Namespace contains repositories. A successful
 request begins foreground termination; permanent removal requires the
 controller-only completion step after lifecycle preconditions are met.
 
-For quickstart examples and `curl`-based testing, see [`specs/009-api-namespaces/quickstart.md`](../../specs/009-api-namespaces/quickstart.md).
-
 ---
 
 ## Accepted Architecture: Admission, Namespace Watch, and Reconciliation

@@ -134,8 +134,8 @@ func TestServiceAccountListingUsesBoundedCursorQuery(t *testing.T) {
 	assert.Len(t, query.Args, 3)
 }
 
-func TestInitialSchemaUsesQueryFirstNamespaceTables(t *testing.T) {
-	content, err := migrations.Files.ReadFile("001_initial_schema.cql")
+func TestNamespaceMigrationUsesQueryFirstNamespaceTables(t *testing.T) {
+	content, err := migrations.Files.ReadFile("002_namespace.cql")
 	require.NoError(t, err)
 	schema := string(content)
 
@@ -159,7 +159,9 @@ func TestInitialSchemaUsesQueryFirstNamespaceTables(t *testing.T) {
 	assert.NotContains(t, schema, "TimeWindowCompactionStrategy")
 }
 
-func TestScyllaSchemaIncludesOwnerReferenceProjectionMigration(t *testing.T) {
+// The schema is a single per-resource baseline; later changes are appended
+// as incremental migrations rather than edited into these files.
+func TestScyllaSchemaIsPerResourceBaseline(t *testing.T) {
 	entries, err := migrations.Files.ReadDir(".")
 	require.NoError(t, err)
 
@@ -170,44 +172,42 @@ func TestScyllaSchemaIncludesOwnerReferenceProjectionMigration(t *testing.T) {
 		}
 	}
 
-	assert.ElementsMatch(t, []string{
-		"001_initial_schema.cql",
-		"002_secondary_indexes.cql",
-		"003_owner_reference_dependents.cql",
-		"004_file_resource.cql",
-		"005_namespace_repository_fence.cql",
-		"006_namespace_watch_cdc.cql",
-		"007_auth_session_revocations.cql",
-		"008_service_account.cql",
-		"009_service_account_assertion_replay.cql",
-		"010_service_account_listing.cql",
-		"011_resource_watch_journal.cql",
-		"012_repository_watch_cdc.cql",
-		"013_product_watch_cdc.cql",
-		"014_file_watch_cdc.cql",
+	assert.Equal(t, []string{
+		"001_infra.cql",
+		"002_namespace.cql",
+		"003_repository.cql",
+		"004_category_taxonomy.cql",
+		"005_product.cql",
+		"006_product_variant.cql",
+		"007_collection.cql",
+		"008_file.cql",
+		"009_service_account.cql",
 	}, names)
 }
 
-func TestAuthSessionRevocationMigration(t *testing.T) {
-	content, err := migrations.Files.ReadFile("007_auth_session_revocations.cql")
+func TestInfraMigrationDefinesSharedTables(t *testing.T) {
+	content, err := migrations.Files.ReadFile("001_infra.cql")
 	require.NoError(t, err)
 	schema := string(content)
-	assert.Contains(t, schema, "CREATE TABLE IF NOT EXISTS auth_session_revocations")
+	for _, table := range []string{"resource_watch_clock", "resource_watch_events", "owner_reference_dependents", "auth_session_revocations"} {
+		assert.Contains(t, schema, "CREATE TABLE IF NOT EXISTS "+table+" (")
+	}
 	assert.Contains(t, schema, "jti text PRIMARY KEY")
 	assert.Contains(t, schema, "expires_at timestamp")
+	assert.NotContains(t, schema, "namespace_watch_")
 }
 
-func TestNamespaceRepositoryFenceMigration(t *testing.T) {
-	content, err := migrations.Files.ReadFile("005_namespace_repository_fence.cql")
+func TestNamespaceMigrationIncludesRepositoryFenceColumns(t *testing.T) {
+	content, err := migrations.Files.ReadFile("002_namespace.cql")
 	require.NoError(t, err)
-	assert.Contains(t, string(content), "ALTER TABLE namespaces_by_uid ADD repository_creation_epoch bigint")
-	assert.Contains(t, string(content), "ALTER TABLE namespaces_by_uid ADD pending_repository_creations bigint")
+	assert.Contains(t, string(content), "repository_creation_epoch    bigint")
+	assert.Contains(t, string(content), "pending_repository_creations bigint")
 	assert.Contains(t, NamespaceByUID.Metadata().Columns, "repository_creation_epoch")
 	assert.Contains(t, NamespaceByUID.Metadata().Columns, "pending_repository_creations")
 }
 
 func TestFileMigrationDefinesAuthoritativeAndLookupTables(t *testing.T) {
-	content, err := migrations.Files.ReadFile("004_file_resource.cql")
+	content, err := migrations.Files.ReadFile("008_file.cql")
 	require.NoError(t, err)
 	schema := string(content)
 	for _, tableName := range []string{"files_by_namespace", "files_by_name", "files_by_uid"} {
@@ -219,12 +219,15 @@ func TestFileMigrationDefinesAuthoritativeAndLookupTables(t *testing.T) {
 	assert.Contains(t, schema, "PRIMARY KEY ((namespace), creation_timestamp, uid)")
 }
 
-func TestSecondaryIndexMigrationIsIntentionallyEmpty(t *testing.T) {
-	content, err := migrations.Files.ReadFile("002_secondary_indexes.cql")
+func TestMigrationsDefineNoSecondaryIndexesOrViews(t *testing.T) {
+	entries, err := migrations.Files.ReadDir(".")
 	require.NoError(t, err)
-	schema := string(content)
-
-	assert.NotContains(t, schema, "CREATE INDEX")
-	assert.NotContains(t, schema, "CREATE CUSTOM INDEX")
-	assert.Contains(t, schema, "Query-first tables")
+	for _, entry := range entries {
+		content, err := migrations.Files.ReadFile(entry.Name())
+		require.NoError(t, err)
+		schema := strings.ToUpper(string(content))
+		assert.NotContainsf(t, schema, "CREATE INDEX", "%s", entry.Name())
+		assert.NotContainsf(t, schema, "CREATE CUSTOM INDEX", "%s", entry.Name())
+		assert.NotContainsf(t, schema, "MATERIALIZED VIEW", "%s", entry.Name())
+	}
 }

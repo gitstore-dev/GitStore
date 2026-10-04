@@ -157,7 +157,7 @@ func TestLoad_RejectsCDCWindowDifferentFromSchema(t *testing.T) {
 
 	_, err := Load()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "migration 006 fixes CDC retention")
+	assert.Contains(t, err.Error(), "the baseline schema fixes CDC retention")
 }
 
 func TestLoad_RejectsJournalRetentionAboveTableTTL(t *testing.T) {
@@ -168,7 +168,7 @@ func TestLoad_RejectsJournalRetentionAboveTableTTL(t *testing.T) {
 
 	_, err := Load()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "migration 006 limits journal retention to 604800 seconds")
+	assert.Contains(t, err.Error(), "the baseline schema limits journal retention to 604800 seconds")
 }
 
 func TestLoad_RejectsOversizedNamespaceSubscriberBuffer(t *testing.T) {

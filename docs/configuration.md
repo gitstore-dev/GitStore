@@ -473,7 +473,7 @@ authentication](runbooks/controller-auth.md) for enrollment, rotation,
 readiness, and recovery procedures.
 
 List-then-watch bootstrap, restart resume, and expired-watch-cursor recovery for registered
-resource kinds (spec 036) persist a per-kind restart checkpoint under `controller.checkpoint.dir`. Each
+resource kinds persist a per-kind restart checkpoint under `controller.checkpoint.dir`. Each
 checkpoint contains the `resourceVersion`, cache snapshot, and deletion replay keys needed to
 restore volatile controller state without losing queued reconciliation work.
 Checkpoint health — last successful write time, replay backlog, and write-failure count — is

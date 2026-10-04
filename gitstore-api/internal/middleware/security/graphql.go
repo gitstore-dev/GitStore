@@ -1154,9 +1154,13 @@ func (a *Authorize) authorizeSubscription(
 		kind = "Repository"
 	case "watchProducts":
 		kind = "Product"
+	case "watchCategories":
+		kind = "CategoryTaxonomy"
 	case "watchResources":
 		kind, _ = directStringArg(fc.Args, "kind")
-		if kind != "File" && kind != "Namespace" && kind != "Repository" && kind != "Product" {
+		if kind != "File" && kind != "Namespace" && kind != "Repository" && kind != "Product" && kind != "CategoryTaxonomy" {
+			// No other kind has a durable watch source; the resolver
+			// rejects it with UNSUPPORTED_KIND without opening a stream.
 			return next(ctx)
 		}
 	default:
@@ -1165,9 +1169,11 @@ func (a *Authorize) authorizeSubscription(
 	if authz == nil {
 		return nil, gqlerror.Errorf("authorization service unavailable")
 	}
+	// Every kind, including CategoryTaxonomy, uses the ADR 0010 slug
+	// grammar: lowerCamel(kind).watch.
 	action := lowerCamelFirst(kind) + ".watch"
 	resource := auth.ResourceContext{Kind: kind, Attrs: map[string]any{}}
-	if kind == "File" || kind == "Repository" || kind == "Product" {
+	if kind == "File" || kind == "Repository" || kind == "Product" || kind == "CategoryTaxonomy" {
 		namespace, _ := directStringArg(fc.Args, "namespace")
 		resource.Attrs["namespace"] = namespace
 	}

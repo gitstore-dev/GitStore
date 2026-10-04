@@ -29,28 +29,28 @@ func TestProductObservabilityContract_BoundedJournalAndAlertSignals(t *testing.T
 	metrics.IncExpiry(watchjournal.ReasonSubscriberOverflow)
 
 	require.NoError(t, testutil.GatherAndCompare(registry, strings.NewReader(`
-# HELP gitstore_namespace_watch_materializer_leader Whether this replica owns the fenced Namespace CDC materializer lease.
-# TYPE gitstore_namespace_watch_materializer_leader gauge
-gitstore_namespace_watch_materializer_leader 1
-# HELP gitstore_namespace_watch_subscribers Active Namespace watch subscribers.
-# TYPE gitstore_namespace_watch_subscribers gauge
-gitstore_namespace_watch_subscribers{path="typed"} 2
-# HELP gitstore_namespace_watch_expired_total Namespace watches terminated because continuity was not provable.
-# TYPE gitstore_namespace_watch_expired_total counter
-gitstore_namespace_watch_expired_total{reason="SUBSCRIBER_OVERFLOW"} 1
-# HELP gitstore_namespace_watch_overflow_total Namespace subscriber buffer overflows.
-# TYPE gitstore_namespace_watch_overflow_total counter
-gitstore_namespace_watch_overflow_total 1
-`), "gitstore_namespace_watch_materializer_leader", "gitstore_namespace_watch_subscribers", "gitstore_namespace_watch_expired_total", "gitstore_namespace_watch_overflow_total"))
+# HELP gitstore_resource_watch_materializer_leader Whether this replica owns the fenced resource watch CDC materializer lease.
+# TYPE gitstore_resource_watch_materializer_leader gauge
+gitstore_resource_watch_materializer_leader 1
+# HELP gitstore_resource_watch_subscribers Active resource watch subscribers.
+# TYPE gitstore_resource_watch_subscribers gauge
+gitstore_resource_watch_subscribers{path="typed"} 2
+# HELP gitstore_resource_watch_expired_total Resource watches terminated because continuity was not provable.
+# TYPE gitstore_resource_watch_expired_total counter
+gitstore_resource_watch_expired_total{reason="SUBSCRIBER_OVERFLOW"} 1
+# HELP gitstore_resource_watch_overflow_total Resource watch subscriber buffer overflows.
+# TYPE gitstore_resource_watch_overflow_total counter
+gitstore_resource_watch_overflow_total 1
+`), "gitstore_resource_watch_materializer_leader", "gitstore_resource_watch_subscribers", "gitstore_resource_watch_expired_total", "gitstore_resource_watch_overflow_total"))
 
 	_, current, _, _ := runtime.Caller(0)
 	docPath := filepath.Join(filepath.Dir(current), "..", "..", "..", "docs", "runbooks", "controller-watch-status.md")
 	doc, err := os.ReadFile(docPath)
 	require.NoError(t, err)
 	for _, required := range []string{
-		"gitstore_namespace_watch_materializer_leader",
-		"gitstore_namespace_watch_overflow_total",
-		"gitstore_namespace_watch_expired_total{reason}",
+		"gitstore_resource_watch_materializer_leader",
+		"gitstore_resource_watch_overflow_total",
+		"gitstore_resource_watch_expired_total{reason}",
 		"delivery p95 exceeds 1 second",
 	} {
 		require.Contains(t, string(doc), required)

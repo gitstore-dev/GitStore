@@ -298,7 +298,7 @@ type DeleteNamespacePayload {
 }
 
 """
-Reassign a namespace's owner (ADR-0010 §14). Distinct from transferRepository,
+Reassign a namespace's owner. Distinct from transferRepository,
 which relocates a repository between namespaces and is unrelated to
 principal ownership.
 """
@@ -369,7 +369,7 @@ extend type Mutation {
   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
 
   """
-  Reassign a namespace's owner (ADR-0010 §14). Requires authentication.
+  Reassign a namespace's owner. Requires authentication.
   Caller must currently be the namespace owner (or isAdmin), and must be a
   member of the target owner (or isAdmin).
   """

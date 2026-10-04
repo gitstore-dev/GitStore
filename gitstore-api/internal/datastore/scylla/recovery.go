@@ -375,8 +375,8 @@ func (s *scyllaDatastore) reserveSKUWithMode(
 	createdAt time.Time,
 	repairSameOwner bool,
 ) (bool, error) {
-	const tableName = "product_variant_by_sku"
-	statement := "INSERT INTO product_variant_by_sku (namespace,sku,uid,creation_timestamp) VALUES (?,?,?,?) IF NOT EXISTS"
+	const tableName = "product_variants_by_sku"
+	statement := "INSERT INTO product_variants_by_sku (namespace,sku,uid,creation_timestamp) VALUES (?,?,?,?) IF NOT EXISTS"
 	return s.reserveOwned(ctx, datastore.MutationStep{
 		Operation:    "reserve",
 		ResourceKind: "ProductVariant",
@@ -402,7 +402,7 @@ func (s *scyllaDatastore) reserveSKUWithMode(
 			return fmt.Errorf("%w: sku %s/%s has stale identity metadata", datastore.ErrConflict, namespace, sku)
 		}
 		applied, err := s.session.Query(
-			"UPDATE product_variant_by_sku SET creation_timestamp=? WHERE namespace=? AND sku=? IF uid=?",
+			"UPDATE product_variants_by_sku SET creation_timestamp=? WHERE namespace=? AND sku=? IF uid=?",
 			nil,
 		).WithContext(ctx).Bind(createdAt, namespace, sku, owner).ExecCASRelease()
 		if err != nil {
@@ -502,10 +502,10 @@ func (s *scyllaDatastore) releaseSKU(
 	owner gocql.UUID,
 ) error {
 	return s.releaseOwned(ctx,
-		"DELETE FROM product_variant_by_sku WHERE namespace=? AND sku=? IF uid=?",
+		"DELETE FROM product_variants_by_sku WHERE namespace=? AND sku=? IF uid=?",
 		[]any{namespace, sku, owner},
 		datastore.ProjectionFinding{
-			ResourceKind: "ProductVariant", ResourceUID: owner.String(), Projection: "product_variant_by_sku",
+			ResourceKind: "ProductVariant", ResourceUID: owner.String(), Projection: "product_variants_by_sku",
 			LookupKey: namespace + "/" + sku, Operation: "release", Type: datastore.FindingStale,
 		},
 	)
@@ -532,12 +532,12 @@ func resourceKindForProjection(tableName string) string {
 	switch tableName {
 	case "products_by_name", "products_by_uid", "products_by_namespace":
 		return "Product"
-	case "category_taxonomy_by_name", "category_taxonomy_by_uid", "category_taxonomy":
+	case "category_taxonomies_by_name", "category_taxonomies_by_uid", "category_taxonomies_by_namespace":
 		return "CategoryTaxonomy"
-	case "collection_by_name", "collection_by_uid", "collection":
+	case "collections_by_name", "collections_by_uid", "collections_by_namespace":
 		return "Collection"
-	case "product_variant_by_name", "product_variant_by_uid", "product_variant_by_sku",
-		"product_variant_by_product_ref", "product_variant_by_namespace":
+	case "product_variants_by_name", "product_variants_by_uid", "product_variants_by_sku",
+		"product_variants_by_product_ref", "product_variants_by_namespace":
 		return "ProductVariant"
 	case "namespace_mappings":
 		return "Repository"

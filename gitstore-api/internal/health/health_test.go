@@ -52,7 +52,7 @@ func TestReadyFailsClosedWhenNamespaceWatchIsNotReady(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h := health.NewHandler(health.HandlerDeps{
 		Store: &testutil.StubStore{},
-		NamespaceWatchReady: func(context.Context) error {
+		ResourceWatchReady: func(context.Context) error {
 			return errors.New("materializer lag")
 		},
 	})
@@ -61,6 +61,6 @@ func TestReadyFailsClosedWhenNamespaceWatchIsNotReady(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ready", nil))
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
-	assert.Contains(t, w.Body.String(), `"namespace_watch"`)
+	assert.Contains(t, w.Body.String(), `"resource_watch"`)
 	assert.Contains(t, w.Body.String(), `"unhealthy"`)
 }

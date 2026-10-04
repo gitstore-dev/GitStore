@@ -4572,25 +4572,27 @@ extend type Mutation {
   """
   Partial-merge update to a CategoryTaxonomy's .status sub-resource.
   Only non-null input fields are changed; all other existing status
-  fields are left unchanged (FR-008, spec 040). Requires
+  fields are left unchanged. Requires
   resourceVersion to match the resource's current value or the
   request fails with a RESOURCE_VERSION_CONFLICT GraphQL error whose
-  extensions include the current resourceVersion (FR-009). Rejects any attempt
+  extensions include the current resourceVersion. Rejects any attempt
   to alter .spec or author-controlled .metadata by construction —
-  this input type has no such fields (FR-010). Requires
+  this input type has no such fields. Requires
   controller-level authorization independent of the resourceVersion
-  outcome (FR-011).
+  outcome.
   """
   updateCategoryStatus(input: UpdateCategoryStatusInput!): UpdateCategoryStatusPayload!
 }
 
 extend type Subscription {
   """
-  Dedicated, compile-time-typed watch entry point for CategoryTaxonomy.
-  Same list-then-watch/resourceVersion/expiry semantics as the generic
-  watchResources field (FR-001 through FR-004, spec 040), scoped to
-  this kind. Callers obtain the initial list via the existing
-  ` + "`" + `categories` + "`" + ` query.
+  Dedicated, compile-time-typed watch entry point for CategoryTaxonomy,
+  served from the durable, replica-safe resource watch journal. Same
+  list-then-watch/resourceVersion/expiry semantics as the generic
+  watchResources field, scoped to
+  this kind; both are projections of the same journal record. Callers
+  obtain the initial list via the existing ` + "`" + `categories` + "`" + ` query. Requires
+  the ` + "`" + `categoryTaxonomy.watch` + "`" + ` permission.
   """
   watchCategories(
     namespace: String
@@ -4702,9 +4704,8 @@ type ResolvedCategoryTaxonomy {
   Ancestor path from root to self, e.g. ["electronics", "computers",
   "laptops"] for the "laptops" category (root-to-self order). A root
   category's path is a single-element array containing its own name.
-  Distinct from Category.path, which is a read-time-derived field
-  computed from the separate ancestor_path datastore column (see
-  specs/040-controller-watch-status-api/research.md R9/R10).
+  Distinct from Category.path, which is derived when the category is
+  read.
   """
   path: [String!]!
   childCount: Int!
@@ -4771,7 +4772,7 @@ type DeleteCategoryPayload {
 }
 
 # ============================================================================
-# Status Subresource API (spec 040)
+# Status Subresource API
 # ============================================================================
 
 input UpdateCategoryStatusInput {
@@ -4779,12 +4780,12 @@ input UpdateCategoryStatusInput {
   namespace: String!
 
   """
-  Required optimistic-concurrency precondition (FR-009). Must equal
+  Required optimistic-concurrency precondition. Must equal
   the resource's current metadata.resourceVersion.
   """
   resourceVersion: String!
 
-  """Null = unchanged. Set on every successful reconcile per spec 026 FR-008."""
+  """Null = unchanged. Set on every successful reconcile."""
   observedGeneration: Int
 
   """Null = unchanged, e.g. "main@sha1:a1b2c3d"."""
@@ -4832,7 +4833,7 @@ type UpdateCategoryStatusPayload {
 }
 
 # ============================================================================
-# Watch API (spec 040)
+# Watch API
 # ============================================================================
 
 """
@@ -5498,7 +5499,7 @@ type DeleteNamespacePayload {
 }
 
 """
-Reassign a namespace's owner (ADR-0010 §14). Distinct from transferRepository,
+Reassign a namespace's owner. Distinct from transferRepository,
 which relocates a repository between namespaces and is unrelated to
 principal ownership.
 """
@@ -5569,7 +5570,7 @@ extend type Mutation {
   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
 
   """
-  Reassign a namespace's owner (ADR-0010 §14). Requires authentication.
+  Reassign a namespace's owner. Requires authentication.
   Caller must currently be the namespace owner (or isAdmin), and must be a
   member of the target owner (or isAdmin).
   """
@@ -5630,8 +5631,8 @@ extend type Query {
 extend type Subscription {
   """
   Dedicated, compile-time-typed watch entry point for Product. Same
-  list-then-watch/resourceVersion/expiry semantics as watchCategories
-  (spec 040), scoped to this kind. Callers obtain the initial list via
+  list-then-watch/resourceVersion/expiry semantics as watchCategories,
+  scoped to this kind. Callers obtain the initial list via
   the existing ` + "`" + `products` + "`" + ` query.
   """
   watchProducts(
@@ -6765,7 +6766,7 @@ type Mutation {
   compile-time-known ` + "`" + `resolved` + "`" + ` shape. Core kinds SHOULD use their
   dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
   this field exists so a kind unknown to the schema at build time can
-  still write status (FR-006, SC-005). Semantics (partial-merge,
+  still write status. Semantics (partial-merge,
   resourceVersion precondition, spec-write rejection by construction,
   controller authorization) are identical to the per-kind mutations.
   """
@@ -6780,12 +6781,12 @@ type Mutation {
 
 type Subscription {
   """
-  Generic list-then-watch entry point for any resource kind, including
-  CRD-defined kinds not built into the core schema (FR-006, spec 040).
-  Core kinds SHOULD prefer their dedicated per-kind subscription (e.g.
-  watchCategories) for compile-time-typed payloads; this field exists
-  so a kind unknown to the schema at build time can still be watched
-  (FR-006, SC-005).
+  Generic list-then-watch entry point for every kind with a durable watch
+  journal source: Namespace, Repository, CategoryTaxonomy, Product and File
+  today, and CRD-defined kinds once they register a source. Core kinds SHOULD prefer their dedicated per-kind subscription
+  (e.g. watchCategories) for compile-time-typed payloads. A kind without a
+  journal source is rejected with an UNSUPPORTED_KIND extension error
+  rather than an empty stream.
 
   Behavior:
   - resourceVersion omitted/empty: no implicit "list" is performed —
@@ -6794,9 +6795,9 @@ type Subscription {
     subscription with the resourceVersion returned by that list.
   - resourceVersion present but expired (older than server retention):
     the subscription terminates immediately with a WATCH_EXPIRED
-    extension error (FR-004) instead of silently resuming from scratch.
+    extension error instead of silently resuming from scratch.
   - resourceVersion present and valid: only events after that cursor
-    are delivered, in admission order for that kind (FR-002, FR-003).
+    are delivered, in admission order for that kind.
   """
   watchResources(
     kind: String!
@@ -6807,7 +6808,7 @@ type Subscription {
 }
 
 # ============================================================================
-# Watch API (spec 040)
+# Watch API
 # ============================================================================
 
 """
@@ -6924,7 +6925,7 @@ scalar Long
   @specifiedBy(url: "https://scalars.graphql.org/apollographql/long-v0.1.html")
 
 """
-The principal type that can own a resource (ADR-0010 §14/§7).
+The principal type that can own a resource.
 """
 enum OwnerKind {
   USER
@@ -6933,7 +6934,7 @@ enum OwnerKind {
 }
 
 """
-The resource's current owner subject (ADR-0010 §14). Distinct from
+The resource's current owner subject. Distinct from
 OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
 delete relationship, not a principal-ownership one.
 """
@@ -6944,7 +6945,7 @@ type ResourceOwner {
 
 """
 Input shape for naming a target owner, e.g. transferNamespaceOwner's
-targetOwnerRef (ADR-0010 §14).
+targetOwnerRef.
 """
 input ResourceOwnerInput {
   kind: OwnerKind!
@@ -7075,9 +7076,9 @@ input ProductVariantNamespacePath {
 }
 
 `, BuiltIn: false},
-	{Name: "../../../../shared/schemas/serviceaccount.graphqls", Input: `# ServiceAccount identity plane (spec 061): GitStore-issued service-account
+	{Name: "../../../../shared/schemas/serviceaccount.graphqls", Input: `# ServiceAccount identity plane: GitStore-issued service-account
 # credentials so gitstore-controller-manager (and future non-human callers)
-# never need to borrow a human-identity credential (ADR-0001).
+# never need to borrow a human-identity credential.
 #
 # Issues a short-lived token after the caller proves possession of an enrolled
 # ServiceAccount private key. Mirrors Kubernetes' TokenRequest result while

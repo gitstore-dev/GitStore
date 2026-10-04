@@ -26,7 +26,6 @@ import (
 	admcatalog "github.com/gitstore-dev/gitstore/api/internal/admission/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
@@ -79,10 +78,9 @@ func (r *gitClientReader) ResolveRef(ctx context.Context, repositoryID, ref stri
 // Server implements catalogv1.CatalogServiceServer.
 type Server struct {
 	catalogv1.UnimplementedCatalogServiceServer
-	store    datastore.Datastore
-	git      GitReader
-	log      *zap.Logger
-	eventBus *eventbus.Bus // nil-safe: publish is skipped if unset (e.g. in older tests)
+	store datastore.Datastore
+	git   GitReader
+	log   *zap.Logger
 
 	parser ResourceParser
 	clock  apiruntime.Clock
@@ -107,11 +105,6 @@ type ServerDeps struct {
 	ExtraValidatingPolicies  []admission.ValidatingAdmissionPolicy
 	NamespacePolicyEvaluator namespaceadmission.PolicyEvaluator
 	NamespaceMetrics         *namespaceadmission.Metrics
-	// EventBus receives a change notification after every successful
-	// CategoryTaxonomy create/update/delete, fanning out to GraphQL watch
-	// subscriptions (spec 040, research.md R2). Optional — nil disables
-	// publishing (e.g. in tests that don't exercise the watch API).
-	EventBus *eventbus.Bus
 }
 
 // newCELEnv constructs a CEL environment for syntax-checking price eligibility expressions.
@@ -172,7 +165,6 @@ func NewServer(deps ServerDeps) (*Server, error) {
 		store:            deps.Store,
 		git:              git,
 		log:              deps.Logger,
-		eventBus:         deps.EventBus,
 		parser:           parser,
 		clock:            clock,
 		ids:              ids,
@@ -181,53 +173,6 @@ func NewServer(deps ServerDeps) (*Server, error) {
 		namespacePolicy:  namespacePolicy,
 		namespaceMetrics: namespaceMetrics,
 	}, nil
-}
-
-// publishCategoryTaxonomyEvent fans out a change notification for the
-// EventBus subscribers of GraphQL watch queries (spec 040). No-op when
-// eventBus is nil (e.g. tests that construct Server directly).
-func (s *Server) publishCategoryTaxonomyEvent(evType eventbus.EventType, c *datastore.CategoryTaxonomy) {
-	if s.eventBus == nil || c == nil {
-		return
-	}
-	s.eventBus.Publish(eventbus.Event{
-		Type:            evType,
-		Kind:            "CategoryTaxonomy",
-		Namespace:       c.Namespace,
-		Name:            c.Name,
-		ResourceVersion: c.ResourceVersion,
-		Object:          c,
-	})
-}
-
-// publishProductEvent fans out a change notification for the EventBus
-// subscribers of the watchProducts GraphQL subscription (spec 042). No-op
-// when eventBus is nil (e.g. tests that construct Server directly).
-func (s *Server) publishProductEvent(evType eventbus.EventType, p *datastore.Product) {
-	if s.eventBus == nil || p == nil {
-		return
-	}
-	s.eventBus.Publish(eventbus.Event{
-		Type:            evType,
-		Kind:            "Product",
-		Namespace:       p.Namespace,
-		Name:            p.Name,
-		ResourceVersion: p.ResourceVersion,
-		Object:          p,
-	})
-}
-
-func (s *Server) publishNamespaceEvent(evType eventbus.EventType, namespace *datastore.Namespace) {
-	if s.eventBus == nil || namespace == nil {
-		return
-	}
-	s.eventBus.Publish(eventbus.Event{
-		Type:            evType,
-		Kind:            "Namespace",
-		Name:            namespace.Name,
-		ResourceVersion: namespace.ResourceVersion,
-		Object:          namespace,
-	})
 }
 
 func (s *Server) newUID(kind, name string) (string, bool) {
@@ -1650,11 +1595,10 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 		if !ok {
 			return fmt.Errorf("product deletion requires lifecycle datastore support")
 		}
-		terminating, markErr := lifecycle.MarkProductTerminating(ctx, r.UID, r.ResourceVersion, "gitstore.dev/foreground-deletion", s.clock.Now().UTC())
+		_, markErr := lifecycle.MarkProductTerminating(ctx, r.UID, r.ResourceVersion, "gitstore.dev/foreground-deletion", s.clock.Now().UTC())
 		if markErr != nil {
 			return fmt.Errorf("mark Product deletion: %w", markErr)
 		}
-		s.publishProductEvent(eventbus.Modified, terminating)
 		return nil
 	case *datastore.CategoryTaxonomy:
 		owners, ok := s.store.(datastore.OwnerReferenceStore)
@@ -1685,11 +1629,10 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 		if !ok {
 			return fmt.Errorf("category deletion requires lifecycle datastore support")
 		}
-		terminating, markErr := lifecycle.MarkCategoryTaxonomyDeletion(ctx, r.Namespace, r.Name, r.ResourceVersion, s.clock.Now().UTC())
+		_, markErr := lifecycle.MarkCategoryTaxonomyDeletion(ctx, r.Namespace, r.Name, r.ResourceVersion, s.clock.Now().UTC())
 		if markErr != nil {
 			return fmt.Errorf("mark category deletion: %w", markErr)
 		}
-		s.publishCategoryTaxonomyEvent(eventbus.Modified, terminating)
 		return nil
 	case *datastore.Collection:
 		uid = r.UID
@@ -1762,12 +1705,6 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 			zap.String("uid", uid),
 			zap.Error(deleteErr))
 		return fmt.Errorf("delete %s %s/%s: %w", id.Kind, id.Namespace, id.Name, deleteErr)
-	}
-	if catTaxonomy, ok := existing.(*datastore.CategoryTaxonomy); ok {
-		s.publishCategoryTaxonomyEvent(eventbus.Deleted, catTaxonomy)
-	}
-	if product, ok := existing.(*datastore.Product); ok {
-		s.publishProductEvent(eventbus.Deleted, product)
 	}
 	s.log.Info("admit_resources: resource deleted",
 		zap.String("kind", id.Kind),
@@ -1842,18 +1779,6 @@ func nextResourceVersion(current string) string {
 
 func specBodyChanged(existingSpec []byte, existingBody string, specJSON []byte, body []byte) bool {
 	return !bytes.Equal(existingSpec, specJSON) || existingBody != string(body)
-}
-
-// productCategoryRefName extracts spec.categoryRef.name from a marshaled
-// ProductSpec, returning "" for no categoryRef (or on any parse failure —
-// unmarshal-once-marshaled-by-us specJSON is never expected to fail, but a
-// zero value is the safe default either way).
-func productCategoryRefName(specJSON []byte) string {
-	var spec catalog.ProductSpec
-	if err := json.Unmarshal(specJSON, &spec); err != nil || spec.CategoryRef == nil {
-		return ""
-	}
-	return spec.CategoryRef.Name
 }
 
 // resolvedCategoryOwnerReferences writes only controller-managed category
@@ -2127,11 +2052,6 @@ func (s *Server) admitNamespace(
 			s.recordNamespaceAdmissionRejection(name, op, reason, existing != nil, err)
 			return
 		}
-		eventType := eventbus.Modified
-		if created {
-			eventType = eventbus.Added
-		}
-		s.publishNamespaceEvent(eventType, namespace)
 		return
 	}
 	s.log.Warn("admit_resources: Namespace rejected after repeated concurrent updates",
@@ -2399,8 +2319,6 @@ func (s *Server) admitProduct(
 		if cerr := s.store.CreateProduct(ctx, p); cerr != nil {
 			s.log.Error("admit_resources: create product failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(cerr))
-		} else {
-			s.publishProductEvent(eventbus.Added, p)
 		}
 	} else {
 		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
@@ -2414,13 +2332,6 @@ func (s *Server) admitProduct(
 		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedOwnerReferences {
 			return
 		}
-		// Diff categoryRef before existing.Spec is overwritten below, so the
-		// watchProducts event only fires when the field CategoryTaxonomy
-		// reconciliation actually cares about changed (spec 042,
-		// contracts/product-watch-contract.md call site 2) — a spec change
-		// that is not a categoryRef change (e.g. price/description) still
-		// persists via the write below but must not publish an event.
-		categoryRefChanged := productCategoryRefName(existing.Spec) != productCategoryRefName(specJSON)
 		gen := existing.Generation
 		if changedSpecBody {
 			gen++
@@ -2445,8 +2356,6 @@ func (s *Server) admitProduct(
 		if uerr := s.store.UpdateProduct(ctx, existing); uerr != nil {
 			s.log.Error("admit_resources: update product failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(uerr))
-		} else if categoryRefChanged {
-			s.publishProductEvent(eventbus.Modified, existing)
 		}
 	}
 }
@@ -2943,7 +2852,6 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 				zap.String("name", name), zap.Error(cerr))
 			return
 		}
-		s.publishCategoryTaxonomyEvent(eventbus.Added, c)
 		s.log.Info("admit_resources: category created",
 			zap.String("kind", resource.Kind),
 			zap.String("namespace", namespace),
@@ -2989,7 +2897,6 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 				zap.String("name", name), zap.Error(uerr))
 			return
 		}
-		s.publishCategoryTaxonomyEvent(eventbus.Modified, existing)
 		s.log.Info("admit_resources: category updated",
 			zap.String("kind", resource.Kind),
 			zap.String("namespace", namespace),

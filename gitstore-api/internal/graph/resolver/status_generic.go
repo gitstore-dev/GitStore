@@ -71,7 +71,6 @@ func (r *mutationResolver) updateCategoryTaxonomyStatusGeneric(ctx context.Conte
 		}
 		return nil, gqlerror.Errorf("update resource status: %v", err)
 	}
-	r.publishCategoryTaxonomyStatusEvent(updated)
 	return &model.UpdateResourceStatusPayload{Object: categoryTaxonomyToJSONMap(updated)}, nil
 }
 

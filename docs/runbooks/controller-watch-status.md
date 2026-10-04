@@ -4,51 +4,57 @@
 
 A controller's `watchCategories`/`watchResources` subscription disconnects and reconnects (a normal occurrence), or its `updateCategoryStatus`/`updateResourceStatus` writes are being rejected. This runbook helps distinguish a transient, self-healing disconnect from a cursor that has actually expired (requiring a re-list), and helps interpret a sustained status-write-conflict rate.
 
-The event-bus metrics in the first sections apply to CategoryTaxonomy.
-Namespace, Repository, Product and File use the durable journal instead; inspect
-`gitstore_namespace_watch_expired_total{reason=...}` and
-`gitstore_namespace_watch_overflow_total`, plus the controller recovery metrics
-below. Increasing event-bus capacity does not change durable journal retention.
+Every watched kind (Namespace, Repository, CategoryTaxonomy, Product and File) is
+served from the same durable, replica-safe watch journal, so one set of signals
+covers all of them. A cursor issued by one API replica can be resumed on any
+other replica.
 
 ## Diagnostic Steps: Watch Disconnects
 
-1. Check the rate of subscriptions being opened for the affected kind:
+1. Check how many subscribers are connected and whether streams are being
+   terminated:
 
    ```promql
-   rate(gitstore_eventbus_subscriptions_opened_total{kind="<Kind>"}[5m])
+   gitstore_resource_watch_subscribers
+   sum by (reason) (rate(gitstore_resource_watch_expired_total[5m]))
    ```
 
-   Split by the `resume` label. A `resume="true"` open immediately following a disconnect, with no corresponding `watch_expired_total` increment for that kind, is a normal transient reconnect — the controller resumed from its in-memory `resourceVersion` cursor and picked up where it left off. This requires no operator action.
+   A reconnect that resumes from its cursor without a matching
+   `expired_total` increment is a normal transient disconnect and needs no
+   operator action.
 
-2. Check whether the disconnect was actually an expired-cursor rejection:
+2. If streams are expiring, the `reason` label tells you why:
+
+   - `RETENTION_EXPIRED` or `REPLAY_LIMIT`: the client was disconnected longer
+     than the retained journal window (`watch.namespace.journal_retention_seconds`)
+     or would need to replay more than `watch.namespace.max_replay_events`.
+   - `INVALID_CURSOR`, `INCOMPATIBLE_CURSOR` or `EPOCH_MISMATCH`: the client presented a cursor the
+     journal never issued, for example one checkpointed before an upgrade.
+   - `SUBSCRIBER_OVERFLOW`: the client did not drain its stream fast enough.
+   - `JOURNAL_DISCONTINUITY`: see "Recovery by wire code" below; page the
+     datastore owner.
+
+3. Check for slow subscribers:
 
    ```promql
-   rate(gitstore_eventbus_watch_expired_total{kind="<Kind>"}[5m])
+   rate(gitstore_resource_watch_overflow_total[5m])
    ```
 
-   Any non-zero value here means at least one `Subscribe` call for that kind was rejected because its requested `resourceVersion` predates the server's retained event window. This is not the same failure mode as a transient network disconnect — it means the controller fell behind far enough (or was disconnected long enough) that in-memory replay is no longer possible, and it must re-list.
-
-3. Confirm the controller reacted correctly to an expired cursor by checking `gitstore-api` logs for the affected kind:
-
-   ```text
-   "watch cursor expired; controller must re-list" kind=<Kind> resource_version=<rv>
-   ```
-
-   This log line (level `WARN`) is emitted by the server on every `WATCH_EXPIRED`-extension response. If you see this line but the controller's own logs show it treating the response as an ordinary error (retrying the same stale cursor instead of re-listing), that is a controller-side bug, not a server-side problem — the server has already signaled the correct recovery action.
-
-4. Check whether events are being dropped for the kind (a sign the watcher is slow, not merely disconnected):
-
-   ```promql
-   rate(gitstore_eventbus_events_dropped_total{kind="<Kind>"}[5m])
-   ```
-
-   A non-zero rate means the subscriber's buffered channel filled up and events were dropped rather than delivered. This does not corrupt the stream — the dropped events widen the gap between the subscriber's last-seen `resourceVersion` and the server's current position, which will eventually manifest as a `WATCH_EXPIRED` on the next resume attempt once that gap exceeds the retained window. A sustained non-zero rate for one kind, while others are at zero, points to that kind's specific reconciler being too slow to drain its watch channel, not a server-wide problem.
+   A sustained non-zero rate means a subscriber's buffer
+   (`watch.namespace.subscriber_buffer`) filled up and its stream was ended with
+   `WATCH_EXPIRED/SUBSCRIBER_OVERFLOW`. Overflow never drops events silently.
 
 ## Recovery Actions: Watch Disconnects
 
-- **Transient reconnect (resume="true", no `watch_expired_total` increment)**: no action needed — this is expected behavior under normal network conditions.
-- **Expired cursor (`watch_expired_total` incrementing)**: confirm the controller's `ListWatcher` implementation re-lists on `errors.Is(err, listwatch.ErrWatchExpired)` rather than retrying the same cursor (see `specs/036-controller-startup-resume/quickstart.md`'s `Runner[T].recoverFromExpiry` pattern). If the controller is already re-listing correctly and cursors are still expiring frequently, the retained event window (`eventBusCapacity` in `gitstore-api/internal/app/server.go`) may be too small for that kind's write volume relative to how long controllers are typically disconnected — consider increasing it.
-- **Events being dropped (`events_dropped_total` incrementing)**: the affected kind's controller is not draining its watch channel fast enough. Check that kind's own queue-depth/worker-saturation signals (see [controller-lag.md](./controller-lag.md)) — a controller stuck processing a backlog will also be slow to read from its watch subscription.
+- **Transient reconnect (no `expired_total` increment)**: no action needed.
+- **Expired cursor**: the controller's `listwatch.Runner` discards the cursor,
+  re-lists from a fresh journal bookmark and resumes automatically. Repeated
+  `RETENTION_EXPIRED`/`REPLAY_LIMIT` expiries for a controller mean it is
+  disconnected for longer than the retained window; fix the outage or raise
+  `journal_retention_seconds`/`max_replay_events` within their documented bounds.
+- **Overflow**: the affected controller is not draining its watch fast enough.
+  Check its queue-depth/worker-saturation signals (see
+  [controller-lag.md](./controller-lag.md)) before reconnecting.
 
 ## Diagnostic Steps: Status-Write Conflicts
 
@@ -58,7 +64,7 @@ below. Increasing event-bus capacity does not change durable journal retention.
    rate(gitstore_status_write_conflicts_total{kind="<Kind>"}[5m])
    ```
 
-   A `StatusConflict` response is expected occasionally (any concurrent write to the same resource can trigger one) — the reconciler pattern already handles this by retrying with fresh cache state (see `specs/026-reconcile-handler/quickstart.md`). A sustained non-zero rate, rather than an occasional blip, is the signal worth investigating.
+   A `StatusConflict` response is expected occasionally (any concurrent write to the same resource can trigger one) — the reconciler pattern already handles this by retrying with fresh cache state. A sustained non-zero rate, rather than an occasional blip, is the signal worth investigating.
 
 2. Check `gitstore-api` logs for the specific resources involved:
 
@@ -75,7 +81,7 @@ below. Increasing event-bus capacity does not change durable journal retention.
 Initial checkpoint restoration and expired-cursor re-listing close per-kind
 dispatch admission. Recovery drains in-flight reconciliation (including its
 completion callbacks), keeps pending replay work, and atomically replaces the
-cache before dispatch resumes. Namespace, Repository and Product runners wait
+cache before dispatch resumes. Every runner waits
 for a bookmark on the resumed watch, not merely a successful asynchronous
 WebSocket open. Cancellation does not reopen admission or discard the old
 checkpoint cursor while listing is incomplete.
@@ -165,15 +171,6 @@ They remain rate-limited, but application traffic cannot consume their quota.
 GraphQL HTTP requests and WebSocket upgrades continue sharing the application
 bucket. This changes neither authentication nor authorization.
 
-The owned production run `441-file-journal-production-20261004-b513016`
-cleared dataset verification and persisted File bootstrap but failed the
-pre-load controller health/authentication guard. Logs showed 429s on Product
-status writes and token exchange, Product runner exits after 15 minutes, and
-quarantine on controller B. The fixes above do not replace a new full production
-run. The capacity harness now persists valid controller samples before checking
-health and reports overall health separately from credential readiness, without
-relaxing either requirement.
-
 ## Bounded disk-backed controllers
 
 The production Namespace, Repository, CategoryTaxonomy and Product controllers
@@ -248,76 +245,26 @@ binary cannot read v2 and still has the original memory behavior; rolling back
 is not a supported way to recover a five-million-row controller. This changes
 no API datastore schema, authentication mechanism or Docker memory allocation.
 
-The initial, pre-integration storage proof `checkpoint-proof-20261004-02` wrote five million
-realistic Product projections, reopened the store, replaced the full snapshot,
-and reopened it again. All 5,000,000 initial pending keys survived; after
-acknowledging 256 keys, the replacement retained exactly 4,999,744 pending keys.
-The complete test took 623.05 seconds with a sampled peak Go heap of 58,949,632
-bytes (56.2 MiB). Its container had a 512 MiB hard memory limit with no additional
-swap allowance, exited successfully and was not OOM-killed. This did not change
-the Docker VM allocation or touch the production dataset/checkpoint volumes.
-Local evidence is retained under `.gitstore/checkpoint-proof-20261004-02/`;
-the task-owned scratch container and volume were removed.
-
-The integrated v2 proof `checkpoint-proof-20261004-04` also completed with five
-million projections, under the same 512 MiB hard limit and no additional swap.
-The real Product reconciler and manager acknowledged 256 items through at most
-four active workers, with 256 writes to a stubbed status API. Full replacement
-and reopening retained all five million projections and exactly 4,999,744
-pending items. The test passed in 1,205.41 seconds, with sampled peak Go
-`HeapInuse` of 60,252,160 bytes (57.5 MiB); Docker recorded exit 0 and no OOM.
-Heap measurements are not total process RSS or container memory usage.
-
-| v2 proof phase | Logical file bytes | Allocated filesystem bytes |
-| --- | ---: | ---: |
-| Initial snapshot/reopen | 953,050,349 | 953,761,792 |
-| Replacement before retirement | 1,974,342,756 | 1,975,816,192 |
-| Sampled peak over the run | 2,084,242,403 | 2,086,227,968 |
-| After retirement/reopen | 2,083,468,964 | 2,085,462,016 |
-
-Disk usage was sampled every second. Logical retirement does not force LSM
-compaction: the final approximately 1.94 GiB allocation can still include
-obsolete table entries and deletion markers. It is not a fully compacted
-steady-state footprint, nor a measurement of the deployed Product dataset.
-The preceding v2 attempt `checkpoint-proof-20261004-03` timed out after 45 minutes
-during cleanup without an OOM; advancing cleanup past each deleted page fixed
-the repeated tombstone scan. Both runs retain logs, source/binary digests and
-container inspection evidence under their respective `.gitstore/` directories.
-Their task-owned scratch containers and volumes were removed; production
-volumes and Docker memory allocation were unchanged.
+Storage sizing: a five-million-Product projection set, including one full
+snapshot replacement, has been exercised under a 512 MiB container memory limit
+without an OOM. Peak Go heap stayed below 60 MiB. On-disk allocation peaked near
+2 GiB during replacement, because the old and new generations coexist until
+retirement and LevelDB reclaims retired table space only on later compaction.
+Budget checkpoint storage for two simultaneous generations plus compaction
+headroom, not for one steady-state catalog.
 
 Separate contracts cover process-kill/reopen durability, incomplete-snapshot
 isolation, concurrent updates, stale acknowledgements, rejected oversized pages,
 membership reassignment and kind/replica isolation. Integration contracts cover
 streamed restart/expiry recovery, bounded dispatch, newer in-flight work,
 durable schedules, fan-out across generations and paginated poison reads.
-The full-size fixture is an isolated storage/dispatch diagnostic, **not
-production capacity acceptance**. Its status API and related-work destination
-are stubbed; the deployed controllers still need a new live gate covering real
-API traffic, concurrent replicas, rolling replacement and sustained load.
+These are storage and dispatch bounds, not production capacity acceptance; use
+`make capacity` against a real deployment for throughput and rolling-recovery
+evidence.
 
-The first integrated live attempt, `441-disk-production-20261004-719396d`,
-recovered the five-million-Product dataset in 388.33 and 394.17 seconds from
-controller process start. Neither replica OOMed or restarted. Prometheus-sampled
-peak RSS was 85.6/85.1 MiB; observed cgroup `memory.peak` was 948.4/961.2 MiB,
-including filesystem cache. Checkpoint allocation at the final sample was
-768.8/767.2 MiB per replica. These are different memory/storage measurements.
-
-That attempt failed before sustained load after 1,306.10 seconds when API A's
-`/metrics` request received HTTP 429 from the shared application bucket.
-Separately, the null-payload round-trip bug kept the Product backlog near five
-million and generated 24,502 conflict requeues across the two replicas.
-The quota-isolation and null-normalization fixes address reproduced regressions,
-but the failed run proves neither sustained throughput nor rolling recovery.
-Its closed evidence remains under the matching run directory in
-`.gitstore/spec063-prod-20261004/evidence/`; supplemental cgroup and storage
-samples remain in `.gitstore/spec063-prod-20261004/rerun-disk-719396d/`.
-
-The secondary Product subscription uses the existing durable Product journal in
-production. Both typed and generic Product watches now require that journal:
-the legacy event-bus fallback has been removed. Development and tests must wire
-the existing memdb journal too; a missing journal returns `WATCH_UNAVAILABLE`.
-CategoryTaxonomy's own event-bus subscription is unchanged.
+Typed and generic watches of every kind require the durable journal. Development
+and tests wire the memdb journal; a deployment without a configured journal
+returns `WATCH_UNAVAILABLE` instead of an unreplayable stream.
 
 ## Recovery Actions: Status-Write Conflicts
 
@@ -327,96 +274,64 @@ CategoryTaxonomy's own event-bus subscription is unchanged.
 
 ## Verification
 
-- `rate(gitstore_eventbus_watch_expired_total{kind}[5m])` returns to `0` (or the controller correctly re-lists whenever it is non-zero).
-- `rate(gitstore_eventbus_events_dropped_total{kind}[5m])` returns to `0`.
+- `sum by (reason) (rate(gitstore_resource_watch_expired_total[5m]))` returns to `0` (or the controller correctly re-lists whenever it is non-zero).
+- `rate(gitstore_resource_watch_overflow_total[5m])` returns to `0`.
 - `rate(gitstore_status_write_conflicts_total{kind}[5m])` returns to its prior baseline (occasional, not sustained).
 
-## File durable-watch rollout
+## Durable watch journal: schema, rollout and recovery
 
-`watchFiles` and `watchResources(kind: "File")` share the Namespace/Repository/
-Product durable journal, lease, metrics, and `watch.namespace` configuration.
-CategoryTaxonomy remains on its existing event bus.
+The journal uses Scylla CDC (full preimage/postimage, 14-day TTL) on each
+watched kind's authoritative table, plus the shared `resource_watch_events`
+and `resource_watch_clock` tables. All of it is created by the baseline schema
+migrations; there is no per-kind migration to apply.
 
-1. Deny **both File watch fields fleet-wide**, including already-open streams,
-   before introducing new replicas. An old materializer can keep shared journal
-   health fresh without consuming File CDC; shared readiness alone cannot prove
-   File migration readiness during a mixed-version rollout. Do not accept File
-   cursors in this interval.
-2. Apply additive migration 014 and verify full preimage/postimage CDC with
-   14-day TTL on `files_by_namespace`. CDC does not synthesize an inventory of
-   older rows. Keep the new `file` lookup out of mixed-version ingress as well.
-3. Upgrade every API/materializer candidate. Drain the old lease holder and
-   verify that the new holder starts **all four** CDC sources. New leaders wait
-   for File source readiness before publishing their initial shared bookmark.
-   Leave other resource watches running only if their existing rollout contract
-   permits it; do not disable their shared gates just to gate File.
-4. From controlled new-version endpoints, prove a committed File create,
-   status update and delete from API A can be replayed on API B and after
-   materializer replacement. Then enable File ingress. Discard legacy numeric
-   cursors. Capture a fresh bootstrap BOOKMARK, read persisted state for the
-   known File names, then replay from that bookmark so concurrent changes are
-   not lost between the read and subscription. Generic clients must consume
-   the public File `object` projection (`id`, `metadata`, `spec`, `status`),
-   replacing the old event bus's flat datastore fields.
-
-For rollback to a version without File CDC, deny/drain File watches **before**
-any old API or materializer candidate returns. Keep migration 014 and retained
-journal/progress tables; never fall back to the event bus under a durable cursor.
-Re-enable only after fleet convergence and the cross-replica probe above.
-Same-version API/materializer replacements resume retained journal/CDC progress;
-the migration itself does not promise uninterrupted mixed-version File watches.
-None of this changes the singleton-only Git service requirement.
-
-## Namespace durable-watch rollout and recovery
-
-Namespace uses a durable Scylla CDC journal rather than the process-local event
-bus described above. Keep spec 047 deployed; do not reopen or roll back its
-Namespace lifecycle contract.
+**Upgrading from a release before the per-resource schema baseline requires a
+fresh Scylla keyspace.** The migration history was consolidated and tables were
+renamed, so an existing keyspace is refused at startup. Rolling back across that
+release is not supported. Controllers re-list from a fresh bootstrap bookmark;
+checkpoint cursors from the older release are rejected with `WATCH_EXPIRED`.
 
 Roll out in this order:
 
-1. Apply migration 006 everywhere and verify the Namespace base table has full
-   preimage/postimage CDC with the 14-day TTL plus the journal-event table and
-   partition-local clock/lease/progress table.
-2. Override both alpha-default-on Namespace watch gates to `false` while any
-   API replica lacks the new schema/code. Deny Namespace watch ingress
-   fleet-wide during mixed-version operation; an old replica cannot honor the
-   durable cursor contract.
-3. Enable `MATERIALIZER_ENABLED` on the converged fleet. Exactly one healthy
-   replica should report materializer leader `1`; wait for a durable BOOKMARK
-   and independently persisted CDC query progress below 60 seconds. A fresh
-   BOOKMARK alone does not certify CDC health.
-4. Enable `READERS_ENABLED`, restore watch ingress, and run the cross-replica
-   bootstrap/resume probe before declaring rollout complete.
+1. Deploy every API replica. Exactly one healthy replica should report
+   materializer leader `1`. Wait for a durable BOOKMARK and persisted CDC
+   progress below 60 seconds; a fresh BOOKMARK alone does not certify CDC health.
+2. Grant the controller identity `categoryTaxonomy.watch` alongside the existing
+   `namespace.watch`, `repository.watch` and `product.watch` permissions.
+   CategoryTaxonomy watches are authorized like every other kind.
+3. Deploy the controllers. They wait for a journal bookmark before marking a
+   kind synced, so they must not run against an API that predates this release.
+4. Run a cross-replica probe: commit a change through API A and resume a watch
+   on API B from an earlier cursor.
 
-For rollback, first deny watch ingress and disable readers. Disable the
-materializer only after readers are drained. Migration 006 is a supported,
-additive artifact and may remain during application rollback; do not drop CDC
-or journal tables while any issued cursor could still be presented.
+To take the journal out of service, deny watch ingress and disable
+`watch.namespace.readers_enabled` first, then disable the materializer once
+readers are drained. Do not drop CDC or journal tables while any issued cursor
+could still be presented.
 
-Namespace signals have bounded labels only (`path` and `reason`; never a
-Namespace name, UID, cursor, holder ID, or replica ID):
+Journal signals have bounded labels only (`path` and `reason`; never a
+resource name, UID, cursor, holder ID, or replica ID):
 
-- `gitstore_namespace_watch_materializer_leader` — alert if the fleet sum is
+- `gitstore_resource_watch_materializer_leader` — alert if the fleet sum is
   zero for 30 seconds or above one for two lease TTLs.
-- `gitstore_namespace_watch_cdc_lag_seconds` and
-  `gitstore_namespace_watch_bookmark_age_seconds` — warn above 30 seconds and
+- `gitstore_resource_watch_cdc_lag_seconds` and
+  `gitstore_resource_watch_bookmark_age_seconds` — warn above 30 seconds and
   page above the 60-second readiness bound. Both report `+Inf` until their
   first durable observation; bookmark age advances only from an actual
   `BOOKMARK`, not ordinary journal activity.
-- `gitstore_namespace_watch_journal_oldest_sequence` and
-  `gitstore_namespace_watch_journal_high_water_sequence` — alert if high water
+- `gitstore_resource_watch_journal_oldest_sequence` and
+  `gitstore_resource_watch_journal_high_water_sequence` — alert if high water
   stops advancing during acknowledged mutations or the retained span shrinks
   unexpectedly.
-- `gitstore_namespace_watch_subscribers{path="typed|generic"}` — capacity
+- `gitstore_resource_watch_subscribers{path="typed|generic"}` — capacity
   gauge; compare with the planned 1,000-subscriber envelope.
-- `gitstore_namespace_watch_expired_total{reason}` and
-  `gitstore_namespace_watch_overflow_total` — alert on any
+- `gitstore_resource_watch_expired_total{reason}` and
+  `gitstore_resource_watch_overflow_total` — alert on any
   `JOURNAL_DISCONTINUITY`; warn on sustained overflow or expiry above 0.1% of
   subscription attempts.
-- `gitstore_namespace_watch_append_errors_total` — page on any sustained
+- `gitstore_resource_watch_append_errors_total` — page on any sustained
   non-zero rate because acknowledged mutations may be awaiting CDC recovery.
-- `gitstore_namespace_watch_duplicates_total` — counts a new journal cursor
+- `gitstore_resource_watch_duplicates_total` — counts a new journal cursor
   delivered with a deduplication key already observed by this replica. Track
   its rate during recovery and rolling replacement; duplicates are safe but
   must remain visible rather than being mistaken for missing transitions.

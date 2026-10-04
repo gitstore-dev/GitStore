@@ -107,7 +107,7 @@ For `updateRepository` mutations: the API commits an updated manifest to
    finalizer and sets `metadata.deletionTimestamp`.
 4. Repository enters `Terminating` status.
 5. The controller drains platform records referencing this repository
-   (`HydrationRecord`, `AdmissionResult`, `ReconcileJob`, `WatchEvent`) and then
+   (`HydrationRecord`, `AdmissionResult`, `ReconcileJob`) and then
    triggers git-service to archive or remove the bare repository from disk.
 6. After the git-service confirms removal, the controller removes the finalizer.
 7. Once all finalizers are cleared, the datastore record is hard-deleted.
@@ -176,6 +176,15 @@ resource journal. The Repository CDC source reads authoritative
 `repositories_by_uid` changes, preserves per-source progress, and uses the
 same fenced journal lease/cursor contract as Namespace. The journal, not an
 in-process event bus, is the source of replay and replica-safe ordering.
+Journal events are not drained on repository deletion; they expire with the
+journal's retention TTL.
+
+The authoritative row is `repositories_by_uid` rather than
+`repositories_by_namespace` because the namespace listing projection is
+partitioned by `(namespace, bucket)` to bound partition size; the single
+unbucketed row keyed by UID is the one CDC can observe without fan-in across
+buckets. Namespaced catalog kinds without that bucketing use
+`<plural>_by_namespace` as their authoritative row.
 
 ### Status and reconciliation behaviour
 

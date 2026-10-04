@@ -1199,9 +1199,8 @@ type ResolvedCategoryTaxonomy struct {
 	// Ancestor path from root to self, e.g. ["electronics", "computers",
 	// "laptops"] for the "laptops" category (root-to-self order). A root
 	// category's path is a single-element array containing its own name.
-	// Distinct from Category.path, which is a read-time-derived field
-	// computed from the separate ancestor_path datastore column (see
-	// specs/040-controller-watch-status-api/research.md R9/R10).
+	// Distinct from Category.path, which is derived when the category is
+	// read.
 	Path         []string `json:"path"`
 	ChildCount   int32    `json:"childCount"`
 	ProductCount int32    `json:"productCount"`
@@ -1304,7 +1303,7 @@ type ResolvedRepositoryDefinition struct {
 	StorageClass string `json:"storageClass"`
 }
 
-// The resource's current owner subject (ADR-0010 §14). Distinct from
+// The resource's current owner subject. Distinct from
 // OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
 // delete relationship, not a principal-ownership one.
 type ResourceOwner struct {
@@ -1313,7 +1312,7 @@ type ResourceOwner struct {
 }
 
 // Input shape for naming a target owner, e.g. transferNamespaceOwner's
-// targetOwnerRef (ADR-0010 §14).
+// targetOwnerRef.
 type ResourceOwnerInput struct {
 	Kind OwnerKind `json:"kind"`
 	Name string    `json:"name"`
@@ -1436,7 +1435,7 @@ type TokenResponse struct {
 	IDToken *string `json:"idToken,omitempty"`
 }
 
-// Reassign a namespace's owner (ADR-0010 §14). Distinct from transferRepository,
+// Reassign a namespace's owner. Distinct from transferRepository,
 // which relocates a repository between namespaces and is unrelated to
 // principal ownership.
 type TransferNamespaceOwnerInput struct {
@@ -1451,10 +1450,10 @@ type TransferNamespaceOwnerPayload struct {
 type UpdateCategoryStatusInput struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
-	// Required optimistic-concurrency precondition (FR-009). Must equal
+	// Required optimistic-concurrency precondition. Must equal
 	// the resource's current metadata.resourceVersion.
 	ResourceVersion string `json:"resourceVersion"`
-	// Null = unchanged. Set on every successful reconcile per spec 026 FR-008.
+	// Null = unchanged. Set on every successful reconcile.
 	ObservedGeneration *int32 `json:"observedGeneration,omitempty"`
 	// Null = unchanged, e.g. "main@sha1:a1b2c3d".
 	LastAppliedRevision *string `json:"lastAppliedRevision,omitempty"`
@@ -1959,7 +1958,7 @@ func (e NamespaceTier) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// The principal type that can own a resource (ADR-0010 §14/§7).
+// The principal type that can own a resource.
 type OwnerKind string
 
 const (

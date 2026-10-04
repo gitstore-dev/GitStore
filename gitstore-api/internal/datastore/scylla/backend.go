@@ -137,7 +137,7 @@ type categoryTaxonomyRow struct {
 	Status            string            `db:"status"`
 }
 
-// categoryTaxonomyNameRow mirrors category_taxonomy_by_name (index only).
+// categoryTaxonomyNameRow mirrors category_taxonomies_by_name (index only).
 type categoryTaxonomyNameRow struct {
 	Namespace         string     `db:"namespace"`
 	Name              string     `db:"name"`
@@ -145,7 +145,7 @@ type categoryTaxonomyNameRow struct {
 	CreationTimestamp time.Time  `db:"creation_timestamp"`
 }
 
-// categoryTaxonomyUIDRow mirrors category_taxonomy_by_uid (index only).
+// categoryTaxonomyUIDRow mirrors category_taxonomies_by_uid (index only).
 type categoryTaxonomyUIDRow struct {
 	UID               gocql.UUID `db:"uid"`
 	Namespace         string     `db:"namespace"`
@@ -725,35 +725,35 @@ func (s *scyllaDatastore) CreateCategoryTaxonomy(ctx context.Context, c *datasto
 	)
 	err = s.mutations.execute(ctx,
 		mutationAction{
-			Step: catalogueStep("create", "CategoryTaxonomy", c.UID, "category_taxonomy_by_name", c.Namespace+"/"+c.Name, "reserve-name"),
+			Step: catalogueStep("create", "CategoryTaxonomy", c.UID, "category_taxonomies_by_name", c.Namespace+"/"+c.Name, "reserve-name"),
 			Apply: func(ctx context.Context) error {
 				var reserveErr error
-				nameReserved, reserveErr = s.reserveNameOwned(ctx, "CategoryTaxonomy", "category_taxonomy_by_name", row.Namespace, row.Name, uid, row.CreationTimestamp)
+				nameReserved, reserveErr = s.reserveNameOwned(ctx, "CategoryTaxonomy", "category_taxonomies_by_name", row.Namespace, row.Name, uid, row.CreationTimestamp)
 				return reserveErr
 			},
 			Compensate: func(ctx context.Context) error {
 				if !nameReserved {
 					return nil
 				}
-				return s.releaseName(ctx, "category_taxonomy_by_name", row.Namespace, row.Name, uid)
+				return s.releaseName(ctx, "category_taxonomies_by_name", row.Namespace, row.Name, uid)
 			},
 		},
 		mutationAction{
-			Step: catalogueStep("create", "CategoryTaxonomy", c.UID, "category_taxonomy_by_uid", c.UID, "reserve-uid"),
+			Step: catalogueStep("create", "CategoryTaxonomy", c.UID, "category_taxonomies_by_uid", c.UID, "reserve-uid"),
 			Apply: func(ctx context.Context) error {
 				var reserveErr error
-				uidReserved, reserveErr = s.reserveUIDOwned(ctx, "CategoryTaxonomy", "category_taxonomy_by_uid", row.Namespace, uid, row.CreationTimestamp)
+				uidReserved, reserveErr = s.reserveUIDOwned(ctx, "CategoryTaxonomy", "category_taxonomies_by_uid", row.Namespace, uid, row.CreationTimestamp)
 				return reserveErr
 			},
 			Compensate: func(ctx context.Context) error {
 				if !uidReserved {
 					return nil
 				}
-				return s.releaseUID(ctx, "category_taxonomy_by_uid", row.Namespace, uid, row.CreationTimestamp)
+				return s.releaseUID(ctx, "category_taxonomies_by_uid", row.Namespace, uid, row.CreationTimestamp)
 			},
 		},
 		mutationAction{
-			Step: catalogueStep("create", "CategoryTaxonomy", c.UID, "category_taxonomy", c.UID, "write-authoritative"),
+			Step: catalogueStep("create", "CategoryTaxonomy", c.UID, "category_taxonomies_by_namespace", c.UID, "write-authoritative"),
 			Apply: func(ctx context.Context) error {
 				applied, applyErr := s.insertAuthoritative(ctx, s.categoryTaxonomyTable, row)
 				if applyErr != nil {
@@ -798,7 +798,7 @@ func (s *scyllaDatastore) CreateCategoryTaxonomy(ctx context.Context, c *datasto
 }
 
 func (s *scyllaDatastore) getCategoryTaxonomyByKey(namespace string, creationTimestamp time.Time, uid gocql.UUID) (*datastore.CategoryTaxonomy, error) {
-	const stmt = "SELECT %s FROM category_taxonomy WHERE namespace = ? AND creation_timestamp = ? AND uid = ?"
+	const stmt = "SELECT %s FROM category_taxonomies_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?"
 	cols := strings.Join(s.categoryTaxonomyTable.Metadata().Columns, ", ")
 	var row categoryTaxonomyRow
 	if err := s.session.Query(fmt.Sprintf(stmt, cols), nil).
@@ -830,7 +830,7 @@ func (s *scyllaDatastore) GetCategoryTaxonomy(ctx context.Context, uid string) (
 	category, err := s.getCategoryTaxonomyByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "CategoryTaxonomy", ResourceUID: uid, Projection: "category_taxonomy_by_uid",
+			ResourceKind: "CategoryTaxonomy", ResourceUID: uid, Projection: "category_taxonomies_by_uid",
 			LookupKey: uid, Operation: "get", Type: datastore.FindingDangling,
 		})
 	}
@@ -853,14 +853,14 @@ func (s *scyllaDatastore) GetCategoryTaxonomyByName(ctx context.Context, namespa
 	category, err := s.getCategoryTaxonomyByKey(namespace, nameRow.CreationTimestamp, nameRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "CategoryTaxonomy", ResourceUID: nameRow.UID.String(), Projection: "category_taxonomy_by_name",
+			ResourceKind: "CategoryTaxonomy", ResourceUID: nameRow.UID.String(), Projection: "category_taxonomies_by_name",
 			LookupKey: namespace + "/" + name, Operation: "get_by_name", Type: datastore.FindingDangling,
 		})
 		return nil, err
 	}
 	if err == nil && (category.Name != name || category.Namespace != namespace) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "CategoryTaxonomy", ResourceUID: nameRow.UID.String(), Projection: "category_taxonomy_by_name",
+			ResourceKind: "CategoryTaxonomy", ResourceUID: nameRow.UID.String(), Projection: "category_taxonomies_by_name",
 			LookupKey: namespace + "/" + name, Operation: "get_by_name", Type: datastore.FindingStale,
 		})
 		return nil, fmt.Errorf("%w: stale category taxonomy name projection %s/%s", datastore.ErrNotFound, namespace, name)
@@ -918,21 +918,21 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *datasto
 
 	err = s.mutations.executeUpdate(ctx, row.ResourceVersion,
 		mutationAction{
-			Step: catalogueStep("update", "CategoryTaxonomy", c.UID, "category_taxonomy", c.UID, "update-authoritative"),
+			Step: catalogueStep("update", "CategoryTaxonomy", c.UID, "category_taxonomies_by_namespace", c.UID, "update-authoritative"),
 			Apply: func(ctx context.Context) error {
 				return s.updateCategoryTaxonomyAuthoritative(ctx, row, existing.ResourceVersion)
 			},
 		},
 		mutationAction{
-			Step: catalogueStep("update", "CategoryTaxonomy", c.UID, "category_taxonomy_by_name", c.Namespace+"/"+c.Name, "converge-name"),
+			Step: catalogueStep("update", "CategoryTaxonomy", c.UID, "category_taxonomies_by_name", c.Namespace+"/"+c.Name, "converge-name"),
 			Apply: func(ctx context.Context) error {
-				return s.reserveName(ctx, "CategoryTaxonomy", "category_taxonomy_by_name", row.Namespace, row.Name, existingUID, row.CreationTimestamp)
+				return s.reserveName(ctx, "CategoryTaxonomy", "category_taxonomies_by_name", row.Namespace, row.Name, existingUID, row.CreationTimestamp)
 			},
 		},
 		mutationAction{
-			Step: catalogueStep("update", "CategoryTaxonomy", c.UID, "category_taxonomy_by_uid", c.UID, "converge-uid"),
+			Step: catalogueStep("update", "CategoryTaxonomy", c.UID, "category_taxonomies_by_uid", c.UID, "converge-uid"),
 			Apply: func(ctx context.Context) error {
-				return s.reserveUID(ctx, "CategoryTaxonomy", "category_taxonomy_by_uid", row.Namespace, existingUID, row.CreationTimestamp)
+				return s.reserveUID(ctx, "CategoryTaxonomy", "category_taxonomies_by_uid", row.Namespace, existingUID, row.CreationTimestamp)
 			},
 		},
 		mutationAction{
@@ -949,7 +949,7 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *datasto
 		},
 	)
 	if err != nil {
-		return fmt.Errorf("scylla: update category_taxonomy: %w", err)
+		return fmt.Errorf("scylla: update category_taxonomies_by_namespace: %w", err)
 	}
 	return nil
 }
@@ -973,7 +973,7 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomyStatus(ctx context.Context, name
 	// the row concurrently, the condition fails and applied is false,
 	// which we surface as ErrConflict rather than silently overwriting a
 	// newer version (spec 040 FR-009).
-	const updStatus = "UPDATE category_taxonomy SET resource_version=?, status=? " +
+	const updStatus = "UPDATE category_taxonomies_by_namespace SET resource_version=?, status=? " +
 		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
 	applied, err := s.session.Query(updStatus, nil).WithContext(ctx).Bind(
 		row.ResourceVersion, row.Status,
@@ -981,7 +981,7 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomyStatus(ctx context.Context, name
 		observedResourceVersion,
 	).ExecCASRelease()
 	if err != nil {
-		return nil, fmt.Errorf("scylla: update category_taxonomy status: %w", err)
+		return nil, fmt.Errorf("scylla: update category_taxonomies_by_namespace status: %w", err)
 	}
 	if !applied {
 		return nil, datastore.ErrConflict
@@ -1002,7 +1002,7 @@ func (s *scyllaDatastore) deleteCategoryTaxonomyWithResourceVersion(ctx context.
 
 	err := s.mutations.executeDelete(ctx,
 		mutationAction{
-			Step: catalogueStep("delete", "CategoryTaxonomy", c.UID, "category_taxonomy", c.UID, "delete-authoritative"),
+			Step: catalogueStep("delete", "CategoryTaxonomy", c.UID, "category_taxonomies_by_namespace", c.UID, "delete-authoritative"),
 			Apply: func(ctx context.Context) error {
 				return s.deleteCategoryTaxonomyAuthoritative(ctx, toCategoryTaxonomyRow(c), expectedResourceVersion)
 			},
@@ -1017,21 +1017,21 @@ func (s *scyllaDatastore) deleteCategoryTaxonomyWithResourceVersion(ctx context.
 			},
 		},
 		mutationAction{
-			Step: catalogueStep("delete", "CategoryTaxonomy", c.UID, "category_taxonomy_by_name", c.Namespace+"/"+c.Name, "delete-name"),
+			Step: catalogueStep("delete", "CategoryTaxonomy", c.UID, "category_taxonomies_by_name", c.Namespace+"/"+c.Name, "delete-name"),
 			Apply: func(ctx context.Context) error {
-				return s.releaseName(ctx, "category_taxonomy_by_name", c.Namespace, c.Name, parsedUID)
+				return s.releaseName(ctx, "category_taxonomies_by_name", c.Namespace, c.Name, parsedUID)
 			},
 			Compensate: func(ctx context.Context) error {
-				return s.reserveName(ctx, "CategoryTaxonomy", "category_taxonomy_by_name", c.Namespace, c.Name, parsedUID, c.CreationTimestamp)
+				return s.reserveName(ctx, "CategoryTaxonomy", "category_taxonomies_by_name", c.Namespace, c.Name, parsedUID, c.CreationTimestamp)
 			},
 		},
 		mutationAction{
-			Step: catalogueStep("delete", "CategoryTaxonomy", c.UID, "category_taxonomy_by_uid", c.UID, "delete-uid"),
+			Step: catalogueStep("delete", "CategoryTaxonomy", c.UID, "category_taxonomies_by_uid", c.UID, "delete-uid"),
 			Apply: func(ctx context.Context) error {
-				return s.releaseUID(ctx, "category_taxonomy_by_uid", c.Namespace, parsedUID, c.CreationTimestamp)
+				return s.releaseUID(ctx, "category_taxonomies_by_uid", c.Namespace, parsedUID, c.CreationTimestamp)
 			},
 			Compensate: func(ctx context.Context) error {
-				return s.reserveUID(ctx, "CategoryTaxonomy", "category_taxonomy_by_uid", c.Namespace, parsedUID, c.CreationTimestamp)
+				return s.reserveUID(ctx, "CategoryTaxonomy", "category_taxonomies_by_uid", c.Namespace, parsedUID, c.CreationTimestamp)
 			},
 		},
 	)
@@ -1062,35 +1062,35 @@ func (s *scyllaDatastore) CreateCollection(ctx context.Context, c *datastore.Col
 	)
 	err = s.mutations.execute(ctx,
 		mutationAction{
-			Step: catalogueStep("create", "Collection", c.UID, "collection_by_name", c.Namespace+"/"+c.Name, "reserve-name"),
+			Step: catalogueStep("create", "Collection", c.UID, "collections_by_name", c.Namespace+"/"+c.Name, "reserve-name"),
 			Apply: func(ctx context.Context) error {
 				var reserveErr error
-				nameReserved, reserveErr = s.reserveNameOwned(ctx, "Collection", "collection_by_name", row.Namespace, row.Name, uid, row.CreationTimestamp)
+				nameReserved, reserveErr = s.reserveNameOwned(ctx, "Collection", "collections_by_name", row.Namespace, row.Name, uid, row.CreationTimestamp)
 				return reserveErr
 			},
 			Compensate: func(ctx context.Context) error {
 				if !nameReserved {
 					return nil
 				}
-				return s.releaseName(ctx, "collection_by_name", row.Namespace, row.Name, uid)
+				return s.releaseName(ctx, "collections_by_name", row.Namespace, row.Name, uid)
 			},
 		},
 		mutationAction{
-			Step: catalogueStep("create", "Collection", c.UID, "collection_by_uid", c.UID, "reserve-uid"),
+			Step: catalogueStep("create", "Collection", c.UID, "collections_by_uid", c.UID, "reserve-uid"),
 			Apply: func(ctx context.Context) error {
 				var reserveErr error
-				uidReserved, reserveErr = s.reserveUIDOwned(ctx, "Collection", "collection_by_uid", row.Namespace, uid, row.CreationTimestamp)
+				uidReserved, reserveErr = s.reserveUIDOwned(ctx, "Collection", "collections_by_uid", row.Namespace, uid, row.CreationTimestamp)
 				return reserveErr
 			},
 			Compensate: func(ctx context.Context) error {
 				if !uidReserved {
 					return nil
 				}
-				return s.releaseUID(ctx, "collection_by_uid", row.Namespace, uid, row.CreationTimestamp)
+				return s.releaseUID(ctx, "collections_by_uid", row.Namespace, uid, row.CreationTimestamp)
 			},
 		},
 		mutationAction{
-			Step: catalogueStep("create", "Collection", c.UID, "collection", c.UID, "write-authoritative"),
+			Step: catalogueStep("create", "Collection", c.UID, "collections_by_namespace", c.UID, "write-authoritative"),
 			Apply: func(ctx context.Context) error {
 				applied, applyErr := s.insertAuthoritative(ctx, s.collectionTable, row)
 				if applyErr != nil {
@@ -1141,7 +1141,7 @@ func (s *scyllaDatastore) GetCollection(ctx context.Context, uid string) (*datas
 	collection, err := s.getCollectionByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "Collection", ResourceUID: uid, Projection: "collection_by_uid",
+			ResourceKind: "Collection", ResourceUID: uid, Projection: "collections_by_uid",
 			LookupKey: uid, Operation: "get", Type: datastore.FindingDangling,
 		})
 	}
@@ -1160,14 +1160,14 @@ func (s *scyllaDatastore) GetCollectionByName(ctx context.Context, namespace, na
 	collection, err := s.getCollectionByKey(nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "Collection", ResourceUID: nameRow.UID.String(), Projection: "collection_by_name",
+			ResourceKind: "Collection", ResourceUID: nameRow.UID.String(), Projection: "collections_by_name",
 			LookupKey: namespace + "/" + name, Operation: "get_by_name", Type: datastore.FindingDangling,
 		})
 		return nil, err
 	}
 	if err == nil && (collection.Name != name || collection.Namespace != namespace) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "Collection", ResourceUID: nameRow.UID.String(), Projection: "collection_by_name",
+			ResourceKind: "Collection", ResourceUID: nameRow.UID.String(), Projection: "collections_by_name",
 			LookupKey: namespace + "/" + name, Operation: "get_by_name", Type: datastore.FindingStale,
 		})
 		return nil, fmt.Errorf("%w: stale collection name projection %s/%s", datastore.ErrNotFound, namespace, name)
@@ -1178,7 +1178,7 @@ func (s *scyllaDatastore) GetCollectionByName(ctx context.Context, namespace, na
 func (s *scyllaDatastore) getCollectionByKey(namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.Collection, error) {
 	cols := strings.Join(s.collectionTable.Metadata().Columns, ", ")
 	stmt := fmt.Sprintf(
-		"SELECT %s FROM collection WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
+		"SELECT %s FROM collections_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
 		cols,
 	)
 	var row collectionRow
@@ -1241,26 +1241,26 @@ func (s *scyllaDatastore) UpdateCollection(ctx context.Context, c *datastore.Col
 
 	err = s.mutations.executeUpdate(ctx, row.ResourceVersion,
 		mutationAction{
-			Step: catalogueStep("update", "Collection", c.UID, "collection", c.UID, "update-authoritative"),
+			Step: catalogueStep("update", "Collection", c.UID, "collections_by_namespace", c.UID, "update-authoritative"),
 			Apply: func(ctx context.Context) error {
 				return s.updateCollectionAuthoritative(ctx, row, existing.ResourceVersion)
 			},
 		},
 		mutationAction{
-			Step: catalogueStep("update", "Collection", c.UID, "collection_by_name", c.Namespace+"/"+c.Name, "converge-name"),
+			Step: catalogueStep("update", "Collection", c.UID, "collections_by_name", c.Namespace+"/"+c.Name, "converge-name"),
 			Apply: func(ctx context.Context) error {
-				return s.reserveName(ctx, "Collection", "collection_by_name", row.Namespace, row.Name, existingUID, row.CreationTimestamp)
+				return s.reserveName(ctx, "Collection", "collections_by_name", row.Namespace, row.Name, existingUID, row.CreationTimestamp)
 			},
 		},
 		mutationAction{
-			Step: catalogueStep("update", "Collection", c.UID, "collection_by_uid", c.UID, "converge-uid"),
+			Step: catalogueStep("update", "Collection", c.UID, "collections_by_uid", c.UID, "converge-uid"),
 			Apply: func(ctx context.Context) error {
-				return s.reserveUID(ctx, "Collection", "collection_by_uid", row.Namespace, existingUID, row.CreationTimestamp)
+				return s.reserveUID(ctx, "Collection", "collections_by_uid", row.Namespace, existingUID, row.CreationTimestamp)
 			},
 		},
 	)
 	if err != nil {
-		return fmt.Errorf("scylla: update collection: %w", err)
+		return fmt.Errorf("scylla: update collections_by_namespace: %w", err)
 	}
 	return nil
 }
@@ -1286,28 +1286,28 @@ func (s *scyllaDatastore) deleteCollectionWithResourceVersion(ctx context.Contex
 	parsedUID := mustParseUUID(uid)
 
 	authoritative := mutationAction{
-		Step: catalogueStep("delete", "Collection", uid, "collection", uid, "delete-authoritative"),
+		Step: catalogueStep("delete", "Collection", uid, "collections_by_namespace", uid, "delete-authoritative"),
 		Apply: func(ctx context.Context) error {
 			return s.deleteCollectionAuthoritative(ctx, toCollectionRow(c), expectedResourceVersion)
 		},
 	}
 	projections := []mutationAction{
 		{
-			Step: catalogueStep("delete", "Collection", uid, "collection_by_name", c.Namespace+"/"+c.Name, "delete-name"),
+			Step: catalogueStep("delete", "Collection", uid, "collections_by_name", c.Namespace+"/"+c.Name, "delete-name"),
 			Apply: func(ctx context.Context) error {
-				return s.releaseName(ctx, "collection_by_name", c.Namespace, c.Name, parsedUID)
+				return s.releaseName(ctx, "collections_by_name", c.Namespace, c.Name, parsedUID)
 			},
 			Compensate: func(ctx context.Context) error {
-				return s.reserveName(ctx, "Collection", "collection_by_name", c.Namespace, c.Name, parsedUID, c.CreationTimestamp)
+				return s.reserveName(ctx, "Collection", "collections_by_name", c.Namespace, c.Name, parsedUID, c.CreationTimestamp)
 			},
 		},
 		{
-			Step: catalogueStep("delete", "Collection", uid, "collection_by_uid", uid, "delete-uid"),
+			Step: catalogueStep("delete", "Collection", uid, "collections_by_uid", uid, "delete-uid"),
 			Apply: func(ctx context.Context) error {
-				return s.releaseUID(ctx, "collection_by_uid", c.Namespace, parsedUID, c.CreationTimestamp)
+				return s.releaseUID(ctx, "collections_by_uid", c.Namespace, parsedUID, c.CreationTimestamp)
 			},
 			Compensate: func(ctx context.Context) error {
-				return s.reserveUID(ctx, "Collection", "collection_by_uid", c.Namespace, parsedUID, c.CreationTimestamp)
+				return s.reserveUID(ctx, "Collection", "collections_by_uid", c.Namespace, parsedUID, c.CreationTimestamp)
 			},
 		},
 	}
@@ -1370,37 +1370,37 @@ func (s *scyllaDatastore) CreateProductVariant(ctx context.Context, v *datastore
 	)
 	actions := []mutationAction{
 		{
-			Step: catalogueStep("create", "ProductVariant", v.UID, "product_variant_by_name", v.Namespace+"/"+v.Name, "reserve-name"),
+			Step: catalogueStep("create", "ProductVariant", v.UID, "product_variants_by_name", v.Namespace+"/"+v.Name, "reserve-name"),
 			Apply: func(ctx context.Context) error {
 				var reserveErr error
-				nameReserved, reserveErr = s.reserveNameOwned(ctx, "ProductVariant", "product_variant_by_name", row.Namespace, row.Name, uid, row.CreationTimestamp)
+				nameReserved, reserveErr = s.reserveNameOwned(ctx, "ProductVariant", "product_variants_by_name", row.Namespace, row.Name, uid, row.CreationTimestamp)
 				return reserveErr
 			},
 			Compensate: func(ctx context.Context) error {
 				if !nameReserved {
 					return nil
 				}
-				return s.releaseName(ctx, "product_variant_by_name", row.Namespace, row.Name, uid)
+				return s.releaseName(ctx, "product_variants_by_name", row.Namespace, row.Name, uid)
 			},
 		},
 		{
-			Step: catalogueStep("create", "ProductVariant", v.UID, "product_variant_by_uid", v.UID, "reserve-uid"),
+			Step: catalogueStep("create", "ProductVariant", v.UID, "product_variants_by_uid", v.UID, "reserve-uid"),
 			Apply: func(ctx context.Context) error {
 				var reserveErr error
-				uidReserved, reserveErr = s.reserveUIDOwned(ctx, "ProductVariant", "product_variant_by_uid", row.Namespace, uid, row.CreationTimestamp)
+				uidReserved, reserveErr = s.reserveUIDOwned(ctx, "ProductVariant", "product_variants_by_uid", row.Namespace, uid, row.CreationTimestamp)
 				return reserveErr
 			},
 			Compensate: func(ctx context.Context) error {
 				if !uidReserved {
 					return nil
 				}
-				return s.releaseUID(ctx, "product_variant_by_uid", row.Namespace, uid, row.CreationTimestamp)
+				return s.releaseUID(ctx, "product_variants_by_uid", row.Namespace, uid, row.CreationTimestamp)
 			},
 		},
 	}
 	if row.SKU != "" {
 		actions = append(actions, mutationAction{
-			Step: catalogueStep("create", "ProductVariant", v.UID, "product_variant_by_sku", v.Namespace+"/"+v.SKU, "reserve-sku"),
+			Step: catalogueStep("create", "ProductVariant", v.UID, "product_variants_by_sku", v.Namespace+"/"+v.SKU, "reserve-sku"),
 			Apply: func(ctx context.Context) error {
 				var reserveErr error
 				skuReserved, reserveErr = s.reserveSKUOwned(ctx, row.Namespace, row.SKU, uid, row.CreationTimestamp)
@@ -1415,7 +1415,7 @@ func (s *scyllaDatastore) CreateProductVariant(ctx context.Context, v *datastore
 		})
 	}
 	actions = append(actions, mutationAction{
-		Step: catalogueStep("create", "ProductVariant", v.UID, "product_variant_by_namespace", v.UID, "write-authoritative"),
+		Step: catalogueStep("create", "ProductVariant", v.UID, "product_variants_by_namespace", v.UID, "write-authoritative"),
 		Apply: func(ctx context.Context) error {
 			applied, applyErr := s.insertAuthoritative(ctx, s.productVariantByNamespaceTable, row)
 			if applyErr != nil {
@@ -1446,7 +1446,7 @@ func (s *scyllaDatastore) CreateProductVariant(ctx context.Context, v *datastore
 			UID: uid, CreationTimestamp: row.CreationTimestamp,
 		}
 		actions = append(actions, mutationAction{
-			Step: catalogueStep("create", "ProductVariant", v.UID, "product_variant_by_product_ref", v.Namespace+"/"+v.ProductRefName, "write-product-ref"),
+			Step: catalogueStep("create", "ProductVariant", v.UID, "product_variants_by_product_ref", v.Namespace+"/"+v.ProductRefName, "write-product-ref"),
 			Apply: func(ctx context.Context) error {
 				return s.insertProjection(ctx, s.productVariantByProductRefTable, refRow)
 			},
@@ -1492,7 +1492,7 @@ func (s *scyllaDatastore) GetProductVariant(ctx context.Context, uid string) (*d
 	variant, err := s.getProductVariantByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "ProductVariant", ResourceUID: uid, Projection: "product_variant_by_uid",
+			ResourceKind: "ProductVariant", ResourceUID: uid, Projection: "product_variants_by_uid",
 			LookupKey: uid, Operation: "get", Type: datastore.FindingDangling,
 		})
 	}
@@ -1511,14 +1511,14 @@ func (s *scyllaDatastore) GetProductVariantByName(ctx context.Context, namespace
 	variant, err := s.getProductVariantByKey(nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "ProductVariant", ResourceUID: nameRow.UID.String(), Projection: "product_variant_by_name",
+			ResourceKind: "ProductVariant", ResourceUID: nameRow.UID.String(), Projection: "product_variants_by_name",
 			LookupKey: namespace + "/" + name, Operation: "get_by_name", Type: datastore.FindingDangling,
 		})
 		return nil, err
 	}
 	if err == nil && (variant.Name != name || variant.Namespace != namespace) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "ProductVariant", ResourceUID: nameRow.UID.String(), Projection: "product_variant_by_name",
+			ResourceKind: "ProductVariant", ResourceUID: nameRow.UID.String(), Projection: "product_variants_by_name",
 			LookupKey: namespace + "/" + name, Operation: "get_by_name", Type: datastore.FindingStale,
 		})
 		return nil, fmt.Errorf("%w: stale product variant name projection %s/%s", datastore.ErrNotFound, namespace, name)
@@ -1538,14 +1538,14 @@ func (s *scyllaDatastore) GetProductVariantBySKU(ctx context.Context, namespace,
 	variant, err := s.getProductVariantByKey(skuRow.Namespace, skuRow.CreationTimestamp, skuRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "ProductVariant", ResourceUID: skuRow.UID.String(), Projection: "product_variant_by_sku",
+			ResourceKind: "ProductVariant", ResourceUID: skuRow.UID.String(), Projection: "product_variants_by_sku",
 			LookupKey: namespace + "/" + sku, Operation: "get_by_sku", Type: datastore.FindingDangling,
 		})
 		return nil, err
 	}
 	if err == nil && (variant.SKU != sku || variant.Namespace != namespace) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "ProductVariant", ResourceUID: skuRow.UID.String(), Projection: "product_variant_by_sku",
+			ResourceKind: "ProductVariant", ResourceUID: skuRow.UID.String(), Projection: "product_variants_by_sku",
 			LookupKey: namespace + "/" + sku, Operation: "get_by_sku", Type: datastore.FindingStale,
 		})
 		return nil, fmt.Errorf("%w: stale product variant sku projection %s/%s", datastore.ErrNotFound, namespace, sku)
@@ -1556,7 +1556,7 @@ func (s *scyllaDatastore) GetProductVariantBySKU(ctx context.Context, namespace,
 func (s *scyllaDatastore) getProductVariantByKey(namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.ProductVariant, error) {
 	cols := strings.Join(s.productVariantByNamespaceTable.Metadata().Columns, ", ")
 	stmt := fmt.Sprintf(
-		"SELECT %s FROM product_variant_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
+		"SELECT %s FROM product_variants_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
 		cols,
 	)
 	var row productVariantRow
@@ -1592,7 +1592,7 @@ func (s *scyllaDatastore) ListProductVariants(_ context.Context, namespace strin
 func (s *scyllaDatastore) ListProductVariantsByProductRef(ctx context.Context, namespace, productRefName string) ([]*datastore.ProductVariant, error) {
 	cols := strings.Join(s.productVariantByProductRefTable.Metadata().Columns, ", ")
 	stmt := fmt.Sprintf(
-		"SELECT %s FROM product_variant_by_product_ref WHERE namespace = ? AND product_ref_name = ?",
+		"SELECT %s FROM product_variants_by_product_ref WHERE namespace = ? AND product_ref_name = ?",
 		cols,
 	)
 	var refRows []productVariantProductRefRow
@@ -1605,7 +1605,7 @@ func (s *scyllaDatastore) ListProductVariantsByProductRef(ctx context.Context, n
 		if err != nil {
 			if errors.Is(err, datastore.ErrNotFound) {
 				s.reportFinding(ctx, datastore.ProjectionFinding{
-					ResourceKind: "ProductVariant", ResourceUID: r.UID.String(), Projection: "product_variant_by_product_ref",
+					ResourceKind: "ProductVariant", ResourceUID: r.UID.String(), Projection: "product_variants_by_product_ref",
 					LookupKey: namespace + "/" + productRefName, Operation: "list_by_product_ref", Type: datastore.FindingDangling,
 				})
 			}
@@ -1613,7 +1613,7 @@ func (s *scyllaDatastore) ListProductVariantsByProductRef(ctx context.Context, n
 		}
 		if v.ProductRefName != productRefName {
 			s.reportFinding(ctx, datastore.ProjectionFinding{
-				ResourceKind: "ProductVariant", ResourceUID: r.UID.String(), Projection: "product_variant_by_product_ref",
+				ResourceKind: "ProductVariant", ResourceUID: r.UID.String(), Projection: "product_variants_by_product_ref",
 				LookupKey: namespace + "/" + productRefName, Operation: "list_by_product_ref", Type: datastore.FindingStale,
 			})
 			continue
@@ -1654,21 +1654,21 @@ func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore
 
 	projections := []mutationAction{
 		{
-			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variant_by_name", v.Namespace+"/"+v.Name, "converge-name"),
+			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variants_by_name", v.Namespace+"/"+v.Name, "converge-name"),
 			Apply: func(ctx context.Context) error {
-				return s.reserveName(ctx, "ProductVariant", "product_variant_by_name", row.Namespace, row.Name, existingUID, row.CreationTimestamp)
+				return s.reserveName(ctx, "ProductVariant", "product_variants_by_name", row.Namespace, row.Name, existingUID, row.CreationTimestamp)
 			},
 		},
 		{
-			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variant_by_uid", v.UID, "converge-uid"),
+			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variants_by_uid", v.UID, "converge-uid"),
 			Apply: func(ctx context.Context) error {
-				return s.reserveUID(ctx, "ProductVariant", "product_variant_by_uid", row.Namespace, existingUID, row.CreationTimestamp)
+				return s.reserveUID(ctx, "ProductVariant", "product_variants_by_uid", row.Namespace, existingUID, row.CreationTimestamp)
 			},
 		},
 	}
 	if row.SKU != "" {
 		projections = append(projections, mutationAction{
-			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variant_by_sku", v.Namespace+"/"+v.SKU, "converge-sku"),
+			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variants_by_sku", v.Namespace+"/"+v.SKU, "converge-sku"),
 			Apply: func(ctx context.Context) error {
 				if err := s.reserveSKU(ctx, row.Namespace, row.SKU, existingUID, row.CreationTimestamp); err != nil {
 					return err
@@ -1680,7 +1680,7 @@ func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore
 	}
 	if existing.SKU != "" && existing.SKU != row.SKU {
 		projections = append(projections, mutationAction{
-			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variant_by_sku", v.Namespace+"/"+existing.SKU, "delete-old-sku"),
+			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variants_by_sku", v.Namespace+"/"+existing.SKU, "delete-old-sku"),
 			Apply: func(ctx context.Context) error {
 				if !skuConverged {
 					return errors.New("new sku reservation has not converged")
@@ -1695,7 +1695,7 @@ func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore
 			UID: existingUID, CreationTimestamp: row.CreationTimestamp,
 		}
 		projections = append(projections, mutationAction{
-			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variant_by_product_ref", v.Namespace+"/"+v.ProductRefName, "converge-product-ref"),
+			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variants_by_product_ref", v.Namespace+"/"+v.ProductRefName, "converge-product-ref"),
 			Apply: func(ctx context.Context) error {
 				if err := s.insertProjection(ctx, s.productVariantByProductRefTable, refRow); err != nil {
 					return err
@@ -1711,7 +1711,7 @@ func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore
 			UID: existingUID, CreationTimestamp: row.CreationTimestamp,
 		}
 		projections = append(projections, mutationAction{
-			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variant_by_product_ref", v.Namespace+"/"+existing.ProductRefName, "delete-old-product-ref"),
+			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variants_by_product_ref", v.Namespace+"/"+existing.ProductRefName, "delete-old-product-ref"),
 			Apply: func(ctx context.Context) error {
 				if !productRefConverged {
 					return errors.New("new product reference projection has not converged")
@@ -1734,7 +1734,7 @@ func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore
 	})
 	err = s.mutations.executeUpdate(ctx, row.ResourceVersion,
 		mutationAction{
-			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variant_by_namespace", v.UID, "update-authoritative"),
+			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variants_by_namespace", v.UID, "update-authoritative"),
 			Apply: func(ctx context.Context) error {
 				return s.updateProductVariantAuthoritative(ctx, row, existing.ResourceVersion)
 			},
@@ -1777,27 +1777,27 @@ func (s *scyllaDatastore) deleteProductVariantWithResourceVersion(ctx context.Co
 			},
 		},
 		{
-			Step: catalogueStep("delete", "ProductVariant", uid, "product_variant_by_name", v.Namespace+"/"+v.Name, "delete-name"),
+			Step: catalogueStep("delete", "ProductVariant", uid, "product_variants_by_name", v.Namespace+"/"+v.Name, "delete-name"),
 			Apply: func(ctx context.Context) error {
-				return s.releaseName(ctx, "product_variant_by_name", v.Namespace, v.Name, parsedUID)
+				return s.releaseName(ctx, "product_variants_by_name", v.Namespace, v.Name, parsedUID)
 			},
 			Compensate: func(ctx context.Context) error {
-				return s.reserveName(ctx, "ProductVariant", "product_variant_by_name", v.Namespace, v.Name, parsedUID, v.CreationTimestamp)
+				return s.reserveName(ctx, "ProductVariant", "product_variants_by_name", v.Namespace, v.Name, parsedUID, v.CreationTimestamp)
 			},
 		},
 		{
-			Step: catalogueStep("delete", "ProductVariant", uid, "product_variant_by_uid", uid, "delete-uid"),
+			Step: catalogueStep("delete", "ProductVariant", uid, "product_variants_by_uid", uid, "delete-uid"),
 			Apply: func(ctx context.Context) error {
-				return s.releaseUID(ctx, "product_variant_by_uid", v.Namespace, parsedUID, v.CreationTimestamp)
+				return s.releaseUID(ctx, "product_variants_by_uid", v.Namespace, parsedUID, v.CreationTimestamp)
 			},
 			Compensate: func(ctx context.Context) error {
-				return s.reserveUID(ctx, "ProductVariant", "product_variant_by_uid", v.Namespace, parsedUID, v.CreationTimestamp)
+				return s.reserveUID(ctx, "ProductVariant", "product_variants_by_uid", v.Namespace, parsedUID, v.CreationTimestamp)
 			},
 		},
 	}
 	if v.SKU != "" {
 		projections = append(projections, mutationAction{
-			Step: catalogueStep("delete", "ProductVariant", uid, "product_variant_by_sku", v.Namespace+"/"+v.SKU, "delete-sku"),
+			Step: catalogueStep("delete", "ProductVariant", uid, "product_variants_by_sku", v.Namespace+"/"+v.SKU, "delete-sku"),
 			Apply: func(ctx context.Context) error {
 				return s.releaseSKU(ctx, v.Namespace, v.SKU, parsedUID)
 			},
@@ -1812,7 +1812,7 @@ func (s *scyllaDatastore) deleteProductVariantWithResourceVersion(ctx context.Co
 			UID: parsedUID, CreationTimestamp: v.CreationTimestamp,
 		}
 		projections = append(projections, mutationAction{
-			Step: catalogueStep("delete", "ProductVariant", uid, "product_variant_by_product_ref", v.Namespace+"/"+v.ProductRefName, "delete-product-ref"),
+			Step: catalogueStep("delete", "ProductVariant", uid, "product_variants_by_product_ref", v.Namespace+"/"+v.ProductRefName, "delete-product-ref"),
 			Apply: func(ctx context.Context) error {
 				return s.deleteProductRefProjection(ctx, refRow)
 			},
@@ -1822,7 +1822,7 @@ func (s *scyllaDatastore) deleteProductVariantWithResourceVersion(ctx context.Co
 		})
 	}
 	authoritative := mutationAction{
-		Step: catalogueStep("delete", "ProductVariant", uid, "product_variant_by_namespace", uid, "delete-authoritative"),
+		Step: catalogueStep("delete", "ProductVariant", uid, "product_variants_by_namespace", uid, "delete-authoritative"),
 		Apply: func(ctx context.Context) error {
 			return s.deleteProductVariantAuthoritative(ctx, toProductVariantRow(v), expectedResourceVersion)
 		},
@@ -1902,7 +1902,7 @@ func (s *scyllaDatastore) updateProductAuthoritative(ctx context.Context, row *p
 }
 
 func (s *scyllaDatastore) updateCategoryTaxonomyAuthoritative(ctx context.Context, row *categoryTaxonomyRow, expectedResourceVersion string) error {
-	const statement = "UPDATE category_taxonomy SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
+	const statement = "UPDATE category_taxonomies_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
 		"creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?," +
 		"repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=?,parent_name=?,ancestor_path=? " +
 		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
@@ -1923,7 +1923,7 @@ func (s *scyllaDatastore) updateCategoryTaxonomyAuthoritative(ctx context.Contex
 }
 
 func (s *scyllaDatastore) updateCollectionAuthoritative(ctx context.Context, row *collectionRow, expectedResourceVersion string) error {
-	const statement = "UPDATE collection SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
+	const statement = "UPDATE collections_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
 		"creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?," +
 		"repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=? " +
 		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
@@ -1944,7 +1944,7 @@ func (s *scyllaDatastore) updateCollectionAuthoritative(ctx context.Context, row
 }
 
 func (s *scyllaDatastore) updateProductVariantAuthoritative(ctx context.Context, row *productVariantRow, expectedResourceVersion string) error {
-	const statement = "UPDATE product_variant_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
+	const statement = "UPDATE product_variants_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
 		"creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?," +
 		"repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=?,sku=?,product_ref_name=? " +
 		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
@@ -1973,21 +1973,21 @@ func (s *scyllaDatastore) deleteProductAuthoritative(ctx context.Context, row *p
 
 func (s *scyllaDatastore) deleteCategoryTaxonomyAuthoritative(ctx context.Context, row *categoryTaxonomyRow, expectedResourceVersion string) error {
 	return s.deleteAuthoritative(ctx,
-		"DELETE FROM category_taxonomy WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
+		"DELETE FROM category_taxonomies_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
 		row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion,
 	)
 }
 
 func (s *scyllaDatastore) deleteCollectionAuthoritative(ctx context.Context, row *collectionRow, expectedResourceVersion string) error {
 	return s.deleteAuthoritative(ctx,
-		"DELETE FROM collection WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
+		"DELETE FROM collections_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
 		row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion,
 	)
 }
 
 func (s *scyllaDatastore) deleteProductVariantAuthoritative(ctx context.Context, row *productVariantRow, expectedResourceVersion string) error {
 	return s.deleteAuthoritative(ctx,
-		"DELETE FROM product_variant_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
+		"DELETE FROM product_variants_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
 		row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion,
 	)
 }
@@ -2005,7 +2005,7 @@ func (s *scyllaDatastore) deleteAuthoritative(ctx context.Context, statement str
 
 func (s *scyllaDatastore) deleteProductRefProjection(ctx context.Context, row *productVariantProductRefRow) error {
 	return s.session.Query(
-		"DELETE FROM product_variant_by_product_ref WHERE namespace=? AND product_ref_name=? AND creation_timestamp=? AND uid=?",
+		"DELETE FROM product_variants_by_product_ref WHERE namespace=? AND product_ref_name=? AND creation_timestamp=? AND uid=?",
 		nil,
 	).WithContext(ctx).Bind(row.Namespace, row.ProductRefName, row.CreationTimestamp, row.UID).ExecRelease()
 }
@@ -2635,9 +2635,9 @@ func (s *scyllaDatastore) deleteNamespaceIndexesAndConfirm(ctx context.Context, 
 // checked in order by HasCatalogResources with short-circuit on first match.
 var catalogTablesByRepositoryID = []string{
 	"products_by_namespace",
-	"product_variant_by_namespace",
-	"category_taxonomy",
-	"collection",
+	"product_variants_by_namespace",
+	"category_taxonomies_by_namespace",
+	"collections_by_namespace",
 }
 
 // HasCatalogResources reports whether at least one Product, ProductVariant,

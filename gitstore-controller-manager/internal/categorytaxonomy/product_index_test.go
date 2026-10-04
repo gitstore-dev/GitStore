@@ -61,7 +61,7 @@ func TestProductCategoryIndex_MultipleProductsSameCategory(t *testing.T) {
 // Product's categoryRef changing from one category to another: the caller is
 // expected to Remove the old (namespace, oldName) membership and Add the new
 // (namespace, newName) membership (mirroring the OnUpdate handling
-// registerProductWatch's Product-cache event handler performs). This test
+// a Product-cache event handler performs). This test
 // confirms the index itself leaves no stale entry under the old name once
 // that sequence runs.
 func TestProductCategoryIndex_CategoryRefChangeLeavesNoStaleMembership(t *testing.T) {

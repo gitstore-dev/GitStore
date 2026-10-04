@@ -13,7 +13,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/google/uuid"
@@ -110,13 +109,11 @@ func TestFileWatchUsesDurableJournalAcrossReplicasAndReplacement(t *testing.T) {
 	require.Nil(t, deleted.File)
 }
 
-func TestFileWatchRejectsLegacyCursorsAndNeverFallsBackToEventBus(t *testing.T) {
+func TestFileWatchRejectsLegacyCursorsAndFailsClosedWithoutJournal(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
-	bus := eventbus.New(16)
-	bus.Publish(eventbus.Event{Kind: "File", Type: eventbus.Added, Name: "legacy"})
 	for _, cfg := range []config.NamespaceWatchConfig{{}, {ReadersEnabled: true}} {
-		r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop(), EventBus: bus, NamespaceWatch: cfg})
+		r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop(), NamespaceWatch: cfg})
 		require.NoError(t, err)
 		_, err = r.Subscription().WatchFiles(t.Context(), nil, nil, nil)
 		require.Error(t, err)

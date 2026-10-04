@@ -1,3 +1,5 @@
+-- File. files_by_namespace is authoritative and the CDC watch source;
+
 CREATE TABLE IF NOT EXISTS files_by_namespace (
     namespace text,
     creation_timestamp timestamp,
@@ -24,7 +26,7 @@ CREATE TABLE IF NOT EXISTS files_by_namespace (
     body text,
     status text,
     PRIMARY KEY ((namespace), creation_timestamp, uid)
-);
+) WITH cdc = {'enabled': 'true', 'preimage': 'full', 'postimage': 'true', 'ttl': '1209600'};
 CREATE TABLE IF NOT EXISTS files_by_name (
     namespace text, name text, uid uuid, creation_timestamp timestamp,
     PRIMARY KEY ((namespace), name)

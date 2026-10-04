@@ -194,21 +194,16 @@ func NewCategoryTaxonomyListWatcher(client *graphqlclient.Client) *CategoryTaxon
 	return &CategoryTaxonomyListWatcher{client: client}
 }
 
-// noResourceVersionSentinel is returned by List when the namespace has zero
-// CategoryTaxonomy resources, so there is no real resourceVersion to report
-// yet. checkpoint.FilesystemStore/spec 036's ListWatcher contract require a
-// non-empty cursor from List (an empty string is reserved for "no checkpoint
-// exists"), but gitstore-api's real resourceVersions are always >= "1"
-// (nextResourceVersion), so "0" can never collide with one. Watch treats it
-// identically to "" (subscribe from the beginning).
-const noResourceVersionSentinel = "0"
+// categoryWatchBootstrapCursor asks the API's durable journal for a bookmark
+// at its current high-water mark, so List can snapshot after a known cursor.
+const categoryWatchBootstrapCursor = "__category_watch_bootstrap__"
 
 const productWatchBootstrapCursor = "__product_watch_bootstrap__"
 
-// List paginates the categories query to completion, returning every
-// CategoryTaxonomy and the highest observed resourceVersion as the list-time
-// cursor. When the namespace has zero categories, ResourceVersion is
-// noResourceVersionSentinel rather than "" (see its doc comment).
+// List establishes a durable journal cursor before enumerating every
+// namespace, then paginates the categories query for each to completion.
+// Changes that race with the snapshot are replayed by the subsequent Watch
+// from that cursor.
 func (lw *CategoryTaxonomyListWatcher) List(ctx context.Context) (ListResponse[categorytaxonomy.CategoryTaxonomy], error) {
 	return collectList[categorytaxonomy.CategoryTaxonomy](ctx, lw)
 }
@@ -217,8 +212,11 @@ func (lw *CategoryTaxonomyListWatcher) ListPages(ctx context.Context, visit func
 	if visit == nil {
 		return "", errors.New("listwatch: missing category page visitor")
 	}
-	highestRV := ""
-	err := visitNamespaceIdentifiers(ctx, lw.client, func(ns string) error {
+	cursor, err := bootstrapCursor[categorytaxonomy.CategoryTaxonomy](ctx, lw, categoryWatchBootstrapCursor)
+	if err != nil {
+		return "", err
+	}
+	err = visitNamespaceIdentifiers(ctx, lw.client, func(ns string) error {
 		var after *string
 		for {
 			var resp categoriesListResponse
@@ -232,11 +230,7 @@ func (lw *CategoryTaxonomyListWatcher) ListPages(ctx context.Context, visit func
 			observeListPage(ctx, len(resp.Categories.Edges))
 			items := make([]categorytaxonomy.CategoryTaxonomy, 0, len(resp.Categories.Edges))
 			for _, edge := range resp.Categories.Edges {
-				c := edge.Node.toCategoryTaxonomy()
-				items = append(items, c)
-				if c.ResourceVersion > highestRV {
-					highestRV = c.ResourceVersion
-				}
+				items = append(items, edge.Node.toCategoryTaxonomy())
 			}
 			if err := visit(items); err != nil {
 				return err
@@ -251,18 +245,11 @@ func (lw *CategoryTaxonomyListWatcher) ListPages(ctx context.Context, visit func
 	if err != nil {
 		return "", err
 	}
-
-	if highestRV == "" {
-		highestRV = noResourceVersionSentinel
-	}
-	return highestRV, nil
+	return cursor, nil
 }
 
 // Watch opens a watchCategories subscription starting after resourceVersion.
 func (lw *CategoryTaxonomyListWatcher) Watch(ctx context.Context, resourceVersion string) (Watcher[categorytaxonomy.CategoryTaxonomy], error) {
-	if resourceVersion == noResourceVersionSentinel {
-		resourceVersion = ""
-	}
 	vars := map[string]any{}
 	if resourceVersion != "" {
 		vars["resourceVersion"] = resourceVersion
@@ -538,18 +525,6 @@ func NewProductListWatcher(client *graphqlclient.Client) *ProductListWatcher {
 	return &ProductListWatcher{client: client}
 }
 
-// listNamespaceIdentifiers paginates namespaces to completion and returns each
-// namespace identifier. Category and Product listwatchers both use it to keep
-// cross-namespace listing behaviour while issuing namespace-scoped list queries.
-func listNamespaceIdentifiers(ctx context.Context, client *graphqlclient.Client) ([]string, error) {
-	var identifiers []string
-	err := visitNamespaceIdentifiers(ctx, client, func(name string) error {
-		identifiers = append(identifiers, name)
-		return nil
-	})
-	return identifiers, err
-}
-
 func visitNamespaceIdentifiers(ctx context.Context, client *graphqlclient.Client, visit func(string) error) error {
 	var after *string
 	for {
@@ -578,8 +553,6 @@ func visitNamespaceIdentifiers(ctx context.Context, client *graphqlclient.Client
 // List establishes a durable journal cursor before enumerating every namespace,
 // then paginates the products query for each to completion. Changes that race
 // with the snapshot are replayed by the subsequent Watch from that cursor.
-// When there are zero prior Product events, the cursor is
-// noResourceVersionSentinel.
 func (lw *ProductListWatcher) List(ctx context.Context) (ListResponse[categorytaxonomy.Product], error) {
 	return collectList[categorytaxonomy.Product](ctx, lw)
 }

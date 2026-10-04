@@ -1,2 +1,0 @@
-ALTER TABLE namespaces_by_uid ADD repository_creation_epoch bigint;
-ALTER TABLE namespaces_by_uid ADD pending_repository_creations bigint;

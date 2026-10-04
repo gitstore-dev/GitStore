@@ -18,7 +18,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
@@ -88,7 +87,6 @@ type webSocketTestEnvironment struct {
 	server      *httptest.Server
 	store       datastore.Datastore
 	connections *wsregistry.Registry
-	eventBus    *eventbus.Bus
 }
 
 func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTestEnvironment {
@@ -107,7 +105,6 @@ func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTe
 	}))
 
 	connections := wsregistry.New()
-	eventBus := eventbus.New(8)
 	provider := &webSocketAuthProvider{store: store, expiresAt: expiresAt}
 	registry := auth.NewProviderRegistry(
 		auth.NewChainedAuthN(provider),
@@ -119,7 +116,6 @@ func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTe
 		Logger:             zap.NewNop(),
 		Registry:           registry,
 		IDs:                apiruntime.NewSequenceIDGenerator(),
-		EventBus:           eventBus,
 		ResourceJournal:    store.(datastore.ResourceWatchCapable).ResourceWatchJournal(),
 		NamespaceWatch:     config.NamespaceWatchConfig{ReadersEnabled: true, SubscriberBuffer: 16, MaxMaterializerLagSeconds: 60},
 		ConnectionRegistry: connections,
@@ -127,7 +123,7 @@ func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTe
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	return &webSocketTestEnvironment{server: server, store: store, connections: connections, eventBus: eventBus}
+	return &webSocketTestEnvironment{server: server, store: store, connections: connections}
 }
 
 func (e *webSocketTestEnvironment) dial(t *testing.T) *websocket.Conn {

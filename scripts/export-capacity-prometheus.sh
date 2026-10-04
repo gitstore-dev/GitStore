@@ -74,9 +74,9 @@ case "${capacity_target}" in
   namespace/watch|namespace/recovery|repository/lifecycle)
     names+=(namespace_cdc_discovery_p95 namespace_materializer_stage_p95 namespace_delivery_p95)
     queries+=(
-      "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_namespace_watch_cdc_discovery_seconds_bucket[${lookback}])))"
-      "histogram_quantile(0.95, sum by (le,stage,instance) (increase(gitstore_namespace_watch_materializer_stage_duration_seconds_bucket[${lookback}])))"
-      "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_namespace_watch_delivery_latency_seconds_bucket[${lookback}])))"
+      "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_resource_watch_cdc_discovery_seconds_bucket[${lookback}])))"
+      "histogram_quantile(0.95, sum by (le,stage,instance) (increase(gitstore_resource_watch_materializer_stage_duration_seconds_bucket[${lookback}])))"
+      "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_resource_watch_delivery_latency_seconds_bucket[${lookback}])))"
     )
     ;;
 esac

@@ -66,7 +66,7 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 		"products_by_namespace",
 		"products_by_name",
 		"products_by_uid",
-		"category_taxonomy_by_uid",
+		"category_taxonomies_by_uid",
 		"namespaces_by_uid",
 		"repositories_by_uid",
 		"repositories_by_namespace",
@@ -159,9 +159,9 @@ func TestRunMigrations_CanonicalEnvelopeColumnsMatch(t *testing.T) {
 
 	tables := []string{
 		"products_by_namespace",
-		"product_variant_by_namespace",
-		"collection",
-		"category_taxonomy",
+		"product_variants_by_namespace",
+		"collections_by_namespace",
+		"category_taxonomies_by_namespace",
 		"repositories_by_uid",
 	}
 	columns := []string{
@@ -298,7 +298,7 @@ func TestRunMigrations_UsesTenDayGCGrace(t *testing.T) {
 		if strings.HasSuffix(tableName, "$paxos") || strings.HasPrefix(tableName, "schema_migrations") {
 			continue
 		}
-		if tableName == "namespaces_by_uid_scylla_cdc_log" || tableName == "repositories_by_uid_scylla_cdc_log" || tableName == "products_by_namespace_scylla_cdc_log" {
+		if strings.HasSuffix(tableName, "_scylla_cdc_log") {
 			assert.Equalf(t, 0, gcGraceSeconds, "Scylla-managed CDC log %s", tableName)
 			continue
 		}
@@ -317,57 +317,22 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 	require.NoError(t, scylla.RunMigrations(ctx, session, scyllaKeyspace, uuid.New().String(), log))
 }
 
-func TestRunMigrations_SupportedRollbackArtifactRetainsForwardMigrationSet(t *testing.T) {
+// The per-resource baseline has no supported rollback below itself: a binary
+// embedding only a prefix of the baseline must refuse a newer keyspace, and
+// the complete set must remain re-runnable.
+func TestRunMigrations_BaselinePrefixRefusesNewerKeyspace(t *testing.T) {
 	session := newRawSession(t)
 	ctx := context.Background()
 	log := zap.NewNop()
 
 	require.NoError(t, scylla.RunMigrations(ctx, session, scyllaKeyspace, uuid.New().String(), log))
 
-	legacyBinaryMigrations := migrationSetThrough(t, "004_file_resource.cql")
-	err := scylla.RunMigrationsWithFS(
-		ctx,
-		session,
-		scyllaKeyspace,
-		uuid.New().String(),
-		log,
-		legacyBinaryMigrations,
-	)
+	err := scylla.RunMigrationsWithFS(ctx, session, scyllaKeyspace, uuid.New().String(), log,
+		migrationSetThrough(t, "008_file.cql"))
 	require.ErrorContains(t, err, "database is ahead")
 
-	preWatchBinaryMigrations := migrationSetThrough(t, "005_namespace_repository_fence.cql")
-	err = scylla.RunMigrationsWithFS(
-		ctx,
-		session,
-		scyllaKeyspace,
-		uuid.New().String(),
-		log,
-		preWatchBinaryMigrations,
-	)
-	require.ErrorContains(t, err, "database is ahead")
-
-	preServiceAccountBinaryMigrations := migrationSetThrough(t, "006_namespace_watch_cdc.cql")
-	err = scylla.RunMigrationsWithFS(
-		ctx,
-		session,
-		scyllaKeyspace,
-		uuid.New().String(),
-		log,
-		preServiceAccountBinaryMigrations,
-	)
-	require.ErrorContains(t, err, "database is ahead")
-
-	// Product's CDC migration is additive and belongs to the supported
-	// rollback artifact along with the Namespace and Repository CDC tables.
-	supportedRollbackMigrations := migrationSetThrough(t, "013_product_watch_cdc.cql")
-	require.NoError(t, scylla.RunMigrationsWithFS(
-		ctx,
-		session,
-		scyllaKeyspace,
-		uuid.New().String(),
-		log,
-		supportedRollbackMigrations,
-	))
+	require.NoError(t, scylla.RunMigrationsWithFS(ctx, session, scyllaKeyspace, uuid.New().String(), log,
+		migrationSetThrough(t, "009_service_account.cql")))
 }
 
 func migrationSetThrough(t *testing.T, last string) fstest.MapFS {

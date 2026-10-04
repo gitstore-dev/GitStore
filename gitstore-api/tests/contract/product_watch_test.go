@@ -15,7 +15,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
@@ -173,12 +172,9 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 	}
 	require.NoError(t, store.CreateRepository(ctx, repo))
 
-	bus := eventbus.New(100)
-
 	srv, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
-		Store:    store,
-		Logger:   zap.NewNop(),
-		EventBus: bus,
+		Store:  store,
+		Logger: zap.NewNop(),
 		GitReader: &stubGitReader{
 			path: "products/widget.md",
 			blob: []byte("---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: widget\n  namespace: gitstore\nspec:\n  title: Widget\n  categoryRef:\n    name: electronics\n---\n"),
@@ -190,7 +186,6 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 		Store:           store,
 		Logger:          zap.NewNop(),
 		Clock:           apiruntime.SystemClock{},
-		EventBus:        bus,
 		ResourceJournal: store.(datastore.ResourceWatchCapable).ResourceWatchJournal(),
 		NamespaceWatch:  resourceContractWatchConfig(),
 	})
@@ -258,8 +253,6 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 	}
 	require.NoError(t, store.CreateRepository(ctx, repo))
 
-	bus := eventbus.New(100)
-
 	zero := strings.Repeat("0", 40)
 	a := strings.Repeat("a", 40)
 	b := strings.Repeat("b", 40)
@@ -276,7 +269,6 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 	srv, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
 		Store:     store,
 		Logger:    zap.NewNop(),
-		EventBus:  bus,
 		GitReader: git,
 	})
 	require.NoError(t, err)
@@ -285,7 +277,6 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 		Store:           store,
 		Logger:          zap.NewNop(),
 		Clock:           apiruntime.SystemClock{},
-		EventBus:        bus,
 		ResourceJournal: store.(datastore.ResourceWatchCapable).ResourceWatchJournal(),
 		NamespaceWatch:  resourceContractWatchConfig(),
 	})
