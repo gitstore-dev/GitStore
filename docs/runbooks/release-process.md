@@ -55,18 +55,23 @@ The release PR is titled something like `chore: release 0.1.0-alpha.4` and its d
 
 ## Graduating: Alpha → Beta → Stable
 
-This is a manual, operator-driven action — never automatic. To force the next release to a specific version regardless of what the accumulated commits would otherwise compute, push an empty commit carrying a `Release-As:` footer. **Direct pushes to `main` are blocked by the "PR to main" repository ruleset**, so this has to land via a merged PR, not `git push origin main` directly:
+This is a manual, operator-driven action — never automatic. To force the next release to a specific version regardless of what the accumulated commits would otherwise compute, push a commit carrying a `Release-As:` footer. **Direct pushes to `main` are blocked by the "PR to main" repository ruleset**, so this has to land via a merged PR, not `git push origin main` directly.
+
+**Do not use `git commit --allow-empty` for this.** An empty commit (no file diff) merged via `gh pr merge --rebase` is silently dropped — `git rebase` without `--keep-empty` drops any commit whose patch is empty relative to its new parent, and since the PR's base (`main`) typically hasn't moved, that's exactly this commit's situation. GitHub's rebase-merge button implements the same behavior: it reports the PR as merged, but `main`'s tip never actually advances, so the `Release-As:` footer never reaches a commit release-please can see. (This happened for real: the first attempt at this override, PR #444, "merged" successfully but added nothing to `main` — confirmed via `gh api repos/<owner>/<repo>/pulls/444` showing `merge_commit_sha` equal to the PR's own base SHA.)
+
+Instead, bundle the footer with a real, trivial content change — e.g. a dated note in this file recording the override — so the commit has a genuine diff and survives any merge strategy:
 
 ```bash
 git checkout -b release-as-override
-git commit --allow-empty -m "chore: release main" -m "Release-As: 0.1.0-beta.1"
+# Make some real, trivial edit here (e.g. append a dated line to this doc) —
+# the point is a non-empty diff, not the specific content.
+git commit -m "chore: release main" -m "Release-As: 0.1.0-beta.1"
 git push -u origin release-as-override
 gh pr create --title "chore: release main" --body "Release-As: 0.1.0-beta.1"
-# then merge via rebase (not squash) so this exact commit — footer intact — lands on main unchanged:
 gh pr merge --rebase
 ```
 
-Rebase merge matters here: a squash merge may rewrite the commit message to the PR title alone and drop the `Release-As:` footer from what actually lands on `main`, which is what release-please parses.
+If you genuinely need a no-file-change override, merge via `gh pr merge --merge` (a real merge commit) instead of `--rebase` or `--squash` — a merge commit always adds the original commit to `main`'s history as a parent regardless of its diff, so an empty commit survives that strategy specifically. Squash merge has the same empty-diff risk as rebase and additionally may drop the footer into the PR title/body instead of the commit `main` actually receives — avoid it for Release-As overrides either way.
 
 (Verify the exact `Release-As:` footer syntax against the pinned `googleapis/release-please-action` version's current docs before relying on it — this convention has been stable across recent majors but confirm before your first graduation.)
 
