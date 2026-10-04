@@ -72,6 +72,9 @@ type Runner[T any] struct {
 	// useful for observer-only runners whose durable work is represented by
 	// RelatedReplayKeys instead.
 	DisableReplay bool
+	// Durable watches validate resume asynchronously. Do not release recovered
+	// work until a bookmark has actually been consumed from the resumed stream.
+	WaitForWatchBookmark bool
 
 	// ResyncInterval, when non-zero, periodically re-enqueues every key
 	// currently in Cache regardless of whether it changed. This lets a
@@ -106,6 +109,9 @@ type Runner[T any] struct {
 func (r *Runner[T]) Run(ctx context.Context) error {
 	r.applyDefaults()
 	defer r.finalFlush(ctx)
+	if err := r.Cache.BeginRecovery(ctx); err != nil {
+		return err
+	}
 
 	pendingDedup, err := r.bootstrapOrResume(ctx)
 	if err != nil {
@@ -225,7 +231,11 @@ func (r *Runner[T]) retryList(ctx context.Context) (ListResponse[T], error) {
 	b.Multiplier = defaultListRetryMultiplier
 
 	return backoff.Retry(ctx, func() (ListResponse[T], error) {
-		return r.ListWatcher.List(ctx)
+		listCtx := ctx
+		if r.Cache != nil {
+			listCtx = context.WithValue(ctx, listProgressKey{}, &listProgress{observe: r.Cache.ObserveListProgress})
+		}
+		return r.ListWatcher.List(listCtx)
 	},
 		backoff.WithMaxElapsedTime(0),
 		backoff.WithBackOff(b),
@@ -283,6 +293,9 @@ func (r *Runner[T]) watchLoop(ctx context.Context, pendingDedup map[types.WorkIt
 		}
 		reconnectBackoff.Reset()
 
+		if !r.WaitForWatchBookmark {
+			r.Cache.EndRecovery()
+		}
 		closeErr, processErr := r.drainWatcher(ctx, watcher, pendingDedup, resyncC)
 		watcher.Stop()
 		if processErr != nil {
@@ -346,6 +359,9 @@ func (r *Runner[T]) drainWatcher(ctx context.Context, watcher Watcher[T], pendin
 			if err := r.handleEvent(ctx, ev, pendingDedup); err != nil {
 				return nil, err
 			}
+			if ev.Type == Bookmark {
+				r.Cache.EndRecovery()
+			}
 		}
 	}
 }
@@ -369,8 +385,9 @@ func (r *Runner[T]) resync() {
 // just-enqueued key is not double-enqueued.
 func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKey]string, error) {
 	r.log().Warn("watch cursor expired; re-listing", zap.String("kind", r.Kind))
-	r.currentRV = ""
-	r.markCheckpointDirty()
+	if err := r.Cache.BeginRecovery(ctx); err != nil {
+		return nil, err
+	}
 
 	listResp, err := r.retryList(ctx)
 	if err != nil {
@@ -378,13 +395,12 @@ func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKe
 	}
 
 	pendingDedup := make(map[types.WorkItemKey]string, len(listResp.Items))
-	listedKeys := make(map[types.WorkItemKey]struct{}, len(listResp.Items))
+	items := make(map[types.WorkItemKey]T, len(listResp.Items))
 	for _, item := range listResp.Items {
 		key := r.KeyFunc(item)
 		newRev := r.RevisionFunc(item)
-		listedKeys[key] = struct{}{}
+		items[key] = item
 		cached, ok := r.Cache.Get(key)
-		r.Cache.Set(key, item)
 		pendingDedup[key] = newRev
 		if !ok || r.RevisionFunc(cached) != newRev {
 			r.rememberForReplay(key)
@@ -393,13 +409,13 @@ func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKe
 	}
 	for _, cached := range r.Cache.List() {
 		key := r.KeyFunc(cached)
-		if _, ok := listedKeys[key]; ok {
+		if _, ok := items[key]; ok {
 			continue
 		}
-		r.Cache.Delete(key)
 		r.rememberForReplay(key)
 		r.enqueue(key)
 	}
+	r.Cache.Replace(items)
 	r.currentRV = listResp.ResourceVersion
 	r.markCheckpointDirty()
 	if err := r.flushWithBackoff(ctx); err != nil {

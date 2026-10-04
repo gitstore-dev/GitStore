@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v5"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/queue"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/retry"
@@ -95,6 +96,7 @@ func (m *Manager) Register(reg ReconcilerRegistration) error {
 	health.QueueDepth.WithLabelValues(reg.Kind).Set(0)
 	health.PoisonItemsTotal.WithLabelValues(reg.Kind).Set(0)
 	health.StalledWorkers.WithLabelValues(reg.Kind).Set(0)
+	health.ConflictRequeues.WithLabelValues(reg.Kind).Add(0)
 	return nil
 }
 
@@ -168,6 +170,25 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 		// degrade /health once StallThreshold elapses.
 		stalled := (active > 0 || depth > 0) &&
 			!stallBaseline.IsZero() && time.Since(stallBaseline) > ks.reg.StallThreshold
+		var recovery cache.RecoveryState
+		if recoveringCache, ok := ks.cache.(recoveryChecker); ok {
+			recovery = recoveringCache.RecoveryState()
+			if recovery.Recovering {
+				stalled = time.Since(recovery.LastProgress) > ks.reg.StallThreshold
+			} else if recovery.CompletedAt.After(stallBaseline) {
+				stalled = (active > 0 || depth > 0) && time.Since(recovery.CompletedAt) > ks.reg.StallThreshold
+			}
+		}
+		recovering := 0.0
+		if recovery.Recovering {
+			recovering = 1
+		}
+		health.RecoveryInProgress.WithLabelValues(kind).Set(recovering)
+		health.RecoveryPages.WithLabelValues(kind).Set(float64(recovery.Pages))
+		health.RecoveryRows.WithLabelValues(kind).Set(float64(recovery.Rows))
+		if !recovery.LastProgress.IsZero() {
+			health.RecoveryLastProgress.WithLabelValues(kind).Set(float64(recovery.LastProgress.Unix()))
+		}
 		if stalled {
 			health.StalledWorkers.WithLabelValues(kind).Set(1)
 		} else {
@@ -180,6 +201,8 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 			PoisonItems:   poison,
 			Stalled:       stalled,
 			Registered:    true,
+			Recovering:    recovery.Recovering || !ks.cache.HasSynced(),
+			Recovery:      recovery,
 		}
 	}
 	return out
@@ -262,6 +285,12 @@ func (m *Manager) runDispatchLoop(ctx context.Context, ks *kindState) {
 			case <-ks.cache.SyncedCh():
 			}
 		}
+		if recovery, ok := ks.cache.(recoveryChecker); ok {
+			if err := recovery.WaitForRecovery(ctx); err != nil {
+				ks.q.Done(key)
+				return
+			}
+		}
 		ks.pool.Submit(func() {
 			m.dispatch(ctx, ks, key)
 		})
@@ -271,6 +300,13 @@ func (m *Manager) runDispatchLoop(ctx context.Context, ks *kindState) {
 // dispatch invokes the reconciler through the retry engine.
 func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) {
 	defer ks.q.Done(key)
+	if recovery, ok := ks.cache.(recoveryChecker); ok {
+		release, err := recovery.AcquireDispatch(ctx)
+		if err != nil {
+			return
+		}
+		defer release()
+	}
 
 	log := m.log.With(
 		zap.String("kind", key.Kind),

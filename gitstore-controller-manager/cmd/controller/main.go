@@ -220,11 +220,12 @@ func credentialReadiness(source graphqlclient.CredentialSource) health.Credentia
 func registerNamespace(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client) (*listwatch.Runner[namespacecontroller.Namespace], error) {
 	namespaceCache := cache.New[namespacecontroller.Namespace]()
 	runner := &listwatch.Runner[namespacecontroller.Namespace]{
-		Kind:        "Namespace",
-		ListWatcher: listwatch.NewNamespaceListWatcher(client),
-		Cache:       namespaceCache,
-		Store:       checkpointStore,
-		Enqueue:     mgr.Enqueue,
+		Kind:                 "Namespace",
+		WaitForWatchBookmark: true,
+		ListWatcher:          listwatch.NewNamespaceListWatcher(client),
+		Cache:                namespaceCache,
+		Store:                checkpointStore,
+		Enqueue:              mgr.Enqueue,
 		KeyFunc: func(item namespacecontroller.Namespace) types.WorkItemKey {
 			return types.WorkItemKey{Kind: "Namespace", Name: item.Name}
 		},
@@ -280,11 +281,12 @@ func registerRepository(
 ) (*listwatch.Runner[repositorycontroller.Repository], error) {
 	repositoryCache := cache.New[repositorycontroller.Repository]()
 	runner := &listwatch.Runner[repositorycontroller.Repository]{
-		Kind:        "Repository",
-		ListWatcher: watcher,
-		Cache:       repositoryCache,
-		Store:       checkpointStore,
-		Enqueue:     mgr.Enqueue,
+		Kind:                 "Repository",
+		WaitForWatchBookmark: true,
+		ListWatcher:          watcher,
+		Cache:                repositoryCache,
+		Store:                checkpointStore,
+		Enqueue:              mgr.Enqueue,
 		KeyFunc: func(item repositorycontroller.Repository) types.WorkItemKey {
 			return types.WorkItemKey{Kind: "Repository", Namespace: item.Namespace, Name: item.Name}
 		},
@@ -440,11 +442,12 @@ func registerProductWatch(ctx context.Context, runners *sync.WaitGroup, mgr *man
 	}
 
 	runner = &listwatch.Runner[categorytaxonomy.Product]{
-		Kind:        "Product",
-		ListWatcher: listWatcher,
-		Cache:       productCache,
-		Store:       checkpointStore,
-		Enqueue:     mgr.Enqueue,
+		Kind:                 "Product",
+		WaitForWatchBookmark: true,
+		ListWatcher:          listWatcher,
+		Cache:                productCache,
+		Store:                checkpointStore,
+		Enqueue:              mgr.Enqueue,
 		ReplayEnqueue: func(key types.WorkItemKey) error {
 			return mgr.Enqueue(key)
 		},

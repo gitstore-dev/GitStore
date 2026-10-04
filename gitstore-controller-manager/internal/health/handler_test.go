@@ -12,6 +12,21 @@ import (
 
 type testManagerStats struct{}
 
+type recoveringManagerStats struct{}
+
+func (recoveringManagerStats) KindStats() map[string]KindStat {
+	return map[string]KindStat{"Product": {Registered: true, Recovering: true}}
+}
+
+func TestRecoveryIsLiveButNotReady(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	NewHandler(recoveringManagerStats{}, "test", testCredentialReadiness(true)).
+		ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"ready":false`) {
+		t.Fatalf("progressing recovery must remain live but not ready: %s", recorder.Body.String())
+	}
+}
+
 func (testManagerStats) KindStats() map[string]KindStat { return map[string]KindStat{} }
 
 type testCredentialReadiness bool

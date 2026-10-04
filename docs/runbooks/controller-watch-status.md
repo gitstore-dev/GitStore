@@ -64,6 +64,53 @@ A controller's `watchCategories`/`watchResources` subscription disconnects and r
 
 ## Controller API throttling and recovery
 
+### Expired-cursor recovery and readiness
+
+Initial checkpoint restoration and expired-cursor re-listing close per-kind
+dispatch admission. Recovery drains in-flight reconciliation (including its
+completion callbacks), keeps pending replay work, and atomically replaces the
+cache before dispatch resumes. Namespace, Repository and Product runners wait
+for a bookmark on the resumed watch, not merely a successful asynchronous
+WebSocket open. Cancellation does not reopen admission or discard the old
+checkpoint cursor while listing is incomplete.
+
+Product enumeration uses 1,000-row pages: five million rows require 5,000
+Product requests rather than 50,000. Successful enumeration pages report a
+high-water count; revisiting the same pages after a failed list does not reset
+the no-progress watchdog. The existing stall threshold still applies to a
+recovery that stops making progress.
+
+`GET /health` distinguishes liveness from readiness: progressing recovery can
+return HTTP 200 with `ready:false`, `kinds.<Kind>.recovering:true` and recovery
+page/row/timestamp details. Consumers that require a reconciled controller
+must check `ready`, not just HTTP status. Capacity setup waits at most ten
+minutes for recovery before baseline collection; unhealthy or unauthenticated
+controllers still fail immediately. Load and final acceptance require readiness.
+No retry is counted as successful reconciliation.
+
+Correlate these per-kind metrics by scrape instance and
+`gitstore_controller_process_instance_info` across replacements:
+
+```promql
+gitstore_controller_recovery_in_progress
+gitstore_controller_recovery_pages
+time() - gitstore_controller_recovery_last_progress_timestamp_seconds
+gitstore_controller_stalled_workers
+rate(gitstore_controller_reconcile_total[1m])
+rate(gitstore_controller_conflict_requeues_total{kind="Product"}[1m])
+```
+
+The conflict counter currently instruments Product status and deletion conflicts.
+Controller snapshots retain all per-kind health details before assertions.
+For historical metrics, enable the capacity scraper with both API and controller
+targets as described in `tests/capacity/README.md`; unscripted `/metrics` reads
+cannot recover counters after a process has exited.
+
+This coordination is per process and changes no persisted checkpoint schema.
+During rolling upgrades, old controllers retain the stale-cache dispatch
+behavior. The updated secret-capacity observer requires the new health shape
+on both replicas; do not use mixed-version results to claim this recovery fix.
+
 The controller shares one outbound request budget across all reconciliation
 kinds, list/status requests and WebSocket upgrades. Defaults are
 `controller.api_client.requests_per_second = 40` and `burst = 10`, leaving

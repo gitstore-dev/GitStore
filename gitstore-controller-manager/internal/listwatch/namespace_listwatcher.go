@@ -158,6 +158,7 @@ func (lw *NamespaceListWatcher) List(ctx context.Context) (ListResponse[namespac
 		if err := lw.client.Query(ctx, namespacesControllerListQuery, vars, &response); err != nil {
 			return ListResponse[namespacecontroller.Namespace]{}, fmt.Errorf("listwatch: list namespaces: %w", err)
 		}
+		observeListPage(ctx, len(response.Namespaces.Edges))
 		for _, edge := range response.Namespaces.Edges {
 			item := edge.Node.toNamespace()
 			items = append(items, item)

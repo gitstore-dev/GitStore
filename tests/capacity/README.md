@@ -380,6 +380,23 @@ scrape-boundary allowance. `CAPACITY_PROMETHEUS_LOOKBACK` remains an explicit
 override for unusual collection windows, but it cannot reach a prior run's
 isolated TSDB.
 
+For Repository/secret recovery investigations, also pass
+`CAPACITY_PROMETHEUS_CONTROLLER_TARGETS=host.docker.internal:5001,host.docker.internal:5002`
+(or the two controller endpoints reachable from the scraper). Keep
+`CAPACITY_OBSERVABILITY=prometheus` and the API targets above. Controllers use
+the separate `gitstore-controller-capacity` job. The exporter saves five-second
+range samples for controller identity, credentials, reconciliation, recovery,
+stall, queue and resource metrics to `prometheus/controller-series.json`,
+including on a failed gate, before the ephemeral scraper is removed. Missing
+controller history fails export rather than generating zero-valued evidence.
+
+Secret-scenario setup waits up to ten minutes for healthy, authenticated
+controllers to finish list/watch recovery before collecting the baseline.
+`secret/controllers-recovery.json` retains the latest warmup observation;
+before/after-load snapshots retain per-kind health and recovery details before
+asserting readiness. Progressing recovery is not permission to start load, and
+neither warmup nor metrics export substitutes for a complete production gate.
+
 ## Choosing application defaults
 
 Default changes require a configuration matrix, not one successful run. Hold

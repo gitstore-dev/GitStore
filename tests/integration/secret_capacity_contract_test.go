@@ -1882,7 +1882,8 @@ func secretCapacityComponentFixture(t *testing.T, root string) (secretCapacityFi
 		r.Before, r.LoadEnd, r.Stabilized = append(r.Before, first), append(r.LoadEnd, last), append(r.Stabilized, last)
 	}
 	for i, p := range e.Controllers {
-		before := secretCapacityControllerSample{ID: p.ID, ObservedAt: start, FreshTokens: 1, Reconciliations: 1}
+		before := secretCapacityControllerSample{ID: p.ID, ObservedAt: start, FreshTokens: 1, Reconciliations: 1,
+			Ready: true, Healthy: true, CredentialReady: true, Kinds: map[string]secretCapacityKindHealth{}}
 		after := before
 		after.FreshTokens, after.Reconciliations, after.ExchangePeak, after.MaxRetry = 121, 121, 1, 30*time.Second
 		after.ObservedAt = start.Add(time.Hour)
@@ -1895,8 +1896,8 @@ func secretCapacityComponentFixture(t *testing.T, root string) (secretCapacityFi
 		OutageAt: e.OutageAt, OutageElapsed: e.OutageElapsed, ExpiredUnready: true, ClassifiedFailures: 1, Recovery: []time.Duration{time.Minute, time.Minute},
 		RotationAt: e.RotationAt, OverlapRenewals: []int64{1, 1}, RetiredKeyDenied: 2, WrongSubjectDenied: 2, AuthorizedIssuance: 4,
 		RestartAt: e.RestartAt, RestartTargetID: e.RestartTargetID, RestartConfirmed: true, ReplacementRecovery: time.Minute,
-		RestartBefore: secretCapacityControllerSample{ID: e.RestartTargetID, FreshTokens: 90, Reconciliations: 90, ExchangePeak: 1},
-		Replacement:   secretCapacityControllerSample{ID: e.ReplacementID, FreshTokens: 1, Reconciliations: 1}}
+		RestartBefore: secretCapacityControllerSample{ID: e.RestartTargetID, FreshTokens: 90, Reconciliations: 90, ExchangePeak: 1, Kinds: map[string]secretCapacityKindHealth{}},
+		Replacement:   secretCapacityControllerSample{ID: e.ReplacementID, FreshTokens: 1, Reconciliations: 1, Kinds: map[string]secretCapacityKindHealth{}}}
 	for name, value := range map[string]any{"file-workload.json": w, "dataset.json": d, "resources.json": r, "faults.json": f} {
 		require.NoError(t, writeSecretCapacityComponent(root, name, value))
 	}

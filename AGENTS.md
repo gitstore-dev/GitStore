@@ -62,6 +62,8 @@ Deltas not covered above: 028 (branch-deletion admission, no new Go deps), 029 (
 - `make admin-compose`, `make admin-stop`, `make admin-down`, `make admin-logs` — optional admin compose wrappers.
 - `make compose IDENTITY=oidc` — run the core stack together with the optional reference OIDC provider (Hydra + Kratos + `gitstore-oidc-bridge`), with the api's `oidc-jwt` provider auto-wired at the reference issuer. `make oidc` runs only the OIDC services. Lifecycle via the generic `make ps`/`make logs`/`make stop`/`make down` (pass `IDENTITY=oidc` to include the OIDC overlay; `SERVICE=oidc` then covers the whole stack). Requires OIDC secrets in the environment or an `.env` file (see `config/oidc/oidc.env.example` and `specs/059-optional-oidc-provider/quickstart.md`).
 
+- Add `CAPACITY_PROMETHEUS_CONTROLLER_TARGETS=<host:port,...>` to an enabled capacity scraper to retain per-kind controller recovery, reconciliation, stall, queue, credential and process-identity time series. Secret capacity waits for list/watch recovery before baseline collection and requires both controllers' `ready` health field before load and acceptance.
+
 Common bootstrap variables:
 - `CONFIG_FILE ?= ./config/config.toml` (override with an explicit file such as `./config/config.stage.toml`)
 - `API_URL ?= http://localhost:4000/graphql`

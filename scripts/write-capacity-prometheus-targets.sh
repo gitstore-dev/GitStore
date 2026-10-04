@@ -6,10 +6,17 @@ set -euo pipefail
 
 output="${1:?output file is required}"
 targets_csv="${2:?comma-separated Prometheus targets are required}"
+controller_targets_csv="${3:-}"
 IFS=',' read -r -a targets <<<"${targets_csv}"
+validation_targets=("${targets[@]}")
+if [[ -n "${controller_targets_csv}" ]]; then
+  [[ "${controller_targets_csv}" != *, ]] || { echo "empty controller scrape target" >&2; exit 2; }
+  IFS=',' read -r -a controller_targets <<<"${controller_targets_csv}"
+  validation_targets+=("${controller_targets[@]}")
+fi
 (( ${#targets[@]} > 0 )) || { echo "at least one Prometheus target is required" >&2; exit 2; }
 
-for target in "${targets[@]}"; do
+for target in "${validation_targets[@]}"; do
   if [[ ! "${target}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*:([1-9][0-9]{0,4})$ ]] || (( BASH_REMATCH[1] > 65535 )); then
     echo "invalid Prometheus scrape target: ${target}" >&2
     exit 2
@@ -17,7 +24,9 @@ for target in "${targets[@]}"; do
 done
 
 mkdir -p "$(dirname "${output}")"
-printf '%s\n' "${targets[@]}" | jq -Rsc '
+printf '%s\n' "${targets[@]}" | jq -Rsc --arg controllers "${controller_targets_csv}" '
   split("\n") | map(select(length > 0)) |
-  [{targets:.,labels:{job:"gitstore-api-capacity"}}]
+  [{targets:.,labels:{job:"gitstore-api-capacity"}}] +
+  (if $controllers == "" then [] else
+    [{targets:($controllers | split(",")),labels:{job:"gitstore-controller-capacity"}}] end)
 ' >"${output}"

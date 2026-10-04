@@ -171,6 +171,7 @@ func (lw *RepositoryListWatcher) List(ctx context.Context) (ListResponse[reposit
 			if err := lw.client.Query(ctx, repositoriesControllerListQuery, vars, &response); err != nil {
 				return ListResponse[repositorycontroller.Repository]{}, fmt.Errorf("listwatch: list repositories: %w", err)
 			}
+			observeListPage(ctx, len(response.Repositories.Edges))
 			for _, edge := range response.Repositories.Edges {
 				items = append(items, edge.Node.toRepository())
 			}

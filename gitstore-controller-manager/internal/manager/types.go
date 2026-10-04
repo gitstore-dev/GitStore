@@ -4,8 +4,10 @@
 package manager
 
 import (
+	"context"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
 
@@ -26,6 +28,12 @@ type Reconciler = types.Reconciler
 type syncChecker interface {
 	HasSynced() bool
 	SyncedCh() <-chan struct{}
+}
+
+type recoveryChecker interface {
+	WaitForRecovery(context.Context) error
+	AcquireDispatch(context.Context) (func(), error)
+	RecoveryState() cache.RecoveryState
 }
 
 // ReconcilerRegistration configures a controller for one resource kind.

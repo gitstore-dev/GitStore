@@ -26,6 +26,37 @@ type countingReconciler struct {
 	calls atomic.Int64
 }
 
+func TestRecoveryHealthUsesProgressWithoutAcknowledgingWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	c := cache.New[string]()
+	c.MarkSynced()
+	require.NoError(t, c.BeginRecovery(ctx))
+	r := &countingReconciler{}
+	mgr := manager.New()
+	key := types.WorkItemKey{Kind: "RecoveringHealth", Name: "pending"}
+	require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+		Kind: key.Kind, Reconciler: r, Cache: c, WorkerCount: 1, StallThreshold: 60 * time.Millisecond,
+	}))
+	done := make(chan error, 1)
+	go func() { done <- mgr.Start(ctx) }()
+	require.NoError(t, mgr.Enqueue(key))
+	for page := int64(1); page <= 6; page++ {
+		c.ObserveListProgress(page, page*1000)
+		stats := mgr.KindStats()[key.Kind]
+		require.True(t, stats.Recovering)
+		require.False(t, stats.Stalled)
+		time.Sleep(20 * time.Millisecond)
+	}
+	require.Zero(t, r.calls.Load())
+	require.Eventually(t, func() bool { return mgr.KindStats()[key.Kind].Stalled }, time.Second, time.Millisecond)
+	c.EndRecovery()
+	require.Eventually(t, func() bool { return r.calls.Load() == 1 }, time.Second, time.Millisecond)
+	require.False(t, mgr.KindStats()[key.Kind].Stalled)
+	cancel()
+	require.NoError(t, <-done)
+}
+
 func (c *countingReconciler) Reconcile(_ context.Context, _ manager.WorkItemKey) manager.ReconcileResult {
 	c.calls.Add(1)
 	return types.ResultOK()

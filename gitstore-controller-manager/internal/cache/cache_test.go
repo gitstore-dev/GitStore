@@ -4,12 +4,70 @@
 package cache_test
 
 import (
+	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/stretchr/testify/require"
 )
+
+func TestRecoveryDrainsDispatchAndPreservesCancellationGate(t *testing.T) {
+	for range 2 {
+		c := cache.New[string]()
+		c.MarkSynced()
+		release, err := c.AcquireDispatch(t.Context())
+		require.NoError(t, err)
+		done := make(chan error, 1)
+		go func() { done <- c.BeginRecovery(t.Context()) }()
+		require.Eventually(t, func() bool { return c.RecoveryState().Recovering }, time.Second, time.Millisecond)
+		select {
+		case <-done:
+			t.Fatal("recovery did not drain the active dispatch")
+		default:
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		_, err = c.AcquireDispatch(ctx)
+		require.ErrorIs(t, err, context.Canceled)
+		release()
+		require.NoError(t, <-done)
+		require.True(t, c.HasSynced(), "recovery must not reset the one-time initial sync signal")
+		c.ObserveListProgress(5, 5000)
+		progress := c.RecoveryState()
+		c.ObserveListProgress(1, 1000)
+		require.Equal(t, progress, c.RecoveryState(), "retrying old pages is not progress")
+		c.EndRecovery()
+		release, err = c.AcquireDispatch(t.Context())
+		require.NoError(t, err)
+		release()
+		require.NoError(t, c.BeginRecovery(t.Context()))
+		require.True(t, c.RecoveryState().Recovering, "a second expiry must close admission again")
+		c.EndRecovery()
+	}
+}
+
+func TestReplacementCallbacksObserveCompleteSnapshot(t *testing.T) {
+	c := cache.New[string]()
+	c.Set(k1, "old")
+	callbacks := 0
+	check := func() {
+		callbacks++
+		_, exists := c.Get(k1)
+		require.False(t, exists)
+		value, exists := c.Get(k2)
+		require.True(t, exists)
+		require.Equal(t, "new", value)
+	}
+	c.AddEventHandler(cache.EventHandler[string]{
+		OnAdd:    func(types.WorkItemKey, string) { check() },
+		OnDelete: func(types.WorkItemKey, string) { check() },
+	})
+	c.Replace(map[types.WorkItemKey]string{k2: "new"})
+	require.Equal(t, 2, callbacks)
+}
 
 var k1 = types.WorkItemKey{Kind: "Product", Namespace: "ns", Name: "p1"}
 var k2 = types.WorkItemKey{Kind: "Product", Namespace: "ns", Name: "p2"}

@@ -168,7 +168,8 @@ func (w *repositoryRegistrationListWatcher) List(context.Context) (listwatch.Lis
 }
 
 func (w *repositoryRegistrationListWatcher) Watch(ctx context.Context, _ string) (listwatch.Watcher[repositorycontroller.Repository], error) {
-	watch := &repositoryRegistrationWatch{events: make(chan listwatch.WatchEvent[repositorycontroller.Repository])}
+	watch := &repositoryRegistrationWatch{events: make(chan listwatch.WatchEvent[repositorycontroller.Repository], 1)}
+	watch.events <- listwatch.WatchEvent[repositorycontroller.Repository]{Type: listwatch.Bookmark, ResourceVersion: "rwv1:test:2"}
 	go func() {
 		<-ctx.Done()
 		watch.Stop()
@@ -288,7 +289,7 @@ func TestRegisterRepositoryAcrossTwoControllerManagers(t *testing.T) {
 		if err := json.Unmarshal(rec.Snapshot, &restored); err != nil {
 			t.Fatal(err)
 		}
-		if rec.ResourceVersion != "rwv1:test:1" || len(restored) != 1 || restored[0].UID != item.UID {
+		if rec.ResourceVersion != "rwv1:test:2" || len(restored) != 1 || restored[0].UID != item.UID {
 			t.Fatal("shutdown flush did not retain the replacement snapshot and cursor")
 		}
 	}

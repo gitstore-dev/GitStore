@@ -228,6 +228,7 @@ func (lw *CategoryTaxonomyListWatcher) List(ctx context.Context) (ListResponse[c
 			if err := lw.client.Query(ctx, categoriesListQuery, vars, &resp); err != nil {
 				return ListResponse[categorytaxonomy.CategoryTaxonomy]{}, fmt.Errorf("listwatch: list categories: %w", err)
 			}
+			observeListPage(ctx, len(resp.Categories.Edges))
 			for _, edge := range resp.Categories.Edges {
 				c := edge.Node.toCategoryTaxonomy()
 				items = append(items, c)
@@ -401,7 +402,7 @@ const productFields = `
 // then paginates this query once per namespace.
 const productsListQueryByNamespace = `
 query($namespace: String!, $after: String) {
-  products(namespace: $namespace, first: 100, after: $after) {
+  products(namespace: $namespace, first: 1000, after: $after) {
     edges {
       cursor
       node {
@@ -541,6 +542,7 @@ func listNamespaceIdentifiers(ctx context.Context, client *graphqlclient.Client)
 		if err := client.Query(ctx, namespacesListQuery, vars, &resp); err != nil {
 			return nil, fmt.Errorf("listwatch: list namespaces: %w", err)
 		}
+		observeListPage(ctx, len(resp.Namespaces.Edges))
 		for _, edge := range resp.Namespaces.Edges {
 			identifiers = append(identifiers, edge.Node.Metadata.Name)
 		}
@@ -601,6 +603,7 @@ func (lw *ProductListWatcher) List(ctx context.Context) (ListResponse[categoryta
 			if err := lw.client.Query(ctx, productsListQueryByNamespace, vars, &resp); err != nil {
 				return ListResponse[categorytaxonomy.Product]{}, fmt.Errorf("listwatch: list products: %w", err)
 			}
+			observeListPage(ctx, len(resp.Products.Edges))
 			for _, edge := range resp.Products.Edges {
 				p := edge.Node.toProduct()
 				items = append(items, p)

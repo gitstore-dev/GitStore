@@ -139,6 +139,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		fileWorkload.dataset = dataset
 		secretFaultDriver.fixture.RuntimeMarkers = append([]string{}, fileWorkload.runtime.markers...)
 		require.NoError(t, writeSecretCapacityPrivateJSON(filepath.Join(secretFaultDriver.root, "owned-fixture.json"), secretFaultDriver.fixture))
+		waitForSecretCapacityControllerRecovery(t, client, cfg)
 	}
 
 	metricsStart := map[string]capacityProcessMetrics{
@@ -2162,6 +2163,37 @@ func secretCapacityRequested() bool {
 	return os.Getenv("REPOSITORY_CAPACITY_SECRET_SCENARIO") == "1"
 }
 
+func waitForSecretCapacityControllerRecovery(t *testing.T, client *http.Client, cfg repositoryCapacityConfig) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
+	defer cancel()
+	for {
+		var samples [2]secretCapacityControllerSample
+		for i, endpoint := range []string{cfg.controllerA, cfg.controllerB} {
+			var err error
+			samples[i], err = sampleSecretCapacityController(ctx, client, endpoint)
+			require.NoError(t, err, "observe controller recovery before baseline")
+		}
+		require.NoError(t, writeSecretCapacityComponent(os.Getenv("CAPACITY_EVIDENCE_DIR"), "controllers-recovery.json", struct {
+			Controllers [2]secretCapacityControllerSample `json:"controllers"`
+		}{samples}))
+		for i, sample := range samples {
+			require.True(t, sample.Healthy && sample.CredentialReady,
+				"controller %d recovery is unhealthy or unauthenticated: %+v", i+1, sample.Kinds)
+		}
+		if samples[0].Ready && samples[1].Ready {
+			return
+		}
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			t.Fatalf("controllers did not complete recovery before baseline: %v", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
 func recordSecretCapacityControllers(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, component string) [2]secretCapacityControllerSample {
 	t.Helper()
 	var samples [2]secretCapacityControllerSample
@@ -2184,6 +2216,7 @@ func recordSecretCapacityControllers(t *testing.T, client *http.Client, cfg repo
 	for i, sample := range samples {
 		require.True(t, sample.Healthy && sample.CredentialReady,
 			"controller %d must be healthy and authenticated outside fault windows (healthy=%t credentialReady=%t)", i+1, sample.Healthy, sample.CredentialReady)
+		require.True(t, sample.Ready, "controller %d must finish list/watch recovery before load or acceptance: %+v", i+1, sample.Kinds)
 		require.Positive(t, sample.FreshTokens)
 		require.Positive(t, sample.Reconciliations)
 	}

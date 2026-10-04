@@ -148,6 +148,8 @@ CAPACITY_PROMETHEUS_URL ?=
 CAPACITY_PROMETHEUS_PORT ?= 9090
 CAPACITY_PROMETHEUS_RETENTION ?= 24h
 CAPACITY_PROMETHEUS_TARGETS ?= host.docker.internal:4000,host.docker.internal:4001
+CAPACITY_PROMETHEUS_CONTROLLER_TARGETS ?=
+export CAPACITY_PROMETHEUS_CONTROLLER_TARGETS
 CAPACITY_PROMETHEUS_TARGETS_FILE ?=
 CAPACITY_OBSERVABILITY ?= none
 CAPACITY_DATASTORE_CONTAINERS ?=
@@ -212,6 +214,7 @@ help: ## Show available targets and common variables.
 	@printf "  CAPACITY_OBSERVABILITY=%s  Optional capacity metrics collector: none or prometheus\n" "$(CAPACITY_OBSERVABILITY)"
 	@printf "  CAPACITY_PROMETHEUS_URL=<url> Export phase queries into the evidence bundle\n"
 	@printf "  CAPACITY_PROMETHEUS_TARGETS=%s  Scrape endpoints reachable from Prometheus\n" "$(CAPACITY_PROMETHEUS_TARGETS)"
+	@printf "  CAPACITY_PROMETHEUS_CONTROLLER_TARGETS=%s  Optional controller endpoints for retained time series\n" "$(CAPACITY_PROMETHEUS_CONTROLLER_TARGETS)"
 	@printf "  CAPACITY_API_ENDPOINTS=<urls>  Comma-separated live API replica endpoints\n"
 	@printf "  CAPACITY_API_CONTAINERS=<names>  Matching digest-pinned API containers\n"
 	@printf "  CAPACITY_GIT_SERVICE_CONTAINER=<name>  Digest-pinned Git-service container\n"
@@ -541,7 +544,7 @@ endif
 
 _capacity-observability:
 	@test -n "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" || { echo "CAPACITY_PROMETHEUS_TARGETS_FILE is required"; exit 2; }
-	@./scripts/write-capacity-prometheus-targets.sh "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" "$(CAPACITY_PROMETHEUS_TARGETS)"
+	@./scripts/write-capacity-prometheus-targets.sh "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" "$(CAPACITY_PROMETHEUS_TARGETS)" "$(CAPACITY_PROMETHEUS_CONTROLLER_TARGETS)"
 	@CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" CAPACITY_PROMETHEUS_TARGETS_FILE="$(CAPACITY_PROMETHEUS_TARGETS_FILE)" \
 		docker compose --profile capacity -f compose.yml -f compose.capacity.yml up -d capacity-prometheus
 

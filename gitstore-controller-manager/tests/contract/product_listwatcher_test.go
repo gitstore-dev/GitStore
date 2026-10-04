@@ -92,6 +92,9 @@ func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 				{"cursor":"n1","node":{"metadata":{"name":"acme"}}}
 			],"pageInfo":{"hasNextPage":false,"endCursor":"n1"}}}}`))
 		case strings.Contains(req.Query, "products("):
+			if !strings.Contains(req.Query, "first: 1000,") {
+				t.Errorf("Product recovery must request bounded 1000-row pages: %s", req.Query)
+			}
 			ns, _ := req.Variables["namespace"].(string)
 			if ns != "acme" {
 				t.Errorf("unexpected namespace variable: %q", ns)

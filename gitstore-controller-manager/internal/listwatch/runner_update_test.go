@@ -6,11 +6,13 @@ package listwatch
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/cenkalti/backoff/v5"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -22,7 +24,50 @@ type updatePolicyItem struct {
 	Version    string
 }
 
+func TestProductListUsesBoundedThousandRowPagesAndReportsRetryHighWater(t *testing.T) {
+	if !strings.Contains(productsListQueryByNamespace, "first: 1000,") {
+		t.Fatal("Product recovery must use 1000-row pages")
+	}
+	c := cache.New[updatePolicyItem]()
+	if err := c.BeginRecovery(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		ctx := context.WithValue(t.Context(), listProgressKey{}, &listProgress{observe: c.ObserveListProgress})
+		observeListPage(ctx, 1000)
+		observeListPage(ctx, 500)
+	}
+	state := c.RecoveryState()
+	if state.Pages != 2 || state.Rows != 1500 {
+		t.Fatalf("retry duplicated progress: %+v", state)
+	}
+}
+
 type longRetryListWatch struct{}
+
+func TestCanceledRecoveryRetainsOldCheckpointAndReplayWork(t *testing.T) {
+	c := cache.New[updatePolicyItem]()
+	key := types.WorkItemKey{Kind: "Product", Name: "pending"}
+	c.Set(key, updatePolicyItem{Name: key.Name, Version: "old"})
+	c.MarkSynced()
+	store := checkpoint.NewMemoryStore()
+	r := &Runner[updatePolicyItem]{Kind: "Product", Cache: c, Store: store,
+		ListWatcher: longRetryListWatch{}, currentRV: "old-cursor"}
+	r.rememberForReplay(key)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := r.recoverFromExpiry(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("recovery did not honor cancellation: %v", err)
+	}
+	r.finalFlush(ctx)
+	record, err := store.Load(t.Context(), "Product")
+	if err != nil || record.ResourceVersion != "old-cursor" || len(record.ReplayKeys) != 1 || record.ReplayKeys[0] != key {
+		t.Fatalf("canceled list lost resumable state: %+v, %v", record, err)
+	}
+	if !c.RecoveryState().Recovering {
+		t.Fatal("canceled recovery reopened stale-cache dispatch")
+	}
+}
 
 func (longRetryListWatch) List(context.Context) (ListResponse[updatePolicyItem], error) {
 	return ListResponse[updatePolicyItem]{}, backoff.RetryAfter(16 * 60)
