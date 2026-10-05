@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -138,6 +139,11 @@ func (s *ServiceAccountSource) Current(ctx context.Context) (string, error) {
 		return token, nil
 	}
 	if time.Now().Before(s.backoffUntil) {
+		if s.hasValidToken(time.Now()) {
+			token := s.token
+			s.mu.Unlock()
+			return token, nil
+		}
 		err := fmt.Errorf("credential source in backoff: last error at %v: %w", s.lastErrTime, s.lastErr)
 		s.mu.Unlock()
 		return "", err
@@ -161,6 +167,11 @@ func (s *ServiceAccountSource) Current(ctx context.Context) (string, error) {
 		return token, nil
 	}
 	if time.Now().Before(s.backoffUntil) {
+		if s.hasValidToken(time.Now()) {
+			token := s.token
+			s.mu.Unlock()
+			return token, nil
+		}
 		err := fmt.Errorf("credential source in backoff: last error at %v: %w", s.lastErrTime, s.lastErr)
 		s.mu.Unlock()
 		return "", err
@@ -182,6 +193,9 @@ func (s *ServiceAccountSource) Current(ctx context.Context) (string, error) {
 		s.lastErrTime = time.Now()
 		s.failures++
 		s.backoffUntil = s.nextBackoff()
+		if s.hasValidToken(time.Now()) {
+			return s.token, nil
+		}
 		return "", fmt.Errorf("failed to issue service account token: %w", err)
 	}
 
@@ -196,6 +210,16 @@ func (s *ServiceAccountSource) Current(ctx context.Context) (string, error) {
 
 func (s *ServiceAccountSource) hasReusableToken(now time.Time) bool {
 	return s.token != "" && !s.expiresAt.IsZero() && now.Before(s.expiresAt.Add(-30*time.Second))
+}
+
+func (s *ServiceAccountSource) hasValidToken(now time.Time) bool {
+	return s.token != "" && !s.expiresAt.IsZero() && now.Before(s.expiresAt)
+}
+
+func (s *ServiceAccountSource) tokenValid(token string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return token == s.token && s.hasValidToken(time.Now())
 }
 
 // issueToken signs an assertion and exchanges it for an access token.
@@ -257,6 +281,10 @@ func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Tim
 		return "", time.Time{}, fmt.Errorf("send token exchange request: %w", err)
 	}
 	defer response.Body.Close() //nolint:errcheck
+	if response.StatusCode == http.StatusTooManyRequests {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+		return "", time.Time{}, fmt.Errorf("%w: token exchange returned HTTP 429", types.ErrRateLimited)
+	}
 	if response.StatusCode >= http.StatusMultipleChoices {
 		return "", time.Time{}, fmt.Errorf("token exchange returned HTTP %d", response.StatusCode)
 	}
@@ -320,7 +348,7 @@ func (s *ServiceAccountSource) LastError() error {
 func (s *ServiceAccountSource) Ready() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.token != "" && !s.expiresAt.IsZero() && time.Now().Before(s.expiresAt)
+	return s.hasValidToken(time.Now())
 }
 
 // Close releases provider handles after the controller's tracked work stops.

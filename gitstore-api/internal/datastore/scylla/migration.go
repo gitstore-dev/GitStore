@@ -5,15 +5,19 @@ package scylla
 
 import (
 	"context"
+	"crypto/md5"
 	"errors"
 	"fmt"
 	"io/fs"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla/migrations"
 	"github.com/gocql/gocql"
+	"github.com/google/uuid"
 	"github.com/scylladb/gocqlx/v3"
 	"github.com/scylladb/gocqlx/v3/migrate"
 	"go.uber.org/zap"
@@ -31,6 +35,70 @@ const (
 )
 
 var migrationLibraryMu sync.Mutex
+
+// Migrate prepares an existing keyspace without starting API listeners, CDC
+// readers, or controllers. It uses the same fenced startup migration path.
+func Migrate(ctx context.Context, cfg config.ScyllaConfig, log *zap.Logger) error {
+	session, err := openSession(cfg)
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	if err := RunMigrations(ctx, session, cfg.Keyspace, uuid.New().String(), log); err != nil {
+		return err
+	}
+	return ValidateSchema(ctx, session)
+}
+
+// ValidateSchema is read-only. migrate.List/Pending cannot be used here because
+// even listing through that library first executes CREATE TABLE IF NOT EXISTS.
+func ValidateSchema(ctx context.Context, session *gocql.Session) error {
+	files, err := fs.Glob(migrations.Files, "*.cql")
+	if err != nil {
+		return fmt.Errorf("scylla: read embedded migrations: %w", err)
+	}
+	if err := session.AwaitSchemaAgreement(ctx); err != nil {
+		return fmt.Errorf("scylla: schema agreement: %w", err)
+	}
+	var history []migrate.Info
+	query := fmt.Sprintf("SELECT name, checksum, done, start_time, end_time FROM gocqlx_migrate LIMIT %d", len(files)+1)
+	if err := gocqlx.NewSession(session).ContextQuery(ctx, query, nil).SelectRelease(&history); err != nil {
+		return fmt.Errorf("scylla: read migration history (prepare the keyspace with gitctl migrate before API startup): %w", err)
+	}
+	if err := validateMigrationHistory(history, migrations.Files); err != nil {
+		return fmt.Errorf("scylla: incompatible schema: %w; prepare a compatible keyspace with the matching gitctl migrate", err)
+	}
+	return nil
+}
+
+func validateMigrationHistory(history []migrate.Info, bundle fs.FS) error {
+	files, err := fs.Glob(bundle, "*.cql")
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 || len(history) != len(files) {
+		return fmt.Errorf("expected %d completed migrations, found %d", len(files), len(history))
+	}
+	sort.Strings(files)
+	sort.Slice(history, func(i, j int) bool { return history[i].Name < history[j].Name })
+	for i, name := range files {
+		data, err := fs.ReadFile(bundle, name)
+		if err != nil {
+			return err
+		}
+		// Match gocqlx's ledger format, not a security/integrity signature.
+		checksum := fmt.Sprintf("%x", md5.Sum(data))
+		statements := strings.Count(string(data), ";")
+		if strings.TrimSpace(string(data)[strings.LastIndex(string(data), ";")+1:]) != "" {
+			statements++
+		}
+		applied := history[i]
+		if applied.Name != name || applied.Checksum != checksum || applied.Done != statements || applied.EndTime.IsZero() {
+			return fmt.Errorf("migration %s is missing, changed, or incomplete", name)
+		}
+	}
+	return nil
+}
 
 // RunMigrations ensures the migration lock table exists, acquires a distributed
 // LWT lock, applies all pending CQL migrations via gocqlx/migrate, then

@@ -15,7 +15,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
@@ -28,6 +27,13 @@ import (
 // Typed and generic Product streams are projections of the same durable
 // cursor. This contract intentionally bypasses the process-local event bus so
 // replay and selector behavior cannot regress to replica-local state.
+func resourceContractWatchConfig() config.NamespaceWatchConfig {
+	return config.NamespaceWatchConfig{
+		ReadersEnabled: true, ReadBatchSize: 32, MaxReplayEvents: 32, SubscriberBuffer: 8,
+		SubscriberBackpressureMillis: 100, PollMinMillis: 1, PollMaxMillis: 5, MaxMaterializerLagSeconds: 60,
+	}
+}
+
 func TestProductDurableWatchContract_TypedGenericBootstrapReplayAndSelector(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -40,7 +46,7 @@ func TestProductDurableWatchContract_TypedGenericBootstrapReplayAndSelector(t *t
 	require.NoError(t, err)
 	r, err := resolver.NewResolver(resolver.ResolverDeps{
 		Store: store, Logger: zap.NewNop(), ResourceJournal: journal,
-		NamespaceWatch: config.NamespaceWatchConfig{ReadersEnabled: true, ReadBatchSize: 32, MaxReplayEvents: 32, SubscriberBuffer: 8, SubscriberBackpressureMillis: 100, PollMinMillis: 1, PollMaxMillis: 5, MaxMaterializerLagSeconds: 60},
+		NamespaceWatch: resourceContractWatchConfig(),
 	})
 	require.NoError(t, err)
 	bootstrap := watchjournal.BootstrapCursor
@@ -166,12 +172,9 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 	}
 	require.NoError(t, store.CreateRepository(ctx, repo))
 
-	bus := eventbus.New(100)
-
 	srv, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
-		Store:    store,
-		Logger:   zap.NewNop(),
-		EventBus: bus,
+		Store:  store,
+		Logger: zap.NewNop(),
 		GitReader: &stubGitReader{
 			path: "products/widget.md",
 			blob: []byte("---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: widget\n  namespace: gitstore\nspec:\n  title: Widget\n  categoryRef:\n    name: electronics\n---\n"),
@@ -180,10 +183,11 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	r, err := resolver.NewResolver(resolver.ResolverDeps{
-		Store:    store,
-		Logger:   zap.NewNop(),
-		Clock:    apiruntime.SystemClock{},
-		EventBus: bus,
+		Store:           store,
+		Logger:          zap.NewNop(),
+		Clock:           apiruntime.SystemClock{},
+		ResourceJournal: store.(datastore.ResourceWatchCapable).ResourceWatchJournal(),
+		NamespaceWatch:  resourceContractWatchConfig(),
 	})
 	require.NoError(t, err)
 
@@ -197,6 +201,7 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 		RepositoryId: repoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
+		ActorSubject: "test-admission",
 	})
 	require.NoError(t, err)
 
@@ -249,8 +254,6 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 	}
 	require.NoError(t, store.CreateRepository(ctx, repo))
 
-	bus := eventbus.New(100)
-
 	zero := strings.Repeat("0", 40)
 	a := strings.Repeat("a", 40)
 	b := strings.Repeat("b", 40)
@@ -267,16 +270,16 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 	srv, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
 		Store:     store,
 		Logger:    zap.NewNop(),
-		EventBus:  bus,
 		GitReader: git,
 	})
 	require.NoError(t, err)
 
 	r, err := resolver.NewResolver(resolver.ResolverDeps{
-		Store:    store,
-		Logger:   zap.NewNop(),
-		Clock:    apiruntime.SystemClock{},
-		EventBus: bus,
+		Store:           store,
+		Logger:          zap.NewNop(),
+		Clock:           apiruntime.SystemClock{},
+		ResourceJournal: store.(datastore.ResourceWatchCapable).ResourceWatchJournal(),
+		NamespaceWatch:  resourceContractWatchConfig(),
 	})
 	require.NoError(t, err)
 
@@ -291,6 +294,7 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 		OldCommitSha: zero,
 		NewCommitSha: a,
 		RefName:      "refs/heads/main",
+		ActorSubject: "test-admission",
 	})
 	require.NoError(t, err)
 
@@ -307,6 +311,7 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 		OldCommitSha: a,
 		NewCommitSha: b,
 		RefName:      "refs/heads/main",
+		ActorSubject: "test-admission",
 	})
 	require.NoError(t, err)
 

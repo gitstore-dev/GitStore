@@ -181,6 +181,7 @@ func TestAdmitResourcesNamespaceUpdateMissingAfterConflictDoesNotCreate(t *testi
 	})
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: b,
@@ -219,6 +220,7 @@ func TestAdmitResourcesNamespaceUpdateMissingInitiallyDoesNotCreate(t *testing.T
 	})
 
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: b,
@@ -294,6 +296,7 @@ func TestAdmitResourcesReintroducedNamespaceUpdatesDurableIdentity(t *testing.T)
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: oldCommit,
 		NewCommitSha: newCommit,
@@ -392,9 +395,9 @@ func TestValidateResourcesLegacyBlobShapePreservesNamespaceUpsert(t *testing.T) 
 
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			namespaceBlob("namespaces/other.md", "other", "USER"),
-		},
+		}}},
 	})
 
 	require.NoError(t, err)

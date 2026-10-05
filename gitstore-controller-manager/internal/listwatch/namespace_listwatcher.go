@@ -6,6 +6,7 @@ package listwatch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
@@ -123,31 +124,17 @@ const namespaceWatchBootstrapCursor = "__namespace_watch_bootstrap__"
 // racing with the snapshot are replayed by the subsequent Watch from that
 // cursor.
 func (lw *NamespaceListWatcher) List(ctx context.Context) (ListResponse[namespacecontroller.Namespace], error) {
-	watcher, err := lw.Watch(ctx, namespaceWatchBootstrapCursor)
+	return collectList[namespacecontroller.Namespace](ctx, lw)
+}
+
+func (lw *NamespaceListWatcher) ListPages(ctx context.Context, visit func([]namespacecontroller.Namespace) error) (string, error) {
+	if visit == nil {
+		return "", errors.New("listwatch: missing namespace page visitor")
+	}
+	cursor, err := bootstrapCursor[namespacecontroller.Namespace](ctx, lw, namespaceWatchBootstrapCursor)
 	if err != nil {
-		return ListResponse[namespacecontroller.Namespace]{}, fmt.Errorf("listwatch: establish namespace watch cursor: %w", err)
+		return "", err
 	}
-	defer watcher.Stop()
-
-	var cursorEvent WatchEvent[namespacecontroller.Namespace]
-	select {
-	case ev, ok := <-watcher.Events():
-		if !ok {
-			if err := watcher.Err(); err != nil {
-				return ListResponse[namespacecontroller.Namespace]{}, fmt.Errorf("listwatch: establish namespace watch cursor: %w", err)
-			}
-			return ListResponse[namespacecontroller.Namespace]{}, fmt.Errorf("listwatch: namespace watch closed before bookmark")
-		}
-		cursorEvent = ev
-	case <-ctx.Done():
-		return ListResponse[namespacecontroller.Namespace]{}, ctx.Err()
-	}
-	if cursorEvent.Type != Bookmark || cursorEvent.ResourceVersion == "" {
-		return ListResponse[namespacecontroller.Namespace]{}, fmt.Errorf("listwatch: namespace watch did not return a bootstrap bookmark")
-	}
-	watcher.Stop()
-
-	var items []namespacecontroller.Namespace
 	var after *string
 	for {
 		var response namespacesControllerListResponse
@@ -156,18 +143,26 @@ func (lw *NamespaceListWatcher) List(ctx context.Context) (ListResponse[namespac
 			vars["after"] = *after
 		}
 		if err := lw.client.Query(ctx, namespacesControllerListQuery, vars, &response); err != nil {
-			return ListResponse[namespacecontroller.Namespace]{}, fmt.Errorf("listwatch: list namespaces: %w", err)
+			return "", fmt.Errorf("listwatch: list namespaces: %w", err)
 		}
+		observeListPage(ctx, len(response.Namespaces.Edges))
+		items := make([]namespacecontroller.Namespace, 0, len(response.Namespaces.Edges))
 		for _, edge := range response.Namespaces.Edges {
 			item := edge.Node.toNamespace()
 			items = append(items, item)
 		}
-		if !response.Namespaces.PageInfo.HasNextPage || response.Namespaces.PageInfo.EndCursor == nil {
+		if err := visit(items); err != nil {
+			return "", err
+		}
+		after, err = nextListCursor(response.Namespaces.PageInfo.HasNextPage, response.Namespaces.PageInfo.EndCursor, after)
+		if err != nil {
+			return "", err
+		}
+		if after == nil {
 			break
 		}
-		after = response.Namespaces.PageInfo.EndCursor
 	}
-	return ListResponse[namespacecontroller.Namespace]{Items: items, ResourceVersion: cursorEvent.ResourceVersion}, nil
+	return cursor, nil
 }
 
 // Watch opens the typed watchNamespaces stream for Namespace events.
@@ -185,6 +180,7 @@ func (lw *NamespaceListWatcher) Watch(ctx context.Context, resourceVersion strin
 	}
 
 	watcher := &namespaceWatcher{
+		watchStop:    newWatchStop(subscription.Stop),
 		subscription: subscription,
 		events:       make(chan WatchEvent[namespacecontroller.Namespace], 16),
 	}
@@ -200,6 +196,7 @@ type namespaceWatchEventJSON struct {
 }
 
 type namespaceWatcher struct {
+	*watchStop
 	subscription graphqlclient.Subscription
 	events       chan WatchEvent[namespacecontroller.Namespace]
 	err          error
@@ -210,7 +207,6 @@ func (w *namespaceWatcher) Events() <-chan WatchEvent[namespacecontroller.Namesp
 }
 
 func (w *namespaceWatcher) Err() error { return w.err }
-func (w *namespaceWatcher) Stop()      { w.subscription.Stop() }
 
 func (w *namespaceWatcher) run() {
 	defer close(w.events)
@@ -242,10 +238,12 @@ func (w *namespaceWatcher) run() {
 		if event.Namespace != nil {
 			item = event.Namespace.toNamespace()
 		}
-		w.events <- WatchEvent[namespacecontroller.Namespace]{
+		if !sendWatchEvent(w.watchStop, w.events, WatchEvent[namespacecontroller.Namespace]{
 			Type:            eventType,
 			Object:          item,
 			ResourceVersion: event.ResourceVersion,
+		}) {
+			return
 		}
 	}
 	if err := w.subscription.Err(); err != nil {

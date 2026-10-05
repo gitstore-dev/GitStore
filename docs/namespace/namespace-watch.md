@@ -6,7 +6,7 @@ issued by one API replica can resume through another and survives process
 replacement for the configured retention window. Callers require the
 cluster-scoped `namespace.watch` authorization action.
 
-This watch observes the Namespace lifecycle already shipped by spec 047. It
+This watch observes the existing Namespace lifecycle. It
 does not reopen or change that lifecycle contract.
 
 ## Race-free bootstrap

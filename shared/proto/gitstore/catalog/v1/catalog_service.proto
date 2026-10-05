@@ -31,10 +31,6 @@ service CatalogService {
   // invoked only when a push derives one or more OperationDelete transitions.
   rpc ValidateResourceDeletions(ValidateResourceDeletionsRequest) returns (ValidateResourceDeletionsResponse);
 
-  // Deprecated: use ValidateResourceDeletions. Retained during rolling
-  // upgrades for Git-service/API pairs that only understand CategoryTaxonomy.
-  rpc ValidateCategoryTaxonomyDeletion(ValidateCategoryTaxonomyDeletionRequest) returns (ValidateCategoryTaxonomyDeletionResponse) { option deprecated = true; }
-
   // AdmitResources triggers catalog storage for resources in an accepted push commit.
   // The git service calls this in the post-receive phase (fire-and-forget).
   // The git service does not wait for this call to complete before responding to the author.
@@ -85,12 +81,10 @@ message ValidateResourcesRequest {
   // Field 15 is the project-wide convention for the repository scoping key.
   string repository_id = 15;
 
-  // blobs contains all candidate resource files from the incoming commit.
-  // Only files with a YAML frontmatter block are included (detected by the git service).
-  repeated ResourceBlob blobs = 1;
+  reserved 1;
+  reserved "blobs";
 
-  // trees is the preferred receive-aware representation. blobs remains for
-  // rolling compatibility with older Git-service/API replicas.
+  // trees is the receive-aware representation used by all callers.
   repeated ResourceValidationTree trees = 2;
 }
 
@@ -117,30 +111,6 @@ message ValidateResourceDeletionsRequest {
 // ValidateResourceDeletionsResponse is a stable, non-sensitive precondition
 // result for generic OperationDelete validation.
 message ValidateResourceDeletionsResponse {
-  bool accepted = 1;
-  string reason = 2;
-}
-
-// CategoryTaxonomyDeletionTree carries one old/proposed ref-tree pair. The Git
-// service sends the complete resource sets because the proposed tree, rather
-// than the currently admitted catalog state, determines whether a child is
-// deleted or reparented atomically with its parent.
-message CategoryTaxonomyDeletionTree {
-  repeated ResourceBlob old_blobs = 1;
-  repeated ResourceBlob proposed_blobs = 2;
-}
-
-// ValidateCategoryTaxonomyDeletionRequest carries every changed ref tree in
-// an atomic receive-pack operation. The API only reads these resources and
-// returns a precondition result; lifecycle mutation remains post-receive.
-message ValidateCategoryTaxonomyDeletionRequest {
-  string repository_id = 15;
-  repeated CategoryTaxonomyDeletionTree trees = 1;
-}
-
-// ValidateCategoryTaxonomyDeletionResponse is a stable, non-sensitive
-// precondition result for the pre-receive hook.
-message ValidateCategoryTaxonomyDeletionResponse {
   bool accepted = 1;
   string reason = 2;
 }

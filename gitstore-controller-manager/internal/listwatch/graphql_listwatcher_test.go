@@ -40,6 +40,42 @@ func categoryNodeJSON(uid, name, namespace, rv string, generation int, parentRef
 	}
 }
 
+// serveCategoryBootstrap answers List's bootstrap watchCategories
+// subscription with a journal bookmark at cursor. It reports whether r was
+// the websocket upgrade.
+func serveCategoryBootstrap(t *testing.T, w http.ResponseWriter, r *http.Request, cursor string) bool {
+	t.Helper()
+	if !websocket.IsWebSocketUpgrade(r) {
+		return false
+	}
+	upgrader := websocket.Upgrader{Subprotocols: []string{"graphql-transport-ws"}}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		t.Errorf("upgrade: %v", err)
+		return true
+	}
+	defer conn.Close()
+	var init map[string]any
+	if conn.ReadJSON(&init) != nil {
+		return true
+	}
+	_ = conn.WriteJSON(map[string]any{"type": "connection_ack"})
+	var subscribe struct {
+		ID      string `json:"id"`
+		Payload struct {
+			Variables map[string]any `json:"variables"`
+		} `json:"payload"`
+	}
+	if conn.ReadJSON(&subscribe) != nil {
+		return true
+	}
+	if subscribe.Payload.Variables["resourceVersion"] != "__category_watch_bootstrap__" {
+		t.Errorf("bootstrap resourceVersion = %#v", subscribe.Payload.Variables["resourceVersion"])
+	}
+	_ = conn.WriteJSON(map[string]any{"id": subscribe.ID, "type": "next", "payload": map[string]any{"data": map[string]any{"watchCategories": map[string]any{"type": "BOOKMARK", "name": "", "resourceVersion": cursor}}}})
+	return true
+}
+
 func TestList_DecodesCategoryLifecycleMetadata(t *testing.T) {
 	deletionTimestamp := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
 	node := categoryNodeJSON("uid-1", "electronics", "acme", "7", 1, "")
@@ -50,6 +86,9 @@ func TestList_DecodesCategoryLifecycleMetadata(t *testing.T) {
 		"uid": "parent-uid", "kind": "CategoryTaxonomy", "blockOwnerDeletion": true,
 	}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCategoryBootstrap(t, w, r, "journal-cursor-9") {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		var req struct {
 			Query string `json:"query"`
@@ -85,7 +124,7 @@ func TestList_DecodesCategoryLifecycleMetadata(t *testing.T) {
 	}
 }
 
-func TestList_PaginatesToCompletionAndReturnsHighestResourceVersion(t *testing.T) {
+func TestList_PaginatesToCompletionAndReturnsJournalBootstrapCursor(t *testing.T) {
 	pages := []map[string]any{
 		{
 			"data": map[string]any{
@@ -110,6 +149,9 @@ func TestList_PaginatesToCompletionAndReturnsHighestResourceVersion(t *testing.T
 	}
 	call := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCategoryBootstrap(t, w, r, "journal-cursor-9") {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		var req struct {
 			Query string `json:"query"`
@@ -152,13 +194,16 @@ func TestList_PaginatesToCompletionAndReturnsHighestResourceVersion(t *testing.T
 	if resp.Items[1].ParentRefName != "electronics" {
 		t.Errorf("Items[1].ParentRefName = %q, want %q", resp.Items[1].ParentRefName, "electronics")
 	}
-	if resp.ResourceVersion != "7" {
-		t.Errorf("ResourceVersion = %q, want %q (highest observed)", resp.ResourceVersion, "7")
+	if resp.ResourceVersion != "journal-cursor-9" {
+		t.Errorf("ResourceVersion = %q, want the journal bootstrap cursor", resp.ResourceVersion)
 	}
 }
 
-func TestList_EmptyDatasetReturnsNonEmptySentinelResourceVersion(t *testing.T) {
+func TestList_EmptyDatasetReturnsJournalBootstrapCursor(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCategoryBootstrap(t, w, r, "journal-cursor-9") {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		var req struct {
 			Query string `json:"query"`
@@ -182,8 +227,8 @@ func TestList_EmptyDatasetReturnsNonEmptySentinelResourceVersion(t *testing.T) {
 	if len(resp.Items) != 0 {
 		t.Errorf("len(Items) = %d, want 0", len(resp.Items))
 	}
-	if resp.ResourceVersion == "" {
-		t.Error("ResourceVersion must not be empty even for a zero-item list (checkpoint.FilesystemStore rejects an empty cursor)")
+	if resp.ResourceVersion != "journal-cursor-9" {
+		t.Errorf("ResourceVersion = %q, want the journal bootstrap cursor even for a zero-item list", resp.ResourceVersion)
 	}
 }
 

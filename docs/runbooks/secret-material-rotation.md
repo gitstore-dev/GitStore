@@ -9,14 +9,10 @@ caller does not impose a retry delay on other callers.
 
 ## Formats and canonical configuration
 
-Raw mode preserves an existing controller-only key at
-`<base_path>/<key_ref.name>/<key_ref.key>`. Set
-`controller.secret_providers.bootstrap.format = "raw"` and supply the enrolled
-`controller.serviceaccount.key_id`. The raw environment mapping also remains
-available under canonical configuration keys; it is frozen to one configured
-reference, not available to resource-runtime callers.
-
-For overlapping-key hot rotation, use a whole-record reference:
+Controllers require an atomic JSON signing record containing both the private
+key and its enrolled ID. Raw-key configuration, `bootstrap.format`,
+`serviceaccount.key_id` and `key_ref.key` are no longer accepted.
+Use a whole-record reference:
 
 ```toml
 [controller.serviceaccount]
@@ -29,12 +25,9 @@ key_ref = { kind = "SecretRef", name = "controller-signing-key" }
 
 [controller.secret_providers.bootstrap]
 type = "file"
-format = "json-record"
 base_path = "/run/secrets"
 ```
 
-Omit `key_ref.key`. Omit static `key_id` for hot rotation; if supplied, it must
-equal the record's ID and prevents changing that ID without updating config.
 The record is `<base_path>/controller-signing-key.json`:
 
 ```json
@@ -50,9 +43,14 @@ The record is `<base_path>/controller-signing-key.json`:
 Provision this record outside GitStore; never put real values in Git, shared
 config, command-line arguments, screenshots or evidence bundles. The record is
 provider-owned, not a Git-backed resource. Whole-record environment mode uses
-the configured prefix plus the escaped name, without the raw keyed suffix:
-`GITSTORE_SECRET__CONTROLLER_DASH_SIGNING_DASH_KEY` for this example.
+`type = "env"` and an explicit `env_variable` naming the variable holding the JSON.
 Environment changes require process replacement.
+
+Native `make controller` and `make dev` preserve the enrolled PEM key and use
+`gitctl generate-signing-key --private-key-path <absolute-pem-path>
+--record-output-path <absolute-record-path> --key-id <enrolled-id>` to publish
+its private record atomically. Repeated generation preserves matching material;
+a differing existing record is refused rather than silently rotated.
 
 ## Safe rotation order
 
@@ -105,6 +103,20 @@ assembly are now connected, with original and replacement logs retained and
 scanned after all writers close. Running this scenario requires explicitly owned
 fixtures and `CHAOS_CONFIRM=1`; no full production-capacity acceptance is claimed.
 
+For local macOS Docker Desktop runs, Docker may report provider directory binds
+with `/host_mnt` while reporting config file binds without it. The verifier
+normalizes these only for a verified local Desktop Unix-socket endpoint, resolves
+host bind paths and still enforces read-only, replica-owned provider/config
+mounts. Do not broaden mounts or disable ownership checks to work around path
+differences; see the [capacity guide](../../tests/capacity/README.md).
+
+File bootstrap in the capacity harness reads the known File names from persisted
+`file(namespace:, name:)` queries on both APIs before subscribing, because an
+empty watch cursor does not replay existing state. File subscriptions use the
+shared durable journal. Functional CDC coverage does not satisfy full
+production-readiness acceptance; that requires a complete production evidence
+bundle.
+
 The in-process regression exercises two independent credential sources and
 HTTP token verifiers, atomic replacement, cached-token reuse, mismatched pairs,
 expiry-spanning provider failure, peer progress, restoration and a new source.
@@ -148,9 +160,7 @@ API/controller metrics were scanned for PEM/JWT material and credential markers;
 the isolated API logs contained no PEM/JWT matches. Test-owned services, volumes,
 records and token files were removed.
 
-Sanitized logs, artifact identities and an explicitly non-production summary are
-under `.gitstore/capacity/secret-functional/20261003/`. This is a local functional
-record from a dirty checkout, not clean release provenance or a capacity pass.
+This deployed functional test is not release provenance or a capacity pass.
 
 Preserve deployment/group-specific checkpoint roots during replacement.
 Changing config names must not change effective checkpoint paths, related replay

@@ -49,12 +49,7 @@ pub struct ValidateResourcesRequest {
     /// Field 15 is the project-wide convention for the repository scoping key.
     #[prost(string, tag="15")]
     pub repository_id: ::prost::alloc::string::String,
-    /// blobs contains all candidate resource files from the incoming commit.
-    /// Only files with a YAML frontmatter block are included (detected by the git service).
-    #[prost(message, repeated, tag="1")]
-    pub blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
-    /// trees is the preferred receive-aware representation. blobs remains for
-    /// rolling compatibility with older Git-service/API replicas.
+    /// trees is the receive-aware representation used by all callers.
     #[prost(message, repeated, tag="2")]
     pub trees: ::prost::alloc::vec::Vec<ResourceValidationTree>,
 }
@@ -85,36 +80,6 @@ pub struct ValidateResourceDeletionsRequest {
 /// result for generic OperationDelete validation.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ValidateResourceDeletionsResponse {
-    #[prost(bool, tag="1")]
-    pub accepted: bool,
-    #[prost(string, tag="2")]
-    pub reason: ::prost::alloc::string::String,
-}
-/// CategoryTaxonomyDeletionTree carries one old/proposed ref-tree pair. The Git
-/// service sends the complete resource sets because the proposed tree, rather
-/// than the currently admitted catalog state, determines whether a child is
-/// deleted or reparented atomically with its parent.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CategoryTaxonomyDeletionTree {
-    #[prost(message, repeated, tag="1")]
-    pub old_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
-    #[prost(message, repeated, tag="2")]
-    pub proposed_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
-}
-/// ValidateCategoryTaxonomyDeletionRequest carries every changed ref tree in
-/// an atomic receive-pack operation. The API only reads these resources and
-/// returns a precondition result; lifecycle mutation remains post-receive.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ValidateCategoryTaxonomyDeletionRequest {
-    #[prost(string, tag="15")]
-    pub repository_id: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="1")]
-    pub trees: ::prost::alloc::vec::Vec<CategoryTaxonomyDeletionTree>,
-}
-/// ValidateCategoryTaxonomyDeletionResponse is a stable, non-sensitive
-/// precondition result for the pre-receive hook.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ValidateCategoryTaxonomyDeletionResponse {
     #[prost(bool, tag="1")]
     pub accepted: bool,
     #[prost(string, tag="2")]

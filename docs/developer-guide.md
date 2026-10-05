@@ -39,7 +39,6 @@ graph TD
 | `gitstore-api`                |  `6000` | CatalogService gRPC called by the Git service          |
 | `gitstore-git-service`        | `50051` | GitService gRPC storage and transport                  |
 | `gitstore-controller-manager` |  `5001` | `/health`, `/metrics`, poison-item API                 |
-| `gitstore-admin`              |  `3000` | Optional browser UI                                    |
 
 ## Production Design Constraints
 
@@ -261,7 +260,7 @@ Runtime pieces:
 - Panic capture with stack traces.
 - Per-kind health statistics.
 - Prometheus metrics.
-- List-then-watch bootstrap and `resourceVersion` checkpointing per registered kind (`internal/checkpoint`, `internal/listwatch`) — populates the informer cache on first start, resumes a watch stream from a persisted checkpoint after a restart, and recovers from a compacted watch cursor by re-listing. See [`specs/036-controller-startup-resume`](../specs/036-controller-startup-resume/quickstart.md) for the `Runner[T]`/`ListWatcher[T]` wiring pattern; no concrete transport ships yet.
+- List-then-watch bootstrap and `resourceVersion` checkpointing per registered kind (`internal/checkpoint`, `internal/listwatch`) — populates the informer cache on first start, resumes a watch stream from a persisted checkpoint after a restart, and recovers from a compacted watch cursor by re-listing (the `Runner[T]`/`ListWatcher[T]` wiring pattern); no concrete transport ships yet.
 
 HTTP surface on port `5001`:
 
@@ -368,32 +367,12 @@ go test ./...
 
 Operations runbooks:
 
-| Runbook | Symptom |
-|---------|---------|
-| [`controller-lag`](runbooks/controller-lag.md) | Queue depth growing, reconciles falling behind |
-| [`controller-replay-window-exceeded`](runbooks/controller-replay-window-exceeded.md) | Watch cursor expired / relist triggered |
-| [`controller-poisoned-item`](runbooks/controller-poisoned-item.md) | A resource repeatedly fails reconciliation |
-| [`controller-auth`](runbooks/controller-auth.md) | Controller credential enrollment, renewal, or revocation failure |
-
-### `gitstore-admin`
-
-Purpose:
-
-- Optional Astro/React UI.
-- GraphQL client of `gitstore-api`.
-- Browser-facing attachment point for future Git-backed editing workflows.
-
-Commands:
-
-```bash
-make admin-compose DETACH=1
-cd gitstore-admin
-npm install
-npm run dev
-npm run build
-npm run test
-npm run test:e2e
-```
+| Runbook                                                                              | Symptom                                                          |
+|--------------------------------------------------------------------------------------|------------------------------------------------------------------|
+| [`controller-lag`](runbooks/controller-lag.md)                                       | Queue depth growing, reconciles falling behind                   |
+| [`controller-replay-window-exceeded`](runbooks/controller-replay-window-exceeded.md) | Watch cursor expired / relist triggered                          |
+| [`controller-poisoned-item`](runbooks/controller-poisoned-item.md)                   | A resource repeatedly fails reconciliation                       |
+| [`controller-auth`](runbooks/controller-auth.md)                                     | Controller credential enrollment, renewal, or revocation failure |
 
 ## Generated Schema And Proto Workflow
 
@@ -490,21 +469,6 @@ Use Conventional Commits.
 See [configuration.md](configuration.md) for canonical controller settings,
 environment variables, defaults, and bootstrap requirements.
 
-## Historical Implementation References
-
-Spec quickstarts are useful implementation references, but they are not user-facing current workflow docs.
-
-| Spec                               | Reference                                                                                                                        |
-|------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
-| `012-smart-http-api`               | [quickstart](../specs/012-smart-http-api/quickstart.md), [plan](../specs/012-smart-http-api/plan.md)                             |
-| `018-hook-pipeline-wiring`         | [quickstart](../specs/018-hook-pipeline-wiring/quickstart.md), [plan](../specs/018-hook-pipeline-wiring/plan.md)                 |
-| `021-category-taxonomy`            | [quickstart](../specs/021-category-taxonomy/quickstart.md), [plan](../specs/021-category-taxonomy/plan.md)                       |
-| `022-collection-resource-contract` | [quickstart](../specs/022-collection-resource-contract/quickstart.md), [plan](../specs/022-collection-resource-contract/plan.md) |
-| `024-product-variant`              | [quickstart](../specs/024-product-variant/quickstart.md), [plan](../specs/024-product-variant/plan.md)                           |
-| `025-controller-manager-runtime`   | [quickstart](../specs/025-controller-manager-runtime/quickstart.md), [plan](../specs/025-controller-manager-runtime/plan.md)     |
-| `026-reconcile-handler`            | [quickstart](../specs/026-reconcile-handler/quickstart.md), [plan](../specs/026-reconcile-handler/plan.md)                       |
-| `036-controller-startup-resume`    | [quickstart](../specs/036-controller-startup-resume/quickstart.md), [plan](../specs/036-controller-startup-resume/plan.md)       |
-
 ## Related Docs
 
 - [User Guide](user-guide.md)
@@ -512,5 +476,8 @@ Spec quickstarts are useful implementation references, but they are not user-fac
 - [Architecture](architecture/README.md)
 - [Admin](admin/README.md)
 - [Push Validation](products/push-validation.md)
+- [CategoryTaxonomy Spec](categories/category-taxonomy-spec.md)
+- [Collection Spec](collections/collection-spec.md)
+- [ProductVariant Spec](products/product-variant-spec.md)
 - [Release Process](runbooks/release-process.md)
 - [Production Readiness Testing](runbooks/production-readiness-testing.md)

@@ -64,37 +64,37 @@ var (
 	})
 
 	CategoryTaxonomy = table.New(table.Metadata{
-		Name:    "category_taxonomy",
+		Name:    "category_taxonomies_by_namespace",
 		Columns: authoritativeColumns(true, true, "parent_name", "ancestor_path"),
 		PartKey: []string{"namespace"},
 		SortKey: []string{"creation_timestamp", "uid"},
 	})
 	CategoryTaxonomyByName = table.New(table.Metadata{
-		Name:    "category_taxonomy_by_name",
+		Name:    "category_taxonomies_by_name",
 		Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
 		PartKey: []string{"namespace"},
 		SortKey: []string{"name"},
 	})
 	CategoryTaxonomyByUID = table.New(table.Metadata{
-		Name:    "category_taxonomy_by_uid",
+		Name:    "category_taxonomies_by_uid",
 		Columns: []string{"uid", "namespace", "creation_timestamp"},
 		PartKey: []string{"uid"},
 	})
 
 	Collection = table.New(table.Metadata{
-		Name:    "collection",
+		Name:    "collections_by_namespace",
 		Columns: authoritativeColumns(true, true),
 		PartKey: []string{"namespace"},
 		SortKey: []string{"creation_timestamp", "uid"},
 	})
 	CollectionByName = table.New(table.Metadata{
-		Name:    "collection_by_name",
+		Name:    "collections_by_name",
 		Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
 		PartKey: []string{"namespace"},
 		SortKey: []string{"name"},
 	})
 	CollectionByUID = table.New(table.Metadata{
-		Name:    "collection_by_uid",
+		Name:    "collections_by_uid",
 		Columns: []string{"uid", "namespace", "creation_timestamp"},
 		PartKey: []string{"uid"},
 	})
@@ -151,30 +151,30 @@ var (
 	})
 
 	ProductVariantByNamespace = table.New(table.Metadata{
-		Name:    "product_variant_by_namespace",
+		Name:    "product_variants_by_namespace",
 		Columns: authoritativeColumns(true, true, "sku", "product_ref_name"),
 		PartKey: []string{"namespace"},
 		SortKey: []string{"creation_timestamp", "uid"},
 	})
 	ProductVariantByName = table.New(table.Metadata{
-		Name:    "product_variant_by_name",
+		Name:    "product_variants_by_name",
 		Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
 		PartKey: []string{"namespace"},
 		SortKey: []string{"name"},
 	})
 	ProductVariantByUID = table.New(table.Metadata{
-		Name:    "product_variant_by_uid",
+		Name:    "product_variants_by_uid",
 		Columns: []string{"uid", "namespace", "creation_timestamp"},
 		PartKey: []string{"uid"},
 	})
 	ProductVariantBySKU = table.New(table.Metadata{
-		Name:    "product_variant_by_sku",
+		Name:    "product_variants_by_sku",
 		Columns: []string{"namespace", "sku", "uid", "creation_timestamp"},
 		PartKey: []string{"namespace"},
 		SortKey: []string{"sku"},
 	})
 	ProductVariantByProductRef = table.New(table.Metadata{
-		Name:    "product_variant_by_product_ref",
+		Name:    "product_variants_by_product_ref",
 		Columns: []string{"namespace", "product_ref_name", "uid", "creation_timestamp"},
 		PartKey: []string{"namespace", "product_ref_name"},
 		SortKey: []string{"creation_timestamp", "uid"},

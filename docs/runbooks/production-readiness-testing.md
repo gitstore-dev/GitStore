@@ -12,13 +12,13 @@ unless implementing those capabilities is explicitly approved feature scope.
 Readiness claims must identify remaining limitations, including AuthN/AuthZ,
 checkpoint coordination and non-idempotent side effects.
 
-Every spec so far (046, 048, 052, ...) has independently reinvented the same
+Every feature so far has independently reinvented the same
 four structural test patterns to satisfy that gate. There is no missing code
 infrastructure here — `go test`, build tags, and env-var gating are enough —
-what was missing was a written convention. This page is that convention. A
-spec's `tasks.md` "production readiness" phase should **reference this
+what was missing was a written convention. This page is that convention.
+Production-readiness work for a feature should **reference this
 runbook** (`docs/runbooks/production-readiness-testing.md`) rather than
-re-deriving the approach, and should link to the concrete test file(s) it
+re-deriving the approach, and should link to the concrete test file(s)
 added for each applicable pattern.
 
 Not every pattern applies to every spec. A leaf, read-only resource with no
@@ -556,7 +556,7 @@ assert.False(t, blocking)
 ```
 
 It constructs a `CategoryTaxonomy` with **no `OwnerReferences` field set at
-all** — exactly what a record written before spec 041/052's owner-reference
+all** — exactly what a record written before the owner-reference
 feature shipped would look like on disk — and asserts that querying it
 through the *new* `HasBlockingOwnerDependents` API returns `false` (not an
 error, and critically not a false-positive block) rather than panicking on a
@@ -566,8 +566,7 @@ first test (`TestOwnerReferenceProjection...`) also directly exercises
 `datastore.MaxOwnerDependentPageSize`, so pagination bounds under real data
 are covered in the same style.
 
-**Scylla-backend equivalent exists too** — spec 052's task T037 asked for a
-memdb/Scylla pair, and it's there:
+**Scylla-backend equivalent exists too**:
 `gitstore-api/internal/datastore/scylla/owner_references_test.go`,
 `TestDecodeOwnerReferencesSupportsLegacyAndAdditiveRecords`:
 
@@ -801,21 +800,12 @@ still respects namespace boundaries (or is redacted/denied) for a caller
 authenticated as a different tenant. This is genuinely open — not covered by
 `authz_repository_contract_test.go` (that test doesn't touch File at all)
 and not covered by `repository_authorization_test.go` (Repository-specific).
-It matches spec 051's own tracking: `specs/051-file-resource-contract/tasks.md`
-T041 ("Add authenticated namespace-isolation and SecretRef boundary tests
-for File admission/status/watch paths") is unchecked as of this writing and
-explicitly annotated `Blocked: existing auth integration covers
-repository/namespace authorization, but has no File admission/status/watch
-endpoint harness; SecretRef validation is covered by runnable unit tests
-only` — note that annotation itself was written before/independent of the
-`TestValidateResources_FileAggregatesVariantAndCredentialsErrors` admission
-coverage identified above, so its "covered by runnable unit tests only"
-framing undersells the admission-level coverage that already exists; what
-it correctly flags as missing is the status/watch/read boundary. Another
-agent may be completing T041 in a parallel worktree as part of spec 051 —
-if so, **point this section at whatever File-specific status/watch
-boundary test lands from that work instead of re-deriving one**, following
-the same worked-example format as patterns 1-3 above.
+This gap is narrower than it first appears: the admission-level coverage
+identified above already handles the reject path, so what remains missing
+is specifically the status/watch/read boundary, not SecretRef validation as
+a whole. Once a File-specific status/watch boundary test lands, point this
+section at it instead of re-deriving one, following the same worked-example
+format as patterns 1-3 above.
 
 **How to apply this to a new resource:**
 
@@ -874,4 +864,3 @@ the same worked-example format as patterns 1-3 above.
 - `tests/integration/authz_repository_contract_test.go`
 - `gitstore-api/internal/cataloggrpc/server_test.go` (`TestValidateResources_FileAggregatesVariantAndCredentialsErrors`)
 - `gitstore-api/internal/catalog/file.go`, `gitstore-api/internal/catalog/file_test.go`
-- `specs/051-file-resource-contract/tasks.md` (T041)

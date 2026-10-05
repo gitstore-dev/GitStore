@@ -91,7 +91,7 @@ type CompletionClient interface {
 
 // Reconciler implements types.Reconciler for Repository resources.
 type Reconciler struct {
-	cache            cache.CacheAccessor[Repository]
+	lookup           cache.LookupFunc[Repository]
 	statusClient     status.StatusClient
 	storageClient    StorageClient
 	completionClient CompletionClient
@@ -102,13 +102,46 @@ type Reconciler struct {
 	// empty after every restart — deliberately: a restart is the cheapest
 	// time to re-verify, so losing this map on restart is a feature, not a
 	// gap.
-	lastStorageVerification sync.Map // types.WorkItemKey -> time.Time
+	lastStorageVerification storageVerificationCache
+}
+
+// Eviction only causes an earlier storage recheck; it never trusts an
+// unverified repository or persists a verification across process replacement.
+type storageVerificationCache struct {
+	mu      sync.Mutex
+	entries map[types.WorkItemKey]time.Time
+}
+
+func (c *storageVerificationCache) Load(key types.WorkItemKey) (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	value, exists := c.entries[key]
+	return value, exists
+}
+
+func (c *storageVerificationCache) Store(key types.WorkItemKey, value time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[types.WorkItemKey]time.Time)
+	}
+	if _, exists := c.entries[key]; !exists && len(c.entries) >= 4096 {
+		for evicted := range c.entries {
+			delete(c.entries, evicted)
+			break
+		}
+	}
+	c.entries[key] = value
 }
 
 // NewReconciler returns a Repository reconciler.
 func NewReconciler(c cache.CacheAccessor[Repository], statusClient status.StatusClient, storageClient StorageClient, completionClient CompletionClient) *Reconciler {
+	return NewReconcilerWithLookup(cache.LookupFrom(c), statusClient, storageClient, completionClient)
+}
+
+func NewReconcilerWithLookup(lookup cache.LookupFunc[Repository], statusClient status.StatusClient, storageClient StorageClient, completionClient CompletionClient) *Reconciler {
 	return &Reconciler{
-		cache:            c,
+		lookup:           lookup,
 		statusClient:     statusClient,
 		storageClient:    storageClient,
 		completionClient: completionClient,
@@ -117,7 +150,10 @@ func NewReconciler(c cache.CacheAccessor[Repository], statusClient status.Status
 
 // Reconcile provisions admitted repositories and completes foreground deletion.
 func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
-	current, ok := r.cache.Get(key)
+	current, ok, err := r.lookup(ctx, key)
+	if err != nil {
+		return types.ResultTransient(fmt.Errorf("repository: read projection: %w", err))
+	}
 	if !ok {
 		// A queued key can outlive its object after watch replay, deletion, or a
 		// checkpointed controller restart. Absence is the reconciled state.
@@ -236,7 +272,7 @@ func (r *Reconciler) storageVerificationDue(key types.WorkItemKey) bool {
 	if !ok {
 		return true
 	}
-	return time.Since(last.(time.Time)) >= storageRevalidationInterval
+	return time.Since(last) >= storageRevalidationInterval
 }
 
 func mergeControllerConditions(current Repository, admitted, storageReady bool, provisionErr error) []*status.Condition {

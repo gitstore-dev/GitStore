@@ -83,6 +83,7 @@ func TestAdmitResources_FileAdmittedAlongsideKindUnknownToThisReplica(t *testing
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err, "an unrecognized kind elsewhere in the push must never fail admission of the rest")
@@ -143,6 +144,7 @@ func TestAdmitResources_FileUpdateAcceptsRecordWrittenBeforeOptionalFieldsExiste
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID, OldCommitSha: commitOld, NewCommitSha: commitNew,
 		RefName: "refs/heads/main", ChangedPaths: []string{"files/hero.md"},
 	})
@@ -192,6 +194,7 @@ func TestAdmitResources_FileContentTypeImmutabilityEnforcedAgainstLegacyShapeSpe
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID, OldCommitSha: commitOld, NewCommitSha: commitNew,
 		RefName: "refs/heads/main", ChangedPaths: []string{"files/hero.md"},
 	})

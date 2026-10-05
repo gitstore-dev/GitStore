@@ -228,7 +228,7 @@ func (s *scyllaDatastore) MarkCategoryTaxonomyDeletion(
 	category.UpdateActor = "deletion"
 	datastore.AdvanceCategoryTaxonomySystemVersion(category)
 	uid := mustParseUUID(category.UID)
-	const stmt = `UPDATE category_taxonomy
+	const stmt = `UPDATE category_taxonomies_by_namespace
 		SET resource_version=?, deletion_timestamp=?, finalizers=?, status=?, update_timestamp=?, update_actor=?
 		WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?`
 	applied, err := s.session.Query(stmt, nil).WithContext(ctx).Bind(

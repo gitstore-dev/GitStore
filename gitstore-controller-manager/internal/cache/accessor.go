@@ -3,7 +3,24 @@
 
 package cache
 
-import "github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+import (
+	"context"
+
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+)
+
+type LookupFunc[T any] func(context.Context, types.WorkItemKey) (T, bool, error)
+
+func LookupFrom[T any](c CacheAccessor[T]) LookupFunc[T] {
+	return func(ctx context.Context, key types.WorkItemKey) (T, bool, error) {
+		if err := ctx.Err(); err != nil {
+			var zero T
+			return zero, false, err
+		}
+		value, found := c.Get(key)
+		return value, found, nil
+	}
+}
 
 // CacheAccessor is a read-only view of a per-kind informer cache.
 // Reconcilers receive this interface so they cannot mutate the cache.

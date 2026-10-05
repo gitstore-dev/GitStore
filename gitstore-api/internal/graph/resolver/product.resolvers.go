@@ -14,7 +14,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -131,16 +130,6 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 			}
 		}
 		return nil, gqlerror.Errorf("update product status: %v", err)
-	}
-	if r.eventBus != nil {
-		r.eventBus.Publish(eventbus.Event{
-			Type:            eventbus.Modified,
-			Kind:            "Product",
-			Namespace:       product.Namespace,
-			Name:            product.Name,
-			ResourceVersion: product.ResourceVersion,
-			Object:          product,
-		})
 	}
 	return &model.UpdateProductStatusPayload{Product: DatastoreProductToGraphQL(product)}, nil
 }

@@ -8,17 +8,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 )
 
 // T026: StaticToken tests (unchanged, always returns configured string)
@@ -161,6 +165,139 @@ func TestServiceAccountSource_ConcurrentCalls_UseSingleflight(t *testing.T) {
 	for _, err := range results {
 		require.Error(t, err)
 	}
+}
+
+func TestServiceAccountSourceKeepsValidTokenDuringFailedEarlyRenewal(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	src := NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{},
+		"gitstore-api/serviceaccount-token", "gitstore-api", time.Minute, time.Minute)
+	src.token = "cached-access-token"
+	src.expiresAt = time.Now().Add(20 * time.Second)
+	token, err := src.Current(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "cached-access-token", token)
+	require.ErrorIs(t, src.LastError(), types.ErrRateLimited)
+	require.True(t, src.Ready())
+	token, err = src.Current(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "cached-access-token", token)
+	require.EqualValues(t, 1, calls.Load(), "backoff must suppress repeated exchange attempts")
+	src.mu.Lock()
+	src.expiresAt = time.Now().Add(-time.Second)
+	src.mu.Unlock()
+	token, err = src.Current(t.Context())
+	require.ErrorIs(t, err, types.ErrRateLimited)
+	require.Empty(t, token)
+	require.False(t, src.Ready(), "fallback must not extend expiry")
+}
+
+func TestServiceAccountSourceRenewalHasHeadroomUnderConcurrentAPIWork(t *testing.T) {
+	for _, replica := range []string{"a", "b"} {
+		t.Run(replica, func(t *testing.T) {
+			t.Parallel()
+			budget := rate.NewLimiter(50, 100)
+			var exchanges, requests, throttled atomic.Int32
+			var src *ServiceAccountSource
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !budget.Allow() {
+					throttled.Add(1)
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
+				var request gqlRequest
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+				if strings.Contains(request.Query, "issueServiceAccountToken") {
+					exchanges.Add(1)
+					require.NoError(t, json.NewEncoder(w).Encode(tokenExchangeResponse("access-token")))
+					return
+				}
+				if requests.Add(1) == 20 {
+					src.mu.Lock()
+					src.expiresAt = time.Now().Add(20 * time.Second)
+					src.mu.Unlock()
+				}
+				_, _ = io.WriteString(w, `{"data":{}}`)
+			}))
+			defer server.Close()
+			src = NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{},
+				"gitstore-api/serviceaccount-token", "gitstore-api", time.Minute, time.Minute)
+			client := New(server.URL, src)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			failures := make(chan error, 100)
+			started := time.Now()
+			for range 10 {
+				go func() {
+					for i := range 10 {
+						if i%2 == 0 {
+							failures <- client.Query(ctx, "query { products { edges { node { id } } } }", nil, nil)
+						} else {
+							failures <- client.Mutate(ctx, "mutation { updateProductStatus { product { id } } }", nil, nil)
+						}
+					}
+				}()
+			}
+			for range 100 {
+				require.NoError(t, <-failures)
+			}
+			require.GreaterOrEqual(t, time.Since(started), 2200*time.Millisecond)
+			require.EqualValues(t, 100, requests.Load())
+			require.EqualValues(t, 2, exchanges.Load(), "renewal must progress during bulk API work")
+			require.Zero(t, throttled.Load())
+			require.True(t, src.Ready())
+		})
+	}
+}
+
+func TestClientAcceptsFreshTokenInsideRenewalWindow(t *testing.T) {
+	var exchanges atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request gqlRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		if strings.Contains(request.Query, "issueServiceAccountToken") {
+			exchanges.Add(1)
+			_, _ = fmt.Fprintf(w, `{"data":{"issueServiceAccountToken":{"tokenRequest":{"status":{"token":"fresh-token","expirationTimestamp":%q}}}}}`, time.Now().Add(20*time.Second).Format(time.RFC3339Nano))
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":{}}`)
+	}))
+	defer server.Close()
+	src := NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{},
+		"gitstore-api/serviceaccount-token", "gitstore-api", 20*time.Second, 20*time.Second)
+	client := New(server.URL, src)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	require.NoError(t, client.Query(ctx, "query { node(id:\"id\") { id } }", nil, nil))
+	require.EqualValues(t, 1, exchanges.Load())
+}
+
+func TestClientDoesNotSendTokenThatExpiresDuringBudgetWait(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	src := NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{},
+		"gitstore-api/serviceaccount-token", "gitstore-api", time.Minute, time.Minute)
+	src.token = "cached-access-token"
+	src.expiresAt = time.Now().Add(100 * time.Millisecond)
+	src.backoffUntil = time.Now().Add(time.Minute)
+	src.lastErr = types.ErrRateLimited
+	client, err := NewWithRateLimit(server.URL, src, 5, 1)
+	require.NoError(t, err)
+	require.True(t, client.limiter.Allow())
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	err = client.Query(ctx, "query { node(id:\"id\") { id } }", nil, nil)
+	require.ErrorIs(t, err, types.ErrRateLimited)
+	require.Zero(t, requests.Load())
+	require.False(t, src.Ready())
 }
 
 func TestServiceAccountSource_ExchangesAndReusesToken(t *testing.T) {

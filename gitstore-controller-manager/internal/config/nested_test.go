@@ -13,15 +13,45 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
 )
 
+func TestLoadAPIClientBudgetDefaultsOverridesAndValidation(t *testing.T) {
+	setenv(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Controller.APIClient.RequestsPerSecond != 40 || cfg.Controller.APIClient.Burst != 10 {
+		t.Fatalf("unexpected default API budget: %+v", cfg.Controller.APIClient)
+	}
+	t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__REQUESTS_PER_SECOND", "20")
+	t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__BURST", "5")
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Controller.APIClient.RequestsPerSecond != 20 || cfg.Controller.APIClient.Burst != 5 {
+		t.Fatal("API client environment overrides ignored")
+	}
+	for _, key := range []string{"REQUESTS_PER_SECOND", "BURST"} {
+		t.Run(key, func(t *testing.T) {
+			for _, value := range []string{"0", "-1", "MUST-NOT-LEAK"} {
+				t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__"+key, value)
+				_, err := config.Load()
+				if err == nil || strings.Contains(err.Error(), "MUST-NOT-LEAK") {
+					t.Fatalf("invalid API request budget did not fail safely: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadCanonicalProviderAndWatchLeaves(t *testing.T) {
 	setenv(t)
 	for key, value := range map[string]string{
-		"SECRET_PROVIDERS__BOOTSTRAP__TYPE":       "env",
-		"SECRET_PROVIDERS__BOOTSTRAP__FORMAT":     "raw",
-		"SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH":  "/test/controller-only",
-		"SECRET_PROVIDERS__BOOTSTRAP__ENV_PREFIX": "TEST_SECRET__",
-		"WATCH__MAX_BACKOFF":                      "12s",
-		"WATCH__RESYNC_INTERVAL":                  "0s",
+		"SECRET_PROVIDERS__BOOTSTRAP__TYPE":         "env",
+		"SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH":    "/test/controller-only",
+		"SECRET_PROVIDERS__BOOTSTRAP__ENV_VARIABLE": "TEST_CONTROLLER_SIGNING_RECORD",
+		"WATCH__MAX_BACKOFF":                        "12s",
+		"WATCH__RESYNC_INTERVAL":                    "0s",
 	} {
 		t.Setenv("GITSTORE_CONTROLLER__"+key, value)
 	}
@@ -32,8 +62,8 @@ func TestLoadCanonicalProviderAndWatchLeaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := cfg.Controller.SecretProviders.Bootstrap
-	if provider.Type != "env" || provider.Format != "raw" ||
-		provider.BasePath != "/test/controller-only" || provider.EnvPrefix != "TEST_SECRET__" {
+	if provider.Type != "env" ||
+		provider.BasePath != "/test/controller-only" || provider.EnvVariable != "TEST_CONTROLLER_SIGNING_RECORD" {
 		t.Fatal("canonical provider environment leaves were not decoded")
 	}
 	if cfg.Controller.Watch.MaxBackoff != 12*time.Second || cfg.Controller.Watch.ResyncInterval != 0 {
@@ -50,6 +80,8 @@ func TestLoadRejectsObsoleteSourcesEvenWhenOverridden(t *testing.T) {
 		"CHECKPOINT_FLUSH_INTERVAL_EVENTS", "DEFAULT_MAX_ATTEMPTS",
 		"DEFAULT_STALL_THRESHOLD", "MAX_WATCH_BACKOFF", "RESYNC_INTERVAL",
 		"CONTROLLER__SERVICEACCOUNT__NAME", "SECRET_PROVIDERS__RUNTIME__TYPE",
+		"SERVICEACCOUNT__KEY_ID", "SERVICEACCOUNT__KEY_REF__KEY",
+		"SECRET_PROVIDERS__BOOTSTRAP__FORMAT", "SECRET_PROVIDERS__BOOTSTRAP__ENV_PREFIX",
 	} {
 		t.Run(key, func(t *testing.T) {
 			setenv(t)
@@ -72,6 +104,14 @@ serviceaccount_namespace = "MUST-NOT-LEAK"`,
 		`[controller.controller]
 serviceaccount_namespace = "MUST-NOT-LEAK"`,
 		`[controller.secret_providers.runtime]`,
+		`[controller.serviceaccount]
+key_id = "MUST-NOT-LEAK"`,
+		`[controller.serviceaccount.key_ref]
+key = "MUST-NOT-LEAK"`,
+		`[controller.secret_providers.bootstrap]
+format = "MUST-NOT-LEAK"`,
+		`[controller.secret_providers.bootstrap]
+env_prefix = "MUST-NOT-LEAK"`,
 	} {
 		setenv(t)
 		path := filepath.Join(t.TempDir(), "config.toml")

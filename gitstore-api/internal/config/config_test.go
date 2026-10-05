@@ -47,6 +47,7 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_AUTH__JWT__REFRESH_GRACE",
 		"GITSTORE_DATASTORE__BACKEND",
 		"GITSTORE_DATASTORE__SCYLLA__HOSTS",
+		"GITSTORE_DATASTORE__SCYLLA__AUTO_MIGRATE",
 		"GITSTORE_DATASTORE__SCYLLA__KEYSPACE",
 		"GITSTORE_DATASTORE__SCYLLA__USERNAME",
 		"GITSTORE_DATASTORE__SCYLLA__PASSWORD",
@@ -157,7 +158,7 @@ func TestLoad_RejectsCDCWindowDifferentFromSchema(t *testing.T) {
 
 	_, err := Load()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "migration 006 fixes CDC retention")
+	assert.Contains(t, err.Error(), "the baseline schema fixes CDC retention")
 }
 
 func TestLoad_RejectsJournalRetentionAboveTableTTL(t *testing.T) {
@@ -168,7 +169,7 @@ func TestLoad_RejectsJournalRetentionAboveTableTTL(t *testing.T) {
 
 	_, err := Load()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "migration 006 limits journal retention to 604800 seconds")
+	assert.Contains(t, err.Error(), "the baseline schema limits journal retention to 604800 seconds")
 }
 
 func TestLoad_RejectsOversizedNamespaceSubscriberBuffer(t *testing.T) {
@@ -372,6 +373,25 @@ pre_receive = { enabled = true }
 func TestLoadFrom_MissingExplicitFileFails(t *testing.T) {
 	_, err := LoadFrom(filepath.Join(t.TempDir(), "missing.toml"))
 	require.Error(t, err)
+}
+
+func TestScyllaAutoMigrationCanBeDisabled(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(""), 0600))
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	require.True(t, cfg.Datastore.Scylla.AutoMigrate)
+	require.NoError(t, os.WriteFile(path, []byte("[datastore.scylla]\nauto_migrate = false\n"), 0600))
+	cfg, err = LoadFrom(path)
+	require.NoError(t, err)
+	require.False(t, cfg.Datastore.Scylla.AutoMigrate)
+	t.Setenv("GITSTORE_DATASTORE__SCYLLA__AUTO_MIGRATE", "true")
+	cfg, err = LoadFrom(path)
+	require.NoError(t, err)
+	require.True(t, cfg.Datastore.Scylla.AutoMigrate)
 }
 
 func TestLoadFromFiles_OverlayMergesOnTopOfBase(t *testing.T) {

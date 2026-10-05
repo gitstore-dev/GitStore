@@ -44,7 +44,7 @@ func TestFileTypedCredentialsValidationAndAdmission(t *testing.T) {
 			}
 			srv := newCatalogServer(t, store, git)
 			result, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-				RepositoryId: testRepoID, Blobs: []*catalogv1.ResourceBlob{{Path: "files/hero.md", Content: doc}},
+				RepositoryId: testRepoID, Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "files/hero.md", Content: doc}}}},
 			})
 			require.NoError(t, err)
 			require.Equal(t, tc.ok, result.Accepted)
@@ -52,6 +52,7 @@ func TestFileTypedCredentialsValidationAndAdmission(t *testing.T) {
 				require.NotContains(t, failure.Message, "MUST-NOT-LEAK")
 			}
 			_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+				ActorSubject: "test-admission-actor",
 				RepositoryId: testRepoID, NewCommitSha: strings.Repeat("a", 40), RefName: "refs/heads/main",
 			})
 			require.NoError(t, err)
@@ -122,6 +123,7 @@ func TestAdmitResources_FileIdentityIsolatedAcrossNamespaces(t *testing.T) {
 	}
 	srvA := newCatalogServer(t, store, gitA)
 	_, err := srvA.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID, NewCommitSha: commitA, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -137,6 +139,7 @@ func TestAdmitResources_FileIdentityIsolatedAcrossNamespaces(t *testing.T) {
 	}
 	srvB := newCatalogServer(t, store, gitB)
 	_, err = srvB.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: secondNamespaceRepoID, NewCommitSha: commitB, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -187,6 +190,7 @@ func TestAdmitResources_FileCrossNamespaceCredentialsRefNeverPersistedAtAdmissio
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err, "admission must tolerate the rejected file without failing the whole push")

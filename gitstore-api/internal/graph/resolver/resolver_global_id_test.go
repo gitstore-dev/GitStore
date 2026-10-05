@@ -5,6 +5,8 @@ package resolver
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -23,6 +25,7 @@ const (
 	globalIDTestNamespaceID  = "00000000-0000-0000-0000-000000000004"
 	globalIDTestVariantUID   = "00000000-0000-0000-0000-000000000005"
 	globalIDTestRepositoryID = "00000000-0000-0000-0000-000000000006"
+	globalIDTestFileUID      = "00000000-0000-0000-0000-000000000007"
 )
 
 func TestQueryNodeResolvesByGlobalID(t *testing.T) {
@@ -42,6 +45,14 @@ func TestQueryNodeResolvesByGlobalID(t *testing.T) {
 	variant, ok := variantNode.(*model.ProductVariant)
 	require.True(t, ok)
 	assert.Equal(t, mustEncodeNodeID(nodeKindProductVariant, globalIDTestVariantUID), variant.ID)
+
+	fileNode, err := query.Node(ctx, mustEncodeNodeID(nodeKindFile, globalIDTestFileUID))
+	require.NoError(t, err)
+	file, ok := fileNode.(*model.File)
+	require.True(t, ok)
+	typedFile, err := query.File(ctx, "test-store", "file-1")
+	require.NoError(t, err)
+	require.Equal(t, typedFile, file)
 }
 
 func TestQueryNodesPreservesOrderAndSkipsInvalidIDs(t *testing.T) {
@@ -58,9 +69,11 @@ func TestQueryNodesPreservesOrderAndSkipsInvalidIDs(t *testing.T) {
 		mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID),
 		mustEncodeNodeID(nodeKindProductVariant, globalIDTestVariantUID),
 		mustEncodeNodeID(nodeKindProduct, "missing"),
+		mustEncodeNodeID(nodeKindFile, globalIDTestFileUID),
+		mustEncodeNodeID(nodeKindFile, "00000000-0000-0000-0000-000000000008"),
 	})
 	require.NoError(t, err)
-	require.Len(t, nodes, 7)
+	require.Len(t, nodes, 9)
 	assert.IsType(t, &model.Namespace{}, nodes[0])
 	assert.Nil(t, nodes[1])
 	assert.IsType(t, &model.Category{}, nodes[2])
@@ -68,6 +81,49 @@ func TestQueryNodesPreservesOrderAndSkipsInvalidIDs(t *testing.T) {
 	assert.IsType(t, &model.Product{}, nodes[4])
 	assert.IsType(t, &model.ProductVariant{}, nodes[5])
 	assert.Nil(t, nodes[6])
+	assert.IsType(t, &model.File{}, nodes[7])
+	assert.Nil(t, nodes[8])
+}
+
+func TestFileNodesObserveSharedDatastoreUpdatesAcrossResolvers(t *testing.T) {
+	store, first := newGlobalIDTestResolver(t)
+	seedGlobalIDTestData(t, t.Context(), store)
+	second, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
+	require.NoError(t, err)
+	file, err := store.GetFile(t.Context(), globalIDTestFileUID)
+	require.NoError(t, err)
+	version := file.ResourceVersion
+	file.Annotations = map[string]string{"sequence": "1"}
+	require.NoError(t, store.UpdateFile(t.Context(), file, version))
+	id := mustEncodeNodeID(nodeKindFile, globalIDTestFileUID)
+	for _, root := range []*Resolver{first, second} {
+		nodes, err := (&queryResolver{Resolver: root}).Nodes(t.Context(), []string{id, id})
+		require.NoError(t, err)
+		require.Len(t, nodes, 2)
+		for _, node := range nodes {
+			file, ok := node.(*model.File)
+			require.True(t, ok)
+			require.Equal(t, id, file.ID)
+			require.Equal(t, "1", file.Metadata.Annotations["sequence"])
+		}
+	}
+}
+
+type globalIDFileFailureStore struct{ datastore.Datastore }
+
+func (globalIDFileFailureStore) GetFile(context.Context, string) (*datastore.File, error) {
+	return nil, errors.New("file storage unavailable")
+}
+
+func TestFileNodeStorageErrorsAreNotReportedAsMissing(t *testing.T) {
+	store, root := newGlobalIDTestResolver(t)
+	root.store = globalIDFileFailureStore{store}
+	query := &queryResolver{Resolver: root}
+	id := mustEncodeNodeID(nodeKindFile, globalIDTestFileUID)
+	_, err := query.Node(t.Context(), id)
+	require.ErrorContains(t, err, "retrieve File: file storage unavailable")
+	_, err = query.Nodes(t.Context(), []string{id})
+	require.ErrorContains(t, err, "retrieve File: file storage unavailable")
 }
 
 func TestLookupQueriesAcceptGlobalIDs(t *testing.T) {
@@ -156,6 +212,12 @@ func newGlobalIDTestResolver(t *testing.T) (datastore.Datastore, *Resolver) {
 func seedGlobalIDTestData(t *testing.T, ctx context.Context, store datastore.Datastore) {
 	t.Helper()
 	now := time.Now()
+	require.NoError(t, store.CreateFile(ctx, &datastore.File{
+		UID: globalIDTestFileUID, Namespace: "test-store", Name: "file-1",
+		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File",
+		Generation: 1, ResourceVersion: "1", CreationTimestamp: now,
+		Spec: json.RawMessage(`{"contentType":"image/jpeg","type":"gitstore.dev/media"}`),
+	}))
 	require.NoError(t, store.CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{
 		UID:               globalIDTestCategoryUID,
 		Namespace:         "test-store",

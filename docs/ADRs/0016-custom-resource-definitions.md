@@ -156,7 +156,9 @@ Extension keywords, all prefixed `x-gitstore-`:
 CRD instances automatically get:
 
 - admission (structural schema, then `x-gitstore-validations`, then bound policies and webhooks);
-- a watch journal source, so they get `watchResources` and event subscriptions;
+- a watch journal source, so they get `watchResources` and event subscriptions. Sources are
+  registered in the shared catalog CDC source registry (kind → authoritative table → payload
+  decoder) rather than per-kind runners; the generic CRD instance table is future schema work;
 - GraphQL list/get/watch types generated from the served versions;
 - authorization actions in the [ADR 0010](0010-authorization-model.md) grammar.
   - The `<kind>` slug is `names.kind` in lower camelCase (`PricingTable` → `pricingTable`).

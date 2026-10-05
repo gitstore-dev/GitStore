@@ -7,7 +7,25 @@
 // so a restart can resume without a full re-list.
 package listwatch
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
+
+type listProgressKey struct{}
+
+type listProgress struct {
+	pages, rows int64
+	observe     func(int64, int64)
+}
+
+func observeListPage(ctx context.Context, rows int) {
+	if progress, ok := ctx.Value(listProgressKey{}).(*listProgress); ok {
+		progress.pages++
+		progress.rows += int64(rows)
+		progress.observe(progress.pages, progress.rows)
+	}
+}
 
 // EventType identifies the kind of change a WatchEvent carries.
 type EventType int

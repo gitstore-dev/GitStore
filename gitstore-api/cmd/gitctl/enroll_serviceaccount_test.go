@@ -14,6 +14,70 @@ import (
 	"testing"
 )
 
+func TestServiceAccountIdentityPublicationIsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "identity.env")
+	for range 2 {
+		if err := writeServiceAccountIdentity(path, "uid-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeServiceAccountIdentity(path, "different-uid"); err == nil {
+		t.Fatal("must not silently replace a different enrolled identity")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "GITSTORE_CONTROLLER__SERVICEACCOUNT__UID=uid-1\n" {
+		t.Fatal("existing identity was changed")
+	}
+}
+
+func TestGenerateSigningRecordPreservesExistingKey(t *testing.T) {
+	root := t.TempDir()
+	keyPath, recordPath := filepath.Join(root, "private.pem"), filepath.Join(root, "controller.json")
+	args := []string{"generate-signing-key", "--private-key-path", keyPath, "--record-output-path", recordPath, "--key-id", "enrolled-key"}
+	var stdout, stderr bytes.Buffer
+	for range 2 {
+		if code := run(args, strings.NewReader(""), &stdout, &stderr); code != 0 {
+			t.Fatalf("generate signing record: code=%d stderr=%s", code, stderr.String())
+		}
+	}
+	key, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record struct {
+		Format string            `json:"format"`
+		Values map[string][]byte `json:"values"`
+	}
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Format != "serviceaccount-signing-key/v1" || !bytes.Equal(record.Values["privateKey"], key) || string(record.Values["keyID"]) != "enrolled-key" {
+		t.Fatal("record does not contain the matching key and enrollment ID")
+	}
+	if info, err := os.Stat(recordPath); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatal("record must remain private")
+	}
+	if strings.Contains(stdout.String()+stderr.String(), "PRIVATE KEY") || bytes.Contains([]byte(stdout.String()+stderr.String()), key) {
+		t.Fatal("private material appeared in command output")
+	}
+	args[len(args)-1] = "different-key"
+	if code := run(args, strings.NewReader(""), &stdout, &stderr); code != 1 {
+		t.Fatal("generator must not silently replace an enrolled signing record")
+	}
+	after, err := os.ReadFile(recordPath)
+	if err != nil || !bytes.Equal(data, after) {
+		t.Fatal("failed record update changed existing material")
+	}
+	leftovers, err := filepath.Glob(filepath.Join(root, ".signing-record-*"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatal("private temporary records were not cleaned up")
+	}
+}
+
 func TestEnrollServiceAccountIsIdempotentAndDoesNotWriteCredentials(t *testing.T) {
 	const adminToken = "admin-token-must-not-be-printed"
 	var requests int

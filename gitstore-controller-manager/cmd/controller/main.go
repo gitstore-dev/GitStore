@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -62,14 +63,6 @@ func main() {
 
 	mgr := manager.New().WithLogger(log)
 
-	// checkpointStore is shared across every kind's listwatch.Runner[T]
-	// (spec 036): each Runner persists into its own file within this
-	// directory (checkpoint.FilesystemStore, one file per kind).
-	checkpointStore, err := checkpoint.NewFilesystemStore(cfg.Controller.Checkpoint.Dir)
-	if err != nil {
-		log.Fatal("failed to init checkpoint store", zap.Error(err))
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -84,52 +77,25 @@ func main() {
 			}
 		}()
 	}
-	client := graphqlclient.New(cfg.Controller.ApiURI, credentials)
+	client, err := graphqlclient.NewWithRateLimit(cfg.Controller.ApiURI, credentials,
+		cfg.Controller.APIClient.RequestsPerSecond, cfg.Controller.APIClient.Burst)
+	if err != nil {
+		log.Fatal("create API client", zap.Error(err))
+	}
 
 	// runners tracks every kind's list-then-watch goroutine so shutdown can
 	// wait for each Runner's final checkpoint flush before the process exits.
 	var runners sync.WaitGroup
 
-	if _, err = registerNamespace(ctx, &runners, mgr, checkpointStore, cfg, log, client); err != nil {
-		log.Fatal("failed to register Namespace reconciler", zap.Error(err))
-	}
-	if _, err = registerRepository(
-		ctx, &runners, mgr, checkpointStore, cfg, log, client,
-		listwatch.NewRepositoryListWatcher(client),
-		repositorycontroller.NewGraphQLStorageClient(client),
-	); err != nil {
-		log.Fatal("failed to register Repository reconciler", zap.Error(err))
-	}
-
-	// categoryCache is shared: the Product reconciler needs read access to
-	// resolve spec.categoryRef (spec 062), and registerCategoryTaxonomy
-	// needs write access to populate it from its own list-then-watch loop.
-	// Constructed here (rather than inside registerCategoryTaxonomy) so both
-	// registration functions can depend on it without a forward reference.
-	categoryCache := cache.New[categorytaxonomy.CategoryTaxonomy]()
-	// productCategoryIndex is likewise shared: registerProductWatch populates
-	// it from Product cache events, and registerCategoryTaxonomy consumes it
-	// to re-enqueue previously-unresolved Products on a CategoryTaxonomy
-	// create/rename (FR-009) without a full Product-cache scan (R3).
-	productCategoryIndex := categorytaxonomy.NewProductCategoryIndex()
-
-	var productRunnerMu sync.RWMutex
-	var productRunner *listwatch.Runner[categorytaxonomy.Product]
-	_, err = registerCategoryTaxonomy(ctx, &runners, mgr, checkpointStore, cfg, log, client, categoryCache, productCategoryIndex, func(key types.WorkItemKey) {
-		productRunnerMu.RLock()
-		runner := productRunner
-		productRunnerMu.RUnlock()
-		if runner != nil {
-			runner.MarkRelatedCompleted(key)
-		}
-	})
+	closeStores, err := registerDiskControllers(ctx, &runners, mgr, cfg, log, client)
 	if err != nil {
-		log.Fatal("failed to register CategoryTaxonomy reconciler", zap.Error(err))
+		log.Fatal("failed to register durable controllers", zap.Error(err))
 	}
-
-	productRunnerMu.Lock()
-	productRunner = registerProductWatch(ctx, &runners, mgr, checkpointStore, cfg, log, client, cache.AsReadOnly(categoryCache), productCategoryIndex)
-	productRunnerMu.Unlock()
+	defer func() {
+		if err := closeStores(); err != nil {
+			log.Error("close controller stores", zap.Error(err))
+		}
+	}()
 
 	addr := fmt.Sprintf(":%d", cfg.Controller.Port)
 	srv := &http.Server{
@@ -170,6 +136,157 @@ func main() {
 	log.Info("controller-manager stopped")
 }
 
+func relationIndex(kind, namespace, name string) string {
+	return kind + "/" + namespace + "\x00" + name
+}
+
+func newDiskRunner[T any](kind string, watcher listwatch.ListWatcher[T], store *checkpoint.DiskStore, cfg *config.Config, log *zap.Logger, key func(T) types.WorkItemKey, revision func(T) string) *listwatch.Runner[T] {
+	return &listwatch.Runner[T]{
+		Kind: kind, ListWatcher: watcher, Disk: store, Cache: cache.New[T](),
+		KeyFunc: key, RevisionFunc: revision, Log: log,
+		WaitForWatchBookmark: true,
+		MaxBackoff:           cfg.Controller.Watch.MaxBackoff,
+	}
+}
+
+func registerDiskRunner[T any](ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, runner *listwatch.Runner[T], reconciler types.Reconciler, cfg *config.Config, related func(context.Context, types.WorkItemKey) error) error {
+	if err := mgr.Register(manager.ReconcilerRegistration{
+		Kind: runner.Kind, Reconciler: reconciler, Cache: runner.Cache, Disk: runner.Disk,
+		RelatedEnqueue: related, ResyncInterval: cfg.Controller.Watch.ResyncInterval,
+		MaxAttempts: cfg.Controller.Reconcile.MaxAttempts, StallThreshold: cfg.Controller.Reconcile.StallThreshold,
+	}); err != nil {
+		return err
+	}
+	runners.Go(func() {
+		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
+			runner.Log.Error("durable runner exited", zap.String("kind", runner.Kind), zap.Error(err))
+			if err := runner.Cache.BeginRecovery(ctx); err != nil && ctx.Err() == nil {
+				runner.Log.Error("close failed runner admission", zap.Error(err))
+			}
+		}
+	})
+	return nil
+}
+
+func registerDiskControllers(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client) (func() error, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	stores := make(map[string]*checkpoint.DiskStore, 4)
+	closeStores := func() error {
+		cancel()
+		runners.Wait()
+		var result error
+		for _, store := range stores {
+			result = errors.Join(result, store.Close())
+		}
+		return result
+	}
+	for _, kind := range []string{"Namespace", "Repository", "CategoryTaxonomy", "Product"} {
+		store, err := checkpoint.OpenDiskStore(cfg.Controller.Checkpoint.Dir, kind)
+		if err != nil {
+			return nil, errors.Join(err, closeStores())
+		}
+		stores[kind] = store
+	}
+	ns := newDiskRunner("Namespace", listwatch.NewNamespaceListWatcher(client), stores["Namespace"], cfg, log,
+		func(n namespacecontroller.Namespace) types.WorkItemKey {
+			return types.WorkItemKey{Kind: "Namespace", Name: n.Name}
+		},
+		func(n namespacecontroller.Namespace) string { return n.ResourceVersion })
+	repo := newDiskRunner("Repository", listwatch.NewRepositoryListWatcher(client), stores["Repository"], cfg, log,
+		func(r repositorycontroller.Repository) types.WorkItemKey {
+			return types.WorkItemKey{Kind: "Repository", Namespace: r.Namespace, Name: r.Name}
+		},
+		func(r repositorycontroller.Repository) string { return r.ResourceVersion })
+	cat := newDiskRunner("CategoryTaxonomy", listwatch.NewCategoryTaxonomyListWatcher(client), stores["CategoryTaxonomy"], cfg, log,
+		func(c categorytaxonomy.CategoryTaxonomy) types.WorkItemKey {
+			return types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: c.Namespace, Name: c.Name}
+		},
+		func(c categorytaxonomy.CategoryTaxonomy) string { return c.ResourceVersion })
+	product := newDiskRunner("Product", listwatch.NewProductListWatcher(client), stores["Product"], cfg, log,
+		func(p categorytaxonomy.Product) types.WorkItemKey {
+			return types.WorkItemKey{Kind: "Product", Namespace: p.Namespace, Name: p.Name}
+		},
+		func(p categorytaxonomy.Product) string { return p.ResourceVersion })
+	cat.AcceptUpdate, cat.ShouldEnqueueUpdate = categorytaxonomy.AcceptWatchUpdate, categorytaxonomy.ShouldEnqueueWatchUpdate
+	cat.DiskIndexes = func(c categorytaxonomy.CategoryTaxonomy) []string {
+		if c.ParentRefName == "" {
+			return nil
+		}
+		return []string{relationIndex("parent", c.Namespace, c.ParentRefName)}
+	}
+	cat.DiskRelated = func(c categorytaxonomy.CategoryTaxonomy) []types.WorkItemKey {
+		keys := []types.WorkItemKey{{Kind: "ProductCategory", Namespace: c.Namespace, Name: c.Name}}
+		if c.ParentRefName != "" {
+			keys = append(keys, types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: c.Namespace, Name: c.ParentRefName})
+		}
+		return keys
+	}
+	cat.DiskRelatedVersion = func(c categorytaxonomy.CategoryTaxonomy) string {
+		return fmt.Sprintf("%s/%t", c.UID, c.DeletionTimestamp != nil || slices.Contains(c.Finalizers, "gitstore.dev/foreground-deletion"))
+	}
+	product.DiskIndexes = func(p categorytaxonomy.Product) []string {
+		if p.CategoryRefName == "" {
+			return nil
+		}
+		return []string{relationIndex("category", p.Namespace, p.CategoryRefName)}
+	}
+	product.DiskRelated = func(p categorytaxonomy.Product) []types.WorkItemKey {
+		if p.CategoryRefName == "" {
+			return nil
+		}
+		return []types.WorkItemKey{{Kind: "CategoryTaxonomy", Namespace: p.Namespace, Name: p.CategoryRefName}}
+	}
+	related := func(ctx context.Context, key types.WorkItemKey) error {
+		if key.Kind == "ProductCategory" {
+			return product.Disk.RequestFanout(ctx, relationIndex("category", key.Namespace, key.Name))
+		}
+		store := stores[key.Kind]
+		if store == nil {
+			return fmt.Errorf("related kind %q: %w", key.Kind, types.ErrKindNotRegistered)
+		}
+		return store.Enqueue(ctx, key)
+	}
+	counter := func(store *checkpoint.DiskStore, synced func() bool, recovering func() cache.RecoveryState, index string) categorytaxonomy.ProductCounter {
+		return func(ctx context.Context, namespace, name string) (int64, error) {
+			if !synced() || recovering().Recovering {
+				return 0, checkpoint.ErrSnapshotInProgress
+			}
+			count, err := store.IndexCount(ctx, relationIndex(index, namespace, name))
+			if err != nil {
+				return 0, err
+			}
+			if count > 1<<63-1 {
+				return 0, errors.New("relation count exceeds status integer range")
+			}
+			return int64(count), nil
+		}
+	}
+	categoryReconciler := categorytaxonomy.NewReconcilerWithLookup(cat.Lookup, status.NewGraphQLStatusClient(client),
+		counter(product.Disk, product.Cache.HasSynced, product.Cache.RecoveryState, "category"),
+		counter(cat.Disk, cat.Cache.HasSynced, cat.Cache.RecoveryState, "parent"),
+		func(ctx context.Context, key types.WorkItemKey) error {
+			return cat.Disk.RequestFanout(ctx, relationIndex("parent", key.Namespace, key.Name))
+		}, categorytaxonomy.NewGraphQLDeletionClient(client))
+	registrations := []func() error{
+		func() error {
+			return registerDiskRunner(ctx, runners, mgr, ns, namespacecontroller.NewReconcilerWithLookup(ns.Lookup, status.NewGraphQLNamespaceStatusClient(client), namespacecontroller.NewGraphQLRepositoryClient(client), namespacecontroller.NewGraphQLDeletionClient(client)), cfg, related)
+		},
+		func() error {
+			return registerDiskRunner(ctx, runners, mgr, repo, repositorycontroller.NewReconcilerWithLookup(repo.Lookup, status.NewGraphQLRepositoryStatusClient(client), repositorycontroller.NewGraphQLStorageClient(client), repositorycontroller.NewGraphQLCompletionClient(client)), cfg, related)
+		},
+		func() error { return registerDiskRunner(ctx, runners, mgr, cat, categoryReconciler, cfg, related) },
+		func() error {
+			return registerDiskRunner(ctx, runners, mgr, product, productcontroller.NewReconcilerWithLookup(product.Lookup, cat.Lookup, status.NewGraphQLProductStatusClient(client), productcontroller.NewGraphQLCompletionClient(client)), cfg, related)
+		},
+	}
+	for _, register := range registrations {
+		if err := register(); err != nil {
+			return nil, errors.Join(err, closeStores())
+		}
+	}
+	return closeStores, nil
+}
+
 // configFileFlags collects repeated --config-file occurrences in the order
 // given; each one after the first is merged additively on top of the
 // previous ones (see config.LoadFromFiles).
@@ -200,7 +317,7 @@ func buildCredentialSource(ctx context.Context, cfg *config.Config, log *zap.Log
 
 	owner := "serviceaccount:" + controller.ServiceAccount.Namespace + ":" + controller.ServiceAccount.Name + ":" + controller.ServiceAccount.UID
 	resolver, err := secret.NewBootstrapResolver(controller.SecretProviders.Bootstrap, owner,
-		controller.ServiceAccount.KeyRef, controller.ServiceAccount.KeyID, secret.NewObserver(log))
+		controller.ServiceAccount.KeyRef, secret.NewObserver(log))
 	if err != nil {
 		return nil, fmt.Errorf("create bootstrap secret resolver: %w", err)
 	}
@@ -225,53 +342,6 @@ func credentialReadiness(source graphqlclient.CredentialSource) health.Credentia
 	return readiness
 }
 
-// registerNamespace wires Namespace list/watch, repository provisioning,
-// status writeback, and foreground-deletion reconciliation into mgr.
-func registerNamespace(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client) (*listwatch.Runner[namespacecontroller.Namespace], error) {
-	namespaceCache := cache.New[namespacecontroller.Namespace]()
-	runner := &listwatch.Runner[namespacecontroller.Namespace]{
-		Kind:        "Namespace",
-		ListWatcher: listwatch.NewNamespaceListWatcher(client),
-		Cache:       namespaceCache,
-		Store:       checkpointStore,
-		Enqueue:     mgr.Enqueue,
-		KeyFunc: func(item namespacecontroller.Namespace) types.WorkItemKey {
-			return types.WorkItemKey{Kind: "Namespace", Name: item.Name}
-		},
-		RevisionFunc: func(item namespacecontroller.Namespace) string {
-			return item.ResourceVersion
-		},
-		FlushIntervalEvents: cfg.Controller.Checkpoint.FlushIntervalEvents,
-		MaxBackoff:          cfg.Controller.Watch.MaxBackoff,
-		ResyncInterval:      cfg.Controller.Watch.ResyncInterval,
-		Log:                 log,
-	}
-	reconciler := namespacecontroller.NewReconciler(
-		cache.AsReadOnly(namespaceCache),
-		status.NewGraphQLNamespaceStatusClient(client),
-		namespacecontroller.NewGraphQLRepositoryClient(client),
-		namespacecontroller.NewGraphQLDeletionClient(client),
-	)
-
-	if err := mgr.Register(manager.ReconcilerRegistration{
-		Kind:           "Namespace",
-		Reconciler:     reconciler,
-		Cache:          namespaceCache,
-		OnSuccess:      runner.MarkCompleted,
-		MaxAttempts:    cfg.Controller.Reconcile.MaxAttempts,
-		StallThreshold: cfg.Controller.Reconcile.StallThreshold,
-	}); err != nil {
-		return nil, fmt.Errorf("register Namespace: %w", err)
-	}
-
-	runners.Go(func() {
-		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
-			log.Error("Namespace runner exited with error", zap.Error(err))
-		}
-	})
-	return runner, nil
-}
-
 // registerRepository constructs the Repository runner and reconciler once the
 // process has been supplied with the concrete typed Repository ListWatcher and
 // idempotent storage provisioner. They are explicit dependencies because the
@@ -290,11 +360,12 @@ func registerRepository(
 ) (*listwatch.Runner[repositorycontroller.Repository], error) {
 	repositoryCache := cache.New[repositorycontroller.Repository]()
 	runner := &listwatch.Runner[repositorycontroller.Repository]{
-		Kind:        "Repository",
-		ListWatcher: watcher,
-		Cache:       repositoryCache,
-		Store:       checkpointStore,
-		Enqueue:     mgr.Enqueue,
+		Kind:                 "Repository",
+		WaitForWatchBookmark: true,
+		ListWatcher:          watcher,
+		Cache:                repositoryCache,
+		Store:                checkpointStore,
+		Enqueue:              mgr.Enqueue,
 		KeyFunc: func(item repositorycontroller.Repository) types.WorkItemKey {
 			return types.WorkItemKey{Kind: "Repository", Namespace: item.Namespace, Name: item.Name}
 		},
@@ -337,159 +408,6 @@ func buildMux(mgr *manager.Manager, credentialReadiness ...health.CredentialRead
 	mux.Handle("GET /metrics", health.NewMetricsHandler(mgr))
 	mux.HandleFunc("GET /controller/v1/poison/{kind}", api.ListPoisonHandler(mgr))
 	mux.HandleFunc("POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue", api.RequeuePoisonHandler(mgr))
+	mux.HandleFunc("POST /controller/v1/poison/{kind}/{name}/requeue", api.RequeuePoisonHandler(mgr))
 	return mux
-}
-
-// registerCategoryTaxonomy wires the GraphQL client, the CategoryTaxonomy
-// list-then-watch adapters (spec 040's client side, deferred to spec 039),
-// and the CategoryTaxonomy reconciler into mgr, then starts its
-// listwatch.Runner on a background goroutine. Per specs/039-category-taxonomy-reconciler/quickstart.md.
-func registerCategoryTaxonomy(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client, catCache *cache.Cache[categorytaxonomy.CategoryTaxonomy], productCategoryIndex *categorytaxonomy.ProductCategoryIndex, onRelatedSuccess func(types.WorkItemKey)) (*listwatch.Runner[categorytaxonomy.CategoryTaxonomy], error) {
-	listWatcher := listwatch.NewCategoryTaxonomyListWatcher(client)
-	statusClient := status.NewGraphQLStatusClient(client)
-
-	reconciler := categorytaxonomy.NewReconciler(
-		cache.AsReadOnly(catCache),
-		statusClient,
-		categorytaxonomy.NewProductCounter(client),
-		mgr.Enqueue,
-		categorytaxonomy.NewGraphQLDeletionClient(client),
-	)
-
-	runner := &listwatch.Runner[categorytaxonomy.CategoryTaxonomy]{
-		Kind:        "CategoryTaxonomy",
-		ListWatcher: listWatcher,
-		Cache:       catCache,
-		Store:       checkpointStore,
-		Enqueue:     mgr.Enqueue,
-		KeyFunc: func(c categorytaxonomy.CategoryTaxonomy) types.WorkItemKey {
-			return types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: c.Namespace, Name: c.Name}
-		},
-		RevisionFunc:        func(c categorytaxonomy.CategoryTaxonomy) string { return c.ResourceVersion },
-		AcceptUpdate:        categorytaxonomy.AcceptWatchUpdate,
-		ShouldEnqueueUpdate: categorytaxonomy.ShouldEnqueueWatchUpdate,
-		FlushIntervalEvents: cfg.Controller.Checkpoint.FlushIntervalEvents,
-		MaxBackoff:          cfg.Controller.Watch.MaxBackoff,
-		ResyncInterval:      cfg.Controller.Watch.ResyncInterval,
-		Log:                 log,
-	}
-
-	if err := mgr.Register(manager.ReconcilerRegistration{
-		Kind:       "CategoryTaxonomy",
-		Reconciler: reconciler,
-		Cache:      catCache,
-		OnSuccess: func(key types.WorkItemKey) {
-			runner.MarkCompleted(key)
-			if onRelatedSuccess != nil {
-				onRelatedSuccess(key)
-			}
-		},
-		MaxAttempts:    cfg.Controller.Reconcile.MaxAttempts,
-		StallThreshold: cfg.Controller.Reconcile.StallThreshold,
-	}); err != nil {
-		return nil, fmt.Errorf("register CategoryTaxonomy: %w", err)
-	}
-	// A child's membership contributes to its parent's ChildCount. Requeue both
-	// sides of a reparent operation, and the parent on add/delete, so counts do
-	// not depend on an unrelated future category update.
-	enqueueParent := func(namespace, name string) {
-		if name != "" {
-			_ = mgr.Enqueue(types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: namespace, Name: name})
-		}
-	}
-	catCache.AddEventHandler(cache.EventHandler[categorytaxonomy.CategoryTaxonomy]{
-		OnAdd: func(_ types.WorkItemKey, c categorytaxonomy.CategoryTaxonomy) {
-			enqueueParent(c.Namespace, c.ParentRefName)
-		},
-		OnUpdate: func(_ types.WorkItemKey, old, current categorytaxonomy.CategoryTaxonomy) {
-			if old.ParentRefName == current.ParentRefName {
-				return
-			}
-			enqueueParent(old.Namespace, old.ParentRefName)
-			enqueueParent(current.Namespace, current.ParentRefName)
-		},
-		OnDelete: func(_ types.WorkItemKey, c categorytaxonomy.CategoryTaxonomy) {
-			enqueueParent(c.Namespace, c.ParentRefName)
-		},
-	})
-	// FR-009: re-enqueue previously-unresolved Products when a
-	// CategoryTaxonomy create/rename newly matches their categoryRef, via
-	// the shared productCategoryIndex — an O(1) lookup, never a full
-	// Product-cache scan (R3).
-	catCache.AddEventHandler(categorytaxonomy.NewCategoryReenqueueHandler(productCategoryIndex, func(key types.WorkItemKey) {
-		_ = mgr.Enqueue(key)
-	}))
-
-	runners.Go(func() {
-		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
-			log.Error("CategoryTaxonomy runner exited with error", zap.Error(err))
-		}
-	})
-
-	return runner, nil
-}
-
-// registerProductWatch wires a Product list-then-watch loop into a
-// dedicated Runner[Product], without registering "Product" as a reconciled
-// kind — Product is observed only to drive CategoryTaxonomy enqueues
-// (research.md R1, spec 042). Its cache event handlers enqueue the
-// already-registered "CategoryTaxonomy" kind via mgr.Enqueue whenever a
-// Product's categoryRef appears, disappears, or changes.
-func registerProductWatch(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client, categoryCache cache.CacheAccessor[categorytaxonomy.CategoryTaxonomy], productCategoryIndex *categorytaxonomy.ProductCategoryIndex) *listwatch.Runner[categorytaxonomy.Product] {
-	listWatcher := listwatch.NewProductListWatcher(client)
-
-	productCache := cache.New[categorytaxonomy.Product]()
-	var runner *listwatch.Runner[categorytaxonomy.Product]
-	enqueueCategory := func(namespace, categoryName string) {
-		if categoryName == "" {
-			return
-		}
-		key := types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: namespace, Name: categoryName}
-		runner.RememberRelatedReplay(key)
-		_ = mgr.Enqueue(key)
-	}
-
-	runner = &listwatch.Runner[categorytaxonomy.Product]{
-		Kind:        "Product",
-		ListWatcher: listWatcher,
-		Cache:       productCache,
-		Store:       checkpointStore,
-		Enqueue:     mgr.Enqueue,
-		ReplayEnqueue: func(key types.WorkItemKey) error {
-			return mgr.Enqueue(key)
-		},
-		DisableReplay: false,
-		KeyFunc: func(p categorytaxonomy.Product) types.WorkItemKey {
-			return types.WorkItemKey{Kind: "Product", Namespace: p.Namespace, Name: p.Name}
-		},
-		RevisionFunc: func(p categorytaxonomy.Product) string { return p.ResourceVersion },
-		// Persist each Product event before advancing the watch cursor so a
-		// crash cannot lose an affected CategoryTaxonomy key.
-		FlushIntervalEvents: 1,
-		MaxBackoff:          cfg.Controller.Watch.MaxBackoff,
-		ResyncInterval:      cfg.Controller.Watch.ResyncInterval,
-		Log:                 log,
-	}
-	reconciler := productcontroller.NewReconciler(
-		cache.AsReadOnly(productCache),
-		categoryCache,
-		status.NewGraphQLProductStatusClient(client),
-		productcontroller.NewGraphQLCompletionClient(client),
-	)
-	if err := mgr.Register(manager.ReconcilerRegistration{
-		Kind: "Product", Reconciler: reconciler, Cache: productCache,
-		OnSuccess: runner.MarkCompleted, MaxAttempts: cfg.Controller.Reconcile.MaxAttempts, StallThreshold: cfg.Controller.Reconcile.StallThreshold,
-	}); err != nil {
-		log.Error("failed to register Product reconciler", zap.Error(err))
-		return nil
-	}
-	productCache.AddEventHandler(categorytaxonomy.NewProductCategoryEnqueueHandler(enqueueCategory))
-	productCache.AddEventHandler(categorytaxonomy.NewProductCategoryIndexHandler(productCategoryIndex))
-
-	runners.Go(func() {
-		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
-			log.Error("Product runner exited with error", zap.Error(err))
-		}
-	})
-	return runner
 }

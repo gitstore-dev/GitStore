@@ -34,7 +34,6 @@ type StaticUsersProvider struct {
 	path                      string
 	jwtSecret                 []byte
 	jwtIssuer                 string
-	legacyJWTIssuer           string
 	jwtDuration, refreshGrace time.Duration
 	revocations               RevocationStore
 	logger                    *zap.Logger
@@ -69,7 +68,6 @@ func NewWithRevocationStore(cfg config.AuthConfig, logger *zap.Logger, revocatio
 	if issuer == "" {
 		issuer = "gitstore"
 	}
-	legacyIssuer := issuer
 	issuer = strings.TrimSuffix(issuer, "/") + "/static-users"
 	duration := 24 * time.Hour
 	if cfg.JWT.Duration != "" {
@@ -88,7 +86,7 @@ func NewWithRevocationStore(cfg config.AuthConfig, logger *zap.Logger, revocatio
 	if revocations == nil {
 		return nil, errors.New("staticusers: revocation store is required")
 	}
-	return &StaticUsersProvider{users: users, path: path, jwtSecret: []byte(cfg.JWT.Secret), jwtIssuer: issuer, legacyJWTIssuer: legacyIssuer, jwtDuration: duration, refreshGrace: grace, revocations: revocations, logger: logger}, nil
+	return &StaticUsersProvider{users: users, path: path, jwtSecret: []byte(cfg.JWT.Secret), jwtIssuer: issuer, jwtDuration: duration, refreshGrace: grace, revocations: revocations, logger: logger}, nil
 }
 func (p *StaticUsersProvider) Name() string { return "static-users" }
 func (p *StaticUsersProvider) Shutdown()    {}
@@ -168,17 +166,18 @@ func (p *StaticUsersProvider) authenticateBearer(ctx context.Context, token stri
 	if !parsed.Valid {
 		return nil, auth.Challenge(p.Name(), "jwt invalid"), nil
 	}
-	if !p.acceptedIssuer(claims.Issuer) {
+	if claims.Issuer != p.jwtIssuer {
 		return nil, auth.Challenge(p.Name(), "jwt issuer is not accepted"), nil
 	}
-	if claims.ID != "" {
-		revoked, revokeErr := p.revocations.IsSessionRevoked(ctx, claims.ID)
-		if revokeErr != nil {
-			return nil, auth.Deny(p.Name(), "session revocation state unavailable"), fmt.Errorf("staticusers: check session revocation: %w", revokeErr)
-		}
-		if revoked {
-			return nil, auth.Deny(p.Name(), "token has been revoked"), nil
-		}
+	if strings.TrimSpace(claims.Subject) == "" || strings.TrimSpace(claims.ID) == "" {
+		return nil, auth.Challenge(p.Name(), "jwt subject and jti are required"), nil
+	}
+	revoked, revokeErr := p.revocations.IsSessionRevoked(ctx, claims.ID)
+	if revokeErr != nil {
+		return nil, auth.Deny(p.Name(), "session revocation state unavailable"), fmt.Errorf("staticusers: check session revocation: %w", revokeErr)
+	}
+	if revoked {
+		return nil, auth.Deny(p.Name(), "token has been revoked"), nil
 	}
 	pr := &auth.Principal{Subject: claims.Subject, Issuer: claims.Issuer, AuthMethod: p.Name(), TokenID: claims.ID}
 	if claims.ExpiresAt != nil {
@@ -187,9 +186,6 @@ func (p *StaticUsersProvider) authenticateBearer(ctx context.Context, token stri
 	return pr, auth.Allow(p.Name(), "valid jwt"), nil
 }
 func (p *StaticUsersProvider) IssueSession(_ context.Context, subject string) (string, time.Time, error) {
-	return p.issueToken(subject)
-}
-func (p *StaticUsersProvider) IssueToken(subject string) (string, time.Time, error) {
 	return p.issueToken(subject)
 }
 func (p *StaticUsersProvider) issueToken(subject string) (string, time.Time, error) {
@@ -230,7 +226,7 @@ func (p *StaticUsersProvider) RefreshSession(ctx context.Context, old string) (s
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrInvalidToken)
 	}
-	if !p.acceptedIssuer(c.Issuer) {
+	if c.Issuer != p.jwtIssuer || strings.TrimSpace(c.Subject) == "" {
 		return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrInvalidToken)
 	}
 	if c.ID == "" {
@@ -239,14 +235,12 @@ func (p *StaticUsersProvider) RefreshSession(ctx context.Context, old string) (s
 	if c.ExpiresAt != nil && time.Now().After(c.ExpiresAt.Time.Add(p.refreshGrace)) {
 		return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrTokenTooOld)
 	}
-	if c.ID != "" {
-		revoked, revokeErr := p.revocations.IsSessionRevoked(ctx, c.ID)
-		if revokeErr != nil {
-			return "", time.Time{}, fmt.Errorf("staticusers: refresh revocation check: %w", revokeErr)
-		}
-		if revoked {
-			return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrTokenRevoked)
-		}
+	revoked, revokeErr := p.revocations.IsSessionRevoked(ctx, c.ID)
+	if revokeErr != nil {
+		return "", time.Time{}, fmt.Errorf("staticusers: refresh revocation check: %w", revokeErr)
+	}
+	if revoked {
+		return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrTokenRevoked)
 	}
 	p.mu.RLock()
 	_, active := p.users[c.Subject]
@@ -254,25 +248,20 @@ func (p *StaticUsersProvider) RefreshSession(ctx context.Context, old string) (s
 	if !active {
 		return "", time.Time{}, fmt.Errorf("staticusers: refresh subject is no longer active: %w", auth.ErrInvalidToken)
 	}
-	if c.ID != "" {
-		revokeUntil := time.Now().Add(2 * time.Minute)
-		if c.ExpiresAt != nil && c.ExpiresAt.Time.Add(2*time.Minute).After(revokeUntil) {
-			revokeUntil = c.ExpiresAt.Time.Add(2 * time.Minute)
-		}
-		consumed, revokeErr := p.revocations.ConsumeSession(ctx, c.ID, revokeUntil)
-		if revokeErr != nil {
-			return "", time.Time{}, fmt.Errorf("staticusers: refresh revoke old session: %w", revokeErr)
-		}
-		if !consumed {
-			return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrTokenRevoked)
-		}
+	revokeUntil := time.Now().Add(2 * time.Minute)
+	if c.ExpiresAt != nil && c.ExpiresAt.Time.Add(2*time.Minute).After(revokeUntil) {
+		revokeUntil = c.ExpiresAt.Time.Add(2 * time.Minute)
+	}
+	consumed, revokeErr := p.revocations.ConsumeSession(ctx, c.ID, revokeUntil)
+	if revokeErr != nil {
+		return "", time.Time{}, fmt.Errorf("staticusers: refresh revoke old session: %w", revokeErr)
+	}
+	if !consumed {
+		return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrTokenRevoked)
 	}
 	return p.issueToken(c.Subject)
 }
 
-func (p *StaticUsersProvider) acceptedIssuer(issuer string) bool {
-	return issuer == p.jwtIssuer || issuer == p.legacyJWTIssuer
-}
 func (p *StaticUsersProvider) GetBySubject(_ context.Context, s string) (*auth.UserProfile, error) {
 	p.mu.RLock()
 	u, ok := p.users[s]

@@ -28,9 +28,6 @@ type MutationResolver interface {
 	RefreshToken(ctx context.Context, input model.RefreshTokenInput) (*model.RefreshTokenPayload, error)
 	DeleteCategory(ctx context.Context, input model.DeleteCategoryInput) (*model.DeleteCategoryPayload, error)
 	UpdateCategoryStatus(ctx context.Context, input model.UpdateCategoryStatusInput) (*model.UpdateCategoryStatusPayload, error)
-	CreateCollection(ctx context.Context, input model.CreateCollectionInput) (*model.CreateCollectionPayload, error)
-	UpdateCollection(ctx context.Context, input model.UpdateCollectionInput) (*model.UpdateCollectionPayload, error)
-	DeleteCollection(ctx context.Context, input model.DeleteCollectionInput) (*model.DeleteCollectionPayload, error)
 	CreateNamespace(ctx context.Context, input model.CreateNamespaceInput) (*model.CreateNamespacePayload, error)
 	UpdateNamespace(ctx context.Context, input model.UpdateNamespaceInput) (*model.UpdateNamespacePayload, error)
 	UpdateNamespaceStatus(ctx context.Context, input model.UpdateNamespaceStatusInput) (*model.UpdateNamespaceStatusPayload, error)
@@ -61,6 +58,7 @@ type QueryResolver interface {
 	Categories(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error)
 	Collection(ctx context.Context, by model.CollectionBy) (*model.Collection, error)
 	Collections(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.CollectionConnection, error)
+	File(ctx context.Context, namespace string, name string) (*model.File, error)
 	Namespace(ctx context.Context, by model.NamespaceBy) (*model.Namespace, error)
 	Namespaces(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.NamespaceConnection, error)
 	Product(ctx context.Context, by model.ProductBy) (*model.Product, error)
@@ -117,20 +115,6 @@ func (ec *executionContext) field_Mutation_completeRepositoryDeletion_args(ctx c
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.CompleteRepositoryDeletionInput, error) {
 			return ec.unmarshalNCompleteRepositoryDeletionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteRepositoryDeletionInput(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["input"] = arg0
-	return args, nil
-}
-
-func (ec *executionContext) field_Mutation_createCollection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
-		func(ctx context.Context, v any) (model.CreateCollectionInput, error) {
-			return ec.unmarshalNCreateCollectionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -201,20 +185,6 @@ func (ec *executionContext) field_Mutation_deleteCategory_args(ctx context.Conte
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.DeleteCategoryInput, error) {
 			return ec.unmarshalNDeleteCategoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryInput(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["input"] = arg0
-	return args, nil
-}
-
-func (ec *executionContext) field_Mutation_deleteCollection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
-		func(ctx context.Context, v any) (model.DeleteCollectionInput, error) {
-			return ec.unmarshalNDeleteCollectionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -383,20 +353,6 @@ func (ec *executionContext) field_Mutation_updateCategoryStatus_args(ctx context
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.UpdateCategoryStatusInput, error) {
 			return ec.unmarshalNUpdateCategoryStatusInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryStatusInput(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["input"] = arg0
-	return args, nil
-}
-
-func (ec *executionContext) field_Mutation_updateCollection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
-		func(ctx context.Context, v any) (model.UpdateCollectionInput, error) {
-			return ec.unmarshalNUpdateCollectionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -634,6 +590,28 @@ func (ec *executionContext) field_Query_collections_args(ctx context.Context, ra
 		return nil, err
 	}
 	args["before"] = arg4
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_file_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "namespace",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["namespace"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg1
 	return args, nil
 }
 
@@ -1469,138 +1447,6 @@ func (ec *executionContext) fieldContext_Mutation_updateCategoryStatus(ctx conte
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_updateCategoryStatus_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Mutation_createCollection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Mutation_createCollection(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Mutation().CreateCollection(ctx, fc.Args["input"].(model.CreateCollectionInput))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.CreateCollectionPayload) graphql.Marshaler {
-			return ec.marshalNCreateCollectionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionPayload(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Mutation_createCollection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Mutation",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_CreateCollectionPayload(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Mutation_createCollection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Mutation_updateCollection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Mutation_updateCollection(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Mutation().UpdateCollection(ctx, fc.Args["input"].(model.UpdateCollectionInput))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.UpdateCollectionPayload) graphql.Marshaler {
-			return ec.marshalNUpdateCollectionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionPayload(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Mutation_updateCollection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Mutation",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_UpdateCollectionPayload(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Mutation_updateCollection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Mutation_deleteCollection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Mutation_deleteCollection(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Mutation().DeleteCollection(ctx, fc.Args["input"].(model.DeleteCollectionInput))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.DeleteCollectionPayload) graphql.Marshaler {
-			return ec.marshalNDeleteCollectionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionPayload(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Mutation_deleteCollection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Mutation",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_DeleteCollectionPayload(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Mutation_deleteCollection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -3242,6 +3088,50 @@ func (ec *executionContext) fieldContext_Query_collections(ctx context.Context, 
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_collections_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_file(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_file(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().File(ctx, fc.Args["namespace"].(string), fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.File) graphql.Marshaler {
+			return ec.marshalOFile2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐFile(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Query_file(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_File(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_file_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -4928,27 +4818,6 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "createCollection":
-			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
-				return ec._Mutation_createCollection(ctx, field)
-			})
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "updateCollection":
-			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
-				return ec._Mutation_updateCollection(ctx, field)
-			})
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "deleteCollection":
-			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
-				return ec._Mutation_deleteCollection(ctx, field)
-			})
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "createNamespace":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_createNamespace(ctx, field)
@@ -5394,6 +5263,25 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "file":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_file(ctx, field)
 				return res
 			}
 

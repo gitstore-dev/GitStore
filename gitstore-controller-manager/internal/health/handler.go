@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -23,11 +24,13 @@ type CredentialReadiness interface {
 
 // KindStat is a snapshot of per-kind operational state.
 type KindStat struct {
-	ActiveWorkers int64 `json:"activeWorkers"`
-	QueueDepth    int   `json:"queueDepth"`
-	PoisonItems   int   `json:"poisonItems"`
-	Stalled       bool  `json:"stalled"`
-	Registered    bool  `json:"registered"`
+	ActiveWorkers int64               `json:"activeWorkers"`
+	QueueDepth    int                 `json:"queueDepth"`
+	PoisonItems   int                 `json:"poisonItems"`
+	Stalled       bool                `json:"stalled"`
+	Registered    bool                `json:"registered"`
+	Recovering    bool                `json:"recovering"`
+	Recovery      cache.RecoveryState `json:"recovery"`
 }
 
 type healthResponse struct {
@@ -35,6 +38,7 @@ type healthResponse struct {
 	Version         string              `json:"version"`
 	Kinds           map[string]KindStat `json:"kinds"`
 	CredentialReady *bool               `json:"credentialReady,omitempty"`
+	Ready           bool                `json:"ready"`
 }
 
 // NewHandler returns an http.Handler for GET /health.
@@ -45,6 +49,7 @@ func NewHandler(mgr ManagerStats, version string, credentialReadiness ...Credent
 		status := "ok"
 		httpStatus := http.StatusOK
 		var credentialReady *bool
+		ready := true
 		if len(credentialReadiness) > 0 && credentialReadiness[0] != nil {
 			ready := credentialReadiness[0].Ready()
 			credentialReady = &ready
@@ -54,6 +59,9 @@ func NewHandler(mgr ManagerStats, version string, credentialReadiness ...Credent
 			}
 		}
 		for _, s := range kinds {
+			if s.Recovering {
+				ready = false
+			}
 			if s.Stalled || s.PoisonItems > 0 {
 				status = "degraded"
 				httpStatus = http.StatusServiceUnavailable
@@ -68,6 +76,7 @@ func NewHandler(mgr ManagerStats, version string, credentialReadiness ...Credent
 			Version:         version,
 			Kinds:           kinds,
 			CredentialReady: credentialReady,
+			Ready:           ready && httpStatus == http.StatusOK,
 		})
 	})
 }

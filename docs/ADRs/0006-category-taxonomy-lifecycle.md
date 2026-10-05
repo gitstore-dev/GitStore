@@ -254,6 +254,16 @@ When `AncestorPathReady=False`, queries that filter by ancestor path may return 
 results. This is a transient state during large tree re-parents and resolves within one
 controller reconcile pass.
 
+### Durable controller watch
+
+CategoryTaxonomy reconciliation consumes `watchCategories` from the generic durable
+resource journal, like every other watched kind. Its CDC source reads the authoritative
+`category_taxonomies_by_namespace` row, including the hierarchy columns (`parent_name`,
+`ancestor_path`), and is registered in the shared catalog CDC source registry. Because
+every write goes through admission into that row, CDC observes every create, status
+write, Terminating transition and removal. Watches are authorized as
+`categoryTaxonomy.watch`.
+
 ## Consequences
 
 Positive:

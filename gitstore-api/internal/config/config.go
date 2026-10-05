@@ -127,7 +127,7 @@ type AuthNConfig struct {
 
 // AuthZConfig selects the active authorization provider.
 type AuthZConfig struct {
-	// Provider is the AuthZ provider name. Defaults to "allow-all".
+	// Provider is the AuthZ provider name. Defaults to "rbac-local".
 	Provider string `mapstructure:"provider"`
 }
 
@@ -207,6 +207,7 @@ type DatastoreConfig struct {
 // ScyllaConfig holds ScyllaDB connection parameters.
 // Credentials and TLS are optional (FR-013).
 type ScyllaConfig struct {
+	AutoMigrate           bool     `mapstructure:"auto_migrate"`
 	Hosts                 []string `mapstructure:"hosts"`
 	Keyspace              string   `mapstructure:"keyspace"`
 	Username              string   `mapstructure:"username"`
@@ -273,7 +274,7 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("auth.jwt.refresh_grace", "60s")
 	v.SetDefault("auth.grpc.hmac_secret", "")
 	v.SetDefault("auth.authn.chain", []string{"static-users", "anonymous"})
-	v.SetDefault("auth.authz.provider", "allow-all")
+	v.SetDefault("auth.authz.provider", "rbac-local")
 	v.SetDefault("auth.userdir.provider", "none")
 	v.SetDefault("auth.rbac.policy_file", "policy.yaml")
 	v.SetDefault("auth.serviceaccount.issuer", "gitstore")
@@ -290,6 +291,7 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("auth.oidc.username_claim", "sub")
 	v.SetDefault("datastore.backend", "memdb")
 	v.SetDefault("datastore.scylla.hosts", []string{"localhost:9042"})
+	v.SetDefault("datastore.scylla.auto_migrate", true)
 	v.SetDefault("datastore.scylla.keyspace", "gitstore")
 	v.SetDefault("datastore.scylla.username", "")
 	v.SetDefault("datastore.scylla.password", "")
@@ -550,10 +552,10 @@ func validateServiceAccountSigningKeySource(cfg *Config, paths []string, fileSig
 
 func validateNamespaceWatchConfig(w *NamespaceWatchConfig) error {
 	if w.CDCRetentionSeconds != namespaceWatchCDCRetentionSeconds {
-		return fmt.Errorf("invalid Namespace watch CDC retention: migration 006 fixes CDC retention at %d seconds", namespaceWatchCDCRetentionSeconds)
+		return fmt.Errorf("invalid resource watch CDC retention: the baseline schema fixes CDC retention at %d seconds", namespaceWatchCDCRetentionSeconds)
 	}
 	if w.JournalRetentionSeconds > namespaceWatchJournalRetentionSeconds {
-		return fmt.Errorf("invalid Namespace watch journal retention: migration 006 limits journal retention to %d seconds", namespaceWatchJournalRetentionSeconds)
+		return fmt.Errorf("invalid resource watch journal retention: the baseline schema limits journal retention to %d seconds", namespaceWatchJournalRetentionSeconds)
 	}
 	if w.CDCRetentionSeconds < w.JournalRetentionSeconds {
 		return fmt.Errorf("invalid Namespace watch bounds: CDC retention must be at least journal retention")

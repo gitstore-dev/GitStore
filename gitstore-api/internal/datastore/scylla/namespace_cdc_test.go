@@ -293,7 +293,7 @@ func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t
 	require.Error(t, consumer.Consume(ctx, scyllacdc.Change{}))
 }
 
-func TestProductCDCConsumerFactorySignalsReadyAfterStreamPoll(t *testing.T) {
+func TestCatalogCDCConsumerFactorySignalsReadyAfterStreamPoll(t *testing.T) {
 	store := &sequencerStore{}
 	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -303,7 +303,8 @@ func TestProductCDCConsumerFactorySignalsReadyAfterStreamPoll(t *testing.T) {
 	stream := scyllacdc.StreamID("product-stream")
 	beginSequenceTestGeneration(t, sequencer, ctx, []string{encodeCDCStreamID(stream)})
 	ready := make(chan struct{}, 1)
-	factory := &productCDCConsumerFactory{
+	factory := &catalogCDCConsumerFactory{
+		kind:      "Product",
 		sequencer: sequencer,
 		onReady: func() {
 			ready <- struct{}{}

@@ -80,7 +80,7 @@ func TestStaticUsersTokenDomainRejectsNewTokenOnLegacyVerifier(t *testing.T) {
 	assert.Equal(t, "alice", principal.Subject)
 }
 
-func TestStaticUsersAcceptsLegacyIssuerDuringRollingUpgrade(t *testing.T) {
+func TestStaticUsersRejectsLegacyIssuer(t *testing.T) {
 	p := testProvider(t)
 	now := time.Now()
 	legacy, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
@@ -91,8 +91,8 @@ func TestStaticUsersAcceptsLegacyIssuerDuringRollingUpgrade(t *testing.T) {
 
 	principal, decision, err := p.Authenticate(context.Background(), auth.AuthRequest{Header: http.Header{"Authorization": {"Bearer " + legacy}}})
 	require.NoError(t, err)
-	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
-	assert.Equal(t, "alice", principal.Subject)
+	assert.Equal(t, auth.OutcomeChallenge, decision.Outcome)
+	assert.Nil(t, principal)
 }
 
 func TestStaticUsersAlwaysAppendsTokenDomainWhenConfiguredIssuerAlreadyHasSuffix(t *testing.T) {

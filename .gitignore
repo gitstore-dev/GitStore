@@ -71,6 +71,7 @@ docker-compose.override.yml
 
 # Test coverage
 coverage/
+**/coverage.txt
 *.cover
 
 # Logs
@@ -85,8 +86,6 @@ demo-catalogue/
 catalog-work/
 catalogue-work/
 /gitstore-controller-manager/controller
-gitstore-controller-manager/coverage.txt
-shared/secretmaterial/coverage.txt
 /out/
 .claude/
 

@@ -12,7 +12,6 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -22,66 +21,177 @@ const (
 	namespaceWatchBootstrapCursor  = "__namespace_watch_bootstrap__"
 	repositoryWatchBootstrapCursor = "__repository_watch_bootstrap__"
 	productWatchBootstrapCursor    = "__product_watch_bootstrap__"
+	fileWatchBootstrapCursor       = "__file_watch_bootstrap__"
+	categoryWatchBootstrapCursor   = "__category_watch_bootstrap__"
 )
 
 // normalizeResourceWatchCursor preserves the private typed-watch bootstrap
-// sentinels while the Namespace and Repository projections share one generic
+// sentinels while resource projections share one generic
 // durable journal. Ordinary opaque cursors are returned unchanged.
 func normalizeResourceWatchCursor(raw string) string {
 	switch raw {
-	case namespaceWatchBootstrapCursor, repositoryWatchBootstrapCursor, productWatchBootstrapCursor:
+	case namespaceWatchBootstrapCursor, repositoryWatchBootstrapCursor, productWatchBootstrapCursor, fileWatchBootstrapCursor, categoryWatchBootstrapCursor:
 		return watchjournal.BootstrapCursor
 	default:
 		return raw
 	}
 }
 
-// publishCategoryTaxonomyStatusEvent fans out a Modified event after a
-// successful status write, so a watcher observing the resource also sees
-// controller-driven status changes, not only spec-pipeline admissions
-// (spec 040: status writes and admission share one event stream). No-op
-// when eventBus is nil.
-func (r *Resolver) publishCategoryTaxonomyStatusEvent(c *datastore.CategoryTaxonomy) {
-	if r.eventBus == nil || c == nil {
-		return
+func fileFromJournalEvent(event datastore.ResourceWatchEvent) (*datastore.File, error) {
+	if event.Type == datastore.ResourceWatchDeleted || event.Type == datastore.ResourceWatchBookmark {
+		return nil, nil
 	}
-	r.eventBus.Publish(eventbus.Event{
-		Type:            eventbus.Modified,
-		Kind:            "CategoryTaxonomy",
-		Namespace:       c.Namespace,
-		Name:            c.Name,
-		ResourceVersion: c.ResourceVersion,
-		Object:          c,
-	})
+	if len(event.Payload) == 0 {
+		return nil, gqlerror.Errorf("File journal data event has no payload")
+	}
+	var file datastore.File
+	if err := json.Unmarshal(event.Payload, &file); err != nil {
+		return nil, gqlerror.Errorf("decode File journal payload")
+	}
+	return &file, nil
 }
 
-func (r *Resolver) publishCategoryTaxonomyDeletedEvent(c *datastore.CategoryTaxonomy) {
-	if r.eventBus == nil || c == nil {
-		return
+func fileJournalEventToGraphQL(event datastore.ResourceWatchEvent) (*model.FileWatchEvent, error) {
+	file, err := fileFromJournalEvent(event)
+	if err != nil {
+		return nil, err
 	}
-	r.eventBus.Publish(eventbus.Event{
-		Type:            eventbus.Deleted,
-		Kind:            "CategoryTaxonomy",
-		Namespace:       c.Namespace,
-		Name:            c.Name,
-		ResourceVersion: c.ResourceVersion,
-		Object:          c,
-	})
+	return &model.FileWatchEvent{
+		Type: model.WatchEventType(event.Type), Namespace: &event.Namespace, Name: event.Name,
+		ResourceVersion: watchjournal.EncodeCursor(event.Epoch, event.Sequence),
+		File:            DatastoreFileToGraphQL(file),
+	}, nil
 }
 
-func toWatchEventType(t eventbus.EventType) model.WatchEventType {
-	switch t {
-	case eventbus.Added:
-		return model.WatchEventTypeAdded
-	case eventbus.Modified:
-		return model.WatchEventTypeModified
-	case eventbus.Deleted:
-		return model.WatchEventTypeDeleted
-	case eventbus.Bookmark:
-		return model.WatchEventTypeBookmark
-	default:
-		return model.WatchEventTypeBookmark
+func fileJournalEventToGeneric(event datastore.ResourceWatchEvent) (*model.WatchEvent, error) {
+	file, err := fileFromJournalEvent(event)
+	if err != nil {
+		return nil, err
 	}
+	out := &model.WatchEvent{
+		Type: model.WatchEventType(event.Type), Kind: "File", Namespace: &event.Namespace,
+		Name: event.Name, ResourceVersion: watchjournal.EncodeCursor(event.Epoch, event.Sequence),
+	}
+	if file != nil {
+		raw, err := json.Marshal(DatastoreFileToGraphQL(file))
+		if err != nil {
+			return nil, gqlerror.Errorf("encode File watch projection")
+		}
+		if err := json.Unmarshal(raw, &out.Object); err != nil {
+			return nil, gqlerror.Errorf("decode File watch projection")
+		}
+	}
+	return out, nil
+}
+
+func categoryFromJournalEvent(event datastore.ResourceWatchEvent) (*datastore.CategoryTaxonomy, error) {
+	if event.Type == datastore.ResourceWatchDeleted || event.Type == datastore.ResourceWatchBookmark {
+		return nil, nil
+	}
+	if len(event.Payload) == 0 {
+		return nil, gqlerror.Errorf("CategoryTaxonomy journal data event has no payload")
+	}
+	var category datastore.CategoryTaxonomy
+	if err := json.Unmarshal(event.Payload, &category); err != nil {
+		return nil, gqlerror.Errorf("decode CategoryTaxonomy journal payload")
+	}
+	return &category, nil
+}
+
+func categoryJournalEventToGraphQL(event datastore.ResourceWatchEvent) (*model.CategoryWatchEvent, error) {
+	category, err := categoryFromJournalEvent(event)
+	if err != nil {
+		return nil, err
+	}
+	return &model.CategoryWatchEvent{
+		Type: model.WatchEventType(event.Type), Namespace: &event.Namespace, Name: event.Name,
+		ResourceVersion: watchjournal.EncodeCursor(event.Epoch, event.Sequence),
+		Category:        DatastoreCategoryTaxonomyToGraphQL(category),
+	}, nil
+}
+
+func categoryJournalEventToGeneric(event datastore.ResourceWatchEvent) (*model.WatchEvent, error) {
+	category, err := categoryFromJournalEvent(event)
+	if err != nil {
+		return nil, err
+	}
+	out := &model.WatchEvent{
+		Type: model.WatchEventType(event.Type), Kind: "CategoryTaxonomy", Namespace: &event.Namespace,
+		Name: event.Name, ResourceVersion: watchjournal.EncodeCursor(event.Epoch, event.Sequence),
+	}
+	if category != nil {
+		out.Object = categoryTaxonomyToJSONMap(category)
+		if out.Object == nil {
+			return nil, gqlerror.Errorf("encode CategoryTaxonomy watch projection")
+		}
+	}
+	return out, nil
+}
+
+// watchCatalogJournal serves the typed and generic projections of one
+// namespaced catalog kind from the shared durable envelope and bounded
+// subscriber; no projection can fall back to a process-local cursor.
+func watchCatalogJournal[T any](ctx context.Context, r *Resolver, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string, path string, convert func(datastore.ResourceWatchEvent) (T, error)) (<-chan T, error) {
+	if err := r.repositoryWatchAvailable(); err != nil {
+		return nil, err
+	}
+	cursor := ""
+	if resourceVersion != nil {
+		cursor = normalizeResourceWatchCursor(*resourceVersion)
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream, err := r.namespaceSubscriber.SubscribePath(streamCtx, cursor, path)
+	if err != nil {
+		cancel()
+		return nil, namespaceWatchGraphQLError(err)
+	}
+	out := make(chan T, r.namespaceWatch.SubscriberBuffer)
+	go func() {
+		defer cancel()
+		defer close(out)
+		for events, errs := stream.Events, stream.Errors; events != nil || errs != nil; {
+			select {
+			case <-ctx.Done():
+				return
+			case err, ok := <-errs:
+				if !ok {
+					errs = nil
+					continue
+				}
+				if err != nil {
+					addNamespaceWatchSubscriptionError(ctx, namespaceWatchGraphQLError(err))
+					return
+				}
+			case event, ok := <-events:
+				if !ok {
+					events = nil
+					continue
+				}
+				if event.Type != datastore.ResourceWatchBookmark &&
+					(event.Kind != kind || !repositoryJournalEventMatchesNamespace(event, namespace)) {
+					continue
+				}
+				// Selector transitions depend only on envelope labels, independent
+				// of resource kind; the shared projector also preserves tombstones.
+				projected, matches := projectResourceJournalSelector(event, selector)
+				if !matches {
+					continue
+				}
+				value, err := convert(projected)
+				if err != nil {
+					addNamespaceWatchSubscriptionError(ctx, err)
+					return
+				}
+				if err := sendNamespaceWatchOutput(streamCtx, out, value, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond, r.namespaceMetrics); err != nil {
+					if streamCtx.Err() == nil {
+						addNamespaceWatchSubscriptionError(ctx, namespaceWatchGraphQLError(err))
+					}
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }
 
 // NamespaceJournalEventToGraphQL maps the durable event envelope without
@@ -190,7 +300,7 @@ func namespaceJournalEventMatchesKind(event datastore.ResourceWatchEvent) bool {
 func namespaceWatchGraphQLError(err error) *gqlerror.Error {
 	terminal, ok := watchjournal.AsTerminal(err)
 	if !ok {
-		return gqlerror.Errorf("namespace watch failed")
+		return gqlerror.Errorf("durable resource watch failed")
 	}
 	return &gqlerror.Error{
 		Message:    terminal.Error(),
@@ -201,7 +311,7 @@ func namespaceWatchGraphQLError(err error) *gqlerror.Error {
 func addNamespaceWatchSubscriptionError(ctx context.Context, err error) {
 	var gqlErr *gqlerror.Error
 	if !errors.As(err, &gqlErr) {
-		gqlErr = gqlerror.Errorf("namespace watch failed")
+		gqlErr = gqlerror.Errorf("durable resource watch failed")
 	}
 	transport.AddSubscriptionError(ctx, gqlErr)
 }
@@ -290,108 +400,6 @@ func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.
 	return out, nil
 }
 
-// categoryEventMatchesFilters reports whether ev satisfies the namespace
-// filter for a watchCategories/watchResources subscription (spec 040
-// FR-007). A nil/empty namespace means no filter — matches every namespace.
-func categoryEventMatchesFilters(ev eventbus.Event, namespace *string) bool {
-	if namespace == nil || *namespace == "" {
-		return true
-	}
-	return ev.Namespace == *namespace
-}
-
-// categoryEventMatchesSelector reports whether ev's underlying
-// CategoryTaxonomy's labels satisfy selector. Requires ev.Object to be a
-// *datastore.CategoryTaxonomy — Deleted events (whose Object may be a
-// stale snapshot taken at delete time) are still evaluated against the
-// labels they carried, consistent with the delete notification being
-// about the resource that was removed, not a hypothetical current state.
-func categoryEventMatchesSelector(ev eventbus.Event, selector *model.LabelSelectorInput) bool {
-	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
-		return true
-	}
-	c, ok := ev.Object.(*datastore.CategoryTaxonomy)
-	if !ok || c == nil {
-		return false
-	}
-	return matchesWatchSelector(selector, c.Labels)
-}
-
-func toCategoryWatchEvent(ev eventbus.Event) *model.CategoryWatchEvent {
-	out := &model.CategoryWatchEvent{
-		Type:            toWatchEventType(ev.Type),
-		Name:            ev.Name,
-		ResourceVersion: ev.Cursor,
-	}
-	if ev.Namespace != "" {
-		ns := ev.Namespace
-		out.Namespace = &ns
-	}
-	if ev.Type != eventbus.Deleted {
-		if c, ok := ev.Object.(*datastore.CategoryTaxonomy); ok {
-			out.Category = DatastoreCategoryTaxonomyToGraphQL(c)
-		}
-	}
-	return out
-}
-
-func fileEventMatchesSelector(ev eventbus.Event, selector *model.LabelSelectorInput) bool {
-	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
-		return true
-	}
-	file, ok := ev.Object.(*datastore.File)
-	return ok && file != nil && matchesWatchSelector(selector, file.Labels)
-}
-
-func toFileWatchEvent(ev eventbus.Event) *model.FileWatchEvent {
-	out := &model.FileWatchEvent{
-		Type:            toWatchEventType(ev.Type),
-		Name:            ev.Name,
-		ResourceVersion: ev.Cursor,
-	}
-	if ev.Namespace != "" {
-		ns := ev.Namespace
-		out.Namespace = &ns
-	}
-	if ev.Type != eventbus.Deleted {
-		if file, ok := ev.Object.(*datastore.File); ok {
-			out.File = DatastoreFileToGraphQL(file)
-		}
-	}
-	return out
-}
-
-// toGenericWatchEvent maps an eventbus.Event to the JSON-boxed WatchEvent
-// used by the generic watchResources subscription (spec 040 FR-006). The
-// object is marshaled through model conversion where a typed converter is
-// known (CategoryTaxonomy today); other kinds pass through as a raw map
-// once additional kinds register their own converter (research.md R7).
-func toGenericWatchEvent(kind string, ev eventbus.Event) *model.WatchEvent {
-	out := &model.WatchEvent{
-		Type:            toWatchEventType(ev.Type),
-		Kind:            kind,
-		Name:            ev.Name,
-		ResourceVersion: ev.Cursor,
-	}
-	if ev.Namespace != "" {
-		ns := ev.Namespace
-		out.Namespace = &ns
-	}
-	if ev.Type != eventbus.Deleted {
-		if c, ok := ev.Object.(*datastore.CategoryTaxonomy); ok {
-			out.Object = categoryTaxonomyToJSONMap(c)
-		} else if namespace, ok := ev.Object.(*datastore.Namespace); ok {
-			out.Object = namespaceToJSONMap(namespace)
-		} else if file, ok := ev.Object.(*datastore.File); ok {
-			out.Object = fileToJSONMap(file)
-		} else if repository, ok := ev.Object.(*datastore.Repository); ok {
-			out.Object = repositoryToJSONMap(repository)
-		}
-	}
-
-	return out
-}
-
 func fileResolvedFromJSONMap(m map[string]any) *catalog.ResolvedFileDefinition {
 	if m == nil {
 		return nil
@@ -465,7 +473,7 @@ func resolvedFromJSONMap(m map[string]any) *catalog.ResolvedCategoryTaxonomy {
 
 // categoryTaxonomyToJSONMap renders a CategoryTaxonomy as the JSON-boxed
 // map[string]any WatchEvent.object needs. Reuses the same GraphQL model
-// conversion as the strongly-typed path (toCategoryWatchEvent), then
+// conversion as the strongly-typed path (categoryJournalEventToGraphQL), then
 // round-trips it through JSON so the generic path never hand-maintains a
 // second, divergent field list.
 func categoryTaxonomyToJSONMap(c *datastore.CategoryTaxonomy) map[string]any {
@@ -480,60 +488,6 @@ func categoryTaxonomyToJSONMap(c *datastore.CategoryTaxonomy) map[string]any {
 	var out map[string]any
 	if err := json.Unmarshal(b, &out); err != nil {
 		return nil
-	}
-	return out
-}
-
-// productEventMatchesSelector reports whether ev's underlying Product's
-// labels satisfy selector, mirroring categoryEventMatchesSelector.
-func productEventMatchesSelector(ev eventbus.Event, selector *model.LabelSelectorInput) bool {
-	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
-		return true
-	}
-	p, ok := ev.Object.(*datastore.Product)
-	if !ok || p == nil {
-		return false
-	}
-	return matchesWatchSelector(selector, p.Labels)
-}
-
-func repositoryEventMatchesSelector(ev eventbus.Event, selector *model.LabelSelectorInput) bool {
-	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
-		return true
-	}
-	repository, ok := ev.Object.(*datastore.Repository)
-	return ok && repository != nil && matchesWatchSelector(selector, repository.Labels)
-}
-
-func watchEventMatchesSelector(kind string, ev eventbus.Event, selector *model.LabelSelectorInput) bool {
-	switch kind {
-	case "Repository":
-		return repositoryEventMatchesSelector(ev, selector)
-	case "File":
-		return fileEventMatchesSelector(ev, selector)
-	case "Product":
-		return productEventMatchesSelector(ev, selector)
-	default:
-		return categoryEventMatchesSelector(ev, selector)
-	}
-}
-
-// toProductWatchEvent maps an eventbus.Event to the strongly-typed
-// ProductWatchEvent, mirroring toCategoryWatchEvent.
-func toProductWatchEvent(ev eventbus.Event) *model.ProductWatchEvent {
-	out := &model.ProductWatchEvent{
-		Type:            toWatchEventType(ev.Type),
-		Name:            ev.Name,
-		ResourceVersion: ev.Cursor,
-	}
-	if ev.Namespace != "" {
-		ns := ev.Namespace
-		out.Namespace = &ns
-	}
-	if ev.Type != eventbus.Deleted {
-		if p, ok := ev.Object.(*datastore.Product); ok {
-			out.Product = DatastoreProductToGraphQL(p)
-		}
 	}
 	return out
 }

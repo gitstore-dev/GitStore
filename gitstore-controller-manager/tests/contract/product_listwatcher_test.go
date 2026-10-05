@@ -6,14 +6,21 @@ package contract_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
 )
 
 func serveProductBootstrapBookmark(t *testing.T, w http.ResponseWriter, r *http.Request, cursor string) bool {
@@ -92,6 +99,9 @@ func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 				{"cursor":"n1","node":{"metadata":{"name":"acme"}}}
 			],"pageInfo":{"hasNextPage":false,"endCursor":"n1"}}}}`))
 		case strings.Contains(req.Query, "products("):
+			if !strings.Contains(req.Query, "first: 250,") {
+				t.Errorf("Product recovery must request bounded 250-row pages: %s", req.Query)
+			}
 			ns, _ := req.Variables["namespace"].(string)
 			if ns != "acme" {
 				t.Errorf("unexpected namespace variable: %q", ns)
@@ -129,6 +139,116 @@ func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 	if resp.ResourceVersion != "42" {
 		t.Errorf("ResourceVersion = %q, want durable journal cursor %q", resp.ResourceVersion, "42")
 	}
+}
+
+func TestProductListPagesHonorsServerCapWithoutLosingRows(t *testing.T) {
+	const total = 501
+	pageArgument := regexp.MustCompile(`\bfirst:\s*(\d+)`)
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveProductBootstrapBookmark(t, w, r, "snapshot-cursor") {
+			return
+		}
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		match := pageArgument.FindStringSubmatch(req.Query)
+		if len(match) != 2 {
+			t.Error("connection request must declare a bounded first argument")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		first, err := strconv.Atoi(match[1])
+		if err != nil || first < 1 || first > 250 {
+			_, _ = w.Write([]byte(`{"errors":[{"message":"page size exceeds limit","extensions":{"code":"MAX_PAGE_SIZE_EXCEEDED"}}]}`))
+			return
+		}
+		if strings.Contains(req.Query, "namespaces(") {
+			_, _ = w.Write([]byte(`{"data":{"namespaces":{"edges":[{"node":{"metadata":{"name":"acme"}}}],"pageInfo":{"hasNextPage":false,"endCursor":"ns"}}}}`))
+			return
+		}
+		if !strings.Contains(req.Query, "products(") || req.Variables["namespace"] != "acme" {
+			t.Error("unexpected query or namespace")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		requests.Add(1)
+		start := 0
+		if after, ok := req.Variables["after"].(string); ok {
+			start, err = strconv.Atoi(after)
+			if err != nil || start < 1 || start >= total {
+				t.Error("invalid continuation cursor")
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+		}
+		end := min(start+first, total)
+		edges := make([]any, 0, end-start)
+		for i := start; i < end; i++ {
+			name := fmt.Sprintf("product-%03d", i)
+			edges = append(edges, map[string]any{"cursor": strconv.Itoa(i + 1),
+				"node": productNodeJSON(name, name, "acme", "1", "")})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"products": map[string]any{
+			"edges": edges, "pageInfo": map[string]any{"hasNextPage": end < total, "endCursor": strconv.Itoa(end)},
+		}}})
+	}))
+	defer srv.Close()
+	lw := listwatch.NewProductListWatcher(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test")))
+	seen := 0
+	var pageSizes []int
+	cursor, err := lw.ListPages(t.Context(), func(items []categorytaxonomy.Product) error {
+		pageSizes = append(pageSizes, len(items))
+		for _, item := range items {
+			require.Equal(t, fmt.Sprintf("product-%03d", seen), item.Name, "missing or duplicated Product")
+			seen++
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, "snapshot-cursor", cursor)
+	require.Equal(t, total, seen)
+	require.Equal(t, []int{250, 250, 1}, pageSizes)
+	require.EqualValues(t, 3, requests.Load())
+}
+
+func TestProductListPagesBackpressuresNamespaceAndProductPagination(t *testing.T) {
+	var namespaces, products atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveProductBootstrapBookmark(t, w, r, "journal-cursor") {
+			return
+		}
+		var req struct {
+			Query string `json:"query"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(req.Query, "namespaces(") {
+			namespaces.Add(1)
+			_, _ = w.Write([]byte(`{"data":{"namespaces":{"edges":[{"node":{"metadata":{"name":"acme"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"namespace-page"}}}}`))
+			return
+		}
+		products.Add(1)
+		_, _ = w.Write([]byte(`{"data":{"products":{"edges":[{"node":{"metadata":{"uid":"one","name":"widget","namespace":"acme","resourceVersion":"1"},"spec":{}}}],"pageInfo":{"hasNextPage":true,"endCursor":"product-page"}}}}`))
+	}))
+	defer srv.Close()
+	lw := listwatch.NewProductListWatcher(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test")))
+	failure := errors.New("projection write failed")
+	cursor, err := lw.ListPages(t.Context(), func(items []categorytaxonomy.Product) error {
+		require.Len(t, items, 1)
+		return failure
+	})
+	require.ErrorIs(t, err, failure)
+	require.Empty(t, cursor, "failed streaming snapshot returned a publishable cursor")
+	require.EqualValues(t, 1, namespaces.Load(), "namespace inventory was accumulated ahead of its consumer")
+	require.EqualValues(t, 1, products.Load(), "product pagination ignored storage backpressure")
 }
 
 func TestProductList_EmptyDatasetReturnsNonEmptySentinelResourceVersion(t *testing.T) {

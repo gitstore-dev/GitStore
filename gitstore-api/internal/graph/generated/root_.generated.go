@@ -116,10 +116,6 @@ type ComplexityRoot struct {
 		Node   func(childComplexity int) int
 	}
 
-	CollectionOptimisticLockConflict struct {
-		Current func(childComplexity int) int
-	}
-
 	CollectionSpec struct {
 		Media    func(childComplexity int) int
 		Selector func(childComplexity int) int
@@ -154,10 +150,6 @@ type ComplexityRoot struct {
 		Type               func(childComplexity int) int
 	}
 
-	CreateCollectionPayload struct {
-		Collection func(childComplexity int) int
-	}
-
 	CreateNamespacePayload struct {
 		Namespace func(childComplexity int) int
 	}
@@ -183,10 +175,6 @@ type ComplexityRoot struct {
 	DeleteCategoryPayload struct {
 		DeletedCategoryID  func(childComplexity int) int
 		OrphanedProductIds func(childComplexity int) int
-	}
-
-	DeleteCollectionPayload struct {
-		DeletedCollectionID func(childComplexity int) int
 	}
 
 	DeleteNamespacePayload struct {
@@ -316,13 +304,11 @@ type ComplexityRoot struct {
 		CompleteNamespaceDeletion          func(childComplexity int, input model.CompleteNamespaceDeletionInput) int
 		CompleteProductDeletion            func(childComplexity int, input model.CompleteProductDeletionInput) int
 		CompleteRepositoryDeletion         func(childComplexity int, input model.CompleteRepositoryDeletionInput) int
-		CreateCollection                   func(childComplexity int, input model.CreateCollectionInput) int
 		CreateNamespace                    func(childComplexity int, input model.CreateNamespaceInput) int
 		CreateProduct                      func(childComplexity int, input model.CreateProductInput) int
 		CreateRepository                   func(childComplexity int, input model.CreateRepositoryInput) int
 		CreateServiceAccount               func(childComplexity int, input model.CreateServiceAccountInput) int
 		DeleteCategory                     func(childComplexity int, input model.DeleteCategoryInput) int
-		DeleteCollection                   func(childComplexity int, input model.DeleteCollectionInput) int
 		DeleteNamespace                    func(childComplexity int, input model.DeleteNamespaceInput) int
 		DeleteProduct                      func(childComplexity int, input model.DeleteProductInput) int
 		DeleteRepository                   func(childComplexity int, input model.DeleteRepositoryInput) int
@@ -336,7 +322,6 @@ type ComplexityRoot struct {
 		RotateServiceAccountKey            func(childComplexity int, input model.RotateServiceAccountKeyInput) int
 		TransferNamespaceOwner             func(childComplexity int, input model.TransferNamespaceOwnerInput) int
 		UpdateCategoryStatus               func(childComplexity int, input model.UpdateCategoryStatusInput) int
-		UpdateCollection                   func(childComplexity int, input model.UpdateCollectionInput) int
 		UpdateNamespace                    func(childComplexity int, input model.UpdateNamespaceInput) int
 		UpdateNamespaceStatus              func(childComplexity int, input model.UpdateNamespaceStatusInput) int
 		UpdateProduct                      func(childComplexity int, input model.UpdateProductInput) int
@@ -586,6 +571,7 @@ type ComplexityRoot struct {
 		Category        func(childComplexity int, by model.CategoryBy) int
 		Collection      func(childComplexity int, by model.CollectionBy) int
 		Collections     func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		File            func(childComplexity int, namespace string, name string) int
 		Namespace       func(childComplexity int, by model.NamespaceBy) int
 		Namespaces      func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Node            func(childComplexity int, id string) int
@@ -812,11 +798,6 @@ type ComplexityRoot struct {
 	UpdateCategoryStatusPayload struct {
 		Category                 func(childComplexity int) int
 		HasMoreProductDependents func(childComplexity int) int
-	}
-
-	UpdateCollectionPayload struct {
-		Collection func(childComplexity int) int
-		Conflict   func(childComplexity int) int
 	}
 
 	UpdateNamespacePayload struct {
@@ -1230,13 +1211,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CollectionEdge.Node(childComplexity), true
 
-	case "CollectionOptimisticLockConflict.current":
-		if e.ComplexityRoot.CollectionOptimisticLockConflict.Current == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CollectionOptimisticLockConflict.Current(childComplexity), true
-
 	case "CollectionSpec.media":
 		if e.ComplexityRoot.CollectionSpec.Media == nil {
 			break
@@ -1349,13 +1323,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Condition.Type(childComplexity), true
 
-	case "CreateCollectionPayload.collection":
-		if e.ComplexityRoot.CreateCollectionPayload.Collection == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CreateCollectionPayload.Collection(childComplexity), true
-
 	case "CreateNamespacePayload.namespace":
 		if e.ComplexityRoot.CreateNamespacePayload.Namespace == nil {
 			break
@@ -1418,13 +1385,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.DeleteCategoryPayload.OrphanedProductIds(childComplexity), true
-
-	case "DeleteCollectionPayload.deletedCollectionId":
-		if e.ComplexityRoot.DeleteCollectionPayload.DeletedCollectionID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.DeleteCollectionPayload.DeletedCollectionID(childComplexity), true
 
 	case "DeleteNamespacePayload.namespace":
 		if e.ComplexityRoot.DeleteNamespacePayload.Namespace == nil {
@@ -1840,18 +1800,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.CompleteRepositoryDeletion(childComplexity, args["input"].(model.CompleteRepositoryDeletionInput)), true
 
-	case "Mutation.createCollection":
-		if e.ComplexityRoot.Mutation.CreateCollection == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_createCollection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.CreateCollection(childComplexity, args["input"].(model.CreateCollectionInput)), true
-
 	case "Mutation.createNamespace":
 		if e.ComplexityRoot.Mutation.CreateNamespace == nil {
 			break
@@ -1911,18 +1859,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.DeleteCategory(childComplexity, args["input"].(model.DeleteCategoryInput)), true
-
-	case "Mutation.deleteCollection":
-		if e.ComplexityRoot.Mutation.DeleteCollection == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_deleteCollection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.DeleteCollection(childComplexity, args["input"].(model.DeleteCollectionInput)), true
 
 	case "Mutation.deleteNamespace":
 		if e.ComplexityRoot.Mutation.DeleteNamespace == nil {
@@ -2074,18 +2010,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.UpdateCategoryStatus(childComplexity, args["input"].(model.UpdateCategoryStatusInput)), true
-
-	case "Mutation.updateCollection":
-		if e.ComplexityRoot.Mutation.UpdateCollection == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_updateCollection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.UpdateCollection(childComplexity, args["input"].(model.UpdateCollectionInput)), true
 
 	case "Mutation.updateNamespace":
 		if e.ComplexityRoot.Mutation.UpdateNamespace == nil {
@@ -3176,6 +3100,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.Collections(childComplexity, args["namespace"].(string), args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
 
+	case "Query.file":
+		if e.ComplexityRoot.Query.File == nil {
+			break
+		}
+
+		args, err := ec.field_Query_file_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.File(childComplexity, args["namespace"].(string), args["name"].(string)), true
+
 	case "Query.namespace":
 		if e.ComplexityRoot.Query.Namespace == nil {
 			break
@@ -4124,20 +4060,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateCategoryStatusPayload.HasMoreProductDependents(childComplexity), true
 
-	case "UpdateCollectionPayload.collection":
-		if e.ComplexityRoot.UpdateCollectionPayload.Collection == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateCollectionPayload.Collection(childComplexity), true
-
-	case "UpdateCollectionPayload.conflict":
-		if e.ComplexityRoot.UpdateCollectionPayload.Conflict == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateCollectionPayload.Conflict(childComplexity), true
-
 	case "UpdateNamespacePayload.namespace":
 		if e.ComplexityRoot.UpdateNamespacePayload.Namespace == nil {
 			break
@@ -4267,13 +4189,11 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCompleteProductDeletionInput,
 		ec.unmarshalInputCompleteRepositoryDeletionInput,
 		ec.unmarshalInputConditionInput,
-		ec.unmarshalInputCreateCollectionInput,
 		ec.unmarshalInputCreateNamespaceInput,
 		ec.unmarshalInputCreateProductInput,
 		ec.unmarshalInputCreateRepositoryInput,
 		ec.unmarshalInputCreateServiceAccountInput,
 		ec.unmarshalInputDeleteCategoryInput,
-		ec.unmarshalInputDeleteCollectionInput,
 		ec.unmarshalInputDeleteNamespaceInput,
 		ec.unmarshalInputDeleteProductInput,
 		ec.unmarshalInputDeleteRepositoryInput,
@@ -4313,7 +4233,6 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputTokenRequestSpecInput,
 		ec.unmarshalInputTransferNamespaceOwnerInput,
 		ec.unmarshalInputUpdateCategoryStatusInput,
-		ec.unmarshalInputUpdateCollectionInput,
 		ec.unmarshalInputUpdateNamespaceInput,
 		ec.unmarshalInputUpdateNamespaceStatusInput,
 		ec.unmarshalInputUpdateProductInput,
@@ -4559,25 +4478,27 @@ extend type Mutation {
   """
   Partial-merge update to a CategoryTaxonomy's .status sub-resource.
   Only non-null input fields are changed; all other existing status
-  fields are left unchanged (FR-008, spec 040). Requires
+  fields are left unchanged. Requires
   resourceVersion to match the resource's current value or the
   request fails with a RESOURCE_VERSION_CONFLICT GraphQL error whose
-  extensions include the current resourceVersion (FR-009). Rejects any attempt
+  extensions include the current resourceVersion. Rejects any attempt
   to alter .spec or author-controlled .metadata by construction —
-  this input type has no such fields (FR-010). Requires
+  this input type has no such fields. Requires
   controller-level authorization independent of the resourceVersion
-  outcome (FR-011).
+  outcome.
   """
   updateCategoryStatus(input: UpdateCategoryStatusInput!): UpdateCategoryStatusPayload!
 }
 
 extend type Subscription {
   """
-  Dedicated, compile-time-typed watch entry point for CategoryTaxonomy.
-  Same list-then-watch/resourceVersion/expiry semantics as the generic
-  watchResources field (FR-001 through FR-004, spec 040), scoped to
-  this kind. Callers obtain the initial list via the existing
-  ` + "`" + `categories` + "`" + ` query.
+  Dedicated, compile-time-typed watch entry point for CategoryTaxonomy,
+  served from the durable, replica-safe resource watch journal. Same
+  list-then-watch/resourceVersion/expiry semantics as the generic
+  watchResources field, scoped to
+  this kind; both are projections of the same journal record. Callers
+  obtain the initial list via the existing ` + "`" + `categories` + "`" + ` query. Requires
+  the ` + "`" + `categoryTaxonomy.watch` + "`" + ` permission.
   """
   watchCategories(
     namespace: String
@@ -4689,9 +4610,8 @@ type ResolvedCategoryTaxonomy {
   Ancestor path from root to self, e.g. ["electronics", "computers",
   "laptops"] for the "laptops" category (root-to-self order). A root
   category's path is a single-element array containing its own name.
-  Distinct from Category.path, which is a read-time-derived field
-  computed from the separate ancestor_path datastore column (see
-  specs/040-controller-watch-status-api/research.md R9/R10).
+  Distinct from Category.path, which is derived when the category is
+  read.
   """
   path: [String!]!
   childCount: Int!
@@ -4758,7 +4678,7 @@ type DeleteCategoryPayload {
 }
 
 # ============================================================================
-# Status Subresource API (spec 040)
+# Status Subresource API
 # ============================================================================
 
 input UpdateCategoryStatusInput {
@@ -4766,12 +4686,12 @@ input UpdateCategoryStatusInput {
   namespace: String!
 
   """
-  Required optimistic-concurrency precondition (FR-009). Must equal
+  Required optimistic-concurrency precondition. Must equal
   the resource's current metadata.resourceVersion.
   """
   resourceVersion: String!
 
-  """Null = unchanged. Set on every successful reconcile per spec 026 FR-008."""
+  """Null = unchanged. Set on every successful reconcile."""
   observedGeneration: Int
 
   """Null = unchanged, e.g. "main@sha1:a1b2c3d"."""
@@ -4819,7 +4739,7 @@ type UpdateCategoryStatusPayload {
 }
 
 # ============================================================================
-# Watch API (spec 040)
+# Watch API
 # ============================================================================
 
 """
@@ -4859,26 +4779,6 @@ extend type Query {
     last: Int
     before: String
   ): CollectionConnection!
-}
-
-extend type Mutation {
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  createCollection(input: CreateCollectionInput!): CreateCollectionPayload!
-
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  updateCollection(input: UpdateCollectionInput!): UpdateCollectionPayload!
-
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  deleteCollection(input: DeleteCollectionInput!): DeleteCollectionPayload!
 }
 
 """
@@ -5050,45 +4950,22 @@ type CollectionConnection {
   edges: [CollectionEdge!]!
   pageInfo: PageInfo!
 }
-
-# ============================================================================
-# Minimal stub inputs (legacy mutations deprecated — managed via git push)
-# ============================================================================
-
-input CreateCollectionInput {
-  name: String!
-}
-
-type CreateCollectionPayload {
-  collection: Collection
-}
-
-input UpdateCollectionInput {
-  id: ID!
-}
-
-type UpdateCollectionPayload {
-  collection: Collection
-  conflict: CollectionOptimisticLockConflict
-}
-
-type CollectionOptimisticLockConflict {
-  current: Collection!
-}
-
-input DeleteCollectionInput {
-  id: ID!
-}
-
-type DeleteCollectionPayload {
-  deletedCollectionId: ID
-}
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/file.graphqls", Input: `# File Resource — typed watch contract
 
+extend type Query {
+  """
+  Read one persisted File by namespace and name. This does not subscribe to events.
+  """
+  file(namespace: String!, name: String!): File
+}
+
 extend type Subscription {
   """
-  Dedicated, compile-time-typed watch entry point for File resources.
+  Durable File changes, resumable across API replicas within journal retention.
+  An omitted cursor watches future changes, not an initial snapshot.
+  Use the shared bootstrap cursor to capture a bookmark before reading current
+  state, then resume from that bookmark. Legacy event-bus cursors are expired.
   """
   watchFiles(
     namespace: String
@@ -5475,7 +5352,7 @@ type DeleteNamespacePayload {
 }
 
 """
-Reassign a namespace's owner (ADR-0010 §14). Distinct from transferRepository,
+Reassign a namespace's owner. Distinct from transferRepository,
 which relocates a repository between namespaces and is unrelated to
 principal ownership.
 """
@@ -5546,7 +5423,7 @@ extend type Mutation {
   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
 
   """
-  Reassign a namespace's owner (ADR-0010 §14). Requires authentication.
+  Reassign a namespace's owner. Requires authentication.
   Caller must currently be the namespace owner (or isAdmin), and must be a
   member of the target owner (or isAdmin).
   """
@@ -5607,8 +5484,8 @@ extend type Query {
 extend type Subscription {
   """
   Dedicated, compile-time-typed watch entry point for Product. Same
-  list-then-watch/resourceVersion/expiry semantics as watchCategories
-  (spec 040), scoped to this kind. Callers obtain the initial list via
+  list-then-watch/resourceVersion/expiry semantics as watchCategories,
+  scoped to this kind. Callers obtain the initial list via
   the existing ` + "`" + `products` + "`" + ` query.
   """
   watchProducts(
@@ -6742,7 +6619,7 @@ type Mutation {
   compile-time-known ` + "`" + `resolved` + "`" + ` shape. Core kinds SHOULD use their
   dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
   this field exists so a kind unknown to the schema at build time can
-  still write status (FR-006, SC-005). Semantics (partial-merge,
+  still write status. Semantics (partial-merge,
   resourceVersion precondition, spec-write rejection by construction,
   controller authorization) are identical to the per-kind mutations.
   """
@@ -6757,12 +6634,12 @@ type Mutation {
 
 type Subscription {
   """
-  Generic list-then-watch entry point for any resource kind, including
-  CRD-defined kinds not built into the core schema (FR-006, spec 040).
-  Core kinds SHOULD prefer their dedicated per-kind subscription (e.g.
-  watchCategories) for compile-time-typed payloads; this field exists
-  so a kind unknown to the schema at build time can still be watched
-  (FR-006, SC-005).
+  Generic list-then-watch entry point for every kind with a durable watch
+  journal source: Namespace, Repository, CategoryTaxonomy, Product and File
+  today, and CRD-defined kinds once they register a source. Core kinds SHOULD prefer their dedicated per-kind subscription
+  (e.g. watchCategories) for compile-time-typed payloads. A kind without a
+  journal source is rejected with an UNSUPPORTED_KIND extension error
+  rather than an empty stream.
 
   Behavior:
   - resourceVersion omitted/empty: no implicit "list" is performed —
@@ -6771,9 +6648,9 @@ type Subscription {
     subscription with the resourceVersion returned by that list.
   - resourceVersion present but expired (older than server retention):
     the subscription terminates immediately with a WATCH_EXPIRED
-    extension error (FR-004) instead of silently resuming from scratch.
+    extension error instead of silently resuming from scratch.
   - resourceVersion present and valid: only events after that cursor
-    are delivered, in admission order for that kind (FR-002, FR-003).
+    are delivered, in admission order for that kind.
   """
   watchResources(
     kind: String!
@@ -6784,7 +6661,7 @@ type Subscription {
 }
 
 # ============================================================================
-# Watch API (spec 040)
+# Watch API
 # ============================================================================
 
 """
@@ -6901,7 +6778,7 @@ scalar Long
   @specifiedBy(url: "https://scalars.graphql.org/apollographql/long-v0.1.html")
 
 """
-The principal type that can own a resource (ADR-0010 §14/§7).
+The principal type that can own a resource.
 """
 enum OwnerKind {
   USER
@@ -6910,7 +6787,7 @@ enum OwnerKind {
 }
 
 """
-The resource's current owner subject (ADR-0010 §14). Distinct from
+The resource's current owner subject. Distinct from
 OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
 delete relationship, not a principal-ownership one.
 """
@@ -6921,7 +6798,7 @@ type ResourceOwner {
 
 """
 Input shape for naming a target owner, e.g. transferNamespaceOwner's
-targetOwnerRef (ADR-0010 §14).
+targetOwnerRef.
 """
 input ResourceOwnerInput {
   kind: OwnerKind!
@@ -7052,9 +6929,9 @@ input ProductVariantNamespacePath {
 }
 
 `, BuiltIn: false},
-	{Name: "../../../../shared/schemas/serviceaccount.graphqls", Input: `# ServiceAccount identity plane (spec 061): GitStore-issued service-account
+	{Name: "../../../../shared/schemas/serviceaccount.graphqls", Input: `# ServiceAccount identity plane: GitStore-issued service-account
 # credentials so gitstore-controller-manager (and future non-human callers)
-# never need to borrow a human-identity credential (ADR-0001).
+# never need to borrow a human-identity credential.
 #
 # Issues a short-lived token after the caller proves possession of an enrolled
 # ServiceAccount private key. Mirrors Kubernetes' TokenRequest result while
@@ -7397,14 +7274,6 @@ func (ec *executionContext) childFields_CollectionEdge(ctx context.Context, fiel
 	return nil, fmt.Errorf("no field named %q was found under type CollectionEdge", field.Name)
 }
 
-func (ec *executionContext) childFields_CollectionOptimisticLockConflict(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "current":
-		return ec.fieldContext_CollectionOptimisticLockConflict_current(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type CollectionOptimisticLockConflict", field.Name)
-}
-
 func (ec *executionContext) childFields_CollectionSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "title":
@@ -7473,14 +7342,6 @@ func (ec *executionContext) childFields_Condition(ctx context.Context, field gra
 	return nil, fmt.Errorf("no field named %q was found under type Condition", field.Name)
 }
 
-func (ec *executionContext) childFields_CreateCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "collection":
-		return ec.fieldContext_CreateCollectionPayload_collection(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type CreateCollectionPayload", field.Name)
-}
-
 func (ec *executionContext) childFields_CreateNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "namespace":
@@ -7533,14 +7394,6 @@ func (ec *executionContext) childFields_DeleteCategoryPayload(ctx context.Contex
 		return ec.fieldContext_DeleteCategoryPayload_orphanedProductIds(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DeleteCategoryPayload", field.Name)
-}
-
-func (ec *executionContext) childFields_DeleteCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "deletedCollectionId":
-		return ec.fieldContext_DeleteCollectionPayload_deletedCollectionId(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type DeleteCollectionPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_DeleteNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8671,16 +8524,6 @@ func (ec *executionContext) childFields_UpdateCategoryStatusPayload(ctx context.
 		return ec.fieldContext_UpdateCategoryStatusPayload_hasMoreProductDependents(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateCategoryStatusPayload", field.Name)
-}
-
-func (ec *executionContext) childFields_UpdateCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "collection":
-		return ec.fieldContext_UpdateCollectionPayload_collection(ctx, field)
-	case "conflict":
-		return ec.fieldContext_UpdateCollectionPayload_conflict(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type UpdateCollectionPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

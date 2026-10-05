@@ -17,7 +17,7 @@ AUTH_CONFIG_DIR ?= $(ROOT)/config
 POLICY_FILE ?= $(AUTH_CONFIG_DIR)/policy.yaml
 USERS_FILE ?= $(AUTH_CONFIG_DIR)/users.yaml
 LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
-LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml -f compose.admin.yml $(IDENTITY_COMPOSE_FILE)
+LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml $(IDENTITY_COMPOSE_FILE)
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
 GIT_GRPC_PORT ?= 50051
 CONTROLLER_CHECKPOINT_DIR ?= $(ROOT)/.gitstore/checkpoints
@@ -148,6 +148,8 @@ CAPACITY_PROMETHEUS_URL ?=
 CAPACITY_PROMETHEUS_PORT ?= 9090
 CAPACITY_PROMETHEUS_RETENTION ?= 24h
 CAPACITY_PROMETHEUS_TARGETS ?= host.docker.internal:4000,host.docker.internal:4001
+CAPACITY_PROMETHEUS_CONTROLLER_TARGETS ?=
+export CAPACITY_PROMETHEUS_CONTROLLER_TARGETS
 CAPACITY_PROMETHEUS_TARGETS_FILE ?=
 CAPACITY_OBSERVABILITY ?= none
 CAPACITY_DATASTORE_CONTAINERS ?=
@@ -176,7 +178,7 @@ export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 .PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-repository-lifecycle _capacity-repository-overflow _capacity-observability _capacity-observability-down
 .PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
 .PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
-.PHONY: admin-compose admin-down admin-stop admin-logs add-user add-role assign-role hash-user-password enroll-controller-serviceaccount
+.PHONY: add-user add-role assign-role hash-user-password enroll-controller-serviceaccount
 .PHONY: oidc
 
 help: ## Show available targets and common variables.
@@ -212,6 +214,7 @@ help: ## Show available targets and common variables.
 	@printf "  CAPACITY_OBSERVABILITY=%s  Optional capacity metrics collector: none or prometheus\n" "$(CAPACITY_OBSERVABILITY)"
 	@printf "  CAPACITY_PROMETHEUS_URL=<url> Export phase queries into the evidence bundle\n"
 	@printf "  CAPACITY_PROMETHEUS_TARGETS=%s  Scrape endpoints reachable from Prometheus\n" "$(CAPACITY_PROMETHEUS_TARGETS)"
+	@printf "  CAPACITY_PROMETHEUS_CONTROLLER_TARGETS=%s  Optional controller endpoints for retained time series\n" "$(CAPACITY_PROMETHEUS_CONTROLLER_TARGETS)"
 	@printf "  CAPACITY_API_ENDPOINTS=<urls>  Comma-separated live API replica endpoints\n"
 	@printf "  CAPACITY_API_CONTAINERS=<names>  Matching digest-pinned API containers\n"
 	@printf "  CAPACITY_GIT_SERVICE_CONTAINER=<name>  Digest-pinned Git-service container\n"
@@ -286,6 +289,9 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 		echo "Generate one with: make secret TARGET=signing-key DESTINATION_PATH=$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
 		exit 2; \
 	}
+	@cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key \
+		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
+		--record-output-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json" --key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)"
 	@set -u; \
 	resolved_uid="$(CONTROLLER_SERVICEACCOUNT_UID)"; \
 	if [ -z "$$resolved_uid" ]; then \
@@ -300,11 +306,9 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 		GITSTORE_CONTROLLER__CHECKPOINT__DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
-		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID="$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$resolved_uid" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME="$(CONTROLLER_SECRET_NAME)" \
-		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY="$(CONTROLLER_SECRET_KEY)" \
 		GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
 		go run ./cmd/controller
 
@@ -327,6 +331,9 @@ dev: ## Run local git service and API together in the foreground.
 		mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"; \
 		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ); \
 	fi; \
+	( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key \
+		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
+		--record-output-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json" --key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" ) || exit $$?; \
 	if [ ! -f "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ]; then \
 		mkdir -p "$$(dirname "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")"; \
 		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ); \
@@ -405,11 +412,9 @@ dev: ## Run local git service and API together in the foreground.
 		GITSTORE_CONTROLLER__CHECKPOINT__DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
-		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID="$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$resolved_uid" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME="$(CONTROLLER_SECRET_NAME)" \
-		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY="$(CONTROLLER_SECRET_KEY)" \
 		GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
 		go run ./cmd/controller & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
@@ -541,7 +546,7 @@ endif
 
 _capacity-observability:
 	@test -n "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" || { echo "CAPACITY_PROMETHEUS_TARGETS_FILE is required"; exit 2; }
-	@./scripts/write-capacity-prometheus-targets.sh "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" "$(CAPACITY_PROMETHEUS_TARGETS)"
+	@./scripts/write-capacity-prometheus-targets.sh "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" "$(CAPACITY_PROMETHEUS_TARGETS)" "$(CAPACITY_PROMETHEUS_CONTROLLER_TARGETS)"
 	@CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" CAPACITY_PROMETHEUS_TARGETS_FILE="$(CAPACITY_PROMETHEUS_TARGETS_FILE)" \
 		docker compose --profile capacity -f compose.yml -f compose.capacity.yml up -d capacity-prometheus
 
@@ -588,6 +593,8 @@ _capacity-scylla-soak:
 		go test -tags scylla -count=1 -timeout 0 -run TestScyllaCapacity ./internal/datastore/scylla/...
 
 _capacity-namespace-admission:
+	@cd "$(API_DIR)" && go test -list '^TestNamespaceValidationCapacity$$' ./internal/cataloggrpc | \
+		grep -qx 'TestNamespaceValidationCapacity' || { echo "Namespace validation capacity test is missing" >&2; exit 2; }
 	@cd "$(API_DIR)" && \
 		GITSTORE_NAMESPACE_CAPACITY_DURATION="$(NAMESPACE_CAPACITY_DURATION)" \
 		GITSTORE_NAMESPACE_CAPACITY_RUN=1 \
@@ -970,15 +977,3 @@ _clean-controller-checkpoints:
 	fi
 	@echo "Removing controller checkpoints only: $(abspath $(CONTROLLER_CHECKPOINT_DIR))"
 	@rm -rf "$(abspath $(CONTROLLER_CHECKPOINT_DIR))"
-
-admin-compose: _check-local-config ## Run the optional admin compose stack.
-	@$(LOCAL_COMPOSE) -f compose.admin.yml up --build $(DETACH_FLAG) admin
-
-admin-down: ## Stop and remove the admin compose stack.
-	@$(LOCAL_COMPOSE) -f compose.admin.yml down
-
-admin-stop: ## Stop only the admin compose service.
-	@$(LOCAL_COMPOSE) -f compose.admin.yml stop admin
-
-admin-logs: ## Follow admin compose logs.
-	@$(LOCAL_COMPOSE) -f compose.admin.yml logs -f admin

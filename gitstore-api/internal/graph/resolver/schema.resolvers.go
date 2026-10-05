@@ -7,14 +7,11 @@ package resolver
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
-	"go.uber.org/zap"
 )
 
 // UpdateResourceStatus is the resolver for the updateResourceStatus field.
@@ -59,7 +56,7 @@ func (r *queryResolver) Nodes(ctx context.Context, ids []string) ([]model.Node, 
 		}
 		node, err := r.resolveNode(ctx, kind, rawID)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		nodes[i] = node
 	}
@@ -80,54 +77,16 @@ func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, 
 	if kind == "Product" {
 		return r.watchProductGenericResources(ctx, namespace, selector, resourceVersion)
 	}
-	if r.eventBus == nil {
-		return nil, gqlerror.Errorf("watch subscriptions are not available")
+	if kind == "File" {
+		return watchCatalogJournal(ctx, r.Resolver, "File", namespace, selector, resourceVersion, "generic", fileJournalEventToGeneric)
 	}
-	rv := ""
-	if resourceVersion != nil {
-		rv = *resourceVersion
+	if kind == "CategoryTaxonomy" {
+		return watchCatalogJournal(ctx, r.Resolver, "CategoryTaxonomy", namespace, selector, resourceVersion, "generic", categoryJournalEventToGeneric)
 	}
-	events, unsubscribe, _, err := r.eventBus.SubscribeWithCursor(kind, rv)
-	if err != nil {
-		if errors.Is(err, eventbus.ErrWatchExpired) {
-			r.logger.Warn("watch cursor expired; controller must re-list",
-				zap.String("kind", kind),
-				zap.String("resource_version", rv))
-			return nil, &gqlerror.Error{
-				Message:    "watch cursor expired; re-list and resume from a fresh cursor",
-				Extensions: map[string]any{"code": "WATCH_EXPIRED"},
-			}
-		}
-		return nil, gqlerror.Errorf("watch subscription failed: %v", err)
+	return nil, &gqlerror.Error{
+		Message:    fmt.Sprintf("watchResources does not support kind %q", kind),
+		Extensions: map[string]any{"code": "UNSUPPORTED_KIND"},
 	}
-	r.logger.Debug("watch subscription opened",
-		zap.String("kind", kind),
-		zap.Bool("resumed", rv != ""))
-
-	out := make(chan *model.WatchEvent, 16)
-	go func() {
-		defer close(out)
-		defer unsubscribe()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case ev, ok := <-events:
-				if !ok {
-					return
-				}
-				if !categoryEventMatchesFilters(ev, namespace) || !watchEventMatchesSelector(kind, ev, selector) {
-					continue
-				}
-				select {
-				case out <- toGenericWatchEvent(kind, ev):
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}()
-	return out, nil
 }
 
 // Mutation returns generated.MutationResolver implementation.

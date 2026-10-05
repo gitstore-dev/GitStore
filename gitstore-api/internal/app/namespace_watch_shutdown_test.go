@@ -6,6 +6,7 @@ package app
 import (
 	"context"
 	"math"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,13 +28,79 @@ func (r *discontinuityNamespaceCDCRunner) RunNamespaceCDC(context.Context, *watc
 	return datastore.ErrNamespaceWatchDiscontinuity
 }
 
-type readyProductCDCRunner struct{ calls atomic.Int64 }
+// fakeCatalogCDCRunner reports readiness immediately for every registered
+// kind except gated, which waits for allowReady.
+type fakeCatalogCDCRunner struct {
+	kinds      []string
+	gated      string
+	started    chan struct{}
+	allowReady chan struct{}
+	calls      sync.Map
+}
 
-func (r *readyProductCDCRunner) RunProductCDC(ctx context.Context, _ *watchjournal.Materializer, _ datastore.ResourceWatchLease, _ time.Duration, _ time.Duration, ready func()) error {
-	r.calls.Add(1)
+func (r *fakeCatalogCDCRunner) CatalogCDCKinds() []string { return r.kinds }
+
+func (r *fakeCatalogCDCRunner) RunCatalogCDC(ctx context.Context, kind string, _ *watchjournal.Materializer, _ datastore.ResourceWatchLease, _ time.Duration, _ time.Duration, ready func()) error {
+	count, _ := r.calls.LoadOrStore(kind, new(atomic.Int64))
+	count.(*atomic.Int64).Add(1)
+	if kind == r.gated {
+		close(r.started)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-r.allowReady:
+		}
+	}
 	ready()
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func (r *fakeCatalogCDCRunner) callCount(kind string) int64 {
+	count, ok := r.calls.Load(kind)
+	if !ok {
+		return 0
+	}
+	return count.(*atomic.Int64).Load()
+}
+
+func TestFileCDCReadinessGatesSharedBookmarksAndShutdownReleasesLease(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	journal := store.(datastore.ResourceWatchJournal)
+	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
+	require.NoError(t, err)
+	clock := apiruntime.SystemClock{}
+	runner := &fakeCatalogCDCRunner{kinds: []string{"CategoryTaxonomy", "File", "Product"}, gated: "File", started: make(chan struct{}), allowReady: make(chan struct{})}
+	runtime := &namespaceWatchRuntime{
+		journal: journal, materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Clock: clock, Metrics: metrics}),
+		leaseManager: watchjournal.NewLeaseManager(journal, "leader", time.Minute, time.Second, clock),
+		metrics:      metrics, catalogRunner: runner,
+		cfg: config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60, CDCRetentionSeconds: 60, CDCConfidenceWindowMillis: 1}, log: zap.NewNop(),
+	}
+	lease, acquired, err := runtime.leaseManager.Acquire(t.Context())
+	require.NoError(t, err)
+	require.True(t, acquired)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runtime.runAsLeader(ctx, lease) }()
+	<-runner.started
+	require.Never(t, func() bool {
+		bounds, err := journal.Bounds(t.Context())
+		require.NoError(t, err)
+		return bounds.HighWater > 0
+	}, 50*time.Millisecond, 5*time.Millisecond)
+	close(runner.allowReady)
+	require.Eventually(t, func() bool {
+		bounds, err := journal.Bounds(t.Context())
+		return err == nil && bounds.HighWater > 0
+	}, time.Second, 10*time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	_, acquired, err = journal.AcquireLease(t.Context(), "replacement", time.Now().UTC(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
 }
 
 func TestNamespaceWatchLeaderReleasesLeaseBeforeReturning(t *testing.T) {
@@ -131,7 +198,7 @@ func TestNamespaceWatchRuntimeStopsRetryingAfterOrderingDiscontinuity(t *testing
 	require.EqualValues(t, 1, runner.calls.Load())
 }
 
-func TestNamespaceWatchLeaderStartsProductCDCWorker(t *testing.T) {
+func TestNamespaceWatchLeaderStartsEveryCatalogCDCWorker(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
@@ -139,11 +206,11 @@ func TestNamespaceWatchLeaderStartsProductCDCWorker(t *testing.T) {
 	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
 	require.NoError(t, err)
 	clock := apiruntime.SystemClock{}
-	runner := &readyProductCDCRunner{}
+	runner := &fakeCatalogCDCRunner{kinds: []string{"CategoryTaxonomy", "File", "Product"}}
 	runtime := &namespaceWatchRuntime{
 		journal: journal, materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Clock: clock, Metrics: metrics}),
 		leaseManager: watchjournal.NewLeaseManager(journal, "leader", time.Minute, time.Second, clock), metrics: metrics,
-		productRunner: runner, cfg: config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60, CDCRetentionSeconds: 60, CDCConfidenceWindowMillis: 1}, log: zap.NewNop(),
+		catalogRunner: runner, cfg: config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60, CDCRetentionSeconds: 60, CDCConfidenceWindowMillis: 1}, log: zap.NewNop(),
 	}
 	lease, acquired, err := runtime.leaseManager.Acquire(t.Context())
 	require.NoError(t, err)
@@ -151,7 +218,14 @@ func TestNamespaceWatchLeaderStartsProductCDCWorker(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- runtime.runAsLeader(ctx, lease) }()
-	require.Eventually(t, func() bool { return runner.calls.Load() == 1 }, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		for _, kind := range runner.kinds {
+			if runner.callCount(kind) != 1 {
+				return false
+			}
+		}
+		return true
+	}, time.Second, 10*time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 }
@@ -180,7 +254,7 @@ func TestNamespaceWatchReadinessRefreshesFollowerMetricsFromSharedBounds(t *test
 	require.NoError(t, err)
 	observed := 0
 	for _, family := range families {
-		if family.GetName() != "gitstore_namespace_watch_cdc_lag_seconds" && family.GetName() != "gitstore_namespace_watch_bookmark_age_seconds" {
+		if family.GetName() != "gitstore_resource_watch_cdc_lag_seconds" && family.GetName() != "gitstore_resource_watch_bookmark_age_seconds" {
 			continue
 		}
 		observed++

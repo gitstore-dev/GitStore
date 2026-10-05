@@ -170,7 +170,12 @@ fn collect_resource_deletion_trees(
     let mut trees = Vec::new();
 
     for update in updates {
-        if update.old_oid == ZERO_OID {
+        // A ref deletion removes a branch pointer, not an authored resource
+        // from a proposed tree. Validating its complete old tree would make a
+        // feature-branch deletion depend on unrelated resources inherited
+        // from main. Only old→new tree transitions represent resource
+        // deletion admissions.
+        if update.old_oid == ZERO_OID || update.new_oid == ZERO_OID {
             continue;
         }
         let old_commit = gix::ObjectId::from_hex(update.old_oid.as_bytes())
@@ -317,8 +322,7 @@ mod tests {
     use super::*;
     use crate::git::hooks::category_taxonomy_deletion_handler::catalog_proto::{
         catalog_service_server::{CatalogService, CatalogServiceServer},
-        AdmitResourcesRequest, AdmitResourcesResponse, ValidateCategoryTaxonomyDeletionRequest,
-        ValidateCategoryTaxonomyDeletionResponse, ValidateResourceDeletionsRequest,
+        AdmitResourcesRequest, AdmitResourcesResponse, ValidateResourceDeletionsRequest,
         ValidateResourceDeletionsResponse, ValidateResourcesRequest, ValidateResourcesResponse,
     };
 
@@ -336,22 +340,6 @@ mod tests {
             Ok(Response::new(ValidateResourcesResponse {
                 accepted: true,
                 errors: vec![],
-            }))
-        }
-
-        async fn validate_category_taxonomy_deletion(
-            &self,
-            request: Request<ValidateCategoryTaxonomyDeletionRequest>,
-        ) -> Result<Response<ValidateCategoryTaxonomyDeletionResponse>, Status> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            let trees = request.into_inner().trees;
-            assert_eq!(trees.len(), 1);
-            if let Some(blob) = trees[0].old_blobs.first() {
-                assert_eq!(blob.path, "file.txt");
-            }
-            Ok(Response::new(ValidateCategoryTaxonomyDeletionResponse {
-                accepted: self.accepted,
-                reason: "child categories present".to_string(),
             }))
         }
 
@@ -569,6 +557,7 @@ mod tests {
             &repository,
             "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: CategoryTaxonomy\nmetadata:\n  name: parent\nspec:\n  title: Parent\n---\n",
         );
+        let new_oid = make_empty_commit(&repository);
         let handler = ResourceDeletionHandler::connect(
             "http://127.0.0.1:1",
             Duration::from_millis(100),
@@ -583,7 +572,7 @@ mod tests {
                 &[RefUpdate {
                     ref_name: "refs/heads/main".to_string(),
                     old_oid,
-                    new_oid: ZERO_OID.to_string(),
+                    new_oid,
                 }],
                 None,
                 &HookContext::default(),

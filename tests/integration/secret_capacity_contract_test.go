@@ -32,6 +32,157 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSecretCapacityDockerDesktopMounts(t *testing.T) {
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(`#!/bin/sh
+case "$1" in
+  context)
+    [ "$2" = inspect ] && [ "$3" = --format ] || exit 1
+    [ "$5" = "$DOCKER_CONTEXT" ] || exit 1
+    printf '%s\n' "$TEST_DOCKER_ENDPOINT"
+    ;;
+  info)
+    [ "$TEST_DOCKER_INFO_FAILURE" != true ] || exit 1
+    printf '%s\n' "$TEST_DOCKER_OS"
+    ;;
+  *) exit 1 ;;
+esac
+`), 0700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, tc := range []struct {
+		name, hostOS, context, host, endpoint, daemonOS string
+		infoFailure, want, wantError                    bool
+	}{
+		{name: "local Desktop context", hostOS: "darwin", endpoint: "unix:///local/docker.sock", daemonOS: "Docker Desktop", want: true},
+		{name: "explicit local host", hostOS: "darwin", host: "unix:///local/docker.sock", endpoint: "ssh://remote", daemonOS: "Docker Desktop", want: true},
+		{name: "context overrides remote host", hostOS: "darwin", context: "desktop", host: "tcp://remote:2376", endpoint: "unix:///local/docker.sock", daemonOS: "Docker Desktop", want: true},
+		{name: "remote context overrides local host", hostOS: "darwin", context: "remote", host: "unix:///local/docker.sock", endpoint: "ssh://remote", daemonOS: "Docker Desktop"},
+		{name: "remote host overrides default context", hostOS: "darwin", host: "tcp://remote:2376", endpoint: "unix:///local/docker.sock", daemonOS: "Docker Desktop"},
+		{name: "Linux does not translate", hostOS: "linux", endpoint: "unix:///var/run/docker.sock", daemonOS: "Docker Desktop"},
+		{name: "other local engine", hostOS: "darwin", endpoint: "unix:///local/docker.sock", daemonOS: "Ubuntu"},
+		{name: "Desktop name alone is insufficient", hostOS: "darwin", context: "desktop-linux", endpoint: "ssh://remote", daemonOS: "Docker Desktop"},
+		{name: "relative socket rejected", hostOS: "darwin", endpoint: "unix:docker.sock", daemonOS: "Docker Desktop"},
+		{name: "socket authority rejected", hostOS: "darwin", endpoint: "unix://remote/docker.sock", daemonOS: "Docker Desktop"},
+		{name: "malformed endpoint rejected", hostOS: "darwin", endpoint: "%invalid", daemonOS: "Docker Desktop"},
+		{name: "daemon lookup fails closed", hostOS: "darwin", endpoint: "unix:///local/docker.sock", infoFailure: true, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("DOCKER_CONTEXT", tc.context)
+			t.Setenv("DOCKER_HOST", tc.host)
+			t.Setenv("TEST_DOCKER_ENDPOINT", tc.endpoint)
+			t.Setenv("TEST_DOCKER_OS", tc.daemonOS)
+			t.Setenv("TEST_DOCKER_INFO_FAILURE", strconv.FormatBool(tc.infoFailure))
+			got, err := secretCapacityDockerDesktopMounts(t.Context(), tc.hostOS)
+			require.Equal(t, tc.wantError, err != nil)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestSecretCapacityOwnedMounts(t *testing.T) {
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	root := filepath.Join(parent, "owned-run")
+	for _, run := range []string{"owned-run", "owned-run-other"} {
+		for _, role := range []string{"controller-a", "controller-b"} {
+			require.NoError(t, os.MkdirAll(filepath.Join(parent, run, role, "provider"), 0700))
+			require.NoError(t, os.WriteFile(filepath.Join(parent, run, role, "config.toml"), nil, 0600))
+		}
+	}
+	alias := filepath.Join(parent, "alias")
+	require.NoError(t, os.Symlink(root, alias))
+	for _, representation := range []struct {
+		name                      string
+		desktop, provider, config bool
+	}{
+		{name: "Linux"},
+		{name: "Desktop native", desktop: true},
+		{name: "Desktop mixed directory", desktop: true, provider: true},
+		{name: "Desktop mixed file", desktop: true, config: true},
+		{name: "Desktop translated", desktop: true, provider: true, config: true},
+	} {
+		for index, role := range []string{"controller-a", "controller-b"} {
+			t.Run(representation.name+"/"+role, func(t *testing.T) {
+				mounts := []secretCapacityOwnedMount{
+					{Type: "bind", Source: filepath.Join(root, role, "provider"), Destination: "/run/secrets"},
+					{Type: "bind", Source: filepath.Join(root, role, "config.toml"), Destination: "/etc/gitstore/gitstore.toml"},
+					{Type: "volume", Source: "/var/lib/docker/volumes/checkpoint/_data", Destination: "/var/lib/gitstore/checkpoints", RW: true},
+					{Type: "volume", Source: "/var/lib/docker/volumes/bootstrap/_data", Destination: "/run/controller-bootstrap"},
+				}
+				translate := func(mounts []secretCapacityOwnedMount) {
+					if representation.provider {
+						mounts[0].Source = "/host_mnt" + mounts[0].Source
+					}
+					if representation.config {
+						mounts[1].Source = "/host_mnt" + mounts[1].Source
+					}
+				}
+				valid := append([]secretCapacityOwnedMount(nil), mounts...)
+				translate(valid)
+				require.NoError(t, validateSecretCapacityServiceMounts(root, index, valid, representation.desktop))
+				if representation.provider || representation.config {
+					require.Error(t, validateSecretCapacityServiceMounts(root, index, valid, false))
+				}
+				for _, tc := range []struct {
+					name   string
+					change func([]secretCapacityOwnedMount) []secretCapacityOwnedMount
+				}{
+					{"writable provider", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[0].RW = true; return m }},
+					{"writable config", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[1].RW = true; return m }},
+					{"wrong provider destination", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[0].Destination = "/wrong"; return m }},
+					{"wrong config destination", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[1].Destination = "/wrong"; return m }},
+					{"provider is not a bind", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[0].Type = "volume"; return m }},
+					{"peer provider", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount {
+						m[0].Source = filepath.Join(root, []string{"controller-b", "controller-a"}[index], "provider")
+						return m
+					}},
+					{"peer config", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount {
+						m[1].Source = filepath.Join(root, []string{"controller-b", "controller-a"}[index], "config.toml")
+						return m
+					}},
+					{"other run", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount {
+						m[0].Source = filepath.Join(parent, "owned-run-other", role, "provider")
+						return m
+					}},
+					{"fixture root", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[0].Source = root; return m }},
+					{"fixture ancestor", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[0].Source = parent; return m }},
+					{"filesystem root", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[0].Source = "/"; return m }},
+					{"missing provider", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { return m[1:] }},
+					{"duplicate mount", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { return append(m, m[0]) }},
+					{"writable bootstrap", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount { m[3].RW = true; return m }},
+					{"fixture through checkpoint", func(m []secretCapacityOwnedMount) []secretCapacityOwnedMount {
+						m[2].Type, m[2].Source = "bind", root
+						return m
+					}},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						invalid := tc.change(append([]secretCapacityOwnedMount(nil), mounts...))
+						for i := range invalid {
+							if representation.desktop && (representation.provider || representation.config) && invalid[i].Type == "bind" {
+								invalid[i].Source = "/host_mnt" + invalid[i].Source
+							}
+						}
+						require.Error(t, validateSecretCapacityServiceMounts(root, index, invalid, representation.desktop))
+					})
+				}
+				for _, service := range []int{2, 3, 4} {
+					require.Error(t, validateSecretCapacityServiceMounts(root, service, valid[:1], representation.desktop))
+					require.NoError(t, validateSecretCapacityServiceMounts(root, service, mounts[2:3], representation.desktop))
+					ancestor := secretCapacityOwnedMount{Type: "bind", Source: "/", Destination: "/host"}
+					require.Error(t, validateSecretCapacityServiceMounts(root, service, []secretCapacityOwnedMount{ancestor}, representation.desktop))
+				}
+				if representation.desktop {
+					aliased := append([]secretCapacityOwnedMount(nil), mounts...)
+					aliased[0].Source = "/host_mnt" + filepath.Join(alias, role, "provider")
+					require.NoError(t, validateSecretCapacityServiceMounts(root, index, aliased, true))
+					aliased[0].Source = "/host_mnt" + filepath.Join(parent, "missing")
+					require.Error(t, validateSecretCapacityServiceMounts(root, index, aliased, true))
+				}
+			})
+		}
+	}
+}
+
 func TestSecretCapacityProductionEvidence(t *testing.T) {
 	require.NoError(t, validateSecretCapacityEvidence(secretCapacityEvidenceFixture()))
 	cases := []struct {
@@ -426,7 +577,11 @@ func secretCapacityEvidenceFixture() secretCapacityEvidence {
 	return e
 }
 
-const secretCapacityJSONLimit = 2 * 1024 * 1024
+const (
+	secretCapacityJSONLimit     = 2 * 1024 * 1024
+	secretCapacityArtifactLimit = 512 * 1024 * 1024
+	secretCapacityTotalLimit    = 4 * 1024 * 1024 * 1024
+)
 
 type secretCapacityArtifact struct {
 	Path      string `json:"path"`
@@ -600,7 +755,7 @@ func verifySecretCapacityArtifact(directory string, artifact secretCapacityArtif
 	if artifact.Kind != "log" && artifact.Kind != "metrics" && artifact.Kind != "trace" && artifact.Kind != "summary" {
 		return invalid
 	}
-	if artifact.Bytes <= 0 || artifact.Bytes > 128*1024*1024 || len(artifact.SHA256) != 64 {
+	if artifact.Bytes <= 0 || artifact.Bytes > secretCapacityArtifactLimit || len(artifact.SHA256) != 64 {
 		return invalid
 	}
 	root, err := os.OpenRoot(directory)
@@ -835,7 +990,7 @@ func scanSecretCapacityArtifacts(directory string, secrets []string) error {
 		}
 		defer file.Close()
 		info, err := file.Stat()
-		if err != nil || info.Size() > 128*1024*1024 || info.Size() > 512*1024*1024-total {
+		if err != nil || info.Size() > secretCapacityArtifactLimit || info.Size() > secretCapacityTotalLimit-total {
 			return invalid
 		}
 		var size int64
@@ -845,7 +1000,7 @@ func scanSecretCapacityArtifacts(directory string, secrets []string) error {
 			n, readErr := file.Read(buffer)
 			total += int64(n)
 			size += int64(n)
-			if total > 512*1024*1024 || size > 128*1024*1024 {
+			if total > secretCapacityTotalLimit || size > secretCapacityArtifactLimit {
 				return invalid
 			}
 			block := append(tail, buffer[:n]...)
@@ -951,7 +1106,7 @@ func TestSecretCapacityArtifactScan(t *testing.T) {
 		root := t.TempDir()
 		file, err := os.Create(filepath.Join(root, "oversized.log"))
 		require.NoError(t, err)
-		require.NoError(t, file.Truncate(128*1024*1024+1))
+		require.NoError(t, file.Truncate(secretCapacityArtifactLimit+1))
 		require.NoError(t, file.Close())
 		require.Error(t, scanSecretCapacityArtifacts(root, nil))
 	})
@@ -1259,6 +1414,89 @@ func TestSecretCapacityProjectionReadsNullableGraphQLFields(t *testing.T) {
 	require.Error(t, validateSecretCapacityFile(projection, "ns", name, 1))
 }
 
+func TestSecretCapacityFilePoolReadsPersistedStateWithoutWatchHistory(t *testing.T) {
+	var reads atomic.Int64
+	var missing, duplicate, wrongNamespace atomic.Bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reads.Add(1)
+		require.Equal(t, http.MethodPost, r.Method)
+		var request gqlRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		require.NotContains(t, request.Query, "watchFiles")
+		require.Len(t, request.Variables, 11, "ten known-name lookups per bounded batch")
+		data := make(map[string]any)
+		for i := range 10 {
+			name := request.Variables[fmt.Sprintf("name%d", i)].(string)
+			namespace := "ns"
+			if wrongNamespace.Load() {
+				namespace = "another-namespace"
+			}
+			id := "id-" + name
+			if duplicate.Load() {
+				id = "duplicate-id"
+			}
+			data[fmt.Sprintf("file%d", i)] = map[string]any{
+				"id": id, "metadata": map[string]any{"name": name, "namespace": namespace,
+					"annotations": map[string]string{"secret-capacity.gitstore.dev/sequence": "0"}},
+				"spec": map[string]any{"contentType": "image/jpeg", "type": "gitstore.dev/media",
+					"source": map[string]any{"type": "s3", "uri": "s3://capacity-fixture/" + name + ".jpg",
+						"credentialsRef": map[string]any{"kind": "CredentialsRef", "type": "aws-access-key/v1",
+							"secretRef": map[string]any{"kind": "SecretRef", "name": "capacity-media"}}}},
+			}
+		}
+		if missing.Load() {
+			data["file0"] = nil
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+	})
+	a, b := httptest.NewServer(handler), httptest.NewServer(handler)
+	defer a.Close()
+	defer b.Close()
+	first, err := secretCapacityReadFileIDs(t.Context(), a.URL, "test-token", "ns", "fixture")
+	require.NoError(t, err)
+	second, err := secretCapacityReadFileIDs(t.Context(), b.URL, "test-token", "ns", "fixture")
+	require.NoError(t, err)
+	require.Len(t, first, 100)
+	require.Equal(t, first, second, "a replica with no event history must return the same persisted IDs")
+	require.EqualValues(t, 20, reads.Load())
+	for _, flag := range []*atomic.Bool{&missing, &duplicate, &wrongNamespace} {
+		flag.Store(true)
+		_, err := secretCapacityReadFileIDs(t.Context(), b.URL, "test-token", "ns", "fixture")
+		require.Error(t, err)
+		flag.Store(false)
+	}
+}
+
+func TestSecretCapacityFilePoolErrorsAreClassifiedAndRedacted(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		status         int
+		body, expected string
+	}{
+		{"rate limit", 429, "private-response-marker", "HTTP 429"},
+		{"GraphQL", 200, `{"errors":[{"message":"private-response-marker"}]}`, "operation errors"},
+		{"malformed", 200, "private-response-marker", "malformed GraphQL response"},
+		{"null data", 200, `{"data":null}`, "missing or malformed GraphQL data"},
+		{"missing File", 200, `{"data":{}}`, "missing projection"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			_, err := secretCapacityReadFileIDs(t.Context(), server.URL, "private-token", "ns", "fixture")
+			require.ErrorContains(t, err, tc.expected)
+			require.NotContains(t, err.Error(), "private-response-marker")
+			require.NotContains(t, err.Error(), "private-token")
+		})
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := secretCapacityReadFileIDs(ctx, "http://127.0.0.1:1", "private-token", "ns", "fixture")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestSecretCapacityGraphQLErrorsDoNotExposeBodies(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"errors":[{"message":"private-response-marker"}]}`)
@@ -1269,6 +1507,38 @@ func TestSecretCapacityGraphQLErrorsDoNotExposeBodies(t *testing.T) {
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "private-response-marker")
 	require.NotContains(t, err.Error(), "private-token")
+}
+
+func TestSecretCapacityGraphQLDoesNotRetryMutations(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "2")
+		http.Error(w, "private-response-marker", http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	err := secretCapacityGraphQL(t.Context(), server.Client(), server.URL, "private-token", "mutation { write }", nil, &struct{}{})
+	var statusErr *capacityHTTPStatusError
+	require.ErrorAs(t, err, &statusErr)
+	require.Equal(t, 2*time.Second, statusErr.retryAfter)
+	require.EqualValues(t, 1, calls.Load())
+	require.NotContains(t, err.Error(), "private-response-marker")
+	require.NotContains(t, err.Error(), "private-token")
+}
+
+func TestCapacityRetryAfter(t *testing.T) {
+	now := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"2", 2 * time.Second},
+		{now.Add(3 * time.Second).Format(http.TimeFormat), 3 * time.Second},
+		{now.Add(-time.Second).Format(http.TimeFormat), 0},
+		{"", 0}, {"invalid", 0}, {"-1", 0}, {"999999999999999999999", 0},
+	} {
+		require.Equal(t, tc.want, capacityRetryAfter(tc.value, now), tc.value)
+	}
 }
 
 func TestSecretCapacityFailedComponentPersistsWithoutPassingGate(t *testing.T) {
@@ -1479,8 +1749,8 @@ func finalizeSecretCapacityBundle(directory, runID, revision string, mode capaci
 		}
 		defer file.Close()
 		digest := sha256.New()
-		size, err := io.Copy(digest, io.LimitReader(file, 128*1024*1024+1))
-		if err != nil || size > 128*1024*1024 {
+		size, err := io.Copy(digest, io.LimitReader(file, secretCapacityArtifactLimit+1))
+		if err != nil || size > secretCapacityArtifactLimit {
 			return errors.New("secret capacity: artifact exceeds finalization bounds")
 		}
 		kind := "summary"
@@ -1648,7 +1918,8 @@ func secretCapacityComponentFixture(t *testing.T, root string) (secretCapacityFi
 		r.Before, r.LoadEnd, r.Stabilized = append(r.Before, first), append(r.LoadEnd, last), append(r.Stabilized, last)
 	}
 	for i, p := range e.Controllers {
-		before := secretCapacityControllerSample{ID: p.ID, ObservedAt: start, FreshTokens: 1, Reconciliations: 1}
+		before := secretCapacityControllerSample{ID: p.ID, ObservedAt: start, FreshTokens: 1, Reconciliations: 1,
+			Ready: true, Healthy: true, CredentialReady: true, Kinds: map[string]secretCapacityKindHealth{}}
 		after := before
 		after.FreshTokens, after.Reconciliations, after.ExchangePeak, after.MaxRetry = 121, 121, 1, 30*time.Second
 		after.ObservedAt = start.Add(time.Hour)
@@ -1661,8 +1932,8 @@ func secretCapacityComponentFixture(t *testing.T, root string) (secretCapacityFi
 		OutageAt: e.OutageAt, OutageElapsed: e.OutageElapsed, ExpiredUnready: true, ClassifiedFailures: 1, Recovery: []time.Duration{time.Minute, time.Minute},
 		RotationAt: e.RotationAt, OverlapRenewals: []int64{1, 1}, RetiredKeyDenied: 2, WrongSubjectDenied: 2, AuthorizedIssuance: 4,
 		RestartAt: e.RestartAt, RestartTargetID: e.RestartTargetID, RestartConfirmed: true, ReplacementRecovery: time.Minute,
-		RestartBefore: secretCapacityControllerSample{ID: e.RestartTargetID, FreshTokens: 90, Reconciliations: 90, ExchangePeak: 1},
-		Replacement:   secretCapacityControllerSample{ID: e.ReplacementID, FreshTokens: 1, Reconciliations: 1}}
+		RestartBefore: secretCapacityControllerSample{ID: e.RestartTargetID, FreshTokens: 90, Reconciliations: 90, ExchangePeak: 1, Kinds: map[string]secretCapacityKindHealth{}},
+		Replacement:   secretCapacityControllerSample{ID: e.ReplacementID, FreshTokens: 1, Reconciliations: 1, Kinds: map[string]secretCapacityKindHealth{}}}
 	for name, value := range map[string]any{"file-workload.json": w, "dataset.json": d, "resources.json": r, "faults.json": f} {
 		require.NoError(t, writeSecretCapacityComponent(root, name, value))
 	}
@@ -1732,7 +2003,7 @@ func TestSecretCapacityBoundedLogWriter(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "log")
 	require.NoError(t, err)
 	defer file.Close()
-	writer := secretCapacityLogWriter{file: file, written: 128*1024*1024 - 2}
+	writer := secretCapacityLogWriter{file: file, written: secretCapacityArtifactLimit - 2}
 	n, err := writer.Write([]byte("abcd"))
 	require.NoError(t, err)
 	require.Equal(t, 4, n, "overflow must drain the pipe rather than deadlock the process")
@@ -1881,6 +2152,7 @@ func TestSecretCapacityDatasetVerifiesBothPaginatedReplicas(t *testing.T) {
 	writeSecretCapacityAcknowledgments(t, path, rows)
 	var calls atomic.Int64
 	var fault atomic.Int64
+	var throttles atomic.Int64
 	handler := func(peer bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, request *http.Request) {
 			calls.Add(1)
@@ -1899,6 +2171,23 @@ func TestSecretCapacityDatasetVerifiesBothPaginatedReplicas(t *testing.T) {
 			}
 			if strings.Contains(input.Query, "totalCount") {
 				t.Error("dataset verification must not request an aggregate")
+			}
+			if fault.Load() == 8 && input.Variables.After != nil && throttles.Add(1)%2 == 1 {
+				require.Equal(t, "2", *input.Variables.After)
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "private-response-marker", http.StatusTooManyRequests)
+				return
+			}
+			if fault.Load() == 9 {
+				http.Error(w, "private-response-marker", http.StatusUnauthorized)
+				return
+			}
+			if fault.Load() == 10 || fault.Load() == 11 {
+				if fault.Load() == 10 {
+					w.Header().Set("Retry-After", "60")
+				}
+				http.Error(w, "private-response-marker", http.StatusTooManyRequests)
+				return
 			}
 			start, end, next := 0, 2, true
 			if input.Variables.After != nil {
@@ -1964,8 +2253,48 @@ func TestSecretCapacityDatasetVerifiesBothPaginatedReplicas(t *testing.T) {
 		_, err = verifySecretCapacityDataset(t.Context(), a.Client(), endpoints, "token", "dataset", path, 2, capacityModeDiagnostic)
 		require.Error(t, err, "absent pagination metadata cannot imply the final page")
 	}
+	t.Run("rate limit retries preserve the page and dataset", func(t *testing.T) {
+		fault.Store(8)
+		before, started := calls.Load(), time.Now()
+		proof, err := verifySecretCapacityDataset(t.Context(), a.Client(), endpoints, "token", "dataset", path, 2, capacityModeDiagnostic)
+		require.NoError(t, err)
+		require.EqualValues(t, 6, calls.Load()-before)
+		require.EqualValues(t, 3, proof.Proof.Rows)
+		require.EqualValues(t, 2, proof.Proof.Pages)
+		require.GreaterOrEqual(t, time.Since(started), 2*time.Second)
+	})
+	t.Run("authentication errors are not retried", func(t *testing.T) {
+		fault.Store(9)
+		before := calls.Load()
+		_, err := verifySecretCapacityDataset(t.Context(), a.Client(), endpoints, "token", "dataset", path, 2, capacityModeDiagnostic)
+		require.ErrorContains(t, err, "api_a page 1 request: HTTP 401")
+		require.NotContains(t, err.Error(), "private-response-marker")
+		require.EqualValues(t, 1, calls.Load()-before)
+	})
+	t.Run("retry wait respects cancellation", func(t *testing.T) {
+		fault.Store(10)
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
+		before := calls.Load()
+		_, err := verifySecretCapacityDataset(ctx, a.Client(), endpoints, "token", "dataset", path, 2, capacityModeDiagnostic)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.EqualValues(t, 1, calls.Load()-before)
+	})
+	t.Run("persistent throttling exhausts bounded attempts", func(t *testing.T) {
+		fault.Store(11)
+		before := calls.Load()
+		_, err := verifySecretCapacityDataset(t.Context(), a.Client(), endpoints, "token", "dataset", path, 2, capacityModeDiagnostic)
+		require.ErrorContains(t, err, "api_a page 1 request: HTTP 429")
+		require.NotContains(t, err.Error(), "private-response-marker")
+		require.EqualValues(t, 8, calls.Load()-before)
+	})
 	fault.Store(0)
 	before := calls.Load()
+	for _, pageSize := range []int{-1, 0, 251, 1000} {
+		_, err := verifySecretCapacityDataset(t.Context(), a.Client(), endpoints, "token", "dataset", path, pageSize, capacityModeDiagnostic)
+		require.ErrorContains(t, err, "page size must be between 1 and 250")
+		require.Equal(t, before, calls.Load(), "invalid page sizes must fail before API requests")
+	}
 	_, err = verifySecretCapacityDataset(t.Context(), a.Client(), endpoints, "token", "dataset", path, 2, capacityModeProduction)
 	require.Error(t, err, "a smaller fixture cannot certify the five-million-row gate")
 	require.Equal(t, before, calls.Load(), "reject undersized production fixtures before requesting pages")

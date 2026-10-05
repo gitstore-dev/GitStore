@@ -17,9 +17,6 @@ func (r *BootstrapResolver) SigningKey(ctx context.Context) ([]byte, string, err
 		return nil, "", err
 	}
 	defer material.Clear()
-	if material.RecordFormat() == string(secretmaterial.FormatRaw) {
-		return material.Value(*r.ref.Key), r.keyID, nil
-	}
 	if material.RecordFormat() != "serviceaccount-signing-key/v1" {
 		return nil, "", secretmaterial.ErrUnsupportedType
 	}
@@ -31,7 +28,7 @@ func (r *BootstrapResolver) SigningKey(ctx context.Context) ([]byte, string, err
 		return nil, "", secretmaterial.ErrMissingKey
 	}
 	keyID := string(id)
-	if !utf8.Valid(id) || strings.TrimSpace(keyID) == "" || (r.keyID != "" && r.keyID != keyID) {
+	if !utf8.Valid(id) || strings.TrimSpace(keyID) == "" {
 		clear(key)
 		return nil, "", secretmaterial.ErrInvalidRef
 	}

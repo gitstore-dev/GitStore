@@ -542,19 +542,19 @@ func expectedProjections(resource AuthoritativeResource) []ProjectionRecord {
 	case "Product":
 		return catalogProjections(base, "products_by_name", "products_by_uid")
 	case "CategoryTaxonomy":
-		return catalogProjections(base, "category_taxonomy_by_name", "category_taxonomy_by_uid")
+		return catalogProjections(base, "category_taxonomies_by_name", "category_taxonomies_by_uid")
 	case "Collection":
-		return catalogProjections(base, "collection_by_name", "collection_by_uid")
+		return catalogProjections(base, "collections_by_name", "collections_by_uid")
 	case "ProductVariant":
-		result := catalogProjections(base, "product_variant_by_name", "product_variant_by_uid")
+		result := catalogProjections(base, "product_variants_by_name", "product_variants_by_uid")
 		if resource.SKU != "" {
 			sku := base
-			sku.Table = "product_variant_by_sku"
+			sku.Table = "product_variants_by_sku"
 			result = append(result, sku)
 		}
 		if resource.ProductRefName != "" {
 			ref := base
-			ref.Table = "product_variant_by_product_ref"
+			ref.Table = "product_variants_by_product_ref"
 			result = append(result, ref)
 		}
 		return result
@@ -585,13 +585,13 @@ func (p ProjectionRecord) Key() string {
 		return p.Namespace + "/" + p.Name
 	case "namespace_mappings_by_repository":
 		return p.UID
-	case "products_by_name", "category_taxonomy_by_name", "collection_by_name", "product_variant_by_name":
+	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name":
 		return p.Namespace + "/" + p.Name
-	case "products_by_uid", "category_taxonomy_by_uid", "collection_by_uid", "product_variant_by_uid":
+	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid":
 		return p.UID
-	case "product_variant_by_sku":
+	case "product_variants_by_sku":
 		return p.Namespace + "/" + p.SKU
-	case "product_variant_by_product_ref":
+	case "product_variants_by_product_ref":
 		return strings.Join([]string{p.Namespace, p.ProductRefName, ts, p.UID}, "/")
 	default:
 		return ""
@@ -613,13 +613,13 @@ func (p ProjectionRecord) Equal(other ProjectionRecord) bool {
 		return p.Bucket == other.Bucket && p.CreationTimestamp.Equal(other.CreationTimestamp)
 	case "namespace_mappings", "namespace_mappings_by_repository":
 		return p.Namespace == other.Namespace && p.Name == other.Name
-	case "products_by_name", "category_taxonomy_by_name", "collection_by_name", "product_variant_by_name":
+	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name":
 		return p.Namespace == other.Namespace && p.Name == other.Name && p.CreationTimestamp.Equal(other.CreationTimestamp)
-	case "products_by_uid", "category_taxonomy_by_uid", "collection_by_uid", "product_variant_by_uid":
+	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid":
 		return p.Namespace == other.Namespace && p.CreationTimestamp.Equal(other.CreationTimestamp)
-	case "product_variant_by_sku":
+	case "product_variants_by_sku":
 		return p.Namespace == other.Namespace && p.SKU == other.SKU && p.CreationTimestamp.Equal(other.CreationTimestamp)
-	case "product_variant_by_product_ref":
+	case "product_variants_by_product_ref":
 		return p.Namespace == other.Namespace && p.ProductRefName == other.ProductRefName && p.CreationTimestamp.Equal(other.CreationTimestamp)
 	default:
 		return false
@@ -655,14 +655,14 @@ func knownProjectionTable(table string) bool {
 		"namespace_mappings_by_repository",
 		"products_by_name",
 		"products_by_uid",
-		"category_taxonomy_by_name",
-		"category_taxonomy_by_uid",
-		"collection_by_name",
-		"collection_by_uid",
-		"product_variant_by_name",
-		"product_variant_by_uid",
-		"product_variant_by_sku",
-		"product_variant_by_product_ref":
+		"category_taxonomies_by_name",
+		"category_taxonomies_by_uid",
+		"collections_by_name",
+		"collections_by_uid",
+		"product_variants_by_name",
+		"product_variants_by_uid",
+		"product_variants_by_sku",
+		"product_variants_by_product_ref":
 		return true
 	default:
 		return false
@@ -776,13 +776,13 @@ func projectionDeleteRepairable(table string) bool {
 		"namespace_mappings_by_repository",
 		"products_by_name",
 		"products_by_uid",
-		"category_taxonomy_by_name",
-		"category_taxonomy_by_uid",
-		"collection_by_name",
-		"collection_by_uid",
-		"product_variant_by_name",
-		"product_variant_by_uid",
-		"product_variant_by_sku":
+		"category_taxonomies_by_name",
+		"category_taxonomies_by_uid",
+		"collections_by_name",
+		"collections_by_uid",
+		"product_variants_by_name",
+		"product_variants_by_uid",
+		"product_variants_by_sku":
 		return false
 	default:
 		return true
@@ -822,9 +822,9 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		{"Namespace", "namespaces_by_uid", "repository_creation_epoch,pending_repository_creations,"},
 		{"Repository", "repositories_by_uid", "namespace,"},
 		{"Product", "products_by_namespace", "namespace,"},
-		{"CategoryTaxonomy", "category_taxonomy", "namespace,"},
-		{"Collection", "collection", "namespace,"},
-		{"ProductVariant", "product_variant_by_namespace", "namespace,sku,product_ref_name,"},
+		{"CategoryTaxonomy", "category_taxonomies_by_namespace", "namespace,"},
+		{"Collection", "collections_by_namespace", "namespace,"},
+		{"ProductVariant", "product_variants_by_namespace", "namespace,sku,product_ref_name,"},
 	}
 	for _, source := range authoritative {
 		statement := fmt.Sprintf(
@@ -872,14 +872,14 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		{"namespace_mappings_by_repository", "repository_id,namespace,name", rowRepositoryID},
 		{"products_by_name", "namespace,name,uid,creation_timestamp", rowUID},
 		{"products_by_uid", "uid,namespace,creation_timestamp", rowUID},
-		{"category_taxonomy_by_name", "namespace,name,uid,creation_timestamp", rowUID},
-		{"category_taxonomy_by_uid", "uid,namespace,creation_timestamp", rowUID},
-		{"collection_by_name", "namespace,name,uid,creation_timestamp", rowUID},
-		{"collection_by_uid", "uid,namespace,creation_timestamp", rowUID},
-		{"product_variant_by_name", "namespace,name,uid,creation_timestamp", rowUID},
-		{"product_variant_by_uid", "uid,namespace,creation_timestamp", rowUID},
-		{"product_variant_by_sku", "namespace,sku,uid,creation_timestamp", rowUID},
-		{"product_variant_by_product_ref", "namespace,product_ref_name,creation_timestamp,uid", rowUID},
+		{"category_taxonomies_by_name", "namespace,name,uid,creation_timestamp", rowUID},
+		{"category_taxonomies_by_uid", "uid,namespace,creation_timestamp", rowUID},
+		{"collections_by_name", "namespace,name,uid,creation_timestamp", rowUID},
+		{"collections_by_uid", "uid,namespace,creation_timestamp", rowUID},
+		{"product_variants_by_name", "namespace,name,uid,creation_timestamp", rowUID},
+		{"product_variants_by_uid", "uid,namespace,creation_timestamp", rowUID},
+		{"product_variants_by_sku", "namespace,sku,uid,creation_timestamp", rowUID},
+		{"product_variants_by_product_ref", "namespace,product_ref_name,creation_timestamp,uid", rowUID},
 	}
 	for _, source := range projections {
 		rows, err := s.scanAuditRows(ctx, "SELECT "+source.columns+" FROM "+source.table)
@@ -962,11 +962,11 @@ func authoritativeTable(kind string) string {
 	case "Product":
 		return "products_by_namespace"
 	case "CategoryTaxonomy":
-		return "category_taxonomy"
+		return "category_taxonomies_by_namespace"
 	case "Collection":
-		return "collection"
+		return "collections_by_namespace"
 	case "ProductVariant":
-		return "product_variant_by_namespace"
+		return "product_variants_by_namespace"
 	default:
 		return ""
 	}
@@ -1054,14 +1054,14 @@ func (s *scyllaProjectionRepairStore) insertProjection(ctx context.Context, row 
 		statement, args = "INSERT INTO namespace_mappings (namespace,name,repository_id) VALUES (?,?,?) IF NOT EXISTS", []any{row.Namespace, row.Name, uid}
 	case "namespace_mappings_by_repository":
 		statement, args = "INSERT INTO namespace_mappings_by_repository (repository_id,namespace,name) VALUES (?,?,?) IF NOT EXISTS", []any{uid, row.Namespace, row.Name}
-	case "products_by_name", "category_taxonomy_by_name", "collection_by_name", "product_variant_by_name":
+	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name":
 		statement, args = fmt.Sprintf("INSERT INTO %s (namespace,name,uid,creation_timestamp) VALUES (?,?,?,?) IF NOT EXISTS", row.Table), []any{row.Namespace, row.Name, uid, row.CreationTimestamp}
-	case "products_by_uid", "category_taxonomy_by_uid", "collection_by_uid", "product_variant_by_uid":
+	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid":
 		statement, args = fmt.Sprintf("INSERT INTO %s (uid,namespace,creation_timestamp) VALUES (?,?,?) IF NOT EXISTS", row.Table), []any{uid, row.Namespace, row.CreationTimestamp}
-	case "product_variant_by_sku":
-		statement, args = "INSERT INTO product_variant_by_sku (namespace,sku,uid,creation_timestamp) VALUES (?,?,?,?) IF NOT EXISTS", []any{row.Namespace, row.SKU, uid, row.CreationTimestamp}
-	case "product_variant_by_product_ref":
-		statement, args = "INSERT INTO product_variant_by_product_ref (namespace,product_ref_name,creation_timestamp,uid) VALUES (?,?,?,?) IF NOT EXISTS", []any{row.Namespace, row.ProductRefName, row.CreationTimestamp, uid}
+	case "product_variants_by_sku":
+		statement, args = "INSERT INTO product_variants_by_sku (namespace,sku,uid,creation_timestamp) VALUES (?,?,?,?) IF NOT EXISTS", []any{row.Namespace, row.SKU, uid, row.CreationTimestamp}
+	case "product_variants_by_product_ref":
+		statement, args = "INSERT INTO product_variants_by_product_ref (namespace,product_ref_name,creation_timestamp,uid) VALUES (?,?,?,?) IF NOT EXISTS", []any{row.Namespace, row.ProductRefName, row.CreationTimestamp, uid}
 	default:
 		return false, fmt.Errorf("unsupported projection table %q", row.Table)
 	}
@@ -1079,14 +1079,14 @@ func (s *scyllaProjectionRepairStore) updateProjection(ctx context.Context, befo
 		statement, args = "UPDATE namespace_mappings SET repository_id=? WHERE namespace=? AND name=? IF repository_id=?", []any{uid, after.Namespace, after.Name, mustRepairUUID(before.UID)}
 	case "namespace_mappings_by_repository":
 		statement, args = "UPDATE namespace_mappings_by_repository SET namespace=?,name=? WHERE repository_id=? IF namespace=? AND name=?", []any{after.Namespace, after.Name, uid, before.Namespace, before.Name}
-	case "products_by_name", "category_taxonomy_by_name", "collection_by_name", "product_variant_by_name":
+	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name":
 		statement = fmt.Sprintf("UPDATE %s SET uid=?,creation_timestamp=? WHERE namespace=? AND name=? IF uid=? AND creation_timestamp=?", after.Table)
 		args = []any{uid, after.CreationTimestamp, after.Namespace, after.Name, mustRepairUUID(before.UID), before.CreationTimestamp}
-	case "products_by_uid", "category_taxonomy_by_uid", "collection_by_uid", "product_variant_by_uid":
+	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid":
 		statement = fmt.Sprintf("UPDATE %s SET namespace=?,creation_timestamp=? WHERE uid=? IF namespace=? AND creation_timestamp=?", after.Table)
 		args = []any{after.Namespace, after.CreationTimestamp, uid, before.Namespace, before.CreationTimestamp}
-	case "product_variant_by_sku":
-		statement = "UPDATE product_variant_by_sku SET uid=?,creation_timestamp=? WHERE namespace=? AND sku=? IF uid=? AND creation_timestamp=?"
+	case "product_variants_by_sku":
+		statement = "UPDATE product_variants_by_sku SET uid=?,creation_timestamp=? WHERE namespace=? AND sku=? IF uid=? AND creation_timestamp=?"
 		args = []any{uid, after.CreationTimestamp, after.Namespace, after.SKU, mustRepairUUID(before.UID), before.CreationTimestamp}
 	default:
 		return false, fmt.Errorf("projection %s cannot be updated in place", after.Table)
@@ -1111,14 +1111,14 @@ func (s *scyllaProjectionRepairStore) deleteProjection(ctx context.Context, row 
 		statement, args = "DELETE FROM namespace_mappings WHERE namespace=? AND name=? IF repository_id=?", []any{row.Namespace, row.Name, uid}
 	case "namespace_mappings_by_repository":
 		statement, args = "DELETE FROM namespace_mappings_by_repository WHERE repository_id=? IF namespace=? AND name=?", []any{uid, row.Namespace, row.Name}
-	case "products_by_name", "category_taxonomy_by_name", "collection_by_name", "product_variant_by_name":
+	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name":
 		statement, args = fmt.Sprintf("DELETE FROM %s WHERE namespace=? AND name=? IF uid=?", row.Table), []any{row.Namespace, row.Name, uid}
-	case "products_by_uid", "category_taxonomy_by_uid", "collection_by_uid", "product_variant_by_uid":
+	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid":
 		statement, args = fmt.Sprintf("DELETE FROM %s WHERE uid=? IF namespace=? AND creation_timestamp=?", row.Table), []any{uid, row.Namespace, row.CreationTimestamp}
-	case "product_variant_by_sku":
-		statement, args = "DELETE FROM product_variant_by_sku WHERE namespace=? AND sku=? IF uid=?", []any{row.Namespace, row.SKU, uid}
-	case "product_variant_by_product_ref":
-		statement, args = "DELETE FROM product_variant_by_product_ref WHERE namespace=? AND product_ref_name=? AND creation_timestamp=? AND uid=? IF EXISTS", []any{row.Namespace, row.ProductRefName, row.CreationTimestamp, uid}
+	case "product_variants_by_sku":
+		statement, args = "DELETE FROM product_variants_by_sku WHERE namespace=? AND sku=? IF uid=?", []any{row.Namespace, row.SKU, uid}
+	case "product_variants_by_product_ref":
+		statement, args = "DELETE FROM product_variants_by_product_ref WHERE namespace=? AND product_ref_name=? AND creation_timestamp=? AND uid=? IF EXISTS", []any{row.Namespace, row.ProductRefName, row.CreationTimestamp, uid}
 	default:
 		return false, fmt.Errorf("unsupported projection table %q", row.Table)
 	}

@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,7 +74,6 @@ uid = %q
 key_ref = { kind = "SecretRef", name = "controller" }
 [controller.secret_providers.bootstrap]
 type = "file"
-format = "json-record"
 base_path = %q
 [controller.checkpoint]
 dir = %q
@@ -612,7 +612,6 @@ uid = %q
 key_ref = {kind = "SecretRef", name = "controller"}
 [controller.secret_providers.bootstrap]
 type = "file"
-format = "json-record"
 base_path = "/run/secrets"
 [controller.checkpoint]
 dir = "/var/lib/gitstore/checkpoints"
@@ -670,10 +669,96 @@ func secretCapacityOwnedCommand(ctx context.Context, name string, args ...string
 	return output.buffer.Bytes(), nil
 }
 
+type secretCapacityOwnedMount struct {
+	Type        string `json:"Type"`
+	Source      string `json:"Source"`
+	Destination string `json:"Destination"`
+	RW          bool   `json:"RW"`
+}
+
+func secretCapacityDockerDesktopMounts(ctx context.Context, hostOS string) (bool, error) {
+	if hostOS != "darwin" {
+		return false, nil
+	}
+	// DOCKER_CONTEXT overrides DOCKER_HOST, just as it does for inspect.
+	endpoint := os.Getenv("DOCKER_HOST")
+	if dockerContext := os.Getenv("DOCKER_CONTEXT"); dockerContext != "" || endpoint == "" {
+		args := []string{"context", "inspect", "--format", "{{.Endpoints.docker.Host}}"}
+		if dockerContext != "" {
+			args = append(args, dockerContext)
+		}
+		body, err := secretCapacityOwnedCommand(ctx, "docker", args...)
+		if err != nil {
+			return false, err
+		}
+		endpoint = strings.TrimSpace(string(body))
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "unix" || parsed.Host != "" || !filepath.IsAbs(parsed.Path) {
+		return false, nil
+	}
+	body, err := secretCapacityOwnedCommand(ctx, "docker", "info", "--format", "{{.OperatingSystem}}")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(body)) == "Docker Desktop", nil
+}
+
+func validateSecretCapacityServiceMounts(root string, index int, mounts []secretCapacityOwnedMount, desktop bool) error {
+	ownedProvider, ownedConfig := false, false
+	for _, mount := range mounts {
+		source := filepath.Clean(mount.Source)
+		if desktop {
+			// Desktop can translate directory binds but leave file binds unchanged.
+			if strings.HasPrefix(source, "/host_mnt/") {
+				source = strings.TrimPrefix(source, "/host_mnt")
+			}
+			if mount.Type == "bind" {
+				var err error
+				source, err = filepath.EvalSymlinks(source)
+				if err != nil {
+					return errors.New("secret capacity: cannot resolve local Docker Desktop bind source")
+				}
+			}
+		}
+		if !filepath.IsAbs(source) {
+			return errors.New("secret capacity: mount source must be absolute")
+		}
+		overlap := source == root || source == string(os.PathSeparator) ||
+			strings.HasPrefix(source, root+string(os.PathSeparator)) ||
+			strings.HasPrefix(root, source+string(os.PathSeparator))
+		if overlap {
+			if index >= 2 || mount.RW || mount.Type != "bind" {
+				return errors.New("secret capacity: provider mounts are writable or visible to another service or not bind mounts")
+			}
+			role := []string{"controller-a", "controller-b"}[index]
+			switch {
+			case source == filepath.Join(root, role, "provider") && mount.Destination == "/run/secrets":
+				ownedProvider = true
+			case source == filepath.Join(root, role, "config.toml") && mount.Destination == "/etc/gitstore/gitstore.toml":
+				ownedConfig = true
+			default:
+				return errors.New("secret capacity: unexpected access to owned private fixture files")
+			}
+		} else if index < 2 && mount.Destination != "/var/lib/gitstore/checkpoints" &&
+			!(mount.Destination == "/run/controller-bootstrap" && !mount.RW) {
+			return errors.New("secret capacity: unexpected controller mount outside owned provider scope")
+		}
+	}
+	if index < 2 && (!ownedProvider || !ownedConfig || len(mounts) != 4) {
+		return errors.New("secret capacity: controllers require owned read-only config/provider, UID and checkpoint mounts")
+	}
+	return nil
+}
+
 func validateSecretCapacityOwnedMounts(ctx context.Context, root, project string) error {
 	root, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return errors.New("secret capacity: cannot resolve owned fixture root")
+	}
+	desktop, err := secretCapacityDockerDesktopMounts(ctx, runtime.GOOS)
+	if err != nil {
+		return err
 	}
 	topology, err := secretCapacityOwnedCommand(ctx, "docker", "ps", "--filter", "label=com.docker.compose.project="+project,
 		"--format", `{{.Names}} {{.Label "com.docker.compose.service"}}`)
@@ -692,42 +777,15 @@ func validateSecretCapacityOwnedMounts(ctx context.Context, root, project string
 			return err
 		}
 		var inspected struct {
-			Project string `json:"project"`
-			Running bool   `json:"running"`
-			Mounts  []struct {
-				Source      string `json:"Source"`
-				Destination string `json:"Destination"`
-				RW          bool   `json:"RW"`
-			} `json:"mounts"`
+			Project string                     `json:"project"`
+			Running bool                       `json:"running"`
+			Mounts  []secretCapacityOwnedMount `json:"mounts"`
 		}
 		if json.Unmarshal(body, &inspected) != nil || inspected.Project != project || !inspected.Running {
 			return errors.New("secret capacity: container is not in the owned running project")
 		}
-		ownedProvider, ownedConfig := false, false
-		for _, mount := range inspected.Mounts {
-			source := filepath.Clean(mount.Source)
-			overlap := source == root || strings.HasPrefix(source, root+string(os.PathSeparator)) ||
-				strings.HasPrefix(root, source+string(os.PathSeparator))
-			if overlap {
-				if i >= 2 || mount.RW {
-					return errors.New("secret capacity: provider mounts are writable or visible to another service")
-				}
-				role := []string{"controller-a", "controller-b"}[i]
-				switch {
-				case source == filepath.Join(root, role, "provider") && mount.Destination == "/run/secrets":
-					ownedProvider = true
-				case source == filepath.Join(root, role, "config.toml") && mount.Destination == "/etc/gitstore/gitstore.toml":
-					ownedConfig = true
-				default:
-					return errors.New("secret capacity: unexpected access to owned private fixture files")
-				}
-			} else if i < 2 && mount.Destination != "/var/lib/gitstore/checkpoints" &&
-				!(mount.Destination == "/run/controller-bootstrap" && !mount.RW) {
-				return errors.New("secret capacity: unexpected controller mount outside owned provider scope")
-			}
-		}
-		if i < 2 && (!ownedProvider || !ownedConfig || len(inspected.Mounts) != 4) {
-			return errors.New("secret capacity: controllers require owned read-only config/provider, UID and checkpoint mounts")
+		if err := validateSecretCapacityServiceMounts(root, i, inspected.Mounts, desktop); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1172,24 +1230,48 @@ func startSecretCapacityFaults(t *testing.T, driver *secretCapacityFaultDriver, 
 
 const secretCapacityControllerBodyLimit = 2 * 1024 * 1024
 
+func secretCapacityControllerHealthFixture(status string, ready bool) string {
+	return fmt.Sprintf(`{"status":%q,"version":"test","ready":%t,"credentialReady":%t,
+		"kinds":{"Repository":{"registered":true,"stalled":false,"activeWorkers":0,"queueDepth":0,"poisonItems":0,"recovering":false,
+		"recovery":{"recovering":false,"lastProgress":"0001-01-01T00:00:00Z","completedAt":"0001-01-01T00:00:00Z","pages":0,"rows":0}}}}`, status, ready, ready)
+}
+
+type secretCapacityKindHealth struct {
+	ActiveWorkers int64 `json:"activeWorkers"`
+	QueueDepth    int64 `json:"queueDepth"`
+	PoisonItems   int64 `json:"poisonItems"`
+	Stalled       bool  `json:"stalled"`
+	Registered    bool  `json:"registered"`
+	Recovering    bool  `json:"recovering"`
+	Recovery      struct {
+		Recovering   bool      `json:"recovering"`
+		LastProgress time.Time `json:"lastProgress"`
+		CompletedAt  time.Time `json:"completedAt"`
+		Pages        int64     `json:"pages"`
+		Rows         int64     `json:"rows"`
+	} `json:"recovery"`
+}
+
 type secretCapacityControllerSample struct {
-	ID                string        `json:"id"`
-	ObservedAt        time.Time     `json:"observedAt"`
-	CredentialReady   bool          `json:"credentialReady"`
-	Healthy           bool          `json:"healthy"`
-	FreshTokens       int64         `json:"freshTokens"`
-	FailedExchanges   int64         `json:"failedExchanges"`
-	CanceledExchanges int64         `json:"canceledExchanges"`
-	DeadlineExchanges int64         `json:"deadlineExchanges"`
-	ExchangeInflight  int64         `json:"exchangeInflight"`
-	ExchangePeak      int64         `json:"exchangePeak"`
-	MaxRetry          time.Duration `json:"maxRetry"`
-	Reconciliations   int64         `json:"reconciliations"`
-	RecordNotFound    int64         `json:"recordNotFound"`
-	CPUSeconds        float64       `json:"cpuSeconds"`
-	RSS               int64         `json:"rss"`
-	Goroutines        int64         `json:"goroutines"`
-	GOMAXPROCS        int64         `json:"gomaxprocs"`
+	ID                string                              `json:"id"`
+	ObservedAt        time.Time                           `json:"observedAt"`
+	CredentialReady   bool                                `json:"credentialReady"`
+	Healthy           bool                                `json:"healthy"`
+	Ready             bool                                `json:"ready"`
+	Kinds             map[string]secretCapacityKindHealth `json:"kinds"`
+	FreshTokens       int64                               `json:"freshTokens"`
+	FailedExchanges   int64                               `json:"failedExchanges"`
+	CanceledExchanges int64                               `json:"canceledExchanges"`
+	DeadlineExchanges int64                               `json:"deadlineExchanges"`
+	ExchangeInflight  int64                               `json:"exchangeInflight"`
+	ExchangePeak      int64                               `json:"exchangePeak"`
+	MaxRetry          time.Duration                       `json:"maxRetry"`
+	Reconciliations   int64                               `json:"reconciliations"`
+	RecordNotFound    int64                               `json:"recordNotFound"`
+	CPUSeconds        float64                             `json:"cpuSeconds"`
+	RSS               int64                               `json:"rss"`
+	Goroutines        int64                               `json:"goroutines"`
+	GOMAXPROCS        int64                               `json:"gomaxprocs"`
 }
 
 var secretCapacityControllerID = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
@@ -1396,24 +1478,22 @@ func sampleSecretCapacityController(ctx context.Context, client *http.Client, en
 	}
 	observedAt := time.Now().UTC()
 	var health struct {
-		Status          string `json:"status"`
-		Version         string `json:"version"`
-		CredentialReady bool   `json:"credentialReady"`
-		Kinds           map[string]struct {
-			ActiveWorkers int64 `json:"activeWorkers"`
-			QueueDepth    int64 `json:"queueDepth"`
-			PoisonItems   int64 `json:"poisonItems"`
-			Stalled       bool  `json:"stalled"`
-			Registered    bool  `json:"registered"`
-		} `json:"kinds"`
+		Status          string                              `json:"status"`
+		Version         string                              `json:"version"`
+		CredentialReady bool                                `json:"credentialReady"`
+		Ready           bool                                `json:"ready"`
+		Kinds           map[string]secretCapacityKindHealth `json:"kinds"`
 	}
 	if decodeSecretCapacityJSON(body, &health) != nil || !health.Kinds["Repository"].Registered ||
+		(health.Ready && status != http.StatusOK) ||
 		(status == http.StatusOK && (health.Status != "ok" || !health.CredentialReady)) ||
 		(status == http.StatusServiceUnavailable && health.Status != "degraded") {
 		return empty, errors.New("secret capacity: incomplete or inconsistent controller readiness")
 	}
 	for _, kind := range health.Kinds {
 		if kind.ActiveWorkers < 0 || kind.QueueDepth < 0 || kind.PoisonItems < 0 ||
+			(health.Ready && kind.Recovering) ||
+			kind.Recovery.Pages < 0 || kind.Recovery.Rows < 0 ||
 			(status == http.StatusOK && (kind.Stalled || kind.PoisonItems > 0)) {
 			return empty, errors.New("secret capacity: inconsistent controller kind health")
 		}
@@ -1430,6 +1510,8 @@ func sampleSecretCapacityController(ctx context.Context, client *http.Client, en
 	before.ObservedAt = observedAt
 	before.CredentialReady = health.CredentialReady
 	before.Healthy = status == http.StatusOK
+	before.Ready = health.Ready
+	before.Kinds = health.Kinds
 	return before, nil
 }
 
@@ -1449,12 +1531,12 @@ func secretCapacityControllerProgress(before, after secretCapacityControllerSamp
 		if !replacement {
 			return false, errors.New("secret capacity: unplanned controller replacement")
 		}
-		return after.CredentialReady && after.Healthy && after.FreshTokens > 0 && after.Reconciliations > 0, nil
+		return after.Ready && after.CredentialReady && after.Healthy && after.FreshTokens > 0 && after.Reconciliations > 0, nil
 	}
 	if !secretCapacityControllerCountersAdvance(before, after) {
 		return false, errors.New("secret capacity: controller counters regressed without replacement")
 	}
-	return !replacement && after.CredentialReady && after.Healthy &&
+	return !replacement && after.Ready && after.CredentialReady && after.Healthy &&
 		after.FreshTokens > before.FreshTokens && after.Reconciliations > before.Reconciliations, nil
 }
 
@@ -1573,8 +1655,7 @@ func TestSecretCapacityControllerSamplingBracketsReadiness(t *testing.T) {
 			ready, status = false, "degraded"
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
-		_, _ = fmt.Fprintf(w, `{"status":%q,"version":"test","credentialReady":%t,
-			"kinds":{"Repository":{"registered":true,"stalled":false,"activeWorkers":0,"queueDepth":0,"poisonItems":0}}}`, status, ready)
+		_, _ = fmt.Fprint(w, secretCapacityControllerHealthFixture(status, ready))
 	}))
 	defer server.Close()
 	sample, err := sampleSecretCapacityController(t.Context(), server.Client(), server.URL)
@@ -1605,7 +1686,7 @@ func TestSecretCapacityControllerProgressRequiresFreshAuthentication(t *testing.
 	before.ObservedAt = time.Now()
 	after := before
 	after.ObservedAt = before.ObservedAt.Add(time.Second)
-	after.CredentialReady, after.Healthy = true, true
+	after.CredentialReady, after.Healthy, after.Ready = true, true, true
 	after.Reconciliations++
 	progress, err := secretCapacityControllerProgress(before, after, false)
 	require.NoError(t, err)
@@ -1614,6 +1695,11 @@ func TestSecretCapacityControllerProgressRequiresFreshAuthentication(t *testing.
 	progress, err = secretCapacityControllerProgress(before, after, false)
 	require.NoError(t, err)
 	require.True(t, progress)
+	after.Ready = false
+	progress, err = secretCapacityControllerProgress(before, after, false)
+	require.NoError(t, err)
+	require.False(t, progress, "progressing list recovery cannot satisfy fault recovery")
+	after.Ready = true
 	for name, change := range map[string]func(*secretCapacityControllerSample){
 		"unexpected replacement": func(s *secretCapacityControllerSample) { s.ID = "controller-instance-000002" },
 		"counter reset":          func(s *secretCapacityControllerSample) { s.FreshTokens = 1 },
@@ -1646,8 +1732,7 @@ func TestSecretCapacityControllerLifecycleSnapshots(t *testing.T) {
 				_, _ = fmt.Fprint(w, secretCapacityControllerMetricsFixture(id, 2, 3))
 				return
 			}
-			_, _ = fmt.Fprint(w, `{"status":"ok","version":"test","credentialReady":true,
-					"kinds":{"Repository":{"registered":true,"stalled":false,"activeWorkers":0,"queueDepth":0,"poisonItems":0}}}`)
+			_, _ = fmt.Fprint(w, secretCapacityControllerHealthFixture("ok", true))
 		}))
 		t.Cleanup(s.Close)
 		return s
@@ -1656,9 +1741,11 @@ func TestSecretCapacityControllerLifecycleSnapshots(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CAPACITY_EVIDENCE_DIR", root)
 	t.Setenv("CAPACITY_RUN_ID", "controller-observer-test")
-	samples := recordSecretCapacityControllers(t, a.Client(), repositoryCapacityConfig{
+	cfg := repositoryCapacityConfig{
 		controllerA: a.URL, controllerB: b.URL, mode: capacityModeDiagnostic,
-	}, "controllers-before-load.json")
+	}
+	waitForSecretCapacityControllerRecovery(t, a.Client(), cfg)
+	samples := recordSecretCapacityControllers(t, a.Client(), cfg, "controllers-before-load.json")
 	require.NotEqual(t, samples[0].ID, samples[1].ID)
 	body, err := os.ReadFile(filepath.Join(root, "secret", "controllers-before-load.json"))
 	require.NoError(t, err)
@@ -1672,18 +1759,19 @@ func TestSecretCapacityControllerLifecycleSnapshots(t *testing.T) {
 }
 
 func TestSecretCapacityControllerHealthRejectsMalformedResponses(t *testing.T) {
-	valid := `{"status":"ok","version":"test","credentialReady":true,
-			"kinds":{"Repository":{"registered":true,"stalled":false,"activeWorkers":0,"queueDepth":0,"poisonItems":0}}}`
+	valid := secretCapacityControllerHealthFixture("ok", true)
 	for name, body := range map[string]string{
-		"duplicate kind":    strings.Replace(valid, `"kinds":{`, `"kinds":{"Repository":{},`, 1),
-		"missing readiness": strings.Replace(valid, `"credentialReady":true,`, "", 1),
-		"null readiness":    strings.Replace(valid, `"credentialReady":true`, `"credentialReady":null`, 1),
-		"unregistered":      strings.Replace(valid, `"registered":true`, `"registered":false`, 1),
-		"missing queue":     strings.Replace(valid, `"queueDepth":0,`, "", 1),
-		"negative queue":    strings.Replace(valid, `"queueDepth":0`, `"queueDepth":-1`, 1),
-		"poisoned but ok":   strings.Replace(valid, `"poisonItems":0`, `"poisonItems":1`, 1),
-		"stalled but ok":    strings.Replace(valid, `"stalled":false`, `"stalled":true`, 1),
-		"trailing body":     valid + "{}",
+		"duplicate kind":          strings.Replace(valid, `"kinds":{`, `"kinds":{"Repository":{},`, 1),
+		"missing readiness":       strings.Replace(valid, `"credentialReady":true,`, "", 1),
+		"null readiness":          strings.Replace(valid, `"credentialReady":true`, `"credentialReady":null`, 1),
+		"unregistered":            strings.Replace(valid, `"registered":true`, `"registered":false`, 1),
+		"missing queue":           strings.Replace(valid, `"queueDepth":0,`, "", 1),
+		"negative queue":          strings.Replace(valid, `"queueDepth":0`, `"queueDepth":-1`, 1),
+		"poisoned but ok":         strings.Replace(valid, `"poisonItems":0`, `"poisonItems":1`, 1),
+		"stalled but ok":          strings.Replace(valid, `"stalled":false`, `"stalled":true`, 1),
+		"recovering but ready":    strings.Replace(valid, `"recovering":false`, `"recovering":true`, 1),
+		"negative recovery pages": strings.Replace(valid, `"pages":0`, `"pages":-1`, 1),
+		"trailing body":           valid + "{}",
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1691,6 +1779,7 @@ func TestSecretCapacityControllerHealthRejectsMalformedResponses(t *testing.T) {
 					_, _ = fmt.Fprint(w, secretCapacityControllerMetricsFixture(secretCapacityControllerTestID, 2, 3))
 					return
 				}
+
 				_, _ = fmt.Fprint(w, body)
 			}))
 			defer s.Close()
@@ -1699,6 +1788,34 @@ func TestSecretCapacityControllerHealthRejectsMalformedResponses(t *testing.T) {
 			require.NotContains(t, err.Error(), body)
 		})
 	}
+}
+
+func TestSecretCapacityRetainsPerKindRecoveryEvidence(t *testing.T) {
+	body := secretCapacityControllerHealthFixture("ok", true)
+	body = strings.Replace(body, `"ready":true`, `"ready":false`, 1)
+	body = strings.ReplaceAll(body, `"recovering":false`, `"recovering":true`)
+	body = strings.Replace(body, `"pages":0`, `"pages":25`, 1)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			_, _ = fmt.Fprint(w, secretCapacityControllerMetricsFixture(secretCapacityControllerTestID, 2, 3))
+			return
+		}
+		_, _ = fmt.Fprint(w, body)
+	}))
+	defer s.Close()
+	sample, err := sampleSecretCapacityController(t.Context(), s.Client(), s.URL)
+	require.NoError(t, err)
+	require.True(t, sample.Healthy)
+	require.False(t, sample.Ready)
+	require.True(t, sample.Kinds["Repository"].Recovering)
+	require.EqualValues(t, 25, sample.Kinds["Repository"].Recovery.Pages)
+	root := t.TempDir()
+	require.NoError(t, writeSecretCapacityComponent(root, "recovery.json", sample))
+	saved, err := os.ReadFile(filepath.Join(root, "secret", "recovery.json"))
+	require.NoError(t, err)
+	var restored secretCapacityControllerSample
+	require.NoError(t, decodeSecretCapacityJSON(saved, &restored))
+	require.Equal(t, sample.Kinds, restored.Kinds)
 }
 
 func TestSecretCapacityOwnedFixtureRecordsAndAssertions(t *testing.T) {
@@ -1769,8 +1886,7 @@ func secretCapacityFaultTestController(t *testing.T, id string, tokens, reconcil
 			_, _ = fmt.Fprint(w, secretCapacityControllerMetricsFixture(id, tokens, reconciles))
 			return
 		}
-		_, _ = fmt.Fprint(w, `{"status":"ok","version":"test","credentialReady":true,
-			"kinds":{"Repository":{"registered":true,"stalled":false,"activeWorkers":0,"queueDepth":0,"poisonItems":0}}}`)
+		_, _ = fmt.Fprint(w, secretCapacityControllerHealthFixture("ok", true))
 	}))
 	t.Cleanup(server.Close)
 	return server

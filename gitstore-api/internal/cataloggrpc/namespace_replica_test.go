@@ -105,6 +105,7 @@ func TestNamespaceReplicaStaleUpdateCannotOverwriteConcurrentDeletion(t *testing
 	updateDone := make(chan error, 1)
 	go func() {
 		_, updateErr := updateReplica.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+			ActorSubject: "test-admission-actor",
 			RepositoryId: testRepoID,
 			OldCommitSha: oldCommit,
 			NewCommitSha: newCommit,
@@ -173,6 +174,7 @@ func TestNamespaceReplicaStaleDeleteCannotOverwriteConcurrentUpdate(t *testing.T
 
 	waitForReplicaRace(t, store.started, "stale delete did not reach its conditional write")
 	_, err = updateReplica.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: oldCommit,
 		NewCommitSha: newCommit,

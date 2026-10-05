@@ -15,9 +15,91 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
 )
+
+type blockedRecoveryList struct {
+	*stubListWatcher[widget]
+	started chan struct{}
+	release chan struct{}
+}
+
+func (lw *blockedRecoveryList) List(ctx context.Context) (listwatch.ListResponse[widget], error) {
+	close(lw.started)
+	select {
+	case <-ctx.Done():
+		return listwatch.ListResponse[widget]{}, ctx.Err()
+	case <-lw.release:
+		return lw.stubListWatcher.List(ctx)
+	}
+}
+
+func TestExpiredCheckpointBlocksBothReplicasUntilFreshSnapshotAndBookmark(t *testing.T) {
+	for replica := range 2 {
+		t.Run(fmt.Sprint(replica), func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			old := widget{Namespace: "ns", Name: "product", ResourceVersion: "1"}
+			fresh := old
+			fresh.ResourceVersion = "2"
+			store := checkpoint.NewMemoryStore()
+			require.NoError(t, store.Save(ctx, widgetCheckpoint(t, "expired", []widget{old}, widgetKey(old))))
+			stream := newStubWatcher[widget](nil, nil)
+			lw := &blockedRecoveryList{
+				stubListWatcher: &stubListWatcher[widget]{
+					listResp:      listwatch.ListResponse[widget]{Items: []widget{fresh}, ResourceVersion: "snapshot"},
+					watchErrQueue: []error{listwatch.ErrWatchExpired},
+					watchers:      []*stubWatcher[widget]{nil, stream},
+				},
+				started: make(chan struct{}), release: make(chan struct{}),
+			}
+			r, c, _ := newRunner(t, lw.stubListWatcher, store)
+			r.ListWatcher = lw
+			r.WaitForWatchBookmark = true
+			var calls atomic.Int64
+			mgr := manager.New()
+			require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+				Kind: "Widget", Cache: c, OnSuccess: r.MarkCompleted,
+				Reconciler: &funcReconciler{fn: func(_ context.Context, key types.WorkItemKey) types.ReconcileResult {
+					item, exists := c.Get(key)
+					if !exists || item.ResourceVersion != "2" {
+						t.Errorf("dispatched stale checkpoint: %+v", item)
+					}
+					calls.Add(1)
+					return types.ResultOK()
+				}},
+			}))
+			r.Enqueue = mgr.Enqueue
+			managerDone, runnerDone := make(chan error, 1), make(chan error, 1)
+			go func() { managerDone <- mgr.Start(ctx) }()
+			go func() { runnerDone <- r.Run(ctx) }()
+			select {
+			case <-lw.started:
+			case <-time.After(time.Second):
+				t.Fatal("expired watch did not start recovery")
+			}
+			require.True(t, c.RecoveryState().Recovering)
+			require.Zero(t, calls.Load())
+			close(lw.release)
+			require.Eventually(t, func() bool { return lw.watchCalls.Load() == 2 }, time.Second, time.Millisecond)
+			require.True(t, c.RecoveryState().Recovering, "opening an asynchronous stream is not validation")
+			require.Zero(t, calls.Load())
+			stream.ch <- listwatch.WatchEvent[widget]{Type: listwatch.Bookmark, ResourceVersion: "validated"}
+			require.Eventually(t, func() bool { return calls.Load() > 0 }, time.Second, time.Millisecond)
+			require.False(t, c.RecoveryState().Recovering)
+			cancel()
+			require.NoError(t, <-managerDone)
+			<-runnerDone
+			record, err := store.Load(t.Context(), "Widget")
+			require.NoError(t, err)
+			require.Equal(t, "validated", record.ResourceVersion)
+		})
+	}
+}
 
 // failingStore wraps a checkpoint.Store, failing the first N Save calls.
 type failingStore struct {

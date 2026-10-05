@@ -127,6 +127,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	if secretCapacityRequested() {
 		secretFaultDriver = prepareSecretCapacityFaultDriver(t, cfg)
 		dataset = prepareSecretCapacityDataset(t, cfg)
+		waitForSecretCapacityControllerRecovery(t, client, cfg)
 	}
 	ensureRepositoryCapacityNamespace(t, cfg)
 	runID := strconv.FormatInt(time.Now().UnixNano(), 36)
@@ -1672,76 +1673,41 @@ const secretCapacityFileSelection = `id metadata { name namespace annotations }
 	spec { contentType type source { type uri credentialsRef { kind type secretRef { kind name key namespace } } } }`
 
 func secretCapacityReadFileIDs(ctx context.Context, endpoint, token, namespace, runID string) (map[string]string, error) {
-	invalid := errors.New("secret capacity: cannot establish the typed File projection pool")
-	connection, err := dialCapacitySubscription(endpoint, token, "secret-capacity-files",
-		`subscription($namespace:String!,$selector:LabelSelectorInput) {
-			watchFiles(namespace:$namespace,selector:$selector) { type file { `+secretCapacityFileSelection+` } }
-		}`, map[string]any{"namespace": namespace, "selector": map[string]any{"matchLabels": map[string]string{"secret-capacity-run": runID}}},
-		10*time.Second)
-	if err != nil {
-		return nil, invalid
-	}
-	defer connection.Close()
-	stop := context.AfterFunc(ctx, func() { _ = connection.Close() })
-	defer stop()
-	connection.SetReadLimit(1024 * 1024)
-	_ = connection.SetReadDeadline(time.Now().Add(30 * time.Second))
-	expected := make(map[string]bool, 100)
-	for file := range 100 {
-		expected[secretCapacityFileName(runID, file)] = true
-	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	client := &http.Client{Timeout: 5 * time.Second}
+	defer client.CloseIdleConnections()
 	ids := make(map[string]string, 100)
 	seenIDs := make(map[string]bool, 100)
-	for messages := 0; messages < 256 && len(ids) < 100; messages++ {
-		var message struct {
-			Type    string `json:"type"`
-			Payload struct {
-				Data struct {
-					WatchFiles struct {
-						Type string                        `json:"type"`
-						File *secretCapacityFileProjection `json:"file"`
-					} `json:"watchFiles"`
-				} `json:"data"`
-				Errors []json.RawMessage `json:"errors"`
-			} `json:"payload"`
+	for offset := 0; offset < 100; offset += 10 {
+		var definitions, fields strings.Builder
+		definitions.WriteString("$namespace:String!")
+		variables := map[string]any{"namespace": namespace}
+		for index := range 10 {
+			fmt.Fprintf(&definitions, ",$name%d:String!", index)
+			fmt.Fprintf(&fields, "file%d:file(namespace:$namespace,name:$name%d){%s}\n", index, index, secretCapacityFileSelection)
+			variables[fmt.Sprintf("name%d", index)] = secretCapacityFileName(runID, offset+index)
 		}
-		if connection.ReadJSON(&message) != nil || len(message.Payload.Errors) > 0 || message.Type == "error" || message.Type == "complete" {
-			return nil, invalid
+		query := "query(" + definitions.String() + "){" + fields.String() + "}"
+		var data map[string]*secretCapacityFileProjection
+		if err := secretCapacityGraphQL(ctx, client, endpoint, token, query, variables, &data); err != nil {
+			return nil, fmt.Errorf("secret capacity: File pool lookup batch %d: %w", offset/10, err)
 		}
-		if message.Type == "ping" {
-			if connection.WriteJSON(map[string]string{"type": "pong"}) != nil {
-				return nil, invalid
+		for index := range 10 {
+			file := data[fmt.Sprintf("file%d", index)]
+			if file == nil {
+				return nil, fmt.Errorf("secret capacity: File pool lookup missing projection at index %d", offset+index)
 			}
-			continue
-		}
-		if message.Type != "next" {
-			return nil, invalid
-		}
-		event := message.Payload.Data.WatchFiles
-		if event.Type == "BOOKMARK" {
-			continue
-		}
-		file := event.File
-		if file == nil || !expected[file.Metadata.Name] || file.ID == "" {
-			return nil, invalid
-		}
-		if err := validateSecretCapacityFile(*file, namespace, file.Metadata.Name, 0); err != nil {
-			return nil, err
-		}
-		if previous, exists := ids[file.Metadata.Name]; exists {
-			if previous != file.ID {
-				return nil, invalid
+			name := secretCapacityFileName(runID, offset+index)
+			if err := validateSecretCapacityFile(*file, namespace, name, 0); err != nil {
+				return nil, fmt.Errorf("secret capacity: File pool projection at index %d: %w", offset+index, err)
 			}
-			continue
+			if seenIDs[file.ID] {
+				return nil, errors.New("secret capacity: File pool contains duplicate identities")
+			}
+			seenIDs[file.ID] = true
+			ids[name] = file.ID
 		}
-		if seenIDs[file.ID] {
-			return nil, invalid
-		}
-		seenIDs[file.ID] = true
-		ids[file.Metadata.Name] = file.ID
-	}
-	if len(ids) != 100 {
-		return nil, invalid
 	}
 	return ids, nil
 }
@@ -1788,19 +1754,34 @@ func secretCapacityGraphQLBounded(ctx context.Context, client *http.Client, endp
 	request.Header.Set("Authorization", "Bearer "+token)
 	response, err := client.Do(request)
 	if err != nil {
-		return invalid
+		if ctx.Err() != nil {
+			return fmt.Errorf("secret capacity: GraphQL request canceled: %w", ctx.Err())
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return errors.New("secret capacity: GraphQL request timed out")
+		}
+		return errors.New("secret capacity: GraphQL transport failed")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return invalid
+		return &capacityHTTPStatusError{
+			status: response.StatusCode, body: "secret capacity: GraphQL operation failed",
+			retryAfter: capacityRetryAfter(response.Header.Get("Retry-After"), time.Now()),
+		}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil || int64(len(body)) > limit {
-		return invalid
+		return errors.New("secret capacity: GraphQL response unreadable or exceeds byte limit")
 	}
 	var envelope gqlResponse
-	if json.Unmarshal(body, &envelope) != nil || len(envelope.Errors) != 0 || json.Unmarshal(envelope.Data, destination) != nil {
-		return invalid
+	if json.Unmarshal(body, &envelope) != nil {
+		return errors.New("secret capacity: malformed GraphQL response")
+	}
+	if len(envelope.Errors) != 0 {
+		return fmt.Errorf("secret capacity: GraphQL returned %d operation errors (details redacted)", len(envelope.Errors))
+	}
+	if len(envelope.Data) == 0 || bytes.Equal(bytes.TrimSpace(envelope.Data), []byte("null")) || json.Unmarshal(envelope.Data, destination) != nil {
+		return errors.New("secret capacity: missing or malformed GraphQL data")
 	}
 	return nil
 }
@@ -2111,6 +2092,15 @@ func prepareSecretCapacityFileWorkload(t *testing.T, cfg repositoryCapacityConfi
 	peerIDs, err := secretCapacityReadFileIDs(t.Context(), cfg.apiB, cfg.token, cfg.namespace, runID)
 	require.NoError(t, err)
 	require.Equal(t, workload.ids, peerIDs, "both APIs must project identical File identities before load")
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	client := &http.Client{Timeout: 5 * time.Second}
+	defer client.CloseIdleConnections()
+	for _, worker := range workload.workers {
+		require.NoError(t, secretCapacityVerifyFileBatch(ctx, client, workload.endpoints, workload.token,
+			worker, workload.ids, secretCapacityPushBatch{sequence: 0}),
+			"verify seeded File projections through generic nodes on both APIs before load")
+	}
 	return workload
 }
 
@@ -2185,6 +2175,37 @@ func secretCapacityRequested() bool {
 	return os.Getenv("REPOSITORY_CAPACITY_SECRET_SCENARIO") == "1"
 }
 
+func waitForSecretCapacityControllerRecovery(t *testing.T, client *http.Client, cfg repositoryCapacityConfig) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
+	defer cancel()
+	for {
+		var samples [2]secretCapacityControllerSample
+		for i, endpoint := range []string{cfg.controllerA, cfg.controllerB} {
+			var err error
+			samples[i], err = sampleSecretCapacityController(ctx, client, endpoint)
+			require.NoError(t, err, "observe controller recovery before baseline")
+		}
+		require.NoError(t, writeSecretCapacityComponent(os.Getenv("CAPACITY_EVIDENCE_DIR"), "controllers-recovery.json", struct {
+			Controllers [2]secretCapacityControllerSample `json:"controllers"`
+		}{samples}))
+		for i, sample := range samples {
+			require.True(t, sample.Healthy && sample.CredentialReady,
+				"controller %d recovery is unhealthy or unauthenticated: %+v", i+1, sample.Kinds)
+		}
+		if samples[0].Ready && samples[1].Ready {
+			return
+		}
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			t.Fatalf("controllers did not complete recovery before baseline: %v", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
 func recordSecretCapacityControllers(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, component string) [2]secretCapacityControllerSample {
 	t.Helper()
 	var samples [2]secretCapacityControllerSample
@@ -2192,9 +2213,6 @@ func recordSecretCapacityControllers(t *testing.T, client *http.Client, cfg repo
 		var err error
 		samples[i], err = sampleSecretCapacityController(t.Context(), client, endpoint)
 		require.NoError(t, err, "collect process-identified controller authentication and progress")
-		require.True(t, samples[i].Healthy && samples[i].CredentialReady, "controller must be authenticated outside fault windows")
-		require.Positive(t, samples[i].FreshTokens)
-		require.Positive(t, samples[i].Reconciliations)
 	}
 	require.NotEqual(t, samples[0].ID, samples[1].ID, "controller samples must identify distinct replicas")
 	runID := os.Getenv("CAPACITY_RUN_ID")
@@ -2207,6 +2225,13 @@ func recordSecretCapacityControllers(t *testing.T, client *http.Client, cfg repo
 		Controllers   [2]secretCapacityControllerSample `json:"controllers"`
 	}{1, "secret-controller-snapshot/v1", runID, cfg.mode, samples}
 	require.NoError(t, writeSecretCapacityComponent(os.Getenv("CAPACITY_EVIDENCE_DIR"), component, observation))
+	for i, sample := range samples {
+		require.True(t, sample.Healthy && sample.CredentialReady,
+			"controller %d must be healthy and authenticated outside fault windows (healthy=%t credentialReady=%t)", i+1, sample.Healthy, sample.CredentialReady)
+		require.True(t, sample.Ready, "controller %d must finish list/watch recovery before load or acceptance: %+v", i+1, sample.Kinds)
+		require.Positive(t, sample.FreshTokens)
+		require.Positive(t, sample.Reconciliations)
+	}
 	return samples
 }
 
@@ -2429,6 +2454,8 @@ type secretCapacityDatasetObservations struct {
 	Elapsed        time.Duration                  `json:"elapsed"`
 }
 
+const secretCapacityDatasetMaxPageSize = 250
+
 func verifySecretCapacityDataset(ctx context.Context, client *http.Client, endpoints []string, token, namespace, manifest string,
 	pageSize int, mode capacityMode,
 ) (secretCapacityDatasetObservations, error) {
@@ -2437,7 +2464,10 @@ func verifySecretCapacityDataset(ctx context.Context, client *http.Client, endpo
 	if err := ctx.Err(); err != nil {
 		return observation, err
 	}
-	if len(endpoints) != 2 || endpoints[0] == endpoints[1] || token == "" || pageSize < 1 || pageSize > 1000 ||
+	if pageSize < 1 || pageSize > secretCapacityDatasetMaxPageSize {
+		return observation, fmt.Errorf("secret capacity: dataset page size must be between 1 and %d", secretCapacityDatasetMaxPageSize)
+	}
+	if len(endpoints) != 2 || endpoints[0] == endpoints[1] || token == "" ||
 		(mode != capacityModeDiagnostic && mode != capacityModeAlpha && mode != capacityModeProduction) {
 		return observation, invalid
 	}
@@ -2484,17 +2514,32 @@ func verifySecretCapacityDataset(ctx context.Context, client *http.Client, endpo
 					} `json:"pageInfo"`
 				} `json:"products"`
 			}
-			err := secretCapacityGraphQLBounded(ctx, client, endpoint, token, `query($namespace:String!,$first:Int!,$after:String) {
+			var err error
+			for attempt := 0; attempt < 8; attempt++ {
+				err = secretCapacityGraphQLBounded(ctx, client, endpoint, token, `query($namespace:String!,$first:Int!,$after:String) {
 				products(namespace:$namespace,first:$first,after:$after) {
 					edges { cursor node { metadata { namespace name revision } spec { title } } }
 					pageInfo { hasNextPage endCursor }
 				}
 			}`, map[string]any{"namespace": namespace, "first": pageSize, "after": after}, &data, 8*1024*1024)
+				var statusErr *capacityHTTPStatusError
+				if !errors.As(err, &statusErr) || statusErr.status != http.StatusTooManyRequests || attempt == 7 {
+					break
+				}
+				delay := max(statusErr.retryAfter, min(100*time.Millisecond*time.Duration(1<<attempt), 5*time.Second))
+				timer := time.NewTimer(delay)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return secretCapacityDatasetObservations{}, ctx.Err()
+				case <-timer.C:
+				}
+			}
 			if err != nil {
 				if ctx.Err() != nil {
 					return secretCapacityDatasetObservations{}, ctx.Err()
 				}
-				return secretCapacityDatasetObservations{}, invalid
+				return secretCapacityDatasetObservations{}, fmt.Errorf("%w: %s page %d request: %w", invalid, proof.Role, proof.Pages+1, err)
 			}
 			page := data.Products
 			if len(page.Edges) == 0 || len(page.Edges) > pageSize || page.PageInfo == nil ||
@@ -2581,7 +2626,7 @@ type secretCapacityLogWriter struct {
 
 func (writer *secretCapacityLogWriter) Write(data []byte) (int, error) {
 	length := len(data)
-	remaining := int64(128*1024*1024) - writer.written
+	remaining := int64(secretCapacityArtifactLimit) - writer.written
 	if int64(length) > remaining {
 		writer.overflow = true
 		data = data[:remaining]
@@ -2902,7 +2947,7 @@ func prepareSecretCapacityDataset(t *testing.T, cfg repositoryCapacityConfig) se
 	proof, err := verifySecretCapacityDataset(t.Context(), client, []string{cfg.apiA, cfg.apiB}, cfg.token,
 		getEnv("REPOSITORY_CAPACITY_SECRET_DATASET_NAMESPACE", cfg.namespace),
 		os.Getenv("REPOSITORY_CAPACITY_SECRET_DATASET_MANIFEST"),
-		capacityEnvInt(t, "REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE", 1000), cfg.mode)
+		capacityEnvInt(t, "REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE", secretCapacityDatasetMaxPageSize), cfg.mode)
 	require.NoError(t, err, "verify acknowledged titled Products offline before any offered load")
 	proof.RunID = os.Getenv("CAPACITY_RUN_ID")
 	require.NotEmpty(t, proof.RunID)

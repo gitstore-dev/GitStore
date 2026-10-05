@@ -16,6 +16,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
@@ -61,27 +62,35 @@ type CompletionClient interface {
 // CategoryResolved/Ready status (spec 062), and completes foreground
 // deletion for terminating Products (pre-existing behavior, unchanged).
 type Reconciler struct {
-	cache         cache.CacheAccessor[categorytaxonomy.Product]
-	categoryCache cache.CacheAccessor[categorytaxonomy.CategoryTaxonomy]
-	statusClient  status.StatusClient
-	completion    CompletionClient
+	lookup         cache.LookupFunc[categorytaxonomy.Product]
+	categoryLookup cache.LookupFunc[categorytaxonomy.CategoryTaxonomy]
+	statusClient   status.StatusClient
+	completion     CompletionClient
 }
 
 // NewReconciler returns a Product reconciler reading Products from c,
 // resolving spec.categoryRef against categoryCache, writing status through
 // statusClient, and completing foreground deletion through completion.
 func NewReconciler(c cache.CacheAccessor[categorytaxonomy.Product], categoryCache cache.CacheAccessor[categorytaxonomy.CategoryTaxonomy], statusClient status.StatusClient, completion CompletionClient) *Reconciler {
-	return &Reconciler{cache: c, categoryCache: categoryCache, statusClient: statusClient, completion: completion}
+	return NewReconcilerWithLookup(cache.LookupFrom(c), cache.LookupFrom(categoryCache), statusClient, completion)
+}
+
+func NewReconcilerWithLookup(lookup cache.LookupFunc[categorytaxonomy.Product], categoryLookup cache.LookupFunc[categorytaxonomy.CategoryTaxonomy], statusClient status.StatusClient, completion CompletionClient) *Reconciler {
+	return &Reconciler{lookup: lookup, categoryLookup: categoryLookup, statusClient: statusClient, completion: completion}
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
-	p, ok := r.cache.Get(key)
+	p, ok, err := r.lookup(ctx, key)
+	if err != nil {
+		return types.ResultTransient(fmt.Errorf("product: read projection: %w", err))
+	}
 	if !ok {
 		return types.ResultOK()
 	}
 	if p.DeletionTimestamp != nil && hasFinalizer(p.Finalizers) {
 		if err := r.completion.CompleteDeletion(ctx, p.Namespace, p.Name, p.ResourceVersion); err != nil {
 			if errors.Is(err, types.ErrConflict) {
+				health.ConflictRequeues.WithLabelValues("Product").Inc()
 				return types.ResultAfter(conflictRequeueDelay)
 			}
 			return types.ResultTransient(fmt.Errorf("product: complete deletion: %w", err))
@@ -96,7 +105,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 // Product was enqueued (initial admission, spec update, or a
 // CategoryTaxonomy-driven re-enqueue).
 func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey, current categorytaxonomy.Product) types.ReconcileResult {
-	found, resolved := r.resolveCategory(current)
+	found, resolved, err := r.resolveCategory(ctx, current)
+	if err != nil {
+		return types.ResultTransient(fmt.Errorf("product: read category projection: %w", err))
+	}
 	// A Product with no categoryRef at all has nothing to resolve — that is
 	// a valid, uncategorized Product (spec.categoryRef is nullable), not an
 	// unresolved reference. Only an actually-set-but-unmatched categoryRef
@@ -130,6 +142,7 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 	if !patch.IsNoOp(current.Status) {
 		if err := r.statusClient.Apply(ctx, key, patch); err != nil {
 			if errors.Is(err, types.ErrConflict) {
+				health.ConflictRequeues.WithLabelValues("Product").Inc()
 				// Another replica (or a newer watch event) won the status
 				// write. Re-enter through the queue so the next attempt
 				// observes fresh cache state instead of exhausting one
@@ -159,26 +172,29 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 // Terminating-as-not-found rule, which is what makes
 // DecoupleCategoryProducts' transient CategoryDeleted reason converge to
 // CategoryNotFound instead of flapping back through True.
-func (r *Reconciler) resolveCategory(current categorytaxonomy.Product) (found bool, ref *resolvedCategoryRef) {
+func (r *Reconciler) resolveCategory(ctx context.Context, current categorytaxonomy.Product) (found bool, ref *resolvedCategoryRef, err error) {
 	if current.CategoryRefName == "" {
-		return false, nil
+		return false, nil, nil
 	}
-	candidate, ok := r.categoryCache.Get(types.WorkItemKey{
+	candidate, ok, err := r.categoryLookup(ctx, types.WorkItemKey{
 		Kind:      "CategoryTaxonomy",
 		Namespace: current.Namespace,
 		Name:      current.CategoryRefName,
 	})
+	if err != nil {
+		return false, nil, err
+	}
 	if !ok {
-		return false, nil
+		return false, nil, nil
 	}
 	if candidate.DeletionTimestamp != nil || slices.Contains(candidate.Finalizers, foregroundDeletionFinalizer) {
-		return false, nil
+		return false, nil, nil
 	}
 	// candidate.UID is already the Relay-encoded id: it is populated
 	// straight from the metadata.uid GraphQL field, which every kind's
 	// resolver already encodes API-side. This process has no access to
 	// that encoding scheme and must never attempt to re-derive it.
-	return true, &resolvedCategoryRef{Name: candidate.Name, UID: candidate.UID}
+	return true, &resolvedCategoryRef{Name: candidate.Name, UID: candidate.UID}, nil
 }
 
 // mergeCategoryConditions builds fresh CategoryResolved/Ready conditions and

@@ -90,13 +90,13 @@ func TestNamespaceWatchOutputUsesBoundedDelivery(t *testing.T) {
 	assert.Equal(t, watchjournal.CodeExpired, terminal.Code)
 	assert.Equal(t, watchjournal.ReasonSubscriberOverflow, terminal.Reason)
 	require.NoError(t, testutil.GatherAndCompare(registry, strings.NewReader(`
-# HELP gitstore_namespace_watch_expired_total Namespace watches terminated because continuity was not provable.
-# TYPE gitstore_namespace_watch_expired_total counter
-gitstore_namespace_watch_expired_total{reason="SUBSCRIBER_OVERFLOW"} 1
-# HELP gitstore_namespace_watch_overflow_total Namespace subscriber buffer overflows.
-# TYPE gitstore_namespace_watch_overflow_total counter
-gitstore_namespace_watch_overflow_total 1
-`), "gitstore_namespace_watch_expired_total", "gitstore_namespace_watch_overflow_total"))
+# HELP gitstore_resource_watch_expired_total Resource watches terminated because continuity was not provable.
+# TYPE gitstore_resource_watch_expired_total counter
+gitstore_resource_watch_expired_total{reason="SUBSCRIBER_OVERFLOW"} 1
+# HELP gitstore_resource_watch_overflow_total Resource watch subscriber buffer overflows.
+# TYPE gitstore_resource_watch_overflow_total counter
+gitstore_resource_watch_overflow_total 1
+`), "gitstore_resource_watch_expired_total", "gitstore_resource_watch_overflow_total"))
 }
 
 func TestNamespaceWatchSelectorProjectsModifiedTransitions(t *testing.T) {

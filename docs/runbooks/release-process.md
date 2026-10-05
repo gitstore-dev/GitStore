@@ -48,7 +48,7 @@ GitStore uses **one unified semantic version** for the whole project, not indepe
 
 ## Reviewing and Merging a Release PR
 
-The release PR is titled something like `chore: release 0.1.0-alpha.4` and its diff only ever touches: `.release-please-manifest.json`, `CHANGELOG.md`, and the 4 version-marker files it keeps in sync (`gitstore-git-service/Cargo.toml`, `gitstore-admin/package.json`, `gitstore-api/internal/app/server.go`'s marker line, `gitstore-controller-manager/internal/version/version.go`'s marker line).
+The release PR is titled something like `chore: release 0.1.0-alpha.4` and its diff only ever touches: `.release-please-manifest.json`, `CHANGELOG.md`, and the 3 version-marker files it keeps in sync (`gitstore-git-service/Cargo.toml`, `gitstore-api/internal/app/server.go`'s marker line, `gitstore-controller-manager/internal/version/version.go`'s marker line).
 
 - **Don't hand-edit the release PR.** Release Please force-resyncs it on every subsequent push to `main` — any manual edit to its diff will be overwritten. If the proposed version or changelog content is wrong, fix it via `release-please-config.json` or a `Release-As` override (below), not by editing the PR directly.
 - Merging the release PR is the only action that actually cuts a release. Nothing else in this pipeline does.

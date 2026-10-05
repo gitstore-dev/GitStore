@@ -13,7 +13,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
@@ -30,7 +29,6 @@ type Resolver struct {
 	registry               *auth.ProviderRegistry
 	storageDataDir         string // data_dir used to build storagePath in responses; defaults to "/data"
 	clock                  apiruntime.Clock
-	eventBus               *eventbus.Bus
 	resourceJournal        datastore.ResourceWatchJournal
 	namespaceSubscriber    *watchjournal.Subscriber
 	namespaceWatch         config.NamespaceWatchConfig
@@ -49,12 +47,9 @@ type ResolverDeps struct {
 	IDGenerator                  apiruntime.IDGenerator
 	CommittedManifestAdmitter    admission.CommittedManifestAdmitter
 	NamespaceRepositoryFenceMode NamespaceRepositoryFenceMode
-	// EventBus backs the watchCategories/watchResources subscription
-	// resolvers (spec 040). Optional — nil disables watch subscriptions.
-	EventBus         *eventbus.Bus
-	ResourceJournal  datastore.ResourceWatchJournal
-	NamespaceWatch   config.NamespaceWatchConfig
-	NamespaceMetrics *watchjournal.Metrics
+	ResourceJournal              datastore.ResourceWatchJournal
+	NamespaceWatch               config.NamespaceWatchConfig
+	NamespaceMetrics             *watchjournal.Metrics
 	// ServiceAccountAudience is the configured audience value for service
 	// account token issuance (spec 061).
 	ServiceAccountAudience string
@@ -103,7 +98,6 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		registry:               deps.Registry,
 		storageDataDir:         "/data",
 		clock:                  clock,
-		eventBus:               deps.EventBus,
 		resourceJournal:        deps.ResourceJournal,
 		namespaceSubscriber:    namespaceSubscriber,
 		namespaceWatch:         deps.NamespaceWatch,

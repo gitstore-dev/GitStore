@@ -20,14 +20,16 @@ activation gates.
    This is mandatory: legacy replicas do not understand the new feature gate
    and would otherwise bypass the fence.
 2. Keep clients selecting only the terminating `namespace { id }` envelope and `outcome`.
-3. Apply migration `005_namespace_repository_fence.cql`.
+3. Provision Scylla with the baseline schema. The fence columns are part of
+   the Namespace table (`002_namespace.cql`); there is no separate migration.
 4. Deploy every API replica with
    `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=disabled` (or `auto`, which
    resolves to disabled for Scylla).
 5. Verify legacy delete selections and the unchanged validation protobuf
    against every old and new replica.
 6. Confirm every API replica is the new build, its schema exposes
-   `DeleteNamespacePayload.outcome`, and Scylla records migration 005.
+   `DeleteNamespacePayload.outcome`, and Scylla records the full baseline
+   migration set.
 
 The external deny stays active for the whole mixed-version window. New replicas
 also return `NAMESPACE_REPOSITORY_FENCE_DISABLED` if one of the four mutations
@@ -56,18 +58,17 @@ reaches them.
    API artifact; current clients use `namespace { id }`.
 3. Set `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=disabled` on the current
    fleet and verify gate rejections.
-4. Roll back replicas only with an artifact that still embeds the complete
-   migration set through `005_namespace_repository_fence.cql`, even if its
-   behavior code is reverted.
+4. Roll back replicas only with an artifact that embeds the same baseline
+   migration set, even if its behavior code is reverted.
 5. Verify legacy GraphQL selections and Git-service validation after each
    replacement.
 6. Keep the external mutation deny active until a forward-capable fenced fleet
    is restored. Do not remove status conditions, finalizers, resource versions,
-   or migration 005.
+   or the fence columns.
 
-An arbitrary older binary that embeds only migrations 001-004 is **not** a
-supported rollback artifact after 005. gocqlx correctly rejects it with
-`database is ahead`. Reverting an API replica before disabling `outcome`
+A binary built before the per-resource schema baseline is **not** a supported
+rollback artifact. gocqlx correctly rejects a keyspace whose migration history
+it does not recognise. Reverting an API replica before disabling `outcome`
 selections also causes GraphQL validation failures on requests routed to the old
 schema.
 
@@ -77,7 +78,7 @@ schema.
 |---|---|---|---|
 | `auto` (default) | enabled | disabled | Development-safe default; production activation must be explicit |
 | `disabled` | disabled | disabled | Phase 1 rollout and safe rollback |
-| `enabled` | enabled | enabled | Phase 2 after migration and full fleet convergence |
+| `enabled` | enabled | enabled | Phase 2 after full fleet convergence |
 
 ## Stable response codes
 
@@ -197,7 +198,7 @@ Namespace, remove or transfer all repositories, then retry deletion.
 
 ### Mutation rejected by the fence rollout gate
 
-Do not bypass the gate on one replica. Confirm migration 005 is applied, every
+Do not bypass the gate on one replica. Confirm the baseline schema is applied, every
 API replica is upgraded, the external mutation deny is still active, and every
 replica has `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=enabled`. Remove the
 external deny only after all four checks pass.

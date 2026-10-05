@@ -53,24 +53,24 @@ var capacityLatencyBuckets = []float64{.001, .005, .01, .025, .05, .1, .25, .5, 
 
 func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 	m := &Metrics{
-		leader:          prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_materializer_leader", Help: "Whether this replica owns the fenced Namespace CDC materializer lease."}),
-		journalOldest:   prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_journal_oldest_sequence", Help: "Oldest retained Namespace journal sequence."}),
-		journalHigh:     prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_journal_high_water_sequence", Help: "Current Namespace journal high-water sequence."}),
-		subscribers:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_subscribers", Help: "Active Namespace watch subscribers."}, []string{"path"}),
-		expired:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: "gitstore_namespace_watch_expired_total", Help: "Namespace watches terminated because continuity was not provable."}, []string{"reason"}),
-		overflow:        prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_namespace_watch_overflow_total", Help: "Namespace subscriber buffer overflows."}),
-		appendErrors:    prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_namespace_watch_append_errors_total", Help: "Namespace journal append failures."}),
-		duplicates:      prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_namespace_watch_duplicates_total", Help: "Distinct Namespace journal cursors delivered with a previously observed deduplication key."}),
-		replayEvents:    prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_namespace_watch_replay_events_total", Help: "Namespace journal events replayed."}),
-		replayLatency:   prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_replay_duration_seconds", Help: "Namespace journal replay duration.", Buckets: capacityLatencyBuckets}),
-		deliveryLatency: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_delivery_latency_seconds", Help: "Namespace CDC-to-subscriber delivery latency.", Buckets: capacityLatencyBuckets}),
-		cdcDiscovery:    prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_cdc_discovery_seconds", Help: "Time from the authoritative CDC timestamp until materialization begins.", Buckets: capacityLatencyBuckets}),
+		leader:          prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_resource_watch_materializer_leader", Help: "Whether this replica owns the fenced resource watch CDC materializer lease."}),
+		journalOldest:   prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_resource_watch_journal_oldest_sequence", Help: "Oldest retained resource watch journal sequence."}),
+		journalHigh:     prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_resource_watch_journal_high_water_sequence", Help: "Current resource watch journal high-water sequence."}),
+		subscribers:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "gitstore_resource_watch_subscribers", Help: "Active resource watch subscribers."}, []string{"path"}),
+		expired:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: "gitstore_resource_watch_expired_total", Help: "Resource watches terminated because continuity was not provable."}, []string{"reason"}),
+		overflow:        prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_resource_watch_overflow_total", Help: "Resource watch subscriber buffer overflows."}),
+		appendErrors:    prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_resource_watch_append_errors_total", Help: "Resource watch journal append failures."}),
+		duplicates:      prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_resource_watch_duplicates_total", Help: "Distinct resource watch journal cursors delivered with a previously observed deduplication key."}),
+		replayEvents:    prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_resource_watch_replay_events_total", Help: "Resource watch journal events replayed."}),
+		replayLatency:   prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_resource_watch_replay_duration_seconds", Help: "Resource watch journal replay duration.", Buckets: capacityLatencyBuckets}),
+		deliveryLatency: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_resource_watch_delivery_latency_seconds", Help: "Resource watch CDC-to-subscriber delivery latency.", Buckets: capacityLatencyBuckets}),
+		cdcDiscovery:    prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_resource_watch_cdc_discovery_seconds", Help: "Time from the authoritative CDC timestamp until materialization begins.", Buckets: capacityLatencyBuckets}),
 		materialize: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name: "gitstore_namespace_watch_materializer_stage_duration_seconds", Help: "Namespace materializer latency at bounded stages.", Buckets: capacityLatencyBuckets,
+			Name: "gitstore_resource_watch_materializer_stage_duration_seconds", Help: "Resource watch materializer latency at bounded stages.", Buckets: capacityLatencyBuckets,
 		}, []string{"stage"}),
-		batchSize: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_materializer_batch_size", Help: "Number of public Namespace events in each materializer batch.", Buckets: []float64{1, 2, 4, 8, 16, 32, 64, 128, 256}}),
+		batchSize: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_resource_watch_materializer_batch_size", Help: "Number of public resource watch events in each materializer batch.", Buckets: []float64{1, 2, 4, 8, 16, 32, 64, 128, 256}}),
 	}
-	m.cdcLag = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_cdc_lag_seconds", Help: "Age of the latest observed Namespace CDC position."}, func() float64 {
+	m.cdcLag = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "gitstore_resource_watch_cdc_lag_seconds", Help: "Age of the latest observed resource watch CDC position."}, func() float64 {
 		nanos := m.cdcProgressNanos.Load()
 		if nanos == 0 {
 			return math.Inf(1)
@@ -81,7 +81,7 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		}
 		return age
 	})
-	m.bookmarkAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_bookmark_age_seconds", Help: "Age of the latest durable Namespace bookmark."}, func() float64 {
+	m.bookmarkAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "gitstore_resource_watch_bookmark_age_seconds", Help: "Age of the latest durable resource watch bookmark."}, func() float64 {
 		nanos := m.bookmarkNanos.Load()
 		if nanos == 0 {
 			return math.Inf(1)

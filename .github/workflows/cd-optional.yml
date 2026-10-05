@@ -1,7 +1,7 @@
 name: CD Optional Images
 
-# Builds and publishes images for GitStore's optional services (admin UI,
-# oidc-bridge, and future ones like a storefront) — not part of the core
+# Builds and publishes images for GitStore's optional services (OIDC bridge
+# and future ones like a storefront) — not part of the core
 # git-service/api/controller-manager stack built by cd.yml. Deliberately
 # decoupled: an optional service failing to build must never block or
 # gate the core release pipeline, and the core pipeline's deploy jobs
@@ -23,7 +23,6 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  ADMIN_IMAGE: ${{ github.repository_owner }}/admin
   OIDC_BRIDGE_IMAGE: ${{ github.repository_owner }}/oidc-bridge
 
 jobs:
@@ -66,58 +65,6 @@ jobs:
             echo "latest_enable=true" >> "$GITHUB_OUTPUT"
           fi
         fi
-
-  build-admin-image:
-    name: Build and Push Admin Image
-    runs-on: ubuntu-latest
-    needs: [compute-latest-eligibility]
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-    - uses: actions/checkout@v6
-
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v4
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
-
-    - name: Log in to Container Registry
-      uses: docker/login-action@v4
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Extract metadata for Admin
-      id: meta-admin
-      uses: docker/metadata-action@v6
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.ADMIN_IMAGE }}
-        flavor: |
-          latest=${{ needs.compute-latest-eligibility.outputs.latest_enable }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=sha,prefix={{branch}}-,enable=${{ github.ref_type == 'branch' }}
-
-    - name: Build and push Admin image
-      uses: docker/build-push-action@v7
-      with:
-        context: .
-        file: ./docker/admin.Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta-admin.outputs.tags }}
-        labels: ${{ steps.meta-admin.outputs.labels }}
-        cache-from: type=gha,scope=admin
-        cache-to: type=gha,mode=max,scope=admin
-        outputs: >-
-          type=image,name=target,"annotation-index.org.opencontainers.image.description=GitStore admin web interface for managing products, categories, collections, and catalog publishing"
 
   build-oidc-bridge-image:
     name: Build and Push OIDC Bridge Image

@@ -170,6 +170,23 @@ key; the controller private key is configured through its `SecretRef` below.
 
 ### Datastore
 
+Automatic startup migration defaults to enabled. To prepare schemas using an
+init container or a separate operator step, set
+`datastore.scylla.auto_migrate = false` (environment:
+`GITSTORE_DATASTORE__SCYLLA__AUTO_MIGRATE=false`) on the API and run the matching
+image's `gitctl migrate --hosts scylla:9042 --keyspace gitstore --timeout 5m`
+before starting it. The command also accepts the existing Scylla environment
+variables, including password, so private connection material need not appear
+in arguments.
+
+The operator must create the keyspace first. `gitctl migrate` uses the same
+distributed migration lock as API startup, exits nonzero on failure and starts
+no API listeners or CDC readers. Both startup modes require a complete,
+unchanged migration history for the current binary. Disabled mode checks that
+history with read-only queries and does not create even the migration ledger
+or lock table. It is not a bypass for a breaking schema baseline or a
+partially-applied migration.
+
 | Key                                         | Env Var                                                   | Type            | Default          | Required | Sensitive | Description                                    |
 |---------------------------------------------|-----------------------------------------------------------|-----------------|------------------|----------|-----------|------------------------------------------------|
 | `datastore.backend`                         | `GITSTORE_DATASTORE__BACKEND`                             | string          | `memdb`          | No       | No        | Active datastore backend: `memdb` or `scylla`  |
@@ -396,19 +413,18 @@ uri = "http://localhost:6000"
 |----------------------------------------------------|----------------------------------------------------------------|----------|-------------------------------------|------------------|-----------|---------------------------------------------------------------------|
 | `controller.port`                                  | `GITSTORE_CONTROLLER__PORT`                                    | integer  | `5001`                              | No               | No        | HTTP port for `/health`, `/metrics`, and `/controller/v1/*`         |
 | `controller.api_uri`                               | `GITSTORE_CONTROLLER__API_URI`                                 | string   | `http://localhost:4000/graphql`     | No               | No        | GraphQL API URI used by reconcilers                                 |
+| `controller.api_client.requests_per_second` | `GITSTORE_CONTROLLER__API_CLIENT__REQUESTS_PER_SECOND` | integer | `40` | No | No | Positive shared request rate across all kinds, queries, mutations and WebSocket upgrades |
+| `controller.api_client.burst` | `GITSTORE_CONTROLLER__API_CLIENT__BURST` | integer | `10` | No | No | Positive shared request burst; credential renewal uses its separate singleflight budget |
 | `controller.serviceaccount.namespace`              | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE`               | string   | (empty)                             | **Yes**          | No        | Enrolled ServiceAccount namespace                                   |
 | `controller.serviceaccount.name`                   | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME`                    | string   | `gitstore-controller-manager`       | **Yes**          | No        | Enrolled ServiceAccount name                                        |
-| `controller.serviceaccount.key_id`                 | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID`                  | string   | (empty)                             | Raw mode         | No        | Enrolled public-key ID (`kid`); omit for whole-record hot rotation  |
 | `controller.serviceaccount.uid`                    | `GITSTORE_CONTROLLER__SERVICEACCOUNT__UID`                     | string   | (empty)                             | **Yes**          | No        | Enrolled ServiceAccount UID; prevents identity reuse after deletion |
 | `controller.serviceaccount.key_ref.kind`           | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND`           | string   | (empty)                             | **Yes**          | No        | Must be `SecretRef`                                                 |
 | `controller.serviceaccount.key_ref.name`           | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME`           | string   | (empty)                             | **Yes**          | No        | Logical bootstrap-secret name, not a filesystem path                |
-| `controller.serviceaccount.key_ref.key`            | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY`            | string   | (empty)                             | Raw mode         | No        | Logical item; must be omitted for atomic signing records            |
 | `controller.serviceaccount.assertion_audience`     | `GITSTORE_CONTROLLER__SERVICEACCOUNT__ASSERTION_AUDIENCE`      | string   | `gitstore-api/serviceaccount-token` | **Yes**          | No        | Audience for the signed assertion used to exchange a token          |
 | `controller.serviceaccount.access_token_audience`  | `GITSTORE_CONTROLLER__SERVICEACCOUNT__ACCESS_TOKEN_AUDIENCE`   | string   | `gitstore-api`                      | **Yes**          | No        | Audience requested for the exchanged access token                   |
 | `controller.secret_providers.bootstrap.type`       | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__TYPE`       | string   | `file`                              | No               | No        | Bootstrap resolver type: `file` or `env`                            |
-| `controller.secret_providers.bootstrap.format`     | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__FORMAT`     | string   | `raw`                               | No               | No        | `raw` keyed material or an atomic `json-record` signing bundle      |
-| `controller.secret_providers.bootstrap.base_path`  | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH`  | string   | `/run/secrets`                      | With `type=file` | No        | Directory containing controller-only mounted bootstrap secrets      |
-| `controller.secret_providers.bootstrap.env_prefix` | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__ENV_PREFIX` | string   | `GITSTORE_SECRET__`                 | With `type=env`  | No        | Prefix used to resolve bootstrap-secret environment variables       |
+| `controller.secret_providers.bootstrap.base_path`  | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH`  | string   | `/run/secrets`                      | With `type=file` | No        | Directory containing controller-only `<key_ref.name>.json` signing records |
+| `controller.secret_providers.bootstrap.env_variable` | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__ENV_VARIABLE` | string | (empty) | With `type=env` | No | Explicit name of the environment variable containing the complete JSON signing record; not the record itself |
 | `controller.reconcile.max_attempts`                | `GITSTORE_CONTROLLER__RECONCILE__MAX_ATTEMPTS`                 | integer  | `5`                                 | No               | No        | Retry limit before quarantine                                       |
 | `controller.reconcile.stall_threshold`             | `GITSTORE_CONTROLLER__RECONCILE__STALL_THRESHOLD`              | duration | `5m`                                | No               | No        | Worker stall threshold                                              |
 | `controller.checkpoint.dir`                        | `GITSTORE_CONTROLLER__CHECKPOINT__DIR`                         | string   | `/var/lib/gitstore/checkpoints`     | No               | No        | Directory for the filesystem checkpoint store (one file per kind)   |
@@ -426,7 +442,6 @@ api_uri = "http://localhost:4000/graphql"
 [controller.serviceaccount]
 namespace = "controllers"
 name = "gitstore-controller-manager"
-key_id = "controller-2026-09"
 uid = "<enrolled-service-account-uid>"
 assertion_audience = "gitstore-api/serviceaccount-token"
 access_token_audience = "gitstore-api"
@@ -446,11 +461,9 @@ resync_interval = "10m"
 [controller.serviceaccount.key_ref]
 kind = "SecretRef"
 name = "controller-manager"
-key = "privateKey"
 
 [controller.secret_providers.bootstrap]
 type = "file"
-format = "raw"
 base_path = "/run/secrets"
 
 [log]
@@ -458,20 +471,54 @@ level = "info"
 format = "json"
 ```
 
-This is the required controller configuration. For the `file` provider, the example `SecretRef`
-resolves `/run/secrets/controller-manager/privateKey`; mount that directory
-read-only into `controller-manager` only. The key must be a single PKCS#8 PEM
-Ed25519 or ECDSA P-256 private key. Do not place a private-key value in TOML,
-in the shared `/config/gitstore.toml` file, in Git, or in a log. The `env`
-provider is supported for deployment platforms that inject secret values, but
-a controller-only read-only mount is preferred where available.
+Both bootstrap providers require a whole-record `SecretRef` and an atomic JSON
+signing record containing the private key and its corresponding enrolled key ID:
+
+```json
+{
+  "format": "serviceaccount-signing-key/v1",
+  "values": {
+    "privateKey": "<base64 of one PKCS#8 Ed25519 or ECDSA P-256 PEM key>",
+    "keyID": "<base64 of the corresponding enrolled key ID>"
+  }
+}
+```
+
+For the `file` provider, the example resolves
+`/run/secrets/controller-manager.json`. Provision the record privately with mode
+`0600` and mount its directory read-only into `controller-manager` only. Replace
+the entire record atomically when rotating, keeping the key and enrolled ID
+together; see [Signing-material rotation](runbooks/secret-material-rotation.md).
+
+For a deployment platform that injects secret environment variables, replace
+the bootstrap table in the example with:
+
+```toml
+[controller.secret_providers.bootstrap]
+type = "env"
+env_variable = "CONTROLLER_SIGNING_RECORD"
+```
+
+Inject the complete JSON record into `CONTROLLER_SIGNING_RECORD` for the
+controller process only. `env_variable` names that variable explicitly; no
+prefix or variable name is derived from `key_ref.name`. Environment changes
+require process replacement. A controller-only read-only file mount is preferred
+where available.
+
+The removed `controller.secret_providers.bootstrap.format`,
+`controller.secret_providers.bootstrap.env_prefix`,
+`controller.serviceaccount.key_id`, and `controller.serviceaccount.key_ref.key`
+settings are rejected, not compatibility options. The JSON record's `format`
+field above is required and is not a TOML bootstrap setting. Do not place real
+signing records or private-key values in TOML, the shared `/config/gitstore.toml`
+file, Git, command-line arguments, or logs.
 
 Static controller API tokens are not supported. See [Controller
 authentication](runbooks/controller-auth.md) for enrollment, rotation,
 readiness, and recovery procedures.
 
 List-then-watch bootstrap, restart resume, and expired-watch-cursor recovery for registered
-resource kinds (spec 036) persist a per-kind restart checkpoint under `controller.checkpoint.dir`. Each
+resource kinds persist a per-kind restart checkpoint under `controller.checkpoint.dir`. Each
 checkpoint contains the `resourceVersion`, cache snapshot, and deletion replay keys needed to
 restore volatile controller state without losing queued reconciliation work.
 Checkpoint health — last successful write time, replay backlog, and write-failure count — is

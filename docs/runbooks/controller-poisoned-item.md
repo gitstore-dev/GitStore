@@ -22,6 +22,12 @@ A specific resource repeatedly fails reconciliation. Either it exhausted its ret
 
    Each entry includes the resource's `Key` (kind/namespace/name), its `Attempts` count, and `LastError` — the error message from the final failed reconcile attempt.
 
+   Responses remain JSON arrays but are bounded to 256 entries. Use `?limit=N`
+   (1–256) to request a smaller page. If the response has an `X-Next-Cursor`
+   header, pass that opaque value as `?after=<cursor>` on the next request.
+   Follow all pages for a complete inventory; an empty final page is valid.
+   Storage failures return HTTP 503, not an empty successful array.
+
 3. Search controller-manager logs for the offending resource's namespace/name for the quarantine log line (`"terminal reconcile failure — quarantining immediately"` for an immediate `TerminalFailure`, or `"reconciler quarantined after exhausting retries"` for exhausted transient retries). The log line includes the same error detail as `LastError` above. If the reconciler panicked, a separate `"reconciler panic recovered"` log line (logged just before the quarantine line) carries the full stack trace.
 
 4. Using `LastError` and the log context, determine **why** the reconciler is failing:
@@ -31,6 +37,12 @@ A specific resource repeatedly fails reconciliation. Either it exhausted its ret
 
 ## Recovery Actions
 
+Quarantine and retry deadlines survive controller replacement on the same
+per-replica checkpoint volume. Periodic resync does not clear them. A newer
+resource/dependency change can enqueue fresh work; completion from an older
+attempt cannot clear that newer obligation. Stored `LastError` text is capped
+at 2,048 bytes plus an explicit truncation suffix; use logs for longer detail.
+
 - **If the root cause was bad resource data**: fix the underlying resource (correct the data via the normal push/API path), then requeue it:
 
   ```bash
@@ -38,6 +50,9 @@ A specific resource repeatedly fails reconciliation. Either it exhausted its ret
   ```
 
   A `204 No Content` response confirms the item was removed from quarantine and re-enqueued with a fresh retry budget.
+
+  For cluster-scoped Namespace keys, omit the namespace segment:
+  `POST /controller/v1/poison/Namespace/<name>/requeue`.
 
 - **If the root cause was a transient outage that has since resolved**: requeuing (same endpoint) is sufficient — no data fix needed, since the reconciler should now succeed on retry.
 

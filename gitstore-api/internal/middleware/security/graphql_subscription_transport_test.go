@@ -15,7 +15,6 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
@@ -44,13 +43,13 @@ func (d *transportDenyAuthZ) Authorize(_ context.Context, _ *auth.Principal, act
 // TestUnauthorizedFileWatchRejectedThroughWebSocket exercises the production
 // graphql-transport-ws path, including gqlgen argument decoding and field
 // middleware. An anonymous caller must receive FORBIDDEN before WatchFiles
-// opens an event-bus subscription.
+// opens a durable journal subscription.
 func TestUnauthorizedFileWatchRejectedThroughWebSocket(t *testing.T) {
 	store := &testutil.StubStore{}
 	deny := &transportDenyAuthZ{}
 	registry := auth.NewProviderRegistry(auth.NewChainedAuthN(anonymous.New()), deny, nil)
 	root, err := resolver.NewResolver(resolver.ResolverDeps{
-		Store: store, Registry: registry, Logger: zap.NewNop(), EventBus: eventbus.New(8),
+		Store: store, Registry: registry, Logger: zap.NewNop(),
 	})
 	require.NoError(t, err)
 

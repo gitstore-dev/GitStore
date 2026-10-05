@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"strings"
 
 	"github.com/gitstore-dev/gitstore/secretmaterial"
 )
@@ -34,21 +33,19 @@ func (ref Ref) SecretRef() secretmaterial.SecretRef {
 }
 
 type BootstrapProviderConfig struct {
-	Type      string `mapstructure:"type"`
-	Format    string `mapstructure:"format"`
-	BasePath  string `mapstructure:"base_path"`
-	EnvPrefix string `mapstructure:"env_prefix"`
+	Type        string `mapstructure:"type"`
+	BasePath    string `mapstructure:"base_path"`
+	EnvVariable string `mapstructure:"env_variable"`
 }
 
 type BootstrapResolver struct {
 	resolver *secretmaterial.Resolver
 	ref      secretmaterial.SecretRef
 	owner    string
-	keyID    string
 	closer   io.Closer
 }
 
-func NewBootstrapResolver(cfg BootstrapProviderConfig, owner string, ref Ref, keyID string, observer secretmaterial.Observer) (*BootstrapResolver, error) {
+func NewBootstrapResolver(cfg BootstrapProviderConfig, owner string, ref Ref, observer secretmaterial.Observer) (*BootstrapResolver, error) {
 	binding := ref.SecretRef()
 	if owner == "" {
 		return nil, secretmaterial.ErrForbidden
@@ -56,33 +53,19 @@ func NewBootstrapResolver(cfg BootstrapProviderConfig, owner string, ref Ref, ke
 	if err := secretmaterial.ValidateSecretRef(binding, ""); err != nil {
 		return nil, err
 	}
-	format := secretmaterial.Format(cfg.Format)
-	if format == "" {
-		format = secretmaterial.FormatRaw
-	}
-	if format != secretmaterial.FormatRaw && format != secretmaterial.FormatJSONRecord {
-		return nil, secretmaterial.ErrUnsupportedType
-	}
-	if format == secretmaterial.FormatRaw && (binding.Key == nil || strings.TrimSpace(keyID) == "") {
-		return nil, secretmaterial.ErrInvalidRef
-	}
-	if format == secretmaterial.FormatJSONRecord && binding.Key != nil {
+	if binding.Key != nil {
 		return nil, secretmaterial.ErrInvalidRef
 	}
 	var provider secretmaterial.Provider
 	var err error
 	switch cfg.Type {
 	case ProviderFile:
-		provider, err = secretmaterial.NewFileProvider(cfg.BasePath, format)
+		provider, err = secretmaterial.NewFileProvider(cfg.BasePath, secretmaterial.FormatJSONRecord)
 	case ProviderEnvironment:
-		var variable string
-		variable, err = secretmaterial.BootstrapEnvironmentVariable(cfg.EnvPrefix, binding)
-		if err == nil {
-			provider, err = secretmaterial.NewEnvironmentProvider(format, []secretmaterial.EnvBinding{{
-				Scope: secretmaterial.Scope{Tier: secretmaterial.TierBootstrap},
-				Name:  ref.Name, Key: ref.Key, Variable: variable,
-			}})
-		}
+		provider, err = secretmaterial.NewEnvironmentProvider(secretmaterial.FormatJSONRecord, []secretmaterial.EnvBinding{{
+			Scope: secretmaterial.Scope{Tier: secretmaterial.TierBootstrap},
+			Name:  ref.Name, Variable: cfg.EnvVariable,
+		}})
 	default:
 		return nil, secretmaterial.ErrUnsupportedType
 	}
@@ -97,7 +80,7 @@ func NewBootstrapResolver(cfg BootstrapProviderConfig, owner string, ref Ref, ke
 		}
 		return nil, err
 	}
-	return &BootstrapResolver{resolver: resolver, ref: binding, owner: owner, keyID: keyID, closer: closer}, nil
+	return &BootstrapResolver{resolver: resolver, ref: binding, owner: owner, closer: closer}, nil
 }
 
 func (r *BootstrapResolver) Resolve(ctx context.Context) (secretmaterial.SecretMaterial, error) {

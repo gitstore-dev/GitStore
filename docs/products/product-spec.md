@@ -91,4 +91,4 @@ where the commit is written.
 
 ## Validation Error Format
 
-Errors follow the pattern `validate: <field-path> <violation>`. Multiple violations are reported together in a single response separated by newlines. See [contracts/validation-errors.md](../../specs/017-product-spec-validation/contracts/validation-errors.md) for the full error catalogue.
+Errors follow the pattern `validate: <field-path> <violation>`. Multiple violations are reported together in a single response separated by newlines. See the example rejections above for sample error messages.

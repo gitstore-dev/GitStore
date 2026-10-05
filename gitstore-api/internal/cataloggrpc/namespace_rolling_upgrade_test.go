@@ -10,11 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 func TestValidationProtobufFieldNumbersAndKindsRemainStable(t *testing.T) {
-	assertProtoField(t, (&catalogv1.ValidateResourcesRequest{}).ProtoReflect().Descriptor(), "blobs", 1, protoreflect.MessageKind, true)
+	assertProtoField(t, (&catalogv1.ValidateResourcesRequest{}).ProtoReflect().Descriptor(), "trees", 2, protoreflect.MessageKind, true)
 	assertProtoField(t, (&catalogv1.ValidateResourcesRequest{}).ProtoReflect().Descriptor(), "repository_id", 15, protoreflect.StringKind, false)
 	assertProtoField(t, (&catalogv1.ValidateResourcesResponse{}).ProtoReflect().Descriptor(), "accepted", 1, protoreflect.BoolKind, false)
 	assertProtoField(t, (&catalogv1.ValidateResourcesResponse{}).ProtoReflect().Descriptor(), "errors", 2, protoreflect.MessageKind, true)
@@ -32,9 +31,8 @@ func TestValidationProtobufFieldNumbersAndKindsRemainStable(t *testing.T) {
 	file := (&catalogv1.ValidateResourcesRequest{}).ProtoReflect().Descriptor().ParentFile()
 	service := file.Services().ByName("CatalogService")
 	require.NotNil(t, service)
-	method := service.Methods().ByName("ValidateCategoryTaxonomyDeletion")
+	method := service.Methods().ByName("ValidateResourceDeletions")
 	require.NotNil(t, method)
-	assert.True(t, method.Options().(*descriptorpb.MethodOptions).GetDeprecated())
 }
 
 func assertProtoField(

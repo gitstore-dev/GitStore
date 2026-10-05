@@ -21,9 +21,8 @@ api_uri = "http://api:4000/graphql"
 [controller.serviceaccount]
 namespace = "controllers"
 name = "gitstore-controller-manager"
-key_id = "key-1"
 uid = "sa-uid-1"
-key_ref = { kind = "SecretRef", name = "controller-manager", key = "privateKey" }
+key_ref = { kind = "SecretRef", name = "controller-manager" }
 assertion_audience = "controller-token-exchange"
 access_token_audience = "controller-api"
 [api]
@@ -68,9 +67,8 @@ api_uri = "http://api:4000/graphql"
 [controller.serviceaccount]
 namespace = "controllers"
 name = "gitstore-controller-manager"
-key_id = "key-1"
 uid = "sa-uid-1"
-key_ref = { kind = "SecretRef", name = "controller-manager", key = "privateKey" }
+key_ref = { kind = "SecretRef", name = "controller-manager" }
 [log]
 level = "info"
 format = "json"
@@ -122,11 +120,9 @@ func setenv(t *testing.T, pairs ...string) {
 	t.Helper()
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE", "controllers")
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME", "gitstore-controller-manager")
-	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID", "key-1")
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "sa-uid-1")
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND", "SecretRef")
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME", "controller-manager")
-	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY", "privateKey")
 	for i := 0; i+1 < len(pairs); i += 2 {
 		t.Setenv(pairs[i], pairs[i+1])
 	}
@@ -365,7 +361,7 @@ func TestLoad_ValidationErrors(t *testing.T) {
 func TestLoad_ServiceAccountCredentialMode(t *testing.T) {
 	setenv(t)
 	t.Setenv("GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__TYPE", "env")
-	t.Setenv("GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__ENV_PREFIX", "TEST_SECRET__")
+	t.Setenv("GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__ENV_VARIABLE", "TEST_CONTROLLER_SIGNING_RECORD")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -388,7 +384,6 @@ func TestLoad_ServiceAccountCredentialMode(t *testing.T) {
 func TestLoad_ServiceAccountCredentialModeRequiresCompleteIdentity(t *testing.T) {
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND", "SecretRef")
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME", "controller-manager")
-	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY", "privateKey")
 
 	_, err := config.Load()
 	if err == nil {

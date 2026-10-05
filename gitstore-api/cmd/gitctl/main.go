@@ -16,11 +16,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -33,6 +36,8 @@ type projectionRepairClient interface {
 var openProjectionRepair = func(cfg config.ScyllaConfig) (projectionRepairClient, error) {
 	return scylla.OpenProjectionRepairService(cfg)
 }
+
+var migrateSchema = scylla.Migrate
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -80,6 +85,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "scylla-projection-audit":
 		return runProjectionAudit(args[1:], stdout, stderr)
 
+	case "migrate":
+		return runMigrate(args[1:], stdout, stderr)
+
 	case "scylla-projection-repair":
 		return runProjectionRepair(args[1:], stdout, stderr)
 
@@ -109,9 +117,10 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  gen-jwt-secret")
 	fmt.Fprintln(output, "  gen-hmac-secret")
 	fmt.Fprintln(output, "  scylla-projection-audit [Scylla flags]")
+	fmt.Fprintln(output, "  migrate [Scylla flags] [--timeout 5m] (prepare an existing keyspace without starting the API)")
 	fmt.Fprintln(output, "  scylla-projection-repair (--dry-run | --confirm) [Scylla flags]")
 	fmt.Fprintln(output, "  enroll-serviceaccount --api-url <url> --admin-token <token> --namespace <namespace> --name <name> --key-id <id> --private-key-path <path> [--replace-existing-key]")
-	fmt.Fprintln(output, "  generate-signing-key --private-key-path <path>")
+	fmt.Fprintln(output, "  generate-signing-key --private-key-path <path> [--record-output-path <path> --key-id <id>]")
 	fmt.Fprintln(output, "  validate-local-config --config-file <config.toml> --policy-file <policy.yaml>")
 }
 
@@ -333,6 +342,28 @@ func runProjectionRepair(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Error writing repair result: %v\n", err)
 		return 1
 	}
+	return 0
+}
+
+func runMigrate(args []string, stdout, stderr io.Writer) int {
+	flags, cfg := newScyllaFlagSet("migrate", stderr)
+	timeout := flags.Duration("timeout", 5*time.Minute, "maximum migration duration")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || *timeout <= 0 {
+		fmt.Fprintln(stderr, "migrate requires a positive --timeout and accepts no positional arguments")
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	log := zap.New(zapcore.NewCore(zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()), zapcore.AddSync(stderr), zap.InfoLevel))
+	defer func() { _ = log.Sync() }()
+	if err := migrateSchema(ctx, cfg(), log); err != nil {
+		fmt.Fprintf(stderr, "Migration failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, "Schema migrations complete.")
 	return 0
 }
 

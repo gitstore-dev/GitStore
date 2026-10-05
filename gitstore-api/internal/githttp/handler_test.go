@@ -45,11 +45,44 @@ func newTestRegistry(t *testing.T) *auth.ProviderRegistry {
 	t.Helper()
 
 	registry := auth.NewProviderRegistry(
-		auth.NewChainedAuthN(anonymous.New()),
-		nil,
+		auth.NewChainedAuthN(&stubAuthNProviderWithPrincipal{
+			principal: &auth.Principal{Subject: "test-writer", AuthMethod: "basic"},
+			decision:  auth.Allow("test-authn", "authenticated fixture"),
+		}),
+		testutil.NewAllowAllAuthZ(),
 		nil,
 	)
 	return registry
+}
+
+func newTestStore() datastore.Datastore {
+	return &testutil.StubStore{
+		GetNamespaceByNameFunc: func(_ context.Context, name string) (*datastore.Namespace, error) {
+			if name != "gitstore" {
+				return nil, datastore.ErrNotFound
+			}
+			return &datastore.Namespace{UID: "test-namespace-id", Name: name}, nil
+		},
+		LookupRepositoryFunc: func(_ context.Context, namespace, name string) (*datastore.NamespaceMapping, error) {
+			if namespace != "gitstore" || name != "catalog" {
+				return nil, datastore.ErrNotFound
+			}
+			return &datastore.NamespaceMapping{RepositoryID: "test-repo-id"}, nil
+		},
+		GetRepositoryFunc: func(_ context.Context, id string) (*datastore.Repository, error) {
+			if id != "test-repo-id" {
+				return nil, datastore.ErrNotFound
+			}
+			return &datastore.Repository{UID: id, Name: "catalog", Namespace: "gitstore"}, nil
+		},
+	}
+}
+
+func TestNewMuxRequiresDatastore(t *testing.T) {
+	require.PanicsWithValue(t, "githttp: datastore is required", func() {
+		NewMux(SmartHttpDeps{GitClient: &mockGitClient{}, Logger: zap.NewNop(),
+			Ids: apiruntime.NewSequenceIDGenerator(), Registry: newTestRegistry(t)})
+	})
 }
 
 func (m *mockGitClient) InfoRefs(ctx context.Context, repoID string, service gitv1.Service) ([]byte, gitv1.Service, error) {
@@ -72,9 +105,6 @@ func (m *mockGitClient) ReceivePack(ctx context.Context, repoID string, body io.
 	}
 	return nil, errors.New("not set up")
 }
-
-// mockResolver is an alias for RepoResolverFunc, used in tests to simulate (namespace, repo) → repo_id lookup.
-type mockResolver = RepoResolverFunc
 
 type requestContextKey struct{}
 
@@ -101,19 +131,17 @@ func TestInfoRefsHandler_UploadPack(t *testing.T) {
 			return advertisement, gitv1.Service_SERVICE_GIT_UPLOAD_PACK, nil
 		},
 	}
-	resolver := mockResolver(func(ns, repo string) (string, bool) {
-		return "test-repo-id", true
-	})
 	registry := newTestRegistry(t)
 	router := NewMux(SmartHttpDeps{
-		GitClient:        client,
-		RepoResolverFunc: resolver,
-		Logger:           zap.NewNop(),
-		Ids:              apiruntime.NewSequenceIDGenerator(),
-		Registry:         registry,
+		GitClient: client,
+		Store:     newTestStore(),
+		Logger:    zap.NewNop(),
+		Ids:       apiruntime.NewSequenceIDGenerator(),
+		Registry:  registry,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-upload-pack", nil)
+	req.SetBasicAuth("test-writer", "test-password")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -139,19 +167,17 @@ func TestInfoRefsHandler_ReceivePack(t *testing.T) {
 			return advertisement, gitv1.Service_SERVICE_GIT_RECEIVE_PACK, nil
 		},
 	}
-	resolver := mockResolver(func(ns, repo string) (string, bool) {
-		return "test-repo-id", true
-	})
 	registry := newTestRegistry(t)
 
 	router := NewMux(SmartHttpDeps{
-		GitClient:        client,
-		RepoResolverFunc: resolver,
-		Logger:           zap.NewNop(),
-		Ids:              apiruntime.NewSequenceIDGenerator(),
-		Registry:         registry,
+		GitClient: client,
+		Store:     newTestStore(),
+		Logger:    zap.NewNop(),
+		Ids:       apiruntime.NewSequenceIDGenerator(),
+		Registry:  registry,
 	})
 	req := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", nil)
+	req.SetBasicAuth("test-writer", "test-password")
 	req.SetPathValue("namespace", "gitstore")
 	req.SetPathValue("repo", "catalog")
 	w := httptest.NewRecorder()
@@ -181,20 +207,18 @@ func TestUploadPackHandler_StreamsResponse(t *testing.T) {
 			return io.MultiReader(bytes.NewReader(chunk1), bytes.NewReader(chunk2)), nil
 		},
 	}
-	resolver := mockResolver(func(ns, repo string) (string, bool) {
-		return "test-repo-id", true
-	})
 	registry := newTestRegistry(t)
 
 	router := NewMux(SmartHttpDeps{
-		GitClient:        client,
-		RepoResolverFunc: resolver,
-		Logger:           zap.NewNop(),
-		Ids:              apiruntime.NewSequenceIDGenerator(),
-		Registry:         registry,
+		GitClient: client,
+		Store:     newTestStore(),
+		Logger:    zap.NewNop(),
+		Ids:       apiruntime.NewSequenceIDGenerator(),
+		Registry:  registry,
 	})
 	body := strings.NewReader("0011want abc123\n0000")
 	req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-upload-pack", body)
+	req.SetBasicAuth("test-writer", "test-password")
 	w := httptest.NewRecorder()
 
 	router.ServeHTTP(w, req)
@@ -217,9 +241,6 @@ func TestUploadPackHandler_StreamsResponse(t *testing.T) {
 }
 
 func TestHandler_PropagatesRequestContextToGitClient(t *testing.T) {
-	resolver := mockResolver(func(ns, repo string) (string, bool) {
-		return "test-repo-id", true
-	})
 	registry := newTestRegistry(t)
 
 	t.Run("info refs", func(t *testing.T) {
@@ -230,13 +251,14 @@ func TestHandler_PropagatesRequestContextToGitClient(t *testing.T) {
 			},
 		}
 		router := NewMux(SmartHttpDeps{
-			GitClient:        client,
-			RepoResolverFunc: resolver,
-			Logger:           zap.NewNop(),
-			Ids:              apiruntime.NewSequenceIDGenerator(),
-			Registry:         registry,
+			GitClient: client,
+			Store:     newTestStore(),
+			Logger:    zap.NewNop(),
+			Ids:       apiruntime.NewSequenceIDGenerator(),
+			Registry:  registry,
 		})
 		req := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-upload-pack", nil)
+		req.SetBasicAuth("test-writer", "test-password")
 		req, _ = requestWithContextMarker(req)
 		w := httptest.NewRecorder()
 
@@ -255,13 +277,14 @@ func TestHandler_PropagatesRequestContextToGitClient(t *testing.T) {
 			},
 		}
 		router := NewMux(SmartHttpDeps{
-			GitClient:        client,
-			RepoResolverFunc: resolver,
-			Logger:           zap.NewNop(),
-			Ids:              apiruntime.NewSequenceIDGenerator(),
-			Registry:         registry,
+			GitClient: client,
+			Store:     newTestStore(),
+			Logger:    zap.NewNop(),
+			Ids:       apiruntime.NewSequenceIDGenerator(),
+			Registry:  registry,
 		})
 		req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-upload-pack", strings.NewReader("0011want abc123\n0000"))
+		req.SetBasicAuth("test-writer", "test-password")
 		req, _ = requestWithContextMarker(req)
 		w := httptest.NewRecorder()
 
@@ -280,13 +303,14 @@ func TestHandler_PropagatesRequestContextToGitClient(t *testing.T) {
 			},
 		}
 		router := NewMux(SmartHttpDeps{
-			GitClient:        client,
-			RepoResolverFunc: resolver,
-			Logger:           zap.NewNop(),
-			Ids:              apiruntime.NewSequenceIDGenerator(),
-			Registry:         registry,
+			GitClient: client,
+			Store:     newTestStore(),
+			Logger:    zap.NewNop(),
+			Ids:       apiruntime.NewSequenceIDGenerator(),
+			Registry:  registry,
 		})
 		req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-receive-pack", strings.NewReader("pack-body"))
+		req.SetBasicAuth("test-writer", "test-password")
 		req, _ = requestWithContextMarker(req)
 		w := httptest.NewRecorder()
 
@@ -308,20 +332,18 @@ func TestReceivePackHandler_PipesBodyToGRPC(t *testing.T) {
 			return reportStatus, nil
 		},
 	}
-	resolver := mockResolver(func(ns, repo string) (string, bool) {
-		return "test-repo-id", true
-	})
 	registry := newTestRegistry(t)
 
 	packData := []byte("0053\x00\x00\x00\x00\x00\x00\x00\x00refs/heads/main\x00\x00PACK...")
 	router := NewMux(SmartHttpDeps{
-		GitClient:        client,
-		RepoResolverFunc: resolver,
-		Logger:           zap.NewNop(),
-		Ids:              apiruntime.NewSequenceIDGenerator(),
-		Registry:         registry,
+		GitClient: client,
+		Store:     newTestStore(),
+		Logger:    zap.NewNop(),
+		Ids:       apiruntime.NewSequenceIDGenerator(),
+		Registry:  registry,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-receive-pack", bytes.NewReader(packData))
+	req.SetBasicAuth("test-writer", "test-password")
 	req.SetPathValue("namespace", "gitstore")
 	req.SetPathValue("repo", "catalog")
 	w := httptest.NewRecorder()
@@ -348,19 +370,17 @@ func TestReceivePackHandler_PipesBodyToGRPC(t *testing.T) {
 // T009: unknown namespace/repo returns 404 with Git pkt-line error
 func TestHandler_UnknownRepo_Returns404(t *testing.T) {
 	client := &mockGitClient{}
-	resolver := mockResolver(func(ns, repo string) (string, bool) {
-		return "", false
-	})
 	registry := newTestRegistry(t)
 
 	router := NewMux(SmartHttpDeps{
-		GitClient:        client,
-		RepoResolverFunc: resolver,
-		Logger:           zap.NewNop(),
-		Ids:              apiruntime.NewSequenceIDGenerator(),
-		Registry:         registry,
+		GitClient: client,
+		Store:     newTestStore(),
+		Logger:    zap.NewNop(),
+		Ids:       apiruntime.NewSequenceIDGenerator(),
+		Registry:  registry,
 	})
 	req := httptest.NewRequest(http.MethodGet, "/unknown/repo/info/refs?service=git-upload-pack", nil)
+	req.SetBasicAuth("test-writer", "test-password")
 	w := httptest.NewRecorder()
 
 	router.ServeHTTP(w, req)
@@ -379,13 +399,12 @@ func TestHandler_UnknownRepo_Returns404(t *testing.T) {
 func TestRepoResolverNotFound(t *testing.T) {
 	store := &testutil.StubStore{} // both lookups return ErrNotFound by default
 
-	router := NewMuxWithStore(SmartHttpDeps{
-		GitClient:        &mockGitClient{},
-		RepoResolverFunc: func(_, _ string) (string, bool) { return "", false },
-		Store:            store,
-		Logger:           zap.NewNop(),
-		Ids:              apiruntime.NewSequenceIDGenerator(),
-		Registry:         newTestRegistry(t),
+	router := NewMux(SmartHttpDeps{
+		GitClient: &mockGitClient{},
+		Store:     store,
+		Logger:    zap.NewNop(),
+		Ids:       apiruntime.NewSequenceIDGenerator(),
+		Registry:  newTestRegistry(t),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/unknown-ns/unknown-repo/info/refs?service=git-upload-pack", nil)
@@ -435,13 +454,12 @@ func TestRepoResolverSetsContext(t *testing.T) {
 		nil,
 	)
 
-	router := NewMuxWithStore(SmartHttpDeps{
-		GitClient:        client,
-		RepoResolverFunc: func(_, _ string) (string, bool) { return "", false }, // legacy resolver not used
-		Store:            store,
-		Logger:           zap.NewNop(),
-		Ids:              apiruntime.NewSequenceIDGenerator(),
-		Registry:         registry,
+	router := NewMux(SmartHttpDeps{
+		GitClient: client,
+		Store:     store,
+		Logger:    zap.NewNop(),
+		Ids:       apiruntime.NewSequenceIDGenerator(),
+		Registry:  registry,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-upload-pack", nil)
@@ -485,13 +503,12 @@ func TestGitHttpAuthorizerReadOnly(t *testing.T) {
 		},
 	}
 
-	router := NewMuxWithStore(SmartHttpDeps{
-		GitClient:        &mockGitClient{},
-		RepoResolverFunc: func(_, _ string) (string, bool) { return "", false },
-		Store:            store,
-		Logger:           zap.NewNop(),
-		Ids:              apiruntime.NewSequenceIDGenerator(),
-		Registry:         registry,
+	router := NewMux(SmartHttpDeps{
+		GitClient: &mockGitClient{},
+		Store:     store,
+		Logger:    zap.NewNop(),
+		Ids:       apiruntime.NewSequenceIDGenerator(),
+		Registry:  registry,
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-receive-pack", strings.NewReader("pack"))
@@ -523,7 +540,7 @@ func TestGitHttpAuthorizerAnonymousDenyChallengesForCredentials(t *testing.T) {
 		},
 	}
 
-	router := NewMuxWithStore(SmartHttpDeps{
+	router := NewMux(SmartHttpDeps{
 		GitClient: &mockGitClient{}, Store: store, Logger: zap.NewNop(),
 		Ids: apiruntime.NewSequenceIDGenerator(), Registry: registry,
 	})
@@ -563,7 +580,7 @@ func TestGitHttpAuthorizerAnonymousReceivePackDiscoveryChallengesForCredentials(
 		},
 	}
 
-	router := NewMuxWithStore(SmartHttpDeps{
+	router := NewMux(SmartHttpDeps{
 		GitClient: &mockGitClient{}, Store: store, Logger: zap.NewNop(),
 		Ids: apiruntime.NewSequenceIDGenerator(), Registry: registry,
 	})
@@ -599,7 +616,7 @@ func TestGitHttpAuthorizerMarksPolicyApprovedAnonymousRead(t *testing.T) {
 			return []byte("001e# service=git-upload-pack\n0000"), gitv1.Service_SERVICE_GIT_UPLOAD_PACK, nil
 		},
 	}
-	router := NewMuxWithStore(SmartHttpDeps{
+	router := NewMux(SmartHttpDeps{
 		GitClient: client, Store: store, Logger: zap.NewNop(),
 		Ids: apiruntime.NewSequenceIDGenerator(), Registry: registry,
 	})
@@ -651,7 +668,7 @@ func TestGitHttpAuthorizerAllowAllAnonymousWriteChallengesForCredentials(t *test
 			return []byte("001e# service=git-receive-pack\n0000"), gitv1.Service_SERVICE_GIT_RECEIVE_PACK, nil
 		},
 	}
-	router := NewMuxWithStore(SmartHttpDeps{
+	router := NewMux(SmartHttpDeps{
 		GitClient: client, Store: store, Logger: zap.NewNop(),
 		Ids: apiruntime.NewSequenceIDGenerator(), Registry: registry,
 	})
@@ -694,13 +711,12 @@ func TestGitHttpAuthorizerWriteAllowed(t *testing.T) {
 		},
 	}
 
-	router := NewMuxWithStore(SmartHttpDeps{
-		GitClient:        client,
-		RepoResolverFunc: func(_, _ string) (string, bool) { return "", false },
-		Store:            store,
-		Logger:           zap.NewNop(),
-		Ids:              apiruntime.NewSequenceIDGenerator(),
-		Registry:         registry,
+	router := NewMux(SmartHttpDeps{
+		GitClient: client,
+		Store:     store,
+		Logger:    zap.NewNop(),
+		Ids:       apiruntime.NewSequenceIDGenerator(),
+		Registry:  registry,
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-receive-pack", strings.NewReader("pack"))
@@ -802,13 +818,12 @@ func TestReceivePackAttachesPushContext(t *testing.T) {
 		nil,
 	)
 
-	router := NewMuxWithStoreAndAuthz(SmartHttpDeps{
-		GitClient:        client,
-		RepoResolverFunc: func(_, _ string) (string, bool) { return "", false },
-		Store:            store,
-		Logger:           zap.NewNop(),
-		Ids:              apiruntime.NewSequenceIDGenerator(),
-		Registry:         registry,
+	router := NewMux(SmartHttpDeps{
+		GitClient: client,
+		Store:     store,
+		Logger:    zap.NewNop(),
+		Ids:       apiruntime.NewSequenceIDGenerator(),
+		Registry:  registry,
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-receive-pack", strings.NewReader("pack-body"))
@@ -826,7 +841,13 @@ func TestReceivePackAttachesPushContext(t *testing.T) {
 	require.NotNil(t, pc.Authorization)
 	require.NotNil(t, pc.Authorization.Actor)
 	assert.Equal(t, "writer", pc.Authorization.Actor.Subject)
+	assert.Equal(t, "basic", pc.Authorization.Actor.AuthMethod)
+	assert.Equal(t, repoID, pc.Authorization.RepositoryId)
+	assert.Equal(t, "repository.write.any", pc.Authorization.Action)
+	assert.Equal(t, "gitstore", pc.Namespace)
+	assert.Equal(t, "catalog", pc.RepositoryName)
 	assert.Equal(t, int64(52428800), pc.Policy.MaxPackSizeBytes)
+	assert.Equal(t, int64(10485760), pc.Policy.MaxFileSizeBytes)
 }
 
 // T010: gRPC unavailability returns 503 with Git pkt-line error, no retry
@@ -838,17 +859,14 @@ func TestHandler_GRPCUnavailable_Returns503(t *testing.T) {
 			return nil, gitv1.Service_SERVICE_UNSPECIFIED, errors.New("connection refused")
 		},
 	}
-	resolver := mockResolver(func(ns, repo string) (string, bool) {
-		return "test-repo-id", true
-	})
 	registry := newTestRegistry(t)
 
 	router := NewMux(SmartHttpDeps{
-		GitClient:        client,
-		RepoResolverFunc: resolver,
-		Logger:           zap.NewNop(),
-		Ids:              apiruntime.NewSequenceIDGenerator(),
-		Registry:         registry,
+		GitClient: client,
+		Store:     newTestStore(),
+		Logger:    zap.NewNop(),
+		Ids:       apiruntime.NewSequenceIDGenerator(),
+		Registry:  registry,
 	})
 	req := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-upload-pack", nil)
 	w := httptest.NewRecorder()

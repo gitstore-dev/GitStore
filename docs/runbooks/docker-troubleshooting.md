@@ -6,17 +6,11 @@ This page covers common local Docker Compose issues for the current GitStore sta
 
 The core compose stack includes:
 
-| Service | Container | Ports |
-|---|---|---|
-| API | `gitstore-api` | `4000`, `9000` (Git HTTP host), `6000` |
-| Git service | `gitstore-git-service` | `50051` |
-| Controller manager | `gitstore-controller-manager` | `5001` |
-
-The optional admin compose override adds:
-
-| Service | Container | Port |
-|---|---|---|
-| Admin | `gitstore-admin` | `3000` |
+| Service            | Container                     | Ports                                  |
+|--------------------|-------------------------------|----------------------------------------|
+| API                | `gitstore-api`                | `4000`, `9000` (Git HTTP host), `6000` |
+| Git service        | `gitstore-git-service`        | `50051`                                |
+| Controller manager | `gitstore-controller-manager` | `5001`                                 |
 
 Git clients connect to the API on Git Smart HTTP port `9000`. The Git service is internal gRPC storage/transport and stores bare repositories in the `git-repo-data-root` volume.
 
@@ -177,8 +171,8 @@ Check that:
 Check the admin and API logs:
 
 ```bash
-make admin-logs
 make logs SERVICE=api
+make logs SERVICE=controller-manager
 ```
 
 The compose default is:
@@ -191,13 +185,12 @@ For more admin-specific checks, see [docs/admin/quickstart.md](../admin/quicksta
 
 ## Log Commands
 
-| Scope | Command |
-|---|---|
-| API | `make logs SERVICE=api` |
-| Git service | `make logs SERVICE=git-service` |
+| Scope              | Command                                |
+|--------------------|----------------------------------------|
+| API                | `make logs SERVICE=api`                |
+| Git service        | `make logs SERVICE=git-service`        |
 | Controller manager | `make logs SERVICE=controller-manager` |
-| Admin | `make admin-logs` |
-| All services | `make logs` |
+| All services       | `make logs`                            |
 
 All services emit structured logs. Pipe JSON lines through `jq` when needed:
 
@@ -216,7 +209,7 @@ make down
 Remove volumes when you explicitly want to discard local repository and datastore state:
 
 ```bash
-docker compose -f compose.yml -f compose.scylla.yml -f compose.admin.yml down --volumes
+docker compose -f compose.yml -f compose.scylla.yml down --volumes
 ```
 
 Start again:

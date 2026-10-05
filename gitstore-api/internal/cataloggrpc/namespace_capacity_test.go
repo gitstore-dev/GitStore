@@ -111,6 +111,30 @@ func TestNamespaceCapacityThresholds(t *testing.T) {
 	assert.Equal(t, 5.0, namespaceCapacityGoroutineDriftLimit)
 }
 
+func TestNamespaceCapacityRequestFixtures(t *testing.T) {
+	server := newCatalogServer(t, newNamespacePolicyDatastore(t), nil)
+	valid, invalid := namespaceCapacityRequests()
+	for _, tc := range []struct {
+		name     string
+		request  *catalogv1.ValidateResourcesRequest
+		accepted bool
+	}{
+		{"valid", valid, true},
+		{"invalid", invalid, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Len(t, tc.request.Trees, 1)
+			require.Len(t, tc.request.Trees[0].ProposedBlobs, namespaceCapacityFilesPerRequest)
+			response, err := server.ValidateResources(context.Background(), tc.request)
+			require.NoError(t, err)
+			assert.Equal(t, tc.accepted, response.Accepted)
+			if !tc.accepted {
+				assert.NotEmpty(t, response.Errors)
+			}
+		})
+	}
+}
+
 func TestNamespaceCapacityProcessCPUExcludesIdleRuntimeCapacity(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("process CPU measurement is supported on Darwin and Linux")
@@ -603,10 +627,10 @@ spec:
 	invalidBlobs[0] = namespaceBlob("namespaces/invalid.md", "Invalid Name", "USER")
 	return &catalogv1.ValidateResourcesRequest{
 			RepositoryId: testRepoID,
-			Blobs:        validBlobs,
+			Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: validBlobs}},
 		}, &catalogv1.ValidateResourcesRequest{
 			RepositoryId: testRepoID,
-			Blobs:        invalidBlobs,
+			Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: invalidBlobs}},
 		}
 }
 

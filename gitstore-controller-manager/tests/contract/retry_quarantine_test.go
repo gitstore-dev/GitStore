@@ -7,18 +7,208 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/api"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/retry"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/stretchr/testify/require"
 )
+
+type diskReconcileFunc func(context.Context, types.WorkItemKey) types.ReconcileResult
+
+func (f diskReconcileFunc) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
+	return f(ctx, key)
+}
+
+func diskManagerStore(t *testing.T, rows int) *checkpoint.DiskStore {
+	t.Helper()
+	store, err := checkpoint.OpenDiskStore(t.TempDir(), "Widget")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	generation, err := store.BeginSnapshot(t.Context())
+	require.NoError(t, err)
+	for start := 0; start < rows; start += checkpoint.DiskPageItems {
+		var page []checkpoint.DiskItem
+		for i := start; i < min(rows, start+checkpoint.DiskPageItems); i++ {
+			page = append(page, checkpoint.DiskItem{
+				Key:     types.WorkItemKey{Kind: "Widget", Namespace: "shop", Name: fmt.Sprintf("work-%05d", i)},
+				Version: "1", Value: json.RawMessage(`{"ready":true}`),
+			})
+		}
+		require.NoError(t, store.PutSnapshotPage(t.Context(), generation, page))
+	}
+	require.NoError(t, store.FinishSnapshot(t.Context(), generation, "snapshot"))
+	return store
+}
+
+func TestDiskManagerCredentialOutagePreservesWorkUntilRecovery(t *testing.T) {
+	store := diskManagerStore(t, 1)
+	var ready atomic.Bool
+	var calls atomic.Int32
+	reconciler := diskReconcileFunc(func(context.Context, types.WorkItemKey) types.ReconcileResult {
+		calls.Add(1)
+		if !ready.Load() {
+			return types.ResultTransient(fmt.Errorf("shared provider outage: %w", types.ErrCredentialsUnavailable))
+		}
+		return types.ResultOK()
+	})
+	mgr := manager.New()
+	require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+		Kind: "Widget", Cache: newSyncedCache(), Disk: store, Reconciler: reconciler,
+		WorkerCount: 1, MaxAttempts: 1, StallThreshold: time.Minute,
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- mgr.Start(ctx) }()
+	t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
+	require.Eventually(t, func() bool { return calls.Load() >= 2 }, 3*time.Second, 10*time.Millisecond)
+	require.EqualValues(t, 1, store.Counts().Pending)
+	require.Zero(t, store.Counts().Poison)
+	ready.Store(true)
+	require.Eventually(t, func() bool { return store.Counts().Pending == 0 }, 3*time.Second, 10*time.Millisecond)
+	require.Zero(t, store.Counts().Poison)
+}
+
+func TestDiskManagerBoundsDispatchAndPreservesNewerInflightWork(t *testing.T) {
+	store := diskManagerStore(t, 5000)
+	gate := newSyncedCache()
+	release := make(chan struct{})
+	started := make(chan types.WorkItemKey, 2)
+	live := make(chan struct{}, 1)
+	var active, peak, firstCalls atomic.Int32
+	reconciler := diskReconcileFunc(func(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
+		n := active.Add(1)
+		defer active.Add(-1)
+		for old := peak.Load(); n > old; old = peak.Load() {
+			if peak.CompareAndSwap(old, n) {
+				break
+			}
+		}
+		if key.Name == "work-00000" {
+			firstCalls.Add(1)
+		}
+		if key.Name == "live" {
+			select {
+			case live <- struct{}{}:
+			default:
+			}
+		}
+		select {
+		case started <- key:
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return types.ResultTransient(ctx.Err())
+		case <-release:
+			return types.ResultOK()
+		}
+	})
+	mgr := manager.New()
+	require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+		Kind: "Widget", Cache: gate, Disk: store, Reconciler: reconciler, WorkerCount: 2,
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- mgr.Start(ctx) }()
+	t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(3 * time.Second):
+			t.Fatal("bounded workers did not start")
+		}
+	}
+	stats := mgr.KindStats()["Widget"]
+	require.EqualValues(t, 2, stats.ActiveWorkers)
+	require.Equal(t, 4998, stats.QueueDepth)
+	require.Empty(t, gate.List(), "the runtime gate must not retain the catalog")
+	require.NoError(t, mgr.Enqueue(types.WorkItemKey{Kind: "Widget", Namespace: "shop", Name: "work-00000"}))
+	require.NoError(t, mgr.Enqueue(types.WorkItemKey{Kind: "Widget", Namespace: "shop", Name: "live"}))
+	close(release)
+	select {
+	case <-live:
+	case <-time.After(3 * time.Second):
+		t.Fatal("live work was starved behind the snapshot backlog")
+	}
+	require.Eventually(t, func() bool { return firstCalls.Load() >= 2 }, 3*time.Second, time.Millisecond,
+		"old completion erased the updated in-flight key")
+	require.LessOrEqual(t, peak.Load(), int32(2))
+}
+
+func TestDiskDeferredWorkDoesNotReportAnIdleControllerAsStalled(t *testing.T) {
+	store := diskManagerStore(t, 1)
+	started := make(chan struct{}, 1)
+	mgr := manager.New()
+	require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+		Kind: "Widget", Cache: newSyncedCache(), Disk: store, WorkerCount: 1, StallThreshold: 20 * time.Millisecond,
+		Reconciler: diskReconcileFunc(func(context.Context, types.WorkItemKey) types.ReconcileResult {
+			started <- struct{}{}
+			return types.ResultAfter(time.Hour)
+		}),
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- mgr.Start(ctx) }()
+	t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("deferred work did not start")
+	}
+	after := time.Now().Add(50 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		stat := mgr.KindStats()["Widget"]
+		return time.Now().After(after) && stat.QueueDepth == 1 && stat.ActiveWorkers == 0 && !stat.Stalled
+	}, time.Second, time.Millisecond)
+}
+
+func TestDiskPoisonAPIIsPaginatedAndReportsStorageFailure(t *testing.T) {
+	store := diskManagerStore(t, 3)
+	work, err := store.Pending(t.Context(), "", 3)
+	require.NoError(t, err)
+	for _, item := range work {
+		ok, err := store.DeferWork(t.Context(), item.Key, item.Token, 0, "test failure", 2)
+		require.NoError(t, err)
+		require.True(t, ok)
+	}
+	mgr := manager.New()
+	require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+		Kind: "Widget", Cache: newSyncedCache(), Disk: store, Reconciler: &alwaysFailReconciler{},
+	}))
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /controller/v1/poison/{kind}", api.ListPoisonHandler(mgr))
+	cursor, count := "", 0
+	for range 4 {
+		request := httptest.NewRequest(http.MethodGet, "/controller/v1/poison/Widget?limit=1&after="+cursor, nil)
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		require.Equal(t, http.StatusOK, response.Code)
+		var page []*retry.PoisonItem
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &page))
+		require.LessOrEqual(t, len(page), 1)
+		count += len(page)
+		cursor = response.Header().Get("X-Next-Cursor")
+		if cursor == "" {
+			break
+		}
+	}
+	require.Equal(t, 3, count)
+	require.NoError(t, store.Close())
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/controller/v1/poison/Widget", nil))
+	require.Equal(t, http.StatusServiceUnavailable, response.Code, "disk failure must not look like an empty poison list")
+}
 
 // alwaysFailReconciler fails every call.
 type alwaysFailReconciler struct{}
@@ -215,25 +405,35 @@ func TestManager_IdleKindIsNotStalled(t *testing.T) {
 func TestPoisonAll_AggregatesAcrossKinds(t *testing.T) {
 	mgr := manager.New()
 	if err := mgr.Register(manager.ReconcilerRegistration{
-		Kind: "Alpha", Reconciler: &countingReconciler{}, Cache: newSyncedCache(),
+		Kind: "Alpha", Reconciler: &alwaysFailReconciler{}, Cache: newSyncedCache(),
 		MaxAttempts: 1, InitialInterval: 1 * time.Millisecond,
 		MaxInterval: 1 * time.Millisecond, Multiplier: 1, StallThreshold: time.Minute, WorkerCount: 1,
 	}); err != nil {
 		t.Fatalf("Register Alpha failed: %v", err)
 	}
 	if err := mgr.Register(manager.ReconcilerRegistration{
-		Kind: "Beta", Reconciler: &countingReconciler{}, Cache: newSyncedCache(),
+		Kind: "Beta", Reconciler: &alwaysFailReconciler{}, Cache: newSyncedCache(),
 		MaxAttempts: 1, InitialInterval: 1 * time.Millisecond,
 		MaxInterval: 1 * time.Millisecond, Multiplier: 1, StallThreshold: time.Minute, WorkerCount: 1,
 	}); err != nil {
 		t.Fatalf("Register Beta failed: %v", err)
 	}
 
-	alphaQS := mgr.QuarantineStore("Alpha")
-	betaQS := mgr.QuarantineStore("Beta")
-	alphaQS.Put(&retry.PoisonItem{Key: types.WorkItemKey{Kind: "Alpha", Namespace: "ns", Name: "a1"}})
-	betaQS.Put(&retry.PoisonItem{Key: types.WorkItemKey{Kind: "Beta", Namespace: "ns", Name: "b1"}})
-	betaQS.Put(&retry.PoisonItem{Key: types.WorkItemKey{Kind: "Beta", Namespace: "ns", Name: "b2"}})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- mgr.Start(ctx) }()
+	t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
+	for _, key := range []types.WorkItemKey{
+		{Kind: "Alpha", Namespace: "ns", Name: "a1"},
+		{Kind: "Beta", Namespace: "ns", Name: "b1"},
+		{Kind: "Beta", Namespace: "ns", Name: "b2"},
+	} {
+		require.NoError(t, mgr.Enqueue(key))
+	}
+	require.Eventually(t, func() bool {
+		items, _, err := mgr.ListPoisonPage(ctx, "_all", "", 256)
+		return err == nil && len(items) == 3
+	}, time.Second, time.Millisecond)
 
 	handler := api.ListPoisonHandler(mgr)
 	req := httptest.NewRequest(http.MethodGet, "/controller/v1/poison/_all", nil)

@@ -104,7 +104,7 @@ func TestProductCategoryEnqueueHandler_OnUpdate(t *testing.T) {
 }
 
 // TestProductCategoryIndexHandler_MaintainsIndexAcrossAddUpdateDelete covers
-// T025: the Product-cache event handler wired in registerProductWatch keeps
+// T025: a Product-cache event handler keeps
 // ProductCategoryIndex correct on add, a categoryRef change, and delete —
 // alongside the existing spec-042 count-fan-out handler above, not
 // replacing it.

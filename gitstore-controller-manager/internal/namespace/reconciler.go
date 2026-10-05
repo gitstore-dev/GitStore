@@ -68,7 +68,7 @@ type DeletionClient interface {
 
 // Reconciler implements types.Reconciler for Namespace resources.
 type Reconciler struct {
-	cache          cache.CacheAccessor[Namespace]
+	lookup         cache.LookupFunc[Namespace]
 	statusClient   status.StatusClient
 	repositories   RepositoryClient
 	deletionClient DeletionClient
@@ -76,8 +76,12 @@ type Reconciler struct {
 
 // NewReconciler returns a Namespace reconciler.
 func NewReconciler(c cache.CacheAccessor[Namespace], statusClient status.StatusClient, repositories RepositoryClient, deletionClient DeletionClient) *Reconciler {
+	return NewReconcilerWithLookup(cache.LookupFrom(c), statusClient, repositories, deletionClient)
+}
+
+func NewReconcilerWithLookup(lookup cache.LookupFunc[Namespace], statusClient status.StatusClient, repositories RepositoryClient, deletionClient DeletionClient) *Reconciler {
 	return &Reconciler{
-		cache:          c,
+		lookup:         lookup,
 		statusClient:   statusClient,
 		repositories:   repositories,
 		deletionClient: deletionClient,
@@ -86,7 +90,10 @@ func NewReconciler(c cache.CacheAccessor[Namespace], statusClient status.StatusC
 
 // Reconcile provisions active admitted namespaces and drains terminating ones.
 func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
-	current, ok := r.cache.Get(key)
+	current, ok, err := r.lookup(ctx, key)
+	if err != nil {
+		return types.ResultTransient(fmt.Errorf("namespace: read projection: %w", err))
+	}
 	if !ok {
 		// A queued key can outlive its object after watch replay, deletion, or a
 		// checkpointed controller restart. Absence is the reconciled state.

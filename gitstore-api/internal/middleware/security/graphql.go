@@ -236,7 +236,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			Extensions: map[string]any{"code": "FORBIDDEN"},
 		}
 	}
-	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isRepositoryQueryField(fc) && !isProductQueryField(fc) {
+	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isFileQueryField(fc) {
 		return next(ctx)
 	}
 	var authz auth.AuthZProvider
@@ -251,7 +251,13 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			}
 		})
 	}
-	if isProductQueryField(fc) {
+	if isFileQueryField(fc) {
+		namespace, _ := directStringArg(fc.Args, "namespace")
+		name, _ := directStringArg(fc.Args, "name")
+		if err := a.authorizeFileRead(ctx, principal, authz, namespace, name); err != nil {
+			return nil, err
+		}
+	} else if isProductQueryField(fc) {
 		if err := a.authorizeProductQueryField(ctx, fc, principal, authz); err != nil {
 			return nil, err
 		}
@@ -263,6 +269,9 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		return nil, err
 	}
 	if err := a.authorizeProductNodeField(ctx, fc, principal, authz); err != nil {
+		return nil, err
+	}
+	if err := a.authorizeFileNodeField(ctx, fc, principal, authz); err != nil {
 		return nil, err
 	}
 
@@ -680,13 +689,75 @@ func isProductQueryField(fc *graphql.FieldContext) bool {
 	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "product" || fc.Field.Name == "products")
 }
 
+func isFileQueryField(fc *graphql.FieldContext) bool {
+	return fc != nil && fc.Object == "Query" && fc.Field.Name == "file"
+}
+
+func (a *Authorize) authorizeFileRead(ctx context.Context, principal *auth.Principal, authz auth.AuthZProvider, namespace, name string) error {
+	if authz == nil || a.store == nil {
+		return gqlerror.Errorf("authorization service unavailable")
+	}
+	owner := ""
+	ns, err := a.store.GetNamespaceByName(ctx, namespace)
+	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+		return gqlerror.Errorf("authorization error")
+	}
+	if ns != nil {
+		owner = ns.EffectiveOwnerSub()
+	}
+	decision, err := authz.Authorize(ctx, principal, "file.read", auth.ResourceContext{
+		Kind: "File", Name: name, OwnerSub: owner, Attrs: map[string]any{"namespace": namespace},
+	})
+	if err != nil {
+		return gqlerror.Errorf("authorization error")
+	}
+	if decision.Outcome != auth.OutcomeAllow {
+		return &gqlerror.Error{Message: "permission denied: file.read", Extensions: map[string]any{"code": "FORBIDDEN"}}
+	}
+	return nil
+}
+
+func (a *Authorize) authorizeFileNodeField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) error {
+	if fc.Object != "Query" || (fc.Field.Name != "node" && fc.Field.Name != "nodes") {
+		return nil
+	}
+	ids, _ := directStringsArg(fc.Args, "ids")
+	if fc.Field.Name == "node" {
+		id, _ := directStringArg(fc.Args, "id")
+		ids = []string{id}
+	}
+	for _, id := range ids {
+		kind, uid, err := decodeGlobalID(id)
+		if err != nil || kind != "File" {
+			continue
+		}
+		fileStore, ok := a.store.(interface {
+			GetFile(context.Context, string) (*datastore.File, error)
+		})
+		if !ok {
+			return gqlerror.Errorf("authorization service unavailable")
+		}
+		file, err := fileStore.GetFile(ctx, uid)
+		if errors.Is(err, datastore.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return gqlerror.Errorf("authorization error")
+		}
+		if err := a.authorizeFileRead(ctx, principal, authz, file.Namespace, file.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func graphqlFieldRequiresAuthorization(fc *graphql.FieldContext) bool {
 	if fc == nil {
 		return false
 	}
 	switch fc.Object {
 	case "Query":
-		return fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node" || fc.Field.Name == "nodes"
+		return isFileQueryField(fc) || fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node" || fc.Field.Name == "nodes"
 	case "Mutation":
 		switch fc.Field.Name {
 		case "createProduct", "updateProduct", "deleteProduct", "completeProductDeletion", "createRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "provisionNamespaceSystemRepository", "completeRepositoryDeletion", "provisionRepositoryStorage", "updateCategoryStatus", "updateProductStatus", "updateNamespaceStatus", "deleteCategory", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":
@@ -1083,9 +1154,13 @@ func (a *Authorize) authorizeSubscription(
 		kind = "Repository"
 	case "watchProducts":
 		kind = "Product"
+	case "watchCategories":
+		kind = "CategoryTaxonomy"
 	case "watchResources":
 		kind, _ = directStringArg(fc.Args, "kind")
-		if kind != "File" && kind != "Namespace" && kind != "Repository" && kind != "Product" {
+		if kind != "File" && kind != "Namespace" && kind != "Repository" && kind != "Product" && kind != "CategoryTaxonomy" {
+			// No other kind has a durable watch source; the resolver
+			// rejects it with UNSUPPORTED_KIND without opening a stream.
 			return next(ctx)
 		}
 	default:
@@ -1094,9 +1169,11 @@ func (a *Authorize) authorizeSubscription(
 	if authz == nil {
 		return nil, gqlerror.Errorf("authorization service unavailable")
 	}
+	// Every kind, including CategoryTaxonomy, uses the ADR 0010 slug
+	// grammar: lowerCamel(kind).watch.
 	action := lowerCamelFirst(kind) + ".watch"
 	resource := auth.ResourceContext{Kind: kind, Attrs: map[string]any{}}
-	if kind == "File" || kind == "Repository" || kind == "Product" {
+	if kind == "File" || kind == "Repository" || kind == "Product" || kind == "CategoryTaxonomy" {
 		namespace, _ := directStringArg(fc.Args, "namespace")
 		resource.Attrs["namespace"] = namespace
 	}

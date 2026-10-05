@@ -38,7 +38,7 @@ func NewDatastore(cfg config.DatastoreConfig, log *zap.Logger, watchConfig ...co
 func NamespaceWatchJournal(store datastore.Datastore) (datastore.NamespaceWatchJournal, error) {
 	capable, ok := store.(datastore.NamespaceWatchCapable)
 	if !ok || capable.NamespaceWatchJournal() == nil {
-		return nil, fmt.Errorf("datastore does not implement the Namespace watch journal capability")
+		return nil, fmt.Errorf("datastore does not implement the resource watch journal capability")
 	}
 	return capable.NamespaceWatchJournal(), nil
 }

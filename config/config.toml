@@ -90,18 +90,22 @@ policy_file = "/etc/gitstore/policy.yaml"
 [controller]
 port = 5001
 api_uri = "http://api:4000/graphql"
+[controller.api_client]
+# Shared across all reconciliation kinds; leave room under the API's IP budget
+# for credential renewal. Replicas sharing an egress IP must share that budget.
+requests_per_second = 40
+burst = 10
+
 # The UID is provisioned by the Compose enrollment job into a controller-only mount.
 [controller.serviceaccount]
 namespace = "controllers"
 name = "gitstore-controller-manager"
-key_id = "controller-key"
-key_ref = { kind = "SecretRef", name = "gitstore-controller-manager-signing-key", key = "privateKey" }
+key_ref = { kind = "SecretRef", name = "gitstore-controller-manager-signing-key" }
 assertion_audience = "gitstore-api/serviceaccount-token"
 access_token_audience = "gitstore-api"
 
 [controller.secret_providers.bootstrap]
 type = "file"
-format = "raw"
 base_path = "/run/secrets"
 
 [controller.reconcile]

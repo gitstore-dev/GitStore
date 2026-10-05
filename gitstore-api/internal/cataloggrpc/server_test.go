@@ -20,7 +20,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -60,6 +59,37 @@ func TestNewServerRequiresDatastore(t *testing.T) {
 	require.ErrorContains(t, err, "datastore is required")
 }
 
+func TestValidateResourcesRequiresTrees(t *testing.T) {
+	srv := newCatalogServer(t, newTestDatastore(t), nil)
+	response, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+	})
+	require.Nil(t, response)
+	require.Equal(t, codes.InvalidArgument, grpcstatus.Code(err))
+}
+
+func TestAdmitResourcesRequiresActorSubject(t *testing.T) {
+	store := newTestDatastore(t)
+	git := &mockGitReader{
+		listFilesFunc: func(context.Context, string, string, string) ([]string, error) {
+			t.Fatal("missing actor must be rejected before reading the Git tree")
+			return nil, nil
+		},
+	}
+	srv := newCatalogServer(t, store, git)
+	for _, actor := range []string{"", " \t\n"} {
+		response, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+			RepositoryId: testRepoID,
+			NewCommitSha: strings.Repeat("a", 40),
+			RefName:      "refs/heads/main",
+			ActorSubject: actor,
+		})
+		require.Nil(t, response)
+		require.Equal(t, codes.InvalidArgument, grpcstatus.Code(err))
+	}
+	assert.Empty(t, journalEvents(t, store, "Product"))
+}
+
 func TestNewServerRequiresLogger(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -82,9 +112,9 @@ func TestNewServerDefaultsOptionalDependencies(t *testing.T) {
 
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "products/widget.md", BlobOid: "abc", Content: []byte(validProduct)},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	assert.True(t, resp.Accepted)
@@ -124,10 +154,10 @@ func TestValidateResources_NamespaceRepositoryPolicy(t *testing.T) {
 	t.Run("accepts system repository path", func(t *testing.T) {
 		resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 			RepositoryId: testRepoID,
-			Blobs: []*catalogv1.ResourceBlob{{
+			Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{
 				Path:    "namespaces/acme-store.md",
 				Content: namespaceManifest("acme-store", "Acme Store", "USER"),
-			}},
+			}}}},
 		})
 		require.NoError(t, err)
 		assert.True(t, resp.Accepted)
@@ -136,10 +166,10 @@ func TestValidateResources_NamespaceRepositoryPolicy(t *testing.T) {
 	t.Run("rejects other repository", func(t *testing.T) {
 		resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 			RepositoryId: wrongNamespaceRepoID,
-			Blobs: []*catalogv1.ResourceBlob{{
+			Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{
 				Path:    "namespaces/acme-store.md",
 				Content: namespaceManifest("acme-store", "Acme Store", "USER"),
-			}},
+			}}}},
 		})
 		require.NoError(t, err)
 		assert.False(t, resp.Accepted)
@@ -150,10 +180,10 @@ func TestValidateResources_NamespaceRepositoryPolicy(t *testing.T) {
 	t.Run("rejects wrong path", func(t *testing.T) {
 		resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 			RepositoryId: testRepoID,
-			Blobs: []*catalogv1.ResourceBlob{{
+			Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{
 				Path:    "catalog/acme-store.md",
 				Content: namespaceManifest("acme-store", "Acme Store", "USER"),
-			}},
+			}}}},
 		})
 		require.NoError(t, err)
 		assert.False(t, resp.Accepted)
@@ -207,6 +237,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 
 	current = b
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: b,
@@ -226,6 +257,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 
 	current = c
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: b,
 		NewCommitSha: c,
@@ -271,6 +303,7 @@ spec:
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: a,
@@ -288,6 +321,7 @@ spec:
 
 	current = b
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: b,
@@ -360,6 +394,7 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 	olderDone := make(chan error, 1)
 	go func() {
 		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+			ActorSubject: "test-admission-actor",
 			RepositoryId: testRepoID,
 			OldCommitSha: initial,
 			NewCommitSha: a,
@@ -380,6 +415,7 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 	current = b
 	mu.Unlock()
 	_, err := newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: b,
@@ -416,6 +452,7 @@ func TestAdmitResources_NamespaceBootstrapNameRejected(t *testing.T) {
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: a,
@@ -436,9 +473,9 @@ func TestValidateResources_ValidBlob_Accepted(t *testing.T) {
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "products/widget.md", BlobOid: "abc", Content: []byte(validProduct)},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	assert.True(t, resp.Accepted, "expected accepted=true for valid blob")
@@ -462,9 +499,9 @@ status:
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "products/bad.md", BlobOid: "abc", Content: []byte(content)},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	assert.False(t, resp.Accepted, "expected accepted=false for status key")
@@ -481,9 +518,9 @@ func TestValidateResources_TitleTooLong_Rejected(t *testing.T) {
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "products/long.md", BlobOid: "abc", Content: []byte(content)},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	assert.False(t, resp.Accepted)
@@ -510,10 +547,10 @@ status:
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "products/widget.md", BlobOid: "aaa", Content: []byte(validProduct)},
 			{Path: "products/bad.md", BlobOid: "bbb", Content: []byte(badContent)},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	assert.False(t, resp.Accepted, "expected rejected because one blob is invalid")
@@ -529,9 +566,9 @@ func TestValidateResources_NonfrontmatterBlob_NoError(t *testing.T) {
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "README.md", BlobOid: "abc", Content: content},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	assert.True(t, resp.Accepted, "non-frontmatter blobs must be no-ops")
@@ -562,7 +599,7 @@ func TestValidateResources_EmptyBlobs_Accepted(t *testing.T) {
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs:        nil,
+		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: nil}},
 	})
 	require.NoError(t, err)
 	assert.True(t, resp.Accepted)
@@ -625,19 +662,20 @@ func TestValidateAndAdmitResources_File(t *testing.T) {
 	})
 	validation, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs:        []*catalogv1.ResourceBlob{{Path: "files/hero.md", Content: makeFile("hero")}},
+		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "files/hero.md", Content: makeFile("hero")}}}},
 	})
 	require.NoError(t, err)
 	require.True(t, validation.Accepted)
 	invalid, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs:        []*catalogv1.ResourceBlob{{Path: "files/bad.md", Content: []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: bad\nspec:\n  contentType: image/jpeg\n  source:\n    type: unsupported\n    uri: s3://bucket/bad\n---\n")}},
+		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "files/bad.md", Content: []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: bad\nspec:\n  contentType: image/jpeg\n  source:\n    type: unsupported\n    uri: s3://bucket/bad\n---\n")}}}},
 	})
 	require.NoError(t, err)
 	require.False(t, invalid.Accepted)
 	require.NotEmpty(t, invalid.Errors)
 	assert.Contains(t, invalid.Errors[0].Message, "spec.source.type")
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -656,10 +694,10 @@ func TestValidateResources_FileDuplicateIdentityRejected(t *testing.T) {
 	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/hero\n---\n")
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "files/hero.md", Content: content},
 			{Path: "files/hero-copy.md", Content: content},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	require.False(t, resp.Accepted)
@@ -672,7 +710,7 @@ func TestValidateResources_FileAggregatesVariantAndCredentialsErrors(t *testing.
 	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: broken\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/broken\n    credentialsRef:\n      kind: CredentialsRef\n      type: aws-access-key/v1\n      secretRef:\n        kind: SecretRef\n        name: cloud\n        namespace: other\n  processing:\n    image:\n      variants:\n        - name: \"\"\n---\n")
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs:        []*catalogv1.ResourceBlob{{Path: "files/broken.md", Content: content}},
+		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "files/broken.md", Content: content}}}},
 	})
 	require.NoError(t, err)
 	require.False(t, resp.Accepted)
@@ -693,11 +731,13 @@ func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
 	})
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	current = b
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -706,6 +746,7 @@ func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
 	assert.Contains(t, string(file.Spec), `"ContentType":"image/jpeg"`)
 	current = c
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID, OldCommitSha: b, NewCommitSha: c, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -786,11 +827,27 @@ func makeProductWithCategoryRef(name, categoryRef string) []byte {
 	return []byte("---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: " + name + "\n  namespace: gitstore\nspec:\n  title: " + name + "\n  categoryRef:\n    name: " + categoryRef + "\n---\n")
 }
 
-// T006 (spec 042): a product created with a categoryRef publishes an Added
-// eventbus.Event with Kind "Product" and the correct Namespace/Name.
-func TestAdmitResources_NewProductWithCategoryRef_PublishesAddedEvent(t *testing.T) {
+// journalEvents returns the committed durable-journal events of kind, in
+// journal order. Admission no longer publishes to a process-local bus: every
+// committed write reaches watchers through the shared journal.
+func journalEvents(t *testing.T, store datastore.Datastore, kind string) []datastore.ResourceWatchEvent {
+	t.Helper()
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	all, err := journal.ReadAfter(context.Background(), datastore.ResourceWatchCursor{}, 1000)
+	require.NoError(t, err)
+	var out []datastore.ResourceWatchEvent
+	for _, event := range all {
+		if event.Kind == kind {
+			out = append(out, event)
+		}
+	}
+	return out
+}
+
+// T006 (spec 042): a product created with a categoryRef is journaled as
+// Added with the correct Namespace/Name.
+func TestAdmitResources_NewProductWithCategoryRef_JournalsAddedEvent(t *testing.T) {
 	memStore := newTestDatastore(t)
-	bus := eventbus.New(100)
 	git := &mockGitReader{
 		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
 			return []string{"products/widget.md"}, nil
@@ -799,132 +856,61 @@ func TestAdmitResources_NewProductWithCategoryRef_PublishesAddedEvent(t *testing
 			return makeProductWithCategoryRef("widget", "electronics"), nil
 		},
 	}
-	srv := newCatalogServer(t, memStore, git, func(deps *cataloggrpc.ServerDeps) {
-		deps.EventBus = bus
-	})
+	srv := newCatalogServer(t, memStore, git)
 
-	events, unsubscribe, err := bus.Subscribe("Product", "")
-	require.NoError(t, err)
-	defer unsubscribe()
-
-	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
 
-	select {
-	case ev := <-events:
-		assert.Equal(t, eventbus.Added, ev.Type)
-		assert.Equal(t, "Product", ev.Kind)
-		assert.Equal(t, "gitstore", ev.Namespace)
-		assert.Equal(t, "widget", ev.Name)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for Product Added event")
-	}
+	events := journalEvents(t, memStore, "Product")
+	require.Len(t, events, 1)
+	assert.Equal(t, datastore.ResourceWatchAdded, events[0].Type)
+	assert.Equal(t, "gitstore", events[0].Namespace)
+	assert.Equal(t, "widget", events[0].Name)
 }
 
-// T025 (spec 042, part a): an update that changes categoryRef publishes a
-// Modified eventbus.Event.
-func TestAdmitResources_UpdateProductCategoryRef_PublishesModifiedEvent(t *testing.T) {
+// T025 (spec 042): every committed Product update, whether it changes the
+// categoryRef or only other spec fields, is journaled as Modified so
+// downstream category counts and generic watchers observe it.
+func TestAdmitResources_UpdateProduct_JournalsModifiedEvents(t *testing.T) {
 	memStore := newTestDatastore(t)
-	bus := eventbus.New(100)
-	ref := ""
+	ref, title := "electronics", "Widget"
 	git := &mockGitReader{
 		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
 			return []string{"products/widget.md"}, nil
 		},
 		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
-			return makeProductWithCategoryRef("widget", ref), nil
+			return []byte("---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: widget\n  namespace: gitstore\nspec:\n  title: " + title + "\n  categoryRef:\n    name: " + ref + "\n---\n"), nil
 		},
 	}
-	srv := newCatalogServer(t, memStore, git, func(deps *cataloggrpc.ServerDeps) {
-		deps.EventBus = bus
-	})
-
-	events, unsubscribe, err := bus.Subscribe("Product", "")
-	require.NoError(t, err)
-	defer unsubscribe()
-
-	ref = "electronics"
-	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
-	})
-	require.NoError(t, err)
-	select {
-	case ev := <-events:
-		assert.Equal(t, eventbus.Added, ev.Type)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for Added event")
+	srv := newCatalogServer(t, memStore, git)
+	admit := func(sha string) {
+		t.Helper()
+		_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+			ActorSubject: "test-admission-actor",
+			RepositoryId: testRepoID,
+			NewCommitSha: strings.Repeat(sha, 40),
+			RefName:      "refs/heads/main",
+		})
+		require.NoError(t, err)
 	}
 
+	admit("a")
 	ref = "computers"
-	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("b", 40),
-		RefName:      "refs/heads/main",
-	})
-	require.NoError(t, err)
-
-	select {
-	case ev := <-events:
-		assert.Equal(t, eventbus.Modified, ev.Type)
-		assert.Equal(t, "Product", ev.Kind)
-		assert.Equal(t, "widget", ev.Name)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for Modified event after categoryRef change")
-	}
-}
-
-// T025 (spec 042, part b): an update that changes only price/description
-// (same categoryRef) does NOT publish an event.
-func TestAdmitResources_UpdateProductNonCategoryField_DoesNotPublishEvent(t *testing.T) {
-	memStore := newTestDatastore(t)
-	bus := eventbus.New(100)
-	title := "Widget"
-	git := &mockGitReader{
-		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
-			return []string{"products/widget.md"}, nil
-		},
-		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
-			return []byte("---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: widget\n  namespace: gitstore\nspec:\n  title: " + title + "\n  categoryRef:\n    name: electronics\n---\n"), nil
-		},
-	}
-	srv := newCatalogServer(t, memStore, git, func(deps *cataloggrpc.ServerDeps) {
-		deps.EventBus = bus
-	})
-
-	events, unsubscribe, err := bus.Subscribe("Product", "")
-	require.NoError(t, err)
-	defer unsubscribe()
-
-	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
-	})
-	require.NoError(t, err)
-	select {
-	case <-events:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for Added event")
-	}
-
+	admit("b")
 	title = "Widget Deluxe"
-	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("b", 40),
-		RefName:      "refs/heads/main",
-	})
-	require.NoError(t, err)
+	admit("c")
 
-	select {
-	case ev := <-events:
-		t.Fatalf("expected no event for a non-categoryRef spec change, got %+v", ev)
-	case <-time.After(50 * time.Millisecond):
+	events := journalEvents(t, memStore, "Product")
+	require.Len(t, events, 3)
+	assert.Equal(t, datastore.ResourceWatchAdded, events[0].Type)
+	for _, event := range events[1:] {
+		assert.Equal(t, datastore.ResourceWatchModified, event.Type)
+		assert.Equal(t, "widget", event.Name)
 	}
 
 	p, err := memStore.GetProductByName(context.Background(), "gitstore", "widget")
@@ -1000,6 +986,7 @@ func TestAdmitResources_TwoProducts_BothStored(t *testing.T) {
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1030,6 +1017,7 @@ func TestAdmitResources_OneParseFailure_OtherStored(t *testing.T) {
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1057,6 +1045,7 @@ func TestAdmitResources_AdmissionAcceptedConditionSet(t *testing.T) {
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1106,9 +1095,9 @@ func TestValidateResources_CategoryTaxonomy_Accepted(t *testing.T) {
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "categories/electronics.md", BlobOid: "abc", Content: []byte(validCategoryTaxonomy)},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	assert.True(t, resp.Accepted)
@@ -1128,9 +1117,9 @@ spec: {}
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "categories/electronics.md", BlobOid: "abc", Content: []byte(content)},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	assert.False(t, resp.Accepted)
@@ -1151,9 +1140,9 @@ spec:
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "categories/electronics.md", BlobOid: "abc", Content: []byte(content)},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	assert.False(t, resp.Accepted)
@@ -1177,9 +1166,9 @@ status:
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "categories/electronics.md", BlobOid: "abc", Content: []byte(content)},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	assert.False(t, resp.Accepted)
@@ -1200,9 +1189,9 @@ spec:
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "things/foo.md", BlobOid: "abc", Content: []byte(content)},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	assert.False(t, resp.Accepted)
@@ -1214,10 +1203,10 @@ func TestValidateResources_ProductAndCategoryTaxonomy_BothValidated(t *testing.T
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs: []*catalogv1.ResourceBlob{
+		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
 			{Path: "products/widget.md", BlobOid: "abc", Content: []byte(validProduct)},
 			{Path: "categories/electronics.md", BlobOid: "def", Content: []byte(validCategoryTaxonomy)},
-		},
+		}}},
 	})
 	require.NoError(t, err)
 	assert.True(t, resp.Accepted)
@@ -1236,7 +1225,7 @@ func TestValidateResources_ProductLifecycleState(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			content := strings.Replace(string(makeProduct("widget")), "  title: widget", "  title: widget\n  lifecycle:\n    state: "+tc.state, 1)
-			response, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{RepositoryId: testRepoID, Blobs: []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(content)}}})
+			response, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{RepositoryId: testRepoID, Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(content)}}}}})
 			require.NoError(t, err)
 			assert.Equal(t, tc.accepted, response.Accepted)
 		})
@@ -1278,6 +1267,7 @@ func TestAdmitResources_CategoryTaxonomy_Created(t *testing.T) {
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1310,6 +1300,7 @@ func TestAdmitResources_CategoryTaxonomy_Updated(t *testing.T) {
 
 	// First admission
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1323,6 +1314,7 @@ func TestAdmitResources_CategoryTaxonomy_Updated(t *testing.T) {
 
 	// Second admission — update
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("b", 40),
 		RefName:      "refs/heads/main",
@@ -1348,6 +1340,7 @@ func TestAdmitResources_CategoryTaxonomy_AdmissionAcceptedCondition(t *testing.T
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1387,6 +1380,7 @@ func TestAdmitResources_CategoryTaxonomy_RootAncestorPath(t *testing.T) {
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1418,7 +1412,7 @@ spec:
 `)
 }
 
-func deletionValidationTree(oldResources, proposedResources map[string][]byte) *catalogv1.CategoryTaxonomyDeletionTree {
+func deletionValidationTree(oldResources, proposedResources map[string][]byte) *catalogv1.ResourceValidationTree {
 	toBlobs := func(resources map[string][]byte) []*catalogv1.ResourceBlob {
 		blobs := make([]*catalogv1.ResourceBlob, 0, len(resources))
 		for path, content := range resources {
@@ -1430,13 +1424,13 @@ func deletionValidationTree(oldResources, proposedResources map[string][]byte) *
 		}
 		return blobs
 	}
-	return &catalogv1.CategoryTaxonomyDeletionTree{
+	return &catalogv1.ResourceValidationTree{
 		OldBlobs:      toBlobs(oldResources),
 		ProposedBlobs: toBlobs(proposedResources),
 	}
 }
 
-func TestValidateCategoryTaxonomyDeletionUsesProposedTree(t *testing.T) {
+func TestValidateResourceDeletionsCategoryTaxonomyUsesProposedTree(t *testing.T) {
 	srv := newCatalogServer(t, newTestDatastore(t), nil)
 	parent := makeCategoryTaxonomy("parent")
 	child := makeCategoryTaxonomyWithParent("child", "parent")
@@ -1476,7 +1470,7 @@ spec:
 
 	tests := []struct {
 		name     string
-		tree     *catalogv1.CategoryTaxonomyDeletionTree
+		tree     *catalogv1.ResourceValidationTree
 		accepted bool
 	}{
 		{
@@ -1538,10 +1532,10 @@ spec:
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			response, err := srv.ValidateCategoryTaxonomyDeletion(context.Background(),
-				&catalogv1.ValidateCategoryTaxonomyDeletionRequest{
+			response, err := srv.ValidateResourceDeletions(context.Background(),
+				&catalogv1.ValidateResourceDeletionsRequest{
 					RepositoryId: testRepoID,
-					Trees:        []*catalogv1.CategoryTaxonomyDeletionTree{tt.tree},
+					Trees:        []*catalogv1.ResourceValidationTree{tt.tree},
 				})
 			require.NoError(t, err)
 			assert.Equal(t, tt.accepted, response.Accepted)
@@ -1552,7 +1546,7 @@ spec:
 	}
 }
 
-func TestValidateCategoryTaxonomyDeletionRejectsIndexedChildOutsideProposedTree(t *testing.T) {
+func TestValidateResourceDeletionsCategoryTaxonomyRejectsIndexedChildOutsideProposedTree(t *testing.T) {
 	store := newTestDatastore(t)
 	ctx := context.Background()
 	parent := &datastore.CategoryTaxonomy{
@@ -1568,9 +1562,9 @@ func TestValidateCategoryTaxonomyDeletionRejectsIndexedChildOutsideProposedTree(
 	require.NoError(t, store.CreateCategoryTaxonomy(ctx, child))
 
 	srv := newCatalogServer(t, store, nil)
-	response, err := srv.ValidateCategoryTaxonomyDeletion(ctx, &catalogv1.ValidateCategoryTaxonomyDeletionRequest{
+	response, err := srv.ValidateResourceDeletions(ctx, &catalogv1.ValidateResourceDeletionsRequest{
 		RepositoryId: testRepoID,
-		Trees: []*catalogv1.CategoryTaxonomyDeletionTree{deletionValidationTree(
+		Trees: []*catalogv1.ResourceValidationTree{deletionValidationTree(
 			map[string][]byte{"categories/parent.md": makeCategoryTaxonomy("parent")},
 			map[string][]byte{},
 		)},
@@ -1625,6 +1619,7 @@ func TestAdmitResources_IntraPushCycle_BothStoredWithAcyclicFalse(t *testing.T) 
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1674,6 +1669,7 @@ func TestAdmitResources_ValidChain_BothStoredWithAcyclicTrue(t *testing.T) {
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1722,6 +1718,7 @@ func TestAdmitResources_RootCategory_AncestorPathEqualsName(t *testing.T) {
 	}
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1747,6 +1744,7 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 	}
 	srv := newCatalogServer(t, memStore, git1)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1764,6 +1762,7 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 	}
 	srv2 := newCatalogServer(t, memStore, git2)
 	_, err = srv2.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("b", 40),
 		RefName:      "refs/heads/main",
@@ -1800,6 +1799,7 @@ func TestAdmitResources_CoCreation_ParentAndChildInSamePush(t *testing.T) {
 	}
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1823,6 +1823,7 @@ func TestAdmitResources_ChildWithMissingParent_TentativeRoot_ParentResolvedFalse
 	}
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1873,6 +1874,7 @@ func TestAdmitResources_DeepCoCreation_GrandchildAncestorPath(t *testing.T) {
 	}
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1907,6 +1909,7 @@ func TestAdmitResources_TailCycle_AllMembersMarkedAcyclicFalse(t *testing.T) {
 	}
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -1961,7 +1964,7 @@ body
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs:        []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}},
+		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}}}},
 	})
 	require.NoError(t, err)
 	assert.True(t, resp.Accepted)
@@ -1986,7 +1989,7 @@ body
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs:        []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}},
+		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}}}},
 	})
 	require.NoError(t, err)
 	assert.False(t, resp.Accepted)
@@ -2010,7 +2013,7 @@ body
 	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Blobs:        []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}},
+		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}}}},
 	})
 	require.NoError(t, err)
 	assert.False(t, resp.Accepted)
@@ -2048,6 +2051,7 @@ body
 	}
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: "abc123",
 		RefName:      "refs/heads/main",
@@ -2102,6 +2106,7 @@ body
 	}
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: "abc123",
 		RefName:      "refs/heads/main",
@@ -2140,6 +2145,7 @@ body
 	}
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: "abc123",
 		RefName:      "refs/heads/main",
@@ -2326,6 +2332,7 @@ func newTreeGitReader(current *string, files map[string]map[string][]byte) *mock
 func admitDelta(t *testing.T, srv *cataloggrpc.Server, oldCommit, newCommit string) {
 	t.Helper()
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: oldCommit,
 		NewCommitSha: newCommit,
@@ -2394,6 +2401,7 @@ func TestAdmitResources_DeleteRejectsConcurrentReownership(t *testing.T) {
 
 	current = b
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: b,
@@ -2518,14 +2526,11 @@ func TestAdmitResources_ReparentChildBeforeDeletingFormerParent(t *testing.T) {
 	assert.NotNil(t, parent.DeletionTimestamp)
 }
 
-// T017 (spec 042): deleting a product with a categoryRef publishes a
-// Deleted eventbus.Event with Kind "Product", using the product's
-// last-known namespace/name (its categoryRef itself is only recoverable
-// downstream from the controller-manager's own cache, per research.md R2 —
-// this event's Namespace/Name is what the consumer needs).
-func TestAdmitResources_DeleteProductWithCategoryRef_PublishesTerminatingEvent(t *testing.T) {
+// T017 (spec 042): deleting a product with a categoryRef journals the
+// Terminating transition as Modified with the product's last-known
+// namespace/name, which is what the downstream category consumer needs.
+func TestAdmitResources_DeleteProductWithCategoryRef_JournalsTerminatingEvent(t *testing.T) {
 	store := newTestDatastore(t)
-	bus := eventbus.New(100)
 	zero := strings.Repeat("0", 40)
 	a := strings.Repeat("a", 40)
 	b := strings.Repeat("b", 40)
@@ -2534,35 +2539,21 @@ func TestAdmitResources_DeleteProductWithCategoryRef_PublishesTerminatingEvent(t
 		a: {"products/widget.md": makeProductWithCategoryRef("widget", "electronics")},
 		b: {},
 	})
-	srv := newCatalogServer(t, store, git, func(deps *cataloggrpc.ServerDeps) {
-		deps.EventBus = bus
-	})
-
-	events, unsubscribe, err := bus.Subscribe("Product", "")
-	require.NoError(t, err)
-	defer unsubscribe()
+	srv := newCatalogServer(t, store, git)
 
 	admitDelta(t, srv, zero, a)
-	// Drain the Added event from creation so it doesn't get mistaken for
-	// the terminating Modified event under test.
-	select {
-	case <-events:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for Product Added event")
-	}
-
 	current = b
 	admitDelta(t, srv, a, b)
 
-	select {
-	case ev := <-events:
-		assert.Equal(t, eventbus.Modified, ev.Type)
-		assert.Equal(t, "Product", ev.Kind)
-		assert.Equal(t, "gitstore", ev.Namespace)
-		assert.Equal(t, "widget", ev.Name)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for Product terminating event")
-	}
+	events := journalEvents(t, store, "Product")
+	require.Len(t, events, 2)
+	assert.Equal(t, datastore.ResourceWatchAdded, events[0].Type)
+	assert.Equal(t, datastore.ResourceWatchModified, events[1].Type)
+	assert.Equal(t, "gitstore", events[1].Namespace)
+	assert.Equal(t, "widget", events[1].Name)
+	var terminating datastore.Product
+	require.NoError(t, json.Unmarshal(events[1].Payload, &terminating))
+	assert.NotNil(t, terminating.DeletionTimestamp)
 }
 
 func TestAdmitResources_MovePreservesUIDAndGeneration(t *testing.T) {
@@ -2705,6 +2696,7 @@ func TestAdmitResources_EmptySHAFromResolveRef_AdmissionProceeds(t *testing.T) {
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: a,
@@ -2736,6 +2728,7 @@ func TestExtraValidatingPolicies_CalledForAdmittedResources(t *testing.T) {
 	})
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -2777,6 +2770,7 @@ func TestDeniedAdmission_BlocksStorage(t *testing.T) {
 	})
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
@@ -2816,6 +2810,7 @@ func TestAdmitResources_BranchDeleteRecreated_SkipsDeleteAdmission(t *testing.T)
 
 	// Simulate a branch-delete admission: newCommit is all zeros.
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: zero,
@@ -2851,6 +2846,7 @@ func TestAdmitResources_BranchDeleteRefGone_ProceedsWithDeletion(t *testing.T) {
 	}
 	seedSrv := newCatalogServer(t, store, seedGit)
 	_, err := seedSrv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: a,
 		RefName:      "refs/heads/main",
@@ -2876,6 +2872,7 @@ func TestAdmitResources_BranchDeleteRefGone_ProceedsWithDeletion(t *testing.T) {
 	}
 	deleteSrv := newCatalogServer(t, store, deleteGit)
 	_, err = deleteSrv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: zero,
@@ -2931,6 +2928,7 @@ func TestAdmitResourcesLegacyPathAbsent(t *testing.T) {
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: a,
 
@@ -2979,6 +2977,7 @@ func TestAdmitResourcesChangedPathsFastPath(t *testing.T) {
 	readCalls = make(map[string]int)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: b,
@@ -3078,6 +3077,7 @@ func TestAdmitResources_OperationSetCorrectly(t *testing.T) {
 	})
 
 	req := &catalogv1.AdmitResourcesRequest{
+		ActorSubject: "test-admission-actor",
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",

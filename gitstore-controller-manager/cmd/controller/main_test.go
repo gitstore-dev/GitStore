@@ -22,17 +22,82 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
+	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
 	repositorycontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/repository"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gitstore-dev/gitstore/secretmaterial"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestProductionRegistrationUsesDiskForEveryKind(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{Controller: config.ControllerConfig{Checkpoint: config.CheckpointConfig{Dir: dir}}}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	mgr := manager.New()
+	var runners sync.WaitGroup
+	client := graphqlclient.New("http://unused.invalid/graphql", graphqlclient.NewStaticToken("test"))
+	closeStores, err := registerDiskControllers(ctx, &runners, mgr, cfg, zap.NewNop(), client)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = closeStores() })
+	runners.Wait()
+	keys := []types.WorkItemKey{
+		{Kind: "Namespace", Name: "probe"},
+		{Kind: "Repository", Namespace: "shop", Name: "probe"},
+		{Kind: "CategoryTaxonomy", Namespace: "shop", Name: "probe"},
+		{Kind: "Product", Namespace: "shop", Name: "probe"},
+	}
+	for _, key := range keys {
+		require.NoError(t, mgr.Enqueue(key))
+		require.True(t, mgr.KindStats()[key.Kind].Registered)
+	}
+	require.NoError(t, closeStores())
+	for _, key := range keys {
+		store, err := checkpoint.OpenDiskStore(dir, key.Kind)
+		require.NoError(t, err)
+		pending, err := store.Pending(t.Context(), "", 1)
+		require.NoError(t, err)
+		require.Len(t, pending, 1)
+		require.Equal(t, key, pending[0].Key, "production registration did not persist its work")
+		require.NoError(t, store.Close())
+	}
+}
+
+func TestPoisonRequeueSupportsClusterScopedDiskKeys(t *testing.T) {
+	store, err := checkpoint.OpenDiskStore(t.TempDir(), "Namespace")
+	require.NoError(t, err)
+	defer store.Close()
+	key := types.WorkItemKey{Kind: "Namespace", Name: "example"}
+	require.NoError(t, store.Enqueue(t.Context(), key))
+	pending, err := store.Pending(t.Context(), "", 1)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	ok, err := store.DeferWork(t.Context(), key, pending[0].Token, 0, "test failure", 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	mgr := manager.New()
+	require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+		Kind: "Namespace", Disk: store,
+		Cache: cache.New[string](),
+		Reconciler: namespacecontroller.NewReconcilerWithLookup(
+			func(context.Context, types.WorkItemKey) (namespacecontroller.Namespace, bool, error) {
+				return namespacecontroller.Namespace{}, false, nil
+			}, nil, nil, nil),
+	}))
+	response := httptest.NewRecorder()
+	buildMux(mgr).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/controller/v1/poison/Namespace/example/requeue", nil))
+	require.Equal(t, http.StatusNoContent, response.Code)
+	require.False(t, mgr.IsQuarantined(key))
+}
 
 func TestParseConfigFile(t *testing.T) {
 	paths, err := parseConfigFiles([]string{"--config-file", "/config/shared.toml"})
@@ -67,13 +132,19 @@ func TestBuildCredentialSourceUsesResolvedServiceAccountKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := secret.Ref{Kind: "SecretRef", Name: "controller-manager", Key: "privateKey"}
-	provider := secret.BootstrapProviderConfig{Type: secret.ProviderEnvironment, EnvPrefix: "TEST_SECRET__"}
-	variable, err := secretmaterial.BootstrapEnvironmentVariable(provider.EnvPrefix, ref.SecretRef())
+	ref := secret.Ref{Kind: "SecretRef", Name: "controller-manager"}
+	provider := secret.BootstrapProviderConfig{Type: secret.ProviderEnvironment, EnvVariable: "TEST_CONTROLLER_SIGNING_RECORD"}
+	record, err := json.Marshal(map[string]any{
+		"format": "serviceaccount-signing-key/v1",
+		"values": map[string]string{
+			"privateKey": base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
+			"keyID":      base64.StdEncoding.EncodeToString([]byte("key-1")),
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(variable, string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})))
+	t.Setenv(provider.EnvVariable, string(record))
 
 	source, err := buildCredentialSource(context.Background(), &config.Config{
 		Controller: config.ControllerConfig{
@@ -81,7 +152,6 @@ func TestBuildCredentialSourceUsesResolvedServiceAccountKey(t *testing.T) {
 			ServiceAccount: config.ServiceAccountConfig{
 				Namespace: "controllers",
 				Name:      "gitstore-controller-manager",
-				KeyID:     "key-1",
 				UID:       "sa-uid-1",
 				KeyRef:    ref,
 			},
@@ -143,7 +213,7 @@ func TestBuildCredentialSourceFailsClosedOnInvalidRecords(t *testing.T) {
 					KeyRef: secret.Ref{Kind: "SecretRef", Name: "controller"},
 				},
 				SecretProviders: config.SecretProvidersConfig{Bootstrap: secret.BootstrapProviderConfig{
-					Type: "file", Format: "json-record", BasePath: root,
+					Type: "file", BasePath: root,
 				}},
 			}}
 			source, err := buildCredentialSource(context.Background(), cfg, zap.NewNop())
@@ -182,7 +252,8 @@ func (w *repositoryRegistrationListWatcher) List(context.Context) (listwatch.Lis
 }
 
 func (w *repositoryRegistrationListWatcher) Watch(ctx context.Context, _ string) (listwatch.Watcher[repositorycontroller.Repository], error) {
-	watch := &repositoryRegistrationWatch{events: make(chan listwatch.WatchEvent[repositorycontroller.Repository])}
+	watch := &repositoryRegistrationWatch{events: make(chan listwatch.WatchEvent[repositorycontroller.Repository], 1)}
+	watch.events <- listwatch.WatchEvent[repositorycontroller.Repository]{Type: listwatch.Bookmark, ResourceVersion: "rwv1:test:2"}
 	go func() {
 		<-ctx.Done()
 		watch.Stop()
@@ -302,7 +373,7 @@ func TestRegisterRepositoryAcrossTwoControllerManagers(t *testing.T) {
 		if err := json.Unmarshal(rec.Snapshot, &restored); err != nil {
 			t.Fatal(err)
 		}
-		if rec.ResourceVersion != "rwv1:test:1" || len(restored) != 1 || restored[0].UID != item.UID {
+		if rec.ResourceVersion != "rwv1:test:2" || len(restored) != 1 || restored[0].UID != item.UID {
 			t.Fatal("shutdown flush did not retain the replacement snapshot and cursor")
 		}
 	}

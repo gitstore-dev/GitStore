@@ -11,7 +11,6 @@ import (
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -41,18 +40,16 @@ func (r *mutationResolver) DeleteCategory(ctx context.Context, input model.Delet
 	if err != nil {
 		return nil, err
 	}
-	category, err := r.service.DeleteCategory(ctx, uid)
-	if err != nil {
+	if _, err := r.service.DeleteCategory(ctx, uid); err != nil {
 		return nil, err
 	}
-	r.publishCategoryTaxonomyStatusEvent(category)
 	return &model.DeleteCategoryPayload{DeletedCategoryID: &input.ID}, nil
 }
 
 // UpdateCategoryStatus is the resolver for the updateCategoryStatus field.
 func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model.UpdateCategoryStatusInput) (*model.UpdateCategoryStatusPayload, error) {
 	if input.DecoupleProducts != nil && *input.DecoupleProducts {
-		products, hasMore, err := r.service.DecoupleCategoryProducts(ctx, input.Namespace, input.Name, input.ResourceVersion)
+		_, hasMore, err := r.service.DecoupleCategoryProducts(ctx, input.Namespace, input.Name, input.ResourceVersion)
 		if errors.Is(err, datastore.ErrConflict) {
 			current, getErr := r.store.GetCategoryTaxonomyByName(ctx, input.Namespace, input.Name)
 			if getErr != nil {
@@ -62,18 +59,6 @@ func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model
 		}
 		if err != nil {
 			return nil, err
-		}
-		for _, product := range products {
-			if r.eventBus != nil {
-				r.eventBus.Publish(eventbus.Event{
-					Type:            eventbus.Modified,
-					Kind:            "Product",
-					Namespace:       product.Namespace,
-					Name:            product.Name,
-					ResourceVersion: product.ResourceVersion,
-					Object:          product,
-				})
-			}
 		}
 		return &model.UpdateCategoryStatusPayload{HasMoreProductDependents: hasMore}, nil
 	}
@@ -87,9 +72,6 @@ func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model
 		}
 		if err != nil {
 			return nil, err
-		}
-		if deleted != nil {
-			r.publishCategoryTaxonomyDeletedEvent(deleted)
 		}
 		return &model.UpdateCategoryStatusPayload{}, nil
 	}
@@ -116,7 +98,6 @@ func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model
 		}
 		return nil, gqlerror.Errorf("update category status: %v", err)
 	}
-	r.publishCategoryTaxonomyStatusEvent(updated)
 	return &model.UpdateCategoryStatusPayload{Category: DatastoreCategoryTaxonomyToGraphQL(updated)}, nil
 }
 
@@ -156,54 +137,7 @@ func (r *queryResolver) Categories(ctx context.Context, namespace string, first 
 
 // WatchCategories is the resolver for the watchCategories field.
 func (r *subscriptionResolver) WatchCategories(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.CategoryWatchEvent, error) {
-	if r.eventBus == nil {
-		return nil, gqlerror.Errorf("watch subscriptions are not available")
-	}
-	rv := ""
-	if resourceVersion != nil {
-		rv = *resourceVersion
-	}
-	events, unsubscribe, err := r.eventBus.Subscribe("CategoryTaxonomy", rv)
-	if err != nil {
-		if errors.Is(err, eventbus.ErrWatchExpired) {
-			r.logger.Warn("watch cursor expired; controller must re-list",
-				zap.String("kind", "CategoryTaxonomy"),
-				zap.String("resource_version", rv))
-			return nil, &gqlerror.Error{
-				Message:    "watch cursor expired; re-list and resume from a fresh cursor",
-				Extensions: map[string]any{"code": "WATCH_EXPIRED"},
-			}
-		}
-		return nil, gqlerror.Errorf("watch subscription failed: %v", err)
-	}
-	r.logger.Debug("watch subscription opened",
-		zap.String("kind", "CategoryTaxonomy"),
-		zap.Bool("resumed", rv != ""))
-
-	out := make(chan *model.CategoryWatchEvent, 16)
-	go func() {
-		defer close(out)
-		defer unsubscribe()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case ev, ok := <-events:
-				if !ok {
-					return
-				}
-				if !categoryEventMatchesFilters(ev, namespace) || !categoryEventMatchesSelector(ev, selector) {
-					continue
-				}
-				select {
-				case out <- toCategoryWatchEvent(ev):
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}()
-	return out, nil
+	return watchCatalogJournal(ctx, r.Resolver, "CategoryTaxonomy", namespace, selector, resourceVersion, "typed", categoryJournalEventToGraphQL)
 }
 
 // Category returns generated.CategoryResolver implementation.

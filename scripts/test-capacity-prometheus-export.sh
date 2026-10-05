@@ -66,4 +66,42 @@ PATH="${test_dir}/bin:${PATH}" CAPACITY_PROMETHEUS_LOOKBACK=30m \
 jq -e '.capacityTarget == "repository/lifecycle" and (.queries | map(.name)) == ["api_targets_up","repository_datastore_operation_p95","repository_datastore_errors","namespace_cdc_discovery_p95","namespace_materializer_stage_p95","namespace_delivery_p95"]' \
   "${test_dir}/repository/prometheus/manifest.json" >/dev/null
 
+"${repo_root}/scripts/write-capacity-prometheus-targets.sh" \
+  "${targets_file}" "api-a.internal:4000,api-b.internal:4001" "controller-a.internal:5001,controller-b.internal:5001"
+jq -e '.[1] == {targets:["controller-a.internal:5001","controller-b.internal:5001"],labels:{job:"gitstore-controller-capacity"}}' "${targets_file}" >/dev/null
+if "${repo_root}/scripts/write-capacity-prometheus-targets.sh" "${targets_file}" "api-a.internal:4000" "bad controller" >/dev/null 2>&1; then
+  echo "invalid controller scrape target unexpectedly succeeded" >&2
+  exit 1
+fi
+
+cat >"${test_dir}/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  */api/v1/query_range)
+    printf '{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"gitstore_controller_stalled_workers","kind":"Product"},"values":[[1,"0"],[2,"1"]]},{"metric":{"__name__":"gitstore_controller_process_instance_info","instance":"controller-a.internal:5001","instance_id":"test-process-00001"},"values":[[1,"1"]]}]}}'
+    ;;
+  *) printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1,"1"]}]}}' ;;
+esac
+EOF
+CAPACITY_PROMETHEUS_CONTROLLER_TARGETS=controller-a.internal:5001 \
+  PATH="${test_dir}/bin:${PATH}" "${repo_root}/scripts/export-capacity-prometheus.sh" \
+  "${test_dir}/repository" http://prometheus.invalid >/dev/null
+jq -e '.data.result[0].metric.kind == "Product" and .data.result[0].values == [[1,"0"],[2,"1"]]' \
+  "${test_dir}/repository/prometheus/controller-series.json" >/dev/null
+jq -e '.controllerStepSeconds == 5 and (.controllerQuery | contains("gitstore-controller-capacity"))' \
+  "${test_dir}/repository/prometheus/manifest.json" >/dev/null
+if CAPACITY_PROMETHEUS_CONTROLLER_TARGETS=controller-a.internal:5001,controller-b.internal:5001 \
+  PATH="${test_dir}/bin:${PATH}" "${repo_root}/scripts/export-capacity-prometheus.sh" \
+  "${test_dir}/repository" http://prometheus.invalid >/dev/null 2>&1; then
+  echo "missing second controller history unexpectedly succeeded" >&2
+  exit 1
+fi
+printf '#!/usr/bin/env bash\nprintf '\''{"status":"success","data":{"resultType":"matrix","result":[]}}'\''\n' >"${test_dir}/bin/curl"
+if CAPACITY_PROMETHEUS_CONTROLLER_TARGETS=controller-a.internal:5001 \
+  PATH="${test_dir}/bin:${PATH}" "${repo_root}/scripts/export-capacity-prometheus.sh" \
+  "${test_dir}/repository" http://prometheus.invalid >/dev/null 2>&1; then
+  echo "missing controller history unexpectedly succeeded" >&2
+  exit 1
+fi
+
 echo "capacity Prometheus export tests passed"

@@ -23,6 +23,27 @@ output_dir="${evidence_dir}/prometheus"
 mkdir -p "${output_dir}"
 capacity_target="$(jq -r '[.target, (.scenario // .profile)] | join("/")' "${metadata}")"
 
+controller_query=""
+if [[ -n "${CAPACITY_PROMETHEUS_CONTROLLER_TARGETS:-}" ]]; then
+  controller_query='{job="gitstore-controller-capacity",__name__=~"up|gitstore_controller_.*|process_cpu_seconds_total|process_resident_memory_bytes|go_goroutines"}'
+  curl -fsS --max-time 120 --get --data-urlencode "query=${controller_query}" \
+    --data-urlencode "start=${started_at}" --data-urlencode "end=${completed_at}" \
+    --data-urlencode "step=5s" "${prometheus_url%/}/api/v1/query_range" \
+    >"${output_dir}/controller-series.json"
+  jq -e --arg targets "${CAPACITY_PROMETHEUS_CONTROLLER_TARGETS}" '
+    .data.result as $series |
+    .status == "success" and .data.resultType == "matrix" and ($series | length) > 0 and
+    all($series[]; (.values | length) > 0) and
+    all(($targets | split(","))[]; . as $target |
+      any($series[]; .metric.__name__ == "gitstore_controller_process_instance_info" and
+        .metric.instance == $target and any(.values[]; .[1] == "1")))
+  ' \
+    "${output_dir}/controller-series.json" >/dev/null || {
+      echo "Prometheus controller history is missing or invalid" >&2
+      exit 1
+    }
+fi
+
 names=(
   api_targets_up
 )
@@ -53,9 +74,9 @@ case "${capacity_target}" in
   namespace/watch|namespace/recovery|repository/lifecycle)
     names+=(namespace_cdc_discovery_p95 namespace_materializer_stage_p95 namespace_delivery_p95)
     queries+=(
-      "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_namespace_watch_cdc_discovery_seconds_bucket[${lookback}])))"
-      "histogram_quantile(0.95, sum by (le,stage,instance) (increase(gitstore_namespace_watch_materializer_stage_duration_seconds_bucket[${lookback}])))"
-      "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_namespace_watch_delivery_latency_seconds_bucket[${lookback}])))"
+      "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_resource_watch_cdc_discovery_seconds_bucket[${lookback}])))"
+      "histogram_quantile(0.95, sum by (le,stage,instance) (increase(gitstore_resource_watch_materializer_stage_duration_seconds_bucket[${lookback}])))"
+      "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_resource_watch_delivery_latency_seconds_bucket[${lookback}])))"
     )
     ;;
 esac
@@ -81,10 +102,11 @@ jq -n \
   --arg source "${prometheus_url%/}" \
   --arg capacity_target "${capacity_target}" \
   --arg lookback "${lookback}" \
+  --arg controller_query "${controller_query}" \
   --arg started_at "$(jq -r '.startedAt' "${metadata}")" \
   --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson queries "$(for index in "${!names[@]}"; do jq -n --arg name "${names[index]}" --arg query "${queries[index]}" '{name:$name,query:$query}'; done | jq -s .)" \
-  '{schemaVersion:1,collectedAt:$collected_at,source:$source,capacityTarget:$capacity_target,runStartedAt:$started_at,runCompletedAt:$completed_at,lookback:$lookback,queries:$queries}' \
+  '{schemaVersion:1,collectedAt:$collected_at,source:$source,capacityTarget:$capacity_target,runStartedAt:$started_at,runCompletedAt:$completed_at,lookback:$lookback,queries:$queries,controllerQuery:$controller_query,controllerStepSeconds:5}' \
   >"${output_dir}/manifest.json"
 
 echo "Prometheus capacity evidence: ${output_dir}"

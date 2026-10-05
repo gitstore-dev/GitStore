@@ -102,11 +102,11 @@ shipped code already emits (`config/policy.yaml`'s `repository.contents.read`,
 `/`-joined `resources:` path, exactly as before:
 
 | Action string                | Policy rule                                                 |
-|-------------------------------|--------------------------------------------------------------|
+|------------------------------|-------------------------------------------------------------|
 | `repository.contents.read`   | `{ resources: ["repository/contents"], verbs: ["read"] }`   |
 | `namespace.status.write`     | `{ resources: ["namespace/status"], verbs: ["write"] }`     |
-| `product.management.read`   | `{ resources: ["product/management"], verbs: ["read"] }`    |
-| `product.purge`              | `{ resources: ["product"], verbs: ["purge"] }`               |
+| `product.management.read`    | `{ resources: ["product/management"], verbs: ["read"] }`    |
+| `product.purge`              | `{ resources: ["product"], verbs: ["purge"] }`              |
 | `serviceAccount.token.issue` | `{ resources: ["serviceAccount/token"], verbs: ["issue"] }` |
 
 ### 3. Verbs
@@ -133,16 +133,16 @@ defined in [doc 037](../implementation/037-custom-commerce-workflows.md) and
 
 **Canonical vocabulary for the seven core resources + `serviceAccount`:**
 
-| Kind               | Control-plane verbs                  | Subresources                                                              | Other verbs / conditions                    |
-|--------------------|--------------------------------------|-----------------------------------------------------------------------------|----------------------------------------------|
-| `namespace`        | create·read·list·watch·update·delete | `status.write`                                                             | `create` gated on `attrs.tier` (org/user)   |
-| `repository`       | create·read·list·watch·update·delete | `status.write`, `contents.read`, `contents.write`                         | —                                            |
-| `categoryTaxonomy` | create·read·list·watch·update·delete | `status.write`                                                             | —                                            |
-| `product`          | create·read·list·watch·update·delete | `status.write`, `management.read`, `management.list`                      | `purge` (hard delete, §5)                    |
-| `productVariant`   | create·read·list·watch·update·delete | `status.write`, `management.read`, `management.list`                      | —                                            |
-| `collection`       | create·read·list·watch·update·delete | `status.write`                                                             | —                                            |
-| `file`             | create·read·list·watch·update·delete | `status.write`                                                             | —                                            |
-| `serviceAccount`   | create·read·list·update·delete       | `token.issue`, `key.rotate`                                                | —                                            |
+| Kind               | Control-plane verbs                  | Subresources                                         | Other verbs / conditions                  |
+|--------------------|--------------------------------------|------------------------------------------------------|-------------------------------------------|
+| `namespace`        | create·read·list·watch·update·delete | `status.write`                                       | `create` gated on `attrs.tier` (org/user) |
+| `repository`       | create·read·list·watch·update·delete | `status.write`, `contents.read`, `contents.write`    | —                                         |
+| `categoryTaxonomy` | create·read·list·watch·update·delete | `status.write`                                       | —                                         |
+| `product`          | create·read·list·watch·update·delete | `status.write`, `management.read`, `management.list` | `purge` (hard delete, §5)                 |
+| `productVariant`   | create·read·list·watch·update·delete | `status.write`, `management.read`, `management.list` | —                                         |
+| `collection`       | create·read·list·watch·update·delete | `status.write`                                       | —                                         |
+| `file`             | create·read·list·watch·update·delete | `status.write`                                       | —                                         |
+| `serviceAccount`   | create·read·list·update·delete       | `token.issue`, `key.rotate`                          | —                                         |
 
 `categoryTaxonomy` is the **single** slug; `category.*` is retired.
 

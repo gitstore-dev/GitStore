@@ -160,6 +160,11 @@ query GetNode($id: ID!) {
 
 ### nodes
 
+File IDs returned by `file` also resolve through `node` and `nodes`, with the
+same `file.read` authorization. Batch results retain input order, including
+duplicate IDs and null entries for missing resources. File datastore failures
+are reported as GraphQL errors, not successful missing-resource responses.
+
 ```graphql
 query GetNodes($ids: [ID!]!) {
   nodes(ids: $ids) {

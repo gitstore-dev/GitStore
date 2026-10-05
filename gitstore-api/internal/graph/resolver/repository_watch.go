@@ -88,7 +88,15 @@ func projectRepositoryJournalEvent(event datastore.ResourceWatchEvent, selector 
 			currentLabels = repository.Labels
 		}
 	}
-	currentMatches := matchesWatchSelector(selector, currentLabels)
+	event.SelectorLabels = currentLabels
+	return projectResourceJournalSelector(event, selector)
+}
+
+func projectResourceJournalSelector(event datastore.ResourceWatchEvent, selector *model.LabelSelectorInput) (datastore.ResourceWatchEvent, bool) {
+	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) || event.Type == datastore.ResourceWatchBookmark {
+		return event, true
+	}
+	currentMatches := matchesWatchSelector(selector, event.SelectorLabels)
 	if event.Type != datastore.ResourceWatchModified {
 		return event, currentMatches
 	}
@@ -134,7 +142,7 @@ func addRepositoryWatchSubscriptionError(ctx context.Context, err error) {
 }
 
 func (r *Resolver) repositoryWatchAvailable() error {
-	if r.namespaceSubscriber == nil || !r.namespaceWatch.ReadersEnabled {
+	if r.resourceJournal == nil || r.namespaceSubscriber == nil || !r.namespaceWatch.ReadersEnabled {
 		return repositoryWatchGraphQLError(&watchjournal.TerminalError{Code: watchjournal.CodeUnavailable, Reason: "MATERIALIZER_NOT_READY"})
 	}
 	return nil

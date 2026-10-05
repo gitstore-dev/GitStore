@@ -150,6 +150,7 @@ func newScyllaDatastoreInKeyspace(t *testing.T, keyspace string) datastore.Datas
 	}
 	port, _ := strconv.Atoi(portStr)
 	cfg := config.ScyllaConfig{
+		AutoMigrate:           true,
 		Hosts:                 []string{scyllaAddr},
 		Keyspace:              keyspace,
 		DisableShardAwarePort: true,

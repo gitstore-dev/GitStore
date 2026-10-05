@@ -39,8 +39,14 @@ The guarded File-load path now reuses the Repository lifecycle runner: it seeds
 on the one Git service to avoid client-side non-fast-forward contention, and
 offers real pushes through a queue capped at 256. Missed schedules and drops are
 counted rather than hidden by ticker coalescing or retries. Every acknowledged
-batch is checked through both APIs' existing `nodes` query; initial IDs come
-from `watchFiles`, not a new File inventory API. Local resolution and explicit
+batch is checked through both APIs' existing `nodes` query. Initial IDs come
+from persisted `file(namespace:, name:)` lookups of the 100 known fixture names
+on each API: ten aliases per request, a five-second request timeout, and a
+30-second bootstrap deadline. This is not an inventory scan or a subscription
+snapshot; subscribing after seed pushes cannot discover already-existing Files.
+Missing, duplicate or invalid projections fail closed, and transport/HTTP/GraphQL
+failures are classified without logging response bodies or credentials.
+Local resolution and explicit
 32-caller/16-slot contention/deadline/authorization probes use test-owned regular
 provider files. No File payload operation is performed.
 
@@ -58,7 +64,7 @@ Product JSONL manifest against bounded `products` pagination on **both APIs**.
 `REPOSITORY_CAPACITY_SECRET_DATASET_MANIFEST` must be an absolute regular-file
 path; `REPOSITORY_CAPACITY_SECRET_DATASET_NAMESPACE` defaults to
 `REPOSITORY_CAPACITY_NAMESPACE`, and
-`REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE` defaults to 1,000 (maximum 1,000).
+`REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE` defaults to 250 (maximum 250).
 Each line contains exactly `namespace`, `name`, `title`, `revision` (the exact
 API value: `<branch>@sha1:<40 lowercase hex characters>`, or a bare SHA-1 for
 preloaded fixtures) and `acknowledged: true`. Names must be strictly sorted
@@ -95,6 +101,16 @@ scenario flag is set. No secret-specific Compose overlay or public Make target
 is needed. Missing ownership/fault prerequisites are rejected before startup;
 missing observations prevent final bundle acceptance.
 
+On macOS, the owned-mount verifier accepts Docker Desktop's mixed bind-source
+representations (`/host_mnt/Users/...` for a directory and `/Users/...` for a
+file) only after confirming a local Unix-socket Docker endpoint and the daemon's
+`Docker Desktop` operating-system identity. `DOCKER_CONTEXT` takes precedence
+over `DOCKER_HOST`. Translated and native bind sources must resolve on the host;
+the same exact per-controller paths, read-only flags, destinations and four-mount
+limit still apply. Linux and remote endpoints receive no Desktop translation.
+Mounts exposing the fixture root, its ancestors or another controller's files
+remain invalid, including mounts on APIs or the singleton Git service.
+
 `make test` also runs these contracts under the race detector,
 including JSON/file-based negative fixtures. The bundle loader in
 `tests/integration/secret_capacity_contract_test.go` requires a closed
@@ -113,10 +129,16 @@ modified, duplicate, symlink or nonregular artifacts fail. The bounded scanner
 checks actual files, including the envelope, for private-key/token patterns,
 provider records, raw controller configuration/environment and caller-supplied
 private markers (including encoded forms). It never echoes offending content.
-Bounds are 2 MiB per JSON envelope, 512 files, 128 MiB per artifact, 512 MiB
-total, 1,024 directory entries and 16 directory levels.
+Bounds are 2 MiB per JSON envelope, 512 files, 512 MiB per artifact, 4 GiB
+total, 1,024 directory entries and 16 directory levels. The hour-long production
+workload can exceed 128 MiB of normal authorization/admission logs per API;
+the larger finite disk budget preserves complete logs instead of truncating or
+sampling them. Hashing and leakage scanning remain streaming with bounded
+buffers; this does not increase service memory limits or relax latency gates.
 
 These helpers validate a **completed immutable collection**, not a live log.
+Setup checks every seeded File through typed lookups and generic `nodes` on both
+APIs before starting offered load, so a missing read surface fails during setup.
 They do not authenticate the origin of observations, collect deployment
 telemetry, or replace the existing release-image/Scylla/lifecycle preflights.
 The connected collector captures original logs before API removal, bounded
@@ -363,6 +385,23 @@ its default PromQL lookback from the recorded run start time plus a small
 scrape-boundary allowance. `CAPACITY_PROMETHEUS_LOOKBACK` remains an explicit
 override for unusual collection windows, but it cannot reach a prior run's
 isolated TSDB.
+
+For Repository/secret recovery investigations, also pass
+`CAPACITY_PROMETHEUS_CONTROLLER_TARGETS=host.docker.internal:5001,host.docker.internal:5002`
+(or the two controller endpoints reachable from the scraper). Keep
+`CAPACITY_OBSERVABILITY=prometheus` and the API targets above. Controllers use
+the separate `gitstore-controller-capacity` job. The exporter saves five-second
+range samples for controller identity, credentials, reconciliation, recovery,
+stall, queue and resource metrics to `prometheus/controller-series.json`,
+including on a failed gate, before the ephemeral scraper is removed. Missing
+controller history fails export rather than generating zero-valued evidence.
+
+Secret-scenario setup waits up to ten minutes for healthy, authenticated
+controllers to finish list/watch recovery before collecting the baseline.
+`secret/controllers-recovery.json` retains the latest warmup observation;
+before/after-load snapshots retain per-kind health and recovery details before
+asserting readiness. Progressing recovery is not permission to start load, and
+neither warmup nor metrics export substitutes for a complete production gate.
 
 ## Choosing application defaults
 

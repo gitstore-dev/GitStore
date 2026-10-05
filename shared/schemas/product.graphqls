@@ -21,8 +21,8 @@ extend type Query {
 extend type Subscription {
   """
   Dedicated, compile-time-typed watch entry point for Product. Same
-  list-then-watch/resourceVersion/expiry semantics as watchCategories
-  (spec 040), scoped to this kind. Callers obtain the initial list via
+  list-then-watch/resourceVersion/expiry semantics as watchCategories,
+  scoped to this kind. Callers obtain the initial list via
   the existing `products` query.
   """
   watchProducts(

@@ -43,23 +43,23 @@ type Check struct {
 
 // Handler provides health check endpoints
 type Handler struct {
-	store               datastore.Datastore
-	logger              *zap.Logger
-	version             string
-	startTime           time.Time
-	clock               apiruntime.Clock
-	namespaceWatchReady func(context.Context) error
-	metricsHandler      http.Handler
+	store              datastore.Datastore
+	logger             *zap.Logger
+	version            string
+	startTime          time.Time
+	clock              apiruntime.Clock
+	resourceWatchReady func(context.Context) error
+	metricsHandler     http.Handler
 }
 
 // HandlerDeps contains dependencies for Handler.
 type HandlerDeps struct {
-	Store               datastore.Datastore
-	Logger              *zap.Logger
-	Version             string
-	Clock               apiruntime.Clock
-	NamespaceWatchReady func(context.Context) error
-	InstanceID          string
+	Store              datastore.Datastore
+	Logger             *zap.Logger
+	Version            string
+	Clock              apiruntime.Clock
+	ResourceWatchReady func(context.Context) error
+	InstanceID         string
 }
 
 // NewHandler creates a new health check handler
@@ -85,13 +85,13 @@ func NewHandler(deps HandlerDeps) *Handler {
 		metricsHandler = promhttp.HandlerFor(prometheus.Gatherers{prometheus.DefaultGatherer, instanceRegistry}, promhttp.HandlerOpts{})
 	}
 	return &Handler{
-		store:               deps.Store,
-		logger:              logger,
-		version:             deps.Version,
-		startTime:           clock.Now(),
-		clock:               clock,
-		namespaceWatchReady: deps.NamespaceWatchReady,
-		metricsHandler:      metricsHandler,
+		store:              deps.Store,
+		logger:             logger,
+		version:            deps.Version,
+		startTime:          clock.Now(),
+		clock:              clock,
+		resourceWatchReady: deps.ResourceWatchReady,
+		metricsHandler:     metricsHandler,
 	}
 }
 
@@ -154,17 +154,17 @@ func (h *Handler) performChecks(ctx context.Context) map[string]Check {
 		mu.Unlock()
 	}()
 
-	if h.namespaceWatchReady != nil {
+	if h.resourceWatchReady != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			check := Check{Status: StatusHealthy, Message: "Namespace watch journal operational"}
-			if err := h.namespaceWatchReady(ctx); err != nil {
-				h.logger.Warn("Namespace watch readiness check failed", zap.Error(err))
-				check = Check{Status: StatusUnhealthy, Message: "Namespace watch materializer unavailable"}
+			check := Check{Status: StatusHealthy, Message: "Resource watch journal operational"}
+			if err := h.resourceWatchReady(ctx); err != nil {
+				h.logger.Warn("Resource watch readiness check failed", zap.Error(err))
+				check = Check{Status: StatusUnhealthy, Message: "Resource watch materializer unavailable"}
 			}
 			mu.Lock()
-			checks["namespace_watch"] = check
+			checks["resource_watch"] = check
 			mu.Unlock()
 		}()
 	}

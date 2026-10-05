@@ -147,23 +147,28 @@ func newTestStore(t *testing.T) datastore.Datastore {
 
 func newTestStoreWithWatchBucket(t *testing.T, watchBucketSize int) datastore.Datastore {
 	t.Helper()
+	store, err := scylla.New(testScyllaConfig(t), zap.NewNop(), watchBucketSize)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func testScyllaConfig(t *testing.T) config.ScyllaConfig {
+	t.Helper()
 	host, portStr, splitErr := net.SplitHostPort(scyllaAddr)
 	if splitErr != nil {
 		host = scyllaAddr
 		portStr = "9042"
 	}
 	port, _ := strconv.Atoi(portStr)
-	cfg := config.ScyllaConfig{
+	return config.ScyllaConfig{
+		AutoMigrate:           true,
 		Hosts:                 []string{scyllaAddr},
 		Keyspace:              scyllaKeyspace,
 		DisableShardAwarePort: true,
 		IgnorePeerAddr:        true,
 		AddressTranslator:     contactPointTranslator(host, port),
 	}
-	store, err := scylla.New(cfg, zap.NewNop(), watchBucketSize)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
-	return store
 }
 
 func newTestStores(t *testing.T) (datastore.Datastore, datastore.Datastore) {
