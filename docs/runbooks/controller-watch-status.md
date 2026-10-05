@@ -281,6 +281,46 @@ These are storage and dispatch bounds, not production capacity acceptance; use
 `make capacity` against a real deployment for throughput and rolling-recovery
 evidence.
 
+### Overnight measurements (2026-10-05)
+
+The retained five-million-Product dataset was copied into a fresh baseline
+keyspace using task-local tooling, with full authoritative-row and projection
+verification. The original keyspace was not modified. Both APIs subsequently
+matched the acknowledged manifest through 20,000 pages of 250 rows each.
+
+| Observation | Result |
+| --- | --- |
+| Cold recovery, both controllers | 515.8 seconds; below the unchanged 600-second guard |
+| Persisted restart | 1.9-3.1 seconds; no Product relist |
+| Final hour-long load, controller cgroup peaks | About 352 / 464 MiB, including filesystem cache |
+| OOMs / automatic restarts in the final attempt | None |
+| Final File gate | Failed: 28,185 dropped offers, 548 failed completions, 636 projection failures |
+| Final offered-to-push latency | p95 about 160 seconds; p99 about 230 seconds |
+
+The final attempt is
+`441-overnight-production-20261005-1d3635f-retry`. These numbers **do not certify
+production capacity**. The push latency includes queue waiting. Key
+overlap/retirement and the scheduled controller replacement did not complete.
+The separate credential-outage fix did recover both controllers, in about
+24.6 / 20.9 seconds; both were healthy at the final capture.
+The cold run had higher cgroup peaks, about 982 / 983 MiB. Docker allocation
+was not increased; these integrated controllers had no individual container
+memory cap.
+
+A separate, 512-MiB-capped diagnostic used 10,000 already-converged Products:
+memory lookup/reconciliation measured about 2 million/s, warm disk
+lookup/reconciliation about 45,000/s, and disk reconciliation with durable
+acknowledgement about 3,000/s. It made zero status writes and used about 22 MiB
+of Go heap. This is a small warm-working-set probe, not a five-million-row
+throughput extrapolation. The live dataset still contains Products requiring
+their first status write, so its roughly 26-40/s net backlog drain is not a
+pure cache benchmark.
+
+Keep the bounded disk-backed implementation while investigating Git admission,
+projection visibility, request quotas and queueing under the combined load.
+The current evidence does not justify an io_uring implementation or a
+memory/disk switch as the remedy for the remaining gate failure.
+
 Typed and generic watches of every kind require the durable journal. Development
 and tests wire the memdb journal; a deployment without a configured journal
 returns `WATCH_UNAVAILABLE` instead of an unreplayable stream.
