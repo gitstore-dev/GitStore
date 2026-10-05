@@ -2092,6 +2092,15 @@ func prepareSecretCapacityFileWorkload(t *testing.T, cfg repositoryCapacityConfi
 	peerIDs, err := secretCapacityReadFileIDs(t.Context(), cfg.apiB, cfg.token, cfg.namespace, runID)
 	require.NoError(t, err)
 	require.Equal(t, workload.ids, peerIDs, "both APIs must project identical File identities before load")
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	client := &http.Client{Timeout: 5 * time.Second}
+	defer client.CloseIdleConnections()
+	for _, worker := range workload.workers {
+		require.NoError(t, secretCapacityVerifyFileBatch(ctx, client, workload.endpoints, workload.token,
+			worker, workload.ids, secretCapacityPushBatch{sequence: 0}),
+			"verify seeded File projections through generic nodes on both APIs before load")
+	}
 	return workload
 }
 

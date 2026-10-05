@@ -137,6 +137,8 @@ sampling them. Hashing and leakage scanning remain streaming with bounded
 buffers; this does not increase service memory limits or relax latency gates.
 
 These helpers validate a **completed immutable collection**, not a live log.
+Setup checks every seeded File through typed lookups and generic `nodes` on both
+APIs before starting offered load, so a missing read surface fails during setup.
 They do not authenticate the origin of observations, collect deployment
 telemetry, or replace the existing release-image/Scylla/lifecycle preflights.
 The connected collector captures original logs before API removal, bounded
