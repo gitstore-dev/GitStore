@@ -71,6 +71,8 @@ func TestManagerThrottlingNeverConsumesPoisonBudgetOrAcknowledgesUnfinishedWork(
 	}{
 		{"initial-throttle", 1, types.ErrRateLimited, types.ResultTransient(types.ErrRateLimited)},
 		{"throttle-during-retry", 2, errors.New("temporary error"), types.ResultTransient(types.ErrRateLimited)},
+		{"initial-credential-outage", 1, types.ErrCredentialsUnavailable, types.ResultTransient(types.ErrCredentialsUnavailable)},
+		{"credential-outage-during-retry", 2, errors.New("temporary error"), types.ResultTransient(types.ErrCredentialsUnavailable)},
 		{"requeue-during-retry", 2, errors.New("temporary error"), types.ResultAfter(20 * time.Millisecond)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

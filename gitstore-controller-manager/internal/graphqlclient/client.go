@@ -74,19 +74,28 @@ func NewWithRateLimit(baseURL string, credentials CredentialSource, requestsPerS
 	}, nil
 }
 
-func (c *Client) waitForRequest(ctx context.Context) error {
+func (c *Client) waitForCooldown(ctx context.Context) error {
 	for {
 		c.throttleMu.Lock()
 		delay := time.Until(c.throttledUntil)
 		c.throttleMu.Unlock()
-		if delay > 0 {
-			timer := time.NewTimer(delay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			case <-timer.C:
-			}
+		if delay <= 0 {
+			return ctx.Err()
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (c *Client) waitForRequest(ctx context.Context) error {
+	for {
+		if err := c.waitForCooldown(ctx); err != nil {
+			return err
 		}
 		if err := c.limiter.Wait(ctx); err != nil {
 			return err
@@ -111,9 +120,16 @@ func (c *Client) requestToken(ctx context.Context) (string, error) {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
+		if err := c.waitForCooldown(ctx); err != nil {
+			return "", fmt.Errorf("graphqlclient: wait for shared dependency: %w", err)
+		}
 		token, err := c.credentials.Current(ctx)
 		if err != nil {
-			return "", fmt.Errorf("graphqlclient: acquire credentials: %w", err)
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("graphqlclient: acquire credentials: %w", err)
+			}
+			c.recordThrottle()
+			return "", fmt.Errorf("graphqlclient: acquire credentials: %w: %w", types.ErrCredentialsUnavailable, err)
 		}
 		// Pace after potentially slow renewal, so waiting callers cannot all
 		// spend old permits in a burst when the exchange finishes.

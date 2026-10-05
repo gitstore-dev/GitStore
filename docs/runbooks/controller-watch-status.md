@@ -114,6 +114,14 @@ not that the pending reconciliation backlog is empty; also inspect queue depth
 and its drain rate. Load and final acceptance require readiness.
 No retry is counted as successful reconciliation.
 
+Credential acquisition failures are shared dependency failures, not evidence
+that an individual resource is invalid. The HTTP/WebSocket client shares a
+cancellable cooldown before retrying acquisition, and the manager defers
+affected work without consuming its quarantine budget or acknowledging it.
+This also applies when credentials become unavailable inside an existing retry
+loop. Durable pending work remains available after credentials recover; a
+provider outage must not create thousands of poisoned resource records.
+
 Correlate these per-kind metrics by scrape instance and
 `gitstore_controller_process_instance_info` across replacements:
 

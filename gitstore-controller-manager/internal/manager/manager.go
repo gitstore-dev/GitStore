@@ -472,8 +472,8 @@ func (m *Manager) scheduleRequeue(ctx context.Context, ks *kindState, key WorkIt
 	})
 }
 
-func (m *Manager) requeueThrottled(ctx context.Context, ks *kindState, key WorkItemKey, delay time.Duration, log *zap.Logger) {
-	log.Warn("API throttled reconciliation; deferring without quarantine", zap.Duration("backoff", delay))
+func (m *Manager) requeueUnavailable(ctx context.Context, ks *kindState, key WorkItemKey, delay time.Duration, reason string, log *zap.Logger) {
+	log.Warn(reason+"; deferring without quarantine", zap.Duration("backoff", delay))
 	if ks.reg.Disk != nil {
 		m.scheduleRequeue(ctx, ks, key, delay)
 		return
@@ -512,7 +512,11 @@ func (m *Manager) handleTransient(
 		return
 	}
 	if errors.Is(r.Err, types.ErrRateLimited) {
-		m.requeueThrottled(ctx, ks, key, max(time.Second, r.BackoffHint), log)
+		m.requeueUnavailable(ctx, ks, key, max(time.Second, r.BackoffHint), "API throttled reconciliation", log)
+		return
+	}
+	if errors.Is(r.Err, types.ErrCredentialsUnavailable) {
+		m.requeueUnavailable(ctx, ks, key, max(time.Second, r.BackoffHint), "credentials unavailable for reconciliation", log)
 		return
 	}
 	if r.BackoffHint > 0 {
@@ -542,7 +546,7 @@ func (m *Manager) handleTransient(
 		_ = m.logPanic(log, key, inner)
 		switch iv := inner.(type) {
 		case types.TransientFailure:
-			if errors.Is(iv.Err, types.ErrRateLimited) || errors.Is(iv.Err, checkpoint.ErrSnapshotInProgress) {
+			if errors.Is(iv.Err, types.ErrRateLimited) || errors.Is(iv.Err, types.ErrCredentialsUnavailable) || errors.Is(iv.Err, checkpoint.ErrSnapshotInProgress) {
 				return backoff.Permanent(iv.Err)
 			}
 			return iv.Err
@@ -566,7 +570,11 @@ func (m *Manager) handleTransient(
 		return
 	}
 	if errors.Is(lastErr, types.ErrRateLimited) {
-		m.requeueThrottled(ctx, ks, key, time.Second, log)
+		m.requeueUnavailable(ctx, ks, key, time.Second, "API throttled reconciliation", log)
+		return
+	}
+	if errors.Is(lastErr, types.ErrCredentialsUnavailable) {
+		m.requeueUnavailable(ctx, ks, key, time.Second, "credentials unavailable for reconciliation", log)
 		return
 	}
 	var deferred *requeueDuringRetryError

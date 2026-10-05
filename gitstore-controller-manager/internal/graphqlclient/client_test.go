@@ -85,6 +85,46 @@ func TestClientSharesRequestBudgetAndCancelsQueuedRequests(t *testing.T) {
 
 type countingCredentials struct{ calls atomic.Int32 }
 
+type outageCredentials struct {
+	calls atomic.Int32
+	ready atomic.Bool
+	err   error
+}
+
+func (c *outageCredentials) Current(context.Context) (string, error) {
+	c.calls.Add(1)
+	if !c.ready.Load() {
+		return "", c.err
+	}
+	return "test-token", nil
+}
+
+func TestCredentialOutageIsClassifiedAndPacedAcrossHTTPAndWebSocket(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = io.WriteString(w, `{"data":{}}`)
+	}))
+	defer server.Close()
+	cause := errors.New("signing provider unavailable")
+	source := &outageCredentials{err: cause}
+	client := graphqlclient.New(server.URL, source)
+	err := client.Query(t.Context(), "query { node(id:\"id\") { id } }", nil, nil)
+	require.ErrorIs(t, err, types.ErrCredentialsUnavailable)
+	require.ErrorIs(t, err, cause)
+	require.Zero(t, requests.Load())
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	_, err = client.Subscribe(ctx, "subscription { watchProducts { name } }", nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.EqualValues(t, 1, source.calls.Load(), "shared outage cooldown must precede credential acquisition")
+	source.ready.Store(true)
+	peer := graphqlclient.New(server.URL, source)
+	require.NoError(t, peer.Query(t.Context(), "query { node(id:\"id\") { id } }", nil, nil))
+	require.NoError(t, client.Query(t.Context(), "query { node(id:\"id\") { id } }", nil, nil))
+	require.EqualValues(t, 2, requests.Load(), "only authenticated requests may reach either transport")
+}
+
 func (c *countingCredentials) Current(context.Context) (string, error) {
 	c.calls.Add(1)
 	return "test-token", nil

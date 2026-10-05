@@ -51,6 +51,34 @@ func diskManagerStore(t *testing.T, rows int) *checkpoint.DiskStore {
 	return store
 }
 
+func TestDiskManagerCredentialOutagePreservesWorkUntilRecovery(t *testing.T) {
+	store := diskManagerStore(t, 1)
+	var ready atomic.Bool
+	var calls atomic.Int32
+	reconciler := diskReconcileFunc(func(context.Context, types.WorkItemKey) types.ReconcileResult {
+		calls.Add(1)
+		if !ready.Load() {
+			return types.ResultTransient(fmt.Errorf("shared provider outage: %w", types.ErrCredentialsUnavailable))
+		}
+		return types.ResultOK()
+	})
+	mgr := manager.New()
+	require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+		Kind: "Widget", Cache: newSyncedCache(), Disk: store, Reconciler: reconciler,
+		WorkerCount: 1, MaxAttempts: 1, StallThreshold: time.Minute,
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- mgr.Start(ctx) }()
+	t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
+	require.Eventually(t, func() bool { return calls.Load() >= 2 }, 3*time.Second, 10*time.Millisecond)
+	require.EqualValues(t, 1, store.Counts().Pending)
+	require.Zero(t, store.Counts().Poison)
+	ready.Store(true)
+	require.Eventually(t, func() bool { return store.Counts().Pending == 0 }, 3*time.Second, 10*time.Millisecond)
+	require.Zero(t, store.Counts().Poison)
+}
+
 func TestDiskManagerBoundsDispatchAndPreservesNewerInflightWork(t *testing.T) {
 	store := diskManagerStore(t, 5000)
 	gate := newSyncedCache()
