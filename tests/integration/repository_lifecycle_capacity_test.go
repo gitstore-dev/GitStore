@@ -2617,7 +2617,7 @@ type secretCapacityLogWriter struct {
 
 func (writer *secretCapacityLogWriter) Write(data []byte) (int, error) {
 	length := len(data)
-	remaining := int64(128*1024*1024) - writer.written
+	remaining := int64(secretCapacityArtifactLimit) - writer.written
 	if int64(length) > remaining {
 		writer.overflow = true
 		data = data[:remaining]

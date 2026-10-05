@@ -129,8 +129,12 @@ modified, duplicate, symlink or nonregular artifacts fail. The bounded scanner
 checks actual files, including the envelope, for private-key/token patterns,
 provider records, raw controller configuration/environment and caller-supplied
 private markers (including encoded forms). It never echoes offending content.
-Bounds are 2 MiB per JSON envelope, 512 files, 128 MiB per artifact, 512 MiB
-total, 1,024 directory entries and 16 directory levels.
+Bounds are 2 MiB per JSON envelope, 512 files, 512 MiB per artifact, 4 GiB
+total, 1,024 directory entries and 16 directory levels. The hour-long production
+workload can exceed 128 MiB of normal authorization/admission logs per API;
+the larger finite disk budget preserves complete logs instead of truncating or
+sampling them. Hashing and leakage scanning remain streaming with bounded
+buffers; this does not increase service memory limits or relax latency gates.
 
 These helpers validate a **completed immutable collection**, not a live log.
 They do not authenticate the origin of observations, collect deployment

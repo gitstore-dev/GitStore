@@ -577,7 +577,11 @@ func secretCapacityEvidenceFixture() secretCapacityEvidence {
 	return e
 }
 
-const secretCapacityJSONLimit = 2 * 1024 * 1024
+const (
+	secretCapacityJSONLimit     = 2 * 1024 * 1024
+	secretCapacityArtifactLimit = 512 * 1024 * 1024
+	secretCapacityTotalLimit    = 4 * 1024 * 1024 * 1024
+)
 
 type secretCapacityArtifact struct {
 	Path      string `json:"path"`
@@ -751,7 +755,7 @@ func verifySecretCapacityArtifact(directory string, artifact secretCapacityArtif
 	if artifact.Kind != "log" && artifact.Kind != "metrics" && artifact.Kind != "trace" && artifact.Kind != "summary" {
 		return invalid
 	}
-	if artifact.Bytes <= 0 || artifact.Bytes > 128*1024*1024 || len(artifact.SHA256) != 64 {
+	if artifact.Bytes <= 0 || artifact.Bytes > secretCapacityArtifactLimit || len(artifact.SHA256) != 64 {
 		return invalid
 	}
 	root, err := os.OpenRoot(directory)
@@ -986,7 +990,7 @@ func scanSecretCapacityArtifacts(directory string, secrets []string) error {
 		}
 		defer file.Close()
 		info, err := file.Stat()
-		if err != nil || info.Size() > 128*1024*1024 || info.Size() > 512*1024*1024-total {
+		if err != nil || info.Size() > secretCapacityArtifactLimit || info.Size() > secretCapacityTotalLimit-total {
 			return invalid
 		}
 		var size int64
@@ -996,7 +1000,7 @@ func scanSecretCapacityArtifacts(directory string, secrets []string) error {
 			n, readErr := file.Read(buffer)
 			total += int64(n)
 			size += int64(n)
-			if total > 512*1024*1024 || size > 128*1024*1024 {
+			if total > secretCapacityTotalLimit || size > secretCapacityArtifactLimit {
 				return invalid
 			}
 			block := append(tail, buffer[:n]...)
@@ -1102,7 +1106,7 @@ func TestSecretCapacityArtifactScan(t *testing.T) {
 		root := t.TempDir()
 		file, err := os.Create(filepath.Join(root, "oversized.log"))
 		require.NoError(t, err)
-		require.NoError(t, file.Truncate(128*1024*1024+1))
+		require.NoError(t, file.Truncate(secretCapacityArtifactLimit+1))
 		require.NoError(t, file.Close())
 		require.Error(t, scanSecretCapacityArtifacts(root, nil))
 	})
@@ -1745,8 +1749,8 @@ func finalizeSecretCapacityBundle(directory, runID, revision string, mode capaci
 		}
 		defer file.Close()
 		digest := sha256.New()
-		size, err := io.Copy(digest, io.LimitReader(file, 128*1024*1024+1))
-		if err != nil || size > 128*1024*1024 {
+		size, err := io.Copy(digest, io.LimitReader(file, secretCapacityArtifactLimit+1))
+		if err != nil || size > secretCapacityArtifactLimit {
 			return errors.New("secret capacity: artifact exceeds finalization bounds")
 		}
 		kind := "summary"
@@ -1999,7 +2003,7 @@ func TestSecretCapacityBoundedLogWriter(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "log")
 	require.NoError(t, err)
 	defer file.Close()
-	writer := secretCapacityLogWriter{file: file, written: 128*1024*1024 - 2}
+	writer := secretCapacityLogWriter{file: file, written: secretCapacityArtifactLimit - 2}
 	n, err := writer.Write([]byte("abcd"))
 	require.NoError(t, err)
 	require.Equal(t, 4, n, "overflow must drain the pipe rather than deadlock the process")

@@ -5,12 +5,24 @@ package resolver
 
 import (
 	"context"
+	"errors"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (model.Node, error) {
 	switch kind {
+	case nodeKindFile:
+		file, err := r.store.GetFile(ctx, rawID)
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, gqlerror.Errorf("retrieve File: %v", err)
+		}
+		return DatastoreFileToGraphQL(file), nil
 	case nodeKindProduct:
 		product, err := r.service.GetProductByUID(ctx, rawID)
 		if err != nil {

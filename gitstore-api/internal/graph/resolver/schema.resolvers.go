@@ -56,7 +56,7 @@ func (r *queryResolver) Nodes(ctx context.Context, ids []string) ([]model.Node, 
 		}
 		node, err := r.resolveNode(ctx, kind, rawID)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		nodes[i] = node
 	}
