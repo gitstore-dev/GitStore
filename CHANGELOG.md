@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.0-alpha.5](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.4...v0.1.0-alpha.5) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **controller:** bound recovery and harden capacity execution ([#452](https://github.com/gitstore-dev/GitStore/issues/452))
+
+### Bug Fixes
+
+* **controller:** bound recovery and harden capacity execution ([#452](https://github.com/gitstore-dev/GitStore/issues/452)) ([a97363a](https://github.com/gitstore-dev/GitStore/commit/a97363a503db8652cb718c8e3ce14c72ec8e9484))
+* **gitctl:** surface the real cause of enroll-serviceaccount bootstrap login failures ([#448](https://github.com/gitstore-dev/GitStore/issues/448)) ([995f44a](https://github.com/gitstore-dev/GitStore/commit/995f44a7db21118aee7f5a171896031af9509b45))
+
+
+### Documentation
+
+* **spec:** roll up Status flips for 055, 058, 060-063 ([#450](https://github.com/gitstore-dev/GitStore/issues/450)) ([63aea4d](https://github.com/gitstore-dev/GitStore/commit/63aea4d6090c111026fdeeccdcaa5269a6e8a76b))
+
 ## [0.1.0-alpha.4](https://github.com/gitstore-dev/GitStore/compare/v1.0.0-alpha.3...v0.1.0-alpha.4) (2026-10-04)
 
 
