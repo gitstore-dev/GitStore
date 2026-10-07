@@ -235,26 +235,20 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	namespaceRepositoryFenceMode := resolver.NamespaceRepositoryFenceDisabled
-	if cfg.NamespaceRepositoryFenceEnabled() {
-		namespaceRepositoryFenceMode = resolver.NamespaceRepositoryFenceEnabled
-	}
-
 	gqlRouter, err := NewGraphQLHandler(GraphQLHandlerDeps{
-		Store:                        store,
-		GitWriter:                    gitClient,
-		Logger:                       log,
-		Registry:                     registry,
-		Clock:                        clock,
-		IDs:                          ids,
-		CommittedManifestAdmitter:    catalogServer,
-		ResourceJournal:              resourceJournal,
-		NamespaceWatch:               cfg.Watch.Namespace,
-		NamespaceMetrics:             namespaceWatchMetrics(namespaceWatch),
-		NamespaceRepositoryFenceMode: namespaceRepositoryFenceMode,
-		ServiceAccountAudience:       cfg.Auth.ServiceAccount.Audience,
-		RateLimitPerSecond:           cfg.Api.RateLimitPerSecond,
-		RateLimitBurst:               cfg.Api.RateLimitBurst,
+		Store:                     store,
+		GitWriter:                 gitClient,
+		Logger:                    log,
+		Registry:                  registry,
+		Clock:                     clock,
+		IDs:                       ids,
+		CommittedManifestAdmitter: catalogServer,
+		ResourceJournal:           resourceJournal,
+		NamespaceWatch:            cfg.Watch.Namespace,
+		NamespaceMetrics:          namespaceWatchMetrics(namespaceWatch),
+		ServiceAccountAudience:    cfg.Auth.ServiceAccount.Audience,
+		RateLimitPerSecond:        cfg.Api.RateLimitPerSecond,
+		RateLimitBurst:            cfg.Api.RateLimitBurst,
 	})
 	if err != nil {
 		_ = gitClient.Close()
@@ -314,17 +308,16 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 
 // GraphQLHandlerDeps are the dependencies for NewGraphQLHandler.
 type GraphQLHandlerDeps struct {
-	Store                        datastore.Datastore
-	GitWriter                    resolver.GitWriter
-	Logger                       *zap.Logger
-	Registry                     *auth.ProviderRegistry
-	Clock                        apiruntime.Clock
-	IDs                          apiruntime.IDGenerator
-	CommittedManifestAdmitter    admission.CommittedManifestAdmitter
-	ResourceJournal              datastore.ResourceWatchJournal
-	NamespaceWatch               config.NamespaceWatchConfig
-	NamespaceMetrics             *watchjournal.Metrics
-	NamespaceRepositoryFenceMode resolver.NamespaceRepositoryFenceMode
+	Store                     datastore.Datastore
+	GitWriter                 resolver.GitWriter
+	Logger                    *zap.Logger
+	Registry                  *auth.ProviderRegistry
+	Clock                     apiruntime.Clock
+	IDs                       apiruntime.IDGenerator
+	CommittedManifestAdmitter admission.CommittedManifestAdmitter
+	ResourceJournal           datastore.ResourceWatchJournal
+	NamespaceWatch            config.NamespaceWatchConfig
+	NamespaceMetrics          *watchjournal.Metrics
 	// ServiceAccountAudience is the configured audience value that the server
 	// issues tokens for. Must be provided to the resolver (spec 061).
 	ServiceAccountAudience string
@@ -350,19 +343,18 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 		connectionRegistry = wsregistry.New()
 	}
 	rootResolver, err := resolver.NewResolver(resolver.ResolverDeps{
-		Store:                        deps.Store,
-		GitWriter:                    deps.GitWriter,
-		Registry:                     deps.Registry,
-		Logger:                       deps.Logger,
-		Clock:                        deps.Clock,
-		IDGenerator:                  deps.IDs,
-		CommittedManifestAdmitter:    deps.CommittedManifestAdmitter,
-		ResourceJournal:              deps.ResourceJournal,
-		NamespaceWatch:               deps.NamespaceWatch,
-		NamespaceMetrics:             deps.NamespaceMetrics,
-		NamespaceRepositoryFenceMode: deps.NamespaceRepositoryFenceMode,
-		ServiceAccountAudience:       deps.ServiceAccountAudience,
-		ConnectionRegistry:           connectionRegistry,
+		Store:                     deps.Store,
+		GitWriter:                 deps.GitWriter,
+		Registry:                  deps.Registry,
+		Logger:                    deps.Logger,
+		Clock:                     deps.Clock,
+		IDGenerator:               deps.IDs,
+		CommittedManifestAdmitter: deps.CommittedManifestAdmitter,
+		ResourceJournal:           deps.ResourceJournal,
+		NamespaceWatch:            deps.NamespaceWatch,
+		NamespaceMetrics:          deps.NamespaceMetrics,
+		ServiceAccountAudience:    deps.ServiceAccountAudience,
+		ConnectionRegistry:        connectionRegistry,
 	})
 	if err != nil {
 		return nil, err

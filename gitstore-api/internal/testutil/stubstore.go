@@ -208,7 +208,6 @@ func (s *StubStore) LookupNamespaceByRepoID(_ context.Context, _ string) (*datas
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) RenameRepository(_ context.Context, _, _, _ string) error    { return nil }
-func (s *StubStore) TransferRepository(_ context.Context, _, _, _ string) error  { return nil }
 func (s *StubStore) DeleteNamespaceMapping(_ context.Context, _, _ string) error { return nil }
 
 func (s *StubStore) CreateServiceAccount(_ context.Context, _ *datastore.ServiceAccount) error {

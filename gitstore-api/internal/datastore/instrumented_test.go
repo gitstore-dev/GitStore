@@ -225,9 +225,6 @@ func (s *stubDatastore) LookupNamespaceByRepoID(_ context.Context, _ string) (*d
 func (s *stubDatastore) RenameRepository(_ context.Context, _, _, _ string) error {
 	return s.getProductErr
 }
-func (s *stubDatastore) TransferRepository(_ context.Context, _, _, _ string) error {
-	return s.getProductErr
-}
 func (s *stubDatastore) DeleteNamespaceMapping(_ context.Context, _, _ string) error {
 	return s.getProductErr
 }

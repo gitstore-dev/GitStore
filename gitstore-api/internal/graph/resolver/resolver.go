@@ -39,17 +39,16 @@ type Resolver struct {
 
 // ResolverDeps contains dependencies for the root GraphQL resolver.
 type ResolverDeps struct {
-	Store                        datastore.Datastore
-	GitWriter                    GitWriter
-	Registry                     *auth.ProviderRegistry
-	Logger                       *zap.Logger
-	Clock                        apiruntime.Clock
-	IDGenerator                  apiruntime.IDGenerator
-	CommittedManifestAdmitter    admission.CommittedManifestAdmitter
-	NamespaceRepositoryFenceMode NamespaceRepositoryFenceMode
-	ResourceJournal              datastore.ResourceWatchJournal
-	NamespaceWatch               config.NamespaceWatchConfig
-	NamespaceMetrics             *watchjournal.Metrics
+	Store                     datastore.Datastore
+	GitWriter                 GitWriter
+	Registry                  *auth.ProviderRegistry
+	Logger                    *zap.Logger
+	Clock                     apiruntime.Clock
+	IDGenerator               apiruntime.IDGenerator
+	CommittedManifestAdmitter admission.CommittedManifestAdmitter
+	ResourceJournal           datastore.ResourceWatchJournal
+	NamespaceWatch            config.NamespaceWatchConfig
+	NamespaceMetrics          *watchjournal.Metrics
 	// ServiceAccountAudience is the configured audience value for service
 	// account token issuance (spec 061).
 	ServiceAccountAudience string
@@ -76,13 +75,12 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 	}
 	SetConverterLogger(deps.Logger)
 	svc, err := NewService(ServiceDeps{
-		Store:                        deps.Store,
-		GitWriter:                    deps.GitWriter,
-		Logger:                       deps.Logger,
-		Clock:                        deps.Clock,
-		IDGenerator:                  deps.IDGenerator,
-		CommittedManifestAdmitter:    deps.CommittedManifestAdmitter,
-		NamespaceRepositoryFenceMode: deps.NamespaceRepositoryFenceMode,
+		Store:                     deps.Store,
+		GitWriter:                 deps.GitWriter,
+		Logger:                    deps.Logger,
+		Clock:                     deps.Clock,
+		IDGenerator:               deps.IDGenerator,
+		CommittedManifestAdmitter: deps.CommittedManifestAdmitter,
 	})
 	if err != nil {
 		return nil, err

@@ -899,48 +899,6 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.ErrorIs(t, ds.CreateRepositoryInActiveNamespace(ctx, late), datastore.ErrNamespaceNotActive)
 	})
 
-	t.Run("Repository/TestTransferRequiresActiveTargetAndBlocksDeletion", func(t *testing.T) {
-		source := newNamespace(datastore.NamespaceTierUser)
-		target := newNamespace(datastore.NamespaceTierUser)
-		require.NoError(t, ds.CreateNamespace(ctx, source))
-		require.NoError(t, ds.CreateNamespace(ctx, target))
-
-		repository := newRepository(source.Name)
-		repository.Name = "catalog"
-		require.NoError(t, ds.CreateRepositoryInActiveNamespace(ctx, repository))
-		require.NoError(t, ds.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
-			Namespace:    source.Name,
-			Name:         repository.Name,
-			RepositoryID: repository.UID,
-		}))
-
-		require.NoError(t, ds.TransferRepository(ctx, repository.UID, source.Name, target.Name))
-		transferred, err := ds.GetRepository(ctx, repository.UID)
-		require.NoError(t, err)
-		assert.Equal(t, target.Name, transferred.Namespace)
-
-		currentTarget, err := ds.GetNamespace(ctx, target.UID)
-		require.NoError(t, err)
-		expectedResourceVersion := currentTarget.ResourceVersion
-		deletedAt := time.Now().UTC().Truncate(time.Millisecond)
-		currentTarget.DeletionTimestamp = &deletedAt
-		datastore.AdvanceNamespaceSystemVersion(currentTarget)
-		require.ErrorIs(t, ds.MarkNamespaceDeletion(ctx, currentTarget, expectedResourceVersion), datastore.ErrNamespaceNotEmpty)
-
-		terminatingTarget := newNamespace(datastore.NamespaceTierUser)
-		require.NoError(t, ds.CreateNamespace(ctx, terminatingTarget))
-		expectedResourceVersion = terminatingTarget.ResourceVersion
-		terminatingTarget.DeletionTimestamp = &deletedAt
-		datastore.AdvanceNamespaceSystemVersion(terminatingTarget)
-		require.NoError(t, ds.MarkNamespaceDeletion(ctx, terminatingTarget, expectedResourceVersion))
-
-		err = ds.TransferRepository(ctx, repository.UID, target.Name, terminatingTarget.Name)
-		require.ErrorIs(t, err, datastore.ErrNamespaceNotActive)
-		stillTransferred, getErr := ds.GetRepository(ctx, repository.UID)
-		require.NoError(t, getErr)
-		assert.Equal(t, target.Name, stillTransferred.Namespace)
-	})
-
 	t.Run("Repository/TestDuplicateUIDAndScopedName", func(t *testing.T) {
 		namespace := "repo-uniqueness-" + newID()[:8]
 		repository := newRepository(namespace)
@@ -977,16 +935,12 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.True(t, result.HasNext)
 	})
 
-	t.Run("Repository/TestMappingRenameAndTransfer", func(t *testing.T) {
+	t.Run("Repository/TestMappingRename", func(t *testing.T) {
 		repositoryID := newID()
 		fromNamespace := "mapping-from-" + newID()[:8]
-		toNamespace := "mapping-to-" + newID()[:8]
 		from := newNamespace(datastore.NamespaceTierUser)
 		from.Name = fromNamespace
-		to := newNamespace(datastore.NamespaceTierUser)
-		to.Name = toNamespace
 		require.NoError(t, ds.CreateNamespace(ctx, from))
-		require.NoError(t, ds.CreateNamespace(ctx, to))
 		mapping := &datastore.NamespaceMapping{
 			Namespace:    fromNamespace,
 			Name:         "old-name",
@@ -999,11 +953,10 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		_, err := ds.LookupRepository(ctx, fromNamespace, "old-name")
 		require.ErrorIs(t, err, datastore.ErrNotFound)
 
-		require.NoError(t, ds.TransferRepository(ctx, repositoryID, fromNamespace, toNamespace))
-		got, err := ds.LookupRepository(ctx, toNamespace, "new-name")
+		got, err := ds.LookupRepository(ctx, fromNamespace, "new-name")
 		require.NoError(t, err)
 		assert.Equal(t, repositoryID, got.RepositoryID)
-		assert.Equal(t, toNamespace, got.Namespace)
+		assert.Equal(t, fromNamespace, got.Namespace)
 	})
 
 	// ── HasCatalogResources ───────────────────────────────────────────────────

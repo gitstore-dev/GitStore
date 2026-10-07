@@ -504,9 +504,6 @@ type RepositoryRoutingStore interface {
 	LookupRepository(ctx context.Context, namespace, name string) (*NamespaceMapping, error)
 	LookupNamespaceByRepoID(ctx context.Context, repositoryID string) (*NamespaceMapping, error)
 	RenameRepository(ctx context.Context, namespace, oldName, newName string) error
-	// TransferRepository moves the authoritative Repository and mapping only
-	// after durably reserving an active target Namespace.
-	TransferRepository(ctx context.Context, repositoryID, fromNamespace, toNamespace string) error
 	DeleteNamespaceMapping(ctx context.Context, namespace, name string) error
 }
 
