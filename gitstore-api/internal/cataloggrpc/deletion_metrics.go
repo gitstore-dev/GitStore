@@ -25,4 +25,16 @@ var (
 			Help:      "Category deletion requests blocked by a child owner reference.",
 		},
 	)
+	productDeletionDependentLookupDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "gitstore", Subsystem: "product_deletion", Name: "dependent_lookup_duration_seconds",
+			Help: "Latency of the bounded blocking ProductVariant lookup.",
+		},
+	)
+	productDeletionBlockedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "gitstore", Subsystem: "product_deletion", Name: "blocked_total",
+			Help: "Product deletion requests blocked by a ProductVariant owner reference.",
+		},
+	)
 )

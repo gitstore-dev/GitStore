@@ -217,7 +217,7 @@ func TestIntegration_ProductCategoryCount_CreateDeleteReassignConverges(t *testi
 		t.Errorf("untouched category reconciled %d time(s), want 0 (FR-004)", calls)
 	}
 
-	_ = catCache // referenced only for fixture symmetry with registerCategoryTaxonomy's shape
+	_ = catCache // referenced only for fixture symmetry with the controller's CategoryTaxonomy wiring
 }
 
 func productKeyFor(p categorytaxonomy.Product) types.WorkItemKey {
@@ -311,7 +311,7 @@ func TestIntegration_ProductCategoryCount_SurvivesRunnerRestart(t *testing.T) {
 	// Store. The checkpoint's restored snapshot re-seeds the new cache with
 	// the already-known product, and productCache2.AddEventHandler is
 	// registered *before* the restore fires the replay, mirroring how
-	// registerProductWatch (cmd/controller/main.go) wires the handler
+	// the controller wires its handlers
 	// before Run is called.
 	preRestartCalls := statusClient.callCount(electronicsKey)
 

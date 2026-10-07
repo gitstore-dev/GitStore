@@ -50,7 +50,8 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: minimal-product
-spec: {}
+spec:
+  title: Minimal Product
 ---
 body
 `
@@ -64,6 +65,21 @@ body
 	assert.NotEmpty(t, body)
 }
 
+func TestParse_Product_MissingTitle_Rejected(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: minimal-product
+spec: {}
+---
+body
+`
+	_, _, err := parseProduct(strings.NewReader(doc))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "spec.title")
+}
+
 func TestParse_ValidProduct_LabelsAndAnnotations(t *testing.T) {
 	doc := `---
 apiVersion: catalog.gitstore.dev/v1beta1
@@ -75,7 +91,8 @@ metadata:
     tier: premium
   annotations:
     owner: catalog-team
-spec: {}
+spec:
+  title: Labelled Product
 ---
 body
 `
@@ -108,7 +125,7 @@ spec:
 	assert.Equal(t, "USER", parsed.Namespace.Spec.Tier)
 }
 
-func TestParse_NamespaceAuthoredStatusIgnored(t *testing.T) {
+func TestParse_NamespaceAuthoredStatusRejected(t *testing.T) {
 	doc := `---
 apiVersion: gitstore.dev/v1beta1
 kind: Namespace
@@ -126,11 +143,9 @@ status:
 ---
 `
 
-	parsed, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
-	require.NoError(t, err)
-	require.NotNil(t, parsed)
-	require.NotNil(t, parsed.Namespace)
-	assert.Equal(t, "status-ignored", parsed.Namespace.Metadata.Name)
+	_, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "status is system-managed")
 }
 
 func TestParse_NamespaceInvalidTierRejected(t *testing.T) {
@@ -495,6 +510,7 @@ kind: Product
 metadata:
   name: my-product
 spec:
+  title: My Product
   media:
     - fileRef:
         name: "hero-image"
@@ -567,6 +583,7 @@ kind: Product
 metadata:
   name: my-product
 spec:
+  title: My Product
   options: []
 ---
 body
@@ -583,7 +600,8 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: my-product
-spec: {}
+spec:
+  title: My Product
 ---
 body
 `
@@ -767,6 +785,28 @@ body
 	assert.Contains(t, err.Error(), "not a recognized")
 }
 
+func TestParseResource_Repository(t *testing.T) {
+	doc := `---
+apiVersion: gitstore.dev/v1beta1
+kind: Repository
+metadata:
+  name: catalog
+  namespace: acme
+spec:
+  defaultBranch: main
+  visibility: PRIVATE
+  storageClass: standard
+---
+Repository description.
+`
+	parsed, body, err := validate.NewParser().ParseResource(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, parsed.Repository)
+	assert.Equal(t, "catalog", parsed.Repository.Metadata.Name)
+	assert.Equal(t, "acme", parsed.Repository.Metadata.Namespace)
+	assert.Equal(t, "Repository description.\n", string(body))
+}
+
 func TestParseResource_CategoryTaxonomy_SelfReference(t *testing.T) {
 	doc := `---
 apiVersion: catalog.gitstore.dev/v1beta1
@@ -791,7 +831,8 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: my-product
-spec: {}
+spec:
+  title: My Product
 ---
 body
 `
@@ -901,6 +942,7 @@ kind: Product
 metadata:
   name: my-product
 spec:
+  title: My Product
   categoryRef:
     name: electronics
     kind: CategoryTaxonomy
@@ -920,7 +962,8 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: my-product
-spec: {}
+spec:
+  title: My Product
 ---
 body
 `

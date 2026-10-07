@@ -4,16 +4,23 @@
 package resolver_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
+	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,11 +37,50 @@ type mockGitWriter struct {
 
 	createRepoCalls []string
 	deleteRepoCalls []string
+	files           map[string][]byte
 
 	commitErr     error
+	readErr       error
 	deleteErr     error
 	createRepoErr error
 	deleteRepoErr error
+}
+
+// testCommittedNamespaceAdmitter keeps Service unit tests focused on GraphQL
+// error mapping and Git delegation. Production uses cataloggrpc.Server, which
+// owns this shared committed-manifest boundary; this small in-memory adapter
+// is deliberately test-only.
+type testCommittedNamespaceAdmitter struct {
+	store datastore.Datastore
+	ids   apiruntime.IDGenerator
+	now   func() time.Time
+}
+
+func (a testCommittedNamespaceAdmitter) AdmitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	parsed, body, err := validate.NewParser().ParseResource(bytes.NewReader(req.Content))
+	if err != nil || parsed == nil || parsed.Namespace == nil {
+		if err == nil {
+			err = errors.New("expected Namespace manifest")
+		}
+		return nil, err
+	}
+	resource := parsed.Namespace
+	now := time.Now
+	if a.now != nil {
+		now = a.now
+	}
+	namespace, _, err := namespaceadmission.ApplyManifestOrdered(
+		ctx, a.store, a.ids, resource, now().UTC(), strings.TrimPrefix(req.RefName, "refs/heads/")+"@sha1:"+req.CommitSHA, req.ActorSubject,
+		namespaceadmission.ApplyManifestOptions{
+			Operation: req.Operation, WriteAttempts: namespaceadmission.AdmissionWriteAttempts,
+			Body: body, SourcePath: req.Path, GitCommitSHA: req.CommitSHA, GitRef: req.RefName,
+			CheckAuthoringRef: func(context.Context) (bool, error) { return true, nil },
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &admission.CommittedManifestResult{Kind: "Namespace", Name: namespace.Name, CommitSHA: req.CommitSHA}, nil
 }
 
 func (m *mockGitWriter) CreateRepository(_ context.Context, repositoryID, _ string) (string, error) {
@@ -66,11 +112,37 @@ func (m *mockGitWriter) CommitFileForRepo(_ context.Context, repositoryID string
 	if m.commitErr != nil {
 		return "", m.commitErr
 	}
+	if m.files == nil {
+		m.files = make(map[string][]byte)
+	}
+	m.files[p.Path] = append([]byte(nil), p.Content...)
 	return "deadbeef", nil
 }
 
 func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, _ string, _ string) (string, error) {
 	return "deadbeef", nil
+}
+
+func (m *mockGitWriter) ReadFileForRepo(_ context.Context, _, path, _ string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	content, ok := m.files[path]
+	if !ok {
+		if m.readErr != nil {
+			return nil, m.readErr
+		}
+		return nil, errors.New("file read is not configured")
+	}
+	return append([]byte(nil), content...), nil
+}
+
+func (m *mockGitWriter) setFile(path string, content []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.files == nil {
+		m.files = make(map[string][]byte)
+	}
+	m.files[path] = append([]byte(nil), content...)
 }
 
 func (m *mockGitWriter) DeleteFile(_ context.Context, p gitclient.DeleteFileParams) (string, error) {
@@ -82,6 +154,9 @@ func (m *mockGitWriter) DeleteFile(_ context.Context, p gitclient.DeleteFilePara
 	}
 	return "cafe1234", nil
 }
+func (m *mockGitWriter) DeleteFileForRepo(_ context.Context, _ string, p gitclient.DeleteFileParams) (string, error) {
+	return m.DeleteFile(context.Background(), p)
+}
 
 func (m *mockGitWriter) CreateTag(_ context.Context, p gitclient.CreateTagParams) (string, error) {
 	m.mu.Lock()
@@ -92,6 +167,14 @@ func (m *mockGitWriter) CreateTag(_ context.Context, p gitclient.CreateTagParams
 
 // newTestSvc builds a Service backed by an in-memory datastore.
 func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
+	return newTestSvcWithFenceMode(t, writer, "")
+}
+
+func newTestSvcWithFenceMode(
+	t *testing.T,
+	writer *mockGitWriter,
+	mode resolver.NamespaceRepositoryFenceMode,
+) *resolver.Service {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -126,9 +209,11 @@ func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
 		RepositoryID: systemRepository.UID,
 	}))
 	svc, err := resolver.NewService(resolver.ServiceDeps{
-		Store:     store,
-		GitWriter: writer,
-		Logger:    zap.NewNop(),
+		Store:                        store,
+		GitWriter:                    writer,
+		Logger:                       zap.NewNop(),
+		CommittedManifestAdmitter:    testCommittedNamespaceAdmitter{store: store, ids: apiruntime.UUIDGenerator{}},
+		NamespaceRepositoryFenceMode: mode,
 	})
 	require.NoError(t, err)
 	return svc

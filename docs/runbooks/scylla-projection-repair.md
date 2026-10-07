@@ -83,7 +83,10 @@ logs. Preserve the audit and plan as incident evidence.
 
 ## 4. Apply
 
-Stop concurrent administrative renames/transfers when practical, then run:
+Quiesce repository creates, renames, transfers, and Namespace deletion before
+applying a repair plan. This is required because successful Repository repair
+also clears retained Namespace/repository fence reservations after the
+post-repair audit is clean. Then run:
 
 ```bash
 go run ./cmd/gitctl scylla-projection-repair --confirm > projection-repair-result.json
@@ -94,7 +97,9 @@ Apply is confirmation-gated. It checks the authoritative resource version (or
 continued absence for dangling owners), uses identity-conditional deletes and
 updates, and uses `IF NOT EXISTS` inserts. A conditional miss or concurrent
 writer is an error; it is never silently skipped. Re-audit and generate a fresh
-plan rather than replaying a stale plan.
+plan rather than replaying a stale plan. Repository creates/transfers that
+return `ErrRepairRequired` intentionally retain their Namespace fence
+reservation until this verified repair completion step.
 
 ## 5. Verify
 

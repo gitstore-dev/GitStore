@@ -1,9 +1,15 @@
 # Repository Resource Contract
 
 Repository is a namespace-scoped GitStore resource represented by the
-`gitstore.dev/v1beta1` declarative read contract. Existing synchronous
-repository mutations remain unchanged; this contract separates declarative
-configuration from system-managed metadata and status.
+`gitstore.dev/v1beta1` declarative contract. Non-bootstrap repositories are
+authored as manifests in their Namespace's `gitstore-system` repository;
+GraphQL create/update mutations commit the same manifest shape.
+
+After the Git commit succeeds, both GraphQL convergence and post-receive use
+the shared committed-manifest admission service. It validates the committed
+content/ref/operation, rejects superseded commits, applies the same catalog
+admission rules, and then GraphQL hydrates the admitted record from the
+datastore. Mutations do not maintain a second direct-write admission path.
 
 ## Hydrated API representation
 
@@ -20,7 +26,12 @@ metadata:
   generation: 1
   creationTimestamp: 2026-08-16T12:00:00Z
   revision: null
-  ownerReferences: []
+  ownerReferences:
+    - apiVersion: gitstore.dev/v1beta1
+      kind: Namespace
+      name: acme-store
+      uid: <Namespace persistent UID>
+      blockOwnerDeletion: true
 spec:
   defaultBranch: main
   visibility: PRIVATE
@@ -44,15 +55,14 @@ status:
 | Field group                                       | Source                             | Mutability in this feature                                    |
 |---------------------------------------------------|------------------------------------|---------------------------------------------------------------|
 | `apiVersion`, `kind`                              | Contract                           | Immutable constants                                           |
-| `metadata.name`                                   | Existing repository name           | Mutable through `renameRepository`                            |
-| `metadata.namespace`                              | Owning Namespace identifier        | Mutable through `transferRepository`                          |
+| `metadata.name`, `metadata.namespace`             | Manifest identity                  | Immutable after admission                                     |
 | `metadata.uid`, `metadata.creationTimestamp`      | System                             | Immutable                                                     |
 | `metadata.resourceVersion`, `metadata.generation` | System                             | Maintained by existing lifecycle operations                   |
-| `spec.defaultBranch`                              | Persisted repository configuration | Read-only projection; existing create input remains unchanged |
+| `spec.defaultBranch`                              | Repository manifest                | Mutable through manifest or `updateRepository`                |
 | `spec.pushPolicy.max*Bytes`                       | Persisted repository limits        | Read-only projection                                          |
 | `spec.visibility`                                 | Reserved contract field            | Always `PRIVATE`                                              |
 | Extended push-policy groups                       | Reserved contract fields           | Always null                                                   |
-| `status`                                          | System                             | No Repository status-write API exists in this feature         |
+| `status`                                          | Controller                         | `updateRepositoryStatus`, never author writable               |
 | `status.resolved`                                 | System                             | Derived from repository identity and storage configuration    |
 
 Zero maximum pack/file sizes retain the existing unlimited sentinel.
@@ -62,13 +72,11 @@ semantics.
 
 ## Version transitions
 
-| Transition                 | UID       | Generation | ResourceVersion | Status         |
-|----------------------------|-----------|------------|-----------------|----------------|
-| Create                     | New       | `1`        | `"1"`           | Initial status |
-| Rename                     | Preserved | `+1`       | `+1`            | Preserved      |
-| Transfer                   | Preserved | Unchanged  | `+1`            | Preserved      |
-| Future spec write          | Preserved | `+1`       | `+1`            | Preserved      |
-| Future system/status write | Preserved | Unchanged  | `+1`            | Updated        |
+| Transition              | UID       | Generation | ResourceVersion | Status            |
+|-------------------------|-----------|------------|-----------------|-------------------|
+| Create                  | New       | `1`        | `"1"`           | Initial status    |
+| Manifest spec write     | Preserved | `+1`       | `+1`            | Admission updated |
+| Controller status write | Preserved | Unchanged  | `+1`            | Updated           |
 
 Rows created before this contract normalize to generation `1`,
 resourceVersion `"1"`, and
@@ -76,13 +84,10 @@ resourceVersion `"1"`, and
 
 ## Condition vocabulary
 
-This feature has no Repository controller, reconciler, status mutation, or
-condition-producing writer. The valid initial Repository condition vocabulary
-is therefore empty and `status.conditions` is an empty list.
-
-A future writer must define its condition types, ownership, transition rules,
-reasons, and observed-generation behavior before emitting conditions. It must
-continue to use the shared `Condition` GraphQL type.
+`AdmissionAccepted` is written by catalog admission. `StorageProvisioned` and
+`Ready` are controller-owned; `Terminating` is derived from the deletion marker
+and foreground-deletion finalizer. Authors cannot submit `status` or
+`metadata.ownerReferences`; admission rejects either attempt.
 
 ## Legacy GraphQL fields
 
@@ -98,13 +103,11 @@ Valid:
 - An existing row with no contract fields returns non-null metadata, spec,
   status, conditions, and resolved storage state.
 - Explicit zero policy limits remain visible as zero.
-- Rename preserves UID while advancing both counters.
-- Transfer preserves UID and generation while advancing resourceVersion.
+- `renameRepository` and `transferRepository` are deprecated and return
+  `Unimplemented` until ADR-0003 Phase 2.
 
 Invalid:
 
-- Treating `visibility` or extended policy groups as currently writable.
-- Emitting a Repository-specific condition type without a separately defined
-  writer contract.
-- Resetting identity or counters during transfer.
+- Setting status or owner references in an authored manifest.
+- Treating a raw datastore UID as a public identity; `metadata.uid == id`.
 - Returning null status or resolved storage for a legacy row.

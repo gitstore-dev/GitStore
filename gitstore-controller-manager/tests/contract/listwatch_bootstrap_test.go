@@ -17,6 +17,8 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // widget is the test resource type used across listwatch contract tests.
@@ -29,6 +31,115 @@ func widgetKey(w widget) types.WorkItemKey {
 }
 
 func widgetRevision(w widget) string { return w.ResourceVersion }
+
+type streamedWidgetListWatcher struct {
+	*stubListWatcher[widget]
+	rows    int
+	pages   atomic.Int32
+	entered chan struct{}
+	pause   <-chan struct{}
+}
+
+func (lw *streamedWidgetListWatcher) List(context.Context) (listwatch.ListResponse[widget], error) {
+	return listwatch.ListResponse[widget]{}, errors.New("disk runner called the unbounded List method")
+}
+
+func (lw *streamedWidgetListWatcher) ListPages(ctx context.Context, visit func([]widget) error) (string, error) {
+	if lw.entered != nil {
+		select {
+		case lw.entered <- struct{}{}:
+		default:
+		}
+	}
+	if lw.pause != nil {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-lw.pause:
+		}
+	}
+	for start := 0; start < lw.rows; start += 128 {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		var page []widget
+		for i := start; i < min(lw.rows, start+128); i++ {
+			page = append(page, widget{Namespace: "shop", Name: fmt.Sprintf("w-%05d", i), ResourceVersion: "1"})
+		}
+		lw.pages.Add(1)
+		if err := visit(page); err != nil {
+			return "", err
+		}
+	}
+	return "snapshot", nil
+}
+
+func TestDiskRunnerStreamsThenResumesWithoutRestoringCatalogIntoMemory(t *testing.T) {
+	dir := t.TempDir()
+	store, err := checkpoint.OpenDiskStore(dir, "Widget")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	makeRunner := func(lw *streamedWidgetListWatcher) *listwatch.Runner[widget] {
+		return &listwatch.Runner[widget]{
+			Kind: "Widget", Cache: cache.New[widget](), Disk: store, ListWatcher: lw,
+			KeyFunc: widgetKey, RevisionFunc: widgetRevision, WaitForWatchBookmark: true,
+			MaxBackoff: time.Millisecond, Log: zap.NewNop(),
+		}
+	}
+	start := func(runner *listwatch.Runner[widget]) (context.CancelFunc, <-chan struct{}) {
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				t.Errorf("disk runner: %v", err)
+			}
+		}()
+		t.Cleanup(func() { cancel(); <-done })
+		return cancel, done
+	}
+	watcher := newStubWatcher[widget](nil, nil)
+	lw := &streamedWidgetListWatcher{stubListWatcher: &stubListWatcher[widget]{watchers: []*stubWatcher[widget]{watcher}}, rows: 1000}
+	runner := makeRunner(lw)
+	cancel, done := start(runner)
+	require.Eventually(t, runner.Cache.HasSynced, 5*time.Second, time.Millisecond)
+	require.True(t, runner.Cache.RecoveryState().Recovering)
+	require.Empty(t, runner.Cache.List())
+	require.EqualValues(t, 1000, store.Counts().Pending)
+	watcher.ch <- listwatch.WatchEvent[widget]{Type: listwatch.Bookmark, ResourceVersion: "validated"}
+	require.Eventually(t, func() bool { return !runner.Cache.RecoveryState().Recovering }, time.Second, time.Millisecond)
+	changed := widget{Namespace: "shop", Name: "w-00000", ResourceVersion: "2"}
+	watcher.ch <- listwatch.WatchEvent[widget]{Type: listwatch.Modified, Object: changed, ResourceVersion: "event-2"}
+	require.Eventually(t, func() bool {
+		_, cursor, err := store.Active(t.Context())
+		return err == nil && cursor == "event-2"
+	}, time.Second, time.Millisecond)
+	cancel()
+	<-done
+	staging, err := store.BeginSnapshot(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, store.PutSnapshotPage(t.Context(), staging, []checkpoint.DiskItem{
+		{Key: widgetKey(changed), Version: "unpublished", Value: json.RawMessage(`{"Name":"wrong"}`)},
+	}))
+	require.NoError(t, store.Close())
+	store, err = checkpoint.OpenDiskStore(dir, "Widget")
+	require.NoError(t, err)
+	resumedWatcher := newStubWatcher([]listwatch.WatchEvent[widget]{{Type: listwatch.Bookmark, ResourceVersion: "resumed"}}, nil)
+	resumedLW := &streamedWidgetListWatcher{stubListWatcher: &stubListWatcher[widget]{watchers: []*stubWatcher[widget]{resumedWatcher}}, rows: 1000}
+	resumed := makeRunner(resumedLW)
+	_, _ = start(resumed)
+	require.Eventually(t, func() bool { return resumed.Cache.HasSynced() && !resumed.Cache.RecoveryState().Recovering }, 3*time.Second, time.Millisecond)
+	require.Zero(t, resumedLW.pages.Load(), "a valid cursor should resume without a full re-list")
+	resumedLW.mu.Lock()
+	versions := append([]string(nil), resumedLW.watchRVs...)
+	resumedLW.mu.Unlock()
+	require.Equal(t, []string{"event-2"}, versions)
+	got, found, err := resumed.Lookup(t.Context(), widgetKey(changed))
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "2", got.ResourceVersion)
+	require.Empty(t, resumed.Cache.List())
+}
 
 // stubWatcher is a test double for listwatch.Watcher[T]. Events are
 // delivered from a script slice; closing happens either when the script is
@@ -52,6 +163,56 @@ func newStubWatcher[T any](events []listwatch.WatchEvent[T], closeErr error) *st
 	// construction (see stubListWatcher.pushWatch). Callers that want an
 	// immediately-closed stream call closeNow.
 	return w
+}
+
+func TestDiskRunnerExpiryKeepsAdmissionClosedThroughSnapshotAndBookmark(t *testing.T) {
+	store, err := checkpoint.OpenDiskStore(t.TempDir(), "Widget")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	gen, err := store.BeginSnapshot(t.Context())
+	require.NoError(t, err)
+	for i := range 3 {
+		item := widget{Namespace: "shop", Name: fmt.Sprintf("w-%05d", i), ResourceVersion: "1"}
+		data, err := json.Marshal(item)
+		require.NoError(t, err)
+		require.NoError(t, store.PutSnapshotPage(t.Context(), gen, []checkpoint.DiskItem{{Key: widgetKey(item), Version: "1", Value: data}}))
+	}
+	require.NoError(t, store.FinishSnapshot(t.Context(), gen, "expired"))
+	watcher := newStubWatcher[widget](nil, nil)
+	pause := make(chan struct{})
+	lw := &streamedWidgetListWatcher{
+		stubListWatcher: &stubListWatcher[widget]{
+			watchErrQueue: []error{listwatch.ErrWatchExpired},
+			watchers:      []*stubWatcher[widget]{nil, watcher},
+		},
+		rows: 2, entered: make(chan struct{}, 1), pause: pause,
+	}
+	runner := &listwatch.Runner[widget]{
+		Kind: "Widget", Disk: store, Cache: cache.New[widget](), ListWatcher: lw,
+		KeyFunc: widgetKey, RevisionFunc: widgetRevision, WaitForWatchBookmark: true, Log: zap.NewNop(),
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+	t.Cleanup(func() { cancel(); require.ErrorIs(t, <-done, context.Canceled) })
+	select {
+	case <-lw.entered:
+	case <-time.After(time.Second):
+		t.Fatal("expired cursor did not start streaming recovery")
+	}
+	require.True(t, runner.Cache.RecoveryState().Recovering)
+	_, cursor, err := store.Active(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "expired", cursor)
+	close(pause)
+	require.Eventually(t, func() bool { return lw.watchCalls.Load() == 2 }, 3*time.Second, time.Millisecond)
+	require.True(t, runner.Cache.RecoveryState().Recovering, "opening a watch must not release dispatch")
+	require.EqualValues(t, 3, store.Counts().Pending, "replacement lost unfinished deletion work")
+	data, _, err := store.DataPage(t.Context(), "", 10)
+	require.NoError(t, err)
+	require.Len(t, data, 2)
+	watcher.ch <- listwatch.WatchEvent[widget]{Type: listwatch.Bookmark, ResourceVersion: "fresh-valid"}
+	require.Eventually(t, func() bool { return !runner.Cache.RecoveryState().Recovering }, time.Second, time.Millisecond)
 }
 
 func (w *stubWatcher[T]) closeNow() {

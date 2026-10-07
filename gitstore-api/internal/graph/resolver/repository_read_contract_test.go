@@ -220,8 +220,8 @@ func TestRepositoryReadContract_ListUsesResolvedNamespaceWithoutPerRowLookups(t 
 	for _, edge := range connection.Edges {
 		require.NotNil(t, edge)
 		require.NotNil(t, edge.Node)
-		expected := expectedByName[edge.Node.Name]
-		require.NotNil(t, expected, "unexpected repository %q", edge.Node.Name)
+		expected := expectedByName[edge.Node.Metadata.Name]
+		require.NotNil(t, expected, "unexpected repository %q", edge.Node.Metadata.Name)
 		assertRepositoryReadContract(t, edge.Node, expected, h.namespace)
 	}
 
@@ -230,18 +230,16 @@ func TestRepositoryReadContract_ListUsesResolvedNamespaceWithoutPerRowLookups(t 
 	assert.Equal(t, 1, byIdentifierCalls, "list resolver should resolve the namespace exactly once")
 }
 
-func TestBuildRepositoryConnectionPreservesUnknownCountAndBody(t *testing.T) {
+func TestBuildRepositoryConnectionPreservesBody(t *testing.T) {
 	h := newRepositoryReadHarness(t)
 	connection, err := resolver.BuildRepositoryConnection(
 		&datastore.PageResult[datastore.Repository]{
-			Items:      []*datastore.Repository{h.repos[0]},
-			TotalCount: -1,
+			Items: []*datastore.Repository{h.repos[0]},
 		},
 		h.namespace,
 		repositoryReadDataDir,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, int32(-1), connection.TotalCount)
 	require.Len(t, connection.Edges, 1)
 	require.NotNil(t, connection.Edges[0].Node.Body)
 	assert.Equal(t, h.repos[0].Body, *connection.Edges[0].Node.Body)
@@ -291,16 +289,6 @@ func assertRepositoryReadContract(
 	assert.Equal(t, repositoryReadStoragePath(repositoryReadDataDir, expected.UID), got.Status.Resolved.StoragePath)
 	assert.Equal(t, expected.StorageClass, got.Status.Resolved.StorageClass)
 
-	assert.Equal(t, expected.Name, got.Name)
-	require.NotNil(t, got.Namespace)
-	assert.Equal(t, namespace.Name, got.Namespace.Identifier)
-	assert.Equal(t, expected.DefaultBranch, got.DefaultBranch)
-	assert.Equal(t, expected.StorageClass, got.StorageClass)
-	assert.Equal(t, got.Status.Resolved.StoragePath, got.StoragePath)
-	assert.Equal(t, expected.CreationTimestamp, got.CreatedAt)
-	assert.Equal(t, expected.CreationActor, got.CreatedBy)
-	assert.Equal(t, expected.UpdateTimestamp, got.UpdatedAt)
-	assert.Equal(t, expected.UpdateActor, got.UpdatedBy)
 	require.NotNil(t, got.Body)
 	assert.Equal(t, expected.Body, *got.Body)
 }

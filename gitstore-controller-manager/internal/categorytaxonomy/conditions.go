@@ -34,11 +34,15 @@ const (
 // absent or resolves to an existing CategoryTaxonomy in the same namespace;
 // False (with a reason/message identifying the problem) otherwise.
 func computeParentResolved(c cache.CacheAccessor[CategoryTaxonomy], self CategoryTaxonomy) status.Condition {
-	if self.ParentRefName == "" {
-		return status.Condition{Type: conditionParentResolved, Status: statusTrue, LastTransitionTime: time.Now()}
+	found := self.ParentRefName == ""
+	if !found {
+		_, found = c.Get(types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: self.Namespace, Name: self.ParentRefName})
 	}
-	_, ok := c.Get(types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: self.Namespace, Name: self.ParentRefName})
-	if !ok {
+	return parentResolvedCondition(self, found)
+}
+
+func parentResolvedCondition(self CategoryTaxonomy, found bool) status.Condition {
+	if !found {
 		return status.Condition{
 			Type:               conditionParentResolved,
 			Status:             statusFalse,

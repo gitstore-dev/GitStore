@@ -13,7 +13,7 @@ use std::sync::Arc;
 use gitstore::auth::interceptor::HmacInterceptor;
 use gitstore::git::hooks::{
     admission_handler::AdmissionControlHandler,
-    category_taxonomy_deletion_handler::CategoryTaxonomyDeletionHandler,
+    category_taxonomy_deletion_handler::ResourceDeletionHandler,
     validation_handler::SchemaValidationHandler, ChainedValidationHandler, HookPipeline,
     NoopAdmissionHandler, NoopValidationHandler,
 };
@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!(path = %data_path.display(), "Created data directory");
     }
 
-    // Preserve schema validation and add the deletion-specific proposed-tree
+    // Preserve schema validation and add the generic deletion proposed-tree
     // check as a second blocking policy.
     let catalog_url = cfg.catalog_service.uri.clone();
     let validation_timeout = std::time::Duration::from_secs(cfg.schema_validation.timeout_secs);
@@ -84,15 +84,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let schema =
             SchemaValidationHandler::connect(&catalog_url, validation_timeout, "".to_string())
                 .await;
-        let deletion = CategoryTaxonomyDeletionHandler::connect(
-            &catalog_url,
-            validation_timeout,
-            "".to_string(),
-        )
-        .await;
+        let deletion =
+            ResourceDeletionHandler::connect(&catalog_url, validation_timeout, "".to_string())
+                .await;
         match (schema, deletion) {
             (Ok(schema), Ok(deletion)) => {
-                info!(url = %catalog_url, "schema and CategoryTaxonomy deletion validators connected");
+                info!(url = %catalog_url, "schema and resource deletion validators connected");
                 Arc::new(ChainedValidationHandler::new(vec![
                     Arc::new(schema),
                     Arc::new(deletion),

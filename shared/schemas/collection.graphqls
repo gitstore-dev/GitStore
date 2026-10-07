@@ -19,26 +19,6 @@ extend type Query {
   ): CollectionConnection!
 }
 
-extend type Mutation {
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  createCollection(input: CreateCollectionInput!): CreateCollectionPayload!
-
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  updateCollection(input: UpdateCollectionInput!): UpdateCollectionPayload!
-
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  deleteCollection(input: DeleteCollectionInput!): DeleteCollectionPayload!
-}
-
 """
 A Collection is a namespace-scoped catalog resource that groups products via
 a declarative label selector. Defined by git push; mutations are not supported.
@@ -207,66 +187,4 @@ Paginated connection for collections (Relay pattern).
 type CollectionConnection {
   edges: [CollectionEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-# ============================================================================
-# Minimal stub inputs (legacy mutations deprecated — managed via git push)
-# ============================================================================
-
-input CreateCollectionInput {
-  name: String!
-}
-
-type CreateCollectionPayload {
-  collection: Collection
-}
-
-input UpdateCollectionInput {
-  id: ID!
-}
-
-type UpdateCollectionPayload {
-  collection: Collection
-  conflict: CollectionOptimisticLockConflict
-}
-
-type CollectionOptimisticLockConflict {
-  current: Collection!
-}
-
-input DeleteCollectionInput {
-  id: ID!
-}
-
-type DeleteCollectionPayload {
-  deletedCollectionId: ID
-}
-
-# ============================================================================
-# Publish / CatalogVersion (kept here for schema continuity)
-# ============================================================================
-
-input PublishCatalogInput {
-  version: String!
-  message: String!
-}
-
-type PublishCatalogPayload {
-  catalogVersion: CatalogVersion
-}
-
-type CatalogVersion {
-  tag: String!
-  commit: String!
-  publishedAt: DateTime!
-  message: String
-  stats: CatalogStats!
-}
-
-type CatalogStats {
-  productCount: Int!
-  categoryCount: Int!
-  collectionCount: Int!
-  orphanedReferences: Int!
 }

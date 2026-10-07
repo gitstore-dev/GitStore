@@ -1,20 +1,5 @@
 # Authentication Types and Mutations
 
-"""
-Authenticated user information
-"""
-type User {
-  """
-  Username
-  """
-  username: String!
-
-  """
-  Whether the user has admin privileges
-  """
-  isAdmin: Boolean!
-}
-
 """OIDC-compatible token response."""
 type TokenResponse {
   """Access token used for authenticated API calls."""

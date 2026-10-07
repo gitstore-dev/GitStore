@@ -4,9 +4,55 @@
 package categorytaxonomy
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
+
+var errHierarchyDepth = errors.New("category hierarchy exceeds the supported depth of 127")
+
+func boundedHierarchy(ctx context.Context, lookup cache.LookupFunc[CategoryTaxonomy], countChildren ProductCounter, self CategoryTaxonomy, products int64) (ResolvedCategoryTaxonomy, bool, status.Condition, error) {
+	path := []string{self.Name}
+	seen := map[string]struct{}{self.Name: {}}
+	current := self
+	cycling := false
+	parentFound := self.ParentRefName == "" || self.ParentRefName == self.Name
+	for current.ParentRefName != "" {
+		if _, exists := seen[current.ParentRefName]; exists {
+			cycling = current.ParentRefName == self.Name
+			break
+		}
+		parent, found, err := lookup(ctx, types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: self.Namespace, Name: current.ParentRefName})
+		if err != nil {
+			return ResolvedCategoryTaxonomy{}, false, status.Condition{}, err
+		}
+		if len(path) == 1 {
+			parentFound = found
+		}
+		if !found {
+			break
+		}
+		if len(path) == 128 {
+			return ResolvedCategoryTaxonomy{}, false, status.Condition{}, errHierarchyDepth
+		}
+		path = append(path, parent.Name)
+		seen[parent.Name] = struct{}{}
+		current = parent
+	}
+	children, err := countChildren(ctx, self.Namespace, self.Name)
+	if err != nil {
+		return ResolvedCategoryTaxonomy{}, false, status.Condition{}, fmt.Errorf("count children: %w", err)
+	}
+	slices.Reverse(path)
+	return ResolvedCategoryTaxonomy{
+		Depth: int8(len(path) - 1), Path: path, ChildCount: children, ProductCount: products,
+	}, cycling, parentResolvedCondition(self, parentFound), nil
+}
 
 // computeHierarchy walks self up to its root via ParentRefName using c
 // (research.md R2), builds Path in root-to-self order, and sets Depth to

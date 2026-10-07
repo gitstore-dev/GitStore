@@ -15,7 +15,7 @@ graph TD
     GraphQLClient["GraphQL clients\nstorefront / admin / scripts"]
     Controller["gitstore-controller-manager\nport 5001"]
 
-    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 5000\nCatalogService gRPC: 6000"]
+    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 9000 (host)\nCatalogService gRPC: 6000"]
     GitService["gitstore-git-service\nGitService gRPC: 50051"]
     Datastore["Datastore\nmemdb or ScyllaDB"]
     Repos["Bare repositories\nlocal filesystem"]
@@ -35,18 +35,21 @@ graph TD
 | Service                       |    Port | Purpose                                                |
 |-------------------------------|--------:|--------------------------------------------------------|
 | `gitstore-api`                |  `4000` | GraphQL, Playground, `/health`, `/ready`, login helper |
-| `gitstore-api`                |  `5000` | Git Smart HTTP front door                              |
+| `gitstore-api`                |  `9000` | Git Smart HTTP front door (host port)                  |
 | `gitstore-api`                |  `6000` | CatalogService gRPC called by the Git service          |
 | `gitstore-git-service`        | `50051` | GitService gRPC storage and transport                  |
 | `gitstore-controller-manager` |  `5001` | `/health`, `/metrics`, poison-item API                 |
-| `gitstore-admin`              |  `3000` | Optional browser UI                                    |
 
 ## Production Design Constraints
 
 `gitstore-api`, `gitstore-controller-manager`, and
 `gitstore-git-service` are the three core services. Features affecting them
-must define behavior with multiple replicas, process replacement, rolling
-upgrades, and autoscaling.
+must define behavior for their actual service topology. API/controller changes
+must verify concurrent-replica behavior and rolling upgrades, naming any
+unverified paths. Git is stateful and singleton-only; repository sharding and
+placement-aware routing are not implemented. Keep one active Git process,
+retain repository storage and use non-overlapping replacement. Do not turn
+generic replica requirements into multi-Git or Git HA scope.
 
 Production paths must also define:
 
@@ -57,6 +60,19 @@ Production paths must also define:
 - sustained Git push load and downstream backpressure behavior;
 - repeatable replica, failover, load, soak, and recovery validation.
 
+Future controllers and multi-controller deployments must also follow
+[ADR 0018 — Controller Ownership, Concurrency and Fencing](ADRs/0018-controller-ownership-concurrency-and-fencing.md).
+It separates logical ownership and conditional writes, which provide safety, from per-key leases,
+which only provide liveness. It also separates CDC materializer leases from controller fencing.
+
+Repository-wide capacity and fault tooling is exposed through the root
+Makefile. Use `make capacity TARGET=<target> PROFILE=<scenario>
+MODE=<diagnostic|alpha|production>` for offered-load and threshold
+evidence, and `make chaos CHAOS_PROFILE=<profile>
+CHAOS_TARGET=<gitstore-container> CHAOS_CONFIRM=1` for bounded container fault
+injection. See [Production readiness testing](runbooks/production-readiness-testing.md)
+for profile authoring, correctness-verifier, evidence, and safety requirements.
+
 ## Local Development
 
 Start the Docker stack:
@@ -65,6 +81,13 @@ Start the Docker stack:
 make compose DETACH=1
 make ps
 ```
+
+This starts all three core services through the `local` Compose profile using
+the shared, read-only `config/config.toml` and `config/policy.yaml` fixtures. No
+service `.env` file is required. The local login is `admin` / `admin123`.
+Choose an alternate shared file with
+`make compose CONFIG_FILE=./config/config.stage.toml`; the selected host path
+is mounted at the same container path for every service.
 
 Run native services:
 
@@ -83,7 +106,7 @@ make dev
 Bootstrap local control-plane resources through GraphQL:
 
 ```bash
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```
 
 Useful variables:
@@ -97,6 +120,7 @@ Useful variables:
 | `NAMESPACE`       | `gitstore-test`                 | Namespace to create                         |
 | `REPOSITORY`      | `catalog`                       | Repository to create                        |
 | `DEFAULT_BRANCH`  | `main`                          | Repository default branch                   |
+| `CONFIG_FILE`     | `./config/config.toml`          | Shared local Compose configuration          |
 
 ## Datastore Backends
 
@@ -113,10 +137,49 @@ Start Scylla services only:
 make scylla DETACH=1
 ```
 
-Start the full stack with Scylla:
+`make scylla` uses the CI-friendly single-node overlay from
+`compose.scylla.yml` (`--smp=1`, replication factor 1). For local
+multi-node validation, start the three-node overlay instead:
 
 ```bash
-make compose-scylla DETACH=1
+make scylla PROFILE=cluster DETACH=1
+```
+
+The cluster overlay uses `compose.scylla.cluster.yml`, creates three Scylla
+nodes, and initializes the `gitstore` keyspace with replication factor 3.
+Override `SCYLLA_CLUSTER_SMP` to change the CPU shard count per Scylla node,
+for example `SCYLLA_CLUSTER_SMP=2 make scylla PROFILE=cluster DETACH=1`.
+The default is `1`, with
+`SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS=2048`, so the three-node
+topology starts reliably on Docker Desktop without requiring host AIO tuning.
+
+Start the full stack with the default in-memory datastore:
+
+```bash
+make compose DETACH=1
+```
+
+Start the full stack with single-node Scylla:
+
+```bash
+make compose DATASTORE=scylla DETACH=1
+```
+
+To run the full stack against the three-node local cluster:
+
+```bash
+make compose DATASTORE=scylla PROFILE=cluster DETACH=1
+```
+
+Lifecycle helpers (`make ps`, `make logs`, `make stop`, and `make down`) load
+both Scylla overlays so they can see services started by either profile.
+`SERVICE=scylla` is treated as a convenience alias for all Scylla variants
+(`scylla`, `scylla-1`, `scylla-2`, `scylla-3`, and `scylla-init`):
+
+```bash
+make logs SERVICE=scylla
+make stop SERVICE=scylla
+make down
 ```
 
 Run Scylla-backed API datastore tests after Scylla is reachable:
@@ -168,13 +231,13 @@ limits, sustained projection mutation, and two independent clients. Add
 
 The API is the Git Smart HTTP front door. The Rust Git service is gRPC-only storage and transport.
 
-1. A Git client clones, fetches, or pushes to `http://localhost:5000/{namespace}/{repo}.git`.
+1. A Git client clones, fetches, or pushes to `http://localhost:9000/{namespace}/{repo}.git`.
 2. `gitstore-api` resolves `{namespace}/{repo}` to the stable repository ID stored in the datastore.
 3. `gitstore-api` forwards Git transport work to `gitstore-git-service` through `GitService` gRPC.
 4. During receive-pack, `gitstore-git-service` stages objects in quarantine and runs enabled hook phases.
-5. In the blocking pre-receive phase, `gitstore-git-service` sends frontmatter resource blobs to `gitstore-api` via `CatalogService.ValidateResources`.
+5. In the blocking pre-receive phase, `gitstore-git-service` sends frontmatter resource blobs to `gitstore-api` via `CatalogService.ValidateResources`; when a resource is removed, it additionally sends the old and proposed trees to `CatalogService.ValidateResourceDeletions`.
 6. If validation passes, refs are updated and the push succeeds.
-7. In the post-receive phase, `gitstore-git-service` calls `CatalogService.AdmitResources` with repository ID, ref name, old commit SHA, and new commit SHA. The legacy `commit_sha` field remains a compatibility alias for the new commit.
+7. In the post-receive phase, `gitstore-git-service` calls `CatalogService.AdmitResources` with repository ID, ref name, old commit SHA, and new commit SHA. New callers populate `new_commit_sha`; the deprecated `commit_sha` tag remains reserved for mixed-version decoding only.
 8. `gitstore-api` verifies that the ref still points at the admitted new commit, skips stale admissions if a newer push already won, compares old/new resource identities, applies admission checks, and creates, updates, or deletes hydrated records in the datastore.
 9. `gitstore-controller-manager` reconciles controller-owned status and operational follow-up through the API.
 
@@ -197,7 +260,7 @@ Runtime pieces:
 - Panic capture with stack traces.
 - Per-kind health statistics.
 - Prometheus metrics.
-- List-then-watch bootstrap and `resourceVersion` checkpointing per registered kind (`internal/checkpoint`, `internal/listwatch`) — populates the informer cache on first start, resumes a watch stream from a persisted checkpoint after a restart, and recovers from a compacted watch cursor by re-listing. See [`specs/036-controller-startup-resume`](../specs/036-controller-startup-resume/quickstart.md) for the `Runner[T]`/`ListWatcher[T]` wiring pattern; no concrete transport ships yet.
+- List-then-watch bootstrap and `resourceVersion` checkpointing per registered kind (`internal/checkpoint`, `internal/listwatch`) — populates the informer cache on first start, resumes a watch stream from a persisted checkpoint after a restart, and recovers from a compacted watch cursor by re-listing (the `Runner[T]`/`ListWatcher[T]` wiring pattern); no concrete transport ships yet.
 
 HTTP surface on port `5001`:
 
@@ -242,7 +305,6 @@ make api
 cd gitstore-api
 go test ./...
 go generate ./...
-go run ./cmd/hashpw <password>
 ```
 
 ### `gitstore-git-service`
@@ -305,31 +367,12 @@ go test ./...
 
 Operations runbooks:
 
-| Runbook | Symptom |
-|---------|---------|
-| [`controller-lag`](runbooks/controller-lag.md) | Queue depth growing, reconciles falling behind |
-| [`controller-replay-window-exceeded`](runbooks/controller-replay-window-exceeded.md) | Watch cursor expired / relist triggered |
-| [`controller-poisoned-item`](runbooks/controller-poisoned-item.md) | A resource repeatedly fails reconciliation |
-
-### `gitstore-admin`
-
-Purpose:
-
-- Optional Astro/React UI.
-- GraphQL client of `gitstore-api`.
-- Browser-facing attachment point for future Git-backed editing workflows.
-
-Commands:
-
-```bash
-make admin-compose DETACH=1
-cd gitstore-admin
-npm install
-npm run dev
-npm run build
-npm run test
-npm run test:e2e
-```
+| Runbook                                                                              | Symptom                                                          |
+|--------------------------------------------------------------------------------------|------------------------------------------------------------------|
+| [`controller-lag`](runbooks/controller-lag.md)                                       | Queue depth growing, reconciles falling behind                   |
+| [`controller-replay-window-exceeded`](runbooks/controller-replay-window-exceeded.md) | Watch cursor expired / relist triggered                          |
+| [`controller-poisoned-item`](runbooks/controller-poisoned-item.md)                   | A resource repeatedly fails reconciliation                       |
+| [`controller-auth`](runbooks/controller-auth.md)                                     | Controller credential enrollment, renewal, or revocation failure |
 
 ## Generated Schema And Proto Workflow
 
@@ -384,7 +427,8 @@ Aggregate checks:
 make build
 make test
 make lint
-make license-check
+make check TARGET=licenses
+make check TARGET=credentials
 make pr-ready
 ```
 
@@ -403,58 +447,37 @@ Use Conventional Commits.
 | Env var                               | Default                  | Purpose                  |
 |---------------------------------------|--------------------------|--------------------------|
 | `GITSTORE_API__PORT`                  | `4000`                   | GraphQL HTTP port        |
-| `GITSTORE_API__GIT_PORT`              | `5000`                   | Git Smart HTTP port      |
+| `GITSTORE_API__GIT_PORT`              | `9000`                   | Git Smart HTTP port      |
 | `GITSTORE_API__GRPC_PORT`             | `6000`                   | CatalogService gRPC port |
 | `GITSTORE_GIT__GRPC__URI`             | `dns:///localhost:50051` | GitService gRPC target   |
 | `GITSTORE_DATASTORE__BACKEND`         | `memdb`                  | `memdb` or `scylla`      |
-| `GITSTORE_AUTH__ADMIN__USERNAME`      | unset                    | Admin login username     |
-| `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | unset                    | bcrypt password hash     |
+| `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE` | `auto` | `auto`, `disabled`, or `enabled`; see the Namespace admission runbook |
 | `GITSTORE_AUTH__JWT__SECRET`          | unset                    | JWT signing secret       |
+| `GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY` | unset | API-only service-account access-token signing key; required when service-account providers are enabled |
 
 ### Git Service
 
 | Env var                             | Default                 | Purpose                   |
 |-------------------------------------|-------------------------|---------------------------|
 | `GITSTORE_GRPC__PORT`               | `50051`                 | GitService gRPC port      |
-| `GITSTORE_GIT__DATA_DIR`            | `/data/repos`           | Bare repository root      |
+| `GITSTORE_GIT__DATA_DIR`            | `/var/lib/gitstore/repos` | Bare repository root    |
 | `GITSTORE_GIT__REPO__MAX_FILE_SIZE` | `52428800`              | Per-file limit            |
 | `GITSTORE_CATALOG_SERVICE__URI`     | `http://localhost:6000` | API CatalogService target |
 
 ### Controller Manager
 
-| Env var                                        | Default                         | Purpose                         |
-|------------------------------------------------|---------------------------------|---------------------------------|
-| `GITSTORE_CONTROLLER__PORT`                    | `5001`                          | HTTP management port            |
-| `GITSTORE_CONTROLLER__API_URI`                 | `http://localhost:4000/graphql` | API endpoint for reconciliation |
-| `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`    | `5`                             | Retry limit before quarantine   |
-| `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | `5m`                            | Worker stall threshold          |
-| `GITSTORE_CONTROLLER__CHECKPOINT_DIR`          | `.gitstore/checkpoints`         | Filesystem checkpoint store directory (one file per kind) |
-| `GITSTORE_CONTROLLER__CHECKPOINT_FLUSH_INTERVAL_EVENTS` | `100`                  | Watch events between checkpoint persists |
-| `GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF`       | `30s`                           | Cap on watch-reconnect exponential backoff |
-
-See [configuration.md](configuration.md) for the operator reference.
-
-## Historical Implementation References
-
-Spec quickstarts are useful implementation references, but they are not user-facing current workflow docs.
-
-| Spec                               | Reference                                                                                                                        |
-|------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
-| `012-smart-http-api`               | [quickstart](../specs/012-smart-http-api/quickstart.md), [plan](../specs/012-smart-http-api/plan.md)                             |
-| `018-hook-pipeline-wiring`         | [quickstart](../specs/018-hook-pipeline-wiring/quickstart.md), [plan](../specs/018-hook-pipeline-wiring/plan.md)                 |
-| `021-category-taxonomy`            | [quickstart](../specs/021-category-taxonomy/quickstart.md), [plan](../specs/021-category-taxonomy/plan.md)                       |
-| `022-collection-resource-contract` | [quickstart](../specs/022-collection-resource-contract/quickstart.md), [plan](../specs/022-collection-resource-contract/plan.md) |
-| `024-product-variant`              | [quickstart](../specs/024-product-variant/quickstart.md), [plan](../specs/024-product-variant/plan.md)                           |
-| `025-controller-manager-runtime`   | [quickstart](../specs/025-controller-manager-runtime/quickstart.md), [plan](../specs/025-controller-manager-runtime/plan.md)     |
-| `026-reconcile-handler`            | [quickstart](../specs/026-reconcile-handler/quickstart.md), [plan](../specs/026-reconcile-handler/plan.md)                       |
-| `036-controller-startup-resume`    | [quickstart](../specs/036-controller-startup-resume/quickstart.md), [plan](../specs/036-controller-startup-resume/plan.md)       |
+See [configuration.md](configuration.md) for canonical controller settings,
+environment variables, defaults, and bootstrap requirements.
 
 ## Related Docs
 
 - [User Guide](user-guide.md)
 - [API Reference](api-reference.md)
-- [Architecture](architecture.md)
+- [Architecture](architecture/README.md)
 - [Admin](admin/README.md)
 - [Push Validation](products/push-validation.md)
+- [CategoryTaxonomy Spec](categories/category-taxonomy-spec.md)
+- [Collection Spec](collections/collection-spec.md)
+- [ProductVariant Spec](products/product-variant-spec.md)
 - [Release Process](runbooks/release-process.md)
 - [Production Readiness Testing](runbooks/production-readiness-testing.md)

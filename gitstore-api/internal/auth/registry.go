@@ -9,7 +9,20 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
+
+// ServiceAccountTokenIssuer is implemented by AuthN providers (currently only
+// serviceaccount-jwt) that can mint ServiceAccount access tokens for the
+// issueServiceAccountToken GraphQL mutation (spec 061). It is a narrower,
+// optional capability than the generic IssueSession — issuance needs the
+// full ServiceAccount record (for its UID and enrolled keys) plus explicit
+// audience/TTL parameters that IssueSession's single-subject signature
+// cannot express.
+type ServiceAccountTokenIssuer interface {
+	IssueAccessToken(sa *datastore.ServiceAccount, audience string, requestedTTL time.Duration) (token string, expiresAt time.Time, err error)
+}
 
 // ProviderRegistry holds the active provider for each auth plane.
 type ProviderRegistry struct {
@@ -126,6 +139,21 @@ func (c *ChainedAuthN) IssueSession(ctx context.Context, subject string) (string
 		if !errors.Is(err, ErrNotSupported) {
 			return "", time.Time{}, err
 		}
+	}
+	return "", time.Time{}, ErrNotSupported
+}
+
+// IssueServiceAccountToken delegates to the first chained provider
+// implementing ServiceAccountTokenIssuer (currently only serviceaccount-jwt).
+// Returns ErrNotSupported if no provider in the chain supports it, e.g. when
+// "serviceaccount-jwt" is not configured in auth.authn.chain.
+func (c *ChainedAuthN) IssueServiceAccountToken(sa *datastore.ServiceAccount, audience string, requestedTTL time.Duration) (string, time.Time, error) {
+	for _, p := range c.providers {
+		issuer, ok := p.(ServiceAccountTokenIssuer)
+		if !ok {
+			continue
+		}
+		return issuer.IssueAccessToken(sa, audience, requestedTTL)
 	}
 	return "", time.Time{}, ErrNotSupported
 }

@@ -40,11 +40,18 @@ type ObjectMeta struct {
 
 // ProductSpec is the author-controlled declarative specification for a product.
 type ProductSpec struct {
-	Title       string                    `yaml:"title"      validate:"omitempty,max=200"`
+	Title       string                    `yaml:"title"      validate:"required,max=200"`
 	CategoryRef *ObjectReference          `yaml:"categoryRef"`
 	Tags        []string                  `yaml:"tags"`
 	Media       []MediaDefinition         `yaml:"media"               validate:"omitempty,dive"`
 	Options     []ProductOptionDefinition `yaml:"options"    validate:"omitempty,dive"`
+	Lifecycle   ProductLifecycleSpec      `yaml:"lifecycle"`
+}
+
+// ProductLifecycleSpec is author-owned desired lifecycle state. Runtime
+// deletion metadata remains system-owned on the enclosing Product record.
+type ProductLifecycleSpec struct {
+	State string `yaml:"state" validate:"omitempty,oneof=ACTIVE RETIRED"`
 }
 
 // ObjectReference is a pointer to another catalogue resource.

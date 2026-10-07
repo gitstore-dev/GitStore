@@ -33,7 +33,8 @@ func TestDatastoreNamespaceToGraphQL_DeclarativeProjection(t *testing.T) {
 
 	require.NotNil(t, got.Metadata)
 	assert.Equal(t, "acme", got.Metadata.Name)
-	assert.Equal(t, ns.ID, got.Metadata.UID)
+	assert.Equal(t, got.ID, got.Metadata.UID, "metadata.uid is the encoded Relay node ID, matching Namespace.id")
+	assert.NotEqual(t, ns.ID, got.Metadata.UID)
 	assert.Equal(t, namespaceInitialResourceVersion, got.Metadata.ResourceVersion)
 	assert.Equal(t, namespaceInitialGeneration, got.Metadata.Generation)
 	assert.Equal(t, map[string]any{"team": "catalog"}, got.Metadata.Labels)
@@ -69,22 +70,6 @@ func TestDatastoreNamespaceToGraphQL_DeclarativeProjection(t *testing.T) {
 	assert.Equal(t, ns.Body, *got.Body)
 }
 
-func TestDatastoreNamespaceToGraphQL_PreservesLegacyProjection(t *testing.T) {
-	ns := namespaceContractFixture("00000000-0000-0000-0000-000000000044", "legacy")
-
-	got := datastoreNamespaceToModel(ns)
-	require.NotNil(t, got)
-	assert.Equal(t, mustEncodeNodeID(nodeKindNamespace, ns.ID), got.ID)
-	assert.Equal(t, ns.Name, got.Identifier)
-	require.NotNil(t, got.DisplayName)
-	assert.Equal(t, ns.Title, *got.DisplayName)
-	assert.Equal(t, model.NamespaceTierUser, got.Tier)
-	assert.Equal(t, ns.CreationTimestamp, got.CreatedAt)
-	assert.Equal(t, ns.CreationActor, got.CreatedBy)
-	assert.Equal(t, ns.UpdateTimestamp, got.UpdatedAt)
-	assert.Equal(t, ns.UpdateActor, got.UpdatedBy)
-}
-
 func TestDatastoreNamespaceToGraphQL_IdentityAndVersionDefaultsArePerResource(t *testing.T) {
 	first := namespaceContractFixture("00000000-0000-0000-0000-000000000101", "first")
 	second := namespaceContractFixture("00000000-0000-0000-0000-000000000202", "second")
@@ -96,8 +81,8 @@ func TestDatastoreNamespaceToGraphQL_IdentityAndVersionDefaultsArePerResource(t 
 	require.NotNil(t, firstModel.Metadata)
 	require.NotNil(t, secondModel.Metadata)
 	assert.NotEqual(t, firstModel.ID, secondModel.ID)
-	assert.Equal(t, first.ID, firstModel.Metadata.UID)
-	assert.Equal(t, second.ID, secondModel.Metadata.UID)
+	assert.Equal(t, firstModel.ID, firstModel.Metadata.UID)
+	assert.Equal(t, secondModel.ID, secondModel.Metadata.UID)
 	assert.NotEqual(t, firstModel.Metadata.UID, secondModel.Metadata.UID)
 	assert.Equal(t, "1", firstModel.Metadata.ResourceVersion)
 	assert.Equal(t, "1", secondModel.Metadata.ResourceVersion)
@@ -105,6 +90,60 @@ func TestDatastoreNamespaceToGraphQL_IdentityAndVersionDefaultsArePerResource(t 
 	assert.Equal(t, int32(1), secondModel.Metadata.Generation)
 	assert.Equal(t, first.CreationTimestamp, firstModel.Metadata.CreationTimestamp)
 	assert.Equal(t, second.CreationTimestamp, secondModel.Metadata.CreationTimestamp)
+}
+
+func TestDatastoreNamespaceToGraphQL_AdmissionAcceptedAndTerminatingRemainDistinct(t *testing.T) {
+	acceptedAt := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	deletionRequestedAt := acceptedAt.Add(time.Hour)
+	ns := namespaceContractFixture("00000000-0000-0000-0000-000000000303", "terminating")
+	ns.Generation = 3
+	ns.DeletionTimestamp = &deletionRequestedAt
+	ns.Status = json.RawMessage(`{
+		"observedGeneration": 3,
+		"lastAppliedRevision": "main@sha1:accepted",
+		"conditions": [{
+			"type": "AdmissionAccepted",
+			"status": "True",
+			"observedGeneration": 3,
+			"lastTransitionTime": "2026-08-29T12:00:00Z",
+			"reason": "AdmittedByHookPipeline",
+			"message": "Namespace manifest admitted successfully."
+		}]
+	}`)
+
+	got := datastoreNamespaceToModel(ns)
+
+	require.NotNil(t, got)
+	require.NotNil(t, got.Status)
+	assert.Equal(t, int32(3), got.Status.ObservedGeneration)
+	require.Len(t, got.Status.Conditions, 2)
+
+	admission := namespaceModelConditionByType(t, got.Status.Conditions, catalog.ConditionAdmissionAccepted)
+	assert.Equal(t, model.ConditionStatusTrue, admission.Status)
+	require.NotNil(t, admission.ObservedGeneration)
+	assert.Equal(t, int32(3), *admission.ObservedGeneration)
+	assert.Equal(t, acceptedAt, admission.LastTransitionTime)
+	require.NotNil(t, admission.Reason)
+	assert.Equal(t, "AdmittedByHookPipeline", *admission.Reason)
+
+	terminating := namespaceModelConditionByType(t, got.Status.Conditions, catalog.ConditionTerminating)
+	assert.Equal(t, model.ConditionStatusTrue, terminating.Status)
+	require.NotNil(t, terminating.ObservedGeneration)
+	assert.Equal(t, int32(3), *terminating.ObservedGeneration)
+	assert.Equal(t, deletionRequestedAt, terminating.LastTransitionTime)
+	require.NotNil(t, terminating.Reason)
+	assert.Equal(t, "DeletionRequested", *terminating.Reason)
+}
+
+func namespaceModelConditionByType(t *testing.T, conditions []*model.Condition, conditionType string) *model.Condition {
+	t.Helper()
+	for _, condition := range conditions {
+		if condition != nil && condition.Type == conditionType {
+			return condition
+		}
+	}
+	t.Fatalf("condition %q not found in %+v", conditionType, conditions)
+	return nil
 }
 
 func repositoryContractFixture() (*datastore.Repository, *datastore.Namespace) {
@@ -183,21 +222,16 @@ func TestDatastoreRepositoryToModel_DeclarativeProjection(t *testing.T) {
 	assert.Equal(t, repo.Body, *got.Body)
 }
 
-func TestDatastoreRepositoryToModel_PreservesLegacyProjection(t *testing.T) {
+func TestDatastoreRepositoryToModel_UsesPersistedResolvedStatus(t *testing.T) {
 	repo, ns := repositoryContractFixture()
+	repo.Status = json.RawMessage(`{"observedGeneration":2,"conditions":[],"resolved":{"storagePath":"/provisioned/acme/catalog.git","storageClass":"ssd"}}`)
 
 	got := datastoreRepositoryToModel(repo, ns, "/var/lib/gitstore")
 
-	assert.Equal(t, repo.Name, got.Name)
-	require.NotNil(t, got.Namespace)
-	assert.Equal(t, ns.Name, got.Namespace.Identifier)
-	assert.Equal(t, repo.DefaultBranch, got.DefaultBranch)
-	assert.Equal(t, repo.StorageClass, got.StorageClass)
-	assert.Equal(t, fanoutStoragePath("/var/lib/gitstore", repo.UID), got.StoragePath)
-	assert.Equal(t, repo.CreationTimestamp, got.CreatedAt)
-	assert.Equal(t, repo.CreationActor, got.CreatedBy)
-	assert.Equal(t, repo.UpdateTimestamp, got.UpdatedAt)
-	assert.Equal(t, repo.UpdateActor, got.UpdatedBy)
+	require.NotNil(t, got.Status)
+	require.NotNil(t, got.Status.Resolved)
+	assert.Equal(t, "/provisioned/acme/catalog.git", got.Status.Resolved.StoragePath)
+	assert.Equal(t, "ssd", got.Status.Resolved.StorageClass)
 }
 
 func TestDatastoreRepositoryToModel_LegacyDefaultsAndEmptyConditionVocabulary(t *testing.T) {
@@ -236,7 +270,7 @@ func TestDatastoreRepositoryToModel_MalformedStatusReturnsExplicitError(t *testi
 func TestSpecFromJSON_NilBlob_ReturnsEmptySpec(t *testing.T) {
 	s := specFromJSON(nil)
 	require.NotNil(t, s)
-	assert.Nil(t, s.Title)
+	assert.Empty(t, s.Title)
 	assert.NotNil(t, s.Tags)
 	assert.Empty(t, s.Tags)
 	assert.NotNil(t, s.Media)
@@ -262,8 +296,7 @@ func TestSpecFromJSON_ValidBlob_PopulatesFields(t *testing.T) {
 	}`)
 	s := specFromJSON(raw)
 	require.NotNil(t, s)
-	require.NotNil(t, s.Title)
-	assert.Equal(t, title, *s.Title)
+	assert.Equal(t, title, s.Title)
 	assert.Equal(t, []string{"apple", "laptop"}, s.Tags)
 	require.Len(t, s.Options, 1)
 	assert.Equal(t, "storage", s.Options[0].Name)
@@ -386,8 +419,7 @@ func TestDatastoreProductToGraphQL_SpecHydration(t *testing.T) {
 	got := DatastoreProductToGraphQL(p)
 	require.NotNil(t, got)
 	require.NotNil(t, got.Spec)
-	require.NotNil(t, got.Spec.Title)
-	assert.Equal(t, "Widget Pro", *got.Spec.Title)
+	assert.Equal(t, "Widget Pro", got.Spec.Title)
 	assert.Equal(t, []string{"sale"}, got.Spec.Tags)
 	require.Len(t, got.Spec.Options, 1)
 	assert.Equal(t, "size", got.Spec.Options[0].Name)
@@ -416,7 +448,7 @@ func TestDatastoreProductToGraphQL_NilSpec_ReturnsEmptySpec(t *testing.T) {
 	got := DatastoreProductToGraphQL(p)
 	require.NotNil(t, got)
 	require.NotNil(t, got.Spec)
-	assert.Nil(t, got.Spec.Title)
+	assert.Empty(t, got.Spec.Title)
 	assert.Empty(t, got.Spec.Tags)
 	assert.Empty(t, got.Spec.Media)
 	assert.Empty(t, got.Spec.Options)

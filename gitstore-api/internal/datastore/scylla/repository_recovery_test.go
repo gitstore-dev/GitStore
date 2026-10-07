@@ -16,6 +16,38 @@ import (
 
 const sagaTestRepositoryID = "11111111-1111-1111-1111-111111111111"
 
+func TestNamespaceRepositoryReservationRetainsFenceAfterRepairRequiredOperation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	operationErr := datastore.NewRepairRequiredError(
+		datastore.MutationStep{Operation: "create_repository", Action: "converge_projection"},
+		errors.New("projection failed"),
+		errors.New("compensation failed"),
+	)
+	releases := 0
+
+	err := executeNamespaceRepositoryReservation(
+		ctx,
+		func() error { return nil },
+		func(releaseCtx context.Context) error {
+			releases++
+			assert.NoError(t, releaseCtx.Err())
+			deadline, ok := releaseCtx.Deadline()
+			assert.True(t, ok)
+			assert.WithinDuration(t, time.Now().Add(namespaceRepositoryReleaseTimeout), deadline, time.Second)
+			return nil
+		},
+		func() error {
+			cancel()
+			return operationErr
+		},
+		datastore.MutationStep{Operation: "create_repository"},
+		"repository was created",
+	)
+
+	assert.Equal(t, 0, releases)
+	assert.Equal(t, operationErr, err)
+}
+
 type repositorySagaState struct {
 	repository *datastore.Repository
 	paths      map[repositoryPath]string

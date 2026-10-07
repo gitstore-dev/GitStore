@@ -271,6 +271,14 @@ added to the base v1 reference shape.
 
 ### Relationship To CredentialsRef
 
+> **Specified in [ADR 0009](0009-credential-secret-boundary.md).** The
+> `CredentialsRef` shape sketched below is now normative there, along with the
+> boundary between resource-referenced secrets (this ADR) and a GitStore
+> process's own identity credential, and the bootstrap/runtime resolver tiers
+> that keep the latter from creating a circular dependency. This section's open
+> question — whether `CredentialsRef` is an inline object, a datastore resource,
+> or both — is answered by ADR 0009 as **inline object only, in v1**.
+
 `SecretRef` is intentionally opaque. It answers only "where is the secret
 material?" It does not answer "what protocol is this for?", "which fields are
 required?", or "how should these bytes be interpreted?"
@@ -460,8 +468,9 @@ present `SecretRef` that cannot be resolved should fail closed.
 
 - Should GitStore define an operator-managed `SecretBinding` or `SecretStore`
   resource for mapping logical refs to physical providers?
-- Should future `CredentialsRef` be an inline object only, a datastore-only
-  resource, or both?
+- ~~Should future `CredentialsRef` be an inline object only, a datastore-only
+  resource, or both?~~ **Answered by [ADR 0009](0009-credential-secret-boundary.md):
+  inline object only, in v1.**
 - What conformance tests should provider adapters pass for rotation, caching,
   and failure classification?
 - Should any production deployments require admission-time existence checks for

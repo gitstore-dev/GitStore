@@ -7,9 +7,9 @@ This page covers how GitStore's automated release pipeline (Release Please) work
 [Release Please](https://github.com/googleapis/release-please) watches every squash-merge to `main`. It maintains a standing **release PR** that accumulates a version bump and changelog from Conventional Commit PR titles since the last release. Merging that release PR is what actually cuts a release:
 
 1. Release Please pushes a tag (e.g. `v0.1.0-alpha.1`) and creates the GitHub Release with generated notes.
-2. `.github/workflows/cd.yml`'s existing `on.push.tags: ['v*']` trigger fires independently and builds+pushes all 4 Docker images (`api`, `controller-manager`, `git-service`, `admin`) to `ghcr.io`, tagged with that exact version.
+2. `.github/workflows/cd.yml`'s existing `on.push.tags: ['v*']` trigger fires independently and builds+pushes the 3 core Docker images (`api`, `controller-manager`, `git-service`) to `ghcr.io`, tagged with that exact version. `.github/workflows/cd-optional.yml` fires on the same trigger, decoupled from the core pipeline, and builds+pushes images for optional services (`admin`, `oidc-bridge`) the same way — an optional service failing to build never blocks or gates the core release.
 
-The two workflows (`release-please.yml` and `cd.yml`) are fully decoupled — `release-please.yml` never invokes or waits on `cd.yml`; it only pushes a tag, and `cd.yml`'s own trigger does the rest.
+All three workflows (`release-please.yml`, `cd.yml`, `cd-optional.yml`) are fully decoupled from each other — `release-please.yml` never invokes or waits on either CD workflow; it only pushes a tag, and each CD workflow's own trigger does the rest. `cd.yml` and `cd-optional.yml` are likewise independent of each other, by design: a build failure in the optional-images workflow must never block or gate the core release.
 
 ## Required One-Time Setup (manual, not in version control)
 
@@ -41,42 +41,62 @@ GitStore uses **one unified semantic version** for the whole project, not indepe
 - **During a prerelease phase, qualifying commits only increment the trailing prerelease counter — but only if the semver core is already anchored at the right boundary for that commit's severity.** Specifically (from `PrereleaseMinorVersionUpdate`/`PrereleaseMajorVersionUpdate`/`PrereleasePatchVersionUpdate` in release-please's source):
   - `fix:` commits always just bump the prerelease counter, regardless of the current patch value.
   - `feat:` commits only just bump the prerelease counter if `patch === 0`; otherwise they do a normal minor bump (reset patch to 0, increment minor) and restart the prerelease counter at `.0`. **This is exactly what broke the very first release attempt** — the manifest was originally seeded at `0.0.1-alpha.0` (patch `1`), so the first `feat:` commit bumped it to `0.1.0-alpha.0` instead of staying at `0.0.1-alpha.1`.
-  - Breaking changes only just bump the prerelease counter if `minor === 0 && patch === 0`; otherwise a normal major bump + counter restart.
-  - **Practical consequence**: because this repo will have ongoing `feat:` commits throughout the whole alpha phase, the version must stay minor-anchored (`0.1.0-alpha.N`, patch always `0`) for the "just bump the counter" behavior to hold indefinitely. Never manually edit the manifest to a non-zero patch while a prerelease is active — the next `feat:` commit will silently core-bump again.
+  - Breaking changes only just bump the prerelease counter if `minor === 0 && patch === 0`; otherwise, **without `bump-minor-pre-major: true` set, release-please does a normal major bump + counter restart even though `major` is still `0`.** This is exactly what happened on 2026-10 (PR #439): the manifest was at `0.1.0-alpha.3` (`minor === 1`), a legitimate breaking-change PR landed, and release-please correctly-per-its-code bumped straight to `1.0.0-alpha.3` — a real release, tagged and shipped with Docker images, well before the project was ready to leave alpha semantics.
+  - **`bump-minor-pre-major: true`** (set in `release-please-config.json` since the above incident) changes this: while `version.isPreMajor` (`major === 0`), a breaking change bumps **minor** instead of major, regardless of the current minor/patch values — this is release-please's standard "pre-1.0, breaking changes don't count as `major`" semantics, matching how most pre-1.0 Conventional-Commits projects behave. `feat:`'s patch-anchoring behavior (previous bullet) is unaffected by this flag.
+  - **Practical consequence**: because this repo will have ongoing `feat:` commits throughout the whole alpha phase, the version must stay minor-anchored (`0.1.0-alpha.N`, patch always `0`) for the "just bump the counter" behavior to hold indefinitely. Never manually edit the manifest to a non-zero patch while a prerelease is active — the next `feat:` commit will silently core-bump again. `bump-minor-pre-major` only protects against breaking changes bumping `major`; it does nothing for patch-anchoring.
 - **Phase names (`alpha` → `beta` → stable) never change automatically.** Moving from one phase to the next is a deliberate human action — see Graduation below.
 
 ## Reviewing and Merging a Release PR
 
-The release PR is titled something like `chore: release 0.1.0-alpha.4` and its diff only ever touches: `.release-please-manifest.json`, `CHANGELOG.md`, and the 4 version-marker files it keeps in sync (`gitstore-git-service/Cargo.toml`, `gitstore-admin/package.json`, `gitstore-api/internal/app/server.go`'s marker line, `gitstore-controller-manager/internal/version/version.go`'s marker line).
+The release PR is titled something like `chore: release 0.1.0-alpha.4` and its diff only ever touches: `.release-please-manifest.json`, `CHANGELOG.md`, and the 3 version-marker files it keeps in sync (`gitstore-git-service/Cargo.toml`, `gitstore-api/internal/app/server.go`'s marker line, `gitstore-controller-manager/internal/version/version.go`'s marker line).
 
 - **Don't hand-edit the release PR.** Release Please force-resyncs it on every subsequent push to `main` — any manual edit to its diff will be overwritten. If the proposed version or changelog content is wrong, fix it via `release-please-config.json` or a `Release-As` override (below), not by editing the PR directly.
 - Merging the release PR is the only action that actually cuts a release. Nothing else in this pipeline does.
 
 ## Graduating: Alpha → Beta → Stable
 
-This is a manual, operator-driven action — never automatic. To force the next release to a specific version regardless of what the accumulated commits would otherwise compute:
+This is a manual, operator-driven action — never automatic. To force the next release to a specific version regardless of what the accumulated commits would otherwise compute, push a commit carrying a `Release-As:` footer. **Direct pushes to `main` are blocked by the "PR to main" repository ruleset**, so this has to land via a merged PR, not `git push origin main` directly.
+
+**Do not use `git commit --allow-empty` for this.** An empty commit (no file diff) merged via `gh pr merge --rebase` is silently dropped. This is specific to GitHub's server-side "Rebase and merge": it reports the PR as merged, but `main`'s tip never actually advances, so the `Release-As:` footer never reaches a commit release-please can see. (Ordinary local `git rebase` is not the same: it keeps a commit that *started* empty by default — only a commit that *becomes* empty during the rebase, because its change already exists upstream, gets dropped by default. Don't confuse the two.) This happened for real: the first attempt at this override, PR #444, "merged" successfully but added nothing to `main` — confirmed via `gh api repos/<owner>/<repo>/pulls/444` showing `merge_commit_sha` equal to the PR's own base SHA.
+
+Instead, bundle the footer with a real, trivial content change — e.g. a dated note in this file recording the override — so the commit has a genuine diff and survives any merge strategy:
 
 ```bash
-git commit --allow-empty -m "chore: release main" -m "Release-As: 0.1.0-beta.1"
-git push origin main
+git checkout -b release-as-override
+# Make some real, trivial edit here (e.g. append a dated line to this doc) —
+# the point is a non-empty diff, not the specific content.
+git commit -m "chore: release main" -m "Release-As: 0.1.0-beta.1"
+git push -u origin release-as-override
+gh pr create --title "chore: release main" --body "Release-As: 0.1.0-beta.1"
+gh pr merge --rebase
 ```
+
+If you genuinely need a no-file-change override, merge via `gh pr merge --merge` (a real merge commit) instead of `--rebase` or `--squash` — a merge commit always adds the original commit to `main`'s history as a parent regardless of its diff, so an empty commit survives that strategy specifically. Squash merge has the same empty-diff risk as rebase and additionally may drop the footer into the PR title/body instead of the commit `main` actually receives — avoid it for Release-As overrides either way.
 
 (Verify the exact `Release-As:` footer syntax against the pinned `googleapis/release-please-action` version's current docs before relying on it — this convention has been stable across recent majors but confirm before your first graduation.)
 
 Use the same mechanism for:
 - **Alpha → beta**: `Release-As: 0.1.0-beta.1` (keep patch at `0` — the same minor-anchoring requirement applies to beta, since `feat:` commits will keep landing there too)
-- **Beta → stable**: `Release-As: 0.1.0` (no prerelease suffix — this is what permanently flips Docker's `latest` tag behavior, see below)
+- **Beta → stable**: `Release-As: 0.1.0` (no prerelease suffix — this is what permanently flips Docker's `latest` tag behavior, see below). **Do not remove `bump-minor-pre-major` here** — `0.1.0` is still `major === 0` (a pre-1.0 stable release), so the flag still applies; removing it now would let the very next breaking-change commit jump straight to a premature `1.0.0-alpha`, recreating the incident above. Release-please's own docs describe this option as applying for the entire `0.x` line, not just prereleases. Keep it set through every `0.x` release (alpha, beta, and stable `0.y.z`) and only remove it when actually graduating to `1.0.0` — which itself should be a deliberate `Release-As: 1.0.0` override, not something an organic breaking commit is left to trigger.
 - **Any one-off correction**: e.g. a bad automatic bump, or a hotfix that needs a specific version out of band.
 
 ## Docker `latest` Tag Behavior
 
-`docker/metadata-action`'s built-in `flavor: latest=auto` does **not** do what this repo needs: by design, it never applies `latest` to a prerelease tag at all, regardless of whether a stable release exists yet (confirmed against its own docs — prerelease tags "will only extend `{{version}}` as tag"). So `cd.yml` computes this explicitly instead, in a `compute-latest-eligibility` job that runs before the 4 image builds and feeds each one's `flavor: | latest=${{ ... }}` with an explicit `true`/`false`:
+`docker/metadata-action`'s built-in `flavor: latest=auto` does **not** do what this repo needs: by design, it never applies `latest` to a prerelease tag at all, regardless of whether a stable release exists yet (confirmed against its own docs — prerelease tags "will only extend `{{version}}` as tag"). So `cd.yml` and `cd-optional.yml` each compute this explicitly instead, in their own `compute-latest-eligibility` job that runs before that workflow's image builds and feeds each one's `flavor: | latest=${{ ... }}` with an explicit `true`/`false` (the logic is duplicated between the two workflows rather than shared, since they're deliberately independent pipelines):
 
 - **A stable tag** (no `-alpha`/`-beta`/`-rc` suffix) is always latest-eligible.
 - **A prerelease tag** is latest-eligible only if `gh release list` shows no stable (non-prerelease) release has ever been published to this repo.
 - **Before any stable release exists**: `latest` tracks whichever alpha/beta build was published most recently.
 - **After the first stable release** (e.g. `0.1.0`): `latest` permanently stops tracking prereleases. Any alpha/beta/rc published *after* that point will never become `latest` again — only a newer stable release can move it.
 - **Practical implication for consumers**: once a stable release exists, anyone who wants "whatever's newest, prereleases included" must pin to the exact version tag (e.g. `:0.2.0-beta.1`), not `:latest`.
+
+## Override Log
+
+A running record of `Release-As:` overrides applied via the mechanism above, for audit purposes.
+
+| Date       | Override           | Reason                                                                                                                                                           |
+|------------|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 2026-10-04 | `0.1.0-alpha.4`     | Resets the manifest below `1.0.0` after PR #439 (`feat(secrets)!`) hit the `bump-minor-pre-major`-less `prerelease` strategy and bumped straight to `1.0.0-alpha.3` — see the breaking-change bullet above. The first attempt at this override (PR #444) used `git commit --allow-empty` and was silently dropped by rebase-merge (`main` never advanced); this entry corresponds to the corrected, non-empty-commit attempt. |
 
 ## Troubleshooting
 
@@ -95,7 +115,8 @@ Adding the `PR Title Lint` workflow only makes the check run and report — it d
 ## Related
 
 - `.github/workflows/release-please.yml` — the release-PR/tag/release-creation workflow.
-- `.github/workflows/cd.yml` — the Docker build/push pipeline, triggered independently by the tag Release Please pushes.
+- `.github/workflows/cd.yml` — the core Docker build/push pipeline (`api`, `controller-manager`, `git-service`), triggered independently by the tag Release Please pushes.
+- `.github/workflows/cd-optional.yml` — the optional-services Docker build/push pipeline (`admin`, `oidc-bridge`), same trigger, fully decoupled from `cd.yml`.
 - `.github/workflows/pr-title-lint.yml` — Conventional Commits enforcement on PR titles.
 - `release-please-config.json` / `.release-please-manifest.json` — repo root, the source of truth for the current version and per-file sync targets.
 - [Docker Deployment Troubleshooting](docker-troubleshooting.md)

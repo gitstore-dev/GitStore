@@ -7,6 +7,7 @@
       "versioning": "prerelease",
       "prerelease": true,
       "prerelease-type": "alpha",
+      "bump-minor-pre-major": true,
       "changelog-sections": [
         { "type": "feat", "section": "Features" },
         { "type": "fix", "section": "Bug Fixes" },
@@ -25,11 +26,6 @@
           "type": "toml",
           "path": "gitstore-git-service/Cargo.toml",
           "jsonpath": "$.package.version"
-        },
-        {
-          "type": "json",
-          "path": "gitstore-admin/package.json",
-          "jsonpath": "$.version"
         },
         {
           "type": "generic",

@@ -152,6 +152,49 @@ func TestMemdb_ListProducts_ReturnsAll(t *testing.T) {
 	assert.Len(t, result.Items, 3)
 }
 
+// TestMemdb_ListProductsByLabelSelector_ReturnsCreationTimestampDescOrder guards
+// against a regression where matches were returned in raw memdb index
+// (UID-lexical) order instead of (CreationTimestamp DESC, UID DESC). Callers
+// such as resolver.BuildProductConnectionFromSlice apply a first/last page
+// limit assuming pre-sorted, newest-first input; without the sort, a
+// selector matching more products than the requested page size would
+// silently truncate to an arbitrary subset instead of the newest N — which
+// only surfaces once accumulated matches exceed the page size (invisible in
+// small/fresh datasets, and invisible on the ScyllaDB backend, which already
+// returns matches in creation-time order for free).
+func TestMemdb_ListProductsByLabelSelector_ReturnsCreationTimestampDescOrder(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	base := time.Now()
+
+	// Create products with UIDs that sort lexically OPPOSITE to their
+	// creation order, so a bug that forgets to sort by CreationTimestamp
+	// (falling back to natural/UID index order) is caught deterministically
+	// rather than by chance.
+	oldest := productFixture("10000000-0000-0000-0000-000000000001", "sel-store", "oldest")
+	oldest.CreationTimestamp = base.Add(-2 * time.Hour)
+	middle := productFixture("90000000-0000-0000-0000-000000000002", "sel-store", "middle")
+	middle.CreationTimestamp = base.Add(-1 * time.Hour)
+	newest := productFixture("f0000000-0000-0000-0000-000000000003", "sel-store", "newest")
+	newest.CreationTimestamp = base
+
+	for _, p := range []*datastore.Product{oldest, middle, newest} {
+		require.NoError(t, ds.CreateProduct(ctx, p))
+	}
+
+	selector := catalog.LabelSelector{
+		MatchExpressions: []catalog.LabelSelectorRequirement{
+			{Key: "gitstore.dev/absent", Operator: "DoesNotExist"},
+		},
+	}
+	got, err := ds.ListProductsByLabelSelector(ctx, "sel-store", selector)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, newest.UID, got[0].UID, "newest product must be first")
+	assert.Equal(t, middle.UID, got[1].UID)
+	assert.Equal(t, oldest.UID, got[2].UID, "oldest product must be last")
+}
+
 func TestMemdb_UpdateProduct(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
@@ -390,6 +433,14 @@ func mappingFixture(namespace, name, repositoryID string) *datastore.NamespaceMa
 	}
 }
 
+func namespaceFixture(uid, name string) *datastore.Namespace {
+	return &datastore.Namespace{
+		UID:               uid,
+		Name:              name,
+		CreationTimestamp: time.Now(),
+	}
+}
+
 func TestMemdb_CreateAndGetRepository(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
@@ -465,7 +516,6 @@ func TestMemdb_ListRepositoriesGlobal(t *testing.T) {
 	assert.Len(t, result.Items, 1)
 	assert.Equal(t, second.UID, result.Items[0].UID)
 	assert.True(t, result.HasNext)
-	assert.Equal(t, int32(2), result.TotalCount)
 
 	cursor := base64.StdEncoding.EncodeToString([]byte(
 		"keyset|" + result.Items[0].CreationTimestamp.Format(time.RFC3339Nano) + "|" + result.Items[0].UID,
@@ -476,7 +526,6 @@ func TestMemdb_ListRepositoriesGlobal(t *testing.T) {
 	assert.Equal(t, first.UID, next.Items[0].UID)
 	assert.True(t, next.HasPrevious)
 	assert.False(t, next.HasNext)
-	assert.Equal(t, int32(2), next.TotalCount)
 }
 
 func TestMemdb_UpdateRepository(t *testing.T) {
@@ -784,6 +833,8 @@ func TestMemdb_RenameRepository_TargetConflictPreservesOldMapping(t *testing.T) 
 func TestMemdb_TransferRepository_OldNSNotFoundNewNSReturnsSameRepoID(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
+	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000011", namespace1)))
+	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000012", namespace2)))
 	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(namespace1, "app", repoID1)))
 
 	require.NoError(t, ds.TransferRepository(ctx, repoID1, namespace1, namespace2))
@@ -799,6 +850,8 @@ func TestMemdb_TransferRepository_OldNSNotFoundNewNSReturnsSameRepoID(t *testing
 func TestMemdb_TransferRepository_ValidatesSourceAndTarget(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
+	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000013", namespace1)))
+	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000014", namespace2)))
 	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(namespace1, "app", repoID1)))
 	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(namespace2, "app", repoID2)))
 

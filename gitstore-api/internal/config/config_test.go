@@ -19,20 +19,35 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__PORT",
 		"GITSTORE_API__RATE_LIMIT_PER_SECOND",
 		"GITSTORE_API__RATE_LIMIT_BURST",
+		"GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE",
+		"GITSTORE_WATCH__NAMESPACE__READERS_ENABLED",
+		"GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED",
+		"GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS",
+		"GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS",
+		"GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS",
+		"GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE",
+		"GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE",
+		"GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS",
+		"GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER",
+		"GITSTORE_WATCH__NAMESPACE__POLL_MIN_MILLIS",
+		"GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS",
+		"GITSTORE_WATCH__NAMESPACE__BOOKMARK_INTERVAL_SECONDS",
+		"GITSTORE_WATCH__NAMESPACE__LEASE_TTL_SECONDS",
+		"GITSTORE_WATCH__NAMESPACE__LEASE_RENEW_INTERVAL_SECONDS",
+		"GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS",
 		"GITSTORE_GIT__GRPC__URI",
 		"GITSTORE_GIT__WS__URI",
 		"GITSTORE_GIT__HTTP__URI",
-		"GITSTORE_CACHE__TTL",
 		"GITSTORE_LOG__LEVEL",
 		"GITSTORE_LOG__FORMAT",
-		"GITSTORE_AUTH__ADMIN__USERNAME",
-		"GITSTORE_AUTH__ADMIN__PASSWORD_HASH",
+		"GITSTORE_AUTH__STATICUSERS__USERS_FILE",
 		"GITSTORE_AUTH__JWT__SECRET",
 		"GITSTORE_AUTH__JWT__DURATION",
 		"GITSTORE_AUTH__JWT__ISSUER",
 		"GITSTORE_AUTH__JWT__REFRESH_GRACE",
 		"GITSTORE_DATASTORE__BACKEND",
 		"GITSTORE_DATASTORE__SCYLLA__HOSTS",
+		"GITSTORE_DATASTORE__SCYLLA__AUTO_MIGRATE",
 		"GITSTORE_DATASTORE__SCYLLA__KEYSPACE",
 		"GITSTORE_DATASTORE__SCYLLA__USERNAME",
 		"GITSTORE_DATASTORE__SCYLLA__PASSWORD",
@@ -58,8 +73,7 @@ func clearEnv(t *testing.T) func() {
 // setRequiredAuth sets the required auth env vars including the gRPC HMAC secret.
 func setRequiredAuth(t *testing.T) {
 	t.Helper()
-	os.Setenv("GITSTORE_AUTH__ADMIN__USERNAME", "admin")
-	os.Setenv("GITSTORE_AUTH__ADMIN__PASSWORD_HASH", "$2a$12$hash")
+	os.Setenv("GITSTORE_AUTH__STATICUSERS__USERS_FILE", "config/users.yaml")
 	os.Setenv("GITSTORE_AUTH__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
 	os.Setenv("GITSTORE_AUTH__GRPC__HMAC_SECRET", "ci-test-grpc-hmac-secret")
 }
@@ -76,16 +90,179 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	require.NotNil(t, cfg)
 
 	assert.Equal(t, 4000, cfg.Api.Port)
-	assert.Equal(t, 5000, cfg.Api.GitPort)
+	assert.Equal(t, 9000, cfg.Api.GitPort)
 	assert.Equal(t, float64(50), cfg.Api.RateLimitPerSecond)
 	assert.Equal(t, 100, cfg.Api.RateLimitBurst)
 	assert.Equal(t, "dns:///localhost:50051", cfg.Git.Grpc.Uri)
-	assert.Equal(t, 300, cfg.Cache.TTL)
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.Equal(t, "json", cfg.Log.Format)
 	assert.Equal(t, "24h", cfg.Auth.JWT.Duration)
 	assert.Equal(t, "gitstore", cfg.Auth.JWT.Issuer)
 	assert.Equal(t, "60s", cfg.Auth.JWT.RefreshGrace)
+	assert.True(t, cfg.Watch.Namespace.ReadersEnabled)
+	assert.True(t, cfg.Watch.Namespace.MaterializerEnabled)
+	assert.Equal(t, 7*24*60*60, cfg.Watch.Namespace.JournalRetentionSeconds)
+	assert.Equal(t, 14*24*60*60, cfg.Watch.Namespace.CDCRetentionSeconds)
+	assert.Equal(t, 500, cfg.Watch.Namespace.CDCConfidenceWindowMillis)
+	assert.Equal(t, 4096, cfg.Watch.Namespace.BucketSize)
+	assert.Equal(t, 256, cfg.Watch.Namespace.ReadBatchSize)
+	assert.Equal(t, 100000, cfg.Watch.Namespace.MaxReplayEvents)
+	assert.Equal(t, 64, cfg.Watch.Namespace.SubscriberBuffer)
+	assert.Equal(t, 30000, cfg.Watch.Namespace.SubscriberBackpressureMillis)
+	assert.Equal(t, 100, cfg.Watch.Namespace.PollMinMillis)
+	assert.Equal(t, 2000, cfg.Watch.Namespace.PollMaxMillis)
+	assert.Equal(t, 30, cfg.Watch.Namespace.BookmarkIntervalSeconds)
+	assert.Equal(t, 30, cfg.Watch.Namespace.LeaseTTLSeconds)
+	assert.Equal(t, 10, cfg.Watch.Namespace.LeaseRenewIntervalSeconds)
+	assert.Equal(t, 60, cfg.Watch.Namespace.MaxMaterializerLagSeconds)
+}
+
+func TestLoad_NamespaceWatchEnvOverrides(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__READERS_ENABLED", "false")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED", "false")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS", "750")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE", "128")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER", "32")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BACKPRESSURE_MILLIS", "1500")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.False(t, cfg.Watch.Namespace.ReadersEnabled)
+	assert.False(t, cfg.Watch.Namespace.MaterializerEnabled)
+	assert.Equal(t, 750, cfg.Watch.Namespace.CDCConfidenceWindowMillis)
+	assert.Equal(t, 128, cfg.Watch.Namespace.ReadBatchSize)
+	assert.Equal(t, 32, cfg.Watch.Namespace.SubscriberBuffer)
+	assert.Equal(t, 1500, cfg.Watch.Namespace.SubscriberBackpressureMillis)
+}
+
+func TestLoad_RejectsUnsafeNamespaceWatchBounds(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS", "120")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS", "60")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CDC retention")
+}
+
+func TestLoad_RejectsCDCWindowDifferentFromSchema(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS", "2592000")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "the baseline schema fixes CDC retention")
+}
+
+func TestLoad_RejectsJournalRetentionAboveTableTTL(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS", "604801")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "the baseline schema limits journal retention to 604800 seconds")
+}
+
+func TestLoad_RejectsOversizedNamespaceSubscriberBuffer(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER", "257")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Config.Watch.Namespace.SubscriberBuffer")
+	assert.Contains(t, err.Error(), "constraint \"max\" violated")
+}
+
+func TestLoad_RejectsOversizedNamespaceReplayLimit(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS", "100001")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Config.Watch.Namespace.MaxReplayEvents")
+	assert.Contains(t, err.Error(), "constraint \"max\" violated")
+}
+
+func TestLoad_RejectsOversizedNamespaceWatchBucket(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE", "4097")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Config.Watch.Namespace.BucketSize")
+	assert.Contains(t, err.Error(), "constraint \"max\" violated")
+}
+
+func TestLoad_RejectsMaterializerLagAtCDCRetention(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS", "1209600")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "maximum materializer lag must be less than CDC retention")
+}
+
+func TestLoad_RejectsCDCConfidenceWindowAtMaterializerLag(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS", "60000")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS", "60")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CDC confidence window must be less than maximum materializer lag")
+}
+
+func TestLoad_AcceptsCDCConfidenceWindowBelowMaterializerLag(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS", "59999")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS", "60")
+
+	_, err := Load()
+	require.NoError(t, err)
+}
+
+func TestLoad_RejectsMaximumPollIntervalAtJournalRetention(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS", "2")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS", "2000")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "maximum poll interval must be less than journal retention")
+}
+
+func TestLoad_AcceptsMaximumPollIntervalBelowJournalRetention(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS", "2")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS", "1999")
+
+	_, err := Load()
+	require.NoError(t, err)
 }
 
 func TestLoad_EnvVarOverridesDefault(t *testing.T) {
@@ -124,9 +301,6 @@ format = "text"
 [api]
 port = 7777
 
-[cache]
-ttl = 600
-
 [auth.jwt]
 refresh_grace = "45s"
 `
@@ -142,7 +316,6 @@ refresh_grace = "45s"
 	require.NotNil(t, cfg)
 
 	assert.Equal(t, 7777, cfg.Api.Port)
-	assert.Equal(t, 600, cfg.Cache.TTL)
 	assert.Equal(t, "warn", cfg.Log.Level)
 	assert.Equal(t, "text", cfg.Log.Format)
 	assert.Equal(t, "45s", cfg.Auth.JWT.RefreshGrace)
@@ -170,6 +343,111 @@ func TestLoad_EnvVarOverridesConfigFile(t *testing.T) {
 	assert.Equal(t, 9999, cfg.Api.Port)
 }
 
+func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	path := filepath.Join(t.TempDir(), "shared.toml")
+	content := `[api]
+port = 7111
+[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[controller]
+port = 5001
+[grpc]
+port = 50051
+[hooks.git_receive_pack]
+pre_receive = { enabled = true }
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+	t.Setenv("GITSTORE_API__PORT", "7222")
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	assert.Equal(t, 7222, cfg.Api.Port)
+}
+
+func TestLoadFrom_MissingExplicitFileFails(t *testing.T) {
+	_, err := LoadFrom(filepath.Join(t.TempDir(), "missing.toml"))
+	require.Error(t, err)
+}
+
+func TestScyllaAutoMigrationCanBeDisabled(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(""), 0600))
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	require.True(t, cfg.Datastore.Scylla.AutoMigrate)
+	require.NoError(t, os.WriteFile(path, []byte("[datastore.scylla]\nauto_migrate = false\n"), 0600))
+	cfg, err = LoadFrom(path)
+	require.NoError(t, err)
+	require.False(t, cfg.Datastore.Scylla.AutoMigrate)
+	t.Setenv("GITSTORE_DATASTORE__SCYLLA__AUTO_MIGRATE", "true")
+	cfg, err = LoadFrom(path)
+	require.NoError(t, err)
+	require.True(t, cfg.Datastore.Scylla.AutoMigrate)
+}
+
+func TestLoadFromFiles_OverlayMergesOnTopOfBase(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	dir := t.TempDir()
+
+	basePath := filepath.Join(dir, "base.toml")
+	base := `
+[api]
+port = 4000
+[git.grpc]
+uri = "dns:///localhost:50051"
+[auth.jwt]
+secret = "base-secret-at-least-32-characters-x"
+[auth.grpc]
+hmac_secret = "base-hmac-secret"
+[datastore]
+backend = "memdb"
+`
+	require.NoError(t, os.WriteFile(basePath, []byte(base), 0600))
+
+	overlayPath := filepath.Join(dir, "overlay.toml")
+	overlay := `
+[datastore]
+backend = "scylla"
+[datastore.scylla]
+hosts = ["scylla:9042"]
+keyspace = "gitstore"
+`
+	require.NoError(t, os.WriteFile(overlayPath, []byte(overlay), 0600))
+
+	cfg, err := LoadFromFiles([]string{basePath, overlayPath})
+	require.NoError(t, err)
+	// Overlay-only key wins.
+	assert.Equal(t, "scylla", cfg.Datastore.Backend)
+	assert.Equal(t, []string{"scylla:9042"}, cfg.Datastore.Scylla.Hosts)
+	// Base-only key is preserved, not wiped by the overlay.
+	assert.Equal(t, 4000, cfg.Api.Port)
+	assert.Equal(t, "dns:///localhost:50051", cfg.Git.Grpc.Uri)
+}
+
+func TestLoadFromFiles_MissingOverlayFails(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base.toml")
+	require.NoError(t, os.WriteFile(basePath, []byte("[api]\nport = 4000\n"), 0600))
+
+	_, err := LoadFromFiles([]string{basePath, filepath.Join(dir, "missing-overlay.toml")})
+	require.Error(t, err)
+}
+
+func TestLoadFromFiles_EmptyFails(t *testing.T) {
+	_, err := LoadFromFiles(nil)
+	require.Error(t, err)
+}
+
 // T007: startup log redaction test
 
 func TestLoad_StartupLogRedactsSensitiveFields(t *testing.T) {
@@ -183,12 +461,9 @@ func TestLoad_StartupLogRedactsSensitiveFields(t *testing.T) {
 
 	// Sensitive fields must not appear in the log representation.
 	// We test via the MarshalLogObject-based redact helper indirectly:
-	// cfg.Auth.Admin.Password and cfg.Auth.JWT.Secret must be redacted.
-	assert.Equal(t, "<redacted>", redact(cfg.Auth.Admin.Password))
+	// JWT secrets must be redacted; users are loaded from a separate file.
 	assert.Equal(t, "<redacted>", redact(cfg.Auth.JWT.Secret))
-
-	// Non-sensitive field must pass through.
-	assert.Equal(t, "admin", cfg.Auth.Admin.Username)
+	assert.NotEmpty(t, cfg.Auth.StaticUsers.UsersFile)
 }
 
 // T027: .env loading tests (US3)
@@ -198,8 +473,7 @@ func TestLoad_EnvFileLoadsWithoutShellVars(t *testing.T) {
 	defer restore()
 
 	dir := t.TempDir()
-	envContent := `GITSTORE_AUTH__ADMIN__USERNAME=envfileuser
-GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$2a$12$hash
+	envContent := `GITSTORE_AUTH__STATICUSERS__USERS_FILE=users-from-env.yaml
 GITSTORE_AUTH__JWT__SECRET=supersecretkey-minimum-32-chars!!
 GITSTORE_AUTH__GRPC__HMAC_SECRET=ci-test-grpc-hmac-secret
 GITSTORE_LOG__LEVEL=warn
@@ -213,7 +487,7 @@ GITSTORE_LOG__LEVEL=warn
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
-	assert.Equal(t, "envfileuser", cfg.Auth.Admin.Username)
+	assert.Equal(t, "users-from-env.yaml", cfg.Auth.StaticUsers.UsersFile)
 	assert.Equal(t, "warn", cfg.Log.Level)
 }
 
@@ -264,14 +538,13 @@ func TestLoad_MissingRequiredKeyReturnsError(t *testing.T) {
 
 	_, err := Load()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Admin.Username")
+	assert.Contains(t, err.Error(), "Grpc.HmacSecret")
 }
 
 func TestLoad_EmptyStringForRequiredKeyIsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
-	os.Setenv("GITSTORE_AUTH__ADMIN__USERNAME", "")
-	os.Setenv("GITSTORE_AUTH__ADMIN__PASSWORD_HASH", "")
+	os.Setenv("GITSTORE_AUTH__STATICUSERS__USERS_FILE", "")
 	os.Setenv("GITSTORE_AUTH__JWT__SECRET", "")
 
 	_, err := Load()
@@ -304,22 +577,32 @@ func TestLoad_InvalidLogFormatReturnsError(t *testing.T) {
 func TestLoad_MultipleValidationErrorsReportedTogether(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
-	// No auth set at all — should report all three required fields
+	t.Setenv("GITSTORE_AUTH__AUTHN__CHAIN", "anonymous")
+	// No auth set at all — JWT.Secret is provider-conditional and is not
+	// required when the static-users provider is not selected explicitly.
 
 	_, err := Load()
 	require.Error(t, err)
-	// All three required fields should appear in the single error string
-	assert.Contains(t, err.Error(), "Admin.Username")
-	assert.Contains(t, err.Error(), "Admin.Password")
-	assert.Contains(t, err.Error(), "JWT.Secret")
+	// The always-required fields should appear in the single error string.
+	assert.Contains(t, err.Error(), "Grpc.HmacSecret")
+	assert.NotContains(t, err.Error(), "JWT.Secret")
+}
+
+func TestValidateAuthChainConfig_StaticUsersRequiresJWTSecret(t *testing.T) {
+	err := validateAuthChainConfig(&Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"static-users"}}}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth.jwt.secret")
+}
+
+func TestValidateAuthChainConfig_AnonymousDoesNotRequireJWTSecret(t *testing.T) {
+	require.NoError(t, validateAuthChainConfig(&Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"anonymous"}}}}))
 }
 
 // T028: missing HMAC secret causes startup failure
 func TestLoad_MissingGrpcHmacSecretReturnsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
-	os.Setenv("GITSTORE_AUTH__ADMIN__USERNAME", "admin")
-	os.Setenv("GITSTORE_AUTH__ADMIN__PASSWORD_HASH", "$2a$12$hash")
+	os.Setenv("GITSTORE_AUTH__STATICUSERS__USERS_FILE", "config/users.yaml")
 	os.Setenv("GITSTORE_AUTH__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
 	// GITSTORE_AUTH__GRPC__HMAC_SECRET intentionally absent
 
@@ -346,6 +629,21 @@ func TestLoad_UnknownKeyInConfigFileDoesNotAbortStartup(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
+}
+
+func TestLoad_ScyllaDockerAddressOptionsAreKnown(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "[datastore.scylla]\ndisable_shard_aware_port = true\nignore_peer_addr = true\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	assert.True(t, cfg.Datastore.Scylla.DisableShardAwarePort)
+	assert.True(t, cfg.Datastore.Scylla.IgnorePeerAddr)
 }
 
 // T009: datastore backend config validation tests
@@ -382,6 +680,66 @@ func TestLoad_DatastoreBackendScyllaIsValid(t *testing.T) {
 	assert.Equal(t, "scylla", cfg.Datastore.Backend)
 }
 
+func TestLoad_NamespaceRepositoryFenceAutoPreservesDevAndBlocksScylla(t *testing.T) {
+	t.Run("memdb enabled", func(t *testing.T) {
+		restore := clearEnv(t)
+		defer restore()
+		setRequiredAuth(t)
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, "auto", cfg.Features.NamespaceRepositoryFence)
+		assert.True(t, cfg.NamespaceRepositoryFenceEnabled())
+	})
+
+	t.Run("scylla disabled", func(t *testing.T) {
+		restore := clearEnv(t)
+		defer restore()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_DATASTORE__BACKEND", "scylla")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, "auto", cfg.Features.NamespaceRepositoryFence)
+		assert.False(t, cfg.NamespaceRepositoryFenceEnabled())
+	})
+}
+
+func TestLoad_NamespaceRepositoryFenceExplicitModes(t *testing.T) {
+	t.Run("enabled permits Scylla activation", func(t *testing.T) {
+		restore := clearEnv(t)
+		defer restore()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_DATASTORE__BACKEND", "scylla")
+		t.Setenv("GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE", "enabled")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.True(t, cfg.NamespaceRepositoryFenceEnabled())
+	})
+
+	t.Run("disabled blocks memdb", func(t *testing.T) {
+		restore := clearEnv(t)
+		defer restore()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE", "disabled")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.False(t, cfg.NamespaceRepositoryFenceEnabled())
+	})
+
+	t.Run("invalid mode rejected", func(t *testing.T) {
+		restore := clearEnv(t)
+		defer restore()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE", "sometimes")
+
+		_, err := Load()
+		require.ErrorContains(t, err, "namespace repository fence")
+	})
+}
+
 func TestLoad_DatastoreBackendUnknownValueReturnsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
@@ -407,4 +765,288 @@ func TestLoad_DatastoreScyllaPasswordLoadedAndRedactable(t *testing.T) {
 	assert.Equal(t, "s3cr3t", cfg.Datastore.Scylla.Password)
 	// And redact() must mask it in logs
 	assert.Equal(t, "<redacted>", redact(cfg.Datastore.Scylla.Password))
+}
+
+// T007: ServiceAccountConfig defaults and validation
+
+func TestLoad_ServiceAccountDefaultsApplied(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "gitstore", cfg.Auth.ServiceAccount.Issuer)
+	assert.Equal(t, "gitstore-api", cfg.Auth.ServiceAccount.Audience)
+	assert.Equal(t, "gitstore-api/serviceaccount-token", cfg.Auth.ServiceAccount.AssertionAudience)
+	assert.Equal(t, "", cfg.Auth.ServiceAccount.SigningKey)
+	assert.Equal(t, "10m", cfg.Auth.ServiceAccount.DefaultTTL)
+	assert.Equal(t, "1h", cfg.Auth.ServiceAccount.MaxTTL)
+	assert.Equal(t, "2m", cfg.Auth.ServiceAccount.ClockSkew)
+}
+
+func TestLoad_ServiceAccountSigningKeyNotRequiredWhenProviderNotChained(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	// Default chain is ["static-users", "anonymous"] — no service-account provider.
+
+	_, err := Load()
+	require.NoError(t, err)
+}
+
+func TestLoad_ServiceAccountSigningKeyRequiredWhenJWTProviderChained(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	path := filepath.Join(t.TempDir(), "gitstore.toml")
+	content := `[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[auth.authn]
+chain = ["static-users", "serviceaccount-jwt", "anonymous"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	_, err := LoadFrom(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth.serviceaccount.signing_key is required")
+	assert.Contains(t, err.Error(), "serviceaccount-jwt")
+}
+
+func TestLoad_ServiceAccountSigningKeyRequiredWhenAssertionProviderChained(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	path := filepath.Join(t.TempDir(), "gitstore.toml")
+	content := `[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[auth.authn]
+chain = ["static-users", "serviceaccount-assertion", "anonymous"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	_, err := LoadFrom(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth.serviceaccount.signing_key is required")
+}
+
+func TestLoad_ServiceAccountSigningKeySatisfiesRequirementWhenChained(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	path := filepath.Join(t.TempDir(), "gitstore.toml")
+	content := `[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[auth.authn]
+chain = ["static-users", "serviceaccount-jwt", "anonymous"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+	os.Setenv("GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY", "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----")
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	assert.NotEmpty(t, cfg.Auth.ServiceAccount.SigningKey)
+}
+
+func TestLoad_ServiceAccountSigningKeyRedactedInStartupLog(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	os.Setenv("GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY", "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "<redacted>", redact(cfg.Auth.ServiceAccount.SigningKey))
+}
+
+// T007a: FR-015c — signing key must not be sourced from a shared config file.
+
+// withTempSharedServiceConfigMountPath overrides sharedServiceConfigMountPath
+// to a path under t.TempDir() for the duration of the test, so these tests
+// never touch the real /config directory on the host.
+func withTempSharedServiceConfigMountPath(t *testing.T) string {
+	t.Helper()
+	original := sharedServiceConfigMountPath
+	path := filepath.Join(t.TempDir(), "gitstore.toml")
+	sharedServiceConfigMountPath = path
+	t.Cleanup(func() { sharedServiceConfigMountPath = original })
+	return path
+}
+
+func TestLoadFrom_RefusesServiceAccountSigningKeyFromSharedMountPath(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	path := withTempSharedServiceConfigMountPath(t)
+
+	content := `[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[auth.authn]
+chain = ["static-users", "serviceaccount-jwt", "anonymous"]
+[auth.serviceaccount]
+signing_key = "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----"
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	_, err := LoadFrom(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be set in")
+	assert.Contains(t, err.Error(), path)
+	assert.Contains(t, err.Error(), "per-service")
+}
+
+func TestLoadFrom_AllowsServiceAccountSigningKeyFromEnvVarEvenAtSharedMountPath(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	path := withTempSharedServiceConfigMountPath(t)
+
+	content := `[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[auth.authn]
+chain = ["static-users", "serviceaccount-jwt", "anonymous"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	os.Setenv("GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY", "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----")
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	assert.NotEmpty(t, cfg.Auth.ServiceAccount.SigningKey)
+}
+
+func TestLoadFromFiles_RefusesServiceAccountSigningKeyFromSharedMountPathEvenWhenOverlayClearsIt(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	sharedPath := withTempSharedServiceConfigMountPath(t)
+
+	sharedContent := `[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[auth.authn]
+chain = ["static-users", "serviceaccount-jwt", "anonymous"]
+[auth.serviceaccount]
+signing_key = "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----"
+`
+	require.NoError(t, os.WriteFile(sharedPath, []byte(sharedContent), 0600))
+
+	// An overlay that merges on top and explicitly blanks the key — e.g. an
+	// operator trying to signal "the real key comes from the env" — must not
+	// be able to hide the fact that the shared file on disk still carries
+	// key material: git-service and controller-manager mount and read that
+	// same file directly, independent of this process's merge order.
+	overlayPath := filepath.Join(t.TempDir(), "overlay.toml")
+	require.NoError(t, os.WriteFile(overlayPath, []byte("[auth.serviceaccount]\nsigning_key = \"\"\n"), 0600))
+
+	os.Setenv("GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY", "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----")
+
+	_, err := LoadFromFiles([]string{sharedPath, overlayPath})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be set in")
+	assert.Contains(t, err.Error(), sharedPath)
+}
+
+func TestValidateServiceAccountSigningKeySource_IgnoresNonSharedPath(t *testing.T) {
+	cfg := &Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"serviceaccount-jwt"}}}}
+	err := validateServiceAccountSigningKeySource(cfg, []string{"/some/other/path.toml"}, "signing-key-material")
+	assert.NoError(t, err)
+}
+
+func TestValidateServiceAccountSigningKeySource_IgnoresWhenProviderNotChained(t *testing.T) {
+	cfg := &Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"static-users", "anonymous"}}}}
+	err := validateServiceAccountSigningKeySource(cfg, []string{sharedServiceConfigMountPath}, "signing-key-material")
+	assert.NoError(t, err)
+}
+
+func TestValidateServiceAccountSigningKeySource_RejectsSharedPathWithKeyMaterial(t *testing.T) {
+	cfg := &Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"serviceaccount-jwt"}}}}
+	err := validateServiceAccountSigningKeySource(cfg, []string{sharedServiceConfigMountPath}, "signing-key-material")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), sharedServiceConfigMountPath)
+}
+
+func TestValidateServiceAccountSigningKeySource_RejectsSharedPathAmongOverlays(t *testing.T) {
+	cfg := &Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"serviceaccount-jwt"}}}}
+	err := validateServiceAccountSigningKeySource(cfg, []string{"/some/other/path.toml", sharedServiceConfigMountPath}, "signing-key-material")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), sharedServiceConfigMountPath)
+}
+
+func TestValidateOIDCAuthChainConfig_NotChained(t *testing.T) {
+	cfg := &AuthConfig{AuthN: AuthNConfig{Chain: []string{"static-users", "anonymous"}}}
+	assert.NoError(t, validateOIDCAuthChainConfig(cfg))
+}
+
+func TestValidateOIDCAuthChainConfig_RequiresIssuerURI(t *testing.T) {
+	cfg := &AuthConfig{
+		AuthN: AuthNConfig{Chain: []string{"oidc-jwt"}},
+		OIDC:  OIDCConfig{Audience: "gitstore"},
+	}
+	err := validateOIDCAuthChainConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth.oidc.issuer_uri")
+}
+
+func TestValidateOIDCAuthChainConfig_RequiresAudienceOrClientID(t *testing.T) {
+	cfg := &AuthConfig{
+		AuthN: AuthNConfig{Chain: []string{"oidc-jwt", "anonymous"}},
+		OIDC:  OIDCConfig{IssuerURI: "http://localhost:4444/"},
+	}
+	err := validateOIDCAuthChainConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth.oidc.audience")
+	assert.Contains(t, err.Error(), "auth.oidc.client_id")
+}
+
+func TestValidateOIDCAuthChainConfig_AudienceOnlySuffices(t *testing.T) {
+	// Pure resource-server mode: no client_id configured at all.
+	cfg := &AuthConfig{
+		AuthN: AuthNConfig{Chain: []string{"oidc-jwt"}},
+		OIDC:  OIDCConfig{IssuerURI: "http://localhost:4444/", Audience: "gitstore-api"},
+	}
+	assert.NoError(t, validateOIDCAuthChainConfig(cfg))
+}
+
+func TestValidateOIDCAuthChainConfig_ClientIDOnlySuffices(t *testing.T) {
+	cfg := &AuthConfig{
+		AuthN: AuthNConfig{Chain: []string{"oidc-jwt"}},
+		OIDC:  OIDCConfig{IssuerURI: "http://localhost:4444/", ClientID: "gitstore"},
+	}
+	assert.NoError(t, validateOIDCAuthChainConfig(cfg))
+}
+
+func TestValidateOIDCAuthChainConfig_Satisfied(t *testing.T) {
+	cfg := &AuthConfig{
+		AuthN: AuthNConfig{Chain: []string{"oidc-jwt"}},
+		OIDC:  OIDCConfig{IssuerURI: "http://localhost:4444/", ClientID: "gitstore", ClockSkew: "2m"},
+	}
+	assert.NoError(t, validateOIDCAuthChainConfig(cfg))
+}
+
+func TestValidateOIDCAuthChainConfig_InvalidClockSkew(t *testing.T) {
+	cfg := &AuthConfig{
+		AuthN: AuthNConfig{Chain: []string{"oidc-jwt"}},
+		OIDC:  OIDCConfig{IssuerURI: "http://localhost:4444/", ClientID: "gitstore", ClockSkew: "not-a-duration"},
+	}
+	err := validateOIDCAuthChainConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth.oidc.clock_skew")
 }

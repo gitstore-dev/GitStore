@@ -75,7 +75,7 @@
 
 ## R-005: Documentation Structure for Admin
 
-**Decision**: Create `docs/admin/` directory. Move/expand `docs/admin.md` (currently 1 line) into `docs/admin/index.md` (or `docs/admin/overview.md`). Core docs (`README.md`, `docs/developer-guide.md`, `docs/user-guide.md`, `docs/architecture.md`) get admin references stripped and replaced with a single "see also: docs/admin/" pointer.
+**Decision**: Create `docs/admin/` directory. Move/expand `docs/admin.md` (currently 1 line) into `docs/admin/index.md` (or `docs/admin/overview.md`). Core docs (`README.md`, `docs/developer-guide.md`, `docs/user-guide.md`, `docs/architecture/README.md`) get admin references stripped and replaced with a single "see also: docs/admin/" pointer.
 
 **Rationale**:
 - A dedicated `docs/admin/` directory scales naturally (can hold multiple pages: overview, architecture, API reference for the admin surface, troubleshooting).
@@ -113,7 +113,7 @@
 - `README.md` — folder references, architecture diagram, component list, build-from-source section
 - `docs/developer-guide.md` — working-directory instructions, expected output, all folder references
 - `docs/user-guide.md` — "Using the Admin" section (move to admin docs; leave a pointer)
-- `docs/architecture.md` — "Implementation Baseline" section folder references
+- `docs/architecture/README.md` — "Implementation Baseline" section folder references
 - `AGENTS.md` — any folder references
 - `scripts/` — any hardcoded folder references
 - `tests/e2e/request_tracing.spec.ts` — env var names (ADMIN_UI_URL) — move this file to `gitstore-admin/tests/` since it's admin-specific

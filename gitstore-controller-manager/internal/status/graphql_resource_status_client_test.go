@@ -21,12 +21,12 @@ func TestResourceStatusApplySendsKindAwareMutation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"updateResourceStatus":{"object":{"metadata":{"resourceVersion":"3"}},"conflict":null}}}`))
+		_, _ = w.Write([]byte(`{"data":{"updateResourceStatus":{"object":{"metadata":{"resourceVersion":"3"}}}}}`))
 	}))
 	defer srv.Close()
 
 	generation := int64(2)
-	client := status.NewGraphQLResourceStatusClient(graphqlclient.New(srv.URL, "token"))
+	client := status.NewGraphQLResourceStatusClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	err := client.Apply(context.Background(), types.WorkItemKey{Kind: "Namespace", Name: "acme"}, &status.StatusPatch{
 		ResourceVersion:    "2",
 		ObservedGeneration: &generation,
@@ -53,11 +53,11 @@ func TestResourceStatusApplySendsKindAwareMutation(t *testing.T) {
 func TestResourceStatusApplyConflictMapsToErrConflict(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"updateResourceStatus":{"object":null,"conflict":{"currentResourceVersion":"4"}}}}`))
+		_, _ = w.Write([]byte(`{"data":{"updateResourceStatus":null},"errors":[{"message":"resource version conflict","extensions":{"code":"RESOURCE_VERSION_CONFLICT","resourceVersion":"4"}}]}`))
 	}))
 	defer srv.Close()
 
-	client := status.NewGraphQLResourceStatusClient(graphqlclient.New(srv.URL, "token"))
+	client := status.NewGraphQLResourceStatusClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	err := client.Apply(context.Background(), types.WorkItemKey{Kind: "Namespace", Name: "acme"}, &status.StatusPatch{ResourceVersion: "3"})
 	if !errors.Is(err, types.ErrConflict) {
 		t.Fatalf("Apply error = %v, want types.ErrConflict", err)
@@ -71,7 +71,7 @@ func TestResourceStatusApplyNotFoundMapsToErrNotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := status.NewGraphQLResourceStatusClient(graphqlclient.New(srv.URL, "token"))
+	client := status.NewGraphQLResourceStatusClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	err := client.Apply(context.Background(), types.WorkItemKey{Kind: "Namespace", Name: "acme"}, &status.StatusPatch{ResourceVersion: "3"})
 	if !errors.Is(err, types.ErrNotFound) {
 		t.Fatalf("Apply error = %v, want types.ErrNotFound", err)

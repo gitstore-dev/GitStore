@@ -138,6 +138,37 @@ func (d *InstrumentedDatastore) DeleteProductWithResourceVersion(ctx context.Con
 	return err
 }
 
+// MarkProductTerminating and CompleteProductDeletion are deliberately
+// forwarded by the instrumentation decorator. Production wiring wraps the
+// Scylla backend before it reaches CatalogService; omitting these additive
+// lifecycle capabilities made a healthy backend appear unsupported only on
+// the Git-backed deletion path.
+func (d *InstrumentedDatastore) MarkProductTerminating(ctx context.Context, uid, expectedResourceVersion, finalizer string, deletionTimestamp time.Time) (*Product, error) {
+	start := time.Now()
+	lifecycle, ok := d.next.(ProductLifecycleStore)
+	if !ok {
+		err := fmt.Errorf("product lifecycle datastore is unavailable")
+		d.observe("MarkProductTerminating", start, err)
+		return nil, err
+	}
+	product, err := lifecycle.MarkProductTerminating(d.withFindingObserver(ctx), uid, expectedResourceVersion, finalizer, deletionTimestamp)
+	d.observe("MarkProductTerminating", start, err)
+	return product, err
+}
+
+func (d *InstrumentedDatastore) CompleteProductDeletion(ctx context.Context, uid, expectedResourceVersion string) error {
+	start := time.Now()
+	lifecycle, ok := d.next.(ProductLifecycleStore)
+	if !ok {
+		err := fmt.Errorf("product lifecycle datastore is unavailable")
+		d.observe("CompleteProductDeletion", start, err)
+		return err
+	}
+	err := lifecycle.CompleteProductDeletion(d.withFindingObserver(ctx), uid, expectedResourceVersion)
+	d.observe("CompleteProductDeletion", start, err)
+	return err
+}
+
 func (d *InstrumentedDatastore) CreateFile(ctx context.Context, f *File) error {
 	start := time.Now()
 	err := d.next.CreateFile(d.withFindingObserver(ctx), f)
@@ -398,6 +429,13 @@ func (d *InstrumentedDatastore) UpdateNamespace(ctx context.Context, ns *Namespa
 	return err
 }
 
+func (d *InstrumentedDatastore) MarkNamespaceDeletion(ctx context.Context, ns *Namespace, expectedResourceVersion string) error {
+	start := time.Now()
+	err := d.next.MarkNamespaceDeletion(d.withFindingObserver(ctx), ns, expectedResourceVersion)
+	d.observe("MarkNamespaceDeletion", start, err)
+	return err
+}
+
 func (d *InstrumentedDatastore) DeleteNamespace(ctx context.Context, id string) error {
 	start := time.Now()
 	err := d.next.DeleteNamespace(d.withFindingObserver(ctx), id)
@@ -425,6 +463,13 @@ func (d *InstrumentedDatastore) CreateRepository(ctx context.Context, r *Reposit
 	start := time.Now()
 	err := d.next.CreateRepository(d.withFindingObserver(ctx), r)
 	d.observe("CreateRepository", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) CreateRepositoryInActiveNamespace(ctx context.Context, r *Repository) error {
+	start := time.Now()
+	err := d.next.CreateRepositoryInActiveNamespace(d.withFindingObserver(ctx), r)
+	d.observe("CreateRepositoryInActiveNamespace", start, err)
 	return err
 }
 
@@ -531,6 +576,133 @@ func (d *InstrumentedDatastore) DeleteNamespaceMapping(ctx context.Context, name
 	err := d.next.DeleteNamespaceMapping(d.withFindingObserver(ctx), namespaceID, name)
 	d.observe("DeleteNamespaceMapping", start, err)
 	return err
+}
+
+// ── OwnerReferenceStore ──────────────────────────────────────────────────────
+//
+// OwnerReferenceStore and CategoryTaxonomyDeletionStore below are additive to
+// Datastore (see their doc comments in datastore.go), so InstrumentedDatastore
+// must forward them explicitly rather than relying on method promotion:
+// wrapping next in this decorator would otherwise make every backend look
+// like it doesn't implement these interfaces to a type assertion on the
+// wrapper, even though the concrete backend (memdb, Scylla) does.
+
+func (d *InstrumentedDatastore) HasBlockingOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID string) (bool, error) {
+	start := time.Now()
+	owners, ok := d.next.(OwnerReferenceStore)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support owner-reference queries", ErrInvalidArgument)
+		d.observe("HasBlockingOwnerDependents", start, err)
+		return false, err
+	}
+	v, err := owners.HasBlockingOwnerDependents(d.withFindingObserver(ctx), scope, ownerUID)
+	d.observe("HasBlockingOwnerDependents", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) ListBlockingOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID, after string, limit int) (OwnerDependentPage, error) {
+	start := time.Now()
+	owners, ok := d.next.(OwnerReferenceStore)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support owner-reference queries", ErrInvalidArgument)
+		d.observe("ListBlockingOwnerDependents", start, err)
+		return OwnerDependentPage{}, err
+	}
+	v, err := owners.ListBlockingOwnerDependents(d.withFindingObserver(ctx), scope, ownerUID, after, limit)
+	d.observe("ListBlockingOwnerDependents", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) ListNonBlockingProductOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID, after string, limit int) (OwnerDependentPage, error) {
+	start := time.Now()
+	owners, ok := d.next.(OwnerReferenceStore)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support owner-reference queries", ErrInvalidArgument)
+		d.observe("ListNonBlockingProductOwnerDependents", start, err)
+		return OwnerDependentPage{}, err
+	}
+	v, err := owners.ListNonBlockingProductOwnerDependents(d.withFindingObserver(ctx), scope, ownerUID, after, limit)
+	d.observe("ListNonBlockingProductOwnerDependents", start, err)
+	return v, err
+}
+
+// ── CategoryTaxonomyDeletionStore ────────────────────────────────────────────
+
+func (d *InstrumentedDatastore) MarkCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*CategoryTaxonomy, error) {
+	start := time.Now()
+	lifecycle, ok := d.next.(CategoryTaxonomyDeletionStore)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support category taxonomy deletion lifecycle", ErrInvalidArgument)
+		d.observe("MarkCategoryTaxonomyDeletion", start, err)
+		return nil, err
+	}
+	v, err := lifecycle.MarkCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion, at)
+	d.observe("MarkCategoryTaxonomyDeletion", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*CategoryTaxonomy, error) {
+	start := time.Now()
+	lifecycle, ok := d.next.(CategoryTaxonomyDeletionStore)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support category taxonomy deletion lifecycle", ErrInvalidArgument)
+		d.observe("CompleteCategoryTaxonomyDeletion", start, err)
+		return nil, err
+	}
+	v, err := lifecycle.CompleteCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion)
+	d.observe("CompleteCategoryTaxonomyDeletion", start, err)
+	return v, err
+}
+
+// ── ServiceAccount ─────────────────────────────────────────────────────────
+
+func (d *InstrumentedDatastore) CreateServiceAccount(ctx context.Context, sa *ServiceAccount) error {
+	start := time.Now()
+	err := d.next.CreateServiceAccount(d.withFindingObserver(ctx), sa)
+	d.observe("CreateServiceAccount", start, err)
+	return err
+}
+func (d *InstrumentedDatastore) GetServiceAccountByUID(ctx context.Context, uid string) (*ServiceAccount, error) {
+	start := time.Now()
+	v, err := d.next.GetServiceAccountByUID(d.withFindingObserver(ctx), uid)
+	d.observe("GetServiceAccountByUID", start, err)
+	return v, err
+}
+func (d *InstrumentedDatastore) GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*ServiceAccount, error) {
+	start := time.Now()
+	v, err := d.next.GetServiceAccountBySubject(d.withFindingObserver(ctx), namespace, name)
+	d.observe("GetServiceAccountBySubject", start, err)
+	return v, err
+}
+func (d *InstrumentedDatastore) ListServiceAccounts(ctx context.Context, page PageParams) (*PageResult[ServiceAccount], error) {
+	start := time.Now()
+	v, err := d.next.ListServiceAccounts(d.withFindingObserver(ctx), page)
+	d.observe("ListServiceAccounts", start, err)
+	return v, err
+}
+func (d *InstrumentedDatastore) UpdateServiceAccountKeys(ctx context.Context, uid string, add []ServiceAccountPublicKey, removeKeyIDs []string, expectedResourceVersion string) (*ServiceAccount, error) {
+	start := time.Now()
+	v, err := d.next.UpdateServiceAccountKeys(d.withFindingObserver(ctx), uid, add, removeKeyIDs, expectedResourceVersion)
+	d.observe("UpdateServiceAccountKeys", start, err)
+	return v, err
+}
+func (d *InstrumentedDatastore) SetServiceAccountDisabled(ctx context.Context, uid string, disabled bool) error {
+	start := time.Now()
+	err := d.next.SetServiceAccountDisabled(d.withFindingObserver(ctx), uid, disabled)
+	d.observe("SetServiceAccountDisabled", start, err)
+	return err
+}
+func (d *InstrumentedDatastore) DeleteServiceAccount(ctx context.Context, uid string) error {
+	start := time.Now()
+	err := d.next.DeleteServiceAccount(d.withFindingObserver(ctx), uid)
+	d.observe("DeleteServiceAccount", start, err)
+	return err
+}
+func (d *InstrumentedDatastore) TryConsumeServiceAccountAssertion(ctx context.Context, jtiDigest string, expiresAt time.Time) (bool, error) {
+	start := time.Now()
+	v, err := d.next.TryConsumeServiceAccountAssertion(d.withFindingObserver(ctx), jtiDigest, expiresAt)
+	d.observe("TryConsumeServiceAccountAssertion", start, err)
+	return v, err
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────

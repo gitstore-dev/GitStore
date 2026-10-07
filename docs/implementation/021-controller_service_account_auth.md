@@ -1,6 +1,14 @@
 # Service-Account Authentication for GitStore Controllers
 **Status**: 🟡️ Proposed (not yet implemented)
 
+> **Configuration update (spec 063, 2026-10-03):** The controller
+> configuration now uses nested typed settings with the same `GITSTORE_` /
+> `__` mapping as the API and Git service. Flat `serviceaccount_*`,
+> `secret_provider_bootstrap` and checkpoint settings are rejected. See the
+> [configuration contract](../../specs/063-implement-secret-adrs/contracts/configuration.md)
+> for the full rename map, mandatory migration, old-key rejection and rollout
+> requirements.
+
 > Generated 2026-08-09 via deep-research workflow (102 agents, 20 sources, 21 verified claims) plus direct source inspection of `gitstore-api` and `gitstore-controller-manager`.
 > Extends `020-pluggable_auth_architecture.md` (Phases 1–6 shipped; this document specifies the deferred Phase 7 "OIDC JWT provider" slot as a **GitStore-issued service-account provider** instead, and supersedes spec 040 research.md's "controller = ordinary bearer-JWT admin principal" interim decision).
 > `022-opa-data-authorization.md` extends this document with authoritative read-path enforcement,
@@ -29,9 +37,9 @@ Confirmed directly from source (not from the external research pass, which does 
 - **`gitstore-controller-manager/cmd/controller/main.go:101`** — `graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)`, called once at startup. If the token is empty, wrong, or later revoked, the controller does not recover — see §12 (testing) and §13 (observability) for the corresponding gaps.
 - **`gitstore-api/internal/app/server.go:322-368`** (`buildProviderRegistry`) — the **only** AuthN providers wired today are `static-admin` and `anonymous` (chain default `["static-admin","anonymous"]`); the only AuthZ providers are `rbac-local` and `allow-all`. Confirmed by directory listing: `gitstore-api/internal/auth/provider/` contains exactly `allowall/`, `anonymous/`, `rbaclocal/`, `staticadmin/`, `userdirnone/`. **No `oidcjwt/` package exists.** `020-pluggable_auth_architecture.md` §2b's `OIDCJWTProvider` and its "Phase 7 — OIDC JWT provider" rollout entry (§7) are an unimplemented design, not shipped code — the research task's caution not to treat `oidc-jwt` as implemented is correct.
 - **`gitstore-api/internal/auth/types.go`** — the live `AuthNProvider` interface is `Name() string`, `Capabilities() Capability`, `Authenticate(ctx, AuthRequest) (*Principal, Decision, error)`, `RevokeSession(ctx, jti, expiresAt) error`, `RefreshSession(ctx, oldToken) (newToken, exp, error)`, and `IssueSession(ctx, subject) (token, exp, error)`. This is already provider-agnostic and already has an issuance method (`IssueSession`) — a new service-account provider slots in without changing this interface.
-- **`gitstore-api/internal/middleware/security/graphql.go`** — `GraphQLFieldAuthorizer` (lines 181–218) is where `category.status.write` and the generic `<kind>.status.write` action strings are actually checked, only for the `updateCategoryStatus` and `updateResourceStatus` mutation fields. `GraphQLAuthenticator` (lines 46–85) runs once per GraphQL *operation* dispatch via `gqlServer.AroundOperations` (`server.go:262-264`) and reads `opCtx.Headers`. For WebSockets, gqlgen populates those headers from the HTTP upgrade request; it exposes the `connection_init` payload separately. The current server wires `transport.Websocket` with no `InitFunc` (`server.go:245-247`), while the controller sends its bearer token only in `connection_init`, so the server does **not** currently authenticate that payload or establish an authenticated connection context. The implementation must add an `InitFunc`; once authenticated there, a subscription principal is fixed for the connection lifetime unless the connection context is cancelled.
-- **No `policy.yaml` exists anywhere in the repository.** `rbac-local`'s action-string vocabulary (`category.status.write`, `namespace.delete.own`, `namespace.delete.any`, `namespace.create.organization`, generic `<kind>.status.write`) is defined only in Go source and tests; there is no live example of a non-admin role binding running in any environment today.
-- **`specs/040-controller-watch-status-api/research.md:45-50`** — spec 040 explicitly considered and **rejected** a dedicated machine-identity mechanism for controllers, deciding instead: *"The controller-manager authenticates as an ordinary bearer-JWT principal (issued via the existing `staticadmin.IssueSession`/`gitctl` tooling) whose roles are bound to a policy granting `category.status.write`..."* This is the documented status quo this research effort is asked to replace. Reusing the gRPC HMAC secret (`GITSTORE_AUTH__GRPC__HMAC_SECRET`, `gitstore-api/internal/gitclient/auth.go`) was also considered elsewhere and correctly ruled out — it protects a header-less gRPC channel with no `Principal` concept, not GraphQL callers.
+- **`gitstore-api/internal/middleware/security/graphql.go`** — `GraphQLFieldAuthorizer` (lines 181–218) is where `categoryTaxonomy.status.write` and the generic `<kind>.status.write` action strings are actually checked, only for the `updateCategoryStatus` and `updateResourceStatus` mutation fields. `GraphQLAuthenticator` (lines 46–85) runs once per GraphQL *operation* dispatch via `gqlServer.AroundOperations` (`server.go:262-264`) and reads `opCtx.Headers`. For WebSockets, gqlgen populates those headers from the HTTP upgrade request; it exposes the `connection_init` payload separately. The current server wires `transport.Websocket` with no `InitFunc` (`server.go:245-247`), while the controller sends its bearer token only in `connection_init`, so the server does **not** currently authenticate that payload or establish an authenticated connection context. The implementation must add an `InitFunc`; once authenticated there, a subscription principal is fixed for the connection lifetime unless the connection context is cancelled.
+- **No `policy.yaml` exists anywhere in the repository.** `rbac-local`'s action-string vocabulary (`categoryTaxonomy.status.write`, `namespace.delete.own`, `namespace.delete.any`, `namespace.create.organization`, generic `<kind>.status.write`) is defined only in Go source and tests; there is no live example of a non-admin role binding running in any environment today.
+- **`specs/040-controller-watch-status-api/research.md:45-50`** — spec 040 explicitly considered and **rejected** a dedicated machine-identity mechanism for controllers, deciding instead: *"The controller-manager authenticates as an ordinary bearer-JWT principal (issued via the existing `staticadmin.IssueSession`/`gitctl` tooling) whose roles are bound to a policy granting `categoryTaxonomy.status.write`..."* This is the documented status quo this research effort is asked to replace. Reusing the gRPC HMAC secret (`GITSTORE_AUTH__GRPC__HMAC_SECRET`, `gitstore-api/internal/gitclient/auth.go`) was also considered elsewhere and correctly ruled out — it protects a header-less gRPC channel with no `Principal` concept, not GraphQL callers.
 
 **The gap, precisely:** GitStore has no notion of a *non-human, self-renewing, audience-scoped, least-privilege* principal. The only way to get the controller a working credential today is for an administrator to mint (or the controller to be handed) a `static-admin`-issued JWT — which, per `staticadmin`'s `IssueSession`, carries `Roles: ["admin"]` (see `020-pluggable_auth_architecture.md` §2a) — and paste it into `GITSTORE_CONTROLLER__API_TOKEN`. That is a manually-copied, long-lived, over-privileged bearer token, precisely what this research is asked to eliminate from normal production operation.
 
@@ -78,7 +86,7 @@ Derived from the objective, the decision standard, and confirmed external mechan
 
 ### 4c. In-cluster vs. out-of-cluster implications
 
-- **In-cluster (optional, future):** gitstore-api could add an `oidc-jwt`-style AuthN provider that trusts a specific cluster's ServiceAccount-token issuer (audience must include `gitstore-api`; issuer must be on an explicit allowlist; JWKS fetched from that cluster's discovery endpoint; subject taken from `system:serviceaccount:<ns>:<name>` and mapped into GitStore's own `Principal.Subject`). Kubernetes RBAC (who can `create pods` with that ServiceAccount) stays entirely inside the cluster and is irrelevant to GitStore's own `AuthZProvider` decision — GitStore RBAC (`rbac-local`/OPA policy) is a completely separate binding from the *GitStore* subject string to GitStore actions. Multiple clusters/issuers require an explicit per-issuer JWKS+audience+namespace-trust allowlist to prevent subject collisions (two different clusters both minting `system:serviceaccount:controllers:category-taxonomy`).
+- **In-cluster (optional, future):** gitstore-api could add an `oidc-jwt`-style AuthN provider that trusts a specific cluster's ServiceAccount-token issuer (audience must include `gitstore-api`; issuer must be on an explicit allowlist; JWKS fetched from that cluster's discovery endpoint; subject taken from `system:serviceaccount:<ns>:<name>` and mapped into GitStore's own `Principal.Subject`). Kubernetes RBAC (who can `create pods` with that ServiceAccount) stays entirely inside the cluster and is irrelevant to GitStore's own `AuthZProvider` decision — GitStore RBAC (`rbac-local`/OPA policy) is a completely separate binding from the *GitStore* subject string to GitStore actions. Multiple clusters/issuers require an explicit per-issuer JWKS+audience+namespace-trust allowlist to prevent subject collisions (two different clusters both minting `system:serviceaccount:controllers:gitstore-controller-manager`).
 - **Out-of-cluster (native process, Docker Compose, CI, non-K8s installs):** there is no Kubernetes issuer or kubelet credential projector to trust. GitStore's own issuer (§9) is the only option. Deployment tooling generates or supplies the controller private key, registers the public key and ServiceAccount record through an authenticated installation operation, and thereafter the controller can obtain tokens without a live administrator or a still-valid previous token.
 
 **Conclusion:** the Kubernetes-issued-token path is a legitimate optional *addition* once GitStore has in-cluster deployments with a clear operational need for it — but it cannot be the primary design, because it does not cover native/Compose/CI. Kubernetes workloads do **not** require an administrator to copy a bootstrap token into each Pod: an operator declares the ServiceAccount/RBAC/workload, and the control plane plus kubelet deliver and rotate the credential automatically. GitStore should preserve that separation. Its installation process enrolls identity and public trust material; its controller performs automatic token acquisition and renewal. GitStore can therefore adapt the properties of the modern Kubernetes ServiceAccount model without pretending it has Kubernetes' universal kubelet machinery.
@@ -109,7 +117,7 @@ flowchart TB
         Registry["Persistent ServiceAccount registry<br/>namespace, name, UID, disabled, public keys"]
         Issue["IssueServiceAccountToken<br/>verify short-lived client assertion<br/>mint short-TTL access JWT"]
         AuthN["serviceaccount-jwt AuthNProvider<br/>verify iss / aud / exp / sub<br/>against signing key and SA registry"]
-        AuthZ["rbac-local AuthZProvider<br/>role binding: serviceaccount:ctrl:category-taxonomy<br/>→ controller"]
+        AuthZ["rbac-local AuthZProvider<br/>role binding: serviceaccount:controllers:gitstore-controller-manager<br/>→ controller"]
         WS["WebSocket InitFunc + connection registry<br/>deadline at token exp<br/>cancel on SA disable/delete"]
 
         CRUD --> Registry --> Issue --> AuthN --> AuthZ
@@ -325,32 +333,50 @@ replacing kubelet attestation with a portable signed client assertion.
 type Mutation {
   issueServiceAccountToken(input: IssueServiceAccountTokenInput!): IssueServiceAccountTokenPayload!
   createServiceAccount(input: CreateServiceAccountInput!): CreateServiceAccountPayload!
-  rotateServiceAccountKey(input: RotateServiceAccountKeyInput!): CreateServiceAccountPayload!
+  rotateServiceAccountKey(input: RotateServiceAccountKeyInput!): RotateServiceAccountKeyPayload!
   deleteServiceAccount(input: DeleteServiceAccountInput!): DeleteServiceAccountPayload!
+}
+
+type ServiceAccount implements Actor {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  keyIDs: [String!]!
+  status: ActorStatus!
+}
+
+type TokenRequest {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: TokenRequestSpec!
+  status: TokenRequestStatus!
 }
 
 input IssueServiceAccountTokenInput {
   apiVersion: String! = "authentication.gitstore.dev/v1beta1"
   kind: String! = "TokenRequest"
   metadata: ObjectMetaInput! # contains namespace and name of the ServiceAccount to issue for
-  spec: TokenRequestSpec!
+  spec: TokenRequestSpecInput!
 }
 
-input TokenRequestSpec {
-    audience: String        # defaults to "gitstore-api"
-    ttlSeconds: Int         # server clamps to auth.serviceaccount.max_ttl
+input TokenRequestSpecInput {
+    audiences: [String!]        # defaults to "gitstore-api"
+    expirationSeconds: Int      # server clamps to auth.serviceaccount.max_ttl
+}
+
+type TokenRequestSpec {
+    audiences: [String!]
+    expirationSeconds: Int
 }
 
 type IssueServiceAccountTokenPayload {
-    apiVersion: String!
-    kind: String!
-    metadata: ObjectMeta!
-    status: TokenRequestStatus!
+    tokenRequest: TokenRequest
 }
 
 type TokenRequestStatus {
   token: String!
-  expiresAt: DateTime!
+  expirationTimestamp: DateTime!
 }
 
 input CreateServiceAccountInput {
@@ -373,17 +399,21 @@ input RotateServiceAccountKeyInput {
 }
 
 type CreateServiceAccountPayload {
-  apiVersion: String!
-  kind: String!
-  metadata: ObjectMeta!   # contains creationTimestamp, namespace, name and uid of the ServiceAccount created
-  keyIDs: [String!]!
-  disabled: Boolean!
+  serviceAccount: ServiceAccount
+}
+
+type RotateServiceAccountKeyPayload {
+  serviceAccount: ServiceAccount
 }
 
 input DeleteServiceAccountInput {
   apiVersion: String! = "authentication.gitstore.dev/v1beta1"
   kind: String! = "ServiceAccount"
   metadata: ObjectMetaInput! # contains namespace and name of the ServiceAccount to delete
+}
+
+type DeleteServiceAccountPayload {
+  serviceAccount: ServiceAccount
 }
 ```
 
@@ -403,11 +433,17 @@ auth.serviceaccount.default_ttl        GITSTORE_AUTH__SERVICEACCOUNT__DEFAULT_TT
 auth.serviceaccount.max_ttl            GITSTORE_AUTH__SERVICEACCOUNT__MAX_TTL         "1h"
 auth.serviceaccount.clock_skew         GITSTORE_AUTH__SERVICEACCOUNT__CLOCK_SKEW      "2m"
 
-controller.api_token                   GITSTORE_CONTROLLER__API_TOKEN          # DEPRECATED dev/CI compatibility only (§11)
-controller.serviceaccount_namespace    GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE  ""   # e.g. "controllers"
-controller.serviceaccount_name         GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME       "category-taxonomy"
-controller.serviceaccount_key_id       GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID      ""
-controller.serviceaccount_private_key_file GITSTORE_CONTROLLER__SERVICEACCOUNT__PRIVATE_KEY_FILE ""
+# controller.api_token / GITSTORE_CONTROLLER__API_TOKEN is rejected.
+controller.serviceaccount.namespace    GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE  ""   # e.g. "controllers"
+controller.serviceaccount.name         GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME       "gitstore-controller-manager"
+controller.serviceaccount.key_id       GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID      ""
+# Signing key is an ADR 0001 SecretRef resolved through a bootstrap-tier
+# SecretResolver (ADR 0009 §3) — NOT a raw filesystem path. The earlier
+# controller.serviceaccount_private_key_file draft is superseded.
+controller.serviceaccount.key_ref.name GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME ""
+controller.serviceaccount.key_ref.key  GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY  "privateKey"
+controller.secret_providers.bootstrap.type      GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__TYPE      "file"
+controller.secret_providers.bootstrap.base_path GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH "/etc/gitstore/secrets"
 ```
 
 The ServiceAccount record is a datastore-only authentication-runtime resource. Its namespace/name, UID, disabled state, and enrolled public keys must be implemented through `datastore.Datastore` in both `go-memdb` and ScyllaDB from the first implementation phase. An in-memory record is not an acceptable starting point because API restart would erase the trust anchor and force re-enrollment. An assertion `jti` replay cache and the active-WebSocket index may remain in memory for the initial single-instance profile; multi-replica deployment requires a shared replay store and a revocation broadcast mechanism.
@@ -469,40 +505,66 @@ The assertion is proof of possession, not a general API credential. It is accept
 
 Enumerated from `categorytaxonomy.NewReconciler` wiring in `cmd/controller/main.go:106-111` and the listwatch/status client shapes it depends on:
 
-| Reconciler need                                        | Action string                                                | New or existing?                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-|--------------------------------------------------------|--------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Initial list of CategoryTaxonomy                       | `category.list`                                              | **New** — today there is no distinct list/watch action; `rbac-local` only gates mutations via `GraphQLFieldAuthorizer`, so reads currently pass through ungated by any explicit action check. Adding this action is optional hardening, not a blocker — GraphQL read-path authorization is a separate, pre-existing gap this document does not attempt to close in scope, but the action string is reserved here so it composes cleanly if/when read-gating is added. |
-| Watch/subscribe to CategoryTaxonomy changes            | `category.watch`                                             | **New**, same rationale as above                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Supporting product reads (`NewProductCounter(client)`) | `product.list`                                              | **New** — 022 makes this the canonical Product connection action and enforces it through GraphQL read middleware.                                                                                                                                                                                                                                                                                                                                                     |
-| Category status writes                                 | `category.status.write`                                      | **Existing** — already implemented and enforced today (`graphql.go:181-198`)                                                                                                                                                                                                                                                                                                                                                                                          |
+| Reconciler need                                        | Action string                   | New or existing?                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+|--------------------------------------------------------|---------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Initial list of CategoryTaxonomy                       | `categoryTaxonomy.list`         | **New** — today there is no distinct list/watch action; `rbac-local` only gates mutations via `GraphQLFieldAuthorizer`, so reads currently pass through ungated by any explicit action check. Adding this action is optional hardening, not a blocker — GraphQL read-path authorization is a separate, pre-existing gap this document does not attempt to close in scope, but the action string is reserved here so it composes cleanly if/when read-gating is added. |
+| Watch/subscribe to CategoryTaxonomy changes            | `categoryTaxonomy.watch`        | **New**, same rationale as above                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Supporting product reads (`NewProductCounter(client)`) | `product.list`                  | **New** — 022 makes this the canonical Product connection action and enforces it through GraphQL read middleware.                                                                                                                                                                                                                                                                                                                                                     |
+| Category status writes                                 | `categoryTaxonomy.status.write` | **Existing** — already implemented and enforced today (`graphql.go:181-198`)                                                                                                                                                                                                                                                                                                                                                                                          |
 
-**Recommendation:** define `category.list` and `category.watch` now. This document reserves those
+**Recommendation:** define `categoryTaxonomy.list` and `categoryTaxonomy.watch` now. This document reserves those
 actions; `022-opa-data-authorization.md` closes the Product/ProductVariant read-path gap and establishes
 the same server-owned SDL/middleware pattern for future Category list/watch enforcement.
 
 ### 10b. Controller role (`rbac-local` `policy.yaml` fragment)
 
+> **Corrected 2026-08-30 (spec 061, on rebase onto spec 047 / PR #370).** An earlier revision of this
+> section scoped the role to the CategoryTaxonomy reconciler alone and asserted `no namespace.*, no
+> repository.*`. That is wrong for the shipped binary: `gitstore-controller-manager`'s
+> `cmd/controller/main.go` registers three workloads (`registerNamespace`, `registerCategoryTaxonomy`,
+> `registerProductWatch`) that share **one** credential source and therefore **one** service account.
+> The role below is the union of all three workloads' required actions.
+
 ```yaml
 roles:
-  category-taxonomy-controller:
+  gitstore-controller-manager:
     allow:
-      - category.list
-      - category.watch
+      # CategoryTaxonomy reconciler
+      - categoryTaxonomy.list
+      - categoryTaxonomy.watch
       - product.list
-      - product.read.unpublished
-      - category.status.write
-    deny: []   # least privilege: no admin, no namespace.*, no repository.*
+      - product.management.read
+      - categoryTaxonomy.status.write
+      - categoryTaxonomy.delete
+      # Namespace reconciler
+      - repository.create.any     # see note below - .own is unreachable for a machine subject
+      - namespace.status.write    # completeNamespaceDeletion
+      - namespace.watch           # Namespace listwatcher's watchResources subscription (spec 050/PR #371)
+    deny: []   # least privilege: no admin role, no namespace.delete.*, no repository.delete.*
 
 role_bindings:
-  "serviceaccount:controllers:category-taxonomy":
-    - category-taxonomy-controller
+  "serviceaccount:controllers:gitstore-controller-manager":
+    - gitstore-controller-manager
 ```
 
-`product.read.unpublished` is required because the controller's product counter reconciles the
+**Why `repository.create.any` rather than `repository.create.own`.**
+`Resolver.authorizeRepositoryTenant` (`gitstore-api/internal/graph/resolver/repository_authorization.go`)
+picks the `.own`/`.any` suffix by comparing the target namespace's `CreationActor` to
+`principal.Subject`, and falls back to `.any` whenever they differ. A controller's subject
+(`serviceaccount:controllers:...`) never equals a human-created namespace's `CreationActor`, so
+system-repository provisioning **always** requests `repository.create.any`. Granting only
+`repository.create.own` would deny every provisioning call. Spec 047 (PR #370) makes this
+load-bearing rather than theoretical, since system-repository provisioning is now on the enforced
+namespace-admission path. Narrowing this grant — for example a resource-context predicate limiting
+it to the reserved system-repository name, or an explicit machine-actor scope rule — requires an
+`rbac-local` policy-semantics change and is deliberately out of scope for spec 061 (its FR-021
+forbids changing `rbac-local` decision semantics). It is recorded there as a follow-on concern.
+
+`product.management.read` is required because the controller's product counter reconciles the
 complete admitted catalog, not the storefront/public projection. Under 022, `product.list` supplies
-the base read entitlement and `product.read.unpublished` upgrades that request to the `MANAGEMENT`
+the base read entitlement and `product.management.read` upgrades that request to the `MANAGEMENT`
 visibility scope. The role receives no ProductVariant management access unless a future reconciler
-demonstrates a need for both `productVariant.list` and `productVariant.read.unpublished`.
+demonstrates a need for both `productVariant.list` and `productVariant.management.read`.
 
 ### 10c. Namespacing and future controllers
 
@@ -519,7 +581,7 @@ Service-account identity is **namespaced by convention** (`serviceaccount:<names
 5. **Phase 4 — flip the default chain, deprecate the static fallback.** `GITSTORE_AUTH__AUTHN__CHAIN` default becomes `["static-admin","serviceaccount-assertion","serviceaccount-jwt","anonymous"]`. `GITSTORE_CONTROLLER__API_TOKEN` is marked deprecated in `docs/configuration.md` and is used only when no ServiceAccount signer is configured—an explicit dev/CI compatibility path, never the production default. Rollback trigger: any existing integration test relying on the static token path regresses.
 6. **Phase 5 — enforce read-path action strings.** Adopt 022's SDL/middleware contract for
    `product.list` and its semantic visibility scope, then extend the same pattern to
-   `category.list`/`.watch`. The controller role includes `product.read.unpublished` only because its
+   `categoryTaxonomy.list`/`.watch`. The controller role includes `product.management.read` only because its
    reconciliation count needs the complete admitted Product set. ProductVariant management actions
    remain absent until a controller requirement justifies them.
 
@@ -562,7 +624,7 @@ At every phase, `static-admin` login and the existing `ChainedAuthN` short-circu
 | 2                    | Idempotent `gitctl` identity enrollment and deployment integration; public key registered, private key stored through the deployment secret mechanism; no bearer bootstrap file   | Any supported deployment cannot enroll without copying an access token into controller configuration |
 | 3                    | `graphqlclient.CredentialSource`, assertion exchange, proactive renewal, recovery after expiry, and WS reconnect with `resourceVersion` resume                                    | Controller cannot recover after access-token expiry or reconnect cleanly                             |
 | 4                    | WebSocket `InitFunc`, expiry-bound contexts, live connection registry, and cancellation on ServiceAccount disable/delete                                                          | A connection survives expiry/revocation or existing subscription tests regress                       |
-| 5                    | `policy.yaml` ships the `category-taxonomy-controller` role/binding; production defaults include both providers; static API token documented as deprecated dev/CI compatibility   | Any supported profile loses a working auth path or required controller action returns `OutcomeDeny`  |
+| 5                    | `policy.yaml` ships the `gitstore-controller-manager` role/binding; production defaults include both providers; static API token documented as deprecated dev/CI compatibility   | Any supported profile loses a working auth path or required controller action returns `OutcomeDeny`  |
 | 6 (future, optional) | In-cluster `oidc-jwt`-style provider trusting Kubernetes-issued tokens, gated by explicit issuer allowlist config, as an additional chain entry                                   | N/A — purely additive; disabled by default                                                           |
 
 ---

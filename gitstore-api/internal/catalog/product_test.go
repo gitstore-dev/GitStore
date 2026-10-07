@@ -167,7 +167,7 @@ func TestProductStatus_FullRoundTrip(t *testing.T) {
 		ObservedGeneration:  3,
 		LastAppliedRevision: "main@sha1:abc123",
 		Conditions: []catalog.Condition{
-			{Type: catalog.ConditionPublished, Status: catalog.ConditionTrue, ObservedGeneration: 3, LastTransitionTime: now, Reason: "Released", Message: "published"},
+			{Type: catalog.ConditionAcyclic, Status: catalog.ConditionTrue, ObservedGeneration: 3, LastTransitionTime: now, Reason: "Confirmed"},
 			{Type: catalog.ConditionAdmissionAccepted, Status: catalog.ConditionTrue, ObservedGeneration: 3, LastTransitionTime: now},
 			{Type: catalog.ConditionCategoryResolved, Status: catalog.ConditionTrue, ObservedGeneration: 3, LastTransitionTime: now},
 			{Type: catalog.ConditionOptionsAccepted, Status: catalog.ConditionFalse, ObservedGeneration: 3, LastTransitionTime: now, Reason: "MissingOption"},
@@ -192,7 +192,7 @@ func TestProductStatus_FullRoundTrip(t *testing.T) {
 	assert.Equal(t, original.ObservedGeneration, got.ObservedGeneration)
 	assert.Equal(t, original.LastAppliedRevision, got.LastAppliedRevision)
 	assert.Len(t, got.Conditions, 6)
-	assert.Equal(t, catalog.ConditionPublished, got.Conditions[0].Type)
+	assert.Equal(t, catalog.ConditionAcyclic, got.Conditions[0].Type)
 	assert.Equal(t, catalog.ConditionTrue, got.Conditions[0].Status)
 	require.NotNil(t, got.Resolved)
 	assert.Equal(t, "Laptops", got.Resolved.Category.Name)

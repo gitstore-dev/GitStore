@@ -57,3 +57,30 @@ func TestDecisionLogger_EmitsStructuredFieldsAndRequestID(t *testing.T) {
 	assert.Equal(t, "req-123", fields["request_id"])
 	assert.Equal(t, "allow", fields["outcome"])
 }
+
+// TestDecisionLogger_ServiceAccountSubjectRendersUnmodified confirms (spec
+// 061 T013) that DecisionLogger requires no code changes to correctly log
+// service-account principals: subject is passed through verbatim from
+// Principal.Subject, so the "serviceaccount:<namespace>:<name>" convention
+// established by datastore.ServiceAccountSubject renders with no
+// truncation, escaping, or reformatting.
+func TestDecisionLogger_ServiceAccountSubjectRendersUnmodified(t *testing.T) {
+	core, logs := observer.New(zapcore.InfoLevel)
+	logger := zap.New(core)
+	provider := authpkg.NewDecisionLogger(&staticAuthZProvider{
+		name:     "rbac-local",
+		decision: authpkg.Allow("rbac-local", "allowed by policy"),
+	}, logger)
+
+	_, err := provider.Authorize(context.Background(), &authpkg.Principal{
+		Subject:    "serviceaccount:controllers:gitstore-controller-manager",
+		Roles:      nil,
+		AuthMethod: "serviceaccount-jwt",
+	}, "categoryTaxonomy.read", authpkg.ResourceContext{Kind: "categorytaxonomy", Name: "demo"})
+	require.NoError(t, err)
+
+	entries := logs.All()
+	require.Len(t, entries, 1)
+	fields := entries[0].ContextMap()
+	assert.Equal(t, "serviceaccount:controllers:gitstore-controller-manager", fields["subject"])
+}

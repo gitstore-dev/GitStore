@@ -401,7 +401,6 @@ Paginated connection for ProductVariants (Relay pattern).
 type ProductVariantConnection {
   edges: [ProductVariantEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }
 
 # ---------------------------------------------------------------------------

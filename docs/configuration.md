@@ -13,12 +13,56 @@ Services load configuration from multiple sources in a fixed order. A higher-pri
 2. Config file                  (optional)
 3. .env file                    (optional)
 4. Environment variables        (highest priority)
-5. CLI flags --config-file, --log-level  (gitstore-git-service only; override everything)
+5. CLI value overrides such as `--log-level` (where supported)
 ```
+
+All three services accept `--config-file <path>`. The flag selects the file
+source; values from the environment still override values in that file. An
+explicit path is required to exist and be readable. Without the flag, the Go
+services retain optional `config.toml` discovery and the Git service retains
+optional `gitstore.toml` discovery in the working directory.
+
+**`gitstore-api` and `gitstore-controller-manager` only**: `--config-file` may
+be repeated to layer additive overlays on top of a base file — e.g.
+`--config-file base.toml --config-file overlay.toml`. The first occurrence is
+read as the base; each one after it is merged on top (later file wins, key by
+key), so an overlay only needs to declare the keys it changes rather than
+duplicating the whole base file. `gitstore-git-service` does not support this
+— it only accepts a single `--config-file`.
+
+For production-friendly local templates, copy the per-service example files in
+this repo:
+
+- `../gitstore-git-service/config.toml.example`
+- `../gitstore-api/config.toml.example`
+- `../gitstore-controller-manager/config.toml.example`
+
+These are intended to be copied to `/etc/gitstore/...` or another deployment
+managed config directory and tuned per environment.
+
+## Shared Local Compose Configuration
+
+`make compose` activates the Compose `local` profile and mounts
+`config/config.toml` read-only into all three core containers at
+`/etc/gitstore/gitstore.toml`. The API also receives the development RBAC
+policy at `/etc/gitstore/policy.yaml`. Select another host-side file explicitly
+with:
+
+```bash
+make compose CONFIG_FILE=./config/config.stage.toml
+```
+
+The tracked file contains only development credentials (`admin` / `admin123`),
+a long-lived development controller token, and a development HMAC/JWT secret.
+Never deploy it to production. Production deployments should mount a reviewed
+configuration/policy revision on every replica and inject secrets through the
+deployment platform. Configuration is startup-only, so replicas remain
+stateless and rolling upgrades can mix binaries with and without the additive
+flag while existing environment/default discovery remains supported.
 
 ### Sensitive values
 
-Keys marked **Sensitive** are always logged as `<redacted>` (when set) or `<unset>` (when absent), regardless of log level. Sensitive values must never be placed in config files — set them via environment variables or `.env` only.
+Keys marked **Sensitive** are always logged as `<redacted>` (when set) or `<unset>` (when absent), regardless of log level. Production secrets should be supplied externally rather than committed to config files; the tracked local fixture is intentionally development-only.
 
 An empty string (`KEY=`) for a **Required** key is treated identically to an absent key and causes a startup failure listing all failing keys.
 
@@ -28,6 +72,8 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 
 **Config file**: `config.toml` (optional, current working directory)
 
+**Explicit file**: `gitstore-api --config-file /path/to/config.toml` (required when selected). Repeat the flag to layer overlays: `--config-file base.toml --config-file overlay.toml` (later file wins per key).
+
 **`.env` file**: `.env` (optional, current working directory)
 **Env var prefix**: `GITSTORE_`
 
@@ -36,7 +82,7 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 | Key             | Env Var                   | Type    | Default | Required | Sensitive | Description                                             |
 |-----------------|---------------------------|---------|---------|----------|-----------|---------------------------------------------------------|
 | `api.port`      | `GITSTORE_API__PORT`      | integer | `4000`  | No       | No        | HTTP port the GraphQL API server listens on (1–65535)   |
-| `api.git_port`  | `GITSTORE_API__GIT_PORT`  | integer | `5000`  | No       | No        | Git Smart HTTP port the API server listens on (1–65535) |
+| `api.git_port`  | `GITSTORE_API__GIT_PORT`  | integer | `9000`  | No       | No        | Git Smart HTTP port the API server listens on (1–65535) |
 | `api.grpc_port` | `GITSTORE_API__GRPC_PORT` | integer | `6000`  | No       | No        | CatalogService gRPC port called by gitstore-git-service |
 | `api.rate_limit_per_second` | `GITSTORE_API__RATE_LIMIT_PER_SECOND` | float | `50` | No | No | Sustained per-client-IP request rate allowed on `/graphql` |
 | `api.rate_limit_burst` | `GITSTORE_API__RATE_LIMIT_BURST` | integer | `100` | No | No | Per-client-IP token-bucket burst size on top of `api.rate_limit_per_second` |
@@ -49,7 +95,7 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 
 ### Git Smart HTTP Endpoints
 
-The following endpoints are served on port `api.git_port` (default `5000`):
+The following endpoints are served on port `api.git_port` (default `9000`):
 
 | Method | Path                                                              | Description                                       |
 |--------|-------------------------------------------------------------------|---------------------------------------------------|
@@ -63,20 +109,57 @@ The following endpoints are served on port `api.git_port` (default `5000`):
 
 | Key                        | Env Var                               | Type     | Default    | Required | Sensitive | Description                                                 |
 |----------------------------|---------------------------------------|----------|------------|----------|-----------|-------------------------------------------------------------|
-| `auth.admin.username`      | `GITSTORE_AUTH__ADMIN__USERNAME`      | string   | —          | **Yes**  | No        | Admin portal username                                       |
-| `auth.admin.password_hash` | `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | string   | —          | **Yes**  | **Yes**   | bcrypt hash of the admin password                           |
-| `auth.jwt.secret`          | `GITSTORE_AUTH__JWT__SECRET`          | string   | —          | **Yes**  | **Yes**   | JWT signing key (minimum 32 characters)                     |
+| `auth.staticusers.users_file` | `GITSTORE_AUTH__STATICUSERS__USERS_FILE` | string | users.yaml | When selected | No | YAML file containing local users |
+| `auth.jwt.secret`          | `GITSTORE_AUTH__JWT__SECRET`          | string   | —          | When `static-users` is selected | **Yes** | JWT signing key (minimum 32 characters)                  |
 | `auth.jwt.duration`        | `GITSTORE_AUTH__JWT__DURATION`        | duration | `24h`      | No       | No        | JWT token validity (e.g. `12h`, `30m`)                      |
 | `auth.jwt.issuer`          | `GITSTORE_AUTH__JWT__ISSUER`          | string   | `gitstore` | No       | No        | JWT `iss` claim value                                       |
 | `auth.jwt.refresh_grace`   | `GITSTORE_AUTH__JWT__REFRESH_GRACE`   | duration | `60s`      | No       | No        | Window after expiry during which `refreshToken` is accepted |
 
-For config files, admin auth keys are nested under `[auth.admin]` (for example, `username = "admin"`) and JWT keys are nested under `[auth.jwt]`.
+For config files, local users are selected with `[auth.staticusers]` and `users_file = "users.yaml"`; JWT keys remain nested under `[auth.jwt]`.
 
-### Cache
+The root operator helpers target the local Compose files in `config/` by default:
 
-| Key         | Env Var               | Type    | Default | Required | Sensitive | Description                            |
-|-------------|-----------------------|---------|---------|----------|-----------|----------------------------------------|
-| `cache.ttl` | `GITSTORE_CACHE__TTL` | integer | `300`   | No       | No        | In-memory catalog cache TTL in seconds |
+```bash
+make add-user USERNAME=alice PASSWORD='secret' EMAIL=alice@example.com DISPLAY_NAME='Alice Doe'
+make add-role ROLE=developer ALLOW='repository.read.own,repository.write.own'
+make assign-role SUBJECT=alice ROLE=developer
+```
+
+Background API work uses the explicit `system:api` subject. Production RBAC
+policies must bind that subject only to the repository actions required by the
+deployment; the development policy provides the `api-internal` role as the
+minimal example. It is carried to GitService as an authorization envelope and
+is not a substitute for the API-to-Git-service HMAC.
+
+Set `AUTH_CONFIG_DIR=gitstore-api` for native-development files, or override
+`USERS_FILE` and `POLICY_FILE` separately. These commands validate and atomically
+replace one YAML file at a time; `add-user` never changes authorization policy.
+
+`static-users` always appends `/static-users` to the configured issuer base when minting tokens, while accepting the exact configured base for legacy sessions during rolling upgrades. Logout and refresh rotation require the shared ScyllaDB revocation table in production; migration 007 creates it automatically.
+
+### Service-account authentication
+
+Service-account authentication is enabled only when
+`auth.authn.chain` contains `serviceaccount-assertion` and
+`serviceaccount-jwt`. The API issues and verifies the controller's
+short-lived access tokens; the controller proves possession of a separately
+mounted private key to obtain them.
+
+| Key | Env Var | Type | Default | Required | Sensitive | Description |
+|-----|---------|------|---------|----------|-----------|-------------|
+| `auth.authn.chain` | `GITSTORE_AUTH__AUTHN__CHAIN` | list of strings | `["static-users","anonymous"]` | No | No | Ordered AuthN providers; include both service-account providers to enable this flow |
+| `auth.serviceaccount.issuer` | `GITSTORE_AUTH__SERVICEACCOUNT__ISSUER` | string | `gitstore` | No | No | Issuer for service-account access tokens |
+| `auth.serviceaccount.audience` | `GITSTORE_AUTH__SERVICEACCOUNT__AUDIENCE` | string | `gitstore-api` | No | No | Required audience for service-account access tokens |
+| `auth.serviceaccount.assertion_audience` | `GITSTORE_AUTH__SERVICEACCOUNT__ASSERTION_AUDIENCE` | string | `gitstore-api/serviceaccount-token` | No | No | Required audience for controller assertions at the token-exchange endpoint |
+| `auth.serviceaccount.signing_key` | `GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY` | PEM private key | (empty) | **Yes, when a service-account provider is chained** | **Yes** | API-only Ed25519 or ECDSA P-256 access-token signing key |
+| `auth.serviceaccount.default_ttl` | `GITSTORE_AUTH__SERVICEACCOUNT__DEFAULT_TTL` | duration | `10m` | No | No | Requested default access-token lifetime |
+| `auth.serviceaccount.max_ttl` | `GITSTORE_AUTH__SERVICEACCOUNT__MAX_TTL` | duration | `1h` | No | No | Maximum permitted access-token lifetime |
+| `auth.serviceaccount.clock_skew` | `GITSTORE_AUTH__SERVICEACCOUNT__CLOCK_SKEW` | duration | `2m` | No | No | Allowed JWT clock skew during validation |
+
+Never put `auth.serviceaccount.signing_key` in a configuration file mounted by
+multiple services. Supply it through an API-only secret mount or environment
+injection instead. It is the API issuer key, not the controller's enrollment
+key; the controller private key is configured through its `SecretRef` below.
 
 ### Logging
 
@@ -87,6 +170,23 @@ For config files, admin auth keys are nested under `[auth.admin]` (for example, 
 
 ### Datastore
 
+Automatic startup migration defaults to enabled. To prepare schemas using an
+init container or a separate operator step, set
+`datastore.scylla.auto_migrate = false` (environment:
+`GITSTORE_DATASTORE__SCYLLA__AUTO_MIGRATE=false`) on the API and run the matching
+image's `gitctl migrate --hosts scylla:9042 --keyspace gitstore --timeout 5m`
+before starting it. The command also accepts the existing Scylla environment
+variables, including password, so private connection material need not appear
+in arguments.
+
+The operator must create the keyspace first. `gitctl migrate` uses the same
+distributed migration lock as API startup, exits nonzero on failure and starts
+no API listeners or CDC readers. Both startup modes require a complete,
+unchanged migration history for the current binary. Disabled mode checks that
+history with read-only queries and does not create even the migration ledger
+or lock table. It is not a bypass for a breaking schema baseline or a
+partially-applied migration.
+
 | Key                                         | Env Var                                                   | Type            | Default          | Required | Sensitive | Description                                    |
 |---------------------------------------------|-----------------------------------------------------------|-----------------|------------------|----------|-----------|------------------------------------------------|
 | `datastore.backend`                         | `GITSTORE_DATASTORE__BACKEND`                             | string          | `memdb`          | No       | No        | Active datastore backend: `memdb` or `scylla`  |
@@ -96,6 +196,54 @@ For config files, admin auth keys are nested under `[auth.admin]` (for example, 
 | `datastore.scylla.password`                 | `GITSTORE_DATASTORE__SCYLLA__PASSWORD`                    | string          | —                | No       | **Yes**   | Scylla password (optional, redacted in logs)   |
 | `datastore.scylla.tls`                      | `GITSTORE_DATASTORE__SCYLLA__TLS`                         | boolean         | `false`          | No       | No        | Enable TLS for Scylla connections              |
 | `datastore.scylla.disable_shard_aware_port` | `GITSTORE_DATASTORE__SCYLLA__DISABLE_SHARD_AWARE_PORT`    | boolean         | `false`          | No       | No        | Disable shard-aware Scylla port discovery      |
+
+### Feature rollout gates
+
+| Key | Env Var | Type | Default | Required | Sensitive | Description |
+|---|---|---|---|---|---|---|
+| `features.namespace_repository_fence` | `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE` | string | `auto` | No | No | `auto`, `disabled`, or `enabled`. `auto` enables memdb and disables Scylla; enable Scylla only after migration 005 and full API-fleet convergence. |
+
+See [Namespace admission operations](runbooks/namespace-admission.md) for the
+mandatory mixed-version ingress/AuthZ deny and rollback procedure.
+
+### Namespace watch journal
+
+The Namespace watch is enabled by default for alpha deployments. Disable the
+reader and materializer switches during migration-first rollout or rollback.
+All time values are integers in seconds or milliseconds as named.
+
+| Key                                              | Environment variable                                        |   Default | Bound / purpose                                                                                                                             |
+|--------------------------------------------------|-------------------------------------------------------------|----------:|---------------------------------------------------------------------------------------------------------------------------------------------|
+| `watch.namespace.readers_enabled`                | `GITSTORE_WATCH__NAMESPACE__READERS_ENABLED`                |    `true` | Enables typed and generic Namespace journal readers; set false as a rollback switch.                                                        |
+| `watch.namespace.materializer_enabled`           | `GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED`           |    `true` | Allows this replica to contend for the fenced CDC materializer lease; set false as a rollback switch.                                       |
+| `watch.namespace.journal_retention_seconds`      | `GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS`      |  `604800` | Journal TTL; accepted range is 1–604,800 seconds because migration 006 fixes the table maximum at seven days.                               |
+| `watch.namespace.cdc_retention_seconds`          | `GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS`          | `1209600` | Fixed fourteen-day CDC TTL from migration 006; other values are rejected at startup.                                                        |
+| `watch.namespace.cdc_confidence_window_millis`   | `GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS`   |     `500` | Scylla CDC consistency window before changes become eligible for ordered materialization; must remain below `max_materializer_lag_seconds`. |
+| `watch.namespace.bucket_size`                    | `GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE`                    |    `4096` | Sequences per journal partition bucket; accepted range is 1–4,096.                                                                          |
+| `watch.namespace.read_batch_size`                | `GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE`                |     `256` | Replay/poll page; must not exceed bucket size.                                                                                              |
+| `watch.namespace.max_replay_events`              | `GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS`              |  `100000` | Resume ceiling before `WATCH_EXPIRED`; accepted range is 1–100,000.                                                                         |
+| `watch.namespace.subscriber_buffer`              | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER`              |      `64` | Per-hop, per-subscription delivery buffer; accepted range is 1–256 and sustained overflow fails closed.                                     |
+| `watch.namespace.subscriber_backpressure_millis` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BACKPRESSURE_MILLIS` |   `30000` | Maximum bounded wait for a slow subscriber before terminal `SUBSCRIBER_OVERFLOW`.                                                           |
+| `watch.namespace.poll_min_millis`                | `GITSTORE_WATCH__NAMESPACE__POLL_MIN_MILLIS`                |     `100` | Minimum journal poll delay.                                                                                                                 |
+| `watch.namespace.poll_max_millis`                | `GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS`                |    `2000` | Maximum adaptive poll delay; must be at least poll-min and strictly below journal retention.                                                |
+| `watch.namespace.bookmark_interval_seconds`      | `GITSTORE_WATCH__NAMESPACE__BOOKMARK_INTERVAL_SECONDS`      |      `30` | Durable idle BOOKMARK interval.                                                                                                             |
+| `watch.namespace.lease_ttl_seconds`              | `GITSTORE_WATCH__NAMESPACE__LEASE_TTL_SECONDS`              |      `30` | Materializer lease TTL.                                                                                                                     |
+| `watch.namespace.lease_renew_interval_seconds`   | `GITSTORE_WATCH__NAMESPACE__LEASE_RENEW_INTERVAL_SECONDS`   |      `10` | Renewal interval; must be less than lease TTL.                                                                                              |
+| `watch.namespace.max_materializer_lag_seconds`   | `GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS`   |      `60` | Reader readiness freshness ceiling; must remain below the fixed 1,209,600-second CDC retention.                                             |
+
+Scylla journal writes use logged conditional batches capped at 32 statements
+and an estimated 32 KiB of encoded event data. The caps are intentionally
+independent of the 4,096-sequence partition bucket so a lagging CDC stream
+cannot create an oversized catch-up batch.
+
+Product durable-watch rollout follows the same fenced reader/materializer
+configuration family as Namespace and Repository. Enable it only after the
+Product CDC migration and Product-aware API/controller rollout; see
+[`product-lifecycle.md`](runbooks/product-lifecycle.md) for the mixed-version
+deny and rollback sequence.
+
+See [Namespace watch contract](namespace/namespace-watch.md) and the
+[controller watch/status runbook](runbooks/controller-watch-status.md).
 
 ### Scylla projection operations
 
@@ -142,7 +290,7 @@ Resource UIDs and names belong in structured logs, never metric labels. See
 ```toml
 [api]
 port = 4000
-git_port = 5000
+git_port = 9000
 grpc_port = 6000
 
 [git.grpc]
@@ -157,9 +305,6 @@ refresh_grace = "60s"
 level = "debug"
 format = "json"
 
-[cache]
-ttl = 300
-
 [datastore]
 backend = "memdb"
 
@@ -169,7 +314,7 @@ keyspace = "gitstore"
 tls = false
 ```
 
-Secrets (`auth.admin.password_hash`, `auth.jwt.secret`) must remain in environment variables or `.env`, never in `config.toml`.
+Secrets in the users file and `auth.jwt.secret` must remain outside committed operator configuration, never in `config.toml`.
 
 ## gitstore-git-service
 
@@ -179,28 +324,26 @@ Secrets (`auth.admin.password_hash`, `auth.jwt.secret`) must remain in environme
 
 ### Core
 
-| Key                            | Env Var                                   | Type   | Default                 | Required | Sensitive | Description                                       |
-|--------------------------------|-------------------------------------------|--------|-------------------------|----------|-----------|---------------------------------------------------|
-| `grpc.port`                    | `GITSTORE_GRPC__PORT`                     | u16    | `50051`                 | No       | No        | GitService gRPC server port                       |
-| `git.data_dir`                 | `GITSTORE_GIT__DATA_DIR`                  | string | `/data/repos`           | No       | No        | Bare repository storage directory                 |
-| `git.repo.max_file_size`       | `GITSTORE_GIT__REPO__MAX_FILE_SIZE`       | u64    | `52428800`              | No       | No        | Max file size in bytes                            |
-| `git.repo.max_pack_size_bytes` | `GITSTORE_GIT__REPO__MAX_PACK_SIZE_BYTES` | u64    | `52428800`              | No       | No        | Max pack size in bytes                            |
-| `catalog_service.uri`          | `GITSTORE_CATALOG_SERVICE__URI`           | string | `http://localhost:6000` | No       | No        | gitstore-api CatalogService gRPC endpoint         |
-| `log.level`                    | `GITSTORE_LOG__LEVEL`                     | string | `info`                  | No       | No        | `trace` \| `debug` \| `info` \| `warn` \| `error` |
-| `log.format`                   | `GITSTORE_LOG__FORMAT`                    | string | `json`                  | No       | No        | `json` \| `text`                                  |
+| Key                            | Env Var                                   | Type   | Default                   | Required | Sensitive | Description                                       |
+|--------------------------------|-------------------------------------------|--------|---------------------------|----------|-----------|---------------------------------------------------|
+| `grpc.port`                    | `GITSTORE_GRPC__PORT`                     | u16    | `50051`                   | No       | No        | GitService gRPC server port                       |
+| `git.data_dir`                 | `GITSTORE_GIT__DATA_DIR`                  | string | `/var/lib/gitstore/repos` | No       | No        | Bare repository storage directory                 |
+| `git.repo.max_file_size`       | `GITSTORE_GIT__REPO__MAX_FILE_SIZE`       | u64    | `52428800`                | No       | No        | Max file size in bytes                            |
+| `git.repo.max_pack_size_bytes` | `GITSTORE_GIT__REPO__MAX_PACK_SIZE_BYTES` | u64    | `52428800`                | No       | No        | Max pack size in bytes                            |
+| `catalog_service.uri`          | `GITSTORE_CATALOG_SERVICE__URI`           | string | `http://localhost:6000`   | No       | No        | gitstore-api CatalogService gRPC endpoint         |
+| `log.level`                    | `GITSTORE_LOG__LEVEL`                     | string | `info`                    | No       | No        | `trace` \| `debug` \| `info` \| `warn` \| `error` |
+| `log.format`                   | `GITSTORE_LOG__FORMAT`                    | string | `json`                    | No       | No        | `json` \| `text`                                  |
 
 ### Hook Phase Toggles
 
-Nested hook keys may be set in `gitstore.toml`. Environment variable overrides use `__` (double-underscore) as the separator.
-
-| Config Key                                             | Default | Description                                   |
-|--------------------------------------------------------|---------|-----------------------------------------------|
-| `hooks.git_receive_pack.pre_receive.enabled`           | `true`  | Enable the `pre-receive` hook phase           |
-| `hooks.git_receive_pack.update.enabled`                | `false` | Enable the `update` hook phase                |
-| `hooks.git_receive_pack.post_receive.enabled`          | `true`  | Enable the `post-receive` hook phase          |
-| `hooks.git_receive_pack.proc_receive.enabled`          | `false` | Enable the `proc-receive` hook phase          |
-| `hooks.git_receive_pack.post_update.enabled`           | `false` | Enable the `post-update` hook phase           |
-| `hooks.git_receive_pack.reference_transaction.enabled` | `false` | Enable the `reference-transaction` hook phase |
+| Config Key                                             | Env Var                                                            | Default | Description                                   |
+|--------------------------------------------------------|--------------------------------------------------------------------|---------|-----------------------------------------------|
+| `hooks.git_receive_pack.pre_receive.enabled`           | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED`           | `true`  | Enable the `pre-receive` hook phase           |
+| `hooks.git_receive_pack.update.enabled`                | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED`                | `false` | Enable the `update` hook phase                |
+| `hooks.git_receive_pack.post_receive.enabled`          | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED`          | `true`  | Enable the `post-receive` hook phase          |
+| `hooks.git_receive_pack.proc_receive.enabled`          | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PROC_RECEIVE__ENABLED`          | `false` | Enable the `proc-receive` hook phase          |
+| `hooks.git_receive_pack.post_update.enabled`           | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_UPDATE__ENABLED`           | `false` | Enable the `post-update` hook phase           |
+| `hooks.git_receive_pack.reference_transaction.enabled` | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__REFERENCE_TRANSACTION__ENABLED` | `false` | Enable the `reference-transaction` hook phase |
 
 ### Validation and Admission
 
@@ -225,7 +368,7 @@ Nested hook keys may be set in `gitstore.toml`. Environment variable overrides u
 port = 50051
 
 [git]
-data_dir = "/data/repos"
+data_dir = "/var/lib/gitstore/repos"
 
 [git.repo]
 max_file_size = 52428800
@@ -261,21 +404,34 @@ uri = "http://localhost:6000"
 
 **Config file**: `config.toml` (optional, current working directory)
 
+**Explicit file**: `gitstore-controller-manager --config-file /path/to/config.toml` (required when selected). Repeat the flag to layer overlays: `--config-file base.toml --config-file overlay.toml` (later file wins per key).
+
 **`.env` file**: `.env` (optional, current working directory)
 **Env var prefix**: `GITSTORE_`
 
-| Key                                  | Env Var                                        | Type     | Default                         | Required | Sensitive | Description                                                 |
-|--------------------------------------|------------------------------------------------|----------|---------------------------------|----------|-----------|-------------------------------------------------------------|
-| `controller.port`                    | `GITSTORE_CONTROLLER__PORT`                    | integer  | `5001`                          | No       | No        | HTTP port for `/health`, `/metrics`, and `/controller/v1/*` |
-| `controller.api_uri`                 | `GITSTORE_CONTROLLER__API_URI`                 | string   | `http://localhost:4000/graphql` | No       | No        | GraphQL API URI used by reconcilers                         |
-| `controller.api_token`               | `GITSTORE_CONTROLLER__API_TOKEN`               | string   | (empty)                         | No       | Yes       | Bearer token presented to `gitstore-api` on every GraphQL query/mutation/subscription |
-| `controller.default_max_attempts`    | `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`    | integer  | `5`                             | No       | No        | Retry limit before quarantine                               |
-| `controller.default_stall_threshold` | `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | duration | `5m`                            | No       | No        | Worker stall threshold                                      |
-| `controller.checkpoint_dir`          | `GITSTORE_CONTROLLER__CHECKPOINT_DIR`          | string   | `.gitstore/checkpoints`         | No       | No        | Directory for the filesystem checkpoint store (one file per kind) |
-| `controller.checkpoint_flush_interval_events` | `GITSTORE_CONTROLLER__CHECKPOINT_FLUSH_INTERVAL_EVENTS` | integer | `100` | No | No | Watch events between checkpoint persists |
-| `controller.max_watch_backoff`       | `GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF`       | duration | `30s`                           | No       | No        | Cap on exponential backoff between watch-stream reconnect attempts |
-| `log.level`                          | `GITSTORE_LOG__LEVEL`                          | string   | `info`                          | No       | No        | `debug` \| `info` \| `warn` \| `error`                      |
-| `log.format`                         | `GITSTORE_LOG__FORMAT`                         | string   | `json`                          | No       | No        | `json` \| `text`                                            |
+| Key                                                | Env Var                                                        | Type     | Default                             | Required         | Sensitive | Description                                                         |
+|----------------------------------------------------|----------------------------------------------------------------|----------|-------------------------------------|------------------|-----------|---------------------------------------------------------------------|
+| `controller.port`                                  | `GITSTORE_CONTROLLER__PORT`                                    | integer  | `5001`                              | No               | No        | HTTP port for `/health`, `/metrics`, and `/controller/v1/*`         |
+| `controller.api_uri`                               | `GITSTORE_CONTROLLER__API_URI`                                 | string   | `http://localhost:4000/graphql`     | No               | No        | GraphQL API URI used by reconcilers                                 |
+| `controller.api_client.requests_per_second` | `GITSTORE_CONTROLLER__API_CLIENT__REQUESTS_PER_SECOND` | integer | `40` | No | No | Positive shared request rate across all kinds, queries, mutations and WebSocket upgrades |
+| `controller.api_client.burst` | `GITSTORE_CONTROLLER__API_CLIENT__BURST` | integer | `10` | No | No | Positive shared request burst; credential renewal uses its separate singleflight budget |
+| `controller.serviceaccount.namespace`              | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE`               | string   | (empty)                             | **Yes**          | No        | Enrolled ServiceAccount namespace                                   |
+| `controller.serviceaccount.name`                   | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME`                    | string   | `gitstore-controller-manager`       | **Yes**          | No        | Enrolled ServiceAccount name                                        |
+| `controller.serviceaccount.uid`                    | `GITSTORE_CONTROLLER__SERVICEACCOUNT__UID`                     | string   | (empty)                             | **Yes**          | No        | Enrolled ServiceAccount UID; prevents identity reuse after deletion |
+| `controller.serviceaccount.key_ref.kind`           | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND`           | string   | (empty)                             | **Yes**          | No        | Must be `SecretRef`                                                 |
+| `controller.serviceaccount.key_ref.name`           | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME`           | string   | (empty)                             | **Yes**          | No        | Logical bootstrap-secret name, not a filesystem path                |
+| `controller.serviceaccount.assertion_audience`     | `GITSTORE_CONTROLLER__SERVICEACCOUNT__ASSERTION_AUDIENCE`      | string   | `gitstore-api/serviceaccount-token` | **Yes**          | No        | Audience for the signed assertion used to exchange a token          |
+| `controller.serviceaccount.access_token_audience`  | `GITSTORE_CONTROLLER__SERVICEACCOUNT__ACCESS_TOKEN_AUDIENCE`   | string   | `gitstore-api`                      | **Yes**          | No        | Audience requested for the exchanged access token                   |
+| `controller.secret_providers.bootstrap.type`       | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__TYPE`       | string   | `file`                              | No               | No        | Bootstrap resolver type: `file` or `env`                            |
+| `controller.secret_providers.bootstrap.base_path`  | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH`  | string   | `/run/secrets`                      | With `type=file` | No        | Directory containing controller-only `<key_ref.name>.json` signing records |
+| `controller.secret_providers.bootstrap.env_variable` | `GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__ENV_VARIABLE` | string | (empty) | With `type=env` | No | Explicit name of the environment variable containing the complete JSON signing record; not the record itself |
+| `controller.reconcile.max_attempts`                | `GITSTORE_CONTROLLER__RECONCILE__MAX_ATTEMPTS`                 | integer  | `5`                                 | No               | No        | Retry limit before quarantine                                       |
+| `controller.reconcile.stall_threshold`             | `GITSTORE_CONTROLLER__RECONCILE__STALL_THRESHOLD`              | duration | `5m`                                | No               | No        | Worker stall threshold                                              |
+| `controller.checkpoint.dir`                        | `GITSTORE_CONTROLLER__CHECKPOINT__DIR`                         | string   | `/var/lib/gitstore/checkpoints`     | No               | No        | Directory for the filesystem checkpoint store (one file per kind)   |
+| `controller.checkpoint.flush_interval_events`      | `GITSTORE_CONTROLLER__CHECKPOINT__FLUSH_INTERVAL_EVENTS`       | integer  | `100`                               | No               | No        | Watch events between checkpoint persists                            |
+| `controller.watch.max_backoff`                     | `GITSTORE_CONTROLLER__WATCH__MAX_BACKOFF`                      | duration | `30s`                               | No               | No        | Cap on exponential backoff between watch-stream reconnect attempts  |
+| `log.level`                                        | `GITSTORE_LOG__LEVEL`                                          | string   | `info`                              | No               | No        | `debug` \| `info` \| `warn` \| `error`                              |
+| `log.format`                                       | `GITSTORE_LOG__FORMAT`                                         | string   | `json`                              | No               | No        | `json` \| `text`                                                    |
 
 Example:
 
@@ -283,19 +439,86 @@ Example:
 [controller]
 port = 5001
 api_uri = "http://localhost:4000/graphql"
-default_max_attempts = 5
-default_stall_threshold = "5m"
-checkpoint_dir = ".gitstore/checkpoints"
-checkpoint_flush_interval_events = 100
-max_watch_backoff = "30s"
+[controller.serviceaccount]
+namespace = "controllers"
+name = "gitstore-controller-manager"
+uid = "<enrolled-service-account-uid>"
+assertion_audience = "gitstore-api/serviceaccount-token"
+access_token_audience = "gitstore-api"
+
+[controller.reconcile]
+max_attempts = 5
+stall_threshold = "5m"
+
+[controller.checkpoint]
+dir = "/var/lib/gitstore/checkpoints"
+flush_interval_events = 100
+
+[controller.watch]
+max_backoff = "30s"
+resync_interval = "10m"
+
+[controller.serviceaccount.key_ref]
+kind = "SecretRef"
+name = "controller-manager"
+
+[controller.secret_providers.bootstrap]
+type = "file"
+base_path = "/run/secrets"
 
 [log]
 level = "info"
 format = "json"
 ```
 
+Both bootstrap providers require a whole-record `SecretRef` and an atomic JSON
+signing record containing the private key and its corresponding enrolled key ID:
+
+```json
+{
+  "format": "serviceaccount-signing-key/v1",
+  "values": {
+    "privateKey": "<base64 of one PKCS#8 Ed25519 or ECDSA P-256 PEM key>",
+    "keyID": "<base64 of the corresponding enrolled key ID>"
+  }
+}
+```
+
+For the `file` provider, the example resolves
+`/run/secrets/controller-manager.json`. Provision the record privately with mode
+`0600` and mount its directory read-only into `controller-manager` only. Replace
+the entire record atomically when rotating, keeping the key and enrolled ID
+together; see [Signing-material rotation](runbooks/secret-material-rotation.md).
+
+For a deployment platform that injects secret environment variables, replace
+the bootstrap table in the example with:
+
+```toml
+[controller.secret_providers.bootstrap]
+type = "env"
+env_variable = "CONTROLLER_SIGNING_RECORD"
+```
+
+Inject the complete JSON record into `CONTROLLER_SIGNING_RECORD` for the
+controller process only. `env_variable` names that variable explicitly; no
+prefix or variable name is derived from `key_ref.name`. Environment changes
+require process replacement. A controller-only read-only file mount is preferred
+where available.
+
+The removed `controller.secret_providers.bootstrap.format`,
+`controller.secret_providers.bootstrap.env_prefix`,
+`controller.serviceaccount.key_id`, and `controller.serviceaccount.key_ref.key`
+settings are rejected, not compatibility options. The JSON record's `format`
+field above is required and is not a TOML bootstrap setting. Do not place real
+signing records or private-key values in TOML, the shared `/config/gitstore.toml`
+file, Git, command-line arguments, or logs.
+
+Static controller API tokens are not supported. See [Controller
+authentication](runbooks/controller-auth.md) for enrollment, rotation,
+readiness, and recovery procedures.
+
 List-then-watch bootstrap, restart resume, and expired-watch-cursor recovery for registered
-resource kinds (spec 036) persist a per-kind restart checkpoint under `checkpoint_dir`. Each
+resource kinds persist a per-kind restart checkpoint under `controller.checkpoint.dir`. Each
 checkpoint contains the `resourceVersion`, cache snapshot, and deletion replay keys needed to
 restore volatile controller state without losing queued reconciliation work.
 Checkpoint health — last successful write time, replay backlog, and write-failure count — is
@@ -309,7 +532,7 @@ exposed on the existing `/metrics` endpoint as `gitstore_controller_checkpoint_l
 
 All Go services automatically load a `.env` file from the current working directory at startup. The Git service loads `.env` in its binary entrypoint before resolving layered configuration. Shell environment variables always override `.env` values.
 
-For the shared gRPC HMAC secret, `make gen-hmac-secret` writes the same `GITSTORE_AUTH__GRPC__HMAC_SECRET` value to both `gitstore-api/.env` and `gitstore-git-service/.env` so local API and git-service runs stay in sync.
+For the shared gRPC HMAC secret, `make secret TARGET=grpc-hmac` writes the same `GITSTORE_AUTH__GRPC__HMAC_SECRET` value to both `gitstore-api/.env` and `gitstore-git-service/.env` so local API and git-service runs stay in sync. Use `make secret TARGET=jwt` for the API session-signing secret; `make generate` is reserved for generated source and schema artifacts.
 
 Copy the example file and fill in the required values:
 

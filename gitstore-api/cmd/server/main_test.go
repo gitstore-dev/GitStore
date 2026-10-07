@@ -9,17 +9,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/app"
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
@@ -38,9 +40,53 @@ type mockGitWriter struct {
 	createTagCalls []gitclient.CreateTagParams
 }
 
+// testCommittedManifestAdmitter keeps this HTTP/authentication test focused on
+// handler wiring. Production injects cataloggrpc.Server, which implements the
+// same committed-manifest admission boundary.
+type testCommittedManifestAdmitter struct{ store datastore.Datastore }
+
+func (a testCommittedManifestAdmitter) AdmitCommittedManifest(ctx context.Context, request admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	name := strings.TrimSuffix(strings.TrimPrefix(request.Path, "namespaces/"), ".md")
+	if current, err := a.store.GetNamespaceByName(ctx, name); err == nil {
+		return &admission.CommittedManifestResult{Kind: "Namespace", Name: current.Name, CommitSHA: request.CommitSHA}, nil
+	}
+	now := time.Now().UTC()
+	namespace := &datastore.Namespace{
+		UID:               "00000000-0000-7000-8000-000000000003",
+		Name:              name,
+		Title:             name,
+		Tier:              datastore.NamespaceTierUser,
+		CreationTimestamp: now,
+		CreationActor:     request.ActorSubject,
+		UpdateTimestamp:   now,
+		UpdateActor:       request.ActorSubject,
+		GitCommitSHA:      request.CommitSHA,
+	}
+	datastore.NormalizeNamespaceContract(namespace)
+	if err := a.store.CreateNamespace(ctx, namespace); err != nil {
+		return nil, err
+	}
+	return &admission.CommittedManifestResult{Kind: "Namespace", Name: namespace.Name, CommitSHA: request.CommitSHA}, nil
+}
+
 func TestMain(m *testing.M) {
 	gin.SetMode(gin.TestMode)
 	os.Exit(m.Run())
+}
+
+func TestParseConfigFile(t *testing.T) {
+	paths, err := parseConfigFiles([]string{"--config-file", "/config/shared.toml"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/config/shared.toml"}, paths)
+}
+
+func TestParseConfigFilesRepeated(t *testing.T) {
+	paths, err := parseConfigFiles([]string{
+		"--config-file", "/config/shared.toml",
+		"--config-file", "/config/overlay.toml",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/config/shared.toml", "/config/overlay.toml"}, paths)
 }
 
 func (m *mockGitWriter) CommitFile(_ context.Context, p gitclient.CommitFileParams) (string, error) {
@@ -58,7 +104,18 @@ func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, _ string, _ string)
 	return "deadbeef", nil
 }
 
+func (m *mockGitWriter) ReadFileForRepo(_ context.Context, _, _, _ string) ([]byte, error) {
+	return nil, nil
+}
+
 func (m *mockGitWriter) DeleteFile(_ context.Context, p gitclient.DeleteFileParams) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleteCalls = append(m.deleteCalls, p)
+	return "cafe1234", nil
+}
+
+func (m *mockGitWriter) DeleteFileForRepo(_ context.Context, _ string, p gitclient.DeleteFileParams) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.deleteCalls = append(m.deleteCalls, p)
@@ -120,11 +177,10 @@ func newTestGraphQLRegistry(t *testing.T) *authpkg.ProviderRegistry {
 	hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.MinCost)
 	require.NoError(t, err)
 
+	usersFile := filepath.Join(t.TempDir(), "users.yaml")
+	require.NoError(t, os.WriteFile(usersFile, []byte("version: v1\nusers:\n  - username: admin\n    password_hash: \""+string(hash)+"\"\n"), 0600))
 	cfg := config.AuthConfig{
-		Admin: config.UserConfig{
-			Username: "admin",
-			Password: string(hash),
-		},
+		StaticUsers: config.StaticUsersConfig{UsersFile: usersFile},
 		JWT: config.JWTConfig{
 			Secret:   "dev-secret",
 			Issuer:   "gitstore",
@@ -132,7 +188,7 @@ func newTestGraphQLRegistry(t *testing.T) *authpkg.ProviderRegistry {
 		},
 	}
 
-	staticAdmin, err := staticadmin.New(cfg, zap.NewNop())
+	staticAdmin, err := staticusers.New(cfg, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(staticAdmin.Shutdown)
 
@@ -158,7 +214,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.NoError(t, err)
 	seedNamespaceAuthoringRepository(t, store)
 
-	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
+	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator(), CommittedManifestAdmitter: testCommittedManifestAdmitter{store: store}})
 	require.NoError(t, err)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
@@ -188,7 +244,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.NotEmpty(t, loginResponse.Data.Login.Token.AccessToken)
 	assert.Equal(t, "Bearer", loginResponse.Data.Login.Token.TokenType)
 
-	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { identifier createdBy } } }"}`))
+	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { metadata { name } } } }"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+loginResponse.Data.Login.Token.AccessToken)
 	w := httptest.NewRecorder()
@@ -200,8 +256,9 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 		Data struct {
 			CreateNamespace struct {
 				Namespace struct {
-					Identifier string `json:"identifier"`
-					CreatedBy  string `json:"createdBy"`
+					Metadata struct {
+						Name string `json:"name"`
+					} `json:"metadata"`
 				} `json:"namespace"`
 			} `json:"createNamespace"`
 		} `json:"data"`
@@ -211,11 +268,10 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	require.Empty(t, response.Errors)
-	assert.Equal(t, "alice", response.Data.CreateNamespace.Namespace.Identifier)
-	assert.Equal(t, "admin", response.Data.CreateNamespace.Namespace.CreatedBy)
+	assert.Equal(t, "alice", response.Data.CreateNamespace.Namespace.Metadata.Name)
 
 	listReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
-		"query": "query { namespaces(first: 10) { edges { cursor node { identifier } } pageInfo { hasNextPage endCursor } totalCount } }"
+		"query": "query { namespaces(first: 10) { edges { cursor node { metadata { name } } } pageInfo { hasNextPage endCursor } } }"
 	}`))
 	listReq.Header.Set("Content-Type", "application/json")
 	listW := httptest.NewRecorder()
@@ -229,10 +285,11 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 				Edges []struct {
 					Cursor string `json:"cursor"`
 					Node   struct {
-						Identifier string `json:"identifier"`
+						Metadata struct {
+							Name string `json:"name"`
+						} `json:"metadata"`
 					} `json:"node"`
 				} `json:"edges"`
-				TotalCount int `json:"totalCount"`
 			} `json:"namespaces"`
 		} `json:"data"`
 		Errors []struct {
@@ -243,8 +300,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.Empty(t, listResponse.Errors)
 	require.Len(t, listResponse.Data.Namespaces.Edges, 2)
 	assert.NotEmpty(t, listResponse.Data.Namespaces.Edges[0].Cursor)
-	assert.Equal(t, "alice", listResponse.Data.Namespaces.Edges[0].Node.Identifier)
-	assert.Equal(t, 2, listResponse.Data.Namespaces.TotalCount)
+	assert.Equal(t, "alice", listResponse.Data.Namespaces.Edges[0].Node.Metadata.Name)
 }
 
 func TestGraphQLHandlerRejectsLoginWithInvalidCredentials(t *testing.T) {
@@ -280,7 +336,7 @@ func TestGraphQLHandlerRejectsNamespaceMutationWithoutBearerToken(t *testing.T) 
 	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
-		"query": "mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { identifier } } }"
+		"query": "mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { metadata { name } } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -306,7 +362,7 @@ func TestGraphQLHandlerRejectsMutationWithInvalidBearerToken(t *testing.T) {
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
-		"query": "mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { identifier } } }"
+		"query": "mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { metadata { name } } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer invalid-token")

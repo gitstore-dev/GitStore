@@ -80,7 +80,7 @@ func TestManager_BurstOfSameKeyEnqueues_CollapsesToOnePendingItem(t *testing.T) 
 	// first is still in flight — simulating a bulk import touching one
 	// category repeatedly.
 	const burstSize = 50
-	for i := 0; i < burstSize; i++ {
+	for i := range burstSize {
 		if err := mgr.Enqueue(key); err != nil {
 			t.Fatalf("Enqueue (burst item %d) failed: %v", i, err)
 		}

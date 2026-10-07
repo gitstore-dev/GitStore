@@ -17,7 +17,28 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  rust-test:
+  secret-material-test:
+    name: Shared Secret Material Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./shared/secretmaterial
+    env:
+      GOWORK: 'off'
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.x'
+        cache: false
+    - name: Check formatting
+      run: test -z "$(gofmt -l .)"
+    - name: Build and vet independently
+      run: go build ./... && go vet ./...
+    - name: Test contracts with race detection
+      run: go test -race -count=1 ./...
+
+  git-service-test:
     name: Git Service Tests
     runs-on: ubuntu-latest
     defaults:
@@ -74,7 +95,7 @@ jobs:
         name: rust-coverage
       continue-on-error: true
 
-  go-test:
+  api-test:
     name: API Tests
     runs-on: ubuntu-latest
     defaults:
@@ -117,6 +138,14 @@ jobs:
 
     - name: Run tests
       run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+    - name: Verify enrollment output secrecy
+      working-directory: .
+      run: ./scripts/check-enroll-serviceaccount-output.sh
+
+    - name: Check service-account credential logging
+      working-directory: .
+      run: make check TARGET=credentials
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v7
@@ -220,14 +249,14 @@ jobs:
   build-status:
     name: Build Status
     runs-on: ubuntu-latest
-    needs: [rust-test, go-test, controller-manager-test, security-scan]
+    needs: [git-service-test, api-test, controller-manager-test, security-scan]
     if: always()
 
     steps:
     - name: Check build status
       run: |
-        if [ "${{ needs.rust-test.result }}" != "success" ] || \
-           [ "${{ needs.go-test.result }}" != "success" ] || \
+        if [ "${{ needs.git-service-test.result }}" != "success" ] || \
+           [ "${{ needs.api-test.result }}" != "success" ] || \
            [ "${{ needs.controller-manager-test.result }}" != "success" ]; then
           echo "Build failed!"
           exit 1

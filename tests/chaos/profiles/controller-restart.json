@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "description": "Restart one explicitly selected test-owned controller replica.",
+  "action": "restart",
+  "expectedRecovery": "60s"
+}

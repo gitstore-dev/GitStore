@@ -26,10 +26,10 @@ service CatalogService {
   // The response carries all violations across all blobs in a single call.
   rpc ValidateResources(ValidateResourcesRequest) returns (ValidateResourcesResponse);
 
-  // ValidateCategoryTaxonomyDeletion validates CategoryTaxonomy deletions against
-  // the proposed trees before refs are updated. It is read-only and is invoked
-  // only when a push removes at least one file.
-  rpc ValidateCategoryTaxonomyDeletion(ValidateCategoryTaxonomyDeletionRequest) returns (ValidateCategoryTaxonomyDeletionResponse);
+  // ValidateResourceDeletions validates all supported resource deletions
+  // against proposed trees before refs are updated. It is read-only and is
+  // invoked only when a push derives one or more OperationDelete transitions.
+  rpc ValidateResourceDeletions(ValidateResourceDeletionsRequest) returns (ValidateResourceDeletionsResponse);
 
   // AdmitResources triggers catalog storage for resources in an accepted push commit.
   // The git service calls this in the post-receive phase (fire-and-forget).
@@ -81,12 +81,10 @@ message ValidateResourcesRequest {
   // Field 15 is the project-wide convention for the repository scoping key.
   string repository_id = 15;
 
-  // blobs contains all candidate resource files from the incoming commit.
-  // Only files with a YAML frontmatter block are included (detected by the git service).
-  repeated ResourceBlob blobs = 1;
+  reserved 1;
+  reserved "blobs";
 
-  // trees is the preferred receive-aware representation. blobs remains for
-  // rolling compatibility with older Git-service/API replicas.
+  // trees is the receive-aware representation used by all callers.
   repeated ResourceValidationTree trees = 2;
 }
 
@@ -101,26 +99,18 @@ message ValidateResourcesResponse {
   repeated ValidationError errors = 2;
 }
 
-// CategoryTaxonomyDeletionTree carries one old/proposed ref-tree pair. The Git
-// service sends the complete resource sets because the proposed tree, rather
-// than the currently admitted catalog state, determines whether a child is
-// deleted or reparented atomically with its parent.
-message CategoryTaxonomyDeletionTree {
-  repeated ResourceBlob old_blobs = 1;
-  repeated ResourceBlob proposed_blobs = 2;
-}
-
-// ValidateCategoryTaxonomyDeletionRequest carries every changed ref tree in
-// an atomic receive-pack operation. The API only reads these resources and
-// returns a precondition result; lifecycle mutation remains post-receive.
-message ValidateCategoryTaxonomyDeletionRequest {
+// ValidateResourceDeletionsRequest carries every changed ref tree in one
+// atomic receive-pack operation. ResourceValidationTree is deliberately shared
+// with schema validation so every Git-backed kind receives identical
+// old/proposed-tree semantics.
+message ValidateResourceDeletionsRequest {
   string repository_id = 15;
-  repeated CategoryTaxonomyDeletionTree trees = 1;
+  repeated ResourceValidationTree trees = 1;
 }
 
-// ValidateCategoryTaxonomyDeletionResponse is a stable, non-sensitive
-// precondition result for the pre-receive hook.
-message ValidateCategoryTaxonomyDeletionResponse {
+// ValidateResourceDeletionsResponse is a stable, non-sensitive precondition
+// result for generic OperationDelete validation.
+message ValidateResourceDeletionsResponse {
   bool accepted = 1;
   string reason = 2;
 }
@@ -129,13 +119,11 @@ message ValidateCategoryTaxonomyDeletionResponse {
 // gitstore-api fetches, parses, and stores resources independently using its own
 // GitService client — the git service does not send blobs for admission.
 message AdmitResourcesRequest {
+  reserved 1;
+  reserved "commit_sha";
+
   // repository_id is the stable UUIDv7 of the repository.
   string repository_id = 15;
-
-  // commit_sha is the full SHA of the accepted push commit.
-  // Deprecated for new callers in favor of new_commit_sha, but retained as
-  // the canonical new commit for older git-service versions.
-  string commit_sha = 1;
 
   // ref_name is the fully-qualified ref that was updated, e.g. "refs/heads/main".
   string ref_name = 2;
@@ -145,7 +133,6 @@ message AdmitResourcesRequest {
   string old_commit_sha = 3;
 
   // new_commit_sha is the ref tip after the accepted update.
-  // If empty, consumers must use commit_sha for backwards compatibility.
   string new_commit_sha = 4;
 
   // changed_paths optionally carries repository-relative paths known to have

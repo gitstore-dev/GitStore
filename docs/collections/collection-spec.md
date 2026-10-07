@@ -299,7 +299,6 @@ query {
         }
       }
       pageInfo { hasNextPage endCursor }
-      totalCount
     }
   }
 }
@@ -319,7 +318,6 @@ query {
       cursor
     }
     pageInfo { hasNextPage endCursor }
-    totalCount
   }
 }
 ```

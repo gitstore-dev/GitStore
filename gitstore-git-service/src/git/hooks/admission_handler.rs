@@ -99,7 +99,6 @@ impl AdmissionHandler for AdmissionControlHandler {
             tokio::spawn(async move {
                 let req = AdmitResourcesRequest {
                     repository_id,
-                    commit_sha: new_commit_sha.clone(),
                     ref_name: ref_name.clone(),
                     old_commit_sha,
                     new_commit_sha,
@@ -216,9 +215,8 @@ mod tests {
 
     use catalog_proto::{
         catalog_service_server::{CatalogService, CatalogServiceServer},
-        AdmitResourcesResponse, ValidateCategoryTaxonomyDeletionRequest,
-        ValidateCategoryTaxonomyDeletionResponse, ValidateResourcesRequest,
-        ValidateResourcesResponse,
+        AdmitResourcesResponse, ValidateResourceDeletionsRequest,
+        ValidateResourceDeletionsResponse, ValidateResourcesRequest, ValidateResourcesResponse,
     };
     use std::sync::{
         atomic::{AtomicU32, Ordering},
@@ -266,11 +264,11 @@ mod tests {
             Ok(Response::new(AdmitResourcesResponse {}))
         }
 
-        async fn validate_category_taxonomy_deletion(
+        async fn validate_resource_deletions(
             &self,
-            _req: Request<ValidateCategoryTaxonomyDeletionRequest>,
-        ) -> Result<Response<ValidateCategoryTaxonomyDeletionResponse>, Status> {
-            Ok(Response::new(ValidateCategoryTaxonomyDeletionResponse {
+            _req: Request<ValidateResourceDeletionsRequest>,
+        ) -> Result<Response<ValidateResourceDeletionsResponse>, Status> {
+            Ok(Response::new(ValidateResourceDeletionsResponse {
                 accepted: true,
                 reason: String::new(),
             }))

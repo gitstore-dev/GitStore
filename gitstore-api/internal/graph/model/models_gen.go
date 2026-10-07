@@ -12,11 +12,34 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// An object that has a human-readable name. This represents both the Subject and the Delegate:
+// - creation_actor
+// - update_actor
+// - creation_on_behalf_of_actor OR creation_subject
+// - update_on_behalf_of_actor OR update_subject
+//
+// Implemented in
+// - User
+// - ServiceAccount
+type Actor interface {
+	IsActor()
+	GetMetadata() *ObjectMeta
+	GetStatus() ActorStatus
+}
+
 // An object with a globally unique ID
 type Node interface {
 	IsNode()
 	// Globally unique identifier (format: [type]_[base62])
 	GetID() string
+}
+
+// An object that can be published or unpublished. Implemented in
+// - Product
+// - ProductVariant
+type Publishable interface {
+	IsPublishable()
+	GetPublished() bool
 }
 
 type AdmissionControlDefaults struct {
@@ -35,19 +58,11 @@ type CatalogObjectReference struct {
 	FieldPath       *string `json:"fieldPath,omitempty"`
 }
 
-type CatalogStats struct {
-	ProductCount       int32 `json:"productCount"`
-	CategoryCount      int32 `json:"categoryCount"`
-	CollectionCount    int32 `json:"collectionCount"`
-	OrphanedReferences int32 `json:"orphanedReferences"`
-}
-
-type CatalogVersion struct {
-	Tag         string        `json:"tag"`
-	Commit      string        `json:"commit"`
-	PublishedAt time.Time     `json:"publishedAt"`
-	Message     *string       `json:"message,omitempty"`
-	Stats       *CatalogStats `json:"stats"`
+type CatalogObjectReferenceInput struct {
+	APIVersion *string `json:"apiVersion,omitempty"`
+	Kind       *string `json:"kind,omitempty"`
+	Name       string  `json:"name"`
+	Namespace  *string `json:"namespace,omitempty"`
 }
 
 // Category represents a hierarchical classification system for products.
@@ -101,8 +116,6 @@ type CategoryConnection struct {
 	Edges []*CategoryEdge `json:"edges"`
 	// Pagination information
 	PageInfo *PageInfo `json:"pageInfo"`
-	// Total count of categories
-	TotalCount int32 `json:"totalCount"`
 }
 
 // Edge type for Category connection (Relay pattern)
@@ -117,20 +130,6 @@ type CategoryEdge struct {
 type CategoryNamespacePath struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-}
-
-// Optimistic lock conflict for category
-type CategoryOptimisticLockConflict struct {
-	// TODO: Should this be a datetime?
-	// Current version in database
-	CurrentVersion time.Time `json:"currentVersion"`
-	// TODO: Should this be a datetime?
-	// Version client attempted to update
-	AttemptedVersion time.Time `json:"attemptedVersion"`
-	// Current state of the category
-	Current *Category `json:"current"`
-	// Diff between current and attempted
-	Diff string `json:"diff"`
 }
 
 // Author-supplied specification for a CategoryTaxonomy resource.
@@ -197,9 +196,8 @@ type CollectionBy struct {
 
 // Paginated connection for collections (Relay pattern).
 type CollectionConnection struct {
-	Edges      []*CollectionEdge `json:"edges"`
-	PageInfo   *PageInfo         `json:"pageInfo"`
-	TotalCount int32             `json:"totalCount"`
+	Edges    []*CollectionEdge `json:"edges"`
+	PageInfo *PageInfo         `json:"pageInfo"`
 }
 
 // Edge type for Collection connection (Relay pattern).
@@ -212,10 +210,6 @@ type CollectionEdge struct {
 type CollectionNamespacePath struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-}
-
-type CollectionOptimisticLockConflict struct {
-	Current *Collection `json:"current"`
 }
 
 // Author-controlled specification for a Collection resource.
@@ -248,8 +242,27 @@ type CompleteNamespaceDeletionInput struct {
 }
 
 type CompleteNamespaceDeletionPayload struct {
-	DeletedIdentifier *string         `json:"deletedIdentifier,omitempty"`
-	Conflict          *StatusConflict `json:"conflict,omitempty"`
+	ID *string `json:"id,omitempty"`
+}
+
+type CompleteProductDeletionInput struct {
+	Namespace       string `json:"namespace"`
+	Name            string `json:"name"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type CompleteProductDeletionPayload struct {
+	ID *string `json:"id,omitempty"`
+}
+
+type CompleteRepositoryDeletionInput struct {
+	Namespace       string `json:"namespace"`
+	Name            string `json:"name"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type CompleteRepositoryDeletionPayload struct {
+	ID *string `json:"id,omitempty"`
 }
 
 // A named status condition shared by core catalog resources.
@@ -273,34 +286,6 @@ type ConditionInput struct {
 	Message            *string         `json:"message,omitempty"`
 }
 
-// Input for creating a category
-type CreateCategoryInput struct {
-	// Category name
-	Name string `json:"name"`
-	// URL-friendly slug (must be unique)
-	Slug string `json:"slug"`
-	// Parent category ID (null for root)
-	ParentID *string `json:"parentId,omitempty"`
-	// Display order
-	DisplayOrder *int32 `json:"displayOrder,omitempty"`
-	// Markdown body content
-	Body *string `json:"body,omitempty"`
-}
-
-// Payload for createCategory mutation
-type CreateCategoryPayload struct {
-	// The created category
-	Category *Category `json:"category,omitempty"`
-}
-
-type CreateCollectionInput struct {
-	Name string `json:"name"`
-}
-
-type CreateCollectionPayload struct {
-	Collection *Collection `json:"collection,omitempty"`
-}
-
 // Declarative resource envelope for creating a namespace.
 type CreateNamespaceInput struct {
 	APIVersion string                  `json:"apiVersion"`
@@ -315,14 +300,47 @@ type CreateNamespacePayload struct {
 	Namespace *Namespace `json:"namespace"`
 }
 
+type CreateProductInput struct {
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	Metadata   *ObjectMetaInput  `json:"metadata"`
+	Spec       *ProductSpecInput `json:"spec"`
+	Body       *string           `json:"body,omitempty"`
+}
+
+type CreateProductPayload struct {
+	Product *Product `json:"product,omitempty"`
+}
+
 type CreateRepositoryInput struct {
-	Namespace     string  `json:"namespace"`
-	Name          string  `json:"name"`
-	DefaultBranch *string `json:"defaultBranch,omitempty"`
+	APIVersion string               `json:"apiVersion"`
+	Kind       string               `json:"kind"`
+	Metadata   *ObjectMetaInput     `json:"metadata"`
+	Spec       *RepositorySpecInput `json:"spec"`
 }
 
 type CreateRepositoryPayload struct {
 	Repository *Repository `json:"repository"`
+}
+
+// createServiceAccount mutation input.
+type CreateServiceAccountInput struct {
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Metadata   *ObjectMetaInput `json:"metadata"`
+	// At least one enrolled public key is required.
+	PublicKeys []*ServiceAccountPublicKeyInput `json:"publicKeys"`
+}
+
+// createServiceAccount mutation payload.
+type CreateServiceAccountPayload struct {
+	ServiceAccount *ServiceAccount `json:"serviceAccount,omitempty"`
+}
+
+type CredentialsRef struct {
+	Kind      string     `json:"kind"`
+	Type      string     `json:"type"`
+	SecretRef *SecretRef `json:"secretRef"`
 }
 
 // Input for deleting a category
@@ -339,34 +357,54 @@ type DeleteCategoryPayload struct {
 	OrphanedProductIds []string `json:"orphanedProductIds,omitempty"`
 }
 
-type DeleteCollectionInput struct {
-	ID string `json:"id"`
-}
-
-type DeleteCollectionPayload struct {
-	DeletedCollectionID *string `json:"deletedCollectionId,omitempty"`
-}
-
 // Input for deleting a namespace.
 type DeleteNamespaceInput struct {
 	// The identifier of the namespace to delete.
 	// Deletion is blocked if any repositories exist within the namespace.
 	// Requires the caller to be the namespace owner (createdBy) or isAdmin.
-	Identifier string `json:"identifier"`
+	ID *string `json:"id,omitempty"`
 }
 
 // Payload returned after successfully deleting a namespace.
 type DeleteNamespacePayload struct {
-	// The identifier of the deleted namespace.
-	DeletedIdentifier string `json:"deletedIdentifier"`
+	// The Namespace while foreground termination is in progress.
+	Namespace *Namespace `json:"namespace,omitempty"`
+	// Whether this request started termination or observed an existing termination.
+	Outcome ResourceDeletionOutcome `json:"outcome"`
+}
+
+type DeleteProductInput struct {
+	// Opaque global Product Node ID; never a raw UID or source selector.
+	ID *string `json:"id,omitempty"`
+}
+
+type DeleteProductPayload struct {
+	// The current Product envelope, including terminating metadata.
+	Product *Product `json:"product,omitempty"`
+	// Whether this request started termination or observed existing termination.
+	Outcome ResourceDeletionOutcome `json:"outcome"`
 }
 
 type DeleteRepositoryInput struct {
-	RepositoryID string `json:"repositoryId"`
+	ID *string `json:"id,omitempty"`
 }
 
 type DeleteRepositoryPayload struct {
-	DeletedRepositoryID string `json:"deletedRepositoryId"`
+	// The Repository while foreground termination is in progress.
+	Repository *Repository             `json:"repository,omitempty"`
+	Outcome    ResourceDeletionOutcome `json:"outcome"`
+}
+
+// deleteServiceAccount mutation input.
+type DeleteServiceAccountInput struct {
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Metadata   *ObjectMetaInput `json:"metadata"`
+}
+
+// deleteServiceAccount mutation payload.
+type DeleteServiceAccountPayload struct {
+	ServiceAccount *ServiceAccount `json:"serviceAccount,omitempty"`
 }
 
 // Gate that controls when a price template is eligible.
@@ -412,11 +450,17 @@ type FileReference struct {
 	Optional bool   `json:"optional"`
 }
 
+type FileReferenceInput struct {
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Optional *bool  `json:"optional,omitempty"`
+}
+
 type FileSource struct {
-	Type           string        `json:"type"`
-	URI            string        `json:"uri"`
-	Checksum       *FileChecksum `json:"checksum,omitempty"`
-	CredentialsRef *SecretRef    `json:"credentialsRef,omitempty"`
+	Type           string          `json:"type"`
+	URI            string          `json:"uri"`
+	Checksum       *FileChecksum   `json:"checksum,omitempty"`
+	CredentialsRef *CredentialsRef `json:"credentialsRef,omitempty"`
 }
 
 type FileSpec struct {
@@ -462,10 +506,17 @@ type InventoryDefinition struct {
 	StockLocationRefs []*CatalogObjectReference `json:"stockLocationRefs"`
 }
 
-// A key-value pair for label maps.
-type KeyValuePair struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
+// issueServiceAccountToken mutation input.
+type IssueServiceAccountTokenInput struct {
+	APIVersion string                 `json:"apiVersion"`
+	Kind       string                 `json:"kind"`
+	Metadata   *ObjectMetaInput       `json:"metadata"`
+	Spec       *TokenRequestSpecInput `json:"spec"`
+}
+
+// issueServiceAccountToken mutation payload.
+type IssueServiceAccountTokenPayload struct {
+	TokenRequest *TokenRequest `json:"tokenRequest,omitempty"`
 }
 
 // A label selector that matches products by their labels.
@@ -529,6 +580,10 @@ type MediaDefinition struct {
 	FileRef *FileReference `json:"fileRef"`
 }
 
+type MediaDefinitionInput struct {
+	FileRef *FileReferenceInput `json:"fileRef"`
+}
+
 type Mutation struct {
 }
 
@@ -548,22 +603,6 @@ type Namespace struct {
 	Spec *NamespaceSpec `json:"spec"`
 	// System-owned observed state.
 	Status *NamespaceStatus `json:"status"`
-	// Human-readable identifier, globally unique across all tiers.
-	// DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
-	// Cannot begin or end with a hyphen.
-	Identifier string `json:"identifier"`
-	// Optional human-friendly display name.
-	DisplayName *string `json:"displayName,omitempty"`
-	// The tier of this namespace.
-	Tier NamespaceTier `json:"tier"`
-	// Timestamp when this namespace was created.
-	CreatedAt time.Time `json:"createdAt"`
-	// Username of the caller who created this namespace.
-	CreatedBy string `json:"createdBy"`
-	// Timestamp when this namespace was last modified.
-	UpdatedAt time.Time `json:"updatedAt"`
-	// Username of the caller who last modified this namespace.
-	UpdatedBy string `json:"updatedBy"`
 	// Markdown body content (namespace description).
 	Body *string `json:"body,omitempty"`
 }
@@ -575,9 +614,8 @@ func (this Namespace) GetID() string { return this.ID }
 
 // Selector for looking up a namespace by exactly one unique key.
 type NamespaceBy struct {
-	ID         *string `json:"id,omitempty"`
-	Identifier *string `json:"identifier,omitempty"`
-	Name       *string `json:"name,omitempty"`
+	ID   *string `json:"id,omitempty"`
+	Name *string `json:"name,omitempty"`
 }
 
 // Connection type for paginated namespaces (Relay pattern).
@@ -586,8 +624,6 @@ type NamespaceConnection struct {
 	Edges []*NamespaceEdge `json:"edges"`
 	// Pagination information.
 	PageInfo *PageInfo `json:"pageInfo"`
-	// Total count of namespaces.
-	TotalCount int32 `json:"totalCount"`
 }
 
 // Edge type for Namespace connection (Relay pattern).
@@ -610,6 +646,7 @@ type NamespaceMetadata struct {
 	CreationTimestamp time.Time         `json:"creationTimestamp"`
 	Revision          *string           `json:"revision,omitempty"`
 	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
+	Owner             *ResourceOwner    `json:"owner"`
 	Finalizers        []string          `json:"finalizers"`
 }
 
@@ -665,6 +702,15 @@ type NamespaceStatus struct {
 	Conditions          []*Condition `json:"conditions"`
 }
 
+// Strongly typed Namespace journal event. resourceVersion is an opaque durable
+// journal cursor and is distinct from namespace.metadata.resourceVersion.
+type NamespaceWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	Namespace       *Namespace     `json:"namespace,omitempty"`
+}
+
 // System-managed metadata shared by core catalog resources.
 type ObjectMeta struct {
 	Name              string            `json:"name"`
@@ -677,8 +723,17 @@ type ObjectMeta struct {
 	CreationTimestamp time.Time         `json:"creationTimestamp"`
 	Revision          *string           `json:"revision,omitempty"`
 	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
+	Owner             *ResourceOwner    `json:"owner"`
 	Finalizers        []string          `json:"finalizers"`
 	DeletionTimestamp *time.Time        `json:"deletionTimestamp,omitempty"`
+}
+
+// Author-controlled metadata shared by declarative resource mutations.
+type ObjectMetaInput struct {
+	Name        string         `json:"name"`
+	Namespace   string         `json:"namespace"`
+	Labels      map[string]any `json:"labels,omitempty"`
+	Annotations map[string]any `json:"annotations,omitempty"`
 }
 
 type OwnerReference struct {
@@ -785,15 +840,22 @@ type ProductBy struct {
 
 // Connection type for paginated products (Relay pattern).
 type ProductConnection struct {
-	Edges      []*ProductEdge `json:"edges"`
-	PageInfo   *PageInfo      `json:"pageInfo"`
-	TotalCount int32          `json:"totalCount"`
+	Edges    []*ProductEdge `json:"edges"`
+	PageInfo *PageInfo      `json:"pageInfo"`
 }
 
 // Edge type for Product connection (Relay pattern).
 type ProductEdge struct {
 	Cursor string   `json:"cursor"`
 	Node   *Product `json:"node"`
+}
+
+type ProductLifecycleSpec struct {
+	State ProductLifecycleState `json:"state"`
+}
+
+type ProductLifecycleSpecInput struct {
+	State *ProductLifecycleState `json:"state,omitempty"`
 }
 
 // Composite selector: namespace identifier (human-readable slug) + product name.
@@ -808,12 +870,29 @@ type ProductOptionDefinition struct {
 	Values []string `json:"values"`
 }
 
+type ProductOptionDefinitionInput struct {
+	Name   string   `json:"name"`
+	Title  *string  `json:"title,omitempty"`
+	Values []string `json:"values"`
+}
+
 type ProductSpec struct {
-	Title       *string                    `json:"title,omitempty"`
+	// Human-readable display title for the product.
+	Title       string                     `json:"title"`
 	CategoryRef *CatalogObjectReference    `json:"categoryRef,omitempty"`
 	Tags        []string                   `json:"tags"`
 	Media       []*MediaDefinition         `json:"media"`
 	Options     []*ProductOptionDefinition `json:"options"`
+	Lifecycle   *ProductLifecycleSpec      `json:"lifecycle"`
+}
+
+type ProductSpecInput struct {
+	Title       string                          `json:"title"`
+	CategoryRef *CatalogObjectReferenceInput    `json:"categoryRef,omitempty"`
+	Tags        []string                        `json:"tags,omitempty"`
+	Media       []*MediaDefinitionInput         `json:"media,omitempty"`
+	Options     []*ProductOptionDefinitionInput `json:"options,omitempty"`
+	Lifecycle   *ProductLifecycleSpecInput      `json:"lifecycle,omitempty"`
 }
 
 type ProductStatus struct {
@@ -858,9 +937,8 @@ type ProductVariantBy struct {
 
 // Paginated connection for ProductVariants (Relay pattern).
 type ProductVariantConnection struct {
-	Edges      []*ProductVariantEdge `json:"edges"`
-	PageInfo   *PageInfo             `json:"pageInfo"`
-	TotalCount int32                 `json:"totalCount"`
+	Edges    []*ProductVariantEdge `json:"edges"`
+	PageInfo *PageInfo             `json:"pageInfo"`
 }
 
 // Edge type for ProductVariant connection (Relay pattern).
@@ -918,13 +996,26 @@ type ProductWatchEvent struct {
 	Product *Product `json:"product,omitempty"`
 }
 
-type PublishCatalogInput struct {
-	Version string `json:"version"`
-	Message string `json:"message"`
+// Controller-only bootstrap operation. Ensures the system-managed
+// `gitstore-system` repository exists for an admitted Namespace. It is separate
+// from createRepository because bootstrap repositories are not author-managed
+// declarative Repository resources.
+type ProvisionNamespaceSystemRepositoryInput struct {
+	Namespace string `json:"namespace"`
 }
 
-type PublishCatalogPayload struct {
-	CatalogVersion *CatalogVersion `json:"catalogVersion,omitempty"`
+type ProvisionNamespaceSystemRepositoryPayload struct {
+	Repository *Repository `json:"repository"`
+}
+
+// Identifies an admitted, non-bootstrap Repository for controller provisioning.
+type ProvisionRepositoryStorageInput struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+type ProvisionRepositoryStoragePayload struct {
+	Repository *Repository `json:"repository"`
 }
 
 // Inclusive quantity range that must be satisfied for a price template to apply.
@@ -962,34 +1053,6 @@ type RefreshTokenPayload struct {
 	Token *TokenResponse `json:"token"`
 }
 
-type RenameRepositoryInput struct {
-	// Relay ID of the repository to rename.
-	RepositoryID string `json:"repositoryId"`
-	NewName      string `json:"newName"`
-}
-
-type RenameRepositoryPayload struct {
-	Repository *Repository `json:"repository"`
-}
-
-// Input for reordering categories (drag-and-drop)
-type ReorderCategoriesInput struct {
-	// Ordered list of category IDs within parent
-	OrderedIds []string `json:"orderedIds"`
-	// Parent category ID (null for root categories)
-	ParentID *string `json:"parentId,omitempty"`
-	// Category ID being moved (for tree restructure)
-	MovedCategoryID *string `json:"movedCategoryId,omitempty"`
-	// New parent ID for moved category (for tree restructure)
-	NewParentID *string `json:"newParentId,omitempty"`
-}
-
-// Payload for reorderCategories mutation
-type ReorderCategoriesPayload struct {
-	// Updated categories
-	Categories []*Category `json:"categories,omitempty"`
-}
-
 // A namespace-scoped GitStore Repository resource.
 type Repository struct {
 	// Relay transport identity.
@@ -1005,16 +1068,7 @@ type Repository struct {
 	Spec *RepositorySpec `json:"spec"`
 	// System-derived Repository state. Present for every Repository, including
 	// resources created before this contract existed.
-	Status        *RepositoryStatus `json:"status"`
-	Name          string            `json:"name"`
-	Namespace     *Namespace        `json:"namespace"`
-	DefaultBranch string            `json:"defaultBranch"`
-	StorageClass  string            `json:"storageClass"`
-	StoragePath   string            `json:"storagePath"`
-	CreatedAt     time.Time         `json:"createdAt"`
-	CreatedBy     string            `json:"createdBy"`
-	UpdatedAt     time.Time         `json:"updatedAt"`
-	UpdatedBy     string            `json:"updatedBy"`
+	Status *RepositoryStatus `json:"status"`
 	// Markdown body content (repository description).
 	Body *string `json:"body,omitempty"`
 }
@@ -1034,9 +1088,8 @@ type RepositoryBy struct {
 }
 
 type RepositoryConnection struct {
-	Edges      []*RepositoryEdge `json:"edges"`
-	PageInfo   *PageInfo         `json:"pageInfo"`
-	TotalCount int32             `json:"totalCount"`
+	Edges    []*RepositoryEdge `json:"edges"`
+	PageInfo *PageInfo         `json:"pageInfo"`
 }
 
 type RepositoryEdge struct {
@@ -1063,12 +1116,24 @@ type RepositoryPushPolicy struct {
 	AdmissionControl *AdmissionControlDefaults `json:"admissionControl,omitempty"`
 }
 
+// System-computed Repository storage state written only by its controller.
+type RepositoryResolvedStatusInput struct {
+	StoragePath  string `json:"storagePath"`
+	StorageClass string `json:"storageClass"`
+}
+
 // Declarative desired-state projection for a Repository. In this feature,
 // visibility is reserved and projects PRIVATE until write semantics are added.
 type RepositorySpec struct {
 	DefaultBranch string                `json:"defaultBranch"`
 	Visibility    RepositoryVisibility  `json:"visibility"`
 	PushPolicy    *RepositoryPushPolicy `json:"pushPolicy"`
+}
+
+type RepositorySpecInput struct {
+	DefaultBranch *string               `json:"defaultBranch,omitempty"`
+	Visibility    *RepositoryVisibility `json:"visibility,omitempty"`
+	StorageClass  *string               `json:"storageClass,omitempty"`
 }
 
 // System-owned observed state for a Repository.
@@ -1081,9 +1146,31 @@ type RepositoryStatus struct {
 	Resolved   *ResolvedRepositoryDefinition `json:"resolved"`
 }
 
+// Strongly typed Repository lifecycle event. ADDED and MODIFIED events carry a
+// Repository; DELETED and BOOKMARK events carry no repository payload.
+type RepositoryWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Namespace       string         `json:"namespace"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	Repository      *Repository    `json:"repository,omitempty"`
+}
+
 type ResolvedCategoryDefinition struct {
 	Name string   `json:"name"`
 	Path []string `json:"path"`
+	// The resolved category's opaque Relay identifier, matching
+	// CategoryTaxonomy.id. Present only while the owning Product's
+	// CategoryResolved condition is True.
+	UID *string `json:"uid,omitempty"`
+}
+
+// A resolved CategoryTaxonomy reference: the category's name and its opaque
+// Relay identifier (the same value CategoryTaxonomy.id already returns for
+// that category), never the category's raw internal identifier.
+type ResolvedCategoryRefInput struct {
+	Name string `json:"name"`
+	UID  string `json:"uid"`
 }
 
 // Controller-computed category hierarchy metadata.
@@ -1092,9 +1179,8 @@ type ResolvedCategoryTaxonomy struct {
 	// Ancestor path from root to self, e.g. ["electronics", "computers",
 	// "laptops"] for the "laptops" category (root-to-self order). A root
 	// category's path is a single-element array containing its own name.
-	// Distinct from Category.path, which is a read-time-derived field
-	// computed from the separate ancestor_path datastore column (see
-	// specs/040-controller-watch-status-api/research.md R9/R10).
+	// Distinct from Category.path, which is derived when the category is
+	// read.
 	Path         []string `json:"path"`
 	ChildCount   int32    `json:"childCount"`
 	ProductCount int32    `json:"productCount"`
@@ -1165,6 +1251,18 @@ type ResolvedProductRef struct {
 	UID  string `json:"uid"`
 }
 
+// Controller-only resolved-status payload accepted by updateProductStatus.
+type ResolvedProductStatusInput struct {
+	// Null clears any previously-resolved category reference. Non-null
+	// declaratively sets it. Either way, the resolver synchronizes the
+	// Product's non-blocking CategoryTaxonomy owner reference to match this
+	// value (adds/updates it when set, removes it when null) — mirroring the
+	// same synthesis admission already performs for a freshly-pushed Product
+	// (resolvedCategoryOwnerReferences), so this is the only writer a
+	// previously-unresolved Product ever needs.
+	Category *ResolvedCategoryRefInput `json:"category,omitempty"`
+}
+
 // Resolved aggregates for a ProductVariant, computed at admission and kept current.
 type ResolvedProductVariantDefinition struct {
 	// Resolved parent product identity.
@@ -1183,6 +1281,37 @@ type ResolvedProductVariantDefinition struct {
 type ResolvedRepositoryDefinition struct {
 	StoragePath  string `json:"storagePath"`
 	StorageClass string `json:"storageClass"`
+}
+
+// The resource's current owner subject. Distinct from
+// OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
+// delete relationship, not a principal-ownership one.
+type ResourceOwner struct {
+	Kind OwnerKind `json:"kind"`
+	Name string    `json:"name"`
+}
+
+// Input shape for naming a target owner, e.g. transferNamespaceOwner's
+// targetOwnerRef.
+type ResourceOwnerInput struct {
+	Kind OwnerKind `json:"kind"`
+	Name string    `json:"name"`
+}
+
+// rotateServiceAccountKey mutation input. add and removeKids
+// may both be non-empty in the same call to support an overlap window during
+// rotation.
+type RotateServiceAccountKeyInput struct {
+	APIVersion string                          `json:"apiVersion"`
+	Kind       string                          `json:"kind"`
+	Metadata   *ObjectMetaInput                `json:"metadata"`
+	Add        []*ServiceAccountPublicKeyInput `json:"add"`
+	RemoveKids []string                        `json:"removeKids"`
+}
+
+// rotateServiceAccountKey mutation payload.
+type RotateServiceAccountKeyPayload struct {
+	ServiceAccount *ServiceAccount `json:"serviceAccount,omitempty"`
 }
 
 type SchemaValidationDefaults struct {
@@ -1205,11 +1334,28 @@ type SelectedOptionDefinition struct {
 	Value string `json:"value"`
 }
 
-// Optimistic-concurrency conflict payload shared by all status-write
-// mutations (per-kind and generic).
-type StatusConflict struct {
-	// The resource's actual current resourceVersion, for retry.
-	CurrentResourceVersion string `json:"currentResourceVersion"`
+// A GitStore-issued non-human identity. Implements the Actor interface so it can
+// appear anywhere a Subject/Delegate is referenced.
+type ServiceAccount struct {
+	APIVersion string      `json:"apiVersion"`
+	Kind       string      `json:"kind"`
+	Metadata   *ObjectMeta `json:"metadata"`
+	KeyIDs     []string    `json:"keyIDs"`
+	Status     ActorStatus `json:"status"`
+}
+
+func (ServiceAccount) IsActor()                      {}
+func (this ServiceAccount) GetMetadata() *ObjectMeta { return this.Metadata }
+func (this ServiceAccount) GetStatus() ActorStatus   { return this.Status }
+
+// Enrolled public key supplied on create/rotate.
+type ServiceAccountPublicKeyInput struct {
+	// Key ID an assertion's protected header "kid" must match.
+	Kid string `json:"kid"`
+	// "Ed25519" (preferred) or "ECDSA-P256".
+	Algorithm string `json:"algorithm"`
+	// PEM-encoded public key.
+	PublicKeyPem string `json:"publicKeyPEM"`
 }
 
 // Pricing strategy applied when this price template is selected.
@@ -1219,6 +1365,35 @@ type StrategyDefinition struct {
 }
 
 type Subscription struct {
+}
+
+// A short-lived ServiceAccount access token result.
+type TokenRequest struct {
+	APIVersion string              `json:"apiVersion"`
+	Kind       string              `json:"kind"`
+	Metadata   *ObjectMeta         `json:"metadata"`
+	Spec       *TokenRequestSpec   `json:"spec"`
+	Status     *TokenRequestStatus `json:"status"`
+}
+
+// Resolved parameters echoed back on an issued token.
+type TokenRequestSpec struct {
+	Audiences         []string `json:"audiences,omitempty"`
+	ExpirationSeconds *int32   `json:"expirationSeconds,omitempty"`
+}
+
+// Requested parameters for a ServiceAccount access token.
+type TokenRequestSpecInput struct {
+	// Requested audiences. Defaults to auth.serviceaccount.audience (typically "gitstore-api") when omitted.
+	Audiences []string `json:"audiences,omitempty"`
+	// Requested token lifetime in seconds. Clamped to auth.serviceaccount.max_ttl regardless of the requested value.
+	ExpirationSeconds *int32 `json:"expirationSeconds,omitempty"`
+}
+
+// Issued access token result.
+type TokenRequestStatus struct {
+	Token               string    `json:"token"`
+	ExpirationTimestamp time.Time `json:"expirationTimestamp"`
 }
 
 // OIDC-compatible token response.
@@ -1240,51 +1415,25 @@ type TokenResponse struct {
 	IDToken *string `json:"idToken,omitempty"`
 }
 
-type TransferRepositoryInput struct {
-	// Relay ID of the repository to transfer.
-	RepositoryID string `json:"repositoryId"`
-	// Relay ID of the destination namespace.
-	TargetNamespaceID string `json:"targetNamespaceId"`
+// Reassign a namespace's owner. Distinct from transferRepository,
+// which relocates a repository between namespaces and is unrelated to
+// principal ownership.
+type TransferNamespaceOwnerInput struct {
+	NamespaceID    string              `json:"namespaceId"`
+	TargetOwnerRef *ResourceOwnerInput `json:"targetOwnerRef"`
 }
 
-type TransferRepositoryPayload struct {
-	Repository *Repository `json:"repository"`
-}
-
-// Input for updating a category
-type UpdateCategoryInput struct {
-	// Category ID to update
-	ID string `json:"id"`
-	// New name
-	Name *string `json:"name,omitempty"`
-	// New slug
-	Slug *string `json:"slug,omitempty"`
-	// New parent ID (null to make root, ID to change parent)
-	ParentID *string `json:"parentId,omitempty"`
-	// New display order
-	DisplayOrder *int32 `json:"displayOrder,omitempty"`
-	// New body content
-	Body *string `json:"body,omitempty"`
-	// TODO: Should this be a datetime?
-	// Version for optimistic locking
-	Version time.Time `json:"version"`
-}
-
-// Payload for updateCategory mutation
-type UpdateCategoryPayload struct {
-	// The updated category
-	Category *Category `json:"category,omitempty"`
-	// Conflict information (if optimistic lock failed)
-	Conflict *CategoryOptimisticLockConflict `json:"conflict,omitempty"`
+type TransferNamespaceOwnerPayload struct {
+	Namespace *Namespace `json:"namespace"`
 }
 
 type UpdateCategoryStatusInput struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
-	// Required optimistic-concurrency precondition (FR-009). Must equal
+	// Required optimistic-concurrency precondition. Must equal
 	// the resource's current metadata.resourceVersion.
 	ResourceVersion string `json:"resourceVersion"`
-	// Null = unchanged. Set on every successful reconcile per spec 026 FR-008.
+	// Null = unchanged. Set on every successful reconcile.
 	ObservedGeneration *int32 `json:"observedGeneration,omitempty"`
 	// Null = unchanged, e.g. "main@sha1:a1b2c3d".
 	LastAppliedRevision *string `json:"lastAppliedRevision,omitempty"`
@@ -1302,21 +1451,10 @@ type UpdateCategoryStatusInput struct {
 }
 
 type UpdateCategoryStatusPayload struct {
-	// Null when the write failed (conflict or not-found).
+	// The updated CategoryTaxonomy.
 	Category *Category `json:"category,omitempty"`
-	// Non-null only when the resourceVersion precondition failed.
-	Conflict *StatusConflict `json:"conflict,omitempty"`
 	// True when another bounded Product page remains to be processed.
 	HasMoreProductDependents bool `json:"hasMoreProductDependents"`
-}
-
-type UpdateCollectionInput struct {
-	ID string `json:"id"`
-}
-
-type UpdateCollectionPayload struct {
-	Collection *Collection                       `json:"collection,omitempty"`
-	Conflict   *CollectionOptimisticLockConflict `json:"conflict,omitempty"`
 }
 
 // Declarative resource envelope for updating a namespace.
@@ -1331,17 +1469,71 @@ type UpdateNamespacePayload struct {
 	Namespace *Namespace `json:"namespace,omitempty"`
 }
 
+type UpdateNamespaceStatusInput struct {
+	Name                string            `json:"name"`
+	ResourceVersion     string            `json:"resourceVersion"`
+	ObservedGeneration  *int32            `json:"observedGeneration,omitempty"`
+	LastAppliedRevision *string           `json:"lastAppliedRevision,omitempty"`
+	Conditions          []*ConditionInput `json:"conditions,omitempty"`
+}
+
+type UpdateNamespaceStatusPayload struct {
+	Namespace *Namespace `json:"namespace"`
+}
+
+type UpdateProductInput struct {
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	Metadata   *ObjectMetaInput  `json:"metadata"`
+	Spec       *ProductSpecInput `json:"spec"`
+	Body       *string           `json:"body,omitempty"`
+}
+
+type UpdateProductPayload struct {
+	Product *Product `json:"product,omitempty"`
+}
+
 type UpdateProductStatusInput struct {
-	Name            string            `json:"name"`
-	Namespace       string            `json:"namespace"`
-	ResourceVersion string            `json:"resourceVersion"`
-	Conditions      []*ConditionInput `json:"conditions,omitempty"`
-	RemoveOwnerUID  *string           `json:"removeOwnerUID,omitempty"`
+	Name            string `json:"name"`
+	Namespace       string `json:"namespace"`
+	ResourceVersion string `json:"resourceVersion"`
+	// Null = unchanged. Set on every successful reconcile, matching every other per-kind status mutation.
+	ObservedGeneration *int32 `json:"observedGeneration,omitempty"`
+	// Null = unchanged, e.g. "main@sha1:a1b2c3d".
+	LastAppliedRevision *string           `json:"lastAppliedRevision,omitempty"`
+	Conditions          []*ConditionInput `json:"conditions,omitempty"`
+	// Null = unchanged. Kind-specific resolved payload for the fields this
+	// feature needs (currently only the resolved category reference).
+	Resolved *ResolvedProductStatusInput `json:"resolved,omitempty"`
 }
 
 type UpdateProductStatusPayload struct {
-	Product  *Product        `json:"product,omitempty"`
-	Conflict *StatusConflict `json:"conflict,omitempty"`
+	Product *Product `json:"product,omitempty"`
+}
+
+type UpdateRepositoryInput struct {
+	APIVersion string               `json:"apiVersion"`
+	Kind       string               `json:"kind"`
+	Metadata   *ObjectMetaInput     `json:"metadata"`
+	Spec       *RepositorySpecInput `json:"spec"`
+}
+
+type UpdateRepositoryPayload struct {
+	Repository *Repository `json:"repository,omitempty"`
+}
+
+type UpdateRepositoryStatusInput struct {
+	Namespace           string                         `json:"namespace"`
+	Name                string                         `json:"name"`
+	ResourceVersion     string                         `json:"resourceVersion"`
+	ObservedGeneration  *int32                         `json:"observedGeneration,omitempty"`
+	LastAppliedRevision *string                        `json:"lastAppliedRevision,omitempty"`
+	Conditions          []*ConditionInput              `json:"conditions,omitempty"`
+	Resolved            *RepositoryResolvedStatusInput `json:"resolved,omitempty"`
+}
+
+type UpdateRepositoryStatusPayload struct {
+	Repository *Repository `json:"repository"`
 }
 
 type UpdateResourceStatusInput struct {
@@ -1358,17 +1550,8 @@ type UpdateResourceStatusInput struct {
 }
 
 type UpdateResourceStatusPayload struct {
-	// JSON-boxed current resource state; null when the write failed.
-	Object   map[string]any  `json:"object,omitempty"`
-	Conflict *StatusConflict `json:"conflict,omitempty"`
-}
-
-// Authenticated user information
-type User struct {
-	// Username
-	Username string `json:"username"`
-	// Whether the user has admin privileges
-	IsAdmin bool `json:"isAdmin"`
+	// JSON-boxed current resource state.
+	Object map[string]any `json:"object,omitempty"`
 }
 
 type VariantSummaryDefinition struct {
@@ -1390,6 +1573,67 @@ type WatchEvent struct {
 	// JSON-boxed because the generic watchResources path has no
 	// compile-time-known shape for CRD kinds.
 	Object map[string]any `json:"object,omitempty"`
+}
+
+type ActorStatus string
+
+const (
+	ActorStatusActive              ActorStatus = "ACTIVE"
+	ActorStatusInactive            ActorStatus = "INACTIVE"
+	ActorStatusSuspended           ActorStatus = "SUSPENDED"
+	ActorStatusInvited             ActorStatus = "INVITED"
+	ActorStatusPendingVerification ActorStatus = "PENDING_VERIFICATION"
+)
+
+var AllActorStatus = []ActorStatus{
+	ActorStatusActive,
+	ActorStatusInactive,
+	ActorStatusSuspended,
+	ActorStatusInvited,
+	ActorStatusPendingVerification,
+}
+
+func (e ActorStatus) IsValid() bool {
+	switch e {
+	case ActorStatusActive, ActorStatusInactive, ActorStatusSuspended, ActorStatusInvited, ActorStatusPendingVerification:
+		return true
+	}
+	return false
+}
+
+func (e ActorStatus) String() string {
+	return string(e)
+}
+
+func (e *ActorStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ActorStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ActorStatus", str)
+	}
+	return nil
+}
+
+func (e ActorStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ActorStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ActorStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 type ConditionStatus string
@@ -1565,66 +1809,6 @@ func (e InventoryPolicy) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Product inventory status
-type InventoryStatus string
-
-const (
-	InventoryStatusInStock      InventoryStatus = "IN_STOCK"
-	InventoryStatusOutOfStock   InventoryStatus = "OUT_OF_STOCK"
-	InventoryStatusPreorder     InventoryStatus = "PREORDER"
-	InventoryStatusDiscontinued InventoryStatus = "DISCONTINUED"
-)
-
-var AllInventoryStatus = []InventoryStatus{
-	InventoryStatusInStock,
-	InventoryStatusOutOfStock,
-	InventoryStatusPreorder,
-	InventoryStatusDiscontinued,
-}
-
-func (e InventoryStatus) IsValid() bool {
-	switch e {
-	case InventoryStatusInStock, InventoryStatusOutOfStock, InventoryStatusPreorder, InventoryStatusDiscontinued:
-		return true
-	}
-	return false
-}
-
-func (e InventoryStatus) String() string {
-	return string(e)
-}
-
-func (e *InventoryStatus) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = InventoryStatus(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid InventoryStatus", str)
-	}
-	return nil
-}
-
-func (e InventoryStatus) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *InventoryStatus) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e InventoryStatus) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
 // Operators supported in a LabelSelectorRequirement.
 type LabelSelectorOperator string
 
@@ -1745,6 +1929,119 @@ func (e NamespaceTier) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// The principal type that can own a resource.
+type OwnerKind string
+
+const (
+	OwnerKindUser           OwnerKind = "USER"
+	OwnerKindGroup          OwnerKind = "GROUP"
+	OwnerKindServiceAccount OwnerKind = "SERVICE_ACCOUNT"
+)
+
+var AllOwnerKind = []OwnerKind{
+	OwnerKindUser,
+	OwnerKindGroup,
+	OwnerKindServiceAccount,
+}
+
+func (e OwnerKind) IsValid() bool {
+	switch e {
+	case OwnerKindUser, OwnerKindGroup, OwnerKindServiceAccount:
+		return true
+	}
+	return false
+}
+
+func (e OwnerKind) String() string {
+	return string(e)
+}
+
+func (e *OwnerKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = OwnerKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid OwnerKind", str)
+	}
+	return nil
+}
+
+func (e OwnerKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *OwnerKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e OwnerKind) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type ProductLifecycleState string
+
+const (
+	ProductLifecycleStateActive  ProductLifecycleState = "ACTIVE"
+	ProductLifecycleStateRetired ProductLifecycleState = "RETIRED"
+)
+
+var AllProductLifecycleState = []ProductLifecycleState{
+	ProductLifecycleStateActive,
+	ProductLifecycleStateRetired,
+}
+
+func (e ProductLifecycleState) IsValid() bool {
+	switch e {
+	case ProductLifecycleStateActive, ProductLifecycleStateRetired:
+		return true
+	}
+	return false
+}
+
+func (e ProductLifecycleState) String() string {
+	return string(e)
+}
+
+func (e *ProductLifecycleState) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ProductLifecycleState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ProductLifecycleState", str)
+	}
+	return nil
+}
+
+func (e ProductLifecycleState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ProductLifecycleState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ProductLifecycleState) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
 type RepositoryVisibility string
 
 const (
@@ -1797,6 +2094,64 @@ func (e *RepositoryVisibility) UnmarshalJSON(b []byte) error {
 }
 
 func (e RepositoryVisibility) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// The successful result of requesting Namespace termination.
+type ResourceDeletionOutcome string
+
+const (
+	// This request set the deletion timestamp and foreground deletion finalizer.
+	ResourceDeletionOutcomeTerminationStarted ResourceDeletionOutcome = "TERMINATION_STARTED"
+	// The Namespace was already terminating, so no datastore write occurred.
+	ResourceDeletionOutcomeAlreadyTerminating ResourceDeletionOutcome = "ALREADY_TERMINATING"
+)
+
+var AllResourceDeletionOutcome = []ResourceDeletionOutcome{
+	ResourceDeletionOutcomeTerminationStarted,
+	ResourceDeletionOutcomeAlreadyTerminating,
+}
+
+func (e ResourceDeletionOutcome) IsValid() bool {
+	switch e {
+	case ResourceDeletionOutcomeTerminationStarted, ResourceDeletionOutcomeAlreadyTerminating:
+		return true
+	}
+	return false
+}
+
+func (e ResourceDeletionOutcome) String() string {
+	return string(e)
+}
+
+func (e *ResourceDeletionOutcome) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ResourceDeletionOutcome(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ResourceDeletionOutcome", str)
+	}
+	return nil
+}
+
+func (e ResourceDeletionOutcome) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ResourceDeletionOutcome) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ResourceDeletionOutcome) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

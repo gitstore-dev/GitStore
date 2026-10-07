@@ -8,7 +8,6 @@ import (
 	"math"
 	"strconv"
 	"sync/atomic"
-	"time"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -70,222 +69,6 @@ func (ec *executionContext) field_Collection_products_args(ctx context.Context, 
 // endregion ************************** directives.gotpl **************************
 
 // region    **************************** field.gotpl *****************************
-
-func (ec *executionContext) _CatalogStats_productCount(ctx context.Context, field graphql.CollectedField, obj *model.CatalogStats) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CatalogStats_productCount(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ProductCount, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
-			return ec.marshalNInt2int32(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CatalogStats_productCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CatalogStats", field, false, false, errors.New("field of type Int does not have child fields"))
-}
-
-func (ec *executionContext) _CatalogStats_categoryCount(ctx context.Context, field graphql.CollectedField, obj *model.CatalogStats) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CatalogStats_categoryCount(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.CategoryCount, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
-			return ec.marshalNInt2int32(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CatalogStats_categoryCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CatalogStats", field, false, false, errors.New("field of type Int does not have child fields"))
-}
-
-func (ec *executionContext) _CatalogStats_collectionCount(ctx context.Context, field graphql.CollectedField, obj *model.CatalogStats) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CatalogStats_collectionCount(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.CollectionCount, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
-			return ec.marshalNInt2int32(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CatalogStats_collectionCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CatalogStats", field, false, false, errors.New("field of type Int does not have child fields"))
-}
-
-func (ec *executionContext) _CatalogStats_orphanedReferences(ctx context.Context, field graphql.CollectedField, obj *model.CatalogStats) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CatalogStats_orphanedReferences(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.OrphanedReferences, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
-			return ec.marshalNInt2int32(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CatalogStats_orphanedReferences(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CatalogStats", field, false, false, errors.New("field of type Int does not have child fields"))
-}
-
-func (ec *executionContext) _CatalogVersion_tag(ctx context.Context, field graphql.CollectedField, obj *model.CatalogVersion) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CatalogVersion_tag(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Tag, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CatalogVersion_tag(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CatalogVersion", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _CatalogVersion_commit(ctx context.Context, field graphql.CollectedField, obj *model.CatalogVersion) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CatalogVersion_commit(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Commit, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CatalogVersion_commit(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CatalogVersion", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _CatalogVersion_publishedAt(ctx context.Context, field graphql.CollectedField, obj *model.CatalogVersion) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CatalogVersion_publishedAt(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.PublishedAt, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
-			return ec.marshalNDateTime2timeᚐTime(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CatalogVersion_publishedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CatalogVersion", field, false, false, errors.New("field of type DateTime does not have child fields"))
-}
-
-func (ec *executionContext) _CatalogVersion_message(ctx context.Context, field graphql.CollectedField, obj *model.CatalogVersion) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CatalogVersion_message(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Message, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_CatalogVersion_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CatalogVersion", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _CatalogVersion_stats(ctx context.Context, field graphql.CollectedField, obj *model.CatalogVersion) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CatalogVersion_stats(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Stats, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.CatalogStats) graphql.Marshaler {
-			return ec.marshalNCatalogStats2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogStats(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CatalogVersion_stats(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "CatalogVersion",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_CatalogStats(ctx, field)
-		},
-	}
-	return fc, nil
-}
 
 func (ec *executionContext) _Collection_id(ctx context.Context, field graphql.CollectedField, obj *model.Collection) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
@@ -583,29 +366,6 @@ func (ec *executionContext) fieldContext_CollectionConnection_pageInfo(_ context
 	return fc, nil
 }
 
-func (ec *executionContext) _CollectionConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.CollectionConnection) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionConnection_totalCount(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.TotalCount, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
-			return ec.marshalNInt2int32(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionConnection", field, false, false, errors.New("field of type Int does not have child fields"))
-}
-
 func (ec *executionContext) _CollectionEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.CollectionEdge) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -651,38 +411,6 @@ func (ec *executionContext) _CollectionEdge_node(ctx context.Context, field grap
 func (ec *executionContext) fieldContext_CollectionEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "CollectionEdge",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_Collection(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _CollectionOptimisticLockConflict_current(ctx context.Context, field graphql.CollectedField, obj *model.CollectionOptimisticLockConflict) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionOptimisticLockConflict_current(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Current, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.Collection) graphql.Marshaler {
-			return ec.marshalNCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionOptimisticLockConflict_current(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "CollectionOptimisticLockConflict",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
@@ -890,61 +618,6 @@ func (ec *executionContext) fieldContext_CollectionStatus_resolved(_ context.Con
 	return fc, nil
 }
 
-func (ec *executionContext) _CreateCollectionPayload_collection(ctx context.Context, field graphql.CollectedField, obj *model.CreateCollectionPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CreateCollectionPayload_collection(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Collection, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.Collection) graphql.Marshaler {
-			return ec.marshalOCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_CreateCollectionPayload_collection(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "CreateCollectionPayload",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_Collection(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _DeleteCollectionPayload_deletedCollectionId(ctx context.Context, field graphql.CollectedField, obj *model.DeleteCollectionPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_DeleteCollectionPayload_deletedCollectionId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.DeletedCollectionID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOID2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_DeleteCollectionPayload_deletedCollectionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("DeleteCollectionPayload", field, false, false, errors.New("field of type ID does not have child fields"))
-}
-
 func (ec *executionContext) _LabelSelector_matchLabels(ctx context.Context, field graphql.CollectedField, obj *model.LabelSelector) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1069,38 +742,6 @@ func (ec *executionContext) fieldContext_LabelSelectorRequirement_values(_ conte
 	return graphql.NewScalarFieldContext("LabelSelectorRequirement", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _PublishCatalogPayload_catalogVersion(ctx context.Context, field graphql.CollectedField, obj *model.PublishCatalogPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_PublishCatalogPayload_catalogVersion(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.CatalogVersion, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.CatalogVersion) graphql.Marshaler {
-			return ec.marshalOCatalogVersion2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_PublishCatalogPayload_catalogVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "PublishCatalogPayload",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_CatalogVersion(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _ResolvedCollectionDefinition_memberCount(ctx context.Context, field graphql.CollectedField, obj *model.ResolvedCollectionDefinition) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1124,200 +765,9 @@ func (ec *executionContext) fieldContext_ResolvedCollectionDefinition_memberCoun
 	return graphql.NewScalarFieldContext("ResolvedCollectionDefinition", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
-func (ec *executionContext) _UpdateCollectionPayload_collection(ctx context.Context, field graphql.CollectedField, obj *model.UpdateCollectionPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_UpdateCollectionPayload_collection(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Collection, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.Collection) graphql.Marshaler {
-			return ec.marshalOCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_UpdateCollectionPayload_collection(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "UpdateCollectionPayload",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_Collection(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _UpdateCollectionPayload_conflict(ctx context.Context, field graphql.CollectedField, obj *model.UpdateCollectionPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_UpdateCollectionPayload_conflict(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Conflict, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.CollectionOptimisticLockConflict) graphql.Marshaler {
-			return ec.marshalOCollectionOptimisticLockConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionOptimisticLockConflict(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_UpdateCollectionPayload_conflict(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "UpdateCollectionPayload",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_CollectionOptimisticLockConflict(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
 // endregion **************************** field.gotpl *****************************
 
 // region    **************************** input.gotpl *****************************
-
-func (ec *executionContext) unmarshalInputCreateCollectionInput(ctx context.Context, obj any) (model.CreateCollectionInput, error) {
-	var it model.CreateCollectionInput
-	if obj == nil {
-		return it, nil
-	}
-
-	asMap := map[string]any{}
-	for k, v := range obj.(map[string]any) {
-		asMap[k] = v
-	}
-
-	fieldsInOrder := [...]string{"name"}
-	for _, k := range fieldsInOrder {
-		v, ok := asMap[k]
-		if !ok {
-			continue
-		}
-		switch k {
-		case "name":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
-			data, err := ec.unmarshalNString2string(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Name = data
-		}
-	}
-	return it, nil
-}
-
-func (ec *executionContext) unmarshalInputDeleteCollectionInput(ctx context.Context, obj any) (model.DeleteCollectionInput, error) {
-	var it model.DeleteCollectionInput
-	if obj == nil {
-		return it, nil
-	}
-
-	asMap := map[string]any{}
-	for k, v := range obj.(map[string]any) {
-		asMap[k] = v
-	}
-
-	fieldsInOrder := [...]string{"id"}
-	for _, k := range fieldsInOrder {
-		v, ok := asMap[k]
-		if !ok {
-			continue
-		}
-		switch k {
-		case "id":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
-			data, err := ec.unmarshalNID2string(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ID = data
-		}
-	}
-	return it, nil
-}
-
-func (ec *executionContext) unmarshalInputPublishCatalogInput(ctx context.Context, obj any) (model.PublishCatalogInput, error) {
-	var it model.PublishCatalogInput
-	if obj == nil {
-		return it, nil
-	}
-
-	asMap := map[string]any{}
-	for k, v := range obj.(map[string]any) {
-		asMap[k] = v
-	}
-
-	fieldsInOrder := [...]string{"version", "message"}
-	for _, k := range fieldsInOrder {
-		v, ok := asMap[k]
-		if !ok {
-			continue
-		}
-		switch k {
-		case "version":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("version"))
-			data, err := ec.unmarshalNString2string(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Version = data
-		case "message":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("message"))
-			data, err := ec.unmarshalNString2string(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Message = data
-		}
-	}
-	return it, nil
-}
-
-func (ec *executionContext) unmarshalInputUpdateCollectionInput(ctx context.Context, obj any) (model.UpdateCollectionInput, error) {
-	var it model.UpdateCollectionInput
-	if obj == nil {
-		return it, nil
-	}
-
-	asMap := map[string]any{}
-	for k, v := range obj.(map[string]any) {
-		asMap[k] = v
-	}
-
-	fieldsInOrder := [...]string{"id"}
-	for _, k := range fieldsInOrder {
-		v, ok := asMap[k]
-		if !ok {
-			continue
-		}
-		switch k {
-		case "id":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
-			data, err := ec.unmarshalNID2string(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ID = data
-		}
-	}
-	return it, nil
-}
 
 // endregion **************************** input.gotpl *****************************
 
@@ -1326,116 +776,6 @@ func (ec *executionContext) unmarshalInputUpdateCollectionInput(ctx context.Cont
 // endregion ************************** interface.gotpl ***************************
 
 // region    **************************** object.gotpl ****************************
-
-var catalogStatsImplementors = []string{"CatalogStats"}
-
-func (ec *executionContext) _CatalogStats(ctx context.Context, sel ast.SelectionSet, obj *model.CatalogStats) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, catalogStatsImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("CatalogStats")
-		case "productCount":
-			out.Values[i] = ec._CatalogStats_productCount(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "categoryCount":
-			out.Values[i] = ec._CatalogStats_categoryCount(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "collectionCount":
-			out.Values[i] = ec._CatalogStats_collectionCount(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "orphanedReferences":
-			out.Values[i] = ec._CatalogStats_orphanedReferences(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var catalogVersionImplementors = []string{"CatalogVersion"}
-
-func (ec *executionContext) _CatalogVersion(ctx context.Context, sel ast.SelectionSet, obj *model.CatalogVersion) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, catalogVersionImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("CatalogVersion")
-		case "tag":
-			out.Values[i] = ec._CatalogVersion_tag(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "commit":
-			out.Values[i] = ec._CatalogVersion_commit(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "publishedAt":
-			out.Values[i] = ec._CatalogVersion_publishedAt(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "message":
-			out.Values[i] = ec._CatalogVersion_message(ctx, field, obj)
-		case "stats":
-			out.Values[i] = ec._CatalogVersion_stats(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
 
 var collectionImplementors = []string{"Collection", "Node"}
 
@@ -1551,11 +891,6 @@ func (ec *executionContext) _CollectionConnection(ctx context.Context, sel ast.S
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "totalCount":
-			out.Values[i] = ec._CollectionConnection_totalCount(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -1597,45 +932,6 @@ func (ec *executionContext) _CollectionEdge(ctx context.Context, sel ast.Selecti
 			}
 		case "node":
 			out.Values[i] = ec._CollectionEdge_node(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var collectionOptimisticLockConflictImplementors = []string{"CollectionOptimisticLockConflict"}
-
-func (ec *executionContext) _CollectionOptimisticLockConflict(ctx context.Context, sel ast.SelectionSet, obj *model.CollectionOptimisticLockConflict) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, collectionOptimisticLockConflictImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("CollectionOptimisticLockConflict")
-		case "current":
-			out.Values[i] = ec._CollectionOptimisticLockConflict_current(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -1756,78 +1052,6 @@ func (ec *executionContext) _CollectionStatus(ctx context.Context, sel ast.Selec
 	return out
 }
 
-var createCollectionPayloadImplementors = []string{"CreateCollectionPayload"}
-
-func (ec *executionContext) _CreateCollectionPayload(ctx context.Context, sel ast.SelectionSet, obj *model.CreateCollectionPayload) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, createCollectionPayloadImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("CreateCollectionPayload")
-		case "collection":
-			out.Values[i] = ec._CreateCollectionPayload_collection(ctx, field, obj)
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var deleteCollectionPayloadImplementors = []string{"DeleteCollectionPayload"}
-
-func (ec *executionContext) _DeleteCollectionPayload(ctx context.Context, sel ast.SelectionSet, obj *model.DeleteCollectionPayload) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, deleteCollectionPayloadImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("DeleteCollectionPayload")
-		case "deletedCollectionId":
-			out.Values[i] = ec._DeleteCollectionPayload_deletedCollectionId(ctx, field, obj)
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
 var labelSelectorImplementors = []string{"LabelSelector"}
 
 func (ec *executionContext) _LabelSelector(ctx context.Context, sel ast.SelectionSet, obj *model.LabelSelector) graphql.Marshaler {
@@ -1918,42 +1142,6 @@ func (ec *executionContext) _LabelSelectorRequirement(ctx context.Context, sel a
 	return out
 }
 
-var publishCatalogPayloadImplementors = []string{"PublishCatalogPayload"}
-
-func (ec *executionContext) _PublishCatalogPayload(ctx context.Context, sel ast.SelectionSet, obj *model.PublishCatalogPayload) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, publishCatalogPayloadImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("PublishCatalogPayload")
-		case "catalogVersion":
-			out.Values[i] = ec._PublishCatalogPayload_catalogVersion(ctx, field, obj)
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
 var resolvedCollectionDefinitionImplementors = []string{"ResolvedCollectionDefinition"}
 
 func (ec *executionContext) _ResolvedCollectionDefinition(ctx context.Context, sel ast.SelectionSet, obj *model.ResolvedCollectionDefinition) graphql.Marshaler {
@@ -1993,71 +1181,9 @@ func (ec *executionContext) _ResolvedCollectionDefinition(ctx context.Context, s
 	return out
 }
 
-var updateCollectionPayloadImplementors = []string{"UpdateCollectionPayload"}
-
-func (ec *executionContext) _UpdateCollectionPayload(ctx context.Context, sel ast.SelectionSet, obj *model.UpdateCollectionPayload) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, updateCollectionPayloadImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("UpdateCollectionPayload")
-		case "collection":
-			out.Values[i] = ec._UpdateCollectionPayload_collection(ctx, field, obj)
-		case "conflict":
-			out.Values[i] = ec._UpdateCollectionPayload_conflict(ctx, field, obj)
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
 // endregion **************************** object.gotpl ****************************
 
 // region    ***************************** type.gotpl *****************************
-
-func (ec *executionContext) marshalNCatalogStats2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogStats(ctx context.Context, sel ast.SelectionSet, v *model.CatalogStats) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._CatalogStats(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNCatalogVersion2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion(ctx context.Context, sel ast.SelectionSet, v model.CatalogVersion) graphql.Marshaler {
-	return ec._CatalogVersion(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNCatalogVersion2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion(ctx context.Context, sel ast.SelectionSet, v *model.CatalogVersion) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._CatalogVersion(ctx, sel, v)
-}
 
 func (ec *executionContext) marshalNCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx context.Context, sel ast.SelectionSet, v *model.Collection) graphql.Marshaler {
 	if v == nil {
@@ -2119,44 +1245,6 @@ func (ec *executionContext) marshalNCollectionSpec2ᚖgithubᚗcomᚋgitstoreᚑ
 	return ec._CollectionSpec(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNCreateCollectionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionInput(ctx context.Context, v any) (model.CreateCollectionInput, error) {
-	res, err := ec.unmarshalInputCreateCollectionInput(ctx, v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalNCreateCollectionPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionPayload(ctx context.Context, sel ast.SelectionSet, v model.CreateCollectionPayload) graphql.Marshaler {
-	return ec._CreateCollectionPayload(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNCreateCollectionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionPayload(ctx context.Context, sel ast.SelectionSet, v *model.CreateCollectionPayload) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._CreateCollectionPayload(ctx, sel, v)
-}
-
-func (ec *executionContext) unmarshalNDeleteCollectionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionInput(ctx context.Context, v any) (model.DeleteCollectionInput, error) {
-	res, err := ec.unmarshalInputDeleteCollectionInput(ctx, v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalNDeleteCollectionPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionPayload(ctx context.Context, sel ast.SelectionSet, v model.DeleteCollectionPayload) graphql.Marshaler {
-	return ec._DeleteCollectionPayload(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNDeleteCollectionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionPayload(ctx context.Context, sel ast.SelectionSet, v *model.DeleteCollectionPayload) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._DeleteCollectionPayload(ctx, sel, v)
-}
-
 func (ec *executionContext) unmarshalNLabelSelectorOperator2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLabelSelectorOperator(ctx context.Context, v any) (model.LabelSelectorOperator, error) {
 	var res model.LabelSelectorOperator
 	err := res.UnmarshalGQL(v)
@@ -2193,63 +1281,11 @@ func (ec *executionContext) marshalNLabelSelectorRequirement2ᚖgithubᚗcomᚋg
 	return ec._LabelSelectorRequirement(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNPublishCatalogInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogInput(ctx context.Context, v any) (model.PublishCatalogInput, error) {
-	res, err := ec.unmarshalInputPublishCatalogInput(ctx, v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalNPublishCatalogPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogPayload(ctx context.Context, sel ast.SelectionSet, v model.PublishCatalogPayload) graphql.Marshaler {
-	return ec._PublishCatalogPayload(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNPublishCatalogPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogPayload(ctx context.Context, sel ast.SelectionSet, v *model.PublishCatalogPayload) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._PublishCatalogPayload(ctx, sel, v)
-}
-
-func (ec *executionContext) unmarshalNUpdateCollectionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionInput(ctx context.Context, v any) (model.UpdateCollectionInput, error) {
-	res, err := ec.unmarshalInputUpdateCollectionInput(ctx, v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalNUpdateCollectionPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateCollectionPayload) graphql.Marshaler {
-	return ec._UpdateCollectionPayload(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNUpdateCollectionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateCollectionPayload) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._UpdateCollectionPayload(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalOCatalogVersion2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion(ctx context.Context, sel ast.SelectionSet, v *model.CatalogVersion) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	return ec._CatalogVersion(ctx, sel, v)
-}
-
 func (ec *executionContext) marshalOCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx context.Context, sel ast.SelectionSet, v *model.Collection) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Collection(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalOCollectionOptimisticLockConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionOptimisticLockConflict(ctx context.Context, sel ast.SelectionSet, v *model.CollectionOptimisticLockConflict) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	return ec._CollectionOptimisticLockConflict(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOCollectionStatus2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionStatus(ctx context.Context, sel ast.SelectionSet, v *model.CollectionStatus) graphql.Marshaler {

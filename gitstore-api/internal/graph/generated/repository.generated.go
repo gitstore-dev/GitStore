@@ -8,7 +8,6 @@ import (
 	"math"
 	"strconv"
 	"sync/atomic"
-	"time"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -28,6 +27,29 @@ import (
 // endregion ************************** directives.gotpl **************************
 
 // region    **************************** field.gotpl *****************************
+
+func (ec *executionContext) _CompleteRepositoryDeletionPayload_id(ctx context.Context, field graphql.CollectedField, obj *model.CompleteRepositoryDeletionPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CompleteRepositoryDeletionPayload_id(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOID2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_CompleteRepositoryDeletionPayload_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CompleteRepositoryDeletionPayload", field, false, false, errors.New("field of type ID does not have child fields"))
+}
 
 func (ec *executionContext) _CreateRepositoryPayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.CreateRepositoryPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
@@ -61,36 +83,68 @@ func (ec *executionContext) fieldContext_CreateRepositoryPayload_repository(_ co
 	return fc, nil
 }
 
-func (ec *executionContext) _DeleteRepositoryPayload_deletedRepositoryId(ctx context.Context, field graphql.CollectedField, obj *model.DeleteRepositoryPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _DeleteRepositoryPayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.DeleteRepositoryPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_DeleteRepositoryPayload_deletedRepositoryId(ctx, field)
+			return ec.fieldContext_DeleteRepositoryPayload_repository(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.DeletedRepositoryID, nil
+			return obj.Repository, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNID2string(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Repository) graphql.Marshaler {
+			return ec.marshalORepository2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepository(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_DeleteRepositoryPayload_repository(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeleteRepositoryPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Repository(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeleteRepositoryPayload_outcome(ctx context.Context, field graphql.CollectedField, obj *model.DeleteRepositoryPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DeleteRepositoryPayload_outcome(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Outcome, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.ResourceDeletionOutcome) graphql.Marshaler {
+			return ec.marshalNResourceDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceDeletionOutcome(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_DeleteRepositoryPayload_deletedRepositoryId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("DeleteRepositoryPayload", field, false, false, errors.New("field of type ID does not have child fields"))
+func (ec *executionContext) fieldContext_DeleteRepositoryPayload_outcome(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("DeleteRepositoryPayload", field, false, false, errors.New("field of type ResourceDeletionOutcome does not have child fields"))
 }
 
-func (ec *executionContext) _RenameRepositoryPayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.RenameRepositoryPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _ProvisionRepositoryStoragePayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.ProvisionRepositoryStoragePayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_RenameRepositoryPayload_repository(ctx, field)
+			return ec.fieldContext_ProvisionRepositoryStoragePayload_repository(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
 			return obj.Repository, nil
@@ -103,9 +157,9 @@ func (ec *executionContext) _RenameRepositoryPayload_repository(ctx context.Cont
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_RenameRepositoryPayload_repository(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_ProvisionRepositoryStoragePayload_repository(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
-		Object:     "RenameRepositoryPayload",
+		Object:     "ProvisionRepositoryStoragePayload",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
@@ -281,222 +335,6 @@ func (ec *executionContext) fieldContext_Repository_status(_ context.Context, fi
 	return fc, nil
 }
 
-func (ec *executionContext) _Repository_name(ctx context.Context, field graphql.CollectedField, obj *model.Repository) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Repository_name(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Name, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Repository_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Repository", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Repository_namespace(ctx context.Context, field graphql.CollectedField, obj *model.Repository) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Repository_namespace(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Namespace, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.Namespace) graphql.Marshaler {
-			return ec.marshalNNamespace2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespace(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Repository_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Repository",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_Namespace(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Repository_defaultBranch(ctx context.Context, field graphql.CollectedField, obj *model.Repository) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Repository_defaultBranch(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.DefaultBranch, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Repository_defaultBranch(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Repository", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Repository_storageClass(ctx context.Context, field graphql.CollectedField, obj *model.Repository) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Repository_storageClass(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.StorageClass, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Repository_storageClass(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Repository", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Repository_storagePath(ctx context.Context, field graphql.CollectedField, obj *model.Repository) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Repository_storagePath(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.StoragePath, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Repository_storagePath(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Repository", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Repository_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.Repository) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Repository_createdAt(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.CreatedAt, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
-			return ec.marshalNDateTime2timeᚐTime(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Repository_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Repository", field, false, false, errors.New("field of type DateTime does not have child fields"))
-}
-
-func (ec *executionContext) _Repository_createdBy(ctx context.Context, field graphql.CollectedField, obj *model.Repository) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Repository_createdBy(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.CreatedBy, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Repository_createdBy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Repository", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Repository_updatedAt(ctx context.Context, field graphql.CollectedField, obj *model.Repository) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Repository_updatedAt(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.UpdatedAt, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
-			return ec.marshalNDateTime2timeᚐTime(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Repository_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Repository", field, false, false, errors.New("field of type DateTime does not have child fields"))
-}
-
-func (ec *executionContext) _Repository_updatedBy(ctx context.Context, field graphql.CollectedField, obj *model.Repository) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Repository_updatedBy(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.UpdatedBy, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Repository_updatedBy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Repository", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
 func (ec *executionContext) _Repository_body(ctx context.Context, field graphql.CollectedField, obj *model.Repository) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -582,29 +420,6 @@ func (ec *executionContext) fieldContext_RepositoryConnection_pageInfo(_ context
 		},
 	}
 	return fc, nil
-}
-
-func (ec *executionContext) _RepositoryConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.RepositoryConnection) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_RepositoryConnection_totalCount(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.TotalCount, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
-			return ec.marshalNInt2int32(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_RepositoryConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("RepositoryConnection", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _RepositoryEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.RepositoryEdge) (ret graphql.Marshaler) {
@@ -992,6 +807,130 @@ func (ec *executionContext) fieldContext_RepositoryStatus_resolved(_ context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _RepositoryWatchEvent_type(ctx context.Context, field graphql.CollectedField, obj *model.RepositoryWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RepositoryWatchEvent_type(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Type, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.WatchEventType) graphql.Marshaler {
+			return ec.marshalNWatchEventType2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐWatchEventType(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RepositoryWatchEvent_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RepositoryWatchEvent", field, false, false, errors.New("field of type WatchEventType does not have child fields"))
+}
+
+func (ec *executionContext) _RepositoryWatchEvent_namespace(ctx context.Context, field graphql.CollectedField, obj *model.RepositoryWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RepositoryWatchEvent_namespace(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Namespace, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RepositoryWatchEvent_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RepositoryWatchEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _RepositoryWatchEvent_name(ctx context.Context, field graphql.CollectedField, obj *model.RepositoryWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RepositoryWatchEvent_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RepositoryWatchEvent_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RepositoryWatchEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _RepositoryWatchEvent_resourceVersion(ctx context.Context, field graphql.CollectedField, obj *model.RepositoryWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RepositoryWatchEvent_resourceVersion(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ResourceVersion, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RepositoryWatchEvent_resourceVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RepositoryWatchEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _RepositoryWatchEvent_repository(ctx context.Context, field graphql.CollectedField, obj *model.RepositoryWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RepositoryWatchEvent_repository(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Repository, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Repository) graphql.Marshaler {
+			return ec.marshalORepository2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepository(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_RepositoryWatchEvent_repository(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepositoryWatchEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Repository(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ResolvedRepositoryDefinition_storagePath(ctx context.Context, field graphql.CollectedField, obj *model.ResolvedRepositoryDefinition) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1038,13 +977,45 @@ func (ec *executionContext) fieldContext_ResolvedRepositoryDefinition_storageCla
 	return graphql.NewScalarFieldContext("ResolvedRepositoryDefinition", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _TransferRepositoryPayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.TransferRepositoryPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _UpdateRepositoryPayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.UpdateRepositoryPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_TransferRepositoryPayload_repository(ctx, field)
+			return ec.fieldContext_UpdateRepositoryPayload_repository(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Repository, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Repository) graphql.Marshaler {
+			return ec.marshalORepository2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepository(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UpdateRepositoryPayload_repository(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UpdateRepositoryPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Repository(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UpdateRepositoryStatusPayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.UpdateRepositoryStatusPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UpdateRepositoryStatusPayload_repository(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
 			return obj.Repository, nil
@@ -1057,9 +1028,9 @@ func (ec *executionContext) _TransferRepositoryPayload_repository(ctx context.Co
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_TransferRepositoryPayload_repository(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_UpdateRepositoryStatusPayload_repository(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
-		Object:     "TransferRepositoryPayload",
+		Object:     "UpdateRepositoryStatusPayload",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
@@ -1074,8 +1045,8 @@ func (ec *executionContext) fieldContext_TransferRepositoryPayload_repository(_ 
 
 // region    **************************** input.gotpl *****************************
 
-func (ec *executionContext) unmarshalInputCreateRepositoryInput(ctx context.Context, obj any) (model.CreateRepositoryInput, error) {
-	var it model.CreateRepositoryInput
+func (ec *executionContext) unmarshalInputCompleteRepositoryDeletionInput(ctx context.Context, obj any) (model.CompleteRepositoryDeletionInput, error) {
+	var it model.CompleteRepositoryDeletionInput
 	if obj == nil {
 		return it, nil
 	}
@@ -1085,7 +1056,7 @@ func (ec *executionContext) unmarshalInputCreateRepositoryInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"namespace", "name", "defaultBranch"}
+	fieldsInOrder := [...]string{"namespace", "name", "resourceVersion"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -1106,13 +1077,71 @@ func (ec *executionContext) unmarshalInputCreateRepositoryInput(ctx context.Cont
 				return it, err
 			}
 			it.Name = data
-		case "defaultBranch":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("defaultBranch"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+		case "resourceVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resourceVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.DefaultBranch = data
+			it.ResourceVersion = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputCreateRepositoryInput(ctx context.Context, obj any) (model.CreateRepositoryInput, error) {
+	var it model.CreateRepositoryInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["apiVersion"]; !present {
+		asMap["apiVersion"] = "gitstore.dev/v1beta1"
+	}
+	if _, present := asMap["kind"]; !present {
+		asMap["kind"] = "Repository"
+	}
+
+	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "spec"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "apiVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("apiVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.APIVersion = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "metadata":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
+			data, err := ec.unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Metadata = data
+		case "spec":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("spec"))
+			data, err := ec.unmarshalNRepositorySpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositorySpecInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Spec = data
 		}
 	}
 	return it, nil
@@ -1129,27 +1158,27 @@ func (ec *executionContext) unmarshalInputDeleteRepositoryInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"repositoryId"}
+	fieldsInOrder := [...]string{"id"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "repositoryId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repositoryId"))
-			data, err := ec.unmarshalNID2string(ctx, v)
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.RepositoryID = data
+			it.ID = data
 		}
 	}
 	return it, nil
 }
 
-func (ec *executionContext) unmarshalInputRenameRepositoryInput(ctx context.Context, obj any) (model.RenameRepositoryInput, error) {
-	var it model.RenameRepositoryInput
+func (ec *executionContext) unmarshalInputObjectMetaInput(ctx context.Context, obj any) (model.ObjectMetaInput, error) {
+	var it model.ObjectMetaInput
 	if obj == nil {
 		return it, nil
 	}
@@ -1159,27 +1188,78 @@ func (ec *executionContext) unmarshalInputRenameRepositoryInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"repositoryId", "newName"}
+	fieldsInOrder := [...]string{"name", "namespace", "labels", "annotations"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "repositoryId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repositoryId"))
-			data, err := ec.unmarshalNID2string(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.RepositoryID = data
-		case "newName":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("newName"))
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
 			data, err := ec.unmarshalNString2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.NewName = data
+			it.Name = data
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "labels":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("labels"))
+			data, err := ec.unmarshalOJSON2map(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Labels = data
+		case "annotations":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("annotations"))
+			data, err := ec.unmarshalOJSON2map(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Annotations = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputProvisionRepositoryStorageInput(ctx context.Context, obj any) (model.ProvisionRepositoryStorageInput, error) {
+	var it model.ProvisionRepositoryStorageInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"namespace", "name"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
 		}
 	}
 	return it, nil
@@ -1259,8 +1339,8 @@ func (ec *executionContext) unmarshalInputRepositoryNamespacePath(ctx context.Co
 	return it, nil
 }
 
-func (ec *executionContext) unmarshalInputTransferRepositoryInput(ctx context.Context, obj any) (model.TransferRepositoryInput, error) {
-	var it model.TransferRepositoryInput
+func (ec *executionContext) unmarshalInputRepositoryResolvedStatusInput(ctx context.Context, obj any) (model.RepositoryResolvedStatusInput, error) {
+	var it model.RepositoryResolvedStatusInput
 	if obj == nil {
 		return it, nil
 	}
@@ -1270,27 +1350,201 @@ func (ec *executionContext) unmarshalInputTransferRepositoryInput(ctx context.Co
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"repositoryId", "targetNamespaceId"}
+	fieldsInOrder := [...]string{"storagePath", "storageClass"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "repositoryId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repositoryId"))
-			data, err := ec.unmarshalNID2string(ctx, v)
+		case "storagePath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("storagePath"))
+			data, err := ec.unmarshalNString2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.RepositoryID = data
-		case "targetNamespaceId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("targetNamespaceId"))
-			data, err := ec.unmarshalNID2string(ctx, v)
+			it.StoragePath = data
+		case "storageClass":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("storageClass"))
+			data, err := ec.unmarshalNString2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.TargetNamespaceID = data
+			it.StorageClass = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputRepositorySpecInput(ctx context.Context, obj any) (model.RepositorySpecInput, error) {
+	var it model.RepositorySpecInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"defaultBranch", "visibility", "storageClass"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "defaultBranch":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("defaultBranch"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DefaultBranch = data
+		case "visibility":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("visibility"))
+			data, err := ec.unmarshalORepositoryVisibility2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositoryVisibility(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Visibility = data
+		case "storageClass":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("storageClass"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.StorageClass = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUpdateRepositoryInput(ctx context.Context, obj any) (model.UpdateRepositoryInput, error) {
+	var it model.UpdateRepositoryInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["apiVersion"]; !present {
+		asMap["apiVersion"] = "gitstore.dev/v1beta1"
+	}
+	if _, present := asMap["kind"]; !present {
+		asMap["kind"] = "Repository"
+	}
+
+	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "spec"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "apiVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("apiVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.APIVersion = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "metadata":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
+			data, err := ec.unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Metadata = data
+		case "spec":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("spec"))
+			data, err := ec.unmarshalNRepositorySpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositorySpecInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Spec = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUpdateRepositoryStatusInput(ctx context.Context, obj any) (model.UpdateRepositoryStatusInput, error) {
+	var it model.UpdateRepositoryStatusInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"namespace", "name", "resourceVersion", "observedGeneration", "lastAppliedRevision", "conditions", "resolved"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "resourceVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resourceVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ResourceVersion = data
+		case "observedGeneration":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("observedGeneration"))
+			data, err := ec.unmarshalOInt2ᚖint32(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ObservedGeneration = data
+		case "lastAppliedRevision":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("lastAppliedRevision"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.LastAppliedRevision = data
+		case "conditions":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("conditions"))
+			data, err := ec.unmarshalOConditionInput2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐConditionInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Conditions = data
+		case "resolved":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resolved"))
+			data, err := ec.unmarshalORepositoryResolvedStatusInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositoryResolvedStatusInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Resolved = data
 		}
 	}
 	return it, nil
@@ -1303,6 +1557,42 @@ func (ec *executionContext) unmarshalInputTransferRepositoryInput(ctx context.Co
 // endregion ************************** interface.gotpl ***************************
 
 // region    **************************** object.gotpl ****************************
+
+var completeRepositoryDeletionPayloadImplementors = []string{"CompleteRepositoryDeletionPayload"}
+
+func (ec *executionContext) _CompleteRepositoryDeletionPayload(ctx context.Context, sel ast.SelectionSet, obj *model.CompleteRepositoryDeletionPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, completeRepositoryDeletionPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CompleteRepositoryDeletionPayload")
+		case "id":
+			out.Values[i] = ec._CompleteRepositoryDeletionPayload_id(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
 
 var createRepositoryPayloadImplementors = []string{"CreateRepositoryPayload"}
 
@@ -1354,8 +1644,10 @@ func (ec *executionContext) _DeleteRepositoryPayload(ctx context.Context, sel as
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("DeleteRepositoryPayload")
-		case "deletedRepositoryId":
-			out.Values[i] = ec._DeleteRepositoryPayload_deletedRepositoryId(ctx, field, obj)
+		case "repository":
+			out.Values[i] = ec._DeleteRepositoryPayload_repository(ctx, field, obj)
+		case "outcome":
+			out.Values[i] = ec._DeleteRepositoryPayload_outcome(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -1382,19 +1674,19 @@ func (ec *executionContext) _DeleteRepositoryPayload(ctx context.Context, sel as
 	return out
 }
 
-var renameRepositoryPayloadImplementors = []string{"RenameRepositoryPayload"}
+var provisionRepositoryStoragePayloadImplementors = []string{"ProvisionRepositoryStoragePayload"}
 
-func (ec *executionContext) _RenameRepositoryPayload(ctx context.Context, sel ast.SelectionSet, obj *model.RenameRepositoryPayload) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, renameRepositoryPayloadImplementors)
+func (ec *executionContext) _ProvisionRepositoryStoragePayload(ctx context.Context, sel ast.SelectionSet, obj *model.ProvisionRepositoryStoragePayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, provisionRepositoryStoragePayloadImplementors)
 
 	out := graphql.NewFieldSet(fields)
 	deferred := make(map[string]*graphql.FieldSet)
 	for i, field := range fields {
 		switch field.Name {
 		case "__typename":
-			out.Values[i] = graphql.MarshalString("RenameRepositoryPayload")
+			out.Values[i] = graphql.MarshalString("ProvisionRepositoryStoragePayload")
 		case "repository":
-			out.Values[i] = ec._RenameRepositoryPayload_repository(ctx, field, obj)
+			out.Values[i] = ec._ProvisionRepositoryStoragePayload_repository(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -1462,51 +1754,6 @@ func (ec *executionContext) _Repository(ctx context.Context, sel ast.SelectionSe
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "name":
-			out.Values[i] = ec._Repository_name(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "namespace":
-			out.Values[i] = ec._Repository_namespace(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "defaultBranch":
-			out.Values[i] = ec._Repository_defaultBranch(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "storageClass":
-			out.Values[i] = ec._Repository_storageClass(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "storagePath":
-			out.Values[i] = ec._Repository_storagePath(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "createdAt":
-			out.Values[i] = ec._Repository_createdAt(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "createdBy":
-			out.Values[i] = ec._Repository_createdBy(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "updatedAt":
-			out.Values[i] = ec._Repository_updatedAt(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "updatedBy":
-			out.Values[i] = ec._Repository_updatedBy(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "body":
 			out.Values[i] = ec._Repository_body(ctx, field, obj)
 		default:
@@ -1550,11 +1797,6 @@ func (ec *executionContext) _RepositoryConnection(ctx context.Context, sel ast.S
 			}
 		case "pageInfo":
 			out.Values[i] = ec._RepositoryConnection_pageInfo(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "totalCount":
-			out.Values[i] = ec._RepositoryConnection_totalCount(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -1775,6 +2017,62 @@ func (ec *executionContext) _RepositoryStatus(ctx context.Context, sel ast.Selec
 	return out
 }
 
+var repositoryWatchEventImplementors = []string{"RepositoryWatchEvent"}
+
+func (ec *executionContext) _RepositoryWatchEvent(ctx context.Context, sel ast.SelectionSet, obj *model.RepositoryWatchEvent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, repositoryWatchEventImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RepositoryWatchEvent")
+		case "type":
+			out.Values[i] = ec._RepositoryWatchEvent_type(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "namespace":
+			out.Values[i] = ec._RepositoryWatchEvent_namespace(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._RepositoryWatchEvent_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "resourceVersion":
+			out.Values[i] = ec._RepositoryWatchEvent_resourceVersion(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "repository":
+			out.Values[i] = ec._RepositoryWatchEvent_repository(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var resolvedRepositoryDefinitionImplementors = []string{"ResolvedRepositoryDefinition"}
 
 func (ec *executionContext) _ResolvedRepositoryDefinition(ctx context.Context, sel ast.SelectionSet, obj *model.ResolvedRepositoryDefinition) graphql.Marshaler {
@@ -1819,19 +2117,55 @@ func (ec *executionContext) _ResolvedRepositoryDefinition(ctx context.Context, s
 	return out
 }
 
-var transferRepositoryPayloadImplementors = []string{"TransferRepositoryPayload"}
+var updateRepositoryPayloadImplementors = []string{"UpdateRepositoryPayload"}
 
-func (ec *executionContext) _TransferRepositoryPayload(ctx context.Context, sel ast.SelectionSet, obj *model.TransferRepositoryPayload) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, transferRepositoryPayloadImplementors)
+func (ec *executionContext) _UpdateRepositoryPayload(ctx context.Context, sel ast.SelectionSet, obj *model.UpdateRepositoryPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, updateRepositoryPayloadImplementors)
 
 	out := graphql.NewFieldSet(fields)
 	deferred := make(map[string]*graphql.FieldSet)
 	for i, field := range fields {
 		switch field.Name {
 		case "__typename":
-			out.Values[i] = graphql.MarshalString("TransferRepositoryPayload")
+			out.Values[i] = graphql.MarshalString("UpdateRepositoryPayload")
 		case "repository":
-			out.Values[i] = ec._TransferRepositoryPayload_repository(ctx, field, obj)
+			out.Values[i] = ec._UpdateRepositoryPayload_repository(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var updateRepositoryStatusPayloadImplementors = []string{"UpdateRepositoryStatusPayload"}
+
+func (ec *executionContext) _UpdateRepositoryStatusPayload(ctx context.Context, sel ast.SelectionSet, obj *model.UpdateRepositoryStatusPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, updateRepositoryStatusPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UpdateRepositoryStatusPayload")
+		case "repository":
+			out.Values[i] = ec._UpdateRepositoryStatusPayload_repository(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -1861,6 +2195,25 @@ func (ec *executionContext) _TransferRepositoryPayload(ctx context.Context, sel 
 // endregion **************************** object.gotpl ****************************
 
 // region    ***************************** type.gotpl *****************************
+
+func (ec *executionContext) unmarshalNCompleteRepositoryDeletionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteRepositoryDeletionInput(ctx context.Context, v any) (model.CompleteRepositoryDeletionInput, error) {
+	res, err := ec.unmarshalInputCompleteRepositoryDeletionInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNCompleteRepositoryDeletionPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteRepositoryDeletionPayload(ctx context.Context, sel ast.SelectionSet, v model.CompleteRepositoryDeletionPayload) graphql.Marshaler {
+	return ec._CompleteRepositoryDeletionPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNCompleteRepositoryDeletionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteRepositoryDeletionPayload(ctx context.Context, sel ast.SelectionSet, v *model.CompleteRepositoryDeletionPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CompleteRepositoryDeletionPayload(ctx, sel, v)
+}
 
 func (ec *executionContext) unmarshalNCreateRepositoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateRepositoryInput(ctx context.Context, v any) (model.CreateRepositoryInput, error) {
 	res, err := ec.unmarshalInputCreateRepositoryInput(ctx, v)
@@ -1900,23 +2253,28 @@ func (ec *executionContext) marshalNDeleteRepositoryPayload2ᚖgithubᚗcomᚋgi
 	return ec._DeleteRepositoryPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNRenameRepositoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRenameRepositoryInput(ctx context.Context, v any) (model.RenameRepositoryInput, error) {
-	res, err := ec.unmarshalInputRenameRepositoryInput(ctx, v)
+func (ec *executionContext) unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx context.Context, v any) (*model.ObjectMetaInput, error) {
+	res, err := ec.unmarshalInputObjectMetaInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNProvisionRepositoryStorageInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProvisionRepositoryStorageInput(ctx context.Context, v any) (model.ProvisionRepositoryStorageInput, error) {
+	res, err := ec.unmarshalInputProvisionRepositoryStorageInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNRenameRepositoryPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRenameRepositoryPayload(ctx context.Context, sel ast.SelectionSet, v model.RenameRepositoryPayload) graphql.Marshaler {
-	return ec._RenameRepositoryPayload(ctx, sel, &v)
+func (ec *executionContext) marshalNProvisionRepositoryStoragePayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProvisionRepositoryStoragePayload(ctx context.Context, sel ast.SelectionSet, v model.ProvisionRepositoryStoragePayload) graphql.Marshaler {
+	return ec._ProvisionRepositoryStoragePayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNRenameRepositoryPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRenameRepositoryPayload(ctx context.Context, sel ast.SelectionSet, v *model.RenameRepositoryPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNProvisionRepositoryStoragePayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProvisionRepositoryStoragePayload(ctx context.Context, sel ast.SelectionSet, v *model.ProvisionRepositoryStoragePayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
 		}
 		return graphql.Null
 	}
-	return ec._RenameRepositoryPayload(ctx, sel, v)
+	return ec._ProvisionRepositoryStoragePayload(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNRepository2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepository(ctx context.Context, sel ast.SelectionSet, v *model.Repository) graphql.Marshaler {
@@ -1994,6 +2352,11 @@ func (ec *executionContext) marshalNRepositorySpec2ᚖgithubᚗcomᚋgitstoreᚑ
 	return ec._RepositorySpec(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNRepositorySpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositorySpecInput(ctx context.Context, v any) (*model.RepositorySpecInput, error) {
+	res, err := ec.unmarshalInputRepositorySpecInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalNRepositoryStatus2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositoryStatus(ctx context.Context, sel ast.SelectionSet, v *model.RepositoryStatus) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -2002,6 +2365,20 @@ func (ec *executionContext) marshalNRepositoryStatus2ᚖgithubᚗcomᚋgitstore�
 		return graphql.Null
 	}
 	return ec._RepositoryStatus(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNRepositoryWatchEvent2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositoryWatchEvent(ctx context.Context, sel ast.SelectionSet, v model.RepositoryWatchEvent) graphql.Marshaler {
+	return ec._RepositoryWatchEvent(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRepositoryWatchEvent2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositoryWatchEvent(ctx context.Context, sel ast.SelectionSet, v *model.RepositoryWatchEvent) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RepositoryWatchEvent(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNResolvedRepositoryDefinition2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedRepositoryDefinition(ctx context.Context, sel ast.SelectionSet, v *model.ResolvedRepositoryDefinition) graphql.Marshaler {
@@ -2014,23 +2391,42 @@ func (ec *executionContext) marshalNResolvedRepositoryDefinition2ᚖgithubᚗcom
 	return ec._ResolvedRepositoryDefinition(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNTransferRepositoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTransferRepositoryInput(ctx context.Context, v any) (model.TransferRepositoryInput, error) {
-	res, err := ec.unmarshalInputTransferRepositoryInput(ctx, v)
+func (ec *executionContext) unmarshalNUpdateRepositoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateRepositoryInput(ctx context.Context, v any) (model.UpdateRepositoryInput, error) {
+	res, err := ec.unmarshalInputUpdateRepositoryInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNTransferRepositoryPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTransferRepositoryPayload(ctx context.Context, sel ast.SelectionSet, v model.TransferRepositoryPayload) graphql.Marshaler {
-	return ec._TransferRepositoryPayload(ctx, sel, &v)
+func (ec *executionContext) marshalNUpdateRepositoryPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateRepositoryPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateRepositoryPayload) graphql.Marshaler {
+	return ec._UpdateRepositoryPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTransferRepositoryPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTransferRepositoryPayload(ctx context.Context, sel ast.SelectionSet, v *model.TransferRepositoryPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNUpdateRepositoryPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateRepositoryPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateRepositoryPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
 		}
 		return graphql.Null
 	}
-	return ec._TransferRepositoryPayload(ctx, sel, v)
+	return ec._UpdateRepositoryPayload(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNUpdateRepositoryStatusInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateRepositoryStatusInput(ctx context.Context, v any) (model.UpdateRepositoryStatusInput, error) {
+	res, err := ec.unmarshalInputUpdateRepositoryStatusInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUpdateRepositoryStatusPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateRepositoryStatusPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateRepositoryStatusPayload) graphql.Marshaler {
+	return ec._UpdateRepositoryStatusPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNUpdateRepositoryStatusPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateRepositoryStatusPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateRepositoryStatusPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UpdateRepositoryStatusPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalORepository2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepository(ctx context.Context, sel ast.SelectionSet, v *model.Repository) graphql.Marshaler {
@@ -2045,6 +2441,14 @@ func (ec *executionContext) unmarshalORepositoryNamespacePath2ᚖgithubᚗcomᚋ
 		return nil, nil
 	}
 	res, err := ec.unmarshalInputRepositoryNamespacePath(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalORepositoryResolvedStatusInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositoryResolvedStatusInput(ctx context.Context, v any) (*model.RepositoryResolvedStatusInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputRepositoryResolvedStatusInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 

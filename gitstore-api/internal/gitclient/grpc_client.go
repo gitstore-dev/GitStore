@@ -57,9 +57,18 @@ func (c *Client) Close() error {
 
 // InfoRefs returns the ref advertisement bytes and service for the given repository.
 func (c *Client) InfoRefs(ctx context.Context, repoID string, service gitv1.Service) ([]byte, gitv1.Service, error) {
+	action := "repository.read.any"
+	if service == gitv1.Service_SERVICE_GIT_RECEIVE_PACK {
+		action = "repository.write.any"
+	}
+	authorization, err := RequestAuthorization(ctx, action, repoID)
+	if err != nil {
+		return nil, gitv1.Service_SERVICE_UNSPECIFIED, err
+	}
 	resp, err := c.Git.InfoRefs(ctx, &gitv1.InfoRefsRequest{
-		RepositoryId: repoID,
-		Service:      service,
+		RepositoryId:  repoID,
+		Service:       service,
+		Authorization: authorization,
 	})
 	if err != nil {
 		return nil, gitv1.Service_SERVICE_UNSPECIFIED, err
@@ -69,9 +78,14 @@ func (c *Client) InfoRefs(ctx context.Context, repoID string, service gitv1.Serv
 
 // UploadPack sends the want/have body and returns an io.Reader streaming pack response chunks.
 func (c *Client) UploadPack(ctx context.Context, repoID string, body []byte) (io.Reader, error) {
+	authorization, err := RequestAuthorization(ctx, "repository.read.any", repoID)
+	if err != nil {
+		return nil, err
+	}
 	stream, err := c.Git.UploadPack(ctx, &gitv1.UploadPackRequest{
-		RepositoryId: repoID,
-		Body:         body,
+		RepositoryId:  repoID,
+		Body:          body,
+		Authorization: authorization,
 	})
 	if err != nil {
 		return nil, err
@@ -97,6 +111,9 @@ func (c *Client) ReceivePack(ctx context.Context, repoID string, body io.Reader)
 
 	// Read PushContext from context — set by PushContextInserter middleware.
 	pushCtx := PushContextFromContext(ctx)
+	if pushCtx == nil || pushCtx.Authorization == nil {
+		return nil, fmt.Errorf("receive-pack requires approved request authorization")
+	}
 
 	const chunkSize = 64 * 1024
 	buf := make([]byte, chunkSize)

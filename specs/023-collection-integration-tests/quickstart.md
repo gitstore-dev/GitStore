@@ -28,7 +28,7 @@ go test -v -timeout 120s ./...
 
 ```bash
 # Start full stack with ScyllaDB overlay
-DETACH=1 make compose-scylla
+DETACH=1 make compose DATASTORE=scylla
 
 # Bootstrap
 make bootstrap ADMIN_PASSWORD=admin123

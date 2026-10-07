@@ -33,7 +33,6 @@ type ConditionType = string
 type ConditionStatus = string
 
 const (
-	ConditionPublished          ConditionType = "Published"
 	ConditionAdmissionAccepted  ConditionType = "AdmissionAccepted"
 	ConditionCategoryResolved   ConditionType = "CategoryResolved"
 	ConditionOptionsAccepted    ConditionType = "OptionsAccepted"
@@ -65,7 +64,7 @@ type ProductStatus struct {
 
 // Condition is a named status signal following the Kubernetes condition convention.
 type Condition struct {
-	Type               ConditionType   `json:"type"               validate:"required,oneof=Published AdmissionAccepted CategoryResolved OptionsAccepted VariantsResolved Ready ParentResolved Acyclic ProductResolved PricingAccepted"`
+	Type               ConditionType   `json:"type"               validate:"required,oneof=AdmissionAccepted CategoryResolved OptionsAccepted VariantsResolved Ready ParentResolved Acyclic ProductResolved PricingAccepted"`
 	Status             ConditionStatus `json:"status"             validate:"required,oneof=True False Unknown"`
 	ObservedGeneration int64           `json:"observedGeneration"`
 	LastTransitionTime time.Time       `json:"lastTransitionTime"`
@@ -87,6 +86,10 @@ type ResolvedProductDefinition struct {
 type ResolvedCategoryDefinition struct {
 	Name string   `json:"name"`
 	Path []string `json:"path"`
+	// UID is the resolved CategoryTaxonomy's opaque Relay-encoded id (the
+	// same value CategoryTaxonomy.id returns), never its raw internal
+	// identifier. Present only while CategoryResolved is True.
+	UID string `json:"uid,omitempty"`
 }
 
 // PriceRangeDefinition uses shopspring/decimal for monetary values, consistent
@@ -148,6 +151,23 @@ type NamespaceStatus struct {
 	ObservedGeneration  int64       `json:"observedGeneration"`
 	LastAppliedRevision string      `json:"lastAppliedRevision"`
 	Conditions          []Condition `json:"conditions"`
+}
+
+// RepositoryStatus is the system-written state for a Repository. Never stored
+// in git.
+type RepositoryStatus struct {
+	ObservedGeneration  int64                         `json:"observedGeneration"`
+	LastAppliedRevision string                        `json:"lastAppliedRevision"`
+	Conditions          []Condition                   `json:"conditions"`
+	Resolved            *ResolvedRepositoryDefinition `json:"resolved,omitempty"`
+}
+
+// ResolvedRepositoryDefinition holds controller-computed Repository storage
+// state. It is deliberately distinct from RepositorySpec, which is author
+// controlled.
+type ResolvedRepositoryDefinition struct {
+	StoragePath  string `json:"storagePath"`
+	StorageClass string `json:"storageClass"`
 }
 
 // ResolvedCategoryTaxonomy holds system-computed hierarchy aggregates for a category.

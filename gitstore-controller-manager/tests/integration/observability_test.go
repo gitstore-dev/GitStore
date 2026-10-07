@@ -162,9 +162,12 @@ func TestObservability_StalledWorkers_SetWhenNoRecentSuccess(t *testing.T) {
 	defer cancel()
 
 	kind := "Widget-US5-Stalled"
-	// No reconcile ever succeeds: the manager must still mark the kind stalled
-	// after the threshold, and a /metrics scrape must refresh the gauge.
-	r := newScriptedReconciler(types.ResultTransient(errors.New("persistent failure")))
+	// A reconcile remains in flight beyond the threshold, so the manager must
+	// mark the kind stalled and a /metrics scrape must refresh the gauge.
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	defer close(release)
+	r := &blockingUntilReleased{started: started, release: release}
 	mgr := manager.New()
 	c := cache.New[string]()
 	c.MarkSynced()
@@ -188,15 +191,9 @@ func TestObservability_StalledWorkers_SetWhenNoRecentSuccess(t *testing.T) {
 	if err := mgr.Enqueue(key); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if r.callCount() >= 1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if r.callCount() == 0 {
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
 		t.Fatal("reconciler was never called")
 	}
 

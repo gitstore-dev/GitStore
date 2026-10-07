@@ -16,4 +16,15 @@ type AdmissionContext struct {
 	RefName      string    // fully-qualified ref, e.g. "refs/heads/main"
 	Revision     string    // human revision label, e.g. "main@sha1:abc123"
 	Now          time.Time // admission timestamp, set once for the entire push
+	superseded   *bool
+}
+
+func (c AdmissionContext) markSuperseded() {
+	if c.superseded != nil {
+		*c.superseded = true
+	}
+}
+
+func (c AdmissionContext) wasSuperseded() bool {
+	return c.superseded != nil && *c.superseded
 }

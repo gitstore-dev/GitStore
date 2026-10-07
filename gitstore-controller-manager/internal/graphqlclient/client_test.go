@@ -7,18 +7,161 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
 )
 
 // ── Query / Mutate ──────────────────────────────────────────────────────────
+
+func TestClientSharesThrottleCooldownAcrossHTTPAndWebSocket(t *testing.T) {
+	for _, websocketFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint(websocketFirst), func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
+					w.WriteHeader(http.StatusTooManyRequests)
+					_, _ = io.WriteString(w, "private-response-marker")
+					return
+				}
+				_, _ = io.WriteString(w, `{"data":{}}`)
+			}))
+			defer server.Close()
+			client := graphqlclient.New(server.URL, graphqlclient.NewStaticToken("test-token"))
+			var err error
+			if websocketFirst {
+				_, err = client.Subscribe(t.Context(), "subscription { watchProducts { name } }", nil)
+			} else {
+				err = client.Mutate(t.Context(), "mutation { updateProductStatus { product { id } } }", nil, nil)
+			}
+			require.ErrorIs(t, err, types.ErrRateLimited)
+			require.NotContains(t, err.Error(), "private-response-marker")
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+			defer cancel()
+			require.ErrorIs(t, client.Query(ctx, "query { products { edges { node { id } } } }", nil, nil), context.DeadlineExceeded)
+			require.EqualValues(t, 1, calls.Load(), "throttled mutations must not be automatically retried")
+			other := graphqlclient.New(server.URL, graphqlclient.NewStaticToken("test-token"))
+			require.NoError(t, other.Query(t.Context(), "query { node(id:\"id\") { id } }", nil, nil))
+			require.EqualValues(t, 2, calls.Load(), "an independent client retains its own budget")
+		})
+	}
+}
+
+func TestClientSharesRequestBudgetAndCancelsQueuedRequests(t *testing.T) {
+	var credentials countingCredentials
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = io.WriteString(w, `{"data":{}}`)
+	}))
+	defer server.Close()
+	client, err := graphqlclient.NewWithRateLimit(server.URL, &credentials, 1, 1)
+	require.NoError(t, err)
+	require.NoError(t, client.Query(t.Context(), "query { node(id:\"id\") { id } }", nil, nil))
+	queued, stop := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer stop()
+	_, err = client.Subscribe(queued, "subscription { watchProducts { name } }", nil)
+	require.Error(t, err)
+	require.EqualValues(t, 1, requests.Load(), "HTTP and WebSocket requests must share the exhausted budget")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = client.Subscribe(ctx, "subscription { watchProducts { name } }", nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.EqualValues(t, 2, credentials.calls.Load(), "canceled requests must not start credential work")
+	require.EqualValues(t, 1, requests.Load())
+}
+
+type countingCredentials struct{ calls atomic.Int32 }
+
+type outageCredentials struct {
+	calls atomic.Int32
+	ready atomic.Bool
+	err   error
+}
+
+func (c *outageCredentials) Current(context.Context) (string, error) {
+	c.calls.Add(1)
+	if !c.ready.Load() {
+		return "", c.err
+	}
+	return "test-token", nil
+}
+
+func TestCredentialOutageIsClassifiedAndPacedAcrossHTTPAndWebSocket(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = io.WriteString(w, `{"data":{}}`)
+	}))
+	defer server.Close()
+	cause := errors.New("signing provider unavailable")
+	source := &outageCredentials{err: cause}
+	client := graphqlclient.New(server.URL, source)
+	err := client.Query(t.Context(), "query { node(id:\"id\") { id } }", nil, nil)
+	require.ErrorIs(t, err, types.ErrCredentialsUnavailable)
+	require.ErrorIs(t, err, cause)
+	require.Zero(t, requests.Load())
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	_, err = client.Subscribe(ctx, "subscription { watchProducts { name } }", nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.EqualValues(t, 1, source.calls.Load(), "shared outage cooldown must precede credential acquisition")
+	source.ready.Store(true)
+	peer := graphqlclient.New(server.URL, source)
+	require.NoError(t, peer.Query(t.Context(), "query { node(id:\"id\") { id } }", nil, nil))
+	require.NoError(t, client.Query(t.Context(), "query { node(id:\"id\") { id } }", nil, nil))
+	require.EqualValues(t, 2, requests.Load(), "only authenticated requests may reach either transport")
+}
+
+func (c *countingCredentials) Current(context.Context) (string, error) {
+	c.calls.Add(1)
+	return "test-token", nil
+}
+
+type gatedCredentials struct{ ready <-chan struct{} }
+
+func (c gatedCredentials) Current(ctx context.Context) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-c.ready:
+		return "test-token", nil
+	}
+}
+
+func TestClientSlowCredentialsDoNotReleaseAnUnpacedRequestBurst(t *testing.T) {
+	ready := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"data":{}}`)
+	}))
+	defer server.Close()
+	client := graphqlclient.New(server.URL, gatedCredentials{ready: ready})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 30)
+	for range 30 {
+		go func() { done <- client.Query(ctx, "query { node(id:\"id\") { id } }", nil, nil) }()
+	}
+	time.Sleep(time.Second)
+	released := time.Now()
+	close(ready)
+	for range 30 {
+		require.NoError(t, <-done)
+	}
+	require.GreaterOrEqual(t, time.Since(released), 450*time.Millisecond)
+}
 
 func TestQuery_SendsPostWithBearerAndDecodesData(t *testing.T) {
 	var gotAuth string
@@ -36,7 +179,7 @@ func TestQuery_SendsPostWithBearerAndDecodesData(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := graphqlclient.New(srv.URL, "test-token")
+	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	var out struct {
 		Categories struct {
 			TotalCount int `json:"totalCount"`
@@ -63,7 +206,7 @@ func TestMutate_DecodesData(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := graphqlclient.New(srv.URL, "test-token")
+	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	var out struct {
 		UpdateCategoryStatus struct {
 			Category struct {
@@ -88,7 +231,7 @@ func TestQuery_GraphQLErrorSurfacesExtensionsCode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := graphqlclient.New(srv.URL, "test-token")
+	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	var out struct{}
 	err := c.Query(context.Background(), `query { category(by: {}) { id } }`, nil, &out)
 	if err == nil {
@@ -112,10 +255,36 @@ func TestQuery_HTTPErrorStatusReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := graphqlclient.New(srv.URL, "test-token")
+	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	var out struct{}
 	if err := c.Query(context.Background(), `query { categories(namespace: "acme") { totalCount } }`, nil, &out); err == nil {
 		t.Fatal("expected error for HTTP 500, got nil")
+	}
+}
+
+func TestQuery_RateLimitStatusReturnsRetryableSentinel(t *testing.T) {
+	var connections atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"rate limit exceeded"}`))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
+	for attempt := 0; attempt < 2; attempt++ {
+		err := c.Query(context.Background(), `query { categories(namespace: "acme") { totalCount } }`, nil, &struct{}{})
+		if !errors.Is(err, types.ErrRateLimited) {
+			t.Fatalf("Query error = %v, want errors.Is(..., types.ErrRateLimited)", err)
+		}
+	}
+	if got := connections.Load(); got != 1 {
+		t.Fatalf("HTTP connections = %d, want 1 reused connection", got)
 	}
 }
 
@@ -128,7 +297,7 @@ func TestQuery_VariablesSentInRequestBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := graphqlclient.New(srv.URL, "test-token")
+	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	var out struct{}
 	if err := c.Query(context.Background(), `query($ns: String!) { categories(namespace: $ns) { totalCount } }`, map[string]any{"ns": "acme"}, &out); err != nil {
 		t.Fatalf("Query failed: %v", err)
@@ -204,7 +373,7 @@ func TestSubscribe_HandshakeAndNextMessages(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	c := graphqlclient.New(wsURL, "test-token")
+	c := graphqlclient.New(wsURL, graphqlclient.NewStaticToken("test-token"))
 	sub, err := c.Subscribe(context.Background(), `subscription { watchCategories { name } }`, nil)
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
@@ -231,7 +400,7 @@ func TestSubscribe_StopClosesChannel(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	c := graphqlclient.New(wsURL, "test-token")
+	c := graphqlclient.New(wsURL, graphqlclient.NewStaticToken("test-token"))
 	sub, err := c.Subscribe(context.Background(), `subscription { watchCategories { name } }`, nil)
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
@@ -256,7 +425,7 @@ func TestSubscribe_ServerErrorSurfacedViaErr(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	c := graphqlclient.New(wsURL, "test-token")
+	c := graphqlclient.New(wsURL, graphqlclient.NewStaticToken("test-token"))
 	sub, err := c.Subscribe(context.Background(), `subscription { watchCategories { name } }`, nil)
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
@@ -301,7 +470,7 @@ func TestSubscribe_NextMessageWithErrorsSurfacedViaErr(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	c := graphqlclient.New(wsURL, "test-token")
+	c := graphqlclient.New(wsURL, graphqlclient.NewStaticToken("test-token"))
 	sub, err := c.Subscribe(context.Background(), `subscription { watchCategories { name } }`, nil)
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)

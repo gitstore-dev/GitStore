@@ -45,10 +45,10 @@ connection reads return the same body unchanged. Author metadata, spec, or body
 changes advance `generation`; status-only changes do not.
 
 Repository and Namespace connections use bounded keyset pagination over monthly
-projections and hydrate only the requested page. `totalCount` is `-1` when an
-exact value would require scanning unbounded historical buckets; consumers must
-treat that value as unknown rather than as an empty result. Fetch-all-then-sort
-is not an accepted pagination implementation.
+projections and hydrate only the requested page. Connections do not expose a
+`totalCount` field — an exact count would require scanning unbounded historical
+buckets, which this pagination model is specifically designed to avoid.
+Fetch-all-then-sort is not an accepted pagination implementation.
 
 The resource list is anchored in the Kubernetes-style frontmatter initiative
 tracked by `gitstore-dev/GitStore#40`. That initiative currently covers
@@ -184,6 +184,10 @@ Subresources should use the same storage decision as the data they represent:
 - [Namespace Resource Contract](../namespace/namespace-spec.md)
 - [Product Spec Reference](../products/product-spec.md)
 - [ProductVariant Spec Reference](../products/product-variant-spec.md)
+- [Product and Variant Publication Lifecycle](../products/publication-lifecycle.md) ([ADR 0014](../ADRs/0014-catalog-release-and-publication.md))
+- [Resource Lifecycle Hooks](../ADRs/0015-resource-lifecycle-hooks.md): which hooks each storage group allows ([contracts](../implementation/039-resource-lifecycle-hooks.md))
+- [Custom Resource Definitions](../ADRs/0016-custom-resource-definitions.md): how Extension/CRD resources are defined
+- [Custom Seller and Buyer Workflows](../implementation/037-custom-commerce-workflows.md)
 - [CategoryTaxonomy Spec Reference](../categories/category-taxonomy-spec.md)
 - [Collection Spec Reference](../collections/collection-spec.md)
 - [Pluggable Identity and Access Design](../implementation/019-pluggable_auth_design.md)

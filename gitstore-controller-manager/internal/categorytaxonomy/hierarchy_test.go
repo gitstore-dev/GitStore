@@ -4,11 +4,16 @@
 package categorytaxonomy
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/stretchr/testify/require"
 )
 
 func key(ns, name string) types.WorkItemKey {
@@ -22,6 +27,46 @@ func seedCache(t *testing.T, items ...CategoryTaxonomy) cache.CacheAccessor[Cate
 		c.Set(key(item.Namespace, item.Name), item)
 	}
 	return cache.AsReadOnly(c)
+}
+
+func TestBoundedHierarchyHonorsDepthRepresentationAndReadErrors(t *testing.T) {
+	for _, nodes := range []int{128, 129} {
+		t.Run(fmt.Sprint(nodes), func(t *testing.T) {
+			calls := 0
+			lookup := func(ctx context.Context, key types.WorkItemKey) (CategoryTaxonomy, bool, error) {
+				calls++
+				n, err := strconv.Atoi(key.Name)
+				if err != nil {
+					return CategoryTaxonomy{}, false, err
+				}
+				item := CategoryTaxonomy{Namespace: key.Namespace, Name: key.Name}
+				if n < nodes-1 {
+					item.ParentRefName = strconv.Itoa(n + 1)
+				}
+				return item, true, ctx.Err()
+			}
+			count := func(context.Context, string, string) (int64, error) { return 2, nil }
+			h, cycling, _, err := boundedHierarchy(t.Context(), lookup, count, CategoryTaxonomy{Namespace: "shop", Name: "0", ParentRefName: "1"}, 3)
+			require.LessOrEqual(t, calls, 128)
+			if nodes == 129 {
+				require.ErrorIs(t, err, errHierarchyDepth)
+			} else {
+				require.NoError(t, err)
+				require.False(t, cycling)
+				require.Equal(t, int8(127), h.Depth)
+				require.Len(t, h.Path, 128)
+				require.EqualValues(t, 2, h.ChildCount)
+				require.EqualValues(t, 3, h.ProductCount)
+			}
+		})
+	}
+	unavailable := errors.New("disk unavailable")
+	_, _, _, err := boundedHierarchy(t.Context(),
+		func(context.Context, types.WorkItemKey) (CategoryTaxonomy, bool, error) {
+			return CategoryTaxonomy{}, false, unavailable
+		},
+		nil, CategoryTaxonomy{Namespace: "shop", Name: "child", ParentRefName: "parent"}, 0)
+	require.ErrorIs(t, err, unavailable, "read failure must not turn into ParentNotFound")
 }
 
 func TestComputeHierarchy_RootCategory(t *testing.T) {

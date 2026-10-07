@@ -1,0 +1,54 @@
+# gitstore-api example config
+# Copy to /etc/gitstore/gitstore-api.toml and adjust for your deployment.
+
+[api]
+port = 4000
+git_port = 9000
+grpc_port = 6000
+rate_limit_per_second = 50
+rate_limit_burst = 100
+
+[git.grpc]
+uri = "dns:///localhost:50051"
+
+[auth.staticusers]
+users_file = "/etc/gitstore/users.yaml"
+
+[auth.jwt]
+secret = "replace-with-strong-random-secret-at-least-32-chars"
+duration = "24h"
+issuer = "gitstore"
+refresh_grace = "60s"
+
+[auth.grpc]
+hmac_secret = "replace-with-shared-hmac-secret"
+
+[auth.authn]
+chain = ["static-users", "anonymous"]
+
+[auth.authz]
+provider = "allow-all"
+
+[auth.userdir]
+provider = "static-users"
+
+[auth.rbac]
+policy_file = "/etc/gitstore/policy.yaml"
+
+[datastore]
+backend = "memdb"
+
+[features]
+namespace_repository_fence = "auto"
+
+[log]
+level = "info"
+format = "json"
+
+# Optional Scylla configuration when datastore.backend = "scylla"
+# [datastore.scylla]
+# hosts = ["localhost:9042"]
+# keyspace = "gitstore"
+# username = ""
+# password = ""
+# tls = false

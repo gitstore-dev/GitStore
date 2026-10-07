@@ -143,7 +143,7 @@ func TestNamespaceMetadataUsesSharedIdentityAndVersionTypes(t *testing.T) {
 	assert.Nil(t, schema.Types["NamespaceStatus"].Fields.ForName("resolved"))
 }
 
-func TestNamespaceLegacyFieldsAreDeprecated(t *testing.T) {
+func TestNamespaceHasNoDeprecatedLegacyFields(t *testing.T) {
 	schema := namespaceContractSchema(t)
 	for _, fieldName := range []string{
 		"identifier",
@@ -154,13 +154,9 @@ func TestNamespaceLegacyFieldsAreDeprecated(t *testing.T) {
 		"updatedAt",
 		"updatedBy",
 	} {
-		field := requireGraphQLField(t, schema, "Namespace", fieldName, schema.Types["Namespace"].Fields.ForName(fieldName).Type.String())
-		directive := field.Directives.ForName("deprecated")
-		require.NotNil(t, directive, "Namespace.%s must be deprecated", fieldName)
-		reason := directive.Arguments.ForName("reason")
-		require.NotNil(t, reason)
-		assert.NotEmpty(t, reason.Value.Raw)
+		assert.Nil(t, schema.Types["Namespace"].Fields.ForName(fieldName), "Namespace.%s should have been removed", fieldName)
 	}
+	assert.Nil(t, schema.Types["NamespaceBy"].Fields.ForName("identifier"), "NamespaceBy.identifier should have been removed")
 }
 
 func TestRepositoryVisibilityContract(t *testing.T) {

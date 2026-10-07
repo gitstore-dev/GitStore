@@ -97,10 +97,12 @@
 
 ### Production Requirements *(mandatory for core-service or load-bearing changes)*
 
-- **PR-001 Replica Safety**: [Define behavior with at least two replicas, process replacement, and rolling upgrades]
+- **PR-001 Replica Safety**: [Define concurrent API/controller replica behavior, implementation gaps, process replacement and rolling upgrades. Git is singleton-only: retain storage and forbid overlapping replacements; do not require Git replicas or HA unless repository sharding/routing/writer safety is explicitly approved feature scope.]
 - **PR-002 Multi-User Security**: [Define authentication, authorization, isolation, and audit behavior]
 - **PR-003 Capacity**: [Define dataset size, peak/sustained concurrency, payload shape, latency, and error objectives]
 - **PR-004 Backpressure**: [Define queue, worker, retry, timeout, and overload behavior]
+- **PR-005 Capacity Evidence**: [Name the reusable `make capacity TARGET=<target> PROFILE=<scenario> MODE=<diagnostic|alpha|production>` target/profile pair, required dataset/topology proof, threshold set, and domain-correctness verifier]
+- **PR-006 Fault Recovery**: [Name the reusable `make chaos CHAOS_PROFILE=...` profile(s), bounded target, steady-state hypothesis, and recovery deadline]
 - **PR-005 Recovery**: [Define convergence and data-integrity behavior after partial failure]
 
 ### Key Entities *(include if feature involves data)*
@@ -123,5 +125,7 @@
 - **SC-004**: [Business metric, e.g., "Reduce support tickets related to [X] by 50%"]
 
 For core-service or load-bearing changes, success criteria MUST also measure
-multi-replica correctness, authorization isolation, sustained-load behavior,
-backpressure, and recovery against the declared production dataset.
+API/controller multi-replica correctness, authorization isolation, sustained-load
+behavior, backpressure and recovery against the declared production dataset.
+Git evidence uses one active instance; separate Git volumes do not prove
+supported sharding, replication or HA.

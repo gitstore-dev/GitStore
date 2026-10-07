@@ -28,6 +28,84 @@ import (
 
 // region    **************************** field.gotpl *****************************
 
+func (ec *executionContext) _CredentialsRef_kind(ctx context.Context, field graphql.CollectedField, obj *model.CredentialsRef) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CredentialsRef_kind(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Kind, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CredentialsRef_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CredentialsRef", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CredentialsRef_type(ctx context.Context, field graphql.CollectedField, obj *model.CredentialsRef) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CredentialsRef_type(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Type, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CredentialsRef_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CredentialsRef", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CredentialsRef_secretRef(ctx context.Context, field graphql.CollectedField, obj *model.CredentialsRef) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CredentialsRef_secretRef(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.SecretRef, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.SecretRef) graphql.Marshaler {
+			return ec.marshalNSecretRef2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐSecretRef(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CredentialsRef_secretRef(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CredentialsRef",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SecretRef(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _File_id(ctx context.Context, field graphql.CollectedField, obj *model.File) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -416,8 +494,8 @@ func (ec *executionContext) _FileSource_credentialsRef(ctx context.Context, fiel
 			return obj.CredentialsRef, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.SecretRef) graphql.Marshaler {
-			return ec.marshalOSecretRef2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐSecretRef(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.CredentialsRef) graphql.Marshaler {
+			return ec.marshalOCredentialsRef2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCredentialsRef(ctx, selections, v)
 		},
 		true,
 		false,
@@ -430,7 +508,7 @@ func (ec *executionContext) fieldContext_FileSource_credentialsRef(_ context.Con
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_SecretRef(ctx, field)
+			return ec.childFields_CredentialsRef(ctx, field)
 		},
 	}
 	return fc, nil
@@ -952,6 +1030,55 @@ func (ec *executionContext) fieldContext_SecretRef_namespace(_ context.Context, 
 // endregion ************************** interface.gotpl ***************************
 
 // region    **************************** object.gotpl ****************************
+
+var credentialsRefImplementors = []string{"CredentialsRef"}
+
+func (ec *executionContext) _CredentialsRef(ctx context.Context, sel ast.SelectionSet, obj *model.CredentialsRef) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, credentialsRefImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CredentialsRef")
+		case "kind":
+			out.Values[i] = ec._CredentialsRef_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "type":
+			out.Values[i] = ec._CredentialsRef_type(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "secretRef":
+			out.Values[i] = ec._CredentialsRef_secretRef(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
 
 var fileImplementors = []string{"File", "Node"}
 
@@ -1553,6 +1680,23 @@ func (ec *executionContext) marshalNResolvedFileVariant2ᚖgithubᚗcomᚋgitsto
 	return ec._ResolvedFileVariant(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNSecretRef2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐSecretRef(ctx context.Context, sel ast.SelectionSet, v *model.SecretRef) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SecretRef(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOCredentialsRef2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCredentialsRef(ctx context.Context, sel ast.SelectionSet, v *model.CredentialsRef) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._CredentialsRef(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalOFile2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐFile(ctx context.Context, sel ast.SelectionSet, v *model.File) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -1586,13 +1730,6 @@ func (ec *executionContext) marshalOFileStatus2ᚖgithubᚗcomᚋgitstoreᚑdev�
 		return graphql.Null
 	}
 	return ec._FileStatus(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalOSecretRef2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐSecretRef(ctx context.Context, sel ast.SelectionSet, v *model.SecretRef) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	return ec._SecretRef(ctx, sel, v)
 }
 
 // endregion ***************************** type.gotpl *****************************

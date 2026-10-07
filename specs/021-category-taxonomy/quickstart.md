@@ -11,7 +11,7 @@
 make dev
 
 # Or with ScyllaDB
-make compose-scylla
+make compose DATASTORE=scylla
 
 # Bootstrap default namespace and repository
 make bootstrap ADMIN_PASSWORD=secret

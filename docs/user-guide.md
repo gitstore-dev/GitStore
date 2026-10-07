@@ -25,7 +25,7 @@ The core stack exposes:
 |---|---|
 | GraphQL API | http://localhost:4000/graphql |
 | GraphQL Playground | http://localhost:4000/playground |
-| Git Smart HTTP | http://localhost:5000 |
+| Git Smart HTTP | http://localhost:9000 |
 | Controller manager health | http://localhost:5001/health |
 
 ## Bootstrap A Repository
@@ -33,7 +33,7 @@ The core stack exposes:
 Create the default namespace and repository:
 
 ```bash
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```
 
 By default this creates:
@@ -48,6 +48,7 @@ Common overrides:
 
 ```bash
 make bootstrap \
+  TARGET=all \
   ADMIN_PASSWORD=<admin-password> \
   NAMESPACE=my-store \
   NAMESPACE_DISPLAY_NAME="My Store" \
@@ -58,13 +59,13 @@ make bootstrap \
 The command prints a clone URL like:
 
 ```text
-http://localhost:5000/gitstore-test/catalog.git
+http://localhost:9000/gitstore-test/catalog.git
 ```
 
 Clone it:
 
 ```bash
-git clone http://localhost:5000/gitstore-test/catalog.git catalog-work
+git clone http://localhost:9000/gitstore-test/catalog.git catalog-work
 cd catalog-work
 ```
 
@@ -253,7 +254,6 @@ query ListProducts {
       hasNextPage
       endCursor
     }
-    totalCount
   }
 }
 ```
@@ -356,7 +356,13 @@ query ListCollections {
           }
         }
         products(first: 5) {
-          totalCount
+          edges {
+            node {
+              metadata {
+                name
+              }
+            }
+          }
         }
       }
     }
@@ -369,7 +375,7 @@ query ListCollections {
 ```bash
 curl -s http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
-  -d '{"query":"query { products(namespace: \"gitstore-test\", first: 5) { totalCount } }"}' | jq .
+  -d '{"query":"query { products(namespace: \"gitstore-test\", first: 5) { edges { node { metadata { name } } } } }"}' | jq .
 ```
 
 ## Control-plane Operations
@@ -377,7 +383,7 @@ curl -s http://localhost:4000/graphql \
 Use GraphQL mutations for authentication, namespaces, and repositories. The Make bootstrap targets wrap these calls for the common local workflow.
 
 GitStore delegates OAuth2/OIDC federation to external identity providers. The GraphQL
-`login(input:)` mutation is a convenience flow for local providers (for example `static-admin`).
+`login(input:)` mutation is a convenience flow for local providers (for example `static-users`).
 
 Login:
 
@@ -415,16 +421,6 @@ Create a namespace and repository manually when you need custom provisioning. Se
 
 Catalogue writes are Git-driven today. Product, category, collection, and variant CRUD over GraphQL will be documented after the Git-backed design is finalized.
 
-## Admin UI
-
-The optional admin UI runs on http://localhost:3000:
-
-```bash
-make admin-compose DETACH=1
-```
-
-See [Admin docs](admin/README.md) for setup and current limitations.
-
 ## Troubleshooting
 
 ### Stack Is Not Healthy
@@ -438,15 +434,15 @@ make logs SERVICE=git-service
 make logs SERVICE=controller-manager
 ```
 
-If required auth environment variables are missing, the API will not become healthy. Set `GITSTORE_AUTH__ADMIN__USERNAME`, `GITSTORE_AUTH__ADMIN__PASSWORD_HASH`, and `GITSTORE_AUTH__JWT__SECRET`, or use the provided compose defaults for local development.
+If required auth configuration is missing, the API will not become healthy. Set `GITSTORE_AUTH__STATICUSERS__USERS_FILE` and `GITSTORE_AUTH__JWT__SECRET`, or use the provided compose defaults for local development.
 
 ### Bootstrap Fails
 
-`make bootstrap` needs a valid admin password unless you provide `BOOTSTRAP_TOKEN` or have a cached token.
+`make bootstrap TARGET=all` needs a valid admin password unless you provide `BOOTSTRAP_TOKEN` or have a cached token.
 
 ```bash
-make bootstrap-token ADMIN_PASSWORD=<admin-password>
-make bootstrap BOOTSTRAP_TOKEN=<token>
+make bootstrap TARGET=token ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all BOOTSTRAP_TOKEN=<token>
 ```
 
 Bootstrap is create-oriented. If a namespace or repository already exists, either use different `NAMESPACE` / `REPOSITORY` values or keep the existing resources.
@@ -456,7 +452,7 @@ Bootstrap is create-oriented. If a namespace or repository already exists, eithe
 Use the clone URL printed by `make bootstrap`. It should include the namespace, repository name, and `.git` suffix:
 
 ```text
-http://localhost:5000/gitstore-test/catalog.git
+http://localhost:9000/gitstore-test/catalog.git
 ```
 
 Verify the repository exists:

@@ -5,9 +5,12 @@ package scylla
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
 
 func TestBuildRepairPlanDeterministicFindings(t *testing.T) {
@@ -94,6 +97,99 @@ func TestProjectionRepairServiceApplyAndVerify(t *testing.T) {
 	}
 	if len(result.Verification.Findings) != 0 {
 		t.Fatalf("verification findings = %#v, want none", result.Verification.Findings)
+	}
+}
+
+func TestProjectionRepairServiceClearsRetainedRepositoryFence(t *testing.T) {
+	t.Parallel()
+	fence := NamespaceRepositoryFenceRepair{
+		Namespace: "demo", UID: "11111111-1111-1111-1111-111111111111",
+		RepositoryCreationEpoch: 7, PendingRepositoryCreations: 1,
+	}
+	snapshot := missingNamespaceBucketSnapshot()
+	snapshot.Projections = append(snapshot.Projections, expectedProjections(snapshot.Authoritative[0])[1])
+	snapshot.NamespaceRepositoryFences = []NamespaceRepositoryFenceRepair{fence}
+	store := newFakeRepairStore(snapshot)
+	service := &ProjectionRepairService{store: store}
+
+	plan, err := service.Audit(context.Background())
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	if len(plan.NamespaceRepositoryFences) != 1 || plan.NamespaceRepositoryFences[0] != fence {
+		t.Fatalf("Audit() fences = %#v, want %#v", plan.NamespaceRepositoryFences, fence)
+	}
+	result, err := service.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if len(result.Verification.NamespaceRepositoryFences) != 0 {
+		t.Fatalf("verification fences = %#v, want none", result.Verification.NamespaceRepositoryFences)
+	}
+	if len(store.completedRepairs) != 1 || store.completedRepairs[0] != fence {
+		t.Fatalf("completed repairs = %#v, want %#v", store.completedRepairs, fence)
+	}
+	if result.PlannedRepositoryFences != 1 || result.CompletedRepositoryFences != 1 {
+		t.Fatalf(
+			"repository fence result = planned %d completed %d, want 1 and 1",
+			result.PlannedRepositoryFences,
+			result.CompletedRepositoryFences,
+		)
+	}
+}
+
+func TestProjectionRepairServiceRetainsFenceWhenClearFails(t *testing.T) {
+	t.Parallel()
+	fence := NamespaceRepositoryFenceRepair{
+		Namespace: "demo", UID: "11111111-1111-1111-1111-111111111111",
+		RepositoryCreationEpoch: 7, PendingRepositoryCreations: 1,
+	}
+	snapshot := missingNamespaceBucketSnapshot()
+	snapshot.Projections = append(snapshot.Projections, expectedProjections(snapshot.Authoritative[0])[1])
+	snapshot.NamespaceRepositoryFences = []NamespaceRepositoryFenceRepair{fence}
+	store := newFakeRepairStore(snapshot)
+	store.completeErr = datastore.ErrConflict
+	service := &ProjectionRepairService{store: store}
+
+	plan, err := service.Audit(context.Background())
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	if _, err := service.Apply(context.Background(), plan); !errors.Is(err, datastore.ErrConflict) {
+		t.Fatalf("Apply() error = %v, want conflict", err)
+	}
+	retryPlan, err := service.Audit(context.Background())
+	if err != nil {
+		t.Fatalf("retry Audit() error = %v", err)
+	}
+	if len(retryPlan.NamespaceRepositoryFences) != 1 || retryPlan.NamespaceRepositoryFences[0] != fence {
+		t.Fatalf("retry Audit() fences = %#v, want %#v", retryPlan.NamespaceRepositoryFences, fence)
+	}
+}
+
+func TestProjectionRepairServiceUsesAuditedFenceForCAS(t *testing.T) {
+	t.Parallel()
+	fence := NamespaceRepositoryFenceRepair{
+		Namespace: "demo", UID: "11111111-1111-1111-1111-111111111111",
+		RepositoryCreationEpoch: 7, PendingRepositoryCreations: 1,
+	}
+	snapshot := missingNamespaceBucketSnapshot()
+	snapshot.Projections = append(snapshot.Projections, expectedProjections(snapshot.Authoritative[0])[1])
+	snapshot.NamespaceRepositoryFences = []NamespaceRepositoryFenceRepair{fence}
+	store := newFakeRepairStore(snapshot)
+	service := &ProjectionRepairService{store: store}
+
+	plan, err := service.Audit(context.Background())
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	store.snapshot.NamespaceRepositoryFences[0].RepositoryCreationEpoch++
+	store.expectedFence = &store.snapshot.NamespaceRepositoryFences[0]
+	if _, err := service.Apply(context.Background(), plan); !errors.Is(err, datastore.ErrConflict) {
+		t.Fatalf("Apply() error = %v, want conflict", err)
+	}
+	if len(store.completedRepairs) != 0 {
+		t.Fatalf("completed repairs = %#v, want none", store.completedRepairs)
 	}
 }
 
@@ -288,6 +384,9 @@ func stringifyPlan(plan RepairPlan) string {
 type fakeRepairStore struct {
 	snapshot          ProjectionSnapshot
 	applyCalls        int
+	completedRepairs  []NamespaceRepositoryFenceRepair
+	completeErr       error
+	expectedFence     *NamespaceRepositoryFenceRepair
 	concurrentVersion string
 	versionsByLookup  []string
 	lookupCalls       int
@@ -347,6 +446,21 @@ func (f *fakeRepairStore) ApplyAction(ctx context.Context, action RepairAction) 
 		return false, nil
 	}
 	return true, nil
+}
+
+func (f *fakeRepairStore) CompleteRepositoryRepairs(
+	_ context.Context,
+	fences []NamespaceRepositoryFenceRepair,
+) error {
+	if f.completeErr != nil {
+		return f.completeErr
+	}
+	if f.expectedFence != nil && (len(fences) != 1 || fences[0] != *f.expectedFence) {
+		return datastore.ErrConflict
+	}
+	f.completedRepairs = append(f.completedRepairs, fences...)
+	f.snapshot.NamespaceRepositoryFences = nil
+	return nil
 }
 
 func (f *fakeRepairStore) Close() {}

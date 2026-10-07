@@ -183,6 +183,7 @@ func TestHealth_MetricsEndpointResponds(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, metric := range []string{
+		"gitstore_controller_process_instance_info",
 		"gitstore_controller_queue_depth",
 		"gitstore_controller_active_workers",
 		"gitstore_controller_poison_items_total",

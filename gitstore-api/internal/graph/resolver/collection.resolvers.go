@@ -54,21 +54,6 @@ func (r *collectionResolver) Products(ctx context.Context, obj *model.Collection
 	}, nil
 }
 
-// CreateCollection is the resolver for the createCollection field.
-func (r *mutationResolver) CreateCollection(ctx context.Context, input model.CreateCollectionInput) (*model.CreateCollectionPayload, error) {
-	return nil, fmt.Errorf("createCollection is deprecated: manage collections via git push")
-}
-
-// UpdateCollection is the resolver for the updateCollection field.
-func (r *mutationResolver) UpdateCollection(ctx context.Context, input model.UpdateCollectionInput) (*model.UpdateCollectionPayload, error) {
-	return nil, fmt.Errorf("updateCollection is deprecated: manage collections via git push")
-}
-
-// DeleteCollection is the resolver for the deleteCollection field.
-func (r *mutationResolver) DeleteCollection(ctx context.Context, input model.DeleteCollectionInput) (*model.DeleteCollectionPayload, error) {
-	return nil, fmt.Errorf("deleteCollection is deprecated: manage collections via git push")
-}
-
 // Collection is the resolver for the collection field.
 func (r *queryResolver) Collection(ctx context.Context, by model.CollectionBy) (*model.Collection, error) {
 	if by.ID != nil {

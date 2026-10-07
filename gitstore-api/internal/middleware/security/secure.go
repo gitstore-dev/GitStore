@@ -6,6 +6,7 @@ package security
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -26,6 +27,12 @@ type Authenticate struct {
 	registry   *auth.ProviderRegistry
 	logger     *zap.Logger
 	authCounts *prometheus.CounterVec
+	// apiAuthnCounts backs gitstore_api_authn_requests_total{provider,outcome}
+	// (spec 061 T013) — a per-provider, per-outcome counter for the generic
+	// bearer-token AuthN path (GraphQL and other non-git-http API traffic),
+	// distinct from authCounts' git-smart-HTTP-specific {outcome,service}
+	// shape above.
+	apiAuthnCounts *prometheus.CounterVec
 }
 
 type Authorize struct {
@@ -38,7 +45,61 @@ type Authorize struct {
 type datastoreGetter interface {
 	GetRepository(ctx context.Context, id string) (*datastore.Repository, error)
 	GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error)
+	GetNamespace(ctx context.Context, id string) (*datastore.Namespace, error)
+	LookupRepository(ctx context.Context, namespace, name string) (*datastore.NamespaceMapping, error)
 	GetCategoryTaxonomy(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error)
+	GetProduct(ctx context.Context, uid string) (*datastore.Product, error)
+	GetProductByName(ctx context.Context, namespace, name string) (*datastore.Product, error)
+}
+
+// authorizeRepositoryTenant is the common repository policy decision used by
+// GraphQL and Git smart-HTTP. Ownership is deliberately derived from the
+// stable principal subject rather than provider-specific roles.
+func (a *Authorize) authorizeRepositoryTenant(ctx context.Context, principal *auth.Principal, operation string, repository *datastore.Repository, namespaces ...*datastore.Namespace) (string, error) {
+	if a.registry == nil || a.registry.AuthZ() == nil {
+		return "", errors.New("authorization service unavailable")
+	}
+	if principal == nil {
+		principal = auth.Anonymous()
+	}
+	if repository == nil || len(namespaces) == 0 {
+		return "", errors.New("repository authorization context is incomplete")
+	}
+
+	scope := "own"
+	attrs := make(map[string]any, len(namespaces))
+	owner := ""
+	for index, namespace := range namespaces {
+		if namespace == nil {
+			return "", errors.New("repository authorization namespace is missing")
+		}
+		if index == 0 {
+			owner = namespace.EffectiveOwnerSub()
+			attrs["namespace"] = namespace.Name
+		} else {
+			attrs["targetNamespace"] = namespace.Name
+			attrs["targetOwnerSub"] = namespace.EffectiveOwnerSub()
+		}
+		// TODO(ADR-0010 §14, follow-up vocabulary spec): this pre-computes
+		// .own/.any in Go against the mutable owner subject; Authorize does
+		// not yet consume ResourceContext.OwnerSub itself (rbaclocal
+		// discards it). See ownerMatchesPrincipal and the ADR-0010 §14
+		// addendum in docs/ADRs/0010-authorization-model.md.
+		if !ownerMatchesPrincipal(namespace.EffectiveOwnerSub(), principal) {
+			scope = "any"
+		}
+	}
+	action := "repository." + operation + "." + scope
+	decision, err := a.registry.AuthZ().Authorize(ctx, principal, action, auth.ResourceContext{
+		Kind: "repository", Name: repository.Name, OwnerSub: owner, Attrs: attrs,
+	})
+	if err != nil {
+		return "", err
+	}
+	if decision.Outcome != auth.OutcomeAllow {
+		return "", fmt.Errorf("permission denied: %s", decision.Reason)
+	}
+	return action, nil
 }
 
 type RateLimit struct {
@@ -60,6 +121,7 @@ type authenticatorFunc func(*gin.Context, auth.AuthRequest, *Authenticate) (cont
 // Pass nil to skip metric registration (useful in tests that don't need counters).
 func NewAuthenticate(registry *auth.ProviderRegistry, logger *zap.Logger, opts ...prometheus.Registerer) Authenticate {
 	var counts *prometheus.CounterVec
+	var apiCounts *prometheus.CounterVec
 	if len(opts) > 0 && opts[0] != nil {
 		counts = prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "gitstore_git_http_auth_requests_total",
@@ -72,11 +134,22 @@ func NewAuthenticate(registry *auth.ProviderRegistry, logger *zap.Logger, opts .
 				counts = are.ExistingCollector.(*prometheus.CounterVec)
 			}
 		}
+		apiCounts = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gitstore_api_authn_requests_total",
+			Help: "Total bearer-token API authentication requests by provider and outcome.",
+		}, []string{"provider", "outcome"})
+		if err := opts[0].Register(apiCounts); err != nil {
+			var are prometheus.AlreadyRegisteredError
+			if errors.As(err, &are) {
+				apiCounts = are.ExistingCollector.(*prometheus.CounterVec)
+			}
+		}
 	}
 	return Authenticate{
-		registry:   registry,
-		logger:     logger,
-		authCounts: counts,
+		registry:       registry,
+		logger:         logger,
+		authCounts:     counts,
+		apiAuthnCounts: apiCounts,
 	}
 }
 
@@ -151,13 +224,16 @@ func bearerAuth(c *gin.Context, req auth.AuthRequest, a *Authenticate) (context.
 	principal, decision, err := a.registry.AuthN().Authenticate(ctx, req)
 	if err != nil {
 		a.logger.Warn("auth chain error", zap.Error(err))
+		a.recordAPIAuthN(decision.Provider, "error")
 		c.AbortWithStatus(http.StatusUnauthorized)
 		return ctx, principal, c.IsAborted()
 	}
 	if decision.Outcome == auth.OutcomeDeny {
+		a.recordAPIAuthN(decision.Provider, "deny")
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"Unauthorized": decision.Reason})
 		return ctx, principal, c.IsAborted()
 	}
+	a.recordAPIAuthN(decision.Provider, "allow")
 	return ctx, principal, c.IsAborted()
 }
 
@@ -210,6 +286,18 @@ func (a *Authenticate) recordAuthService(outcome, service string) {
 	a.authCounts.WithLabelValues(outcome, service).Inc()
 }
 
+// recordAPIAuthN increments gitstore_api_authn_requests_total{provider,outcome}
+// if metrics are configured (spec 061 T013). provider is the Decision's
+// Provider field — the name of the specific AuthNProvider that produced the
+// terminal outcome, or "chain" when every provider in the chain returned
+// Challenge (see ChainedAuthN.Authenticate's doc comment).
+func (a *Authenticate) recordAPIAuthN(provider, outcome string) {
+	if a.apiAuthnCounts == nil {
+		return
+	}
+	a.apiAuthnCounts.WithLabelValues(provider, outcome).Inc()
+}
+
 // Authenticator authenticates a request through the active provider chain.
 // Anonymous access passes through as a Principal with AuthMethod "none"; denied
 // credentials return 401 before the request reaches GraphQL.
@@ -228,14 +316,17 @@ func (a *Authenticate) BasicAuthenticator(c *gin.Context) {
 // repoIDKey matches the constant defined in githttp/resolver.go.
 // Duplicated here to avoid an import cycle; both must be kept in sync.
 const repoIDKey = "repoID"
+const approvedRepositoryActionKey = "approvedRepositoryAction"
 
 // GitHttpAuthorizer authorizes a Git Smart HTTP request after RepoResolver has run.
 // Requires repoIDKey to be set in the gin context (abort 500 if missing).
-// Determines required action from route path:
-//   - /info/refs and /git-upload-pack → "repository.read"
-//   - /git-receive-pack              → "repository.write"
+// Determines required action from route path (and, for /info/refs, the
+// ?service= query param since that endpoint is shared by both services):
+//   - /git-upload-pack, or /info/refs?service=git-upload-pack   → "repository.read"
+//   - /git-receive-pack, or /info/refs?service=git-receive-pack → "repository.write"
 //
-// Aborts with 403 on deny.
+// Aborts with 401 on an anonymous deny so Git credential helpers can retry,
+// and with 403 when an authenticated principal lacks permission.
 func (a *Authorize) GitHttpAuthorizer(c *gin.Context) {
 	if a.logger == nil {
 		a.logger = zap.NewNop()
@@ -259,30 +350,73 @@ func (a *Authorize) GitHttpAuthorizer(c *gin.Context) {
 		principal = auth.Anonymous()
 	}
 
-	action := "repository.read"
-	if strings.HasSuffix(c.FullPath(), "/git-receive-pack") {
-		action = "repository.write"
+	// /info/refs is shared by both upload-pack and receive-pack discovery;
+	// the actual service is disambiguated by the ?service= query param, not
+	// the path, so a receive-pack discovery request must be treated as a
+	// write to correctly reject anonymous access with a 401 (prompting Git
+	// to retry with credentials) instead of falling through to a deeper
+	// rejection that surfaces as a generic 503.
+	operation := "read"
+	switch {
+	case strings.HasSuffix(c.FullPath(), "/git-receive-pack"):
+		operation = "write"
+	case strings.HasSuffix(c.FullPath(), "/info/refs") && c.Query("service") == "git-receive-pack":
+		operation = "write"
 	}
 
-	authz := a.registry.AuthZ()
-	if authz == nil {
-		c.Next()
+	if a.store == nil {
+		// Legacy test/embedding callers do not provide a datastore. Preserve the
+		// historical unsuffixed action there; production wiring always supplies a
+		// store and therefore uses the tenant-aware contract below.
+		authorize := a.registry.AuthZ()
+		if authorize == nil {
+			c.Next()
+			return
+		}
+		decision, err := authorize.Authorize(c.Request.Context(), principal, "repository."+operation, auth.ResourceContext{Kind: "repository", Name: repoID})
+		if err != nil {
+			a.logger.Error("authz error", zap.Error(err))
+			c.AbortWithStatus(http.StatusServiceUnavailable)
+			return
+		}
+		if decision.Outcome == auth.OutcomeAllow {
+			c.Next()
+			return
+		}
+		if principal.AuthMethod == "none" {
+			c.Header("WWW-Authenticate", `Basic realm="GitStore"`)
+			c.AbortWithStatus(http.StatusUnauthorized)
+		} else {
+			c.AbortWithStatus(http.StatusForbidden)
+		}
 		return
 	}
-
-	decision, err := authz.Authorize(c.Request.Context(), principal, action, auth.ResourceContext{
-		Kind: "repository",
-		Name: repoID,
-	})
+	repository, err := a.store.GetRepository(c.Request.Context(), repoID)
 	if err != nil {
-		a.logger.Error("authz error", zap.Error(err))
-		c.AbortWithStatus(http.StatusServiceUnavailable)
+		a.logger.Error("GitHttpAuthorizer: resolve repository", zap.Error(err))
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
-	if decision.Outcome == auth.OutcomeDeny {
-		a.logger.Warn("authz denied", zap.String("action", action), zap.String("reason", decision.Reason))
+	namespace, err := a.store.GetNamespaceByName(c.Request.Context(), repository.Namespace)
+	if err != nil {
+		a.logger.Error("GitHttpAuthorizer: resolve namespace", zap.Error(err))
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	action, err := a.authorizeRepositoryTenant(c.Request.Context(), principal, operation, repository, namespace)
+	if err != nil {
+		a.logger.Warn("authz denied", zap.String("action", action), zap.Error(err))
+		if principal.AuthMethod == "none" {
+			c.Header("WWW-Authenticate", `Basic realm="GitStore"`)
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
 		c.AbortWithStatus(http.StatusForbidden)
 		return
+	}
+	c.Set(approvedRepositoryActionKey, action)
+	if principal.AuthMethod == "none" {
+		c.Request = c.Request.WithContext(auth.ContextWithAuthorizedAnonymous(c.Request.Context()))
 	}
 	c.Next()
 }
@@ -325,19 +459,25 @@ func (a *Authorize) PushContextInserter(c *gin.Context) {
 	if principal == nil {
 		principal = auth.Anonymous()
 	}
+	action, exists := c.Get(approvedRepositoryActionKey)
+	approvedAction, isString := action.(string)
+	if !exists || !isString || approvedAction == "" {
+		a.logger.Error("PushContextInserter: approved repository action missing")
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
 
 	pc := &gitv1.PushContext{
 		RepositoryId:          repoID,
 		Namespace:             strings.TrimSuffix(c.Param("namespace"), ".git"),
 		RepositoryName:        repo.Name,
 		ConfigResourceVersion: repo.UpdateTimestamp.UTC().Format(time.RFC3339Nano),
-		Actor: &gitv1.AuthContext{
-			Subject:    principal.Subject,
-			Issuer:     principal.Issuer,
-			AuthMethod: principal.AuthMethod,
-			Roles:      principal.Roles,
-			Groups:     principal.Groups,
-			Scopes:     principal.Scopes,
+		Authorization: &gitv1.RequestAuthorization{
+			Actor: &gitv1.AuthContext{
+				Subject: principal.Subject, Issuer: principal.Issuer, AuthMethod: principal.AuthMethod,
+				Roles: principal.Roles, Groups: principal.Groups, Scopes: principal.Scopes,
+			},
+			Action: approvedAction, ResourceKind: "repository", ResourceName: repo.Name, RepositoryId: repoID,
 		},
 		Policy: &gitv1.PushPolicy{
 			MaxPackSizeBytes: repo.MaxPackSizeBytes,
@@ -352,12 +492,19 @@ func (a *Authorize) PushContextInserter(c *gin.Context) {
 
 // RateLimiter rate limiting prevents abuse, brute-force attacks, and resource exhaustion.
 func (r *RateLimit) RateLimiter(c *gin.Context) {
-	ip := c.ClientIP()
-	r.mu.Lock()
-	if _, exists := r.clients[ip]; !exists {
-		r.clients[ip] = &client{limiter: rate.NewLimiter(r.limit, r.burst)}
+	key := c.ClientIP()
+	if c.Request.Method == http.MethodGet {
+		switch c.FullPath() {
+		case "/health", "/ready", "/metrics":
+			// Keep each operational route bounded without sharing application quota.
+			key += "|" + c.FullPath()
+		}
 	}
-	cl := r.clients[ip]
+	r.mu.Lock()
+	if _, exists := r.clients[key]; !exists {
+		r.clients[key] = &client{limiter: rate.NewLimiter(r.limit, r.burst)}
+	}
+	cl := r.clients[key]
 	cl.lastSeen = time.Now()
 	r.mu.Unlock()
 	if !cl.limiter.Allow() {

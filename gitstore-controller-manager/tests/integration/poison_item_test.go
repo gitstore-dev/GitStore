@@ -72,14 +72,18 @@ func TestIntegration_PoisonedItem_SurfacedAsTerminalFailure(t *testing.T) {
 		}
 
 		found := false
-		for _, item := range mgr.AllPoisonItems() {
+		items, _, err := mgr.ListPoisonPage(ctx, "_all", "", 256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range items {
 			if item.Key == key {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Error("expected quarantined key to appear in Manager.AllPoisonItems()")
+			t.Error("expected quarantined key to appear in Manager.ListPoisonPage()")
 		}
 
 		after := testutil.ToFloat64(health.PoisonItemsTotal.WithLabelValues(kind))

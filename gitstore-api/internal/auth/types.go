@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 )
 
@@ -66,17 +67,16 @@ type Principal struct {
 	ExpiresAt  time.Time      `json:"exp,omitempty"`
 	// TokenID is the JWT jti claim — unique per-token identifier used for revocation.
 	// Empty for Basic Auth sessions and anonymous principals.
-	TokenID string `json:"jti,omitempty"`
+	TokenID           string `json:"jti,omitempty"`
+	ServiceAccountUID string `json:"service_account_uid,omitempty"`
 }
 
-// IsAdmin returns true when the principal carries the built-in "admin" role.
+// IsAdmin reports whether AuthZ assigned the built-in "admin" role.
+// Authentication providers establish identity only; they must not grant roles.
+// In particular, static-users principals are role-free until rbac-local (or
+// another AuthZ provider) resolves their bindings.
 func (p *Principal) IsAdmin() bool {
-	for _, r := range p.Roles {
-		if r == "admin" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.Roles, "admin")
 }
 
 // Anonymous returns a Principal with no identity.

@@ -6,19 +6,19 @@ This page covers common local Docker Compose issues for the current GitStore sta
 
 The core compose stack includes:
 
-| Service | Container | Ports |
-|---|---|---|
-| API | `gitstore-api` | `4000`, `5000`, `6000` |
-| Git service | `gitstore-git-service` | `50051` |
-| Controller manager | `gitstore-controller-manager` | `5001` |
+| Service            | Container                     | Ports                                  |
+|--------------------|-------------------------------|----------------------------------------|
+| API                | `gitstore-api`                | `4000`, `9000` (Git HTTP host), `6000` |
+| Git service        | `gitstore-git-service`        | `50051`                                |
+| Controller manager | `gitstore-controller-manager` | `5001`                                 |
 
-The optional admin compose override adds:
+Git clients connect to the API on Git Smart HTTP port `9000`. The Git service is internal gRPC storage/transport and stores bare repositories in the `git-repo-data-root` volume.
 
-| Service | Container | Port |
-|---|---|---|
-| Admin | `gitstore-admin` | `3000` |
-
-Git clients connect to the API on Git Smart HTTP port `5000`. The Git service is internal gRPC storage/transport and stores bare repositories in the `git-repo-data-root` volume.
+Core services are enabled by the `local` profile. Use the root Make targets so
+the profile and `compose.local.yml` are applied consistently. They validate the
+selected `CONFIG_FILE` and `config/policy.yaml` before startup. Both files are
+mounted read-only; `CONFIG_FILE=./config/config.prod.toml` selects an alternate
+host filename without changing container arguments.
 
 ## Basic Health Checks
 
@@ -44,7 +44,7 @@ Check GraphQL:
 ```bash
 curl -s http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
-  -d '{"query":"query { namespaces(first: 1) { totalCount } }"}' | jq .
+  -d '{"query":"query { namespaces(first: 1) { pageInfo { hasNextPage } } }"}' | jq .
 ```
 
 ## Bootstrap Checklist
@@ -54,20 +54,20 @@ Repositories are created through the API, not by manually placing a default repo
 Create the default namespace and repository:
 
 ```bash
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```
 
 The command prints a clone URL:
 
 ```text
-http://localhost:5000/gitstore-test/catalog.git
+http://localhost:9000/gitstore-test/catalog.git
 ```
 
 If bootstrap fails, get a token explicitly:
 
 ```bash
-make bootstrap-token ADMIN_PASSWORD=<admin-password>
-make bootstrap BOOTSTRAP_TOKEN=<token>
+make bootstrap TARGET=token ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all BOOTSTRAP_TOKEN=<token>
 ```
 
 ## Volume Debugging
@@ -81,7 +81,7 @@ docker inspect gitstore-git-service | jq '.[0].Mounts'
 List repository data inside the Git service container:
 
 ```bash
-docker compose exec git-service ls -la /data/repos
+docker compose exec git-service ls -la /var/lib/gitstore/repos
 ```
 
 The exact repository storage path is generated from the repository identity and is exposed on the `Repository.storagePath` GraphQL field:
@@ -106,10 +106,17 @@ query Repository {
 
 ### API container exits during startup
 
-Check required auth settings:
+With `make compose`, first validate the shared fixture and resolved mounts:
 
-- `GITSTORE_AUTH__ADMIN__USERNAME`
-- `GITSTORE_AUTH__ADMIN__PASSWORD_HASH`
+```bash
+make check TARGET=config
+CONFIG_FILE=./config/config.toml docker compose --profile local \
+  -f compose.yml -f compose.local.yml config
+```
+
+For non-profile/manual startup, check the active auth settings:
+
+- `auth.staticusers.users_file` points to a readable users file
 - `GITSTORE_AUTH__JWT__SECRET`
 
 Inspect logs:
@@ -131,7 +138,7 @@ curl -s http://localhost:4000/graphql \
 Use the API-fronted clone URL with the `.git` suffix:
 
 ```text
-http://localhost:5000/gitstore-test/catalog.git
+http://localhost:9000/gitstore-test/catalog.git
 ```
 
 ### Push rejected with validation errors
@@ -164,8 +171,8 @@ Check that:
 Check the admin and API logs:
 
 ```bash
-make admin-logs
 make logs SERVICE=api
+make logs SERVICE=controller-manager
 ```
 
 The compose default is:
@@ -178,13 +185,12 @@ For more admin-specific checks, see [docs/admin/quickstart.md](../admin/quicksta
 
 ## Log Commands
 
-| Scope | Command |
-|---|---|
-| API | `make logs SERVICE=api` |
-| Git service | `make logs SERVICE=git-service` |
+| Scope              | Command                                |
+|--------------------|----------------------------------------|
+| API                | `make logs SERVICE=api`                |
+| Git service        | `make logs SERVICE=git-service`        |
 | Controller manager | `make logs SERVICE=controller-manager` |
-| Admin | `make admin-logs` |
-| All services | `make logs` |
+| All services       | `make logs`                            |
 
 All services emit structured logs. Pipe JSON lines through `jq` when needed:
 
@@ -203,12 +209,12 @@ make down
 Remove volumes when you explicitly want to discard local repository and datastore state:
 
 ```bash
-docker compose -f compose.yml -f compose.scylla.yml -f compose.admin.yml down --volumes
+docker compose -f compose.yml -f compose.scylla.yml down --volumes
 ```
 
 Start again:
 
 ```bash
 make compose DETACH=1
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```

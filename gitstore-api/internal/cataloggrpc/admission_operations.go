@@ -44,6 +44,66 @@ type resourceAdmissionOperation struct {
 	contentChanged bool
 }
 
+const namespaceConvergenceOperation admission.Operation = "CONVERGE"
+
+func namespaceConvergenceOperations(
+	operations []resourceAdmissionOperation,
+	requestedEntries []*parsedEntry,
+) []resourceAdmissionOperation {
+	requestedByPath := make(map[string]*parsedEntry, len(requestedEntries))
+	for _, entry := range requestedEntries {
+		if entry != nil {
+			requestedByPath[entry.path] = entry
+		}
+	}
+	converged := make([]resourceAdmissionOperation, 0, len(operations))
+	for _, operation := range operations {
+		if operation.newEntry == nil ||
+			operation.newEntry.parsed == nil ||
+			operation.newEntry.parsed.Namespace == nil {
+			continue
+		}
+		requested := requestedByPath[operation.newEntry.path]
+		if requested == nil ||
+			requested.identity.key() != operation.newEntry.identity.key() ||
+			requested.contentHash != operation.newEntry.contentHash {
+			continue
+		}
+		operation.operation = namespaceConvergenceOperation
+		converged = append(converged, operation)
+	}
+	return converged
+}
+
+func namespaceConvergencePaths(
+	currentEntries []*parsedEntry,
+	requestedEntries []*parsedEntry,
+) []string {
+	currentByPath := make(map[string]*parsedEntry, len(currentEntries))
+	for _, entry := range currentEntries {
+		if entry != nil {
+			currentByPath[entry.path] = entry
+		}
+	}
+	paths := make([]string, 0, len(requestedEntries))
+	for _, requested := range requestedEntries {
+		if requested == nil ||
+			requested.parsed == nil ||
+			requested.parsed.Namespace == nil {
+			continue
+		}
+		current := currentByPath[requested.path]
+		if current == nil ||
+			current.identity.key() != requested.identity.key() ||
+			current.contentHash != requested.contentHash {
+			continue
+		}
+		paths = append(paths, requested.path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 type comparableResource struct {
 	APIVersion  string            `json:"apiVersion"`
 	Kind        string            `json:"kind"`
@@ -116,6 +176,12 @@ func comparableForParsed(parsed *validate.ParsedResource, body []byte, defaultNa
 		return comparableFromMeta(r.APIVersion, r.Kind, r.Metadata, r.Spec, body, ""), true
 	case "File":
 		r := parsed.File
+		if r == nil {
+			return comparableResource{}, false
+		}
+		return comparableFromMeta(r.APIVersion, r.Kind, r.Metadata, r.Spec, body, defaultNamespace), true
+	case "Repository":
+		r := parsed.Repository
 		if r == nil {
 			return comparableResource{}, false
 		}
@@ -247,4 +313,31 @@ func operationSortPriority(op admission.Operation) int {
 	default:
 		return 3
 	}
+}
+
+// repositoryImmutablePathChanges detects a Repository identity change in the
+// same manifest path. Pre-receive rejects this via
+// validateImmutableResourceChanges; this second guard makes post-receive safe
+// when a caller invokes AdmitResources directly or a rolling deployment has a
+// stale pre-receive hook. Without it, identity-based operation derivation
+// would incorrectly turn a rename/transfer into a create.
+func repositoryImmutablePathChanges(oldEntries, newEntries []*parsedEntry) []string {
+	oldByPath := make(map[string]*parsedEntry, len(oldEntries))
+	for _, entry := range oldEntries {
+		if entry != nil && entry.identity.Kind == "Repository" {
+			oldByPath[entry.path] = entry
+		}
+	}
+	var changed []string
+	for _, entry := range newEntries {
+		if entry == nil || entry.identity.Kind != "Repository" {
+			continue
+		}
+		old, ok := oldByPath[entry.path]
+		if ok && (old.identity.Name != entry.identity.Name || old.identity.Namespace != entry.identity.Namespace) {
+			changed = append(changed, entry.path)
+		}
+	}
+	sort.Strings(changed)
+	return changed
 }

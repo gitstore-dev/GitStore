@@ -6,12 +6,12 @@ Catalogue reads are GraphQL-first. Catalogue writes are Git-driven today: author
 
 ## Endpoint
 
-| Item | Value |
-|---|---|
-| GraphQL URL | `http://localhost:4000/graphql` |
-| Playground | `http://localhost:4000/playground` |
-| Method | `POST` |
-| Content type | `application/json` |
+| Item         | Value                              |
+|--------------|------------------------------------|
+| GraphQL URL  | `http://localhost:4000/graphql`    |
+| Playground   | `http://localhost:4000/playground` |
+| Method       | `POST`                             |
+| Content type | `application/json`                 |
 
 ## Authentication
 
@@ -22,7 +22,7 @@ Authorization: Bearer <token>
 ```
 
 GitStore delegates OAuth2/OIDC federation to external identity providers. The GraphQL `login`
-mutation is a local-provider convenience (for example `static-admin`) and returns an OIDC-style
+mutation is a local-provider convenience (for example `static-users`) and returns an OIDC-style
 token payload. External providers such as `oidc-jwt` are expected to authenticate out-of-band and
 present a token to GitStore for verification.
 
@@ -76,45 +76,45 @@ mutation Logout {
 
 ### Queries
 
-| Operation | Purpose |
-|---|---|
-| `node(id: ID!)` | Fetch one Relay node by global ID |
-| `nodes(ids: [ID!]!)` | Fetch multiple Relay nodes by global ID |
-| `namespace(by: NamespaceBy!)` | Fetch one namespace |
-| `namespaces(...)` | List namespaces |
-| `repository(by: RepositoryBy!)` | Fetch one repository |
-| `repositories(namespace: String!, ...)` | List repositories in a namespace |
-| `product(by: ProductBy!)` | Fetch one product resource |
-| `products(namespace: String!, ...)` | List products in a namespace |
-| `productVariant(by: ProductVariantBy!)` | Fetch one product variant resource |
-| `productVariants(namespace: String!, ...)` | List product variants in a namespace |
-| `category(by: CategoryBy!)` | Fetch one category resource |
-| `categories(namespace: String!, ...)` | List categories in a namespace |
-| `collection(by: CollectionBy!)` | Fetch one collection resource |
-| `collections(namespace: String!, ...)` | List collections in a namespace |
-| `catalogVersion` | Legacy schema-continuity field for current catalogue version metadata |
+| Operation                                  | Purpose                                 |
+|--------------------------------------------|-----------------------------------------|
+| `node(id: ID!)`                            | Fetch one Relay node by global ID       |
+| `nodes(ids: [ID!]!)`                       | Fetch multiple Relay nodes by global ID |
+| `namespace(by: NamespaceBy!)`              | Fetch one namespace                     |
+| `namespaces(...)`                          | List namespaces                         |
+| `repository(by: RepositoryBy!)`            | Fetch one repository                    |
+| `repositories(namespace: String!, ...)`    | List repositories in a namespace        |
+| `product(by: ProductBy!)`                  | Fetch one product resource              |
+| `products(namespace: String!, ...)`        | List products in a namespace            |
+| `productVariant(by: ProductVariantBy!)`    | Fetch one product variant resource      |
+| `productVariants(namespace: String!, ...)` | List product variants in a namespace    |
+| `category(by: CategoryBy!)`                | Fetch one category resource             |
+| `categories(namespace: String!, ...)`      | List categories in a namespace          |
+| `collection(by: CollectionBy!)`            | Fetch one collection resource           |
+| `collections(namespace: String!, ...)`     | List collections in a namespace         |
 
 ### Mutations
 
-| Operation | Purpose |
-|---|---|
-| `login(input: LoginInput!)` | Create an OIDC-style token response for local providers |
-| `logout` | End the current session |
-| `refreshToken(input: RefreshTokenInput!)` | Exchange a refresh token for a new OIDC-style token response |
-| `createNamespace(input: CreateNamespaceInput!)` | Create a namespace |
-| `deleteNamespace(input: DeleteNamespaceInput!)` | Delete an empty namespace |
-| `createRepository(input: CreateRepositoryInput!)` | Create a repository in a namespace |
-| `renameRepository(input: RenameRepositoryInput!)` | Rename a repository |
-| `transferRepository(input: TransferRepositoryInput!)` | Move a repository to another namespace |
-| `deleteRepository(input: DeleteRepositoryInput!)` | Delete a repository and its storage |
-| `updateCategoryStatus(input: UpdateCategoryStatusInput!)` | Controller-only partial-merge write to a CategoryTaxonomy's `.status` sub-resource |
-| `updateResourceStatus(input: UpdateResourceStatusInput!)` | Generic, kind-parameterized counterpart of `updateCategoryStatus` for CRD-defined kinds |
+| Operation                                                     | Purpose                                                                                                                                                                              |
+|---------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `login(input: LoginInput!)`                                   | Create an OIDC-style token response for local providers                                                                                                                              |
+| `logout`                                                      | End the current session                                                                                                                                                              |
+| `refreshToken(input: RefreshTokenInput!)`                     | Exchange a refresh token for a new OIDC-style token response                                                                                                                         |
+| `createNamespace(input: CreateNamespaceInput!)`               | Create a namespace                                                                                                                                                                   |
+| `deleteNamespace(input: DeleteNamespaceInput!)`               | Delete an empty namespace                                                                                                                                                            |
+| `createRepository(input: CreateRepositoryInput!)`             | Create a repository in a namespace                                                                                                                                                   |
+| `deleteRepository(input: DeleteRepositoryInput!)`             | Delete a repository and its storage                                                                                                                                                  |
+| `updateCategoryStatus(input: UpdateCategoryStatusInput!)`     | Controller-only partial-merge write to a CategoryTaxonomy's `.status` sub-resource                                                                                                   |
+| `updateNamespaceStatus(input: UpdateNamespaceStatusInput!)`   | Controller-only partial-merge write to a Namespace's `.status` sub-resource                                                                                                          |
+| `updateProductStatus(input: UpdateProductStatusInput!)`       | Controller-only partial-merge write to a Product's `.status` sub-resource, including `resolved.category` (`{name, uid}`) and its declarative `CategoryTaxonomy` owner-reference sync |
+| `updateRepositoryStatus(input: UpdateRepositoryStatusInput!)` | Controller-only partial-merge write to a Repository's `.status` sub-resource                                                                                                         |
+| `updateResourceStatus(input: UpdateResourceStatusInput!)`     | Generic, kind-parameterized counterpart of the per-kind status mutations for CRD-defined kinds                                                                                       |
 
 ### Subscriptions
 
-| Operation | Purpose |
-|---|---|
-| `watchCategories(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | List-then-watch stream of `CategoryTaxonomy` changes |
+| Operation                                                                                                 | Purpose                                                                            |
+|-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| `watchCategories(namespace: String, selector: LabelSelectorInput, resourceVersion: String)`               | List-then-watch stream of `CategoryTaxonomy` changes                               |
 | `watchResources(kind: String!, namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Generic, kind-parameterized counterpart of `watchCategories` for CRD-defined kinds |
 
 ## Relay IDs
@@ -160,6 +160,11 @@ query GetNode($id: ID!) {
 
 ### nodes
 
+File IDs returned by `file` also resolve through `node` and `nodes`, with the
+same `file.read` authorization. Batch results retain input order, including
+duplicate IDs and null entries for missing resources. File datastore failures
+are reported as GraphQL errors, not successful missing-resource responses.
+
 ```graphql
 query GetNodes($ids: [ID!]!) {
   nodes(ids: $ids) {
@@ -174,8 +179,12 @@ query GetNodes($ids: [ID!]!) {
       }
     }
     ... on Repository {
-      name
-      defaultBranch
+      metadata {
+        name
+      }
+      spec {
+        defaultBranch
+      }
     }
   }
 }
@@ -185,7 +194,7 @@ query GetNodes($ids: [ID!]!) {
 
 ```graphql
 query GetNamespace {
-  namespace(by: { identifier: "gitstore-test" }) {
+  namespace(by: { name: "gitstore-test" }) {
     id
     apiVersion
     kind
@@ -222,9 +231,6 @@ query GetNamespace {
 }
 ```
 
-Existing flat fields remain available with deprecation reasons. New callers
-should use the declarative fields shown above.
-
 ### namespaces
 
 ```graphql
@@ -250,7 +256,6 @@ query ListNamespaces {
       hasNextPage
       endCursor
     }
-    totalCount
   }
 }
 ```
@@ -268,17 +273,17 @@ query GetRepository {
     }
   ) {
     id
-    name
-    defaultBranch
-    storageClass
-    storagePath
-    namespace {
-      metadata {
-        name
-      }
-      spec {
-        title
-        tier
+    metadata {
+      name
+      namespace
+    }
+    spec {
+      defaultBranch
+    }
+    status {
+      resolved {
+        storagePath
+        storageClass
       }
     }
   }
@@ -294,11 +299,14 @@ query ListRepositories($namespace: String!) {
       cursor
       node {
         id
-        name
-        defaultBranch
+        metadata {
+          name
+        }
+        spec {
+          defaultBranch
+        }
       }
     }
-    totalCount
   }
 }
 ```
@@ -380,7 +388,6 @@ query ListProducts {
       startCursor
       endCursor
     }
-    totalCount
   }
 }
 ```
@@ -474,7 +481,6 @@ query ListProductVariants {
         }
       }
     }
-    totalCount
   }
 }
 ```
@@ -539,7 +545,6 @@ query ListCategories {
         depth
       }
     }
-    totalCount
   }
 }
 ```
@@ -573,7 +578,13 @@ query GetCollection {
       }
     }
     products(first: 10) {
-      totalCount
+      edges {
+        node {
+          metadata {
+            name
+          }
+        }
+      }
     }
   }
 }
@@ -601,28 +612,6 @@ query ListCollections {
         }
       }
     }
-    totalCount
-  }
-}
-```
-
-### catalogVersion
-
-`catalogVersion` remains in the schema for continuity. Repository-scoped catalogue version semantics are still being clarified, so prefer resource queries for current catalogue state.
-
-```graphql
-query CatalogVersion {
-  catalogVersion {
-    tag
-    commit
-    publishedAt
-    message
-    stats {
-      productCount
-      categoryCount
-      collectionCount
-      orphanedReferences
-    }
   }
 }
 ```
@@ -649,9 +638,10 @@ Creates a namespace.
 mutation CreateNamespace {
   createNamespace(
     input: {
-            identifier: "gitstore-test"
-      displayName: "GitStore Test"
-      tier: USER
+      apiVersion: "gitstore.dev/v1beta1"
+      kind: "Namespace"
+      metadata: { name: "gitstore-test" }
+      spec: { title: "GitStore Test", tier: USER }
     }
   ) {
     namespace {
@@ -673,24 +663,25 @@ mutation CreateNamespace {
 
 Input fields:
 
-| Field | Required | Notes |
-|---|---|---|
-| `identifier` | yes | Globally unique DNS-label namespace identifier |
-| `displayName` | no | Human-friendly name |
-| `tier` | yes | `USER` or `ORGANIZATION` |
+| Field                | Required | Notes                                          |
+|----------------------|----------|-------------------------------------------------|
+| `metadata.name`      | yes      | Globally unique DNS-label namespace identifier |
+| `spec.title`         | no       | Human-friendly display title                   |
+| `spec.tier`          | yes      | `USER` or `ORGANIZATION`                       |
 
 ### deleteNamespace
 
 Deletes an empty namespace. Deletion is blocked if repositories remain.
 
 ```graphql
-mutation DeleteNamespace {
+mutation DeleteNamespace($id: ID!) {
   deleteNamespace(
     input: {
-            identifier: "gitstore-test"
+            id: $id
     }
   ) {
-        deletedIdentifier
+        namespace { id metadata { name } status { conditions { type } } }
+        outcome
   }
 }
 ```
@@ -703,60 +694,24 @@ Creates a repository in a namespace.
 mutation CreateRepository($namespace: String!) {
   createRepository(
     input: {
-      namespace: $namespace
-      name: "catalog"
-      defaultBranch: "main"
+      apiVersion: "gitstore.dev/v1beta1"
+      kind: "Repository"
+      metadata: { namespace: $namespace, name: "catalog" }
+      spec: { defaultBranch: "main", visibility: PRIVATE }
     }
   ) {
     repository {
       id
-      name
-      defaultBranch
-      storagePath
-      namespace {
-        metadata {
-          name
-        }
+      metadata {
+        name
+        namespace
       }
-    }
-  }
-}
-```
-
-### renameRepository
-
-```graphql
-mutation RenameRepository($repositoryId: ID!) {
-  renameRepository(
-    input: {
-            repositoryId: $repositoryId
-      newName: "summer-catalog"
-    }
-  ) {
-        repository {
-      id
-      name
-    }
-  }
-}
-```
-
-### transferRepository
-
-```graphql
-mutation TransferRepository($repositoryId: ID!, $targetNamespaceId: ID!) {
-  transferRepository(
-    input: {
-            repositoryId: $repositoryId
-      targetNamespaceId: $targetNamespaceId
-    }
-  ) {
-        repository {
-      id
-      name
-      namespace {
-        metadata {
-          name
+      spec {
+        defaultBranch
+      }
+      status {
+        resolved {
+          storagePath
         }
       }
     }
@@ -769,20 +724,21 @@ mutation TransferRepository($repositoryId: ID!, $targetNamespaceId: ID!) {
 Deletes repository metadata and storage.
 
 ```graphql
-mutation DeleteRepository($repositoryId: ID!) {
+mutation DeleteRepository($id: ID!) {
   deleteRepository(
     input: {
-            repositoryId: $repositoryId
+            id: $id
     }
   ) {
-        deletedRepositoryId
+        repository { id metadata { name } status { conditions { type } } }
+        outcome
   }
 }
 ```
 
 ### updateCategoryStatus
 
-Controller-only, partial-merge write to a `CategoryTaxonomy`'s `.status` sub-resource. Only non-null input fields are changed; existing status fields not mentioned in the input are left unchanged. Requires `resourceVersion` to match the resource's current value, or the request returns a `conflict` payload (not an error) carrying the resource's actual current version. Requires controller-level authorization (`category.status.write`), independent of whether `resourceVersion` matches. Never alters `.spec` or author-controlled `.metadata` — the input type has no such fields.
+Controller-only, partial-merge write to a `CategoryTaxonomy`'s `.status` sub-resource. Only non-null input fields are changed; existing status fields not mentioned in the input are left unchanged. Requires `resourceVersion` to match the resource's current value, or the request returns a `conflict` payload (not an error) carrying the resource's actual current version. Requires controller-level authorization (`categoryTaxonomy.status.write`), independent of whether `resourceVersion` matches. Never alters `.spec` or author-controlled `.metadata` — the input type has no such fields.
 
 ```graphql
 mutation UpdateCategoryStatus($input: UpdateCategoryStatusInput!) {
@@ -893,15 +849,6 @@ type Namespace implements Node {
   metadata: NamespaceMetadata!
   spec: NamespaceSpec!
   status: NamespaceStatus!
-
-  # Deprecated compatibility fields remain until a future major API release.
-  identifier: String! @deprecated
-  displayName: String @deprecated
-  tier: NamespaceTier! @deprecated
-  createdAt: DateTime! @deprecated
-  createdBy: String! @deprecated
-  updatedAt: DateTime! @deprecated
-  updatedBy: String! @deprecated
 }
 ```
 
@@ -921,17 +868,6 @@ type Repository implements Node {
   metadata: ObjectMeta!
   spec: RepositorySpec!
   status: RepositoryStatus!
-
-  # Deprecated compatibility fields remain until a future major API release.
-  name: String! @deprecated
-  namespace: Namespace! @deprecated
-  defaultBranch: String! @deprecated
-  storageClass: String! @deprecated
-  storagePath: String! @deprecated
-  createdAt: DateTime! @deprecated
-  createdBy: String! @deprecated
-  updatedAt: DateTime! @deprecated
-  updatedBy: String! @deprecated
 }
 
 type RepositorySpec {
@@ -976,7 +912,7 @@ type Product implements Node {
   id: ID!
   apiVersion: String!
   kind: String!
-  metadata: ProductObjectMeta!
+  metadata: ObjectMeta!
   spec: ProductSpec!
   status: ProductStatus
 }
@@ -989,7 +925,7 @@ type ProductVariant implements Node {
   id: ID!
   apiVersion: String!
   kind: String!
-  metadata: ProductVariantObjectMeta!
+  metadata: ObjectMeta!
   spec: ProductVariantSpec!
   status: ProductVariantStatus
   body: String
@@ -1003,7 +939,7 @@ type Category implements Node {
   id: ID!
   apiVersion: String
   kind: String
-  metadata: CategoryObjectMeta!
+  metadata: ObjectMeta!
   spec: CategorySpec!
   status: CategoryTaxonomyStatus
   body: String
@@ -1022,7 +958,7 @@ type Collection implements Node {
   id: ID!
   apiVersion: String
   kind: String
-  metadata: CollectionObjectMeta!
+  metadata: ObjectMeta!
   spec: CollectionSpec!
   status: CollectionStatus
   body: String
@@ -1055,7 +991,6 @@ query PageProducts($after: String) {
       hasNextPage
       endCursor
     }
-    totalCount
   }
 }
 ```
@@ -1087,19 +1022,19 @@ Single-resource queries return `null` when the resource is not found.
 
 Common categories:
 
-| Code | Meaning |
-|---|---|
-| `NOT_FOUND` | Requested resource does not exist |
-| `VALIDATION_ERROR` | Input validation failed |
-| `CONFLICT` | Requested change conflicts with current state |
-| `INTERNAL_ERROR` | Server error |
+| Code               | Meaning                                       |
+|--------------------|-----------------------------------------------|
+| `NOT_FOUND`        | Requested resource does not exist             |
+| `VALIDATION_ERROR` | Input validation failed                       |
+| `CONFLICT`         | Requested change conflicts with current state |
+| `INTERNAL_ERROR`   | Server error                                  |
 
 ## Related Docs
 
 - [User Guide](user-guide.md)
 - [Developer Guide](developer-guide.md)
 - [Product Spec](products/product-spec.md)
-- [ProductVariant Spec](products/product-variants.md)
-- [CategoryTaxonomy Spec](categories/category-taxonomy.md)
+- [ProductVariant Spec](products/product-variant-spec.md)
+- [CategoryTaxonomy Spec](categories/category-taxonomy-spec.md)
 - [Collection Spec](collections/collection-spec.md)
 - [GraphQL schema files](../shared/schemas/)

@@ -22,6 +22,23 @@ var (
 	// caller's resourceVersion precondition does not match the resource's
 	// current value (optimistic concurrency, spec 040 FR-009).
 	ErrConflict = errors.New("datastore: resourceVersion conflict")
+	// ErrNamespaceNotActive means a repository creation lost the durable
+	// race with Namespace termination.
+	ErrNamespaceNotActive = errors.New("datastore: namespace is not active")
+	// ErrNamespaceNotEmpty means a Namespace deletion mark observed a
+	// committed or in-flight repository creation.
+	ErrNamespaceNotEmpty = errors.New("datastore: namespace is not empty")
+	// ErrStaleWatchLease rejects materializer writes from a lost lease owner.
+	ErrStaleWatchLease = errors.New("datastore: stale Namespace watch lease")
+	// ErrWatchCursorEpoch rejects reads from another journal epoch.
+	ErrWatchCursorEpoch = errors.New("datastore: Namespace watch cursor epoch mismatch")
+	// ErrWatchRetentionExpired rejects reads whose next sequence has already
+	// expired from the retained journal.
+	ErrWatchRetentionExpired = errors.New("datastore: Namespace watch retention expired")
+	// ErrNamespaceWatchDiscontinuity stops automatic CDC restarts when global
+	// ordering can no longer be proven. Operator repair is required before a
+	// materializer may safely resume.
+	ErrNamespaceWatchDiscontinuity = errors.New("datastore: Namespace watch CDC ordering discontinuity")
 )
 
 // DefaultPageSize is used when First/Last is zero.
@@ -31,6 +48,38 @@ const DefaultPageSize = 100
 // It prevents a caller from turning a controller continuation into an
 // unbounded datastore read.
 const MaxOwnerDependentPageSize = 100
+
+// ResourceWatchJournal is an optional datastore capability. Keeping it
+// separate from Datastore avoids forcing resource-only test doubles to own
+// watch infrastructure while allowing both production backends to expose the
+// same durable contract. Source and streamID identify independent CDC
+// adapters, so a slow or repaired source cannot overwrite another kind's
+// checkpoint.
+type ResourceWatchJournal interface {
+	Bounds(ctx context.Context) (ResourceWatchBounds, error)
+	Append(ctx context.Context, lease ResourceWatchLease, event ResourceWatchEvent, ttl time.Duration) (ResourceWatchEvent, error)
+	ReadAfter(ctx context.Context, cursor ResourceWatchCursor, limit int) ([]ResourceWatchEvent, error)
+	AcquireLease(ctx context.Context, holder string, now time.Time, ttl time.Duration) (ResourceWatchLease, bool, error)
+	RenewLease(ctx context.Context, lease ResourceWatchLease, now time.Time, ttl time.Duration) (ResourceWatchLease, bool, error)
+	ReleaseLease(ctx context.Context, lease ResourceWatchLease) error
+	// streamID is a canonical source-qualified checkpoint key. Adapters must
+	// use Source/StreamID together when constructing it (for example
+	// "Repository/<cdc-stream>") so kind-local sources cannot collide.
+	LoadProgress(ctx context.Context, streamID string) (ResourceCDCProgress, error)
+	SaveProgress(ctx context.Context, lease ResourceWatchLease, progress ResourceCDCProgress) error
+}
+
+// NamespaceWatchCapable is implemented by datastores that can serve the
+// Namespace watch journal.
+type ResourceWatchCapable interface {
+	ResourceWatchJournal() ResourceWatchJournal
+}
+
+// Deprecated compatibility aliases for the Namespace-only API. Backends can
+// expose both accessors during the migration, but new callers use the generic
+// capability above.
+type NamespaceWatchJournal = ResourceWatchJournal
+type NamespaceWatchCapable interface{ NamespaceWatchJournal() ResourceWatchJournal }
 
 // CategoryTaxonomyForegroundDeletionFinalizer holds a CategoryTaxonomy while
 // its controller rechecks blocking dependents and decouples Products.
@@ -104,7 +153,6 @@ type PageResult[T any] struct {
 	Items       []*T
 	HasNext     bool
 	HasPrevious bool
-	TotalCount  int32 // -1 if unknown/expensive to compute
 }
 
 // OwnerReferenceScope restricts dependent lookups to the owner's repository.
@@ -147,8 +195,7 @@ type CategoryTaxonomyDeletionStore interface {
 }
 
 // GlobalRepositoryLister is the optional contract for backends that provide a
-// globally ordered Repository connection. Backends whose exact count requires
-// scanning historical partitions return TotalCount = -1.
+// globally ordered Repository connection.
 type GlobalRepositoryLister interface {
 	ListRepositories(ctx context.Context, page PageParams) (*PageResult[Repository], error)
 }
@@ -220,6 +267,48 @@ type NamespaceStatusPatch struct {
 	Conditions          []catalog.Condition
 }
 
+// RepositoryStatusPatch is the controller-only partial status write for a
+// Repository. It deliberately mirrors Namespace status semantics: controller
+// retries use ResourceVersion, while author-owned generation is unchanged.
+type RepositoryStatusPatch struct {
+	ResourceVersion     string
+	ObservedGeneration  *int64
+	LastAppliedRevision *string
+	Conditions          []catalog.Condition
+	Resolved            *catalog.ResolvedRepositoryDefinition
+}
+
+func ApplyRepositoryStatusPatch(repository *Repository, patch RepositoryStatusPatch) error {
+	if patch.ResourceVersion != repository.ResourceVersion {
+		return ErrConflict
+	}
+	var status catalog.RepositoryStatus
+	if len(repository.Status) > 0 {
+		if err := json.Unmarshal(repository.Status, &status); err != nil {
+			return fmt.Errorf("datastore: unmarshal existing Repository status: %w", err)
+		}
+	}
+	if patch.ObservedGeneration != nil {
+		status.ObservedGeneration = *patch.ObservedGeneration
+	}
+	if patch.LastAppliedRevision != nil {
+		status.LastAppliedRevision = *patch.LastAppliedRevision
+	}
+	if patch.Conditions != nil {
+		status.Conditions = patch.Conditions
+	}
+	if patch.Resolved != nil {
+		status.Resolved = patch.Resolved
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		return fmt.Errorf("datastore: marshal updated Repository status: %w", err)
+	}
+	repository.Status = data
+	AdvanceRepositorySystemVersion(repository)
+	return nil
+}
+
 func ApplyNamespaceStatusPatch(namespace *Namespace, patch NamespaceStatusPatch) error {
 	if patch.ResourceVersion != namespace.ResourceVersion {
 		return ErrConflict
@@ -289,12 +378,8 @@ func ApplyCategoryTaxonomyStatusPatch(c *CategoryTaxonomy, patch CategoryTaxonom
 	return nil
 }
 
-// Datastore is the persistence contract for all backends.
-//
-// All implementations must be safe for concurrent use.
-// The abstraction never retries or reconnects internally; storage errors are
-// propagated immediately to callers (FR-007a).
-type Datastore interface {
+// FileStore persists File resources.
+type FileStore interface {
 	// File operations
 	CreateFile(ctx context.Context, f *File) error
 	GetFile(ctx context.Context, uid string) (*File, error)
@@ -306,8 +391,12 @@ type Datastore interface {
 	DeleteFile(ctx context.Context, uid string) error
 	DeleteFileWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 
-	// Product operations
+	// UpdateFileStatus applies a partial status update.
 	UpdateFileStatus(ctx context.Context, namespace, name string, patch FileStatusPatch) (*File, error)
+}
+
+// ProductStore persists Product resources.
+type ProductStore interface {
 	CreateProduct(ctx context.Context, p *Product) error
 	GetProduct(ctx context.Context, uid string) (*Product, error)
 	GetProductByName(ctx context.Context, namespace, name string) (*Product, error)
@@ -315,8 +404,18 @@ type Datastore interface {
 	UpdateProduct(ctx context.Context, p *Product) error
 	DeleteProduct(ctx context.Context, uid string) error
 	DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
+}
 
-	// CategoryTaxonomy operations
+// ProductLifecycleStore provides the compare-and-swap transitions used by
+// foreground Product deletion. It is additive while the Scylla rollout lands;
+// callers must require it before starting a terminating transition.
+type ProductLifecycleStore interface {
+	MarkProductTerminating(ctx context.Context, uid, expectedResourceVersion, finalizer string, deletionTimestamp time.Time) (*Product, error)
+	CompleteProductDeletion(ctx context.Context, uid, expectedResourceVersion string) error
+}
+
+// CategoryTaxonomyStore persists CategoryTaxonomy resources.
+type CategoryTaxonomyStore interface {
 	CreateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error
 	GetCategoryTaxonomy(ctx context.Context, uid string) (*CategoryTaxonomy, error)
 	GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*CategoryTaxonomy, error)
@@ -330,8 +429,10 @@ type Datastore interface {
 	// ErrNotFound if no resource matches namespace/name (spec 040 FR-009,
 	// FR-010, FR-012; research.md R6).
 	UpdateCategoryTaxonomyStatus(ctx context.Context, namespace, name string, patch CategoryTaxonomyStatusPatch) (*CategoryTaxonomy, error)
+}
 
-	// ProductVariant operations
+// ProductVariantStore persists ProductVariant resources.
+type ProductVariantStore interface {
 	CreateProductVariant(ctx context.Context, v *ProductVariant) error
 	GetProductVariant(ctx context.Context, uid string) (*ProductVariant, error)
 	GetProductVariantByName(ctx context.Context, namespace, name string) (*ProductVariant, error)
@@ -341,8 +442,10 @@ type Datastore interface {
 	UpdateProductVariant(ctx context.Context, v *ProductVariant) error
 	DeleteProductVariant(ctx context.Context, uid string) error
 	DeleteProductVariantWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
+}
 
-	// Collection operations
+// CollectionStore persists Collection resources and product selector queries.
+type CollectionStore interface {
 	CreateCollection(ctx context.Context, c *Collection) error
 	GetCollection(ctx context.Context, uid string) (*Collection, error)
 	GetCollectionByName(ctx context.Context, namespace, name string) (*Collection, error)
@@ -351,13 +454,18 @@ type Datastore interface {
 	DeleteCollection(ctx context.Context, uid string) error
 	DeleteCollectionWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 	ListProductsByLabelSelector(ctx context.Context, namespace string, selector catalog.LabelSelector) ([]*Product, error)
+}
 
-	// Namespace operations
+// NamespaceStore persists Namespace resources.
+type NamespaceStore interface {
 	CreateNamespace(ctx context.Context, ns *Namespace) error
 	GetNamespace(ctx context.Context, uid string) (*Namespace, error)
 	GetNamespaceByName(ctx context.Context, name string) (*Namespace, error)
 	ListNamespaces(ctx context.Context, page PageParams) (*PageResult[Namespace], error)
 	UpdateNamespace(ctx context.Context, ns *Namespace, expectedResourceVersion string) error
+	// MarkNamespaceDeletion atomically verifies the resourceVersion and that no
+	// repository can commit across the empty-to-terminating transition.
+	MarkNamespaceDeletion(ctx context.Context, ns *Namespace, expectedResourceVersion string) error
 	DeleteNamespace(ctx context.Context, uid string) error
 	DeleteNamespaceWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 	// HasRepositories reports whether at least one Repository record
@@ -365,9 +473,16 @@ type Datastore interface {
 	// enforce FR-001 (reject deletion while repositories remain). Must be
 	// an existence check (LIMIT 1 / equivalent), not a full count.
 	HasRepositories(ctx context.Context, namespace string) (bool, error)
+}
 
-	// Repository operations
+// RepositoryStore persists Repository resources. Repository routing is kept
+// separate because it is the (namespace, name) <-> repository identity relation,
+// rather than Namespace lifecycle state.
+type RepositoryStore interface {
 	CreateRepository(ctx context.Context, r *Repository) error
+	// CreateRepositoryInActiveNamespace atomically or conditionally proves the
+	// owning Namespace is active before the repository can commit.
+	CreateRepositoryInActiveNamespace(ctx context.Context, r *Repository) error
 	GetRepository(ctx context.Context, uid string) (*Repository, error)
 	ListRepositoriesByNamespace(ctx context.Context, namespace string, page PageParams) (*PageResult[Repository], error)
 	// UpdateRepository replaces a repository only when its persisted
@@ -381,15 +496,61 @@ type Datastore interface {
 	// (reject deletion while catalog resources remain). Must be an
 	// existence check (LIMIT 1 / equivalent), not a full count.
 	HasCatalogResources(ctx context.Context, repositoryID string) (bool, error)
+}
 
-	// NamespaceMapping operations (lookup contract)
+// RepositoryRoutingStore resolves and maintains the repository routing relation.
+type RepositoryRoutingStore interface {
 	CreateNamespaceMapping(ctx context.Context, m *NamespaceMapping) error
 	LookupRepository(ctx context.Context, namespace, name string) (*NamespaceMapping, error)
 	LookupNamespaceByRepoID(ctx context.Context, repositoryID string) (*NamespaceMapping, error)
 	RenameRepository(ctx context.Context, namespace, oldName, newName string) error
+	// TransferRepository moves the authoritative Repository and mapping only
+	// after durably reserving an active target Namespace.
 	TransferRepository(ctx context.Context, repositoryID, fromNamespace, toNamespace string) error
 	DeleteNamespaceMapping(ctx context.Context, namespace, name string) error
+}
 
-	// Close lifecycle function
+// ServiceAccountStore persists non-human ServiceAccount identities.
+type ServiceAccountStore interface {
+	CreateServiceAccount(ctx context.Context, sa *ServiceAccount) error
+	GetServiceAccountByUID(ctx context.Context, uid string) (*ServiceAccount, error)
+	GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*ServiceAccount, error)
+	ListServiceAccounts(ctx context.Context, page PageParams) (*PageResult[ServiceAccount], error)
+	// UpdateServiceAccountKeys adds/removes public keys and advances
+	// Generation; fails with ErrConflict if expectedResourceVersion is stale
+	// (optimistic concurrency, matching UpdateFile/UpdateRepository's
+	// existing contract).
+	UpdateServiceAccountKeys(ctx context.Context, uid string, add []ServiceAccountPublicKey, removeKeyIDs []string, expectedResourceVersion string) (*ServiceAccount, error)
+	// SetServiceAccountDisabled toggles Disabled without touching PublicKeys
+	// or Generation.
+	SetServiceAccountDisabled(ctx context.Context, uid string, disabled bool) error
+	DeleteServiceAccount(ctx context.Context, uid string) error
+	// TryConsumeServiceAccountAssertion atomically records an assertion JTI
+	// digest until expiresAt. It returns true exactly once for a digest and
+	// false on every replay before expiry.
+	TryConsumeServiceAccountAssertion(ctx context.Context, jtiDigest string, expiresAt time.Time) (bool, error)
+}
+
+// Closer releases backend resources.
+type Closer interface {
 	Close() error
+}
+
+// Datastore is the aggregate persistence contract used only for backend
+// construction and application wiring. Consumers should depend on the smallest
+// focused contract above.
+//
+// All implementations must be safe for concurrent use. The abstraction never
+// retries or reconnects internally; storage errors are propagated immediately.
+type Datastore interface {
+	FileStore
+	ProductStore
+	CategoryTaxonomyStore
+	ProductVariantStore
+	CollectionStore
+	NamespaceStore
+	RepositoryStore
+	RepositoryRoutingStore
+	ServiceAccountStore
+	Closer
 }

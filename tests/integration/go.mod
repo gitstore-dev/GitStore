@@ -1,14 +1,20 @@
 module github.com/gitstore-dev/gitstore/tests/integration
 
-go 1.25.0
-
-require github.com/stretchr/testify v1.11.1
+go 1.26.0
 
 require (
-	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	github.com/gitstore-dev/gitstore/secretmaterial v0.0.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/gorilla/websocket v1.5.3
+	github.com/prometheus/client_model v0.6.3
+	github.com/prometheus/common v0.72.0
+	github.com/stretchr/testify v1.12.1
+)
+
+replace github.com/gitstore-dev/gitstore/secretmaterial => ../../shared/secretmaterial
+
+require (
+	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
 )

@@ -1,0 +1,39 @@
+# DEVELOPMENT ONLY. Production deployments must provide a reviewed policy.
+version: v1
+roles:
+  admin:
+    allow:
+      - "*"
+    deny: []
+  controller:
+    allow:
+      - "*.status.write"
+      - "category.status.write"
+      - "categoryTaxonomy.watch"
+      - "namespace.status.write"
+      - "namespace.system-repository.provision"
+      - "namespace.watch"
+      - "repository.create.any"
+      - "repository.read.any"
+      - "repository.status.write"
+      - "repository.watch"
+      # Product read authorization is resource-aware; unlike Repository
+      # mutations it resolves to the canonical `product.read` action.
+      - "product.read"
+      - "product.watch"
+      - "product.delete.complete"
+      - "product.status.write"
+      - "serviceaccount.token.issue"
+    deny: []
+  api-internal:
+    allow:
+      - "repository.*.any"
+    deny: []
+default_deny: true
+role_bindings:
+  admin:
+    - admin
+  serviceaccount:controllers:gitstore-controller-manager:
+    - controller
+  system:api:
+    - api-internal

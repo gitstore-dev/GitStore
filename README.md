@@ -13,25 +13,23 @@ The broader thesis is that commerce operations are becoming increasingly agentic
 
 AI agents are becoming capable enough to modify commercial content, but businesses do not yet have safe operational rails for letting them touch production commerce data. Git already solved review, history, rollback, branching, and collaboration for code.
 
-GitStore applies those primitives to commerce catalogues, then exposes the admitted catalogue state through headless APIs and admin workflows. The timing is right because headless commerce, GitOps, and AI-assisted operations are converging.
+GitStore applies those primitives to commerce catalogues, then exposes the admitted catalogue state through headless APIs. The timing is right because headless commerce, GitOps, and AI-assisted operations are converging.
 
 ## Architecture
 
 ```mermaid
 graph TD
     GitClient["Git client\n(CLI / agent)"]
-    Admin["gitstore-admin\n(optional UI)"]
     Storefront["Storefront"]
     OtherClients["Other GraphQL clients"]
     Controller["gitstore-controller-manager"]
 
-    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 5000\nCatalogService gRPC: 6000"]
+    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 9000 (host)\nCatalogService gRPC: 6000"]
     GitService["gitstore-git-service\ngRPC Git storage/transport: 50051"]
     Datastore["Datastore\nmemdb / ScyllaDB"]
     Repos["Bare Git repositories\nlocal filesystem"]
 
     GitClient -->|"git clone / fetch / push\nSmart HTTP"| API
-    Admin -->|"GraphQL"| API
     Storefront -->|"GraphQL"| API
     OtherClients -->|"GraphQL"| API
     Controller -->|"GraphQL reconcile/status traffic"| API
@@ -47,21 +45,21 @@ graph TD
 - **`gitstore-api`**: Go service that exposes GraphQL, API-fronted Git Smart HTTP, and the CatalogService gRPC hook/admission endpoint.
 - **`gitstore-git-service`**: Rust service that owns bare Git repository storage and the gRPC Git transport primitives used by the API.
 - **`gitstore-controller-manager`**: Go controller runtime that reconciles through the API and exposes health, metrics, and poison-item endpoints.
-- **`gitstore-admin`**: Optional Astro/React web UI that talks to `gitstore-api`.
 
-The API, controller manager, and Git service are the three core services. The
-production target requires each to run with multiple replicas under autoscaling.
-Production features must preserve replica-safe state, pluggable multi-user
+The API, controller manager, and Git service are the three core services.
+API/controller features must verify concurrent-replica behavior; this is not a
+blanket claim of production HA. **Git service is stateful and singleton-only**
+until repository sharding, placement-aware routing and writer safety are
+implemented. Git replacement must retain storage without overlapping writers.
+Production features must preserve pluggable multi-user
 authentication and authorization, catalogue operation at millions-of-products
-scale, and sustained Git push throughput. The admin UI and other clients are
-optional.
+scale, and sustained Git push throughput.
 
 See the module READMEs for boundaries and commands:
 
 - [gitstore-api/README.md](gitstore-api/README.md)
 - [gitstore-git-service/README.md](gitstore-git-service/README.md)
 - [gitstore-controller-manager/README.md](gitstore-controller-manager/README.md)
-- [gitstore-admin/README.md](gitstore-admin/README.md)
 
 ## Why This Works Well for Developers and AI Agents
 
@@ -82,13 +80,13 @@ make ps
 Use `make compose` without `DETACH=1` to keep the compose stack in the foreground. After the API is healthy, create a starter namespace and repository:
 
 ```bash
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```
 
 The bootstrap command prints a clone URL similar to:
 
 ```text
-http://localhost:5000/gitstore-test/catalog.git
+http://localhost:9000/gitstore-test/catalog.git
 ```
 
 See the [user guide](docs/user-guide.md) for the complete Docker workflow, catalogue push examples, GraphQL queries, and troubleshooting.
@@ -97,9 +95,8 @@ See the [user guide](docs/user-guide.md) for the complete Docker workflow, catal
 
 - **User Guide**: [docs/user-guide.md](docs/user-guide.md)
 - **Developer Guide**: [docs/developer-guide.md](docs/developer-guide.md)
-- **Architecture**: [docs/architecture.md](docs/architecture.md)
+- **Architecture**: [docs/architecture/](docs/architecture/README.md)
 - **API Reference**: [docs/api-reference.md](docs/api-reference.md)
-- **Admin**: [docs/admin/README.md](docs/admin/README.md)
 - **Configuration**: [docs/configuration.md](docs/configuration.md)
 - **Storefront**: [docs/storefront.md](docs/storefront.md)
 - **GraphQL Contracts**: [shared/schemas/](shared/schemas/)

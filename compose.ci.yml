@@ -1,0 +1,9 @@
+services:
+  git-service:
+    environment:
+      GITSTORE_AUTH__GRPC__HMAC_SECRET: ${GITSTORE_AUTH__GRPC__HMAC_SECRET:?CI gRPC HMAC secret is required}
+
+  api:
+    environment:
+      GITSTORE_AUTH__JWT__SECRET: ${GITSTORE_AUTH__JWT__SECRET:?CI JWT secret is required}
+      GITSTORE_AUTH__GRPC__HMAC_SECRET: ${GITSTORE_AUTH__GRPC__HMAC_SECRET:?CI gRPC HMAC secret is required}

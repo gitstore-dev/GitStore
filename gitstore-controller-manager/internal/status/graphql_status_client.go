@@ -19,7 +19,6 @@ const updateCategoryStatusMutation = `
 mutation($input: UpdateCategoryStatusInput!) {
   updateCategoryStatus(input: $input) {
     category { metadata { resourceVersion } }
-    conflict { currentResourceVersion }
   }
 }`
 
@@ -30,9 +29,6 @@ type updateCategoryStatusResponse struct {
 				ResourceVersion string `json:"resourceVersion"`
 			} `json:"metadata"`
 		} `json:"category"`
-		Conflict *struct {
-			CurrentResourceVersion string `json:"currentResourceVersion"`
-		} `json:"conflict"`
 	} `json:"updateCategoryStatus"`
 }
 
@@ -61,14 +57,15 @@ func (c *graphqlStatusClient) Apply(ctx context.Context, key types.WorkItemKey, 
 	var resp updateCategoryStatusResponse
 	if err := c.client.Mutate(ctx, updateCategoryStatusMutation, map[string]any{"input": input}, &resp); err != nil {
 		var gqlErr *graphqlclient.Error
-		if errors.As(err, &gqlErr) && gqlErr.Extensions["code"] == "NOT_FOUND" {
-			return fmt.Errorf("graphqlStatusClient: %w: %w", types.ErrNotFound, err)
+		if errors.As(err, &gqlErr) {
+			switch gqlErr.Extensions["code"] {
+			case "NOT_FOUND":
+				return fmt.Errorf("graphqlStatusClient: %w: %w", types.ErrNotFound, err)
+			case "RESOURCE_VERSION_CONFLICT":
+				return fmt.Errorf("graphqlStatusClient: %w: current resourceVersion %q: %w", types.ErrConflict, gqlErr.Extensions["resourceVersion"], err)
+			}
 		}
 		return fmt.Errorf("graphqlStatusClient: updateCategoryStatus: %w", err)
-	}
-
-	if resp.UpdateCategoryStatus.Conflict != nil {
-		return fmt.Errorf("graphqlStatusClient: %w: current resourceVersion %q", types.ErrConflict, resp.UpdateCategoryStatus.Conflict.CurrentResourceVersion)
 	}
 	return nil
 }

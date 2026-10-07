@@ -12,17 +12,53 @@ import (
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
-	"go.uber.org/zap"
 )
 
+// CreateProduct is the resolver for the createProduct field.
+func (r *mutationResolver) CreateProduct(ctx context.Context, input model.CreateProductInput) (*model.CreateProductPayload, error) {
+	product, err := r.service.CommitProductManifest(ctx, input.APIVersion, input.Kind, input.Metadata, input.Spec, input.Body, callerUsernameOrAnon(ctx, r), true)
+	if err != nil {
+		return nil, err
+	}
+	return &model.CreateProductPayload{Product: DatastoreProductToGraphQL(product)}, nil
+}
+
+// UpdateProduct is the resolver for the updateProduct field.
+func (r *mutationResolver) UpdateProduct(ctx context.Context, input model.UpdateProductInput) (*model.UpdateProductPayload, error) {
+	product, err := r.service.CommitProductManifest(ctx, input.APIVersion, input.Kind, input.Metadata, input.Spec, input.Body, callerUsernameOrAnon(ctx, r), false)
+	if err != nil {
+		return nil, err
+	}
+	return &model.UpdateProductPayload{Product: DatastoreProductToGraphQL(product)}, nil
+}
+
+// DeleteProduct is the resolver for the deleteProduct field.
+func (r *mutationResolver) DeleteProduct(ctx context.Context, input model.DeleteProductInput) (*model.DeleteProductPayload, error) {
+	if input.ID == nil {
+		return nil, gqlerror.Errorf("product ID is required")
+	}
+	uid, err := decodeNodeIDAs(nodeKindProduct, *input.ID)
+	if err != nil {
+		return nil, gqlerror.Errorf("invalid product ID")
+	}
+	product, started, err := r.service.DeleteProductManifest(ctx, uid, callerUsernameOrAnon(ctx, r))
+	if err != nil {
+		return nil, err
+	}
+	outcome := model.ResourceDeletionOutcomeAlreadyTerminating
+	if started {
+		outcome = model.ResourceDeletionOutcomeTerminationStarted
+	}
+	return &model.DeleteProductPayload{Product: DatastoreProductToGraphQL(product), Outcome: outcome}, nil
+}
+
 // UpdateProductStatus applies controller-managed category-resolution state.
-// It may remove exactly one resolved category owner reference, but never
-// touches the Git-authored spec.categoryRef.
+// It never touches the Git-authored spec.categoryRef.
 func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.UpdateProductStatusInput) (*model.UpdateProductStatusPayload, error) {
 	product, err := r.store.GetProductByName(ctx, input.Namespace, input.Name)
 	if err != nil {
@@ -35,28 +71,7 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 		return nil, gqlerror.Errorf("retrieve product status: %v", err)
 	}
 	if product.ResourceVersion != input.ResourceVersion {
-		return &model.UpdateProductStatusPayload{
-			Conflict: &model.StatusConflict{CurrentResourceVersion: product.ResourceVersion},
-		}, nil
-	}
-	if input.RemoveOwnerUID != nil {
-		var refs []catalog.OwnerReference
-		if len(product.OwnerReferences) > 0 {
-			if err := json.Unmarshal(product.OwnerReferences, &refs); err != nil {
-				return nil, gqlerror.Errorf("decode product owner references: %v", err)
-			}
-		}
-		filtered := refs[:0]
-		for _, ref := range refs {
-			if ref.UID != *input.RemoveOwnerUID {
-				filtered = append(filtered, ref)
-			}
-		}
-		ownerReferences, err := json.Marshal(filtered)
-		if err != nil {
-			return nil, gqlerror.Errorf("encode product owner references: %v", err)
-		}
-		product.OwnerReferences = ownerReferences
+		return nil, statusConflictError("Product", input.Namespace, input.Name, product.ResourceVersion)
 	}
 	var status catalog.ProductStatus
 	if len(product.Status) > 0 {
@@ -64,37 +79,72 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 			return nil, gqlerror.Errorf("decode product status: %v", err)
 		}
 	}
+	if input.ObservedGeneration != nil {
+		status.ObservedGeneration = int64(*input.ObservedGeneration)
+	}
+	if input.LastAppliedRevision != nil {
+		status.LastAppliedRevision = *input.LastAppliedRevision
+	}
 	if input.Conditions != nil {
 		status.Conditions = mergeProductConditions(status.Conditions, toConditions(input.Conditions))
+	}
+	if input.Resolved != nil {
+		if input.Resolved.Category != nil {
+			if status.Resolved == nil {
+				status.Resolved = &catalog.ResolvedProductDefinition{}
+			}
+			status.Resolved.Category = &catalog.ResolvedCategoryDefinition{
+				Name: input.Resolved.Category.Name,
+				UID:  input.Resolved.Category.UID,
+			}
+		} else if status.Resolved != nil {
+			status.Resolved.Category = nil
+		}
 	}
 	statusJSON, err := json.Marshal(status)
 	if err != nil {
 		return nil, gqlerror.Errorf("encode product status: %v", err)
 	}
 	product.Status = statusJSON
+	if input.Resolved != nil {
+		var categoryRef *catalog.ObjectReference
+		if input.Resolved.Category != nil {
+			categoryRef = &catalog.ObjectReference{Name: input.Resolved.Category.Name}
+		}
+		ownerReferences, err := cataloggrpc.ResolvedCategoryOwnerReferences(ctx, r.store, product.Namespace, categoryRef, false)
+		if err != nil {
+			// A transient lookup failure must not commit CategoryResolved=True
+			// with an empty owner-reference projection: DecoupleCategoryProducts
+			// would then be unable to find this Product later if its category
+			// is deleted. Fail the whole write so the controller retries.
+			return nil, gqlerror.Errorf("resolve category owner reference: %v", err)
+		}
+		product.OwnerReferences = ownerReferences
+	}
 	datastore.AdvanceProductSystemVersion(product)
 	if err := r.store.UpdateProduct(ctx, product); err != nil {
 		if errors.Is(err, datastore.ErrConflict) {
 			current, getErr := r.store.GetProductByName(ctx, input.Namespace, input.Name)
 			if getErr == nil {
-				return &model.UpdateProductStatusPayload{
-					Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion},
-				}, nil
+				return nil, statusConflictError("Product", input.Namespace, input.Name, current.ResourceVersion)
 			}
 		}
 		return nil, gqlerror.Errorf("update product status: %v", err)
 	}
-	if r.eventBus != nil {
-		r.eventBus.Publish(eventbus.Event{
-			Type:            eventbus.Modified,
-			Kind:            "Product",
-			Namespace:       product.Namespace,
-			Name:            product.Name,
-			ResourceVersion: product.ResourceVersion,
-			Object:          product,
-		})
-	}
 	return &model.UpdateProductStatusPayload{Product: DatastoreProductToGraphQL(product)}, nil
+}
+
+// CompleteProductDeletion is the resolver for the completeProductDeletion field.
+func (r *mutationResolver) CompleteProductDeletion(ctx context.Context, input model.CompleteProductDeletionInput) (*model.CompleteProductDeletionPayload, error) {
+	deleted, err := r.service.CompleteProductDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
+	if errors.Is(err, datastore.ErrConflict) {
+		return nil, statusConflictError("Product", input.Namespace, input.Name, deleted.ResourceVersion)
+	}
+	if err != nil {
+		return nil, err
+	}
+	id := mustEncodeNodeID(nodeKindProduct, deleted.UID)
+	return &model.CompleteProductDeletionPayload{ID: &id}, nil
 }
 
 // Product is the resolver for the product field.
@@ -133,62 +183,7 @@ func (r *queryResolver) Products(ctx context.Context, namespace string, first *i
 
 // WatchProducts is the resolver for the watchProducts field.
 func (r *subscriptionResolver) WatchProducts(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.ProductWatchEvent, error) {
-	if r.eventBus == nil {
-		return nil, gqlerror.Errorf("watch subscriptions are not available")
-	}
-	rv := ""
-	if resourceVersion != nil {
-		rv = *resourceVersion
-	}
-	bootstrap := rv == productWatchBootstrapCursor
-	if bootstrap {
-		rv = ""
-	}
-	events, unsubscribe, startCursor, err := r.eventBus.SubscribeWithCursor("Product", rv)
-	if err != nil {
-		if errors.Is(err, eventbus.ErrWatchExpired) {
-			r.logger.Warn("watch cursor expired; controller must re-list",
-				zap.String("kind", "Product"),
-				zap.String("resource_version", rv))
-			return nil, &gqlerror.Error{
-				Message:    "watch cursor expired; re-list and resume from a fresh cursor",
-				Extensions: map[string]any{"code": "WATCH_EXPIRED"},
-			}
-		}
-		return nil, gqlerror.Errorf("watch subscription failed: %v", err)
-	}
-	out := make(chan *model.ProductWatchEvent, 16)
-	go func() {
-		defer close(out)
-		defer unsubscribe()
-		if bootstrap {
-			bookmark := toProductWatchEvent(eventbus.Event{Kind: "Product", Cursor: startCursor})
-			select {
-			case out <- bookmark:
-			case <-ctx.Done():
-				return
-			}
-		}
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case ev, ok := <-events:
-				if !ok {
-					return
-				}
-				if !productEventMatchesFilters(ev, namespace) || !productEventMatchesSelector(ev, selector) {
-					continue
-				}
-				select {
-				case out <- toProductWatchEvent(ev):
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}()
-	return out, nil
+	return r.watchProductResources(ctx, namespace, selector, resourceVersion)
 }
 
 // Product returns generated.ProductResolver implementation.

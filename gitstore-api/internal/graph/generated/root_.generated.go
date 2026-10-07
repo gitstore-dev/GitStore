@@ -49,21 +49,6 @@ type ComplexityRoot struct {
 		UID             func(childComplexity int) int
 	}
 
-	CatalogStats struct {
-		CategoryCount      func(childComplexity int) int
-		CollectionCount    func(childComplexity int) int
-		OrphanedReferences func(childComplexity int) int
-		ProductCount       func(childComplexity int) int
-	}
-
-	CatalogVersion struct {
-		Commit      func(childComplexity int) int
-		Message     func(childComplexity int) int
-		PublishedAt func(childComplexity int) int
-		Stats       func(childComplexity int) int
-		Tag         func(childComplexity int) int
-	}
-
 	Category struct {
 		APIVersion func(childComplexity int) int
 		Body       func(childComplexity int) int
@@ -80,21 +65,13 @@ type ComplexityRoot struct {
 	}
 
 	CategoryConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
 	}
 
 	CategoryEdge struct {
 		Cursor func(childComplexity int) int
 		Node   func(childComplexity int) int
-	}
-
-	CategoryOptimisticLockConflict struct {
-		AttemptedVersion func(childComplexity int) int
-		Current          func(childComplexity int) int
-		CurrentVersion   func(childComplexity int) int
-		Diff             func(childComplexity int) int
 	}
 
 	CategorySpec struct {
@@ -130,18 +107,13 @@ type ComplexityRoot struct {
 	}
 
 	CollectionConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
 	}
 
 	CollectionEdge struct {
 		Cursor func(childComplexity int) int
 		Node   func(childComplexity int) int
-	}
-
-	CollectionOptimisticLockConflict struct {
-		Current func(childComplexity int) int
 	}
 
 	CollectionSpec struct {
@@ -158,8 +130,15 @@ type ComplexityRoot struct {
 	}
 
 	CompleteNamespaceDeletionPayload struct {
-		Conflict          func(childComplexity int) int
-		DeletedIdentifier func(childComplexity int) int
+		ID func(childComplexity int) int
+	}
+
+	CompleteProductDeletionPayload struct {
+		ID func(childComplexity int) int
+	}
+
+	CompleteRepositoryDeletionPayload struct {
+		ID func(childComplexity int) int
 	}
 
 	Condition struct {
@@ -171,20 +150,26 @@ type ComplexityRoot struct {
 		Type               func(childComplexity int) int
 	}
 
-	CreateCategoryPayload struct {
-		Category func(childComplexity int) int
-	}
-
-	CreateCollectionPayload struct {
-		Collection func(childComplexity int) int
-	}
-
 	CreateNamespacePayload struct {
 		Namespace func(childComplexity int) int
 	}
 
+	CreateProductPayload struct {
+		Product func(childComplexity int) int
+	}
+
 	CreateRepositoryPayload struct {
 		Repository func(childComplexity int) int
+	}
+
+	CreateServiceAccountPayload struct {
+		ServiceAccount func(childComplexity int) int
+	}
+
+	CredentialsRef struct {
+		Kind      func(childComplexity int) int
+		SecretRef func(childComplexity int) int
+		Type      func(childComplexity int) int
 	}
 
 	DeleteCategoryPayload struct {
@@ -192,16 +177,23 @@ type ComplexityRoot struct {
 		OrphanedProductIds func(childComplexity int) int
 	}
 
-	DeleteCollectionPayload struct {
-		DeletedCollectionID func(childComplexity int) int
+	DeleteNamespacePayload struct {
+		Namespace func(childComplexity int) int
+		Outcome   func(childComplexity int) int
 	}
 
-	DeleteNamespacePayload struct {
-		DeletedIdentifier func(childComplexity int) int
+	DeleteProductPayload struct {
+		Outcome func(childComplexity int) int
+		Product func(childComplexity int) int
 	}
 
 	DeleteRepositoryPayload struct {
-		DeletedRepositoryID func(childComplexity int) int
+		Outcome    func(childComplexity int) int
+		Repository func(childComplexity int) int
+	}
+
+	DeleteServiceAccountPayload struct {
+		ServiceAccount func(childComplexity int) int
 	}
 
 	EligibilityDefinition struct {
@@ -281,9 +273,8 @@ type ComplexityRoot struct {
 		StockLocationRefs func(childComplexity int) int
 	}
 
-	KeyValuePair struct {
-		Key   func(childComplexity int) int
-		Value func(childComplexity int) int
+	IssueServiceAccountTokenPayload struct {
+		TokenRequest func(childComplexity int) int
 	}
 
 	LabelSelector struct {
@@ -310,51 +301,49 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
-		CompleteNamespaceDeletion func(childComplexity int, input model.CompleteNamespaceDeletionInput) int
-		CreateCategory            func(childComplexity int, input model.CreateCategoryInput) int
-		CreateCollection          func(childComplexity int, input model.CreateCollectionInput) int
-		CreateNamespace           func(childComplexity int, input model.CreateNamespaceInput) int
-		CreateRepository          func(childComplexity int, input model.CreateRepositoryInput) int
-		DeleteCategory            func(childComplexity int, input model.DeleteCategoryInput) int
-		DeleteCollection          func(childComplexity int, input model.DeleteCollectionInput) int
-		DeleteNamespace           func(childComplexity int, input model.DeleteNamespaceInput) int
-		DeleteRepository          func(childComplexity int, input model.DeleteRepositoryInput) int
-		Login                     func(childComplexity int, input model.LoginInput) int
-		Logout                    func(childComplexity int) int
-		PublishCatalog            func(childComplexity int, input model.PublishCatalogInput) int
-		RefreshToken              func(childComplexity int, input model.RefreshTokenInput) int
-		RenameRepository          func(childComplexity int, input model.RenameRepositoryInput) int
-		ReorderCategories         func(childComplexity int, input model.ReorderCategoriesInput) int
-		TransferRepository        func(childComplexity int, input model.TransferRepositoryInput) int
-		UpdateCategory            func(childComplexity int, input model.UpdateCategoryInput) int
-		UpdateCategoryStatus      func(childComplexity int, input model.UpdateCategoryStatusInput) int
-		UpdateCollection          func(childComplexity int, input model.UpdateCollectionInput) int
-		UpdateNamespace           func(childComplexity int, input model.UpdateNamespaceInput) int
-		UpdateProductStatus       func(childComplexity int, input model.UpdateProductStatusInput) int
-		UpdateResourceStatus      func(childComplexity int, input model.UpdateResourceStatusInput) int
+		CompleteNamespaceDeletion          func(childComplexity int, input model.CompleteNamespaceDeletionInput) int
+		CompleteProductDeletion            func(childComplexity int, input model.CompleteProductDeletionInput) int
+		CompleteRepositoryDeletion         func(childComplexity int, input model.CompleteRepositoryDeletionInput) int
+		CreateNamespace                    func(childComplexity int, input model.CreateNamespaceInput) int
+		CreateProduct                      func(childComplexity int, input model.CreateProductInput) int
+		CreateRepository                   func(childComplexity int, input model.CreateRepositoryInput) int
+		CreateServiceAccount               func(childComplexity int, input model.CreateServiceAccountInput) int
+		DeleteCategory                     func(childComplexity int, input model.DeleteCategoryInput) int
+		DeleteNamespace                    func(childComplexity int, input model.DeleteNamespaceInput) int
+		DeleteProduct                      func(childComplexity int, input model.DeleteProductInput) int
+		DeleteRepository                   func(childComplexity int, input model.DeleteRepositoryInput) int
+		DeleteServiceAccount               func(childComplexity int, input model.DeleteServiceAccountInput) int
+		IssueServiceAccountToken           func(childComplexity int, input model.IssueServiceAccountTokenInput) int
+		Login                              func(childComplexity int, input model.LoginInput) int
+		Logout                             func(childComplexity int) int
+		ProvisionNamespaceSystemRepository func(childComplexity int, input model.ProvisionNamespaceSystemRepositoryInput) int
+		ProvisionRepositoryStorage         func(childComplexity int, input model.ProvisionRepositoryStorageInput) int
+		RefreshToken                       func(childComplexity int, input model.RefreshTokenInput) int
+		RotateServiceAccountKey            func(childComplexity int, input model.RotateServiceAccountKeyInput) int
+		TransferNamespaceOwner             func(childComplexity int, input model.TransferNamespaceOwnerInput) int
+		UpdateCategoryStatus               func(childComplexity int, input model.UpdateCategoryStatusInput) int
+		UpdateNamespace                    func(childComplexity int, input model.UpdateNamespaceInput) int
+		UpdateNamespaceStatus              func(childComplexity int, input model.UpdateNamespaceStatusInput) int
+		UpdateProduct                      func(childComplexity int, input model.UpdateProductInput) int
+		UpdateProductStatus                func(childComplexity int, input model.UpdateProductStatusInput) int
+		UpdateRepository                   func(childComplexity int, input model.UpdateRepositoryInput) int
+		UpdateRepositoryStatus             func(childComplexity int, input model.UpdateRepositoryStatusInput) int
+		UpdateResourceStatus               func(childComplexity int, input model.UpdateResourceStatusInput) int
 	}
 
 	Namespace struct {
-		APIVersion  func(childComplexity int) int
-		Body        func(childComplexity int) int
-		CreatedAt   func(childComplexity int) int
-		CreatedBy   func(childComplexity int) int
-		DisplayName func(childComplexity int) int
-		ID          func(childComplexity int) int
-		Identifier  func(childComplexity int) int
-		Kind        func(childComplexity int) int
-		Metadata    func(childComplexity int) int
-		Spec        func(childComplexity int) int
-		Status      func(childComplexity int) int
-		Tier        func(childComplexity int) int
-		UpdatedAt   func(childComplexity int) int
-		UpdatedBy   func(childComplexity int) int
+		APIVersion func(childComplexity int) int
+		Body       func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
 	}
 
 	NamespaceConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
 	}
 
 	NamespaceEdge struct {
@@ -369,6 +358,7 @@ type ComplexityRoot struct {
 		Generation        func(childComplexity int) int
 		Labels            func(childComplexity int) int
 		Name              func(childComplexity int) int
+		Owner             func(childComplexity int) int
 		OwnerReferences   func(childComplexity int) int
 		ResourceVersion   func(childComplexity int) int
 		Revision          func(childComplexity int) int
@@ -401,6 +391,13 @@ type ComplexityRoot struct {
 		ObservedGeneration  func(childComplexity int) int
 	}
 
+	NamespaceWatchEvent struct {
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Type            func(childComplexity int) int
+	}
+
 	ObjectMeta struct {
 		Annotations       func(childComplexity int) int
 		CreationTimestamp func(childComplexity int) int
@@ -410,6 +407,7 @@ type ComplexityRoot struct {
 		Labels            func(childComplexity int) int
 		Name              func(childComplexity int) int
 		Namespace         func(childComplexity int) int
+		Owner             func(childComplexity int) int
 		OwnerReferences   func(childComplexity int) int
 		ResourceVersion   func(childComplexity int) int
 		Revision          func(childComplexity int) int
@@ -475,14 +473,17 @@ type ComplexityRoot struct {
 	}
 
 	ProductConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
 	}
 
 	ProductEdge struct {
 		Cursor func(childComplexity int) int
 		Node   func(childComplexity int) int
+	}
+
+	ProductLifecycleSpec struct {
+		State func(childComplexity int) int
 	}
 
 	ProductOptionDefinition struct {
@@ -493,6 +494,7 @@ type ComplexityRoot struct {
 
 	ProductSpec struct {
 		CategoryRef func(childComplexity int) int
+		Lifecycle   func(childComplexity int) int
 		Media       func(childComplexity int) int
 		Options     func(childComplexity int) int
 		Tags        func(childComplexity int) int
@@ -517,9 +519,8 @@ type ComplexityRoot struct {
 	}
 
 	ProductVariantConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
 	}
 
 	ProductVariantEdge struct {
@@ -552,8 +553,12 @@ type ComplexityRoot struct {
 		Type            func(childComplexity int) int
 	}
 
-	PublishCatalogPayload struct {
-		CatalogVersion func(childComplexity int) int
+	ProvisionNamespaceSystemRepositoryPayload struct {
+		Repository func(childComplexity int) int
+	}
+
+	ProvisionRepositoryStoragePayload struct {
+		Repository func(childComplexity int) int
 	}
 
 	QuantityDefinition struct {
@@ -562,11 +567,11 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		CatalogVersion  func(childComplexity int) int
 		Categories      func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
 		Category        func(childComplexity int, by model.CategoryBy) int
 		Collection      func(childComplexity int, by model.CollectionBy) int
 		Collections     func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		File            func(childComplexity int, namespace string, name string) int
 		Namespace       func(childComplexity int, by model.NamespaceBy) int
 		Namespaces      func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Node            func(childComplexity int, id string) int
@@ -592,37 +597,19 @@ type ComplexityRoot struct {
 		Token func(childComplexity int) int
 	}
 
-	RenameRepositoryPayload struct {
-		Repository func(childComplexity int) int
-	}
-
-	ReorderCategoriesPayload struct {
-		Categories func(childComplexity int) int
-	}
-
 	Repository struct {
-		APIVersion    func(childComplexity int) int
-		Body          func(childComplexity int) int
-		CreatedAt     func(childComplexity int) int
-		CreatedBy     func(childComplexity int) int
-		DefaultBranch func(childComplexity int) int
-		ID            func(childComplexity int) int
-		Kind          func(childComplexity int) int
-		Metadata      func(childComplexity int) int
-		Name          func(childComplexity int) int
-		Namespace     func(childComplexity int) int
-		Spec          func(childComplexity int) int
-		Status        func(childComplexity int) int
-		StorageClass  func(childComplexity int) int
-		StoragePath   func(childComplexity int) int
-		UpdatedAt     func(childComplexity int) int
-		UpdatedBy     func(childComplexity int) int
+		APIVersion func(childComplexity int) int
+		Body       func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
 	}
 
 	RepositoryConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
 	}
 
 	RepositoryEdge struct {
@@ -651,9 +638,18 @@ type ComplexityRoot struct {
 		Resolved            func(childComplexity int) int
 	}
 
+	RepositoryWatchEvent struct {
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		Repository      func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Type            func(childComplexity int) int
+	}
+
 	ResolvedCategoryDefinition struct {
 		Name func(childComplexity int) int
 		Path func(childComplexity int) int
+		UID  func(childComplexity int) int
 	}
 
 	ResolvedCategoryTaxonomy struct {
@@ -721,6 +717,15 @@ type ComplexityRoot struct {
 		StoragePath  func(childComplexity int) int
 	}
 
+	ResourceOwner struct {
+		Kind func(childComplexity int) int
+		Name func(childComplexity int) int
+	}
+
+	RotateServiceAccountKeyPayload struct {
+		ServiceAccount func(childComplexity int) int
+	}
+
 	SchemaValidationDefaults struct {
 		Phase          func(childComplexity int) int
 		TimeoutSeconds func(childComplexity int) int
@@ -738,8 +743,12 @@ type ComplexityRoot struct {
 		Value func(childComplexity int) int
 	}
 
-	StatusConflict struct {
-		CurrentResourceVersion func(childComplexity int) int
+	ServiceAccount struct {
+		APIVersion func(childComplexity int) int
+		KeyIDs     func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Status     func(childComplexity int) int
 	}
 
 	StrategyDefinition struct {
@@ -747,10 +756,30 @@ type ComplexityRoot struct {
 	}
 
 	Subscription struct {
-		WatchCategories func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
-		WatchFiles      func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
-		WatchProducts   func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
-		WatchResources  func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchCategories   func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchFiles        func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchNamespaces   func(childComplexity int, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchProducts     func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchRepositories func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchResources    func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+	}
+
+	TokenRequest struct {
+		APIVersion func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
+	}
+
+	TokenRequestSpec struct {
+		Audiences         func(childComplexity int) int
+		ExpirationSeconds func(childComplexity int) int
+	}
+
+	TokenRequestStatus struct {
+		ExpirationTimestamp func(childComplexity int) int
+		Token               func(childComplexity int) int
 	}
 
 	TokenResponse struct {
@@ -762,43 +791,41 @@ type ComplexityRoot struct {
 		TokenType    func(childComplexity int) int
 	}
 
-	TransferRepositoryPayload struct {
-		Repository func(childComplexity int) int
-	}
-
-	UpdateCategoryPayload struct {
-		Category func(childComplexity int) int
-		Conflict func(childComplexity int) int
+	TransferNamespaceOwnerPayload struct {
+		Namespace func(childComplexity int) int
 	}
 
 	UpdateCategoryStatusPayload struct {
 		Category                 func(childComplexity int) int
-		Conflict                 func(childComplexity int) int
 		HasMoreProductDependents func(childComplexity int) int
-	}
-
-	UpdateCollectionPayload struct {
-		Collection func(childComplexity int) int
-		Conflict   func(childComplexity int) int
 	}
 
 	UpdateNamespacePayload struct {
 		Namespace func(childComplexity int) int
 	}
 
+	UpdateNamespaceStatusPayload struct {
+		Namespace func(childComplexity int) int
+	}
+
+	UpdateProductPayload struct {
+		Product func(childComplexity int) int
+	}
+
 	UpdateProductStatusPayload struct {
-		Conflict func(childComplexity int) int
-		Product  func(childComplexity int) int
+		Product func(childComplexity int) int
+	}
+
+	UpdateRepositoryPayload struct {
+		Repository func(childComplexity int) int
+	}
+
+	UpdateRepositoryStatusPayload struct {
+		Repository func(childComplexity int) int
 	}
 
 	UpdateResourceStatusPayload struct {
-		Conflict func(childComplexity int) int
-		Object   func(childComplexity int) int
-	}
-
-	User struct {
-		IsAdmin  func(childComplexity int) int
-		Username func(childComplexity int) int
+		Object func(childComplexity int) int
 	}
 
 	VariantSummaryDefinition struct {
@@ -893,69 +920,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CatalogObjectReference.UID(childComplexity), true
-
-	case "CatalogStats.categoryCount":
-		if e.ComplexityRoot.CatalogStats.CategoryCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CatalogStats.CategoryCount(childComplexity), true
-
-	case "CatalogStats.collectionCount":
-		if e.ComplexityRoot.CatalogStats.CollectionCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CatalogStats.CollectionCount(childComplexity), true
-
-	case "CatalogStats.orphanedReferences":
-		if e.ComplexityRoot.CatalogStats.OrphanedReferences == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CatalogStats.OrphanedReferences(childComplexity), true
-
-	case "CatalogStats.productCount":
-		if e.ComplexityRoot.CatalogStats.ProductCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CatalogStats.ProductCount(childComplexity), true
-
-	case "CatalogVersion.commit":
-		if e.ComplexityRoot.CatalogVersion.Commit == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CatalogVersion.Commit(childComplexity), true
-
-	case "CatalogVersion.message":
-		if e.ComplexityRoot.CatalogVersion.Message == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CatalogVersion.Message(childComplexity), true
-
-	case "CatalogVersion.publishedAt":
-		if e.ComplexityRoot.CatalogVersion.PublishedAt == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CatalogVersion.PublishedAt(childComplexity), true
-
-	case "CatalogVersion.stats":
-		if e.ComplexityRoot.CatalogVersion.Stats == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CatalogVersion.Stats(childComplexity), true
-
-	case "CatalogVersion.tag":
-		if e.ComplexityRoot.CatalogVersion.Tag == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CatalogVersion.Tag(childComplexity), true
 
 	case "Category.apiVersion":
 		if e.ComplexityRoot.Category.APIVersion == nil {
@@ -1060,13 +1024,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CategoryConnection.PageInfo(childComplexity), true
 
-	case "CategoryConnection.totalCount":
-		if e.ComplexityRoot.CategoryConnection.TotalCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CategoryConnection.TotalCount(childComplexity), true
-
 	case "CategoryEdge.cursor":
 		if e.ComplexityRoot.CategoryEdge.Cursor == nil {
 			break
@@ -1080,34 +1037,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CategoryEdge.Node(childComplexity), true
-
-	case "CategoryOptimisticLockConflict.attemptedVersion":
-		if e.ComplexityRoot.CategoryOptimisticLockConflict.AttemptedVersion == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CategoryOptimisticLockConflict.AttemptedVersion(childComplexity), true
-
-	case "CategoryOptimisticLockConflict.current":
-		if e.ComplexityRoot.CategoryOptimisticLockConflict.Current == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CategoryOptimisticLockConflict.Current(childComplexity), true
-
-	case "CategoryOptimisticLockConflict.currentVersion":
-		if e.ComplexityRoot.CategoryOptimisticLockConflict.CurrentVersion == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CategoryOptimisticLockConflict.CurrentVersion(childComplexity), true
-
-	case "CategoryOptimisticLockConflict.diff":
-		if e.ComplexityRoot.CategoryOptimisticLockConflict.Diff == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CategoryOptimisticLockConflict.Diff(childComplexity), true
 
 	case "CategorySpec.media":
 		if e.ComplexityRoot.CategorySpec.Media == nil {
@@ -1268,13 +1197,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CollectionConnection.PageInfo(childComplexity), true
 
-	case "CollectionConnection.totalCount":
-		if e.ComplexityRoot.CollectionConnection.TotalCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CollectionConnection.TotalCount(childComplexity), true
-
 	case "CollectionEdge.cursor":
 		if e.ComplexityRoot.CollectionEdge.Cursor == nil {
 			break
@@ -1288,13 +1210,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CollectionEdge.Node(childComplexity), true
-
-	case "CollectionOptimisticLockConflict.current":
-		if e.ComplexityRoot.CollectionOptimisticLockConflict.Current == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CollectionOptimisticLockConflict.Current(childComplexity), true
 
 	case "CollectionSpec.media":
 		if e.ComplexityRoot.CollectionSpec.Media == nil {
@@ -1345,19 +1260,26 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CollectionStatus.Resolved(childComplexity), true
 
-	case "CompleteNamespaceDeletionPayload.conflict":
-		if e.ComplexityRoot.CompleteNamespaceDeletionPayload.Conflict == nil {
+	case "CompleteNamespaceDeletionPayload.id":
+		if e.ComplexityRoot.CompleteNamespaceDeletionPayload.ID == nil {
 			break
 		}
 
-		return e.ComplexityRoot.CompleteNamespaceDeletionPayload.Conflict(childComplexity), true
+		return e.ComplexityRoot.CompleteNamespaceDeletionPayload.ID(childComplexity), true
 
-	case "CompleteNamespaceDeletionPayload.deletedIdentifier":
-		if e.ComplexityRoot.CompleteNamespaceDeletionPayload.DeletedIdentifier == nil {
+	case "CompleteProductDeletionPayload.id":
+		if e.ComplexityRoot.CompleteProductDeletionPayload.ID == nil {
 			break
 		}
 
-		return e.ComplexityRoot.CompleteNamespaceDeletionPayload.DeletedIdentifier(childComplexity), true
+		return e.ComplexityRoot.CompleteProductDeletionPayload.ID(childComplexity), true
+
+	case "CompleteRepositoryDeletionPayload.id":
+		if e.ComplexityRoot.CompleteRepositoryDeletionPayload.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CompleteRepositoryDeletionPayload.ID(childComplexity), true
 
 	case "Condition.lastTransitionTime":
 		if e.ComplexityRoot.Condition.LastTransitionTime == nil {
@@ -1401,20 +1323,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Condition.Type(childComplexity), true
 
-	case "CreateCategoryPayload.category":
-		if e.ComplexityRoot.CreateCategoryPayload.Category == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CreateCategoryPayload.Category(childComplexity), true
-
-	case "CreateCollectionPayload.collection":
-		if e.ComplexityRoot.CreateCollectionPayload.Collection == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CreateCollectionPayload.Collection(childComplexity), true
-
 	case "CreateNamespacePayload.namespace":
 		if e.ComplexityRoot.CreateNamespacePayload.Namespace == nil {
 			break
@@ -1422,12 +1330,47 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CreateNamespacePayload.Namespace(childComplexity), true
 
+	case "CreateProductPayload.product":
+		if e.ComplexityRoot.CreateProductPayload.Product == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CreateProductPayload.Product(childComplexity), true
+
 	case "CreateRepositoryPayload.repository":
 		if e.ComplexityRoot.CreateRepositoryPayload.Repository == nil {
 			break
 		}
 
 		return e.ComplexityRoot.CreateRepositoryPayload.Repository(childComplexity), true
+
+	case "CreateServiceAccountPayload.serviceAccount":
+		if e.ComplexityRoot.CreateServiceAccountPayload.ServiceAccount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CreateServiceAccountPayload.ServiceAccount(childComplexity), true
+
+	case "CredentialsRef.kind":
+		if e.ComplexityRoot.CredentialsRef.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CredentialsRef.Kind(childComplexity), true
+
+	case "CredentialsRef.secretRef":
+		if e.ComplexityRoot.CredentialsRef.SecretRef == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CredentialsRef.SecretRef(childComplexity), true
+
+	case "CredentialsRef.type":
+		if e.ComplexityRoot.CredentialsRef.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CredentialsRef.Type(childComplexity), true
 
 	case "DeleteCategoryPayload.deletedCategoryId":
 		if e.ComplexityRoot.DeleteCategoryPayload.DeletedCategoryID == nil {
@@ -1443,26 +1386,54 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.DeleteCategoryPayload.OrphanedProductIds(childComplexity), true
 
-	case "DeleteCollectionPayload.deletedCollectionId":
-		if e.ComplexityRoot.DeleteCollectionPayload.DeletedCollectionID == nil {
+	case "DeleteNamespacePayload.namespace":
+		if e.ComplexityRoot.DeleteNamespacePayload.Namespace == nil {
 			break
 		}
 
-		return e.ComplexityRoot.DeleteCollectionPayload.DeletedCollectionID(childComplexity), true
+		return e.ComplexityRoot.DeleteNamespacePayload.Namespace(childComplexity), true
 
-	case "DeleteNamespacePayload.deletedIdentifier":
-		if e.ComplexityRoot.DeleteNamespacePayload.DeletedIdentifier == nil {
+	case "DeleteNamespacePayload.outcome":
+		if e.ComplexityRoot.DeleteNamespacePayload.Outcome == nil {
 			break
 		}
 
-		return e.ComplexityRoot.DeleteNamespacePayload.DeletedIdentifier(childComplexity), true
+		return e.ComplexityRoot.DeleteNamespacePayload.Outcome(childComplexity), true
 
-	case "DeleteRepositoryPayload.deletedRepositoryId":
-		if e.ComplexityRoot.DeleteRepositoryPayload.DeletedRepositoryID == nil {
+	case "DeleteProductPayload.outcome":
+		if e.ComplexityRoot.DeleteProductPayload.Outcome == nil {
 			break
 		}
 
-		return e.ComplexityRoot.DeleteRepositoryPayload.DeletedRepositoryID(childComplexity), true
+		return e.ComplexityRoot.DeleteProductPayload.Outcome(childComplexity), true
+
+	case "DeleteProductPayload.product":
+		if e.ComplexityRoot.DeleteProductPayload.Product == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteProductPayload.Product(childComplexity), true
+
+	case "DeleteRepositoryPayload.outcome":
+		if e.ComplexityRoot.DeleteRepositoryPayload.Outcome == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteRepositoryPayload.Outcome(childComplexity), true
+
+	case "DeleteRepositoryPayload.repository":
+		if e.ComplexityRoot.DeleteRepositoryPayload.Repository == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteRepositoryPayload.Repository(childComplexity), true
+
+	case "DeleteServiceAccountPayload.serviceAccount":
+		if e.ComplexityRoot.DeleteServiceAccountPayload.ServiceAccount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteServiceAccountPayload.ServiceAccount(childComplexity), true
 
 	case "EligibilityDefinition.constraints":
 		if e.ComplexityRoot.EligibilityDefinition.Constraints == nil {
@@ -1730,19 +1701,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.InventoryDefinition.StockLocationRefs(childComplexity), true
 
-	case "KeyValuePair.key":
-		if e.ComplexityRoot.KeyValuePair.Key == nil {
+	case "IssueServiceAccountTokenPayload.tokenRequest":
+		if e.ComplexityRoot.IssueServiceAccountTokenPayload.TokenRequest == nil {
 			break
 		}
 
-		return e.ComplexityRoot.KeyValuePair.Key(childComplexity), true
-
-	case "KeyValuePair.value":
-		if e.ComplexityRoot.KeyValuePair.Value == nil {
-			break
-		}
-
-		return e.ComplexityRoot.KeyValuePair.Value(childComplexity), true
+		return e.ComplexityRoot.IssueServiceAccountTokenPayload.TokenRequest(childComplexity), true
 
 	case "LabelSelector.matchExpressions":
 		if e.ComplexityRoot.LabelSelector.MatchExpressions == nil {
@@ -1812,29 +1776,29 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.CompleteNamespaceDeletion(childComplexity, args["input"].(model.CompleteNamespaceDeletionInput)), true
 
-	case "Mutation.createCategory":
-		if e.ComplexityRoot.Mutation.CreateCategory == nil {
+	case "Mutation.completeProductDeletion":
+		if e.ComplexityRoot.Mutation.CompleteProductDeletion == nil {
 			break
 		}
 
-		args, err := ec.field_Mutation_createCategory_args(ctx, rawArgs)
+		args, err := ec.field_Mutation_completeProductDeletion_args(ctx, rawArgs)
 		if err != nil {
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Mutation.CreateCategory(childComplexity, args["input"].(model.CreateCategoryInput)), true
+		return e.ComplexityRoot.Mutation.CompleteProductDeletion(childComplexity, args["input"].(model.CompleteProductDeletionInput)), true
 
-	case "Mutation.createCollection":
-		if e.ComplexityRoot.Mutation.CreateCollection == nil {
+	case "Mutation.completeRepositoryDeletion":
+		if e.ComplexityRoot.Mutation.CompleteRepositoryDeletion == nil {
 			break
 		}
 
-		args, err := ec.field_Mutation_createCollection_args(ctx, rawArgs)
+		args, err := ec.field_Mutation_completeRepositoryDeletion_args(ctx, rawArgs)
 		if err != nil {
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Mutation.CreateCollection(childComplexity, args["input"].(model.CreateCollectionInput)), true
+		return e.ComplexityRoot.Mutation.CompleteRepositoryDeletion(childComplexity, args["input"].(model.CompleteRepositoryDeletionInput)), true
 
 	case "Mutation.createNamespace":
 		if e.ComplexityRoot.Mutation.CreateNamespace == nil {
@@ -1848,6 +1812,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.CreateNamespace(childComplexity, args["input"].(model.CreateNamespaceInput)), true
 
+	case "Mutation.createProduct":
+		if e.ComplexityRoot.Mutation.CreateProduct == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createProduct_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CreateProduct(childComplexity, args["input"].(model.CreateProductInput)), true
+
 	case "Mutation.createRepository":
 		if e.ComplexityRoot.Mutation.CreateRepository == nil {
 			break
@@ -1859,6 +1835,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.CreateRepository(childComplexity, args["input"].(model.CreateRepositoryInput)), true
+
+	case "Mutation.createServiceAccount":
+		if e.ComplexityRoot.Mutation.CreateServiceAccount == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createServiceAccount_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CreateServiceAccount(childComplexity, args["input"].(model.CreateServiceAccountInput)), true
 
 	case "Mutation.deleteCategory":
 		if e.ComplexityRoot.Mutation.DeleteCategory == nil {
@@ -1872,18 +1860,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.DeleteCategory(childComplexity, args["input"].(model.DeleteCategoryInput)), true
 
-	case "Mutation.deleteCollection":
-		if e.ComplexityRoot.Mutation.DeleteCollection == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_deleteCollection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.DeleteCollection(childComplexity, args["input"].(model.DeleteCollectionInput)), true
-
 	case "Mutation.deleteNamespace":
 		if e.ComplexityRoot.Mutation.DeleteNamespace == nil {
 			break
@@ -1896,6 +1872,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.DeleteNamespace(childComplexity, args["input"].(model.DeleteNamespaceInput)), true
 
+	case "Mutation.deleteProduct":
+		if e.ComplexityRoot.Mutation.DeleteProduct == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteProduct_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DeleteProduct(childComplexity, args["input"].(model.DeleteProductInput)), true
+
 	case "Mutation.deleteRepository":
 		if e.ComplexityRoot.Mutation.DeleteRepository == nil {
 			break
@@ -1907,6 +1895,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.DeleteRepository(childComplexity, args["input"].(model.DeleteRepositoryInput)), true
+
+	case "Mutation.deleteServiceAccount":
+		if e.ComplexityRoot.Mutation.DeleteServiceAccount == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteServiceAccount_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DeleteServiceAccount(childComplexity, args["input"].(model.DeleteServiceAccountInput)), true
+
+	case "Mutation.issueServiceAccountToken":
+		if e.ComplexityRoot.Mutation.IssueServiceAccountToken == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_issueServiceAccountToken_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.IssueServiceAccountToken(childComplexity, args["input"].(model.IssueServiceAccountTokenInput)), true
 
 	case "Mutation.login":
 		if e.ComplexityRoot.Mutation.Login == nil {
@@ -1927,17 +1939,29 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.Logout(childComplexity), true
 
-	case "Mutation.publishCatalog":
-		if e.ComplexityRoot.Mutation.PublishCatalog == nil {
+	case "Mutation.provisionNamespaceSystemRepository":
+		if e.ComplexityRoot.Mutation.ProvisionNamespaceSystemRepository == nil {
 			break
 		}
 
-		args, err := ec.field_Mutation_publishCatalog_args(ctx, rawArgs)
+		args, err := ec.field_Mutation_provisionNamespaceSystemRepository_args(ctx, rawArgs)
 		if err != nil {
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Mutation.PublishCatalog(childComplexity, args["input"].(model.PublishCatalogInput)), true
+		return e.ComplexityRoot.Mutation.ProvisionNamespaceSystemRepository(childComplexity, args["input"].(model.ProvisionNamespaceSystemRepositoryInput)), true
+
+	case "Mutation.provisionRepositoryStorage":
+		if e.ComplexityRoot.Mutation.ProvisionRepositoryStorage == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_provisionRepositoryStorage_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ProvisionRepositoryStorage(childComplexity, args["input"].(model.ProvisionRepositoryStorageInput)), true
 
 	case "Mutation.refreshToken":
 		if e.ComplexityRoot.Mutation.RefreshToken == nil {
@@ -1951,53 +1975,29 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.RefreshToken(childComplexity, args["input"].(model.RefreshTokenInput)), true
 
-	case "Mutation.renameRepository":
-		if e.ComplexityRoot.Mutation.RenameRepository == nil {
+	case "Mutation.rotateServiceAccountKey":
+		if e.ComplexityRoot.Mutation.RotateServiceAccountKey == nil {
 			break
 		}
 
-		args, err := ec.field_Mutation_renameRepository_args(ctx, rawArgs)
+		args, err := ec.field_Mutation_rotateServiceAccountKey_args(ctx, rawArgs)
 		if err != nil {
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Mutation.RenameRepository(childComplexity, args["input"].(model.RenameRepositoryInput)), true
+		return e.ComplexityRoot.Mutation.RotateServiceAccountKey(childComplexity, args["input"].(model.RotateServiceAccountKeyInput)), true
 
-	case "Mutation.reorderCategories":
-		if e.ComplexityRoot.Mutation.ReorderCategories == nil {
+	case "Mutation.transferNamespaceOwner":
+		if e.ComplexityRoot.Mutation.TransferNamespaceOwner == nil {
 			break
 		}
 
-		args, err := ec.field_Mutation_reorderCategories_args(ctx, rawArgs)
+		args, err := ec.field_Mutation_transferNamespaceOwner_args(ctx, rawArgs)
 		if err != nil {
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Mutation.ReorderCategories(childComplexity, args["input"].(model.ReorderCategoriesInput)), true
-
-	case "Mutation.transferRepository":
-		if e.ComplexityRoot.Mutation.TransferRepository == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_transferRepository_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.TransferRepository(childComplexity, args["input"].(model.TransferRepositoryInput)), true
-
-	case "Mutation.updateCategory":
-		if e.ComplexityRoot.Mutation.UpdateCategory == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_updateCategory_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.UpdateCategory(childComplexity, args["input"].(model.UpdateCategoryInput)), true
+		return e.ComplexityRoot.Mutation.TransferNamespaceOwner(childComplexity, args["input"].(model.TransferNamespaceOwnerInput)), true
 
 	case "Mutation.updateCategoryStatus":
 		if e.ComplexityRoot.Mutation.UpdateCategoryStatus == nil {
@@ -2011,18 +2011,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.UpdateCategoryStatus(childComplexity, args["input"].(model.UpdateCategoryStatusInput)), true
 
-	case "Mutation.updateCollection":
-		if e.ComplexityRoot.Mutation.UpdateCollection == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_updateCollection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.UpdateCollection(childComplexity, args["input"].(model.UpdateCollectionInput)), true
-
 	case "Mutation.updateNamespace":
 		if e.ComplexityRoot.Mutation.UpdateNamespace == nil {
 			break
@@ -2035,6 +2023,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.UpdateNamespace(childComplexity, args["input"].(model.UpdateNamespaceInput)), true
 
+	case "Mutation.updateNamespaceStatus":
+		if e.ComplexityRoot.Mutation.UpdateNamespaceStatus == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateNamespaceStatus_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateNamespaceStatus(childComplexity, args["input"].(model.UpdateNamespaceStatusInput)), true
+
+	case "Mutation.updateProduct":
+		if e.ComplexityRoot.Mutation.UpdateProduct == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateProduct_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateProduct(childComplexity, args["input"].(model.UpdateProductInput)), true
+
 	case "Mutation.updateProductStatus":
 		if e.ComplexityRoot.Mutation.UpdateProductStatus == nil {
 			break
@@ -2046,6 +2058,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.UpdateProductStatus(childComplexity, args["input"].(model.UpdateProductStatusInput)), true
+
+	case "Mutation.updateRepository":
+		if e.ComplexityRoot.Mutation.UpdateRepository == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateRepository_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateRepository(childComplexity, args["input"].(model.UpdateRepositoryInput)), true
+
+	case "Mutation.updateRepositoryStatus":
+		if e.ComplexityRoot.Mutation.UpdateRepositoryStatus == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateRepositoryStatus_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateRepositoryStatus(childComplexity, args["input"].(model.UpdateRepositoryStatusInput)), true
 
 	case "Mutation.updateResourceStatus":
 		if e.ComplexityRoot.Mutation.UpdateResourceStatus == nil {
@@ -2073,40 +2109,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Namespace.Body(childComplexity), true
 
-	case "Namespace.createdAt":
-		if e.ComplexityRoot.Namespace.CreatedAt == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Namespace.CreatedAt(childComplexity), true
-
-	case "Namespace.createdBy":
-		if e.ComplexityRoot.Namespace.CreatedBy == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Namespace.CreatedBy(childComplexity), true
-
-	case "Namespace.displayName":
-		if e.ComplexityRoot.Namespace.DisplayName == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Namespace.DisplayName(childComplexity), true
-
 	case "Namespace.id":
 		if e.ComplexityRoot.Namespace.ID == nil {
 			break
 		}
 
 		return e.ComplexityRoot.Namespace.ID(childComplexity), true
-
-	case "Namespace.identifier":
-		if e.ComplexityRoot.Namespace.Identifier == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Namespace.Identifier(childComplexity), true
 
 	case "Namespace.kind":
 		if e.ComplexityRoot.Namespace.Kind == nil {
@@ -2136,27 +2144,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Namespace.Status(childComplexity), true
 
-	case "Namespace.tier":
-		if e.ComplexityRoot.Namespace.Tier == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Namespace.Tier(childComplexity), true
-
-	case "Namespace.updatedAt":
-		if e.ComplexityRoot.Namespace.UpdatedAt == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Namespace.UpdatedAt(childComplexity), true
-
-	case "Namespace.updatedBy":
-		if e.ComplexityRoot.Namespace.UpdatedBy == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Namespace.UpdatedBy(childComplexity), true
-
 	case "NamespaceConnection.edges":
 		if e.ComplexityRoot.NamespaceConnection.Edges == nil {
 			break
@@ -2170,13 +2157,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.NamespaceConnection.PageInfo(childComplexity), true
-
-	case "NamespaceConnection.totalCount":
-		if e.ComplexityRoot.NamespaceConnection.TotalCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceConnection.TotalCount(childComplexity), true
 
 	case "NamespaceEdge.cursor":
 		if e.ComplexityRoot.NamespaceEdge.Cursor == nil {
@@ -2233,6 +2213,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.NamespaceMetadata.Name(childComplexity), true
+
+	case "NamespaceMetadata.owner":
+		if e.ComplexityRoot.NamespaceMetadata.Owner == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceMetadata.Owner(childComplexity), true
 
 	case "NamespaceMetadata.ownerReferences":
 		if e.ComplexityRoot.NamespaceMetadata.OwnerReferences == nil {
@@ -2360,6 +2347,34 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.NamespaceStatus.ObservedGeneration(childComplexity), true
 
+	case "NamespaceWatchEvent.name":
+		if e.ComplexityRoot.NamespaceWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceWatchEvent.Name(childComplexity), true
+
+	case "NamespaceWatchEvent.namespace":
+		if e.ComplexityRoot.NamespaceWatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceWatchEvent.Namespace(childComplexity), true
+
+	case "NamespaceWatchEvent.resourceVersion":
+		if e.ComplexityRoot.NamespaceWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceWatchEvent.ResourceVersion(childComplexity), true
+
+	case "NamespaceWatchEvent.type":
+		if e.ComplexityRoot.NamespaceWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceWatchEvent.Type(childComplexity), true
+
 	case "ObjectMeta.annotations":
 		if e.ComplexityRoot.ObjectMeta.Annotations == nil {
 			break
@@ -2415,6 +2430,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ObjectMeta.Namespace(childComplexity), true
+
+	case "ObjectMeta.owner":
+		if e.ComplexityRoot.ObjectMeta.Owner == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ObjectMeta.Owner(childComplexity), true
 
 	case "ObjectMeta.ownerReferences":
 		if e.ComplexityRoot.ObjectMeta.OwnerReferences == nil {
@@ -2701,13 +2723,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ProductConnection.PageInfo(childComplexity), true
 
-	case "ProductConnection.totalCount":
-		if e.ComplexityRoot.ProductConnection.TotalCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ProductConnection.TotalCount(childComplexity), true
-
 	case "ProductEdge.cursor":
 		if e.ComplexityRoot.ProductEdge.Cursor == nil {
 			break
@@ -2721,6 +2736,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ProductEdge.Node(childComplexity), true
+
+	case "ProductLifecycleSpec.state":
+		if e.ComplexityRoot.ProductLifecycleSpec.State == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductLifecycleSpec.State(childComplexity), true
 
 	case "ProductOptionDefinition.name":
 		if e.ComplexityRoot.ProductOptionDefinition.Name == nil {
@@ -2749,6 +2771,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ProductSpec.CategoryRef(childComplexity), true
+
+	case "ProductSpec.lifecycle":
+		if e.ComplexityRoot.ProductSpec.Lifecycle == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductSpec.Lifecycle(childComplexity), true
 
 	case "ProductSpec.media":
 		if e.ComplexityRoot.ProductSpec.Media == nil {
@@ -2868,13 +2897,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ProductVariantConnection.PageInfo(childComplexity), true
-
-	case "ProductVariantConnection.totalCount":
-		if e.ComplexityRoot.ProductVariantConnection.TotalCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ProductVariantConnection.TotalCount(childComplexity), true
 
 	case "ProductVariantEdge.cursor":
 		if e.ComplexityRoot.ProductVariantEdge.Cursor == nil {
@@ -3002,12 +3024,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ProductWatchEvent.Type(childComplexity), true
 
-	case "PublishCatalogPayload.catalogVersion":
-		if e.ComplexityRoot.PublishCatalogPayload.CatalogVersion == nil {
+	case "ProvisionNamespaceSystemRepositoryPayload.repository":
+		if e.ComplexityRoot.ProvisionNamespaceSystemRepositoryPayload.Repository == nil {
 			break
 		}
 
-		return e.ComplexityRoot.PublishCatalogPayload.CatalogVersion(childComplexity), true
+		return e.ComplexityRoot.ProvisionNamespaceSystemRepositoryPayload.Repository(childComplexity), true
+
+	case "ProvisionRepositoryStoragePayload.repository":
+		if e.ComplexityRoot.ProvisionRepositoryStoragePayload.Repository == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProvisionRepositoryStoragePayload.Repository(childComplexity), true
 
 	case "QuantityDefinition.max":
 		if e.ComplexityRoot.QuantityDefinition.Max == nil {
@@ -3022,13 +3051,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.QuantityDefinition.Min(childComplexity), true
-
-	case "Query.catalogVersion":
-		if e.ComplexityRoot.Query.CatalogVersion == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Query.CatalogVersion(childComplexity), true
 
 	case "Query.categories":
 		if e.ComplexityRoot.Query.Categories == nil {
@@ -3077,6 +3099,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Collections(childComplexity, args["namespace"].(string), args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
+
+	case "Query.file":
+		if e.ComplexityRoot.Query.File == nil {
+			break
+		}
+
+		args, err := ec.field_Query_file_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.File(childComplexity, args["namespace"].(string), args["name"].(string)), true
 
 	case "Query.namespace":
 		if e.ComplexityRoot.Query.Namespace == nil {
@@ -3247,20 +3281,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.RefreshTokenPayload.Token(childComplexity), true
 
-	case "RenameRepositoryPayload.repository":
-		if e.ComplexityRoot.RenameRepositoryPayload.Repository == nil {
-			break
-		}
-
-		return e.ComplexityRoot.RenameRepositoryPayload.Repository(childComplexity), true
-
-	case "ReorderCategoriesPayload.categories":
-		if e.ComplexityRoot.ReorderCategoriesPayload.Categories == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ReorderCategoriesPayload.Categories(childComplexity), true
-
 	case "Repository.apiVersion":
 		if e.ComplexityRoot.Repository.APIVersion == nil {
 			break
@@ -3274,27 +3294,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Repository.Body(childComplexity), true
-
-	case "Repository.createdAt":
-		if e.ComplexityRoot.Repository.CreatedAt == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Repository.CreatedAt(childComplexity), true
-
-	case "Repository.createdBy":
-		if e.ComplexityRoot.Repository.CreatedBy == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Repository.CreatedBy(childComplexity), true
-
-	case "Repository.defaultBranch":
-		if e.ComplexityRoot.Repository.DefaultBranch == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Repository.DefaultBranch(childComplexity), true
 
 	case "Repository.id":
 		if e.ComplexityRoot.Repository.ID == nil {
@@ -3317,20 +3316,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Repository.Metadata(childComplexity), true
 
-	case "Repository.name":
-		if e.ComplexityRoot.Repository.Name == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Repository.Name(childComplexity), true
-
-	case "Repository.namespace":
-		if e.ComplexityRoot.Repository.Namespace == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Repository.Namespace(childComplexity), true
-
 	case "Repository.spec":
 		if e.ComplexityRoot.Repository.Spec == nil {
 			break
@@ -3345,34 +3330,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Repository.Status(childComplexity), true
 
-	case "Repository.storageClass":
-		if e.ComplexityRoot.Repository.StorageClass == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Repository.StorageClass(childComplexity), true
-
-	case "Repository.storagePath":
-		if e.ComplexityRoot.Repository.StoragePath == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Repository.StoragePath(childComplexity), true
-
-	case "Repository.updatedAt":
-		if e.ComplexityRoot.Repository.UpdatedAt == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Repository.UpdatedAt(childComplexity), true
-
-	case "Repository.updatedBy":
-		if e.ComplexityRoot.Repository.UpdatedBy == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Repository.UpdatedBy(childComplexity), true
-
 	case "RepositoryConnection.edges":
 		if e.ComplexityRoot.RepositoryConnection.Edges == nil {
 			break
@@ -3386,13 +3343,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RepositoryConnection.PageInfo(childComplexity), true
-
-	case "RepositoryConnection.totalCount":
-		if e.ComplexityRoot.RepositoryConnection.TotalCount == nil {
-			break
-		}
-
-		return e.ComplexityRoot.RepositoryConnection.TotalCount(childComplexity), true
 
 	case "RepositoryEdge.cursor":
 		if e.ComplexityRoot.RepositoryEdge.Cursor == nil {
@@ -3492,6 +3442,41 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.RepositoryStatus.Resolved(childComplexity), true
 
+	case "RepositoryWatchEvent.name":
+		if e.ComplexityRoot.RepositoryWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryWatchEvent.Name(childComplexity), true
+
+	case "RepositoryWatchEvent.namespace":
+		if e.ComplexityRoot.RepositoryWatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryWatchEvent.Namespace(childComplexity), true
+
+	case "RepositoryWatchEvent.repository":
+		if e.ComplexityRoot.RepositoryWatchEvent.Repository == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryWatchEvent.Repository(childComplexity), true
+
+	case "RepositoryWatchEvent.resourceVersion":
+		if e.ComplexityRoot.RepositoryWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryWatchEvent.ResourceVersion(childComplexity), true
+
+	case "RepositoryWatchEvent.type":
+		if e.ComplexityRoot.RepositoryWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryWatchEvent.Type(childComplexity), true
+
 	case "ResolvedCategoryDefinition.name":
 		if e.ComplexityRoot.ResolvedCategoryDefinition.Name == nil {
 			break
@@ -3505,6 +3490,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ResolvedCategoryDefinition.Path(childComplexity), true
+
+	case "ResolvedCategoryDefinition.uid":
+		if e.ComplexityRoot.ResolvedCategoryDefinition.UID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedCategoryDefinition.UID(childComplexity), true
 
 	case "ResolvedCategoryTaxonomy.childCount":
 		if e.ComplexityRoot.ResolvedCategoryTaxonomy.ChildCount == nil {
@@ -3751,6 +3743,27 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ResolvedRepositoryDefinition.StoragePath(childComplexity), true
 
+	case "ResourceOwner.kind":
+		if e.ComplexityRoot.ResourceOwner.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResourceOwner.Kind(childComplexity), true
+
+	case "ResourceOwner.name":
+		if e.ComplexityRoot.ResourceOwner.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResourceOwner.Name(childComplexity), true
+
+	case "RotateServiceAccountKeyPayload.serviceAccount":
+		if e.ComplexityRoot.RotateServiceAccountKeyPayload.ServiceAccount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RotateServiceAccountKeyPayload.ServiceAccount(childComplexity), true
+
 	case "SchemaValidationDefaults.phase":
 		if e.ComplexityRoot.SchemaValidationDefaults.Phase == nil {
 			break
@@ -3807,12 +3820,40 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.SelectedOptionDefinition.Value(childComplexity), true
 
-	case "StatusConflict.currentResourceVersion":
-		if e.ComplexityRoot.StatusConflict.CurrentResourceVersion == nil {
+	case "ServiceAccount.apiVersion":
+		if e.ComplexityRoot.ServiceAccount.APIVersion == nil {
 			break
 		}
 
-		return e.ComplexityRoot.StatusConflict.CurrentResourceVersion(childComplexity), true
+		return e.ComplexityRoot.ServiceAccount.APIVersion(childComplexity), true
+
+	case "ServiceAccount.keyIDs":
+		if e.ComplexityRoot.ServiceAccount.KeyIDs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceAccount.KeyIDs(childComplexity), true
+
+	case "ServiceAccount.kind":
+		if e.ComplexityRoot.ServiceAccount.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceAccount.Kind(childComplexity), true
+
+	case "ServiceAccount.metadata":
+		if e.ComplexityRoot.ServiceAccount.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceAccount.Metadata(childComplexity), true
+
+	case "ServiceAccount.status":
+		if e.ComplexityRoot.ServiceAccount.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceAccount.Status(childComplexity), true
 
 	case "StrategyDefinition.type":
 		if e.ComplexityRoot.StrategyDefinition.Type == nil {
@@ -3845,6 +3886,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Subscription.WatchFiles(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
+	case "Subscription.watchNamespaces":
+		if e.ComplexityRoot.Subscription.WatchNamespaces == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchNamespaces_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchNamespaces(childComplexity, args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
 	case "Subscription.watchProducts":
 		if e.ComplexityRoot.Subscription.WatchProducts == nil {
 			break
@@ -3857,6 +3910,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Subscription.WatchProducts(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
+	case "Subscription.watchRepositories":
+		if e.ComplexityRoot.Subscription.WatchRepositories == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchRepositories_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchRepositories(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
 	case "Subscription.watchResources":
 		if e.ComplexityRoot.Subscription.WatchResources == nil {
 			break
@@ -3868,6 +3933,69 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.WatchResources(childComplexity, args["kind"].(string), args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "TokenRequest.apiVersion":
+		if e.ComplexityRoot.TokenRequest.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequest.APIVersion(childComplexity), true
+
+	case "TokenRequest.kind":
+		if e.ComplexityRoot.TokenRequest.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequest.Kind(childComplexity), true
+
+	case "TokenRequest.metadata":
+		if e.ComplexityRoot.TokenRequest.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequest.Metadata(childComplexity), true
+
+	case "TokenRequest.spec":
+		if e.ComplexityRoot.TokenRequest.Spec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequest.Spec(childComplexity), true
+
+	case "TokenRequest.status":
+		if e.ComplexityRoot.TokenRequest.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequest.Status(childComplexity), true
+
+	case "TokenRequestSpec.audiences":
+		if e.ComplexityRoot.TokenRequestSpec.Audiences == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequestSpec.Audiences(childComplexity), true
+
+	case "TokenRequestSpec.expirationSeconds":
+		if e.ComplexityRoot.TokenRequestSpec.ExpirationSeconds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequestSpec.ExpirationSeconds(childComplexity), true
+
+	case "TokenRequestStatus.expirationTimestamp":
+		if e.ComplexityRoot.TokenRequestStatus.ExpirationTimestamp == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequestStatus.ExpirationTimestamp(childComplexity), true
+
+	case "TokenRequestStatus.token":
+		if e.ComplexityRoot.TokenRequestStatus.Token == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenRequestStatus.Token(childComplexity), true
 
 	case "TokenResponse.accessToken":
 		if e.ComplexityRoot.TokenResponse.AccessToken == nil {
@@ -3911,26 +4039,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.TokenResponse.TokenType(childComplexity), true
 
-	case "TransferRepositoryPayload.repository":
-		if e.ComplexityRoot.TransferRepositoryPayload.Repository == nil {
+	case "TransferNamespaceOwnerPayload.namespace":
+		if e.ComplexityRoot.TransferNamespaceOwnerPayload.Namespace == nil {
 			break
 		}
 
-		return e.ComplexityRoot.TransferRepositoryPayload.Repository(childComplexity), true
-
-	case "UpdateCategoryPayload.category":
-		if e.ComplexityRoot.UpdateCategoryPayload.Category == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateCategoryPayload.Category(childComplexity), true
-
-	case "UpdateCategoryPayload.conflict":
-		if e.ComplexityRoot.UpdateCategoryPayload.Conflict == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateCategoryPayload.Conflict(childComplexity), true
+		return e.ComplexityRoot.TransferNamespaceOwnerPayload.Namespace(childComplexity), true
 
 	case "UpdateCategoryStatusPayload.category":
 		if e.ComplexityRoot.UpdateCategoryStatusPayload.Category == nil {
@@ -3939,33 +4053,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateCategoryStatusPayload.Category(childComplexity), true
 
-	case "UpdateCategoryStatusPayload.conflict":
-		if e.ComplexityRoot.UpdateCategoryStatusPayload.Conflict == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateCategoryStatusPayload.Conflict(childComplexity), true
-
 	case "UpdateCategoryStatusPayload.hasMoreProductDependents":
 		if e.ComplexityRoot.UpdateCategoryStatusPayload.HasMoreProductDependents == nil {
 			break
 		}
 
 		return e.ComplexityRoot.UpdateCategoryStatusPayload.HasMoreProductDependents(childComplexity), true
-
-	case "UpdateCollectionPayload.collection":
-		if e.ComplexityRoot.UpdateCollectionPayload.Collection == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateCollectionPayload.Collection(childComplexity), true
-
-	case "UpdateCollectionPayload.conflict":
-		if e.ComplexityRoot.UpdateCollectionPayload.Conflict == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateCollectionPayload.Conflict(childComplexity), true
 
 	case "UpdateNamespacePayload.namespace":
 		if e.ComplexityRoot.UpdateNamespacePayload.Namespace == nil {
@@ -3974,12 +4067,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateNamespacePayload.Namespace(childComplexity), true
 
-	case "UpdateProductStatusPayload.conflict":
-		if e.ComplexityRoot.UpdateProductStatusPayload.Conflict == nil {
+	case "UpdateNamespaceStatusPayload.namespace":
+		if e.ComplexityRoot.UpdateNamespaceStatusPayload.Namespace == nil {
 			break
 		}
 
-		return e.ComplexityRoot.UpdateProductStatusPayload.Conflict(childComplexity), true
+		return e.ComplexityRoot.UpdateNamespaceStatusPayload.Namespace(childComplexity), true
+
+	case "UpdateProductPayload.product":
+		if e.ComplexityRoot.UpdateProductPayload.Product == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateProductPayload.Product(childComplexity), true
 
 	case "UpdateProductStatusPayload.product":
 		if e.ComplexityRoot.UpdateProductStatusPayload.Product == nil {
@@ -3988,12 +4088,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateProductStatusPayload.Product(childComplexity), true
 
-	case "UpdateResourceStatusPayload.conflict":
-		if e.ComplexityRoot.UpdateResourceStatusPayload.Conflict == nil {
+	case "UpdateRepositoryPayload.repository":
+		if e.ComplexityRoot.UpdateRepositoryPayload.Repository == nil {
 			break
 		}
 
-		return e.ComplexityRoot.UpdateResourceStatusPayload.Conflict(childComplexity), true
+		return e.ComplexityRoot.UpdateRepositoryPayload.Repository(childComplexity), true
+
+	case "UpdateRepositoryStatusPayload.repository":
+		if e.ComplexityRoot.UpdateRepositoryStatusPayload.Repository == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateRepositoryStatusPayload.Repository(childComplexity), true
 
 	case "UpdateResourceStatusPayload.object":
 		if e.ComplexityRoot.UpdateResourceStatusPayload.Object == nil {
@@ -4001,20 +4108,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.UpdateResourceStatusPayload.Object(childComplexity), true
-
-	case "User.isAdmin":
-		if e.ComplexityRoot.User.IsAdmin == nil {
-			break
-		}
-
-		return e.ComplexityRoot.User.IsAdmin(childComplexity), true
-
-	case "User.username":
-		if e.ComplexityRoot.User.Username == nil {
-			break
-		}
-
-		return e.ComplexityRoot.User.Username(childComplexity), true
 
 	case "VariantSummaryDefinition.ready":
 		if e.ComplexityRoot.VariantSummaryDefinition.Ready == nil {
@@ -4087,45 +4180,65 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputCatalogObjectReferenceInput,
 		ec.unmarshalInputCategoryBy,
 		ec.unmarshalInputCategoryNamespacePath,
 		ec.unmarshalInputCollectionBy,
 		ec.unmarshalInputCollectionNamespacePath,
 		ec.unmarshalInputCompleteNamespaceDeletionInput,
+		ec.unmarshalInputCompleteProductDeletionInput,
+		ec.unmarshalInputCompleteRepositoryDeletionInput,
 		ec.unmarshalInputConditionInput,
-		ec.unmarshalInputCreateCategoryInput,
-		ec.unmarshalInputCreateCollectionInput,
 		ec.unmarshalInputCreateNamespaceInput,
+		ec.unmarshalInputCreateProductInput,
 		ec.unmarshalInputCreateRepositoryInput,
+		ec.unmarshalInputCreateServiceAccountInput,
 		ec.unmarshalInputDeleteCategoryInput,
-		ec.unmarshalInputDeleteCollectionInput,
 		ec.unmarshalInputDeleteNamespaceInput,
+		ec.unmarshalInputDeleteProductInput,
 		ec.unmarshalInputDeleteRepositoryInput,
+		ec.unmarshalInputDeleteServiceAccountInput,
+		ec.unmarshalInputFileReferenceInput,
+		ec.unmarshalInputIssueServiceAccountTokenInput,
 		ec.unmarshalInputLabelSelectorInput,
 		ec.unmarshalInputLabelSelectorRequirementInput,
 		ec.unmarshalInputLoginInput,
+		ec.unmarshalInputMediaDefinitionInput,
 		ec.unmarshalInputNamespaceBy,
 		ec.unmarshalInputNamespaceMetadataInput,
 		ec.unmarshalInputNamespacePushPolicyDefaultsInput,
 		ec.unmarshalInputNamespaceRepositoryDefaultsInput,
 		ec.unmarshalInputNamespaceSpecInput,
+		ec.unmarshalInputObjectMetaInput,
 		ec.unmarshalInputProductBy,
+		ec.unmarshalInputProductLifecycleSpecInput,
 		ec.unmarshalInputProductNamespacePath,
+		ec.unmarshalInputProductOptionDefinitionInput,
+		ec.unmarshalInputProductSpecInput,
 		ec.unmarshalInputProductVariantBy,
 		ec.unmarshalInputProductVariantNamespacePath,
-		ec.unmarshalInputPublishCatalogInput,
+		ec.unmarshalInputProvisionNamespaceSystemRepositoryInput,
+		ec.unmarshalInputProvisionRepositoryStorageInput,
 		ec.unmarshalInputRefreshTokenInput,
-		ec.unmarshalInputRenameRepositoryInput,
-		ec.unmarshalInputReorderCategoriesInput,
 		ec.unmarshalInputRepositoryBy,
 		ec.unmarshalInputRepositoryNamespacePath,
+		ec.unmarshalInputRepositoryResolvedStatusInput,
+		ec.unmarshalInputRepositorySpecInput,
+		ec.unmarshalInputResolvedCategoryRefInput,
 		ec.unmarshalInputResolvedCategoryTaxonomyInput,
-		ec.unmarshalInputTransferRepositoryInput,
-		ec.unmarshalInputUpdateCategoryInput,
+		ec.unmarshalInputResolvedProductStatusInput,
+		ec.unmarshalInputResourceOwnerInput,
+		ec.unmarshalInputRotateServiceAccountKeyInput,
+		ec.unmarshalInputServiceAccountPublicKeyInput,
+		ec.unmarshalInputTokenRequestSpecInput,
+		ec.unmarshalInputTransferNamespaceOwnerInput,
 		ec.unmarshalInputUpdateCategoryStatusInput,
-		ec.unmarshalInputUpdateCollectionInput,
 		ec.unmarshalInputUpdateNamespaceInput,
+		ec.unmarshalInputUpdateNamespaceStatusInput,
+		ec.unmarshalInputUpdateProductInput,
 		ec.unmarshalInputUpdateProductStatusInput,
+		ec.unmarshalInputUpdateRepositoryInput,
+		ec.unmarshalInputUpdateRepositoryStatusInput,
 		ec.unmarshalInputUpdateResourceStatusInput,
 	)
 	first := true
@@ -4220,21 +4333,6 @@ func newExecutionContext(
 
 var sources = []*ast.Source{
 	{Name: "../../../../shared/schemas/auth.graphqls", Input: `# Authentication Types and Mutations
-
-"""
-Authenticated user information
-"""
-type User {
-  """
-  Username
-  """
-  username: String!
-
-  """
-  Whether the user has admin privileges
-  """
-  isAdmin: Boolean!
-}
 
 """OIDC-compatible token response."""
 type TokenResponse {
@@ -4373,46 +4471,34 @@ extend type Query {
 
 extend type Mutation {
   """
-  Create a new category
-  """
-  createCategory(input: CreateCategoryInput!): CreateCategoryPayload!
-
-  """
-  Update an existing category
-  """
-  updateCategory(input: UpdateCategoryInput!): UpdateCategoryPayload!
-
-  """
   Delete a category
   """
   deleteCategory(input: DeleteCategoryInput!): DeleteCategoryPayload!
 
   """
-  Reorder categories (drag-and-drop)
-  """
-  reorderCategories(input: ReorderCategoriesInput!): ReorderCategoriesPayload!
-
-  """
   Partial-merge update to a CategoryTaxonomy's .status sub-resource.
   Only non-null input fields are changed; all other existing status
-  fields are left unchanged (FR-008, spec 040). Requires
+  fields are left unchanged. Requires
   resourceVersion to match the resource's current value or the
-  request fails with a StatusConflict (FR-009). Rejects any attempt
+  request fails with a RESOURCE_VERSION_CONFLICT GraphQL error whose
+  extensions include the current resourceVersion. Rejects any attempt
   to alter .spec or author-controlled .metadata by construction —
-  this input type has no such fields (FR-010). Requires
+  this input type has no such fields. Requires
   controller-level authorization independent of the resourceVersion
-  outcome (FR-011).
+  outcome.
   """
   updateCategoryStatus(input: UpdateCategoryStatusInput!): UpdateCategoryStatusPayload!
 }
 
 extend type Subscription {
   """
-  Dedicated, compile-time-typed watch entry point for CategoryTaxonomy.
-  Same list-then-watch/resourceVersion/expiry semantics as the generic
-  watchResources field (FR-001 through FR-004, spec 040), scoped to
-  this kind. Callers obtain the initial list via the existing
-  ` + "`" + `categories` + "`" + ` query.
+  Dedicated, compile-time-typed watch entry point for CategoryTaxonomy,
+  served from the durable, replica-safe resource watch journal. Same
+  list-then-watch/resourceVersion/expiry semantics as the generic
+  watchResources field, scoped to
+  this kind; both are projections of the same journal record. Callers
+  obtain the initial list via the existing ` + "`" + `categories` + "`" + ` query. Requires
+  the ` + "`" + `categoryTaxonomy.watch` + "`" + ` permission.
   """
   watchCategories(
     namespace: String
@@ -4505,14 +4591,6 @@ type CategorySpec {
 }
 
 """
-A key-value pair for label maps.
-"""
-type KeyValuePair {
-  key: String!
-  value: String!
-}
-
-"""
 System-written status for a git-backed CategoryTaxonomy resource.
 """
 type CategoryTaxonomyStatus {
@@ -4532,9 +4610,8 @@ type ResolvedCategoryTaxonomy {
   Ancestor path from root to self, e.g. ["electronics", "computers",
   "laptops"] for the "laptops" category (root-to-self order). A root
   category's path is a single-element array containing its own name.
-  Distinct from Category.path, which is a read-time-derived field
-  computed from the separate ancestor_path datastore column (see
-  specs/040-controller-watch-status-api/research.md R9/R10).
+  Distinct from Category.path, which is derived when the category is
+  read.
   """
   path: [String!]!
   childCount: Int!
@@ -4569,11 +4646,6 @@ type CategoryConnection {
   Pagination information
   """
   pageInfo: PageInfo!
-
-  """
-  Total count of categories
-  """
-  totalCount: Int!
 }
 
 # ============================================================================
@@ -4581,120 +4653,9 @@ type CategoryConnection {
 # ============================================================================
 
 """
-Input for creating a category
-"""
-input CreateCategoryInput {
-
-
-
-  """
-  Category name
-  """
-  name: String!
-
-  """
-  URL-friendly slug (must be unique)
-  """
-  slug: String!
-
-  """
-  Parent category ID (null for root)
-  """
-  parentId: ID
-
-  """
-  Display order
-  """
-  displayOrder: Int
-
-  """
-  Markdown body content
-  """
-  body: String
-}
-
-"""
-Payload for createCategory mutation
-"""
-type CreateCategoryPayload {
-
-
-
-  """
-  The created category
-  """
-  category: Category
-}
-
-"""
-Input for updating a category
-"""
-input UpdateCategoryInput {
-
-
-
-  """
-  Category ID to update
-  """
-  id: ID!
-
-  """
-  New name
-  """
-  name: String
-
-  """
-  New slug
-  """
-  slug: String
-
-  """
-  New parent ID (null to make root, ID to change parent)
-  """
-  parentId: ID
-
-  """
-  New display order
-  """
-  displayOrder: Int
-
-  """
-  New body content
-  """
-  body: String
-
-  """
-  TODO: Should this be a datetime?
-  Version for optimistic locking
-  """
-  version: DateTime!
-}
-
-"""
-Payload for updateCategory mutation
-"""
-type UpdateCategoryPayload {
-
-
-
-  """
-  The updated category
-  """
-  category: Category
-
-  """
-  Conflict information (if optimistic lock failed)
-  """
-  conflict: CategoryOptimisticLockConflict
-}
-
-"""
 Input for deleting a category
 """
 input DeleteCategoryInput {
-
-
-
   """
   Category ID to delete
   """
@@ -4705,9 +4666,6 @@ input DeleteCategoryInput {
 Payload for deleteCategory mutation
 """
 type DeleteCategoryPayload {
-
-
-
   """
   Deleted category ID
   """
@@ -4719,76 +4677,8 @@ type DeleteCategoryPayload {
   orphanedProductIds: [ID!]
 }
 
-"""
-Input for reordering categories (drag-and-drop)
-"""
-input ReorderCategoriesInput {
-
-
-
-  """
-  Ordered list of category IDs within parent
-  """
-  orderedIds: [ID!]!
-
-  """
-  Parent category ID (null for root categories)
-  """
-  parentId: ID
-
-  """
-  Category ID being moved (for tree restructure)
-  """
-  movedCategoryId: ID
-
-  """
-  New parent ID for moved category (for tree restructure)
-  """
-  newParentId: ID
-}
-
-"""
-Payload for reorderCategories mutation
-"""
-type ReorderCategoriesPayload {
-
-
-
-  """
-  Updated categories
-  """
-  categories: [Category!]
-}
-
-"""
-Optimistic lock conflict for category
-"""
-type CategoryOptimisticLockConflict {
-  """
-  TODO: Should this be a datetime?
-  Current version in database
-  """
-  currentVersion: DateTime!
-
-  """
-  TODO: Should this be a datetime?
-  Version client attempted to update
-  """
-  attemptedVersion: DateTime!
-
-  """
-  Current state of the category
-  """
-  current: Category!
-
-  """
-  Diff between current and attempted
-  """
-  diff: String!
-}
-
 # ============================================================================
-# Status Subresource API (spec 040)
+# Status Subresource API
 # ============================================================================
 
 input UpdateCategoryStatusInput {
@@ -4796,12 +4686,12 @@ input UpdateCategoryStatusInput {
   namespace: String!
 
   """
-  Required optimistic-concurrency precondition (FR-009). Must equal
+  Required optimistic-concurrency precondition. Must equal
   the resource's current metadata.resourceVersion.
   """
   resourceVersion: String!
 
-  """Null = unchanged. Set on every successful reconcile per spec 026 FR-008."""
+  """Null = unchanged. Set on every successful reconcile."""
   observedGeneration: Int
 
   """Null = unchanged, e.g. "main@sha1:a1b2c3d"."""
@@ -4841,18 +4731,15 @@ input ResolvedCategoryTaxonomyInput {
 }
 
 type UpdateCategoryStatusPayload {
-  """Null when the write failed (conflict or not-found)."""
+  """The updated CategoryTaxonomy."""
   category: Category
-
-  """Non-null only when the resourceVersion precondition failed."""
-  conflict: StatusConflict
 
   """True when another bounded Product page remains to be processed."""
   hasMoreProductDependents: Boolean!
 }
 
 # ============================================================================
-# Watch API (spec 040)
+# Watch API
 # ============================================================================
 
 """
@@ -4892,26 +4779,6 @@ extend type Query {
     last: Int
     before: String
   ): CollectionConnection!
-}
-
-extend type Mutation {
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  createCollection(input: CreateCollectionInput!): CreateCollectionPayload!
-
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  updateCollection(input: UpdateCollectionInput!): UpdateCollectionPayload!
-
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  deleteCollection(input: DeleteCollectionInput!): DeleteCollectionPayload!
 }
 
 """
@@ -5082,75 +4949,23 @@ Paginated connection for collections (Relay pattern).
 type CollectionConnection {
   edges: [CollectionEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-# ============================================================================
-# Minimal stub inputs (legacy mutations deprecated — managed via git push)
-# ============================================================================
-
-input CreateCollectionInput {
-  name: String!
-}
-
-type CreateCollectionPayload {
-  collection: Collection
-}
-
-input UpdateCollectionInput {
-  id: ID!
-}
-
-type UpdateCollectionPayload {
-  collection: Collection
-  conflict: CollectionOptimisticLockConflict
-}
-
-type CollectionOptimisticLockConflict {
-  current: Collection!
-}
-
-input DeleteCollectionInput {
-  id: ID!
-}
-
-type DeleteCollectionPayload {
-  deletedCollectionId: ID
-}
-
-# ============================================================================
-# Publish / CatalogVersion (kept here for schema continuity)
-# ============================================================================
-
-input PublishCatalogInput {
-  version: String!
-  message: String!
-}
-
-type PublishCatalogPayload {
-  catalogVersion: CatalogVersion
-}
-
-type CatalogVersion {
-  tag: String!
-  commit: String!
-  publishedAt: DateTime!
-  message: String
-  stats: CatalogStats!
-}
-
-type CatalogStats {
-  productCount: Int!
-  categoryCount: Int!
-  collectionCount: Int!
-  orphanedReferences: Int!
 }
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/file.graphqls", Input: `# File Resource — typed watch contract
 
+extend type Query {
+  """
+  Read one persisted File by namespace and name. This does not subscribe to events.
+  """
+  file(namespace: String!, name: String!): File
+}
+
 extend type Subscription {
   """
-  Dedicated, compile-time-typed watch entry point for File resources.
+  Durable File changes, resumable across API replicas within journal retention.
+  An omitted cursor watches future changes, not an initial snapshot.
+  Use the shared bootstrap cursor to capture a bookmark before reading current
+  state, then resume from that bookmark. Legacy event-bus cursors are expired.
   """
   watchFiles(
     namespace: String
@@ -5188,7 +5003,13 @@ type FileSource {
   type: String!
   uri: String!
   checksum: FileChecksum
-  credentialsRef: SecretRef
+  credentialsRef: CredentialsRef
+}
+
+type CredentialsRef {
+  kind: String!
+  type: String!
+  secretRef: SecretRef!
 }
 
 type FileChecksum {
@@ -5288,50 +5109,6 @@ type Namespace implements Node {
   status: NamespaceStatus!
 
   """
-  Human-readable identifier, globally unique across all tiers.
-  DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
-  Cannot begin or end with a hyphen.
-  """
-  identifier: String!
-    @deprecated(reason: "Use metadata.name; removal requires a future major GraphQL API release.")
-
-  """
-  Optional human-friendly display name.
-  """
-  displayName: String
-    @deprecated(reason: "Use spec.title; removal requires a future major GraphQL API release.")
-
-  """
-  The tier of this namespace.
-  """
-  tier: NamespaceTier!
-    @deprecated(reason: "Use spec.tier; removal requires a future major GraphQL API release.")
-
-  """
-  Timestamp when this namespace was created.
-  """
-  createdAt: DateTime!
-    @deprecated(reason: "Use metadata.creationTimestamp; removal requires a future major GraphQL API release.")
-
-  """
-  Username of the caller who created this namespace.
-  """
-  createdBy: String!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
-  """
-  Timestamp when this namespace was last modified.
-  """
-  updatedAt: DateTime!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
-  """
-  Username of the caller who last modified this namespace.
-  """
-  updatedBy: String!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
-  """
   Markdown body content (namespace description).
   """
   body: String
@@ -5351,6 +5128,7 @@ type NamespaceMetadata {
   creationTimestamp: DateTime!
   revision: String
   ownerReferences: [OwnerReference!]!
+  owner: ResourceOwner!
   finalizers: [String!]!
 }
 
@@ -5443,11 +5221,6 @@ type NamespaceConnection {
   Pagination information.
   """
   pageInfo: PageInfo!
-
-  """
-  Total count of namespaces.
-  """
-  totalCount: Int!
 }
 
 """
@@ -5455,7 +5228,6 @@ Selector for looking up a namespace by exactly one unique key.
 """
 input NamespaceBy @oneOf {
   id: ID
-  identifier: String @deprecated(reason: "Use name; removal requires a future major GraphQL API release.")
   name: String
 }
 
@@ -5489,8 +5261,8 @@ input NamespaceSpecInput {
 Declarative resource envelope for creating a namespace.
 """
 input CreateNamespaceInput {
-  apiVersion: String!
-  kind: String!
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Namespace"
   metadata: NamespaceMetadataInput!
   spec: NamespaceSpecInput!
 }
@@ -5499,8 +5271,8 @@ input CreateNamespaceInput {
 Declarative resource envelope for updating a namespace.
 """
 input UpdateNamespaceInput {
-  apiVersion: String!
-  kind: String!
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Namespace"
   metadata: NamespaceMetadataInput!
   spec: NamespaceSpecInput!
 }
@@ -5514,7 +5286,7 @@ input DeleteNamespaceInput {
   Deletion is blocked if any repositories exist within the namespace.
   Requires the caller to be the namespace owner (createdBy) or isAdmin.
   """
-  identifier: String!
+  id: ID
 }
 
 """
@@ -5539,19 +5311,76 @@ type UpdateNamespacePayload {
   namespace: Namespace
 }
 
+input UpdateNamespaceStatusInput {
+  name: String!
+  resourceVersion: String!
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [ConditionInput!]
+}
+
+type UpdateNamespaceStatusPayload {
+  namespace: Namespace!
+}
+
+"""
+The successful result of requesting Namespace termination.
+"""
+enum ResourceDeletionOutcome {
+  """
+  This request set the deletion timestamp and foreground deletion finalizer.
+  """
+  TERMINATION_STARTED
+
+  """
+  The Namespace was already terminating, so no datastore write occurred.
+  """
+  ALREADY_TERMINATING
+}
+
 """
 Payload returned after successfully deleting a namespace.
 """
 type DeleteNamespacePayload {
+  "The Namespace while foreground termination is in progress."
+  namespace: Namespace
+
   """
-  The identifier of the deleted namespace.
+  Whether this request started termination or observed an existing termination.
   """
-  deletedIdentifier: String!
+  outcome: ResourceDeletionOutcome!
+}
+
+"""
+Reassign a namespace's owner. Distinct from transferRepository,
+which relocates a repository between namespaces and is unrelated to
+principal ownership.
+"""
+input TransferNamespaceOwnerInput {
+  namespaceId: ID!
+  targetOwnerRef: ResourceOwnerInput!
+}
+
+type TransferNamespaceOwnerPayload {
+  namespace: Namespace!
 }
 
 type CompleteNamespaceDeletionPayload {
-  deletedIdentifier: String
-  conflict: StatusConflict
+  id: ID
+}
+
+"""
+Controller-only bootstrap operation. Ensures the system-managed
+` + "`" + `gitstore-system` + "`" + ` repository exists for an admitted Namespace. It is separate
+from createRepository because bootstrap repositories are not author-managed
+declarative Repository resources.
+"""
+input ProvisionNamespaceSystemRepositoryInput {
+  namespace: String!
+}
+
+type ProvisionNamespaceSystemRepositoryPayload {
+  repository: Repository!
 }
 
 extend type Query {
@@ -5583,6 +5412,9 @@ extend type Mutation {
   """
   updateNamespace(input: UpdateNamespaceInput!): UpdateNamespacePayload!
 
+  """Write controller-owned Namespace status with optimistic concurrency."""
+  updateNamespaceStatus(input: UpdateNamespaceStatusInput!): UpdateNamespaceStatusPayload!
+
   """
   Delete a namespace.
   Requires authentication. Caller must be the namespace owner or isAdmin.
@@ -5591,15 +5423,49 @@ extend type Mutation {
   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
 
   """
+  Reassign a namespace's owner. Requires authentication.
+  Caller must currently be the namespace owner (or isAdmin), and must be a
+  member of the target owner (or isAdmin).
+  """
+  transferNamespaceOwner(input: TransferNamespaceOwnerInput!): TransferNamespaceOwnerPayload!
+
+  """
   Permanently delete a terminating namespace after its repositories are gone.
   """
   completeNamespaceDeletion(input: CompleteNamespaceDeletionInput!): CompleteNamespaceDeletionPayload!
+
+  """Controller-only, idempotent Namespace bootstrap repository provisioning."""
+  provisionNamespaceSystemRepository(input: ProvisionNamespaceSystemRepositoryInput!): ProvisionNamespaceSystemRepositoryPayload!
+}
+
+extend type Subscription {
+  """
+  Canonical cluster-scoped Namespace watch. The bootstrap sentinel establishes
+  a high-water BOOKMARK before the caller lists Namespaces. A retained cursor
+  resumes strictly after that event; continuity failures return WATCH_EXPIRED.
+  """
+  watchNamespaces(
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): NamespaceWatchEvent!
+}
+
+"""
+Strongly typed Namespace journal event. resourceVersion is an opaque durable
+journal cursor and is distinct from namespace.metadata.resourceVersion.
+"""
+type NamespaceWatchEvent {
+  type: WatchEventType!
+  name: String!
+  resourceVersion: String!
+  namespace: Namespace
 }
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/product.graphqls", Input: `# Product Resource — Kubernetes-style GraphQL Schema
 # Full rewrite: alpha software, no backwards compatibility required.
 # All reads served from the datastore (fully hydrated view).
-# Mutations are git-driven; GraphQL mutations removed (deferred to GH#185/186).
+# Mutations are git-driven: GraphQL commits the canonical manifest and awaits
+# the same admission path as a Git push.
 
 extend type Query {
   """Fetch a single product by globally unique ID or namespace + name."""
@@ -5618,8 +5484,8 @@ extend type Query {
 extend type Subscription {
   """
   Dedicated, compile-time-typed watch entry point for Product. Same
-  list-then-watch/resourceVersion/expiry semantics as watchCategories
-  (spec 040), scoped to this kind. Callers obtain the initial list via
+  list-then-watch/resourceVersion/expiry semantics as watchCategories,
+  scoped to this kind. Callers obtain the initial list via
   the existing ` + "`" + `products` + "`" + ` query.
   """
   watchProducts(
@@ -5630,10 +5496,22 @@ extend type Subscription {
 }
 
 extend type Mutation {
+  """Create a Product in the namespace's implicit gitstore-system repository."""
+  createProduct(input: CreateProductInput!): CreateProductPayload!
+
+  """Update the canonical manifest at the admitted Product's stored provenance."""
+  updateProduct(input: UpdateProductInput!): UpdateProductPayload!
+
+  """Start or observe foreground Product termination."""
+  deleteProduct(input: DeleteProductInput!): DeleteProductPayload!
+
   """
   Controller-only Product status and category-resolution update.
   """
   updateProductStatus(input: UpdateProductStatusInput!): UpdateProductStatusPayload!
+
+  """Controller-only finalizer completion for a terminating Product."""
+  completeProductDeletion(input: CompleteProductDeletionInput!): CompleteProductDeletionPayload!
 }
 
 """
@@ -5672,11 +5550,97 @@ type Product implements Node {
 }
 
 type ProductSpec {
-  title: String
+  """
+  Human-readable display title for the product.
+  """
+  title: String!
   categoryRef: CatalogObjectReference
   tags: [String!]!
   media: [MediaDefinition!]!
   options: [ProductOptionDefinition!]!
+  lifecycle: ProductLifecycleSpec!
+}
+
+enum ProductLifecycleState {
+  ACTIVE
+  RETIRED
+}
+
+type ProductLifecycleSpec {
+  state: ProductLifecycleState!
+}
+
+input ProductLifecycleSpecInput {
+  state: ProductLifecycleState = ACTIVE
+}
+
+input ProductSpecInput {
+  title: String!
+  categoryRef: CatalogObjectReferenceInput
+  tags: [String!]
+  media: [MediaDefinitionInput!]
+  options: [ProductOptionDefinitionInput!]
+  lifecycle: ProductLifecycleSpecInput
+}
+
+input CatalogObjectReferenceInput {
+  apiVersion: String
+  kind: String
+  name: String!
+  namespace: String
+}
+
+input MediaDefinitionInput {
+  fileRef: FileReferenceInput!
+}
+
+input FileReferenceInput {
+  name: String!
+  kind: String!
+  optional: Boolean
+}
+
+input ProductOptionDefinitionInput {
+  name: String!
+  title: String
+  values: [String!]!
+}
+
+input CreateProductInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "Product"
+  metadata: ObjectMetaInput!
+  spec: ProductSpecInput!
+  body: String
+}
+
+input UpdateProductInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "Product"
+  metadata: ObjectMetaInput!
+  spec: ProductSpecInput!
+  body: String
+}
+
+input DeleteProductInput {
+  """Opaque global Product Node ID; never a raw UID or source selector."""
+  id: ID
+}
+
+type CreateProductPayload {
+  product: Product
+}
+
+type UpdateProductPayload {
+  product: Product
+}
+
+type DeleteProductPayload {
+  "The current Product envelope, including terminating metadata."
+  product: Product
+
+  "Whether this request started termination or observed existing termination."
+  outcome: ResourceDeletionOutcome!
 }
 
 type ProductStatus {
@@ -5690,13 +5654,58 @@ input UpdateProductStatusInput {
   name: String!
   namespace: String!
   resourceVersion: String!
+
+  """Null = unchanged. Set on every successful reconcile, matching every other per-kind status mutation."""
+  observedGeneration: Int
+
+  """Null = unchanged, e.g. "main@sha1:a1b2c3d"."""
+  lastAppliedRevision: String
+
   conditions: [ConditionInput!]
-  removeOwnerUID: String
+
+  """
+  Null = unchanged. Kind-specific resolved payload for the fields this
+  feature needs (currently only the resolved category reference).
+  """
+  resolved: ResolvedProductStatusInput
+}
+
+"""Controller-only resolved-status payload accepted by updateProductStatus."""
+input ResolvedProductStatusInput {
+  """
+  Null clears any previously-resolved category reference. Non-null
+  declaratively sets it. Either way, the resolver synchronizes the
+  Product's non-blocking CategoryTaxonomy owner reference to match this
+  value (adds/updates it when set, removes it when null) — mirroring the
+  same synthesis admission already performs for a freshly-pushed Product
+  (resolvedCategoryOwnerReferences), so this is the only writer a
+  previously-unresolved Product ever needs.
+  """
+  category: ResolvedCategoryRefInput
+}
+
+"""
+A resolved CategoryTaxonomy reference: the category's name and its opaque
+Relay identifier (the same value CategoryTaxonomy.id already returns for
+that category), never the category's raw internal identifier.
+"""
+input ResolvedCategoryRefInput {
+  name: String!
+  uid: ID!
 }
 
 type UpdateProductStatusPayload {
   product: Product
-  conflict: StatusConflict
+}
+
+input CompleteProductDeletionInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+}
+
+type CompleteProductDeletionPayload {
+  id: ID
 }
 
 """A pointer to another catalogue resource."""
@@ -5746,6 +5755,13 @@ type ResolvedProductDefinition {
 type ResolvedCategoryDefinition {
   name: String!
   path: [String!]!
+
+  """
+  The resolved category's opaque Relay identifier, matching
+  CategoryTaxonomy.id. Present only while the owning Product's
+  CategoryResolved condition is True.
+  """
+  uid: ID
 }
 
 type PriceRangeDefinition {
@@ -5776,7 +5792,6 @@ type ProductEdge {
 type ProductConnection {
   edges: [ProductEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/product_variant.graphqls", Input: `# ProductVariant Entity GraphQL Types (Kubernetes-style resource envelope)
@@ -6182,7 +6197,6 @@ Paginated connection for ProductVariants (Relay pattern).
 type ProductVariantConnection {
   edges: [ProductVariantEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }
 
 # ---------------------------------------------------------------------------
@@ -6243,25 +6257,6 @@ type Repository implements Node {
   """
   status: RepositoryStatus!
 
-  name: String!
-    @deprecated(reason: "Use metadata.name; removal requires a future major GraphQL API release.")
-  namespace: Namespace!
-    @deprecated(reason: "Use metadata.namespace; removal requires a future major GraphQL API release.")
-  defaultBranch: String!
-    @deprecated(reason: "Use spec.defaultBranch; removal requires a future major GraphQL API release.")
-  storageClass: String!
-    @deprecated(reason: "Use status.resolved.storageClass; removal requires a future major GraphQL API release.")
-  storagePath: String!
-    @deprecated(reason: "Use status.resolved.storagePath; removal requires a future major GraphQL API release.")
-  createdAt: DateTime!
-    @deprecated(reason: "Use metadata.creationTimestamp; removal requires a future major GraphQL API release.")
-  createdBy: String!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-  updatedAt: DateTime!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-  updatedBy: String!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
   """
   Markdown body content (repository description).
   """
@@ -6321,7 +6316,6 @@ type RepositoryEdge {
 type RepositoryConnection {
   edges: [RepositoryEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }
 
 # ============================================================================
@@ -6379,74 +6373,149 @@ input RepositoryNamespacePath {
 }
 
 # ============================================================================
+# Subscription additions
+# ============================================================================
+
+extend type Subscription {
+  """
+  Global Repository watch. Omit namespace for the controller's fleet-wide
+  stream; provide it only to filter a tenant-scoped consumer. A Repository
+  event cursor is opaque and distinct from Repository.metadata.resourceVersion.
+  """
+  watchRepositories(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): RepositoryWatchEvent!
+}
+
+"""
+Strongly typed Repository lifecycle event. ADDED and MODIFIED events carry a
+Repository; DELETED and BOOKMARK events carry no repository payload.
+"""
+type RepositoryWatchEvent {
+  type: WatchEventType!
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+  repository: Repository
+}
+
+# ============================================================================
 # Mutation additions
 # ============================================================================
 
 extend type Mutation {
   """
-  Create a new repository within a namespace.
+  Create a new repository by committing its manifest to the owning namespace's
+  gitstore-system repository and awaiting admission.
   """
   createRepository(input: CreateRepositoryInput!): CreateRepositoryPayload!
 
-  """
-  Rename a repository within its namespace. Does not move storage.
-  """
-  renameRepository(input: RenameRepositoryInput!): RenameRepositoryPayload!
+  """Update an admitted Repository's author-controlled specification."""
+  updateRepository(input: UpdateRepositoryInput!): UpdateRepositoryPayload!
+
+  """Write controller-owned Repository status with optimistic concurrency."""
+  updateRepositoryStatus(input: UpdateRepositoryStatusInput!): UpdateRepositoryStatusPayload!
+
+  """Controller-only, idempotent provisioning of an admitted Repository's bare Git storage."""
+  provisionRepositoryStorage(input: ProvisionRepositoryStorageInput!): ProvisionRepositoryStoragePayload!
 
   """
-  Transfer a repository to a different namespace. Does not move storage.
-  """
-  transferRepository(input: TransferRepositoryInput!): TransferRepositoryPayload!
-
-  """
-  Delete a repository and its storage. Deletion is blocked when the repository contains catalog resources.
+  Start foreground deletion of a repository. Deletion is blocked when the
+  repository contains catalog resources; storage removal and record GC happen
+  asynchronously after controller finalizer completion.
   """
   deleteRepository(input: DeleteRepositoryInput!): DeleteRepositoryPayload!
+
+  """Controller-only completion of a terminating Repository deletion."""
+  completeRepositoryDeletion(input: CompleteRepositoryDeletionInput!): CompleteRepositoryDeletionPayload!
+}
+
+"""Author-controlled metadata shared by declarative resource mutations."""
+input ObjectMetaInput {
+  name: String!
+  namespace: String!
+  labels: JSON
+  annotations: JSON
+}
+
+input RepositorySpecInput {
+  defaultBranch: String
+  visibility: RepositoryVisibility
+  storageClass: String
+}
+
+"""Identifies an admitted, non-bootstrap Repository for controller provisioning."""
+input ProvisionRepositoryStorageInput {
+  namespace: String!
+  name: String!
+}
+
+type ProvisionRepositoryStoragePayload {
+  repository: Repository!
 }
 
 input CreateRepositoryInput {
-  namespace: String!
-  name: String!
-  defaultBranch: String
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Repository"
+  metadata: ObjectMetaInput!
+  spec: RepositorySpecInput!
 }
 
 type CreateRepositoryPayload {
   repository: Repository!
 }
 
-input RenameRepositoryInput {
-  """
-  Relay ID of the repository to rename.
-  """
-  repositoryId: ID!
-  newName: String!
+input UpdateRepositoryInput {
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Repository"
+  metadata: ObjectMetaInput!
+  spec: RepositorySpecInput!
 }
 
-type RenameRepositoryPayload {
-  repository: Repository!
+type UpdateRepositoryPayload {
+  repository: Repository
 }
 
-input TransferRepositoryInput {
-  """
-  Relay ID of the repository to transfer.
-  """
-  repositoryId: ID!
-  """
-  Relay ID of the destination namespace.
-  """
-  targetNamespaceId: ID!
+input UpdateRepositoryStatusInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [ConditionInput!]
+  resolved: RepositoryResolvedStatusInput
 }
 
-type TransferRepositoryPayload {
+"""System-computed Repository storage state written only by its controller."""
+input RepositoryResolvedStatusInput {
+  storagePath: String!
+  storageClass: String!
+}
+
+type UpdateRepositoryStatusPayload {
   repository: Repository!
 }
 
 input DeleteRepositoryInput {
-  repositoryId: ID!
+  id: ID
 }
 
 type DeleteRepositoryPayload {
-  deletedRepositoryId: ID!
+  "The Repository while foreground termination is in progress."
+  repository: Repository
+  outcome: ResourceDeletionOutcome!
+}
+
+input CompleteRepositoryDeletionInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+}
+
+type CompleteRepositoryDeletionPayload {
+  id: ID
 }
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/schema.graphqls", Input: `# GitStore GraphQL Schema
@@ -6470,6 +6539,32 @@ interface Node {
   Globally unique identifier (format: [type]_[base62])
   """
   id: ID!
+}
+
+"""
+An object that has a human-readable name. This represents both the Subject and the Delegate:
+- creation_actor
+- update_actor
+- creation_on_behalf_of_actor OR creation_subject
+- update_on_behalf_of_actor OR update_subject
+
+Implemented in
+- User
+- ServiceAccount
+"""
+interface Actor {
+  metadata: ObjectMeta!
+  status: ActorStatus!
+}
+
+"""
+An object that can be published or unpublished. Implemented in
+- Product
+- ProductVariant
+"""
+interface Publishable {
+  published: Boolean!
+  # publications: PublicationConnection!
 }
 
 """
@@ -6512,12 +6607,6 @@ type Query {
   Fetches multiple objects given their globally unique IDs
   """
   nodes(ids: [ID!]!): [Node]!
-
-  """
-  Get current catalog version (release tag)
-  TODO: Remove. It is unclear which repository this belongs to and it is not used in the UI.
-  """
-  catalogVersion: CatalogVersion!
 }
 
 # ============================================================================
@@ -6526,10 +6615,17 @@ type Query {
 
 type Mutation {
   """
-  Publish changes (commit + push + create release tag)
-  TODO: Remove. It is unclear which repository we're are publishing to.
+  Generic status-subresource write for CRD-defined kinds that have no
+  compile-time-known ` + "`" + `resolved` + "`" + ` shape. Core kinds SHOULD use their
+  dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
+  this field exists so a kind unknown to the schema at build time can
+  still write status. Semantics (partial-merge,
+  resourceVersion precondition, spec-write rejection by construction,
+  controller authorization) are identical to the per-kind mutations.
   """
-  publishCatalog(input: PublishCatalogInput!): PublishCatalogPayload!
+  updateResourceStatus(
+    input: UpdateResourceStatusInput!
+  ): UpdateResourceStatusPayload!
 }
 
 # ============================================================================
@@ -6538,12 +6634,12 @@ type Mutation {
 
 type Subscription {
   """
-  Generic list-then-watch entry point for any resource kind, including
-  CRD-defined kinds not built into the core schema (FR-006, spec 040).
-  Core kinds SHOULD prefer their dedicated per-kind subscription (e.g.
-  watchCategories) for compile-time-typed payloads; this field exists
-  so a kind unknown to the schema at build time can still be watched
-  (FR-006, SC-005).
+  Generic list-then-watch entry point for every kind with a durable watch
+  journal source: Namespace, Repository, CategoryTaxonomy, Product and File
+  today, and CRD-defined kinds once they register a source. Core kinds SHOULD prefer their dedicated per-kind subscription
+  (e.g. watchCategories) for compile-time-typed payloads. A kind without a
+  journal source is rejected with an UNSUPPORTED_KIND extension error
+  rather than an empty stream.
 
   Behavior:
   - resourceVersion omitted/empty: no implicit "list" is performed —
@@ -6552,9 +6648,9 @@ type Subscription {
     subscription with the resourceVersion returned by that list.
   - resourceVersion present but expired (older than server retention):
     the subscription terminates immediately with a WATCH_EXPIRED
-    extension error (FR-004) instead of silently resuming from scratch.
+    extension error instead of silently resuming from scratch.
   - resourceVersion present and valid: only events after that cursor
-    are delivered, in admission order for that kind (FR-002, FR-003).
+    are delivered, in admission order for that kind.
   """
   watchResources(
     kind: String!
@@ -6565,7 +6661,7 @@ type Subscription {
 }
 
 # ============================================================================
-# Watch API (spec 040)
+# Watch API
 # ============================================================================
 
 """
@@ -6620,25 +6716,6 @@ input LabelSelectorRequirementInput {
   values: [String!]
 }
 
-# ============================================================================
-# Status Subresource API (spec 040)
-# ============================================================================
-
-extend type Mutation {
-  """
-  Generic status-subresource write for CRD-defined kinds that have no
-  compile-time-known ` + "`" + `resolved` + "`" + ` shape. Core kinds SHOULD use their
-  dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
-  this field exists so a kind unknown to the schema at build time can
-  still write status (FR-006, SC-005). Semantics (partial-merge,
-  resourceVersion precondition, spec-write rejection by construction,
-  controller authorization) are identical to the per-kind mutations.
-  """
-  updateResourceStatus(
-    input: UpdateResourceStatusInput!
-  ): UpdateResourceStatusPayload!
-}
-
 input UpdateResourceStatusInput {
   kind: String!
   name: String!
@@ -6656,10 +6733,8 @@ input UpdateResourceStatusInput {
 }
 
 type UpdateResourceStatusPayload {
-  """JSON-boxed current resource state; null when the write failed."""
+  """JSON-boxed current resource state."""
   object: JSON
-
-  conflict: StatusConflict
 }
 
 """
@@ -6675,17 +6750,8 @@ input ConditionInput {
   message: String
 }
 
-"""
-Optimistic-concurrency conflict payload shared by all status-write
-mutations (per-kind and generic).
-"""
-type StatusConflict {
-  """The resource's actual current resourceVersion, for retry."""
-  currentResourceVersion: String!
-}
-
 # ============================================================================
-# Scalars & Enums
+# Scalars
 # ============================================================================
 
 """
@@ -6712,6 +6778,34 @@ scalar Long
   @specifiedBy(url: "https://scalars.graphql.org/apollographql/long-v0.1.html")
 
 """
+The principal type that can own a resource.
+"""
+enum OwnerKind {
+  USER
+  GROUP
+  SERVICE_ACCOUNT
+}
+
+"""
+The resource's current owner subject. Distinct from
+OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
+delete relationship, not a principal-ownership one.
+"""
+type ResourceOwner {
+  kind: OwnerKind!
+  name: String!
+}
+
+"""
+Input shape for naming a target owner, e.g. transferNamespaceOwner's
+targetOwnerRef.
+"""
+input ResourceOwnerInput {
+  kind: OwnerKind!
+  name: String!
+}
+
+"""
 System-managed metadata shared by core catalog resources.
 """
 type ObjectMeta {
@@ -6725,6 +6819,7 @@ type ObjectMeta {
   creationTimestamp: DateTime!
   revision: String
   ownerReferences: [OwnerReference!]!
+  owner: ResourceOwner!
   finalizers: [String!]!
   deletionTimestamp: DateTime
 }
@@ -6745,6 +6840,14 @@ enum ConditionStatus {
   TRUE
   FALSE
   UNKNOWN
+}
+
+enum ActorStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  INVITED
+  PENDING_VERIFICATION
 }
 
 """
@@ -6825,24 +6928,180 @@ input ProductVariantNamespacePath {
   name: String!
 }
 
+`, BuiltIn: false},
+	{Name: "../../../../shared/schemas/serviceaccount.graphqls", Input: `# ServiceAccount identity plane: GitStore-issued service-account
+# credentials so gitstore-controller-manager (and future non-human callers)
+# never need to borrow a human-identity credential.
+#
+# Issues a short-lived token after the caller proves possession of an enrolled
+# ServiceAccount private key. Mirrors Kubernetes' TokenRequest result while
+# replacing kubelet attestation with a portable signed client assertion.
+
 """
-Product inventory status
+A GitStore-issued non-human identity. Implements the Actor interface so it can
+appear anywhere a Subject/Delegate is referenced.
 """
-enum InventoryStatus {
-  IN_STOCK
-  OUT_OF_STOCK
-  PREORDER
-  DISCONTINUED
+type ServiceAccount implements Actor {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  keyIDs: [String!]!
+  status: ActorStatus!
 }
 
+"""
+issueServiceAccountToken mutation input.
+"""
+input IssueServiceAccountTokenInput {
+  apiVersion: String! = "authentication.gitstore.dev/v1beta1"
+  kind: String! = "TokenRequest"
+  metadata: ObjectMetaInput!
+  spec: TokenRequestSpecInput!
+}
 
-# ============================================================================
-# Include entity type definitions
-# ============================================================================
+"""
+Requested parameters for a ServiceAccount access token.
+"""
+input TokenRequestSpecInput {
+  """Requested audiences. Defaults to auth.serviceaccount.audience (typically "gitstore-api") when omitted."""
+  audiences: [String!]
 
-# Product types defined in product.graphql
-# Category types defined in category.graphql
-# Collection types defined in collection.graphql
+  """Requested token lifetime in seconds. Clamped to auth.serviceaccount.max_ttl regardless of the requested value."""
+  expirationSeconds: Int
+}
+
+"""
+Resolved parameters echoed back on an issued token.
+"""
+type TokenRequestSpec {
+  audiences: [String!]
+  expirationSeconds: Int
+}
+
+"""
+A short-lived ServiceAccount access token result.
+"""
+type TokenRequest {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: TokenRequestSpec!
+  status: TokenRequestStatus!
+}
+
+"""
+Issued access token result.
+"""
+type TokenRequestStatus {
+  token: String!
+  expirationTimestamp: DateTime!
+}
+
+"""
+issueServiceAccountToken mutation payload.
+"""
+type IssueServiceAccountTokenPayload {
+  tokenRequest: TokenRequest
+}
+
+"""
+Enrolled public key supplied on create/rotate.
+"""
+input ServiceAccountPublicKeyInput {
+  """Key ID an assertion's protected header "kid" must match."""
+  kid: String!
+
+  """"Ed25519" (preferred) or "ECDSA-P256"."""
+  algorithm: String!
+
+  """PEM-encoded public key."""
+  publicKeyPEM: String!
+}
+
+"""
+createServiceAccount mutation input.
+"""
+input CreateServiceAccountInput {
+  apiVersion: String! = "authentication.gitstore.dev/v1beta1"
+  kind: String! = "ServiceAccount"
+  metadata: ObjectMetaInput!
+
+  """At least one enrolled public key is required."""
+  publicKeys: [ServiceAccountPublicKeyInput!]!
+}
+
+"""
+createServiceAccount mutation payload.
+"""
+type CreateServiceAccountPayload {
+  serviceAccount: ServiceAccount
+}
+
+"""
+rotateServiceAccountKey mutation input. add and removeKids
+may both be non-empty in the same call to support an overlap window during
+rotation.
+"""
+input RotateServiceAccountKeyInput {
+  apiVersion: String! = "authentication.gitstore.dev/v1beta1"
+  kind: String! = "ServiceAccount"
+  metadata: ObjectMetaInput!
+  add: [ServiceAccountPublicKeyInput!]!
+  removeKids: [String!]!
+}
+
+"""
+rotateServiceAccountKey mutation payload.
+"""
+type RotateServiceAccountKeyPayload {
+  serviceAccount: ServiceAccount
+}
+
+"""
+deleteServiceAccount mutation input.
+"""
+input DeleteServiceAccountInput {
+  apiVersion: String! = "authentication.gitstore.dev/v1beta1"
+  kind: String! = "ServiceAccount"
+  metadata: ObjectMetaInput!
+}
+
+"""
+deleteServiceAccount mutation payload.
+"""
+type DeleteServiceAccountPayload {
+  serviceAccount: ServiceAccount
+}
+
+# Add ServiceAccount mutations to the Mutation type
+extend type Mutation {
+  """
+  Issue a short-lived ServiceAccount access token. Requires the caller to
+  authenticate via a single-use signed client assertion (AuthMethod ==
+  "serviceaccount-assertion") for the exact ServiceAccount named in the
+  input's metadata; no rbac-local role can substitute for this check.
+  """
+  issueServiceAccountToken(input: IssueServiceAccountTokenInput!): IssueServiceAccountTokenPayload!
+
+  """
+  Create a new ServiceAccount with one or more enrolled public keys.
+  Requires rbac-local action "serviceaccount.create".
+  """
+  createServiceAccount(input: CreateServiceAccountInput!): CreateServiceAccountPayload!
+
+  """
+  Add and/or remove enrolled public keys on an existing ServiceAccount,
+  supporting an overlap window during key rotation. Requires rbac-local
+  action "serviceaccount.key.rotate".
+  """
+  rotateServiceAccountKey(input: RotateServiceAccountKeyInput!): RotateServiceAccountKeyPayload!
+
+  """
+  Delete a ServiceAccount. Idempotent: deleting an already-deleted account
+  is a no-op success. Requires rbac-local action "serviceaccount.delete".
+  """
+  deleteServiceAccount(input: DeleteServiceAccountInput!): DeleteServiceAccountPayload!
+}
 `, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
@@ -6881,36 +7140,6 @@ func (ec *executionContext) childFields_CatalogObjectReference(ctx context.Conte
 	return nil, fmt.Errorf("no field named %q was found under type CatalogObjectReference", field.Name)
 }
 
-func (ec *executionContext) childFields_CatalogStats(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "productCount":
-		return ec.fieldContext_CatalogStats_productCount(ctx, field)
-	case "categoryCount":
-		return ec.fieldContext_CatalogStats_categoryCount(ctx, field)
-	case "collectionCount":
-		return ec.fieldContext_CatalogStats_collectionCount(ctx, field)
-	case "orphanedReferences":
-		return ec.fieldContext_CatalogStats_orphanedReferences(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type CatalogStats", field.Name)
-}
-
-func (ec *executionContext) childFields_CatalogVersion(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "tag":
-		return ec.fieldContext_CatalogVersion_tag(ctx, field)
-	case "commit":
-		return ec.fieldContext_CatalogVersion_commit(ctx, field)
-	case "publishedAt":
-		return ec.fieldContext_CatalogVersion_publishedAt(ctx, field)
-	case "message":
-		return ec.fieldContext_CatalogVersion_message(ctx, field)
-	case "stats":
-		return ec.fieldContext_CatalogVersion_stats(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type CatalogVersion", field.Name)
-}
-
 func (ec *executionContext) childFields_Category(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "id":
@@ -6947,8 +7176,6 @@ func (ec *executionContext) childFields_CategoryConnection(ctx context.Context, 
 		return ec.fieldContext_CategoryConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_CategoryConnection_pageInfo(ctx, field)
-	case "totalCount":
-		return ec.fieldContext_CategoryConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CategoryConnection", field.Name)
 }
@@ -6961,20 +7188,6 @@ func (ec *executionContext) childFields_CategoryEdge(ctx context.Context, field 
 		return ec.fieldContext_CategoryEdge_node(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CategoryEdge", field.Name)
-}
-
-func (ec *executionContext) childFields_CategoryOptimisticLockConflict(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "currentVersion":
-		return ec.fieldContext_CategoryOptimisticLockConflict_currentVersion(ctx, field)
-	case "attemptedVersion":
-		return ec.fieldContext_CategoryOptimisticLockConflict_attemptedVersion(ctx, field)
-	case "current":
-		return ec.fieldContext_CategoryOptimisticLockConflict_current(ctx, field)
-	case "diff":
-		return ec.fieldContext_CategoryOptimisticLockConflict_diff(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type CategoryOptimisticLockConflict", field.Name)
 }
 
 func (ec *executionContext) childFields_CategorySpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7047,8 +7260,6 @@ func (ec *executionContext) childFields_CollectionConnection(ctx context.Context
 		return ec.fieldContext_CollectionConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_CollectionConnection_pageInfo(ctx, field)
-	case "totalCount":
-		return ec.fieldContext_CollectionConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CollectionConnection", field.Name)
 }
@@ -7061,14 +7272,6 @@ func (ec *executionContext) childFields_CollectionEdge(ctx context.Context, fiel
 		return ec.fieldContext_CollectionEdge_node(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CollectionEdge", field.Name)
-}
-
-func (ec *executionContext) childFields_CollectionOptimisticLockConflict(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "current":
-		return ec.fieldContext_CollectionOptimisticLockConflict_current(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type CollectionOptimisticLockConflict", field.Name)
 }
 
 func (ec *executionContext) childFields_CollectionSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7099,12 +7302,26 @@ func (ec *executionContext) childFields_CollectionStatus(ctx context.Context, fi
 
 func (ec *executionContext) childFields_CompleteNamespaceDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "deletedIdentifier":
-		return ec.fieldContext_CompleteNamespaceDeletionPayload_deletedIdentifier(ctx, field)
-	case "conflict":
-		return ec.fieldContext_CompleteNamespaceDeletionPayload_conflict(ctx, field)
+	case "id":
+		return ec.fieldContext_CompleteNamespaceDeletionPayload_id(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CompleteNamespaceDeletionPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CompleteProductDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_CompleteProductDeletionPayload_id(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CompleteProductDeletionPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CompleteRepositoryDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_CompleteRepositoryDeletionPayload_id(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CompleteRepositoryDeletionPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_Condition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7125,22 +7342,6 @@ func (ec *executionContext) childFields_Condition(ctx context.Context, field gra
 	return nil, fmt.Errorf("no field named %q was found under type Condition", field.Name)
 }
 
-func (ec *executionContext) childFields_CreateCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "category":
-		return ec.fieldContext_CreateCategoryPayload_category(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type CreateCategoryPayload", field.Name)
-}
-
-func (ec *executionContext) childFields_CreateCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "collection":
-		return ec.fieldContext_CreateCollectionPayload_collection(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type CreateCollectionPayload", field.Name)
-}
-
 func (ec *executionContext) childFields_CreateNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "namespace":
@@ -7149,12 +7350,40 @@ func (ec *executionContext) childFields_CreateNamespacePayload(ctx context.Conte
 	return nil, fmt.Errorf("no field named %q was found under type CreateNamespacePayload", field.Name)
 }
 
+func (ec *executionContext) childFields_CreateProductPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "product":
+		return ec.fieldContext_CreateProductPayload_product(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CreateProductPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_CreateRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "repository":
 		return ec.fieldContext_CreateRepositoryPayload_repository(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CreateRepositoryPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CreateServiceAccountPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "serviceAccount":
+		return ec.fieldContext_CreateServiceAccountPayload_serviceAccount(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CreateServiceAccountPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CredentialsRef(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "kind":
+		return ec.fieldContext_CredentialsRef_kind(ctx, field)
+	case "type":
+		return ec.fieldContext_CredentialsRef_type(ctx, field)
+	case "secretRef":
+		return ec.fieldContext_CredentialsRef_secretRef(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CredentialsRef", field.Name)
 }
 
 func (ec *executionContext) childFields_DeleteCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7167,28 +7396,42 @@ func (ec *executionContext) childFields_DeleteCategoryPayload(ctx context.Contex
 	return nil, fmt.Errorf("no field named %q was found under type DeleteCategoryPayload", field.Name)
 }
 
-func (ec *executionContext) childFields_DeleteCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "deletedCollectionId":
-		return ec.fieldContext_DeleteCollectionPayload_deletedCollectionId(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type DeleteCollectionPayload", field.Name)
-}
-
 func (ec *executionContext) childFields_DeleteNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "deletedIdentifier":
-		return ec.fieldContext_DeleteNamespacePayload_deletedIdentifier(ctx, field)
+	case "namespace":
+		return ec.fieldContext_DeleteNamespacePayload_namespace(ctx, field)
+	case "outcome":
+		return ec.fieldContext_DeleteNamespacePayload_outcome(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DeleteNamespacePayload", field.Name)
 }
 
+func (ec *executionContext) childFields_DeleteProductPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "product":
+		return ec.fieldContext_DeleteProductPayload_product(ctx, field)
+	case "outcome":
+		return ec.fieldContext_DeleteProductPayload_outcome(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type DeleteProductPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_DeleteRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "deletedRepositoryId":
-		return ec.fieldContext_DeleteRepositoryPayload_deletedRepositoryId(ctx, field)
+	case "repository":
+		return ec.fieldContext_DeleteRepositoryPayload_repository(ctx, field)
+	case "outcome":
+		return ec.fieldContext_DeleteRepositoryPayload_outcome(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DeleteRepositoryPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_DeleteServiceAccountPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "serviceAccount":
+		return ec.fieldContext_DeleteServiceAccountPayload_serviceAccount(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type DeleteServiceAccountPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_EligibilityDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7345,6 +7588,14 @@ func (ec *executionContext) childFields_InventoryDefinition(ctx context.Context,
 	return nil, fmt.Errorf("no field named %q was found under type InventoryDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_IssueServiceAccountTokenPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "tokenRequest":
+		return ec.fieldContext_IssueServiceAccountTokenPayload_tokenRequest(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type IssueServiceAccountTokenPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_LabelSelector(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "matchLabels":
@@ -7405,20 +7656,6 @@ func (ec *executionContext) childFields_Namespace(ctx context.Context, field gra
 		return ec.fieldContext_Namespace_spec(ctx, field)
 	case "status":
 		return ec.fieldContext_Namespace_status(ctx, field)
-	case "identifier":
-		return ec.fieldContext_Namespace_identifier(ctx, field)
-	case "displayName":
-		return ec.fieldContext_Namespace_displayName(ctx, field)
-	case "tier":
-		return ec.fieldContext_Namespace_tier(ctx, field)
-	case "createdAt":
-		return ec.fieldContext_Namespace_createdAt(ctx, field)
-	case "createdBy":
-		return ec.fieldContext_Namespace_createdBy(ctx, field)
-	case "updatedAt":
-		return ec.fieldContext_Namespace_updatedAt(ctx, field)
-	case "updatedBy":
-		return ec.fieldContext_Namespace_updatedBy(ctx, field)
 	case "body":
 		return ec.fieldContext_Namespace_body(ctx, field)
 	}
@@ -7431,8 +7668,6 @@ func (ec *executionContext) childFields_NamespaceConnection(ctx context.Context,
 		return ec.fieldContext_NamespaceConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_NamespaceConnection_pageInfo(ctx, field)
-	case "totalCount":
-		return ec.fieldContext_NamespaceConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type NamespaceConnection", field.Name)
 }
@@ -7467,6 +7702,8 @@ func (ec *executionContext) childFields_NamespaceMetadata(ctx context.Context, f
 		return ec.fieldContext_NamespaceMetadata_revision(ctx, field)
 	case "ownerReferences":
 		return ec.fieldContext_NamespaceMetadata_ownerReferences(ctx, field)
+	case "owner":
+		return ec.fieldContext_NamespaceMetadata_owner(ctx, field)
 	case "finalizers":
 		return ec.fieldContext_NamespaceMetadata_finalizers(ctx, field)
 	}
@@ -7525,6 +7762,20 @@ func (ec *executionContext) childFields_NamespaceStatus(ctx context.Context, fie
 	return nil, fmt.Errorf("no field named %q was found under type NamespaceStatus", field.Name)
 }
 
+func (ec *executionContext) childFields_NamespaceWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_NamespaceWatchEvent_type(ctx, field)
+	case "name":
+		return ec.fieldContext_NamespaceWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_NamespaceWatchEvent_resourceVersion(ctx, field)
+	case "namespace":
+		return ec.fieldContext_NamespaceWatchEvent_namespace(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type NamespaceWatchEvent", field.Name)
+}
+
 func (ec *executionContext) childFields_ObjectMeta(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
@@ -7547,6 +7798,8 @@ func (ec *executionContext) childFields_ObjectMeta(ctx context.Context, field gr
 		return ec.fieldContext_ObjectMeta_revision(ctx, field)
 	case "ownerReferences":
 		return ec.fieldContext_ObjectMeta_ownerReferences(ctx, field)
+	case "owner":
+		return ec.fieldContext_ObjectMeta_owner(ctx, field)
 	case "finalizers":
 		return ec.fieldContext_ObjectMeta_finalizers(ctx, field)
 	case "deletionTimestamp":
@@ -7677,8 +7930,6 @@ func (ec *executionContext) childFields_ProductConnection(ctx context.Context, f
 		return ec.fieldContext_ProductConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_ProductConnection_pageInfo(ctx, field)
-	case "totalCount":
-		return ec.fieldContext_ProductConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ProductConnection", field.Name)
 }
@@ -7691,6 +7942,14 @@ func (ec *executionContext) childFields_ProductEdge(ctx context.Context, field g
 		return ec.fieldContext_ProductEdge_node(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ProductEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_ProductLifecycleSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "state":
+		return ec.fieldContext_ProductLifecycleSpec_state(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProductLifecycleSpec", field.Name)
 }
 
 func (ec *executionContext) childFields_ProductOptionDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7717,6 +7976,8 @@ func (ec *executionContext) childFields_ProductSpec(ctx context.Context, field g
 		return ec.fieldContext_ProductSpec_media(ctx, field)
 	case "options":
 		return ec.fieldContext_ProductSpec_options(ctx, field)
+	case "lifecycle":
+		return ec.fieldContext_ProductSpec_lifecycle(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ProductSpec", field.Name)
 }
@@ -7761,8 +8022,6 @@ func (ec *executionContext) childFields_ProductVariantConnection(ctx context.Con
 		return ec.fieldContext_ProductVariantConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_ProductVariantConnection_pageInfo(ctx, field)
-	case "totalCount":
-		return ec.fieldContext_ProductVariantConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ProductVariantConnection", field.Name)
 }
@@ -7827,12 +8086,20 @@ func (ec *executionContext) childFields_ProductWatchEvent(ctx context.Context, f
 	return nil, fmt.Errorf("no field named %q was found under type ProductWatchEvent", field.Name)
 }
 
-func (ec *executionContext) childFields_PublishCatalogPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+func (ec *executionContext) childFields_ProvisionNamespaceSystemRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "catalogVersion":
-		return ec.fieldContext_PublishCatalogPayload_catalogVersion(ctx, field)
+	case "repository":
+		return ec.fieldContext_ProvisionNamespaceSystemRepositoryPayload_repository(ctx, field)
 	}
-	return nil, fmt.Errorf("no field named %q was found under type PublishCatalogPayload", field.Name)
+	return nil, fmt.Errorf("no field named %q was found under type ProvisionNamespaceSystemRepositoryPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_ProvisionRepositoryStoragePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "repository":
+		return ec.fieldContext_ProvisionRepositoryStoragePayload_repository(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProvisionRepositoryStoragePayload", field.Name)
 }
 
 func (ec *executionContext) childFields_QuantityDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7871,22 +8138,6 @@ func (ec *executionContext) childFields_RefreshTokenPayload(ctx context.Context,
 	return nil, fmt.Errorf("no field named %q was found under type RefreshTokenPayload", field.Name)
 }
 
-func (ec *executionContext) childFields_RenameRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "repository":
-		return ec.fieldContext_RenameRepositoryPayload_repository(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type RenameRepositoryPayload", field.Name)
-}
-
-func (ec *executionContext) childFields_ReorderCategoriesPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "categories":
-		return ec.fieldContext_ReorderCategoriesPayload_categories(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type ReorderCategoriesPayload", field.Name)
-}
-
 func (ec *executionContext) childFields_Repository(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "id":
@@ -7901,24 +8152,6 @@ func (ec *executionContext) childFields_Repository(ctx context.Context, field gr
 		return ec.fieldContext_Repository_spec(ctx, field)
 	case "status":
 		return ec.fieldContext_Repository_status(ctx, field)
-	case "name":
-		return ec.fieldContext_Repository_name(ctx, field)
-	case "namespace":
-		return ec.fieldContext_Repository_namespace(ctx, field)
-	case "defaultBranch":
-		return ec.fieldContext_Repository_defaultBranch(ctx, field)
-	case "storageClass":
-		return ec.fieldContext_Repository_storageClass(ctx, field)
-	case "storagePath":
-		return ec.fieldContext_Repository_storagePath(ctx, field)
-	case "createdAt":
-		return ec.fieldContext_Repository_createdAt(ctx, field)
-	case "createdBy":
-		return ec.fieldContext_Repository_createdBy(ctx, field)
-	case "updatedAt":
-		return ec.fieldContext_Repository_updatedAt(ctx, field)
-	case "updatedBy":
-		return ec.fieldContext_Repository_updatedBy(ctx, field)
 	case "body":
 		return ec.fieldContext_Repository_body(ctx, field)
 	}
@@ -7931,8 +8164,6 @@ func (ec *executionContext) childFields_RepositoryConnection(ctx context.Context
 		return ec.fieldContext_RepositoryConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_RepositoryConnection_pageInfo(ctx, field)
-	case "totalCount":
-		return ec.fieldContext_RepositoryConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type RepositoryConnection", field.Name)
 }
@@ -7989,12 +8220,30 @@ func (ec *executionContext) childFields_RepositoryStatus(ctx context.Context, fi
 	return nil, fmt.Errorf("no field named %q was found under type RepositoryStatus", field.Name)
 }
 
+func (ec *executionContext) childFields_RepositoryWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_RepositoryWatchEvent_type(ctx, field)
+	case "namespace":
+		return ec.fieldContext_RepositoryWatchEvent_namespace(ctx, field)
+	case "name":
+		return ec.fieldContext_RepositoryWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_RepositoryWatchEvent_resourceVersion(ctx, field)
+	case "repository":
+		return ec.fieldContext_RepositoryWatchEvent_repository(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RepositoryWatchEvent", field.Name)
+}
+
 func (ec *executionContext) childFields_ResolvedCategoryDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
 		return ec.fieldContext_ResolvedCategoryDefinition_name(ctx, field)
 	case "path":
 		return ec.fieldContext_ResolvedCategoryDefinition_path(ctx, field)
+	case "uid":
+		return ec.fieldContext_ResolvedCategoryDefinition_uid(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedCategoryDefinition", field.Name)
 }
@@ -8129,6 +8378,24 @@ func (ec *executionContext) childFields_ResolvedRepositoryDefinition(ctx context
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedRepositoryDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_ResourceOwner(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "kind":
+		return ec.fieldContext_ResourceOwner_kind(ctx, field)
+	case "name":
+		return ec.fieldContext_ResourceOwner_name(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ResourceOwner", field.Name)
+}
+
+func (ec *executionContext) childFields_RotateServiceAccountKeyPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "serviceAccount":
+		return ec.fieldContext_RotateServiceAccountKeyPayload_serviceAccount(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RotateServiceAccountKeyPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_SchemaValidationDefaults(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "phase":
@@ -8163,12 +8430,20 @@ func (ec *executionContext) childFields_SelectedOptionDefinition(ctx context.Con
 	return nil, fmt.Errorf("no field named %q was found under type SelectedOptionDefinition", field.Name)
 }
 
-func (ec *executionContext) childFields_StatusConflict(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+func (ec *executionContext) childFields_ServiceAccount(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "currentResourceVersion":
-		return ec.fieldContext_StatusConflict_currentResourceVersion(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_ServiceAccount_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_ServiceAccount_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_ServiceAccount_metadata(ctx, field)
+	case "keyIDs":
+		return ec.fieldContext_ServiceAccount_keyIDs(ctx, field)
+	case "status":
+		return ec.fieldContext_ServiceAccount_status(ctx, field)
 	}
-	return nil, fmt.Errorf("no field named %q was found under type StatusConflict", field.Name)
+	return nil, fmt.Errorf("no field named %q was found under type ServiceAccount", field.Name)
 }
 
 func (ec *executionContext) childFields_StrategyDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8177,6 +8452,42 @@ func (ec *executionContext) childFields_StrategyDefinition(ctx context.Context, 
 		return ec.fieldContext_StrategyDefinition_type(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type StrategyDefinition", field.Name)
+}
+
+func (ec *executionContext) childFields_TokenRequest(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "apiVersion":
+		return ec.fieldContext_TokenRequest_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_TokenRequest_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_TokenRequest_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_TokenRequest_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_TokenRequest_status(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TokenRequest", field.Name)
+}
+
+func (ec *executionContext) childFields_TokenRequestSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "audiences":
+		return ec.fieldContext_TokenRequestSpec_audiences(ctx, field)
+	case "expirationSeconds":
+		return ec.fieldContext_TokenRequestSpec_expirationSeconds(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TokenRequestSpec", field.Name)
+}
+
+func (ec *executionContext) childFields_TokenRequestStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "token":
+		return ec.fieldContext_TokenRequestStatus_token(ctx, field)
+	case "expirationTimestamp":
+		return ec.fieldContext_TokenRequestStatus_expirationTimestamp(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TokenRequestStatus", field.Name)
 }
 
 func (ec *executionContext) childFields_TokenResponse(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8197,44 +8508,22 @@ func (ec *executionContext) childFields_TokenResponse(ctx context.Context, field
 	return nil, fmt.Errorf("no field named %q was found under type TokenResponse", field.Name)
 }
 
-func (ec *executionContext) childFields_TransferRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+func (ec *executionContext) childFields_TransferNamespaceOwnerPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "repository":
-		return ec.fieldContext_TransferRepositoryPayload_repository(ctx, field)
+	case "namespace":
+		return ec.fieldContext_TransferNamespaceOwnerPayload_namespace(ctx, field)
 	}
-	return nil, fmt.Errorf("no field named %q was found under type TransferRepositoryPayload", field.Name)
-}
-
-func (ec *executionContext) childFields_UpdateCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "category":
-		return ec.fieldContext_UpdateCategoryPayload_category(ctx, field)
-	case "conflict":
-		return ec.fieldContext_UpdateCategoryPayload_conflict(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type UpdateCategoryPayload", field.Name)
+	return nil, fmt.Errorf("no field named %q was found under type TransferNamespaceOwnerPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateCategoryStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "category":
 		return ec.fieldContext_UpdateCategoryStatusPayload_category(ctx, field)
-	case "conflict":
-		return ec.fieldContext_UpdateCategoryStatusPayload_conflict(ctx, field)
 	case "hasMoreProductDependents":
 		return ec.fieldContext_UpdateCategoryStatusPayload_hasMoreProductDependents(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateCategoryStatusPayload", field.Name)
-}
-
-func (ec *executionContext) childFields_UpdateCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "collection":
-		return ec.fieldContext_UpdateCollectionPayload_collection(ctx, field)
-	case "conflict":
-		return ec.fieldContext_UpdateCollectionPayload_conflict(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type UpdateCollectionPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8245,22 +8534,50 @@ func (ec *executionContext) childFields_UpdateNamespacePayload(ctx context.Conte
 	return nil, fmt.Errorf("no field named %q was found under type UpdateNamespacePayload", field.Name)
 }
 
+func (ec *executionContext) childFields_UpdateNamespaceStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "namespace":
+		return ec.fieldContext_UpdateNamespaceStatusPayload_namespace(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateNamespaceStatusPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateProductPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "product":
+		return ec.fieldContext_UpdateProductPayload_product(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateProductPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_UpdateProductStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "product":
 		return ec.fieldContext_UpdateProductStatusPayload_product(ctx, field)
-	case "conflict":
-		return ec.fieldContext_UpdateProductStatusPayload_conflict(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateProductStatusPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "repository":
+		return ec.fieldContext_UpdateRepositoryPayload_repository(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateRepositoryPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateRepositoryStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "repository":
+		return ec.fieldContext_UpdateRepositoryStatusPayload_repository(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateRepositoryStatusPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateResourceStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "object":
 		return ec.fieldContext_UpdateResourceStatusPayload_object(ctx, field)
-	case "conflict":
-		return ec.fieldContext_UpdateResourceStatusPayload_conflict(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateResourceStatusPayload", field.Name)
 }

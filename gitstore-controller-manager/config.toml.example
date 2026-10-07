@@ -1,0 +1,34 @@
+# gitstore-controller-manager example config
+# Copy to /etc/gitstore/controller-manager.toml and adjust for your deployment.
+
+[controller]
+port = 5001
+api_uri = "http://localhost:4000/graphql"
+
+[controller.serviceaccount]
+namespace = "controllers"
+name = "gitstore-controller-manager"
+uid = ""
+assertion_audience = "gitstore-api/serviceaccount-token"
+access_token_audience = "gitstore-api"
+key_ref = { kind = "SecretRef", name = "gitstore-controller-manager-signing-key" }
+
+[controller.secret_providers.bootstrap]
+type = "file"
+base_path = "/run/secrets"
+
+[controller.reconcile]
+max_attempts = 5
+stall_threshold = "5m"
+
+[controller.checkpoint]
+dir = "/var/lib/gitstore/checkpoints"
+flush_interval_events = 100
+
+[controller.watch]
+max_backoff = "30s"
+resync_interval = "10m"
+
+[log]
+level = "info"
+format = "json"

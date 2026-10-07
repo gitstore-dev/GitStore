@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "description": "Restart one explicitly selected GitStore API replica.",
+  "action": "restart",
+  "expectedRecovery": "30s"
+}

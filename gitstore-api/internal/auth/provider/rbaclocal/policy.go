@@ -30,7 +30,18 @@ func loadPolicy(path string) (*Policy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("rbaclocal: read policy file %q: %w", path, err)
 	}
+	return parsePolicy(path, data)
+}
 
+// ValidatePolicyFile parses and validates a local RBAC policy without starting
+// the provider. It is used by repository tooling to fail fast on bad policy
+// configuration.
+func ValidatePolicyFile(path string) error {
+	_, err := loadPolicy(path)
+	return err
+}
+
+func parsePolicy(path string, data []byte) (*Policy, error) {
 	var p Policy
 	if err := yaml.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("rbaclocal: parse policy file %q: %w", path, err)
@@ -69,6 +80,19 @@ func validatePolicy(p *Policy) error {
 		for _, a := range role.Deny {
 			if a == "" {
 				return fmt.Errorf("role %q: deny contains empty action string", name)
+			}
+		}
+	}
+	for subject, roleNames := range p.RoleBindings {
+		if subject == "" {
+			return errors.New("role binding subject must be non-empty")
+		}
+		if len(roleNames) == 0 {
+			return fmt.Errorf("role binding for %q must name at least one role", subject)
+		}
+		for _, roleName := range roleNames {
+			if _, ok := p.Roles[roleName]; !ok {
+				return fmt.Errorf("role binding for %q references undefined role %q", subject, roleName)
 			}
 		}
 	}

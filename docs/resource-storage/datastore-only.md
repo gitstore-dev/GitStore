@@ -167,3 +167,18 @@ policy is Git-backed.
 | `WebhookDelivery` | Core  | Delivery attempt to a webhook endpoint.               | `spec: {endpointRef, eventRef, attempt, response, nextAttemptAt}` |
 | `AuditLog`        | Core  | Append-only audit event.                              | `spec: {actor, action, resourceRef, before, after, occurredAt}`   |
 | `IndexState`      | Core  | Search or projection index cursor and health.         | `spec: {indexName, cursor, lastIndexedAt, status}`                |
+
+## Workflow Runtime
+
+Workflow definitions, profiles, category clusters, bindings, and bundle locks
+are Git-backed configuration. The state of seller reviews and buyer commerce
+must remain datastore-only so that it can be private, append-only, and safe for
+high-frequency updates. See
+[Custom Seller and Buyer Workflows](../implementation/037-custom-commerce-workflows.md).
+
+| Resource | Scope | Summary | Initial spec shape |
+|---|---|---|---|
+| `WorkflowExecution` | Extension/CRD | Current seller-review, order, or return execution with immutable definition/profile snapshot references. | `spec: {subjectRef, scope, state, profileSnapshotRef, definitionSnapshotRef, version}` |
+| `WorkflowTransition` | Extension/CRD | Append-only, authorized workflow state transition. | `spec: {executionRef, event, from, to, actor, idempotencyKey, occurredAt}` |
+| `WorkflowTask` | Extension/CRD | Human review or fulfilment task created by a workflow. | `spec: {executionRef, assigneeRef, taskType, state, dueAt}` |
+| `WorkflowActionAttempt` | Extension/CRD | Durable asynchronous action request/result and retry facts. | `spec: {executionRef, action, causalEventRef, leaseEpoch, attempt, result}` |

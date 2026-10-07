@@ -10,12 +10,12 @@ import (
 
 var (
 	apiURL string // GraphQL API base URL (port 4000)
-	gitURL string // Git smart HTTP base URL (port 5000)
+	gitURL string // Git smart HTTP base URL (host port 9000)
 )
 
 func TestMain(m *testing.M) {
 	apiURL = getEnv("API_URL", "http://localhost:4000")
-	gitURL = getEnv("GIT_URL", "http://localhost:5000")
+	gitURL = getEnv("GIT_URL", "http://localhost:9000")
 
 	os.Exit(m.Run())
 }

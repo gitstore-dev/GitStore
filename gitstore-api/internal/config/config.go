@@ -6,7 +6,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/joho/godotenv"
@@ -20,8 +22,9 @@ type Config struct {
 	Api       ApiConfig       `mapstructure:"api"`
 	Git       GitConfig       `mapstructure:"git"`
 	Auth      AuthConfig      `mapstructure:"auth"`
-	Cache     CacheConfig     `mapstructure:"cache"`
 	Datastore DatastoreConfig `mapstructure:"datastore"`
+	Features  FeatureConfig   `mapstructure:"features"`
+	Watch     WatchConfig     `mapstructure:"watch"`
 	Log       LogConfig       `mapstructure:"log"`
 }
 
@@ -51,13 +54,64 @@ type GitEndpointConfig struct {
 
 // AuthConfig holds authentication and JWT settings.
 type AuthConfig struct {
-	Admin   UserConfig     `mapstructure:"admin"`
-	JWT     JWTConfig      `mapstructure:"jwt"`
-	Grpc    GrpcAuthConfig `mapstructure:"grpc"`
-	AuthN   AuthNConfig    `mapstructure:"authn"`
-	AuthZ   AuthZConfig    `mapstructure:"authz"`
-	UserDir UserDirConfig  `mapstructure:"userdir"`
-	RBAC    RBACConfig     `mapstructure:"rbac"`
+	StaticUsers StaticUsersConfig `mapstructure:"staticusers"`
+	JWT         JWTConfig         `mapstructure:"jwt"`
+	Grpc        GrpcAuthConfig    `mapstructure:"grpc"`
+	AuthN       AuthNConfig       `mapstructure:"authn"`
+	AuthZ       AuthZConfig       `mapstructure:"authz"`
+	UserDir     UserDirConfig     `mapstructure:"userdir"`
+	RBAC        RBACConfig        `mapstructure:"rbac"`
+
+	// ServiceAccount configures the serviceaccount-assertion/serviceaccount-jwt
+	// AuthN providers (spec 061). SigningKey is required only when one of
+	// those providers is present in AuthN.Chain (see
+	// validateAuthChainConfig), not via a struct `validate:"required"` tag.
+	ServiceAccount ServiceAccountConfig `mapstructure:"serviceaccount"`
+
+	// OIDC configures the oidc-jwt AuthN provider (Phase 7, spec 059):
+	// a generic, issuer-agnostic OIDC Relying Party. IssuerURI and ClientID
+	// are required only when "oidc-jwt" is present in AuthN.Chain (see
+	// validateOIDCAuthChainConfig).
+	OIDC OIDCConfig `mapstructure:"oidc"`
+}
+
+// OIDCConfig holds settings for the oidc-jwt AuthN provider: bearer JWTs are
+// verified via OIDC Discovery + JWKS against the configured issuer.
+type OIDCConfig struct {
+	IssuerURI string `mapstructure:"issuer_uri"`
+	// ClientID is optional for a pure resource server: it only serves as the
+	// default for Audience. Operators who set Audience explicitly need not
+	// configure a client_id at all.
+	ClientID string `mapstructure:"client_id"`
+	// Audience expected in the aud claim. Defaults to ClientID when empty.
+	// At least one of Audience/ClientID is required when oidc-jwt is chained.
+	Audience  string `mapstructure:"audience"`
+	ClockSkew string `mapstructure:"clock_skew"`
+	// UsernameClaim selects which token/userinfo claim becomes
+	// Principal.Subject (the identity used for role bindings, ownership fields,
+	// and audit logs) — the Kubernetes --oidc-username-claim / Spring Security
+	// user-name-attribute pattern. Defaults to "sub" (unique and immutable per
+	// issuer); "email" or "preferred_username" give human-readable bindings at
+	// the cost of stability if the trait changes. The raw sub is always
+	// preserved in Principal.Claims["sub"].
+	UsernameClaim string `mapstructure:"username_claim"`
+}
+
+// ServiceAccountConfig holds settings for GitStore-issued service-account
+// identities: JWT assertion verification (proof of possession) and
+// short-lived access-token issuance/verification.
+type ServiceAccountConfig struct {
+	Issuer            string `mapstructure:"issuer"`
+	Audience          string `mapstructure:"audience"`
+	AssertionAudience string `mapstructure:"assertion_audience"`
+	// SigningKey is a PEM-encoded Ed25519 or ECDSA P-256 private key used to
+	// sign/verify access tokens. Required only when "serviceaccount-jwt" or
+	// "serviceaccount-assertion" is chained in (FR-015c: it must never be
+	// resolvable from a config file shared across services).
+	SigningKey string `mapstructure:"signing_key"`
+	DefaultTTL string `mapstructure:"default_ttl"`
+	MaxTTL     string `mapstructure:"max_ttl"`
+	ClockSkew  string `mapstructure:"clock_skew"`
 }
 
 // GrpcAuthConfig holds inter-service gRPC authentication settings.
@@ -67,13 +121,13 @@ type GrpcAuthConfig struct {
 
 // AuthNConfig controls the authentication provider chain.
 type AuthNConfig struct {
-	// Chain is the ordered list of AuthN provider names. Defaults to ["static-admin","anonymous"].
+	// Chain is the ordered list of AuthN provider names. Defaults to ["static-users","anonymous"].
 	Chain []string `mapstructure:"chain"`
 }
 
 // AuthZConfig selects the active authorization provider.
 type AuthZConfig struct {
-	// Provider is the AuthZ provider name. Defaults to "allow-all".
+	// Provider is the AuthZ provider name. Defaults to "rbac-local".
 	Provider string `mapstructure:"provider"`
 }
 
@@ -91,22 +145,52 @@ type RBACConfig struct {
 
 // JWTConfig holds JWT token settings.
 type JWTConfig struct {
-	Secret       string `mapstructure:"secret"   validate:"required"`
+	Secret       string `mapstructure:"secret"`
 	Duration     string `mapstructure:"duration"`
 	Issuer       string `mapstructure:"issuer"`
 	RefreshGrace string `mapstructure:"refresh_grace"`
 }
 
-// UserConfig in-memory users
-type UserConfig struct {
-	Username string `mapstructure:"username" validate:"required"`
-	Password string `mapstructure:"password_hash" validate:"required"`
+// StaticUsersConfig configures the file-backed local user list.
+type StaticUsersConfig struct {
+	UsersFile string `mapstructure:"users_file"`
 }
 
-// CacheConfig holds cache settings.
-type CacheConfig struct {
-	TTL int `mapstructure:"ttl"`
+// FeatureConfig holds staged rollout gates.
+type FeatureConfig struct {
+	NamespaceRepositoryFence string `mapstructure:"namespace_repository_fence"`
 }
+
+// WatchConfig holds per-kind durable watch settings.
+type WatchConfig struct {
+	Namespace NamespaceWatchConfig `mapstructure:"namespace"`
+}
+
+// NamespaceWatchConfig bounds the Namespace CDC materializer and journal.
+// Integer time values keep TOML/environment configuration explicit and are
+// converted to durations at the watch boundary.
+type NamespaceWatchConfig struct {
+	ReadersEnabled               bool `mapstructure:"readers_enabled"`
+	MaterializerEnabled          bool `mapstructure:"materializer_enabled"`
+	JournalRetentionSeconds      int  `mapstructure:"journal_retention_seconds" validate:"min=1"`
+	CDCRetentionSeconds          int  `mapstructure:"cdc_retention_seconds" validate:"min=1"`
+	CDCConfidenceWindowMillis    int  `mapstructure:"cdc_confidence_window_millis" validate:"min=1"`
+	BucketSize                   int  `mapstructure:"bucket_size" validate:"min=1,max=4096"`
+	ReadBatchSize                int  `mapstructure:"read_batch_size" validate:"min=1"`
+	MaxReplayEvents              int  `mapstructure:"max_replay_events" validate:"min=1,max=100000"`
+	SubscriberBuffer             int  `mapstructure:"subscriber_buffer" validate:"min=1,max=256"`
+	SubscriberBackpressureMillis int  `mapstructure:"subscriber_backpressure_millis" validate:"min=1"`
+	PollMinMillis                int  `mapstructure:"poll_min_millis" validate:"min=1"`
+	PollMaxMillis                int  `mapstructure:"poll_max_millis" validate:"min=1"`
+	BookmarkIntervalSeconds      int  `mapstructure:"bookmark_interval_seconds" validate:"min=1"`
+	LeaseTTLSeconds              int  `mapstructure:"lease_ttl_seconds" validate:"min=1"`
+	LeaseRenewIntervalSeconds    int  `mapstructure:"lease_renew_interval_seconds" validate:"min=1"`
+	MaxMaterializerLagSeconds    int  `mapstructure:"max_materializer_lag_seconds" validate:"min=1"`
+}
+
+const namespaceWatchCDCRetentionSeconds = 14 * 24 * 60 * 60
+
+const namespaceWatchJournalRetentionSeconds = 7 * 24 * 60 * 60
 
 // LogConfig holds logger settings.
 type LogConfig struct {
@@ -123,6 +207,7 @@ type DatastoreConfig struct {
 // ScyllaConfig holds ScyllaDB connection parameters.
 // Credentials and TLS are optional (FR-013).
 type ScyllaConfig struct {
+	AutoMigrate           bool     `mapstructure:"auto_migrate"`
 	Hosts                 []string `mapstructure:"hosts"`
 	Keyspace              string   `mapstructure:"keyspace"`
 	Username              string   `mapstructure:"username"`
@@ -138,6 +223,35 @@ type ScyllaConfig struct {
 // Load reads configuration from all sources (defaults → config file → env vars)
 // and returns the resolved, validated Config.
 func Load() (*Config, error) {
+	return load(nil)
+}
+
+// LoadFrom loads configuration from path. Unlike Load's current-directory
+// discovery, an explicitly selected file is required to exist and be readable.
+func LoadFrom(path string) (*Config, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, errors.New("config file path must not be empty")
+	}
+	return load([]string{path})
+}
+
+// LoadFromFiles loads configuration by reading paths[0] and additively
+// merging each subsequent path on top (a later file's keys win), so an
+// overlay only needs to specify the deltas from the base file. Each path
+// is required to exist and be readable.
+func LoadFromFiles(paths []string) (*Config, error) {
+	if len(paths) == 0 {
+		return nil, errors.New("config file path must not be empty")
+	}
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			return nil, errors.New("config file path must not be empty")
+		}
+	}
+	return load(paths)
+}
+
+func load(paths []string) (*Config, error) {
 	// .env file is optional; ignore error if absent
 	_ = godotenv.Load()
 
@@ -146,41 +260,97 @@ func Load() (*Config, error) {
 	// Defaults — all known keys must have a default so AutomaticEnv populates them
 	// during Unmarshal, even if the default is an empty string.
 	v.SetDefault("api.port", 4000)
-	v.SetDefault("api.git_port", 5000)
+	v.SetDefault("api.git_port", 9000)
 	v.SetDefault("api.grpc_port", 6000)
 	v.SetDefault("api.rate_limit_per_second", 50)
 	v.SetDefault("api.rate_limit_burst", 100)
 	v.SetDefault("git.grpc.uri", "dns:///localhost:50051")
-	v.SetDefault("cache.ttl", 300)
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
-	v.SetDefault("auth.admin.username", "")
-	v.SetDefault("auth.admin.password_hash", "")
+	v.SetDefault("auth.staticusers.users_file", "users.yaml")
 	v.SetDefault("auth.jwt.secret", "")
 	v.SetDefault("auth.jwt.duration", "24h")
 	v.SetDefault("auth.jwt.issuer", "gitstore")
 	v.SetDefault("auth.jwt.refresh_grace", "60s")
 	v.SetDefault("auth.grpc.hmac_secret", "")
-	v.SetDefault("auth.authn.chain", []string{"static-admin", "anonymous"})
-	v.SetDefault("auth.authz.provider", "allow-all")
+	v.SetDefault("auth.authn.chain", []string{"static-users", "anonymous"})
+	v.SetDefault("auth.authz.provider", "rbac-local")
 	v.SetDefault("auth.userdir.provider", "none")
 	v.SetDefault("auth.rbac.policy_file", "policy.yaml")
+	v.SetDefault("auth.serviceaccount.issuer", "gitstore")
+	v.SetDefault("auth.serviceaccount.audience", "gitstore-api")
+	v.SetDefault("auth.serviceaccount.assertion_audience", "gitstore-api/serviceaccount-token")
+	v.SetDefault("auth.serviceaccount.signing_key", "")
+	v.SetDefault("auth.serviceaccount.default_ttl", "10m")
+	v.SetDefault("auth.serviceaccount.max_ttl", "1h")
+	v.SetDefault("auth.serviceaccount.clock_skew", "2m")
+	v.SetDefault("auth.oidc.issuer_uri", "")
+	v.SetDefault("auth.oidc.client_id", "")
+	v.SetDefault("auth.oidc.audience", "")
+	v.SetDefault("auth.oidc.clock_skew", "2m")
+	v.SetDefault("auth.oidc.username_claim", "sub")
 	v.SetDefault("datastore.backend", "memdb")
 	v.SetDefault("datastore.scylla.hosts", []string{"localhost:9042"})
+	v.SetDefault("datastore.scylla.auto_migrate", true)
 	v.SetDefault("datastore.scylla.keyspace", "gitstore")
 	v.SetDefault("datastore.scylla.username", "")
 	v.SetDefault("datastore.scylla.password", "")
 	v.SetDefault("datastore.scylla.tls", false)
+	v.SetDefault("datastore.scylla.disable_shard_aware_port", false)
+	v.SetDefault("datastore.scylla.ignore_peer_addr", false)
+	v.SetDefault("features.namespace_repository_fence", "auto")
+	v.SetDefault("watch.namespace.readers_enabled", true)
+	v.SetDefault("watch.namespace.materializer_enabled", true)
+	v.SetDefault("watch.namespace.journal_retention_seconds", 7*24*60*60)
+	v.SetDefault("watch.namespace.cdc_retention_seconds", 14*24*60*60)
+	v.SetDefault("watch.namespace.cdc_confidence_window_millis", 500)
+	v.SetDefault("watch.namespace.bucket_size", 4096)
+	v.SetDefault("watch.namespace.read_batch_size", 256)
+	v.SetDefault("watch.namespace.max_replay_events", 100000)
+	v.SetDefault("watch.namespace.subscriber_buffer", 64)
+	v.SetDefault("watch.namespace.subscriber_backpressure_millis", 30000)
+	v.SetDefault("watch.namespace.poll_min_millis", 100)
+	v.SetDefault("watch.namespace.poll_max_millis", 2000)
+	v.SetDefault("watch.namespace.bookmark_interval_seconds", 30)
+	v.SetDefault("watch.namespace.lease_ttl_seconds", 30)
+	v.SetDefault("watch.namespace.lease_renew_interval_seconds", 10)
+	v.SetDefault("watch.namespace.max_materializer_lag_seconds", 60)
 
-	// Config file (optional)
-	v.SetConfigName("config")
-	v.SetConfigType("toml")
-	v.AddConfigPath(".")
-	if err := v.ReadInConfig(); err != nil {
-		var notFound viper.ConfigFileNotFoundError
-		if !errors.As(err, &notFound) {
-			return nil, err
+	// Config discovery is optional for compatibility; explicit paths are not.
+	// Each path after the first is additively merged on top of the previous
+	// ones, so later files only need to specify the keys they override.
+	if len(paths) == 0 {
+		v.SetConfigName("config")
+		v.SetConfigType("toml")
+		v.AddConfigPath(".")
+		if err := v.ReadInConfig(); err != nil {
+			var notFound viper.ConfigFileNotFoundError
+			if !errors.As(err, &notFound) {
+				return nil, err
+			}
 		}
+	} else {
+		for i, p := range paths {
+			v.SetConfigFile(p)
+			if i == 0 {
+				if err := v.ReadInConfig(); err != nil {
+					return nil, err
+				}
+			} else if err := v.MergeInConfig(); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Read independently of the merge above: a later overlay that sets
+	// auth.serviceaccount.signing_key = "" would otherwise erase the shared
+	// file's value from v before it's inspected, letting key material that
+	// physically still sits in the shared mount (read directly by git-service
+	// and controller-manager, bypassing this process's merge order) slip past
+	// validateServiceAccountSigningKeySource undetected.
+	sharedFileServiceAccountSigningKey, err := signingKeyInFile(paths, sharedServiceConfigMountPath)
+	if err != nil {
+		return nil, err
 	}
 
 	// Environment variables
@@ -196,30 +366,12 @@ func Load() (*Config, error) {
 	if err := validateConfig(&cfg); err != nil {
 		return nil, err
 	}
+	if err := validateServiceAccountSigningKeySource(&cfg, paths, sharedFileServiceAccountSigningKey); err != nil {
+		return nil, err
+	}
 
 	logger, _ := zap.NewProduction()
 	defer logger.Sync() //nolint:errcheck
-
-	// Warn about keys present in the config file that are not in the known schema.
-	knownKeys := map[string]bool{
-		"api.port": true, "api.git_port": true, "api.grpc_port": true,
-		"api.rate_limit_per_second": true, "api.rate_limit_burst": true,
-		"git.grpc.uri": true,
-		"cache.ttl":    true, "log.level": true, "log.format": true,
-		"auth.admin.username": true, "auth.admin.password_hash": true,
-		"auth.jwt.secret": true, "auth.jwt.duration": true, "auth.jwt.issuer": true, "auth.jwt.refresh_grace": true,
-		"auth.grpc.hmac_secret": true,
-		"auth.authn.chain":      true, "auth.authz.provider": true,
-		"auth.userdir.provider": true, "auth.rbac.policy_file": true,
-		"datastore.backend": true, "datastore.scylla.hosts": true,
-		"datastore.scylla.keyspace": true, "datastore.scylla.username": true,
-		"datastore.scylla.password": true, "datastore.scylla.tls": true,
-	}
-	for _, k := range v.AllKeys() {
-		if !knownKeys[k] {
-			logger.Warn("unknown configuration key", zap.String("key", k))
-		}
-	}
 
 	logger.Info("Configuration loaded", zap.Object("config", &cfg))
 
@@ -246,7 +398,187 @@ func validateConfig(cfg *Config) error {
 	if err := validateDatastoreConfig(&cfg.Datastore); err != nil {
 		return err
 	}
+	if err := validateFeatureConfig(&cfg.Features); err != nil {
+		return err
+	}
+	if err := validateAuthChainConfig(cfg); err != nil {
+		return err
+	}
+	if err := validateNamespaceWatchConfig(&cfg.Watch.Namespace); err != nil {
+		return err
+	}
+	if err := validateServiceAccountAuthChainConfig(&cfg.Auth); err != nil {
+		return err
+	}
+	if err := validateOIDCAuthChainConfig(&cfg.Auth); err != nil {
+		return err
+	}
 	return validateLogFormat(&cfg.Log)
+}
+
+func validateAuthChainConfig(cfg *Config) error {
+	for _, provider := range cfg.Auth.AuthN.Chain {
+		if strings.EqualFold(strings.TrimSpace(provider), "static-users") && cfg.Auth.JWT.Secret == "" {
+			return errors.New("startup failed: auth.jwt.secret is required\n\n  Problem: static-users is present in auth.authn.chain, but auth.jwt.secret (env: GITSTORE_AUTH__JWT__SECRET) is empty. static-users cannot issue or verify session tokens without it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_AUTH__JWT__SECRET to a random string (32+ chars). You can generate one with: make secret TARGET=jwt\n    2. If you don't intend to use static-users, remove it from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)\n\n  See specs/060-local-multiuser-authn/quickstart.md, step 4, for a worked example")
+		}
+	}
+	return nil
+}
+
+// validateOIDCAuthChainConfig enforces that auth.oidc.issuer_uri and
+// auth.oidc.client_id are configured when "oidc-jwt" is present in
+// auth.authn.chain (Phase 7, spec 059), mirroring validateAuthChainConfig's
+// conditional-requirement pattern.
+func validateOIDCAuthChainConfig(auth *AuthConfig) error {
+	chained := false
+	for _, provider := range auth.AuthN.Chain {
+		if strings.EqualFold(strings.TrimSpace(provider), "oidc-jwt") {
+			chained = true
+			break
+		}
+	}
+	if !chained {
+		return nil
+	}
+	if strings.TrimSpace(auth.OIDC.IssuerURI) == "" {
+		return errors.New("startup failed: auth.oidc.issuer_uri is required\n\n  Problem: oidc-jwt is present in auth.authn.chain, but auth.oidc.issuer_uri (env: GITSTORE_AUTH__OIDC__ISSUER_URI) is empty. oidc-jwt cannot verify bearer tokens without an OIDC issuer to run discovery against\n\n  To fix, do ONE of the following:\n    1. Point auth.oidc.issuer_uri at any standards-compliant OIDC issuer (e.g. the optional reference stack from `make compose IDENTITY=oidc`, Keycloak, Auth0)\n    2. If you don't intend to use OIDC, remove oidc-jwt from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)\n\n  See specs/059-optional-oidc-provider/quickstart.md for a worked example")
+	}
+	if strings.TrimSpace(auth.OIDC.Audience) == "" && strings.TrimSpace(auth.OIDC.ClientID) == "" {
+		return errors.New("startup failed: auth.oidc.audience or auth.oidc.client_id is required\n\n  Problem: oidc-jwt is present in auth.authn.chain, but neither auth.oidc.audience nor auth.oidc.client_id is set. gitstore-api is a resource server: it must know which aud value to expect — set auth.oidc.audience explicitly, or set auth.oidc.client_id and the audience defaults to it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_AUTH__OIDC__AUDIENCE to the audience your clients request (e.g. gitstore)\n    2. Set GITSTORE_AUTH__OIDC__CLIENT_ID to the registered client id (audience defaults to it)\n    3. If you don't intend to use OIDC, remove oidc-jwt from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)")
+	}
+	if auth.OIDC.ClockSkew != "" {
+		if _, err := time.ParseDuration(auth.OIDC.ClockSkew); err != nil {
+			return fmt.Errorf("startup failed: auth.oidc.clock_skew %q is not a valid duration: %w", auth.OIDC.ClockSkew, err)
+		}
+	}
+	return nil
+}
+
+// serviceAccountChainProviders are the auth.authn.chain entries that require
+// auth.serviceaccount.signing_key to be configured.
+var serviceAccountChainProviders = map[string]bool{
+	"serviceaccount-jwt":       true,
+	"serviceaccount-assertion": true,
+}
+
+// chainRequiresServiceAccountSigningKey reports whether chain includes a
+// service-account AuthN provider.
+func chainRequiresServiceAccountSigningKey(chain []string) bool {
+	for _, name := range chain {
+		if serviceAccountChainProviders[strings.ToLower(strings.TrimSpace(name))] {
+			return true
+		}
+	}
+	return false
+}
+
+// validateServiceAccountAuthChainConfig enforces conditional requirements driven by
+// auth.authn.chain membership, mirroring spec 060's validateAuthChainConfig
+// pattern: auth.serviceaccount.signing_key is required only when
+// "serviceaccount-jwt" or "serviceaccount-assertion" is chained in, not via
+// a struct `validate:"required"` tag (which would force every deployment to
+// set it even when no service-account provider is in use).
+func validateServiceAccountAuthChainConfig(auth *AuthConfig) error {
+	if chainRequiresServiceAccountSigningKey(auth.AuthN.Chain) && strings.TrimSpace(auth.ServiceAccount.SigningKey) == "" {
+		return errors.New(
+			"auth.serviceaccount.signing_key is required when \"serviceaccount-jwt\" or " +
+				"\"serviceaccount-assertion\" is present in auth.authn.chain",
+		)
+	}
+	return nil
+}
+
+// sharedServiceConfigMountPath is the container path GitStore's local/dev
+// compose profile (compose.local.yml) mounts a single host config file into
+// git-service, api, and controller-manager alike, read-only. Per FR-015c,
+// auth.serviceaccount.signing_key must never be resolvable from that file:
+// doing so would let any of those three services mint or forge a
+// service-account access token for the others, bypassing the
+// assertion/proof-of-possession flow and every least-privilege guarantee in
+// User Story 3.
+// A var (not const) so tests can safely override it to a temp path instead
+// of writing to the real /config directory on the host.
+var sharedServiceConfigMountPath = "/etc/gitstore/gitstore.toml"
+
+// signingKeyInFile reads auth.serviceaccount.signing_key from path on its
+// own, independent of any other file in paths, if path appears in paths.
+// Used instead of inspecting the final merged viper state, because a later
+// overlay that sets the key to "" would otherwise erase evidence that the
+// shared file itself carries key material — material git-service and
+// controller-manager would still read directly from that same file on disk,
+// regardless of what this process's merge order computes.
+func signingKeyInFile(paths []string, path string) (string, error) {
+	if !slices.Contains(paths, path) {
+		return "", nil
+	}
+	single := viper.New()
+	single.SetConfigFile(path)
+	if err := single.ReadInConfig(); err != nil {
+		return "", err
+	}
+	return single.GetString("auth.serviceaccount.signing_key"), nil
+}
+
+// validateServiceAccountSigningKeySource enforces FR-015c: refuses startup
+// if a service-account AuthN provider is chained in and its signing key was
+// sourced from fileSigningKey — the value read from the config file at path
+// before environment variables were applied. This specifically targets
+// compose.local.yml's shared /etc/gitstore/gitstore.toml mount; an
+// env-var-sourced key (even in a container that also mounts that shared file
+// for other settings) is unaffected, since the file itself never carries the
+// secret.
+func validateServiceAccountSigningKeySource(cfg *Config, paths []string, fileSigningKey string) error {
+	if !chainRequiresServiceAccountSigningKey(cfg.Auth.AuthN.Chain) {
+		return nil
+	}
+	if !slices.Contains(paths, sharedServiceConfigMountPath) {
+		return nil
+	}
+	if strings.TrimSpace(fileSigningKey) == "" {
+		return nil
+	}
+	return fmt.Errorf(
+		"auth.serviceaccount.signing_key must not be set in %q: this file is mounted read-only "+
+			"into git-service, api, and controller-manager alike (see compose.local.yml), so any "+
+			"of those services could forge a service-account access token; instead, mount a "+
+			"per-service file containing only the signing key (e.g. "+
+			"./config/api/serviceaccount-signing-key.toml -> /config/serviceaccount-signing-key.toml, "+
+			"mounted into the api service alone, read-only) and set "+
+			"GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY from it, or resolve it from a per-service "+
+			"secret store instead",
+		sharedServiceConfigMountPath,
+	)
+}
+
+func validateNamespaceWatchConfig(w *NamespaceWatchConfig) error {
+	if w.CDCRetentionSeconds != namespaceWatchCDCRetentionSeconds {
+		return fmt.Errorf("invalid resource watch CDC retention: the baseline schema fixes CDC retention at %d seconds", namespaceWatchCDCRetentionSeconds)
+	}
+	if w.JournalRetentionSeconds > namespaceWatchJournalRetentionSeconds {
+		return fmt.Errorf("invalid resource watch journal retention: the baseline schema limits journal retention to %d seconds", namespaceWatchJournalRetentionSeconds)
+	}
+	if w.CDCRetentionSeconds < w.JournalRetentionSeconds {
+		return fmt.Errorf("invalid Namespace watch bounds: CDC retention must be at least journal retention")
+	}
+	if w.MaxMaterializerLagSeconds >= w.CDCRetentionSeconds {
+		return fmt.Errorf("invalid Namespace watch bounds: maximum materializer lag must be less than CDC retention")
+	}
+	if int64(w.CDCConfidenceWindowMillis) >= int64(w.MaxMaterializerLagSeconds)*1000 {
+		return fmt.Errorf("invalid Namespace watch bounds: CDC confidence window must be less than maximum materializer lag")
+	}
+	if w.ReadBatchSize > w.BucketSize {
+		return fmt.Errorf("invalid Namespace watch bounds: read batch size must not exceed bucket size")
+	}
+	if w.PollMinMillis > w.PollMaxMillis {
+		return fmt.Errorf("invalid Namespace watch bounds: minimum poll interval must not exceed maximum")
+	}
+	if int64(w.PollMaxMillis) >= int64(w.JournalRetentionSeconds)*1000 {
+		return fmt.Errorf("invalid Namespace watch bounds: maximum poll interval must be less than journal retention")
+	}
+	if w.LeaseRenewIntervalSeconds >= w.LeaseTTLSeconds {
+		return fmt.Errorf("invalid Namespace watch bounds: lease renewal interval must be less than lease TTL")
+	}
+	return nil
 }
 
 // validateDatastoreConfig validates backend selection and ScyllaDB settings.
@@ -260,6 +592,37 @@ func validateDatastoreConfig(ds *DatastoreConfig) error {
 		return nil
 	default:
 		return fmt.Errorf("invalid datastore backend %q; valid values: memdb, scylla", ds.Backend)
+	}
+}
+
+func validateFeatureConfig(features *FeatureConfig) error {
+	mode := strings.ToLower(strings.TrimSpace(features.NamespaceRepositoryFence))
+	if mode == "" {
+		mode = "auto"
+	}
+	switch mode {
+	case "auto", "enabled", "disabled":
+		features.NamespaceRepositoryFence = mode
+		return nil
+	default:
+		return fmt.Errorf(
+			"invalid namespace repository fence mode %q; valid values: auto, enabled, disabled",
+			features.NamespaceRepositoryFence,
+		)
+	}
+}
+
+// NamespaceRepositoryFenceEnabled resolves the rollout gate. Development
+// memdb keeps the existing behavior; Scylla requires explicit activation.
+func (c *Config) NamespaceRepositoryFenceEnabled() bool {
+	mode := strings.ToLower(strings.TrimSpace(c.Features.NamespaceRepositoryFence))
+	switch mode {
+	case "enabled":
+		return true
+	case "disabled":
+		return false
+	default:
+		return strings.EqualFold(c.Datastore.Backend, "memdb")
 	}
 }
 
@@ -284,18 +647,26 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddInt("api.git_port", c.Api.GitPort)
 	enc.AddInt("api.grpc_port", c.Api.GrpcPort)
 	enc.AddString("git.grpc.uri", c.Git.Grpc.Uri)
-	enc.AddString("auth.admin.username", c.Auth.Admin.Username)
-	enc.AddString("auth.admin.password_hash", redact(c.Auth.Admin.Password))
+	enc.AddString("auth.staticusers.users_file", c.Auth.StaticUsers.UsersFile)
 	enc.AddString("auth.jwt.secret", redact(c.Auth.JWT.Secret))
 	enc.AddString("auth.jwt.duration", c.Auth.JWT.Duration)
 	enc.AddString("auth.jwt.issuer", c.Auth.JWT.Issuer)
 	enc.AddString("auth.jwt.refresh_grace", c.Auth.JWT.RefreshGrace)
 	enc.AddString("auth.grpc.hmac_secret", redact(c.Auth.Grpc.HmacSecret))
-	enc.AddInt("cache.ttl", c.Cache.TTL)
+	enc.AddString("auth.serviceaccount.issuer", c.Auth.ServiceAccount.Issuer)
+	enc.AddString("auth.serviceaccount.audience", c.Auth.ServiceAccount.Audience)
+	enc.AddString("auth.serviceaccount.assertion_audience", c.Auth.ServiceAccount.AssertionAudience)
+	enc.AddString("auth.serviceaccount.signing_key", redact(c.Auth.ServiceAccount.SigningKey))
+	enc.AddString("auth.serviceaccount.default_ttl", c.Auth.ServiceAccount.DefaultTTL)
+	enc.AddString("auth.serviceaccount.max_ttl", c.Auth.ServiceAccount.MaxTTL)
+	enc.AddString("auth.serviceaccount.clock_skew", c.Auth.ServiceAccount.ClockSkew)
 	enc.AddString("log.level", c.Log.Level)
 	enc.AddString("log.format", c.Log.Format)
 	enc.AddString("datastore.backend", c.Datastore.Backend)
 	enc.AddString("datastore.scylla.password", redact(c.Datastore.Scylla.Password))
+	enc.AddString("features.namespace_repository_fence", c.Features.NamespaceRepositoryFence)
+	enc.AddBool("watch.namespace.readers_enabled", c.Watch.Namespace.ReadersEnabled)
+	enc.AddBool("watch.namespace.materializer_enabled", c.Watch.Namespace.MaterializerEnabled)
 	return nil
 }
 

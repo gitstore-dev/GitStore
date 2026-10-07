@@ -162,7 +162,7 @@ Example JSON log (default configuration):
 }
 ```
 
-> **Phase conflict**: `GITSTORE_SCHEMA_VALIDATION__PHASE` and `GITSTORE_ADMISSION_CONTROL__PHASE` must not be equal. The service refuses to start if they are the same (FR-019).
+> **Phase conflict**: `GITSTORE_SCHEMA_VALIDATION__PHASE` and `GITSTORE_ADMISSION_CONTROL__PHASE` must not be equal. The service refuses to start if they are the same.
 
 ## Metrics
 

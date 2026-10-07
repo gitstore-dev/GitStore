@@ -22,6 +22,32 @@ interface Node {
 }
 
 """
+An object that has a human-readable name. This represents both the Subject and the Delegate:
+- creation_actor
+- update_actor
+- creation_on_behalf_of_actor OR creation_subject
+- update_on_behalf_of_actor OR update_subject
+
+Implemented in
+- User
+- ServiceAccount
+"""
+interface Actor {
+  metadata: ObjectMeta!
+  status: ActorStatus!
+}
+
+"""
+An object that can be published or unpublished. Implemented in
+- Product
+- ProductVariant
+"""
+interface Publishable {
+  published: Boolean!
+  # publications: PublicationConnection!
+}
+
+"""
 Information about pagination in a connection
 """
 type PageInfo {
@@ -61,12 +87,6 @@ type Query {
   Fetches multiple objects given their globally unique IDs
   """
   nodes(ids: [ID!]!): [Node]!
-
-  """
-  Get current catalog version (release tag)
-  TODO: Remove. It is unclear which repository this belongs to and it is not used in the UI.
-  """
-  catalogVersion: CatalogVersion!
 }
 
 # ============================================================================
@@ -75,10 +95,17 @@ type Query {
 
 type Mutation {
   """
-  Publish changes (commit + push + create release tag)
-  TODO: Remove. It is unclear which repository we're are publishing to.
+  Generic status-subresource write for CRD-defined kinds that have no
+  compile-time-known `resolved` shape. Core kinds SHOULD use their
+  dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
+  this field exists so a kind unknown to the schema at build time can
+  still write status. Semantics (partial-merge,
+  resourceVersion precondition, spec-write rejection by construction,
+  controller authorization) are identical to the per-kind mutations.
   """
-  publishCatalog(input: PublishCatalogInput!): PublishCatalogPayload!
+  updateResourceStatus(
+    input: UpdateResourceStatusInput!
+  ): UpdateResourceStatusPayload!
 }
 
 # ============================================================================
@@ -87,12 +114,12 @@ type Mutation {
 
 type Subscription {
   """
-  Generic list-then-watch entry point for any resource kind, including
-  CRD-defined kinds not built into the core schema (FR-006, spec 040).
-  Core kinds SHOULD prefer their dedicated per-kind subscription (e.g.
-  watchCategories) for compile-time-typed payloads; this field exists
-  so a kind unknown to the schema at build time can still be watched
-  (FR-006, SC-005).
+  Generic list-then-watch entry point for every kind with a durable watch
+  journal source: Namespace, Repository, CategoryTaxonomy, Product and File
+  today, and CRD-defined kinds once they register a source. Core kinds SHOULD prefer their dedicated per-kind subscription
+  (e.g. watchCategories) for compile-time-typed payloads. A kind without a
+  journal source is rejected with an UNSUPPORTED_KIND extension error
+  rather than an empty stream.
 
   Behavior:
   - resourceVersion omitted/empty: no implicit "list" is performed —
@@ -101,9 +128,9 @@ type Subscription {
     subscription with the resourceVersion returned by that list.
   - resourceVersion present but expired (older than server retention):
     the subscription terminates immediately with a WATCH_EXPIRED
-    extension error (FR-004) instead of silently resuming from scratch.
+    extension error instead of silently resuming from scratch.
   - resourceVersion present and valid: only events after that cursor
-    are delivered, in admission order for that kind (FR-002, FR-003).
+    are delivered, in admission order for that kind.
   """
   watchResources(
     kind: String!
@@ -114,7 +141,7 @@ type Subscription {
 }
 
 # ============================================================================
-# Watch API (spec 040)
+# Watch API
 # ============================================================================
 
 """
@@ -169,25 +196,6 @@ input LabelSelectorRequirementInput {
   values: [String!]
 }
 
-# ============================================================================
-# Status Subresource API (spec 040)
-# ============================================================================
-
-extend type Mutation {
-  """
-  Generic status-subresource write for CRD-defined kinds that have no
-  compile-time-known `resolved` shape. Core kinds SHOULD use their
-  dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
-  this field exists so a kind unknown to the schema at build time can
-  still write status (FR-006, SC-005). Semantics (partial-merge,
-  resourceVersion precondition, spec-write rejection by construction,
-  controller authorization) are identical to the per-kind mutations.
-  """
-  updateResourceStatus(
-    input: UpdateResourceStatusInput!
-  ): UpdateResourceStatusPayload!
-}
-
 input UpdateResourceStatusInput {
   kind: String!
   name: String!
@@ -205,10 +213,8 @@ input UpdateResourceStatusInput {
 }
 
 type UpdateResourceStatusPayload {
-  """JSON-boxed current resource state; null when the write failed."""
+  """JSON-boxed current resource state."""
   object: JSON
-
-  conflict: StatusConflict
 }
 
 """
@@ -224,17 +230,8 @@ input ConditionInput {
   message: String
 }
 
-"""
-Optimistic-concurrency conflict payload shared by all status-write
-mutations (per-kind and generic).
-"""
-type StatusConflict {
-  """The resource's actual current resourceVersion, for retry."""
-  currentResourceVersion: String!
-}
-
 # ============================================================================
-# Scalars & Enums
+# Scalars
 # ============================================================================
 
 """
@@ -261,6 +258,34 @@ scalar Long
   @specifiedBy(url: "https://scalars.graphql.org/apollographql/long-v0.1.html")
 
 """
+The principal type that can own a resource.
+"""
+enum OwnerKind {
+  USER
+  GROUP
+  SERVICE_ACCOUNT
+}
+
+"""
+The resource's current owner subject. Distinct from
+OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
+delete relationship, not a principal-ownership one.
+"""
+type ResourceOwner {
+  kind: OwnerKind!
+  name: String!
+}
+
+"""
+Input shape for naming a target owner, e.g. transferNamespaceOwner's
+targetOwnerRef.
+"""
+input ResourceOwnerInput {
+  kind: OwnerKind!
+  name: String!
+}
+
+"""
 System-managed metadata shared by core catalog resources.
 """
 type ObjectMeta {
@@ -274,6 +299,7 @@ type ObjectMeta {
   creationTimestamp: DateTime!
   revision: String
   ownerReferences: [OwnerReference!]!
+  owner: ResourceOwner!
   finalizers: [String!]!
   deletionTimestamp: DateTime
 }
@@ -294,6 +320,14 @@ enum ConditionStatus {
   TRUE
   FALSE
   UNKNOWN
+}
+
+enum ActorStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  INVITED
+  PENDING_VERIFICATION
 }
 
 """
@@ -374,21 +408,3 @@ input ProductVariantNamespacePath {
   name: String!
 }
 
-"""
-Product inventory status
-"""
-enum InventoryStatus {
-  IN_STOCK
-  OUT_OF_STOCK
-  PREORDER
-  DISCONTINUED
-}
-
-
-# ============================================================================
-# Include entity type definitions
-# ============================================================================
-
-# Product types defined in product.graphql
-# Category types defined in category.graphql
-# Collection types defined in collection.graphql

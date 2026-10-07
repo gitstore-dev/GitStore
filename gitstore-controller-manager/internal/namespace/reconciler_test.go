@@ -5,10 +5,16 @@ package namespace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
@@ -83,14 +89,14 @@ func conditionByType(t *testing.T, conditions []*status.Condition, conditionType
 	return nil
 }
 
-func TestReconcileMissingNamespaceReturnsTerminal(t *testing.T) {
+func TestReconcileMissingNamespaceIsAlreadyReconciled(t *testing.T) {
 	sc := &fakeStatusClient{}
 	r := NewReconciler(seedNamespaceCache(t), sc, &fakeRepositoryClient{}, &fakeDeletionClient{})
 
 	result := r.Reconcile(context.Background(), namespaceKey("missing"))
 
-	if _, ok := result.(types.TerminalFailure); !ok {
-		t.Fatalf("Reconcile result = %T, want types.TerminalFailure", result)
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %T, want types.Success", result)
 	}
 	if len(sc.patches) != 0 {
 		t.Fatalf("status calls = %d, want 0", len(sc.patches))
@@ -134,6 +140,110 @@ func TestReconcileAdmittedNamespaceProvisionsSystemRepositoryAndMarksReady(t *te
 	}
 	if got := conditionByType(t, patch.Conditions, "Ready").Status; got != "TRUE" {
 		t.Errorf("Ready = %q, want TRUE", got)
+	}
+}
+
+// TestReconcileFreshNamespaceProvisionsSystemRepositoryViaRealClient exercises
+// the full Reconcile path with the real GraphQLRepositoryClient (not the
+// fake) against a server that reproduces gitstore-api's actual response for
+// a genuinely fresh environment: repository(by: namespacePath) returns a
+// The controller uses the dedicated bootstrap operation, rather than the
+// author-facing createRepository mutation. The API owns the idempotent
+// lookup/create race, so a fresh Namespace reaches Success directly.
+func TestReconcileFreshNamespaceProvisionsSystemRepositoryViaRealClient(t *testing.T) {
+	var mutations int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(req.Query, "mutation") {
+			mutations++
+			_, _ = w.Write([]byte(`{"data":{"provisionNamespaceSystemRepository":{"repository":{"metadata":{"name":"gitstore-system"}}}}}`))
+			return
+		}
+		t.Fatalf("unexpected query: %s", req.Query)
+	}))
+	defer srv.Close()
+
+	current := Namespace{
+		Name:            "acme",
+		Generation:      1,
+		ResourceVersion: "1",
+		Status: status.ResourceStatus{
+			ResourceVersion: "1",
+			Conditions:      []*status.Condition{admittedCondition(1)},
+		},
+	}
+	sc := &fakeStatusClient{}
+	repos := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
+	r := NewReconciler(seedNamespaceCache(t, current), sc, repos, &fakeDeletionClient{})
+
+	result := r.Reconcile(context.Background(), namespaceKey("acme"))
+
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %#v, want types.Success", result)
+	}
+	if mutations != 1 {
+		t.Fatalf("mutations=%d, want 1", mutations)
+	}
+	if len(sc.patches) != 1 {
+		t.Fatalf("status calls = %d, want 1", len(sc.patches))
+	}
+	if got := conditionByType(t, sc.patches[0].Conditions, "SystemRepoReady").Status; got != "TRUE" {
+		t.Errorf("SystemRepoReady = %q, want TRUE", got)
+	}
+}
+
+func TestReconcilePreservesAdmissionAcceptedWhileUpdatingControllerConditions(t *testing.T) {
+	acceptedAt := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	admission := &status.Condition{
+		Type:               "AdmissionAccepted",
+		Status:             "TRUE",
+		ObservedGeneration: 4,
+		LastTransitionTime: acceptedAt,
+		Reason:             "AdmittedByHookPipeline",
+		Message:            "Namespace manifest admitted successfully.",
+	}
+	current := Namespace{
+		Name:            "acme",
+		Generation:      4,
+		ResourceVersion: "11",
+		Status: status.ResourceStatus{
+			ResourceVersion:    "11",
+			ObservedGeneration: 4,
+			Conditions: []*status.Condition{
+				admission,
+				{Type: "SystemRepoReady", Status: "FALSE", ObservedGeneration: 3},
+				{Type: "Ready", Status: "FALSE", ObservedGeneration: 3},
+			},
+		},
+	}
+	sc := &fakeStatusClient{}
+	r := NewReconciler(seedNamespaceCache(t, current), sc, &fakeRepositoryClient{}, &fakeDeletionClient{})
+
+	result := r.Reconcile(context.Background(), namespaceKey("acme"))
+
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %T, want types.Success", result)
+	}
+	if len(sc.patches) != 1 {
+		t.Fatalf("status calls = %d, want 1", len(sc.patches))
+	}
+	patch := sc.patches[0]
+	preserved := conditionByType(t, patch.Conditions, "AdmissionAccepted")
+	if preserved == admission {
+		t.Fatal("AdmissionAccepted condition was not copied")
+	}
+	if *preserved != *admission {
+		t.Errorf("AdmissionAccepted = %+v, want %+v", preserved, admission)
+	}
+	if got := conditionByType(t, patch.Conditions, "SystemRepoReady"); got.Status != "TRUE" || got.ObservedGeneration != 4 {
+		t.Errorf("SystemRepoReady = %+v, want TRUE at generation 4", got)
+	}
+	if got := conditionByType(t, patch.Conditions, "Ready"); got.Status != "TRUE" || got.ObservedGeneration != 4 {
+		t.Errorf("Ready = %+v, want TRUE at generation 4", got)
 	}
 }
 

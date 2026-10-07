@@ -9,12 +9,15 @@ package scylla_test
 
 import (
 	"context"
+	"io/fs"
 	"net"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla/migrations"
 	"github.com/gocql/gocql"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -63,12 +66,14 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 		"products_by_namespace",
 		"products_by_name",
 		"products_by_uid",
-		"category_taxonomy_by_uid",
+		"category_taxonomies_by_uid",
 		"namespaces_by_uid",
 		"repositories_by_uid",
 		"repositories_by_namespace",
 		"repositories_by_bucket",
 		"namespace_mappings_by_repository",
+		"service_account_assertion_replays",
+		"service_accounts_by_bucket",
 	} {
 		var tblName string
 		err = session.Query(
@@ -114,6 +119,7 @@ func TestRunMigrations_RepositoryResourceContractColumns(t *testing.T) {
 		"max_pack_size_bytes": "bigint",
 		"max_file_size_bytes": "bigint",
 	}
+
 	for column, expectedType := range expectedColumns {
 		t.Run(column, func(t *testing.T) {
 			var columnName, columnType string
@@ -129,15 +135,33 @@ func TestRunMigrations_RepositoryResourceContractColumns(t *testing.T) {
 	}
 }
 
+func TestRunMigrations_NamespaceRepositoryFenceColumns(t *testing.T) {
+	session := newRawSession(t)
+	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), zap.NewNop()))
+
+	for _, column := range []string{"repository_creation_epoch", "pending_repository_creations"} {
+		var columnName, columnType string
+		err := session.Query(
+			`SELECT column_name, type FROM system_schema.columns
+			 WHERE keyspace_name = ? AND table_name = 'namespaces_by_uid' AND column_name = ?`,
+			scyllaKeyspace,
+			column,
+		).Scan(&columnName, &columnType)
+		require.NoError(t, err)
+		assert.Equal(t, column, columnName)
+		assert.Equal(t, "bigint", columnType)
+	}
+}
+
 func TestRunMigrations_CanonicalEnvelopeColumnsMatch(t *testing.T) {
 	session := newRawSession(t)
 	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), zap.NewNop()))
 
 	tables := []string{
 		"products_by_namespace",
-		"product_variant_by_namespace",
-		"collection",
-		"category_taxonomy",
+		"product_variants_by_namespace",
+		"collections_by_namespace",
+		"category_taxonomies_by_namespace",
 		"repositories_by_uid",
 	}
 	columns := []string{
@@ -175,8 +199,62 @@ func TestRunMigrations_HasNoRepositorySecondaryIndexes(t *testing.T) {
 	for iter.Scan(&index) {
 		assert.NotContains(t, index, "repositories")
 		assert.NotContains(t, index, "mappings")
+		assert.NotContains(t, index, "service_accounts")
 	}
 	require.NoError(t, iter.Close())
+}
+
+// TestRunMigrations_ServiceAccountSchemaMatchesEnvelopeConventions asserts
+// spec 061's service_accounts_* tables (a) create no secondary index and
+// (b) use the canonical envelope column names/types established by 002's
+// query-first pattern (creation_timestamp/update_timestamp/deletion_timestamp,
+// creation_actor/update_actor, generation bigint, resource_version text, and
+// uid typed uuid rather than text) — the existing index test above is scoped
+// to repositories/mappings names only, so it would not have caught a
+// service_accounts index on its own.
+func TestRunMigrations_ServiceAccountSchemaMatchesEnvelopeConventions(t *testing.T) {
+	session := newRawSession(t)
+	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), zap.NewNop()))
+
+	iter := session.Query(
+		`SELECT index_name FROM system_schema.indexes WHERE keyspace_name = ? AND table_name LIKE 'service_accounts%' ALLOW FILTERING`,
+		scyllaKeyspace,
+	).Iter()
+	var index string
+	count := 0
+	for iter.Scan(&index) {
+		count++
+	}
+	require.NoError(t, iter.Close())
+	assert.Zero(t, count, "service_accounts_* tables must have zero secondary indexes (query-first pattern)")
+
+	wantColumnTypes := map[string]string{
+		"creation_timestamp": "timestamp",
+		"update_timestamp":   "timestamp",
+		"deletion_timestamp": "timestamp",
+		"creation_actor":     "text",
+		"update_actor":       "text",
+		"generation":         "bigint",
+		"resource_version":   "text",
+		"uid":                "uuid",
+	}
+
+	iter = session.Query(
+		`SELECT column_name, type FROM system_schema.columns WHERE keyspace_name = ? AND table_name = ?`,
+		scyllaKeyspace, "service_accounts_by_namespace",
+	).Iter()
+	var columnName, columnType string
+	seen := map[string]string{}
+	for iter.Scan(&columnName, &columnType) {
+		seen[columnName] = columnType
+	}
+	require.NoError(t, iter.Close())
+
+	for column, wantType := range wantColumnTypes {
+		gotType, ok := seen[column]
+		require.Truef(t, ok, "expected column %q on service_accounts_by_namespace", column)
+		assert.Equalf(t, wantType, gotType, "column %q type mismatch", column)
+	}
 }
 
 func TestRunMigrations_DoesNotMaterializeProductLabelSelectors(t *testing.T) {
@@ -220,6 +298,10 @@ func TestRunMigrations_UsesTenDayGCGrace(t *testing.T) {
 		if strings.HasSuffix(tableName, "$paxos") || strings.HasPrefix(tableName, "schema_migrations") {
 			continue
 		}
+		if strings.HasSuffix(tableName, "_scylla_cdc_log") {
+			assert.Equalf(t, 0, gcGraceSeconds, "Scylla-managed CDC log %s", tableName)
+			continue
+		}
 		assert.Equalf(t, 864000, gcGraceSeconds, "table %s", tableName)
 	}
 	require.NoError(t, iter.Close())
@@ -233,6 +315,75 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 	// Running migrations twice must not return an error.
 	require.NoError(t, scylla.RunMigrations(ctx, session, scyllaKeyspace, uuid.New().String(), log))
 	require.NoError(t, scylla.RunMigrations(ctx, session, scyllaKeyspace, uuid.New().String(), log))
+}
+
+func TestSchemaValidationDoesNotWriteOrIgnorePartialMigrations(t *testing.T) {
+	session := newRawSession(t)
+	cfg := testScyllaConfig(t)
+	require.NoError(t, scylla.Migrate(t.Context(), cfg, zap.NewNop()))
+	cfg.AutoMigrate = false
+	readWrites := func() map[string]int64 {
+		result := make(map[string]int64)
+		iter := session.Query("SELECT name, writetime(done) FROM gocqlx_migrate").Iter()
+		var name string
+		var written int64
+		for iter.Scan(&name, &written) {
+			result[name] = written
+		}
+		require.NoError(t, iter.Close())
+		return result
+	}
+	before := readWrites()
+	store, err := scylla.New(cfg, zap.NewNop())
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	require.Equal(t, before, readWrites(), "disabled auto-migration must not rewrite the ledger")
+
+	const name = "009_service_account.cql"
+	var done int
+	require.NoError(t, session.Query("SELECT done FROM gocqlx_migrate WHERE name=?", name).Scan(&done))
+	require.NoError(t, session.Query("UPDATE gocqlx_migrate SET done=? WHERE name=?", done-1, name).Exec())
+	t.Cleanup(func() {
+		assert.NoError(t, session.Query("UPDATE gocqlx_migrate SET done=? WHERE name=?", done, name).Exec())
+	})
+	store, err = scylla.New(cfg, zap.NewNop())
+	require.ErrorContains(t, err, "incompatible schema")
+	require.Nil(t, store)
+}
+
+// The per-resource baseline has no supported rollback below itself: a binary
+// embedding only a prefix of the baseline must refuse a newer keyspace, and
+// the complete set must remain re-runnable.
+func TestRunMigrations_BaselinePrefixRefusesNewerKeyspace(t *testing.T) {
+	session := newRawSession(t)
+	ctx := context.Background()
+	log := zap.NewNop()
+
+	require.NoError(t, scylla.RunMigrations(ctx, session, scyllaKeyspace, uuid.New().String(), log))
+
+	err := scylla.RunMigrationsWithFS(ctx, session, scyllaKeyspace, uuid.New().String(), log,
+		migrationSetThrough(t, "008_file.cql"))
+	require.ErrorContains(t, err, "database is ahead")
+
+	require.NoError(t, scylla.RunMigrationsWithFS(ctx, session, scyllaKeyspace, uuid.New().String(), log,
+		migrationSetThrough(t, "009_service_account.cql")))
+}
+
+func migrationSetThrough(t *testing.T, last string) fstest.MapFS {
+	t.Helper()
+	entries, err := fs.ReadDir(migrations.Files, ".")
+	require.NoError(t, err)
+	files := make(fstest.MapFS)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".cql") || entry.Name() > last {
+			continue
+		}
+		content, readErr := fs.ReadFile(migrations.Files, entry.Name())
+		require.NoError(t, readErr)
+		files[entry.Name()] = &fstest.MapFile{Data: content, Mode: 0o444}
+	}
+	require.Contains(t, files, last)
+	return files
 }
 
 func TestRunMigrations_LockReleasedAfterSuccess(t *testing.T) {
