@@ -36,3 +36,10 @@
   the controller's existing reconcile cascade, and this repo's established
   `@deprecated` reason-text convention) supplied enough grounding to make
   reasonable, architecture-consistent decisions, recorded under Assumptions.
+- 2026-10-07 scope expansion (Git-backed create/update/delete; descendant filtering)
+  re-validated. Decisions resolved with the user rather than via markers:
+  closure-style ancestor index; Git-removal delete with `{category, outcome}` payload;
+  `createCategory` targets `gitstore-system` only; `categoryTaxonomy.*` actions per
+  ADR-0010; diagnostics follow ADR-0015 §4's two-lane contract. Interface names
+  (mutation/input/filter fields) appear in requirements because they are the
+  user-facing contract, consistent with prior specs in this repository.

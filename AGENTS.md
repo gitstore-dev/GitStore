@@ -25,7 +25,7 @@ Storage/schema notes:
 - Spec 063 adds a repository-local `shared/secretmaterial` Go module (no new third-party dependency); provider-owned secret records are bounded in-process memory only, no persisted secret cache.
 - Controller state uses `<Kind>.disk-v2` directories on existing per-replica checkpoint volumes. Legacy JSON checkpoints are retained but not loaded; the first upgrade streams a cold list. Never overlap processes on one checkpoint directory. Pending work, retry deadlines, quarantine, relation counts and bounded fan-out cursors are durable; lookups must preserve I/O errors rather than returning false absence.
 
-Deltas not covered above: 028 (branch-deletion admission, no new Go deps), 029 (`config 0.15.22`, `regex 1`, already in Rust `Cargo.toml`), 033 (`cmd/gitctl` replaces `cmd/hashpw`), 035 (`github.com/gin-gonic/gin`, `go-grpc-prometheus`; push-policy fields on `datastore.Repository`), 048 (Scylla query-specific denormalized tables, `go-memdb` as dev/contract-test backend).
+Deltas not covered above: 028 (branch-deletion admission, no new Go deps), 029 (`config 0.15.22`, `regex 1`, already in Rust `Cargo.toml`), 033 (`cmd/gitctl` replaces `cmd/hashpw`), 035 (`github.com/gin-gonic/gin`, `go-grpc-prometheus`; push-policy fields on `datastore.Repository`), 048 (Scylla query-specific denormalized tables, `go-memdb` as dev/contract-test backend). 057 (no new deps; Scylla projection `category_ancestor_index` in migration `010`, maintained by `UpdateCategoryTaxonomyStatus`/final removal and repaired via `gitctl scylla-projection-audit|repair`; shared `internal/admission` diagnostics/`RejectedError` and `internal/admissionreport` response extension).
 
 ## Commands
 
@@ -82,9 +82,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 057-categorytaxonomy-path-freshness: Added Go 1.25 (`gitstore-api`, `gitstore-controller-manager`); Rust 1.x (`gitstore-git-service`, golden-fixture parity test only) + Existing only: gqlgen v0.17.90, gocqlx/gocql, go-memdb, `internal/gitclient` Git writer gRPC, `internal/admission`, `cataloggrpc`, zap, Prometheus. No new third-party dependency.
 - 063-implement-secret-adrs: Added Go 1.25 module baseline (API and controller); existing Rust Git service; current Go container builders use 1.26.1. + Existing gqlgen, validator, zap, Prometheus client, JWT/crypto and standard library; new repository-local `shared/secretmaterial` Go module, no new third-party dependency.
 - 062-product-category-readiness: Added Go 1.25 (`gitstore-api`, `gitstore-controller-manager`) + `github.com/99designs/gqlgen v0.17.90` (schema/resolver codegen), existing `internal/graphqlclient.Client`, existing `internal/status.StatusPatch`/`StatusClient` (`gitstore-controller-manager`), existing `internal/cache.Cache[T]`/`CacheAccessor[T]` (spec 026), existing `internal/listwatch.Runner[T]` (spec 036/042), existing `internal/manager.Manager` reconciler registration (spec 026); no new external dependency in either service.
-- 055-product-deletion-safety: Added Go 1.25 (`gitstore-api`, `gitstore-controller-manager`); Rust 1.x (`gitstore-git-service`) + Existing gqlgen v0.17.90, gocqlx/gocql, go-memdb, Git writer/catalog gRPC, `internal/watchjournal`, Scylla CDC, Prometheus, zap, controller ListWatcher/Runner/cache/status interfaces; no new dependency
 
 
 <!-- MANUAL ADDITIONS START -->
