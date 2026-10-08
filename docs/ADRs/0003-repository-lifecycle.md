@@ -1,6 +1,6 @@
 # ADR 0003: Repository Lifecycle
 
-**Status**: Proposed
+**Status**: Accepted (2026-09-16)
 
 **Date**: 2026-06-26
 

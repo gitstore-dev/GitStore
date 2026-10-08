@@ -1,6 +1,6 @@
 # ADR 0009: Credential and Secret Material Boundary
 
-**Status**: Proposed
+**Status**: Accepted (2026-10-04)
 
 **Date**: 2026-08-30
 
