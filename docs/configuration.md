@@ -295,8 +295,9 @@ below bounds journal behavior; it does not enable or disable it.
 | `api.watch.journal.materializer.lease_renew_interval` | `GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__LEASE_RENEW_INTERVAL` | duration | `10s` | Renewal interval; must be less than `materializer.lease_ttl`.                                                                                 |
 | `api.watch.journal.materializer.max_lag`        | `GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__MAX_LAG`         | duration | `60s`   | Reader readiness freshness ceiling; must remain below the fixed 14-day CDC retention.                                                         |
 
-The CDC retention window (14 days) and the journal sequence bucket width
-(4,096) are fixed by the baseline Scylla schema and are not configurable.
+The CDC retention window (14 days) and the journal sequence bucket width are not
+configurable. New journals use a bucket width of 4,096; a journal initialized
+by an earlier release with a different width keeps its stored width.
 
 Scylla journal writes use logged conditional batches capped at 32 statements
 and an estimated 32 KiB of encoded event data. The caps are intentionally
@@ -686,7 +687,7 @@ environment variable) is still set — there is no silent fallback.
 | `watch.namespace.readers_enabled`                     | removed                                           | The durable watch journal reader is always on |
 | `watch.namespace.materializer_enabled`                | removed                                           | The CDC materializer is always on |
 | `watch.namespace.cdc_retention_seconds`               | removed                                           | Fixed at 14 days by the baseline schema |
-| `watch.namespace.bucket_size`                         | removed                                           | Fixed at 4,096, persisted on first init |
+| `watch.namespace.bucket_size`                         | removed                                           | New journals use 4,096; a journal initialized with another size keeps it |
 | `watch.namespace.journal_retention_seconds`           | `api.watch.journal.retention`                    | Now a duration string (e.g. `"168h"`), not integer seconds |
 | `watch.namespace.cdc_confidence_window_millis`        | `api.watch.journal.cdc.confidence_window`        | Now a duration string (e.g. `"500ms"`), not integer milliseconds |
 | `watch.namespace.read_batch_size`                     | `api.watch.journal.read.batch_size`              | |
