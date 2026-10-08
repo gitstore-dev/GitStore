@@ -237,8 +237,11 @@ type CollectionStatus struct {
 
 // Controller-only finalizer completion for a terminating namespace.
 type CompleteNamespaceDeletionInput struct {
-	Identifier      string `json:"identifier"`
-	ResourceVersion string `json:"resourceVersion"`
+	// Name of the terminating namespace. Exactly one of name or identifier is required.
+	Name *string `json:"name,omitempty"`
+	// Legacy alias of name, accepted during rolling upgrades.
+	Identifier      *string `json:"identifier,omitempty"`
+	ResourceVersion string  `json:"resourceVersion"`
 }
 
 type CompleteNamespaceDeletionPayload struct {
@@ -362,7 +365,7 @@ type DeleteNamespaceInput struct {
 	// The identifier of the namespace to delete.
 	// Deletion is blocked if any repositories exist within the namespace.
 	// Requires the caller to be the namespace owner (createdBy) or isAdmin.
-	ID *string `json:"id,omitempty"`
+	ID string `json:"id"`
 }
 
 // Payload returned after successfully deleting a namespace.
@@ -375,7 +378,7 @@ type DeleteNamespacePayload struct {
 
 type DeleteProductInput struct {
 	// Opaque global Product Node ID; never a raw UID or source selector.
-	ID *string `json:"id,omitempty"`
+	ID string `json:"id"`
 }
 
 type DeleteProductPayload struct {
@@ -386,7 +389,7 @@ type DeleteProductPayload struct {
 }
 
 type DeleteRepositoryInput struct {
-	ID *string `json:"id,omitempty"`
+	ID string `json:"id"`
 }
 
 type DeleteRepositoryPayload struct {
@@ -1415,9 +1418,7 @@ type TokenResponse struct {
 	IDToken *string `json:"idToken,omitempty"`
 }
 
-// Reassign a namespace's owner. Distinct from transferRepository,
-// which relocates a repository between namespaces and is unrelated to
-// principal ownership.
+// Reassign a namespace's owner.
 type TransferNamespaceOwnerInput struct {
 	NamespaceID    string              `json:"namespaceId"`
 	TargetOwnerRef *ResourceOwnerInput `json:"targetOwnerRef"`

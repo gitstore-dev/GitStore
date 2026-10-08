@@ -103,8 +103,7 @@ Valid:
 - An existing row with no contract fields returns non-null metadata, spec,
   status, conditions, and resolved storage state.
 - Explicit zero policy limits remain visible as zero.
-- `renameRepository` and `transferRepository` are deprecated and return
-  `Unimplemented` until ADR-0003 Phase 2.
+- Repository rename and transfer between namespaces are not available.
 
 Invalid:
 

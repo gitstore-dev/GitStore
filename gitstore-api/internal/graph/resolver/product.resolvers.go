@@ -39,10 +39,7 @@ func (r *mutationResolver) UpdateProduct(ctx context.Context, input model.Update
 
 // DeleteProduct is the resolver for the deleteProduct field.
 func (r *mutationResolver) DeleteProduct(ctx context.Context, input model.DeleteProductInput) (*model.DeleteProductPayload, error) {
-	if input.ID == nil {
-		return nil, gqlerror.Errorf("product ID is required")
-	}
-	uid, err := decodeNodeIDAs(nodeKindProduct, *input.ID)
+	uid, err := decodeNodeIDAs(nodeKindProduct, input.ID)
 	if err != nil {
 		return nil, gqlerror.Errorf("invalid product ID")
 	}

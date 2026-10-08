@@ -75,7 +75,7 @@ func TestDeleteProductReturnsTerminatingEnvelopeAndIsIdempotent(t *testing.T) {
 	mutation := &mutationResolver{Resolver: &Resolver{service: service, logger: zap.NewNop()}}
 	id := mustEncodeNodeID(nodeKindProduct, product.UID)
 
-	first, err := mutation.DeleteProduct(context.Background(), model.DeleteProductInput{ID: &id})
+	first, err := mutation.DeleteProduct(context.Background(), model.DeleteProductInput{ID: id})
 	require.NoError(t, err)
 	assert.Equal(t, model.ResourceDeletionOutcomeTerminationStarted, first.Outcome)
 	require.NotNil(t, first.Product.Metadata.DeletionTimestamp)
@@ -83,7 +83,7 @@ func TestDeleteProductReturnsTerminatingEnvelopeAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, admission.OperationDelete, admitter.calls[0].Operation)
 	assert.Equal(t, product.RepositoryID, admitter.calls[0].RepositoryID)
 
-	second, err := mutation.DeleteProduct(context.Background(), model.DeleteProductInput{ID: &id})
+	second, err := mutation.DeleteProduct(context.Background(), model.DeleteProductInput{ID: id})
 	require.NoError(t, err)
 	assert.Equal(t, model.ResourceDeletionOutcomeAlreadyTerminating, second.Outcome)
 	assert.Len(t, admitter.calls, 1, "an already-terminating Product must not cascade a second Git delete")

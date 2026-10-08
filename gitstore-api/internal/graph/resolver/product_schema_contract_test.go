@@ -30,7 +30,7 @@ func TestProductLifecycleSchemaContract(t *testing.T) {
 		assert.Nil(t, schema.Types[inputName].Fields.ForName("path"), "%s must route through persisted provenance", inputName)
 	}
 
-	requireGraphQLField(t, schema, "DeleteProductInput", "id", "ID")
+	requireGraphQLField(t, schema, "DeleteProductInput", "id", "ID!")
 	deleteID := schema.Types["DeleteProductInput"].Fields.ForName("id")
 	require.NotNil(t, deleteID.Description)
 	assert.Contains(t, deleteID.Description, "Opaque global Product Node ID")

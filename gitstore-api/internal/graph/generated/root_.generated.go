@@ -5286,14 +5286,21 @@ input DeleteNamespaceInput {
   Deletion is blocked if any repositories exist within the namespace.
   Requires the caller to be the namespace owner (createdBy) or isAdmin.
   """
-  id: ID
+  id: ID!
 }
 
 """
 Controller-only finalizer completion for a terminating namespace.
 """
 input CompleteNamespaceDeletionInput {
-  identifier: String!
+  """
+  Name of the terminating namespace. Exactly one of name or identifier is required.
+  """
+  name: String
+  """
+  Legacy alias of name, accepted during rolling upgrades.
+  """
+  identifier: String @deprecated(reason: "Use name. Removed in the next release.")
   resourceVersion: String!
 }
 
@@ -5352,9 +5359,7 @@ type DeleteNamespacePayload {
 }
 
 """
-Reassign a namespace's owner. Distinct from transferRepository,
-which relocates a repository between namespaces and is unrelated to
-principal ownership.
+Reassign a namespace's owner.
 """
 input TransferNamespaceOwnerInput {
   namespaceId: ID!
@@ -5624,7 +5629,7 @@ input UpdateProductInput {
 
 input DeleteProductInput {
   """Opaque global Product Node ID; never a raw UID or source selector."""
-  id: ID
+  id: ID!
 }
 
 type CreateProductPayload {
@@ -6499,7 +6504,7 @@ type UpdateRepositoryStatusPayload {
 }
 
 input DeleteRepositoryInput {
-  id: ID
+  id: ID!
 }
 
 type DeleteRepositoryPayload {

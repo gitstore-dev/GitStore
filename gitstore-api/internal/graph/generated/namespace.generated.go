@@ -1644,16 +1644,23 @@ func (ec *executionContext) unmarshalInputCompleteNamespaceDeletionInput(ctx con
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"identifier", "resourceVersion"}
+	fieldsInOrder := [...]string{"name", "identifier", "resourceVersion"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
 		case "identifier":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("identifier"))
-			data, err := ec.unmarshalNString2string(ctx, v)
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -1748,7 +1755,7 @@ func (ec *executionContext) unmarshalInputDeleteNamespaceInput(ctx context.Conte
 		switch k {
 		case "id":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
-			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+			data, err := ec.unmarshalNID2string(ctx, v)
 			if err != nil {
 				return it, err
 			}

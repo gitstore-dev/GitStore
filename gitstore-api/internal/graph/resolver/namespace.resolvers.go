@@ -72,10 +72,7 @@ func (r *mutationResolver) UpdateNamespaceStatus(ctx context.Context, input mode
 
 // DeleteNamespace is the resolver for the deleteNamespace field.
 func (r *mutationResolver) DeleteNamespace(ctx context.Context, input model.DeleteNamespaceInput) (*model.DeleteNamespacePayload, error) {
-	if input.ID == nil {
-		return nil, gqlerror.Errorf("namespace ID is required")
-	}
-	uid, err := decodeNodeIDAs(nodeKindNamespace, *input.ID)
+	uid, err := decodeNodeIDAs(nodeKindNamespace, input.ID)
 	if err != nil {
 		return nil, gqlerror.Errorf("invalid namespace ID")
 	}
@@ -116,12 +113,16 @@ func (r *mutationResolver) TransferNamespaceOwner(ctx context.Context, input mod
 
 // CompleteNamespaceDeletion is the resolver for the completeNamespaceDeletion field.
 func (r *mutationResolver) CompleteNamespaceDeletion(ctx context.Context, input model.CompleteNamespaceDeletionInput) (*model.CompleteNamespaceDeletionPayload, error) {
-	deleted, err := r.service.CompleteNamespaceDeletion(ctx, input.Identifier, input.ResourceVersion)
+	name, err := security.ResolveCompleteNamespaceDeletionName(input.Name, input.Identifier)
+	if err != nil {
+		return nil, err
+	}
+	deleted, err := r.service.CompleteNamespaceDeletion(ctx, name, input.ResourceVersion)
 	if errors.Is(err, datastore.ErrConflict) {
 		if deleted == nil {
 			return nil, gqlerror.Errorf("namespace deletion conflict, and current version could not be read")
 		}
-		return nil, statusConflictError("Namespace", "", input.Identifier, deleted.ResourceVersion)
+		return nil, statusConflictError("Namespace", "", name, deleted.ResourceVersion)
 	}
 	if err != nil {
 		return nil, err
