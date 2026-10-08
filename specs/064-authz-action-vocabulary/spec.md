@@ -170,9 +170,12 @@ recorded value is in the canonical vocabulary table, and none carries an
    policy, **When** `bob` creates USER-tier namespace `bob`, **Then** it is
    allowed and `bob` owns it; **When** `bob` creates ORGANIZATION-tier `acme`,
    **Then** it is denied.
-6. **Given** a product hard-delete, **When** it is authorized, **Then** the
-   action is `product.purge`, and a grant of `product.delete` alone does not
-   allow it.
+6. **Given** the final removal of a terminating resource through any
+   `complete*Deletion` mutation (`completeNamespaceDeletion`,
+   `completeRepositoryDeletion`, `completeProductDeletion`,
+   `completeCategoryDeletion`), **When** it is authorized, **Then** the action
+   is `<kind>.purge` (e.g. `namespace.purge`, `product.purge`). A grant of
+   `<kind>.delete` or `<kind>.status.write` alone does not allow it.
 
 ---
 
@@ -285,7 +288,7 @@ valid v1beta1 document that the API loads and enforces.
   (`namespace`, `serviceAccount`) via `RoleBinding` → never matches.
 - Owner is a group and the caller is the creator but not a group member →
   `when: owner` is false.
-- Unrecognized verb for a kind (e.g. `namespace.purge`) → validation error.
+- Unrecognized verb for a kind (e.g. `namespace.publish`) → validation error.
 - An old API replica sends a legacy action to an upgraded Git service during
   rollout → the Git service denies it with an explicit error (fail closed);
   it is never treated as allowed.
@@ -309,6 +312,13 @@ valid v1beta1 document that the API loads and enforces.
   `category.*`, `namespace.create.organization`/`.user`,
   `.read.management`, `.list.management`, `.delete.complete` or
   `repository.read`/`repository.write` meaning Git contents.
+- **FR-002a**: Every `complete*Deletion` mutation (the final, finalizer-gated
+  removal of a terminating resource) MUST be authorized as `<kind>.purge`.
+  `purge` is in the vocabulary for every kind that has such a mutation:
+  `namespace`, `repository`, `categoryTaxonomy` and `product`, and any kind
+  that later gains one. `completeNamespaceDeletion` and
+  `completeRepositoryDeletion` move off `*.status.write`, and
+  `completeProductDeletion` moves off `product.delete.complete`.
 - **FR-003**: Callers MUST NOT choose an action based on ownership, tier or
   visibility. They MUST pass the facts in `ResourceContext` (`OwnerSub`,
   `Attrs.namespace`, `Attrs.tier`, `Attrs.visibility`,
@@ -457,6 +467,8 @@ valid v1beta1 document that the API loads and enforces.
 - **FR-022**: The controller-manager's required permission set (list, watch,
   status write, product management reads, purge, token issue) MUST be
   expressed in canonical actions and verified against the shipped policy.
+  It includes `purge` on every kind whose deletion the controllers complete
+  (`namespace`, `repository`, `categoryTaxonomy`, `product`).
 - **FR-023**: User-facing documentation (`docs/`) MUST describe the v1beta1
   document, canonical vocabulary and the removal of v1; ADR-0010 MUST be
   updated to record the §13 amendment, allow-only rules (§10/§11, no deny),
