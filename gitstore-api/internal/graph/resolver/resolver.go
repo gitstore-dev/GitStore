@@ -7,7 +7,6 @@ package resolver
 
 import (
 	"errors"
-	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
@@ -31,7 +30,7 @@ type Resolver struct {
 	clock                  apiruntime.Clock
 	resourceJournal        datastore.ResourceWatchJournal
 	namespaceSubscriber    *watchjournal.Subscriber
-	namespaceWatch         config.NamespaceWatchConfig
+	namespaceWatch         config.WatchJournalConfig
 	namespaceMetrics       *watchjournal.Metrics
 	serviceAccountAudience string
 	connectionRegistry     *wsregistry.Registry
@@ -39,17 +38,19 @@ type Resolver struct {
 
 // ResolverDeps contains dependencies for the root GraphQL resolver.
 type ResolverDeps struct {
-	Store                        datastore.Datastore
-	GitWriter                    GitWriter
-	Registry                     *auth.ProviderRegistry
-	Logger                       *zap.Logger
-	Clock                        apiruntime.Clock
-	IDGenerator                  apiruntime.IDGenerator
-	CommittedManifestAdmitter    admission.CommittedManifestAdmitter
-	NamespaceRepositoryFenceMode NamespaceRepositoryFenceMode
-	ResourceJournal              datastore.ResourceWatchJournal
-	NamespaceWatch               config.NamespaceWatchConfig
-	NamespaceMetrics             *watchjournal.Metrics
+	Store                     datastore.Datastore
+	GitWriter                 GitWriter
+	Registry                  *auth.ProviderRegistry
+	Logger                    *zap.Logger
+	Clock                     apiruntime.Clock
+	IDGenerator               apiruntime.IDGenerator
+	CommittedManifestAdmitter admission.CommittedManifestAdmitter
+	ResourceJournal           datastore.ResourceWatchJournal
+	NamespaceWatch            config.WatchJournalConfig
+	NamespaceMetrics          *watchjournal.Metrics
+	// PushLimits is the shared static platform push-size ceiling; see
+	// config.PushLimitsConfig.
+	PushLimits config.PushLimitsConfig
 	// ServiceAccountAudience is the configured audience value for service
 	// account token issuance (spec 061).
 	ServiceAccountAudience string
@@ -62,27 +63,27 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		return nil, errMissingLogger
 	}
 	var namespaceSubscriber *watchjournal.Subscriber
-	if deps.ResourceJournal != nil && deps.NamespaceWatch.ReadersEnabled {
+	if deps.ResourceJournal != nil {
 		namespaceSubscriber = watchjournal.NewSubscriber(deps.ResourceJournal, watchjournal.SubscriberConfig{
-			ReadBatchSize:       deps.NamespaceWatch.ReadBatchSize,
-			MaxReplayEvents:     deps.NamespaceWatch.MaxReplayEvents,
-			BufferSize:          deps.NamespaceWatch.SubscriberBuffer,
-			BackpressureTimeout: time.Duration(deps.NamespaceWatch.SubscriberBackpressureMillis) * time.Millisecond,
-			PollMin:             time.Duration(deps.NamespaceWatch.PollMinMillis) * time.Millisecond,
-			PollMax:             time.Duration(deps.NamespaceWatch.PollMaxMillis) * time.Millisecond,
-			MaxMaterializerLag:  time.Duration(deps.NamespaceWatch.MaxMaterializerLagSeconds) * time.Second,
+			ReadBatchSize:       deps.NamespaceWatch.Read.BatchSize,
+			MaxReplayEvents:     deps.NamespaceWatch.Read.MaxReplayEvents,
+			BufferSize:          deps.NamespaceWatch.Subscriber.Buffer,
+			BackpressureTimeout: deps.NamespaceWatch.Subscriber.Backpressure,
+			PollMin:             deps.NamespaceWatch.Poll.Min,
+			PollMax:             deps.NamespaceWatch.Poll.Max,
+			MaxMaterializerLag:  deps.NamespaceWatch.Materializer.MaxLag,
 			Metrics:             deps.NamespaceMetrics,
 		})
 	}
 	SetConverterLogger(deps.Logger)
 	svc, err := NewService(ServiceDeps{
-		Store:                        deps.Store,
-		GitWriter:                    deps.GitWriter,
-		Logger:                       deps.Logger,
-		Clock:                        deps.Clock,
-		IDGenerator:                  deps.IDGenerator,
-		CommittedManifestAdmitter:    deps.CommittedManifestAdmitter,
-		NamespaceRepositoryFenceMode: deps.NamespaceRepositoryFenceMode,
+		Store:                     deps.Store,
+		GitWriter:                 deps.GitWriter,
+		Logger:                    deps.Logger,
+		Clock:                     deps.Clock,
+		IDGenerator:               deps.IDGenerator,
+		CommittedManifestAdmitter: deps.CommittedManifestAdmitter,
+		PushLimits:                deps.PushLimits,
 	})
 	if err != nil {
 		return nil, err

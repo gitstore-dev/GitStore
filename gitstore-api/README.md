@@ -77,18 +77,17 @@ no API `.env` file.
 
 Required for local API startup unless provided by `.env`:
 
-| Variable                              | Default                  | Purpose                  |
-|---------------------------------------|--------------------------|--------------------------|
-| `GITSTORE_AUTH__STATICUSERS__USERS_FILE` | `users.yaml`          | Local users YAML         |
-| `GITSTORE_AUTH__JWT__SECRET`          | unset                    | JWT signing secret       |
-| `GITSTORE_API__PORT`                  | `4000`                   | GraphQL HTTP port        |
-| `GITSTORE_API__GIT_PORT`              | `5000`                   | Git Smart HTTP port      |
-| `GITSTORE_API__GRPC_PORT`             | `6000`                   | CatalogService gRPC port |
-| `GITSTORE_GIT__GRPC__URI`             | `dns:///localhost:50051` | GitService gRPC target   |
-| `GITSTORE_DATASTORE__BACKEND`         | `memdb`                  | `memdb` or `scylla`      |
-| `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE` | `auto` | Fence rollout gate; `auto` enables memdb and disables Scylla |
-| `GITSTORE_LOG__LEVEL`                 | `info`                   | Log level                |
-| `GITSTORE_LOG__FORMAT`                | `json`                   | `json` or `text`         |
+| Variable                                        | Default                  | Purpose                  |
+|---------------------------------------------------|--------------------------|--------------------------|
+| `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE`  | `users.yaml`             | Local users YAML         |
+| `GITSTORE_API__AUTH__JWT__SECRET`               | unset                    | JWT signing secret       |
+| `GITSTORE_API__PORT`                            | `4000`                   | GraphQL HTTP port        |
+| `GITSTORE_API__GIT_PORT`                        | `5000`                   | Git Smart HTTP port      |
+| `GITSTORE_API__GRPC_PORT`                       | `6000`                   | CatalogService gRPC port |
+| `GITSTORE_API__GIT_SERVICE__URI`                | `dns:///localhost:50051` | GitService gRPC target   |
+| `GITSTORE_API__DATASTORE__BACKEND`              | `memdb`                  | `memdb` or `scylla`      |
+| `GITSTORE_LOG__LEVEL`                           | `info`                   | Log level                |
+| `GITSTORE_LOG__FORMAT`                          | `json`                   | `json` or `text`         |
 
 Copy the example file for local development:
 

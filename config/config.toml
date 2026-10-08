@@ -4,79 +4,62 @@
 # must never contain service-account key material. The local Compose profile
 # mounts the API issuer key and controller private key separately.
 
-[grpc]
-port = 50051
-
-[git]
+[git_service]
+grpc_port = 50051
 data_dir = "/var/lib/gitstore/repos"
 
-[git.repo]
-max_file_size = 52428800
-max_pack_size_bytes = 52428800
+[git_service.catalog]
+uri = "dns:///api:6000"
 
-[hooks.git_receive_pack]
-pre_receive = { enabled = true }
-update = { enabled = false }
-post_receive = { enabled = true }
-proc_receive = { enabled = false }
-post_update = { enabled = false }
-reference_transaction = { enabled = false }
+[git_service.validation]
+timeout = "10s"
 
-[schema_validation]
-phase = "pre-receive"
-timeout_secs = 10
-
-[admission_control]
-phase = "post-receive"
-branch_pattern = "refs/heads/.*"
-
-[catalog_service]
-uri = "http://api:6000"
+[git_service.admission]
+branch_pattern = "^refs/heads/main$"
 
 [api]
 port = 4000
 git_port = 9000
 grpc_port = 6000
-rate_limit_per_second = 50
-rate_limit_burst = 100
 
-[git.grpc]
+[api.rate_limit]
+per_second = 50
+burst = 100
+
+[api.git_service]
 uri = "dns:///git-service:50051"
 
-[datastore]
+[api.datastore]
 backend = "memdb"
 
-[auth.staticusers]
+[api.auth.static_users]
 users_file = "/etc/gitstore/users.yaml"
 
-[auth.jwt]
+[api.auth.jwt]
 secret = "local-development-jwt-secret-at-least-32-characters"
-duration = "24h"
+ttl = "24h"
 issuer = "gitstore"
 refresh_grace = "60s"
 
-[auth.grpc]
-hmac_secret = "local-development-grpc-hmac-secret"
-
-[auth.authn]
+[api.auth.authn]
 chain = ["static-users", "serviceaccount-assertion", "serviceaccount-jwt", "anonymous"]
 
-[auth.serviceaccount]
+[api.auth.serviceaccount]
 issuer = "gitstore"
 audience = "gitstore-api"
 assertion_audience = "gitstore-api/serviceaccount-token"
 # The API issuer key is injected from its API-only /run/secrets mount.
 
-[auth.authz]
+[api.auth.authz]
 provider = "rbac-local"
 
-[auth.userdir]
+[api.auth.userdir]
 provider = "static-users"
 
-# Optional Phase 7 OIDC Relying Party (spec 059). Uncomment and chain "oidc-jwt"
-# into auth.authn.chain to verify bearer tokens against any standards-compliant
+# Optional OIDC Relying Party. Uncomment and chain "oidc-jwt" into
+# api.auth.authn.chain to verify bearer tokens against any standards-compliant
 # OIDC issuer — e.g. the optional reference stack (make compose IDENTITY=oidc).
-# [auth.oidc]
+# [api.auth.oidc_jwt]
 # issuer_uri = "http://localhost:4444/"
 # client_id = "gitstore"
 # audience = ""        # defaults to client_id
@@ -84,16 +67,17 @@ provider = "static-users"
 # username_claim = "sub"  # claim that becomes Principal.Subject (bindings/audit);
                           # "email" or "preferred_username" = human-readable but mutable
 
-[auth.rbac]
+[api.auth.rbac_local]
 policy_file = "/etc/gitstore/policy.yaml"
 
 [controller]
 port = 5001
 api_uri = "http://api:4000/graphql"
-[controller.api_client]
+
+[controller.api_client.rate_limit]
 # Shared across all reconciliation kinds; leave room under the API's IP budget
 # for credential renewal. Replicas sharing an egress IP must share that budget.
-requests_per_second = 40
+per_second = 40
 burst = 10
 
 # The UID is provisioned by the Compose enrollment job into a controller-only mount.
@@ -120,8 +104,12 @@ flush_interval_events = 100
 max_backoff = "30s"
 resync_interval = "10m"
 
-[features]
-namespace_repository_fence = "auto"
+[grpc_auth]
+hmac_secret = "local-development-grpc-hmac-secret"
+
+[push_limits]
+max_pack_size = "512MiB"
+max_file_size = "100MiB"
 
 [log]
 level = "info"

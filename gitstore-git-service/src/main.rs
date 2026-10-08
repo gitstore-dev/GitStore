@@ -53,24 +53,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Failed to initialize logger: {e}"))?;
 
     info!(
-        grpc_port = cfg.grpc.port,
-        data_dir = %cfg.git.data_dir,
+        grpc_port = cfg.git_service.grpc_port,
+        data_dir = %cfg.git_service.data_dir,
         "Starting GitStore Server"
     );
     info!(
-        pre_receive              = cfg.hooks.git_receive_pack.pre_receive.enabled,
-        update                   = cfg.hooks.git_receive_pack.update.enabled,
-        post_receive             = cfg.hooks.git_receive_pack.post_receive.enabled,
-        proc_receive             = cfg.hooks.git_receive_pack.proc_receive.enabled,
-        post_update              = cfg.hooks.git_receive_pack.post_update.enabled,
-        reference_transaction    = cfg.hooks.git_receive_pack.reference_transaction.enabled,
-        schema_validation_phase  = %cfg.schema_validation.phase,
-        admission_phase          = %cfg.admission_control.phase,
-        "hook phases"
+        pre_receive = true,
+        post_receive = true,
+        "hook phases always on"
     );
 
     // Create data directory if it doesn't exist (no default repo provisioned)
-    let data_path = PathBuf::from(&cfg.git.data_dir);
+    let data_path = PathBuf::from(&cfg.git_service.data_dir);
     if !data_path.exists() {
         std::fs::create_dir_all(&data_path)?;
         info!(path = %data_path.display(), "Created data directory");
@@ -78,8 +72,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Preserve schema validation and add the generic deletion proposed-tree
     // check as a second blocking policy.
-    let catalog_url = cfg.catalog_service.uri.clone();
-    let validation_timeout = std::time::Duration::from_secs(cfg.schema_validation.timeout_secs);
+    let catalog_url = cfg.git_service.catalog.uri.clone();
+    let validation_timeout: std::time::Duration = cfg.git_service.validation.timeout.into();
     let validation_handler: Arc<dyn gitstore::git::hooks::ValidationHandler + Send + Sync> = {
         let schema =
             SchemaValidationHandler::connect(&catalog_url, validation_timeout, "".to_string())
@@ -106,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let admission_handler: Arc<dyn gitstore::git::hooks::AdmissionHandler + Send + Sync> =
         match AdmissionControlHandler::connect(
             &catalog_url,
-            cfg.admission_control.branch_pattern.clone(),
+            cfg.git_service.admission.branch_pattern.clone(),
         )
         .await
         {
@@ -121,27 +115,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
     // Start gRPC server
-    let grpc_addr: SocketAddr = format!("0.0.0.0:{}", cfg.grpc.port).parse()?;
+    let grpc_addr: SocketAddr = format!("0.0.0.0:{}", cfg.git_service.grpc_port).parse()?;
     let hook_pipeline = Arc::new(HookPipeline::new(
-        cfg.hooks.git_receive_pack.clone(),
-        cfg.schema_validation.phase.clone(),
         validation_timeout,
-        cfg.admission_control.phase.clone(),
-        cfg.admission_control.branch_pattern.clone(),
         validation_handler,
         admission_handler,
     ));
-    let grpc_service = GitServiceImpl::with_pipeline(data_path.clone(), hook_pipeline);
+    let push_limits = gitstore::grpc::server::PushLimits {
+        max_pack_size: cfg.push_limits.max_pack_size.0,
+        max_file_size: cfg.push_limits.max_file_size.0,
+    };
+    let grpc_service = GitServiceImpl::with_pipeline(data_path.clone(), hook_pipeline, push_limits);
     let interceptor = HmacInterceptor::new(
-        &cfg.auth.grpc.hmac_secret,
-        cfg.auth.grpc.hmac_secret_previous.as_deref(),
+        &cfg.grpc_auth.hmac_secret,
+        cfg.grpc_auth.hmac_secret_previous.as_deref(),
     );
     info!(
-        rotation_window_open = cfg.auth.grpc.hmac_secret_previous.is_some(),
+        rotation_window_open = cfg.grpc_auth.hmac_secret_previous.is_some(),
         "gRPC HMAC auth active"
     );
     info!(
-        grpc_port = cfg.grpc.port,
+        grpc_port = cfg.git_service.grpc_port,
         "gRPC server starting on {}", grpc_addr
     );
     let grpc_handle = tokio::spawn(async move {

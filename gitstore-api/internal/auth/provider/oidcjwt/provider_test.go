@@ -247,7 +247,7 @@ func TestAuthenticateForeignIssuerChallenges(t *testing.T) {
 
 func TestAuthenticateExpiredTokenDenies(t *testing.T) {
 	issuer := newMockIssuer(t)
-	p := newProvider(t, issuer, config.OIDCConfig{ClockSkew: "0s"})
+	p := newProvider(t, issuer, config.OIDCConfig{ClockSkew: 0 * time.Second})
 	claims := issuer.validClaims()
 	claims["exp"] = time.Now().Add(-time.Hour).Unix()
 	token := issuer.sign(t, claims)
@@ -260,7 +260,7 @@ func TestAuthenticateExpiredTokenDenies(t *testing.T) {
 
 func TestAuthenticateClockSkewToleratesRecentExpiry(t *testing.T) {
 	issuer := newMockIssuer(t)
-	p := newProvider(t, issuer, config.OIDCConfig{ClockSkew: "5m"})
+	p := newProvider(t, issuer, config.OIDCConfig{ClockSkew: 5 * time.Minute})
 	claims := issuer.validClaims()
 	claims["exp"] = time.Now().Add(-time.Minute).Unix()
 	token := issuer.sign(t, claims)

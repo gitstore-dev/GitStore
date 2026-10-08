@@ -198,11 +198,11 @@ projections:
 
 ```bash
 cd gitstore-api
-GITSTORE_DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
+GITSTORE_API__DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
   go run ./cmd/gitctl scylla-projection-audit
-GITSTORE_DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
+GITSTORE_API__DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
   go run ./cmd/gitctl scylla-projection-repair --dry-run
-GITSTORE_DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
+GITSTORE_API__DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
   go run ./cmd/gitctl scylla-projection-repair --confirm
 ```
 
@@ -449,20 +449,19 @@ Use Conventional Commits.
 | `GITSTORE_API__PORT`                  | `4000`                   | GraphQL HTTP port        |
 | `GITSTORE_API__GIT_PORT`              | `9000`                   | Git Smart HTTP port      |
 | `GITSTORE_API__GRPC_PORT`             | `6000`                   | CatalogService gRPC port |
-| `GITSTORE_GIT__GRPC__URI`             | `dns:///localhost:50051` | GitService gRPC target   |
-| `GITSTORE_DATASTORE__BACKEND`         | `memdb`                  | `memdb` or `scylla`      |
-| `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE` | `auto` | `auto`, `disabled`, or `enabled`; see the Namespace admission runbook |
-| `GITSTORE_AUTH__JWT__SECRET`          | unset                    | JWT signing secret       |
-| `GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY` | unset | API-only service-account access-token signing key; required when service-account providers are enabled |
+| `GITSTORE_API__GIT_SERVICE__URI`      | `dns:///localhost:50051` | GitService gRPC target   |
+| `GITSTORE_API__DATASTORE__BACKEND`    | `memdb`                  | `memdb` or `scylla`      |
+| `GITSTORE_API__AUTH__JWT__SECRET`     | unset                    | JWT signing secret       |
+| `GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY` | unset | API-only service-account access-token signing key; required when service-account providers are enabled |
 
 ### Git Service
 
-| Env var                             | Default                 | Purpose                   |
-|-------------------------------------|-------------------------|---------------------------|
-| `GITSTORE_GRPC__PORT`               | `50051`                 | GitService gRPC port      |
-| `GITSTORE_GIT__DATA_DIR`            | `/var/lib/gitstore/repos` | Bare repository root    |
-| `GITSTORE_GIT__REPO__MAX_FILE_SIZE` | `52428800`              | Per-file limit            |
-| `GITSTORE_CATALOG_SERVICE__URI`     | `http://localhost:6000` | API CatalogService target |
+| Env var                                     | Default                   | Purpose                     |
+|-----------------------------------------------|------------------------------|--------------------------------|
+| `GITSTORE_GIT_SERVICE__GRPC_PORT`           | `50051`                   | GitService gRPC port        |
+| `GITSTORE_GIT_SERVICE__DATA_DIR`            | `/var/lib/gitstore/repos` | Bare repository root        |
+| `GITSTORE_PUSH_LIMITS__MAX_FILE_SIZE`       | `100MiB`                  | Shared platform file-size ceiling (IEC size string) |
+| `GITSTORE_GIT_SERVICE__CATALOG__URI`        | `dns:///localhost:6000`   | API CatalogService target (`dns:///host:port`) |
 
 ### Controller Manager
 

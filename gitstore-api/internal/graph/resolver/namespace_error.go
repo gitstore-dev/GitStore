@@ -43,17 +43,6 @@ func NewNamespaceDeletionBlockedError(reasons []namespaceadmission.Reason, messa
 	}
 }
 
-func NewNamespaceRepositoryFenceDisabledError(operation string) error {
-	return &gqlerror.Error{
-		Message: "namespace deletion and repository create/transfer are disabled during staged rollout",
-		Extensions: map[string]any{
-			"code":      "NAMESPACE_REPOSITORY_FENCE_DISABLED",
-			"reason":    "ROLLOUT_GATE_DISABLED",
-			"operation": operation,
-		},
-	}
-}
-
 func newNamespaceError(message, code string, phase namespaceadmission.Phase, reason namespaceadmission.Reason) error {
 	return &gqlerror.Error{
 		Message: message,

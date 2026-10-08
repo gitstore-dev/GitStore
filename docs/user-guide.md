@@ -434,7 +434,7 @@ make logs SERVICE=git-service
 make logs SERVICE=controller-manager
 ```
 
-If required auth configuration is missing, the API will not become healthy. Set `GITSTORE_AUTH__STATICUSERS__USERS_FILE` and `GITSTORE_AUTH__JWT__SECRET`, or use the provided compose defaults for local development.
+If required auth configuration is missing, the API will not become healthy. Set `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE` and `GITSTORE_API__AUTH__JWT__SECRET`, or use the provided compose defaults for local development.
 
 ### Bootstrap Fails
 

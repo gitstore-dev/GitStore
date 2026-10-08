@@ -754,10 +754,10 @@ evaluation_timeout = "25ms"
 Environment variables follow existing Viper conventions:
 
 ```text
-GITSTORE_AUTH__AUTHZ__PROVIDER=opa
-GITSTORE_AUTH__OPA__BUNDLE_PATH=...
-GITSTORE_AUTH__OPA__DECISION_PATH=data.gitstore.authz.decision
-GITSTORE_AUTH__OPA__EVALUATION_TIMEOUT=25ms
+GITSTORE_API__AUTH__AUTHZ__PROVIDER=opa
+GITSTORE_API__AUTH__OPA__BUNDLE_PATH=...
+GITSTORE_API__AUTH__OPA__DECISION_PATH=data.gitstore.authz.decision
+GITSTORE_API__AUTH__OPA__EVALUATION_TIMEOUT=25ms
 ```
 
 Rules:
@@ -861,7 +861,7 @@ cardinality review.
    paths. Public ProductVariant exposure stays gated on publication eligibility.
 5. **Public projections:** build/backfill scope-specific memdb and ScyllaDB query paths, then enable
    public visibility behind a deployment feature flag.
-6. **Production opt-in:** enable `GITSTORE_AUTH__AUTHZ__PROVIDER=opa` only after parity, load,
+6. **Production opt-in:** enable `GITSTORE_API__AUTH__AUTHZ__PROVIDER=opa` only after parity, load,
    publication, and rollback tests pass. Changing the default is a separate decision.
 
 Compatibility guarantees:

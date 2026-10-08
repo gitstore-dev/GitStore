@@ -7,78 +7,38 @@ GraphQL create/update/delete behavior, and the server-first activation of
 `DeleteNamespacePayload.outcome`. Authorization must complete before validation,
 policy, lifecycle, or blocker details are returned.
 
-## Rollout
+## Repository lifecycle fence
 
-The additive GraphQL field and the repository lifecycle fence have separate
-activation gates.
+The repository lifecycle fence (Scylla LWT columns on the Namespace row that
+serialize namespace deletion against in-flight repository creation) is always
+enabled on every backend; it is not configurable and has no rollout gate.
+`deleteNamespace`, `completeNamespaceDeletion`, and `createRepository` always
+enforce it.
 
-### Phase 1: quiesce and deploy
+### Upgrading from a release with the fence rollout setting
 
-1. Before replacing the first production API replica, install a fleet-wide
-   ingress/AuthZ maintenance deny for `deleteNamespace`,
-   `completeNamespaceDeletion`, `createRepository`, and `transferRepository`.
-   This is mandatory: legacy replicas do not understand the new feature gate
-   and would otherwise bypass the fence.
-2. Keep clients selecting only the terminating `namespace { id }` envelope and `outcome`.
-3. Provision Scylla with the baseline schema. The fence columns are part of
-   the Namespace table (`002_namespace.cql`); there is no separate migration.
-4. Deploy every API replica with
-   `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=disabled` (or `auto`, which
-   resolves to disabled for Scylla).
-5. Verify legacy delete selections and the unchanged validation protobuf
-   against every old and new replica.
-6. Confirm every API replica is the new build, its schema exposes
-   `DeleteNamespacePayload.outcome`, and Scylla records the full baseline
-   migration set.
+Earlier releases controlled the fence with `features.namespace_repository_fence`.
+Remove that key, and the `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE`
+environment variable, before deploying. The API refuses to start while either is
+present.
 
-The external deny stays active for the whole mixed-version window. New replicas
-also return `NAMESPACE_REPOSITORY_FENCE_DISABLED` if one of the four mutations
-reaches them.
+A rolling upgrade needs no extra quiescing:
 
-### Phase 2: activate
+- Older replicas with the fence disabled (the `auto` default on Scylla) do not
+  run the three mutations unfenced. They reject them with
+  `NAMESPACE_REPOSITORY_FENCE_DISABLED`.
+- Older replicas with the fence enabled, and all upgraded replicas, enforce it.
 
-1. Deploy
-   `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=enabled` to every API replica.
-   Keep the external deny active while this setting rolls out; disabled replicas
-   reject rather than execute.
-2. Verify every replica reports the enabled configuration and run create/delete
-   plus transfer/delete race probes.
-3. Remove the fleet-wide mutation deny.
-4. Only after GraphQL schema convergence, activate clients that select
-   `outcome`.
-5. Keep Git-service rollout independent: `ValidateResourcesRequest`,
-   `ValidateResourcesResponse`, and `ValidationError` retain their legacy field
-   numbers and wire types.
-
-## Rollback
-
-1. Restore the fleet-wide deny for `deleteNamespace`,
-   `completeNamespaceDeletion`, `createRepository`, and `transferRepository`.
-2. Disable client selections of `outcome` only when rolling back to a compatible
-   API artifact; current clients use `namespace { id }`.
-3. Set `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=disabled` on the current
-   fleet and verify gate rejections.
-4. Roll back replicas only with an artifact that embeds the same baseline
-   migration set, even if its behavior code is reverted.
-5. Verify legacy GraphQL selections and Git-service validation after each
-   replacement.
-6. Keep the external mutation deny active until a forward-capable fenced fleet
-   is restored. Do not remove status conditions, finalizers, resource versions,
-   or the fence columns.
+No replica can therefore let repository creation race namespace deletion. Until
+the last older replica is replaced, requests that reach one fail and can be
+retried. Rolling back to such a release has the same effect: the three
+mutations are rejected until the fence is enabled on the older fleet.
 
 A binary built before the per-resource schema baseline is **not** a supported
 rollback artifact. gocqlx correctly rejects a keyspace whose migration history
 it does not recognise. Reverting an API replica before disabling `outcome`
 selections also causes GraphQL validation failures on requests routed to the old
 schema.
-
-## Fence gate configuration
-
-| Value | memdb | Scylla | Intended use |
-|---|---|---|---|
-| `auto` (default) | enabled | disabled | Development-safe default; production activation must be explicit |
-| `disabled` | disabled | disabled | Phase 1 rollout and safe rollback |
-| `enabled` | enabled | enabled | Phase 2 after full fleet convergence |
 
 ## Stable response codes
 
@@ -89,7 +49,6 @@ schema.
 | `NAMESPACE_POLICY_REJECTED` | `POLICY` | `BOOTSTRAP_NAMESPACE`, `TIER_DEMOTION`, `NAMESPACE_TERMINATING`, `NAMESPACE_ALREADY_EXISTS`, `NAMESPACE_NOT_FOUND` |
 | `NAMESPACE_DELETION_BLOCKED` | deletion | `BOOTSTRAP_NAMESPACE`, `NAMESPACE_NOT_EMPTY` |
 | `NAMESPACE_CONFLICT` | write | `RESOURCE_VERSION_CONFLICT` |
-| `NAMESPACE_REPOSITORY_FENCE_DISABLED` | rollout gate | `ROLLOUT_GATE_DISABLED`; operation is `DELETE_NAMESPACE`, `COMPLETE_NAMESPACE_DELETION`, `CREATE_REPOSITORY`, or `TRANSFER_REPOSITORY` |
 
 Deletion blockers are ordered `BOOTSTRAP_NAMESPACE`, then
 `NAMESPACE_NOT_EMPTY`. Successful deletion returns `TERMINATION_STARTED` or the
@@ -195,13 +154,6 @@ Namespace, remove or transfer all repositories, then retry deletion.
    retain the fence until a quiesced `scylla-projection-repair --confirm` run
    completes projection repair, verifies a clean audit, and clears the retained
    reservation.
-
-### Mutation rejected by the fence rollout gate
-
-Do not bypass the gate on one replica. Confirm the baseline schema is applied, every
-API replica is upgraded, the external mutation deny is still active, and every
-replica has `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=enabled`. Remove the
-external deny only after all four checks pass.
 
 ### High conflict or latency rate
 

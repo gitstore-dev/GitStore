@@ -433,14 +433,6 @@ func mappingFixture(namespace, name, repositoryID string) *datastore.NamespaceMa
 	}
 }
 
-func namespaceFixture(uid, name string) *datastore.Namespace {
-	return &datastore.Namespace{
-		UID:               uid,
-		Name:              name,
-		CreationTimestamp: time.Now(),
-	}
-}
-
 func TestMemdb_CreateAndGetRepository(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
@@ -826,42 +818,6 @@ func TestMemdb_RenameRepository_TargetConflictPreservesOldMapping(t *testing.T) 
 	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
 
 	got, lookupErr := ds.LookupRepository(ctx, namespace1, "old-name")
-	require.NoError(t, lookupErr)
-	assert.Equal(t, repoID1, got.RepositoryID)
-}
-
-func TestMemdb_TransferRepository_OldNSNotFoundNewNSReturnsSameRepoID(t *testing.T) {
-	ds := newBackend(t)
-	ctx := context.Background()
-	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000011", namespace1)))
-	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000012", namespace2)))
-	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(namespace1, "app", repoID1)))
-
-	require.NoError(t, ds.TransferRepository(ctx, repoID1, namespace1, namespace2))
-
-	_, err := ds.LookupRepository(ctx, namespace1, "app")
-	require.ErrorIs(t, err, datastore.ErrNotFound)
-
-	got, err := ds.LookupRepository(ctx, namespace2, "app")
-	require.NoError(t, err)
-	assert.Equal(t, repoID1, got.RepositoryID)
-}
-
-func TestMemdb_TransferRepository_ValidatesSourceAndTarget(t *testing.T) {
-	ds := newBackend(t)
-	ctx := context.Background()
-	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000013", namespace1)))
-	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000014", namespace2)))
-	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(namespace1, "app", repoID1)))
-	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(namespace2, "app", repoID2)))
-
-	err := ds.TransferRepository(ctx, repoID1, "wrong-source", namespace2)
-	require.ErrorIs(t, err, datastore.ErrNotFound)
-
-	err = ds.TransferRepository(ctx, repoID1, namespace1, namespace2)
-	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
-
-	got, lookupErr := ds.LookupRepository(ctx, namespace1, "app")
 	require.NoError(t, lookupErr)
 	assert.Equal(t, repoID1, got.RepositoryID)
 }

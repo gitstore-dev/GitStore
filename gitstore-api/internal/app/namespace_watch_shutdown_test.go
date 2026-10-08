@@ -76,7 +76,7 @@ func TestFileCDCReadinessGatesSharedBookmarksAndShutdownReleasesLease(t *testing
 		journal: journal, materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Clock: clock, Metrics: metrics}),
 		leaseManager: watchjournal.NewLeaseManager(journal, "leader", time.Minute, time.Second, clock),
 		metrics:      metrics, catalogRunner: runner,
-		cfg: config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60, CDCRetentionSeconds: 60, CDCConfidenceWindowMillis: 1}, log: zap.NewNop(),
+		cfg: config.WatchJournalConfig{BookmarkInterval: 60 * time.Second, CDC: config.CDCWatchConfig{ConfidenceWindow: 1 * time.Millisecond}}, log: zap.NewNop(),
 	}
 	lease, acquired, err := runtime.leaseManager.Acquire(t.Context())
 	require.NoError(t, err)
@@ -120,7 +120,7 @@ func TestNamespaceWatchLeaderReleasesLeaseBeforeReturning(t *testing.T) {
 		materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Clock: clock, Metrics: metrics}),
 		leaseManager: leader,
 		metrics:      metrics,
-		cfg:          config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60},
+		cfg:          config.WatchJournalConfig{BookmarkInterval: 60 * time.Second},
 		log:          zap.NewNop(),
 	}
 
@@ -181,7 +181,7 @@ func TestNamespaceWatchRuntimeStopsRetryingAfterOrderingDiscontinuity(t *testing
 		journal: journal, materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Metrics: metrics}),
 		leaseManager: watchjournal.NewLeaseManager(journal, "leader", time.Minute, time.Second, apiruntime.SystemClock{}),
 		metrics:      metrics, runner: runner,
-		cfg: config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60, CDCRetentionSeconds: 60, CDCConfidenceWindowMillis: 1},
+		cfg: config.WatchJournalConfig{BookmarkInterval: 60 * time.Second, CDC: config.CDCWatchConfig{ConfidenceWindow: 1 * time.Millisecond}},
 		log: zap.NewNop(),
 	}
 
@@ -210,7 +210,7 @@ func TestNamespaceWatchLeaderStartsEveryCatalogCDCWorker(t *testing.T) {
 	runtime := &namespaceWatchRuntime{
 		journal: journal, materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Clock: clock, Metrics: metrics}),
 		leaseManager: watchjournal.NewLeaseManager(journal, "leader", time.Minute, time.Second, clock), metrics: metrics,
-		catalogRunner: runner, cfg: config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60, CDCRetentionSeconds: 60, CDCConfidenceWindowMillis: 1}, log: zap.NewNop(),
+		catalogRunner: runner, cfg: config.WatchJournalConfig{BookmarkInterval: 60 * time.Second, CDC: config.CDCWatchConfig{ConfidenceWindow: 1 * time.Millisecond}}, log: zap.NewNop(),
 	}
 	lease, acquired, err := runtime.leaseManager.Acquire(t.Context())
 	require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestNamespaceWatchReadinessRefreshesFollowerMetricsFromSharedBounds(t *test
 	require.NoError(t, err)
 	runtime := &namespaceWatchRuntime{
 		journal: journal, metrics: metrics,
-		cfg: config.NamespaceWatchConfig{MaxMaterializerLagSeconds: 60},
+		cfg: config.WatchJournalConfig{Materializer: config.MaterializerWatchConfig{MaxLag: 60 * time.Second}},
 	}
 
 	require.NoError(t, namespaceWatchReadiness(context.Background(), runtime, now.Add(time.Second)))

@@ -39,14 +39,14 @@ func (stubServiceAccountLookup) TryConsumeServiceAccountAssertion(_ context.Cont
 
 func TestBuildProviderRegistry_DefaultChain_Unchanged(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Auth.AuthZ.Provider = "allow-all"
-	cfg.Auth.UserDir.Provider = ""
+	cfg.Api.Auth.AuthZ.Provider = "allow-all"
+	cfg.Api.Auth.UserDir.Provider = ""
 	hash, err := bcrypt.GenerateFromPassword([]byte("irrelevant"), bcrypt.MinCost)
 	require.NoError(t, err)
 	usersFile := filepath.Join(t.TempDir(), "users.yaml")
 	require.NoError(t, os.WriteFile(usersFile, []byte("version: v1\nusers:\n  - username: admin\n    password_hash: "+string(hash)+"\n"), 0600))
-	cfg.Auth.StaticUsers.UsersFile = usersFile
-	cfg.Auth.JWT.Secret = "test-jwt-secret-at-least-32-bytes-long!!"
+	cfg.Api.Auth.StaticUsers.UsersFile = usersFile
+	cfg.Api.Auth.JWT.Secret = "test-jwt-secret-at-least-32-bytes-long!!"
 	store, err := memdb.New()
 	require.NoError(t, err)
 	revocations := store.(staticusers.RevocationStore)
@@ -62,9 +62,11 @@ func TestBuildProviderRegistry_DefaultChain_Unchanged(t *testing.T) {
 
 func TestBuildProviderRegistry_ServiceAccountProvidersChainedIn(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Auth.AuthN.Chain = []string{"serviceaccount-assertion", "serviceaccount-jwt", "anonymous"}
-	cfg.Auth.AuthZ.Provider = "allow-all"
-	cfg.Auth.ServiceAccount.SigningKey = generateEd25519PEMForServerTest(t)
+	cfg.Api.Auth.AuthN.Chain = []string{"serviceaccount-assertion", "serviceaccount-jwt", "anonymous"}
+	cfg.Api.Auth.AuthZ.Provider = "allow-all"
+	cfg.Api.Auth.ServiceAccount.SigningKey = generateEd25519PEMForServerTest(t)
+	cfg.Api.Auth.ServiceAccount.DefaultTTL = 10 * time.Minute
+	cfg.Api.Auth.ServiceAccount.MaxTTL = time.Hour
 
 	registry, _, shutdowns, err := buildProviderRegistry(cfg, stubServiceAccountLookup{}, zap.NewNop(), nil)
 	require.NoError(t, err)
@@ -79,7 +81,7 @@ func TestBuildProviderRegistry_ServiceAccountProvidersChainedIn(t *testing.T) {
 
 func TestBuildProviderRegistry_UnknownProvider_Errors(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Auth.AuthN.Chain = []string{"not-a-real-provider"}
+	cfg.Api.Auth.AuthN.Chain = []string{"not-a-real-provider"}
 
 	_, _, _, err := buildProviderRegistry(cfg, stubServiceAccountLookup{}, zap.NewNop(), nil)
 	require.Error(t, err)

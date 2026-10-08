@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gocql/gocql"
 	"github.com/stretchr/testify/assert"
@@ -219,8 +220,9 @@ func TestNamespaceWatchHidesStagedNamespaceFromBootstrapReads(t *testing.T) {
 	}
 }
 
-func TestNamespaceWatchRejectsBucketLayoutMismatch(t *testing.T) {
-	first := newTestStore(t).(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+func TestNamespaceWatchAdoptsPersistedBucketLayout(t *testing.T) {
+	legacyStore := newTestStoreWithWatchBucket(t, 3)
+	legacy := legacyStore.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
 	raw := newRawSession(t)
 	require.NoError(t, raw.Query("TRUNCATE resource_watch_events").Exec())
 	require.NoError(t, raw.Query("TRUNCATE resource_watch_clock").Exec())
@@ -232,13 +234,18 @@ func TestNamespaceWatchRejectsBucketLayoutMismatch(t *testing.T) {
 		require.NoError(t, cleanup.Query("TRUNCATE resource_watch_clock").Exec())
 	})
 
-	_, acquired, err := first.AcquireLease(context.Background(), "replica-a", time.Now().UTC(), time.Minute)
+	lease, acquired, err := legacy.AcquireLease(context.Background(), "replica-a", time.Now().UTC(), time.Minute)
 	require.NoError(t, err)
 	require.True(t, acquired)
+	require.NoError(t, legacy.ReleaseLease(context.Background(), lease))
 
-	second := newTestStoreWithWatchBucket(t, 3).(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
-	_, _, err = second.AcquireLease(context.Background(), "replica-b", time.Now().UTC(), time.Minute)
-	require.ErrorContains(t, err, "bucket size is 4096, configured 3")
+	upgradedStore := newTestStore(t)
+	upgraded := upgradedStore.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	lease, acquired, err = upgraded.AcquireLease(context.Background(), "replica-b", time.Now().UTC(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	t.Cleanup(func() { require.NoError(t, upgraded.ReleaseLease(context.Background(), lease)) })
+	require.Equal(t, int64(3), scylla.WatchBucketSizeForTest(upgradedStore))
 }
 
 func TestNamespaceWatchInitializesBucketLayoutForMigrationFirstClock(t *testing.T) {

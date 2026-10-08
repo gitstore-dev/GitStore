@@ -109,8 +109,8 @@ func newServiceAccountResolverHarness(t *testing.T) *serviceAccountResolverHarne
 	provider, err := serviceaccountjwt.New(config.ServiceAccountConfig{
 		Audience:   "gitstore-api",
 		SigningKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER})),
-		DefaultTTL: "10m",
-		MaxTTL:     "1h",
+		DefaultTTL: 10 * time.Minute,
+		MaxTTL:     1 * time.Hour,
 	}, store, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(provider.Shutdown)

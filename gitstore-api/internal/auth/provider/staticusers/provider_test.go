@@ -28,7 +28,7 @@ func testProvider(t *testing.T) *StaticUsersProvider {
 	hash, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.MinCost)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, []byte("version: v1\nusers:\n  - username: alice\n    password_hash: "+string(hash)+"\n    display_name: Alice\n    email: alice@example.com\n  - username: bob\n    password_hash: "+string(hash)+"\n"), 0600))
-	p, err := New(config.AuthConfig{StaticUsers: config.StaticUsersConfig{UsersFile: path}, JWT: config.JWTConfig{Secret: "secret", Issuer: "gitstore", Duration: "1h"}}, zap.NewNop())
+	p, err := New(config.AuthConfig{StaticUsers: config.StaticUsersConfig{UsersFile: path}, JWT: config.JWTConfig{Secret: "secret", Issuer: "gitstore", TTL: 1 * time.Hour}}, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(p.Shutdown)
 	return p
@@ -103,7 +103,7 @@ func TestStaticUsersAlwaysAppendsTokenDomainWhenConfiguredIssuerAlreadyHasSuffix
 	require.NoError(t, os.WriteFile(path, []byte("version: v1\nusers:\n  - username: alice\n    password_hash: "+string(hash)+"\n"), 0600))
 	p, err := New(config.AuthConfig{
 		StaticUsers: config.StaticUsersConfig{UsersFile: path},
-		JWT:         config.JWTConfig{Secret: "secret", Issuer: "gitstore/static-users", Duration: "1h"},
+		JWT:         config.JWTConfig{Secret: "secret", Issuer: "gitstore/static-users", TTL: 1 * time.Hour},
 	}, zap.NewNop())
 	require.NoError(t, err)
 
@@ -124,7 +124,7 @@ func TestStaticUsersRevocationIsSharedAcrossProviders(t *testing.T) {
 	hash, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.MinCost)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, []byte("version: v1\nusers:\n  - username: alice\n    password_hash: "+string(hash)+"\n"), 0600))
-	cfg := config.AuthConfig{StaticUsers: config.StaticUsersConfig{UsersFile: path}, JWT: config.JWTConfig{Secret: "secret", Issuer: "gitstore", Duration: "1h"}}
+	cfg := config.AuthConfig{StaticUsers: config.StaticUsersConfig{UsersFile: path}, JWT: config.JWTConfig{Secret: "secret", Issuer: "gitstore", TTL: 1 * time.Hour}}
 	issuer, err := NewWithRevocationStore(cfg, zap.NewNop(), store)
 	require.NoError(t, err)
 	verifier, err := NewWithRevocationStore(cfg, zap.NewNop(), store)
@@ -166,7 +166,7 @@ func TestStaticUsersConcurrentRefreshIsConsumedOnceAcrossProviders(t *testing.T)
 	hash, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.MinCost)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, []byte("version: v1\nusers:\n  - username: alice\n    password_hash: "+string(hash)+"\n"), 0600))
-	cfg := config.AuthConfig{StaticUsers: config.StaticUsersConfig{UsersFile: path}, JWT: config.JWTConfig{Secret: "secret", Issuer: "gitstore", Duration: "1h"}}
+	cfg := config.AuthConfig{StaticUsers: config.StaticUsersConfig{UsersFile: path}, JWT: config.JWTConfig{Secret: "secret", Issuer: "gitstore", TTL: 1 * time.Hour}}
 	first, err := NewWithRevocationStore(cfg, zap.NewNop(), store)
 	require.NoError(t, err)
 	second, err := NewWithRevocationStore(cfg, zap.NewNop(), store)

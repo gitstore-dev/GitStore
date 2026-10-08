@@ -80,21 +80,18 @@ func New(cfg config.ServiceAccountConfig, lookup ServiceAccountLookup, logger *z
 		audience = defaultAudience
 	}
 
-	ttl, err := parseDurationOrDefault(cfg.DefaultTTL, defaultTTL, "default_ttl")
+	// config.Load defaults DefaultTTL/MaxTTL/ClockSkew; a caller constructing
+	// ServiceAccountConfig directly may leave them zero to use the same
+	// defaults. Negative values are configuration errors.
+	ttl, err := durationOrDefault(cfg.DefaultTTL, defaultTTL, "default_ttl")
 	if err != nil {
 		return nil, err
 	}
-	if ttl <= 0 {
-		return nil, fmt.Errorf("serviceaccountjwt: default_ttl must be positive")
-	}
-	maxTTL, err := parseDurationOrDefault(cfg.MaxTTL, defaultMaxTTL, "max_ttl")
+	maxTTL, err := durationOrDefault(cfg.MaxTTL, defaultMaxTTL, "max_ttl")
 	if err != nil {
 		return nil, err
 	}
-	if maxTTL <= 0 {
-		return nil, fmt.Errorf("serviceaccountjwt: max_ttl must be positive")
-	}
-	skew, err := parseDurationOrDefault(cfg.ClockSkew, defaultSkew, "clock_skew")
+	skew, err := durationOrDefault(cfg.ClockSkew, defaultSkew, "clock_skew")
 	if err != nil {
 		return nil, err
 	}
@@ -118,17 +115,6 @@ func New(cfg config.ServiceAccountConfig, lookup ServiceAccountLookup, logger *z
 		revocations: revocations,
 		logger:      logger,
 	}, nil
-}
-
-func parseDurationOrDefault(raw string, fallback time.Duration, field string) (time.Duration, error) {
-	if strings.TrimSpace(raw) == "" {
-		return fallback, nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return 0, fmt.Errorf("serviceaccountjwt: invalid %s %q: %w", field, raw, err)
-	}
-	return d, nil
 }
 
 func (p *Provider) Name() string { return providerName }
@@ -317,4 +303,15 @@ func (p *Provider) signWithClaims(claims accessTokenClaims) (string, error) {
 		return "", fmt.Errorf("serviceaccountjwt: sign token: %w", err)
 	}
 	return signed, nil
+}
+
+func durationOrDefault(value, fallback time.Duration, name string) (time.Duration, error) {
+	switch {
+	case value < 0:
+		return 0, fmt.Errorf("serviceaccountjwt: %s must not be negative", name)
+	case value == 0:
+		return fallback, nil
+	default:
+		return value, nil
+	}
 }

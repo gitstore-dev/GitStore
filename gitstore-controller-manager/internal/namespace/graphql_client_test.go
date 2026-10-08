@@ -103,10 +103,14 @@ func TestGraphQLRepositoryClientReportsRepositoryAbsence(t *testing.T) {
 	}
 }
 
+// TestGraphQLDeletionClientCompletesDeletion covers the success path against
+// CompleteNamespaceDeletionPayload's actual shape ({ id: ID }, since 84b7bb4
+// / #394 removed the payload's conflict field) rather than a payload-level
+// conflict that no longer exists.
 func TestGraphQLDeletionClientCompletesDeletion(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":{"id":"namespace-1","conflict":null}}}`))
+		_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":{"id":"namespace-1"}}}`))
 	}))
 	defer srv.Close()
 
@@ -116,10 +120,13 @@ func TestGraphQLDeletionClientCompletesDeletion(t *testing.T) {
 	}
 }
 
-func TestGraphQLDeletionClientReturnsConflict(t *testing.T) {
+// TestGraphQLDeletionClientReturnsConflictOnLegacyCode covers the
+// RESOURCE_VERSION_CONFLICT extension code every existing status/completion
+// mutation reports today.
+func TestGraphQLDeletionClientReturnsConflictOnLegacyCode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":{"id":null,"conflict":{"currentResourceVersion":"10"}}}}`))
+		_, _ = w.Write([]byte(`{"errors":[{"message":"resource version conflict","extensions":{"code":"RESOURCE_VERSION_CONFLICT","resourceVersion":"10"}}]}`))
 	}))
 	defer srv.Close()
 
@@ -127,5 +134,42 @@ func TestGraphQLDeletionClientReturnsConflict(t *testing.T) {
 	err := client.CompleteDeletion(context.Background(), "acme", "9")
 	if !errors.Is(err, types.ErrConflict) {
 		t.Fatalf("CompleteDeletion error = %v, want conflict", err)
+	}
+}
+
+// TestGraphQLDeletionClientReturnsConflictOnForwardCompatibleCode covers the
+// kind-neutral CONFLICT extension code an upcoming change folds
+// RESOURCE_VERSION_CONFLICT into.
+func TestGraphQLDeletionClientReturnsConflictOnForwardCompatibleCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errors":[{"message":"conflict","extensions":{"code":"CONFLICT","resourceVersion":"10"}}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
+	err := client.CompleteDeletion(context.Background(), "acme", "9")
+	if !errors.Is(err, types.ErrConflict) {
+		t.Fatalf("CompleteDeletion error = %v, want conflict", err)
+	}
+}
+
+// TestGraphQLDeletionClientPropagatesOtherErrors covers a GraphQL error with
+// neither conflict extension code: it must be returned, but never mapped to
+// types.ErrConflict.
+func TestGraphQLDeletionClientPropagatesOtherErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errors":[{"message":"namespace not found","extensions":{"code":"NOT_FOUND"}}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
+	err := client.CompleteDeletion(context.Background(), "acme", "9")
+	if err == nil {
+		t.Fatal("CompleteDeletion succeeded, want error")
+	}
+	if errors.Is(err, types.ErrConflict) {
+		t.Fatalf("CompleteDeletion error = %v, want non-conflict error", err)
 	}
 }

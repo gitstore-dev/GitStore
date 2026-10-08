@@ -6,61 +6,67 @@ package config
 import (
 	"errors"
 	"fmt"
+	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	units "github.com/docker/go-units"
 	"github.com/go-playground/validator/v10"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
-// Config holds the complete application configuration.
+// Config holds the complete application configuration, grouped by owning
+// service. gitstore-api owns everything under [api]; [log], [grpc_auth] and
+// [push_limits] are shared with gitstore-git-service (and, for log, every
+// service reading this file).
 type Config struct {
-	Api       ApiConfig       `mapstructure:"api"`
-	Git       GitConfig       `mapstructure:"git"`
-	Auth      AuthConfig      `mapstructure:"auth"`
-	Datastore DatastoreConfig `mapstructure:"datastore"`
-	Features  FeatureConfig   `mapstructure:"features"`
-	Watch     WatchConfig     `mapstructure:"watch"`
-	Log       LogConfig       `mapstructure:"log"`
+	Api        ApiConfig        `mapstructure:"api"`
+	GrpcAuth   GrpcAuthConfig   `mapstructure:"grpc_auth"`
+	PushLimits PushLimitsConfig `mapstructure:"push_limits"`
+	Log        LogConfig        `mapstructure:"log"`
 }
 
-// ApiConfig holds HTTP API server settings.
+// ApiConfig holds HTTP API server settings and everything gitstore-api owns.
 type ApiConfig struct {
 	Port     int `mapstructure:"port"      validate:"min=1,max=65535"`
 	GitPort  int `mapstructure:"git_port"  validate:"min=1,max=65535"`
 	GrpcPort int `mapstructure:"grpc_port" validate:"min=1,max=65535"`
 
-	// RateLimitPerSecond is the sustained per-client-IP request rate allowed
-	// on /graphql before responses are rejected with HTTP 429.
-	RateLimitPerSecond float64 `mapstructure:"rate_limit_per_second" validate:"gt=0"`
-	// RateLimitBurst is the per-client-IP token-bucket burst size layered on
-	// top of RateLimitPerSecond.
-	RateLimitBurst int `mapstructure:"rate_limit_burst" validate:"min=1"`
+	RateLimit  RateLimitConfig          `mapstructure:"rate_limit"`
+	GitService GitServiceEndpointConfig `mapstructure:"git_service"`
+	Auth       AuthConfig               `mapstructure:"auth"`
+	Datastore  DatastoreConfig          `mapstructure:"datastore"`
+	Watch      WatchConfig              `mapstructure:"watch"`
 }
 
-// GitConfig holds addresses for the git service backends.
-type GitConfig struct {
-	Grpc GitEndpointConfig `mapstructure:"grpc"`
+// RateLimitConfig is the sustained per-client-IP request rate allowed on
+// /graphql before responses are rejected with HTTP 429, plus the token-bucket
+// burst size layered on top of it.
+type RateLimitConfig struct {
+	PerSecond float64 `mapstructure:"per_second" validate:"gt=0"`
+	Burst     int     `mapstructure:"burst" validate:"min=1"`
 }
 
-// GitEndpointConfig holds a single git-service endpoint URI.
-type GitEndpointConfig struct {
+// GitServiceEndpointConfig holds the git-service gRPC endpoint URI, in
+// dns:///host:port form.
+type GitServiceEndpointConfig struct {
 	Uri string `mapstructure:"uri" validate:"required"`
 }
 
 // AuthConfig holds authentication and JWT settings.
 type AuthConfig struct {
-	StaticUsers StaticUsersConfig `mapstructure:"staticusers"`
+	StaticUsers StaticUsersConfig `mapstructure:"static_users"`
 	JWT         JWTConfig         `mapstructure:"jwt"`
-	Grpc        GrpcAuthConfig    `mapstructure:"grpc"`
 	AuthN       AuthNConfig       `mapstructure:"authn"`
 	AuthZ       AuthZConfig       `mapstructure:"authz"`
 	UserDir     UserDirConfig     `mapstructure:"userdir"`
-	RBAC        RBACConfig        `mapstructure:"rbac"`
+	RBACLocal   RBACConfig        `mapstructure:"rbac_local"`
 
 	// ServiceAccount configures the serviceaccount-assertion/serviceaccount-jwt
 	// AuthN providers (spec 061). SigningKey is required only when one of
@@ -68,11 +74,11 @@ type AuthConfig struct {
 	// validateAuthChainConfig), not via a struct `validate:"required"` tag.
 	ServiceAccount ServiceAccountConfig `mapstructure:"serviceaccount"`
 
-	// OIDC configures the oidc-jwt AuthN provider (Phase 7, spec 059):
-	// a generic, issuer-agnostic OIDC Relying Party. IssuerURI and ClientID
-	// are required only when "oidc-jwt" is present in AuthN.Chain (see
+	// OIDC configures the oidc-jwt AuthN provider: a generic,
+	// issuer-agnostic OIDC Relying Party. IssuerURI and ClientID are
+	// required only when "oidc-jwt" is present in AuthN.Chain (see
 	// validateOIDCAuthChainConfig).
-	OIDC OIDCConfig `mapstructure:"oidc"`
+	OIDC OIDCConfig `mapstructure:"oidc_jwt"`
 }
 
 // OIDCConfig holds settings for the oidc-jwt AuthN provider: bearer JWTs are
@@ -85,10 +91,11 @@ type OIDCConfig struct {
 	ClientID string `mapstructure:"client_id"`
 	// Audience expected in the aud claim. Defaults to ClientID when empty.
 	// At least one of Audience/ClientID is required when oidc-jwt is chained.
-	Audience  string `mapstructure:"audience"`
-	ClockSkew string `mapstructure:"clock_skew"`
+	Audience string `mapstructure:"audience"`
+	// ClockSkew is a duration string restricted to ms|s|m|h.
+	ClockSkew time.Duration `mapstructure:"clock_skew"`
 	// UsernameClaim selects which token/userinfo claim becomes
-	// Principal.Subject (the identity used for role bindings, ownership fields,
+	// Principal.Subject (the identity used for role bindings, ownership traits,
 	// and audit logs) — the Kubernetes --oidc-username-claim / Spring Security
 	// user-name-attribute pattern. Defaults to "sub" (unique and immutable per
 	// issuer); "email" or "preferred_username" give human-readable bindings at
@@ -108,13 +115,15 @@ type ServiceAccountConfig struct {
 	// sign/verify access tokens. Required only when "serviceaccount-jwt" or
 	// "serviceaccount-assertion" is chained in (FR-015c: it must never be
 	// resolvable from a config file shared across services).
-	SigningKey string `mapstructure:"signing_key"`
-	DefaultTTL string `mapstructure:"default_ttl"`
-	MaxTTL     string `mapstructure:"max_ttl"`
-	ClockSkew  string `mapstructure:"clock_skew"`
+	SigningKey string        `mapstructure:"signing_key"`
+	DefaultTTL time.Duration `mapstructure:"default_ttl"`
+	MaxTTL     time.Duration `mapstructure:"max_ttl"`
+	ClockSkew  time.Duration `mapstructure:"clock_skew"`
 }
 
-// GrpcAuthConfig holds inter-service gRPC authentication settings.
+// GrpcAuthConfig holds inter-service gRPC authentication settings, shared
+// between gitstore-api and gitstore-git-service via the top-level
+// [grpc_auth] table.
 type GrpcAuthConfig struct {
 	HmacSecret string `mapstructure:"hmac_secret" validate:"required"`
 }
@@ -145,10 +154,10 @@ type RBACConfig struct {
 
 // JWTConfig holds JWT token settings.
 type JWTConfig struct {
-	Secret       string `mapstructure:"secret"`
-	Duration     string `mapstructure:"duration"`
-	Issuer       string `mapstructure:"issuer"`
-	RefreshGrace string `mapstructure:"refresh_grace"`
+	Secret       string        `mapstructure:"secret"`
+	TTL          time.Duration `mapstructure:"ttl"`
+	Issuer       string        `mapstructure:"issuer"`
+	RefreshGrace time.Duration `mapstructure:"refresh_grace"`
 }
 
 // StaticUsersConfig configures the file-backed local user list.
@@ -156,46 +165,89 @@ type StaticUsersConfig struct {
 	UsersFile string `mapstructure:"users_file"`
 }
 
-// FeatureConfig holds staged rollout gates.
-type FeatureConfig struct {
-	NamespaceRepositoryFence string `mapstructure:"namespace_repository_fence"`
-}
-
-// WatchConfig holds per-kind durable watch settings.
+// WatchConfig holds durable-watch-journal settings shared by every watched
+// kind (Namespace, Repository, Product, File, CategoryTaxonomy).
 type WatchConfig struct {
-	Namespace NamespaceWatchConfig `mapstructure:"namespace"`
+	Journal WatchJournalConfig `mapstructure:"journal"`
 }
 
-// NamespaceWatchConfig bounds the Namespace CDC materializer and journal.
-// Integer time values keep TOML/environment configuration explicit and are
-// converted to durations at the watch boundary.
-type NamespaceWatchConfig struct {
-	ReadersEnabled               bool `mapstructure:"readers_enabled"`
-	MaterializerEnabled          bool `mapstructure:"materializer_enabled"`
-	JournalRetentionSeconds      int  `mapstructure:"journal_retention_seconds" validate:"min=1"`
-	CDCRetentionSeconds          int  `mapstructure:"cdc_retention_seconds" validate:"min=1"`
-	CDCConfidenceWindowMillis    int  `mapstructure:"cdc_confidence_window_millis" validate:"min=1"`
-	BucketSize                   int  `mapstructure:"bucket_size" validate:"min=1,max=4096"`
-	ReadBatchSize                int  `mapstructure:"read_batch_size" validate:"min=1"`
-	MaxReplayEvents              int  `mapstructure:"max_replay_events" validate:"min=1,max=100000"`
-	SubscriberBuffer             int  `mapstructure:"subscriber_buffer" validate:"min=1,max=256"`
-	SubscriberBackpressureMillis int  `mapstructure:"subscriber_backpressure_millis" validate:"min=1"`
-	PollMinMillis                int  `mapstructure:"poll_min_millis" validate:"min=1"`
-	PollMaxMillis                int  `mapstructure:"poll_max_millis" validate:"min=1"`
-	BookmarkIntervalSeconds      int  `mapstructure:"bookmark_interval_seconds" validate:"min=1"`
-	LeaseTTLSeconds              int  `mapstructure:"lease_ttl_seconds" validate:"min=1"`
-	LeaseRenewIntervalSeconds    int  `mapstructure:"lease_renew_interval_seconds" validate:"min=1"`
-	MaxMaterializerLagSeconds    int  `mapstructure:"max_materializer_lag_seconds" validate:"min=1"`
+// WatchJournalConfig bounds the CDC-backed durable watch journal and its
+// materializer. Durable readers and the materializer are always on — there
+// is no watch mechanism besides the journal (eventbus was removed) — so
+// every bound here is a hard operational limit, not a feature toggle.
+// cdc_retention (14 days) and bucket_size (4096) are fixed by the baseline
+// Scylla schema and are not configurable; see JournalCDCRetention and
+// JournalBucketSize.
+type WatchJournalConfig struct {
+	// Retention is how long the journal keeps bookmarks/catalog-up-to-date
+	// state before a subscriber must cold-list. Duration string, ms|s|m|h.
+	Retention        time.Duration           `mapstructure:"retention" validate:"required"`
+	BookmarkInterval time.Duration           `mapstructure:"bookmark_interval" validate:"required"`
+	CDC              CDCWatchConfig          `mapstructure:"cdc"`
+	Read             ReadWatchConfig         `mapstructure:"read"`
+	Poll             PollWatchConfig         `mapstructure:"poll"`
+	Subscriber       SubscriberWatchConfig   `mapstructure:"subscriber"`
+	Materializer     MaterializerWatchConfig `mapstructure:"materializer"`
 }
 
-const namespaceWatchCDCRetentionSeconds = 14 * 24 * 60 * 60
+// CDCWatchConfig bounds how long an event's postimage is awaited before it
+// is considered a confirmed CDC delete (vs a reordering artifact).
+type CDCWatchConfig struct {
+	ConfidenceWindow time.Duration `mapstructure:"confidence_window" validate:"required"`
+}
 
-const namespaceWatchJournalRetentionSeconds = 7 * 24 * 60 * 60
+// ReadWatchConfig bounds a single journal read.
+type ReadWatchConfig struct {
+	BatchSize       int `mapstructure:"batch_size" validate:"min=1"`
+	MaxReplayEvents int `mapstructure:"max_replay_events" validate:"min=1,max=100000"`
+}
+
+// PollWatchConfig bounds the subscriber's adaptive poll interval.
+type PollWatchConfig struct {
+	Min time.Duration `mapstructure:"min" validate:"required"`
+	Max time.Duration `mapstructure:"max" validate:"required"`
+}
+
+// SubscriberWatchConfig bounds a single subscriber's buffered channel.
+type SubscriberWatchConfig struct {
+	Buffer       int           `mapstructure:"buffer" validate:"min=1,max=256"`
+	Backpressure time.Duration `mapstructure:"backpressure" validate:"required"`
+}
+
+// MaterializerWatchConfig bounds the CDC materializer's leader lease and
+// staleness budget.
+type MaterializerWatchConfig struct {
+	LeaseTTL           time.Duration `mapstructure:"lease_ttl" validate:"required"`
+	LeaseRenewInterval time.Duration `mapstructure:"lease_renew_interval" validate:"required"`
+	MaxLag             time.Duration `mapstructure:"max_lag" validate:"required"`
+}
+
+// JournalCDCRetention is the fixed Scylla CDC retention window for every
+// watched table's full-preimage/postimage CDC log. Not configurable.
+const JournalCDCRetention = 14 * 24 * time.Hour
+
+// JournalBucketSize is the fixed journal sequence bucket width, persisted on
+// first init of the resource_watch_clock row. Not configurable.
+const JournalBucketSize = 4096
 
 // LogConfig holds logger settings.
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
 	Format string `mapstructure:"format"`
+}
+
+// PushLimitsConfig is the shared static platform push-size ceiling enforced
+// by both gitstore-api (admission) and gitstore-git-service (the actual
+// clamp during receive-pack). Size strings use IEC units (KiB/MiB/GiB) or
+// plain bytes ("B").
+type PushLimitsConfig struct {
+	MaxPackSize string `mapstructure:"max_pack_size" validate:"required"`
+	MaxFileSize string `mapstructure:"max_file_size" validate:"required"`
+
+	// MaxPackSizeBytes/MaxFileSizeBytes are resolved from the strings above
+	// during validation; not populated from config sources directly.
+	MaxPackSizeBytes int64 `mapstructure:"-"`
+	MaxFileSizeBytes int64 `mapstructure:"-"`
 }
 
 // DatastoreConfig selects the active storage backend.
@@ -218,6 +270,64 @@ type ScyllaConfig struct {
 	// AddressTranslator is an optional runtime-only field (not populated from config files).
 	// Set it when Scylla runs behind a NAT (e.g. Docker) to redirect peer addresses.
 	AddressTranslator interface{} `mapstructure:"-"`
+}
+
+// legacyKey names a removed or renamed configuration path that must fail
+// startup rather than silently falling back to a default. replacement names
+// the new path (or explains the removal) in operator-facing form.
+type legacyKey struct {
+	path        string
+	replacement string
+}
+
+// legacyKeys lists every TOML path gitstore-api used to own before the
+// config-grouping refactor. Each one is checked independently of viper's
+// final merged state so a renamed/removed key never silently resolves to a
+// default. Ordered most-specific-first so the most helpful match wins.
+var legacyKeys = []legacyKey{
+	{"api.rate_limit_per_second", "api.rate_limit.per_second"},
+	{"api.rate_limit_burst", "api.rate_limit.burst"},
+	{"git.grpc.uri", "api.git_service.uri"},
+	{"git.grpc", "api.git_service.uri"},
+	{"git.repo.max_file_size", "push_limits.max_file_size (now a shared static ceiling)"},
+	{"git.repo.max_pack_size_bytes", "push_limits.max_pack_size (now a shared static ceiling)"},
+	{"git.repo", "push_limits"},
+	{"git", "api.git_service.uri / push_limits"},
+	{"datastore.backend", "api.datastore.backend"},
+	{"datastore.scylla", "api.datastore.scylla"},
+	{"datastore", "api.datastore"},
+	{"auth.staticusers", "api.auth.static_users"},
+	{"auth.grpc.hmac_secret", "grpc_auth.hmac_secret"},
+	{"auth.grpc", "grpc_auth"},
+	{"auth.jwt.duration", "api.auth.jwt.ttl"},
+	{"auth.rbac.policy_file", "api.auth.rbac_local.policy_file"},
+	{"auth.rbac", "api.auth.rbac_local"},
+	{"auth.oidc", "api.auth.oidc_jwt"},
+	{"auth.jwt", "api.auth.jwt"},
+	{"auth.authn", "api.auth.authn"},
+	{"auth.authz", "api.auth.authz"},
+	{"auth.userdir", "api.auth.userdir"},
+	{"auth.serviceaccount", "api.auth.serviceaccount"},
+	{"auth", "api.auth"},
+	{"watch.namespace.readers_enabled", "removed; the durable watch journal reader is always on"},
+	{"watch.namespace.materializer_enabled", "removed; the CDC materializer is always on"},
+	{"watch.namespace.cdc_retention_seconds", "removed; fixed at 14 days by the baseline schema"},
+	{"watch.namespace.bucket_size", "removed; fixed at 4096, persisted on first init"},
+	{"watch.namespace.journal_retention_seconds", "api.watch.journal.retention"},
+	{"watch.namespace.cdc_confidence_window_millis", "api.watch.journal.cdc.confidence_window"},
+	{"watch.namespace.read_batch_size", "api.watch.journal.read.batch_size"},
+	{"watch.namespace.max_replay_events", "api.watch.journal.read.max_replay_events"},
+	{"watch.namespace.subscriber_buffer", "api.watch.journal.subscriber.buffer"},
+	{"watch.namespace.subscriber_backpressure_millis", "api.watch.journal.subscriber.backpressure"},
+	{"watch.namespace.poll_min_millis", "api.watch.journal.poll.min"},
+	{"watch.namespace.poll_max_millis", "api.watch.journal.poll.max"},
+	{"watch.namespace.bookmark_interval_seconds", "api.watch.journal.bookmark_interval"},
+	{"watch.namespace.lease_ttl_seconds", "api.watch.journal.materializer.lease_ttl"},
+	{"watch.namespace.lease_renew_interval_seconds", "api.watch.journal.materializer.lease_renew_interval"},
+	{"watch.namespace.max_materializer_lag_seconds", "api.watch.journal.materializer.max_lag"},
+	{"watch.namespace", "api.watch.journal"},
+	{"watch", "api.watch"},
+	{"features.namespace_repository_fence", "removed; the namespace repository fence is always enabled"},
 }
 
 // Load reads configuration from all sources (defaults → config file → env vars)
@@ -262,59 +372,56 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("api.port", 4000)
 	v.SetDefault("api.git_port", 9000)
 	v.SetDefault("api.grpc_port", 6000)
-	v.SetDefault("api.rate_limit_per_second", 50)
-	v.SetDefault("api.rate_limit_burst", 100)
-	v.SetDefault("git.grpc.uri", "dns:///localhost:50051")
+	v.SetDefault("api.rate_limit.per_second", 50)
+	v.SetDefault("api.rate_limit.burst", 100)
+	v.SetDefault("api.git_service.uri", "dns:///localhost:50051")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
-	v.SetDefault("auth.staticusers.users_file", "users.yaml")
-	v.SetDefault("auth.jwt.secret", "")
-	v.SetDefault("auth.jwt.duration", "24h")
-	v.SetDefault("auth.jwt.issuer", "gitstore")
-	v.SetDefault("auth.jwt.refresh_grace", "60s")
-	v.SetDefault("auth.grpc.hmac_secret", "")
-	v.SetDefault("auth.authn.chain", []string{"static-users", "anonymous"})
-	v.SetDefault("auth.authz.provider", "rbac-local")
-	v.SetDefault("auth.userdir.provider", "none")
-	v.SetDefault("auth.rbac.policy_file", "policy.yaml")
-	v.SetDefault("auth.serviceaccount.issuer", "gitstore")
-	v.SetDefault("auth.serviceaccount.audience", "gitstore-api")
-	v.SetDefault("auth.serviceaccount.assertion_audience", "gitstore-api/serviceaccount-token")
-	v.SetDefault("auth.serviceaccount.signing_key", "")
-	v.SetDefault("auth.serviceaccount.default_ttl", "10m")
-	v.SetDefault("auth.serviceaccount.max_ttl", "1h")
-	v.SetDefault("auth.serviceaccount.clock_skew", "2m")
-	v.SetDefault("auth.oidc.issuer_uri", "")
-	v.SetDefault("auth.oidc.client_id", "")
-	v.SetDefault("auth.oidc.audience", "")
-	v.SetDefault("auth.oidc.clock_skew", "2m")
-	v.SetDefault("auth.oidc.username_claim", "sub")
-	v.SetDefault("datastore.backend", "memdb")
-	v.SetDefault("datastore.scylla.hosts", []string{"localhost:9042"})
-	v.SetDefault("datastore.scylla.auto_migrate", true)
-	v.SetDefault("datastore.scylla.keyspace", "gitstore")
-	v.SetDefault("datastore.scylla.username", "")
-	v.SetDefault("datastore.scylla.password", "")
-	v.SetDefault("datastore.scylla.tls", false)
-	v.SetDefault("datastore.scylla.disable_shard_aware_port", false)
-	v.SetDefault("datastore.scylla.ignore_peer_addr", false)
-	v.SetDefault("features.namespace_repository_fence", "auto")
-	v.SetDefault("watch.namespace.readers_enabled", true)
-	v.SetDefault("watch.namespace.materializer_enabled", true)
-	v.SetDefault("watch.namespace.journal_retention_seconds", 7*24*60*60)
-	v.SetDefault("watch.namespace.cdc_retention_seconds", 14*24*60*60)
-	v.SetDefault("watch.namespace.cdc_confidence_window_millis", 500)
-	v.SetDefault("watch.namespace.bucket_size", 4096)
-	v.SetDefault("watch.namespace.read_batch_size", 256)
-	v.SetDefault("watch.namespace.max_replay_events", 100000)
-	v.SetDefault("watch.namespace.subscriber_buffer", 64)
-	v.SetDefault("watch.namespace.subscriber_backpressure_millis", 30000)
-	v.SetDefault("watch.namespace.poll_min_millis", 100)
-	v.SetDefault("watch.namespace.poll_max_millis", 2000)
-	v.SetDefault("watch.namespace.bookmark_interval_seconds", 30)
-	v.SetDefault("watch.namespace.lease_ttl_seconds", 30)
-	v.SetDefault("watch.namespace.lease_renew_interval_seconds", 10)
-	v.SetDefault("watch.namespace.max_materializer_lag_seconds", 60)
+	v.SetDefault("grpc_auth.hmac_secret", "")
+	v.SetDefault("push_limits.max_pack_size", "512MiB")
+	v.SetDefault("push_limits.max_file_size", "100MiB")
+	v.SetDefault("api.auth.static_users.users_file", "users.yaml")
+	v.SetDefault("api.auth.jwt.secret", "")
+	v.SetDefault("api.auth.jwt.ttl", "24h")
+	v.SetDefault("api.auth.jwt.issuer", "gitstore")
+	v.SetDefault("api.auth.jwt.refresh_grace", "60s")
+	v.SetDefault("api.auth.authn.chain", []string{"static-users", "anonymous"})
+	v.SetDefault("api.auth.authz.provider", "rbac-local")
+	v.SetDefault("api.auth.userdir.provider", "none")
+	v.SetDefault("api.auth.rbac_local.policy_file", "policy.yaml")
+	v.SetDefault("api.auth.serviceaccount.issuer", "gitstore")
+	v.SetDefault("api.auth.serviceaccount.audience", "gitstore-api")
+	v.SetDefault("api.auth.serviceaccount.assertion_audience", "gitstore-api/serviceaccount-token")
+	v.SetDefault("api.auth.serviceaccount.signing_key", "")
+	v.SetDefault("api.auth.serviceaccount.default_ttl", "10m")
+	v.SetDefault("api.auth.serviceaccount.max_ttl", "1h")
+	v.SetDefault("api.auth.serviceaccount.clock_skew", "2m")
+	v.SetDefault("api.auth.oidc_jwt.issuer_uri", "")
+	v.SetDefault("api.auth.oidc_jwt.client_id", "")
+	v.SetDefault("api.auth.oidc_jwt.audience", "")
+	v.SetDefault("api.auth.oidc_jwt.clock_skew", "2m")
+	v.SetDefault("api.auth.oidc_jwt.username_claim", "sub")
+	v.SetDefault("api.datastore.backend", "memdb")
+	v.SetDefault("api.datastore.scylla.hosts", []string{"localhost:9042"})
+	v.SetDefault("api.datastore.scylla.auto_migrate", true)
+	v.SetDefault("api.datastore.scylla.keyspace", "gitstore")
+	v.SetDefault("api.datastore.scylla.username", "")
+	v.SetDefault("api.datastore.scylla.password", "")
+	v.SetDefault("api.datastore.scylla.tls", false)
+	v.SetDefault("api.datastore.scylla.disable_shard_aware_port", false)
+	v.SetDefault("api.datastore.scylla.ignore_peer_addr", false)
+	v.SetDefault("api.watch.journal.retention", "168h")
+	v.SetDefault("api.watch.journal.bookmark_interval", "30s")
+	v.SetDefault("api.watch.journal.cdc.confidence_window", "500ms")
+	v.SetDefault("api.watch.journal.read.batch_size", "256")
+	v.SetDefault("api.watch.journal.read.max_replay_events", "100000")
+	v.SetDefault("api.watch.journal.subscriber.buffer", "64")
+	v.SetDefault("api.watch.journal.subscriber.backpressure", "30s")
+	v.SetDefault("api.watch.journal.poll.min", "100ms")
+	v.SetDefault("api.watch.journal.poll.max", "2s")
+	v.SetDefault("api.watch.journal.materializer.lease_ttl", "30s")
+	v.SetDefault("api.watch.journal.materializer.lease_renew_interval", "10s")
+	v.SetDefault("api.watch.journal.materializer.max_lag", "60s")
 
 	// Config discovery is optional for compatibility; explicit paths are not.
 	// Each path after the first is additively merged on top of the previous
@@ -343,7 +450,7 @@ func load(paths []string) (*Config, error) {
 	}
 
 	// Read independently of the merge above: a later overlay that sets
-	// auth.serviceaccount.signing_key = "" would otherwise erase the shared
+	// api.auth.serviceaccount.signing_key = "" would otherwise erase the shared
 	// file's value from v before it's inspected, letting key material that
 	// physically still sits in the shared mount (read directly by git-service
 	// and controller-manager, bypassing this process's merge order) slip past
@@ -358,8 +465,16 @@ func load(paths []string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
 	v.AutomaticEnv()
 
+	if err := checkLegacyKeys(v); err != nil {
+		return nil, err
+	}
+
 	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
+	decodeHook := mapstructure.ComposeDecodeHookFunc(
+		strictDurationHookFunc,
+		mapstructure.StringToSliceHookFunc(","),
+	)
+	if err := v.Unmarshal(&cfg, viper.DecodeHook(decodeHook)); err != nil {
 		return nil, err
 	}
 
@@ -376,6 +491,23 @@ func load(paths []string) (*Config, error) {
 	logger.Info("Configuration loaded", zap.Object("config", &cfg))
 
 	return &cfg, nil
+}
+
+// checkLegacyKeys fails startup when any removed/renamed configuration path
+// (TOML or env var) is present, naming its replacement. One file is mounted
+// into every service, so this cannot use a global strict/deny-unknown-fields
+// check — each service checks only the keys it used to own.
+func checkLegacyKeys(v *viper.Viper) error {
+	for _, legacy := range legacyKeys {
+		if v.IsSet(legacy.path) {
+			envName := "GITSTORE_" + strings.ToUpper(strings.ReplaceAll(legacy.path, ".", "__"))
+			return fmt.Errorf(
+				"config: %s (env: %s) is no longer recognised; use %s instead",
+				legacy.path, envName, legacy.replacement,
+			)
+		}
+	}
+	return nil
 }
 
 // validateConfig runs all struct validations and returns a combined error.
@@ -395,39 +527,39 @@ func validateConfig(cfg *Config) error {
 		}
 		return err
 	}
-	if err := validateDatastoreConfig(&cfg.Datastore); err != nil {
-		return err
-	}
-	if err := validateFeatureConfig(&cfg.Features); err != nil {
+	if err := validateDatastoreConfig(&cfg.Api.Datastore); err != nil {
 		return err
 	}
 	if err := validateAuthChainConfig(cfg); err != nil {
 		return err
 	}
-	if err := validateNamespaceWatchConfig(&cfg.Watch.Namespace); err != nil {
+	if err := validatePushLimitsConfig(&cfg.PushLimits); err != nil {
 		return err
 	}
-	if err := validateServiceAccountAuthChainConfig(&cfg.Auth); err != nil {
+	if err := validateWatchJournalConfig(&cfg.Api.Watch.Journal); err != nil {
 		return err
 	}
-	if err := validateOIDCAuthChainConfig(&cfg.Auth); err != nil {
+	if err := validateServiceAccountAuthChainConfig(&cfg.Api.Auth); err != nil {
+		return err
+	}
+	if err := validateOIDCAuthChainConfig(&cfg.Api.Auth); err != nil {
 		return err
 	}
 	return validateLogFormat(&cfg.Log)
 }
 
 func validateAuthChainConfig(cfg *Config) error {
-	for _, provider := range cfg.Auth.AuthN.Chain {
-		if strings.EqualFold(strings.TrimSpace(provider), "static-users") && cfg.Auth.JWT.Secret == "" {
-			return errors.New("startup failed: auth.jwt.secret is required\n\n  Problem: static-users is present in auth.authn.chain, but auth.jwt.secret (env: GITSTORE_AUTH__JWT__SECRET) is empty. static-users cannot issue or verify session tokens without it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_AUTH__JWT__SECRET to a random string (32+ chars). You can generate one with: make secret TARGET=jwt\n    2. If you don't intend to use static-users, remove it from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)\n\n  See specs/060-local-multiuser-authn/quickstart.md, step 4, for a worked example")
+	for _, provider := range cfg.Api.Auth.AuthN.Chain {
+		if strings.EqualFold(strings.TrimSpace(provider), "static-users") && cfg.Api.Auth.JWT.Secret == "" {
+			return errors.New("startup failed: api.auth.jwt.secret is required\n\n  Problem: static-users is present in api.auth.authn.chain, but api.auth.jwt.secret (env: GITSTORE_API__AUTH__JWT__SECRET) is empty. static-users cannot issue or verify session tokens without it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_API__AUTH__JWT__SECRET to a random string (32+ chars). You can generate one with: make secret TARGET=jwt\n    2. If you don't intend to use static-users, remove it from api.auth.authn.chain (GITSTORE_API__AUTH__AUTHN__CHAIN)\n\n  See specs/060-local-multiuser-authn/quickstart.md, step 4, for a worked example")
 		}
 	}
 	return nil
 }
 
-// validateOIDCAuthChainConfig enforces that auth.oidc.issuer_uri and
-// auth.oidc.client_id are configured when "oidc-jwt" is present in
-// auth.authn.chain (Phase 7, spec 059), mirroring validateAuthChainConfig's
+// validateOIDCAuthChainConfig enforces that api.auth.oidc_jwt.issuer_uri and
+// api.auth.oidc_jwt.client_id are configured when "oidc-jwt" is present in
+// api.auth.authn.chain, mirroring validateAuthChainConfig's
 // conditional-requirement pattern.
 func validateOIDCAuthChainConfig(auth *AuthConfig) error {
 	chained := false
@@ -441,21 +573,16 @@ func validateOIDCAuthChainConfig(auth *AuthConfig) error {
 		return nil
 	}
 	if strings.TrimSpace(auth.OIDC.IssuerURI) == "" {
-		return errors.New("startup failed: auth.oidc.issuer_uri is required\n\n  Problem: oidc-jwt is present in auth.authn.chain, but auth.oidc.issuer_uri (env: GITSTORE_AUTH__OIDC__ISSUER_URI) is empty. oidc-jwt cannot verify bearer tokens without an OIDC issuer to run discovery against\n\n  To fix, do ONE of the following:\n    1. Point auth.oidc.issuer_uri at any standards-compliant OIDC issuer (e.g. the optional reference stack from `make compose IDENTITY=oidc`, Keycloak, Auth0)\n    2. If you don't intend to use OIDC, remove oidc-jwt from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)\n\n  See specs/059-optional-oidc-provider/quickstart.md for a worked example")
+		return errors.New("startup failed: api.auth.oidc_jwt.issuer_uri is required\n\n  Problem: oidc-jwt is present in api.auth.authn.chain, but api.auth.oidc_jwt.issuer_uri (env: GITSTORE_API__AUTH__OIDC_JWT__ISSUER_URI) is empty. oidc-jwt cannot verify bearer tokens without an OIDC issuer to run discovery against\n\n  To fix, do ONE of the following:\n    1. Point api.auth.oidc_jwt.issuer_uri at any standards-compliant OIDC issuer (e.g. the optional reference stack from `make compose IDENTITY=oidc`, Keycloak, Auth0)\n    2. If you don't intend to use OIDC, remove oidc-jwt from api.auth.authn.chain (GITSTORE_API__AUTH__AUTHN__CHAIN)\n\n  See specs/059-optional-oidc-provider/quickstart.md for a worked example")
 	}
 	if strings.TrimSpace(auth.OIDC.Audience) == "" && strings.TrimSpace(auth.OIDC.ClientID) == "" {
-		return errors.New("startup failed: auth.oidc.audience or auth.oidc.client_id is required\n\n  Problem: oidc-jwt is present in auth.authn.chain, but neither auth.oidc.audience nor auth.oidc.client_id is set. gitstore-api is a resource server: it must know which aud value to expect — set auth.oidc.audience explicitly, or set auth.oidc.client_id and the audience defaults to it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_AUTH__OIDC__AUDIENCE to the audience your clients request (e.g. gitstore)\n    2. Set GITSTORE_AUTH__OIDC__CLIENT_ID to the registered client id (audience defaults to it)\n    3. If you don't intend to use OIDC, remove oidc-jwt from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)")
-	}
-	if auth.OIDC.ClockSkew != "" {
-		if _, err := time.ParseDuration(auth.OIDC.ClockSkew); err != nil {
-			return fmt.Errorf("startup failed: auth.oidc.clock_skew %q is not a valid duration: %w", auth.OIDC.ClockSkew, err)
-		}
+		return errors.New("startup failed: api.auth.oidc_jwt.audience or api.auth.oidc_jwt.client_id is required\n\n  Problem: oidc-jwt is present in api.auth.authn.chain, but neither api.auth.oidc_jwt.audience nor api.auth.oidc_jwt.client_id is set. gitstore-api is a resource server: it must know which aud value to expect — set api.auth.oidc_jwt.audience explicitly, or set api.auth.oidc_jwt.client_id and the audience defaults to it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_API__AUTH__OIDC_JWT__AUDIENCE to the audience your clients request (e.g. gitstore)\n    2. Set GITSTORE_API__AUTH__OIDC_JWT__CLIENT_ID to the registered client id (audience defaults to it)\n    3. If you don't intend to use OIDC, remove oidc-jwt from api.auth.authn.chain (GITSTORE_API__AUTH__AUTHN__CHAIN)")
 	}
 	return nil
 }
 
-// serviceAccountChainProviders are the auth.authn.chain entries that require
-// auth.serviceaccount.signing_key to be configured.
+// serviceAccountChainProviders are the api.auth.authn.chain entries that
+// require api.auth.serviceaccount.signing_key to be configured.
 var serviceAccountChainProviders = map[string]bool{
 	"serviceaccount-jwt":       true,
 	"serviceaccount-assertion": true,
@@ -473,17 +600,28 @@ func chainRequiresServiceAccountSigningKey(chain []string) bool {
 }
 
 // validateServiceAccountAuthChainConfig enforces conditional requirements driven by
-// auth.authn.chain membership, mirroring spec 060's validateAuthChainConfig
-// pattern: auth.serviceaccount.signing_key is required only when
-// "serviceaccount-jwt" or "serviceaccount-assertion" is chained in, not via
-// a struct `validate:"required"` tag (which would force every deployment to
-// set it even when no service-account provider is in use).
+// api.auth.authn.chain membership: api.auth.serviceaccount.signing_key is
+// required only when "serviceaccount-jwt" or "serviceaccount-assertion" is
+// chained in, not via a struct `validate:"required"` tag (which would force
+// every deployment to set it even when no service-account provider is in use).
 func validateServiceAccountAuthChainConfig(auth *AuthConfig) error {
 	if chainRequiresServiceAccountSigningKey(auth.AuthN.Chain) && strings.TrimSpace(auth.ServiceAccount.SigningKey) == "" {
 		return errors.New(
-			"auth.serviceaccount.signing_key is required when \"serviceaccount-jwt\" or " +
-				"\"serviceaccount-assertion\" is present in auth.authn.chain",
+			"api.auth.serviceaccount.signing_key is required when \"serviceaccount-jwt\" or " +
+				"\"serviceaccount-assertion\" is present in api.auth.authn.chain",
 		)
+	}
+	if chainRequiresServiceAccountSigningKey(auth.AuthN.Chain) {
+		sa := auth.ServiceAccount
+		if sa.DefaultTTL <= 0 {
+			return errors.New("api.auth.serviceaccount.default_ttl must be positive")
+		}
+		if sa.MaxTTL <= 0 {
+			return errors.New("api.auth.serviceaccount.max_ttl must be positive")
+		}
+		if sa.ClockSkew < 0 {
+			return errors.New("api.auth.serviceaccount.clock_skew must not be negative")
+		}
 	}
 	return nil
 }
@@ -491,8 +629,8 @@ func validateServiceAccountAuthChainConfig(auth *AuthConfig) error {
 // sharedServiceConfigMountPath is the container path GitStore's local/dev
 // compose profile (compose.local.yml) mounts a single host config file into
 // git-service, api, and controller-manager alike, read-only. Per FR-015c,
-// auth.serviceaccount.signing_key must never be resolvable from that file:
-// doing so would let any of those three services mint or forge a
+// api.auth.serviceaccount.signing_key must never be resolvable from that
+// file: doing so would let any of those three services mint or forge a
 // service-account access token for the others, bypassing the
 // assertion/proof-of-possession flow and every least-privilege guarantee in
 // User Story 3.
@@ -500,7 +638,7 @@ func validateServiceAccountAuthChainConfig(auth *AuthConfig) error {
 // of writing to the real /config directory on the host.
 var sharedServiceConfigMountPath = "/etc/gitstore/gitstore.toml"
 
-// signingKeyInFile reads auth.serviceaccount.signing_key from path on its
+// signingKeyInFile reads api.auth.serviceaccount.signing_key from path on its
 // own, independent of any other file in paths, if path appears in paths.
 // Used instead of inspecting the final merged viper state, because a later
 // overlay that sets the key to "" would otherwise erase evidence that the
@@ -516,7 +654,7 @@ func signingKeyInFile(paths []string, path string) (string, error) {
 	if err := single.ReadInConfig(); err != nil {
 		return "", err
 	}
-	return single.GetString("auth.serviceaccount.signing_key"), nil
+	return single.GetString("api.auth.serviceaccount.signing_key"), nil
 }
 
 // validateServiceAccountSigningKeySource enforces FR-015c: refuses startup
@@ -528,7 +666,7 @@ func signingKeyInFile(paths []string, path string) (string, error) {
 // for other settings) is unaffected, since the file itself never carries the
 // secret.
 func validateServiceAccountSigningKeySource(cfg *Config, paths []string, fileSigningKey string) error {
-	if !chainRequiresServiceAccountSigningKey(cfg.Auth.AuthN.Chain) {
+	if !chainRequiresServiceAccountSigningKey(cfg.Api.Auth.AuthN.Chain) {
 		return nil
 	}
 	if !slices.Contains(paths, sharedServiceConfigMountPath) {
@@ -538,45 +676,39 @@ func validateServiceAccountSigningKeySource(cfg *Config, paths []string, fileSig
 		return nil
 	}
 	return fmt.Errorf(
-		"auth.serviceaccount.signing_key must not be set in %q: this file is mounted read-only "+
+		"api.auth.serviceaccount.signing_key must not be set in %q: this file is mounted read-only "+
 			"into git-service, api, and controller-manager alike (see compose.local.yml), so any "+
 			"of those services could forge a service-account access token; instead, mount a "+
 			"per-service file containing only the signing key (e.g. "+
 			"./config/api/serviceaccount-signing-key.toml -> /config/serviceaccount-signing-key.toml, "+
 			"mounted into the api service alone, read-only) and set "+
-			"GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY from it, or resolve it from a per-service "+
+			"GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY from it, or resolve it from a per-service "+
 			"secret store instead",
 		sharedServiceConfigMountPath,
 	)
 }
 
-func validateNamespaceWatchConfig(w *NamespaceWatchConfig) error {
-	if w.CDCRetentionSeconds != namespaceWatchCDCRetentionSeconds {
-		return fmt.Errorf("invalid resource watch CDC retention: the baseline schema fixes CDC retention at %d seconds", namespaceWatchCDCRetentionSeconds)
+func validateWatchJournalConfig(w *WatchJournalConfig) error {
+	if w.Retention > JournalCDCRetention {
+		return fmt.Errorf("invalid api.watch.journal.retention: the baseline schema limits journal retention to %s", JournalCDCRetention)
 	}
-	if w.JournalRetentionSeconds > namespaceWatchJournalRetentionSeconds {
-		return fmt.Errorf("invalid resource watch journal retention: the baseline schema limits journal retention to %d seconds", namespaceWatchJournalRetentionSeconds)
+	if w.Materializer.MaxLag >= JournalCDCRetention {
+		return fmt.Errorf("invalid api.watch.journal bounds: materializer.max_lag must be less than the fixed CDC retention of %s", JournalCDCRetention)
 	}
-	if w.CDCRetentionSeconds < w.JournalRetentionSeconds {
-		return fmt.Errorf("invalid Namespace watch bounds: CDC retention must be at least journal retention")
+	if w.CDC.ConfidenceWindow >= w.Materializer.MaxLag {
+		return fmt.Errorf("invalid api.watch.journal bounds: cdc.confidence_window must be less than materializer.max_lag")
 	}
-	if w.MaxMaterializerLagSeconds >= w.CDCRetentionSeconds {
-		return fmt.Errorf("invalid Namespace watch bounds: maximum materializer lag must be less than CDC retention")
+	if w.Read.BatchSize > JournalBucketSize {
+		return fmt.Errorf("invalid api.watch.journal bounds: read.batch_size must not exceed %d", JournalBucketSize)
 	}
-	if int64(w.CDCConfidenceWindowMillis) >= int64(w.MaxMaterializerLagSeconds)*1000 {
-		return fmt.Errorf("invalid Namespace watch bounds: CDC confidence window must be less than maximum materializer lag")
+	if w.Poll.Min > w.Poll.Max {
+		return fmt.Errorf("invalid api.watch.journal bounds: poll.min must not exceed poll.max")
 	}
-	if w.ReadBatchSize > w.BucketSize {
-		return fmt.Errorf("invalid Namespace watch bounds: read batch size must not exceed bucket size")
+	if w.Poll.Max >= w.Retention {
+		return fmt.Errorf("invalid api.watch.journal bounds: poll.max must be less than retention")
 	}
-	if w.PollMinMillis > w.PollMaxMillis {
-		return fmt.Errorf("invalid Namespace watch bounds: minimum poll interval must not exceed maximum")
-	}
-	if int64(w.PollMaxMillis) >= int64(w.JournalRetentionSeconds)*1000 {
-		return fmt.Errorf("invalid Namespace watch bounds: maximum poll interval must be less than journal retention")
-	}
-	if w.LeaseRenewIntervalSeconds >= w.LeaseTTLSeconds {
-		return fmt.Errorf("invalid Namespace watch bounds: lease renewal interval must be less than lease TTL")
+	if w.Materializer.LeaseRenewInterval >= w.Materializer.LeaseTTL {
+		return fmt.Errorf("invalid api.watch.journal bounds: materializer.lease_renew_interval must be less than materializer.lease_ttl")
 	}
 	return nil
 }
@@ -595,35 +727,68 @@ func validateDatastoreConfig(ds *DatastoreConfig) error {
 	}
 }
 
-func validateFeatureConfig(features *FeatureConfig) error {
-	mode := strings.ToLower(strings.TrimSpace(features.NamespaceRepositoryFence))
-	if mode == "" {
-		mode = "auto"
+// iecSizePattern restricts size strings to IEC-unit byte counts (plain bytes,
+// or binary-multiple units) so values are portable between Go
+// (github.com/docker/go-units) and Rust (bytesize) without the ambiguity of
+// decimal (KB/MB/GB) units.
+var iecSizePattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?(B|KiB|MiB|GiB|TiB)$`)
+
+// ParseIECBytes parses a size string restricted to IEC units (plain "B" or
+// binary-multiple KiB/MiB/GiB/TiB), returning the resolved byte count.
+func ParseIECBytes(raw string) (int64, error) {
+	trimmed := strings.TrimSpace(raw)
+	if !iecSizePattern.MatchString(trimmed) {
+		return 0, fmt.Errorf("%q is not a valid size: expected IEC units (B, KiB, MiB, GiB, TiB), e.g. \"512KiB\"", raw)
 	}
-	switch mode {
-	case "auto", "enabled", "disabled":
-		features.NamespaceRepositoryFence = mode
-		return nil
-	default:
-		return fmt.Errorf(
-			"invalid namespace repository fence mode %q; valid values: auto, enabled, disabled",
-			features.NamespaceRepositoryFence,
-		)
+	bytes, err := units.RAMInBytes(trimmed)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a valid size: %w", raw, err)
 	}
+	return bytes, nil
 }
 
-// NamespaceRepositoryFenceEnabled resolves the rollout gate. Development
-// memdb keeps the existing behavior; Scylla requires explicit activation.
-func (c *Config) NamespaceRepositoryFenceEnabled() bool {
-	mode := strings.ToLower(strings.TrimSpace(c.Features.NamespaceRepositoryFence))
-	switch mode {
-	case "enabled":
-		return true
-	case "disabled":
-		return false
-	default:
-		return strings.EqualFold(c.Datastore.Backend, "memdb")
+// durationPattern restricts duration strings to a single magnitude with one
+// of the ms|s|m|h units (rejecting humantime/Go's ns/us and any multi-unit
+// compound form such as "1h30m") so values are portable between Go
+// (time.ParseDuration) and Rust (humantime-serde, gated the same way).
+var durationPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?(ms|s|m|h)$`)
+
+// strictDurationHookFunc is a viper/mapstructure DecodeHookFuncType that
+// converts a config string into time.Duration, restricted to the ms|s|m|h
+// grammar. Used in place of mapstructure's default
+// StringToTimeDurationHookFunc, which also accepts ns/us and compound
+// expressions like "1h30m".
+func strictDurationHookFunc(from reflect.Type, to reflect.Type, data any) (any, error) {
+	if from.Kind() != reflect.String || to != reflect.TypeFor[time.Duration]() {
+		return data, nil
 	}
+	raw, _ := data.(string)
+	if !durationPattern.MatchString(strings.TrimSpace(raw)) {
+		return nil, fmt.Errorf("%q is not a valid duration: expected a single magnitude with unit ms, s, m, or h, e.g. \"30s\"", raw)
+	}
+	return time.ParseDuration(raw)
+}
+
+// validatePushLimitsConfig parses and bounds-checks the shared push-size
+// ceiling, resolving MaxPackSizeBytes/MaxFileSizeBytes for callers.
+func validatePushLimitsConfig(p *PushLimitsConfig) error {
+	packBytes, err := ParseIECBytes(p.MaxPackSize)
+	if err != nil {
+		return fmt.Errorf("invalid push_limits.max_pack_size: %w", err)
+	}
+	fileBytes, err := ParseIECBytes(p.MaxFileSize)
+	if err != nil {
+		return fmt.Errorf("invalid push_limits.max_file_size: %w", err)
+	}
+	if packBytes <= 0 {
+		return errors.New("invalid push_limits.max_pack_size: must be greater than zero")
+	}
+	if fileBytes <= 0 {
+		return errors.New("invalid push_limits.max_file_size: must be greater than zero")
+	}
+	p.MaxPackSizeBytes = packBytes
+	p.MaxFileSizeBytes = fileBytes
+	return nil
 }
 
 // validateLogFormat validates and normalizes the configured log encoding.
@@ -646,27 +811,26 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddInt("api.port", c.Api.Port)
 	enc.AddInt("api.git_port", c.Api.GitPort)
 	enc.AddInt("api.grpc_port", c.Api.GrpcPort)
-	enc.AddString("git.grpc.uri", c.Git.Grpc.Uri)
-	enc.AddString("auth.staticusers.users_file", c.Auth.StaticUsers.UsersFile)
-	enc.AddString("auth.jwt.secret", redact(c.Auth.JWT.Secret))
-	enc.AddString("auth.jwt.duration", c.Auth.JWT.Duration)
-	enc.AddString("auth.jwt.issuer", c.Auth.JWT.Issuer)
-	enc.AddString("auth.jwt.refresh_grace", c.Auth.JWT.RefreshGrace)
-	enc.AddString("auth.grpc.hmac_secret", redact(c.Auth.Grpc.HmacSecret))
-	enc.AddString("auth.serviceaccount.issuer", c.Auth.ServiceAccount.Issuer)
-	enc.AddString("auth.serviceaccount.audience", c.Auth.ServiceAccount.Audience)
-	enc.AddString("auth.serviceaccount.assertion_audience", c.Auth.ServiceAccount.AssertionAudience)
-	enc.AddString("auth.serviceaccount.signing_key", redact(c.Auth.ServiceAccount.SigningKey))
-	enc.AddString("auth.serviceaccount.default_ttl", c.Auth.ServiceAccount.DefaultTTL)
-	enc.AddString("auth.serviceaccount.max_ttl", c.Auth.ServiceAccount.MaxTTL)
-	enc.AddString("auth.serviceaccount.clock_skew", c.Auth.ServiceAccount.ClockSkew)
+	enc.AddString("api.git_service.uri", c.Api.GitService.Uri)
+	enc.AddString("api.auth.static_users.users_file", c.Api.Auth.StaticUsers.UsersFile)
+	enc.AddString("api.auth.jwt.secret", redact(c.Api.Auth.JWT.Secret))
+	enc.AddDuration("api.auth.jwt.ttl", c.Api.Auth.JWT.TTL)
+	enc.AddString("api.auth.jwt.issuer", c.Api.Auth.JWT.Issuer)
+	enc.AddDuration("api.auth.jwt.refresh_grace", c.Api.Auth.JWT.RefreshGrace)
+	enc.AddString("grpc_auth.hmac_secret", redact(c.GrpcAuth.HmacSecret))
+	enc.AddString("api.auth.serviceaccount.issuer", c.Api.Auth.ServiceAccount.Issuer)
+	enc.AddString("api.auth.serviceaccount.audience", c.Api.Auth.ServiceAccount.Audience)
+	enc.AddString("api.auth.serviceaccount.assertion_audience", c.Api.Auth.ServiceAccount.AssertionAudience)
+	enc.AddString("api.auth.serviceaccount.signing_key", redact(c.Api.Auth.ServiceAccount.SigningKey))
+	enc.AddDuration("api.auth.serviceaccount.default_ttl", c.Api.Auth.ServiceAccount.DefaultTTL)
+	enc.AddDuration("api.auth.serviceaccount.max_ttl", c.Api.Auth.ServiceAccount.MaxTTL)
+	enc.AddDuration("api.auth.serviceaccount.clock_skew", c.Api.Auth.ServiceAccount.ClockSkew)
 	enc.AddString("log.level", c.Log.Level)
 	enc.AddString("log.format", c.Log.Format)
-	enc.AddString("datastore.backend", c.Datastore.Backend)
-	enc.AddString("datastore.scylla.password", redact(c.Datastore.Scylla.Password))
-	enc.AddString("features.namespace_repository_fence", c.Features.NamespaceRepositoryFence)
-	enc.AddBool("watch.namespace.readers_enabled", c.Watch.Namespace.ReadersEnabled)
-	enc.AddBool("watch.namespace.materializer_enabled", c.Watch.Namespace.MaterializerEnabled)
+	enc.AddString("api.datastore.backend", c.Api.Datastore.Backend)
+	enc.AddString("api.datastore.scylla.password", redact(c.Api.Datastore.Scylla.Password))
+	enc.AddString("push_limits.max_pack_size", c.PushLimits.MaxPackSize)
+	enc.AddString("push_limits.max_file_size", c.PushLimits.MaxFileSize)
 	return nil
 }
 

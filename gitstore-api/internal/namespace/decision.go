@@ -18,20 +18,21 @@ const (
 type Reason string
 
 const (
-	ReasonInvalidEnvelope         Reason = "INVALID_ENVELOPE"
-	ReasonInvalidIdentifier       Reason = "INVALID_IDENTIFIER"
-	ReasonReservedIdentifier      Reason = "RESERVED_IDENTIFIER"
-	ReasonInvalidTier             Reason = "INVALID_TIER"
-	ReasonInvalidAuthoringTarget  Reason = "INVALID_AUTHORING_TARGET"
-	ReasonDuplicateIdentity       Reason = "DUPLICATE_IDENTITY"
-	ReasonImmutableName           Reason = "IMMUTABLE_NAME"
-	ReasonBootstrapNamespace      Reason = "BOOTSTRAP_NAMESPACE"
-	ReasonTierDemotion            Reason = "TIER_DEMOTION"
-	ReasonNamespaceTerminating    Reason = "NAMESPACE_TERMINATING"
-	ReasonNamespaceAlreadyExists  Reason = "NAMESPACE_ALREADY_EXISTS"
-	ReasonNamespaceNotFound       Reason = "NAMESPACE_NOT_FOUND"
-	ReasonNamespaceNotEmpty       Reason = "NAMESPACE_NOT_EMPTY"
-	ReasonResourceVersionConflict Reason = "RESOURCE_VERSION_CONFLICT"
+	ReasonInvalidEnvelope          Reason = "INVALID_ENVELOPE"
+	ReasonInvalidIdentifier        Reason = "INVALID_IDENTIFIER"
+	ReasonReservedIdentifier       Reason = "RESERVED_IDENTIFIER"
+	ReasonInvalidTier              Reason = "INVALID_TIER"
+	ReasonInvalidAuthoringTarget   Reason = "INVALID_AUTHORING_TARGET"
+	ReasonDuplicateIdentity        Reason = "DUPLICATE_IDENTITY"
+	ReasonImmutableName            Reason = "IMMUTABLE_NAME"
+	ReasonBootstrapNamespace       Reason = "BOOTSTRAP_NAMESPACE"
+	ReasonPushPolicyExceedsCeiling Reason = "PUSH_POLICY_EXCEEDS_CEILING"
+	ReasonTierDemotion             Reason = "TIER_DEMOTION"
+	ReasonNamespaceTerminating     Reason = "NAMESPACE_TERMINATING"
+	ReasonNamespaceAlreadyExists   Reason = "NAMESPACE_ALREADY_EXISTS"
+	ReasonNamespaceNotFound        Reason = "NAMESPACE_NOT_FOUND"
+	ReasonNamespaceNotEmpty        Reason = "NAMESPACE_NOT_EMPTY"
+	ReasonResourceVersionConflict  Reason = "RESOURCE_VERSION_CONFLICT"
 )
 
 const (

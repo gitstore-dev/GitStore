@@ -5,6 +5,7 @@ package namespace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
@@ -25,11 +26,17 @@ query($namespace: String!) {
   }
 }`
 
+// completeNamespaceDeletionMutation selects only the fields
+// CompleteNamespaceDeletionPayload actually declares ({ id }, since commit
+// 84b7bb4 / #394 removed the payload's conflict field). A resourceVersion
+// conflict is reported as a GraphQL error with a RESOURCE_VERSION_CONFLICT
+// (or forward-compatible CONFLICT) extension code, not a payload field,
+// matching every other status/completion mutation in this codebase (see
+// graphqlclient.IsConflictCode).
 const completeNamespaceDeletionMutation = `
 mutation($input: CompleteNamespaceDeletionInput!) {
   completeNamespaceDeletion(input: $input) {
     id
-    conflict { currentResourceVersion }
   }
 }`
 
@@ -102,10 +109,7 @@ func NewGraphQLDeletionClient(client *graphqlclient.Client) *GraphQLDeletionClie
 func (c *GraphQLDeletionClient) CompleteDeletion(ctx context.Context, namespace, resourceVersion string) error {
 	var response struct {
 		CompleteNamespaceDeletion struct {
-			ID       *string `json:"id"`
-			Conflict *struct {
-				CurrentResourceVersion string `json:"currentResourceVersion"`
-			} `json:"conflict"`
+			ID *string `json:"id"`
 		} `json:"completeNamespaceDeletion"`
 	}
 	if err := c.client.Mutate(ctx, completeNamespaceDeletionMutation, map[string]any{
@@ -114,14 +118,14 @@ func (c *GraphQLDeletionClient) CompleteDeletion(ctx context.Context, namespace,
 			"resourceVersion": resourceVersion,
 		},
 	}, &response); err != nil {
+		var gqlErr *graphqlclient.Error
+		if errors.As(err, &gqlErr) && graphqlclient.IsConflictCode(gqlErr.Extensions["code"]) {
+			return fmt.Errorf(
+				"namespace deletion client: %w: current resourceVersion %q: %w",
+				types.ErrConflict, gqlErr.Extensions["resourceVersion"], err,
+			)
+		}
 		return fmt.Errorf("namespace deletion client: complete deletion: %w", err)
-	}
-	if response.CompleteNamespaceDeletion.Conflict != nil {
-		return fmt.Errorf(
-			"namespace deletion client: %w: current resourceVersion %q",
-			types.ErrConflict,
-			response.CompleteNamespaceDeletion.Conflict.CurrentResourceVersion,
-		)
 	}
 	if response.CompleteNamespaceDeletion.ID == nil {
 		return fmt.Errorf("namespace deletion client: completion returned no deleted identifier")

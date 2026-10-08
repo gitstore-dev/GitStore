@@ -157,6 +157,18 @@ func (e *Error) Error() string {
 	return e.Message
 }
 
+// IsConflictCode reports whether a GraphQL error's extensions["code"] value
+// signals an optimistic-concurrency conflict. RESOURCE_VERSION_CONFLICT is
+// the per-kind code every existing status/completion mutation returns today;
+// CONFLICT is the forward-compatible kind-neutral code an upcoming API
+// change folds it into. Every controller GraphQL client should map either
+// code to types.ErrConflict through this shared check rather than matching
+// RESOURCE_VERSION_CONFLICT alone.
+func IsConflictCode(code any) bool {
+	c, _ := code.(string)
+	return c == "RESOURCE_VERSION_CONFLICT" || c == "CONFLICT"
+}
+
 type gqlRequest struct {
 	Query     string         `json:"query"`
 	Variables map[string]any `json:"variables,omitempty"`

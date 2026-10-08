@@ -103,12 +103,12 @@ func (*transportWatchJournal) SaveProgress(context.Context, datastore.NamespaceW
 	panic("unused")
 }
 
-func namespaceWatchConfig() config.NamespaceWatchConfig {
-	return config.NamespaceWatchConfig{
-		ReadersEnabled: true, ReadBatchSize: 256, MaxReplayEvents: 100000,
-		SubscriberBuffer: 1, PollMinMillis: 1, PollMaxMillis: 2,
-		SubscriberBackpressureMillis: 1,
-		MaxMaterializerLagSeconds:    60,
+func namespaceWatchConfig() config.WatchJournalConfig {
+	return config.WatchJournalConfig{
+		Read:         config.ReadWatchConfig{BatchSize: 256, MaxReplayEvents: 100000},
+		Subscriber:   config.SubscriberWatchConfig{Buffer: 1, Backpressure: 1 * time.Millisecond},
+		Poll:         config.PollWatchConfig{Min: 1 * time.Millisecond, Max: 2 * time.Millisecond},
+		Materializer: config.MaterializerWatchConfig{MaxLag: 60 * time.Second},
 	}
 }
 

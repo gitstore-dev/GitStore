@@ -61,9 +61,9 @@ func newTestProvider(t *testing.T, pem string, lookup ServiceAccountLookup) *Pro
 		Issuer:     "gitstore",
 		Audience:   "gitstore-api",
 		SigningKey: pem,
-		DefaultTTL: "10m",
-		MaxTTL:     "1h",
-		ClockSkew:  "2m",
+		DefaultTTL: 10 * time.Minute,
+		MaxTTL:     1 * time.Hour,
+		ClockSkew:  2 * time.Minute,
 	}, lookup, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(p.Shutdown)
@@ -138,32 +138,31 @@ func TestKidFromPublicKeyUsesCanonicalDER(t *testing.T) {
 	assert.Equal(t, edKID, reparsedEdKID)
 }
 
-func TestNewRejectsNonpositiveTokenTTLs(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		field string
-		value string
-	}{
-		{name: "zero default TTL", field: "default_ttl", value: "0s"},
-		{name: "negative default TTL", field: "default_ttl", value: "-1s"},
-		{name: "zero maximum TTL", field: "max_ttl", value: "0s"},
-		{name: "negative maximum TTL", field: "max_ttl", value: "-1s"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := config.ServiceAccountConfig{
-				SigningKey: generateEd25519PEM(t),
-				DefaultTTL: "10m",
-				MaxTTL:     "1h",
-			}
-			if tc.field == "default_ttl" {
-				cfg.DefaultTTL = tc.value
-			} else {
-				cfg.MaxTTL = tc.value
+func TestNewRejectsNegativeTokenDurations(t *testing.T) {
+	for _, field := range []string{"default_ttl", "max_ttl", "clock_skew"} {
+		t.Run(field, func(t *testing.T) {
+			cfg := config.ServiceAccountConfig{SigningKey: generateEd25519PEM(t)}
+			switch field {
+			case "default_ttl":
+				cfg.DefaultTTL = -time.Second
+			case "max_ttl":
+				cfg.MaxTTL = -time.Second
+			default:
+				cfg.ClockSkew = -time.Second
 			}
 			_, err := New(cfg, &stubLookup{}, zap.NewNop())
-			require.ErrorContains(t, err, tc.field+" must be positive")
+			require.ErrorContains(t, err, field+" must not be negative")
 		})
 	}
+}
+
+func TestNewDefaultsUnsetTokenDurations(t *testing.T) {
+	p, err := New(config.ServiceAccountConfig{SigningKey: generateEd25519PEM(t)}, &stubLookup{}, zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(p.Shutdown)
+	assert.Equal(t, defaultTTL, p.defaultTTL)
+	assert.Equal(t, defaultMaxTTL, p.maxTTL)
+	assert.Equal(t, defaultSkew, p.clockSkew)
 }
 
 func TestServiceAccountJWT_NoBearerToken_Challenge(t *testing.T) {
@@ -424,11 +423,6 @@ func TestServiceAccountJWT_Capabilities(t *testing.T) {
 
 func TestNew_EmptySigningKey_Errors(t *testing.T) {
 	_, err := New(config.ServiceAccountConfig{Issuer: "gitstore", Audience: "gitstore-api"}, &stubLookup{}, zap.NewNop())
-	require.Error(t, err)
-}
-
-func TestNew_InvalidDefaultTTL_Errors(t *testing.T) {
-	_, err := New(config.ServiceAccountConfig{SigningKey: generateEd25519PEM(t), DefaultTTL: "not-a-duration"}, &stubLookup{}, zap.NewNop())
 	require.Error(t, err)
 }
 

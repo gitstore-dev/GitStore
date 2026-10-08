@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
@@ -165,16 +166,18 @@ func (m *mockGitWriter) CreateTag(_ context.Context, p gitclient.CreateTagParams
 	return "tag123", nil
 }
 
-// newTestSvc builds a Service backed by an in-memory datastore.
-func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
-	return newTestSvcWithFenceMode(t, writer, "")
+// testPushLimits mirrors config.Load's production push_limits defaults
+// (512MiB/100MiB) so tests exercising namespace/repository push-policy
+// fields see a realistic, non-zero platform ceiling.
+var testPushLimits = config.PushLimitsConfig{
+	MaxPackSize:      "512MiB",
+	MaxFileSize:      "100MiB",
+	MaxPackSizeBytes: 512 << 20,
+	MaxFileSizeBytes: 100 << 20,
 }
 
-func newTestSvcWithFenceMode(
-	t *testing.T,
-	writer *mockGitWriter,
-	mode resolver.NamespaceRepositoryFenceMode,
-) *resolver.Service {
+// newTestSvc builds a Service backed by an in-memory datastore.
+func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -209,11 +212,11 @@ func newTestSvcWithFenceMode(
 		RepositoryID: systemRepository.UID,
 	}))
 	svc, err := resolver.NewService(resolver.ServiceDeps{
-		Store:                        store,
-		GitWriter:                    writer,
-		Logger:                       zap.NewNop(),
-		CommittedManifestAdmitter:    testCommittedNamespaceAdmitter{store: store, ids: apiruntime.UUIDGenerator{}},
-		NamespaceRepositoryFenceMode: mode,
+		Store:                     store,
+		GitWriter:                 writer,
+		Logger:                    zap.NewNop(),
+		CommittedManifestAdmitter: testCommittedNamespaceAdmitter{store: store, ids: apiruntime.UUIDGenerator{}},
+		PushLimits:                testPushLimits,
 	})
 	require.NoError(t, err)
 	return svc

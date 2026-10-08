@@ -37,6 +37,8 @@ func mustBcrypt(t *testing.T, password string) string {
 
 func newTestConfig(t *testing.T, duration string) config.AuthConfig {
 	t.Helper()
+	ttl, err := time.ParseDuration(duration)
+	require.NoError(t, err)
 	return config.AuthConfig{
 		StaticUsers: config.StaticUsersConfig{UsersFile: func() string {
 			path := filepath.Join(t.TempDir(), "users.yaml")
@@ -46,8 +48,8 @@ func newTestConfig(t *testing.T, duration string) config.AuthConfig {
 		JWT: config.JWTConfig{
 			Secret:       "test-secret",
 			Issuer:       "gitstore",
-			Duration:     duration,
-			RefreshGrace: "60s",
+			TTL:          ttl,
+			RefreshGrace: 60 * time.Second,
 		},
 	}
 }

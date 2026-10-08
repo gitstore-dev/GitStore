@@ -103,14 +103,10 @@ func New(ctx context.Context, cfg config.OIDCConfig, logger *zap.Logger) (*OIDCJ
 	if strings.TrimSpace(audience) == "" {
 		return nil, errors.New("oidcjwt: audience or client_id is required")
 	}
-	skew := 2 * time.Minute
-	if cfg.ClockSkew != "" {
-		parsed, err := time.ParseDuration(cfg.ClockSkew)
-		if err != nil {
-			return nil, fmt.Errorf("oidcjwt: invalid clock_skew %q: %w", cfg.ClockSkew, err)
-		}
-		skew = parsed
-	}
+	// config.Load defaults ClockSkew to 2m; a caller constructing OIDCConfig
+	// directly (e.g. tests) that leaves it zero means zero tolerance, not
+	// "use the default" — the zero value is meaningful here.
+	skew := cfg.ClockSkew
 	provider, canonicalIssuer, err := discover(ctx, cfg.IssuerURI)
 	if err != nil {
 		return nil, fmt.Errorf("oidcjwt: discovery against %q: %w", cfg.IssuerURI, err)

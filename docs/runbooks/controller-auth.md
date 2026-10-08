@@ -31,19 +31,22 @@ administrator-issued bearer token.
 3. Ensure the RBAC policy binds
    `serviceaccount:<namespace>:<name>` to only the controller role. Enrollment
    does not grant authorization by itself.
-4. Configure `controller.serviceaccount_namespace`, `_name`, `_key_id`, and
-   `_uid`, plus a complete `controller.serviceaccount_key_ref`. For a file
-   resolver, `SecretRef{name: "controller-manager", key: "privateKey"}`
-   resolves `/run/secrets/controller-manager/privateKey`.
-5. Mount `/run/secrets/controller-manager` read-only into the
+4. Configure `controller.serviceaccount.namespace`, `.name`, and `.uid`, plus
+   a complete `controller.serviceaccount.key_ref` (`kind = "SecretRef"`,
+   `name = "<logical-secret-name>"`; `key` must be omitted — the resolver
+   reads one atomic JSON signing record, not an individual field). For the
+   `file` bootstrap resolver, a `key_ref.name` of `controller-manager`
+   resolves `<base_path>/controller-manager.json` (default base path
+   `/run/secrets`).
+5. Mount the resolved signing-record path read-only into the
    controller-manager alone. Configure the API issuer key independently with
-   `GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY`; no other service may receive
+   `GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY`; no other service may receive
    that mount.
 6. Roll out the controller and check `GET /health`. A working credential source
    returns HTTP 200 with `"credentialReady":true`. The response intentionally
    contains no credential value or exchange error.
 
-The controller requires `controller.serviceaccount_key_ref`; static controller
+The controller requires `controller.serviceaccount.key_ref`; static controller
 API tokens are not supported.
 
 ## Renewal, readiness, and backoff
