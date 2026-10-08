@@ -15,8 +15,9 @@ import (
 // categoryDeletionStatusMutation queries only fields UpdateCategoryStatusPayload
 // actually declares (category, hasMoreProductDependents) — a resourceVersion
 // conflict is reported as a GraphQL error with a RESOURCE_VERSION_CONFLICT
-// extension (see mapConflictErr below), not a payload field, matching every
-// other status mutation in this codebase (graphql_status_client.go et al.).
+// (or forward-compatible CONFLICT) extension (see mapConflictErr below), not
+// a payload field, matching every other status mutation in this codebase
+// (graphql_status_client.go et al.).
 const categoryDeletionStatusMutation = `
 mutation($input: UpdateCategoryStatusInput!) {
   updateCategoryStatus(input: $input) {
@@ -24,12 +25,12 @@ mutation($input: UpdateCategoryStatusInput!) {
   }
 }`
 
-// mapConflictErr maps a RESOURCE_VERSION_CONFLICT GraphQL error to
-// types.ErrConflict; any other error (including a NOT_FOUND-coded one)
-// passes through wrapped but otherwise unchanged.
+// mapConflictErr maps a RESOURCE_VERSION_CONFLICT or forward-compatible
+// CONFLICT GraphQL error to types.ErrConflict; any other error (including a
+// NOT_FOUND-coded one) passes through wrapped but otherwise unchanged.
 func mapConflictErr(err error) error {
 	var gqlErr *graphqlclient.Error
-	if errors.As(err, &gqlErr) && gqlErr.Extensions["code"] == "RESOURCE_VERSION_CONFLICT" {
+	if errors.As(err, &gqlErr) && graphqlclient.IsConflictCode(gqlErr.Extensions["code"]) {
 		return fmt.Errorf("%w: current resourceVersion %q: %w", types.ErrConflict, gqlErr.Extensions["resourceVersion"], err)
 	}
 	return err
