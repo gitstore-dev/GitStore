@@ -212,7 +212,7 @@ treeView-beta
 
    No schema additions except the Namespace error extensions.
 2. **Remove `Category.path`/`depth`**: converters, regenerate, consumers and docs.
-3. **Git-backed mutations**: `ManifestValidator`, `CommitCategoryManifest`/`DeleteCategoryManifest`, authorization, payload change, `extensions.admission` collector, policy grants.
+3. **Git-backed mutations**: `ManifestValidator`, `CommitCategoryManifest`/`DeleteCategoryManifest`, authorization, payload change, `extensions.admission` collector, policy grants. Adds the controller-only `completeCategoryDeletion` (deprecating the `updateCategoryStatus.completeDeletion` flag for one release) and switches the CategoryTaxonomy controller's deletion client to it.
 4. **Ancestor index**: datastore interface, memdb, Scylla migration 010, maintenance in status and delete, contract suites, `gitctl` audit/repair.
 5. **Filtered list, `parent`, `children`**: resolvers, `gqlgen.yml`, cursors, docs.
 6. **Capacity and chaos evidence**: profile, preflight, verifier, run-script case, CLAUDE.md/AGENTS.md command list.

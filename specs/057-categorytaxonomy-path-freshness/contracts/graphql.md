@@ -45,7 +45,21 @@ extend type Mutation {
   child categories exist. Assigned products are decoupled asynchronously.
   """
   deleteCategory(input: DeleteCategoryInput!): DeleteCategoryPayload!
+
+  """Controller-only completion of a terminating category's foreground deletion."""
+  completeCategoryDeletion(input: CompleteCategoryDeletionInput!): CompleteCategoryDeletionPayload!
 }
+
+input CompleteCategoryDeletionInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+}
+
+type CompleteCategoryDeletionPayload { id: ID }
+
+# UpdateCategoryStatusInput.completeDeletion: Boolean
+#   @deprecated(reason: "Use completeCategoryDeletion. Removed in the next release.")
 
 input CategorySpecInput {
   title: String!
@@ -104,6 +118,7 @@ type Category implements Node {
 | `createCategory`      | `categoryTaxonomy.create`           | `input.metadata.{namespace,name}`                   |
 | `updateCategory`      | `categoryTaxonomy.update`           | stored record: namespace, name, owner, repositoryID |
 | `deleteCategory`      | `categoryTaxonomy.delete`           | stored record (replaces `category.delete`)          |
+| `completeCategoryDeletion` | `categoryTaxonomy.status.write` | input `namespace`, `name` (controller identity) |
 | `categories(filter:)` | `categoryTaxonomy.list` (unchanged) | namespace                                           |
 
 All three mutations require an authenticated principal and are checked before any Git or datastore work.
@@ -118,6 +133,6 @@ All mutation errors use the four-key envelope in `admission-diagnostics.md`: `co
 | `ALREADY_EXISTS`      | create of an existing name                                                                  | `CATEGORY_ALREADY_EXISTS`                                                    |
 | `NOT_FOUND`           | update/delete target missing                                                                | `CATEGORY_NOT_FOUND`                                                         |
 | `CONFLICT`            | superseded by another commit to the same file                                               | `SUPERSEDED`                                                                 |
-| `FAILED_PRECONDITION` | target terminating (update), child categories present (delete), provenance unavailable      | `CATEGORY_TERMINATING`, `CHILD_CATEGORIES_PRESENT`, `PROVENANCE_UNAVAILABLE` |
+| `FAILED_PRECONDITION` | target terminating (update); child categories present (delete, complete); provenance unavailable; completing a category that is not terminating or still has products to decouple | `CATEGORY_TERMINATING`, `CHILD_CATEGORIES_PRESENT`, `PROVENANCE_UNAVAILABLE`, `CATEGORY_NOT_TERMINATING`, `PRODUCT_DECOUPLING_INCOMPLETE` |
 | `BAD_USER_INPUT`      | `maxDepth` out of range; cursor from the other list mode                                    | `INVALID_ARGUMENT`                                                           |
 | `FORBIDDEN`           | authorization denied                                                                        | none                                                                         |

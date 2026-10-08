@@ -55,6 +55,10 @@ All Technical Context unknowns are resolved below. Code references are relative 
   - The Product-only guard at `committed_manifest.go:114-137` is extended with a CategoryTaxonomy branch that delegates to the existing `deleteResource` category case (`server.go:1573-1606`). That case already does the blocker check, metrics and `MarkCategoryTaxonomyDeletion`.
   - The payload becomes `{ category, outcome }`.
   - The current datastore-only `Service.DeleteCategory` (`service.go:388-428`) is removed.
+  - **Completion** moves from the `completeDeletion` flag on `updateCategoryStatus` (`category.resolvers.go:50-102`, `Service.CompleteCategoryDeletion` at `service.go:433`) to a dedicated `completeCategoryDeletion` mutation, matching Namespace, Repository and Product.
+    - The resolver reuses `Service.CompleteCategoryDeletion` and `CompleteCategoryTaxonomyDeletion`, which also removes the category's ancestor-index rows.
+    - It is authorized as `categoryTaxonomy.status.write`, like `completeNamespaceDeletion`/`completeRepositoryDeletion` use `*.status.write`. Product's `product.delete.complete` maps to the separate `purge` (hard delete) verb in ADR-0010, which categories don't have.
+    - The flag stays, `@deprecated`, for one release. The controller (`internal/categorytaxonomy/deletion_client.go:74-90`) switches to the new mutation in the same release, and the schema-validation guard from #456 covers the new query string.
 - **Rationale**: This reuses push-path deletion semantics exactly and closes the Git/datastore divergence (SC-008).
 - **Alternatives considered**: None viable. The user chose Git removal.
 
