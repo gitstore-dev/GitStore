@@ -1,6 +1,6 @@
 # ADR 0008: File Lifecycle
 
-**Status**: Proposed
+**Status**: Accepted (2026-08-29)
 
 **Date**: 2026-06-26
 

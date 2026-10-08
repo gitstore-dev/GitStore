@@ -1,6 +1,6 @@
 # ADR 0017: Aggregate Fields via Async Controller Materialization
 
-**Status**: Proposed
+**Status**: Accepted (2026-10-03)
 
 **Date**: 2026-10-03
 

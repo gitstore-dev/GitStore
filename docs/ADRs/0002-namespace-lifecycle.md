@@ -1,6 +1,6 @@
 # ADR 0002: Namespace Lifecycle
 
-**Status**: Proposed
+**Status**: Accepted (2026-08-20)
 
 **Date**: 2026-06-26
 
