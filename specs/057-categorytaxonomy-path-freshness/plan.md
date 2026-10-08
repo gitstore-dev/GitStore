@@ -90,19 +90,19 @@ Evidence goes in the standard capacity evidence bundle.
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-| Principle | Status | Evidence |
-|-----------|--------|----------|
-| Test-First | PASS | Failing tests come before implementation for the contracts in `contracts/`, the datastore contract suite, the authorization matrix, the Go/Rust rejection-text golden fixture, and replica and rolling-upgrade tests. |
-| API/Contract-First | PASS | `contracts/graphql.md`, `contracts/admission-diagnostics.md` and `contracts/datastore-ancestor-index.md` define the schema, errors, datastore and CQL. |
-| Core-Service Boundary | PASS | API: mutations, admission decision, index and diagnostics. Controller: no code change; it still selects `status.resolved {path depth}` only. Git service: no behaviour change, only a golden-fixture parity test. |
-| Replica Safety | PASS | Own-commit SHA check and superseded handling. The index is idempotent and versioned. Rolling-upgrade gap is closed by repair. Unverified paths are named in the Verification list below. Git stays singleton. |
-| Multi-User Security | PASS | ADR-0010 actions, stored-resource scope, authenticated principal required, no cross-namespace disclosure in diagnostics. |
-| Production Capacity | PASS | Category envelope declared. Product 5M paths untouched. Sustained mutation-plus-push load is in the capacity profile. |
-| Repeatable Evidence | PASS | `make capacity TARGET=category PROFILE=hierarchy` with a domain verifier, and `make chaos` profiles declared. |
-| Bounded Work | PASS | Depth ≤ 128, page ≤ 100, fetch concurrency ≤ 16, index writes O(depth), repair paged. No new queue. |
-| Observability | PASS | Metrics and logs are listed below. |
-| Incremental Delivery | PASS | Slices below deploy independently. API replicas may overlap. Git is never replaced. |
-| Simplicity | PASS | Reuses the Product, Namespace and repair patterns. One new table and two internal interfaces. The closure index is justified against the alternatives in ADR-0006 and R8. |
+| Principle             | Status | Evidence                                                                                                                                                                                                              |
+|-----------------------|--------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Test-First            | PASS   | Failing tests come before implementation for the contracts in `contracts/`, the datastore contract suite, the authorization matrix, the Go/Rust rejection-text golden fixture, and replica and rolling-upgrade tests. |
+| API/Contract-First    | PASS   | `contracts/graphql.md`, `contracts/admission-diagnostics.md` and `contracts/datastore-ancestor-index.md` define the schema, errors, datastore and CQL.                                                                |
+| Core-Service Boundary | PASS   | API: mutations, admission decision, index and diagnostics. Controller: the CategoryTaxonomy deletion client switches to `completeCategoryDeletion`; it still selects only `status.resolved {path depth}`. Git service: no behaviour change, only a golden-fixture parity test.     |
+| Replica Safety        | PASS   | Own-commit SHA check and superseded handling. The index is idempotent and versioned. Rolling-upgrade gap is closed by repair. Unverified paths are named in the Verification list below. Git stays singleton.         |
+| Multi-User Security   | PASS   | ADR-0010 actions, stored-resource scope, authenticated principal required, no cross-namespace disclosure in diagnostics.                                                                                              |
+| Production Capacity   | PASS   | Category envelope declared. Product 5M paths untouched. Sustained mutation-plus-push load is in the capacity profile.                                                                                                 |
+| Repeatable Evidence   | PASS   | `make capacity TARGET=category PROFILE=hierarchy` with a domain verifier, and `make chaos` profiles declared.                                                                                                         |
+| Bounded Work          | PASS   | Depth ≤ 128, page ≤ 100, fetch concurrency ≤ 16, index writes O(depth), repair paged. No new queue.                                                                                                                   |
+| Observability         | PASS   | Metrics and logs are listed below.                                                                                                                                                                                    |
+| Incremental Delivery  | PASS   | Slices below deploy independently. API replicas may overlap. Git is never replaced.                                                                                                                                   |
+| Simplicity            | PASS   | Reuses the Product, Namespace and repair patterns. One new table and two internal interfaces. The closure index is justified against the alternatives in ADR-0006 and R8.                                             |
 
 **Observability additions**:
 - `gitstore_category_mutation_total{operation,outcome}` and `gitstore_category_mutation_duration_seconds{operation}`.
@@ -199,7 +199,7 @@ treeView-beta
 
 **Structure Decision**:
 - The existing three-service layout is kept.
-- All runtime changes are in `gitstore-api`. The controller has no code change, and the Git service only gains a parity test.
+- Runtime changes are in `gitstore-api`, plus the controller's deletion client switching to `completeCategoryDeletion`. The Git service only gains a parity test.
 - One new internal package, `admissionreport`. The response extension is kind-neutral and will host the cost reporting planned in design 038, so it shouldn't live in `resolver`.
 
 ## Delivery Slices (independently deployable)
