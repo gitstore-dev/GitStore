@@ -12,15 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// An object that has a human-readable name. This represents both the Subject and the Delegate:
-// - creation_actor
-// - update_actor
-// - creation_on_behalf_of_actor OR creation_subject
-// - update_on_behalf_of_actor OR update_subject
-//
-// Implemented in
-// - User
-// - ServiceAccount
+// An object that has a human-readable name. This represents both the Subject and the Delegate
 type Actor interface {
 	IsActor()
 	GetMetadata() *ObjectMeta
