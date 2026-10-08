@@ -150,8 +150,8 @@ validate_release_service_containers() {
          imageID:.Image,
          executable:.Path,
          arguments:(.Args // []),
-         gitServiceURI:(((.Config.Env // []) | map(select(startswith("GITSTORE_GIT__GRPC__URI="))) | first // "") | sub("^GITSTORE_GIT__GRPC__URI="; "")),
-         catalogServiceURI:(((.Config.Env // []) | map(select(startswith("GITSTORE_CATALOG_SERVICE__URI="))) | first // "") | sub("^GITSTORE_CATALOG_SERVICE__URI="; "")),
+         gitServiceURI:(((.Config.Env // []) | map(select(startswith("GITSTORE_API__GIT_SERVICE__URI="))) | first // "") | sub("^GITSTORE_API__GIT_SERVICE__URI="; "")),
+         catalogServiceURI:(((.Config.Env // []) | map(select(startswith("GITSTORE_GIT_SERVICE__CATALOG__URI="))) | first // "") | sub("^GITSTORE_GIT_SERVICE__CATALOG__URI="; "")),
          revision:(.Config.Labels["org.opencontainers.image.revision"] // ""),
          running:.State.Running}]
     ' <<<"${inspection}")"
@@ -185,7 +185,7 @@ validate_release_service_containers() {
       ([.[] | select(.role == "api") | .gitServiceURI] | length) == $expected_replicas and
       ([.[] | select(.role == "api") | .gitServiceURI] | all(length > 0)) and
       ([.[] | select(.role == "api") | .gitServiceURI] | unique | length) == 1 and
-      ([.[] | select(.role == "git-service") | .catalogServiceURI] == ["http://api-a:6000"])
+      ([.[] | select(.role == "git-service") | .catalogServiceURI] == ["dns:///api-a:6000"])
     ' <<<"${release_service_containers}" >/dev/null || {
       echo "repository/lifecycle evidence requires both APIs to use the singleton Git service whose CatalogService callback targets API A" >&2
       exit 1

@@ -40,7 +40,6 @@ const assertionTyp = "gitstore-sa-assertion+jwt"
 
 const (
 	defaultAssertionAudience = "gitstore-api/serviceaccount-token"
-	defaultClockSkew         = 2 * time.Minute
 	// maxAssertionLifetime is the hard exp-iat<=60s bound from data-model.md
 	// §3 — assertions are single-use, proof-of-possession tokens, not
 	// general-purpose bearer tokens, so their validity window is
@@ -89,14 +88,10 @@ func New(cfg config.ServiceAccountConfig, store ServiceAccountStore, logger *zap
 	if audience == "" {
 		audience = defaultAssertionAudience
 	}
-	skew := defaultClockSkew
-	if raw := strings.TrimSpace(cfg.ClockSkew); raw != "" {
-		d, err := time.ParseDuration(raw)
-		if err != nil {
-			return nil, fmt.Errorf("serviceaccountassertion: invalid clock_skew %q: %w", raw, err)
-		}
-		skew = d
-	}
+	// config.Load defaults ClockSkew to 2m; a caller constructing
+	// ServiceAccountConfig directly (e.g. tests) that leaves it zero means
+	// zero tolerance, not "use the default" — the zero value is meaningful.
+	skew := cfg.ClockSkew
 
 	return &Provider{
 		assertionAudience: audience,

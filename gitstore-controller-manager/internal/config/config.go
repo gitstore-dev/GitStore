@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -37,8 +38,14 @@ type ControllerConfig struct {
 }
 
 type APIClientConfig struct {
-	RequestsPerSecond int `mapstructure:"requests_per_second"`
-	Burst             int `mapstructure:"burst"`
+	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
+}
+
+// RateLimitConfig mirrors gitstore-api's api.rate_limit shape for
+// consistency across services.
+type RateLimitConfig struct {
+	PerSecond int `mapstructure:"per_second"`
+	Burst     int `mapstructure:"burst"`
 }
 
 type ServiceAccountConfig struct {
@@ -77,8 +84,8 @@ type LogConfig struct {
 var defaults = map[string]any{
 	"controller.port":                                    5001,
 	"controller.api_uri":                                 "http://localhost:4000/graphql",
-	"controller.api_client.requests_per_second":          40,
-	"controller.api_client.burst":                        10,
+	"controller.api_client.rate_limit.per_second":        40,
+	"controller.api_client.rate_limit.burst":             10,
 	"controller.serviceaccount.namespace":                "",
 	"controller.serviceaccount.name":                     "gitstore-controller-manager",
 	"controller.serviceaccount.uid":                      "",
@@ -216,6 +223,8 @@ func validateSource(path string, value any) error {
 func sourceError(path, env string) error {
 	replacement := strings.Replace(path, "controller.controller.", "controller.", 1)
 	for old, next := range map[string]string{
+		"api_client.requests_per_second":       "api_client.rate_limit.per_second",
+		"api_client.burst":                     "api_client.rate_limit.burst",
 		"serviceaccount_namespace":             "serviceaccount.namespace",
 		"serviceaccount_name":                  "serviceaccount.name",
 		"serviceaccount_uid":                   "serviceaccount.uid",
@@ -249,12 +258,21 @@ func sourceError(path, env string) error {
 }
 
 // Decode errors contain paths and expectations, never supplied values.
+// durationPattern restricts duration strings to a single magnitude with one
+// of the ms|s|m|h units (rejecting Go's ns/us and multi-unit compounds like
+// "1h30m"), matching gitstore-api's and gitstore-git-service's grammar.
+var durationPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?(ms|s|m|h)$`)
+
 func decodeValue(from, to reflect.Type, value any) (any, error) {
 	if to == reflect.TypeFor[time.Duration]() {
 		if from.Kind() != reflect.String {
 			return nil, errors.New("must be a duration string")
 		}
-		duration, err := time.ParseDuration(value.(string))
+		raw, _ := value.(string)
+		if !durationPattern.MatchString(strings.TrimSpace(raw)) {
+			return nil, errors.New("must be a duration with a single magnitude and unit ms, s, m, or h, e.g. \"30s\"")
+		}
+		duration, err := time.ParseDuration(raw)
 		if err != nil {
 			return nil, errors.New("must be a valid duration")
 		}
@@ -292,8 +310,8 @@ func validate(cfg *Config) error {
 	if strings.TrimSpace(c.ApiURI) == "" {
 		return errors.New("controller.api_uri must not be empty")
 	}
-	if c.APIClient.RequestsPerSecond < 1 || c.APIClient.Burst < 1 {
-		return errors.New("controller.api_client.requests_per_second and burst must be positive")
+	if c.APIClient.RateLimit.PerSecond < 1 || c.APIClient.RateLimit.Burst < 1 {
+		return errors.New("controller.api_client.rate_limit.per_second and burst must be positive")
 	}
 	ref := c.ServiceAccount.KeyRef.SecretRef()
 	if err := secretmaterial.ValidateSecretRef(ref, ""); err != nil {

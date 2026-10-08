@@ -118,7 +118,7 @@ type namespaceWatchRuntime struct {
 	runner           namespaceCDCRunner
 	repositoryRunner repositoryCDCRunner
 	catalogRunner    catalogCDCRunner
-	cfg              config.NamespaceWatchConfig
+	cfg              config.WatchJournalConfig
 	log              *zap.Logger
 	cancel           context.CancelFunc
 	done             chan struct{}
@@ -142,13 +142,15 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	clock := apiruntime.SystemClock{}
 	instanceID := uuid.NewString()
 
-	rawStore, err := dsfactory.NewDatastore(cfg.Datastore, log, cfg.Watch.Namespace)
+	rawStore, err := dsfactory.NewDatastore(cfg.Api.Datastore, log, cfg.Api.Watch.Journal)
 	if err != nil {
 		return nil, fmt.Errorf("create datastore: %w", err)
 	}
 	var namespaceWatch *namespaceWatchRuntime
 	var resourceJournal datastore.ResourceWatchJournal
-	if cfg.Watch.Namespace.ReadersEnabled || cfg.Watch.Namespace.MaterializerEnabled {
+	{
+		// The durable watch journal reader and CDC materializer are always
+		// on — there is no watch mechanism besides the journal.
 		journal, journalErr := dsfactory.ResourceWatchJournal(rawStore)
 		if journalErr != nil {
 			_ = rawStore.Close()
@@ -164,20 +166,20 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		namespaceWatch = &namespaceWatchRuntime{
 			journal: journal,
 			materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{
-				EventTTL:         time.Duration(cfg.Watch.Namespace.JournalRetentionSeconds) * time.Second,
-				BookmarkInterval: time.Duration(cfg.Watch.Namespace.BookmarkIntervalSeconds) * time.Second,
+				EventTTL:         cfg.Api.Watch.Journal.Retention,
+				BookmarkInterval: cfg.Api.Watch.Journal.BookmarkInterval,
 				Clock:            clock,
 				Metrics:          metrics,
 			}),
 			leaseManager: watchjournal.NewLeaseManager(
 				journal,
 				instanceID,
-				time.Duration(cfg.Watch.Namespace.LeaseTTLSeconds)*time.Second,
-				time.Duration(cfg.Watch.Namespace.LeaseRenewIntervalSeconds)*time.Second,
+				cfg.Api.Watch.Journal.Materializer.LeaseTTL,
+				cfg.Api.Watch.Journal.Materializer.LeaseRenewInterval,
 				clock,
 			),
 			metrics: metrics,
-			cfg:     cfg.Watch.Namespace,
+			cfg:     cfg.Api.Watch.Journal,
 			log:     log,
 		}
 		if runner, ok := rawStore.(namespaceCDCRunner); ok {
@@ -190,10 +192,10 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 			namespaceWatch.catalogRunner = runner
 		}
 	}
-	store := datastore.NewInstrumentedDatastore(rawStore, cfg.Datastore.Backend, log)
+	store := datastore.NewInstrumentedDatastore(rawStore, cfg.Api.Datastore.Backend, log)
 	ids := apiruntime.UUIDGenerator{}
 
-	gitClient, err := gitclient.NewClientWithAddr(cfg.Git.Grpc.Uri, cfg.Auth.Grpc.HmacSecret)
+	gitClient, err := gitclient.NewClientWithAddr(cfg.Api.GitService.Uri, cfg.GrpcAuth.HmacSecret)
 	if err != nil {
 		_ = store.Close()
 		return nil, fmt.Errorf("connect git-service: %w", err)
@@ -216,9 +218,9 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, fmt.Errorf("build auth provider registry: %w", err)
 	}
 	log.Info("auth providers ready",
-		zap.Strings("authn_chain", cfg.Auth.AuthN.Chain),
-		zap.String("authz_provider", cfg.Auth.AuthZ.Provider),
-		zap.String("userdir_provider", cfg.Auth.UserDir.Provider),
+		zap.Strings("authn_chain", cfg.Api.Auth.AuthN.Chain),
+		zap.String("authz_provider", cfg.Api.Auth.AuthZ.Provider),
+		zap.String("userdir_provider", cfg.Api.Auth.UserDir.Provider),
 	)
 
 	// The same admission runtime serves post-receive batches and synchronous
@@ -244,11 +246,12 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		IDs:                       ids,
 		CommittedManifestAdmitter: catalogServer,
 		ResourceJournal:           resourceJournal,
-		NamespaceWatch:            cfg.Watch.Namespace,
+		NamespaceWatch:            cfg.Api.Watch.Journal,
 		NamespaceMetrics:          namespaceWatchMetrics(namespaceWatch),
-		ServiceAccountAudience:    cfg.Auth.ServiceAccount.Audience,
-		RateLimitPerSecond:        cfg.Api.RateLimitPerSecond,
-		RateLimitBurst:            cfg.Api.RateLimitBurst,
+		ServiceAccountAudience:    cfg.Api.Auth.ServiceAccount.Audience,
+		RateLimitPerSecond:        cfg.Api.RateLimit.PerSecond,
+		RateLimitBurst:            cfg.Api.RateLimit.Burst,
+		PushLimits:                cfg.PushLimits,
 	})
 	if err != nil {
 		_ = gitClient.Close()
@@ -316,8 +319,11 @@ type GraphQLHandlerDeps struct {
 	IDs                       apiruntime.IDGenerator
 	CommittedManifestAdmitter admission.CommittedManifestAdmitter
 	ResourceJournal           datastore.ResourceWatchJournal
-	NamespaceWatch            config.NamespaceWatchConfig
+	NamespaceWatch            config.WatchJournalConfig
 	NamespaceMetrics          *watchjournal.Metrics
+	// PushLimits is the shared static platform push-size ceiling; see
+	// config.PushLimitsConfig.
+	PushLimits config.PushLimitsConfig
 	// ServiceAccountAudience is the configured audience value that the server
 	// issues tokens for. Must be provided to the resolver (spec 061).
 	ServiceAccountAudience string
@@ -353,6 +359,7 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 		ResourceJournal:           deps.ResourceJournal,
 		NamespaceWatch:            deps.NamespaceWatch,
 		NamespaceMetrics:          deps.NamespaceMetrics,
+		PushLimits:                deps.PushLimits,
 		ServiceAccountAudience:    deps.ServiceAccountAudience,
 		ConnectionRegistry:        connectionRegistry,
 	})
@@ -519,7 +526,7 @@ func namespaceWatchReadiness(ctx context.Context, runtime *namespaceWatchRuntime
 	// replicas aligned with the leader even though they do not receive the
 	// materializer's process-local observation callbacks.
 	runtime.metrics.SetBounds(bounds, now)
-	maxLag := time.Duration(runtime.cfg.MaxMaterializerLagSeconds) * time.Second
+	maxLag := runtime.cfg.Materializer.MaxLag
 	if bounds.ProgressAt.IsZero() || now.Sub(bounds.ProgressAt) > maxLag {
 		return watchjournal.ErrMaterializerNotReady
 	}
@@ -596,7 +603,7 @@ func (r *providerRegistryRuntime) Shutdown() {
 
 func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, []providerShutdowner, error) {
 	// Build AuthN providers in chain order.
-	chain := cfg.Auth.AuthN.Chain
+	chain := cfg.Api.Auth.AuthN.Chain
 	if len(chain) == 0 {
 		chain = []string{"static-users", "anonymous"}
 	}
@@ -612,7 +619,7 @@ func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, lo
 	for _, name := range chain {
 		switch name {
 		case "static-users":
-			p, err := staticusers.NewWithRevocationStore(cfg.Auth, log, revocations)
+			p, err := staticusers.NewWithRevocationStore(cfg.Api.Auth, log, revocations)
 			if err != nil {
 				cleanup()
 				return nil, nil, fmt.Errorf("init static-users provider: %w", err)
@@ -623,14 +630,14 @@ func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, lo
 		case "anonymous":
 			authnProviders = append(authnProviders, anonymous.New())
 		case "serviceaccount-assertion":
-			p, err := serviceaccountassertion.New(cfg.Auth.ServiceAccount, store, log)
+			p, err := serviceaccountassertion.New(cfg.Api.Auth.ServiceAccount, store, log)
 			if err != nil {
 				cleanup()
 				return nil, nil, fmt.Errorf("init serviceaccount-assertion provider: %w", err)
 			}
 			authnProviders = append(authnProviders, p)
 		case "serviceaccount-jwt":
-			p, err := serviceaccountjwt.New(cfg.Auth.ServiceAccount, store, log)
+			p, err := serviceaccountjwt.New(cfg.Api.Auth.ServiceAccount, store, log)
 			if err != nil {
 				cleanup()
 				return nil, nil, fmt.Errorf("init serviceaccount-jwt provider: %w", err)
@@ -638,7 +645,7 @@ func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, lo
 			authnProviders = append(authnProviders, p)
 			shutdowns = append(shutdowns, p)
 		case "oidc-jwt":
-			p, err := oidcjwt.New(context.Background(), cfg.Auth.OIDC, log)
+			p, err := oidcjwt.New(context.Background(), cfg.Api.Auth.OIDC, log)
 			if err != nil {
 				cleanup()
 				return nil, nil, fmt.Errorf("init oidc-jwt provider: %w", err)
@@ -654,9 +661,9 @@ func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, lo
 	// Build AuthZ provider.
 	var authzProvider auth.AuthZProvider
 	var rbacProvider *rbaclocal.RBACLocalProvider
-	switch cfg.Auth.AuthZ.Provider {
+	switch cfg.Api.Auth.AuthZ.Provider {
 	case "rbac-local":
-		p, err := rbaclocal.New(cfg.Auth.RBAC, log)
+		p, err := rbaclocal.New(cfg.Api.Auth.RBACLocal, log)
 		if err != nil {
 			cleanup()
 			return nil, nil, fmt.Errorf("init rbac-local authz provider: %w", err)
@@ -667,7 +674,7 @@ func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, lo
 		authzProvider = allowall.New(log)
 	default:
 		cleanup()
-		return nil, nil, fmt.Errorf("unknown authz provider %q", cfg.Auth.AuthZ.Provider)
+		return nil, nil, fmt.Errorf("unknown authz provider %q", cfg.Api.Auth.AuthZ.Provider)
 	}
 	// DecisionLogger is the required middleware that keeps every AuthZ decision
 	// consistent with the pluggable auth architecture audit contract.
@@ -675,18 +682,18 @@ func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, lo
 
 	// Build UserDir provider.
 	var userdirProvider auth.UserDirProvider
-	switch cfg.Auth.UserDir.Provider {
+	switch cfg.Api.Auth.UserDir.Provider {
 	case "none", "":
 		userdirProvider = userdirnone.New()
 	case "static-users":
 		if staticUsersProvider == nil {
 			cleanup()
-			return nil, nil, errors.New("auth.userdir.provider=static-users requires static-users in auth.authn.chain")
+			return nil, nil, errors.New("api.auth.userdir.provider=static-users requires static-users in api.auth.authn.chain")
 		}
 		userdirProvider = staticUsersProvider
 	default:
 		cleanup()
-		return nil, nil, fmt.Errorf("unknown userdir provider %q", cfg.Auth.UserDir.Provider)
+		return nil, nil, fmt.Errorf("unknown userdir provider %q", cfg.Api.Auth.UserDir.Provider)
 	}
 
 	if staticUsersProvider != nil && rbacProvider != nil && !rbacProvider.HasAnyRoleBindingFor(staticUsersProvider.Usernames()) {
@@ -696,14 +703,16 @@ func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, lo
 			first = usernames[0]
 		}
 		cleanup()
-		return nil, nil, fmt.Errorf("startup failed: static-users + rbac-local migration safety check\n\n  Problem: static-users is configured with %d user(s) (%s), but rbac-local's policy.yaml has no usable role_bindings entry for any of them. A usable binding's complete role set leaves at least one allowed action after explicit denies are applied\n\n  To fix, do ONE of the following:\n    1. Add a role_bindings entry in %s for at least one of the usernames above, e.g. role_bindings: %s: [admin]\n    2. If you don't want rbac-local enforcement yet, set GITSTORE_AUTH__AUTHZ__PROVIDER=allow-all instead\n\n  See specs/060-local-multiuser-authn/quickstart.md for a worked example", len(usernames), strings.Join(usernames, ", "), cfg.Auth.RBAC.PolicyFile, first)
+		return nil, nil, fmt.Errorf("startup failed: static-users + rbac-local migration safety check\n\n  Problem: static-users is configured with %d user(s) (%s), but rbac-local's policy.yaml has no usable role_bindings entry for any of them. A usable binding's complete role set leaves at least one allowed action after explicit denies are applied\n\n  To fix, do ONE of the following:\n    1. Add a role_bindings entry in %s for at least one of the usernames above, e.g. role_bindings: %s: [admin]\n    2. If you don't want rbac-local enforcement yet, set GITSTORE_API__AUTH__AUTHZ__PROVIDER=allow-all instead\n\n  See specs/060-local-multiuser-authn/quickstart.md for a worked example", len(usernames), strings.Join(usernames, ", "), cfg.Api.Auth.RBACLocal.PolicyFile, first)
 	}
 	return auth.NewProviderRegistry(auth.NewChainedAuthN(authnProviders...), authzProvider, userdirProvider), shutdowns, nil
 }
 
 // Start starts all servers in background goroutines.
 func (s *Server) Start() {
-	if s.namespaceWatch != nil && s.namespaceWatch.cfg.MaterializerEnabled {
+	// The CDC materializer is always on — there is no watch mechanism besides
+	// the durable journal.
+	if s.namespaceWatch != nil {
 		ctx, cancel := context.WithCancel(context.Background())
 		s.namespaceWatch.cancel = cancel
 		s.namespaceWatch.done = make(chan struct{})
@@ -841,8 +850,8 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 	if r.runner != nil || r.repositoryRunner != nil || len(catalogKinds) > 0 {
 		ready := make(chan struct{}, sources)
 		readyCount := 0
-		changeAgeLimit := time.Duration(r.cfg.CDCRetentionSeconds) * time.Second
-		confidenceWindow := time.Duration(r.cfg.CDCConfidenceWindowMillis) * time.Millisecond
+		changeAgeLimit := config.JournalCDCRetention
+		confidenceWindow := r.cfg.CDC.ConfidenceWindow
 		markReady := func() { ready <- struct{}{} }
 		if r.runner != nil {
 			readyCount++
@@ -884,7 +893,7 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 		r.log.Error("Resource watch materializer initial bookmark failed", zap.Error(err))
 		return err
 	}
-	bookmark := time.NewTicker(time.Duration(r.cfg.BookmarkIntervalSeconds) * time.Second)
+	bookmark := time.NewTicker(r.cfg.BookmarkInterval)
 	defer bookmark.Stop()
 	for {
 		select {

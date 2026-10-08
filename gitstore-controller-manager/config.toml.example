@@ -5,6 +5,10 @@
 port = 5001
 api_uri = "http://localhost:4000/graphql"
 
+[controller.api_client.rate_limit]
+per_second = 40
+burst = 10
+
 [controller.serviceaccount]
 namespace = "controllers"
 name = "gitstore-controller-manager"

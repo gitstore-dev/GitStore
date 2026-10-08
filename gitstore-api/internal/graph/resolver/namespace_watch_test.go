@@ -34,7 +34,12 @@ func TestTypedAndGenericNamespaceWatchShareBootstrapAndEvents(t *testing.T) {
 
 	r, err := NewResolver(ResolverDeps{
 		Store: store, Logger: zap.NewNop(), ResourceJournal: journal,
-		NamespaceWatch: config.NamespaceWatchConfig{ReadersEnabled: true, ReadBatchSize: 256, MaxReplayEvents: 100000, SubscriberBuffer: 64, SubscriberBackpressureMillis: 1000, PollMinMillis: 10, PollMaxMillis: 20, MaxMaterializerLagSeconds: 60},
+		NamespaceWatch: config.WatchJournalConfig{
+			Read:         config.ReadWatchConfig{BatchSize: 256, MaxReplayEvents: 100000},
+			Subscriber:   config.SubscriberWatchConfig{Buffer: 64, Backpressure: 1000 * time.Millisecond},
+			Poll:         config.PollWatchConfig{Min: 10 * time.Millisecond, Max: 20 * time.Millisecond},
+			Materializer: config.MaterializerWatchConfig{MaxLag: 60 * time.Second},
+		},
 	})
 	require.NoError(t, err)
 	bootstrap := watchjournal.BootstrapCursor

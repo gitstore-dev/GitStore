@@ -339,8 +339,8 @@ func (c *ChainedAuthN) RevokeSession(ctx context.Context, jti string, expiresAt 
 package staticusers
 
 // Resolved config fields (loaded from Viper paths/env vars by internal/config):
-//   auth.staticusers.users_file → GITSTORE_AUTH__STATICUSERS__USERS_FILE
-//   auth.jwt.secret              → GITSTORE_AUTH__JWT__SECRET
+//   api.auth.static_users.users_file → GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE
+//   api.auth.jwt.secret              → GITSTORE_API__AUTH__JWT__SECRET
 
 type StaticUsersProvider struct {
     users        map[string]UserEntry
@@ -362,7 +362,7 @@ func (p *StaticUsersProvider) Capabilities() auth.Capability {
 
 func (p *StaticUsersProvider) Authenticate(ctx context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
     // 1. Extract Authorization: Bearer <jwt>
-    // 2. Parse the JWT (golang-jwt/v5, HS256, using GITSTORE_AUTH__JWT__SECRET)
+    // 2. Parse the JWT (golang-jwt/v5, HS256, using GITSTORE_API__AUTH__JWT__SECRET)
     // 3. If parse fails → OutcomeChallenge (not my token, try next provider)
     // 4. Validate issuer == configured base + "/static-users" (always appended)
     //    or the exact legacy configured base during rolling upgrade
@@ -403,10 +403,10 @@ Session revocations are stored in the shared ScyllaDB `auth_session_revocations`
 package oidcjwt
 
 // Config keys (Viper paths → env vars):
-//   auth.oidc.issuer_uri   → GITSTORE_AUTH__OIDC__ISSUER_URI   (required)
-//   auth.oidc.client_id    → GITSTORE_AUTH__OIDC__CLIENT_ID    (optional; audience default)
-//   auth.oidc.audience     → GITSTORE_AUTH__OIDC__AUDIENCE     (audience or client_id required)
-//   auth.oidc.clock_skew   → GITSTORE_AUTH__OIDC__CLOCK_SKEW   (default "2m")
+//   api.auth.oidc_jwt.issuer_uri   → GITSTORE_API__AUTH__OIDC_JWT__ISSUER_URI   (required)
+//   api.auth.oidc_jwt.client_id    → GITSTORE_API__AUTH__OIDC_JWT__CLIENT_ID    (optional; audience default)
+//   api.auth.oidc_jwt.audience     → GITSTORE_API__AUTH__OIDC_JWT__AUDIENCE     (audience or client_id required)
+//   api.auth.oidc_jwt.clock_skew   → GITSTORE_API__AUTH__OIDC_JWT__CLOCK_SKEW   (default "2m")
 
 type OIDCJWTProvider struct {
     verifier    *oidc.IDTokenVerifier
@@ -417,8 +417,8 @@ type OIDCJWTProvider struct {
 }
 
 func New(ctx context.Context, cfg *viper.Viper, logger *zap.Logger) (*OIDCJWTProvider, error) {
-    issuerURI := cfg.GetString("auth.oidc.issuer_uri")
-    clientID  := cfg.GetString("auth.oidc.client_id")
+    issuerURI := cfg.GetString("api.auth.oidc_jwt.issuer_uri")
+    clientID  := cfg.GetString("api.auth.oidc_jwt.client_id")
     // go-oidc performs OIDC Discovery (/.well-known/openid-configuration) here:
     provider, err := oidc.NewProvider(ctx, issuerURI)
     // verifier enforces iss + aud; clock skew leeway is handled by go-oidc internally
@@ -426,7 +426,7 @@ func New(ctx context.Context, cfg *viper.Viper, logger *zap.Logger) (*OIDCJWTPro
     verifier := provider.Verifier(&oidc.Config{
         ClientID:        clientID,
         SkipExpiryCheck: false, // RFC 7519 §4.1.4 MUST validate exp
-        // go-oidc applies a 1-minute built-in leeway; set GITSTORE_AUTH__OIDC__CLOCK_SKEW for override
+        // go-oidc applies a 1-minute built-in leeway; set GITSTORE_API__AUTH__OIDC_JWT__CLOCK_SKEW for override
     })
     return &OIDCJWTProvider{verifier: verifier, issuerURI: issuerURI, clientID: clientID,
         provider: provider, logger: logger}, nil
@@ -471,7 +471,7 @@ func (p *OIDCJWTProvider) RefreshSession(_ context.Context, _ string) (string, t
 // File: gitstore-api/internal/auth/provider/allowall/provider.go
 package allowall
 
-// Config keys: none. Activated when GITSTORE_AUTH__AUTHZ__PROVIDER=allow-all.
+// Config keys: none. Activated when GITSTORE_API__AUTH__AUTHZ__PROVIDER=allow-all.
 
 type AllowAllProvider struct{ warned bool }
 
@@ -494,7 +494,7 @@ func (p *AllowAllProvider) Authorize(_ context.Context, _ *auth.Principal, actio
 package rbaclocal
 
 // Resolved config fields (loaded from Viper paths/env vars by internal/config):
-//   auth.rbac.policy_file → GITSTORE_AUTH__RBAC__POLICY_FILE (default "policy.yaml")
+//   api.auth.rbac_local.policy_file → GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE (default "policy.yaml")
 
 type RBACLocalProvider struct {
     mu     sync.RWMutex
@@ -628,7 +628,7 @@ func (p *AnonymousProvider) RefreshSession(_ context.Context, _ string) (string,
 }
 ```
 
-The `anonymous` provider must be the **last entry** in `GITSTORE_AUTH__AUTHN__CHAIN`.
+The `anonymous` provider must be the **last entry** in `GITSTORE_API__AUTH__AUTHN__CHAIN`.
 Placing it earlier would shadow all subsequent providers.
 
 ---
@@ -827,7 +827,7 @@ impl Interceptor for HmacInterceptor {
 }
 
 // Wired at server startup in main.rs:
-// let interceptor = HmacInterceptor::new(config.auth.grpc.hmac_secret.clone());
+// let interceptor = HmacInterceptor::new(config.grpc_auth.hmac_secret.clone());
 // Server::builder()
 //     .add_service(GitServiceServer::with_interceptor(svc, interceptor))
 //     .serve(addr)
@@ -846,7 +846,7 @@ func (h hmacCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[strin
 func (h hmacCreds) RequireTransportSecurity() bool { return false }
 
 // When building the gRPC connection:
-// grpc.Dial(addr, grpc.WithPerRPCCredentials(hmacCreds{token: cfg.GetString("auth.grpc.hmac_secret")}))
+// grpc.Dial(addr, grpc.WithPerRPCCredentials(hmacCreds{token: cfg.GetString("grpc_auth.hmac_secret")}))
 ```
 
 ### 4b. Git Smart-HTTP Authentication
@@ -954,77 +954,77 @@ pub struct HookContext {
 ```text
 Key path (Viper)                         Env var                                    Type     Default
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-auth.authn.chain                         GITSTORE_AUTH__AUTHN__CHAIN                []string ["static-users","anonymous"]
-auth.authz.provider                      GITSTORE_AUTH__AUTHZ__PROVIDER             string   "allow-all"
-auth.userdir.provider                    GITSTORE_AUTH__USERDIR__PROVIDER           string   "none"
+api.auth.authn.chain                         GITSTORE_API__AUTH__AUTHN__CHAIN                []string ["static-users","anonymous"]
+api.auth.authz.provider                      GITSTORE_API__AUTH__AUTHZ__PROVIDER             string   "allow-all"
+api.auth.userdir.provider                    GITSTORE_API__AUTH__USERDIR__PROVIDER           string   "none"
 
 # Local users file
-auth.staticusers.users_file              GITSTORE_AUTH__STATICUSERS__USERS_FILE     string   "users.yaml"
-auth.jwt.secret                          GITSTORE_AUTH__JWT__SECRET                 string   (required)
-auth.jwt.duration                        GITSTORE_AUTH__JWT__DURATION               duration "24h"
-auth.jwt.issuer                          GITSTORE_AUTH__JWT__ISSUER                 string   "gitstore"
-auth.jwt.refresh_grace                   GITSTORE_AUTH__JWT__REFRESH_GRACE          duration "60s"
+api.auth.static_users.users_file              GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE     string   "users.yaml"
+api.auth.jwt.secret                          GITSTORE_API__AUTH__JWT__SECRET                 string   (required)
+api.auth.jwt.ttl                        GITSTORE_API__AUTH__JWT__TTL               duration "24h"
+api.auth.jwt.issuer                          GITSTORE_API__AUTH__JWT__ISSUER                 string   "gitstore"
+api.auth.jwt.refresh_grace                   GITSTORE_API__AUTH__JWT__REFRESH_GRACE          duration "60s"
 
 # Future OIDC JWT provider (Phase 6)
-auth.oidc.issuer_uri                     GITSTORE_AUTH__OIDC__ISSUER_URI            string   "" (required when oidc-jwt chained)
-auth.oidc.client_id                      GITSTORE_AUTH__OIDC__CLIENT_ID             string   "" (optional; audience default — a pure resource server may set audience alone)
-auth.oidc.audience                       GITSTORE_AUTH__OIDC__AUDIENCE              string   "" (defaults to client_id; one of audience/client_id required when oidc-jwt chained)
-auth.oidc.clock_skew                     GITSTORE_AUTH__OIDC__CLOCK_SKEW            duration "2m"
-auth.oidc.username_claim                 GITSTORE_AUTH__OIDC__USERNAME_CLAIM        string   "sub" (k8s --oidc-username-claim / Spring user-name-attribute pattern; email or preferred_username give human-readable bindings at the cost of stability)
+api.auth.oidc_jwt.issuer_uri                     GITSTORE_API__AUTH__OIDC_JWT__ISSUER_URI            string   "" (required when oidc-jwt chained)
+api.auth.oidc_jwt.client_id                      GITSTORE_API__AUTH__OIDC_JWT__CLIENT_ID             string   "" (optional; audience default — a pure resource server may set audience alone)
+api.auth.oidc_jwt.audience                       GITSTORE_API__AUTH__OIDC_JWT__AUDIENCE              string   "" (defaults to client_id; one of audience/client_id required when oidc-jwt chained)
+api.auth.oidc_jwt.clock_skew                     GITSTORE_API__AUTH__OIDC_JWT__CLOCK_SKEW            duration "2m"
+api.auth.oidc_jwt.username_claim                 GITSTORE_API__AUTH__OIDC_JWT__USERNAME_CLAIM        string   "sub" (k8s --oidc-username-claim / Spring user-name-attribute pattern; email or preferred_username give human-readable bindings at the cost of stability)
 
 # RBAC local provider
-auth.rbac.policy_file                    GITSTORE_AUTH__RBAC__POLICY_FILE           string   "policy.yaml"
+api.auth.rbac_local.policy_file                    GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE           string   "policy.yaml"
 
 # gRPC inter-service HMAC
-auth.grpc.hmac_secret                    GITSTORE_AUTH__GRPC__HMAC_SECRET           string   (required unless grpc.disabled)
+grpc_auth.hmac_secret                    GITSTORE_GRPC_AUTH__HMAC_SECRET           string   (required unless grpc.disabled)
 ```
 
 **gitstore-api/.env — local-fast profile:**
 ```text
 # local-fast: no external services required
-GITSTORE_AUTH__ADMIN__USERNAME=admin
-GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
-GITSTORE_AUTH__JWT__SECRET=dev-secret-change-me
-GITSTORE_AUTH__JWT__ISSUER=gitstore
-GITSTORE_AUTH__AUTHN__CHAIN=static-users,anonymous
-GITSTORE_AUTH__AUTHZ__PROVIDER=allow-all
-GITSTORE_AUTH__USERDIR__PROVIDER=none
-GITSTORE_AUTH__GRPC__HMAC_SECRET=dev-grpc-secret
+GITSTORE_API__AUTH__ADMIN__USERNAME=admin
+GITSTORE_API__AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
+GITSTORE_API__AUTH__JWT__SECRET=dev-secret-change-me
+GITSTORE_API__AUTH__JWT__ISSUER=gitstore
+GITSTORE_API__AUTH__AUTHN__CHAIN=static-users,anonymous
+GITSTORE_API__AUTH__AUTHZ__PROVIDER=allow-all
+GITSTORE_API__AUTH__USERDIR__PROVIDER=none
+GITSTORE_GRPC_AUTH__HMAC_SECRET=dev-grpc-secret
 ```
 
 **gitstore-api/.env — future local-secure profile with OIDC (Phase 6):**
 ```text
-GITSTORE_AUTH__ADMIN__USERNAME=admin
-GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
-GITSTORE_AUTH__JWT__SECRET=local-secure-secret
-GITSTORE_AUTH__JWT__ISSUER=gitstore
-GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-users,anonymous
-GITSTORE_AUTH__AUTHZ__PROVIDER=rbac-local
-GITSTORE_AUTH__USERDIR__PROVIDER=none
-GITSTORE_AUTH__RBAC__POLICY_FILE=/etc/gitstore/policy.yaml
-GITSTORE_AUTH__OIDC__ISSUER_URI=http://localhost:8080/realms/gitstore
-GITSTORE_AUTH__OIDC__CLIENT_ID=gitstore-api
-GITSTORE_AUTH__OIDC__CLOCK_SKEW=2m
-GITSTORE_AUTH__GRPC__HMAC_SECRET=local-grpc-hmac-secret
+GITSTORE_API__AUTH__ADMIN__USERNAME=admin
+GITSTORE_API__AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
+GITSTORE_API__AUTH__JWT__SECRET=local-secure-secret
+GITSTORE_API__AUTH__JWT__ISSUER=gitstore
+GITSTORE_API__AUTH__AUTHN__CHAIN=oidc-jwt,static-users,anonymous
+GITSTORE_API__AUTH__AUTHZ__PROVIDER=rbac-local
+GITSTORE_API__AUTH__USERDIR__PROVIDER=none
+GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE=/etc/gitstore/policy.yaml
+GITSTORE_API__AUTH__OIDC_JWT__ISSUER_URI=http://localhost:8080/realms/gitstore
+GITSTORE_API__AUTH__OIDC_JWT__CLIENT_ID=gitstore-api
+GITSTORE_API__AUTH__OIDC_JWT__CLOCK_SKEW=2m
+GITSTORE_GRPC_AUTH__HMAC_SECRET=local-grpc-hmac-secret
 ```
 
 **gitstore-api/.env — future production profile with OIDC/OPA (Phase 6+):**
 ```text
-GITSTORE_AUTH__ADMIN__USERNAME=admin
-GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
-GITSTORE_AUTH__JWT__SECRET=${JWT_SECRET}
-GITSTORE_AUTH__JWT__ISSUER=gitstore
-GITSTORE_AUTH__JWT__DURATION=1h
-GITSTORE_AUTH__JWT__REFRESH_GRACE=60s
-GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-users,anonymous
-GITSTORE_AUTH__AUTHZ__PROVIDER=opa
-GITSTORE_AUTH__USERDIR__PROVIDER=none
-GITSTORE_AUTH__OIDC__ISSUER_URI=${OIDC_ISSUER_URI}
-GITSTORE_AUTH__OIDC__CLIENT_ID=${OIDC_CLIENT_ID}
-GITSTORE_AUTH__OIDC__AUDIENCE=${OIDC_AUDIENCE}
-GITSTORE_AUTH__OIDC__CLOCK_SKEW=2m
-GITSTORE_AUTH__RBAC__POLICY_FILE=/etc/gitstore/policy.yaml
-GITSTORE_AUTH__GRPC__HMAC_SECRET=${GRPC_HMAC_SECRET}
+GITSTORE_API__AUTH__ADMIN__USERNAME=admin
+GITSTORE_API__AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
+GITSTORE_API__AUTH__JWT__SECRET=${JWT_SECRET}
+GITSTORE_API__AUTH__JWT__ISSUER=gitstore
+GITSTORE_API__AUTH__JWT__TTL=1h
+GITSTORE_API__AUTH__JWT__REFRESH_GRACE=60s
+GITSTORE_API__AUTH__AUTHN__CHAIN=oidc-jwt,static-users,anonymous
+GITSTORE_API__AUTH__AUTHZ__PROVIDER=opa
+GITSTORE_API__AUTH__USERDIR__PROVIDER=none
+GITSTORE_API__AUTH__OIDC_JWT__ISSUER_URI=${OIDC_ISSUER_URI}
+GITSTORE_API__AUTH__OIDC_JWT__CLIENT_ID=${OIDC_CLIENT_ID}
+GITSTORE_API__AUTH__OIDC_JWT__AUDIENCE=${OIDC_AUDIENCE}
+GITSTORE_API__AUTH__OIDC_JWT__CLOCK_SKEW=2m
+GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE=/etc/gitstore/policy.yaml
+GITSTORE_GRPC_AUTH__HMAC_SECRET=${GRPC_HMAC_SECRET}
 ```
 
 ### 5b. Rust config-rs additions
@@ -1041,7 +1041,7 @@ pub struct AuthConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct GrpcAuthConfig {
     /// Shared HMAC secret validated by the Tonic interceptor.
-    /// Env: GITSTORE_AUTH__GRPC__HMAC_SECRET
+    /// Env: GITSTORE_GRPC_AUTH__HMAC_SECRET
     pub hmac_secret: String,
 }
 
@@ -1051,7 +1051,7 @@ pub struct HttpAuthConfig {
     /// "none"   — accept all requests (local-fast only)
     /// "basic"  — validate credentials by calling gitstore-api auth endpoint
     /// "header" — trust X-Gitstore-Principal-Sub header (set by Go auth proxy)
-    /// Env: GITSTORE_AUTH__HTTP__MODE  (default: "header")
+    /// Env: GITSTORE_API__AUTH__HTTP__MODE  (default: "header")
     #[serde(default = "default_http_auth_mode")]
     pub mode: String,
 }
@@ -1131,7 +1131,7 @@ action-name changes. See `022-opa-data-authorization.md` §5–§9.
 
 ### Phase 3 — Logout and RefreshToken mutations implemented ✅ COMPLETE (032)
 **Milestone:** `auth-framework-v1`
-**Deliverable:** `Logout` mutation calls `ChainedAuthN.RevokeSession`; `RefreshToken` mutation calls `ChainedAuthN.RefreshSession`; `StaticAdminProvider` blacklist is functional. `Login` resolver migrated away from legacy `authMiddleware` stubs — `user.isAdmin` and `user.username` now derived from `Principal`. `IssueSession` added to `AuthNProvider` interface. `Principal.TokenID` carries JWT `jti`. `ContextWithRawToken`/`RawTokenFromContext` store the raw Bearer string for refresh. `GITSTORE_AUTH__JWT__REFRESH_GRACE` (default `60s`) bounds the refresh window.
+**Deliverable:** `Logout` mutation calls `ChainedAuthN.RevokeSession`; `RefreshToken` mutation calls `ChainedAuthN.RefreshSession`; `StaticAdminProvider` blacklist is functional. `Login` resolver migrated away from legacy `authMiddleware` stubs — `user.isAdmin` and `user.username` now derived from `Principal`. `IssueSession` added to `AuthNProvider` interface. `Principal.TokenID` carries JWT `jti`. `ContextWithRawToken`/`RawTokenFromContext` store the raw Bearer string for refresh. `GITSTORE_API__AUTH__JWT__REFRESH_GRACE` (default `60s`) bounds the refresh window.
 **Affected packages:** `gitstore-api/internal/auth/types.go`, `gitstore-api/internal/auth/context.go`, `gitstore-api/internal/auth/registry.go`, `gitstore-api/internal/auth/provider/staticadmin/`, `gitstore-api/internal/auth/provider/anonymous/`, `gitstore-api/internal/middleware/auth.go`, `gitstore-api/internal/graph/resolver/`
 **Session lifecycle:** Production revocation state survives API restart in ScyllaDB and is shared across replicas. Rows expire automatically after the token's natural expiry plus verifier leeway.
 **Test strategy:** Unit tests for all three mutations (logout, refreshToken, login) in `tests/unit/resolver/auth_resolvers_test.go`; grace-window and TokenID population tests in `tests/unit/auth/staticadmin_test.go`.
@@ -1139,7 +1139,7 @@ action-name changes. See `022-opa-data-authorization.md` §5–§9.
 
 ### Phase 4 — gRPC HMAC inter-service authentication ✅ COMPLETE (033)
 **Milestone:** `auth-framework-git-v1`
-**Deliverable:** `HmacInterceptor` in Rust git-service; `hmacCreds` on Go gRPC client; `GITSTORE_AUTH__GRPC__HMAC_SECRET` wired on both sides; `cmd/gitctl` binary with `gen-hmac-secret` subcommand.
+**Deliverable:** `HmacInterceptor` in Rust git-service; `hmacCreds` on Go gRPC client; `GITSTORE_GRPC_AUTH__HMAC_SECRET` wired on both sides; `cmd/gitctl` binary with `gen-hmac-secret` subcommand.
 **Affected packages:** `gitstore-git-service/src/auth/`, `gitstore-api/internal/gitclient/`, `gitstore-api/cmd/gitctl/`, `gitstore-api/internal/config/`
 **Test strategy:** Unit tests: `HmacInterceptor` rejects missing/wrong token, accepts correct token and previous token during rotation window; `hmacCreds.GetRequestMetadata` injects `Authorization: Bearer` header; config validation fails on empty secret.
 **Rollback trigger:** Any gRPC call from API to git-service fails in CI.
@@ -1241,14 +1241,14 @@ stale/invalid decision does not fail closed, or scoped Relay results expose an i
 
 ### Risk 1: JWT Clock Skew (exp validation)
 **Description:** Distributed nodes with unsynchronized clocks can cause valid tokens to be rejected (or expired tokens to be accepted) at the boundary. The research verified that RFC 7519 MAY (not MUST) apply leeway — go-oidc v3 applies 1 minute by default, but the static-admin HS256 path (golang-jwt/v5) uses no leeway by default.
-**Mitigation:** Configure `2m` clock skew leeway (`GITSTORE_AUTH__OIDC__CLOCK_SKEW=2m`) for the oidc-jwt provider and the static-users JWT parser. Enforce NTP synchronization in production deployment runbooks. Monitor NTP synchronization and token rejection rate as alert signals for clock drift.
+**Mitigation:** Configure `2m` clock skew leeway (`GITSTORE_API__AUTH__OIDC_JWT__CLOCK_SKEW=2m`) for the oidc-jwt provider and the static-users JWT parser. Enforce NTP synchronization in production deployment runbooks. Monitor NTP synchronization and token rejection rate as alert signals for clock drift.
 
 ### Risk 2: JWKS Key Rotation Window
 **Description:** `RemoteKeySet` (go-oidc v3) caches JWKS and does NOT immediately propagate rotated keys. During the rotation window, tokens signed with the new key are rejected as "key not found."
 **Mitigation:** In the `OIDCJWTProvider.Authenticate` method, on any signature verification error matching "key not found" or "verification error," force a JWKS refresh via the provider's `RemoteKeySet` and retry the verification exactly once before returning 401. This closes the rotation window to a single request's latency. Log the forced-refresh event for observability.
 
 ### Risk 3: HMAC Secret Rotation (gRPC inter-service)
-**Description:** Rotating `GITSTORE_AUTH__GRPC__HMAC_SECRET` requires a coordinated deployment of both API and git-service. A window exists where one service has the new secret and the other has the old, causing all gRPC calls to fail with `Status::unauthenticated`.
+**Description:** Rotating `GITSTORE_GRPC_AUTH__HMAC_SECRET` requires a coordinated deployment of both API and git-service. A window exists where one service has the new secret and the other has the old, causing all gRPC calls to fail with `Status::unauthenticated`.
 **Mitigation:** Implement a two-token validation window in `HmacInterceptor`: accept both `hmac_secret` and `hmac_secret_previous` during rotation. The Go client always sends `hmac_secret`. This allows a rolling deployment without a service outage. Remove `hmac_secret_previous` after both services confirm the new secret.
 
 ### Risk 4: Policy Hot-Reload Race Condition (rbac-local)

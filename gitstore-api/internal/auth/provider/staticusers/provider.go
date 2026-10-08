@@ -62,26 +62,23 @@ func NewWithRevocationStore(cfg config.AuthConfig, logger *zap.Logger, revocatio
 		return nil, err
 	}
 	if cfg.JWT.Secret == "" {
-		return nil, errors.New("staticusers: GITSTORE_AUTH__JWT__SECRET is required")
+		return nil, errors.New("staticusers: GITSTORE_API__AUTH__JWT__SECRET is required")
 	}
 	issuer := cfg.JWT.Issuer
 	if issuer == "" {
 		issuer = "gitstore"
 	}
 	issuer = strings.TrimSuffix(issuer, "/") + "/static-users"
+	// A zero TTL/RefreshGrace means "not set" (config.Load always defaults
+	// these to non-zero); a negative value is used as-is — tests rely on it
+	// to construct an already-expired token.
 	duration := 24 * time.Hour
-	if cfg.JWT.Duration != "" {
-		duration, err = time.ParseDuration(cfg.JWT.Duration)
-		if err != nil {
-			return nil, fmt.Errorf("staticusers: invalid jwt duration %q: %w", cfg.JWT.Duration, err)
-		}
+	if cfg.JWT.TTL != 0 {
+		duration = cfg.JWT.TTL
 	}
 	grace := time.Minute
-	if cfg.JWT.RefreshGrace != "" {
-		grace, err = time.ParseDuration(cfg.JWT.RefreshGrace)
-		if err != nil {
-			return nil, fmt.Errorf("staticusers: invalid refresh_grace %q: %w", cfg.JWT.RefreshGrace, err)
-		}
+	if cfg.JWT.RefreshGrace != 0 {
+		grace = cfg.JWT.RefreshGrace
 	}
 	if revocations == nil {
 		return nil, errors.New("staticusers: revocation store is required")

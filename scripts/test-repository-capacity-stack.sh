@@ -91,7 +91,7 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     .services["api-b"].depends_on["capacity-credential-bootstrap"].condition == "service_completed_successfully" and
     .services["api-b"].depends_on["scylla-init"].condition == "service_completed_successfully" and
     .services["api-b"].depends_on["capacity-git-service"].condition == "service_started" and
-    .services["capacity-git-service"].environment.GITSTORE_CATALOG_SERVICE__URI == "http://api-a:6000" and
+    .services["capacity-git-service"].environment.GITSTORE_GIT_SERVICE__CATALOG__URI == "dns:///api-a:6000" and
     ((.services["capacity-credential-bootstrap"].ports // []) | length) == 0 and
     ((.services["capacity-serviceaccount-enrollment"].ports // []) | length) == 0 and
     (.services["api-a"].depends_on["api-b"] == null)
@@ -118,8 +118,8 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     (.services["capacity-git-service"].image | startswith("localhost/git@sha256:")) and
     (.services["api-a"].environment.REPOSITORY_CAPACITY_SECRET_SCENARIO == "1") and
     (.services["api-b"].environment.REPOSITORY_CAPACITY_SECRET_SCENARIO == "1") and
-    (.services["api-a"].command[-1] | contains("GITSTORE_AUTH__SERVICEACCOUNT__MAX_TTL=60s")) and
-    (.services["capacity-git-service"].environment.GITSTORE_CATALOG_SERVICE__URI == "http://api-a:6000") and
+    (.services["api-a"].command[-1] | contains("GITSTORE_API__AUTH__SERVICEACCOUNT__MAX_TTL=60s")) and
+    (.services["capacity-git-service"].environment.GITSTORE_GIT_SERVICE__CATALOG__URI == "dns:///api-a:6000") and
     ([.services["controller-manager-a"], .services["controller-manager-b"]] |
       all((.volumes | length) == 4 and
           ([.volumes[] | select(.target == "/run/secrets" and .read_only == true)] | length) == 1 and

@@ -62,9 +62,9 @@ jobs:
       contents: read
     # CI-specific credentials override the tracked development fixture.
     env:
-      GITSTORE_GIT__DATA_DIR: ./data/repos
-      GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
-      GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
+      GITSTORE_GIT_SERVICE__DATA_DIR: ./data/repos
+      GITSTORE_API__AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
+      GITSTORE_GRPC_AUTH__HMAC_SECRET: ci-test-grpc-hmac-secret
 
     steps:
     - uses: actions/checkout@v6
@@ -140,9 +140,9 @@ jobs:
     permissions:
       contents: read
     env:
-      GITSTORE_GIT__DATA_DIR: ./data/repos
-      GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
-      GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
+      GITSTORE_GIT_SERVICE__DATA_DIR: ./data/repos
+      GITSTORE_API__AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
+      GITSTORE_GRPC_AUTH__HMAC_SECRET: ci-test-grpc-hmac-secret
 
     steps:
       - uses: actions/checkout@v6

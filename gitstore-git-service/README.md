@@ -18,22 +18,23 @@ It does not expose public Git HTTP endpoints. In the default Compose deployment,
 ## Boundaries
 
 - `gitstore-api` calls this service through GitService gRPC on port `50051`.
-- This service stores repositories below `GITSTORE_GIT__DATA_DIR`.
+- This service stores repositories below `GITSTORE_GIT_SERVICE__DATA_DIR`.
 - During push hooks, this service calls `gitstore-api` CatalogService gRPC on port `6000`.
 - Catalogue parsing and datastore persistence are API responsibilities.
 - Post-receive admission callouts include the ref name, old commit SHA, and new commit SHA so the API can derive creates, updates, deletes, moves, and stale-admission skips.
 
 ## Configuration Highlights
 
-| Variable                                  | Default                   | Purpose                     |
-|-------------------------------------------|---------------------------|-----------------------------|
-| `GITSTORE_GRPC__PORT`                     | `50051`                   | GitService gRPC listen port |
-| `GITSTORE_GIT__DATA_DIR`                  | `/var/lib/gitstore/repos` | Bare repository root        |
-| `GITSTORE_GIT__REPO__MAX_FILE_SIZE`       | `52428800`                | Per-file size limit         |
-| `GITSTORE_GIT__REPO__MAX_PACK_SIZE_BYTES` | `52428800`                | Pack size limit             |
-| `GITSTORE_CATALOG_SERVICE__URI`           | `http://localhost:6000`   | API CatalogService target   |
-| `GITSTORE_LOG__LEVEL`                     | `info`                    | Log level                   |
-| `GITSTORE_LOG__FORMAT`                    | `json`                    | `json` or `text`            |
+| Variable                                   | Default                   | Purpose                     |
+|-----------------------------------------------|---------------------------|-----------------------------|
+| `GITSTORE_GIT_SERVICE__GRPC_PORT`          | `50051`                   | GitService gRPC listen port |
+| `GITSTORE_GIT_SERVICE__DATA_DIR`           | `/var/lib/gitstore/repos` | Bare repository root        |
+| `GITSTORE_PUSH_LIMITS__MAX_FILE_SIZE`      | `100MiB`                  | Shared platform file-size ceiling (IEC size string) |
+| `GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE`      | `512MiB`                  | Shared platform pack-size ceiling (IEC size string) |
+| `GITSTORE_GIT_SERVICE__CATALOG__URI`       | `dns:///localhost:6000`   | API CatalogService target (`dns:///host:port`) |
+| `GITSTORE_GRPC_AUTH__HMAC_SECRET`          | —                         | HMAC secret shared with gitstore-api |
+| `GITSTORE_LOG__LEVEL`                      | `info`                    | Log level                   |
+| `GITSTORE_LOG__FORMAT`                     | `json`                    | `json` or `text`            |
 
 Hook and admission settings are loaded from defaults, optional `gitstore.toml`, and environment variables. See [docs/configuration.md](../docs/configuration.md).
 
@@ -92,7 +93,7 @@ Primary RPC groups:
 
 ## Storage
 
-Repositories are stored as bare repositories below `GITSTORE_GIT__DATA_DIR`. The API resolves human-readable namespace/repository paths to stable repository IDs before calling this service.
+Repositories are stored as bare repositories below `GITSTORE_GIT_SERVICE__DATA_DIR`. The API resolves human-readable namespace/repository paths to stable repository IDs before calling this service.
 
 ## Deeper Docs
 

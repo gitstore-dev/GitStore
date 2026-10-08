@@ -78,7 +78,7 @@ func main() {
 		}()
 	}
 	client, err := graphqlclient.NewWithRateLimit(cfg.Controller.ApiURI, credentials,
-		cfg.Controller.APIClient.RequestsPerSecond, cfg.Controller.APIClient.Burst)
+		cfg.Controller.APIClient.RateLimit.PerSecond, cfg.Controller.APIClient.RateLimit.Burst)
 	if err != nil {
 		log.Fatal("create API client", zap.Error(err))
 	}

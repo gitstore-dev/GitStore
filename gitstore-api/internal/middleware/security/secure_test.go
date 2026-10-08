@@ -66,9 +66,9 @@ func newTestRegistry(t *testing.T) (*auth.ProviderRegistry, *staticusers.StaticU
 	cfg := config.AuthConfig{
 		StaticUsers: config.StaticUsersConfig{UsersFile: usersFile},
 		JWT: config.JWTConfig{
-			Secret:   "dev-secret-change-in-production",
-			Issuer:   "gitstore",
-			Duration: "24h",
+			Secret: "dev-secret-change-in-production",
+			Issuer: "gitstore",
+			TTL:    24 * time.Hour,
 		},
 	}
 

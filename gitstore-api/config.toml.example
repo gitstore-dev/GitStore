@@ -5,45 +5,51 @@
 port = 4000
 git_port = 9000
 grpc_port = 6000
-rate_limit_per_second = 50
-rate_limit_burst = 100
 
-[git.grpc]
+[api.rate_limit]
+per_second = 50
+burst = 100
+
+[api.git_service]
 uri = "dns:///localhost:50051"
 
-[auth.staticusers]
+[api.auth.static_users]
 users_file = "/etc/gitstore/users.yaml"
 
-[auth.jwt]
+[api.auth.jwt]
 secret = "replace-with-strong-random-secret-at-least-32-chars"
-duration = "24h"
+ttl = "24h"
 issuer = "gitstore"
 refresh_grace = "60s"
 
-[auth.grpc]
-hmac_secret = "replace-with-shared-hmac-secret"
-
-[auth.authn]
+[api.auth.authn]
 chain = ["static-users", "anonymous"]
 
-[auth.authz]
+[api.auth.authz]
 provider = "allow-all"
 
-[auth.userdir]
+[api.auth.userdir]
 provider = "static-users"
 
-[auth.rbac]
+[api.auth.rbac_local]
 policy_file = "/etc/gitstore/policy.yaml"
 
-[datastore]
+[api.datastore]
 backend = "memdb"
+
+[grpc_auth]
+hmac_secret = "replace-with-shared-hmac-secret"
+
+[push_limits]
+max_pack_size = "512MiB"
+max_file_size = "100MiB"
 
 [log]
 level = "info"
 format = "json"
 
-# Optional Scylla configuration when datastore.backend = "scylla"
-# [datastore.scylla]
+# Optional Scylla configuration when api.datastore.backend = "scylla"
+# [api.datastore.scylla]
 # hosts = ["localhost:9042"]
 # keyspace = "gitstore"
 # username = ""

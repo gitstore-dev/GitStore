@@ -112,12 +112,15 @@ func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTe
 		nil,
 	)
 	handler, err := NewGraphQLHandler(GraphQLHandlerDeps{
-		Store:              store,
-		Logger:             zap.NewNop(),
-		Registry:           registry,
-		IDs:                apiruntime.NewSequenceIDGenerator(),
-		ResourceJournal:    store.(datastore.ResourceWatchCapable).ResourceWatchJournal(),
-		NamespaceWatch:     config.NamespaceWatchConfig{ReadersEnabled: true, SubscriberBuffer: 16, MaxMaterializerLagSeconds: 60},
+		Store:           store,
+		Logger:          zap.NewNop(),
+		Registry:        registry,
+		IDs:             apiruntime.NewSequenceIDGenerator(),
+		ResourceJournal: store.(datastore.ResourceWatchCapable).ResourceWatchJournal(),
+		NamespaceWatch: config.WatchJournalConfig{
+			Subscriber:   config.SubscriberWatchConfig{Buffer: 16},
+			Materializer: config.MaterializerWatchConfig{MaxLag: 60 * time.Second},
+		},
 		ConnectionRegistry: connections,
 	})
 	require.NoError(t, err)

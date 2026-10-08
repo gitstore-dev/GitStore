@@ -85,7 +85,7 @@ func newTestProvider(t *testing.T, store ServiceAccountStore) *Provider {
 	t.Helper()
 	p, err := New(config.ServiceAccountConfig{
 		AssertionAudience: "gitstore-api/serviceaccount-token",
-		ClockSkew:         "2m",
+		ClockSkew:         2 * time.Minute,
 	}, store, zap.NewNop())
 	require.NoError(t, err)
 	return p
@@ -540,9 +540,4 @@ func TestServiceAccountAssertion_Capabilities(t *testing.T) {
 	assert.NotZero(t, caps&auth.CapAuthenticate)
 	assert.Zero(t, caps&auth.CapIssueSession)
 	assert.Zero(t, caps&auth.CapIntrospect)
-}
-
-func TestNew_InvalidClockSkew_Errors(t *testing.T) {
-	_, err := New(config.ServiceAccountConfig{ClockSkew: "not-a-duration"}, &stubLookup{}, zap.NewNop())
-	require.Error(t, err)
 }

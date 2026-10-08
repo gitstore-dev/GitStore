@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"time"
 
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -142,7 +141,7 @@ func addRepositoryWatchSubscriptionError(ctx context.Context, err error) {
 }
 
 func (r *Resolver) repositoryWatchAvailable() error {
-	if r.resourceJournal == nil || r.namespaceSubscriber == nil || !r.namespaceWatch.ReadersEnabled {
+	if r.resourceJournal == nil || r.namespaceSubscriber == nil {
 		return repositoryWatchGraphQLError(&watchjournal.TerminalError{Code: watchjournal.CodeUnavailable, Reason: "MATERIALIZER_NOT_READY"})
 	}
 	return nil
@@ -165,7 +164,7 @@ func (r *Resolver) watchRepositoryResources(ctx context.Context, namespace *stri
 		cancel()
 		return nil, repositoryWatchGraphQLError(err)
 	}
-	out := make(chan *model.WatchEvent, r.namespaceWatch.SubscriberBuffer)
+	out := make(chan *model.WatchEvent, r.namespaceWatch.Subscriber.Buffer)
 	go func() {
 		defer cancel()
 		defer close(out)
@@ -199,7 +198,7 @@ func (r *Resolver) watchRepositoryResources(ctx context.Context, namespace *stri
 					addRepositoryWatchSubscriptionError(ctx, convertErr)
 					return
 				}
-				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond, r.namespaceMetrics); sendErr != nil {
+				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, r.namespaceWatch.Subscriber.Backpressure, r.namespaceMetrics); sendErr != nil {
 					if streamCtx.Err() == nil {
 						addRepositoryWatchSubscriptionError(streamCtx, repositoryWatchGraphQLError(sendErr))
 					}

@@ -77,10 +77,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runRBAC(args[1:], stdout, stderr)
 
 	case "gen-jwt-secret":
-		return printSecret(stdout, stderr, "GITSTORE_AUTH__JWT__SECRET")
+		return printSecret(stdout, stderr, "GITSTORE_API__AUTH__JWT__SECRET")
 
 	case "gen-hmac-secret":
-		return printSecret(stdout, stderr, "GITSTORE_AUTH__GRPC__HMAC_SECRET")
+		return printSecret(stdout, stderr, "GITSTORE_GRPC_AUTH__HMAC_SECRET")
 
 	case "scylla-projection-audit":
 		return runProjectionAudit(args[1:], stdout, stderr)
@@ -370,13 +370,13 @@ func runMigrate(args []string, stdout, stderr io.Writer) int {
 func newScyllaFlagSet(name string, stderr io.Writer) (*flag.FlagSet, func() config.ScyllaConfig) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	hosts := flags.String("hosts", envOrDefault("GITSTORE_DATASTORE__SCYLLA__HOSTS", "localhost:9042"), "comma-separated Scylla host:port endpoints")
-	keyspace := flags.String("keyspace", envOrDefault("GITSTORE_DATASTORE__SCYLLA__KEYSPACE", "gitstore"), "Scylla keyspace")
-	username := flags.String("username", os.Getenv("GITSTORE_DATASTORE__SCYLLA__USERNAME"), "Scylla username")
-	tls := flags.Bool("tls", envBool("GITSTORE_DATASTORE__SCYLLA__TLS"), "enable TLS")
+	hosts := flags.String("hosts", envOrDefault("GITSTORE_API__DATASTORE__SCYLLA__HOSTS", "localhost:9042"), "comma-separated Scylla host:port endpoints")
+	keyspace := flags.String("keyspace", envOrDefault("GITSTORE_API__DATASTORE__SCYLLA__KEYSPACE", "gitstore"), "Scylla keyspace")
+	username := flags.String("username", os.Getenv("GITSTORE_API__DATASTORE__SCYLLA__USERNAME"), "Scylla username")
+	tls := flags.Bool("tls", envBool("GITSTORE_API__DATASTORE__SCYLLA__TLS"), "enable TLS")
 	disableShardAware := flags.Bool(
 		"disable-shard-aware-port",
-		envBool("GITSTORE_DATASTORE__SCYLLA__DISABLE_SHARD_AWARE_PORT"),
+		envBool("GITSTORE_API__DATASTORE__SCYLLA__DISABLE_SHARD_AWARE_PORT"),
 		"disable shard-aware port discovery",
 	)
 	return flags, func() config.ScyllaConfig {
@@ -384,7 +384,7 @@ func newScyllaFlagSet(name string, stderr io.Writer) (*flag.FlagSet, func() conf
 			Hosts:                 splitNonEmpty(*hosts),
 			Keyspace:              *keyspace,
 			Username:              *username,
-			Password:              os.Getenv("GITSTORE_DATASTORE__SCYLLA__PASSWORD"),
+			Password:              os.Getenv("GITSTORE_API__DATASTORE__SCYLLA__PASSWORD"),
 			TLS:                   *tls,
 			DisableShardAwarePort: *disableShardAware,
 		}

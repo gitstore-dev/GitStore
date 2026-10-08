@@ -106,7 +106,7 @@ func TestValidateLocalConfigRejectsMalformedInputs(t *testing.T) {
 
 	validConfig := filepath.Join("..", "..", "..", "config", "config.toml")
 	stderr.Reset()
-	t.Setenv("GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY", "config-validation-placeholder")
+	t.Setenv("GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY", "config-validation-placeholder")
 	code = run([]string{"validate-local-config", "--config-file", validConfig, "--policy-file", policyPath}, strings.NewReader(""), &stdout, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "Invalid RBAC policy") {
 		t.Fatalf("malformed policy: code = %d, stderr = %q", code, stderr.String())

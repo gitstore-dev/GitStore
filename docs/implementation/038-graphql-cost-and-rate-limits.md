@@ -173,7 +173,7 @@ a Lua GCRA or token-bucket script. Candidates to evaluate: `go-redis/redis_rate`
 redis-cell. Neither is adopted by this document.
 
 **Both layers use the same interface.** L0 becomes `Take(key="ip:"+ClientIP, policy=ip, cost=1)`.
-The existing `api.rate_limit_per_second`/`rate_limit_burst` keys map to
+The existing `api.rate_limit.per_second`/`api.rate_limit.burst` keys map to
 `Policy{RestoreRate, MaximumAvailable}`, so current deployments keep their behaviour.
 
 ## 6. Cost Model
@@ -514,9 +514,11 @@ Stable UPPER_SNAKE codes follow the existing API vocabulary (`FORBIDDEN`, `NOT_F
 
 ```toml
 [api]
-rate_limit_per_second = 50        # L0 "ip" policy (unchanged keys)
-rate_limit_burst = 100
 trusted_proxies = []              # CIDRs; empty = trust none (C7 fix)
+
+[api.rate_limit]                  # L0 "ip" policy
+per_second = 50
+burst = 100
 
 [api.graphql.limits]
 max_body_bytes = 1048576

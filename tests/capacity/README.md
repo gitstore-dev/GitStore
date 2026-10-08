@@ -307,8 +307,8 @@ defined in the shared `compose.capacity.yml` capacity overlay.
 When a load balancer or local container runtime buffers WebSocket traffic,
 point `REPOSITORY_OVERFLOW_API` at a reader-only API replica on the same
 datastore and journal. Configure only that chaos endpoint with
-`watch.namespace.subscriber_buffer=1` and
-`watch.namespace.subscriber_backpressure_millis=1`; the two measured API
+`api.watch.journal.subscriber.buffer=1` and
+`api.watch.journal.subscriber.backpressure=1ms`; the two measured API
 replicas must retain their production settings.
 
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -81,18 +80,16 @@ func TestTypedAndGenericProductWatchShareDurableJournal(t *testing.T) {
 func TestProductWatchFailsClosedWithoutJournal(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
-	for _, cfg := range []config.NamespaceWatchConfig{{}, {ReadersEnabled: true}} {
-		r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop(), NamespaceWatch: cfg})
-		require.NoError(t, err)
-		_, err = r.Subscription().WatchProducts(t.Context(), nil, nil, nil)
-		require.Error(t, err)
-		require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
-		_, err = r.Subscription().WatchResources(t.Context(), "Product", nil, nil, nil)
-		require.Error(t, err)
-		require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
-	}
+	r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
+	require.NoError(t, err)
+	_, err = r.Subscription().WatchProducts(t.Context(), nil, nil, nil)
+	require.Error(t, err)
+	require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
+	_, err = r.Subscription().WatchResources(t.Context(), "Product", nil, nil, nil)
+	require.Error(t, err)
+	require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
 	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
-	r, err := NewResolver(repositoryWatchResolverDeps(store, journal))
+	r, err = NewResolver(repositoryWatchResolverDeps(store, journal))
 	require.NoError(t, err)
 	require.NotNil(t, r.namespaceSubscriber)
 	r.resourceJournal = nil
@@ -129,31 +126,6 @@ gitstore_resource_watch_expired_total{reason="SUBSCRIBER_OVERFLOW"} 1
 # TYPE gitstore_resource_watch_overflow_total counter
 gitstore_resource_watch_overflow_total 1
 `), "gitstore_resource_watch_expired_total", "gitstore_resource_watch_overflow_total"))
-}
-
-// Product watches must fail closed when the shared journal materializer is not
-// ready. In particular, they must not fall back to an event-bus cursor that
-// cannot be resumed on another API replica.
-func TestProductWatchFailsClosedWhenDurableReadersAreDisabled(t *testing.T) {
-	store, err := memdb.New()
-	require.NoError(t, err)
-	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
-	r, err := NewResolver(ResolverDeps{
-		Store: store, Logger: zap.NewNop(), ResourceJournal: journal,
-		NamespaceWatch: config.NamespaceWatchConfig{ReadersEnabled: false},
-	})
-	require.NoError(t, err)
-
-	invalidCursor := "revealing-invalid-cursor"
-	_, err = r.Subscription().WatchProducts(context.Background(), nil, nil, &invalidCursor)
-	require.Error(t, err)
-	assert.Equal(t, "WATCH_UNAVAILABLE", err.(*gqlerror.Error).Extensions["code"])
-	assert.Equal(t, "MATERIALIZER_NOT_READY", err.(*gqlerror.Error).Extensions["reason"])
-
-	_, err = r.Subscription().WatchResources(context.Background(), "Product", nil, nil, &invalidCursor)
-	require.Error(t, err)
-	assert.Equal(t, "WATCH_UNAVAILABLE", err.(*gqlerror.Error).Extensions["code"])
-	assert.Equal(t, "MATERIALIZER_NOT_READY", err.(*gqlerror.Error).Extensions["reason"])
 }
 
 // Bootstrap is a shared journal operation: a typed Product subscriber and a

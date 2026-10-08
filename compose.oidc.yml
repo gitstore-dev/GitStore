@@ -18,12 +18,12 @@ services:
       # that exact URL from inside the container.
       - "localhost:host-gateway"
     environment:
-      - GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous
-      - GITSTORE_AUTH__OIDC__ISSUER_URI=http://localhost:${GITSTORE_HOST_OIDC_ISSUER_PORT:-4444}/
-      - GITSTORE_AUTH__OIDC__CLIENT_ID=${GITSTORE_OIDC_CLIENT_ID:-gitstore}
+      - GITSTORE_API__AUTH__AUTHN__CHAIN=oidc-jwt,static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous
+      - GITSTORE_API__AUTH__OIDC_JWT__ISSUER_URI=http://localhost:${GITSTORE_HOST_OIDC_ISSUER_PORT:-4444}/
+      - GITSTORE_API__AUTH__OIDC_JWT__CLIENT_ID=${GITSTORE_OIDC_CLIENT_ID:-gitstore}
       # Follows GITSTORE_OIDC_CLIENT_AUDIENCE so a custom registered audience
       # is also what the api verifies.
-      - GITSTORE_AUTH__OIDC__AUDIENCE=${GITSTORE_OIDC_CLIENT_AUDIENCE:-gitstore}
+      - GITSTORE_API__AUTH__OIDC_JWT__AUDIENCE=${GITSTORE_OIDC_CLIENT_AUDIENCE:-gitstore}
 
   hydra-postgres:
     image: postgres:16-alpine
