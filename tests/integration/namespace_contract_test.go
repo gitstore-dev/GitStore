@@ -287,7 +287,7 @@ func main() {
 		JWT: config.JWTConfig{
 			Secret:   "namespace-contract-secret",
 			Issuer:   "gitstore",
-			Duration: "2h",
+			TTL:    2 * time.Hour,
 		},
 		ServiceAccount: config.ServiceAccountConfig{
 			Audience:   "gitstore-api",

@@ -1258,3 +1258,20 @@ func TestLoad_RejectsLegacyAuthStaticusersConfigFile(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "api.auth.static_users")
 }
+
+func TestLoad_RejectsNonPositiveServiceAccountTokenTTLs(t *testing.T) {
+	for _, key := range []string{"DEFAULT_TTL", "MAX_TTL"} {
+		t.Run(key, func(t *testing.T) {
+			restore := clearEnv(t)
+			defer restore()
+			setRequiredAuth(t)
+			os.Setenv("GITSTORE_API__AUTH__AUTHN__CHAIN", "static-users,serviceaccount-jwt,anonymous")
+			os.Setenv("GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY", "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----")
+			os.Setenv("GITSTORE_API__AUTH__SERVICEACCOUNT__"+key, "0s")
+			defer os.Unsetenv("GITSTORE_API__AUTH__SERVICEACCOUNT__" + key)
+
+			_, err := Load()
+			require.ErrorContains(t, err, "must be positive")
+		})
+	}
+}

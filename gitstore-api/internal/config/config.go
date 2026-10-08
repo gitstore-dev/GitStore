@@ -611,6 +611,18 @@ func validateServiceAccountAuthChainConfig(auth *AuthConfig) error {
 				"\"serviceaccount-assertion\" is present in api.auth.authn.chain",
 		)
 	}
+	if chainRequiresServiceAccountSigningKey(auth.AuthN.Chain) {
+		sa := auth.ServiceAccount
+		if sa.DefaultTTL <= 0 {
+			return errors.New("api.auth.serviceaccount.default_ttl must be positive")
+		}
+		if sa.MaxTTL <= 0 {
+			return errors.New("api.auth.serviceaccount.max_ttl must be positive")
+		}
+		if sa.ClockSkew < 0 {
+			return errors.New("api.auth.serviceaccount.clock_skew must not be negative")
+		}
+	}
 	return nil
 }
 

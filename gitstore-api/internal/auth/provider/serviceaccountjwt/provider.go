@@ -29,6 +29,9 @@ const providerName = "serviceaccount-jwt"
 const (
 	defaultIssuer   = "gitstore"
 	defaultAudience = "gitstore-api"
+	defaultTTL      = 10 * time.Minute
+	defaultMaxTTL   = time.Hour
+	defaultSkew     = 2 * time.Minute
 )
 
 // ServiceAccountLookup is the narrow datastore seam this provider needs —
@@ -78,18 +81,20 @@ func New(cfg config.ServiceAccountConfig, lookup ServiceAccountLookup, logger *z
 	}
 
 	// config.Load defaults DefaultTTL/MaxTTL/ClockSkew; a caller constructing
-	// ServiceAccountConfig directly (e.g. tests) is trusted as-is — an
-	// explicit zero or negative TTL is a configuration error, not silently
-	// replaced by the default.
-	ttl := cfg.DefaultTTL
-	if ttl <= 0 {
-		return nil, fmt.Errorf("serviceaccountjwt: default_ttl must be positive")
+	// ServiceAccountConfig directly may leave them zero to use the same
+	// defaults. Negative values are configuration errors.
+	ttl, err := durationOrDefault(cfg.DefaultTTL, defaultTTL, "default_ttl")
+	if err != nil {
+		return nil, err
 	}
-	maxTTL := cfg.MaxTTL
-	if maxTTL <= 0 {
-		return nil, fmt.Errorf("serviceaccountjwt: max_ttl must be positive")
+	maxTTL, err := durationOrDefault(cfg.MaxTTL, defaultMaxTTL, "max_ttl")
+	if err != nil {
+		return nil, err
 	}
-	skew := cfg.ClockSkew
+	skew, err := durationOrDefault(cfg.ClockSkew, defaultSkew, "clock_skew")
+	if err != nil {
+		return nil, err
+	}
 
 	keys, err := newKeySet(cfg.SigningKey)
 	if err != nil {
@@ -298,4 +303,15 @@ func (p *Provider) signWithClaims(claims accessTokenClaims) (string, error) {
 		return "", fmt.Errorf("serviceaccountjwt: sign token: %w", err)
 	}
 	return signed, nil
+}
+
+func durationOrDefault(value, fallback time.Duration, name string) (time.Duration, error) {
+	switch {
+	case value < 0:
+		return 0, fmt.Errorf("serviceaccountjwt: %s must not be negative", name)
+	case value == 0:
+		return fallback, nil
+	default:
+		return value, nil
+	}
 }
