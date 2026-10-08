@@ -69,7 +69,7 @@ func TestProductMutationAuthorizationMatrix(t *testing.T) {
 	}{
 		{"createProduct", map[string]any{"input": model.CreateProductInput{Metadata: metadata}}, "product.create"},
 		{"updateProduct", map[string]any{"input": model.UpdateProductInput{Metadata: metadata}}, "product.update"},
-		{"deleteProduct", map[string]any{"input": model.DeleteProductInput{ID: &productID}}, "product.delete"},
+		{"deleteProduct", map[string]any{"input": model.DeleteProductInput{ID: productID}}, "product.delete"},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			authz := testutil.NewDenyAllAuthZ(t)
@@ -181,7 +181,7 @@ func TestProductAuthorizationCapabilitiesAreAttributedAcrossPrincipalProviders(t
 		{
 			name:      "human deletes product",
 			principal: &auth.Principal{Subject: "alice", AuthMethod: "static-users"},
-			field:     "deleteProduct", args: map[string]any{"input": model.DeleteProductInput{ID: &productID}}, action: "product.delete",
+			field:     "deleteProduct", args: map[string]any{"input": model.DeleteProductInput{ID: productID}}, action: "product.delete",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

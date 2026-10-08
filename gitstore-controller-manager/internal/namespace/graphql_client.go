@@ -114,7 +114,7 @@ func (c *GraphQLDeletionClient) CompleteDeletion(ctx context.Context, namespace,
 	}
 	if err := c.client.Mutate(ctx, completeNamespaceDeletionMutation, map[string]any{
 		"input": map[string]any{
-			"identifier":      namespace,
+			"name":            namespace,
 			"resourceVersion": resourceVersion,
 		},
 	}, &response); err != nil {

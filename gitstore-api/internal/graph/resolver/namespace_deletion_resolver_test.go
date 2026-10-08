@@ -111,12 +111,12 @@ func invokeDeleteNamespaceResolver(
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
-		Args:   map[string]any{"input": model.DeleteNamespaceInput{ID: &id}},
+		Args:   map[string]any{"input": model.DeleteNamespaceInput{ID: id}},
 	})
 	var payload *model.DeleteNamespacePayload
 	_, err = authorizer.GraphQLFieldAuthorizer(ctx, func(nextCtx context.Context) (any, error) {
 		var resolverErr error
-		payload, resolverErr = mutation.DeleteNamespace(nextCtx, model.DeleteNamespaceInput{ID: &id})
+		payload, resolverErr = mutation.DeleteNamespace(nextCtx, model.DeleteNamespaceInput{ID: id})
 		return payload, resolverErr
 	})
 	return payload, err

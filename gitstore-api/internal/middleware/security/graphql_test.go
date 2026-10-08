@@ -23,8 +23,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func ptr(s string) *string { return &s }
-
 func TestGraphQLAuthenticatorValidBearerInjectsPrincipal(t *testing.T) {
 	registry, staticAdmin := newTestRegistry(t)
 	token, _, err := staticAdmin.IssueSession(t.Context(), "admin")
@@ -476,7 +474,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
 		Args: map[string]any{
-			"input": model.DeleteNamespaceInput{ID: ptr(base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/acme")))},
+			"input": model.DeleteNamespaceInput{ID: base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/acme"))},
 		},
 	})
 
@@ -529,7 +527,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenialHidesDeletionDetails(t *test
 				Object: "Mutation",
 				Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
 				Args: map[string]any{
-					"input": model.DeleteNamespaceInput{ID: ptr(base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/" + tc.namespace.UID)))},
+					"input": model.DeleteNamespaceInput{ID: base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/" + tc.namespace.UID))},
 				},
 			})
 
@@ -564,7 +562,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespacePassesAuthorizedRecord(t *testing.
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
 		Args: map[string]any{
-			"input": model.DeleteNamespaceInput{ID: ptr(base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/acme")))},
+			"input": model.DeleteNamespaceInput{ID: base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/acme"))},
 		},
 	})
 

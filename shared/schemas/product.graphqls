@@ -161,7 +161,7 @@ input UpdateProductInput {
 
 input DeleteProductInput {
   """Opaque global Product Node ID; never a raw UID or source selector."""
-  id: ID
+  id: ID!
 }
 
 type CreateProductPayload {
