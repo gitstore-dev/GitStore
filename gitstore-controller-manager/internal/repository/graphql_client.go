@@ -99,10 +99,10 @@ func (c *GraphQLCompletionClient) CompleteDeletion(ctx context.Context, namespac
 	}, &response); err != nil {
 		var gqlErr *graphqlclient.Error
 		if errors.As(err, &gqlErr) {
-			switch gqlErr.Extensions["code"] {
-			case "RESOURCE_VERSION_CONFLICT":
+			switch {
+			case graphqlclient.IsConflictCode(gqlErr.Extensions["code"]):
 				return fmt.Errorf("repository completion client: %w: %w", types.ErrConflict, err)
-			case "NOT_FOUND":
+			case gqlErr.Extensions["code"] == "NOT_FOUND":
 				// A previous at-least-once reconcile may already have completed
 				// this deletion. Treat the desired terminal state as success.
 				return nil

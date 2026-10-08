@@ -58,10 +58,10 @@ func (c *graphqlStatusClient) Apply(ctx context.Context, key types.WorkItemKey, 
 	if err := c.client.Mutate(ctx, updateCategoryStatusMutation, map[string]any{"input": input}, &resp); err != nil {
 		var gqlErr *graphqlclient.Error
 		if errors.As(err, &gqlErr) {
-			switch gqlErr.Extensions["code"] {
-			case "NOT_FOUND":
+			switch {
+			case gqlErr.Extensions["code"] == "NOT_FOUND":
 				return fmt.Errorf("graphqlStatusClient: %w: %w", types.ErrNotFound, err)
-			case "RESOURCE_VERSION_CONFLICT":
+			case graphqlclient.IsConflictCode(gqlErr.Extensions["code"]):
 				return fmt.Errorf("graphqlStatusClient: %w: current resourceVersion %q: %w", types.ErrConflict, gqlErr.Extensions["resourceVersion"], err)
 			}
 		}
