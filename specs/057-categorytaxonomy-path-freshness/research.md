@@ -89,7 +89,7 @@ All Technical Context unknowns are resolved below. Code references are relative 
   - `check` is redundant: the code and reason already encode it.
   - Putting `reason`/`reasons` inside diagnostics gives one place for machine-readable detail.
   - Collapsing the codes gives clients a single vocabulary across kinds.
-- **Prerequisite**: a separate PR, merged before slice 1:
+- **Prerequisite** (merged as #457):
   - removes `features.namespace_repository_fence` (the fence is always on);
   - removes `NAMESPACE_REPOSITORY_FENCE_DISABLED`;
   - removes the unused `TransferRepository` datastore method and its tests;
