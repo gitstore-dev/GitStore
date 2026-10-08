@@ -118,7 +118,7 @@ type Category implements Node {
 | `createCategory`      | `categoryTaxonomy.create`           | `input.metadata.{namespace,name}`                   |
 | `updateCategory`      | `categoryTaxonomy.update`           | stored record: namespace, name, owner, repositoryID |
 | `deleteCategory`      | `categoryTaxonomy.delete`           | stored record (replaces `category.delete`)          |
-| `completeCategoryDeletion` | `categoryTaxonomy.status.write` | input `namespace`, `name` (controller identity) |
+| `completeCategoryDeletion` | `categoryTaxonomy.purge` | input `namespace`, `name` (controller identity) |
 | `categories(filter:)` | `categoryTaxonomy.list` (unchanged) | namespace                                           |
 
 All three mutations require an authenticated principal and are checked before any Git or datastore work.

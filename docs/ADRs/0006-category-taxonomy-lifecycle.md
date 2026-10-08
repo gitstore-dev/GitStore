@@ -315,7 +315,7 @@ Laptop category description.
 | `createCategory`       | `categoryTaxonomy.create` | Pre-receive checks; commits `categories/<name>.md` to `gitstore-system`; admits synchronously.          |
 | `updateCategory`       | `categoryTaxonomy.update` | Pre-receive checks; commits to stored provenance; admits synchronously. Name and namespace immutable.   |
 | `deleteCategory`       | `categoryTaxonomy.delete` | Child check; removes the file at stored provenance; admission adds the `foregroundDeletion` finalizer and sets `Terminating`. Assigned products never block; the controller decouples them asynchronously. Returns `{ category, outcome }`. |
-| `completeCategoryDeletion` | `categoryTaxonomy.status.write` | Controller-only. Removes a `Terminating` category, its finalizer and its ancestor-index entries once no children remain and product decoupling is complete. Replaces the deprecated `completeDeletion` flag on `updateCategoryStatus`. |
+| `completeCategoryDeletion` | `categoryTaxonomy.purge` | Controller-only. Removes a `Terminating` category, its finalizer and its ancestor-index entries once no children remain and product decoupling is complete. Replaces the deprecated `completeDeletion` flag on `updateCategoryStatus`. |
 | `category(by:)`        | `categoryTaxonomy.read`   | Read-only datastore query; hierarchy via `status.resolved`.                                           |
 | `categories(filter:)`  | `categoryTaxonomy.list`   | Read-only, namespace-scoped; optional subtree filter served from the ancestor index.                  |
 
