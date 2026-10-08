@@ -38,9 +38,6 @@ policy_file = "/etc/gitstore/policy.yaml"
 [datastore]
 backend = "memdb"
 
-[features]
-namespace_repository_fence = "auto"
-
 [log]
 level = "info"
 format = "json"

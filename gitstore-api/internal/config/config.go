@@ -23,7 +23,6 @@ type Config struct {
 	Git       GitConfig       `mapstructure:"git"`
 	Auth      AuthConfig      `mapstructure:"auth"`
 	Datastore DatastoreConfig `mapstructure:"datastore"`
-	Features  FeatureConfig   `mapstructure:"features"`
 	Watch     WatchConfig     `mapstructure:"watch"`
 	Log       LogConfig       `mapstructure:"log"`
 }
@@ -154,11 +153,6 @@ type JWTConfig struct {
 // StaticUsersConfig configures the file-backed local user list.
 type StaticUsersConfig struct {
 	UsersFile string `mapstructure:"users_file"`
-}
-
-// FeatureConfig holds staged rollout gates.
-type FeatureConfig struct {
-	NamespaceRepositoryFence string `mapstructure:"namespace_repository_fence"`
 }
 
 // WatchConfig holds per-kind durable watch settings.
@@ -298,7 +292,6 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("datastore.scylla.tls", false)
 	v.SetDefault("datastore.scylla.disable_shard_aware_port", false)
 	v.SetDefault("datastore.scylla.ignore_peer_addr", false)
-	v.SetDefault("features.namespace_repository_fence", "auto")
 	v.SetDefault("watch.namespace.readers_enabled", true)
 	v.SetDefault("watch.namespace.materializer_enabled", true)
 	v.SetDefault("watch.namespace.journal_retention_seconds", 7*24*60*60)
@@ -358,6 +351,13 @@ func load(paths []string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
 	v.AutomaticEnv()
 
+	if v.IsSet("features.namespace_repository_fence") {
+		return nil, errors.New(
+			"config: features.namespace_repository_fence (GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE) " +
+				"is no longer recognised; the namespace repository fence is always enabled and this key must be removed",
+		)
+	}
+
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, err
@@ -396,9 +396,6 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 	if err := validateDatastoreConfig(&cfg.Datastore); err != nil {
-		return err
-	}
-	if err := validateFeatureConfig(&cfg.Features); err != nil {
 		return err
 	}
 	if err := validateAuthChainConfig(cfg); err != nil {
@@ -595,37 +592,6 @@ func validateDatastoreConfig(ds *DatastoreConfig) error {
 	}
 }
 
-func validateFeatureConfig(features *FeatureConfig) error {
-	mode := strings.ToLower(strings.TrimSpace(features.NamespaceRepositoryFence))
-	if mode == "" {
-		mode = "auto"
-	}
-	switch mode {
-	case "auto", "enabled", "disabled":
-		features.NamespaceRepositoryFence = mode
-		return nil
-	default:
-		return fmt.Errorf(
-			"invalid namespace repository fence mode %q; valid values: auto, enabled, disabled",
-			features.NamespaceRepositoryFence,
-		)
-	}
-}
-
-// NamespaceRepositoryFenceEnabled resolves the rollout gate. Development
-// memdb keeps the existing behavior; Scylla requires explicit activation.
-func (c *Config) NamespaceRepositoryFenceEnabled() bool {
-	mode := strings.ToLower(strings.TrimSpace(c.Features.NamespaceRepositoryFence))
-	switch mode {
-	case "enabled":
-		return true
-	case "disabled":
-		return false
-	default:
-		return strings.EqualFold(c.Datastore.Backend, "memdb")
-	}
-}
-
 // validateLogFormat validates and normalizes the configured log encoding.
 func validateLogFormat(log *LogConfig) error {
 	switch strings.ToLower(log.Format) {
@@ -664,7 +630,6 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("log.format", c.Log.Format)
 	enc.AddString("datastore.backend", c.Datastore.Backend)
 	enc.AddString("datastore.scylla.password", redact(c.Datastore.Scylla.Password))
-	enc.AddString("features.namespace_repository_fence", c.Features.NamespaceRepositoryFence)
 	enc.AddBool("watch.namespace.readers_enabled", c.Watch.Namespace.ReadersEnabled)
 	enc.AddBool("watch.namespace.materializer_enabled", c.Watch.Namespace.MaterializerEnabled)
 	return nil

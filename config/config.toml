@@ -120,9 +120,6 @@ flush_interval_events = 100
 max_backoff = "30s"
 resync_interval = "10m"
 
-[features]
-namespace_repository_fence = "auto"
-
 [log]
 level = "info"
 format = "json"

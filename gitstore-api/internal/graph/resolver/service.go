@@ -44,13 +44,6 @@ func init() { prometheus.MustRegister(productDeletionOutcomes) }
 // target for git-backed management of the namespace's own resources.
 const SystemRepositoryName = "gitstore-system"
 
-type NamespaceRepositoryFenceMode string
-
-const (
-	NamespaceRepositoryFenceEnabled  NamespaceRepositoryFenceMode = "enabled"
-	NamespaceRepositoryFenceDisabled NamespaceRepositoryFenceMode = "disabled"
-)
-
 // Service provides business logic for GraphQL operations
 type Service struct {
 	store     datastore.Datastore
@@ -62,8 +55,6 @@ type Service struct {
 	namespacePolicy   namespaceadmission.PolicyEvaluator
 	namespaceMetrics  *namespaceadmission.Metrics
 	committedAdmitter admission.CommittedManifestAdmitter
-
-	namespaceRepositoryFenceEnabled bool
 }
 
 // GitWriter is the write subset of gitclient.Client used by the Service.
@@ -82,15 +73,14 @@ type GitWriter interface {
 
 // ServiceDeps contains dependencies for GraphQL business logic.
 type ServiceDeps struct {
-	Store                        datastore.Datastore
-	GitWriter                    GitWriter
-	Logger                       *zap.Logger
-	Clock                        apiruntime.Clock
-	IDGenerator                  apiruntime.IDGenerator
-	NamespacePolicyEvaluator     namespaceadmission.PolicyEvaluator
-	NamespaceMetrics             *namespaceadmission.Metrics
-	CommittedManifestAdmitter    admission.CommittedManifestAdmitter
-	NamespaceRepositoryFenceMode NamespaceRepositoryFenceMode
+	Store                     datastore.Datastore
+	GitWriter                 GitWriter
+	Logger                    *zap.Logger
+	Clock                     apiruntime.Clock
+	IDGenerator               apiruntime.IDGenerator
+	NamespacePolicyEvaluator  namespaceadmission.PolicyEvaluator
+	NamespaceMetrics          *namespaceadmission.Metrics
+	CommittedManifestAdmitter admission.CommittedManifestAdmitter
 }
 
 // NewService creates a new service instance backed by the datastore.
@@ -117,27 +107,15 @@ func NewService(deps ServiceDeps) (*Service, error) {
 	if namespaceMetrics == nil {
 		namespaceMetrics = namespaceadmission.DefaultMetrics()
 	}
-	namespaceRepositoryFenceEnabled := true
-	switch deps.NamespaceRepositoryFenceMode {
-	case "", NamespaceRepositoryFenceEnabled:
-	case NamespaceRepositoryFenceDisabled:
-		namespaceRepositoryFenceEnabled = false
-	default:
-		return nil, fmt.Errorf(
-			"resolver: invalid namespace repository fence mode %q",
-			deps.NamespaceRepositoryFenceMode,
-		)
-	}
 	return &Service{
-		store:                           deps.Store,
-		gitWriter:                       deps.GitWriter,
-		logger:                          deps.Logger,
-		clock:                           clock,
-		ids:                             ids,
-		namespacePolicy:                 namespacePolicy,
-		namespaceMetrics:                namespaceMetrics,
-		committedAdmitter:               deps.CommittedManifestAdmitter,
-		namespaceRepositoryFenceEnabled: namespaceRepositoryFenceEnabled,
+		store:             deps.Store,
+		gitWriter:         deps.GitWriter,
+		logger:            deps.Logger,
+		clock:             clock,
+		ids:               ids,
+		namespacePolicy:   namespacePolicy,
+		namespaceMetrics:  namespaceMetrics,
+		committedAdmitter: deps.CommittedManifestAdmitter,
 	}, nil
 }
 
@@ -1328,9 +1306,6 @@ func (s *Service) DeleteNamespace(ctx context.Context, ns *datastore.Namespace) 
 	if ns == nil || namespaceUID(ns) == "" || ns.Name == "" {
 		return "", gqlerror.Errorf("namespace deletion target is missing")
 	}
-	if err := s.requireNamespaceRepositoryFence("DELETE_NAMESPACE"); err != nil {
-		return "", err
-	}
 
 	current, err := s.store.GetNamespaceByName(ctx, ns.Name)
 	if err != nil {
@@ -1451,9 +1426,6 @@ func namespaceUID(ns *datastore.Namespace) string {
 }
 
 func (s *Service) CompleteNamespaceDeletion(ctx context.Context, name, expectedResourceVersion string) (*datastore.Namespace, error) {
-	if err := s.requireNamespaceRepositoryFence("COMPLETE_NAMESPACE_DELETION"); err != nil {
-		return nil, err
-	}
 	if namespaceadmission.IsBootstrap(name) {
 		return nil, gqlerror.Errorf("bootstrap namespace %q is system-managed", name)
 	}
@@ -1523,9 +1495,6 @@ func fanoutStoragePath(dataDir, repoID string) string {
 // CreateRepository creates a new repository and its namespace mapping, then provisions
 // storage via gRPC. Returns the created Repository entity.
 func (s *Service) CreateRepository(ctx context.Context, namespace, name, defaultBranch, storageClass, callerUsername string) (*datastore.Repository, error) {
-	if err := s.requireNamespaceRepositoryFence("CREATE_REPOSITORY"); err != nil {
-		return nil, err
-	}
 	namespaceName, err := s.canonicalNamespaceName(ctx, namespace)
 	if err != nil {
 		return nil, err
@@ -1767,16 +1736,6 @@ func (s *Service) ListRepositories(ctx context.Context, params datastore.PagePar
 		return nil, gqlerror.Errorf("failed to list repositories")
 	}
 	return result, nil
-}
-
-func (s *Service) requireNamespaceRepositoryFence(operation string) error {
-	if s.namespaceRepositoryFenceEnabled {
-		return nil
-	}
-	s.logger.Warn("Namespace repository mutation rejected by rollout gate",
-		zap.String("operation", operation),
-		zap.String("reason", "ROLLOUT_GATE_DISABLED"))
-	return NewNamespaceRepositoryFenceDisabledError(operation)
 }
 
 // DeleteRepository starts foreground deletion. The Repository remains visible

@@ -564,13 +564,6 @@ func (d *InstrumentedDatastore) RenameRepository(ctx context.Context, namespaceI
 	return err
 }
 
-func (d *InstrumentedDatastore) TransferRepository(ctx context.Context, repoID, fromNamespaceID, toNamespaceID string) error {
-	start := time.Now()
-	err := d.next.TransferRepository(d.withFindingObserver(ctx), repoID, fromNamespaceID, toNamespaceID)
-	d.observe("TransferRepository", start, err)
-	return err
-}
-
 func (d *InstrumentedDatastore) DeleteNamespaceMapping(ctx context.Context, namespaceID, name string) error {
 	start := time.Now()
 	err := d.next.DeleteNamespaceMapping(d.withFindingObserver(ctx), namespaceID, name)

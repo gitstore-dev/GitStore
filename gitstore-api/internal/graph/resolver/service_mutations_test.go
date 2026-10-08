@@ -167,14 +167,6 @@ func (m *mockGitWriter) CreateTag(_ context.Context, p gitclient.CreateTagParams
 
 // newTestSvc builds a Service backed by an in-memory datastore.
 func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
-	return newTestSvcWithFenceMode(t, writer, "")
-}
-
-func newTestSvcWithFenceMode(
-	t *testing.T,
-	writer *mockGitWriter,
-	mode resolver.NamespaceRepositoryFenceMode,
-) *resolver.Service {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -209,11 +201,10 @@ func newTestSvcWithFenceMode(
 		RepositoryID: systemRepository.UID,
 	}))
 	svc, err := resolver.NewService(resolver.ServiceDeps{
-		Store:                        store,
-		GitWriter:                    writer,
-		Logger:                       zap.NewNop(),
-		CommittedManifestAdmitter:    testCommittedNamespaceAdmitter{store: store, ids: apiruntime.UUIDGenerator{}},
-		NamespaceRepositoryFenceMode: mode,
+		Store:                     store,
+		GitWriter:                 writer,
+		Logger:                    zap.NewNop(),
+		CommittedManifestAdmitter: testCommittedNamespaceAdmitter{store: store, ids: apiruntime.UUIDGenerator{}},
 	})
 	require.NoError(t, err)
 	return svc
