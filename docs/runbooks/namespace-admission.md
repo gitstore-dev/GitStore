@@ -15,6 +15,25 @@ enabled on every backend; it is not configurable and has no rollout gate.
 `deleteNamespace`, `completeNamespaceDeletion`, and `createRepository` always
 enforce it.
 
+### Upgrading from a release with the fence rollout setting
+
+Earlier releases controlled the fence with `features.namespace_repository_fence`.
+Remove that key, and the `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE`
+environment variable, before deploying. The API refuses to start while either is
+present.
+
+A rolling upgrade needs no extra quiescing:
+
+- Older replicas with the fence disabled (the `auto` default on Scylla) do not
+  run the three mutations unfenced. They reject them with
+  `NAMESPACE_REPOSITORY_FENCE_DISABLED`.
+- Older replicas with the fence enabled, and all upgraded replicas, enforce it.
+
+No replica can therefore let repository creation race namespace deletion. Until
+the last older replica is replaced, requests that reach one fail and can be
+retried. Rolling back to such a release has the same effect: the three
+mutations are rejected until the fence is enabled on the older fleet.
+
 A binary built before the per-resource schema baseline is **not** a supported
 rollback artifact. gocqlx correctly rejects a keyspace whose migration history
 it does not recognise. Reverting an API replica before disabling `outcome`
