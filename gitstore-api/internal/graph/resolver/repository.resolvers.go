@@ -166,10 +166,7 @@ func (r *mutationResolver) ProvisionRepositoryStorage(ctx context.Context, input
 
 // DeleteRepository is the resolver for the deleteRepository field.
 func (r *mutationResolver) DeleteRepository(ctx context.Context, input model.DeleteRepositoryInput) (*model.DeleteRepositoryPayload, error) {
-	if input.ID == nil {
-		return nil, gqlerror.Errorf("repository ID is required")
-	}
-	repoID, err := decodeNodeIDAs(nodeKindRepository, *input.ID)
+	repoID, err := decodeNodeIDAs(nodeKindRepository, input.ID)
 	if err != nil {
 		return nil, err
 	}

@@ -183,7 +183,7 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 			name:   "delete",
 			action: "repository.delete.any",
 			object: "Mutation", field: "deleteRepository", args: map[string]any{"input": model.DeleteRepositoryInput{
-				ID: &h.repositoryNodeID,
+				ID: h.repositoryNodeID,
 			}},
 		},
 		{

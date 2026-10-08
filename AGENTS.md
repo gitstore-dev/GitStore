@@ -130,6 +130,14 @@ Common bootstrap variables:
   cheap cross-partition aggregate, by design. Materialize it asynchronously via
   a `gitstore-controller-manager` reconciler into `status.resolved`, per
   [ADR 0017](docs/ADRs/0017-aggregate-fields-via-async-materialization.md).
+- ADRs under `docs/ADRs/` follow the status lifecycle in
+  [`docs/ADRs/README.md`](docs/ADRs/README.md): a PR that implements an ADR's
+  decision flips its `**Status**` line from `Proposed` to `Accepted
+  (YYYY-MM-DD)` in that same PR, the same way a spec's Status flips to Closed.
+  `/speckit.plan` and `/speckit.tasks` must include that flip as an explicit
+  step whenever the plan/tasks implement an ADR's core decision. Superseding
+  an ADR updates both the superseded ADR's status line and the
+  `docs/ADRs/README.md` index in the same PR.
 
 ## Tool Usage
 

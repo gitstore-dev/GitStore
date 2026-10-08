@@ -282,7 +282,7 @@ type UpdateRepositoryStatusPayload {
 }
 
 input DeleteRepositoryInput {
-  id: ID
+  id: ID!
 }
 
 type DeleteRepositoryPayload {

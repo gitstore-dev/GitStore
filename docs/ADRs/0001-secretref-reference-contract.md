@@ -1,6 +1,6 @@
 # ADR 0001: SecretRef Reference Contract
 
-**Status**: Proposed
+**Status**: Accepted (2026-10-04)
 
 **Date**: 2026-06-24
 
