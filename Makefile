@@ -29,7 +29,7 @@ CONTROLLER_SECRET_KEY ?= privateKey
 # key above). Required whenever auth.authn.chain includes
 # serviceaccount-jwt/serviceaccount-assertion (see gitstore-api's
 # validateServiceAccountSigningKeySource) — it must be supplied via the
-# GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY env var, never via config.toml.
+# GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY env var, never via config.toml.
 API_SERVICEACCOUNT_SIGNING_KEY_PATH ?= $(ROOT)/.gitstore/secrets/api-issuer/privateKey
 CONTROLLER_SERVICEACCOUNT_NAMESPACE ?= controllers
 CONTROLLER_SERVICEACCOUNT_NAME ?= gitstore-controller-manager
@@ -237,7 +237,7 @@ help: ## Show available targets and common variables.
 
 git: ## Run gitstore-git-service locally in the foreground.
 	@mkdir -p "$(GIT_DATA_DIR)"
-	@cd "$(GIT_SERVICE_DIR)" && GITSTORE_GIT__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service
+	@cd "$(GIT_SERVICE_DIR)" && GITSTORE_GIT_SERVICE__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service
 
 # enroll-controller-serviceaccount registers the controller-manager's signing
 # key with a running API and resolves the real, API-assigned ServiceAccount
@@ -317,7 +317,7 @@ api: ## Run gitstore-api locally in the foreground.
 	@test -f "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" || \
 		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" )
 	@cd "$(API_DIR)" && \
-		GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
+		GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
 		go run ./cmd/server
 
 dev: ## Run local git service and API together in the foreground.
@@ -353,7 +353,7 @@ dev: ## Run local git service and API together in the foreground.
 	trap 'cleanup' EXIT; \
 	( set +e; \
 		cd "$(GIT_SERVICE_DIR)" || { printf 'git-service 1\n' > "$$fifo"; exit 0; }; \
-		GITSTORE_GIT__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service & child=$$!; \
+		GITSTORE_GIT_SERVICE__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
 		wait "$$child"; status=$$?; \
 		printf 'git-service %s\n' "$$status" > "$$fifo"; \
@@ -372,8 +372,8 @@ dev: ## Run local git service and API together in the foreground.
 		done; \
 		exec 3<&- 2>/dev/null || true; \
 		exec 3>&- 2>/dev/null || true; \
-		GITSTORE_AUTH__AUTHN__CHAIN="static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous" \
-		GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
+		GITSTORE_API__AUTH__AUTHN__CHAIN="static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous" \
+		GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
 		go run ./cmd/server & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
 		wait "$$child"; status=$$?; \
@@ -433,7 +433,7 @@ _check-local-config:
 	@test -f "$(POLICY_FILE)" || { echo "Local RBAC policy does not exist: $(POLICY_FILE)"; exit 2; }
 	@test -r "$(POLICY_FILE)" || { echo "Local RBAC policy is not readable: $(POLICY_FILE)"; exit 2; }
 	@cd "$(API_DIR)" && \
-		GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$${GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY:-config-validation-placeholder}" \
+		GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$${GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY:-config-validation-placeholder}" \
 		go run ./cmd/gitctl validate-local-config \
 			--config-file "$(abspath $(CONFIG_FILE))" --policy-file "$(abspath $(POLICY_FILE))"
 
@@ -786,18 +786,18 @@ secret: ## Generate local security material; set TARGET=jwt, grpc-hmac, or signi
 	@./scripts/run-make-workflow.sh secret "$(TARGET)"
 
 _secret-jwt:
-	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-jwt-secret | sed -n 's/^GITSTORE_AUTH__JWT__SECRET=//p') || { \
+	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-jwt-secret | sed -n 's/^GITSTORE_API__AUTH__JWT__SECRET=//p') || { \
 		echo "Failed to generate JWT secret. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
-	./scripts/update-env-secret.sh GITSTORE_AUTH__JWT__SECRET "$$secret" "$(API_DIR)/.env"
+	./scripts/update-env-secret.sh GITSTORE_API__AUTH__JWT__SECRET "$$secret" "$(API_DIR)/.env"
 
 _secret-grpc-hmac:
-	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-hmac-secret | sed -n 's/^GITSTORE_AUTH__GRPC__HMAC_SECRET=//p') || { \
+	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-hmac-secret | sed -n 's/^GITSTORE_GRPC_AUTH__HMAC_SECRET=//p') || { \
 		echo "Failed to generate HMAC secret. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
-	./scripts/update-env-secret.sh GITSTORE_AUTH__GRPC__HMAC_SECRET "$$secret" "$(API_DIR)/.env" "$(GIT_SERVICE_DIR)/.env"; \
+	./scripts/update-env-secret.sh GITSTORE_GRPC_AUTH__HMAC_SECRET "$$secret" "$(API_DIR)/.env" "$(GIT_SERVICE_DIR)/.env"; \
 	echo "HMAC secret updated in $(API_DIR)/.env and $(GIT_SERVICE_DIR)/.env"
 
 _secret-signing-key:

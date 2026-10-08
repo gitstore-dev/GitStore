@@ -11,6 +11,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
@@ -60,7 +61,9 @@ type scyllaDatastore struct {
 	serviceAccountByUIDTable          *table.Table
 	serviceAccountByBucketTable       *table.Table
 	mutations                         *mutationExecutor
-	namespaceWatchBucketSize          int64
+	// namespaceWatchBucketSize starts at the configured constant and adopts the
+	// journal's persisted bucket size on first clock read.
+	namespaceWatchBucketSize atomic.Int64
 }
 
 // row structs mirror the CQL columns.
@@ -341,11 +344,10 @@ func New(cfg config.ScyllaConfig, log *zap.Logger, watchBucketSize ...int) (data
 	if len(watchBucketSize) > 0 && watchBucketSize[0] > 0 {
 		bucketSize = int64(watchBucketSize[0])
 	}
-	return &scyllaDatastore{
+	ds := &scyllaDatastore{
 		session:                           gocqlx.NewSession(rawSession),
 		keyspace:                          cfg.Keyspace,
 		log:                               log,
-		namespaceWatchBucketSize:          bucketSize,
 		productByNamespaceTable:           ProductByNamespace,
 		productByNameTable:                ProductByName,
 		productByUIDTable:                 ProductByUID,
@@ -376,7 +378,9 @@ func New(cfg config.ScyllaConfig, log *zap.Logger, watchBucketSize ...int) (data
 		serviceAccountByUIDTable:          ServiceAccountByUID,
 		serviceAccountByBucketTable:       ServiceAccountByBucket,
 		mutations:                         newMutationExecutor(nil),
-	}, nil
+	}
+	ds.namespaceWatchBucketSize.Store(bucketSize)
+	return ds, nil
 }
 
 // parseHosts splits "host:port" entries into plain hostnames and returns

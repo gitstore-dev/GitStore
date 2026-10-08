@@ -17,6 +17,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -55,6 +56,7 @@ type Service struct {
 	namespacePolicy   namespaceadmission.PolicyEvaluator
 	namespaceMetrics  *namespaceadmission.Metrics
 	committedAdmitter admission.CommittedManifestAdmitter
+	pushLimits        config.PushLimitsConfig
 }
 
 // GitWriter is the write subset of gitclient.Client used by the Service.
@@ -81,6 +83,7 @@ type ServiceDeps struct {
 	NamespacePolicyEvaluator  namespaceadmission.PolicyEvaluator
 	NamespaceMetrics          *namespaceadmission.Metrics
 	CommittedManifestAdmitter admission.CommittedManifestAdmitter
+	PushLimits                config.PushLimitsConfig
 }
 
 // NewService creates a new service instance backed by the datastore.
@@ -116,6 +119,7 @@ func NewService(deps ServiceDeps) (*Service, error) {
 		namespacePolicy:   namespacePolicy,
 		namespaceMetrics:  namespaceMetrics,
 		committedAdmitter: deps.CommittedManifestAdmitter,
+		pushLimits:        deps.PushLimits,
 	}, nil
 }
 
@@ -625,7 +629,7 @@ func (s *Service) UpdateCollection(ctx context.Context, uid string, input map[st
 func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespaceInput, callerUsername string) (*datastore.Namespace, error) {
 	started := time.Now()
 	defer func() { s.namespaceMetrics.ObserveAdmissionStage("total", time.Since(started)) }()
-	resource, err := namespaceResourceFromCreateInput(input)
+	resource, err := namespaceResourceFromCreateInput(input, s.pushLimits)
 	var content []byte
 	if err == nil {
 		content, err = validateNamespaceResource(resource)
@@ -751,7 +755,7 @@ func repositoryStorageClassDowngrade(current, proposed string) bool {
 func (s *Service) UpdateNamespace(ctx context.Context, input model.UpdateNamespaceInput, callerUsername string) (*datastore.Namespace, error) {
 	started := time.Now()
 	defer func() { s.namespaceMetrics.ObserveAdmissionStage("total", time.Since(started)) }()
-	resource, err := namespaceResourceFromUpdateInput(input)
+	resource, err := namespaceResourceFromUpdateInput(input, s.pushLimits)
 	var content []byte
 	if err == nil {
 		content, err = validateNamespaceResource(resource)
@@ -1097,15 +1101,15 @@ func (s *Service) recordNamespaceGraphQLError(operation, name string, err error)
 		zap.Bool("conflict", graphErr.Extensions["code"] == namespaceadmission.CodeConflict))
 }
 
-func namespaceResourceFromCreateInput(input model.CreateNamespaceInput) (*catalog.NamespaceResource, error) {
-	return namespaceResourceFromInput(input.APIVersion, input.Kind, input.Metadata, input.Spec)
+func namespaceResourceFromCreateInput(input model.CreateNamespaceInput, pushLimits config.PushLimitsConfig) (*catalog.NamespaceResource, error) {
+	return namespaceResourceFromInput(input.APIVersion, input.Kind, input.Metadata, input.Spec, pushLimits)
 }
 
-func namespaceResourceFromUpdateInput(input model.UpdateNamespaceInput) (*catalog.NamespaceResource, error) {
-	return namespaceResourceFromInput(input.APIVersion, input.Kind, input.Metadata, input.Spec)
+func namespaceResourceFromUpdateInput(input model.UpdateNamespaceInput, pushLimits config.PushLimitsConfig) (*catalog.NamespaceResource, error) {
+	return namespaceResourceFromInput(input.APIVersion, input.Kind, input.Metadata, input.Spec, pushLimits)
 }
 
-func namespaceResourceFromInput(apiVersion, kind string, metadata *model.NamespaceMetadataInput, spec *model.NamespaceSpecInput) (*catalog.NamespaceResource, error) {
+func namespaceResourceFromInput(apiVersion, kind string, metadata *model.NamespaceMetadataInput, spec *model.NamespaceSpecInput, pushLimits config.PushLimitsConfig) (*catalog.NamespaceResource, error) {
 	if apiVersion != namespaceAPIVersion {
 		return nil, NewNamespaceStructuralError(namespaceadmission.ReasonInvalidEnvelope, fmt.Sprintf("apiVersion must be %q", namespaceAPIVersion))
 	}
@@ -1151,9 +1155,17 @@ func namespaceResourceFromInput(apiVersion, kind string, metadata *model.Namespa
 		}
 	}
 	if defaults := spec.PushPolicyDefaults; defaults != nil {
+		maxPackSizeBytes := int64OrZero(defaults.MaxPackSizeBytes)
+		maxFileSizeBytes := int64OrZero(defaults.MaxFileSizeBytes)
+		if maxPackSizeBytes > pushLimits.MaxPackSizeBytes {
+			return nil, NewNamespaceStructuralError(namespaceadmission.ReasonPushPolicyExceedsCeiling, fmt.Sprintf("spec.pushPolicyDefaults.maxPackSizeBytes (%d) exceeds the platform ceiling of %d bytes (push_limits.max_pack_size)", maxPackSizeBytes, pushLimits.MaxPackSizeBytes))
+		}
+		if maxFileSizeBytes > pushLimits.MaxFileSizeBytes {
+			return nil, NewNamespaceStructuralError(namespaceadmission.ReasonPushPolicyExceedsCeiling, fmt.Sprintf("spec.pushPolicyDefaults.maxFileSizeBytes (%d) exceeds the platform ceiling of %d bytes (push_limits.max_file_size)", maxFileSizeBytes, pushLimits.MaxFileSizeBytes))
+		}
 		resourceSpec.PushPolicyDefaults = &catalog.NamespacePushPolicyDefaults{
-			MaxPackSizeBytes: int64OrZero(defaults.MaxPackSizeBytes),
-			MaxFileSizeBytes: int64OrZero(defaults.MaxFileSizeBytes),
+			MaxPackSizeBytes: maxPackSizeBytes,
+			MaxFileSizeBytes: maxFileSizeBytes,
 		}
 	}
 	return &catalog.NamespaceResource{
@@ -1255,6 +1267,37 @@ func (s *Service) canonicalNamespaceName(ctx context.Context, namespace string) 
 		return "", gqlerror.Errorf("failed to retrieve namespace")
 	}
 	return current.Name, nil
+}
+
+// effectivePushPolicy resolves the push-size limits a new Repository under
+// namespaceName should carry: the namespace's pushPolicyDefaults when set
+// (already validated at Namespace admission to be at or below the platform
+// ceiling), falling back to the ceiling itself. There is no more "0 = no
+// limit" — every Repository is created with a positive, enforceable limit.
+func (s *Service) effectivePushPolicy(ctx context.Context, namespaceName string) (maxPackSizeBytes, maxFileSizeBytes int64, err error) {
+	maxPackSizeBytes = s.pushLimits.MaxPackSizeBytes
+	maxFileSizeBytes = s.pushLimits.MaxFileSizeBytes
+	ns, nsErr := s.store.GetNamespaceByName(ctx, namespaceName)
+	if nsErr != nil {
+		if errors.Is(nsErr, datastore.ErrNotFound) {
+			return maxPackSizeBytes, maxFileSizeBytes, nil
+		}
+		return 0, 0, nsErr
+	}
+	if len(ns.Spec) == 0 {
+		return maxPackSizeBytes, maxFileSizeBytes, nil
+	}
+	var spec catalog.NamespaceSpec
+	if jsonErr := json.Unmarshal(ns.Spec, &spec); jsonErr != nil || spec.PushPolicyDefaults == nil {
+		return maxPackSizeBytes, maxFileSizeBytes, nil
+	}
+	if spec.PushPolicyDefaults.MaxPackSizeBytes > 0 {
+		maxPackSizeBytes = spec.PushPolicyDefaults.MaxPackSizeBytes
+	}
+	if spec.PushPolicyDefaults.MaxFileSizeBytes > 0 {
+		maxFileSizeBytes = spec.PushPolicyDefaults.MaxFileSizeBytes
+	}
+	return maxPackSizeBytes, maxFileSizeBytes, nil
 }
 
 // GetNamespaceByName retrieves a namespace by its canonical name.
@@ -1509,13 +1552,17 @@ func (s *Service) CreateRepository(ctx context.Context, namespace, name, default
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to generate repository ID")
 	}
+	maxPackSizeBytes, maxFileSizeBytes, err := s.effectivePushPolicy(ctx, namespaceName)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to resolve namespace push policy")
+	}
 	now := s.clock.Now().UTC()
 	spec, err := json.Marshal(&model.RepositorySpec{
 		DefaultBranch: defaultBranch,
 		Visibility:    model.RepositoryVisibilityPrivate,
 		PushPolicy: &model.RepositoryPushPolicy{
-			MaxPackSizeBytes: 0,
-			MaxFileSizeBytes: 0,
+			MaxPackSizeBytes: maxPackSizeBytes,
+			MaxFileSizeBytes: maxFileSizeBytes,
 		},
 	})
 	if err != nil {
@@ -1536,6 +1583,8 @@ func (s *Service) CreateRepository(ctx context.Context, namespace, name, default
 		Body:              "",
 		DefaultBranch:     defaultBranch,
 		StorageClass:      storageClass,
+		MaxPackSizeBytes:  maxPackSizeBytes,
+		MaxFileSizeBytes:  maxFileSizeBytes,
 		CreationTimestamp: now,
 		CreationActor:     callerUsername,
 		UpdateTimestamp:   now,

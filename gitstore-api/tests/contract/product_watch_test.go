@@ -27,10 +27,12 @@ import (
 // Typed and generic Product streams are projections of the same durable
 // cursor. This contract intentionally bypasses the process-local event bus so
 // replay and selector behavior cannot regress to replica-local state.
-func resourceContractWatchConfig() config.NamespaceWatchConfig {
-	return config.NamespaceWatchConfig{
-		ReadersEnabled: true, ReadBatchSize: 32, MaxReplayEvents: 32, SubscriberBuffer: 8,
-		SubscriberBackpressureMillis: 100, PollMinMillis: 1, PollMaxMillis: 5, MaxMaterializerLagSeconds: 60,
+func resourceContractWatchConfig() config.WatchJournalConfig {
+	return config.WatchJournalConfig{
+		Read:         config.ReadWatchConfig{BatchSize: 32, MaxReplayEvents: 32},
+		Subscriber:   config.SubscriberWatchConfig{Buffer: 8, Backpressure: 100 * time.Millisecond},
+		Poll:         config.PollWatchConfig{Min: 1 * time.Millisecond, Max: 5 * time.Millisecond},
+		Materializer: config.MaterializerWatchConfig{MaxLag: 60 * time.Second},
 	}
 }
 

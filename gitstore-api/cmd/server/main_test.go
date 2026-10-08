@@ -182,9 +182,9 @@ func newTestGraphQLRegistry(t *testing.T) *authpkg.ProviderRegistry {
 	cfg := config.AuthConfig{
 		StaticUsers: config.StaticUsersConfig{UsersFile: usersFile},
 		JWT: config.JWTConfig{
-			Secret:   "dev-secret",
-			Issuer:   "gitstore",
-			Duration: "2h",
+			Secret: "dev-secret",
+			Issuer: "gitstore",
+			TTL:    2 * time.Hour,
 		},
 	}
 

@@ -49,8 +49,8 @@ func main() {
 
 	log.Info("Starting GitStore GraphQL API",
 		zap.Int("port", cfg.Api.Port),
-		zap.String("git.grpc.uri", cfg.Git.Grpc.Uri),
-		zap.String("datastore_backend", cfg.Datastore.Backend),
+		zap.String("api.git_service.uri", cfg.Api.GitService.Uri),
+		zap.String("datastore_backend", cfg.Api.Datastore.Backend),
 	)
 
 	server, err := app.NewServer(cfg, log)

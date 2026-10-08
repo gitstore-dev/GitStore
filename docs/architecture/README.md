@@ -96,12 +96,12 @@ Business packages receive dependencies through plain `Deps` structs rather than 
 
 Key environment variables:
 
-| Service                | Variable                   | Purpose                                                          |
-|------------------------|----------------------------|------------------------------------------------------------------|
-| `gitstore-api`         | `GITSTORE_GIT__GRPC__URI`  | gRPC address of git-service (e.g. `dns:///git-service:50051`)    |
-| `gitstore-api`         | `GITSTORE_API__GIT_PORT`   | Port the Git smart HTTP server binds on (default `9000`)         |
-| `gitstore-git-service` | `GITSTORE_GRPC__PORT`      | Port the gRPC server binds on (default `50051`)                  |
-| `gitstore-git-service` | `GITSTORE_GIT__DATA_DIR`   | Path to the bare repository directory                            |
+| Service                | Variable                            | Purpose                                                          |
+|------------------------|---------------------------------------|------------------------------------------------------------------|
+| `gitstore-api`         | `GITSTORE_API__GIT_SERVICE__URI`    | gRPC address of git-service (e.g. `dns:///git-service:50051`)    |
+| `gitstore-api`         | `GITSTORE_API__GIT_PORT`            | Port the Git smart HTTP server binds on (default `9000`)         |
+| `gitstore-git-service` | `GITSTORE_GIT_SERVICE__GRPC_PORT`   | Port the gRPC server binds on (default `50051`)                  |
+| `gitstore-git-service` | `GITSTORE_GIT_SERVICE__DATA_DIR`    | Path to the bare repository directory                            |
 
 ### Git Engine — gitoxide (gix)
 
@@ -117,7 +117,7 @@ Key consequences of this change:
 
 The git service supports **named repositories** created and deleted at runtime via gRPC — no service restart is required.
 
-- Each repository is stored as `<GITSTORE_GIT__DATA_DIR>/<repository_id>.git` on disk.
+- Each repository is stored as `<git_service.data_dir>/<repository_id>.git` on disk (env `GITSTORE_GIT_SERVICE__DATA_DIR`).
 - Every gRPC request carries a `repository_id` field that identifies the target repository.
 - Requests with an unknown or invalid `repository_id` return `NOT_FOUND` or `INVALID_ARGUMENT` respectively.
 - Concurrent requests to different repositories are isolated via a per-repository `RwLock`.

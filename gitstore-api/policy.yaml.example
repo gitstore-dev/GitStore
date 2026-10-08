@@ -1,7 +1,7 @@
 # policy.yaml.example — rbac-local policy file
 #
 # Copy this file to `policy.yaml` (or any path referenced by
-# GITSTORE_AUTH__RBAC__POLICY_FILE) when GITSTORE_AUTH__AUTHZ__PROVIDER=rbac-local.
+# GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE) when GITSTORE_API__AUTH__AUTHZ__PROVIDER=rbac-local.
 #
 # `version` must be "v1".
 version: v1

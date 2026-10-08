@@ -145,7 +145,7 @@ func watchCatalogJournal[T any](ctx context.Context, r *Resolver, kind string, n
 		cancel()
 		return nil, namespaceWatchGraphQLError(err)
 	}
-	out := make(chan T, r.namespaceWatch.SubscriberBuffer)
+	out := make(chan T, r.namespaceWatch.Subscriber.Buffer)
 	go func() {
 		defer cancel()
 		defer close(out)
@@ -182,7 +182,7 @@ func watchCatalogJournal[T any](ctx context.Context, r *Resolver, kind string, n
 					addNamespaceWatchSubscriptionError(ctx, err)
 					return
 				}
-				if err := sendNamespaceWatchOutput(streamCtx, out, value, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond, r.namespaceMetrics); err != nil {
+				if err := sendNamespaceWatchOutput(streamCtx, out, value, r.namespaceWatch.Subscriber.Backpressure, r.namespaceMetrics); err != nil {
 					if streamCtx.Err() == nil {
 						addNamespaceWatchSubscriptionError(ctx, namespaceWatchGraphQLError(err))
 					}
@@ -339,7 +339,7 @@ func sendNamespaceWatchOutput[T any](ctx context.Context, out chan<- T, value T,
 }
 
 func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.WatchEvent, error) {
-	if r.namespaceSubscriber == nil || !r.namespaceWatch.ReadersEnabled {
+	if r.namespaceSubscriber == nil {
 		return nil, namespaceWatchGraphQLError(&watchjournal.TerminalError{Code: watchjournal.CodeUnavailable, Reason: "MATERIALIZER_NOT_READY"})
 	}
 	rawCursor := ""
@@ -352,7 +352,7 @@ func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.
 		cancel()
 		return nil, namespaceWatchGraphQLError(err)
 	}
-	out := make(chan *model.WatchEvent, r.namespaceWatch.SubscriberBuffer)
+	out := make(chan *model.WatchEvent, r.namespaceWatch.Subscriber.Buffer)
 	go func() {
 		defer cancel()
 		defer close(out)
@@ -388,7 +388,7 @@ func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.
 					addNamespaceWatchSubscriptionError(ctx, convertErr)
 					return
 				}
-				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond, r.namespaceMetrics); sendErr != nil {
+				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, r.namespaceWatch.Subscriber.Backpressure, r.namespaceMetrics); sendErr != nil {
 					if streamCtx.Err() == nil {
 						addNamespaceWatchSubscriptionError(streamCtx, namespaceWatchGraphQLError(sendErr))
 					}

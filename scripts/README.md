@@ -88,8 +88,8 @@ Updates a `KEY='value'` entry in one or more `.env` files. If the key exists, th
 ### Usage
 
 ```bash
-./scripts/update-env-secret.sh GITSTORE_AUTH__JWT__SECRET "new-secret" gitstore-api/.env
-./scripts/update-env-secret.sh GITSTORE_AUTH__GRPC__HMAC_SECRET "shared-secret" gitstore-api/.env gitstore-git-service/.env
+./scripts/update-env-secret.sh GITSTORE_API__AUTH__JWT__SECRET "new-secret" gitstore-api/.env
+./scripts/update-env-secret.sh GITSTORE_GRPC_AUTH__HMAC_SECRET "shared-secret" gitstore-api/.env gitstore-git-service/.env
 ```
 
 ## check-rust-license-headers.sh

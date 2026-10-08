@@ -6,7 +6,6 @@ package resolver
 import (
 	"context"
 	"encoding/json"
-	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -99,7 +98,7 @@ func (r *Resolver) watchProductResources(ctx context.Context, namespace *string,
 		cancel()
 		return nil, repositoryWatchGraphQLError(err)
 	}
-	out := make(chan *model.ProductWatchEvent, r.namespaceWatch.SubscriberBuffer)
+	out := make(chan *model.ProductWatchEvent, r.namespaceWatch.Subscriber.Buffer)
 	go func() {
 		defer cancel()
 		defer close(out)
@@ -133,7 +132,7 @@ func (r *Resolver) watchProductResources(ctx context.Context, namespace *string,
 					addRepositoryWatchSubscriptionError(ctx, err)
 					return
 				}
-				if err := sendNamespaceWatchOutput(streamCtx, out, converted, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond, r.namespaceMetrics); err != nil {
+				if err := sendNamespaceWatchOutput(streamCtx, out, converted, r.namespaceWatch.Subscriber.Backpressure, r.namespaceMetrics); err != nil {
 					if streamCtx.Err() == nil {
 						addRepositoryWatchSubscriptionError(ctx, repositoryWatchGraphQLError(err))
 					}
@@ -159,7 +158,7 @@ func (r *Resolver) watchProductGenericResources(ctx context.Context, namespace *
 		cancel()
 		return nil, repositoryWatchGraphQLError(err)
 	}
-	out := make(chan *model.WatchEvent, r.namespaceWatch.SubscriberBuffer)
+	out := make(chan *model.WatchEvent, r.namespaceWatch.Subscriber.Buffer)
 	go func() {
 		defer cancel()
 		defer close(out)
@@ -200,7 +199,7 @@ func (r *Resolver) watchProductGenericResources(ctx context.Context, namespace *
 					addRepositoryWatchSubscriptionError(ctx, err)
 					return
 				}
-				if err := sendNamespaceWatchOutput(streamCtx, out, generic, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond, r.namespaceMetrics); err != nil {
+				if err := sendNamespaceWatchOutput(streamCtx, out, generic, r.namespaceWatch.Subscriber.Backpressure, r.namespaceMetrics); err != nil {
 					if streamCtx.Err() == nil {
 						addRepositoryWatchSubscriptionError(ctx, repositoryWatchGraphQLError(err))
 					}

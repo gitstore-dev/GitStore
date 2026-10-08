@@ -26,8 +26,8 @@ other replica.
 2. If streams are expiring, the `reason` label tells you why:
 
    - `RETENTION_EXPIRED` or `REPLAY_LIMIT`: the client was disconnected longer
-     than the retained journal window (`watch.namespace.journal_retention_seconds`)
-     or would need to replay more than `watch.namespace.max_replay_events`.
+     than the retained journal window (`api.watch.journal.retention`)
+     or would need to replay more than `api.watch.journal.read.max_replay_events`.
    - `INVALID_CURSOR`, `INCOMPATIBLE_CURSOR` or `EPOCH_MISMATCH`: the client presented a cursor the
      journal never issued, for example one checkpointed before an upgrade.
    - `SUBSCRIBER_OVERFLOW`: the client did not drain its stream fast enough.
@@ -41,7 +41,7 @@ other replica.
    ```
 
    A sustained non-zero rate means a subscriber's buffer
-   (`watch.namespace.subscriber_buffer`) filled up and its stream was ended with
+   (`api.watch.journal.subscriber.buffer`) filled up and its stream was ended with
    `WATCH_EXPIRED/SUBSCRIBER_OVERFLOW`. Overflow never drops events silently.
 
 ## Recovery Actions: Watch Disconnects
@@ -147,7 +147,7 @@ replicas; do not use mixed-version results to claim bounded-memory recovery.
 
 The controller shares one outbound request budget across all reconciliation
 kinds, list/status requests and WebSocket upgrades. Defaults are
-`controller.api_client.requests_per_second = 40` and `burst = 10`, leaving
+`controller.api_client.rate_limit.per_second = 40` and `rate_limit.burst = 10`, leaving
 headroom under the API's unchanged 50 requests/second, burst-100 per-IP limit
 for token exchange. Budget waits happen after potentially slow credential
 renewal, preventing a burst when exchange waiters wake up. Cached service-account
@@ -363,10 +363,12 @@ Roll out in this order:
 4. Run a cross-replica probe: commit a change through API A and resume a watch
    on API B from an earlier cursor.
 
-To take the journal out of service, deny watch ingress and disable
-`watch.namespace.readers_enabled` first, then disable the materializer once
-readers are drained. Do not drop CDC or journal tables while any issued cursor
-could still be presented.
+The durable watch journal reader and CDC materializer are always on — there is
+no config flag to disable them independently, and no watch mechanism besides
+the journal. To take the journal out of service, stop every API replica (and
+drain or redirect watch ingress at the load balancer first) rather than
+reaching for a config toggle. Do not drop CDC or journal tables while any
+issued cursor could still be presented.
 
 Journal signals have bounded labels only (`path` and `reason`; never a
 resource name, UID, cursor, holder ID, or replica ID):

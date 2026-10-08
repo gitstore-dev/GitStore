@@ -8,13 +8,13 @@ services:
   api:
     profiles: [local]
     # The API issuer key is intentionally read from this API-only mount. The
-    # shared gitstore.toml must never contain auth.serviceaccount.signing_key.
+    # shared gitstore.toml must never contain api.auth.serviceaccount.signing_key.
     command:
       - /bin/sh
       - -ec
       - |
         if [ -f /run/secrets/serviceaccount-signing-key ]; then
-          export GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat /run/secrets/serviceaccount-signing-key)"
+          export GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat /run/secrets/serviceaccount-signing-key)"
         fi
         exec /app/api --config-file /etc/gitstore/gitstore.toml
     volumes:

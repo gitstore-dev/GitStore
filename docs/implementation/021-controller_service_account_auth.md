@@ -39,7 +39,7 @@ Confirmed directly from source (not from the external research pass, which does 
 - **`gitstore-api/internal/auth/types.go`** — the live `AuthNProvider` interface is `Name() string`, `Capabilities() Capability`, `Authenticate(ctx, AuthRequest) (*Principal, Decision, error)`, `RevokeSession(ctx, jti, expiresAt) error`, `RefreshSession(ctx, oldToken) (newToken, exp, error)`, and `IssueSession(ctx, subject) (token, exp, error)`. This is already provider-agnostic and already has an issuance method (`IssueSession`) — a new service-account provider slots in without changing this interface.
 - **`gitstore-api/internal/middleware/security/graphql.go`** — `GraphQLFieldAuthorizer` (lines 181–218) is where `categoryTaxonomy.status.write` and the generic `<kind>.status.write` action strings are actually checked, only for the `updateCategoryStatus` and `updateResourceStatus` mutation fields. `GraphQLAuthenticator` (lines 46–85) runs once per GraphQL *operation* dispatch via `gqlServer.AroundOperations` (`server.go:262-264`) and reads `opCtx.Headers`. For WebSockets, gqlgen populates those headers from the HTTP upgrade request; it exposes the `connection_init` payload separately. The current server wires `transport.Websocket` with no `InitFunc` (`server.go:245-247`), while the controller sends its bearer token only in `connection_init`, so the server does **not** currently authenticate that payload or establish an authenticated connection context. The implementation must add an `InitFunc`; once authenticated there, a subscription principal is fixed for the connection lifetime unless the connection context is cancelled.
 - **No `policy.yaml` exists anywhere in the repository.** `rbac-local`'s action-string vocabulary (`categoryTaxonomy.status.write`, `namespace.delete.own`, `namespace.delete.any`, `namespace.create.organization`, generic `<kind>.status.write`) is defined only in Go source and tests; there is no live example of a non-admin role binding running in any environment today.
-- **`specs/040-controller-watch-status-api/research.md:45-50`** — spec 040 explicitly considered and **rejected** a dedicated machine-identity mechanism for controllers, deciding instead: *"The controller-manager authenticates as an ordinary bearer-JWT principal (issued via the existing `staticadmin.IssueSession`/`gitctl` tooling) whose roles are bound to a policy granting `categoryTaxonomy.status.write`..."* This is the documented status quo this research effort is asked to replace. Reusing the gRPC HMAC secret (`GITSTORE_AUTH__GRPC__HMAC_SECRET`, `gitstore-api/internal/gitclient/auth.go`) was also considered elsewhere and correctly ruled out — it protects a header-less gRPC channel with no `Principal` concept, not GraphQL callers.
+- **`specs/040-controller-watch-status-api/research.md:45-50`** — spec 040 explicitly considered and **rejected** a dedicated machine-identity mechanism for controllers, deciding instead: *"The controller-manager authenticates as an ordinary bearer-JWT principal (issued via the existing `staticadmin.IssueSession`/`gitctl` tooling) whose roles are bound to a policy granting `categoryTaxonomy.status.write`..."* This is the documented status quo this research effort is asked to replace. Reusing the gRPC HMAC secret (`GITSTORE_GRPC_AUTH__HMAC_SECRET`, `gitstore-api/internal/gitclient/auth.go`) was also considered elsewhere and correctly ruled out — it protects a header-less gRPC channel with no `Principal` concept, not GraphQL callers.
 
 **The gap, precisely:** GitStore has no notion of a *non-human, self-renewing, audience-scoped, least-privilege* principal. The only way to get the controller a working credential today is for an administrator to mint (or the controller to be handed) a `static-admin`-issued JWT — which, per `staticadmin`'s `IssueSession`, carries `Roles: ["admin"]` (see `020-pluggable_auth_architecture.md` §2a) — and paste it into `GITSTORE_CONTROLLER__API_TOKEN`. That is a manually-copied, long-lived, over-privileged bearer token, precisely what this research is asked to eliminate from normal production operation.
 
@@ -283,12 +283,12 @@ type ServiceAccountSource struct {
 package serviceaccountjwt
 
 // Config keys (Viper):
-//   auth.serviceaccount.issuer          GITSTORE_AUTH__SERVICEACCOUNT__ISSUER          default "gitstore"
-//   auth.serviceaccount.audience        GITSTORE_AUTH__SERVICEACCOUNT__AUDIENCE        default "gitstore-api"
-//   auth.serviceaccount.signing_key     GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY     required (PEM, Ed25519 or ECDSA)
-//   auth.serviceaccount.default_ttl     GITSTORE_AUTH__SERVICEACCOUNT__DEFAULT_TTL     default "10m"
-//   auth.serviceaccount.max_ttl         GITSTORE_AUTH__SERVICEACCOUNT__MAX_TTL         default "1h"
-//   auth.serviceaccount.clock_skew      GITSTORE_AUTH__SERVICEACCOUNT__CLOCK_SKEW      default "2m"
+//   api.auth.serviceaccount.issuer          GITSTORE_API__AUTH__SERVICEACCOUNT__ISSUER          default "gitstore"
+//   api.auth.serviceaccount.audience        GITSTORE_API__AUTH__SERVICEACCOUNT__AUDIENCE        default "gitstore-api"
+//   api.auth.serviceaccount.signing_key     GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY     required (PEM, Ed25519 or ECDSA)
+//   api.auth.serviceaccount.default_ttl     GITSTORE_API__AUTH__SERVICEACCOUNT__DEFAULT_TTL     default "10m"
+//   api.auth.serviceaccount.max_ttl         GITSTORE_API__AUTH__SERVICEACCOUNT__MAX_TTL         default "1h"
+//   api.auth.serviceaccount.clock_skew      GITSTORE_API__AUTH__SERVICEACCOUNT__CLOCK_SKEW      default "2m"
 
 type ServiceAccountJWTProvider struct { /* issuer signing key, persistent SA lookup, clock skew */ }
 
@@ -362,7 +362,7 @@ input IssueServiceAccountTokenInput {
 
 input TokenRequestSpecInput {
     audiences: [String!]        # defaults to "gitstore-api"
-    expirationSeconds: Int      # server clamps to auth.serviceaccount.max_ttl
+    expirationSeconds: Int      # server clamps to api.auth.serviceaccount.max_ttl
 }
 
 type TokenRequestSpec {
@@ -422,16 +422,16 @@ type DeleteServiceAccountPayload {
 ### 8c. Config additions (Viper/env, additive — no breaking changes)
 
 ```
-auth.authn.chain                       GITSTORE_AUTH__AUTHN__CHAIN            default unchanged: ["static-admin","anonymous"]
+api.auth.authn.chain                       GITSTORE_API__AUTH__AUTHN__CHAIN            default unchanged: ["static-admin","anonymous"]
                                         # add both SA providers to enable, e.g.:
                                         # ["static-admin","serviceaccount-assertion","serviceaccount-jwt","anonymous"]
-auth.serviceaccount.issuer             GITSTORE_AUTH__SERVICEACCOUNT__ISSUER          "gitstore"
-auth.serviceaccount.audience           GITSTORE_AUTH__SERVICEACCOUNT__AUDIENCE        "gitstore-api"
-auth.serviceaccount.assertion_audience GITSTORE_AUTH__SERVICEACCOUNT__ASSERTION_AUDIENCE "gitstore-api/serviceaccount-token"
-auth.serviceaccount.signing_key        GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY     (required once enabled)
-auth.serviceaccount.default_ttl        GITSTORE_AUTH__SERVICEACCOUNT__DEFAULT_TTL     "10m"
-auth.serviceaccount.max_ttl            GITSTORE_AUTH__SERVICEACCOUNT__MAX_TTL         "1h"
-auth.serviceaccount.clock_skew         GITSTORE_AUTH__SERVICEACCOUNT__CLOCK_SKEW      "2m"
+api.auth.serviceaccount.issuer             GITSTORE_API__AUTH__SERVICEACCOUNT__ISSUER          "gitstore"
+api.auth.serviceaccount.audience           GITSTORE_API__AUTH__SERVICEACCOUNT__AUDIENCE        "gitstore-api"
+api.auth.serviceaccount.assertion_audience GITSTORE_API__AUTH__SERVICEACCOUNT__ASSERTION_AUDIENCE "gitstore-api/serviceaccount-token"
+api.auth.serviceaccount.signing_key        GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY     (required once enabled)
+api.auth.serviceaccount.default_ttl        GITSTORE_API__AUTH__SERVICEACCOUNT__DEFAULT_TTL     "10m"
+api.auth.serviceaccount.max_ttl            GITSTORE_API__AUTH__SERVICEACCOUNT__MAX_TTL         "1h"
+api.auth.serviceaccount.clock_skew         GITSTORE_API__AUTH__SERVICEACCOUNT__CLOCK_SKEW      "2m"
 
 # controller.api_token / GITSTORE_CONTROLLER__API_TOKEN is rejected.
 controller.serviceaccount.namespace    GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE  ""   # e.g. "controllers"
@@ -468,7 +468,7 @@ gqlgen closes the socket and cancels its active subscriptions when the returned 
 
 | Claim                                                          | Meaning                                             | Authoritative source                                      | Trust rule                                                                                                                                                                                                                                                                                                                  |
 |----------------------------------------------------------------|-----------------------------------------------------|-----------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `iss`                                                          | `auth.serviceaccount.issuer` (default `"gitstore"`) | gitstore-api signing config                               | Verifier MUST check exact match before trusting anything else — this is how the provider decides "is this even my token" (`OutcomeChallenge` vs. proceed)                                                                                                                                                                   |
+| `iss`                                                          | `api.auth.serviceaccount.issuer` (default `"gitstore"`) | gitstore-api signing config                               | Verifier MUST check exact match before trusting anything else — this is how the provider decides "is this even my token" (`OutcomeChallenge` vs. proceed)                                                                                                                                                                   |
 | `sub`                                                          | `serviceaccount:<namespace>:<name>`                 | ServiceAccount registry at issuance time                  | Authoritative identity string; never accept a caller-asserted `sub` at issuance — issuance derives it from the ServiceAccount record being requested, gated by authz (§8b)                                                                                                                                                  |
 | `aud`                                                          | `["gitstore-api"]` (array, matches K8s convention)  | issuance request, clamped to configured allowed audiences | Verifier MUST reject if its own identifier is absent — this is the confused-deputy defense                                                                                                                                                                                                                                  |
 | `exp`                                                          | issuance time + clamp(requested TTL, `max_ttl`)     | issuer                                                    | MUST be checked; MUST NOT exceed `max_ttl` regardless of what the caller requested                                                                                                                                                                                                                                          |
@@ -578,7 +578,7 @@ Service-account identity is **namespaced by convention** (`serviceaccount:<names
 2. **Phase 1 — persistent ServiceAccount identity and opt-in providers.** Add datastore-backed ServiceAccount/UID/public-key state plus `serviceaccount-assertion` and `serviceaccount-jwt` behind explicit AuthN-chain configuration. Ship assertion-gated issuance and administrative identity/key lifecycle mutations. `GITSTORE_CONTROLLER__API_TOKEN` continues to work exactly as today. Rollback: remove the two providers from the chain; persistent records remain inert.
 3. **Phase 2 — installation-time enrollment, not token bootstrap.** Extend `gitctl` with an idempotent controller-identity enrollment command. It generates a private key locally (or accepts a secret-manager-backed signer), uses the administrator's existing installation context to create/update the ServiceAccount and register only the public key, and writes the private key with restrictive permissions or delegates storage to the deployment secret mechanism. Compose/Helm/native installation automation invokes this command as part of provisioning. It never writes a bearer access token to disk. This corresponds to an operator applying a Kubernetes ServiceAccount, RoleBinding, and workload manifest; runtime token delivery remains automatic.
 4. **Phase 3 — controller exchange, renewal, and WebSocket enforcement.** Add `CredentialSource`, signed assertion exchange, access-token caching, proactive renewal, `Websocket.InitFunc`, expiry deadlines, live-connection cancellation, and `resourceVersion` resume. A restart after the access token expires succeeds from the enrolled private key without administrator involvement.
-5. **Phase 4 — flip the default chain, deprecate the static fallback.** `GITSTORE_AUTH__AUTHN__CHAIN` default becomes `["static-admin","serviceaccount-assertion","serviceaccount-jwt","anonymous"]`. `GITSTORE_CONTROLLER__API_TOKEN` is marked deprecated in `docs/configuration.md` and is used only when no ServiceAccount signer is configured—an explicit dev/CI compatibility path, never the production default. Rollback trigger: any existing integration test relying on the static token path regresses.
+5. **Phase 4 — flip the default chain, deprecate the static fallback.** `GITSTORE_API__AUTH__AUTHN__CHAIN` default becomes `["static-admin","serviceaccount-assertion","serviceaccount-jwt","anonymous"]`. `GITSTORE_CONTROLLER__API_TOKEN` is marked deprecated in `docs/configuration.md` and is used only when no ServiceAccount signer is configured—an explicit dev/CI compatibility path, never the production default. Rollback trigger: any existing integration test relying on the static token path regresses.
 6. **Phase 5 — enforce read-path action strings.** Adopt 022's SDL/middleware contract for
    `product.list` and its semantic visibility scope, then extend the same pattern to
    `categoryTaxonomy.list`/`.watch`. The controller role includes `product.management.read` only because its

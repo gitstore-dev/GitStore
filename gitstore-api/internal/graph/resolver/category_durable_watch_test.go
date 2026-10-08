@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -82,16 +81,14 @@ func TestCategoryWatchIsDeliveredAcrossReplicasSharingTheJournal(t *testing.T) {
 func TestCategoryWatchFailsClosedWithoutJournal(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
-	for _, cfg := range []config.NamespaceWatchConfig{{}, {ReadersEnabled: true}} {
-		r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop(), NamespaceWatch: cfg})
-		require.NoError(t, err)
-		_, err = r.Subscription().WatchCategories(t.Context(), nil, nil, nil)
-		require.Error(t, err)
-		require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
-		_, err = r.Subscription().WatchResources(t.Context(), "CategoryTaxonomy", nil, nil, nil)
-		require.Error(t, err)
-		require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
-	}
+	r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
+	require.NoError(t, err)
+	_, err = r.Subscription().WatchCategories(t.Context(), nil, nil, nil)
+	require.Error(t, err)
+	require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
+	_, err = r.Subscription().WatchResources(t.Context(), "CategoryTaxonomy", nil, nil, nil)
+	require.Error(t, err)
+	require.Equal(t, watchjournal.CodeUnavailable, err.(*gqlerror.Error).Extensions["code"])
 }
 
 func TestCategoryWatchBootstrapCursorNormalizes(t *testing.T) {

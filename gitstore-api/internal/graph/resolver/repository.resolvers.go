@@ -8,7 +8,6 @@ package resolver
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -298,7 +297,7 @@ func (r *subscriptionResolver) WatchRepositories(ctx context.Context, namespace 
 		cancel()
 		return nil, repositoryWatchGraphQLError(err)
 	}
-	out := make(chan *model.RepositoryWatchEvent, r.namespaceWatch.SubscriberBuffer)
+	out := make(chan *model.RepositoryWatchEvent, r.namespaceWatch.Subscriber.Buffer)
 	go func() {
 		defer cancel()
 		defer close(out)
@@ -337,7 +336,7 @@ func (r *subscriptionResolver) WatchRepositories(ctx context.Context, namespace 
 					addRepositoryWatchSubscriptionError(ctx, convertErr)
 					return
 				}
-				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond, r.namespaceMetrics); sendErr != nil {
+				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, r.namespaceWatch.Subscriber.Backpressure, r.namespaceMetrics); sendErr != nil {
 					if streamCtx.Err() == nil {
 						addRepositoryWatchSubscriptionError(streamCtx, repositoryWatchGraphQLError(sendErr))
 					}

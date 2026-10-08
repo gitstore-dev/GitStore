@@ -40,10 +40,10 @@ output is JSON and never includes the configured password.
 Configure the target without putting the password on the command line:
 
 ```bash
-export GITSTORE_DATASTORE__SCYLLA__HOSTS=scylla-1:9042,scylla-2:9042
-export GITSTORE_DATASTORE__SCYLLA__KEYSPACE=gitstore
-export GITSTORE_DATASTORE__SCYLLA__USERNAME=gitstore_operator
-export GITSTORE_DATASTORE__SCYLLA__PASSWORD='<from-secret-manager>'
+export GITSTORE_API__DATASTORE__SCYLLA__HOSTS=scylla-1:9042,scylla-2:9042
+export GITSTORE_API__DATASTORE__SCYLLA__KEYSPACE=gitstore
+export GITSTORE_API__DATASTORE__SCYLLA__USERNAME=gitstore_operator
+export GITSTORE_API__DATASTORE__SCYLLA__PASSWORD='<from-secret-manager>'
 
 go run ./cmd/gitctl scylla-projection-audit > projection-audit.json
 jq '{findings: (.findings | length), actions: (.actions | length)}' projection-audit.json

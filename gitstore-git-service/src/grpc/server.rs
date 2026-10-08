@@ -65,42 +65,81 @@ impl From<&PushContext> for HookContext {
     }
 }
 
+/// Shared static platform push-size ceiling (see config::PushLimitsConfig).
+/// The effective per-push limit is `min(repository policy, ceiling)`,
+/// treating a 0/absent repository policy as the ceiling itself.
+#[derive(Clone, Copy, Debug)]
+pub struct PushLimits {
+    pub max_pack_size: u64,
+    pub max_file_size: u64,
+}
+
+impl Default for PushLimits {
+    fn default() -> Self {
+        // Mirrors config::default_toml's push_limits defaults.
+        Self {
+            max_pack_size: 512 * 1024 * 1024,
+            max_file_size: 100 * 1024 * 1024,
+        }
+    }
+}
+
+impl PushLimits {
+    /// Resolves the effective limit for a single push: the repository's
+    /// configured policy value clamped to the ceiling, or the ceiling
+    /// itself when the repository policy is 0/absent (there is no more
+    /// "0 = unlimited").
+    fn effective_pack_limit(&self, repository_policy: i64) -> i64 {
+        effective_limit(repository_policy, self.max_pack_size)
+    }
+
+    fn effective_file_limit(&self, repository_policy: i64) -> i64 {
+        effective_limit(repository_policy, self.max_file_size)
+    }
+}
+
+/// `repository_policy > 0` -> `min(repository_policy, ceiling)`; otherwise
+/// the ceiling itself. The ceiling is always positive (config validation
+/// enforces this), so the result is always a positive, enforceable limit.
+fn effective_limit(repository_policy: i64, ceiling: u64) -> i64 {
+    let ceiling = ceiling.min(i64::MAX as u64) as i64;
+    if repository_policy > 0 {
+        repository_policy.min(ceiling)
+    } else {
+        ceiling
+    }
+}
+
 pub struct GitServiceImpl {
     pub data_root: Arc<PathBuf>,
     pub repo_locks: Arc<DashMap<String, Arc<RwLock<()>>>>,
     pub hook_pipeline: Arc<HookPipeline>,
+    pub push_limits: PushLimits,
 }
 
 impl GitServiceImpl {
     pub fn new(data_root: PathBuf) -> Self {
-        use crate::config::{GitReceivePackHooks, HookToggle};
-        let default_hooks = GitReceivePackHooks {
-            pre_receive: HookToggle { enabled: false },
-            update: HookToggle { enabled: false },
-            post_receive: HookToggle { enabled: false },
-            proc_receive: HookToggle { enabled: false },
-            post_update: HookToggle { enabled: false },
-            reference_transaction: HookToggle { enabled: false },
-        };
         Self::with_pipeline(
             data_root,
             Arc::new(HookPipeline::new(
-                default_hooks,
-                "pre-receive".to_string(),
                 std::time::Duration::from_secs(10),
-                "post-receive".to_string(),
-                "refs/heads/main".to_string(),
                 Arc::new(NoopValidationHandler),
                 Arc::new(NoopAdmissionHandler),
             )),
+            PushLimits::default(),
         )
     }
 
-    pub fn with_pipeline(data_root: PathBuf, hook_pipeline: Arc<HookPipeline>) -> Self {
+    pub fn with_pipeline(
+        data_root: PathBuf,
+        hook_pipeline: Arc<HookPipeline>,
+        push_limits: PushLimits,
+    ) -> Self {
         Self {
             data_root: Arc::new(data_root),
             repo_locks: Arc::new(DashMap::new()),
             hook_pipeline,
+            push_limits,
         }
     }
 }
@@ -1022,12 +1061,16 @@ impl GitService for GitServiceImpl {
             &["repository.write.own", "repository.write.any"],
         )?;
 
-        // T041: Extract pack size limit before any pack I/O.
-        let max_pack_size_bytes: i64 = push_ctx
-            .policy
-            .as_ref()
-            .map(|p| p.max_pack_size_bytes)
-            .unwrap_or(0);
+        // T041: Extract pack size limit before any pack I/O. Effective limit
+        // = min(repository policy, ceiling); a 0/absent repository policy
+        // means the ceiling itself (no more "0 = unlimited").
+        let max_pack_size_bytes: i64 = self.push_limits.effective_pack_limit(
+            push_ctx
+                .policy
+                .as_ref()
+                .map(|p| p.max_pack_size_bytes)
+                .unwrap_or(0),
+        );
 
         // T051: Build HookContext from validated PushContext.
         let hook_ctx = crate::git::hooks::HookContext::from(push_ctx);
@@ -1128,13 +1171,17 @@ impl GitService for GitServiceImpl {
             Some(q)
         };
 
-        // T042: Enforce blob size limit on quarantined objects before any ref update.
-        let max_file_size_bytes: i64 = first
-            .push_context
-            .as_ref()
-            .and_then(|ctx| ctx.policy.as_ref())
-            .map(|p| p.max_file_size_bytes)
-            .unwrap_or(0);
+        // T042: Enforce blob size limit on quarantined objects before any ref
+        // update. Effective limit = min(repository policy, ceiling); a
+        // 0/absent repository policy means the ceiling itself.
+        let max_file_size_bytes: i64 = self.push_limits.effective_file_limit(
+            first
+                .push_context
+                .as_ref()
+                .and_then(|ctx| ctx.policy.as_ref())
+                .map(|p| p.max_file_size_bytes)
+                .unwrap_or(0),
+        );
         if max_file_size_bytes > 0 {
             if let Some(ref q) = quarantine {
                 let pack_path = q.pack_path.clone();
@@ -1213,25 +1260,14 @@ impl GitService for GitServiceImpl {
             .map(|i| pipeline_updates[*i].clone())
             .collect();
 
-        // Build ref_edits, prepare the gix transaction (acquires lock files), run the
-        // reference-transaction/prepared veto *while locks are held*, then commit or rollback.
-        // All of this runs in spawn_blocking because gix::Repository is !Send.
-        // block_in_place is used inside to drive the async veto call.
+        // Build ref_edits, prepare the gix transaction (acquires lock files), then
+        // commit. Runs in spawn_blocking because gix::Repository is !Send.
         let pipeline_updates_for_txn = pipeline_updates.clone();
         let accepted_indices_clone = accepted_indices.clone();
-        let accepted_updates_clone = accepted_updates.clone();
         let accepted_updates_for_callbacks = accepted_updates.clone();
         let repo_path_commit = repo_path.clone();
-        let pipeline_clone = Arc::clone(&pipeline);
-        let hook_ctx_txn = hook_ctx.clone();
         let hook_ctx_post = hook_ctx.clone();
-        // Result is either Ok(rt_committed) or Err(Status); we also need to know if the
-        // reference-transaction veto fired so we can call the right observation callback.
-        enum TxnOutcome {
-            Committed,
-            RejectedByHook(String), // veto reason
-        }
-        let txn_result: Result<TxnOutcome, Status> = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 
             let repo = gix::open(&repo_path_commit)
@@ -1285,7 +1321,7 @@ impl GitService for GitServiceImpl {
             }
 
             if ref_edits.is_empty() {
-                return Ok(TxnOutcome::Committed);
+                return Ok::<(), Status>(());
             }
 
             let file_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
@@ -1301,51 +1337,16 @@ impl GitService for GitServiceImpl {
                 .prepare(ref_edits, file_lock_fail, packed_lock_fail)
                 .map_err(|e| Status::internal(format!("prepare ref transaction: {}", e)))?;
 
-            // Run the veto hook while locks are held (matches the prepared state semantics).
-            let veto = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(
-                    pipeline_clone.run_reference_transaction_prepared(
-                        &repo_path_commit,
-                        &accepted_updates_clone,
-                        &hook_ctx_txn,
-                    ),
-                )
-            });
-
-            match veto {
-                Err(rejection) => {
-                    drop(txn); // releases all lock files
-                    Ok(TxnOutcome::RejectedByHook(rejection.reason))
-                }
-                Ok(()) => {
-                    if let Some(q) = quarantine {
-                        crate::git::pack_server::promote_quarantine(&repo, q)
-                            .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
-                    }
-                    txn.commit(None)
-                        .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
-                    Ok(TxnOutcome::Committed)
-                }
+            if let Some(q) = quarantine {
+                crate::git::pack_server::promote_quarantine(&repo, q)
+                    .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
             }
+            txn.commit(None)
+                .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
+            Ok(())
         })
         .await
-        .map_err(|e| Status::internal(format!("commit join: {}", e)))?;
-
-        match txn_result? {
-            TxnOutcome::Committed => {
-                pipeline.run_reference_transaction_committed(
-                    &repo_path,
-                    &accepted_updates_for_callbacks,
-                );
-            }
-            TxnOutcome::RejectedByHook(reason) => {
-                pipeline
-                    .run_reference_transaction_aborted(&repo_path, &accepted_updates_for_callbacks);
-                let all_refs: Vec<&str> = ref_updates.iter().map(|u| u.ref_name.as_str()).collect();
-                let report_status = build_rejection_status(&all_refs, &reason);
-                return Ok(Response::new(ReceivePackResponse { report_status }));
-            }
-        }
+        .map_err(|e| Status::internal(format!("commit join: {}", e)))??;
 
         info!(repo_id = %repo_id, "receive_pack: refs committed");
 
@@ -1678,6 +1679,45 @@ mod tests {
 
     fn make_test_service(data_root: &std::path::Path) -> GitServiceImpl {
         GitServiceImpl::new(data_root.to_path_buf())
+    }
+
+    fn make_test_service_with_push_limits(
+        data_root: &std::path::Path,
+        push_limits: PushLimits,
+    ) -> GitServiceImpl {
+        GitServiceImpl::with_pipeline(
+            data_root.to_path_buf(),
+            Arc::new(HookPipeline::new(
+                std::time::Duration::from_secs(10),
+                Arc::new(NoopValidationHandler),
+                Arc::new(NoopAdmissionHandler),
+            )),
+            push_limits,
+        )
+    }
+
+    async fn make_grpc_client_with_push_limits(
+        data_root: std::path::PathBuf,
+        push_limits: PushLimits,
+    ) -> proto::git_service_client::GitServiceClient<tonic::transport::Channel> {
+        use proto::git_service_server::GitServiceServer;
+
+        let svc = make_test_service_with_push_limits(&data_root, push_limits);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(GitServiceServer::new(svc))
+                .serve_with_incoming(incoming)
+                .await
+                .unwrap();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let url = format!("http://{}", addr);
+        proto::git_service_client::GitServiceClient::connect(url)
+            .await
+            .unwrap()
     }
 
     /// Create a bare repo at the fanout path for `repo_id` with one commit.
@@ -2608,7 +2648,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_zero_limits_mean_unlimited() {
+    async fn test_zero_policy_falls_back_to_ceiling_not_unlimited() {
+        // A delete-only push skips pack staging entirely regardless of
+        // policy, so a zero/absent repository policy here exercises no size
+        // check either way — it must not be rejected for size reasons. The
+        // effective-limit resolution itself (0/absent policy -> ceiling, not
+        // "unlimited") is covered by test_ceiling_clamps_oversized_repository_policy.
         let dir = TempDir::new().unwrap();
         bare_repo_with_main(dir.path(), TEST_REPO_H);
         let mut client = make_grpc_client(dir.path().to_path_buf()).await;
@@ -2617,7 +2662,6 @@ mod tests {
         let repo = gix::open(&repo_path).unwrap();
         let head_oid = repo.head_id().unwrap().to_string();
 
-        // Both limits = 0 (unlimited) — a delete-only push with a large push_context should succeed
         let ctx = PushContext {
             repository_id: TEST_REPO_H.to_string(),
             namespace: "ns".to_string(),
@@ -2631,14 +2675,107 @@ mod tests {
         };
         let chunk = delete_ref_cmd_with_ctx(TEST_REPO_H, "refs/heads/main", &head_oid, ctx);
         let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
-        // With zero limits the push should not be rejected for size reasons;
-        // it may fail for other reasons (e.g. ref update semantics) but not ResourceExhausted
         if let Err(status) = &result {
             assert_ne!(
                 status.code(),
                 tonic::Code::ResourceExhausted,
-                "zero limits must never trigger size rejection"
+                "a delete-only push must never trigger size rejection"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_ceiling_clamps_oversized_repository_policy() {
+        // The repository's own policy claims a 1GiB pack limit, but the
+        // service's push_limits ceiling is 1 byte — effective limit must be
+        // min(repository policy, ceiling) = the ceiling, not the repository
+        // policy. Any non-trivial pack must therefore be rejected.
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_I);
+        let mut client = make_grpc_client_with_push_limits(
+            dir.path().to_path_buf(),
+            PushLimits {
+                max_pack_size: 1,
+                max_file_size: 1,
+            },
+        )
+        .await;
+
+        let ctx = PushContext {
+            repository_id: TEST_REPO_I.to_string(),
+            namespace: "ns".to_string(),
+            repository_name: "repo".to_string(),
+            config_resource_version: String::new(),
+            policy: Some(PushPolicy {
+                max_pack_size_bytes: 1024 * 1024 * 1024,
+                max_file_size_bytes: 1024 * 1024 * 1024,
+            }),
+            authorization: test_authorization(TEST_REPO_I, "repository.write.any"),
+        };
+        let chunk = ReceivePackRequest {
+            repository_id: TEST_REPO_I.to_string(),
+            ref_commands: vec![RefCommand {
+                old_oid: "0000000000000000000000000000000000000000".to_string(),
+                new_oid: "a".repeat(40),
+                ref_name: "refs/heads/feature".to_string(),
+            }],
+            pack_data: b"PACK\x00\x00\x00\x02".to_vec(), // 8 bytes > 1-byte ceiling
+            is_last: true,
+            push_context: Some(ctx),
+        };
+
+        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let status = result.unwrap_err();
+        assert_eq!(
+            status.code(),
+            tonic::Code::ResourceExhausted,
+            "a repository policy above the ceiling must still be clamped to the ceiling, got: {:?}",
+            status
+        );
+    }
+
+    #[tokio::test]
+    async fn test_absent_repository_policy_uses_ceiling_as_effective_limit() {
+        // No repository policy at all (None) — the effective limit must be
+        // the service's ceiling, not "unlimited".
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_I);
+        let mut client = make_grpc_client_with_push_limits(
+            dir.path().to_path_buf(),
+            PushLimits {
+                max_pack_size: 1,
+                max_file_size: 1,
+            },
+        )
+        .await;
+
+        let ctx = PushContext {
+            repository_id: TEST_REPO_I.to_string(),
+            namespace: "ns".to_string(),
+            repository_name: "repo".to_string(),
+            config_resource_version: String::new(),
+            policy: None,
+            authorization: test_authorization(TEST_REPO_I, "repository.write.any"),
+        };
+        let chunk = ReceivePackRequest {
+            repository_id: TEST_REPO_I.to_string(),
+            ref_commands: vec![RefCommand {
+                old_oid: "0000000000000000000000000000000000000000".to_string(),
+                new_oid: "a".repeat(40),
+                ref_name: "refs/heads/feature".to_string(),
+            }],
+            pack_data: b"PACK\x00\x00\x00\x02".to_vec(), // 8 bytes > 1-byte ceiling
+            is_last: true,
+            push_context: Some(ctx),
+        };
+
+        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let status = result.unwrap_err();
+        assert_eq!(
+            status.code(),
+            tonic::Code::ResourceExhausted,
+            "an absent repository policy must fall back to the ceiling, not unlimited, got: {:?}",
+            status
+        );
     }
 }
