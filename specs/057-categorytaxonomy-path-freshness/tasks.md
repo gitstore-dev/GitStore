@@ -421,11 +421,13 @@ The working tree already contains the user's schema edit removing `Category.path
 - [X] T082 [P] Metrics and log review: `gitstore_category_ancestor_index_writes_total{result}`, `gitstore_category_ancestor_index_repair_required_total`, `gitstore_admission_rejections_total{kind,phase}`, and dashboard/alert notes in the runbook.
 - [X] T083 Flip ADR-0006 from `Proposed` to `Accepted (<merge date>)` in `docs/ADRs/0006-category-taxonomy-lifecycle.md` and in the index in `docs/ADRs/README.md`, keeping media `fileRef` resolution (GH#244) as an open item. Set spec.md `**Status**` per the spec roll-up convention.
 - [ ] T084 Run every `quickstart.md` section against `make compose` and `make compose DATASTORE=scylla`. Then run `make pr-ready`, `cd tests/integration && go vet ./...`, and `graphify update .`. **Deferred to GH#451** (combined File/secret/category capacity acceptance on a live production topology; the companion push driver is `tests/integration/capacity_push_driver_test.go`).
-- [ ] T085 After merge, file the follow-up GitHub issues:
+- [X] T085 After merge, file the follow-up GitHub issues:
   - Product admission reports denials as success; it should adopt `EntryDecision` and `convergeCommittedResource`;
   - `Category.products` returns all products.
 
   Check for existing issues first.
+
+  Filed: #462 (Product admission), #463 (Category.products), and further follow-ups #464–#470 and gitstore-dev/quickstart#5.
 
 ---
 
