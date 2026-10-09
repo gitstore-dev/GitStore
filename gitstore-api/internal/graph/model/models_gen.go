@@ -1500,8 +1500,6 @@ type UpdateCategoryStatusInput struct {
 	Conditions []*ConditionInput `json:"conditions,omitempty"`
 	// Null = unchanged. Kind-specific — not part of any generic patch shape.
 	Resolved *ResolvedCategoryTaxonomyInput `json:"resolved,omitempty"`
-	// Controller-only foreground-deletion completion request.
-	CompleteDeletion *bool `json:"completeDeletion,omitempty"`
 	// Controller-only bounded Product drain. The server removes non-blocking
 	// owner references and writes CategoryDeleted without changing product spec.
 	DecoupleProducts *bool `json:"decoupleProducts,omitempty"`

@@ -835,8 +835,6 @@ mutation DeleteCategory($input: DeleteCategoryInput!) {
 
 Controller-only. Finishes foreground deletion of a terminating category once its children are gone and its products are decoupled. Requires `categoryTaxonomy.purge`. `resourceVersion` must equal the category's current value, otherwise the request fails with `CONFLICT` (`RESOURCE_VERSION_CONFLICT`). Fails with `FAILED_PRECONDITION` (`CATEGORY_NOT_TERMINATING`, `CHILD_CATEGORIES_PRESENT` or `PRODUCT_DECOUPLING_INCOMPLETE`) when the category is not ready to be removed. Returns `{ id }` of the removed category.
 
-`UpdateCategoryStatusInput.completeDeletion` is deprecated in favor of this mutation and will be removed in the next release.
-
 ### updateCategoryStatus
 
 Controller-only, partial-merge write to a `CategoryTaxonomy`'s `.status` sub-resource. Only non-null input fields are changed; existing status fields not mentioned in the input are left unchanged. Requires `resourceVersion` to match the resource's current value, or the request fails with a `CONFLICT` error whose diagnostic reason is `RESOURCE_VERSION_CONFLICT` and whose message includes the current version (`current resourceVersion is N`). Requires controller-level authorization (`categoryTaxonomy.status.write`), independent of whether `resourceVersion` matches. Never alters `.spec` or author-controlled `.metadata` — the input type has no such fields.

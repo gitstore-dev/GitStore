@@ -370,8 +370,7 @@ func (s *Service) deleteCategoryManifest(ctx context.Context, uid, caller string
 	return terminating, model.ResourceDeletionOutcomeTerminationStarted, commitSHA, nil
 }
 
-// completeCategoryDeletion backs completeCategoryDeletion and the deprecated
-// updateCategoryStatus.completeDeletion flag.
+// completeCategoryDeletion backs the completeCategoryDeletion mutation.
 func (r *mutationResolver) completeCategoryDeletion(ctx context.Context, namespace, name, resourceVersion string) (*datastore.CategoryTaxonomy, error) {
 	deleted, err := r.service.CompleteCategoryDeletion(ctx, namespace, name, resourceVersion)
 	if errors.Is(err, datastore.ErrConflict) {
