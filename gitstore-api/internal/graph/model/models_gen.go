@@ -270,11 +270,9 @@ type CompleteCategoryDeletionPayload struct {
 
 // Controller-only finalizer completion for a terminating namespace.
 type CompleteNamespaceDeletionInput struct {
-	// Name of the terminating namespace. Exactly one of name or identifier is required.
-	Name *string `json:"name,omitempty"`
-	// Legacy alias of name, accepted during rolling upgrades.
-	Identifier      *string `json:"identifier,omitempty"`
-	ResourceVersion string  `json:"resourceVersion"`
+	// Name of the terminating namespace.
+	Name            string `json:"name"`
+	ResourceVersion string `json:"resourceVersion"`
 }
 
 type CompleteNamespaceDeletionPayload struct {
