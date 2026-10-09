@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.1.0-alpha.6](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.5...v0.1.0-alpha.6) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** Category.path/depth and DeleteCategoryPayload.deletedCategoryId/ orphanedProductIds are removed; Namespace mutation errors use the shared envelope codes; RESOURCE_VERSION_CONFLICT is folded into CONFLICT; category reads and mutations require the categoryTaxonomy.* actions. Roll out the API before the controllers.
+* **config:** every renamed/removed config key and environment variable listed in docs/configuration.md's "Upgrading configuration" section now fails startup instead of silently falling back to a default. Operators must update config.toml and GITSTORE_* environment variables (including .env files, which this change does not touch) before upgrading. Highlights: auth.* -> api.auth.* (gitstore-api); auth.jwt.duration -> api.auth.jwt.ttl; auth.grpc.hmac_secret / GITSTORE_AUTH__GRPC__HMAC_SECRET -> grpc_auth.hmac_secret / GITSTORE_GRPC_AUTH__HMAC_SECRET (shared); datastore.* -> api.datastore.*; watch.namespace.* -> api.watch.journal.* (readers_enabled/materializer_enabled/cdc_retention_seconds/bucket_size removed); git.grpc.uri -> api.git_service.uri; grpc.port -> git_service. grpc_port; git.data_dir -> git_service.data_dir; git.repo.max_file_size / max_pack_size_bytes removed in favor of shared push_limits.max_file_size / max_pack_size (IEC size strings); hooks.git_receive_pack.* removed (always on); schema_validation.* / admission_control.* folded into git_service.validation.timeout / git_service.admission.branch_pattern; catalog_service.uri -> git_service.catalog.uri (now dns:///host:port); api.rate_limit_per_second/burst -> api.rate_limit.per_second/burst; controller.api_client.requests_per_second/burst -> controller.api_client.rate_limit.per_second/burst.
+* **api:** the config.go `features.namespace_repository_fence` key and the GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE environment variable are no longer recognised; config.Load() now fails startup with a clear error if either is present, instead of silently ignoring them. The NAMESPACE_REPOSITORY_FENCE_DISABLED GraphQL error code is removed, along with NamespaceRepositoryFenceMode/NamespaceRepositoryFenceEnabled() and the empty Features/FeatureConfig struct.
+
+### Features
+
+* **api:** Git-backed category mutations, subtree filter and shared mutation error envelope ([#383](https://github.com/gitstore-dev/GitStore/issues/383)) ([d5f4d2a](https://github.com/gitstore-dev/GitStore/commit/d5f4d2aa4dccb42f4c9a4ffc4fd07cf024c033bd))
+
+
+### Bug Fixes
+
+* **api:** align namespace completion and delete input shapes with other kinds ([#461](https://github.com/gitstore-dev/GitStore/issues/461)) ([df6d841](https://github.com/gitstore-dev/GitStore/commit/df6d8416136b3e891fef94461decba0a860257f6))
+* **api:** align Product Git mutations with admission ([#475](https://github.com/gitstore-dev/GitStore/issues/475)) ([b004f34](https://github.com/gitstore-dev/GitStore/commit/b004f34625178c2e450b53a86f086eecea43fa32))
+* **api:** make namespace repository fence always on and remove TransferRepository ([#457](https://github.com/gitstore-dev/GitStore/issues/457)) ([b01979a](https://github.com/gitstore-dev/GitStore/commit/b01979ac605ccbd51288b1e89012094c4a852bcf))
+* **api:** repair admission after API commits ([#473](https://github.com/gitstore-dev/GitStore/issues/473)) ([7cbb06a](https://github.com/gitstore-dev/GitStore/commit/7cbb06a1503c0584e2d7d224d62434301345a4ec))
+* **controller:** complete namespace deletion with the current payload shape ([#456](https://github.com/gitstore-dev/GitStore/issues/456)) ([9bd7b87](https://github.com/gitstore-dev/GitStore/commit/9bd7b877a11d7a79377760534be4858d37837809))
+* **scylla:** correct projection kind attribution ([#474](https://github.com/gitstore-dev/GitStore/issues/474)) ([04b523d](https://github.com/gitstore-dev/GitStore/commit/04b523deb3048959232fe4fc8b4655425e1ea82b))
+
+
+### Documentation
+
+* **adr:** define ADR status lifecycle and mark implemented decisions accepted ([#460](https://github.com/gitstore-dev/GitStore/issues/460)) ([4012a14](https://github.com/gitstore-dev/GitStore/commit/4012a14889edd5b1ad09338577197e81077b51fb))
+
+
+### Code Refactoring
+
+* **config:** group configuration by service and normalize durations, sizes and names ([#458](https://github.com/gitstore-dev/GitStore/issues/458)) ([ee19e7d](https://github.com/gitstore-dev/GitStore/commit/ee19e7d111b2b6dbde7c8e8ee8fd32b35603c6fc))
+
 ## [0.1.0-alpha.5](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.4...v0.1.0-alpha.5) (2026-10-05)
 
 
