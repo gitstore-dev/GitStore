@@ -510,6 +510,31 @@ func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) 
 	return nil
 }
 
+func (m *memdbDatastore) UpdateProductStatus(_ context.Context, namespace, name string, patch datastore.ProductStatusPatch) (*datastore.Product, error) {
+	txn := m.db.Txn(true)
+	raw, err := txn.First("product", "name_namespace", namespace, name)
+	if err != nil || raw == nil {
+		txn.Abort()
+		return nil, fmt.Errorf("%w: product %s/%s", datastore.ErrNotFound, namespace, name)
+	}
+	updated := cloneProduct(raw.(*datastore.Product))
+	if err := datastore.ApplyProductStatusPatch(updated, patch); err != nil {
+		txn.Abort()
+		return nil, err
+	}
+	if err := txn.Insert("product", updated); err != nil {
+		txn.Abort()
+		return nil, fmt.Errorf("memdb: update product status: %w", err)
+	}
+	if err := syncOwnerReferenceProjections(txn, updated.Namespace, updated.RepositoryID, "Product", updated.UID, updated.Name, updated.ResourceVersion, updated.OwnerReferences); err != nil {
+		txn.Abort()
+		return nil, err
+	}
+	txn.Commit()
+	m.recordCommittedProduct(datastore.ResourceWatchModified, updated, raw.(*datastore.Product).Labels)
+	return cloneProduct(updated), nil
+}
+
 func (m *memdbDatastore) DeleteProduct(_ context.Context, uid string) error {
 	return m.deleteProduct(uid, "", false)
 }

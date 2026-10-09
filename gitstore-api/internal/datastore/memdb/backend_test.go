@@ -209,6 +209,36 @@ func TestMemdb_UpdateProduct(t *testing.T) {
 	assert.Equal(t, "main", got.GitRef)
 }
 
+func TestMemdb_UpdateProductStatus_PreservesResourceFieldsAndUsesCAS(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	p := productFixture("a0000000-0000-0000-0000-000000000031", "my-store", "product-status")
+	parentUID := "b0000000-0000-0000-0000-000000000031"
+	p.RepositoryID = "repo-status"
+	p.OwnerReferences, _ = json.Marshal([]catalog.OwnerReference{{
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy", Name: "category", UID: parentUID,
+	}})
+	p.Status = []byte(`{"lastAppliedRevision":"before","conditions":[{"type":"ControllerOwned","status":"True"}]}`)
+	require.NoError(t, ds.CreateProduct(ctx, p))
+	revision := "main@sha1:after"
+	updated, err := ds.UpdateProductStatus(ctx, p.Namespace, p.Name, datastore.ProductStatusPatch{ResourceVersion: p.ResourceVersion, LastAppliedRevision: &revision})
+	require.NoError(t, err)
+	assert.Equal(t, p.Spec, updated.Spec)
+	assert.Equal(t, p.Generation, updated.Generation)
+	assert.NotEqual(t, p.ResourceVersion, updated.ResourceVersion)
+	var status catalog.ProductStatus
+	require.NoError(t, json.Unmarshal(updated.Status, &status))
+	assert.Equal(t, revision, status.LastAppliedRevision)
+	require.Len(t, status.Conditions, 1)
+	owners := ds.(datastore.OwnerReferenceStore)
+	page, err := owners.ListNonBlockingProductOwnerDependents(ctx, datastore.OwnerReferenceScope{Namespace: p.Namespace, RepositoryID: p.RepositoryID}, parentUID, "", 1)
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, updated.ResourceVersion, page.Items[0].ResourceVersion)
+	_, err = ds.UpdateProductStatus(ctx, p.Namespace, p.Name, datastore.ProductStatusPatch{ResourceVersion: p.ResourceVersion})
+	require.ErrorIs(t, err, datastore.ErrConflict)
+}
+
 func TestMemdb_UpdateProduct_NotFound(t *testing.T) {
 	ds := newBackend(t)
 	p := productFixture("a0000000-0000-0000-0000-000000000099", "my-store", "no-such")

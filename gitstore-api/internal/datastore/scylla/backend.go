@@ -656,6 +656,41 @@ func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Produc
 	return nil
 }
 
+func (s *scyllaDatastore) UpdateProductStatus(ctx context.Context, namespace, name string, patch datastore.ProductStatusPatch) (*datastore.Product, error) {
+	existing, err := s.GetProductByName(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	expected := existing.ResourceVersion
+	if err := datastore.ApplyProductStatusPatch(existing, patch); err != nil {
+		return nil, err
+	}
+	uid := mustParseUUID(existing.UID)
+	const statement = "UPDATE products_by_namespace SET resource_version=?, status=? WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
+	authoritative := mutationAction{
+		Step: catalogueStep("update-status", "Product", existing.UID, "products_by_namespace", existing.UID, "update-authoritative"),
+		Apply: func(ctx context.Context) error {
+			applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(existing.ResourceVersion, existing.Status, existing.Namespace, existing.CreationTimestamp, uid, expected).ExecCASRelease()
+			if err != nil {
+				return fmt.Errorf("scylla: update products_by_namespace status: %w", err)
+			}
+			if !applied {
+				return datastore.ErrConflict
+			}
+			return nil
+		},
+	}
+	if err := s.mutations.executeUpdate(ctx, existing.ResourceVersion, authoritative, mutationAction{
+		Step: catalogueStep("update-status", "Product", existing.UID, ownerReferenceDependentsTable, existing.UID, "converge-owner-references"),
+		Apply: func(ctx context.Context) error {
+			return s.syncOwnerReferenceDependents(ctx, existing.Namespace, existing.RepositoryID, "Product", existing.UID, existing.Name, existing.ResourceVersion, existing.OwnerReferences, existing.OwnerReferences)
+		},
+	}); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
 func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 	p, err := s.GetProduct(ctx, uid)
 	if err != nil {

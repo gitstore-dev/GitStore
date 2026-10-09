@@ -244,18 +244,22 @@ func invalidCategoryField(path, field string, err error) *admission.Error {
 
 // categoryAdmissionError maps a committed-admission failure onto the shared
 // envelope. Admission errors pass through; a superseded commit is a CONFLICT.
-func categoryAdmissionError(err error, commitSHA string) error {
+func committedAdmissionError(err error, commitSHA, resource string) error {
 	var admissionErr *admission.Error
 	if errors.As(err, &admissionErr) {
 		return admissionErr
 	}
 	if errors.Is(err, admission.ErrCommittedManifestSuperseded) {
 		return admission.NewError(admission.CodeConflict, "SUPERSEDED",
-			"the category manifest was changed by a concurrent commit")
+			"the "+resource+" manifest was changed by a concurrent commit")
 	}
 	return admission.Rejected(admission.PhasePostReceive, commitSHA, []admission.Diagnostic{{
 		Reason: "ADMISSION_FAILED", Message: "admission failed: " + err.Error(), Level: admission.LevelFailure,
 	}})
+}
+
+func categoryAdmissionError(err error, commitSHA string) error {
+	return committedAdmissionError(err, commitSHA, "category")
 }
 
 func (s *Service) observeCategoryMutation(operation string, metadata *model.ObjectMetaInput, commitSHA string, started time.Time, err error) {
@@ -286,13 +290,15 @@ func (s *Service) observeCategoryMutation(operation string, metadata *model.Obje
 
 // categoryMutationGraphQLError renders shared-envelope errors as GraphQL
 // errors; any other error is internal and carries no envelope.
-func categoryMutationGraphQLError(err error) error {
+func admissionMutationGraphQLError(err error) error {
 	var admissionErr *admission.Error
 	if errors.As(err, &admissionErr) {
 		return admissionErr.ToGQLError()
 	}
 	return err
 }
+
+func categoryMutationGraphQLError(err error) error { return admissionMutationGraphQLError(err) }
 
 // DeleteCategoryManifest starts foreground deletion by removing the category's
 // manifest from Git at its stored provenance and admitting that removal, so

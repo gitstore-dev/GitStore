@@ -68,6 +68,9 @@ func (s *stubDatastore) ListProducts(_ context.Context, _ string, _ datastore.Pa
 func (s *stubDatastore) UpdateProduct(_ context.Context, _ *datastore.Product) error {
 	return s.getProductErr
 }
+func (s *stubDatastore) UpdateProductStatus(_ context.Context, _, _ string, _ datastore.ProductStatusPatch) (*datastore.Product, error) {
+	return nil, s.getProductErr
+}
 func (s *stubDatastore) DeleteProduct(_ context.Context, _ string) error {
 	return s.getProductErr
 }

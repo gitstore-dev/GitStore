@@ -124,6 +124,13 @@ func (d *InstrumentedDatastore) UpdateProduct(ctx context.Context, p *Product) e
 	return err
 }
 
+func (d *InstrumentedDatastore) UpdateProductStatus(ctx context.Context, namespace, name string, patch ProductStatusPatch) (*Product, error) {
+	start := time.Now()
+	p, err := d.next.UpdateProductStatus(d.withFindingObserver(ctx), namespace, name, patch)
+	d.observe("UpdateProductStatus", start, err)
+	return p, err
+}
+
 func (d *InstrumentedDatastore) DeleteProduct(ctx context.Context, id string) error {
 	start := time.Now()
 	err := d.next.DeleteProduct(d.withFindingObserver(ctx), id)
