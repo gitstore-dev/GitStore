@@ -656,6 +656,27 @@ func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Produc
 	return nil
 }
 
+func (s *scyllaDatastore) UpdateProductStatus(ctx context.Context, namespace, name string, patch datastore.ProductStatusPatch) (*datastore.Product, error) {
+	existing, err := s.GetProductByName(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	expected := existing.ResourceVersion
+	if err := datastore.ApplyProductStatusPatch(existing, patch); err != nil {
+		return nil, err
+	}
+	uid := mustParseUUID(existing.UID)
+	const statement = "UPDATE products_by_namespace SET resource_version=?, status=? WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
+	applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(existing.ResourceVersion, existing.Status, existing.Namespace, existing.CreationTimestamp, uid, expected).ExecCASRelease()
+	if err != nil {
+		return nil, fmt.Errorf("scylla: update products_by_namespace status: %w", err)
+	}
+	if !applied {
+		return nil, datastore.ErrConflict
+	}
+	return existing, nil
+}
+
 func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 	p, err := s.GetProduct(ctx, uid)
 	if err != nil {

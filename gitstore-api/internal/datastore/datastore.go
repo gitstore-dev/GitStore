@@ -434,8 +434,52 @@ type ProductStore interface {
 	GetProductByName(ctx context.Context, namespace, name string) (*Product, error)
 	ListProducts(ctx context.Context, namespace string, page PageParams) (*PageResult[Product], error)
 	UpdateProduct(ctx context.Context, p *Product) error
+	// UpdateProductStatus applies a status-only CAS patch without replacing
+	// author or controller owned fields outside .status.
+	UpdateProductStatus(ctx context.Context, namespace, name string, patch ProductStatusPatch) (*Product, error)
 	DeleteProduct(ctx context.Context, uid string) error
 	DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
+}
+
+// ProductStatusPatch is a partial-merge update to a Product's status.
+// Conditions is a full replacement only when non-nil.
+type ProductStatusPatch struct {
+	ResourceVersion     string
+	ObservedGeneration  *int64
+	LastAppliedRevision *string
+	Conditions          []catalog.Condition
+	Resolved            *catalog.ResolvedProductDefinition
+}
+
+func ApplyProductStatusPatch(product *Product, patch ProductStatusPatch) error {
+	if patch.ResourceVersion != product.ResourceVersion {
+		return ErrConflict
+	}
+	var status catalog.ProductStatus
+	if len(product.Status) > 0 {
+		if err := json.Unmarshal(product.Status, &status); err != nil {
+			return fmt.Errorf("datastore: unmarshal existing Product status: %w", err)
+		}
+	}
+	if patch.ObservedGeneration != nil {
+		status.ObservedGeneration = *patch.ObservedGeneration
+	}
+	if patch.LastAppliedRevision != nil {
+		status.LastAppliedRevision = *patch.LastAppliedRevision
+	}
+	if patch.Conditions != nil {
+		status.Conditions = patch.Conditions
+	}
+	if patch.Resolved != nil {
+		status.Resolved = patch.Resolved
+	}
+	raw, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	product.Status = raw
+	AdvanceProductSystemVersion(product)
+	return nil
 }
 
 // ProductLifecycleStore provides the compare-and-swap transitions used by

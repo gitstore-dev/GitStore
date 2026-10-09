@@ -91,8 +91,8 @@ Monitor:
 - `gitstore_namespace_deletion_rejections_total{reason}`
 - `gitstore_namespace_deletion_outcomes_total{outcome}`
 - `gitstore_admission_rejections_total{kind,phase}` (manifests rejected by
-  admission after the ref moved; currently emitted for `CategoryTaxonomy`
-  with `phase="POST_RECEIVE"`, not for Namespace)
+  admission; emitted for `CategoryTaxonomy/POST_RECEIVE`,
+  `Product/PRE_RECEIVE`, and `Product/POST_RECEIVE`, not for Namespace)
 
 The `phase` label on the two `validation` series was replaced: rejections are
 now labelled by `code` (keeping `reason`), and duration by `stage`

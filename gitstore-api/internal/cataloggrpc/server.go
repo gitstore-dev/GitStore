@@ -1383,7 +1383,7 @@ func (s *Server) admitParsedEntries(
 		}
 		switch e.parsed.Kind {
 		case "Product":
-			s.admitProduct(ctx, e.parsed.Product, e.body, admCtx, e.path, op, existing)
+			decisions = append(decisions, s.admitProduct(ctx, e.parsed.Product, e.body, admCtx, e.path, op, existing))
 		case "Collection":
 			s.admitCollection(ctx, e.parsed.Collection, e.body, admCtx, e.path, op, existing)
 		case "ProductVariant":
@@ -2255,7 +2255,15 @@ func (s *Server) admitProduct(
 	sourcePath string,
 	op admission.Operation,
 	rawExisting any,
-) {
+) admission.EntryDecision {
+	decision := admission.EntryDecision{Kind: "Product", Path: sourcePath}
+	if resource != nil {
+		decision.Name, decision.Namespace = resource.Metadata.Name, resource.Metadata.Namespace
+	}
+	failed := func(err error) admission.EntryDecision {
+		decision.Outcome, decision.Err = admission.EntryFailed, err
+		return decision
+	}
 	// Lifecycle is author-owned desired state. Persist an explicit default so
 	// Git-authored Products and GraphQL-authored Products have identical
 	// admitted representations.
@@ -2266,13 +2274,14 @@ func (s *Server) admitProduct(
 	if err != nil {
 		s.log.Error("admit_resources: marshal product spec failed",
 			zap.String("name", resource.Metadata.Name), zap.Error(err))
-		return
+		return failed(fmt.Errorf("marshal product spec: %w", err))
 	}
 
 	namespace := resource.Metadata.Namespace
 	if namespace == "" {
 		namespace = admCtx.Namespace
 	}
+	decision.Namespace = namespace
 
 	existing, _ := rawExisting.(*datastore.Product)
 	var oldObject any
@@ -2311,13 +2320,19 @@ func (s *Server) admitProduct(
 			zap.String("name", resource.Metadata.Name),
 			zap.String("namespace", namespace),
 			zap.String("reason", d.Reason))
-		return
+		decision.Outcome = admission.EntryDenied
+		decision.Diagnostics = []admission.Diagnostic{{Reason: "POLICY_DENIED", Message: d.Reason, Level: admission.LevelFailure, File: sourcePath, Field: d.Field}}
+		ObserveAdmissionRejection("Product", admission.PhasePostReceive)
+		if existing != nil {
+			s.recordProductAdmissionDenied(ctx, existing, decision.Diagnostics, admCtx.Now)
+		}
+		return decision
 	}
 
 	if op == admission.OperationCreate {
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
 		if !ok {
-			return
+			return failed(fmt.Errorf("generate product UID"))
 		}
 		p := &datastore.Product{
 			UID:               uid,
@@ -2346,6 +2361,7 @@ func (s *Server) admitProduct(
 		if cerr := s.store.CreateProduct(ctx, p); cerr != nil {
 			s.log.Error("admit_resources: create product failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(cerr))
+			return failed(fmt.Errorf("create product: %w", cerr))
 		}
 	} else {
 		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
@@ -2356,8 +2372,10 @@ func (s *Server) admitProduct(
 		changedProvenance := existing.RepositoryID != admCtx.RepositoryID ||
 			existing.SourcePath != sourcePath
 		changedOwnerReferences := !bytes.Equal(existing.OwnerReferences, ownerReferences)
-		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedOwnerReferences {
-			return
+		changedAdmission := !productAdmissionAccepted(existing.Status)
+		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedOwnerReferences && !changedAdmission {
+			decision.Outcome = admission.EntryNoOp
+			return decision
 		}
 		gen := existing.Generation
 		if changedSpecBody {
@@ -2383,8 +2401,53 @@ func (s *Server) admitProduct(
 		if uerr := s.store.UpdateProduct(ctx, existing); uerr != nil {
 			s.log.Error("admit_resources: update product failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(uerr))
+			return failed(fmt.Errorf("update product: %w", uerr))
 		}
 	}
+	decision.Outcome = admission.EntryAccepted
+	return decision
+}
+
+func (s *Server) recordProductAdmissionDenied(ctx context.Context, existing *datastore.Product, diagnostics []admission.Diagnostic, now time.Time) {
+	current := existing
+	for range maxRepositoryAdmissionUpdateAttempts {
+		var status catalog.ProductStatus
+		if len(current.Status) > 0 && json.Unmarshal(current.Status, &status) != nil {
+			return
+		}
+		denied := catalog.Condition{Type: catalog.ConditionAdmissionAccepted, Status: catalog.ConditionFalse, ObservedGeneration: current.Generation, LastTransitionTime: now, Reason: "AdmissionReportFailed", Message: admission.FormatRejection(diagnostics)}
+		conditions, replaced := make([]catalog.Condition, 0, len(status.Conditions)+1), false
+		for _, condition := range status.Conditions {
+			if condition.Type == catalog.ConditionAdmissionAccepted {
+				condition, replaced = denied, true
+			}
+			conditions = append(conditions, condition)
+		}
+		if !replaced {
+			conditions = append(conditions, denied)
+		}
+		_, err := s.store.UpdateProductStatus(ctx, current.Namespace, current.Name, datastore.ProductStatusPatch{ResourceVersion: current.ResourceVersion, Conditions: conditions})
+		if err == nil || !errors.Is(err, datastore.ErrConflict) {
+			return
+		}
+		current, err = s.store.GetProductByName(ctx, current.Namespace, current.Name)
+		if err != nil {
+			return
+		}
+	}
+}
+
+func productAdmissionAccepted(raw []byte) bool {
+	var status catalog.ProductStatus
+	if len(raw) == 0 || json.Unmarshal(raw, &status) != nil {
+		return true
+	}
+	for _, condition := range status.Conditions {
+		if condition.Type == catalog.ConditionAdmissionAccepted {
+			return condition.Status != catalog.ConditionFalse
+		}
+	}
+	return true
 }
 
 func (s *Server) admitCollection(
@@ -2813,7 +2876,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		decision.Diagnostics = []admission.Diagnostic{{
 			Reason: "POLICY_DENIED", Message: dec.Reason, Level: admission.LevelFailure, File: sourcePath, Field: dec.Field,
 		}}
-		admissionRejectionsTotal.WithLabelValues("CategoryTaxonomy", string(admission.PhasePostReceive)).Inc()
+		ObserveAdmissionRejection("CategoryTaxonomy", admission.PhasePostReceive)
 		if existing != nil {
 			s.recordCategoryAdmissionDenied(ctx, existing, decision.Diagnostics, admCtx.Now)
 		}

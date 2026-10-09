@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/admissionreport"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
@@ -168,66 +170,111 @@ func (s *Service) GetProductByName(ctx context.Context, namespace, name string) 
 // committed-admission boundary. GraphQL never writes Product desired state
 // directly to the datastore.
 func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind string, metadata *model.ObjectMetaInput, spec *model.ProductSpecInput, body *string, caller string, create bool) (*datastore.Product, error) {
-	if apiVersion != "catalog.gitstore.dev/v1beta1" || kind != "Product" || metadata == nil || spec == nil || metadata.Name == "" || metadata.Namespace == "" {
-		return nil, gqlerror.Errorf("invalid Product resource envelope")
+	const productAPIVersion, productKind, productRef = "catalog.gitstore.dev/v1beta1", "Product", "refs/heads/main"
+	if metadata == nil || spec == nil || metadata.Name == "" || metadata.Namespace == "" || apiVersion != productAPIVersion || kind != productKind {
+		return nil, admission.Rejected(admission.PhasePreReceive, "", []admission.Diagnostic{{Reason: "INVALID_ENVELOPE", Message: "metadata.name, metadata.namespace, Product apiVersion/kind, and spec are required", Level: admission.LevelFailure}})
 	}
-	if s.gitWriter == nil || s.committedAdmitter == nil {
-		return nil, gqlerror.Errorf("Product admission runtime is unavailable")
+	if s.gitWriter == nil || s.committedAdmitter == nil || s.manifestValidator == nil {
+		return nil, fmt.Errorf("Product admission runtime is unavailable")
 	}
 	labels, err := stringMap(metadata.Labels)
 	if err != nil {
-		return nil, gqlerror.Errorf("metadata.labels: %v", err)
+		return nil, admission.Rejected(admission.PhasePreReceive, "", []admission.Diagnostic{{Reason: "INVALID_FIELD", Message: err.Error(), Level: admission.LevelFailure}})
 	}
 	annotations, err := stringMap(metadata.Annotations)
 	if err != nil {
-		return nil, gqlerror.Errorf("metadata.annotations: %v", err)
+		return nil, admission.Rejected(admission.PhasePreReceive, "", []admission.Diagnostic{{Reason: "INVALID_FIELD", Message: err.Error(), Level: admission.LevelFailure}})
 	}
 	repositoryID, path := "", ""
+	var existing *datastore.Product
+	var lookupErr error
 	if create {
 		mapping, lookupErr := s.store.LookupRepository(ctx, metadata.Namespace, SystemRepositoryName)
 		if lookupErr != nil {
-			return nil, gqlerror.Errorf("namespace system repository is unavailable")
+			if errors.Is(lookupErr, datastore.ErrNotFound) {
+				return nil, admission.NewError(admission.CodeNotFound, "NAMESPACE_NOT_FOUND", "namespace system repository is unavailable")
+			}
+			return nil, fmt.Errorf("look up namespace system repository: %w", lookupErr)
 		}
 		repositoryID, path = mapping.RepositoryID, fmt.Sprintf("products/%s.md", metadata.Name)
 	} else {
-		existing, lookupErr := s.store.GetProductByName(ctx, metadata.Namespace, metadata.Name)
+		existing, lookupErr = s.store.GetProductByName(ctx, metadata.Namespace, metadata.Name)
 		if lookupErr != nil {
-			return nil, gqlerror.Errorf("product not found")
+			if errors.Is(lookupErr, datastore.ErrNotFound) {
+				return nil, admission.NewError(admission.CodeNotFound, "PRODUCT_NOT_FOUND", "product not found")
+			}
+			return nil, fmt.Errorf("look up product: %w", lookupErr)
+		}
+		if existing.DeletionTimestamp != nil {
+			return nil, admission.NewError(admission.CodeFailedPrecondition, "PRODUCT_TERMINATING", "product is terminating")
 		}
 		if err := guardOwnerAnnotationUnchanged(existing.Annotations, annotations); err != nil {
-			return nil, err
+			return nil, admission.Rejected(admission.PhasePreReceive, "", []admission.Diagnostic{{Reason: "IMMUTABLE_OWNER", Message: err.Error(), Level: admission.LevelFailure, File: existing.SourcePath, Field: "metadata.annotations"}})
 		}
 		repositoryID, path = existing.RepositoryID, existing.SourcePath
 		if repositoryID == "" || path == "" {
-			return nil, gqlerror.Errorf("Product provenance is unavailable")
+			return nil, admission.NewError(admission.CodeFailedPrecondition, "PROVENANCE_UNAVAILABLE", "Product provenance is unavailable")
+		}
+		if existing.GitRef != "" && existing.GitRef != productRef {
+			return nil, admission.NewError(admission.CodeFailedPrecondition, "PROVENANCE_UNAVAILABLE", "Product was not authored from the default branch")
 		}
 	}
-	manifestSpec := productManifestSpec(spec)
-	resource := map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"name": metadata.Name, "namespace": metadata.Namespace, "labels": labels, "annotations": annotations}, "spec": manifestSpec}
-	frontmatter, err := yaml.Marshal(resource)
+	current, err := s.gitWriter.ReadFileForRepo(ctx, repositoryID, path, productRef)
 	if err != nil {
-		return nil, gqlerror.Errorf("encode Product manifest: %v", err)
+		if status.Code(err) != codes.NotFound {
+			return nil, fmt.Errorf("read current Product manifest: %w", err)
+		}
+		current = nil
 	}
-	content := append([]byte("---\n"), frontmatter...)
-	content = append(content, []byte("---\n")...)
+	manifestBody := []byte{}
 	if body != nil {
-		content = append(content, []byte(*body)...)
+		manifestBody = []byte(*body)
+	} else if !create {
+		manifestBody = markdownBody(current)
+	}
+	content, err := renderManifest(map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"name": metadata.Name, "namespace": metadata.Namespace, "labels": labels, "annotations": annotations}, "spec": productManifestSpec(spec)}, manifestBody)
+	if err != nil {
+		return nil, admission.Rejected(admission.PhasePreReceive, "", []admission.Diagnostic{{Reason: "INVALID_FIELD", Message: err.Error(), Level: admission.LevelFailure, File: path}})
 	}
 	verb, operation := "Update", admission.OperationUpdate
 	if create {
 		verb, operation = "Create", admission.OperationCreate
 	}
-	sha, err := s.gitWriter.CommitFileForRepo(ctx, repositoryID, gitclient.CommitFileParams{Path: path, Content: content, CommitMessage: fmt.Sprintf("%s Product %s", verb, metadata.Name), AuthorName: caller})
+	sha := ""
+	if current != nil && bytes.Equal(current, content) {
+		sha, err = s.gitWriter.ResolveRefForRepo(ctx, repositoryID, productRef)
+		if err != nil {
+			return nil, fmt.Errorf("resolve Product repository head: %w", err)
+		}
+	} else {
+		diagnostics, validateErr := s.manifestValidator.ValidateManifest(ctx, admission.ManifestValidationRequest{RepositoryID: repositoryID, Path: path, OldContent: current, NewContent: content})
+		if validateErr != nil {
+			return nil, fmt.Errorf("validate Product manifest: %w", validateErr)
+		}
+		if len(diagnostics) > 0 {
+			cataloggrpc.ObserveAdmissionRejection("Product", admission.PhasePreReceive)
+			return nil, admission.Rejected(admission.PhasePreReceive, "", diagnostics)
+		}
+		sha, err = s.gitWriter.CommitFileForRepo(ctx, repositoryID, gitclient.CommitFileParams{Path: path, Content: content, CommitMessage: fmt.Sprintf("%s Product %s", verb, metadata.Name), AuthorName: caller})
+		if err != nil {
+			return nil, fmt.Errorf("commit Product manifest: %w", err)
+		}
+	}
+	result, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{RepositoryID: repositoryID, Namespace: metadata.Namespace, ActorSubject: caller, CommitSHA: sha, RefName: productRef, Path: path, Content: content, Operation: operation})
 	if err != nil {
-		return nil, gqlerror.Errorf("failed to commit Product manifest: %v", err)
+		return nil, committedAdmissionError(err, sha, "Product")
 	}
-	if _, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{RepositoryID: repositoryID, Namespace: metadata.Namespace, ActorSubject: caller, CommitSHA: sha, RefName: "refs/heads/main", Path: path, Content: content, Operation: operation}); err != nil {
-		return nil, gqlerror.Errorf("Product admission failed: %v", err)
-	}
-	product, err := s.store.GetProductByName(ctx, metadata.Namespace, metadata.Name)
+	product, err := convergeCommittedResource(result, func() (*datastore.Product, string, error) {
+		record, err := s.store.GetProductByName(ctx, metadata.Namespace, metadata.Name)
+		if err != nil {
+			return nil, "", err
+		}
+		return record, record.GitCommitSHA, nil
+	})
 	if err != nil {
-		return nil, gqlerror.Errorf("Product admission did not materialize product")
+		return nil, committedAdmissionError(err, sha, "Product")
 	}
+	admissionreport.Report(ctx, sha, result.Warnings)
 	return product, nil
 }
 
@@ -267,7 +314,7 @@ func (s *Service) DeleteProductManifest(ctx context.Context, uid, caller string)
 		refName = "refs/heads/main"
 	}
 	if _, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{RepositoryID: product.RepositoryID, Namespace: product.Namespace, ActorSubject: caller, CommitSHA: sha, RefName: refName, Path: product.SourcePath, Operation: admission.OperationDelete, Kind: "Product", Name: product.Name}); err != nil {
-		return nil, false, gqlerror.Errorf("Product deletion admission failed: %v", err)
+		return nil, false, committedAdmissionError(err, sha, "Product")
 	}
 	productDeletionOutcomes.WithLabelValues("TERMINATION_STARTED").Inc()
 	s.logger.Info("product deletion termination started", zap.String("namespace", product.Namespace), zap.String("name", product.Name), zap.String("actor", caller))

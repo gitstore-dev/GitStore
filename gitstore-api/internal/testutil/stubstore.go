@@ -100,7 +100,10 @@ func (s *StubStore) ListProducts(_ context.Context, _ string, _ datastore.PagePa
 	return &datastore.PageResult[datastore.Product]{}, nil
 }
 func (s *StubStore) UpdateProduct(_ context.Context, _ *datastore.Product) error { return nil }
-func (s *StubStore) DeleteProduct(_ context.Context, _ string) error             { return nil }
+func (s *StubStore) UpdateProductStatus(_ context.Context, _, _ string, _ datastore.ProductStatusPatch) (*datastore.Product, error) {
+	return nil, nil
+}
+func (s *StubStore) DeleteProduct(_ context.Context, _ string) error { return nil }
 func (s *StubStore) DeleteProductWithResourceVersion(_ context.Context, _, _ string) error {
 	return nil
 }

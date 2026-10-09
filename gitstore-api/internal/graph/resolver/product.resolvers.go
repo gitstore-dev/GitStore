@@ -23,7 +23,7 @@ import (
 func (r *mutationResolver) CreateProduct(ctx context.Context, input model.CreateProductInput) (*model.CreateProductPayload, error) {
 	product, err := r.service.CommitProductManifest(ctx, input.APIVersion, input.Kind, input.Metadata, input.Spec, input.Body, callerUsernameOrAnon(ctx, r), true)
 	if err != nil {
-		return nil, err
+		return nil, admissionMutationGraphQLError(err)
 	}
 	return &model.CreateProductPayload{Product: DatastoreProductToGraphQL(product)}, nil
 }
@@ -32,7 +32,7 @@ func (r *mutationResolver) CreateProduct(ctx context.Context, input model.Create
 func (r *mutationResolver) UpdateProduct(ctx context.Context, input model.UpdateProductInput) (*model.UpdateProductPayload, error) {
 	product, err := r.service.CommitProductManifest(ctx, input.APIVersion, input.Kind, input.Metadata, input.Spec, input.Body, callerUsernameOrAnon(ctx, r), false)
 	if err != nil {
-		return nil, err
+		return nil, admissionMutationGraphQLError(err)
 	}
 	return &model.UpdateProductPayload{Product: DatastoreProductToGraphQL(product)}, nil
 }
@@ -45,7 +45,7 @@ func (r *mutationResolver) DeleteProduct(ctx context.Context, input model.Delete
 	}
 	product, started, err := r.service.DeleteProductManifest(ctx, uid, callerUsernameOrAnon(ctx, r))
 	if err != nil {
-		return nil, err
+		return nil, admissionMutationGraphQLError(err)
 	}
 	outcome := model.ResourceDeletionOutcomeAlreadyTerminating
 	if started {

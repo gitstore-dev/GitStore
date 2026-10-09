@@ -4,9 +4,16 @@
 package cataloggrpc
 
 import (
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+// ObserveAdmissionRejection records the single admission rejection metric used
+// by both asynchronous Git admission and synchronous GraphQL authoring.
+func ObserveAdmissionRejection(kind string, phase admission.Phase) {
+	admissionRejectionsTotal.WithLabelValues(kind, string(phase)).Inc()
+}
 
 var (
 	categoryDeletionDependentLookupDuration = promauto.NewHistogram(
