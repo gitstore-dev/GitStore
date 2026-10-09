@@ -1,6 +1,8 @@
 # ADR 0006: CategoryTaxonomy Lifecycle
 
-**Status**: Proposed
+**Status**: Accepted (2026-10-09)
+
+**Open item**: `spec.media[*].fileRef` resolution and the `MediaResolved` condition remain deferred (GH#378).
 
 **Date**: 2026-06-26
 

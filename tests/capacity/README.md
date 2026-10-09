@@ -426,6 +426,44 @@ a default.
   at p95 <= 1 second and p99 <= 3 seconds. The Go watch verifier remains
   authoritative for replay, duplicates, cursor recovery, and replacement.
 
+- `category-hierarchy` (`make capacity TARGET=category PROFILE=hierarchy
+  MODE=<mode>`, spec 057) seeds a deterministic fan-out subtree of
+  `CAPACITY_CATEGORY_SUBTREE_SIZE` (default and alpha/production minimum 10,000)
+  descendants under one root, then sustains `createCategory`/`updateCategory`
+  at `CAPACITY_RATE` (default and minimum 20/s, one namespace,
+  `CAPACITY_CATEGORY_NAMESPACE`) alternating across both APIs, while paging
+  `categories(filter:{descendantOf,...}, first:100)`. Midway
+  (`CAPACITY_CATEGORY_REPARENT_AFTER_SECONDS`) the subtree root is re-parented
+  and cascade convergence is recorded as `category_cascade_convergence_ms`
+  (reported, not gated). Thresholds for alpha and production alike: mutation
+  p95 <= 750ms / p99 <= 2s; filtered page p95 <= 150ms / p99 <= 500ms, including
+  during the cascade. Other knobs: `CAPACITY_CATEGORY_FANOUT`,
+  `CAPACITY_CATEGORY_DURATION_SECONDS` (min 300 for gates),
+  `CAPACITY_CATEGORY_READ_RATE`, `CAPACITY_CATEGORY_CONVERGENCE_TIMEOUT_SECONDS`.
+  - **SC-009**: teardown waits for the cascade, walks every category's
+    `status.resolved.path`, and compares the walk with seven filtered result
+    sets (including `maxDepth`, `includeSelf` and an unknown root) fully paged
+    on each API replica; any missing or extra name fails.
+  - **SC-007**: each pool record (a created category or a seed updated once) is
+    touched by exactly one mutation. Each acknowledged payload must carry its own
+    name and title and a `metadata.revision` of the form `<branch>@sha1:<commit>` (40-64 hex commit); at teardown
+    the commits extracted from the stored revisions of all pool records must be pairwise distinct. This
+    needs `ObjectMeta.revision` populated on `Category`.
+  - **Concurrent pushes**: k6 cannot push, so the companion push driver
+    (`TestCapacityGitPushDriver` in `tests/integration/capacity_push_driver_test.go`,
+    enabled with `CAPACITY_PUSH_DRIVER=1`; see the file header for its
+    `CAPACITY_PUSH_*` settings) pushes commits to the same `gitstore-system`
+    repository for the duration of the load and writes `{"repository":"gitstore-system","pushes":N,"failures":0,
+    "firstPushMs":<epoch ms>,"lastPushMs":<epoch ms>}`. Pass its path as
+    `CAPACITY_CATEGORY_PUSH_EVIDENCE`; alpha/production require it and the
+    verifier requires the push window to cover at least half of the load window.
+  - **Faults**: reuse `tests/chaos/profiles/controller-restart.json` and
+    `api-restart.json` via `CAPACITY_CHAOS_PROFILE` (one per run) with
+    `CAPACITY_CHAOS_DELAY` set inside the load window (for example, the delay
+    that lands in the cascade). After recovery run `gitctl scylla-projection-audit`
+    and pass the output as `CAPACITY_CATEGORY_AUDIT_FILE`; alpha/production
+    require zero `findings`.
+
 Alpha and production modes refuse to run unless evidence
 declares at least two API replicas, three Scylla nodes with at least two shards
 each, and a release Git-service build. Use `MODE=diagnostic` only for

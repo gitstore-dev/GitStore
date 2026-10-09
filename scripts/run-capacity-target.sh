@@ -21,6 +21,7 @@ valid target/profile combinations:
   namespace/recovery
   repository/lifecycle
   product/lifecycle
+  category/hierarchy
   scylla/soak
 
 valid modes: diagnostic, alpha, production
@@ -62,6 +63,12 @@ case "${target}/${profile}" in
     # full two-API/two-controller verifier is assembled in feature 055.
     runner_kind=k6
     command=(make --no-print-directory _capacity-k6 CAPACITY_PROFILE=product-lifecycle "MODE=${mode}")
+    ;;
+  category/hierarchy)
+    # Spec 057: k6 mutation/filter load plus the SC-007/SC-009 domain verifier.
+    # Concurrent Git pushes come from a companion driver (see the README).
+    runner_kind=k6
+    command=(make --no-print-directory _capacity-k6 CAPACITY_PROFILE=category-hierarchy "MODE=${mode}")
     ;;
   scylla/soak)
     runner_kind=go-test

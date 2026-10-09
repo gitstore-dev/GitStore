@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/config"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gocql/gocql"
 	"github.com/scylladb/gocqlx/v3"
 )
@@ -44,6 +45,9 @@ type AuthoritativeResource struct {
 	CreationTimestamp time.Time `json:"creationTimestamp"`
 	SKU               string    `json:"sku,omitempty"`
 	ProductRefName    string    `json:"productRefName,omitempty"`
+	// ResolvedPath is a CategoryTaxonomy's status.resolved.path (root to
+	// self); it derives the category_ancestor_index rows.
+	ResolvedPath []string `json:"resolvedPath,omitempty"`
 }
 
 type ProjectionRecord struct {
@@ -55,6 +59,12 @@ type ProjectionRecord struct {
 	CreationTimestamp time.Time `json:"creationTimestamp,omitempty"`
 	SKU               string    `json:"sku,omitempty"`
 	ProductRefName    string    `json:"productRefName,omitempty"`
+	// Ancestor and Depth identify a category_ancestor_index row; Name is the
+	// descendant and ResourceVersion the version that wrote it (informational,
+	// not compared: status writes without Resolved leave it behind).
+	Ancestor        string `json:"ancestor,omitempty"`
+	Depth           int    `json:"depth,omitempty"`
+	ResourceVersion string `json:"resourceVersion,omitempty"`
 }
 
 type ProjectionSnapshot struct {
@@ -362,7 +372,14 @@ func BuildRepairPlan(snapshot ProjectionSnapshot) (RepairPlan, error) {
 		if !repairable {
 			reason = "projection participates in write reservation and cannot be deleted safely online"
 		}
-		plan.Findings = append(plan.Findings, finding(findingType, kind, actual.UID, firstProjection(owned), actual, repairable, reason))
+		expectedForFinding := firstProjection(owned)
+		if actual.Table == "category_ancestor_index" {
+			// One category owns several index rows; key the finding by the
+			// stale row rather than an arbitrary owned one.
+			findingType, expectedForFinding = FindingStale, ProjectionRecord{}
+			reason = "ancestor row is not part of the category's current resolved path"
+		}
+		plan.Findings = append(plan.Findings, finding(findingType, kind, actual.UID, expectedForFinding, actual, repairable, reason))
 		if repairable {
 			plan.Actions = append(plan.Actions, deleteAction(resource, true, actual))
 		}
@@ -542,7 +559,20 @@ func expectedProjections(resource AuthoritativeResource) []ProjectionRecord {
 	case "Product":
 		return catalogProjections(base, "products_by_name", "products_by_uid")
 	case "CategoryTaxonomy":
-		return catalogProjections(base, "category_taxonomies_by_name", "category_taxonomies_by_uid")
+		result := catalogProjections(base, "category_taxonomies_by_name", "category_taxonomies_by_uid")
+		rows, err := datastore.CategoryAncestorRows(resource.Name, resource.ResolvedPath)
+		if err != nil {
+			// An unrepresentable path owns no rows; admission bounds depth.
+			return result
+		}
+		for _, row := range rows {
+			index := base
+			index.Table = "category_ancestor_index"
+			index.Ancestor, index.Depth = row.Ancestor, row.Depth
+			index.ResourceVersion = resource.ResourceVersion
+			result = append(result, index)
+		}
+		return result
 	case "Collection":
 		return catalogProjections(base, "collections_by_name", "collections_by_uid")
 	case "ProductVariant":
@@ -593,6 +623,8 @@ func (p ProjectionRecord) Key() string {
 		return p.Namespace + "/" + p.SKU
 	case "product_variants_by_product_ref":
 		return strings.Join([]string{p.Namespace, p.ProductRefName, ts, p.UID}, "/")
+	case "category_ancestor_index":
+		return strings.Join([]string{p.Namespace, p.Ancestor, strconv.Itoa(p.Depth), p.Name}, "/")
 	default:
 		return ""
 	}
@@ -621,6 +653,8 @@ func (p ProjectionRecord) Equal(other ProjectionRecord) bool {
 		return p.Namespace == other.Namespace && p.SKU == other.SKU && p.CreationTimestamp.Equal(other.CreationTimestamp)
 	case "product_variants_by_product_ref":
 		return p.Namespace == other.Namespace && p.ProductRefName == other.ProductRefName && p.CreationTimestamp.Equal(other.CreationTimestamp)
+	case "category_ancestor_index":
+		return p.Namespace == other.Namespace && p.Ancestor == other.Ancestor && p.Depth == other.Depth && p.Name == other.Name
 	default:
 		return false
 	}
@@ -634,7 +668,7 @@ func projectionKind(table string) string {
 		return "Repository"
 	case strings.HasPrefix(table, "products_"):
 		return "Product"
-	case strings.HasPrefix(table, "category_taxonomy_"):
+	case strings.HasPrefix(table, "category_taxonomy_"), strings.HasPrefix(table, "category_ancestor_"):
 		return "CategoryTaxonomy"
 	case strings.HasPrefix(table, "collection_"):
 		return "Collection"
@@ -662,7 +696,8 @@ func knownProjectionTable(table string) bool {
 		"product_variants_by_name",
 		"product_variants_by_uid",
 		"product_variants_by_sku",
-		"product_variants_by_product_ref":
+		"product_variants_by_product_ref",
+		"category_ancestor_index":
 		return true
 	default:
 		return false
@@ -808,6 +843,11 @@ type auditRow struct {
 	Bucket                     string     `db:"bucket"`
 	SKU                        string     `db:"sku"`
 	ProductRefName             string     `db:"product_ref_name"`
+	Status                     string     `db:"status"`
+	Ancestor                   string     `db:"ancestor"`
+	Depth                      int8       `db:"depth"`
+	Descendant                 string     `db:"descendant"`
+	DescendantUID              gocql.UUID `db:"descendant_uid"`
 	RepositoryCreationEpoch    *int64     `db:"repository_creation_epoch"`
 	PendingRepositoryCreations *int64     `db:"pending_repository_creations"`
 }
@@ -822,7 +862,7 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		{"Namespace", "namespaces_by_uid", "repository_creation_epoch,pending_repository_creations,"},
 		{"Repository", "repositories_by_uid", "namespace,"},
 		{"Product", "products_by_namespace", "namespace,"},
-		{"CategoryTaxonomy", "category_taxonomies_by_namespace", "namespace,"},
+		{"CategoryTaxonomy", "category_taxonomies_by_namespace", "namespace,status,"},
 		{"Collection", "collections_by_namespace", "namespace,"},
 		{"ProductVariant", "product_variants_by_namespace", "namespace,sku,product_ref_name,"},
 	}
@@ -836,11 +876,19 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 			return ProjectionSnapshot{}, fmt.Errorf("audit authoritative table %s: %w", source.table, err)
 		}
 		for _, row := range rows {
-			snapshot.Authoritative = append(snapshot.Authoritative, AuthoritativeResource{
+			resource := AuthoritativeResource{
 				Kind: source.kind, UID: row.UID.String(), Namespace: row.Namespace, Name: row.Name,
 				ResourceVersion: row.ResourceVersion, CreationTimestamp: row.CreationTimestamp,
 				SKU: row.SKU, ProductRefName: row.ProductRefName,
-			})
+			}
+			if source.kind == "CategoryTaxonomy" {
+				path, err := datastore.CategoryResolvedPath(row.Status)
+				if err != nil {
+					return ProjectionSnapshot{}, fmt.Errorf("audit authoritative table %s: category %s/%s: %w", source.table, row.Namespace, row.Name, err)
+				}
+				resource.ResolvedPath = path
+			}
+			snapshot.Authoritative = append(snapshot.Authoritative, resource)
 			if source.kind == "Namespace" && row.PendingRepositoryCreations != nil && *row.PendingRepositoryCreations > 0 {
 				if row.RepositoryCreationEpoch == nil {
 					return ProjectionSnapshot{}, fmt.Errorf(
@@ -880,6 +928,7 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		{"product_variants_by_uid", "uid,namespace,creation_timestamp", rowUID},
 		{"product_variants_by_sku", "namespace,sku,uid,creation_timestamp", rowUID},
 		{"product_variants_by_product_ref", "namespace,product_ref_name,creation_timestamp,uid", rowUID},
+		{"category_ancestor_index", "namespace,ancestor,depth,descendant,descendant_uid,resource_version", func(row auditRow) gocql.UUID { return row.DescendantUID }},
 	}
 	for _, source := range projections {
 		rows, err := s.scanAuditRows(ctx, "SELECT "+source.columns+" FROM "+source.table)
@@ -888,11 +937,16 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		}
 		for _, row := range rows {
 			uid := source.uid(row)
-			snapshot.Projections = append(snapshot.Projections, ProjectionRecord{
+			record := ProjectionRecord{
 				Table: source.table, UID: uid.String(), Namespace: row.Namespace, Name: row.Name,
 				Bucket: row.Bucket, CreationTimestamp: row.CreationTimestamp,
 				SKU: row.SKU, ProductRefName: row.ProductRefName,
-			})
+			}
+			if source.table == "category_ancestor_index" {
+				record.Name = row.Descendant
+				record.Ancestor, record.Depth, record.ResourceVersion = row.Ancestor, int(row.Depth), row.ResourceVersion
+			}
+			snapshot.Projections = append(snapshot.Projections, record)
 		}
 	}
 	return snapshot, nil
@@ -1062,6 +1116,9 @@ func (s *scyllaProjectionRepairStore) insertProjection(ctx context.Context, row 
 		statement, args = "INSERT INTO product_variants_by_sku (namespace,sku,uid,creation_timestamp) VALUES (?,?,?,?) IF NOT EXISTS", []any{row.Namespace, row.SKU, uid, row.CreationTimestamp}
 	case "product_variants_by_product_ref":
 		statement, args = "INSERT INTO product_variants_by_product_ref (namespace,product_ref_name,creation_timestamp,uid) VALUES (?,?,?,?) IF NOT EXISTS", []any{row.Namespace, row.ProductRefName, row.CreationTimestamp, uid}
+	case "category_ancestor_index":
+		statement = "INSERT INTO category_ancestor_index (namespace,ancestor,depth,descendant,descendant_uid,resource_version) VALUES (?,?,?,?,?,?) IF NOT EXISTS"
+		args = []any{row.Namespace, row.Ancestor, int8(row.Depth), row.Name, uid, row.ResourceVersion}
 	default:
 		return false, fmt.Errorf("unsupported projection table %q", row.Table)
 	}
@@ -1119,6 +1176,8 @@ func (s *scyllaProjectionRepairStore) deleteProjection(ctx context.Context, row 
 		statement, args = "DELETE FROM product_variants_by_sku WHERE namespace=? AND sku=? IF uid=?", []any{row.Namespace, row.SKU, uid}
 	case "product_variants_by_product_ref":
 		statement, args = "DELETE FROM product_variants_by_product_ref WHERE namespace=? AND product_ref_name=? AND creation_timestamp=? AND uid=? IF EXISTS", []any{row.Namespace, row.ProductRefName, row.CreationTimestamp, uid}
+	case "category_ancestor_index":
+		statement, args = "DELETE FROM category_ancestor_index WHERE namespace=? AND ancestor=? AND depth=? AND descendant=? IF descendant_uid=?", []any{row.Namespace, row.Ancestor, int8(row.Depth), row.Name, uid}
 	default:
 		return false, fmt.Errorf("unsupported projection table %q", row.Table)
 	}

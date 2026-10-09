@@ -3096,3 +3096,37 @@ func TestAdmitResources_OperationSetCorrectly(t *testing.T) {
 	assert.Equal(t, admission.OperationUpdate, policy.calls[0].Operation, "second push must be OperationUpdate")
 	assert.NotNil(t, policy.calls[0].OldObject, "second push must have non-nil OldObject")
 }
+
+func TestAdmitResources_CategoryTaxonomyDenialIsRecordedOnTheCategory(t *testing.T) {
+	store := newTestDatastore(t)
+	accepted, denied := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	current := accepted
+	srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{
+		accepted: {"categories/electronics.md": categoryManifestTitled("electronics", "Electronics")},
+		denied: {
+			"categories/electronics.md": categoryManifestTitled("electronics", "Denied"),
+			"categories/new.md":         categoryManifestTitled("new", "Denied"),
+		},
+	}), withDenyCategoryTitle)
+	admitDelta(t, srv, "", accepted)
+	before, err := store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+
+	current = denied
+	admitDelta(t, srv, accepted, denied)
+
+	after, err := store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+	assert.Equal(t, before.Generation, after.Generation)
+	assert.Equal(t, before.Spec, after.Spec)
+	assert.Equal(t, before.Body, after.Body)
+	assert.Equal(t, accepted, after.GitCommitSHA)
+	condition := categoryCondition(t, after, catalog.ConditionAdmissionAccepted)
+	require.NotNil(t, condition)
+	assert.Equal(t, catalog.ConditionFalse, condition.Status)
+	assert.Equal(t, "AdmissionReportFailed", condition.Reason)
+	assert.Contains(t, condition.Message, "title Denied is not allowed")
+
+	_, err = store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "new")
+	assert.ErrorIs(t, err, datastore.ErrNotFound, "a denied create leaves no record")
+}

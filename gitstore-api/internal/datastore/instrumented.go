@@ -619,6 +619,21 @@ func (d *InstrumentedDatastore) ListNonBlockingProductOwnerDependents(ctx contex
 	return v, err
 }
 
+// ── CategoryAncestorIndex ────────────────────────────────────────────────────
+
+func (d *InstrumentedDatastore) ListCategoryDescendants(ctx context.Context, q CategoryDescendantQuery) (*PageResult[CategoryDescendant], error) {
+	start := time.Now()
+	index, ok := d.next.(CategoryAncestorIndex)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support category ancestor index queries", ErrInvalidArgument)
+		d.observe("ListCategoryDescendants", start, err)
+		return nil, err
+	}
+	v, err := index.ListCategoryDescendants(d.withFindingObserver(ctx), q)
+	d.observe("ListCategoryDescendants", start, err)
+	return v, err
+}
+
 // ── CategoryTaxonomyDeletionStore ────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) MarkCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*CategoryTaxonomy, error) {

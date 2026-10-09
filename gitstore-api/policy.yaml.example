@@ -17,6 +17,8 @@ roles:
     allow:
       - "*.status.write"
       - "category.status.write"
+      - "categoryTaxonomy.list"
+      - "categoryTaxonomy.purge"
       - "namespace.status.write"
       - "namespace.watch"
       - "repository.create.any"
@@ -36,6 +38,11 @@ roles:
       - repository.transfer.own
       - repository.delete.own
       - repository.read.own
+      - categoryTaxonomy.create
+      - categoryTaxonomy.update
+      - categoryTaxonomy.delete
+      - categoryTaxonomy.list
+      - categoryTaxonomy.read
     deny:
       - namespace.delete.any     # cannot delete other owners' namespaces
 
@@ -45,10 +52,17 @@ roles:
       - repository.read
       - repository.write
       - repository.read.any
+      - categoryTaxonomy.create
+      - categoryTaxonomy.update
+      - categoryTaxonomy.delete
+      - categoryTaxonomy.list
+      - categoryTaxonomy.read
     deny: []
 
   anonymous:
     allow:
+      - categoryTaxonomy.list
+      - categoryTaxonomy.read
       - namespace.read
       - repository.read
       - repository.read.any

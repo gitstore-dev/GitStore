@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -410,7 +411,7 @@ func TestUpdateCategoryStatus_PartialMergeAppliesOnlySuppliedFields(t *testing.T
 }
 
 // T026: updateCategoryStatus with a stale resourceVersion returns a
-// RESOURCE_VERSION_CONFLICT GraphQL error, leaving status unchanged.
+// CONFLICT GraphQL error, leaving status unchanged.
 func TestUpdateCategoryStatus_StaleResourceVersionReturnsGraphQLError(t *testing.T) {
 	r, store := newWatchTestResolver(t)
 	ctx := context.Background()
@@ -429,8 +430,8 @@ func TestUpdateCategoryStatus_StaleResourceVersionReturnsGraphQLError(t *testing
 	})
 	var gqlErr *gqlerror.Error
 	require.True(t, errors.As(err, &gqlErr))
-	require.Equal(t, "RESOURCE_VERSION_CONFLICT", gqlErr.Extensions["code"])
-	require.Equal(t, "1", gqlErr.Extensions["resourceVersion"])
+	require.Equal(t, "CONFLICT", gqlErr.Extensions["code"])
+	require.Contains(t, fmt.Sprint(gqlErr.Extensions["diagnostics"]), "current resourceVersion is "+"1")
 }
 
 // T027: updateCategoryStatus targeting a deleted/nonexistent resource

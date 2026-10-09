@@ -189,18 +189,7 @@ impl SchemaValidationHandler {
                     self.record_metric("accepted");
                     Ok(AdmissionDecision::Accept)
                 } else {
-                    let aggregated = resp
-                        .errors
-                        .iter()
-                        .map(|e| {
-                            if e.file_path.is_empty() {
-                                e.message.clone()
-                            } else {
-                                format!("{}: {}", e.file_path, e.message)
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("; ");
+                    let aggregated = format_rejection(&resp.errors);
                     error!(file_count, duration_ms, outcome = "rejected", error_summary = %aggregated, "validation_callout_complete");
                     self.record_metric("rejected");
                     Ok(AdmissionDecision::Reject(aggregated))
@@ -213,6 +202,22 @@ impl SchemaValidationHandler {
         use crate::git::metrics::increment_schema_validation_total;
         increment_schema_validation_total(result);
     }
+}
+
+/// Joins validation errors as `file: message; …` (`message` when there is no
+/// file). The API produces byte-identical text for mutation rejections.
+fn format_rejection(errors: &[catalog_proto::ValidationError]) -> String {
+    errors
+        .iter()
+        .map(|e| {
+            if e.file_path.is_empty() {
+                e.message.clone()
+            } else {
+                format!("{}: {}", e.file_path, e.message)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn to_proto_blob(blob: ResourceBlob) -> ProtoBlob {
@@ -628,5 +633,36 @@ mod tests {
             matches!(result, AdmissionDecision::Reject(_)),
             "expected Reject when server is unreachable"
         );
+    }
+
+    /// The push rejection text must stay byte-identical to the API's
+    /// mutation rejection text for the same validation errors.
+    #[test]
+    fn format_rejection_matches_golden_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/fixtures/admission-rejection-golden.json");
+        let raw = std::fs::read_to_string(&path).expect("read golden fixture");
+        let fixture: serde_json::Value = serde_json::from_str(&raw).expect("parse golden fixture");
+        let cases = fixture["cases"].as_array().expect("cases array");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let errors: Vec<ValidationError> = case["errors"]
+                .as_array()
+                .expect("errors array")
+                .iter()
+                .map(|e| ValidationError {
+                    file_path: e["filePath"].as_str().unwrap_or_default().to_string(),
+                    field: e["field"].as_str().unwrap_or_default().to_string(),
+                    constraint: e["constraint"].as_str().unwrap_or_default().to_string(),
+                    message: e["message"].as_str().unwrap_or_default().to_string(),
+                })
+                .collect();
+            assert_eq!(
+                format_rejection(&errors),
+                case["expected"].as_str().expect("expected text"),
+                "case {}",
+                case["name"]
+            );
+        }
     }
 }

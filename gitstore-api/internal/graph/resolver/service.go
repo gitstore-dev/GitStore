@@ -56,6 +56,7 @@ type Service struct {
 	namespacePolicy   namespaceadmission.PolicyEvaluator
 	namespaceMetrics  *namespaceadmission.Metrics
 	committedAdmitter admission.CommittedManifestAdmitter
+	manifestValidator admission.ManifestValidator
 	pushLimits        config.PushLimitsConfig
 }
 
@@ -83,7 +84,10 @@ type ServiceDeps struct {
 	NamespacePolicyEvaluator  namespaceadmission.PolicyEvaluator
 	NamespaceMetrics          *namespaceadmission.Metrics
 	CommittedManifestAdmitter admission.CommittedManifestAdmitter
-	PushLimits                config.PushLimitsConfig
+	// ManifestValidator runs push pre-receive checks for mutations. When nil,
+	// the admitter is used if it also implements ManifestValidator.
+	ManifestValidator admission.ManifestValidator
+	PushLimits        config.PushLimitsConfig
 }
 
 // NewService creates a new service instance backed by the datastore.
@@ -110,7 +114,12 @@ func NewService(deps ServiceDeps) (*Service, error) {
 	if namespaceMetrics == nil {
 		namespaceMetrics = namespaceadmission.DefaultMetrics()
 	}
+	manifestValidator := deps.ManifestValidator
+	if manifestValidator == nil {
+		manifestValidator, _ = deps.CommittedManifestAdmitter.(admission.ManifestValidator)
+	}
 	return &Service{
+		manifestValidator: manifestValidator,
 		store:             deps.Store,
 		gitWriter:         deps.GitWriter,
 		logger:            deps.Logger,
@@ -364,51 +373,6 @@ func (s *Service) GetCategoryTaxonomyByName(ctx context.Context, namespace, name
 	return c, nil
 }
 
-// DeleteCategory requests foreground deletion of a CategoryTaxonomy. The
-// caller has already selected the resource by immutable UID; all dependent
-// checks remain scope-bound to the persisted record.
-func (s *Service) DeleteCategory(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error) {
-	category, err := s.store.GetCategoryTaxonomy(ctx, uid)
-	if err != nil {
-		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, gqlerror.Errorf("category not found")
-		}
-		return nil, gqlerror.Errorf("failed to retrieve category")
-	}
-	if category.DeletionTimestamp != nil {
-		return category, nil
-	}
-	owners, ok := s.store.(datastore.OwnerReferenceStore)
-	if !ok {
-		return nil, gqlerror.Errorf("category deletion is unavailable while owner-reference indexing is disabled")
-	}
-	hasChildren, err := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{
-		Namespace: category.Namespace, RepositoryID: category.RepositoryID,
-	}, category.UID)
-	if err != nil {
-		s.logger.Error("failed to check category deletion dependents",
-			zap.String("namespace", category.Namespace),
-			zap.String("name", category.Name),
-			zap.Error(err))
-		return nil, gqlerror.Errorf("failed to check category deletion dependents")
-	}
-	if hasChildren {
-		return nil, gqlerror.Errorf("category %q has child categories and cannot be deleted", category.Name)
-	}
-	lifecycle, ok := s.store.(datastore.CategoryTaxonomyDeletionStore)
-	if !ok {
-		return nil, gqlerror.Errorf("category deletion lifecycle is unavailable")
-	}
-	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, s.clock.Now().UTC())
-	if err != nil {
-		if errors.Is(err, datastore.ErrConflict) {
-			return nil, gqlerror.Errorf("category %q changed while deletion was requested", category.Name)
-		}
-		return nil, gqlerror.Errorf("failed to mark category for deletion")
-	}
-	return terminating, nil
-}
-
 // CompleteCategoryDeletion finalizes a controller-observed foreground
 // deletion. It repeats the blocking-dependent check immediately before the
 // resource-version-guarded delete so a child-created race cannot orphan it.
@@ -424,20 +388,29 @@ func (s *Service) CompleteCategoryDeletion(ctx context.Context, namespace, name,
 		return category, datastore.ErrConflict
 	}
 	if category.DeletionTimestamp == nil || !containsString(category.Finalizers, datastore.CategoryTaxonomyForegroundDeletionFinalizer) {
-		return nil, gqlerror.Errorf("category %q is not awaiting foreground deletion", name)
+		return nil, admission.NewError(admission.CodeFailedPrecondition, "CATEGORY_NOT_TERMINATING",
+			fmt.Sprintf("category %q is not awaiting foreground deletion", name))
 	}
 	owners, ok := s.store.(datastore.OwnerReferenceStore)
 	if !ok {
 		return nil, gqlerror.Errorf("category deletion is unavailable while owner-reference indexing is disabled")
 	}
-	hasChildren, err := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{
-		Namespace: category.Namespace, RepositoryID: category.RepositoryID,
-	}, category.UID)
+	scope := datastore.OwnerReferenceScope{Namespace: category.Namespace, RepositoryID: category.RepositoryID}
+	hasChildren, err := owners.HasBlockingOwnerDependents(ctx, scope, category.UID)
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to recheck category deletion dependents")
 	}
 	if hasChildren {
-		return category, gqlerror.Errorf("category %q still has child categories", name)
+		return category, admission.NewError(admission.CodeFailedPrecondition, "CHILD_CATEGORIES_PRESENT",
+			fmt.Sprintf("category %q still has child categories", name))
+	}
+	products, err := owners.ListNonBlockingProductOwnerDependents(ctx, scope, category.UID, "", 1)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to recheck category Product dependents")
+	}
+	if len(products.Items) > 0 {
+		return category, admission.NewError(admission.CodeFailedPrecondition, "PRODUCT_DECOUPLING_INCOMPLETE",
+			fmt.Sprintf("category %q still has products to decouple", name))
 	}
 	lifecycle, ok := s.store.(datastore.CategoryTaxonomyDeletionStore)
 	if !ok {
@@ -634,7 +607,7 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 	if err == nil {
 		content, err = validateNamespaceResource(resource)
 	}
-	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.PhaseStructural, time.Since(started))
+	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.StageStructural, time.Since(started))
 	if err != nil {
 		s.recordNamespaceGraphQLError("CREATE", namespaceInputName(input.Metadata), err)
 		return nil, err
@@ -760,7 +733,7 @@ func (s *Service) UpdateNamespace(ctx context.Context, input model.UpdateNamespa
 	if err == nil {
 		content, err = validateNamespaceResource(resource)
 	}
-	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.PhaseStructural, time.Since(started))
+	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.StageStructural, time.Since(started))
 	if err != nil {
 		s.recordNamespaceGraphQLError("UPDATE", namespaceInputName(input.Metadata), err)
 		return nil, err
@@ -846,7 +819,7 @@ func (s *Service) evaluateNamespacePolicy(
 		Tier:             tier,
 		CapturePreflight: true,
 	})
-	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.PhasePolicy, time.Since(started))
+	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.StagePolicy, time.Since(started))
 	if err != nil {
 		return namespaceadmission.Preflight{}, gqlerror.Errorf("Namespace policy evaluation failed")
 	}
@@ -859,7 +832,7 @@ func (s *Service) evaluateNamespacePolicy(
 	if decision.Reason == namespaceadmission.ReasonNamespaceNotFound {
 		return namespaceadmission.Preflight{}, NewNamespaceNotFoundError(fmt.Sprintf("namespace %q not found", resource.Metadata.Name))
 	}
-	return namespaceadmission.Preflight{}, NewNamespacePolicyError(decision.Reason, decision.Message)
+	return namespaceadmission.Preflight{}, NewNamespacePolicyError(admission.PhasePreReceive, "", decision.Reason, decision.Message)
 }
 
 func validateNamespaceResource(resource *catalog.NamespaceResource) ([]byte, error) {
@@ -961,19 +934,19 @@ func (s *Service) commitAndAdmitNamespace(
 		var mapped error
 		switch {
 		case errors.Is(err, namespaceadmission.ErrBootstrapNamespace):
-			mapped = NewNamespacePolicyError(namespaceadmission.ReasonBootstrapNamespace, fmt.Sprintf("bootstrap namespace %q is system-managed", resource.Metadata.Name))
+			mapped = NewNamespacePolicyError(admission.PhasePostReceive, sha, namespaceadmission.ReasonBootstrapNamespace, fmt.Sprintf("bootstrap namespace %q is system-managed", resource.Metadata.Name))
 		case errors.Is(err, namespaceadmission.ErrTierDemotion):
-			mapped = NewNamespacePolicyError(namespaceadmission.ReasonTierDemotion, "namespace tier demotion is not allowed")
+			mapped = NewNamespacePolicyError(admission.PhasePostReceive, sha, namespaceadmission.ReasonTierDemotion, "namespace tier demotion is not allowed")
 		case errors.Is(err, namespaceadmission.ErrNamespaceTerminating):
-			mapped = NewNamespacePolicyError(namespaceadmission.ReasonNamespaceTerminating, fmt.Sprintf("namespace %q is terminating", resource.Metadata.Name))
+			mapped = NewNamespacePolicyError(admission.PhasePostReceive, sha, namespaceadmission.ReasonNamespaceTerminating, fmt.Sprintf("namespace %q is terminating", resource.Metadata.Name))
 		case errors.Is(err, namespaceadmission.ErrNamespaceAlreadyExists):
-			mapped = NewNamespacePolicyError(namespaceadmission.ReasonNamespaceAlreadyExists, fmt.Sprintf("namespace with identifier %q already exists", resource.Metadata.Name))
+			mapped = NewNamespacePolicyError(admission.PhasePostReceive, sha, namespaceadmission.ReasonNamespaceAlreadyExists, fmt.Sprintf("namespace with identifier %q already exists", resource.Metadata.Name))
 		case errors.Is(err, namespaceadmission.ErrNamespaceNotFound):
 			mapped = NewNamespaceNotFoundError(fmt.Sprintf("namespace %q not found", resource.Metadata.Name))
 		case errors.Is(err, namespaceadmission.ErrAuthoringRefCheck):
 			return nil, gqlerror.Errorf("failed to verify Namespace commit: %v", err)
 		case errors.Is(err, admission.ErrCommittedManifestSuperseded), errors.Is(err, namespaceadmission.ErrAuthoringRefSuperseded):
-			mapped = NewNamespaceConflictError(namespaceadmission.ReasonResourceVersionConflict, "Namespace commit was superseded by a newer commit")
+			mapped = NewNamespaceConflictError(namespaceadmission.ReasonSuperseded, "Namespace commit was superseded by a newer commit")
 		case errors.Is(err, datastore.ErrConflict):
 			mapped = NewNamespaceConflictError(namespaceadmission.ReasonResourceVersionConflict, fmt.Sprintf("namespace %q changed while the update was applied", resource.Metadata.Name))
 		default:
@@ -1087,18 +1060,22 @@ func (s *Service) recordNamespaceGraphQLError(operation, name string, err error)
 	if !errors.As(err, &graphErr) {
 		return
 	}
-	phase, _ := graphErr.Extensions["phase"].(string)
-	reason, _ := graphErr.Extensions["reason"].(string)
-	if phase == "" || reason == "" {
+	code, _ := graphErr.Extensions["code"].(string)
+	diagnostics, _ := graphErr.Extensions["diagnostics"].([]map[string]any)
+	if code == "" || len(diagnostics) == 0 {
 		return
 	}
-	s.namespaceMetrics.ObserveRejection(namespaceadmission.Phase(phase), namespaceadmission.Reason(reason))
+	reason, _ := diagnostics[0]["reason"].(string)
+	if reason == "" {
+		return
+	}
+	s.namespaceMetrics.ObserveRejection(namespaceadmission.Reason(reason))
 	s.logger.Warn("Namespace mutation rejected",
 		zap.String("operation", operation),
-		zap.String("phase", phase),
+		zap.String("code", code),
 		zap.String("reason", reason),
 		zap.String("namespace", name),
-		zap.Bool("conflict", graphErr.Extensions["code"] == namespaceadmission.CodeConflict))
+		zap.Bool("conflict", code == string(admission.CodeConflict)))
 }
 
 func namespaceResourceFromCreateInput(input model.CreateNamespaceInput, pushLimits config.PushLimitsConfig) (*catalog.NamespaceResource, error) {

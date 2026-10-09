@@ -3,7 +3,7 @@
 **Feature Branch**: `057-categorytaxonomy-path-freshness`
 **Created**: 2026-08-20
 **Updated**: 2026-10-07 (scope expanded: Git-backed create/update/delete mutations; ancestor-path descendant filtering)
-**Status**: Draft
+**Status**: In progress
 **Input**: User description: "CategoryTaxonomy Path Freshness: Deprecate Admission-Time path/depth in Favor of status.resolved (GitHub issue #382). `Category.path`/`Category.depth` go stale after a category is re-parented elsewhere in the tree, while the separate `status.resolved.path`/`status.resolved.depth` (written by the CategoryTaxonomy controller) are kept fresh. Fix the resolver to prefer the fresh fields, with a pre-reconcile fallback, and mark the legacy fields `@deprecated`." Revised 2026-10-07: remove `Category.path`/`Category.depth` outright, with no fallback. Scope expansion: "Add mutations that write to Git to mirror the Repository and Namespace implementations. ADR-0006 mentions path prefix filtering — implement that as well."
 
 ## Scope Overview

@@ -67,7 +67,7 @@ type CatalogObjectReferenceInput struct {
 
 // Category represents a hierarchical classification system for products.
 // Follows the Kubernetes-style resource envelope: id / apiVersion / kind / metadata / spec / status.
-// Tree-traversal convenience fields (parent, children, path, depth, products, body) are top-level
+// Tree-traversal convenience fields (parent, children, products, body) are top-level
 // because they are computed or graph-linked and do not belong in spec or status.
 type Category struct {
 	// Globally unique identifier (format: cat_[base62])
@@ -84,17 +84,14 @@ type Category struct {
 	Status *CategoryTaxonomyStatus `json:"status,omitempty"`
 	// Markdown body content (category description).
 	Body *string `json:"body,omitempty"`
-	// Parent category (null for root categories).
+	// Resolved parent category. Null for roots, for an unresolved parent, and
+	// before the category is first reconciled.
 	Parent *Category `json:"parent,omitempty"`
-	// Direct child categories.
+	// Direct child categories (at most 100), ordered by name. A child appears
+	// once it has been reconciled.
 	Children []*Category `json:"children"`
 	// Products in this category (includes subcategory products).
 	Products *ProductConnection `json:"products"`
-	// Full path from root (e.g., ["electronics", "computers", "laptops"]).
-	// Derived from the materialized ancestor path stored at admission time.
-	Path []string `json:"path"`
-	// Depth in tree (root = 0).
-	Depth int32 `json:"depth"`
 }
 
 func (Category) IsNode() {}
@@ -126,6 +123,19 @@ type CategoryEdge struct {
 	Node *Category `json:"node"`
 }
 
+// Subtree filter. Hierarchy comes from each category's `status.resolved.path`:
+// categories that have not yet been reconciled are not matched, and results are
+// eventually consistent after an ancestor moves.
+type CategoryFilterInput struct {
+	// Name of the category whose descendants are returned. Unknown names return
+	// an empty connection.
+	DescendantOf string `json:"descendantOf"`
+	// Include `descendantOf` itself as the first result.
+	IncludeSelf *bool `json:"includeSelf,omitempty"`
+	// Maximum levels below `descendantOf` (1–128). Omit for the whole subtree.
+	MaxDepth *int32 `json:"maxDepth,omitempty"`
+}
+
 // Composite selector: namespace identifier (human-readable slug) + category name.
 type CategoryNamespacePath struct {
 	Namespace string `json:"namespace"`
@@ -139,12 +149,23 @@ type CategorySpec struct {
 	Media     []*MediaDefinition      `json:"media"`
 }
 
+// Author-supplied category specification.
+type CategorySpecInput struct {
+	Title     string                       `json:"title"`
+	ParentRef *CatalogObjectReferenceInput `json:"parentRef,omitempty"`
+	Media     []*MediaDefinitionInput      `json:"media,omitempty"`
+}
+
 // System-written status for a git-backed CategoryTaxonomy resource.
 type CategoryTaxonomyStatus struct {
-	ObservedGeneration  int32                     `json:"observedGeneration"`
-	LastAppliedRevision string                    `json:"lastAppliedRevision"`
-	Conditions          []*Condition              `json:"conditions"`
-	Resolved            *ResolvedCategoryTaxonomy `json:"resolved,omitempty"`
+	ObservedGeneration  int32        `json:"observedGeneration"`
+	LastAppliedRevision string       `json:"lastAppliedRevision"`
+	Conditions          []*Condition `json:"conditions"`
+	// Controller-computed hierarchy: the only source of a category's position in
+	// the tree. Null until the category is first reconciled. After an ancestor
+	// moves, descendants converge level by level, so the value is eventually
+	// consistent.
+	Resolved *ResolvedCategoryTaxonomy `json:"resolved,omitempty"`
 }
 
 // CategoryTaxonomy-specific watch event. Carries the same envelope as
@@ -235,6 +256,18 @@ type CollectionStatus struct {
 	Resolved *ResolvedCollectionDefinition `json:"resolved,omitempty"`
 }
 
+type CompleteCategoryDeletionInput struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	// Must equal the category's current metadata.resourceVersion.
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type CompleteCategoryDeletionPayload struct {
+	// ID of the removed category.
+	ID *string `json:"id,omitempty"`
+}
+
 // Controller-only finalizer completion for a terminating namespace.
 type CompleteNamespaceDeletionInput struct {
 	// Name of the terminating namespace. Exactly one of name or identifier is required.
@@ -287,6 +320,19 @@ type ConditionInput struct {
 	LastTransitionTime time.Time       `json:"lastTransitionTime"`
 	Reason             *string         `json:"reason,omitempty"`
 	Message            *string         `json:"message,omitempty"`
+}
+
+type CreateCategoryInput struct {
+	APIVersion string             `json:"apiVersion"`
+	Kind       string             `json:"kind"`
+	Metadata   *ObjectMetaInput   `json:"metadata"`
+	Spec       *CategorySpecInput `json:"spec"`
+	// Markdown body. Omit for an empty body.
+	Body *string `json:"body,omitempty"`
+}
+
+type CreateCategoryPayload struct {
+	Category *Category `json:"category,omitempty"`
 }
 
 // Declarative resource envelope for creating a namespace.
@@ -354,10 +400,9 @@ type DeleteCategoryInput struct {
 
 // Payload for deleteCategory mutation
 type DeleteCategoryPayload struct {
-	// Deleted category ID
-	DeletedCategoryID *string `json:"deletedCategoryId,omitempty"`
-	// Orphaned product IDs (products that referenced this category)
-	OrphanedProductIds []string `json:"orphanedProductIds,omitempty"`
+	// The category, now terminating.
+	Category *Category               `json:"category,omitempty"`
+	Outcome  ResourceDeletionOutcome `json:"outcome"`
 }
 
 // Input for deleting a namespace.
@@ -1178,12 +1223,11 @@ type ResolvedCategoryRefInput struct {
 
 // Controller-computed category hierarchy metadata.
 type ResolvedCategoryTaxonomy struct {
+	// Depth in the tree (root = 0).
 	Depth int32 `json:"depth"`
 	// Ancestor path from root to self, e.g. ["electronics", "computers",
 	// "laptops"] for the "laptops" category (root-to-self order). A root
 	// category's path is a single-element array containing its own name.
-	// Distinct from Category.path, which is derived when the category is
-	// read.
 	Path         []string `json:"path"`
 	ChildCount   int32    `json:"childCount"`
 	ProductCount int32    `json:"productCount"`
@@ -1428,6 +1472,20 @@ type TransferNamespaceOwnerPayload struct {
 	Namespace *Namespace `json:"namespace"`
 }
 
+type UpdateCategoryInput struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	// `name` and `namespace` identify the category and cannot change.
+	Metadata *ObjectMetaInput   `json:"metadata"`
+	Spec     *CategorySpecInput `json:"spec"`
+	// Markdown body. Omit to keep the current body.
+	Body *string `json:"body,omitempty"`
+}
+
+type UpdateCategoryPayload struct {
+	Category *Category `json:"category,omitempty"`
+}
+
 type UpdateCategoryStatusInput struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
@@ -1442,9 +1500,7 @@ type UpdateCategoryStatusInput struct {
 	Conditions []*ConditionInput `json:"conditions,omitempty"`
 	// Null = unchanged. Kind-specific — not part of any generic patch shape.
 	Resolved *ResolvedCategoryTaxonomyInput `json:"resolved,omitempty"`
-	// Controller-only foreground-deletion completion request. This extends the
-	// existing status subresource rather than introducing a parallel
-	// CategoryTaxonomy mutation.
+	// Controller-only foreground-deletion completion request.
 	CompleteDeletion *bool `json:"completeDeletion,omitempty"`
 	// Controller-only bounded Product drain. The server removes non-blocking
 	// owner references and writes CategoryDeleted without changing product spec.

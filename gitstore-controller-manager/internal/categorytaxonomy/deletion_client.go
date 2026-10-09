@@ -25,6 +25,16 @@ mutation($input: UpdateCategoryStatusInput!) {
   }
 }`
 
+// completeCategoryDeletionMutation finishes a terminating category's
+// foreground deletion. It replaces the deprecated
+// updateCategoryStatus.completeDeletion flag.
+const completeCategoryDeletionMutation = `
+mutation($input: CompleteCategoryDeletionInput!) {
+  completeCategoryDeletion(input: $input) {
+    id
+  }
+}`
+
 // mapConflictErr maps a RESOURCE_VERSION_CONFLICT or forward-compatible
 // CONFLICT GraphQL error to types.ErrConflict; any other error (including a
 // NOT_FOUND-coded one) passes through wrapped but otherwise unchanged.
@@ -36,9 +46,9 @@ func mapConflictErr(err error) error {
 	return err
 }
 
-// DeletionClient invokes lifecycle operations through the existing
-// updateCategoryStatus subresource mutation. No parallel CategoryTaxonomy
-// GraphQL mutation is introduced.
+// DeletionClient invokes the controller-only lifecycle operations: the
+// bounded Product drain through updateCategoryStatus, and final removal
+// through completeCategoryDeletion.
 type DeletionClient interface {
 	DecoupleProducts(ctx context.Context, namespace, name, resourceVersion string) (bool, error)
 	CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error
@@ -73,14 +83,13 @@ func (c *graphqlDeletionClient) DecoupleProducts(ctx context.Context, namespace,
 
 func (c *graphqlDeletionClient) CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error {
 	var response struct {
-		UpdateCategoryStatus struct{} `json:"updateCategoryStatus"`
+		CompleteCategoryDeletion struct{} `json:"completeCategoryDeletion"`
 	}
-	if err := c.client.Mutate(ctx, categoryDeletionStatusMutation, map[string]any{
+	if err := c.client.Mutate(ctx, completeCategoryDeletionMutation, map[string]any{
 		"input": map[string]any{
-			"namespace":        namespace,
-			"name":             name,
-			"resourceVersion":  resourceVersion,
-			"completeDeletion": true,
+			"namespace":       namespace,
+			"name":            name,
+			"resourceVersion": resourceVersion,
 		},
 	}, &response); err != nil {
 		return fmt.Errorf("category deletion client: complete deletion: %w", mapConflictErr(err))

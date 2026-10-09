@@ -31,7 +31,11 @@ output is JSON and never includes the configured password.
 4. Check `system.large_partitions`, table tombstone warnings, read latency, and
    compaction backlog. A partition above 100 MiB is an incident; a hot
    partition above 10 MiB requires capacity review.
-5. Confirm the last successful cluster repair completed less than seven days
+5. For category subtree filters, watch
+   `gitstore_category_ancestor_index_writes_total{result}` (`applied`,
+   `skipped_newer`, `failed`) and
+   `gitstore_category_ancestor_index_repair_required_total`.
+6. Confirm the last successful cluster repair completed less than seven days
    ago. If not, prioritize anti-entropy repair before reducing
    `gc_grace_seconds` or changing compaction.
 
@@ -56,7 +60,9 @@ Run large audits from a controlled operator host and monitor both client memory
 and coordinator latency.
 
 The audit compares authoritative rows with Namespace, Repository, mapping, and
-catalogue query projections. Findings are deterministic:
+catalogue query projections, including the CategoryTaxonomy
+`category_ancestor_index` projection (see
+[Category ancestor index](#category-ancestor-index)). Findings are deterministic:
 
 - `missing`: an authoritative row requires a projection that is absent;
 - `dangling`: a projection owner has no authoritative row;
@@ -69,6 +75,43 @@ the same unique key or the projection participates in an in-flight write
 reservation. Do not delete or overwrite it online. Resolve authoritative
 conflicts first; investigate reservation findings against mutation logs before
 performing any manual cleanup.
+
+### Category ancestor index
+
+`categories(filter: {descendantOf: ...})` reads the `category_ancestor_index`
+projection, which is maintained from each category's `status.resolved.path`
+whenever a status write or final removal happens. It has one row per
+ancestor/descendant pair. Rows are written with the category's resource
+version, so concurrent replicas converge to the higher version and an older
+write is skipped.
+
+Run an audit followed by a confirmed repair:
+
+- after rolling out the release that introduces the index, because categories
+  reconciled earlier have no rows and, during a rolling upgrade, status writes
+  from replicas that predate the index leave gaps;
+- whenever `gitstore_category_ancestor_index_repair_required_total` increases.
+
+```bash
+go run ./cmd/gitctl scylla-projection-audit > projection-audit.json
+jq '.findings[] | select(.table == "category_ancestor_index")' projection-audit.json
+go run ./cmd/gitctl scylla-projection-repair --dry-run > projection-repair-plan.json
+go run ./cmd/gitctl scylla-projection-repair --confirm > projection-repair-result.json
+```
+
+Suggested dashboard panels and alerts:
+
+| Signal | Use |
+|---|---|
+| `rate(gitstore_category_ancestor_index_writes_total{result="applied"}[5m])` | Panel: index write throughput; follows category reconciliation volume |
+| `rate(gitstore_category_ancestor_index_writes_total{result="skipped_newer"}[5m])` | Panel: writes dropped because a newer version was already stored. Non-zero is normal under concurrent replicas |
+| `increase(gitstore_category_ancestor_index_writes_total{result="failed"}[10m]) > 0` | Alert (warning): index writes are failing after retry |
+| `increase(gitstore_category_ancestor_index_repair_required_total[10m]) > 0` | Alert (page): a mutation left the index inconsistent; run audit and confirmed repair |
+| `increase(gitstore_admission_rejections_total{kind="CategoryTaxonomy",phase="POST_RECEIVE"}[15m]) > 0` | Alert (warning): a commit passed the Git check but was rejected on admission; the last accepted generation is kept and `AdmissionAccepted=False` |
+
+Until repair completes, subtree filters can omit categories or return rows for a
+previous path; unfiltered category reads are unaffected. Categories with
+`status.resolved = null` have no rows by design and are not findings.
 
 ## 3. Dry run
 

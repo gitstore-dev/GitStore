@@ -42,32 +42,68 @@ schema.
 
 ## Stable response codes
 
-| Code | Phase | Typical reasons |
-|---|---|---|
-| `NAMESPACE_STRUCTURAL_VALIDATION_FAILED` | `STRUCTURAL` | `INVALID_ENVELOPE`, `INVALID_IDENTIFIER`, `RESERVED_IDENTIFIER`, `INVALID_TIER`, `INVALID_AUTHORING_TARGET`, `DUPLICATE_IDENTITY` |
-| `NAMESPACE_IMMUTABLE_FIELD` | `STRUCTURAL` | `IMMUTABLE_NAME` |
-| `NAMESPACE_POLICY_REJECTED` | `POLICY` | `BOOTSTRAP_NAMESPACE`, `TIER_DEMOTION`, `NAMESPACE_TERMINATING`, `NAMESPACE_ALREADY_EXISTS`, `NAMESPACE_NOT_FOUND` |
-| `NAMESPACE_DELETION_BLOCKED` | deletion | `BOOTSTRAP_NAMESPACE`, `NAMESPACE_NOT_EMPTY` |
-| `NAMESPACE_CONFLICT` | write | `RESOURCE_VERSION_CONFLICT` |
+Namespace mutations use the shared mutation error envelope: `extensions.code`,
+plus `diagnostics[]` (each with a stable `reason`), and for
+`ADMISSION_REJECTED` only, `phase` (`PRE_RECEIVE` or `POST_RECEIVE`) and, for
+`POST_RECEIVE`, `commit`. No other keys are returned. Clients branch on `code`
+first and on `diagnostics[].reason` for detail. Reason values are unchanged
+from earlier releases.
 
-Deletion blockers are ordered `BOOTSTRAP_NAMESPACE`, then
-`NAMESPACE_NOT_EMPTY`. Successful deletion returns `TERMINATION_STARTED` or the
-idempotent no-write result `ALREADY_TERMINATING`, including when another replica
-wins a concurrent deletion request.
+| Code | Reasons |
+|---|---|
+| `ADMISSION_REJECTED` | `INVALID_ENVELOPE`, `INVALID_IDENTIFIER`, `RESERVED_IDENTIFIER`, `INVALID_TIER`, `INVALID_AUTHORING_TARGET`, `DUPLICATE_IDENTITY`, `IMMUTABLE_NAME`, `TIER_DEMOTION` |
+| `FAILED_PRECONDITION` | `BOOTSTRAP_NAMESPACE`, `NAMESPACE_TERMINATING`, and for deletion `NAMESPACE_NOT_EMPTY` |
+| `ALREADY_EXISTS` | `NAMESPACE_ALREADY_EXISTS` |
+| `NOT_FOUND` | `NAMESPACE_NOT_FOUND` |
+| `CONFLICT` | `RESOURCE_VERSION_CONFLICT`, `SUPERSEDED` |
+
+### Migrating from the earlier codes
+
+| Earlier `code` | Earlier extensions | Now |
+|---|---|---|
+| `NAMESPACE_STRUCTURAL_VALIDATION_FAILED` | `phase: STRUCTURAL`, `reason` | `ADMISSION_REJECTED`; same reason in `diagnostics[0].reason` |
+| `NAMESPACE_IMMUTABLE_FIELD` | `phase: STRUCTURAL`, `reason` | `ADMISSION_REJECTED`, reason `IMMUTABLE_NAME` |
+| `NAMESPACE_POLICY_REJECTED` | `phase: POLICY`, `reason` | By reason: `TIER_DEMOTION` is `ADMISSION_REJECTED`; `BOOTSTRAP_NAMESPACE` and `NAMESPACE_TERMINATING` are `FAILED_PRECONDITION`; `NAMESPACE_ALREADY_EXISTS` is `ALREADY_EXISTS`; `NAMESPACE_NOT_FOUND` is `NOT_FOUND` |
+| `NAMESPACE_CONFLICT` | `phase: POLICY`, `reason` | `CONFLICT`, reason `RESOURCE_VERSION_CONFLICT` or `SUPERSEDED` |
+| `NOT_FOUND` | `phase: POLICY`, `reason` | `NOT_FOUND`, reason `NAMESPACE_NOT_FOUND` |
+| `NAMESPACE_DELETION_BLOCKED` | `reasons[]` | `FAILED_PRECONDITION`, one diagnostic per blocker |
+| `RESOURCE_VERSION_CONFLICT` (status writes and `complete*Deletion`, all kinds) | `resourceVersion` | `CONFLICT`, reason `RESOURCE_VERSION_CONFLICT`; the current version is in the diagnostic `message` (`current resourceVersion is N`), not a `resourceVersion` key |
+
+The `phase` values `STRUCTURAL` and `POLICY` and the top-level `reason` and
+`reasons` keys no longer appear in error extensions. Update client and alert
+matchers that used them.
+
+Deletion blockers are returned as one diagnostic each, ordered
+`BOOTSTRAP_NAMESPACE`, then `NAMESPACE_NOT_EMPTY`. Successful deletion returns
+`TERMINATION_STARTED` or the idempotent no-write result `ALREADY_TERMINATING`,
+including when another replica wins a concurrent deletion request.
+
+Controllers accept both the earlier `RESOURCE_VERSION_CONFLICT` code and
+`CONFLICT` and treat either as "re-read and retry", so the API and controller
+manager can be upgraded in either order.
 
 ## Metrics
 
 Monitor:
 
-- `gitstore_namespace_validation_rejections_total{phase,reason}`
-- `gitstore_namespace_validation_duration_seconds{phase}`
+- `gitstore_namespace_validation_rejections_total{code,reason}`
+- `gitstore_namespace_validation_duration_seconds{stage}`
 - `gitstore_namespace_deletion_rejections_total{reason}`
 - `gitstore_namespace_deletion_outcomes_total{outcome}`
+- `gitstore_admission_rejections_total{kind,phase}` (manifests rejected by
+  admission after the ref moved; currently emitted for `CategoryTaxonomy`
+  with `phase="POST_RECEIVE"`, not for Namespace)
 
-Alert on a sustained increase in `RESOURCE_VERSION_CONFLICT`,
-`NAMESPACE_TERMINATING`, or internal GraphQL/gRPC errors. Correlate policy
-rejections with deployments and client changes; do not treat expected user
-rejections as server failures.
+The `phase` label on the two `validation` series was replaced: rejections are
+now labelled by `code` (keeping `reason`), and duration by `stage`
+(`STRUCTURAL` or `POLICY`). Dashboards and alerts that selected on
+`phase="STRUCTURAL"` or `phase="POLICY"` must be rewritten, for example
+`stage="POLICY"` for latency or `code="ADMISSION_REJECTED"` for rejections.
+
+Alert on a sustained increase in `reason="RESOURCE_VERSION_CONFLICT"` or
+`code="CONFLICT"`, `NAMESPACE_TERMINATING`, or internal GraphQL/gRPC errors.
+Correlate policy rejections with deployments and client changes; do not treat
+expected user rejections as server failures.
 
 ## Capacity and saturation
 
@@ -127,6 +163,8 @@ Submit a non-demoting update or create a migration plan; do not edit the
 datastore directly.
 
 ### Update rejected with `NAMESPACE_TERMINATING`
+
+The response code is `FAILED_PRECONDITION` with reason `NAMESPACE_TERMINATING`.
 
 The Namespace already has a deletion timestamp. Stop retries that modify its
 spec and either let foreground deletion complete or resolve its deletion

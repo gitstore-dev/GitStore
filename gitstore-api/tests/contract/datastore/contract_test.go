@@ -1212,4 +1212,235 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		_, err := ds.TryConsumeServiceAccountAssertion(ctx, "expired-"+newID(), time.Now().Add(-time.Second))
 		assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
 	})
+
+	t.Run("CategoryAncestorIndex", func(t *testing.T) {
+		runCategoryAncestorIndexContract(t, ds)
+	})
+}
+
+// ── CategoryAncestorIndex helpers ────────────────────────────────────────────
+
+// seedCategory creates a category and, when path is given, records it as
+// status.resolved.path (root-to-self, last element = name).
+func seedCategory(t *testing.T, ds datastore.Datastore, ns, name string, path ...string) *datastore.CategoryTaxonomy {
+	t.Helper()
+	c := newCategoryTaxonomyInNS(ns)
+	c.Name = name
+	require.NoError(t, ds.CreateCategoryTaxonomy(context.Background(), c))
+	if len(path) == 0 {
+		return c
+	}
+	return setResolvedPath(t, ds, ns, name, path...)
+}
+
+func setResolvedPath(t *testing.T, ds datastore.Datastore, ns, name string, path ...string) *datastore.CategoryTaxonomy {
+	t.Helper()
+	ctx := context.Background()
+	current, err := ds.GetCategoryTaxonomyByName(ctx, ns, name)
+	require.NoError(t, err)
+	updated, err := ds.UpdateCategoryTaxonomyStatus(ctx, ns, name, datastore.CategoryTaxonomyStatusPatch{
+		ResourceVersion: current.ResourceVersion,
+		Resolved:        &catalog.ResolvedCategoryTaxonomy{Depth: int8(len(path) - 1), Path: path},
+	})
+	require.NoError(t, err)
+	return updated
+}
+
+func categoryIndex(t *testing.T, ds datastore.Datastore) datastore.CategoryAncestorIndex {
+	t.Helper()
+	index, ok := ds.(datastore.CategoryAncestorIndex)
+	require.True(t, ok, "backend must implement datastore.CategoryAncestorIndex")
+	return index
+}
+
+// descendants lists the full subtree as "name@depth" in index order.
+func descendants(t *testing.T, ds datastore.Datastore, ns, ancestor string, includeSelf bool, maxDepth int) []string {
+	t.Helper()
+	result, err := categoryIndex(t, ds).ListCategoryDescendants(context.Background(), datastore.CategoryDescendantQuery{
+		Namespace: ns, Ancestor: ancestor, IncludeSelf: includeSelf, MaxDepth: maxDepth,
+		Page: datastore.PageParams{First: 100},
+	})
+	require.NoError(t, err)
+	out := make([]string, 0, len(result.Items))
+	for _, item := range result.Items {
+		out = append(out, fmt.Sprintf("%s@%d", item.Name, item.Depth))
+	}
+	return out
+}
+
+func runCategoryAncestorIndexContract(t *testing.T, ds datastore.Datastore) {
+	ctx := context.Background()
+
+	// electronics
+	// |- computers
+	// |  `- laptops
+	// `- computers-refurb
+	//    `- phones
+	newTree := func(t *testing.T) string {
+		ns := "idx-" + newID()[:8]
+		seedCategory(t, ds, ns, "electronics", "electronics")
+		seedCategory(t, ds, ns, "computers", "electronics", "computers")
+		seedCategory(t, ds, ns, "computers-refurb", "electronics", "computers-refurb")
+		seedCategory(t, ds, ns, "laptops", "electronics", "computers", "laptops")
+		seedCategory(t, ds, ns, "phones", "electronics", "computers-refurb", "phones")
+		return ns
+	}
+
+	t.Run("MatchesWholePathSegmentsOnly", func(t *testing.T) {
+		ns := newTree(t)
+		assert.Equal(t, []string{"laptops@1"}, descendants(t, ds, ns, "computers", false, 0))
+		assert.Equal(t, []string{"phones@1"}, descendants(t, ds, ns, "computers-refurb", false, 0))
+	})
+
+	t.Run("IncludeSelfAndOrdering", func(t *testing.T) {
+		ns := newTree(t)
+		assert.Equal(t, []string{"computers@0", "laptops@1"}, descendants(t, ds, ns, "computers", true, 0))
+		assert.Equal(t,
+			[]string{"computers@1", "computers-refurb@1", "laptops@2", "phones@2"},
+			descendants(t, ds, ns, "electronics", false, 0))
+		assert.Equal(t, "electronics@0", descendants(t, ds, ns, "electronics", true, 0)[0])
+		assert.Empty(t, descendants(t, ds, ns, "unknown", true, 0))
+	})
+
+	t.Run("MaxDepth", func(t *testing.T) {
+		ns := newTree(t)
+		assert.Equal(t, []string{"computers@1", "computers-refurb@1"}, descendants(t, ds, ns, "electronics", false, 1))
+		assert.Equal(t,
+			[]string{"electronics@0", "computers@1", "computers-refurb@1"},
+			descendants(t, ds, ns, "electronics", true, 1))
+	})
+
+	t.Run("ReparentRemovesStaleRows", func(t *testing.T) {
+		ns := newTree(t)
+		setResolvedPath(t, ds, ns, "laptops", "electronics", "computers-refurb", "laptops")
+		assert.Empty(t, descendants(t, ds, ns, "computers", false, 0))
+		assert.Equal(t, []string{"laptops@1", "phones@1"}, descendants(t, ds, ns, "computers-refurb", false, 0))
+		assert.Equal(t,
+			[]string{"computers@1", "computers-refurb@1", "laptops@2", "phones@2"},
+			descendants(t, ds, ns, "electronics", false, 0))
+
+		// Promoting to a root drops every old ancestor row.
+		setResolvedPath(t, ds, ns, "laptops", "laptops")
+		assert.NotContains(t, descendants(t, ds, ns, "electronics", false, 0), "laptops@2")
+		assert.Equal(t, []string{"laptops@0"}, descendants(t, ds, ns, "laptops", true, 0))
+	})
+
+	t.Run("FinalRemovalDeletesRows", func(t *testing.T) {
+		ns := newTree(t)
+		laptops, err := ds.GetCategoryTaxonomyByName(ctx, ns, "laptops")
+		require.NoError(t, err)
+		lifecycle, ok := ds.(datastore.CategoryTaxonomyDeletionStore)
+		require.True(t, ok)
+		marked, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, ns, "laptops", laptops.ResourceVersion, time.Now())
+		require.NoError(t, err)
+		// Foreground deletion keeps the rows until final removal.
+		assert.Contains(t, descendants(t, ds, ns, "computers", false, 0), "laptops@1")
+		_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, ns, "laptops", marked.ResourceVersion)
+		require.NoError(t, err)
+		assert.Empty(t, descendants(t, ds, ns, "computers", false, 0))
+		assert.NotContains(t, descendants(t, ds, ns, "electronics", false, 0), "laptops@2")
+
+		// DeleteCategoryTaxonomy removes rows as well.
+		phones, err := ds.GetCategoryTaxonomyByName(ctx, ns, "phones")
+		require.NoError(t, err)
+		require.NoError(t, ds.DeleteCategoryTaxonomy(ctx, phones.UID))
+		assert.Empty(t, descendants(t, ds, ns, "computers-refurb", false, 0))
+		assert.Equal(t, []string{"computers@1", "computers-refurb@1"}, descendants(t, ds, ns, "electronics", false, 0))
+	})
+
+	t.Run("NullResolvedOwnsNoRows", func(t *testing.T) {
+		ns := "idx-" + newID()[:8]
+		seedCategory(t, ds, ns, "draft")
+		assert.Empty(t, descendants(t, ds, ns, "draft", true, 0))
+
+		// A status write without Resolved leaves existing rows untouched.
+		seedCategory(t, ds, ns, "root", "root")
+		current, err := ds.GetCategoryTaxonomyByName(ctx, ns, "root")
+		require.NoError(t, err)
+		_, err = ds.UpdateCategoryTaxonomyStatus(ctx, ns, "root", datastore.CategoryTaxonomyStatusPatch{
+			ResourceVersion: current.ResourceVersion,
+			Conditions:      []catalog.Condition{},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"root@0"}, descendants(t, ds, ns, "root", true, 0))
+	})
+
+	t.Run("RepeatedStatusWritesAreIdempotent", func(t *testing.T) {
+		ns := newTree(t)
+		want := descendants(t, ds, ns, "electronics", true, 0)
+		for range 3 {
+			setResolvedPath(t, ds, ns, "laptops", "electronics", "computers", "laptops")
+		}
+		assert.Equal(t, want, descendants(t, ds, ns, "electronics", true, 0))
+		assert.Equal(t, []string{"laptops@1"}, descendants(t, ds, ns, "computers", false, 0))
+	})
+
+	t.Run("ConcurrentWritesKeepHigherResourceVersion", func(t *testing.T) {
+		ns := newTree(t)
+		base, err := ds.GetCategoryTaxonomyByName(ctx, ns, "laptops")
+		require.NoError(t, err)
+
+		parents := []string{"computers", "computers-refurb", "electronics"}
+		var wg sync.WaitGroup
+		results := make([]error, len(parents))
+		for i, parent := range parents {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				path := []string{"electronics", parent, "laptops"}
+				if parent == "electronics" {
+					path = []string{"electronics", "laptops"}
+				}
+				_, results[i] = ds.UpdateCategoryTaxonomyStatus(ctx, ns, "laptops", datastore.CategoryTaxonomyStatusPatch{
+					ResourceVersion: base.ResourceVersion,
+					Resolved:        &catalog.ResolvedCategoryTaxonomy{Depth: int8(len(path) - 1), Path: path},
+				})
+			}()
+		}
+		wg.Wait()
+		winners := 0
+		for _, err := range results {
+			if err == nil {
+				winners++
+			} else {
+				assert.ErrorIs(t, err, datastore.ErrConflict)
+			}
+		}
+		require.Equal(t, 1, winners, "exactly one writer may win the resource-version CAS")
+
+		// Rows follow the stored (winning) path, with no leftovers from losers.
+		stored, err := ds.GetCategoryTaxonomyByName(ctx, ns, "laptops")
+		require.NoError(t, err)
+		path, err := datastore.CategoryResolvedPath(string(stored.Status))
+		require.NoError(t, err)
+		require.NotEmpty(t, path)
+		holders := 0
+		for _, parent := range parents {
+			for _, entry := range descendants(t, ds, ns, parent, false, 0) {
+				if len(entry) >= 7 && entry[:7] == "laptops" {
+					holders++
+					if parent != "electronics" {
+						assert.Equal(t, path[len(path)-2], parent)
+					}
+				}
+			}
+		}
+		// electronics always holds laptops (depth 1 or 2); exactly one parent
+		// among computers/computers-refurb holds it when it is not a direct child.
+		if len(path) == 3 {
+			assert.Equal(t, 2, holders)
+		} else {
+			assert.Equal(t, 1, holders)
+		}
+	})
+
+	t.Run("ValidatesQuery", func(t *testing.T) {
+		index := categoryIndex(t, ds)
+		_, err := index.ListCategoryDescendants(ctx, datastore.CategoryDescendantQuery{Namespace: "ns"})
+		assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
+		_, err = index.ListCategoryDescendants(ctx, datastore.CategoryDescendantQuery{
+			Namespace: "ns", Ancestor: "a", MaxDepth: datastore.MaxCategoryHierarchyDepth + 1,
+		})
+		assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
+	})
 }

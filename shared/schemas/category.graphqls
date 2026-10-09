@@ -7,10 +7,14 @@ extend type Query {
   category(by: CategoryBy!): Category
 
   """
-  List categories with Relay cursor-based pagination
+  List categories with Relay cursor-based pagination. Without `filter`,
+  ordering is newest first. With `filter`, results are the subtree below
+  `filter.descendantOf`, ordered by relative depth and then name. Cursors
+  from one mode are rejected by the other.
   """
   categories(
     namespace: String!
+    filter: CategoryFilterInput
     first: Int
     after: String
     last: Int
@@ -20,17 +24,38 @@ extend type Query {
 
 extend type Mutation {
   """
-  Delete a category
+  Create a category by committing its manifest to the namespace's
+  gitstore-system repository and admitting it.
+  """
+  createCategory(input: CreateCategoryInput!): CreateCategoryPayload!
+
+  """
+  Update a category by committing its manifest to the repository and path
+  it was admitted from.
+  """
+  updateCategory(input: UpdateCategoryInput!): UpdateCategoryPayload!
+
+  """
+  Start foreground deletion by removing the category's manifest from Git.
+  Blocked while child categories exist. Assigned products are decoupled
+  asynchronously.
   """
   deleteCategory(input: DeleteCategoryInput!): DeleteCategoryPayload!
+
+  """
+  Controller-only completion of a terminating category's foreground
+  deletion.
+  """
+  completeCategoryDeletion(input: CompleteCategoryDeletionInput!): CompleteCategoryDeletionPayload!
 
   """
   Partial-merge update to a CategoryTaxonomy's .status sub-resource.
   Only non-null input fields are changed; all other existing status
   fields are left unchanged. Requires
   resourceVersion to match the resource's current value or the
-  request fails with a RESOURCE_VERSION_CONFLICT GraphQL error whose
-  extensions include the current resourceVersion. Rejects any attempt
+  request fails with a CONFLICT GraphQL error carrying a
+  RESOURCE_VERSION_CONFLICT diagnostic whose message includes the
+  current resourceVersion. Rejects any attempt
   to alter .spec or author-controlled .metadata by construction —
   this input type has no such fields. Requires
   controller-level authorization independent of the resourceVersion
@@ -59,7 +84,7 @@ extend type Subscription {
 """
 Category represents a hierarchical classification system for products.
 Follows the Kubernetes-style resource envelope: id / apiVersion / kind / metadata / spec / status.
-Tree-traversal convenience fields (parent, children, path, depth, products, body) are top-level
+Tree-traversal convenience fields (parent, children, products, body) are top-level
 because they are computed or graph-linked and do not belong in spec or status.
 """
 type Category implements Node {
@@ -99,12 +124,14 @@ type Category implements Node {
   body: String
 
   """
-  Parent category (null for root categories).
+  Resolved parent category. Null for roots, for an unresolved parent, and
+  before the category is first reconciled.
   """
   parent: Category
 
   """
-  Direct child categories.
+  Direct child categories (at most 100), ordered by name. A child appears
+  once it has been reconciled.
   """
   children: [Category!]!
 
@@ -117,17 +144,6 @@ type Category implements Node {
     last: Int
     before: String
   ): ProductConnection!
-
-  """
-  Full path from root (e.g., ["electronics", "computers", "laptops"]).
-  Derived from the materialized ancestor path stored at admission time.
-  """
-  path: [String!]!
-
-  """
-  Depth in tree (root = 0).
-  """
-  depth: Int!
 }
 
 """
@@ -146,6 +162,12 @@ type CategoryTaxonomyStatus {
   observedGeneration: Int!
   lastAppliedRevision: String!
   conditions: [Condition!]!
+  """
+  Controller-computed hierarchy: the only source of a category's position in
+  the tree. Null until the category is first reconciled. After an ancestor
+  moves, descendants converge level by level, so the value is eventually
+  consistent.
+  """
   resolved: ResolvedCategoryTaxonomy
 }
 
@@ -153,14 +175,15 @@ type CategoryTaxonomyStatus {
 Controller-computed category hierarchy metadata.
 """
 type ResolvedCategoryTaxonomy {
+  """
+  Depth in the tree (root = 0).
+  """
   depth: Int!
 
   """
   Ancestor path from root to self, e.g. ["electronics", "computers",
   "laptops"] for the "laptops" category (root-to-self order). A root
   category's path is a single-element array containing its own name.
-  Distinct from Category.path, which is derived when the category is
-  read.
   """
   path: [String!]!
   childCount: Int!
@@ -216,14 +239,96 @@ Payload for deleteCategory mutation
 """
 type DeleteCategoryPayload {
   """
-  Deleted category ID
+  The category, now terminating.
   """
-  deletedCategoryId: ID
+  category: Category
+
+  outcome: ResourceDeletionOutcome!
+}
+
+"""
+Subtree filter. Hierarchy comes from each category's `status.resolved.path`:
+categories that have not yet been reconciled are not matched, and results are
+eventually consistent after an ancestor moves.
+"""
+input CategoryFilterInput {
+  """
+  Name of the category whose descendants are returned. Unknown names return
+  an empty connection.
+  """
+  descendantOf: String!
 
   """
-  Orphaned product IDs (products that referenced this category)
+  Include `descendantOf` itself as the first result.
   """
-  orphanedProductIds: [ID!]
+  includeSelf: Boolean = false
+
+  """
+  Maximum levels below `descendantOf` (1–128). Omit for the whole subtree.
+  """
+  maxDepth: Int
+}
+
+"""
+Author-supplied category specification.
+"""
+input CategorySpecInput {
+  title: String!
+  parentRef: CatalogObjectReferenceInput
+  media: [MediaDefinitionInput!]
+}
+
+input CreateCategoryInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "CategoryTaxonomy"
+  metadata: ObjectMetaInput!
+  spec: CategorySpecInput!
+
+  """
+  Markdown body. Omit for an empty body.
+  """
+  body: String
+}
+
+input UpdateCategoryInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "CategoryTaxonomy"
+
+  """
+  `name` and `namespace` identify the category and cannot change.
+  """
+  metadata: ObjectMetaInput!
+  spec: CategorySpecInput!
+
+  """
+  Markdown body. Omit to keep the current body.
+  """
+  body: String
+}
+
+type CreateCategoryPayload {
+  category: Category
+}
+
+type UpdateCategoryPayload {
+  category: Category
+}
+
+input CompleteCategoryDeletionInput {
+  namespace: String!
+  name: String!
+
+  """
+  Must equal the category's current metadata.resourceVersion.
+  """
+  resourceVersion: String!
+}
+
+type CompleteCategoryDeletionPayload {
+  """
+  ID of the removed category.
+  """
+  id: ID
 }
 
 # ============================================================================
@@ -253,11 +358,9 @@ input UpdateCategoryStatusInput {
   resolved: ResolvedCategoryTaxonomyInput
 
   """
-  Controller-only foreground-deletion completion request. This extends the
-  existing status subresource rather than introducing a parallel
-  CategoryTaxonomy mutation.
+  Controller-only foreground-deletion completion request.
   """
-  completeDeletion: Boolean
+  completeDeletion: Boolean @deprecated(reason: "Use completeCategoryDeletion. Removed in the next release.")
 
   """
   Controller-only bounded Product drain. The server removes non-blocking

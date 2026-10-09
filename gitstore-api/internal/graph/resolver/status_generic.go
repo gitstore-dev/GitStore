@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -21,13 +22,15 @@ func statusConflictError(kind, namespace, name, currentResourceVersion string) e
 	if namespace != "" {
 		identifier = namespace + "/" + name
 	}
-	return &gqlerror.Error{
+	return (&admission.Error{
+		Code: admission.CodeConflict,
+		Diagnostics: []admission.Diagnostic{{
+			Reason:  "RESOURCE_VERSION_CONFLICT",
+			Message: fmt.Sprintf("current resourceVersion is %s", currentResourceVersion),
+			Level:   admission.LevelFailure,
+		}},
 		Message: fmt.Sprintf("%s %s status update conflict", kind, identifier),
-		Extensions: map[string]any{
-			"code":            "RESOURCE_VERSION_CONFLICT",
-			"resourceVersion": currentResourceVersion,
-		},
-	}
+	}).ToGQLError()
 }
 
 // updateCategoryTaxonomyStatusGeneric backs updateResourceStatus for

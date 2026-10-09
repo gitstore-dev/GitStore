@@ -74,6 +74,7 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 		"namespace_mappings_by_repository",
 		"service_account_assertion_replays",
 		"service_accounts_by_bucket",
+		"category_ancestor_index",
 	} {
 		var tblName string
 		err = session.Query(
@@ -362,11 +363,11 @@ func TestRunMigrations_BaselinePrefixRefusesNewerKeyspace(t *testing.T) {
 	require.NoError(t, scylla.RunMigrations(ctx, session, scyllaKeyspace, uuid.New().String(), log))
 
 	err := scylla.RunMigrationsWithFS(ctx, session, scyllaKeyspace, uuid.New().String(), log,
-		migrationSetThrough(t, "008_file.cql"))
+		migrationSetThrough(t, "009_service_account.cql"))
 	require.ErrorContains(t, err, "database is ahead")
 
 	require.NoError(t, scylla.RunMigrationsWithFS(ctx, session, scyllaKeyspace, uuid.New().String(), log,
-		migrationSetThrough(t, "009_service_account.cql")))
+		migrationSetThrough(t, "010_category_ancestor_index.cql")))
 }
 
 func migrationSetThrough(t *testing.T, last string) fstest.MapFS {

@@ -712,7 +712,7 @@ func TestGraphQLFieldAuthorizerDeleteCategoryUsesPersistedScope(t *testing.T) {
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return "ok", nil })
 	require.NoError(t, err)
 	assert.True(t, called)
-	assert.Equal(t, "category.delete", authz.Action)
+	assert.Equal(t, "categoryTaxonomy.delete", authz.Action)
 	assert.Equal(t, "phones", authz.Resource.Name)
 	assert.Equal(t, "alice", authz.Resource.OwnerSub)
 	assert.Equal(t, "shop", authz.Resource.Attrs["namespace"])

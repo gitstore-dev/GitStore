@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,7 +129,7 @@ func TestCategoryResolver_Categories_ForwardPagination(t *testing.T) {
 
 	first := int32(2)
 
-	page1, err := qr.Categories(context.Background(), ns, &first, nil, nil, nil)
+	page1, err := qr.Categories(context.Background(), ns, nil, &first, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, page1)
 	assert.Len(t, page1.Edges, 2)
@@ -136,7 +138,7 @@ func TestCategoryResolver_Categories_ForwardPagination(t *testing.T) {
 	require.NotNil(t, page1.PageInfo.EndCursor)
 
 	// Page 2 using the end cursor from page 1.
-	page2, err := qr.Categories(context.Background(), ns, &first, page1.PageInfo.EndCursor, nil, nil)
+	page2, err := qr.Categories(context.Background(), ns, nil, &first, page1.PageInfo.EndCursor, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, page2)
 	assert.Len(t, page2.Edges, 2)
@@ -145,7 +147,7 @@ func TestCategoryResolver_Categories_ForwardPagination(t *testing.T) {
 	require.NotNil(t, page2.PageInfo.EndCursor)
 
 	// Page 3 — last item.
-	page3, err := qr.Categories(context.Background(), ns, &first, page2.PageInfo.EndCursor, nil, nil)
+	page3, err := qr.Categories(context.Background(), ns, nil, &first, page2.PageInfo.EndCursor, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, page3)
 	assert.Len(t, page3.Edges, 1)
@@ -166,7 +168,7 @@ func TestCategoryResolver_Categories_BackwardPagination(t *testing.T) {
 
 	last := int32(2)
 
-	result, err := qr.Categories(context.Background(), ns, nil, nil, &last, nil)
+	result, err := qr.Categories(context.Background(), ns, nil, nil, nil, &last, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Len(t, result.Edges, 2)
@@ -187,14 +189,14 @@ func TestCategoryResolver_Categories_BackwardWithBefore(t *testing.T) {
 
 	// Get the first 3 items (newest first) to establish a mid-point cursor.
 	first := int32(3)
-	page1, err := qr.Categories(context.Background(), ns, &first, nil, nil, nil)
+	page1, err := qr.Categories(context.Background(), ns, nil, &first, nil, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, page1.Edges, 3)
 	require.NotNil(t, page1.PageInfo.EndCursor)
 
 	// Walk backward from the 3rd item.
 	last := int32(2)
-	backward, err := qr.Categories(context.Background(), ns, nil, nil, &last, page1.PageInfo.EndCursor)
+	backward, err := qr.Categories(context.Background(), ns, nil, nil, nil, &last, page1.PageInfo.EndCursor)
 	require.NoError(t, err)
 	require.NotNil(t, backward)
 	assert.Len(t, backward.Edges, 2)
@@ -210,7 +212,7 @@ func TestCategoryResolver_Categories_CursorFields(t *testing.T) {
 	seedCategory(t, store, ns, "beta", time.Now().UTC().Add(time.Second))
 
 	first := int32(2)
-	result, err := qr.Categories(context.Background(), ns, &first, nil, nil, nil)
+	result, err := qr.Categories(context.Background(), ns, nil, &first, nil, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, result.Edges, 2)
 
@@ -231,7 +233,7 @@ func TestCategoryResolver_Categories_Empty(t *testing.T) {
 	qr, _ := newCategoryResolverEnv(t)
 
 	first := int32(10)
-	result, err := qr.Categories(context.Background(), "test-ns", &first, nil, nil, nil)
+	result, err := qr.Categories(context.Background(), "test-ns", nil, &first, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Empty(t, result.Edges)
@@ -251,69 +253,10 @@ func TestCategoryResolver_Categories_TotalCount(t *testing.T) {
 	}
 
 	first := int32(2)
-	result, err := qr.Categories(context.Background(), ns, &first, nil, nil, nil)
+	result, err := qr.Categories(context.Background(), ns, nil, &first, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Len(t, result.Edges, 2)
-}
-
-func TestDeleteCategoryMarksChildlessCategory(t *testing.T) {
-	mutation, store := newCategoryMutationResolverEnv(t)
-	category := seedCategory(t, store, "test-ns", "parent", time.Now().UTC())
-	category.RepositoryID = "repo-1"
-	require.NoError(t, store.UpdateCategoryTaxonomy(context.Background(), category))
-
-	payload, err := mutation.DeleteCategory(context.Background(), model.DeleteCategoryInput{
-		ID: mustEncodeNodeID(nodeKindCategory, category.UID),
-	})
-	require.NoError(t, err)
-	require.NotNil(t, payload)
-	assert.Equal(t, mustEncodeNodeID(nodeKindCategory, category.UID), *payload.DeletedCategoryID)
-
-	terminating, err := store.GetCategoryTaxonomyByName(context.Background(), category.Namespace, category.Name)
-	require.NoError(t, err)
-	assert.NotNil(t, terminating.DeletionTimestamp)
-	assert.Contains(t, terminating.Finalizers, datastore.CategoryTaxonomyForegroundDeletionFinalizer)
-	var status catalog.CategoryTaxonomyStatus
-	require.NoError(t, json.Unmarshal(terminating.Status, &status))
-	assert.Condition(t, func() bool {
-		for _, condition := range status.Conditions {
-			if condition.Type == catalog.ConditionTerminating &&
-				condition.Status == catalog.ConditionTrue &&
-				condition.ObservedGeneration == terminating.Generation &&
-				condition.Reason == "DeletionRequested" {
-				return true
-			}
-		}
-		return false
-	}, "terminating condition was not written")
-}
-
-func TestDeleteCategoryRejectsBlockingChild(t *testing.T) {
-	mutation, store := newCategoryMutationResolverEnv(t)
-	parent := seedCategory(t, store, "test-ns", "parent", time.Now().UTC())
-	parent.RepositoryID = "repo-1"
-	require.NoError(t, store.UpdateCategoryTaxonomy(context.Background(), parent))
-	ownerReferences, err := json.Marshal([]catalog.OwnerReference{{
-		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy", Name: parent.Name, UID: parent.UID, BlockOwnerDeletion: true,
-	}})
-	require.NoError(t, err)
-	child := seedCategory(t, store, parent.Namespace, "child", time.Now().UTC())
-	child.RepositoryID = parent.RepositoryID
-	child.OwnerReferences = ownerReferences
-	child.ResourceVersion = "2"
-	require.NoError(t, store.UpdateCategoryTaxonomy(context.Background(), child))
-
-	payload, err := mutation.DeleteCategory(context.Background(), model.DeleteCategoryInput{
-		ID: mustEncodeNodeID(nodeKindCategory, parent.UID),
-	})
-	assert.Nil(t, payload)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "child categories")
-
-	current, getErr := store.GetCategoryTaxonomy(context.Background(), parent.UID)
-	require.NoError(t, getErr)
-	assert.Nil(t, current.DeletionTimestamp)
 }
 
 func TestUpdateCategoryStatusDecouplesNonBlockingProducts(t *testing.T) {
@@ -409,31 +352,52 @@ func TestUpdateCategoryStatusDecoupleRejectsStaleCategoryVersion(t *testing.T) {
 	})
 	var graphErr *gqlerror.Error
 	require.ErrorAs(t, err, &graphErr)
-	assert.Equal(t, "RESOURCE_VERSION_CONFLICT", graphErr.Extensions["code"])
-	assert.Equal(t, terminating.ResourceVersion, graphErr.Extensions["resourceVersion"])
+	assert.Equal(t, "CONFLICT", graphErr.Extensions["code"])
+	assert.Contains(t, fmt.Sprint(graphErr.Extensions["diagnostics"]), "current resourceVersion is "+terminating.ResourceVersion)
 }
 
-func TestDeleteCategoryIsIdempotentAndRepositoryScoped(t *testing.T) {
-	mutation, store := newCategoryMutationResolverEnv(t)
+func TestCategoryResolver_HierarchyOnlyFromResolvedStatus(t *testing.T) {
+	qr, store := newCategoryResolverEnv(t)
 	ctx := context.Background()
-	parent := seedCategory(t, store, "test-ns", "parent", time.Now().UTC())
-	parent.RepositoryID = "repo-1"
-	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, parent))
-	refs, err := json.Marshal([]catalog.OwnerReference{{
-		Kind: "CategoryTaxonomy", Name: parent.Name, UID: parent.UID, BlockOwnerDeletion: true,
-	}})
-	require.NoError(t, err)
-	child := seedCategory(t, store, parent.Namespace, "unrelated-repository-child", time.Now().UTC())
-	child.RepositoryID = "repo-2"
-	child.OwnerReferences = refs
-	child.ResourceVersion = "2"
-	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, child))
+	c := &datastore.CategoryTaxonomy{
+		UID: uuid.New().String(), Namespace: "test-ns", Name: "laptops",
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy",
+		Generation: 1, ResourceVersion: "1", CreationTimestamp: time.Now().UTC(),
+		ParentName: "computers", AncestorPath: "electronics/computers/laptops",
+	}
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, c))
+	by := model.CategoryBy{NamespacePath: &model.CategoryNamespacePath{Namespace: "test-ns", Name: "laptops"}}
 
-	input := model.DeleteCategoryInput{ID: mustEncodeNodeID(nodeKindCategory, parent.UID)}
-	first, err := mutation.DeleteCategory(ctx, input)
+	got, err := qr.Category(ctx, by)
 	require.NoError(t, err)
-	require.NotNil(t, first)
-	second, err := mutation.DeleteCategory(ctx, input)
+	require.NotNil(t, got)
+	if got.Status != nil {
+		assert.Nil(t, got.Status.Resolved, "an unreconciled category has no resolved hierarchy, even with an admission-time ancestor path")
+	}
+
+	_, err = store.UpdateCategoryTaxonomyStatus(ctx, "test-ns", "laptops", datastore.CategoryTaxonomyStatusPatch{
+		ResourceVersion: "1",
+		Resolved:        &catalog.ResolvedCategoryTaxonomy{Path: []string{"home", "laptops"}, Depth: 1},
+	})
 	require.NoError(t, err)
-	assert.Equal(t, first.DeletedCategoryID, second.DeletedCategoryID)
+	got, err = qr.Category(ctx, by)
+	require.NoError(t, err)
+	require.NotNil(t, got.Status)
+	require.NotNil(t, got.Status.Resolved)
+	assert.Equal(t, []string{"home", "laptops"}, got.Status.Resolved.Path)
+	assert.EqualValues(t, 1, got.Status.Resolved.Depth)
+}
+
+func TestCategoryResolversNeverReadAncestorPath(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	require.NoError(t, err)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(name)
+		require.NoError(t, err)
+		assert.NotContainsf(t, string(raw), "AncestorPath", "%s must not expose the admission-internal ancestor path", name)
+	}
 }

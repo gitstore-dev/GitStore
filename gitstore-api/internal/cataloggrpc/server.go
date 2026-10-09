@@ -207,7 +207,7 @@ func (s *Server) ValidateResources(
 		}
 		allErrors = append(allErrors, deletionErrors...)
 	}
-	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.PhaseStructural, time.Since(structuralStarted))
+	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.StageStructural, time.Since(structuralStarted))
 
 	if len(allErrors) > 0 {
 		return &catalogv1.ValidateResourcesResponse{
@@ -219,14 +219,14 @@ func (s *Server) ValidateResources(
 	policyStarted := time.Now()
 	policyErrors, evaluated, err := s.validateNamespacePolicies(ctx, req)
 	if evaluated {
-		s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.PhasePolicy, time.Since(policyStarted))
+		s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.StagePolicy, time.Since(policyStarted))
 	}
 	if err != nil {
 		return nil, grpcstatus.Errorf(codes.Internal, "namespace policy evaluation failed")
 	}
 	if len(policyErrors) > 0 {
 		for _, validationErr := range policyErrors {
-			s.namespaceMetrics.ObserveRejection(namespaceadmission.PhasePolicy, namespacePolicyReason(validationErr.GetConstraint()))
+			s.namespaceMetrics.ObserveRejection(namespacePolicyReason(validationErr.GetConstraint()))
 		}
 		return &catalogv1.ValidateResourcesResponse{Accepted: false, Errors: policyErrors}, nil
 	}
@@ -306,7 +306,6 @@ func (s *Server) validateNamespacePolicies(
 		decision.FilePath = candidate.path
 		s.log.Warn("validate_resources: Namespace policy rejection",
 			zap.String("operation", string(candidate.operation)),
-			zap.String("phase", string(decision.Phase)),
 			zap.String("reason", string(decision.Reason)),
 			zap.String("namespace", candidate.name),
 			zap.Bool("conflict", false))
@@ -354,6 +353,10 @@ func (s *Server) validateResourceBlobs(ctx context.Context, repositoryID string,
 				namespace, resolveErr := s.resolveNamespaceIdentifier(ctx, repositoryID)
 				if resolveErr != nil {
 					err = fmt.Errorf("resolve category namespace: %w", resolveErr)
+				} else if refNamespace := category.Spec.ParentRef.Namespace; refNamespace != "" && refNamespace != namespace {
+					// Deliberately does not look the target up: the message must not
+					// reveal whether a category exists in another namespace.
+					err = fmt.Errorf("validate: spec.parentRef.namespace must be empty or the category's own namespace")
 				} else if parent, lookupErr := s.store.GetCategoryTaxonomyByName(ctx, namespace, category.Spec.ParentRef.Name); lookupErr == nil && parent.DeletionTimestamp != nil {
 					err = fmt.Errorf("parent category %q is terminating", category.Spec.ParentRef.Name)
 				} else if lookupErr != nil && !errors.Is(lookupErr, datastore.ErrNotFound) {
@@ -371,12 +374,12 @@ func (s *Server) validateResourceBlobs(ctx context.Context, repositoryID string,
 			namespaceName = parsed.Namespace.Metadata.Name
 		}
 		if namespaceName != "" || isNamespaceFrontmatter(blob.Content) {
-			s.namespaceMetrics.ObserveRejection(namespaceadmission.PhaseStructural, validationReason)
+			s.namespaceMetrics.ObserveRejection(validationReason)
 		}
 		s.log.Warn("validate_resources: pre-receive rejection",
 			zap.String("path", blob.Path),
 			zap.String("operation", "VALIDATE"),
-			zap.String("phase", string(namespaceadmission.PhaseStructural)),
+			zap.String("stage", string(namespaceadmission.StageStructural)),
 			zap.String("reason", string(validationReason)),
 			zap.String("namespace", namespaceName),
 			zap.Bool("conflict", false),
@@ -443,7 +446,7 @@ func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*cat
 			Constraint: "immutable",
 			Message:    "validate: metadata.name is immutable at the same repository path",
 		})
-		s.namespaceMetrics.ObserveRejection(namespaceadmission.PhaseStructural, namespaceadmission.ReasonImmutableName)
+		s.namespaceMetrics.ObserveRejection(namespaceadmission.ReasonImmutableName)
 	}
 	oldRepositoriesByPath := repositoryEntriesByPath(s.parser, oldBlobs)
 	proposedRepositoriesByPath := repositoryEntriesByPath(s.parser, proposedBlobs)
@@ -472,6 +475,27 @@ func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*cat
 		}
 	}
 
+	oldCategoriesByPath := categoryEntriesByPath(s.parser, oldBlobs)
+	for path, proposed := range categoryEntriesByPath(s.parser, proposedBlobs) {
+		old, found := oldCategoriesByPath[path]
+		if !found {
+			continue
+		}
+		oldMeta, newMeta := old.parsed.CategoryTaxonomy.Metadata, proposed.parsed.CategoryTaxonomy.Metadata
+		if oldMeta.Name != newMeta.Name {
+			errorsOut = append(errorsOut, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.name", Constraint: "immutable",
+				Message: "validate: metadata.name is immutable at the same repository path",
+			})
+		}
+		if oldMeta.Namespace != "" && newMeta.Namespace != "" && oldMeta.Namespace != newMeta.Namespace {
+			errorsOut = append(errorsOut, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.namespace", Constraint: "immutable",
+				Message: "validate: metadata.namespace is immutable at the same repository path",
+			})
+		}
+	}
+
 	oldEntries := immutableEntries(s.parser, oldBlobs)
 	proposedEntries := immutableEntries(s.parser, proposedBlobs)
 	for key, proposed := range proposedEntries {
@@ -484,6 +508,21 @@ func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*cat
 		}
 	}
 	return errorsOut
+}
+
+func categoryEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+	entries := make(map[string]*parsedEntry, len(blobs))
+	for _, blob := range blobs {
+		parsed, body, err := parser.ParseResource(bytes.NewReader(blob.GetContent()))
+		if err != nil || parsed == nil || parsed.CategoryTaxonomy == nil {
+			continue
+		}
+		entry, ok, err := newParsedEntry(blob.GetPath(), parsed, body, "")
+		if err == nil && ok {
+			entries[blob.GetPath()] = entry
+		}
+	}
+	return entries
 }
 
 func repositoryEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
@@ -888,6 +927,23 @@ func errorToValidationError(filePath, msg string) *catalogv1.ValidationError {
 	} else if strings.HasPrefix(trimmed, "spec.title exceeds") {
 		field = "spec.title"
 		constraint = "max=200"
+	} else if strings.HasSuffix(trimmed, " is required") {
+		field = strings.TrimSuffix(trimmed, " is required")
+		constraint = "required"
+	} else if path, _, ok := strings.Cut(trimmed, " must be \""); ok && !strings.Contains(path, " ") {
+		field = path
+		constraint = "eq"
+	} else if strings.Contains(trimmed, "must not reference the category itself") {
+		field = "spec.parentRef.name"
+		constraint = "self-parent"
+	} else if strings.HasPrefix(trimmed, "parent category ") && strings.HasSuffix(trimmed, " is terminating") {
+		field = "spec.parentRef.name"
+		constraint = "parent-terminating"
+	} else if strings.HasPrefix(trimmed, "spec.parentRef.namespace must") {
+		field = "spec.parentRef.namespace"
+		constraint = "cross-namespace"
+	} else if strings.Contains(trimmed, "malformed YAML") || strings.Contains(trimmed, "frontmatter") {
+		constraint = "envelope"
 	} else if strings.HasPrefix(trimmed, "metadata.") {
 		// "metadata.uid is read-only..."
 		parts := strings.SplitN(trimmed, " ", 2)
@@ -1216,7 +1272,7 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 	// child CategoryTaxonomy may be reparented in the same accepted push that
 	// removes its former parent; deleting first would consult a stale reverse
 	// owner-reference projection and reject after the ref has already advanced.
-	if err := s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps); err != nil {
+	if _, err := s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps); err != nil {
 		return err
 	}
 	for _, op := range deletes {
@@ -1245,7 +1301,7 @@ func (s *Server) admitParsedEntries(
 	entries []*parsedEntry,
 	admCtx AdmissionContext,
 	explicitOps map[string]resourceAdmissionOperation,
-) error {
+) ([]admission.EntryDecision, error) {
 	// Build intra-push category graph: name → parentName
 	pushCategoryParents := make(map[string]string)
 	categoryEntries := make(map[string]*parsedEntry)
@@ -1308,13 +1364,14 @@ func (s *Server) admitParsedEntries(
 	// inPushAncestorPaths is populated as each category is admitted so that
 	// children later in the same push see their parent's full computed path.
 	inPushAncestorPaths := make(map[string]string, len(topoOrder))
+	decisions := make([]admission.EntryDecision, 0, len(topoOrder))
 	for _, name := range topoOrder {
 		e := categoryEntries[name]
 		op, existing, err := s.operationForEntry(ctx, e, explicitOps)
 		if err != nil {
-			return err
+			return decisions, err
 		}
-		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, e.path, op, existing, inPushAncestorPaths, catPushSet)
+		decisions = append(decisions, s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, e.path, op, existing, inPushAncestorPaths, catPushSet))
 	}
 	for _, e := range entries {
 		if e.parsed.Kind == "CategoryTaxonomy" {
@@ -1322,7 +1379,7 @@ func (s *Server) admitParsedEntries(
 		}
 		op, existing, err := s.operationForEntry(ctx, e, explicitOps)
 		if err != nil {
-			return err
+			return decisions, err
 		}
 		switch e.parsed.Kind {
 		case "Product":
@@ -1337,11 +1394,11 @@ func (s *Server) admitParsedEntries(
 			s.admitFile(ctx, e.parsed.File, e.body, admCtx, e.path, op, existing)
 		case "Repository":
 			if err := s.admitRepository(ctx, e.parsed.Repository, e.body, admCtx, e.path, op, existing); err != nil {
-				return err
+				return decisions, err
 			}
 		}
 	}
-	return nil
+	return decisions, nil
 }
 
 func (s *Server) operationForEntry(
@@ -2027,11 +2084,11 @@ func (s *Server) admitNamespace(
 	s.log.Warn("admit_resources: Namespace rejected after repeated concurrent updates",
 		zap.String("namespace", name),
 		zap.String("operation", string(op)),
-		zap.String("phase", string(namespaceadmission.PhasePolicy)),
+		zap.String("stage", string(namespaceadmission.StagePolicy)),
 		zap.String("reason", string(namespaceadmission.ReasonResourceVersionConflict)),
 		zap.Bool("conflict", true),
 		zap.Int("attempts", namespaceadmission.AdmissionWriteAttempts))
-	s.namespaceMetrics.ObserveRejection(namespaceadmission.PhasePolicy, namespaceadmission.ReasonResourceVersionConflict)
+	s.namespaceMetrics.ObserveRejection(namespaceadmission.ReasonResourceVersionConflict)
 }
 
 func (s *Server) recordNamespaceAdmissionRejection(
@@ -2041,11 +2098,11 @@ func (s *Server) recordNamespaceAdmissionRejection(
 	existing bool,
 	err error,
 ) {
-	s.namespaceMetrics.ObserveRejection(namespaceadmission.PhasePolicy, reason)
+	s.namespaceMetrics.ObserveRejection(reason)
 	s.log.Warn("admit_resources: Namespace rejected",
 		zap.String("namespace", name),
 		zap.String("operation", string(op)),
-		zap.String("phase", string(namespaceadmission.PhasePolicy)),
+		zap.String("stage", string(namespaceadmission.StagePolicy)),
 		zap.String("reason", string(reason)),
 		zap.Bool("existing", existing),
 		zap.Bool("conflict", errors.Is(err, datastore.ErrConflict)),
@@ -2691,20 +2748,24 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	rawExisting any,
 	inPushAncestorPaths map[string]string,
 	catPushSet []admission.AdmissionRequest,
-) {
-	specJSON, err := json.Marshal(resource.Spec)
-	if err != nil {
-		s.log.Error("admit_resources: marshal category spec failed",
-			zap.String("name", resource.Metadata.Name), zap.Error(err))
-		return
-	}
-
+) admission.EntryDecision {
 	namespace := resource.Metadata.Namespace
 	if namespace == "" {
 		namespace = admCtx.Namespace
 	}
-
 	name := resource.Metadata.Name
+	decision := admission.EntryDecision{Kind: "CategoryTaxonomy", Namespace: namespace, Name: name, Path: sourcePath}
+	failed := func(err error) admission.EntryDecision {
+		decision.Outcome, decision.Err = admission.EntryFailed, err
+		return decision
+	}
+
+	specJSON, err := json.Marshal(resource.Spec)
+	if err != nil {
+		s.log.Error("admit_resources: marshal category spec failed",
+			zap.String("name", resource.Metadata.Name), zap.Error(err))
+		return failed(fmt.Errorf("marshal category spec: %w", err))
+	}
 
 	existing, _ := rawExisting.(*datastore.CategoryTaxonomy)
 	var oldObject any
@@ -2748,7 +2809,15 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 			zap.String("name", name),
 			zap.String("namespace", namespace),
 			zap.String("reason", dec.Reason))
-		return
+		decision.Outcome = admission.EntryDenied
+		decision.Diagnostics = []admission.Diagnostic{{
+			Reason: "POLICY_DENIED", Message: dec.Reason, Level: admission.LevelFailure, File: sourcePath, Field: dec.Field,
+		}}
+		admissionRejectionsTotal.WithLabelValues("CategoryTaxonomy", string(admission.PhasePostReceive)).Inc()
+		if existing != nil {
+			s.recordCategoryAdmissionDenied(ctx, existing, decision.Diagnostics, admCtx.Now)
+		}
+		return decision
 	case admission.Allowed:
 		for _, c := range dec.Conditions {
 			switch c.Type {
@@ -2792,7 +2861,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		statusJSON := categoryAdmissionStatusFull(1, admCtx.Revision, admCtx.Now, parentResolved, inCycle)
 		uid, ok := s.newUID(resource.Kind, name)
 		if !ok {
-			return
+			return failed(fmt.Errorf("generate category UID"))
 		}
 		c := &datastore.CategoryTaxonomy{
 			UID:               uid,
@@ -2820,7 +2889,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		if cerr := s.store.CreateCategoryTaxonomy(ctx, c); cerr != nil {
 			s.log.Error("admit_resources: create category failed",
 				zap.String("name", name), zap.Error(cerr))
-			return
+			return failed(fmt.Errorf("create category: %w", cerr))
 		}
 		s.log.Info("admit_resources: category created",
 			zap.String("kind", resource.Kind),
@@ -2838,8 +2907,12 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 			existing.SourcePath != sourcePath
 		changedHierarchy := existing.ParentName != parentName || existing.AncestorPath != ancestorPath
 		changedOwnerReferences := !bytes.Equal(existing.OwnerReferences, ownerReferences)
-		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedHierarchy && !changedOwnerReferences {
-			return
+		// A previously denied update leaves AdmissionAccepted=False; re-admitting
+		// the accepted content must clear it.
+		changedAdmission := !categoryAdmissionAccepted(existing.Status)
+		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedHierarchy && !changedOwnerReferences && !changedAdmission {
+			decision.Outcome = admission.EntryNoOp
+			return decision
 		}
 		gen := existing.Generation
 		if changedSpecBody {
@@ -2865,7 +2938,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		if uerr := s.store.UpdateCategoryTaxonomy(ctx, existing); uerr != nil {
 			s.log.Error("admit_resources: update category failed",
 				zap.String("name", name), zap.Error(uerr))
-			return
+			return failed(fmt.Errorf("update category: %w", uerr))
 		}
 		s.log.Info("admit_resources: category updated",
 			zap.String("kind", resource.Kind),
@@ -2873,6 +2946,78 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 			zap.String("name", name),
 			zap.String("ancestor_path", ancestorPath))
 	}
+	decision.Outcome = admission.EntryAccepted
+	return decision
+}
+
+// recordCategoryAdmissionDenied marks an existing category's AdmissionAccepted
+// condition False without touching spec, body or generation, so the last
+// accepted generation stays served while the denial is visible.
+func (s *Server) recordCategoryAdmissionDenied(ctx context.Context, existing *datastore.CategoryTaxonomy, diagnostics []admission.Diagnostic, now time.Time) {
+	current := existing
+	for range maxRepositoryAdmissionUpdateAttempts {
+		var status catalog.CategoryTaxonomyStatus
+		if len(current.Status) > 0 {
+			if err := json.Unmarshal(current.Status, &status); err != nil {
+				s.log.Error("admit_resources: decode category status failed", zap.String("name", current.Name), zap.Error(err))
+				return
+			}
+		}
+		denied := catalog.Condition{
+			Type:               catalog.ConditionAdmissionAccepted,
+			Status:             catalog.ConditionFalse,
+			ObservedGeneration: current.Generation,
+			LastTransitionTime: now,
+			Reason:             "AdmissionReportFailed",
+			Message:            admission.FormatRejection(diagnostics),
+		}
+		conditions := make([]catalog.Condition, 0, len(status.Conditions)+1)
+		replaced := false
+		for _, condition := range status.Conditions {
+			if condition.Type == catalog.ConditionAdmissionAccepted {
+				condition, replaced = denied, true
+			}
+			conditions = append(conditions, condition)
+		}
+		if !replaced {
+			conditions = append(conditions, denied)
+		}
+		_, err := s.store.UpdateCategoryTaxonomyStatus(ctx, current.Namespace, current.Name, datastore.CategoryTaxonomyStatusPatch{
+			ResourceVersion: current.ResourceVersion,
+			Conditions:      conditions,
+		})
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, datastore.ErrConflict) {
+			s.log.Error("admit_resources: record category denial failed", zap.String("name", current.Name), zap.Error(err))
+			return
+		}
+		current, err = s.store.GetCategoryTaxonomyByName(ctx, current.Namespace, current.Name)
+		if err != nil {
+			s.log.Error("admit_resources: reload category after conflict failed", zap.String("name", existing.Name), zap.Error(err))
+			return
+		}
+	}
+	s.log.Error("admit_resources: record category denial retry budget exhausted", zap.String("name", existing.Name))
+}
+
+// categoryAdmissionAccepted reports whether a stored status has no
+// AdmissionAccepted=False condition.
+func categoryAdmissionAccepted(raw []byte) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	var status catalog.CategoryTaxonomyStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return true
+	}
+	for _, condition := range status.Conditions {
+		if condition.Type == catalog.ConditionAdmissionAccepted {
+			return condition.Status != catalog.ConditionFalse
+		}
+	}
+	return true
 }
 
 // admissionAcceptedStatus builds the initial status JSON with AdmissionAccepted: True (FR-009).

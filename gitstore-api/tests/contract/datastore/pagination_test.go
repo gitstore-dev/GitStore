@@ -612,6 +612,98 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		assert.True(t, before.HasNext)
 		assert.False(t, before.HasPrevious)
 	})
+
+	t.Run("CategoryAncestorIndex", func(t *testing.T) {
+		runCategoryAncestorIndexPagination(t, ds)
+	})
+}
+
+func runCategoryAncestorIndexPagination(t *testing.T, ds datastore.Datastore) {
+	ctx := context.Background()
+	index := categoryIndex(t, ds)
+	ns := "idx-" + newID()[:8]
+	seedCategory(t, ds, ns, "root", "root")
+	for _, name := range []string{"a", "b", "c"} {
+		seedCategory(t, ds, ns, name, "root", name)
+	}
+	for _, name := range []string{"a1", "a2"} {
+		seedCategory(t, ds, ns, name, "root", "a", name)
+	}
+	query := func(page datastore.PageParams) *datastore.PageResult[datastore.CategoryDescendant] {
+		t.Helper()
+		result, err := index.ListCategoryDescendants(ctx, datastore.CategoryDescendantQuery{
+			Namespace: ns, Ancestor: "root", IncludeSelf: true, Page: page,
+		})
+		require.NoError(t, err)
+		return result
+	}
+	names := func(items []*datastore.CategoryDescendant) []string {
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			out = append(out, item.Name)
+		}
+		return out
+	}
+	cursorOf := func(item *datastore.CategoryDescendant) string {
+		return datastore.EncodeClosureCursor(item.Depth, item.Name)
+	}
+	full := []string{"root", "a", "b", "c", "a1", "a2"}
+
+	t.Run("ForwardRoundTrip", func(t *testing.T) {
+		var got []string
+		page := query(datastore.PageParams{First: 2})
+		require.Len(t, page.Items, 2)
+		assert.True(t, page.HasNext)
+		assert.False(t, page.HasPrevious)
+		for {
+			got = append(got, names(page.Items)...)
+			if !page.HasNext {
+				break
+			}
+			page = query(datastore.PageParams{First: 2, After: cursorOf(page.Items[len(page.Items)-1])})
+			assert.True(t, page.HasPrevious)
+		}
+		assert.Equal(t, full, got)
+	})
+
+	t.Run("CursorAcrossDepthBoundary", func(t *testing.T) {
+		page := query(datastore.PageParams{First: 10, After: datastore.EncodeClosureCursor(1, "c")})
+		assert.Equal(t, []string{"a1", "a2"}, names(page.Items))
+		assert.False(t, page.HasNext)
+		page = query(datastore.PageParams{First: 10, After: datastore.EncodeClosureCursor(2, "a2")})
+		assert.Empty(t, page.Items)
+	})
+
+	t.Run("Backward", func(t *testing.T) {
+		page := query(datastore.PageParams{Last: 2})
+		assert.Equal(t, []string{"a1", "a2"}, names(page.Items))
+		assert.True(t, page.HasPrevious)
+		page = query(datastore.PageParams{Last: 3, Before: cursorOf(page.Items[0])})
+		assert.Equal(t, []string{"a", "b", "c"}, names(page.Items))
+		assert.True(t, page.HasPrevious)
+		assert.True(t, page.HasNext)
+		page = query(datastore.PageParams{Last: 3, Before: cursorOf(page.Items[0])})
+		assert.Equal(t, []string{"root"}, names(page.Items))
+		assert.False(t, page.HasPrevious)
+	})
+
+	t.Run("KeysetCursorRejected", func(t *testing.T) {
+		keyset := encodeCursor(time.Now(), newID())
+		for _, page := range []datastore.PageParams{{First: 2, After: keyset}, {Last: 2, Before: keyset}} {
+			_, err := index.ListCategoryDescendants(ctx, datastore.CategoryDescendantQuery{
+				Namespace: ns, Ancestor: "root", Page: page,
+			})
+			assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
+		}
+	})
+
+	t.Run("ClosureCursorRejectedByKeysetList", func(t *testing.T) {
+		closure := datastore.EncodeClosureCursor(1, "a")
+		for _, page := range []datastore.PageParams{{First: 2, After: closure}, {Last: 2, Before: closure}} {
+			_, err := ds.ListCategoryTaxonomies(ctx, ns, page)
+			assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
+		}
+	})
 }
 
 func newProductInNS(ns string) *datastore.Product {

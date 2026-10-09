@@ -233,6 +233,10 @@ func (m *memdbDatastore) CompleteCategoryTaxonomyDeletion(_ context.Context, nam
 		txn.Abort()
 		return nil, err
 	}
+	if err := deleteCategoryAncestorRows(txn, category); err != nil {
+		txn.Abort()
+		return nil, err
+	}
 	if err := txn.Delete("category_taxonomy", category); err != nil {
 		txn.Abort()
 		return nil, fmt.Errorf("memdb: complete category taxonomy deletion: %w", err)
