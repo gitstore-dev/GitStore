@@ -402,16 +402,12 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
-		var namePtr, identifierPtr *string
-		if v, ok := nestedStringArg(fc.Args, "input", "name"); ok {
-			namePtr = &v
+		targetName, ok := nestedStringArg(fc.Args, "input", "name")
+		if !ok {
+			return nil, &gqlerror.Error{Message: "name is required", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
 		}
-		if v, ok := nestedStringArg(fc.Args, "input", "identifier"); ok {
-			identifierPtr = &v
-		}
-		targetName, err := ResolveCompleteNamespaceDeletionName(namePtr, identifierPtr)
-		if err != nil {
-			return nil, err
+		if strings.TrimSpace(targetName) == "" {
+			return nil, &gqlerror.Error{Message: "name must not be empty", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
 		}
 		decision, err := authz.Authorize(ctx, principal, "namespace.status.write", auth.ResourceContext{
 			Kind: "namespace",
@@ -1505,29 +1501,4 @@ func requiresAuthenticatedPrincipal(opCtx *graphql.OperationContext) bool {
 		}
 	}
 	return false
-}
-
-// ResolveCompleteNamespaceDeletionName returns the target namespace name from
-// completeNamespaceDeletion input. Exactly one of name or the deprecated
-// identifier must be supplied; both are accepted only when equal.
-func ResolveCompleteNamespaceDeletionName(name, identifier *string) (string, error) {
-	badInput := func(msg string) error {
-		return &gqlerror.Error{Message: msg, Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
-	}
-	switch {
-	case name == nil && identifier == nil:
-		return "", badInput("name is required")
-	case name != nil && identifier != nil && *name != *identifier:
-		return "", badInput("name and identifier must not differ; use name only")
-	}
-	resolved := ""
-	if name != nil {
-		resolved = *name
-	} else {
-		resolved = *identifier
-	}
-	if strings.TrimSpace(resolved) == "" {
-		return "", badInput("name must not be empty")
-	}
-	return resolved, nil
 }

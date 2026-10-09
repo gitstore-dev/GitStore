@@ -8,6 +8,7 @@ package resolver
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -113,9 +114,9 @@ func (r *mutationResolver) TransferNamespaceOwner(ctx context.Context, input mod
 
 // CompleteNamespaceDeletion is the resolver for the completeNamespaceDeletion field.
 func (r *mutationResolver) CompleteNamespaceDeletion(ctx context.Context, input model.CompleteNamespaceDeletionInput) (*model.CompleteNamespaceDeletionPayload, error) {
-	name, err := security.ResolveCompleteNamespaceDeletionName(input.Name, input.Identifier)
-	if err != nil {
-		return nil, err
+	name := input.Name
+	if strings.TrimSpace(name) == "" {
+		return nil, &gqlerror.Error{Message: "name must not be empty", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
 	}
 	deleted, err := r.service.CompleteNamespaceDeletion(ctx, name, input.ResourceVersion)
 	if errors.Is(err, datastore.ErrConflict) {

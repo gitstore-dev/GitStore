@@ -240,13 +240,9 @@ Controller-only finalizer completion for a terminating namespace.
 """
 input CompleteNamespaceDeletionInput {
   """
-  Name of the terminating namespace. Exactly one of name or identifier is required.
+  Name of the terminating namespace.
   """
-  name: String
-  """
-  Legacy alias of name, accepted during rolling upgrades.
-  """
-  identifier: String @deprecated(reason: "Use name. Removed in the next release.")
+  name: String!
   resourceVersion: String!
 }
 
