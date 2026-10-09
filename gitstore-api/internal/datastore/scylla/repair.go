@@ -660,48 +660,33 @@ func (p ProjectionRecord) Equal(other ProjectionRecord) bool {
 	}
 }
 
+var projectionTableKinds = map[string]string{
+	"namespaces_by_name":               "Namespace",
+	"namespaces_by_bucket":             "Namespace",
+	"repositories_by_namespace":        "Repository",
+	"repositories_by_bucket":           "Repository",
+	"namespace_mappings":               "Repository",
+	"namespace_mappings_by_repository": "Repository",
+	"products_by_name":                 "Product",
+	"products_by_uid":                  "Product",
+	"category_taxonomies_by_name":      "CategoryTaxonomy",
+	"category_taxonomies_by_uid":       "CategoryTaxonomy",
+	"category_ancestor_index":          "CategoryTaxonomy",
+	"collections_by_name":              "Collection",
+	"collections_by_uid":               "Collection",
+	"product_variants_by_name":         "ProductVariant",
+	"product_variants_by_uid":          "ProductVariant",
+	"product_variants_by_sku":          "ProductVariant",
+	"product_variants_by_product_ref":  "ProductVariant",
+}
+
 func projectionKind(table string) string {
-	switch {
-	case strings.HasPrefix(table, "namespaces_"):
-		return "Namespace"
-	case strings.HasPrefix(table, "repositories_"), strings.HasPrefix(table, "namespace_mappings"):
-		return "Repository"
-	case strings.HasPrefix(table, "products_"):
-		return "Product"
-	case strings.HasPrefix(table, "category_taxonomy_"), strings.HasPrefix(table, "category_ancestor_"):
-		return "CategoryTaxonomy"
-	case strings.HasPrefix(table, "collection_"):
-		return "Collection"
-	case strings.HasPrefix(table, "product_variant_"):
-		return "ProductVariant"
-	default:
-		return ""
-	}
+	return projectionTableKinds[table]
 }
 
 func knownProjectionTable(table string) bool {
-	switch table {
-	case "namespaces_by_name",
-		"namespaces_by_bucket",
-		"repositories_by_namespace",
-		"repositories_by_bucket",
-		"namespace_mappings",
-		"namespace_mappings_by_repository",
-		"products_by_name",
-		"products_by_uid",
-		"category_taxonomies_by_name",
-		"category_taxonomies_by_uid",
-		"collections_by_name",
-		"collections_by_uid",
-		"product_variants_by_name",
-		"product_variants_by_uid",
-		"product_variants_by_sku",
-		"product_variants_by_product_ref",
-		"category_ancestor_index":
-		return true
-	default:
-		return false
-	}
+	_, known := projectionTableKinds[table]
+	return known
 }
 
 func resourceKey(kind, uid string) string {
