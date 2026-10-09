@@ -762,6 +762,15 @@ Pre-receive stays stateless and rejects structurally invalid resource blobs befo
 
 Git-originated and API-originated mutations converge at the schema and admission layers — they are evaluated identically.
 
+For an API-authored manifest, the Git commit is durable before synchronous
+admission runs. If that admission fails after the write, the API retains the
+original mutation error but makes up to three repair attempts within two
+seconds. A repair re-reads the path and is permitted only while that exact
+commit is still the ref tip; it derives create versus update from the current
+projection and uses the original actor. It never admits a newer writer's
+commit, and policy denials are not retried. This is bounded best effort, not a
+replacement for durable delivery after a process crash.
+
 ### Resource Status — Conditions
 
 Resources use typed `.status.conditions` rather than a `phase` field. A `phase` enum is an antipattern ([kubernetes/kubernetes#7856](https://github.com/kubernetes/kubernetes/issues/7856)) because it is opaque, hard to extend, and cannot represent concurrent states.
