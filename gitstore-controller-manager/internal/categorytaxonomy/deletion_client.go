@@ -26,8 +26,7 @@ mutation($input: UpdateCategoryStatusInput!) {
 }`
 
 // completeCategoryDeletionMutation finishes a terminating category's
-// foreground deletion. It replaces the deprecated
-// updateCategoryStatus.completeDeletion flag.
+// foreground deletion.
 const completeCategoryDeletionMutation = `
 mutation($input: CompleteCategoryDeletionInput!) {
   completeCategoryDeletion(input: $input) {

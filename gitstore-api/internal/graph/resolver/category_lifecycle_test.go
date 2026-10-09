@@ -562,15 +562,4 @@ func TestCompleteCategoryDeletion(t *testing.T) {
 		_, err = env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "laptops", category.ResourceVersion)
 		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "PRODUCT_DECOUPLING_INCOMPLETE")
 	})
-	t.Run("deprecated status flag still completes", func(t *testing.T) {
-		env := newCategoryLifecycleEnv(t)
-		category := terminatingCategory(t, env, "laptops")
-		complete := true
-		_, err := env.mut.UpdateCategoryStatus(context.Background(), model.UpdateCategoryStatusInput{
-			Namespace: lifecycleNamespace, Name: "laptops", ResourceVersion: category.ResourceVersion, CompleteDeletion: &complete,
-		})
-		require.NoError(t, err)
-		_, err = env.store.GetCategoryTaxonomyByName(context.Background(), lifecycleNamespace, "laptops")
-		assert.ErrorIs(t, err, datastore.ErrNotFound)
-	})
 }

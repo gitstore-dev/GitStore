@@ -137,12 +137,6 @@ func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model
 		}
 		return &model.UpdateCategoryStatusPayload{HasMoreProductDependents: hasMore}, nil
 	}
-	if input.CompleteDeletion != nil && *input.CompleteDeletion {
-		if _, err := r.completeCategoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion); err != nil {
-			return nil, err
-		}
-		return &model.UpdateCategoryStatusPayload{}, nil
-	}
 	patch := toCategoryTaxonomyStatusPatch(input)
 	updated, err := r.store.UpdateCategoryTaxonomyStatus(ctx, input.Namespace, input.Name, patch)
 	if err != nil {

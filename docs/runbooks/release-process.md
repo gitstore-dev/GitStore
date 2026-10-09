@@ -158,8 +158,9 @@ and `updateCategory` require `categoryTaxonomy.create` and
   `categoryTaxonomy.purge`. Grant `purge` to the controller manager identity
   and add the new actions to custom RBAC policies. `categories` accepts a new
   `filter` argument.
-- `UpdateCategoryStatusInput.completeDeletion` is deprecated in favor of
-  `completeCategoryDeletion` and will be removed in the next release.
+- `UpdateCategoryStatusInput.completeDeletion` is removed. Controllers complete
+  category deletion through the `completeCategoryDeletion` mutation, which
+  requires `categoryTaxonomy.purge`.
 - Namespace mutation errors use the shared error envelope. The
   `NAMESPACE_*` codes are replaced by `ADMISSION_REJECTED`, `ALREADY_EXISTS`,
   `NOT_FOUND`, `CONFLICT` and `FAILED_PRECONDITION`, and `phase`, `reason` and

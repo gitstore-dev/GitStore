@@ -73,11 +73,8 @@ func TestDeleteCategorySchemaContract(t *testing.T) {
 	requireGraphQLField(t, schema, "CompleteCategoryDeletionInput", "resourceVersion", "String!")
 	requireGraphQLField(t, schema, "CompleteCategoryDeletionPayload", "id", "ID")
 
-	completeDeletion := schema.Types["UpdateCategoryStatusInput"].Fields.ForName("completeDeletion")
-	require.NotNil(t, completeDeletion)
-	deprecated := completeDeletion.Directives.ForName("deprecated")
-	require.NotNil(t, deprecated, "completeDeletion must be deprecated")
-	assert.Contains(t, deprecated.Arguments.ForName("reason").Value.Raw, "completeCategoryDeletion")
+	assert.Nil(t, schema.Types["UpdateCategoryStatusInput"].Fields.ForName("completeDeletion"),
+		"completeDeletion is removed; controllers use the completeCategoryDeletion mutation")
 }
 
 func TestCategoryFilterSchemaContract(t *testing.T) {

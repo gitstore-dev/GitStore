@@ -110,9 +110,6 @@ func TestCompleteDeletion_SendsCompleteCategoryDeletion(t *testing.T) {
 	if input["namespace"] != "acme" || input["name"] != "laptops" || input["resourceVersion"] != "7" {
 		t.Fatalf("unexpected input %v", input)
 	}
-	if _, ok := input["completeDeletion"]; ok {
-		t.Fatalf("the deprecated completeDeletion flag must not be sent: %v", input)
-	}
 }
 
 func TestCompleteDeletion_FoldedConflictMapsToErrConflict(t *testing.T) {

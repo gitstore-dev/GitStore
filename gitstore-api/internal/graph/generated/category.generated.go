@@ -1459,7 +1459,7 @@ func (ec *executionContext) unmarshalInputUpdateCategoryStatusInput(ctx context.
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "namespace", "resourceVersion", "observedGeneration", "lastAppliedRevision", "conditions", "resolved", "completeDeletion", "decoupleProducts"}
+	fieldsInOrder := [...]string{"name", "namespace", "resourceVersion", "observedGeneration", "lastAppliedRevision", "conditions", "resolved", "decoupleProducts"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -1515,13 +1515,6 @@ func (ec *executionContext) unmarshalInputUpdateCategoryStatusInput(ctx context.
 				return it, err
 			}
 			it.Resolved = data
-		case "completeDeletion":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("completeDeletion"))
-			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.CompleteDeletion = data
 		case "decoupleProducts":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("decoupleProducts"))
 			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)

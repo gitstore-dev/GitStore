@@ -358,11 +358,6 @@ input UpdateCategoryStatusInput {
   resolved: ResolvedCategoryTaxonomyInput
 
   """
-  Controller-only foreground-deletion completion request.
-  """
-  completeDeletion: Boolean @deprecated(reason: "Use completeCategoryDeletion. Removed in the next release.")
-
-  """
   Controller-only bounded Product drain. The server removes non-blocking
   owner references and writes CategoryDeleted without changing product spec.
   """
