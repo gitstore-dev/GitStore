@@ -307,7 +307,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	case "completeProductDeletion":
 		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
 		name, _ := nestedStringArg(fc.Args, "input", "name")
-		if err := a.authorizeStoredProductAction(ctx, authz, principal, "product.delete.complete", namespace, name, ""); err != nil {
+		if err := a.authorizeStoredProductAction(ctx, authz, principal, "product.purge", namespace, name, ""); err != nil {
 			return nil, err
 		}
 	case "createNamespace":
@@ -409,7 +409,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if strings.TrimSpace(targetName) == "" {
 			return nil, &gqlerror.Error{Message: "name must not be empty", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
 		}
-		decision, err := authz.Authorize(ctx, principal, "namespace.status.write", auth.ResourceContext{
+		decision, err := authz.Authorize(ctx, principal, "namespace.purge", auth.ResourceContext{
 			Kind: "namespace",
 			Name: targetName,
 		})
@@ -445,7 +445,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		}
 		name, _ := nestedStringArg(fc.Args, "input", "name")
 		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
-		decision, err := authz.Authorize(ctx, principal, "repository.status.write", auth.ResourceContext{
+		decision, err := authz.Authorize(ctx, principal, "repository.purge", auth.ResourceContext{
 			Kind: "repository", Name: name, Attrs: map[string]any{"namespace": namespace},
 		})
 		if err != nil {
