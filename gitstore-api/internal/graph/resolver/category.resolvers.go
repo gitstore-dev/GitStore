@@ -7,8 +7,10 @@ package resolver
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -57,18 +59,59 @@ func (r *categoryResolver) Children(ctx context.Context, obj *model.Category) ([
 
 // Products is the resolver for the products field.
 func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
-	_, err := decodeNodeIDAs(nodeKindCategory, obj.ID)
+	categoryUID, err := decodeNodeIDAs(nodeKindCategory, obj.ID)
 	if err != nil {
 		return nil, err
 	}
-	// TODO: Add category-scoped product listing to the datastore interface.
-	// For now, return all products paginated (filter by category will be added later).
 	params := toPageParams(first, after, last, before)
-	result, err := r.service.GetProducts(ctx, "", params)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get products: %w", err)
+	if params.After, err = decodeCategoryProductCursor(categoryUID, params.After); err != nil {
+		return nil, gqlerror.Errorf("invalid category products cursor")
 	}
-	return BuildProductConnection(result), nil
+	if params.Before, err = decodeCategoryProductCursor(categoryUID, params.Before); err != nil {
+		return nil, gqlerror.Errorf("invalid category products cursor")
+	}
+	index, ok := r.store.(datastore.CategoryProductIndex)
+	if !ok {
+		return nil, gqlerror.Errorf("category product projection is not ready")
+	}
+	result, err := index.ListCategoryProducts(ctx, obj.Metadata.Namespace, categoryUID, params)
+	if err != nil {
+		if errors.Is(err, datastore.ErrProjectionNotReady) {
+			return nil, &gqlerror.Error{Message: "category product projection is rebuilding; retry shortly", Extensions: map[string]any{"code": "PROJECTION_NOT_READY", "retryable": true}}
+		}
+		return nil, fmt.Errorf("list category products: %w", err)
+	}
+	return buildCategoryProductConnection(categoryUID, result), nil
+}
+
+func encodeCategoryProductCursor(categoryUID, cursor string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte("category-product\x00" + categoryUID + "\x00" + cursor))
+}
+func decodeCategoryProductCursor(categoryUID, cursor string) (string, error) {
+	if cursor == "" {
+		return "", nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return "", err
+	}
+	prefix := "category-product\x00" + categoryUID + "\x00"
+	if !strings.HasPrefix(string(b), prefix) {
+		return "", fmt.Errorf("cursor belongs to another category")
+	}
+	return strings.TrimPrefix(string(b), prefix), nil
+}
+func buildCategoryProductConnection(categoryUID string, result *datastore.PageResult[datastore.Product]) *model.ProductConnection {
+	edges := make([]*model.ProductEdge, len(result.Items))
+	for i, p := range result.Items {
+		edges[i] = &model.ProductEdge{Cursor: encodeCategoryProductCursor(categoryUID, EncodeKeysetCursor(p.CreationTimestamp, p.UID)), Node: DatastoreProductToGraphQL(p)}
+	}
+	pi := &model.PageInfo{HasNextPage: result.HasNext, HasPreviousPage: result.HasPrevious}
+	if len(edges) > 0 {
+		start, end := edges[0].Cursor, edges[len(edges)-1].Cursor
+		pi.StartCursor, pi.EndCursor = &start, &end
+	}
+	return &model.ProductConnection{Edges: edges, PageInfo: pi}
 }
 
 // CreateCategory is the resolver for the createCategory field.

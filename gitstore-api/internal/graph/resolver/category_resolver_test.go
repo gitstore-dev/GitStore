@@ -115,6 +115,28 @@ func TestCategoryResolver_CategoryByID_Malformed(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+func TestCategoryProductsUsesOnlyItsMaterializedSubtreeMembership(t *testing.T) {
+	qr, store := newCategoryResolverEnv(t)
+	ctx := context.Background()
+	root := seedCategory(t, store, "shop", "root", time.Now().UTC())
+	other := seedCategory(t, store, "shop", "other", time.Now().UTC())
+	direct := &datastore.Product{UID: uuid.New().String(), Namespace: "shop", Name: "direct", CreationTimestamp: time.Now().UTC(), ResourceVersion: "1"}
+	unrelated := &datastore.Product{UID: uuid.New().String(), Namespace: "shop", Name: "unrelated", CreationTimestamp: time.Now().UTC().Add(-time.Second), ResourceVersion: "1"}
+	require.NoError(t, store.CreateProduct(ctx, direct))
+	require.NoError(t, store.CreateProduct(ctx, unrelated))
+	index := store.(datastore.CategoryProductIndex)
+	require.NoError(t, index.ReplaceCategoryProductMembership(ctx, direct, []string{root.UID}))
+	require.NoError(t, index.ReplaceCategoryProductMembership(ctx, unrelated, []string{other.UID}))
+	resolver := &categoryResolver{qr.Resolver}
+	connection, err := resolver.Products(ctx, DatastoreCategoryTaxonomyToGraphQL(root), nil, nil, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, connection.Edges, 1)
+	assert.Equal(t, "direct", connection.Edges[0].Node.Metadata.Name)
+	assert.NotEmpty(t, connection.Edges[0].Cursor)
+	_, err = resolver.Products(ctx, DatastoreCategoryTaxonomyToGraphQL(other), nil, &connection.Edges[0].Cursor, nil, nil)
+	assert.Error(t, err, "a cursor from another category must not be reusable")
+}
+
 // ── Categories forward pagination ────────────────────────────────────────────
 
 func TestCategoryResolver_Categories_ForwardPagination(t *testing.T) {

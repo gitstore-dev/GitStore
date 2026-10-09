@@ -51,6 +51,18 @@ func TestProductWatchAuthorizationRunsBeforeCursorHandling(t *testing.T) {
 	}
 }
 
+func TestCategoryProductsRequiresProductListBeforeResolver(t *testing.T) {
+	authz := testutil.NewDenyAllAuthZ(t)
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "denied", AuthMethod: "bearer"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Category", Field: graphql.CollectedField{Field: &ast.Field{Name: "products"}}})
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Equal(t, "product.list", authz.Action)
+}
+
 func TestProductMutationAuthorizationMatrix(t *testing.T) {
 	productID := "Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC9wcm9kLXVpZA=="
 	metadata := &model.ObjectMetaInput{Namespace: "acme", Name: "widget"}
@@ -117,7 +129,7 @@ func TestProductListAuthorizationDoesNotDiscloseCrossNamespaceExistence(t *testi
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
 	require.Error(t, err)
 	assert.False(t, called, "the list resolver must not reveal whether private Products exist")
-	assert.Equal(t, "product.read", authz.Action)
+	assert.Equal(t, "product.list", authz.Action)
 	assert.Equal(t, "private", authz.Resource.Attrs["namespace"])
 	assert.Equal(t, "namespace-owner", authz.Resource.OwnerSub)
 }

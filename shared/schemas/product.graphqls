@@ -229,6 +229,9 @@ that category), never the category's raw internal identifier.
 input ResolvedCategoryRefInput {
   name: String!
   uid: ID!
+
+  """Resolved root-to-self category names, maintained by the controller."""
+  path: [String!]
 }
 
 type UpdateProductStatusPayload {

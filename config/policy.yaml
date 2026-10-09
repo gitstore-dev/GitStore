@@ -25,6 +25,7 @@ roles:
       # mutations it resolves to the canonical `product.read` action.
       - "product.read"
       - "product.purge"
+      - "product.list"
       - "product.watch"
       # Legacy deletion-completion grant retained for one release so older API
       # replicas stay compatible during rolling upgrades; remove next release.

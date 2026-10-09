@@ -49,8 +49,9 @@ type resolvedCategory struct {
 }
 
 type resolvedCategoryRef struct {
-	Name string `json:"name"`
-	UID  string `json:"uid"`
+	Name string   `json:"name"`
+	UID  string   `json:"uid"`
+	Path []string `json:"path,omitempty"`
 }
 
 type CompletionClient interface {
@@ -194,7 +195,16 @@ func (r *Reconciler) resolveCategory(ctx context.Context, current categorytaxono
 	// straight from the metadata.uid GraphQL field, which every kind's
 	// resolver already encodes API-side. This process has no access to
 	// that encoding scheme and must never attempt to re-derive it.
-	return true, &resolvedCategoryRef{Name: candidate.Name, UID: candidate.UID}, nil
+	var resolved categorytaxonomy.ResolvedCategoryTaxonomy
+	if len(candidate.Status.Resolved) > 0 {
+		if err := json.Unmarshal(candidate.Status.Resolved, &resolved); err != nil {
+			return false, nil, err
+		}
+	}
+	// During an upgrade a category can be visible before its path projection.
+	// Keep direct membership in that interval; the category watch fan-out will
+	// reconcile this Product again once the path is available.
+	return true, &resolvedCategoryRef{Name: candidate.Name, UID: candidate.UID, Path: resolved.Path}, nil
 }
 
 // mergeCategoryConditions builds fresh CategoryResolved/Ready conditions and

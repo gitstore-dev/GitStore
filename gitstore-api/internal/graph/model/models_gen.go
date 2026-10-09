@@ -1217,6 +1217,8 @@ type ResolvedCategoryDefinition struct {
 type ResolvedCategoryRefInput struct {
 	Name string `json:"name"`
 	UID  string `json:"uid"`
+	// Resolved root-to-self category names, maintained by the controller.
+	Path []string `json:"path,omitempty"`
 }
 
 // Controller-computed category hierarchy metadata.

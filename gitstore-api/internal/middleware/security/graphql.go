@@ -236,7 +236,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			Extensions: map[string]any{"code": "FORBIDDEN"},
 		}
 	}
-	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
+	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isCategoryProductsField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
 		return next(ctx)
 	}
 	var authz auth.AuthZProvider
@@ -259,6 +259,10 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		}
 	} else if isProductQueryField(fc) {
 		if err := a.authorizeProductQueryField(ctx, fc, principal, authz); err != nil {
+			return nil, err
+		}
+	} else if isCategoryProductsField(fc) {
+		if err := authorizeProductAction(ctx, authz, principal, "product.list", "", "", ""); err != nil {
 			return nil, err
 		}
 	} else if isCategoryQueryField(fc) {
@@ -711,6 +715,14 @@ func isProductQueryField(fc *graphql.FieldContext) bool {
 	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "product" || fc.Field.Name == "products")
 }
 
+// The parent Category has already been authorized for read. gqlgen field
+// middleware does not expose its hydrated parent value, so this action check
+// deliberately uses the global list scope; resource-aware Category scoping is
+// enforced at the parent read boundary.
+func isCategoryProductsField(fc *graphql.FieldContext) bool {
+	return fc != nil && fc.Object == "Category" && fc.Field.Name == "products"
+}
+
 func isCategoryQueryField(fc *graphql.FieldContext) bool {
 	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "category" || fc.Field.Name == "categories")
 }
@@ -974,7 +986,7 @@ func (a *Authorize) authorizeProductQueryField(ctx context.Context, fc *graphql.
 				owner = ns.EffectiveOwnerSub()
 			}
 		}
-		return authorizeProductAction(ctx, authz, principal, "product.read", "", namespace, owner)
+		return authorizeProductAction(ctx, authz, principal, "product.list", "", namespace, owner)
 	}
 	if a.store == nil {
 		return gqlerror.Errorf("authorization service unavailable")

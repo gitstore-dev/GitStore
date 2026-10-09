@@ -24,6 +24,8 @@ func TestProjectionTableKinds(t *testing.T) {
 		"namespace_mappings_by_repository": "Repository",
 		"products_by_name":                 "Product",
 		"products_by_uid":                  "Product",
+		"category_products_by_category":    "Product",
+		"category_products_by_product":     "Product",
 		"category_taxonomies_by_name":      "CategoryTaxonomy",
 		"category_taxonomies_by_uid":       "CategoryTaxonomy",
 		"category_ancestor_index":          "CategoryTaxonomy",
@@ -55,6 +57,29 @@ func TestProjectionTableKinds(t *testing.T) {
 	}
 	if knownProjectionTable(unknown) {
 		t.Errorf("knownProjectionTable(%q) = true, want false", unknown)
+	}
+}
+
+func TestExpectedProductCategoryMembershipProjectionsAreSharded(t *testing.T) {
+	resource := AuthoritativeResource{
+		Kind: "Product", UID: "00000000-0000-0000-0000-000000000001", Namespace: "shop", Name: "widget",
+		CreationTimestamp: time.Unix(100, 0).UTC(), CategoryUIDs: []string{"cat-a", "cat-b"},
+	}
+	rows := expectedProjections(resource)
+	var forward, reverse int
+	for _, row := range rows {
+		switch row.Table {
+		case "category_products_by_category":
+			forward++
+			if row.Shard != categoryProductShard(resource.UID) {
+				t.Fatalf("forward shard = %d", row.Shard)
+			}
+		case "category_products_by_product":
+			reverse++
+		}
+	}
+	if forward != 2 || reverse != 2 {
+		t.Fatalf("membership projections = forward %d reverse %d, want 2 each", forward, reverse)
 	}
 }
 
