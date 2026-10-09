@@ -526,6 +526,10 @@ func (m *memdbDatastore) UpdateProductStatus(_ context.Context, namespace, name 
 		txn.Abort()
 		return nil, fmt.Errorf("memdb: update product status: %w", err)
 	}
+	if err := syncOwnerReferenceProjections(txn, updated.Namespace, updated.RepositoryID, "Product", updated.UID, updated.Name, updated.ResourceVersion, updated.OwnerReferences); err != nil {
+		txn.Abort()
+		return nil, err
+	}
 	txn.Commit()
 	m.recordCommittedProduct(datastore.ResourceWatchModified, updated, raw.(*datastore.Product).Labels)
 	return cloneProduct(updated), nil

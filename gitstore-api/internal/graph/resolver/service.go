@@ -246,6 +246,16 @@ func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind st
 		if err != nil {
 			return nil, fmt.Errorf("resolve Product repository head: %w", err)
 		}
+		// ResolveRef and the original HEAD read are separate operations. Bind a
+		// no-op admission to the file at the resolved SHA so a concurrent writer
+		// cannot have its commit attributed to the bytes we read before it.
+		resolved, readErr := s.gitWriter.ReadFileForRepo(ctx, repositoryID, path, sha)
+		if readErr != nil {
+			return nil, fmt.Errorf("read Product manifest at resolved commit: %w", readErr)
+		}
+		if !bytes.Equal(resolved, content) {
+			return nil, committedAdmissionError(admission.ErrCommittedManifestSuperseded, sha, "Product")
+		}
 	} else {
 		diagnostics, validateErr := s.manifestValidator.ValidateManifest(ctx, admission.ManifestValidationRequest{RepositoryID: repositoryID, Path: path, OldContent: current, NewContent: content})
 		if validateErr != nil {
