@@ -243,13 +243,14 @@ func TestRepositoryStatusMutationUsesControllerWriteAction(t *testing.T) {
 	})
 
 	for _, tc := range []struct {
-		name  string
-		field string
-		input any
+		name   string
+		field  string
+		input  any
+		action string
 	}{
-		{name: "status", field: "updateRepositoryStatus", input: model.UpdateRepositoryStatusInput{Namespace: h.sourceNamespace.Name, Name: h.repository.Name}},
-		{name: "provision storage", field: "provisionRepositoryStorage", input: model.ProvisionRepositoryStorageInput{Namespace: h.sourceNamespace.Name, Name: h.repository.Name}},
-		{name: "complete deletion", field: "completeRepositoryDeletion", input: model.CompleteRepositoryDeletionInput{Namespace: h.sourceNamespace.Name, Name: h.repository.Name, ResourceVersion: "1"}},
+		{name: "status", field: "updateRepositoryStatus", input: model.UpdateRepositoryStatusInput{Namespace: h.sourceNamespace.Name, Name: h.repository.Name}, action: "repository.status.write"},
+		{name: "provision storage", field: "provisionRepositoryStorage", input: model.ProvisionRepositoryStorageInput{Namespace: h.sourceNamespace.Name, Name: h.repository.Name}, action: "repository.status.write"},
+		{name: "complete deletion", field: "completeRepositoryDeletion", input: model.CompleteRepositoryDeletionInput{Namespace: h.sourceNamespace.Name, Name: h.repository.Name, ResourceVersion: "1"}, action: "repository.purge"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h.authz.reset()
@@ -257,7 +258,7 @@ func TestRepositoryStatusMutationUsesControllerWriteAction(t *testing.T) {
 			require.EqualError(t, err, "input: permission denied: cross-tenant access denied")
 			calls := h.authz.callsSnapshot()
 			require.Len(t, calls, 1)
-			assert.Equal(t, "repository.status.write", calls[0].action)
+			assert.Equal(t, tc.action, calls[0].action)
 			assert.Equal(t, "repository", calls[0].resource.Kind)
 			assert.Equal(t, h.repository.Name, calls[0].resource.Name)
 			assert.Equal(t, h.sourceNamespace.Name, calls[0].resource.Attrs["namespace"])

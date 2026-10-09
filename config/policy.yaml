@@ -12,17 +12,22 @@ roles:
       - "categoryTaxonomy.list"
       - "categoryTaxonomy.purge"
       - "categoryTaxonomy.watch"
+      - "namespace.purge"
       - "namespace.status.write"
       - "namespace.system-repository.provision"
       - "namespace.watch"
       - "repository.create.any"
+      - "repository.purge"
       - "repository.read.any"
       - "repository.status.write"
       - "repository.watch"
       # Product read authorization is resource-aware; unlike Repository
       # mutations it resolves to the canonical `product.read` action.
       - "product.read"
+      - "product.purge"
       - "product.watch"
+      # Legacy deletion-completion grant retained for one release so older API
+      # replicas stay compatible during rolling upgrades; remove next release.
       - "product.delete.complete"
       - "product.status.write"
       - "serviceaccount.token.issue"

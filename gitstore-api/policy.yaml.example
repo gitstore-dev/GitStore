@@ -19,9 +19,12 @@ roles:
       - "category.status.write"
       - "categoryTaxonomy.list"
       - "categoryTaxonomy.purge"
+      - "namespace.purge"
       - "namespace.status.write"
       - "namespace.watch"
       - "repository.create.any"
+      - "repository.purge"
+      - "product.purge"
       - "serviceaccount.token.issue"
     deny: []
 

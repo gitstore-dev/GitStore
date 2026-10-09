@@ -604,6 +604,30 @@ func TestGraphQLFieldAuthorizerUpdateCategoryStatusUsesPolicy(t *testing.T) {
 	assert.Equal(t, "category.status.write", authz.Action)
 }
 
+func TestGraphQLFieldAuthorizerCompleteNamespaceDeletionUsesControllerPolicy(t *testing.T) {
+	authz := testutil.NewDenyAllAuthZ(t)
+	registry := auth.NewProviderRegistry(nil, authz, nil)
+	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "untrusted", AuthMethod: "static-users"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "completeNamespaceDeletion"}},
+		Args:   map[string]any{"input": model.CompleteNamespaceDeletionInput{Name: "obsolete", ResourceVersion: "7"}},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+		called = true
+		return "ok", nil
+	})
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Equal(t, "namespace.purge", authz.Action)
+	var graphErr *gqlerror.Error
+	require.ErrorAs(t, err, &graphErr)
+	assert.Equal(t, "FORBIDDEN", graphErr.Extensions["code"])
+}
+
 func TestGraphQLFieldAuthorizerCompleteRepositoryDeletionUsesControllerPolicy(t *testing.T) {
 	authz := testutil.NewDenyAllAuthZ(t)
 	registry := auth.NewProviderRegistry(nil, authz, nil)
@@ -622,7 +646,7 @@ func TestGraphQLFieldAuthorizerCompleteRepositoryDeletionUsesControllerPolicy(t 
 	})
 	require.Error(t, err)
 	assert.False(t, called)
-	assert.Equal(t, "repository.status.write", authz.Action)
+	assert.Equal(t, "repository.purge", authz.Action)
 	var graphErr *gqlerror.Error
 	require.ErrorAs(t, err, &graphErr)
 	assert.Equal(t, "FORBIDDEN", graphErr.Extensions["code"])

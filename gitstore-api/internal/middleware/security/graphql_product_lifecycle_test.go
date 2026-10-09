@@ -183,6 +183,11 @@ func TestProductAuthorizationCapabilitiesAreAttributedAcrossPrincipalProviders(t
 			principal: &auth.Principal{Subject: "alice", AuthMethod: "static-users"},
 			field:     "deleteProduct", args: map[string]any{"input": model.DeleteProductInput{ID: productID}}, action: "product.delete",
 		},
+		{
+			name:      "controller completes product deletion",
+			principal: &auth.Principal{Subject: "serviceaccount:controllers:gitstore-controller-manager", AuthMethod: "grpc-forwarded"},
+			field:     "completeProductDeletion", args: map[string]any{"input": model.CompleteProductDeletionInput{Namespace: "acme", Name: "widget", ResourceVersion: "3"}}, action: "product.purge",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			core, logs := observer.New(zapcore.InfoLevel)
