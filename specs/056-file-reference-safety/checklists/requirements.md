@@ -1,7 +1,8 @@
-# Specification Quality Checklist: File Reference Resolution and Deletion Safety
+# Specification Quality Checklist: File Reference Safety and Renewable Source Access
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-08-20
+**Updated**: 2026-10-09
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -31,7 +32,11 @@
 
 ## Notes
 
-- All items pass on first validation pass (2026-08-20).
-- The core block-vs-decouple design question (GH#378's central ask) is resolved explicitly in the Clarifications section, mirroring spec 052's reasoning depth: File deletion always decouples, never blocks, uniformly across all four consumer kinds and regardless of the `optional` flag.
-- File paths and existing condition-type names (`FileRefConfirmed`, `gitstore-controller-manager/internal/categorytaxonomy/fileref.go`) are cited in the Assumptions/Key Entities sections as grounding evidence for terminology reuse (consistent with spec 052's own house style), not as implementation prescriptions for this feature's new work.
-- This spec assumes spec 051 (File schema) and spec 052 (ownerReferences/blockOwnerDeletion mechanism) land — both are sibling in-progress specifications; this is recorded explicitly under Assumptions rather than left as an open clarification, since GH#378 itself lists spec 051 as a hard dependency and instructs reuse of spec 052's mechanism.
+- Revision review 2026-10-09: the old scope excluded source access and checksum verification and assumed current dependencies had not landed. Those statements have been replaced, not left alongside conflicting new requirements.
+- The user confirmed AWS S3 renewable role/workload access, B2 S3-compatible application-key rotation, and B2 Native token renewal as the production acceptance scope. Other secret-store adapters are not silently included.
+- Stories 1-3 and FR-001 through FR-012 preserve the original non-blocking reference/deletion behavior. Durable decoupling handoff and recovery of never-resolved references are explicit.
+- Stories 4-6 and FR-013 through FR-035 cover actual source verification, live binding administration, provider renewal, authorization/revocation, ephemeral secret handling, and replica-safe recovery.
+- SecretBinding, deployment-managed binding, and SecretClaim are explicit planning alternatives with a required recorded decision (FR-029/030, SC-013). The spec does not prescribe new resource implementations before that decision.
+- Provider names, existing reference/condition contracts, and repository-required capacity/chaos commands identify product capabilities and acceptance interfaces, not a prescribed language, framework, storage layout, or renewal algorithm.
+- PR-001 through PR-008 define dataset, workload, bounds, real expiry/rotation evidence, recovery, revocation, and safety requirements. Real B2 Native expiry requires the separately declared 26-hour exercise; a 60-minute soak or accelerated clock cannot substitute.
+- All 16 checklist items pass after the revision review. This is specification readiness only; implementation and production evidence remain outstanding. No plan or tasks existed in the updated 056 branch to regenerate.

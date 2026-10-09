@@ -15,6 +15,43 @@ owner and reference at construction and resolves a fresh signing record for
 every token exchange; only access tokens are cached. The File integration
 remains metadata validation plus a contract-only runtime consumer.
 
+## Planned production File consumer (spec 056)
+
+[Spec 056](../../specs/056-file-reference-safety/spec.md) now specifies the first
+production resource-runtime consumer, separately from the existing controller
+bootstrap integration. This is planned work, not an already supported deployment
+configuration or credential-renewal implementation.
+
+The required source paths are AWS S3 with renewable role/workload credentials,
+Backblaze B2 S3-compatible access with application-key rotation, and B2 Native
+access with authorization-token renewal. The runtime integration must preserve
+expiry and session information, reauthorize or reload according to each provider,
+and recover without a File edit or process restart. Re-reading expired bytes
+from the current local providers does not provide this capability. B2 Native
+tokens and their underlying application keys have separate lifetimes; an
+expired application key requires valid replacement material.
+
+Operators establish workload trust or provision underlying keys outside
+GitStore. A stable runtime binding authorizes a particular resource's use of
+that authority, including tenant and destination scope. A File reference alone
+does not grant access, and a failed runtime binding must not fall back to the
+controller's bootstrap identity or broader ambient permissions.
+
+Planning must explicitly compare ADR 0001's SecretBinding with an equivalent
+deployment-managed binding supporting live administration, revocation, and
+replica-safe policy. SecretClaim is a separate provisioning/management decision,
+not a prerequisite for reading externally managed material. Neither is currently
+an implemented resource, and neither replaces provider renewal. Secret values
+remain outside Git and catalog records; ephemeral access credentials require
+bounded lifetimes and authorization-scoped reuse.
+
+Spec 056 must supply production configuration, authorization, provider adapters,
+source verification, and real expiry/rotation evidence. The configuration below
+continues to describe the shipped bootstrap/local-reader boundary; it must not
+be interpreted as an already wired runtime provider.
+
+## Existing acquisition boundary
+
 Use pure `ValidateSecretRef`/`ValidateCredentialsRef` for admission. JSON
 decoding rejects unknown/duplicate/case-folded fields and explicit null
 optionals; validation against the containing namespace remains mandatory.
