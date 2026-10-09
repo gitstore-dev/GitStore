@@ -551,7 +551,7 @@ func expectedProjections(resource AuthoritativeResource) []ProjectionRecord {
 	base := ProjectionRecord{
 		UID: resource.UID, Namespace: resource.Namespace, Name: resource.Name,
 		CreationTimestamp: resource.CreationTimestamp, Bucket: resource.CreationTimestamp.UTC().Format("2006-01"),
-		SKU: resource.SKU, ProductRefName: resource.ProductRefName,
+		SKU: resource.SKU, ProductRefName: resource.ProductRefName, ResourceVersion: resource.ResourceVersion,
 	}
 	switch resource.Kind {
 	case "Namespace":
@@ -933,10 +933,17 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		}
 	}
 	// Resolve Product category paths after all categories have been scanned.
-	categories := make(map[string]string)
+	// Older API replicas persisted only the directly resolved category name in
+	// Product status.  Expand that legacy form through the authoritative
+	// category path before deriving ancestor memberships for a rolling upgrade.
+	type categoryResolution struct {
+		uid  string
+		path []string
+	}
+	categories := make(map[string]categoryResolution)
 	for _, resource := range snapshot.Authoritative {
 		if resource.Kind == "CategoryTaxonomy" {
-			categories[resource.Namespace+"\x00"+resource.Name] = resource.UID
+			categories[resource.Namespace+"\x00"+resource.Name] = categoryResolution{uid: resource.UID, path: resource.ResolvedPath}
 		}
 	}
 	for i := range snapshot.Authoritative {
@@ -944,9 +951,14 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		if resource.Kind != "Product" || len(resource.ResolvedPath) == 0 {
 			continue
 		}
+		if len(resource.ResolvedPath) == 1 {
+			if category, ok := categories[resource.Namespace+"\x00"+resource.ResolvedPath[0]]; ok && len(category.path) > 0 {
+				resource.ResolvedPath = append([]string(nil), category.path...)
+			}
+		}
 		for _, name := range resource.ResolvedPath {
-			if uid := categories[resource.Namespace+"\x00"+name]; uid != "" {
-				resource.CategoryUIDs = append(resource.CategoryUIDs, uid)
+			if category, ok := categories[resource.Namespace+"\x00"+name]; ok && category.uid != "" {
+				resource.CategoryUIDs = append(resource.CategoryUIDs, category.uid)
 			}
 		}
 	}
@@ -1173,9 +1185,9 @@ func (s *scyllaProjectionRepairStore) insertProjection(ctx context.Context, row 
 		statement = "INSERT INTO category_ancestor_index (namespace,ancestor,depth,descendant,descendant_uid,resource_version) VALUES (?,?,?,?,?,?) IF NOT EXISTS"
 		args = []any{row.Namespace, row.Ancestor, int8(row.Depth), row.Name, uid, row.ResourceVersion}
 	case "category_products_by_category":
-		statement, args = "INSERT INTO category_products_by_category (namespace,category_uid,shard,creation_timestamp,product_uid) VALUES (?,?,?,?,?) IF NOT EXISTS", []any{row.Namespace, row.CategoryUID, row.Shard, row.CreationTimestamp, uid}
+		statement, args = "INSERT INTO category_products_by_category (namespace,category_uid,shard,creation_timestamp,product_uid,resource_version) VALUES (?,?,?,?,?,?) IF NOT EXISTS", []any{row.Namespace, row.CategoryUID, row.Shard, row.CreationTimestamp, uid, row.ResourceVersion}
 	case "category_products_by_product":
-		statement, args = "INSERT INTO category_products_by_product (namespace,product_uid,category_uid,shard) VALUES (?,?,?,?) IF NOT EXISTS", []any{row.Namespace, uid, row.CategoryUID, row.Shard}
+		statement, args = "INSERT INTO category_products_by_product (namespace,product_uid,category_uid,shard,resource_version) VALUES (?,?,?,?,?) IF NOT EXISTS", []any{row.Namespace, uid, row.CategoryUID, row.Shard, row.ResourceVersion}
 	default:
 		return false, fmt.Errorf("unsupported projection table %q", row.Table)
 	}

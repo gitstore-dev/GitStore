@@ -381,13 +381,27 @@ func New(cfg config.ScyllaConfig, log *zap.Logger, watchBucketSize ...int) (data
 		mutations:                         newMutationExecutor(nil),
 	}
 	ds.namespaceWatchBucketSize.Store(bucketSize)
+	_ = ds.refreshCategoryProductProjectionReady(context.Background())
+	return ds, nil
+}
+
+// refreshCategoryProductProjectionReady observes the durable rollout marker on
+// every connection read.  A repair command can set it while API replicas are
+// live, so startup-only caching would leave those replicas permanently stale.
+func (s *scyllaDatastore) refreshCategoryProductProjectionReady(ctx context.Context) error {
 	var ready struct {
 		Ready bool `db:"ready"`
 	}
-	if err := ds.session.Query("SELECT ready FROM category_product_projection_state WHERE projection=?", nil).Bind("category-products").GetRelease(&ready); err == nil && ready.Ready {
-		ds.categoryProductProjectionReady.Store(true)
+	err := s.session.Query("SELECT ready FROM category_product_projection_state WHERE projection=?", nil).WithContext(ctx).Bind("category-products").GetRelease(&ready)
+	if errors.Is(err, gocql.ErrNotFound) {
+		s.categoryProductProjectionReady.Store(false)
+		return nil
 	}
-	return ds, nil
+	if err != nil {
+		return fmt.Errorf("scylla: read category product projection state: %w", err)
+	}
+	s.categoryProductProjectionReady.Store(ready.Ready)
+	return nil
 }
 
 // parseHosts splits "host:port" entries into plain hostnames and returns

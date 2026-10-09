@@ -1,13 +1,19 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 package scylla
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gocql/gocql"
 )
@@ -28,8 +34,9 @@ type categoryProductRow struct {
 	ProductUID        gocql.UUID `db:"product_uid"`
 }
 type categoryProductReverseRow struct {
-	CategoryUID string `db:"category_uid"`
-	Shard       int8   `db:"shard"`
+	CategoryUID     string `db:"category_uid"`
+	Shard           int8   `db:"shard"`
+	ResourceVersion string `db:"resource_version"`
 }
 
 // ReplaceCategoryProductMembership replaces the small, resolved ancestor set
@@ -44,18 +51,8 @@ func (s *scyllaDatastore) ReplaceCategoryProductMembership(ctx context.Context, 
 		return fmt.Errorf("%w: invalid product uid", datastore.ErrInvalidArgument)
 	}
 	var old []categoryProductReverseRow
-	if err := s.session.Query("SELECT category_uid FROM "+categoryProductsByProductTable+" WHERE namespace=? AND product_uid=?", nil).WithContext(ctx).Bind(product.Namespace, uid).SelectRelease(&old); err != nil {
+	if err := s.session.Query("SELECT category_uid, shard, resource_version FROM "+categoryProductsByProductTable+" WHERE namespace=? AND product_uid=?", nil).WithContext(ctx).Bind(product.Namespace, uid).SelectRelease(&old); err != nil {
 		return fmt.Errorf("scylla: list product category memberships: %w", err)
-	}
-	for _, row := range old {
-		if err := s.session.Query("DELETE FROM "+categoryProductsByCategoryTable+" WHERE namespace=? AND category_uid=? AND shard=? AND creation_timestamp=? AND product_uid=?", nil).WithContext(ctx).Bind(product.Namespace, row.CategoryUID, row.Shard, product.CreationTimestamp, uid).ExecRelease(); err != nil {
-			return fmt.Errorf("scylla: remove category membership: %w", err)
-		}
-	}
-	if len(old) > 0 {
-		if err := s.session.Query("DELETE FROM "+categoryProductsByProductTable+" WHERE namespace=? AND product_uid=?", nil).WithContext(ctx).Bind(product.Namespace, uid).ExecRelease(); err != nil {
-			return fmt.Errorf("scylla: remove category reverse membership: %w", err)
-		}
 	}
 	seen := make(map[string]struct{}, len(categoryUIDs))
 	shard := categoryProductShard(product.UID)
@@ -67,17 +64,135 @@ func (s *scyllaDatastore) ReplaceCategoryProductMembership(ctx context.Context, 
 			continue
 		}
 		seen[categoryUID] = struct{}{}
-		if err := s.session.Query("INSERT INTO "+categoryProductsByCategoryTable+" (namespace, category_uid, shard, creation_timestamp, product_uid) VALUES (?, ?, ?, ?, ?)", nil).WithContext(ctx).Bind(product.Namespace, categoryUID, shard, product.CreationTimestamp, uid).ExecRelease(); err != nil {
-			return fmt.Errorf("scylla: add category membership: %w", err)
+		if err := s.upsertCategoryProductMembership(ctx, product, uid, categoryUID, shard); err != nil {
+			return err
 		}
-		if err := s.session.Query("INSERT INTO "+categoryProductsByProductTable+" (namespace, product_uid, category_uid, shard) VALUES (?, ?, ?, ?)", nil).WithContext(ctx).Bind(product.Namespace, uid, categoryUID, shard).ExecRelease(); err != nil {
-			return fmt.Errorf("scylla: add category reverse membership: %w", err)
+	}
+	for _, row := range old {
+		if _, wanted := seen[row.CategoryUID]; wanted {
+			continue
+		}
+		if err := s.deleteCategoryProductMembership(ctx, product, uid, row); err != nil {
+			return err
+		}
+	}
+	return s.fenceCategoryProductMembership(ctx, product, uid, seen)
+}
+
+const categoryProductWriteAttempts = 5
+
+func (s *scyllaDatastore) upsertCategoryProductMembership(ctx context.Context, product *datastore.Product, uid gocql.UUID, categoryUID string, shard int8) error {
+	for attempt := 0; attempt < categoryProductWriteAttempts; attempt++ {
+		var current struct {
+			ResourceVersion string `db:"resource_version"`
+		}
+		err := s.session.Query("SELECT resource_version FROM "+categoryProductsByProductTable+" WHERE namespace=? AND product_uid=? AND category_uid=?", nil).WithContext(ctx).Bind(product.Namespace, uid, categoryUID).GetRelease(&current)
+		if err != nil && !errors.Is(err, gocql.ErrNotFound) {
+			return fmt.Errorf("scylla: read category membership fence: %w", err)
+		}
+		if err == nil && compareResourceVersions(current.ResourceVersion, product.ResourceVersion) >= 0 {
+			return nil
+		}
+		var applied bool
+		if errors.Is(err, gocql.ErrNotFound) {
+			applied, err = s.session.Query("INSERT INTO "+categoryProductsByProductTable+" (namespace,product_uid,category_uid,shard,resource_version) VALUES (?,?,?,?,?) IF NOT EXISTS", nil).WithContext(ctx).Bind(product.Namespace, uid, categoryUID, shard, product.ResourceVersion).ExecCASRelease()
+		} else {
+			applied, err = s.session.Query("UPDATE "+categoryProductsByProductTable+" SET shard=?,resource_version=? WHERE namespace=? AND product_uid=? AND category_uid=? IF resource_version=?", nil).WithContext(ctx).Bind(shard, product.ResourceVersion, product.Namespace, uid, categoryUID, current.ResourceVersion).ExecCASRelease()
+		}
+		if err != nil {
+			return fmt.Errorf("scylla: write category reverse membership: %w", err)
+		}
+		if !applied {
+			continue
+		}
+		return s.upsertCategoryProductForward(ctx, product, uid, categoryUID, shard)
+	}
+	return fmt.Errorf("scylla: category membership fence contention")
+}
+
+func (s *scyllaDatastore) upsertCategoryProductForward(ctx context.Context, product *datastore.Product, uid gocql.UUID, categoryUID string, shard int8) error {
+	for attempt := 0; attempt < categoryProductWriteAttempts; attempt++ {
+		var current struct {
+			ResourceVersion string `db:"resource_version"`
+		}
+		err := s.session.Query("SELECT resource_version FROM "+categoryProductsByCategoryTable+" WHERE namespace=? AND category_uid=? AND shard=? AND creation_timestamp=? AND product_uid=?", nil).WithContext(ctx).Bind(product.Namespace, categoryUID, shard, product.CreationTimestamp, uid).GetRelease(&current)
+		if err != nil && !errors.Is(err, gocql.ErrNotFound) {
+			return fmt.Errorf("scylla: read category forward membership fence: %w", err)
+		}
+		if err == nil && compareResourceVersions(current.ResourceVersion, product.ResourceVersion) >= 0 {
+			return nil
+		}
+		var applied bool
+		if errors.Is(err, gocql.ErrNotFound) {
+			applied, err = s.session.Query("INSERT INTO "+categoryProductsByCategoryTable+" (namespace,category_uid,shard,creation_timestamp,product_uid,resource_version) VALUES (?,?,?,?,?,?) IF NOT EXISTS", nil).WithContext(ctx).Bind(product.Namespace, categoryUID, shard, product.CreationTimestamp, uid, product.ResourceVersion).ExecCASRelease()
+		} else {
+			applied, err = s.session.Query("UPDATE "+categoryProductsByCategoryTable+" SET resource_version=? WHERE namespace=? AND category_uid=? AND shard=? AND creation_timestamp=? AND product_uid=? IF resource_version=?", nil).WithContext(ctx).Bind(product.ResourceVersion, product.Namespace, categoryUID, shard, product.CreationTimestamp, uid, current.ResourceVersion).ExecCASRelease()
+		}
+		if err != nil {
+			return fmt.Errorf("scylla: write category forward membership: %w", err)
+		}
+		if applied {
+			return nil
+		}
+	}
+	return fmt.Errorf("scylla: category forward membership fence contention")
+}
+
+func (s *scyllaDatastore) deleteCategoryProductMembership(ctx context.Context, product *datastore.Product, uid gocql.UUID, row categoryProductReverseRow) error {
+	if compareResourceVersions(row.ResourceVersion, product.ResourceVersion) >= 0 {
+		return nil
+	}
+	applied, err := s.session.Query("DELETE FROM "+categoryProductsByProductTable+" WHERE namespace=? AND product_uid=? AND category_uid=? IF resource_version=?", nil).WithContext(ctx).Bind(product.Namespace, uid, row.CategoryUID, row.ResourceVersion).ExecCASRelease()
+	if err != nil {
+		return fmt.Errorf("scylla: remove category reverse membership: %w", err)
+	}
+	if !applied {
+		return nil
+	}
+	if _, err := s.session.Query("DELETE FROM "+categoryProductsByCategoryTable+" WHERE namespace=? AND category_uid=? AND shard=? AND creation_timestamp=? AND product_uid=? IF resource_version=?", nil).WithContext(ctx).Bind(product.Namespace, row.CategoryUID, row.Shard, product.CreationTimestamp, uid, row.ResourceVersion).ExecCASRelease(); err != nil {
+		return fmt.Errorf("scylla: remove category membership: %w", err)
+	}
+	return nil
+}
+
+func (s *scyllaDatastore) fenceCategoryProductMembership(ctx context.Context, product *datastore.Product, uid gocql.UUID, written map[string]struct{}) error {
+	latest, err := s.GetProduct(ctx, product.UID)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("scylla: re-read product for category membership fence: %w", err)
+	}
+	if latest.ResourceVersion == product.ResourceVersion {
+		return nil
+	}
+	var status catalog.ProductStatus
+	if err := json.Unmarshal(latest.Status, &status); err != nil {
+		return fmt.Errorf("scylla: decode product category fence status: %w", err)
+	}
+	current := map[string]struct{}{}
+	if status.Resolved != nil && status.Resolved.Category != nil {
+		for _, name := range status.Resolved.Category.Path {
+			category, getErr := s.GetCategoryTaxonomyByName(ctx, latest.Namespace, name)
+			if getErr == nil {
+				current[category.UID] = struct{}{}
+			}
+		}
+	}
+	for categoryUID := range written {
+		if _, retained := current[categoryUID]; !retained {
+			if err := s.deleteCategoryProductMembership(ctx, latest, uid, categoryProductReverseRow{CategoryUID: categoryUID, Shard: categoryProductShard(latest.UID), ResourceVersion: product.ResourceVersion}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
 func (s *scyllaDatastore) ListCategoryProducts(ctx context.Context, namespace, categoryUID string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+	if err := s.refreshCategoryProductProjectionReady(ctx); err != nil {
+		return nil, err
+	}
 	if !s.categoryProductProjectionReady.Load() {
 		return nil, datastore.ErrProjectionNotReady
 	}
