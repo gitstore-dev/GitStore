@@ -13,6 +13,51 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
 
+func TestProjectionTableKinds(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"namespaces_by_name":               "Namespace",
+		"namespaces_by_bucket":             "Namespace",
+		"repositories_by_namespace":        "Repository",
+		"repositories_by_bucket":           "Repository",
+		"namespace_mappings":               "Repository",
+		"namespace_mappings_by_repository": "Repository",
+		"products_by_name":                 "Product",
+		"products_by_uid":                  "Product",
+		"category_taxonomies_by_name":      "CategoryTaxonomy",
+		"category_taxonomies_by_uid":       "CategoryTaxonomy",
+		"category_ancestor_index":          "CategoryTaxonomy",
+		"collections_by_name":              "Collection",
+		"collections_by_uid":               "Collection",
+		"product_variants_by_name":         "ProductVariant",
+		"product_variants_by_uid":          "ProductVariant",
+		"product_variants_by_sku":          "ProductVariant",
+		"product_variants_by_product_ref":  "ProductVariant",
+	}
+	if len(tests) != len(projectionTableKinds) {
+		t.Fatalf("projection table test coverage = %d tables, registry = %d", len(tests), len(projectionTableKinds))
+	}
+
+	for table, wantKind := range tests {
+		t.Run(table, func(t *testing.T) {
+			if got := projectionKind(table); got != wantKind {
+				t.Errorf("projectionKind(%q) = %q, want %q", table, got, wantKind)
+			}
+			if !knownProjectionTable(table) {
+				t.Errorf("knownProjectionTable(%q) = false, want true", table)
+			}
+		})
+	}
+
+	const unknown = "unknown_projection_table"
+	if got := projectionKind(unknown); got != "" {
+		t.Errorf("projectionKind(%q) = %q, want empty", unknown, got)
+	}
+	if knownProjectionTable(unknown) {
+		t.Errorf("knownProjectionTable(%q) = true, want false", unknown)
+	}
+}
+
 func TestBuildRepairPlanDeterministicFindings(t *testing.T) {
 	t.Parallel()
 	created := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
