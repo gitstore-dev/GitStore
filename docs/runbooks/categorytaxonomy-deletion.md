@@ -2,8 +2,12 @@
 
 ## Normal operation
 
-`deleteCategory` marks an eligible category with
-`gitstore.dev/foreground-deletion` and a deletion timestamp. Child categories
+`deleteCategory` removes the category's manifest from Git (one commit) and the
+category is marked with
+`gitstore.dev/foreground-deletion` and a deletion timestamp. The response outcome
+is `TERMINATION_STARTED`; a repeat returns `ALREADY_TERMINATING` without a new
+commit. When children are gone and products are decoupled, the controller calls
+`completeCategoryDeletion` (permission `categoryTaxonomy.purge`). Child categories
 with `blockOwnerDeletion=true` reject the request. Products never block it:
 the controller removes their managed owner reference and writes
 `CategoryResolved=False` with reason `CategoryDeleted`; it does not change the

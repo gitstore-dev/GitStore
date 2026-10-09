@@ -888,6 +888,9 @@ func (s *scyllaDatastore) GetCategoryTaxonomyByName(ctx context.Context, namespa
 }
 
 func (s *scyllaDatastore) ListCategoryTaxonomies(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
+	if err := datastore.RejectClosureCursors(page); err != nil {
+		return nil, err
+	}
 	limit := page.Limit()
 	pq := buildPaginatedSelect(s.categoryTaxonomyTable, page, "namespace", namespace, clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}, nil, nil)
 
@@ -980,6 +983,14 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomyStatus(ctx context.Context, name
 	}
 	observedResourceVersion := existing.ResourceVersion
 
+	var previousRows []datastore.CategoryAncestorRow
+	if patch.Resolved != nil {
+		previousRows, err = categoryAncestorRowsFor(existing)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if applyErr := datastore.ApplyCategoryTaxonomyStatusPatch(existing, patch); applyErr != nil {
 		return nil, applyErr
 	}
@@ -994,16 +1005,47 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomyStatus(ctx context.Context, name
 	// newer version (spec 040 FR-009).
 	const updStatus = "UPDATE category_taxonomies_by_namespace SET resource_version=?, status=? " +
 		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
-	applied, err := s.session.Query(updStatus, nil).WithContext(ctx).Bind(
-		row.ResourceVersion, row.Status,
-		row.Namespace, row.CreationTimestamp, existingUID,
-		observedResourceVersion,
-	).ExecCASRelease()
-	if err != nil {
-		return nil, fmt.Errorf("scylla: update category_taxonomies_by_namespace status: %w", err)
+	authoritative := mutationAction{
+		Step: catalogueStep("update-status", "CategoryTaxonomy", existing.UID, "category_taxonomies_by_namespace", existing.UID, "update-authoritative"),
+		Apply: func(ctx context.Context) error {
+			applied, err := s.session.Query(updStatus, nil).WithContext(ctx).Bind(
+				row.ResourceVersion, row.Status,
+				row.Namespace, row.CreationTimestamp, existingUID,
+				observedResourceVersion,
+			).ExecCASRelease()
+			if err != nil {
+				return fmt.Errorf("scylla: update category_taxonomies_by_namespace status: %w", err)
+			}
+			if !applied {
+				return datastore.ErrConflict
+			}
+			return nil
+		},
 	}
-	if !applied {
-		return nil, datastore.ErrConflict
+	if patch.Resolved == nil {
+		if err := authoritative.Apply(ctx); err != nil {
+			return nil, err
+		}
+		return existing, nil
+	}
+
+	currentRows, err := categoryAncestorRowsFor(existing)
+	if err != nil {
+		return nil, err
+	}
+	obsolete := datastore.ObsoleteCategoryAncestorRows(previousRows, currentRows)
+	if err := s.mutations.executeUpdate(ctx, existing.ResourceVersion, authoritative,
+		mutationAction{
+			Step: catalogueStep("update-status", "CategoryTaxonomy", existing.UID, categoryAncestorIndexTable, existing.Namespace+"/"+existing.Name, "write-ancestor-index"),
+			Apply: func(ctx context.Context) error {
+				return s.syncCategoryAncestorRows(ctx, existing, currentRows, obsolete)
+			},
+		},
+	); err != nil {
+		if errors.Is(err, datastore.ErrRepairRequired) {
+			datastore.CategoryAncestorIndexRepairRequiredTotal.Inc()
+		}
+		return nil, err
 	}
 	return existing, nil
 }
@@ -1033,6 +1075,15 @@ func (s *scyllaDatastore) deleteCategoryTaxonomyWithResourceVersion(ctx context.
 			},
 			Compensate: func(ctx context.Context) error {
 				return s.syncOwnerReferenceDependents(ctx, c.Namespace, c.RepositoryID, "CategoryTaxonomy", c.UID, c.Name, c.ResourceVersion, nil, c.OwnerReferences)
+			},
+		},
+		mutationAction{
+			Step: catalogueStep("delete", "CategoryTaxonomy", c.UID, categoryAncestorIndexTable, c.Namespace+"/"+c.Name, "delete-ancestor-index"),
+			Apply: func(ctx context.Context) error {
+				return s.removeCategoryAncestorRows(ctx, c)
+			},
+			Compensate: func(ctx context.Context) error {
+				return s.restoreCategoryAncestorRows(ctx, c)
 			},
 		},
 		mutationAction{

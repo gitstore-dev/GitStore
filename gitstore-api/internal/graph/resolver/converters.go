@@ -429,14 +429,6 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 		return nil
 	}
 
-	// Compute path and depth from materialized AncestorPath.
-	var path []string
-	var depth int32
-	if c.AncestorPath != "" {
-		path = strings.Split(c.AncestorPath, "/")
-		depth = int32(len(path) - 1)
-	}
-
 	emptyProducts := &model.ProductConnection{
 		Edges:    []*model.ProductEdge{},
 		PageInfo: &model.PageInfo{},
@@ -541,10 +533,6 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 		Spec:       spec,
 		Status:     categoryStatus,
 		Body:       nil,
-		Parent:     nil,
-		Children:   []*model.Category{},
-		Path:       path,
-		Depth:      depth,
 		Products:   emptyProducts,
 	}
 	if c.Body != "" {

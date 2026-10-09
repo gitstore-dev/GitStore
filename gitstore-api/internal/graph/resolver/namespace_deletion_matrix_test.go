@@ -245,9 +245,13 @@ func requireDeletionReasons(t *testing.T, err error, want ...namespaceadmission.
 	t.Helper()
 	var graphErr *gqlerror.Error
 	require.ErrorAs(t, err, &graphErr)
-	assert.Equal(t, namespaceadmission.CodeDeletionBlocked, graphErr.Extensions["code"])
-	values, ok := graphErr.Extensions["reasons"].([]string)
+	assert.Equal(t, "FAILED_PRECONDITION", graphErr.Extensions["code"])
+	diagnostics, ok := graphErr.Extensions["diagnostics"].([]map[string]any)
 	require.True(t, ok)
+	values := make([]string, 0, len(diagnostics))
+	for _, d := range diagnostics {
+		values = append(values, d["reason"].(string))
+	}
 	expected := make([]string, len(want))
 	for i, reason := range want {
 		expected[i] = string(reason)

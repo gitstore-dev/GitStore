@@ -187,9 +187,11 @@ func TestNamespaceReplicaStaleDeleteCannotOverwriteConcurrentUpdate(t *testing.T
 	deleteErr := waitForReplicaResult(t, deleteDone)
 	var graphErr *gqlerror.Error
 	require.ErrorAs(t, deleteErr, &graphErr)
-	assert.Equal(t, namespaceadmission.CodeConflict, graphErr.Extensions["code"])
-	assert.Equal(t, string(namespaceadmission.PhasePolicy), graphErr.Extensions["phase"])
-	assert.Equal(t, string(namespaceadmission.ReasonResourceVersionConflict), graphErr.Extensions["reason"])
+	assert.Equal(t, "CONFLICT", graphErr.Extensions["code"])
+	assert.NotContains(t, graphErr.Extensions, "phase")
+	diagnostics, _ := graphErr.Extensions["diagnostics"].([]map[string]any)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, string(namespaceadmission.ReasonResourceVersionConflict), diagnostics[0]["reason"])
 
 	got, err := base.GetNamespaceByName(context.Background(), name)
 	require.NoError(t, err)
@@ -198,14 +200,13 @@ func TestNamespaceReplicaStaleDeleteCannotOverwriteConcurrentUpdate(t *testing.T
 	assert.Equal(t, newCommit, got.GitCommitSHA)
 	assert.Equal(t, "2", got.ResourceVersion)
 	assert.Equal(t, int64(1), store.conflicts.Load(), "the stale delete must observe exactly one resource-version conflict")
-	assert.Equal(t, float64(1), namespaceRejectionCount(t, registry,
-		namespaceadmission.PhasePolicy, namespaceadmission.ReasonResourceVersionConflict))
+	assert.Equal(t, float64(1), namespaceRejectionCount(t, registry, namespaceadmission.ReasonResourceVersionConflict))
 
 	conflictLogs := logs.FilterMessage("Namespace mutation rejected").All()
 	require.Len(t, conflictLogs, 1)
 	fields := conflictLogs[0].ContextMap()
 	assert.Equal(t, "delete", fields["operation"])
-	assert.Equal(t, string(namespaceadmission.PhasePolicy), fields["phase"])
+	assert.Equal(t, "CONFLICT", fields["code"])
 	assert.Equal(t, string(namespaceadmission.ReasonResourceVersionConflict), fields["reason"])
 	assert.Equal(t, name, fields["namespace"])
 	assert.Equal(t, true, fields["conflict"])

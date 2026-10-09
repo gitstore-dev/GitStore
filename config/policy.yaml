@@ -9,6 +9,8 @@ roles:
     allow:
       - "*.status.write"
       - "category.status.write"
+      - "categoryTaxonomy.list"
+      - "categoryTaxonomy.purge"
       - "categoryTaxonomy.watch"
       - "namespace.status.write"
       - "namespace.system-repository.provision"

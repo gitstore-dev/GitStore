@@ -6,6 +6,7 @@ package resolver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -111,8 +112,8 @@ func TestUpdateRepositoryStatusAppliesTypedPartialPatchAndReturnsGraphQLErrorOnC
 	})
 	var conflict *gqlerror.Error
 	require.ErrorAs(t, err, &conflict)
-	assert.Equal(t, "RESOURCE_VERSION_CONFLICT", conflict.Extensions["code"])
-	assert.Equal(t, "8", conflict.Extensions["resourceVersion"])
+	assert.Equal(t, "CONFLICT", conflict.Extensions["code"])
+	assert.Contains(t, fmt.Sprint(conflict.Extensions["diagnostics"]), "current resourceVersion is "+"8")
 }
 
 type repositoryLifecycleWriter struct {

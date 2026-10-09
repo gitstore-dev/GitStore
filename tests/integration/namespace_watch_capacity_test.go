@@ -1268,7 +1268,7 @@ func capacityCreateRetryable(err error) bool {
 	if !errors.As(err, &graphqlErr) {
 		return false
 	}
-	return strings.Contains(graphqlErr.raw, `"code":"NAMESPACE_CONFLICT"`) ||
+	return strings.Contains(graphqlErr.raw, `"code":"CONFLICT"`) ||
 		strings.Contains(graphqlErr.raw, `"reason":"RESOURCE_VERSION_CONFLICT"`) ||
 		(strings.Contains(graphqlErr.raw, "Cannot achieve consistency level") &&
 			strings.Contains(graphqlErr.raw, "potentially executed: false"))
@@ -1473,7 +1473,7 @@ func TestCapacityReplayCreateRetriesOnlyConflicts(t *testing.T) {
 			}
 			primaryCalls.Add(1)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"errors":[{"message":"superseded","extensions":{"code":"NAMESPACE_CONFLICT","reason":"RESOURCE_VERSION_CONFLICT"}}]}`)
+			_, _ = io.WriteString(w, `{"errors":[{"message":"superseded","extensions":{"code":"CONFLICT","diagnostics":[{"reason":"SUPERSEDED","message":"superseded","level":"FAILURE"}]}}]}`)
 		}))
 		defer primary.Close()
 		peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1507,7 +1507,7 @@ func TestCapacityReplayCreateRetriesOnlyConflicts(t *testing.T) {
 				return
 			}
 			primaryMutations.Add(1)
-			_, _ = io.WriteString(w, `{"errors":[{"message":"superseded","extensions":{"code":"NAMESPACE_CONFLICT","reason":"RESOURCE_VERSION_CONFLICT"}}]}`)
+			_, _ = io.WriteString(w, `{"errors":[{"message":"superseded","extensions":{"code":"CONFLICT","diagnostics":[{"reason":"SUPERSEDED","message":"superseded","level":"FAILURE"}]}}]}`)
 		}))
 		defer primary.Close()
 		peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1576,7 +1576,7 @@ func TestCapacityReplayCreateRetriesOnlyConflicts(t *testing.T) {
 		peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			peerCalls.Add(1)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"errors":[{"message":"already exists","extensions":{"code":"NAMESPACE_POLICY_REJECTED","reason":"NAMESPACE_ALREADY_EXISTS"}}]}`)
+			_, _ = io.WriteString(w, `{"errors":[{"message":"already exists","extensions":{"code":"ALREADY_EXISTS","diagnostics":[{"reason":"NAMESPACE_ALREADY_EXISTS","message":"already exists","level":"FAILURE"}]}}]}`)
 		}))
 		defer peer.Close()
 

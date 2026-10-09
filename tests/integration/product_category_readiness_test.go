@@ -170,7 +170,7 @@ func deleteCategoryByID(t *testing.T, id string) {
 	t.Helper()
 	resp := gqlQuery(t, `
 		mutation($id: ID!) {
-			deleteCategory(input: {id: $id}) { deletedCategoryId }
+			deleteCategory(input: {id: $id}) { outcome }
 		}
 	`, map[string]any{"id": id})
 	if len(resp.Errors) > 0 {

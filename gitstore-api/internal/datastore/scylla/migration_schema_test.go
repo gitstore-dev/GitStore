@@ -110,3 +110,13 @@ func TestMigrationStatementsSurviveGocqlxSplitting(t *testing.T) {
 		}
 	}
 }
+
+func TestCategoryAncestorIndexIsKeyedByNamespaceAndAncestor(t *testing.T) {
+	stmt := strings.Join(strings.Fields(createStatement(t, "010_category_ancestor_index.cql", "category_ancestor_index")), " ")
+	assert.Contains(t, stmt, "primary key ((namespace, ancestor), depth, descendant)")
+	assert.Contains(t, stmt, "clustering order by (depth asc, descendant asc)")
+	for _, column := range []string{"depth tinyint", "descendant_uid uuid", "resource_version text"} {
+		assert.Contains(t, stmt, column)
+	}
+	assert.NotContains(t, stmt, "cdc", "the ancestor index is a derived projection, not a watch source")
+}

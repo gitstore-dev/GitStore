@@ -236,7 +236,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			Extensions: map[string]any{"code": "FORBIDDEN"},
 		}
 	}
-	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isFileQueryField(fc) {
+	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
 		return next(ctx)
 	}
 	var authz auth.AuthZProvider
@@ -261,6 +261,10 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if err := a.authorizeProductQueryField(ctx, fc, principal, authz); err != nil {
 			return nil, err
 		}
+	} else if isCategoryQueryField(fc) {
+		if err := a.authorizeCategoryQueryField(ctx, fc, principal, authz); err != nil {
+			return nil, err
+		}
 	} else if err := a.authorizeRepositoryField(ctx, fc, principal); err != nil {
 		var notFound *authFieldNotFoundError
 		if errors.As(err, &notFound) {
@@ -272,6 +276,9 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		return nil, err
 	}
 	if err := a.authorizeFileNodeField(ctx, fc, principal, authz); err != nil {
+		return nil, err
+	}
+	if err := a.authorizeCategoryNodeField(ctx, fc, principal, authz); err != nil {
 		return nil, err
 	}
 
@@ -534,31 +541,40 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if decision.Outcome == auth.OutcomeDeny {
 			return nil, &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
 		}
-	case "deleteCategory":
-		if authz == nil {
-			return nil, gqlerror.Errorf("authorization service unavailable")
+	case "createCategory":
+		namespace, _ := nestedStringPath(fc.Args, "input", "metadata", "namespace")
+		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
+		if err := authorizeCategoryAction(ctx, authz, principal, "categoryTaxonomy.create", auth.ResourceContext{
+			Kind: "categoryTaxonomy", Name: name, Attrs: map[string]any{"namespace": namespace},
+		}); err != nil {
+			return nil, err
 		}
+	case "updateCategory":
+		namespace, _ := nestedStringPath(fc.Args, "input", "metadata", "namespace")
+		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
+		if err := a.authorizeStoredCategoryAction(ctx, authz, principal, "categoryTaxonomy.update", func() (*datastore.CategoryTaxonomy, error) {
+			return a.store.GetCategoryTaxonomyByName(ctx, namespace, name)
+		}); err != nil {
+			return nil, err
+		}
+	case "deleteCategory":
 		encodedID, _ := nestedStringArg(fc.Args, "input", "id")
 		uid, err := decodeCategoryID(encodedID)
 		if err != nil {
 			return nil, gqlerror.Errorf("invalid category ID")
 		}
-		category, err := a.store.GetCategoryTaxonomy(ctx, uid)
-		if err != nil {
-			if errors.Is(err, datastore.ErrNotFound) {
-				return nil, gqlerror.Errorf("category not found")
-			}
-			return nil, gqlerror.Errorf("authorization error")
+		if err := a.authorizeStoredCategoryAction(ctx, authz, principal, "categoryTaxonomy.delete", func() (*datastore.CategoryTaxonomy, error) {
+			return a.store.GetCategoryTaxonomy(ctx, uid)
+		}); err != nil {
+			return nil, err
 		}
-		decision, err := authz.Authorize(ctx, principal, "category.delete", auth.ResourceContext{
-			Kind: "categoryTaxonomy", Name: category.Name, OwnerSub: category.EffectiveOwnerSub(),
-			Attrs: map[string]any{"namespace": category.Namespace, "repositoryID": category.RepositoryID},
-		})
-		if err != nil {
-			return nil, gqlerror.Errorf("authorization error")
-		}
-		if decision.Outcome == auth.OutcomeDeny {
-			return nil, &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
+	case "completeCategoryDeletion":
+		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
+		name, _ := nestedStringArg(fc.Args, "input", "name")
+		if err := authorizeCategoryAction(ctx, authz, principal, "categoryTaxonomy.purge", auth.ResourceContext{
+			Kind: "categoryTaxonomy", Name: name, Attrs: map[string]any{"namespace": namespace},
+		}); err != nil {
+			return nil, err
 		}
 	case "updateResourceStatus":
 		if authz == nil {
@@ -699,6 +715,94 @@ func isProductQueryField(fc *graphql.FieldContext) bool {
 	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "product" || fc.Field.Name == "products")
 }
 
+func isCategoryQueryField(fc *graphql.FieldContext) bool {
+	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "category" || fc.Field.Name == "categories")
+}
+
+// authorizeCategoryQueryField checks categoryTaxonomy.list for lists (filtered
+// or not) and categoryTaxonomy.read for single reads, scoped to the namespace.
+// A by-name read is checked against the requested name, so a denied caller
+// learns nothing about whether the category exists.
+func (a *Authorize) authorizeCategoryQueryField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) error {
+	if fc.Field.Name == "categories" {
+		namespace, _ := directStringArg(fc.Args, "namespace")
+		owner := ""
+		if a.store != nil && namespace != "" {
+			ns, err := a.store.GetNamespaceByName(ctx, namespace)
+			if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+				return gqlerror.Errorf("authorization error")
+			}
+			if ns != nil {
+				owner = ns.EffectiveOwnerSub()
+			}
+		}
+		return authorizeCategoryAction(ctx, authz, principal, "categoryTaxonomy.list", auth.ResourceContext{
+			Kind: "categoryTaxonomy", OwnerSub: owner, Attrs: map[string]any{"namespace": namespace},
+		})
+	}
+	if encodedID, ok := nestedStringPath(fc.Args, "by", "id"); ok && encodedID != "" {
+		uid, err := decodeCategoryID(encodedID)
+		if err != nil {
+			return gqlerror.Errorf("invalid category ID")
+		}
+		if a.store == nil {
+			return gqlerror.Errorf("authorization service unavailable")
+		}
+		category, err := a.store.GetCategoryTaxonomy(ctx, uid)
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil // the resolver returns null; there is nothing to disclose
+		}
+		if err != nil {
+			return gqlerror.Errorf("authorization error")
+		}
+		return authorizeCategoryAction(ctx, authz, principal, "categoryTaxonomy.read", auth.ResourceContext{
+			Kind: "categoryTaxonomy", Name: category.Name, OwnerSub: category.EffectiveOwnerSub(),
+			Attrs: map[string]any{"namespace": category.Namespace, "repositoryID": category.RepositoryID},
+		})
+	}
+	namespace, _ := nestedStringPath(fc.Args, "by", "namespacePath", "namespace")
+	name, _ := nestedStringPath(fc.Args, "by", "namespacePath", "name")
+	return authorizeCategoryAction(ctx, authz, principal, "categoryTaxonomy.read", auth.ResourceContext{
+		Kind: "categoryTaxonomy", Name: name, Attrs: map[string]any{"namespace": namespace},
+	})
+}
+
+// authorizeCategoryNodeField applies categoryTaxonomy.read to Category IDs
+// fetched through node/nodes, so the Node interface is not a read bypass.
+func (a *Authorize) authorizeCategoryNodeField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) error {
+	if fc.Object != "Query" || (fc.Field.Name != "node" && fc.Field.Name != "nodes") {
+		return nil
+	}
+	ids, _ := directStringsArg(fc.Args, "ids")
+	if fc.Field.Name == "node" {
+		id, _ := directStringArg(fc.Args, "id")
+		ids = []string{id}
+	}
+	for _, id := range ids {
+		uid, err := decodeCategoryID(id)
+		if err != nil {
+			continue
+		}
+		if a.store == nil {
+			return gqlerror.Errorf("authorization service unavailable")
+		}
+		category, err := a.store.GetCategoryTaxonomy(ctx, uid)
+		if errors.Is(err, datastore.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return gqlerror.Errorf("authorization error")
+		}
+		if err := authorizeCategoryAction(ctx, authz, principal, "categoryTaxonomy.read", auth.ResourceContext{
+			Kind: "categoryTaxonomy", Name: category.Name, OwnerSub: category.EffectiveOwnerSub(),
+			Attrs: map[string]any{"namespace": category.Namespace, "repositoryID": category.RepositoryID},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func isFileQueryField(fc *graphql.FieldContext) bool {
 	return fc != nil && fc.Object == "Query" && fc.Field.Name == "file"
 }
@@ -761,16 +865,49 @@ func (a *Authorize) authorizeFileNodeField(ctx context.Context, fc *graphql.Fiel
 	return nil
 }
 
+// authorizeStoredCategoryAction scopes the decision by the stored record, never
+// by caller-supplied fields.
+func (a *Authorize) authorizeStoredCategoryAction(ctx context.Context, authz auth.AuthZProvider, principal *auth.Principal, action string, load func() (*datastore.CategoryTaxonomy, error)) error {
+	if a.store == nil {
+		return gqlerror.Errorf("authorization service unavailable")
+	}
+	category, err := load()
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return &gqlerror.Error{Message: "category not found", Extensions: map[string]any{"code": "NOT_FOUND"}}
+		}
+		return gqlerror.Errorf("authorization error")
+	}
+	return authorizeCategoryAction(ctx, authz, principal, action, auth.ResourceContext{
+		Kind: "categoryTaxonomy", Name: category.Name, OwnerSub: category.EffectiveOwnerSub(),
+		Attrs: map[string]any{"namespace": category.Namespace, "repositoryID": category.RepositoryID},
+	})
+}
+
+func authorizeCategoryAction(ctx context.Context, authz auth.AuthZProvider, principal *auth.Principal, action string, resource auth.ResourceContext) error {
+	if authz == nil {
+		return gqlerror.Errorf("authorization service unavailable")
+	}
+	decision, err := authz.Authorize(ctx, principal, action, resource)
+	if err != nil {
+		return gqlerror.Errorf("authorization error")
+	}
+	if decision.Outcome == auth.OutcomeDeny {
+		return &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
+	}
+	return nil
+}
+
 func graphqlFieldRequiresAuthorization(fc *graphql.FieldContext) bool {
 	if fc == nil {
 		return false
 	}
 	switch fc.Object {
 	case "Query":
-		return isFileQueryField(fc) || fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node" || fc.Field.Name == "nodes"
+		return isFileQueryField(fc) || isCategoryQueryField(fc) || fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node" || fc.Field.Name == "nodes"
 	case "Mutation":
 		switch fc.Field.Name {
-		case "createProduct", "updateProduct", "deleteProduct", "completeProductDeletion", "createRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "provisionNamespaceSystemRepository", "completeRepositoryDeletion", "provisionRepositoryStorage", "updateCategoryStatus", "updateProductStatus", "updateNamespaceStatus", "deleteCategory", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":
+		case "createProduct", "updateProduct", "deleteProduct", "completeProductDeletion", "createRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "provisionNamespaceSystemRepository", "completeRepositoryDeletion", "provisionRepositoryStorage", "updateCategoryStatus", "updateProductStatus", "updateNamespaceStatus", "createCategory", "updateCategory", "deleteCategory", "completeCategoryDeletion", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":
 			return true
 		case "createNamespace":
 			tier, ok := nestedStringPath(fc.Args, "input", "spec", "tier")

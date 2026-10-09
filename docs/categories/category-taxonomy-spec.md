@@ -3,7 +3,7 @@
 **API Version**: `catalog.gitstore.dev/v1beta1`  
 **Kind**: `CategoryTaxonomy`
 
-A CategoryTaxonomy resource is a Markdown file with YAML frontmatter pushed to a GitStore repository. It represents a hierarchical catalog category with optional parent linkage, media references, and a resolved ancestor path.
+A CategoryTaxonomy resource is a Markdown file with YAML frontmatter pushed to a GitStore repository. It represents a hierarchical catalog category with optional parent linkage, media references, and a controller-resolved ancestor path.
 
 ---
 
@@ -77,16 +77,47 @@ Even when `metadata.namespace` is present in the file it is still validated to m
 
 ## Hierarchy
 
-Categories form a tree via `spec.parentRef`. The system computes a materialized `ancestorPath` (slash-separated names from root to self) at admission time.
+Categories form a tree via `spec.parentRef`. A category's position in the tree is computed by the controller manager and published in `status.resolved`:
+
+| Field                      | Meaning                                                              |
+|----------------------------|----------------------------------------------------------------------|
+| `status.resolved.path`     | Names from root to self, e.g. `["electronics", "computers", "laptops"]`. A root's path is its own name. |
+| `status.resolved.depth`    | Depth in the tree. Roots are `0`.                                    |
+| `status.resolved.childCount` / `productCount` | Materialized counts.                             |
+
+`status.resolved` is the only source of hierarchy. There are no top-level `Category.path` or `Category.depth` fields, and admission does not compute a path.
+
+- `status.resolved` is `null` until the category is first reconciled. A category with no `resolved` value is not matched by subtree filters.
+- The value is eventually consistent. After an ancestor is created, moved or reparented, descendants converge one level at a time as the controller reconciles them, so a read immediately after the change can briefly show the old path.
+- A category whose parent cannot be found gets `ParentResolved=False` and is re-reconciled once the parent appears.
+- `Category.parent` resolves the direct parent (null for roots, unresolved parents, or before the first reconcile). `Category.children` returns at most 100 direct children ordered by name, and is empty until the children have been reconciled.
 
 **Rules enforced at push time (pre-receive, blocking):**
 - `spec.parentRef.name` must not equal `metadata.name` (self-parenting rejected)
+- `spec.parentRef.namespace` must be omitted or equal the category's namespace (cross-namespace parents rejected)
+- A parent that is terminating cannot gain new children
+- At the same file path, `metadata.name` and `metadata.namespace` cannot change. Create a new category and delete the old one instead.
+- Removing a category's manifest is rejected while child categories still reference it, unless the same push removes or reparents them.
 
 **Rules enforced at admission time (post-receive, non-blocking):**
-- If the parent is in the same push (co-creation), `ancestorPath` is set to `parentName/childName` and `ParentResolved=True`
-- If the parent exists in the datastore, `ancestorPath` inherits `parent.ancestorPath/childName` and `ParentResolved=True`
-- If the parent is not found anywhere, the category is stored as a tentative root (`ancestorPath=name`) with `ParentResolved=False`
 - Intra-push mutual cycles (A→B, B→A) are stored with `Acyclic=False`
+- A parent that cannot be found is recorded as `ParentResolved=False`
+
+### Listing a subtree
+
+`categories(namespace:, filter:)` returns the subtree below `filter.descendantOf`, ordered by relative depth and then name. `includeSelf: true` adds the named category as the first result, and `maxDepth` (1 to 128) limits how many levels below it are returned. An unknown `descendantOf` name returns an empty connection. Cursors from filtered and unfiltered listings are not interchangeable and are rejected with `BAD_USER_INPUT`. See the [API reference](../api-reference.md#categories).
+
+---
+
+## Writing categories through GraphQL
+
+Categories can be authored by Git push or by the `createCategory`, `updateCategory` and `deleteCategory` mutations. The mutations commit the manifest to the namespace's `gitstore-system` repository and run the same checks a push does, so both paths accept and reject the same manifests.
+
+- `createCategory` writes a new manifest. It fails with `ALREADY_EXISTS` if the name is taken.
+- `updateCategory` commits to the repository and path the category was admitted from. `metadata.name` and `metadata.namespace` cannot change. Omitting `body` keeps the current body.
+- `deleteCategory` removes the manifest and starts foreground deletion (outcome `TERMINATION_STARTED`; a repeat returns `ALREADY_TERMINATING` without a new commit). It fails with `FAILED_PRECONDITION` while child categories exist. Assigned products are decoupled asynchronously by the controller, which then finishes removal with `completeCategoryDeletion`.
+
+Rejections use the shared error envelope documented in the [API reference](../api-reference.md#error-handling).
 
 ---
 
@@ -96,9 +127,10 @@ The system writes a `status` blob to the datastore after each push. Conditions f
 
 | Condition           | Meaning                                                         |
 |--------------------|-----------------------------------------------------------------|
-| `AdmissionAccepted` | Resource was stored by the post-receive pipeline                |
-| `ParentResolved`    | `spec.parentRef` was found (in push or in DB)                   |
-| `Acyclic`           | No intra-push cycle detected involving this category           |
+| `AdmissionAccepted` | Resource was stored by the post-receive pipeline. `False` with reason `AdmissionReportFailed` when post-receive admission rejected a commit; the last accepted generation is kept |
+| `ParentResolved`    | `spec.parentRef` was found                                      |
+| `Acyclic`           | No cycle detected involving this category                       |
+| `Terminating`       | Foreground deletion has started                                 |
 | `Ready`             | Controller has fully reconciled the resource (GH#244, deferred) |
 
 ---
@@ -113,6 +145,11 @@ The system writes a `status` blob to the datastore after each push. Conditions f
 | `kind "X" is not a recognized catalog resource type`         | Unknown `kind` value                |
 | `status is system-managed`                                   | `status` key present in author file |
 | `metadata.uid is read-only`                                  | System field set in author file     |
+| `spec.parentRef.namespace` must match the category namespace | Cross-namespace parent              |
+| `metadata.name` / `metadata.namespace` is immutable          | Identity changed at the same path   |
+| parent category is terminating                               | New child of a terminating parent   |
+
+Each of these maps to a diagnostic `reason` on GraphQL mutations (`REQUIRED_FIELD`, `SELF_PARENT`, `CROSS_NAMESPACE_REFERENCE`, `IMMUTABLE_NAME`, `IMMUTABLE_NAMESPACE`, `PARENT_TERMINATING`, ...); see the [reason table](../api-reference.md#category-reasons).
 
 ---
 

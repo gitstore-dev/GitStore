@@ -20,6 +20,32 @@ var schema = &memdb.DBSchema{
 			"ancestor_path": optionalStringIndex("ancestor_path", "AncestorPath"),
 			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
 		}),
+		"category_ancestor_index": {
+			Name: "category_ancestor_index",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {
+					Name:    "id",
+					Unique:  true,
+					Indexer: &memdb.StringFieldIndex{Field: "ID"},
+				},
+				"ancestor": {
+					Name:   "ancestor",
+					Unique: false,
+					Indexer: &memdb.CompoundIndex{Indexes: []memdb.Indexer{
+						&memdb.StringFieldIndex{Field: "Namespace"},
+						&memdb.StringFieldIndex{Field: "Ancestor"},
+					}},
+				},
+				"descendant": {
+					Name:   "descendant",
+					Unique: false,
+					Indexer: &memdb.CompoundIndex{Indexes: []memdb.Indexer{
+						&memdb.StringFieldIndex{Field: "Namespace"},
+						&memdb.StringFieldIndex{Field: "Descendant"},
+					}},
+				},
+			},
+		},
 		"service_account": resourceTableSchema("service_account", map[string]*memdb.IndexSchema{}),
 		"service_account_assertion_replay": {
 			Name: "service_account_assertion_replay",

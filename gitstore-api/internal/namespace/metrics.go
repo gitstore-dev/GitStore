@@ -31,8 +31,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Namespace: "gitstore",
 			Subsystem: "namespace",
 			Name:      "validation_rejections_total",
-			Help:      "Namespace validation rejections by bounded phase and reason.",
-		}, []string{"phase", "reason"}),
+			Help:      "Namespace validation rejections by bounded error code and reason.",
+		}, []string{"code", "reason"}),
 		deletionRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "gitstore",
 			Subsystem: "namespace",
@@ -49,9 +49,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Namespace: "gitstore",
 			Subsystem: "namespace",
 			Name:      "validation_duration_seconds",
-			Help:      "Namespace validation latency by phase.",
+			Help:      "Namespace validation latency by stage.",
 			Buckets:   capacityLatencyBuckets,
-		}, []string{"phase"}),
+		}, []string{"stage"}),
 		admissionDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "gitstore",
 			Subsystem: "namespace",
@@ -77,11 +77,11 @@ func (m *Metrics) ObserveAdmissionStage(stage string, duration time.Duration) {
 	m.admissionDuration.WithLabelValues(stage).Observe(duration.Seconds())
 }
 
-func (m *Metrics) ObserveRejection(phase Phase, reason Reason) {
+func (m *Metrics) ObserveRejection(reason Reason) {
 	if m == nil {
 		return
 	}
-	m.validationRejections.WithLabelValues(string(phase), string(reason)).Inc()
+	m.validationRejections.WithLabelValues(string(CodeForReason(reason)), string(reason)).Inc()
 }
 
 func (m *Metrics) ObserveDeletionBlocked(reason Reason) {
@@ -98,9 +98,9 @@ func (m *Metrics) ObserveDeletionOutcome(outcome DeletionOutcome) {
 	m.deletionOutcomes.WithLabelValues(string(outcome)).Inc()
 }
 
-func (m *Metrics) ObserveValidationDuration(phase Phase, duration time.Duration) {
+func (m *Metrics) ObserveValidationDuration(stage ValidationStage, duration time.Duration) {
 	if m == nil {
 		return
 	}
-	m.validationDuration.WithLabelValues(string(phase)).Observe(duration.Seconds())
+	m.validationDuration.WithLabelValues(string(stage)).Observe(duration.Seconds())
 }

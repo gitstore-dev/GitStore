@@ -10,12 +10,50 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
+
+// Parent is the resolver for the parent field.
+func (r *categoryResolver) Parent(ctx context.Context, obj *model.Category) (*model.Category, error) {
+	if obj == nil || obj.Status == nil || obj.Status.Resolved == nil || obj.Spec == nil || obj.Spec.ParentRef == nil || obj.Metadata == nil {
+		return nil, nil
+	}
+	if !categoryConditionTrue(obj.Status.Conditions, catalog.ConditionParentResolved) {
+		return nil, nil
+	}
+	parent, err := r.store.GetCategoryTaxonomyByName(ctx, obj.Metadata.Namespace, obj.Spec.ParentRef.Name)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load parent category: %w", err)
+	}
+	return DatastoreCategoryTaxonomyToGraphQL(parent), nil
+}
+
+// Children is the resolver for the children field.
+func (r *categoryResolver) Children(ctx context.Context, obj *model.Category) ([]*model.Category, error) {
+	if obj == nil || obj.Status == nil || obj.Status.Resolved == nil || obj.Metadata == nil {
+		return []*model.Category{}, nil
+	}
+	maxDepth := int32(1)
+	conn, err := r.service.listCategoryDescendants(ctx, obj.Metadata.Namespace, &model.CategoryFilterInput{
+		DescendantOf: obj.Metadata.Name, MaxDepth: &maxDepth,
+	}, datastore.PageParams{First: categoryFilterMaxPage})
+	if err != nil {
+		return nil, err
+	}
+	children := make([]*model.Category, 0, len(conn.Edges))
+	for _, edge := range conn.Edges {
+		children = append(children, edge.Node)
+	}
+	return children, nil
+}
 
 // Products is the resolver for the products field.
 func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
@@ -33,6 +71,28 @@ func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, fi
 	return BuildProductConnection(result), nil
 }
 
+// CreateCategory is the resolver for the createCategory field.
+func (r *mutationResolver) CreateCategory(ctx context.Context, input model.CreateCategoryInput) (*model.CreateCategoryPayload, error) {
+	category, err := r.service.CommitCategoryManifest(ctx, CategoryManifestInput{
+		APIVersion: input.APIVersion, Kind: input.Kind, Metadata: input.Metadata, Spec: input.Spec, Body: input.Body,
+	}, callerUsernameOrAnon(ctx, r), true)
+	if err != nil {
+		return nil, categoryMutationGraphQLError(err)
+	}
+	return &model.CreateCategoryPayload{Category: DatastoreCategoryTaxonomyToGraphQL(category)}, nil
+}
+
+// UpdateCategory is the resolver for the updateCategory field.
+func (r *mutationResolver) UpdateCategory(ctx context.Context, input model.UpdateCategoryInput) (*model.UpdateCategoryPayload, error) {
+	category, err := r.service.CommitCategoryManifest(ctx, CategoryManifestInput{
+		APIVersion: input.APIVersion, Kind: input.Kind, Metadata: input.Metadata, Spec: input.Spec, Body: input.Body,
+	}, callerUsernameOrAnon(ctx, r), false)
+	if err != nil {
+		return nil, categoryMutationGraphQLError(err)
+	}
+	return &model.UpdateCategoryPayload{Category: DatastoreCategoryTaxonomyToGraphQL(category)}, nil
+}
+
 // DeleteCategory is the resolver for the existing CategoryTaxonomy-backed
 // deleteCategory API. It starts (or returns) the shared foreground lifecycle.
 func (r *mutationResolver) DeleteCategory(ctx context.Context, input model.DeleteCategoryInput) (*model.DeleteCategoryPayload, error) {
@@ -40,10 +100,25 @@ func (r *mutationResolver) DeleteCategory(ctx context.Context, input model.Delet
 	if err != nil {
 		return nil, err
 	}
-	if _, err := r.service.DeleteCategory(ctx, uid); err != nil {
+	category, outcome, err := r.service.DeleteCategoryManifest(ctx, uid, callerUsernameOrAnon(ctx, r))
+	if err != nil {
+		return nil, categoryMutationGraphQLError(err)
+	}
+	return &model.DeleteCategoryPayload{Category: DatastoreCategoryTaxonomyToGraphQL(category), Outcome: outcome}, nil
+}
+
+// CompleteCategoryDeletion is the resolver for the completeCategoryDeletion field.
+func (r *mutationResolver) CompleteCategoryDeletion(ctx context.Context, input model.CompleteCategoryDeletionInput) (*model.CompleteCategoryDeletionPayload, error) {
+	deleted, err := r.completeCategoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
+	if err != nil {
 		return nil, err
 	}
-	return &model.DeleteCategoryPayload{DeletedCategoryID: &input.ID}, nil
+	payload := &model.CompleteCategoryDeletionPayload{}
+	if deleted != nil {
+		id := mustEncodeNodeID(nodeKindCategory, deleted.UID)
+		payload.ID = &id
+	}
+	return payload, nil
 }
 
 // UpdateCategoryStatus is the resolver for the updateCategoryStatus field.
@@ -63,14 +138,7 @@ func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model
 		return &model.UpdateCategoryStatusPayload{HasMoreProductDependents: hasMore}, nil
 	}
 	if input.CompleteDeletion != nil && *input.CompleteDeletion {
-		deleted, err := r.service.CompleteCategoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
-		if errors.Is(err, datastore.ErrConflict) {
-			if deleted == nil {
-				return nil, gqlerror.Errorf("complete category deletion conflict, and current version could not be read")
-			}
-			return nil, statusConflictError("CategoryTaxonomy", input.Namespace, input.Name, deleted.ResourceVersion)
-		}
-		if err != nil {
+		if _, err := r.completeCategoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion); err != nil {
 			return nil, err
 		}
 		return &model.UpdateCategoryStatusPayload{}, nil
@@ -126,10 +194,16 @@ func (r *queryResolver) Category(ctx context.Context, by model.CategoryBy) (*mod
 }
 
 // Categories returns categories as a Relay connection.
-func (r *queryResolver) Categories(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error) {
+func (r *queryResolver) Categories(ctx context.Context, namespace string, filter *model.CategoryFilterInput, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error) {
 	params := toPageParams(first, after, last, before)
+	if filter != nil {
+		return r.service.listCategoryDescendants(ctx, namespace, filter, params)
+	}
 	result, err := r.service.GetCategoryTaxonomies(ctx, namespace, params)
 	if err != nil {
+		if errors.Is(err, datastore.ErrInvalidArgument) {
+			return nil, badCategoryListArgument("cursor belongs to a filtered category list")
+		}
 		return nil, fmt.Errorf("failed to get categories: %w", err)
 	}
 	return BuildCategoryConnection(result), nil

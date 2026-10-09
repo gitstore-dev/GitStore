@@ -195,7 +195,7 @@ func TestAdmitResourcesNamespaceUpdateMissingAfterConflictDoesNotCreate(t *testi
 	assert.Equal(t, 0, store.createCalls)
 	_, err = base.GetNamespaceByName(context.Background(), "other")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
-	assert.Equal(t, float64(1), namespaceRejectionCount(t, registry, namespaceadmission.PhasePolicy, namespaceadmission.ReasonNamespaceNotFound))
+	assert.Equal(t, float64(1), namespaceRejectionCount(t, registry, namespaceadmission.ReasonNamespaceNotFound))
 }
 
 func TestAdmitResourcesNamespaceUpdateMissingInitiallyDoesNotCreate(t *testing.T) {
@@ -234,7 +234,7 @@ func TestAdmitResourcesNamespaceUpdateMissingInitiallyDoesNotCreate(t *testing.T
 	assert.Equal(t, 0, store.createCalls)
 	_, err = base.GetNamespaceByName(context.Background(), "other")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
-	assert.Equal(t, float64(1), namespaceRejectionCount(t, registry, namespaceadmission.PhasePolicy, namespaceadmission.ReasonNamespaceNotFound))
+	assert.Equal(t, float64(1), namespaceRejectionCount(t, registry, namespaceadmission.ReasonNamespaceNotFound))
 }
 
 func TestValidateResourcesSamePathNamespaceNameChangeIsImmutable(t *testing.T) {
@@ -315,7 +315,6 @@ func TestAdmitResourcesReintroducedNamespaceUpdatesDurableIdentity(t *testing.T)
 
 func TestValidateResourcesNamespacePolicyUsesStableConstraint(t *testing.T) {
 	spy := &namespacePolicySpy{decision: &namespaceadmission.Decision{
-		Phase:   namespaceadmission.PhasePolicy,
 		Reason:  namespaceadmission.ReasonTierDemotion,
 		Field:   "spec.tier",
 		Message: "namespace tier demotion is not allowed",
@@ -439,7 +438,7 @@ func namespaceStructuralRejectionCount(t *testing.T, registry *prometheus.Regist
 		}
 		for _, metric := range family.GetMetric() {
 			for _, label := range metric.GetLabel() {
-				if label.GetName() == "phase" && label.GetValue() == string(namespaceadmission.PhaseStructural) {
+				if label.GetName() == "code" && label.GetValue() == string(admission.CodeAdmissionRejected) {
 					total += metric.GetCounter().GetValue()
 				}
 			}
@@ -448,7 +447,7 @@ func namespaceStructuralRejectionCount(t *testing.T, registry *prometheus.Regist
 	return total
 }
 
-func namespaceRejectionCount(t *testing.T, registry *prometheus.Registry, phase namespaceadmission.Phase, reason namespaceadmission.Reason) float64 {
+func namespaceRejectionCount(t *testing.T, registry *prometheus.Registry, reason namespaceadmission.Reason) float64 {
 	t.Helper()
 	families, err := registry.Gather()
 	require.NoError(t, err)
@@ -460,7 +459,7 @@ func namespaceRejectionCount(t *testing.T, registry *prometheus.Registry, phase 
 			matchesPhase := false
 			matchesReason := false
 			for _, label := range metric.GetLabel() {
-				matchesPhase = matchesPhase || label.GetName() == "phase" && label.GetValue() == string(phase)
+				matchesPhase = matchesPhase || label.GetName() == "code" && label.GetValue() == string(namespaceadmission.CodeForReason(reason))
 				matchesReason = matchesReason || label.GetName() == "reason" && label.GetValue() == string(reason)
 			}
 			if matchesPhase && matchesReason {

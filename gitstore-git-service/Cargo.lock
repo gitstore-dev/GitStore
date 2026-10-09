@@ -598,6 +598,7 @@ dependencies = [
  "prost",
  "regex",
  "serde",
+ "serde_json",
  "subtle",
  "tempfile",
  "tokio",

@@ -6,13 +6,14 @@ package namespace_test
 import (
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNamespaceDecisionVocabulary(t *testing.T) {
-	assert.Equal(t, namespaceadmission.Phase("STRUCTURAL"), namespaceadmission.PhaseStructural)
-	assert.Equal(t, namespaceadmission.Phase("POLICY"), namespaceadmission.PhasePolicy)
+	assert.Equal(t, namespaceadmission.ValidationStage("STRUCTURAL"), namespaceadmission.StageStructural)
+	assert.Equal(t, namespaceadmission.ValidationStage("POLICY"), namespaceadmission.StagePolicy)
 
 	assert.Equal(t, namespaceadmission.Reason("INVALID_ENVELOPE"), namespaceadmission.ReasonInvalidEnvelope)
 	assert.Equal(t, namespaceadmission.Reason("INVALID_IDENTIFIER"), namespaceadmission.ReasonInvalidIdentifier)
@@ -27,11 +28,22 @@ func TestNamespaceDecisionVocabulary(t *testing.T) {
 	assert.Equal(t, namespaceadmission.Reason("NAMESPACE_ALREADY_EXISTS"), namespaceadmission.ReasonNamespaceAlreadyExists)
 	assert.Equal(t, namespaceadmission.Reason("RESOURCE_VERSION_CONFLICT"), namespaceadmission.ReasonResourceVersionConflict)
 
-	assert.Equal(t, "NAMESPACE_STRUCTURAL_VALIDATION_FAILED", namespaceadmission.CodeStructuralValidationFailed)
-	assert.Equal(t, "NAMESPACE_IMMUTABLE_FIELD", namespaceadmission.CodeImmutableField)
-	assert.Equal(t, "NAMESPACE_POLICY_REJECTED", namespaceadmission.CodePolicyRejected)
-	assert.Equal(t, "NAMESPACE_DELETION_BLOCKED", namespaceadmission.CodeDeletionBlocked)
-	assert.Equal(t, "NAMESPACE_CONFLICT", namespaceadmission.CodeConflict)
+	assert.Equal(t, namespaceadmission.Reason("SUPERSEDED"), namespaceadmission.ReasonSuperseded)
+
+	for reason, code := range map[namespaceadmission.Reason]admission.Code{
+		namespaceadmission.ReasonInvalidEnvelope:         admission.CodeAdmissionRejected,
+		namespaceadmission.ReasonImmutableName:           admission.CodeAdmissionRejected,
+		namespaceadmission.ReasonTierDemotion:            admission.CodeAdmissionRejected,
+		namespaceadmission.ReasonBootstrapNamespace:      admission.CodeFailedPrecondition,
+		namespaceadmission.ReasonNamespaceTerminating:    admission.CodeFailedPrecondition,
+		namespaceadmission.ReasonNamespaceNotEmpty:       admission.CodeFailedPrecondition,
+		namespaceadmission.ReasonNamespaceAlreadyExists:  admission.CodeAlreadyExists,
+		namespaceadmission.ReasonNamespaceNotFound:       admission.CodeNotFound,
+		namespaceadmission.ReasonResourceVersionConflict: admission.CodeConflict,
+		namespaceadmission.ReasonSuperseded:              admission.CodeConflict,
+	} {
+		assert.Equal(t, code, namespaceadmission.CodeForReason(reason), string(reason))
+	}
 }
 
 func TestNamespaceDeletionVocabularyAndOrdering(t *testing.T) {

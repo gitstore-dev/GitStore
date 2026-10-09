@@ -4,52 +4,71 @@
 package resolver
 
 import (
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
-	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
+// NewNamespaceError builds a Namespace mutation error on the shared envelope.
+// The code follows the reason; phase and commit only apply when the code is
+// ADMISSION_REJECTED.
+func NewNamespaceError(phase admission.Phase, commitSHA string, reason namespaceadmission.Reason, message string) error {
+	code := namespaceadmission.CodeForReason(reason)
+	err := &admission.Error{
+		Code:        code,
+		Diagnostics: []admission.Diagnostic{{Reason: string(reason), Message: message, Level: admission.LevelFailure}},
+		Message:     message,
+	}
+	if code == admission.CodeAdmissionRejected {
+		err.Phase, err.CommitSHA = phase, commitSHA
+	}
+	return err.ToGQLError()
+}
+
+// NewNamespaceStructuralError reports a manifest check that failed before commit.
 func NewNamespaceStructuralError(reason namespaceadmission.Reason, message string) error {
-	return newNamespaceError(message, namespaceadmission.CodeStructuralValidationFailed, namespaceadmission.PhaseStructural, reason)
+	return NewNamespaceError(admission.PhasePreReceive, "", reason, message)
 }
 
+// NewNamespaceImmutableError reports an immutable-field change rejected before commit.
 func NewNamespaceImmutableError(reason namespaceadmission.Reason, message string) error {
-	return newNamespaceError(message, namespaceadmission.CodeImmutableField, namespaceadmission.PhaseStructural, reason)
+	return NewNamespaceError(admission.PhasePreReceive, "", reason, message)
 }
 
-func NewNamespacePolicyError(reason namespaceadmission.Reason, message string) error {
-	return newNamespaceError(message, namespaceadmission.CodePolicyRejected, namespaceadmission.PhasePolicy, reason)
+// NewNamespacePolicyError reports a policy or lifecycle rejection. Preflight
+// rejections are PRE_RECEIVE; rejections after the commit are POST_RECEIVE.
+func NewNamespacePolicyError(phase admission.Phase, commitSHA string, reason namespaceadmission.Reason, message string) error {
+	return NewNamespaceError(phase, commitSHA, reason, message)
 }
 
+// NewNamespaceConflictError reports a concurrent change (RESOURCE_VERSION_CONFLICT or SUPERSEDED).
 func NewNamespaceConflictError(reason namespaceadmission.Reason, message string) error {
-	return newNamespaceError(message, namespaceadmission.CodeConflict, namespaceadmission.PhasePolicy, reason)
+	return NewNamespaceError("", "", reason, message)
 }
 
 func NewNamespaceNotFoundError(message string) error {
-	return newNamespaceError(message, "NOT_FOUND", namespaceadmission.PhasePolicy, namespaceadmission.ReasonNamespaceNotFound)
+	return NewNamespaceError("", "", namespaceadmission.ReasonNamespaceNotFound, message)
 }
 
+// NewNamespaceDeletionBlockedError reports one diagnostic per blocker, in the
+// stable blocker order.
 func NewNamespaceDeletionBlockedError(reasons []namespaceadmission.Reason, message string) error {
 	ordered := namespaceadmission.OrderDeletionBlockers(reasons)
-	values := make([]string, len(ordered))
-	for i, reason := range ordered {
-		values[i] = string(reason)
+	diagnostics := make([]admission.Diagnostic, 0, len(ordered))
+	for _, reason := range ordered {
+		diagnostics = append(diagnostics, admission.Diagnostic{
+			Reason: string(reason), Message: namespaceDeletionBlockerMessage(reason), Level: admission.LevelFailure,
+		})
 	}
-	return &gqlerror.Error{
-		Message: message,
-		Extensions: map[string]any{
-			"code":    namespaceadmission.CodeDeletionBlocked,
-			"reasons": values,
-		},
-	}
+	return (&admission.Error{Code: admission.CodeFailedPrecondition, Diagnostics: diagnostics, Message: message}).ToGQLError()
 }
 
-func newNamespaceError(message, code string, phase namespaceadmission.Phase, reason namespaceadmission.Reason) error {
-	return &gqlerror.Error{
-		Message: message,
-		Extensions: map[string]any{
-			"code":   code,
-			"phase":  string(phase),
-			"reason": string(reason),
-		},
+func namespaceDeletionBlockerMessage(reason namespaceadmission.Reason) string {
+	switch reason {
+	case namespaceadmission.ReasonBootstrapNamespace:
+		return "bootstrap namespaces are system-managed and cannot be deleted"
+	case namespaceadmission.ReasonNamespaceNotEmpty:
+		return "namespace still contains repositories"
+	default:
+		return string(reason)
 	}
 }

@@ -71,7 +71,6 @@ func (e *datastorePolicyEvaluator) Evaluate(ctx context.Context, check PolicyChe
 	}
 	if IsBootstrap(check.Name) {
 		return &Decision{
-			Phase:   PhasePolicy,
 			Reason:  ReasonBootstrapNamespace,
 			Field:   "metadata.name",
 			Message: "bootstrap namespace is system-managed",
@@ -82,7 +81,6 @@ func (e *datastorePolicyEvaluator) Evaluate(ctx context.Context, check PolicyChe
 	if errors.Is(err, datastore.ErrNotFound) {
 		if check.Operation == admission.OperationUpdate {
 			return &Decision{
-				Phase:   PhasePolicy,
 				Reason:  ReasonNamespaceNotFound,
 				Field:   "metadata.name",
 				Message: "namespace not found",
@@ -98,7 +96,6 @@ func (e *datastorePolicyEvaluator) Evaluate(ctx context.Context, check PolicyChe
 	}
 	if check.Operation == admission.OperationCreate {
 		return &Decision{
-			Phase:   PhasePolicy,
 			Reason:  ReasonNamespaceAlreadyExists,
 			Field:   "metadata.name",
 			Message: "namespace already exists",
@@ -106,7 +103,6 @@ func (e *datastorePolicyEvaluator) Evaluate(ctx context.Context, check PolicyChe
 	}
 	if existing.DeletionTimestamp != nil {
 		return &Decision{
-			Phase:   PhasePolicy,
 			Reason:  ReasonNamespaceTerminating,
 			Field:   "metadata.name",
 			Message: "namespace is terminating",
@@ -114,7 +110,6 @@ func (e *datastorePolicyEvaluator) Evaluate(ctx context.Context, check PolicyChe
 	}
 	if TierRank(check.Tier) < TierRank(existing.Tier) {
 		return &Decision{
-			Phase:   PhasePolicy,
 			Reason:  ReasonTierDemotion,
 			Field:   "spec.tier",
 			Message: "namespace tier demotion is not allowed",

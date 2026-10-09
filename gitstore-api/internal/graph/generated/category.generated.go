@@ -17,6 +17,8 @@ import (
 // region    ************************** generated!.gotpl **************************
 
 type CategoryResolver interface {
+	Parent(ctx context.Context, obj *model.Category) (*model.Category, error)
+	Children(ctx context.Context, obj *model.Category) ([]*model.Category, error)
 	Products(ctx context.Context, obj *model.Category, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error)
 }
 
@@ -267,7 +269,7 @@ func (ec *executionContext) _Category_parent(ctx context.Context, field graphql.
 			return ec.fieldContext_Category_parent(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Parent, nil
+			return ec.Resolvers.Category().Parent(ctx, obj)
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.Category) graphql.Marshaler {
@@ -281,8 +283,8 @@ func (ec *executionContext) fieldContext_Category_parent(_ context.Context, fiel
 	fc = &graphql.FieldContext{
 		Object:     "Category",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_Category(ctx, field)
 		},
@@ -299,7 +301,7 @@ func (ec *executionContext) _Category_children(ctx context.Context, field graphq
 			return ec.fieldContext_Category_children(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Children, nil
+			return ec.Resolvers.Category().Children(ctx, obj)
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*model.Category) graphql.Marshaler {
@@ -313,8 +315,8 @@ func (ec *executionContext) fieldContext_Category_children(_ context.Context, fi
 	fc = &graphql.FieldContext{
 		Object:     "Category",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_Category(ctx, field)
 		},
@@ -364,52 +366,6 @@ func (ec *executionContext) fieldContext_Category_products(ctx context.Context, 
 		return fc, err
 	}
 	return fc, nil
-}
-
-func (ec *executionContext) _Category_path(ctx context.Context, field graphql.CollectedField, obj *model.Category) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Category_path(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Path, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
-			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Category_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Category", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Category_depth(ctx context.Context, field graphql.CollectedField, obj *model.Category) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Category_depth(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Depth, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
-			return ec.marshalNInt2int32(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Category_depth(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Category", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _CategoryConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.CategoryConnection) (ret graphql.Marshaler) {
@@ -852,16 +808,16 @@ func (ec *executionContext) fieldContext_CategoryWatchEvent_category(_ context.C
 	return fc, nil
 }
 
-func (ec *executionContext) _DeleteCategoryPayload_deletedCategoryId(ctx context.Context, field graphql.CollectedField, obj *model.DeleteCategoryPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _CompleteCategoryDeletionPayload_id(ctx context.Context, field graphql.CollectedField, obj *model.CompleteCategoryDeletionPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_DeleteCategoryPayload_deletedCategoryId(ctx, field)
+			return ec.fieldContext_CompleteCategoryDeletionPayload_id(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.DeletedCategoryID, nil
+			return obj.ID, nil
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
@@ -871,31 +827,95 @@ func (ec *executionContext) _DeleteCategoryPayload_deletedCategoryId(ctx context
 		false,
 	)
 }
-func (ec *executionContext) fieldContext_DeleteCategoryPayload_deletedCategoryId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("DeleteCategoryPayload", field, false, false, errors.New("field of type ID does not have child fields"))
+func (ec *executionContext) fieldContext_CompleteCategoryDeletionPayload_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CompleteCategoryDeletionPayload", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _DeleteCategoryPayload_orphanedProductIds(ctx context.Context, field graphql.CollectedField, obj *model.DeleteCategoryPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _CreateCategoryPayload_category(ctx context.Context, field graphql.CollectedField, obj *model.CreateCategoryPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_DeleteCategoryPayload_orphanedProductIds(ctx, field)
+			return ec.fieldContext_CreateCategoryPayload_category(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.OrphanedProductIds, nil
+			return obj.Category, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
-			return ec.marshalOID2ᚕstringᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Category) graphql.Marshaler {
+			return ec.marshalOCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx, selections, v)
 		},
 		true,
 		false,
 	)
 }
-func (ec *executionContext) fieldContext_DeleteCategoryPayload_orphanedProductIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("DeleteCategoryPayload", field, false, false, errors.New("field of type ID does not have child fields"))
+func (ec *executionContext) fieldContext_CreateCategoryPayload_category(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CreateCategoryPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Category(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeleteCategoryPayload_category(ctx context.Context, field graphql.CollectedField, obj *model.DeleteCategoryPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DeleteCategoryPayload_category(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Category, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Category) graphql.Marshaler {
+			return ec.marshalOCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_DeleteCategoryPayload_category(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeleteCategoryPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Category(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeleteCategoryPayload_outcome(ctx context.Context, field graphql.CollectedField, obj *model.DeleteCategoryPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DeleteCategoryPayload_outcome(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Outcome, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.ResourceDeletionOutcome) graphql.Marshaler {
+			return ec.marshalNResourceDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceDeletionOutcome(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_DeleteCategoryPayload_outcome(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("DeleteCategoryPayload", field, false, false, errors.New("field of type ResourceDeletionOutcome does not have child fields"))
 }
 
 func (ec *executionContext) _ResolvedCategoryTaxonomy_depth(ctx context.Context, field graphql.CollectedField, obj *model.ResolvedCategoryTaxonomy) (ret graphql.Marshaler) {
@@ -990,6 +1010,38 @@ func (ec *executionContext) fieldContext_ResolvedCategoryTaxonomy_productCount(_
 	return graphql.NewScalarFieldContext("ResolvedCategoryTaxonomy", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
+func (ec *executionContext) _UpdateCategoryPayload_category(ctx context.Context, field graphql.CollectedField, obj *model.UpdateCategoryPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UpdateCategoryPayload_category(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Category, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Category) graphql.Marshaler {
+			return ec.marshalOCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UpdateCategoryPayload_category(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UpdateCategoryPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Category(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _UpdateCategoryStatusPayload_category(ctx context.Context, field graphql.CollectedField, obj *model.UpdateCategoryStatusPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1048,6 +1100,207 @@ func (ec *executionContext) fieldContext_UpdateCategoryStatusPayload_hasMoreProd
 // endregion **************************** field.gotpl *****************************
 
 // region    **************************** input.gotpl *****************************
+
+func (ec *executionContext) unmarshalInputCategoryFilterInput(ctx context.Context, obj any) (model.CategoryFilterInput, error) {
+	var it model.CategoryFilterInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["includeSelf"]; !present {
+		asMap["includeSelf"] = false
+	}
+
+	fieldsInOrder := [...]string{"descendantOf", "includeSelf", "maxDepth"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "descendantOf":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("descendantOf"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DescendantOf = data
+		case "includeSelf":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("includeSelf"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.IncludeSelf = data
+		case "maxDepth":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("maxDepth"))
+			data, err := ec.unmarshalOInt2ᚖint32(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxDepth = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputCategorySpecInput(ctx context.Context, obj any) (model.CategorySpecInput, error) {
+	var it model.CategorySpecInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"title", "parentRef", "media"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "title":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("title"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Title = data
+		case "parentRef":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("parentRef"))
+			data, err := ec.unmarshalOCatalogObjectReferenceInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogObjectReferenceInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ParentRef = data
+		case "media":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("media"))
+			data, err := ec.unmarshalOMediaDefinitionInput2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMediaDefinitionInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Media = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputCompleteCategoryDeletionInput(ctx context.Context, obj any) (model.CompleteCategoryDeletionInput, error) {
+	var it model.CompleteCategoryDeletionInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"namespace", "name", "resourceVersion"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "resourceVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resourceVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ResourceVersion = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputCreateCategoryInput(ctx context.Context, obj any) (model.CreateCategoryInput, error) {
+	var it model.CreateCategoryInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["apiVersion"]; !present {
+		asMap["apiVersion"] = "catalog.gitstore.dev/v1beta1"
+	}
+	if _, present := asMap["kind"]; !present {
+		asMap["kind"] = "CategoryTaxonomy"
+	}
+
+	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "spec", "body"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "apiVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("apiVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.APIVersion = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "metadata":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
+			data, err := ec.unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Metadata = data
+		case "spec":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("spec"))
+			data, err := ec.unmarshalNCategorySpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategorySpecInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Spec = data
+		case "body":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("body"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Body = data
+		}
+	}
+	return it, nil
+}
 
 func (ec *executionContext) unmarshalInputDeleteCategoryInput(ctx context.Context, obj any) (model.DeleteCategoryInput, error) {
 	var it model.DeleteCategoryInput
@@ -1125,6 +1378,71 @@ func (ec *executionContext) unmarshalInputResolvedCategoryTaxonomyInput(ctx cont
 				return it, err
 			}
 			it.ProductCount = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUpdateCategoryInput(ctx context.Context, obj any) (model.UpdateCategoryInput, error) {
+	var it model.UpdateCategoryInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["apiVersion"]; !present {
+		asMap["apiVersion"] = "catalog.gitstore.dev/v1beta1"
+	}
+	if _, present := asMap["kind"]; !present {
+		asMap["kind"] = "CategoryTaxonomy"
+	}
+
+	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "spec", "body"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "apiVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("apiVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.APIVersion = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "metadata":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
+			data, err := ec.unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Metadata = data
+		case "spec":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("spec"))
+			data, err := ec.unmarshalNCategorySpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategorySpecInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Spec = data
+		case "body":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("body"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Body = data
 		}
 	}
 	return it, nil
@@ -1259,12 +1577,74 @@ func (ec *executionContext) _Category(ctx context.Context, sel ast.SelectionSet,
 		case "body":
 			out.Values[i] = ec._Category_body(ctx, field, obj)
 		case "parent":
-			out.Values[i] = ec._Category_parent(ctx, field, obj)
-		case "children":
-			out.Values[i] = ec._Category_children(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Category_parent(ctx, field, obj)
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "children":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Category_children(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "products":
 			field := field
 
@@ -1301,16 +1681,6 @@ func (ec *executionContext) _Category(ctx context.Context, sel ast.SelectionSet,
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "path":
-			out.Values[i] = ec._Category_path(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "depth":
-			out.Values[i] = ec._Category_depth(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -1572,6 +1942,78 @@ func (ec *executionContext) _CategoryWatchEvent(ctx context.Context, sel ast.Sel
 	return out
 }
 
+var completeCategoryDeletionPayloadImplementors = []string{"CompleteCategoryDeletionPayload"}
+
+func (ec *executionContext) _CompleteCategoryDeletionPayload(ctx context.Context, sel ast.SelectionSet, obj *model.CompleteCategoryDeletionPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, completeCategoryDeletionPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CompleteCategoryDeletionPayload")
+		case "id":
+			out.Values[i] = ec._CompleteCategoryDeletionPayload_id(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var createCategoryPayloadImplementors = []string{"CreateCategoryPayload"}
+
+func (ec *executionContext) _CreateCategoryPayload(ctx context.Context, sel ast.SelectionSet, obj *model.CreateCategoryPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, createCategoryPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CreateCategoryPayload")
+		case "category":
+			out.Values[i] = ec._CreateCategoryPayload_category(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var deleteCategoryPayloadImplementors = []string{"DeleteCategoryPayload"}
 
 func (ec *executionContext) _DeleteCategoryPayload(ctx context.Context, sel ast.SelectionSet, obj *model.DeleteCategoryPayload) graphql.Marshaler {
@@ -1583,10 +2025,13 @@ func (ec *executionContext) _DeleteCategoryPayload(ctx context.Context, sel ast.
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("DeleteCategoryPayload")
-		case "deletedCategoryId":
-			out.Values[i] = ec._DeleteCategoryPayload_deletedCategoryId(ctx, field, obj)
-		case "orphanedProductIds":
-			out.Values[i] = ec._DeleteCategoryPayload_orphanedProductIds(ctx, field, obj)
+		case "category":
+			out.Values[i] = ec._DeleteCategoryPayload_category(ctx, field, obj)
+		case "outcome":
+			out.Values[i] = ec._DeleteCategoryPayload_outcome(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -1641,6 +2086,42 @@ func (ec *executionContext) _ResolvedCategoryTaxonomy(ctx context.Context, sel a
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var updateCategoryPayloadImplementors = []string{"UpdateCategoryPayload"}
+
+func (ec *executionContext) _UpdateCategoryPayload(ctx context.Context, sel ast.SelectionSet, obj *model.UpdateCategoryPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, updateCategoryPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UpdateCategoryPayload")
+		case "category":
+			out.Values[i] = ec._UpdateCategoryPayload_category(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -1785,6 +2266,11 @@ func (ec *executionContext) marshalNCategorySpec2ᚖgithubᚗcomᚋgitstoreᚑde
 	return ec._CategorySpec(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNCategorySpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategorySpecInput(ctx context.Context, v any) (*model.CategorySpecInput, error) {
+	res, err := ec.unmarshalInputCategorySpecInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalNCategoryWatchEvent2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryWatchEvent(ctx context.Context, sel ast.SelectionSet, v model.CategoryWatchEvent) graphql.Marshaler {
 	return ec._CategoryWatchEvent(ctx, sel, &v)
 }
@@ -1797,6 +2283,44 @@ func (ec *executionContext) marshalNCategoryWatchEvent2ᚖgithubᚗcomᚋgitstor
 		return graphql.Null
 	}
 	return ec._CategoryWatchEvent(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNCompleteCategoryDeletionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteCategoryDeletionInput(ctx context.Context, v any) (model.CompleteCategoryDeletionInput, error) {
+	res, err := ec.unmarshalInputCompleteCategoryDeletionInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNCompleteCategoryDeletionPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteCategoryDeletionPayload(ctx context.Context, sel ast.SelectionSet, v model.CompleteCategoryDeletionPayload) graphql.Marshaler {
+	return ec._CompleteCategoryDeletionPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNCompleteCategoryDeletionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteCategoryDeletionPayload(ctx context.Context, sel ast.SelectionSet, v *model.CompleteCategoryDeletionPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CompleteCategoryDeletionPayload(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNCreateCategoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryInput(ctx context.Context, v any) (model.CreateCategoryInput, error) {
+	res, err := ec.unmarshalInputCreateCategoryInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNCreateCategoryPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryPayload(ctx context.Context, sel ast.SelectionSet, v model.CreateCategoryPayload) graphql.Marshaler {
+	return ec._CreateCategoryPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNCreateCategoryPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryPayload(ctx context.Context, sel ast.SelectionSet, v *model.CreateCategoryPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CreateCategoryPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNDeleteCategoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryInput(ctx context.Context, v any) (model.DeleteCategoryInput, error) {
@@ -1816,6 +2340,25 @@ func (ec *executionContext) marshalNDeleteCategoryPayload2ᚖgithubᚗcomᚋgits
 		return graphql.Null
 	}
 	return ec._DeleteCategoryPayload(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNUpdateCategoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryInput(ctx context.Context, v any) (model.UpdateCategoryInput, error) {
+	res, err := ec.unmarshalInputUpdateCategoryInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUpdateCategoryPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateCategoryPayload) graphql.Marshaler {
+	return ec._UpdateCategoryPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNUpdateCategoryPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateCategoryPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UpdateCategoryPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNUpdateCategoryStatusInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryStatusInput(ctx context.Context, v any) (model.UpdateCategoryStatusInput, error) {
@@ -1842,6 +2385,14 @@ func (ec *executionContext) marshalOCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋ
 		return graphql.Null
 	}
 	return ec._Category(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOCategoryFilterInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryFilterInput(ctx context.Context, v any) (*model.CategoryFilterInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputCategoryFilterInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalOCategoryTaxonomyStatus2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryTaxonomyStatus(ctx context.Context, sel ast.SelectionSet, v *model.CategoryTaxonomyStatus) graphql.Marshaler {

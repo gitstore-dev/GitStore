@@ -194,6 +194,38 @@ type CategoryTaxonomyDeletionStore interface {
 	CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*CategoryTaxonomy, error)
 }
 
+// MaxCategoryHierarchyDepth is the deepest relative depth an ancestor index
+// row can hold. The controller resolves paths of at most 128 categories, so
+// depth (len(path)-1) is at most 127, which is also the range of the
+// status.resolved.depth field and the index's tinyint depth column.
+const MaxCategoryHierarchyDepth = 127
+
+// CategoryDescendant is one row of an ancestor's subtree.
+type CategoryDescendant struct {
+	Name  string
+	UID   string
+	Depth int // relative to the ancestor; 0 = the ancestor itself
+}
+
+// CategoryDescendantQuery selects an ancestor's subtree from the ancestor
+// closure index, ordered by (Depth, Name). Page cursors are closure cursors
+// (EncodeClosureCursor); keyset cursors fail with ErrInvalidArgument.
+type CategoryDescendantQuery struct {
+	Namespace   string
+	Ancestor    string // category name
+	IncludeSelf bool
+	MaxDepth    int // 0 = unbounded (<= MaxCategoryHierarchyDepth)
+	Page        PageParams
+}
+
+// CategoryAncestorIndex is implemented by stores that maintain the derived
+// ancestor closure index. The index is maintained inside
+// UpdateCategoryTaxonomyStatus (when the patch carries Resolved) and the
+// category delete paths; there is no direct write method.
+type CategoryAncestorIndex interface {
+	ListCategoryDescendants(ctx context.Context, q CategoryDescendantQuery) (*PageResult[CategoryDescendant], error)
+}
+
 // GlobalRepositoryLister is the optional contract for backends that provide a
 // globally ordered Repository connection.
 type GlobalRepositoryLister interface {

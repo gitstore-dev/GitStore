@@ -809,6 +809,9 @@ func (m *memdbDatastore) GetCategoryTaxonomyByName(_ context.Context, namespace,
 }
 
 func (m *memdbDatastore) ListCategoryTaxonomies(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
+	if err := datastore.RejectClosureCursors(page); err != nil {
+		return nil, err
+	}
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
@@ -885,6 +888,12 @@ func (m *memdbDatastore) UpdateCategoryTaxonomyStatus(_ context.Context, namespa
 		txn.Abort()
 		return nil, err
 	}
+	if patch.Resolved != nil {
+		if err := syncCategoryAncestorIndex(txn, updated); err != nil {
+			txn.Abort()
+			return nil, err
+		}
+	}
 	txn.Commit()
 	m.recordCommittedCategoryTaxonomy(datastore.ResourceWatchModified, updated, raw.(*datastore.CategoryTaxonomy).Labels)
 	return cloneCategoryTaxonomy(updated), nil
@@ -900,6 +909,10 @@ func (m *memdbDatastore) DeleteCategoryTaxonomy(_ context.Context, uid string) e
 		return fmt.Errorf("%w: category_taxonomy uid %s", datastore.ErrNotFound, uid)
 	}
 	if err := deleteOwnerReferenceProjections(txn, "CategoryTaxonomy", uid); err != nil {
+		txn.Abort()
+		return err
+	}
+	if err := deleteCategoryAncestorRows(txn, raw.(*datastore.CategoryTaxonomy)); err != nil {
 		txn.Abort()
 		return err
 	}

@@ -32,6 +32,9 @@ func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.Commi
 		return nil, fmt.Errorf("committed admission requires repository, ref, commit, and path")
 	}
 	if req.Operation == admission.OperationDelete {
+		if req.Kind == "CategoryTaxonomy" {
+			return s.admitCommittedCategoryDeletion(ctx, req)
+		}
 		return s.admitCommittedProductDeletion(ctx, req)
 	}
 	if req.Operation != admission.OperationCreate && req.Operation != admission.OperationUpdate {
@@ -95,11 +98,34 @@ func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.Commi
 		newEntry:  entry,
 		identity:  entry.identity,
 	}}
-	if err := s.admitParsedEntries(ctx, []*parsedEntry{entry}, admCtx, ops); err != nil {
+	decisions, err := s.admitParsedEntries(ctx, []*parsedEntry{entry}, admCtx, ops)
+	if err != nil {
 		return nil, err
 	}
 	if admCtx.wasSuperseded() || !s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, commitSHA) {
 		return nil, ErrCommittedManifestSuperseded
+	}
+	result := &admission.CommittedManifestResult{Kind: entry.identity.Kind, Namespace: entry.identity.Namespace, Name: entry.identity.Name, CommitSHA: commitSHA}
+	for _, decision := range decisions {
+		if decision.Kind != entry.identity.Kind || decision.Name != entry.identity.Name {
+			continue
+		}
+		switch decision.Outcome {
+		case admission.EntryDenied:
+			return nil, admission.Rejected(admission.PhasePostReceive, commitSHA, decision.Diagnostics)
+		case admission.EntryFailed:
+			if decision.Kind == "CategoryTaxonomy" && errors.Is(decision.Err, datastore.ErrAlreadyExists) {
+				// A concurrent create of the same name won the datastore write.
+				return nil, admission.NewError(admission.CodeAlreadyExists, "CATEGORY_ALREADY_EXISTS",
+					fmt.Sprintf("category %q already exists", decision.Name))
+			}
+			return nil, admission.Rejected(admission.PhasePostReceive, commitSHA, []admission.Diagnostic{{
+				Reason: "ADMISSION_FAILED", Message: "admission failed: " + errorText(decision.Err), Level: admission.LevelFailure, File: entry.path,
+			}})
+		case admission.EntryNoOp:
+			result.NoOp = true
+		}
+		result.Warnings = append(result.Warnings, decision.Warnings...)
 	}
 	stored, err := s.lookupResourceByIdentity(ctx, entry.identity)
 	if err != nil || stored == nil {
@@ -108,7 +134,14 @@ func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.Commi
 		}
 		return nil, fmt.Errorf("committed admission did not materialize %s %s/%s: %w", entry.identity.Kind, entry.identity.Namespace, entry.identity.Name, err)
 	}
-	return &admission.CommittedManifestResult{Kind: entry.identity.Kind, Namespace: entry.identity.Namespace, Name: entry.identity.Name, CommitSHA: commitSHA}, nil
+	return result, nil
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	return err.Error()
 }
 
 func (s *Server) admitCommittedProductDeletion(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
@@ -136,6 +169,45 @@ func (s *Server) admitCommittedProductDeletion(ctx context.Context, req admissio
 	return &admission.CommittedManifestResult{Kind: "Product", Namespace: product.Namespace, Name: product.Name, CommitSHA: req.CommitSHA}, nil
 }
 
+// admitCommittedCategoryDeletion admits a committed removal of a category
+// manifest through the same deletion path a push uses: the blocking-child
+// check and the foreground-deletion mark.
+func (s *Server) admitCommittedCategoryDeletion(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	if req.Name == "" {
+		return nil, fmt.Errorf("committed deletion requires a CategoryTaxonomy name")
+	}
+	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	if !ok || current != req.CommitSHA {
+		return nil, ErrCommittedManifestSuperseded
+	}
+	category, err := s.store.GetCategoryTaxonomyByName(ctx, req.Namespace, req.Name)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, admission.NewError(admission.CodeNotFound, "CATEGORY_NOT_FOUND", fmt.Sprintf("category %q not found", req.Name))
+		}
+		return nil, err
+	}
+	if category.RepositoryID != req.RepositoryID || category.SourcePath != req.Path {
+		return nil, admission.NewError(admission.CodeFailedPrecondition, "PROVENANCE_UNAVAILABLE",
+			fmt.Sprintf("category %q was not admitted from %s", req.Name, req.Path))
+	}
+	identity := resourceIdentity{Kind: "CategoryTaxonomy", Namespace: category.Namespace, Name: category.Name}
+	actor := req.ActorSubject
+	if actor == "" {
+		actor = "admission"
+	}
+	if err := s.deleteResource(ctx, identity, req.RepositoryID, category.GitRef, req.Path, actor); err != nil {
+		if errors.Is(err, errCategoryDeletionBlocked) {
+			return nil, admission.Rejected(admission.PhasePostReceive, req.CommitSHA, []admission.Diagnostic{{
+				Reason: "CHILD_CATEGORIES_PRESENT", Message: fmt.Sprintf("category %q has child categories", req.Name),
+				Level: admission.LevelFailure, File: req.Path,
+			}})
+		}
+		return nil, err
+	}
+	return &admission.CommittedManifestResult{Kind: "CategoryTaxonomy", Namespace: category.Namespace, Name: category.Name, CommitSHA: req.CommitSHA}, nil
+}
+
 // validateCommittedOperation makes synchronous admission strict. The batch
 // pipeline deliberately logs and continues for one bad file; GraphQL has a
 // single object and must return that rejection to its caller instead.
@@ -151,11 +223,17 @@ func (s *Server) validateCommittedOperation(ctx context.Context, entry *parsedEn
 		if entry.identity.Kind == "Namespace" {
 			return namespaceadmission.ErrNamespaceAlreadyExists
 		}
+		if entry.identity.Kind == "CategoryTaxonomy" {
+			return admission.NewError(admission.CodeAlreadyExists, "CATEGORY_ALREADY_EXISTS", fmt.Sprintf("category %q already exists", entry.identity.Name))
+		}
 		return fmt.Errorf("%s %s/%s already exists", entry.identity.Kind, entry.identity.Namespace, entry.identity.Name)
 	}
 	if operation == admission.OperationUpdate && existing == nil {
 		if entry.identity.Kind == "Namespace" {
 			return namespaceadmission.ErrNamespaceNotFound
+		}
+		if entry.identity.Kind == "CategoryTaxonomy" {
+			return admission.NewError(admission.CodeNotFound, "CATEGORY_NOT_FOUND", fmt.Sprintf("category %q not found", entry.identity.Name))
 		}
 		return fmt.Errorf("%s %s/%s not found", entry.identity.Kind, entry.identity.Namespace, entry.identity.Name)
 	}

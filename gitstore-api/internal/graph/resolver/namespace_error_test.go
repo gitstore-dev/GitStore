@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
@@ -27,41 +28,81 @@ func (s *resolverNamespacePolicySpy) Evaluate(_ context.Context, check namespace
 	return nil, namespaceadmission.Preflight{Captured: true}, nil
 }
 
-func requireNamespaceErrorExtensions(t *testing.T, err error, code string, phase namespaceadmission.Phase, reason namespaceadmission.Reason) {
+// requireNamespaceError asserts the shared four-key envelope: the code, the
+// phase (only for ADMISSION_REJECTED) and the ordered diagnostic reasons.
+func requireNamespaceError(t *testing.T, err error, code admission.Code, phase admission.Phase, reasons ...namespaceadmission.Reason) {
 	t.Helper()
 	var graphErr *gqlerror.Error
 	require.ErrorAs(t, err, &graphErr)
-	assert.Equal(t, code, graphErr.Extensions["code"])
+	assert.Equal(t, string(code), graphErr.Extensions["code"])
+	for key := range graphErr.Extensions {
+		assert.Contains(t, []string{"code", "diagnostics", "phase", "commit"}, key)
+	}
 	if phase != "" {
 		assert.Equal(t, string(phase), graphErr.Extensions["phase"])
+	} else {
+		assert.NotContains(t, graphErr.Extensions, "phase")
 	}
-	if reason != "" {
-		assert.Equal(t, string(reason), graphErr.Extensions["reason"])
+	if len(reasons) == 0 {
+		return
 	}
+	diagnostics, ok := graphErr.Extensions["diagnostics"].([]map[string]any)
+	require.True(t, ok, "diagnostics must be present")
+	got := make([]string, 0, len(diagnostics))
+	for _, d := range diagnostics {
+		got = append(got, d["reason"].(string))
+	}
+	want := make([]string, 0, len(reasons))
+	for _, r := range reasons {
+		want = append(want, string(r))
+	}
+	assert.Equal(t, want, got)
 }
 
-func TestNamespaceErrorConstructorsExposeStableExtensions(t *testing.T) {
-	requireNamespaceErrorExtensions(t,
+func TestNamespaceErrorConstructorsUseSharedEnvelope(t *testing.T) {
+	requireNamespaceError(t,
 		resolver.NewNamespaceStructuralError(namespaceadmission.ReasonInvalidIdentifier, "invalid identifier"),
-		namespaceadmission.CodeStructuralValidationFailed, namespaceadmission.PhaseStructural, namespaceadmission.ReasonInvalidIdentifier)
-	requireNamespaceErrorExtensions(t,
+		admission.CodeAdmissionRejected, admission.PhasePreReceive, namespaceadmission.ReasonInvalidIdentifier)
+	requireNamespaceError(t,
 		resolver.NewNamespaceImmutableError(namespaceadmission.ReasonImmutableName, "name is immutable"),
-		namespaceadmission.CodeImmutableField, namespaceadmission.PhaseStructural, namespaceadmission.ReasonImmutableName)
-	requireNamespaceErrorExtensions(t,
-		resolver.NewNamespacePolicyError(namespaceadmission.ReasonTierDemotion, "tier demotion"),
-		namespaceadmission.CodePolicyRejected, namespaceadmission.PhasePolicy, namespaceadmission.ReasonTierDemotion)
-	requireNamespaceErrorExtensions(t,
+		admission.CodeAdmissionRejected, admission.PhasePreReceive, namespaceadmission.ReasonImmutableName)
+	requireNamespaceError(t,
+		resolver.NewNamespacePolicyError(admission.PhasePreReceive, "", namespaceadmission.ReasonTierDemotion, "tier demotion"),
+		admission.CodeAdmissionRejected, admission.PhasePreReceive, namespaceadmission.ReasonTierDemotion)
+	postReceive := resolver.NewNamespacePolicyError(admission.PhasePostReceive, "abc123", namespaceadmission.ReasonTierDemotion, "tier demotion")
+	requireNamespaceError(t, postReceive, admission.CodeAdmissionRejected, admission.PhasePostReceive, namespaceadmission.ReasonTierDemotion)
+	var graphErr *gqlerror.Error
+	require.ErrorAs(t, postReceive, &graphErr)
+	assert.Equal(t, "abc123", graphErr.Extensions["commit"])
+
+	for reason, code := range map[namespaceadmission.Reason]admission.Code{
+		namespaceadmission.ReasonBootstrapNamespace:     admission.CodeFailedPrecondition,
+		namespaceadmission.ReasonNamespaceTerminating:   admission.CodeFailedPrecondition,
+		namespaceadmission.ReasonNamespaceAlreadyExists: admission.CodeAlreadyExists,
+		namespaceadmission.ReasonNamespaceNotFound:      admission.CodeNotFound,
+	} {
+		requireNamespaceError(t,
+			resolver.NewNamespacePolicyError(admission.PhasePostReceive, "abc123", reason, "rejected"),
+			code, "", reason)
+	}
+	requireNamespaceError(t,
 		resolver.NewNamespaceConflictError(namespaceadmission.ReasonResourceVersionConflict, "conflict"),
-		namespaceadmission.CodeConflict, namespaceadmission.PhasePolicy, namespaceadmission.ReasonResourceVersionConflict)
+		admission.CodeConflict, "", namespaceadmission.ReasonResourceVersionConflict)
+	requireNamespaceError(t,
+		resolver.NewNamespaceConflictError(namespaceadmission.ReasonSuperseded, "superseded"),
+		admission.CodeConflict, "", namespaceadmission.ReasonSuperseded)
+	requireNamespaceError(t,
+		resolver.NewNamespaceNotFoundError("missing"),
+		admission.CodeNotFound, "", namespaceadmission.ReasonNamespaceNotFound)
 
 	blocked := resolver.NewNamespaceDeletionBlockedError([]namespaceadmission.Reason{
 		namespaceadmission.ReasonNamespaceNotEmpty,
 		namespaceadmission.ReasonBootstrapNamespace,
 	}, "blocked")
-	var graphErr *gqlerror.Error
+	requireNamespaceError(t, blocked, admission.CodeFailedPrecondition, "",
+		namespaceadmission.ReasonBootstrapNamespace, namespaceadmission.ReasonNamespaceNotEmpty)
 	require.ErrorAs(t, blocked, &graphErr)
-	assert.Equal(t, namespaceadmission.CodeDeletionBlocked, graphErr.Extensions["code"])
-	assert.Equal(t, []string{"BOOTSTRAP_NAMESPACE", "NAMESPACE_NOT_EMPTY"}, graphErr.Extensions["reasons"])
+	assert.Equal(t, "blocked", graphErr.Message)
 }
 
 func TestNamespaceCreateUpdateStructuralSchemaFailuresSkipPolicy(t *testing.T) {
@@ -96,7 +137,7 @@ func TestNamespaceCreateUpdateStructuralSchemaFailuresSkipPolicy(t *testing.T) {
 
 			err = run(svc)
 
-			requireNamespaceErrorExtensions(t, err, namespaceadmission.CodeStructuralValidationFailed, namespaceadmission.PhaseStructural, namespaceadmission.ReasonInvalidEnvelope)
+			requireNamespaceError(t, err, admission.CodeAdmissionRejected, admission.PhasePreReceive, namespaceadmission.ReasonInvalidEnvelope)
 			assert.Empty(t, spy.calls)
 		})
 	}
@@ -106,7 +147,7 @@ func TestNamespaceCreateUpdateErrorsUseStableExtensions(t *testing.T) {
 	t.Run("structural", func(t *testing.T) {
 		svc := newTestSvc(t, &mockGitWriter{})
 		_, err := svc.CreateNamespace(context.Background(), createNamespaceInput("invalid name", model.NamespaceTierUser), "alice")
-		requireNamespaceErrorExtensions(t, err, namespaceadmission.CodeStructuralValidationFailed, namespaceadmission.PhaseStructural, namespaceadmission.ReasonInvalidIdentifier)
+		requireNamespaceError(t, err, admission.CodeAdmissionRejected, admission.PhasePreReceive, namespaceadmission.ReasonInvalidIdentifier)
 	})
 
 	t.Run("duplicate create", func(t *testing.T) {
@@ -115,17 +156,13 @@ func TestNamespaceCreateUpdateErrorsUseStableExtensions(t *testing.T) {
 		_, err := svc.CreateNamespace(context.Background(), input, "alice")
 		require.NoError(t, err)
 		_, err = svc.CreateNamespace(context.Background(), input, "alice")
-		requireNamespaceErrorExtensions(t, err, namespaceadmission.CodePolicyRejected, namespaceadmission.PhasePolicy, namespaceadmission.ReasonNamespaceAlreadyExists)
+		requireNamespaceError(t, err, admission.CodeAlreadyExists, "", namespaceadmission.ReasonNamespaceAlreadyExists)
 	})
 
 	t.Run("update not found", func(t *testing.T) {
 		svc := newTestSvc(t, &mockGitWriter{})
 		_, err := svc.UpdateNamespace(context.Background(), updateNamespaceInput("missing", model.NamespaceTierUser), "alice")
-		var graphErr *gqlerror.Error
-		require.ErrorAs(t, err, &graphErr)
-		assert.Equal(t, "NOT_FOUND", graphErr.Extensions["code"])
-		assert.Equal(t, string(namespaceadmission.PhasePolicy), graphErr.Extensions["phase"])
-		assert.Equal(t, "NAMESPACE_NOT_FOUND", graphErr.Extensions["reason"])
+		requireNamespaceError(t, err, admission.CodeNotFound, "", namespaceadmission.ReasonNamespaceNotFound)
 	})
 
 	t.Run("tier demotion", func(t *testing.T) {
@@ -133,7 +170,7 @@ func TestNamespaceCreateUpdateErrorsUseStableExtensions(t *testing.T) {
 		_, err := svc.CreateNamespace(context.Background(), createNamespaceInput("demotion", model.NamespaceTierOrganization), "alice")
 		require.NoError(t, err)
 		_, err = svc.UpdateNamespace(context.Background(), updateNamespaceInput("demotion", model.NamespaceTierUser), "alice")
-		requireNamespaceErrorExtensions(t, err, namespaceadmission.CodePolicyRejected, namespaceadmission.PhasePolicy, namespaceadmission.ReasonTierDemotion)
+		requireNamespaceError(t, err, admission.CodeAdmissionRejected, admission.PhasePreReceive, namespaceadmission.ReasonTierDemotion)
 	})
 
 	t.Run("terminating target", func(t *testing.T) {
@@ -145,6 +182,6 @@ func TestNamespaceCreateUpdateErrorsUseStableExtensions(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = svc.UpdateNamespace(ctx, updateNamespaceInput("terminating", model.NamespaceTierOrganization), "alice")
-		requireNamespaceErrorExtensions(t, err, namespaceadmission.CodePolicyRejected, namespaceadmission.PhasePolicy, namespaceadmission.ReasonNamespaceTerminating)
+		requireNamespaceError(t, err, admission.CodeFailedPrecondition, "", namespaceadmission.ReasonNamespaceTerminating)
 	})
 }

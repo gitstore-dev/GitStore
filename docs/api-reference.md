@@ -2,7 +2,7 @@
 
 This reference documents the current GraphQL contract exposed by `gitstore-api`.
 
-Catalogue reads are GraphQL-first. Catalogue writes are Git-driven today: author Markdown/frontmatter resources, commit them, and push through Git Smart HTTP. Product, category, collection, and variant GraphQL write operations are intentionally not documented as supported catalogue write APIs while Git-backed CRUD over GraphQL is being finalized.
+Catalogue reads are GraphQL-first. Catalogue writes are Git-driven today: author Markdown/frontmatter resources, commit them, and push through Git Smart HTTP. Category GraphQL mutations (`createCategory`, `updateCategory`, `deleteCategory`) commit to Git on the caller's behalf. Product, collection, and variant GraphQL write operations are intentionally not documented as supported catalogue write APIs while Git-backed CRUD over GraphQL is being finalized.
 
 ## Endpoint
 
@@ -89,7 +89,7 @@ mutation Logout {
 | `productVariant(by: ProductVariantBy!)`    | Fetch one product variant resource      |
 | `productVariants(namespace: String!, ...)` | List product variants in a namespace    |
 | `category(by: CategoryBy!)`                | Fetch one category resource             |
-| `categories(namespace: String!, ...)`      | List categories in a namespace          |
+| `categories(namespace: String!, filter, ...)` | List categories in a namespace, or the subtree below one category |
 | `collection(by: CollectionBy!)`            | Fetch one collection resource           |
 | `collections(namespace: String!, ...)`     | List collections in a namespace         |
 
@@ -104,6 +104,10 @@ mutation Logout {
 | `deleteNamespace(input: DeleteNamespaceInput!)`               | Delete an empty namespace                                                                                                                                                            |
 | `createRepository(input: CreateRepositoryInput!)`             | Create a repository in a namespace                                                                                                                                                   |
 | `deleteRepository(input: DeleteRepositoryInput!)`             | Delete a repository and its storage                                                                                                                                                  |
+| `createCategory(input: CreateCategoryInput!)`                 | Create a category by committing its manifest to the namespace's `gitstore-system` repository                                                                                         |
+| `updateCategory(input: UpdateCategoryInput!)`                 | Update a category by committing to the repository and path it was admitted from                                                                                                      |
+| `deleteCategory(input: DeleteCategoryInput!)`                 | Start foreground deletion of a category by removing its manifest from Git                                                                                                            |
+| `completeCategoryDeletion(input: CompleteCategoryDeletionInput!)` | Controller-only completion of a terminating category's deletion                                                                                                                  |
 | `updateCategoryStatus(input: UpdateCategoryStatusInput!)`     | Controller-only partial-merge write to a CategoryTaxonomy's `.status` sub-resource                                                                                                   |
 | `updateNamespaceStatus(input: UpdateNamespaceStatusInput!)`   | Controller-only partial-merge write to a Namespace's `.status` sub-resource                                                                                                          |
 | `updateProductStatus(input: UpdateProductStatusInput!)`       | Controller-only partial-merge write to a Product's `.status` sub-resource, including `resolved.category` (`{name, uid}`) and its declarative `CategoryTaxonomy` owner-reference sync |
@@ -487,6 +491,8 @@ query ListProductVariants {
 
 ### category
 
+Requires the `categoryTaxonomy.read` permission on the category's namespace.
+
 ```graphql
 query GetCategory {
   category(
@@ -510,8 +516,12 @@ query GetCategory {
         name
       }
     }
-    path
-    depth
+    status {
+      resolved {
+        path
+        depth
+      }
+    }
     parent {
       metadata {
         name
@@ -541,13 +551,45 @@ query ListCategories {
         spec {
           title
         }
-        path
-        depth
+        status {
+          resolved {
+            path
+            depth
+          }
+        }
       }
     }
   }
 }
 ```
+
+Without `filter`, categories are listed newest first.
+
+#### Subtree filter
+
+```graphql
+query Laptops {
+  categories(
+    namespace: "gitstore-test"
+    filter: { descendantOf: "electronics", includeSelf: true, maxDepth: 2 }
+    first: 50
+  ) {
+    edges { node { metadata { name } status { resolved { depth path } } } }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+```
+
+| Field          | Meaning                                                                          |
+|----------------|----------------------------------------------------------------------------------|
+| `descendantOf` | Name of the category whose descendants are returned. An unknown name returns an empty connection. |
+| `includeSelf`  | Include `descendantOf` itself as the first result. Default `false`.              |
+| `maxDepth`     | Levels below `descendantOf` to return, 1 to 128. Omit for the whole subtree. Out of range fails with `BAD_USER_INPUT`. |
+
+- Results are ordered by relative depth, then name.
+- Hierarchy comes from each category's `status.resolved.path`. Categories that have not been reconciled yet (`status.resolved` is `null`) are not matched, and results are eventually consistent after an ancestor moves.
+- Filtered and unfiltered listings use different cursors. A cursor from one mode passed to the other fails with `BAD_USER_INPUT`.
+- Listing categories, with or without the filter, requires the `categoryTaxonomy.list` permission on the namespace.
 
 ### collection
 
@@ -736,9 +778,68 @@ mutation DeleteRepository($id: ID!) {
 }
 ```
 
+### createCategory
+
+Creates a category by committing a `CategoryTaxonomy` manifest to the namespace's `gitstore-system` repository and admitting it. The same checks as a Git push apply. Requires `categoryTaxonomy.create`.
+
+```graphql
+mutation CreateCategory($input: CreateCategoryInput!) {
+  createCategory(input: $input) {
+    category { id metadata { name resourceVersion } spec { title } }
+  }
+}
+```
+
+```json
+{
+  "input": {
+    "metadata": { "name": "laptops", "namespace": "gitstore-test" },
+    "spec": { "title": "Laptops", "parentRef": { "name": "electronics" } },
+    "body": "Category copy for laptops."
+  }
+}
+```
+
+`apiVersion` and `kind` default to `catalog.gitstore.dev/v1beta1` and `CategoryTaxonomy`. Omit `body` for an empty body. Fails with `ALREADY_EXISTS` if the name is taken.
+
+### updateCategory
+
+Updates a category by committing to the repository and path it was admitted from. Requires `categoryTaxonomy.update`. `metadata.name` and `metadata.namespace` identify the category and cannot change. Omit `body` to keep the current body. Fails with `NOT_FOUND` if the category does not exist, `FAILED_PRECONDITION` (`CATEGORY_TERMINATING`) if it is being deleted, and `CONFLICT` (`SUPERSEDED`) if another commit to the same file won.
+
+```graphql
+mutation UpdateCategory($input: UpdateCategoryInput!) {
+  updateCategory(input: $input) {
+    category { id metadata { generation resourceVersion } spec { title } }
+  }
+}
+```
+
+Changing `spec.parentRef` moves the category; its descendants' `status.resolved.path` converges as the controller reconciles them.
+
+### deleteCategory
+
+Starts foreground deletion by removing the category's manifest from Git. Requires `categoryTaxonomy.delete`. The request is blocked with `FAILED_PRECONDITION` (`CHILD_CATEGORIES_PRESENT`) while child categories exist. Assigned products never block it: the controller decouples them asynchronously and then finishes removal.
+
+```graphql
+mutation DeleteCategory($input: DeleteCategoryInput!) {
+  deleteCategory(input: $input) {
+    category { id metadata { deletionTimestamp } }
+    outcome
+  }
+}
+```
+
+`outcome` is `TERMINATION_STARTED`, or `ALREADY_TERMINATING` for a repeat request, which creates no commit. See the [deletion runbook](runbooks/categorytaxonomy-deletion.md).
+
+### completeCategoryDeletion
+
+Controller-only. Finishes foreground deletion of a terminating category once its children are gone and its products are decoupled. Requires `categoryTaxonomy.purge`. `resourceVersion` must equal the category's current value, otherwise the request fails with `CONFLICT` (`RESOURCE_VERSION_CONFLICT`). Fails with `FAILED_PRECONDITION` (`CATEGORY_NOT_TERMINATING`, `CHILD_CATEGORIES_PRESENT` or `PRODUCT_DECOUPLING_INCOMPLETE`) when the category is not ready to be removed. Returns `{ id }` of the removed category.
+
+`UpdateCategoryStatusInput.completeDeletion` is deprecated in favor of this mutation and will be removed in the next release.
+
 ### updateCategoryStatus
 
-Controller-only, partial-merge write to a `CategoryTaxonomy`'s `.status` sub-resource. Only non-null input fields are changed; existing status fields not mentioned in the input are left unchanged. Requires `resourceVersion` to match the resource's current value, or the request returns a `conflict` payload (not an error) carrying the resource's actual current version. Requires controller-level authorization (`categoryTaxonomy.status.write`), independent of whether `resourceVersion` matches. Never alters `.spec` or author-controlled `.metadata` — the input type has no such fields.
+Controller-only, partial-merge write to a `CategoryTaxonomy`'s `.status` sub-resource. Only non-null input fields are changed; existing status fields not mentioned in the input are left unchanged. Requires `resourceVersion` to match the resource's current value, or the request fails with a `CONFLICT` error whose diagnostic reason is `RESOURCE_VERSION_CONFLICT` and whose message includes the current version (`current resourceVersion is N`). Requires controller-level authorization (`categoryTaxonomy.status.write`), independent of whether `resourceVersion` matches. Never alters `.spec` or author-controlled `.metadata` — the input type has no such fields.
 
 ```graphql
 mutation UpdateCategoryStatus($input: UpdateCategoryStatusInput!) {
@@ -755,14 +856,12 @@ mutation UpdateCategoryStatus($input: UpdateCategoryStatusInput!) {
         }
       }
     }
-    conflict {
-      currentResourceVersion
-    }
+    hasMoreProductDependents
   }
 }
 ```
 
-A resource that no longer exists returns a GraphQL error with `extensions.code == "NOT_FOUND"` rather than a `conflict` payload — distinguishing "someone else changed it first" from "it's gone."
+A resource that no longer exists returns a GraphQL error with `extensions.code == "NOT_FOUND"`, distinct from `CONFLICT` ("someone else changed it first").
 
 ### updateResourceStatus
 
@@ -946,10 +1045,10 @@ type Category implements Node {
   parent: Category
   children: [Category!]!
   products(first: Int, after: String, last: Int, before: String): ProductConnection!
-  path: [String!]!
-  depth: Int!
 }
 ```
+
+A category's position in the tree is `status.resolved { path depth childCount productCount }`. It is computed by the controller manager, is `null` until the first reconcile, and is eventually consistent after an ancestor moves. `Category.path` and `Category.depth` no longer exist.
 
 ### Collection
 
@@ -1020,7 +1119,83 @@ GraphQL errors use the standard response shape:
 
 Single-resource queries return `null` when the resource is not found.
 
-Common categories:
+### Mutation error envelope
+
+Git-backed mutations (`createCategory`, `updateCategory`, `deleteCategory`, `completeCategoryDeletion`, and the Namespace mutations) and status writes return errors with at most four `extensions` keys:
+
+| Key           | Present when                                                          | Value |
+|---------------|-----------------------------------------------------------------------|-------|
+| `code`        | always                                                                | One of the codes below |
+| `diagnostics` | the error has detail (always for `ADMISSION_REJECTED`, `FAILED_PRECONDITION`, `CONFLICT`); omitted for `FORBIDDEN` | One or more entries, see below |
+| `phase`       | only `ADMISSION_REJECTED`                                             | `PRE_RECEIVE`: nothing was committed. `POST_RECEIVE`: the commit exists, the last accepted generation is kept and `AdmissionAccepted` becomes `False` |
+| `commit`      | only `phase = POST_RECEIVE`                                           | Commit SHA |
+
+A diagnostic is `{ reason, message, level, file?, field? }`. `reason` is a stable SCREAMING_SNAKE string clients should branch on; `message` is for humans; `level` is `FAILURE`, `WARNING` or `NOTICE`; `file` and `field` are set for manifest problems. Clients must ignore unknown keys.
+
+```json
+{
+  "message": "categories/laptops.md: spec.title is required; categories/laptops.md: spec.parentRef.name must not equal metadata.name",
+  "path": ["createCategory"],
+  "extensions": {
+    "code": "ADMISSION_REJECTED",
+    "phase": "PRE_RECEIVE",
+    "diagnostics": [
+      { "reason": "REQUIRED_FIELD", "message": "spec.title is required", "level": "FAILURE",
+        "file": "categories/laptops.md", "field": "spec.title" },
+      { "reason": "SELF_PARENT", "message": "spec.parentRef.name must not equal metadata.name", "level": "FAILURE",
+        "file": "categories/laptops.md", "field": "spec.parentRef.name" }
+    ]
+  }
+}
+```
+
+For `ADMISSION_REJECTED`, `message` is the `file: message` entries joined by `"; "`, byte-identical to the text a Git push prints for the same manifest. For other codes, `message` is free text.
+
+| Code                  | Meaning |
+|-----------------------|---------|
+| `ADMISSION_REJECTED`  | The manifest failed schema, structural, immutability or policy checks |
+| `ALREADY_EXISTS`      | The name is already taken |
+| `NOT_FOUND`           | The target or a referenced namespace does not exist |
+| `CONFLICT`            | Superseded by a concurrent commit or a resource-version change |
+| `FAILED_PRECONDITION` | The target's state forbids the operation (terminating, blocking dependents, missing provenance, bootstrap resource) |
+| `BAD_USER_INPUT`      | Malformed arguments, such as `maxDepth` out of range or a cursor from the other list mode |
+| `FORBIDDEN`           | Authorization denied; nothing about the resource is disclosed |
+
+Errors raised by other operations continue to use the codes in the table at the end of this section.
+
+#### Category reasons
+
+| `diagnostics[].reason` | `code` |
+|------------------------|--------|
+| `INVALID_ENVELOPE`, `REQUIRED_FIELD`, `INVALID_FIELD`, `SELF_PARENT`, `PARENT_TERMINATING`, `CROSS_NAMESPACE_REFERENCE`, `IMMUTABLE_NAME`, `IMMUTABLE_NAMESPACE`, `POLICY_DENIED`, `VALIDATION_FAILED` (fallback for unmapped checks) | `ADMISSION_REJECTED` |
+| `CATEGORY_TERMINATING`, `CHILD_CATEGORIES_PRESENT`, `PROVENANCE_UNAVAILABLE`, `CATEGORY_NOT_TERMINATING`, `PRODUCT_DECOUPLING_INCOMPLETE` | `FAILED_PRECONDITION` |
+| `CATEGORY_ALREADY_EXISTS` | `ALREADY_EXISTS` |
+| `CATEGORY_NOT_FOUND` | `NOT_FOUND` |
+| `SUPERSEDED`, `RESOURCE_VERSION_CONFLICT` | `CONFLICT` |
+| `INVALID_ARGUMENT` | `BAD_USER_INPUT` |
+
+`PROVENANCE_UNAVAILABLE` means `updateCategory` and `deleteCategory` cannot target the category: it has no recorded repository and path, or it was admitted from a ref other than the default branch (API mutations commit only to the default branch).
+
+#### Warnings on success: `extensions.admission`
+
+Non-fatal findings from a successful commit are returned at the top level of the response, never inside `data`:
+
+```json
+{
+  "data": { "a": { "category": { "id": "..." } }, "b": { "category": { "id": "..." } } },
+  "extensions": {
+    "admission": [
+      { "path": ["b"], "commit": "9f2c...",
+        "diagnostics": [{ "reason": "MEDIA_UNRESOLVED", "message": "...", "level": "WARNING",
+                          "file": "categories/tv.md", "field": "spec.media" }] }
+    ]
+  }
+}
+```
+
+`path` is the response path of the mutation field, so it reflects aliases. The key is omitted when there is nothing to report and never overwrites other top-level extension keys.
+
+### Other error codes
 
 | Code               | Meaning                                       |
 |--------------------|-----------------------------------------------|

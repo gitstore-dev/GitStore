@@ -53,12 +53,10 @@ type ComplexityRoot struct {
 		APIVersion func(childComplexity int) int
 		Body       func(childComplexity int) int
 		Children   func(childComplexity int) int
-		Depth      func(childComplexity int) int
 		ID         func(childComplexity int) int
 		Kind       func(childComplexity int) int
 		Metadata   func(childComplexity int) int
 		Parent     func(childComplexity int) int
-		Path       func(childComplexity int) int
 		Products   func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Spec       func(childComplexity int) int
 		Status     func(childComplexity int) int
@@ -129,6 +127,10 @@ type ComplexityRoot struct {
 		Resolved            func(childComplexity int) int
 	}
 
+	CompleteCategoryDeletionPayload struct {
+		ID func(childComplexity int) int
+	}
+
 	CompleteNamespaceDeletionPayload struct {
 		ID func(childComplexity int) int
 	}
@@ -148,6 +150,10 @@ type ComplexityRoot struct {
 		Reason             func(childComplexity int) int
 		Status             func(childComplexity int) int
 		Type               func(childComplexity int) int
+	}
+
+	CreateCategoryPayload struct {
+		Category func(childComplexity int) int
 	}
 
 	CreateNamespacePayload struct {
@@ -173,8 +179,8 @@ type ComplexityRoot struct {
 	}
 
 	DeleteCategoryPayload struct {
-		DeletedCategoryID  func(childComplexity int) int
-		OrphanedProductIds func(childComplexity int) int
+		Category func(childComplexity int) int
+		Outcome  func(childComplexity int) int
 	}
 
 	DeleteNamespacePayload struct {
@@ -301,9 +307,11 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
+		CompleteCategoryDeletion           func(childComplexity int, input model.CompleteCategoryDeletionInput) int
 		CompleteNamespaceDeletion          func(childComplexity int, input model.CompleteNamespaceDeletionInput) int
 		CompleteProductDeletion            func(childComplexity int, input model.CompleteProductDeletionInput) int
 		CompleteRepositoryDeletion         func(childComplexity int, input model.CompleteRepositoryDeletionInput) int
+		CreateCategory                     func(childComplexity int, input model.CreateCategoryInput) int
 		CreateNamespace                    func(childComplexity int, input model.CreateNamespaceInput) int
 		CreateProduct                      func(childComplexity int, input model.CreateProductInput) int
 		CreateRepository                   func(childComplexity int, input model.CreateRepositoryInput) int
@@ -321,6 +329,7 @@ type ComplexityRoot struct {
 		RefreshToken                       func(childComplexity int, input model.RefreshTokenInput) int
 		RotateServiceAccountKey            func(childComplexity int, input model.RotateServiceAccountKeyInput) int
 		TransferNamespaceOwner             func(childComplexity int, input model.TransferNamespaceOwnerInput) int
+		UpdateCategory                     func(childComplexity int, input model.UpdateCategoryInput) int
 		UpdateCategoryStatus               func(childComplexity int, input model.UpdateCategoryStatusInput) int
 		UpdateNamespace                    func(childComplexity int, input model.UpdateNamespaceInput) int
 		UpdateNamespaceStatus              func(childComplexity int, input model.UpdateNamespaceStatusInput) int
@@ -567,7 +576,7 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		Categories      func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		Categories      func(childComplexity int, namespace string, filter *model.CategoryFilterInput, first *int32, after *string, last *int32, before *string) int
 		Category        func(childComplexity int, by model.CategoryBy) int
 		Collection      func(childComplexity int, by model.CollectionBy) int
 		Collections     func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
@@ -795,6 +804,10 @@ type ComplexityRoot struct {
 		Namespace func(childComplexity int) int
 	}
 
+	UpdateCategoryPayload struct {
+		Category func(childComplexity int) int
+	}
+
 	UpdateCategoryStatusPayload struct {
 		Category                 func(childComplexity int) int
 		HasMoreProductDependents func(childComplexity int) int
@@ -942,13 +955,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Category.Children(childComplexity), true
 
-	case "Category.depth":
-		if e.ComplexityRoot.Category.Depth == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Category.Depth(childComplexity), true
-
 	case "Category.id":
 		if e.ComplexityRoot.Category.ID == nil {
 			break
@@ -976,13 +982,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Category.Parent(childComplexity), true
-
-	case "Category.path":
-		if e.ComplexityRoot.Category.Path == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Category.Path(childComplexity), true
 
 	case "Category.products":
 		if e.ComplexityRoot.Category.Products == nil {
@@ -1260,6 +1259,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CollectionStatus.Resolved(childComplexity), true
 
+	case "CompleteCategoryDeletionPayload.id":
+		if e.ComplexityRoot.CompleteCategoryDeletionPayload.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CompleteCategoryDeletionPayload.ID(childComplexity), true
+
 	case "CompleteNamespaceDeletionPayload.id":
 		if e.ComplexityRoot.CompleteNamespaceDeletionPayload.ID == nil {
 			break
@@ -1323,6 +1329,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Condition.Type(childComplexity), true
 
+	case "CreateCategoryPayload.category":
+		if e.ComplexityRoot.CreateCategoryPayload.Category == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CreateCategoryPayload.Category(childComplexity), true
+
 	case "CreateNamespacePayload.namespace":
 		if e.ComplexityRoot.CreateNamespacePayload.Namespace == nil {
 			break
@@ -1372,19 +1385,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CredentialsRef.Type(childComplexity), true
 
-	case "DeleteCategoryPayload.deletedCategoryId":
-		if e.ComplexityRoot.DeleteCategoryPayload.DeletedCategoryID == nil {
+	case "DeleteCategoryPayload.category":
+		if e.ComplexityRoot.DeleteCategoryPayload.Category == nil {
 			break
 		}
 
-		return e.ComplexityRoot.DeleteCategoryPayload.DeletedCategoryID(childComplexity), true
+		return e.ComplexityRoot.DeleteCategoryPayload.Category(childComplexity), true
 
-	case "DeleteCategoryPayload.orphanedProductIds":
-		if e.ComplexityRoot.DeleteCategoryPayload.OrphanedProductIds == nil {
+	case "DeleteCategoryPayload.outcome":
+		if e.ComplexityRoot.DeleteCategoryPayload.Outcome == nil {
 			break
 		}
 
-		return e.ComplexityRoot.DeleteCategoryPayload.OrphanedProductIds(childComplexity), true
+		return e.ComplexityRoot.DeleteCategoryPayload.Outcome(childComplexity), true
 
 	case "DeleteNamespacePayload.namespace":
 		if e.ComplexityRoot.DeleteNamespacePayload.Namespace == nil {
@@ -1764,6 +1777,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.MediaDefinition.FileRef(childComplexity), true
 
+	case "Mutation.completeCategoryDeletion":
+		if e.ComplexityRoot.Mutation.CompleteCategoryDeletion == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_completeCategoryDeletion_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CompleteCategoryDeletion(childComplexity, args["input"].(model.CompleteCategoryDeletionInput)), true
+
 	case "Mutation.completeNamespaceDeletion":
 		if e.ComplexityRoot.Mutation.CompleteNamespaceDeletion == nil {
 			break
@@ -1799,6 +1824,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.CompleteRepositoryDeletion(childComplexity, args["input"].(model.CompleteRepositoryDeletionInput)), true
+
+	case "Mutation.createCategory":
+		if e.ComplexityRoot.Mutation.CreateCategory == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createCategory_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CreateCategory(childComplexity, args["input"].(model.CreateCategoryInput)), true
 
 	case "Mutation.createNamespace":
 		if e.ComplexityRoot.Mutation.CreateNamespace == nil {
@@ -1998,6 +2035,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.TransferNamespaceOwner(childComplexity, args["input"].(model.TransferNamespaceOwnerInput)), true
+
+	case "Mutation.updateCategory":
+		if e.ComplexityRoot.Mutation.UpdateCategory == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateCategory_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateCategory(childComplexity, args["input"].(model.UpdateCategoryInput)), true
 
 	case "Mutation.updateCategoryStatus":
 		if e.ComplexityRoot.Mutation.UpdateCategoryStatus == nil {
@@ -3062,7 +3111,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Categories(childComplexity, args["namespace"].(string), args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
+		return e.ComplexityRoot.Query.Categories(childComplexity, args["namespace"].(string), args["filter"].(*model.CategoryFilterInput), args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
 
 	case "Query.category":
 		if e.ComplexityRoot.Query.Category == nil {
@@ -4046,6 +4095,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.TransferNamespaceOwnerPayload.Namespace(childComplexity), true
 
+	case "UpdateCategoryPayload.category":
+		if e.ComplexityRoot.UpdateCategoryPayload.Category == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateCategoryPayload.Category(childComplexity), true
+
 	case "UpdateCategoryStatusPayload.category":
 		if e.ComplexityRoot.UpdateCategoryStatusPayload.Category == nil {
 			break
@@ -4182,13 +4238,17 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
 		ec.unmarshalInputCatalogObjectReferenceInput,
 		ec.unmarshalInputCategoryBy,
+		ec.unmarshalInputCategoryFilterInput,
 		ec.unmarshalInputCategoryNamespacePath,
+		ec.unmarshalInputCategorySpecInput,
 		ec.unmarshalInputCollectionBy,
 		ec.unmarshalInputCollectionNamespacePath,
+		ec.unmarshalInputCompleteCategoryDeletionInput,
 		ec.unmarshalInputCompleteNamespaceDeletionInput,
 		ec.unmarshalInputCompleteProductDeletionInput,
 		ec.unmarshalInputCompleteRepositoryDeletionInput,
 		ec.unmarshalInputConditionInput,
+		ec.unmarshalInputCreateCategoryInput,
 		ec.unmarshalInputCreateNamespaceInput,
 		ec.unmarshalInputCreateProductInput,
 		ec.unmarshalInputCreateRepositoryInput,
@@ -4232,6 +4292,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputServiceAccountPublicKeyInput,
 		ec.unmarshalInputTokenRequestSpecInput,
 		ec.unmarshalInputTransferNamespaceOwnerInput,
+		ec.unmarshalInputUpdateCategoryInput,
 		ec.unmarshalInputUpdateCategoryStatusInput,
 		ec.unmarshalInputUpdateNamespaceInput,
 		ec.unmarshalInputUpdateNamespaceStatusInput,
@@ -4458,10 +4519,14 @@ extend type Query {
   category(by: CategoryBy!): Category
 
   """
-  List categories with Relay cursor-based pagination
+  List categories with Relay cursor-based pagination. Without ` + "`" + `filter` + "`" + `,
+  ordering is newest first. With ` + "`" + `filter` + "`" + `, results are the subtree below
+  ` + "`" + `filter.descendantOf` + "`" + `, ordered by relative depth and then name. Cursors
+  from one mode are rejected by the other.
   """
   categories(
     namespace: String!
+    filter: CategoryFilterInput
     first: Int
     after: String
     last: Int
@@ -4471,17 +4536,38 @@ extend type Query {
 
 extend type Mutation {
   """
-  Delete a category
+  Create a category by committing its manifest to the namespace's
+  gitstore-system repository and admitting it.
+  """
+  createCategory(input: CreateCategoryInput!): CreateCategoryPayload!
+
+  """
+  Update a category by committing its manifest to the repository and path
+  it was admitted from.
+  """
+  updateCategory(input: UpdateCategoryInput!): UpdateCategoryPayload!
+
+  """
+  Start foreground deletion by removing the category's manifest from Git.
+  Blocked while child categories exist. Assigned products are decoupled
+  asynchronously.
   """
   deleteCategory(input: DeleteCategoryInput!): DeleteCategoryPayload!
+
+  """
+  Controller-only completion of a terminating category's foreground
+  deletion.
+  """
+  completeCategoryDeletion(input: CompleteCategoryDeletionInput!): CompleteCategoryDeletionPayload!
 
   """
   Partial-merge update to a CategoryTaxonomy's .status sub-resource.
   Only non-null input fields are changed; all other existing status
   fields are left unchanged. Requires
   resourceVersion to match the resource's current value or the
-  request fails with a RESOURCE_VERSION_CONFLICT GraphQL error whose
-  extensions include the current resourceVersion. Rejects any attempt
+  request fails with a CONFLICT GraphQL error carrying a
+  RESOURCE_VERSION_CONFLICT diagnostic whose message includes the
+  current resourceVersion. Rejects any attempt
   to alter .spec or author-controlled .metadata by construction —
   this input type has no such fields. Requires
   controller-level authorization independent of the resourceVersion
@@ -4510,7 +4596,7 @@ extend type Subscription {
 """
 Category represents a hierarchical classification system for products.
 Follows the Kubernetes-style resource envelope: id / apiVersion / kind / metadata / spec / status.
-Tree-traversal convenience fields (parent, children, path, depth, products, body) are top-level
+Tree-traversal convenience fields (parent, children, products, body) are top-level
 because they are computed or graph-linked and do not belong in spec or status.
 """
 type Category implements Node {
@@ -4550,12 +4636,14 @@ type Category implements Node {
   body: String
 
   """
-  Parent category (null for root categories).
+  Resolved parent category. Null for roots, for an unresolved parent, and
+  before the category is first reconciled.
   """
   parent: Category
 
   """
-  Direct child categories.
+  Direct child categories (at most 100), ordered by name. A child appears
+  once it has been reconciled.
   """
   children: [Category!]!
 
@@ -4568,17 +4656,6 @@ type Category implements Node {
     last: Int
     before: String
   ): ProductConnection!
-
-  """
-  Full path from root (e.g., ["electronics", "computers", "laptops"]).
-  Derived from the materialized ancestor path stored at admission time.
-  """
-  path: [String!]!
-
-  """
-  Depth in tree (root = 0).
-  """
-  depth: Int!
 }
 
 """
@@ -4597,6 +4674,12 @@ type CategoryTaxonomyStatus {
   observedGeneration: Int!
   lastAppliedRevision: String!
   conditions: [Condition!]!
+  """
+  Controller-computed hierarchy: the only source of a category's position in
+  the tree. Null until the category is first reconciled. After an ancestor
+  moves, descendants converge level by level, so the value is eventually
+  consistent.
+  """
   resolved: ResolvedCategoryTaxonomy
 }
 
@@ -4604,14 +4687,15 @@ type CategoryTaxonomyStatus {
 Controller-computed category hierarchy metadata.
 """
 type ResolvedCategoryTaxonomy {
+  """
+  Depth in the tree (root = 0).
+  """
   depth: Int!
 
   """
   Ancestor path from root to self, e.g. ["electronics", "computers",
   "laptops"] for the "laptops" category (root-to-self order). A root
   category's path is a single-element array containing its own name.
-  Distinct from Category.path, which is derived when the category is
-  read.
   """
   path: [String!]!
   childCount: Int!
@@ -4667,14 +4751,96 @@ Payload for deleteCategory mutation
 """
 type DeleteCategoryPayload {
   """
-  Deleted category ID
+  The category, now terminating.
   """
-  deletedCategoryId: ID
+  category: Category
+
+  outcome: ResourceDeletionOutcome!
+}
+
+"""
+Subtree filter. Hierarchy comes from each category's ` + "`" + `status.resolved.path` + "`" + `:
+categories that have not yet been reconciled are not matched, and results are
+eventually consistent after an ancestor moves.
+"""
+input CategoryFilterInput {
+  """
+  Name of the category whose descendants are returned. Unknown names return
+  an empty connection.
+  """
+  descendantOf: String!
 
   """
-  Orphaned product IDs (products that referenced this category)
+  Include ` + "`" + `descendantOf` + "`" + ` itself as the first result.
   """
-  orphanedProductIds: [ID!]
+  includeSelf: Boolean = false
+
+  """
+  Maximum levels below ` + "`" + `descendantOf` + "`" + ` (1–128). Omit for the whole subtree.
+  """
+  maxDepth: Int
+}
+
+"""
+Author-supplied category specification.
+"""
+input CategorySpecInput {
+  title: String!
+  parentRef: CatalogObjectReferenceInput
+  media: [MediaDefinitionInput!]
+}
+
+input CreateCategoryInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "CategoryTaxonomy"
+  metadata: ObjectMetaInput!
+  spec: CategorySpecInput!
+
+  """
+  Markdown body. Omit for an empty body.
+  """
+  body: String
+}
+
+input UpdateCategoryInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "CategoryTaxonomy"
+
+  """
+  ` + "`" + `name` + "`" + ` and ` + "`" + `namespace` + "`" + ` identify the category and cannot change.
+  """
+  metadata: ObjectMetaInput!
+  spec: CategorySpecInput!
+
+  """
+  Markdown body. Omit to keep the current body.
+  """
+  body: String
+}
+
+type CreateCategoryPayload {
+  category: Category
+}
+
+type UpdateCategoryPayload {
+  category: Category
+}
+
+input CompleteCategoryDeletionInput {
+  namespace: String!
+  name: String!
+
+  """
+  Must equal the category's current metadata.resourceVersion.
+  """
+  resourceVersion: String!
+}
+
+type CompleteCategoryDeletionPayload {
+  """
+  ID of the removed category.
+  """
+  id: ID
 }
 
 # ============================================================================
@@ -4704,11 +4870,9 @@ input UpdateCategoryStatusInput {
   resolved: ResolvedCategoryTaxonomyInput
 
   """
-  Controller-only foreground-deletion completion request. This extends the
-  existing status subresource rather than introducing a parallel
-  CategoryTaxonomy mutation.
+  Controller-only foreground-deletion completion request.
   """
-  completeDeletion: Boolean
+  completeDeletion: Boolean @deprecated(reason: "Use completeCategoryDeletion. Removed in the next release.")
 
   """
   Controller-only bounded Product drain. The server removes non-blocking
@@ -7167,10 +7331,6 @@ func (ec *executionContext) childFields_Category(ctx context.Context, field grap
 		return ec.fieldContext_Category_children(ctx, field)
 	case "products":
 		return ec.fieldContext_Category_products(ctx, field)
-	case "path":
-		return ec.fieldContext_Category_path(ctx, field)
-	case "depth":
-		return ec.fieldContext_Category_depth(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Category", field.Name)
 }
@@ -7305,6 +7465,14 @@ func (ec *executionContext) childFields_CollectionStatus(ctx context.Context, fi
 	return nil, fmt.Errorf("no field named %q was found under type CollectionStatus", field.Name)
 }
 
+func (ec *executionContext) childFields_CompleteCategoryDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_CompleteCategoryDeletionPayload_id(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CompleteCategoryDeletionPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_CompleteNamespaceDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "id":
@@ -7345,6 +7513,14 @@ func (ec *executionContext) childFields_Condition(ctx context.Context, field gra
 		return ec.fieldContext_Condition_message(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Condition", field.Name)
+}
+
+func (ec *executionContext) childFields_CreateCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "category":
+		return ec.fieldContext_CreateCategoryPayload_category(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CreateCategoryPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_CreateNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7393,10 +7569,10 @@ func (ec *executionContext) childFields_CredentialsRef(ctx context.Context, fiel
 
 func (ec *executionContext) childFields_DeleteCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "deletedCategoryId":
-		return ec.fieldContext_DeleteCategoryPayload_deletedCategoryId(ctx, field)
-	case "orphanedProductIds":
-		return ec.fieldContext_DeleteCategoryPayload_orphanedProductIds(ctx, field)
+	case "category":
+		return ec.fieldContext_DeleteCategoryPayload_category(ctx, field)
+	case "outcome":
+		return ec.fieldContext_DeleteCategoryPayload_outcome(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DeleteCategoryPayload", field.Name)
 }
@@ -8519,6 +8695,14 @@ func (ec *executionContext) childFields_TransferNamespaceOwnerPayload(ctx contex
 		return ec.fieldContext_TransferNamespaceOwnerPayload_namespace(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type TransferNamespaceOwnerPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "category":
+		return ec.fieldContext_UpdateCategoryPayload_category(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateCategoryPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateCategoryStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

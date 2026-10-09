@@ -464,3 +464,171 @@ func (f *fakeRepairStore) CompleteRepositoryRepairs(
 }
 
 func (f *fakeRepairStore) Close() {}
+
+func categoryAncestorResource(name, uid, resourceVersion string, path ...string) AuthoritativeResource {
+	return AuthoritativeResource{
+		Kind: "CategoryTaxonomy", UID: uid, Namespace: "demo", Name: name,
+		ResourceVersion: resourceVersion, CreationTimestamp: time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC),
+		ResolvedPath: path,
+	}
+}
+
+func ancestorRows(resource AuthoritativeResource) []ProjectionRecord {
+	var rows []ProjectionRecord
+	for _, projection := range expectedProjections(resource) {
+		if projection.Table == "category_ancestor_index" {
+			rows = append(rows, projection)
+		}
+	}
+	return rows
+}
+
+func ancestorSnapshot(resources []AuthoritativeResource, rows ...ProjectionRecord) ProjectionSnapshot {
+	snapshot := ProjectionSnapshot{Authoritative: resources}
+	for _, resource := range resources {
+		for _, projection := range expectedProjections(resource) {
+			if projection.Table != "category_ancestor_index" {
+				snapshot.Projections = append(snapshot.Projections, projection)
+			}
+		}
+	}
+	snapshot.Projections = append(snapshot.Projections, rows...)
+	return snapshot
+}
+
+func TestExpectedProjectionsDeriveCategoryAncestorRowsFromResolvedPath(t *testing.T) {
+	t.Parallel()
+	laptops := categoryAncestorResource("laptops", "11111111-1111-1111-1111-111111111111", "4", "electronics", "computers", "laptops")
+	rows := ancestorRows(laptops)
+	got := make([]string, 0, len(rows))
+	for _, row := range rows {
+		got = append(got, row.Key())
+	}
+	want := []string{"demo/electronics/2/laptops", "demo/computers/1/laptops", "demo/laptops/0/laptops"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("ancestor rows = %v, want %v", got, want)
+	}
+	if rows := ancestorRows(categoryAncestorResource("draft", "22222222-2222-2222-2222-222222222222", "1")); len(rows) != 0 {
+		t.Fatalf("category without status.resolved owns rows: %v", rows)
+	}
+}
+
+func TestBuildRepairPlanReportsMissingDanglingAndStaleAncestorRows(t *testing.T) {
+	t.Parallel()
+	const laptopsUID = "11111111-1111-1111-1111-111111111111"
+	laptops := categoryAncestorResource("laptops", laptopsUID, "4", "electronics", "computers", "laptops")
+	rows := ancestorRows(laptops)
+
+	// computers/1 is missing; a re-parent left electronics/2 intact but also
+	// left a row under the old parent "gadgets"; an orphan references a
+	// removed category; and one row points at a recreated (different) UID.
+	oldParent := rows[0]
+	oldParent.Ancestor, oldParent.Depth = "gadgets", 1
+	orphan := rows[0]
+	orphan.UID, orphan.Name, orphan.Ancestor, orphan.Depth = "99999999-9999-9999-9999-999999999999", "removed", "electronics", 1
+	recreated := rows[2]
+	recreated.UID = "88888888-8888-8888-8888-888888888888"
+
+	snapshot := ancestorSnapshot([]AuthoritativeResource{laptops}, rows[0], oldParent, orphan, recreated)
+	plan, err := BuildRepairPlan(snapshot)
+	if err != nil {
+		t.Fatalf("BuildRepairPlan() error = %v", err)
+	}
+	got := map[string]FindingType{}
+	for _, finding := range plan.Findings {
+		if finding.Table == "category_ancestor_index" {
+			got[finding.Key] = finding.Type
+		}
+	}
+	want := map[string]FindingType{
+		"demo/computers/1/laptops":   FindingMissing,
+		"demo/gadgets/1/laptops":     FindingStale,
+		"demo/electronics/1/removed": FindingDangling,
+		"demo/laptops/0/laptops":     FindingStale,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("findings = %v, want %v", got, want)
+	}
+	for key, findingType := range want {
+		if got[key] != findingType {
+			t.Fatalf("finding[%s] = %q, want %q (all: %v)", key, got[key], findingType, got)
+		}
+	}
+	for _, finding := range plan.Findings {
+		if !finding.Repairable {
+			t.Fatalf("finding %s/%s is not repairable: %s", finding.Table, finding.Key, finding.Reason)
+		}
+	}
+	if err := ValidateRepairPlan(plan); err != nil {
+		t.Fatalf("ValidateRepairPlan() error = %v", err)
+	}
+}
+
+func TestProjectionRepairServiceConvergesAncestorIndex(t *testing.T) {
+	t.Parallel()
+	laptops := categoryAncestorResource("laptops", "11111111-1111-1111-1111-111111111111", "4", "electronics", "computers", "laptops")
+	rows := ancestorRows(laptops)
+	oldParent := rows[0]
+	oldParent.Ancestor, oldParent.Depth = "gadgets", 1
+	orphan := rows[0]
+	orphan.UID, orphan.Name, orphan.Depth = "99999999-9999-9999-9999-999999999999", "removed", 1
+
+	store := newFakeRepairStore(ancestorSnapshot([]AuthoritativeResource{laptops}, rows[0], oldParent, orphan))
+	service := &ProjectionRepairService{store: store}
+	plan, err := service.Audit(context.Background())
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	if len(plan.Actions) != 4 {
+		t.Fatalf("actions = %s, want 4 (insert 2 missing, delete stale, delete dangling)", stringifyPlan(plan))
+	}
+	result, err := service.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if result.AppliedActions != 4 || len(result.Verification.Findings) != 0 {
+		t.Fatalf("result = %+v, want 4 applied actions and a clean audit", result)
+	}
+	again, err := service.Audit(context.Background())
+	if err != nil || len(again.Findings) != 0 || len(again.Actions) != 0 {
+		t.Fatalf("second audit = %+v, %v; want clean", again, err)
+	}
+}
+
+// TestRollingUpgradeAncestorIndexGapIsBackfilledByRepair models categories
+// whose status was written by a replica that predates the ancestor index:
+// status.resolved is set but no index row exists. Repair must backfill every
+// row and leave a clean audit, so filtered lists are complete after rollout.
+func TestRollingUpgradeAncestorIndexGapIsBackfilledByRepair(t *testing.T) {
+	t.Parallel()
+	resources := []AuthoritativeResource{
+		categoryAncestorResource("electronics", "21111111-1111-1111-1111-111111111111", "3", "electronics"),
+		categoryAncestorResource("computers", "22222222-2222-2222-2222-222222222222", "5", "electronics", "computers"),
+		categoryAncestorResource("laptops", "23333333-3333-3333-3333-333333333333", "7", "electronics", "computers", "laptops"),
+		// Never reconciled: owns no rows before or after repair.
+		categoryAncestorResource("unreconciled", "24444444-4444-4444-4444-444444444444", "1"),
+	}
+	want := 0
+	for _, resource := range resources {
+		want += len(ancestorRows(resource))
+	}
+	if want != 6 {
+		t.Fatalf("expected 6 derived rows, got %d", want)
+	}
+
+	service := &ProjectionRepairService{store: newFakeRepairStore(ancestorSnapshot(resources))}
+	plan, err := service.Audit(context.Background())
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	if len(plan.Actions) != want {
+		t.Fatalf("actions = %s, want %d inserts", stringifyPlan(plan), want)
+	}
+	result, err := service.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if len(result.Verification.Findings) != 0 {
+		t.Fatalf("verification findings = %+v, want none", result.Verification.Findings)
+	}
+}

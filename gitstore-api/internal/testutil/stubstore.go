@@ -16,15 +16,16 @@ import (
 // githttp and security middleware tests have override hooks; all other methods
 // are no-ops that satisfy the full datastore.Datastore interface.
 type StubStore struct {
-	GetNamespaceByNameFunc  func(ctx context.Context, name string) (*datastore.Namespace, error)
-	GetNamespaceFunc        func(ctx context.Context, id string) (*datastore.Namespace, error)
-	LookupRepositoryFunc    func(ctx context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error)
-	GetRepositoryFunc       func(ctx context.Context, id string) (*datastore.Repository, error)
-	HasRepositoriesFunc     func(ctx context.Context, namespaceID string) (bool, error)
-	HasCatalogResourcesFunc func(ctx context.Context, repoID string) (bool, error)
-	GetCategoryTaxonomyFunc func(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error)
-	GetProductFunc          func(ctx context.Context, uid string) (*datastore.Product, error)
-	GetProductByNameFunc    func(ctx context.Context, namespace, name string) (*datastore.Product, error)
+	GetNamespaceByNameFunc        func(ctx context.Context, name string) (*datastore.Namespace, error)
+	GetNamespaceFunc              func(ctx context.Context, id string) (*datastore.Namespace, error)
+	LookupRepositoryFunc          func(ctx context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error)
+	GetRepositoryFunc             func(ctx context.Context, id string) (*datastore.Repository, error)
+	HasRepositoriesFunc           func(ctx context.Context, namespaceID string) (bool, error)
+	HasCatalogResourcesFunc       func(ctx context.Context, repoID string) (bool, error)
+	GetCategoryTaxonomyFunc       func(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error)
+	GetCategoryTaxonomyByNameFunc func(ctx context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error)
+	GetProductFunc                func(ctx context.Context, uid string) (*datastore.Product, error)
+	GetProductByNameFunc          func(ctx context.Context, namespace, name string) (*datastore.Product, error)
 }
 
 func (s *StubStore) CreateFile(_ context.Context, _ *datastore.File) error { return nil }
@@ -112,7 +113,10 @@ func (s *StubStore) GetCategoryTaxonomy(ctx context.Context, uid string) (*datas
 	}
 	return nil, datastore.ErrNotFound
 }
-func (s *StubStore) GetCategoryTaxonomyByName(_ context.Context, _, _ string) (*datastore.CategoryTaxonomy, error) {
+func (s *StubStore) GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error) {
+	if s.GetCategoryTaxonomyByNameFunc != nil {
+		return s.GetCategoryTaxonomyByNameFunc(ctx, namespace, name)
+	}
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) ListCategoryTaxonomies(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {

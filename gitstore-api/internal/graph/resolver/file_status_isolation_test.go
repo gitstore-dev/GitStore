@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -74,6 +75,6 @@ func TestUpdateFileStatusGeneric_ScopedStrictlyToNamespaceAndNameIdentity(t *tes
 	})
 	var graphErr *gqlerror.Error
 	require.True(t, errors.As(err, &graphErr))
-	require.Equal(t, "RESOURCE_VERSION_CONFLICT", graphErr.Extensions["code"])
-	require.Equal(t, "1", graphErr.Extensions["resourceVersion"])
+	require.Equal(t, "CONFLICT", graphErr.Extensions["code"])
+	require.Contains(t, fmt.Sprint(graphErr.Extensions["diagnostics"]), "current resourceVersion is "+"1")
 }

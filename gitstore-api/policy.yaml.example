@@ -17,6 +17,8 @@ roles:
     allow:
       - "*.status.write"
       - "category.status.write"
+      - "categoryTaxonomy.list"
+      - "categoryTaxonomy.purge"
       - "namespace.status.write"
       - "namespace.watch"
       - "repository.create.any"
@@ -36,19 +38,29 @@ roles:
       - repository.transfer.own
       - repository.delete.own
       - repository.read.own
+      - categoryTaxonomy.list
+      - categoryTaxonomy.read
     deny:
       - namespace.delete.any     # cannot delete other owners' namespaces
 
+  # Category mutations (categoryTaxonomy.create|update|delete) are not granted
+  # to these shared roles: rbac-local grants are global, not namespace-scoped.
+  # Grant them to a per-tenant role, or use a provider that scopes decisions by
+  # the request's namespace attribute.
   developer:
     allow:
       - namespace.read
       - repository.read
       - repository.write
       - repository.read.any
+      - categoryTaxonomy.list
+      - categoryTaxonomy.read
     deny: []
 
   anonymous:
     allow:
+      - categoryTaxonomy.list
+      - categoryTaxonomy.read
       - namespace.read
       - repository.read
       - repository.read.any

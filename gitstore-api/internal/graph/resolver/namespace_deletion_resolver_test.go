@@ -14,7 +14,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
-	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,8 +59,11 @@ func TestDeleteNamespaceResolverReturnsDeterministicBlockers(t *testing.T) {
 	assert.Nil(t, payload)
 	var graphErr *gqlerror.Error
 	require.ErrorAs(t, err, &graphErr)
-	assert.Equal(t, namespaceadmission.CodeDeletionBlocked, graphErr.Extensions["code"])
-	assert.Equal(t, []string{"BOOTSTRAP_NAMESPACE", "NAMESPACE_NOT_EMPTY"}, graphErr.Extensions["reasons"])
+	assert.Equal(t, "FAILED_PRECONDITION", graphErr.Extensions["code"])
+	diagnostics, _ := graphErr.Extensions["diagnostics"].([]map[string]any)
+	require.Len(t, diagnostics, 2)
+	assert.Equal(t, "BOOTSTRAP_NAMESPACE", diagnostics[0]["reason"])
+	assert.Equal(t, "NAMESPACE_NOT_EMPTY", diagnostics[1]["reason"])
 }
 
 func newNamespaceDeletionResolver(t *testing.T) (*mutationResolver, datastore.Datastore) {

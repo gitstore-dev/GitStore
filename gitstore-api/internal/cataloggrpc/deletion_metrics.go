@@ -37,4 +37,11 @@ var (
 			Help: "Product deletion requests blocked by a ProductVariant owner reference.",
 		},
 	)
+	admissionRejectionsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "gitstore", Subsystem: "admission", Name: "rejections_total",
+			Help: "Manifests rejected by admission, by kind and phase.",
+		},
+		[]string{"kind", "phase"},
+	)
 )

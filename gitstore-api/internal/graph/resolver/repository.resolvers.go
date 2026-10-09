@@ -122,7 +122,7 @@ func (r *mutationResolver) UpdateRepositoryStatus(ctx context.Context, input mod
 	}
 	if err := datastore.ApplyRepositoryStatusPatch(repository, patch); err != nil {
 		if errors.Is(err, datastore.ErrConflict) {
-			return nil, &gqlerror.Error{Message: "Repository status update conflict", Extensions: map[string]any{"code": "RESOURCE_VERSION_CONFLICT", "resourceVersion": repository.ResourceVersion}}
+			return nil, statusConflictError("Repository", input.Namespace, input.Name, repository.ResourceVersion)
 		}
 		return nil, gqlerror.Errorf("update Repository status: %v", err)
 	}
@@ -132,7 +132,7 @@ func (r *mutationResolver) UpdateRepositoryStatus(ctx context.Context, input mod
 			if getErr != nil {
 				return nil, gqlerror.Errorf("Repository status update conflict")
 			}
-			return nil, &gqlerror.Error{Message: "Repository status update conflict", Extensions: map[string]any{"code": "RESOURCE_VERSION_CONFLICT", "resourceVersion": current.ResourceVersion}}
+			return nil, statusConflictError("Repository", input.Namespace, input.Name, current.ResourceVersion)
 		}
 		return nil, gqlerror.Errorf("update Repository status: %v", err)
 	}

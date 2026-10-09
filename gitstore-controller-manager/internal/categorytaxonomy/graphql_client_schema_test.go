@@ -15,6 +15,7 @@ import (
 func TestGraphQLOperationsMatchSchema(t *testing.T) {
 	schemavalidate.Validate(t, []schemavalidate.Operation{
 		{Name: "categoryDeletionStatusMutation", Query: categoryDeletionStatusMutation},
+		{Name: "completeCategoryDeletionMutation", Query: completeCategoryDeletionMutation},
 		{Name: "productsListQuery", Query: productsListQuery},
 	})
 }

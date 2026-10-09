@@ -193,18 +193,27 @@ type mockGitWriter struct {
 	mu sync.Mutex
 }
 
-type namespaceOwnerAuthZ struct{}
+// namespaceOwnerAuthZ mirrors namespace-scoped authorization: a non-admin
+// subject may act on categories only in a namespace it owns.
+type namespaceOwnerAuthZ struct {
+	store datastore.Datastore
+}
 
 func (*namespaceOwnerAuthZ) Name() string { return "namespace-owner-test" }
 
-func (*namespaceOwnerAuthZ) Authorize(
-	_ context.Context,
+func (n *namespaceOwnerAuthZ) Authorize(
+	ctx context.Context,
 	principal *authpkg.Principal,
 	_ string,
 	resource authpkg.ResourceContext,
 ) (authpkg.Decision, error) {
 	if principal.Subject == "admin" {
 		return authpkg.Allow("namespace-owner-test", "administrator"), nil
+	}
+	if namespace, _ := resource.Attrs["namespace"].(string); resource.Kind == "categoryTaxonomy" && namespace != "" {
+		if ns, err := n.store.GetNamespaceByName(ctx, namespace); err == nil && ns.EffectiveOwnerSub() != "" && ns.EffectiveOwnerSub() != principal.Subject {
+			return authpkg.Deny("namespace-owner-test", "namespace belongs to another user"), nil
+		}
 	}
 	if resource.OwnerSub != "" && resource.OwnerSub != principal.Subject {
 		return authpkg.Deny("namespace-owner-test", "resource belongs to another user"), nil
@@ -315,7 +324,7 @@ func main() {
 	defer accessTokenProvider.Shutdown()
 	registry := authpkg.NewProviderRegistry(
 		authpkg.NewChainedAuthN(staticUsers, assertionProvider, accessTokenProvider, anonymous.New()),
-		&namespaceOwnerAuthZ{},
+		&namespaceOwnerAuthZ{store: store},
 		nil,
 	)
 	ids := apiruntime.NewSequenceIDGenerator()

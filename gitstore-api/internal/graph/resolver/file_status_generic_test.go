@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -48,8 +49,8 @@ func TestUpdateResourceStatusFileResolvedAndConflict(t *testing.T) {
 	})
 	var graphErr *gqlerror.Error
 	require.True(t, errors.As(err, &graphErr))
-	require.Equal(t, "RESOURCE_VERSION_CONFLICT", graphErr.Extensions["code"])
-	require.Equal(t, "2", graphErr.Extensions["resourceVersion"])
+	require.Equal(t, "CONFLICT", graphErr.Extensions["code"])
+	require.Contains(t, fmt.Sprint(graphErr.Extensions["diagnostics"]), "current resourceVersion is "+"2")
 }
 
 func TestFileWatchUsesDurableJournalAcrossReplicasAndReplacement(t *testing.T) {
