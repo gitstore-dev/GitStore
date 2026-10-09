@@ -6,13 +6,18 @@ package cataloggrpc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"reflect"
 	"strings"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
+	"go.uber.org/zap"
 )
 
 // ErrCommittedManifestSuperseded is retained as an alias for callers that
@@ -25,6 +30,47 @@ var ErrCommittedManifestSuperseded = admission.ErrCommittedManifestSuperseded
 // the synchronous counterpart of the post-receive batch path; neither callers
 // nor GraphQL resolvers may write an author-controlled resource directly.
 func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	result, err := s.admitCommittedManifest(ctx, req)
+	// Constructor dependencies and request shape are not post-commit failures;
+	// attempting repair for either can dereference an unavailable Git reader.
+	if err == nil || isCommittedAdmissionDenied(err) || s.git == nil || s.store == nil ||
+		req.RepositoryID == "" || req.CommitSHA == "" || req.RefName == "" || req.Path == "" {
+		return result, err
+	}
+
+	// A Git write is already durable when this method is called.  Keep the
+	// caller-visible result of that write, but make a small, synchronous effort
+	// to converge its tip.  The repair context deliberately survives a canceled
+	// request: cancellation after commit must not strand the manifest.
+	repairCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	repaired := s.repairCommittedManifest(repairCtx, req)
+	s.log.Info("committed manifest admission repair completed",
+		zap.String("repository_id", req.RepositoryID), zap.String("ref_name", req.RefName),
+		zap.String("path", req.Path), zap.String("commit_sha", req.CommitSHA),
+		zap.String("outcome", repaired))
+	return result, err
+}
+
+func isCommittedAdmissionDenied(err error) bool {
+	var admissionErr *admission.Error
+	if !errors.As(err, &admissionErr) || admissionErr.Code != admission.CodeAdmissionRejected {
+		return false
+	}
+	// EntryFailed is also represented as a post-receive rejection so callers
+	// receive the normal wire envelope.  Only an actual policy/content denial
+	// is terminal for repair; a write failure is worth retrying at the same tip.
+	for _, diagnostic := range admissionErr.Diagnostics {
+		if diagnostic.Reason == "ADMISSION_FAILED" {
+			return false
+		}
+	}
+	return true
+}
+
+// admitCommittedManifest performs one admission attempt.  Its public wrapper
+// is responsible for best-effort repair while preserving this attempt's error.
+func (s *Server) admitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
 	if s.git == nil || s.store == nil {
 		return nil, fmt.Errorf("committed admission is unavailable")
 	}
@@ -48,12 +94,7 @@ func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.Commi
 		return nil, ErrCommittedManifestSuperseded
 	}
 	if current != req.CommitSHA {
-		latest, err := s.git.ReadFile(ctx, req.RepositoryID, req.Path, current)
-		if err != nil || !bytes.Equal(latest, content) {
-			return nil, ErrCommittedManifestSuperseded
-		}
-		content = latest
-		commitSHA = current
+		return nil, ErrCommittedManifestSuperseded
 	}
 
 	parsed, body, err := s.parser.ParseResource(bytes.NewReader(content))
@@ -134,7 +175,133 @@ func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.Commi
 		}
 		return nil, fmt.Errorf("committed admission did not materialize %s %s/%s: %w", entry.identity.Kind, entry.identity.Namespace, entry.identity.Name, err)
 	}
+	if !committedResourceMatches(stored, req, entry, result.NoOp) {
+		// Product historically represents an identical manifest as a silent
+		// no-op. Treat that as success only after proving the stored body and
+		// provenance are identical; otherwise this is a real failed admission.
+		if committedResourceMatches(stored, req, entry, true) {
+			result.NoOp = true
+			return result, nil
+		}
+		return nil, fmt.Errorf("committed admission did not materialize current content and provenance for %s %s/%s", entry.identity.Kind, entry.identity.Namespace, entry.identity.Name)
+	}
 	return result, nil
+}
+
+// repairCommittedManifest retries only while this caller's commit remains the
+// ref tip.  It reads the authoritative tree again and derives the operation
+// from the current projection, preventing a stale caller from admitting a
+// later writer's content under its own identity.
+func (s *Server) repairCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) string {
+	for attempt := 0; attempt < 3; attempt++ {
+		if ctx.Err() != nil {
+			return "budget_exhausted"
+		}
+		current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+		if !ok || current != req.CommitSHA {
+			return "superseded"
+		}
+		retry := req
+		if req.Operation == admission.OperationDelete {
+			// Deletion admission validates stored provenance itself.
+			if _, err := s.admitCommittedManifest(ctx, retry); err == nil {
+				return "repaired"
+			} else if isCommittedAdmissionDenied(err) {
+				return "denied"
+			}
+			continue
+		}
+
+		content, err := s.git.ReadFile(ctx, req.RepositoryID, req.Path, current)
+		if err != nil {
+			return "read_failed"
+		}
+		parsed, body, err := s.parser.ParseResource(bytes.NewReader(content))
+		if err != nil || parsed == nil {
+			return "invalid_content"
+		}
+		entry, accepted, err := newParsedEntry(req.Path, parsed, body, req.Namespace)
+		if err != nil || !accepted {
+			return "identity_mismatch"
+		}
+		// The request normally has no Kind/Name for create/update, so establish
+		// identity from its original content before accepting the reread file.
+		original, originalBody, originalErr := s.parser.ParseResource(bytes.NewReader(req.Content))
+		if originalErr != nil || original == nil {
+			return "identity_mismatch"
+		}
+		originalEntry, originalAccepted, identityErr := newParsedEntry(req.Path, original, originalBody, req.Namespace)
+		if identityErr != nil || !originalAccepted || originalEntry.identity != entry.identity {
+			return "identity_mismatch"
+		}
+		retry.Content = content
+		// The mutation was authorized for req.Operation. Do not turn a failed
+		// create into an update (or vice versa) here: this boundary has no
+		// principal authorizer and must not broaden the caller's authority.
+		retry.Operation = req.Operation
+		if _, err := s.admitCommittedManifest(ctx, retry); err == nil {
+			return "repaired"
+		} else if isCommittedAdmissionDenied(err) {
+			return "denied"
+		}
+	}
+	return "attempts_exhausted"
+}
+
+func committedResourceMatches(resource any, req admission.CommittedManifestRequest, entry *parsedEntry, noOp bool) bool {
+	if entry == nil {
+		return false
+	}
+	var repositoryID, sourcePath, gitRef, commitSHA string
+	var apiVersion, kind, namespace, name, body string
+	var labels, annotations map[string]string
+	var storedSpec []byte
+	switch v := resource.(type) {
+	case *datastore.CategoryTaxonomy:
+		repositoryID, sourcePath, gitRef, commitSHA = v.RepositoryID, v.SourcePath, v.GitRef, v.GitCommitSHA
+		apiVersion, kind, namespace, name, labels, annotations, body, storedSpec = v.APIVersion, v.Kind, v.Namespace, v.Name, v.Labels, v.Annotations, v.Body, v.Spec
+	case *datastore.Product:
+		repositoryID, sourcePath, gitRef, commitSHA = v.RepositoryID, v.SourcePath, v.GitRef, v.GitCommitSHA
+		apiVersion, kind, namespace, name, labels, annotations, body, storedSpec = v.APIVersion, v.Kind, v.Namespace, v.Name, v.Labels, v.Annotations, v.Body, v.Spec
+	case *datastore.Namespace:
+		// Namespace provenance is its configured authoring target rather than a
+		// stored repository ID (Namespace is cluster-scoped).
+		sourcePath, gitRef, commitSHA = v.SourcePath, v.GitRef, v.GitCommitSHA
+		apiVersion, kind, name, labels, annotations, body, storedSpec = v.APIVersion, v.Kind, v.Name, v.Labels, v.Annotations, v.Body, v.Spec
+	case *datastore.Repository:
+		// Repository.RepositoryID is the ID being declared, not the system
+		// repository that authored this manifest.
+		sourcePath, gitRef, commitSHA = v.SourcePath, v.GitRef, v.GitCommitSHA
+		apiVersion, kind, namespace, name, labels, annotations, body, storedSpec = v.APIVersion, v.Kind, v.Namespace, v.Name, v.Labels, v.Annotations, v.Body, v.Spec
+	case *datastore.File:
+		repositoryID, sourcePath, gitRef, commitSHA = v.RepositoryID, v.SourcePath, v.GitRef, v.GitCommitSHA
+		apiVersion, kind, namespace, name, labels, annotations, body, storedSpec = v.APIVersion, v.Kind, v.Namespace, v.Name, v.Labels, v.Annotations, v.Body, v.Spec
+	case *datastore.Collection:
+		repositoryID, sourcePath, gitRef, commitSHA = v.RepositoryID, v.SourcePath, v.GitRef, v.GitCommitSHA
+		apiVersion, kind, namespace, name, labels, annotations, body, storedSpec = v.APIVersion, v.Kind, v.Namespace, v.Name, v.Labels, v.Annotations, v.Body, v.Spec
+	case *datastore.ProductVariant:
+		repositoryID, sourcePath, gitRef, commitSHA = v.RepositoryID, v.SourcePath, v.GitRef, v.GitCommitSHA
+		apiVersion, kind, namespace, name, labels, annotations, body, storedSpec = v.APIVersion, v.Kind, v.Namespace, v.Name, v.Labels, v.Annotations, v.Body, v.Spec
+	default:
+		return false
+	}
+	if (repositoryID != "" && repositoryID != req.RepositoryID) || sourcePath != req.Path || gitRef != req.RefName {
+		return false
+	}
+	expected, ok := comparableForParsed(entry.parsed, entry.body, req.Namespace)
+	if !ok {
+		return false
+	}
+	expectedSpec, expectedErr := json.Marshal(expected.Spec)
+	var expectedValue, storedValue any
+	if expectedErr != nil || json.Unmarshal(expectedSpec, &expectedValue) != nil || json.Unmarshal(storedSpec, &storedValue) != nil ||
+		apiVersion != expected.APIVersion || kind != expected.Kind || namespace != expected.Namespace || name != expected.Name ||
+		!maps.Equal(labels, expected.Labels) || !maps.Equal(annotations, expected.Annotations) || body != expected.Body || !reflect.DeepEqual(storedValue, expectedValue) {
+		return false
+	}
+	// A verified no-op intentionally retains its earlier commit, but it must
+	// still prove that the admitted body and provenance are the same.
+	return noOp || commitSHA == req.CommitSHA
 }
 
 func errorText(err error) string {

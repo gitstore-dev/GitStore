@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
@@ -17,6 +18,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type failCategoryCreateOnceStore struct {
+	datastore.Datastore
+	remaining atomic.Int32
+}
+
+func (s *failCategoryCreateOnceStore) CreateCategoryTaxonomy(ctx context.Context, category *datastore.CategoryTaxonomy) error {
+	if s.remaining.CompareAndSwap(1, 0) {
+		return errors.New("injected category create failure")
+	}
+	return s.Datastore.CreateCategoryTaxonomy(ctx, category)
+}
 
 // denyCategoryTitlePolicy denies any CategoryTaxonomy titled "Denied".
 type denyCategoryTitlePolicy struct{}
@@ -88,6 +101,32 @@ func TestAdmitCommittedManifest_CategoryTaxonomyDenialIsPostReceiveRejection(t *
 	require.NoError(t, err)
 	assert.Equal(t, accepted, stored.GitCommitSHA, "the last accepted generation is kept")
 	assert.Contains(t, string(stored.Spec), "Electronics")
+}
+
+func TestAdmitCommittedManifest_RepairsCurrentTipAfterWriteFailureButPreservesError(t *testing.T) {
+	base := newTestDatastore(t)
+	store := &failCategoryCreateOnceStore{Datastore: base}
+	store.remaining.Store(1)
+	commit := strings.Repeat("f", 40)
+	current := commit
+	content := categoryManifestTitled("electronics", "Electronics")
+	srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{
+		commit: {"categories/electronics.md": content},
+	}))
+
+	_, err := admitCommittedCategory(t, srv, commit, content, admission.OperationCreate)
+	require.Error(t, err, "the original mutation outcome is retained")
+	assert.Zero(t, store.remaining.Load(), "the bounded repair retried the failed write")
+	stored, lookupErr := base.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, lookupErr)
+	assert.Equal(t, commit, stored.GitCommitSHA)
+}
+
+func TestAdmitCommittedManifest_UnavailableRuntimeDoesNotAttemptRepair(t *testing.T) {
+	store := newTestDatastore(t)
+	srv := newCatalogServer(t, store, nil)
+	_, err := admitCommittedCategory(t, srv, strings.Repeat("a", 40), categoryManifestTitled("electronics", "Electronics"), admission.OperationCreate)
+	require.EqualError(t, err, "committed admission is unavailable")
 }
 
 func TestAdmitCommittedManifest_CategoryTaxonomyIdenticalReadmissionIsNoOp(t *testing.T) {
