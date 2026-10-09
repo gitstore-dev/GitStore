@@ -2386,7 +2386,7 @@ func (ec *executionContext) unmarshalInputResolvedCategoryRefInput(ctx context.C
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "uid"}
+	fieldsInOrder := [...]string{"name", "uid", "path"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -2407,6 +2407,13 @@ func (ec *executionContext) unmarshalInputResolvedCategoryRefInput(ctx context.C
 				return it, err
 			}
 			it.UID = data
+		case "path":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("path"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Path = data
 		}
 	}
 	return it, nil

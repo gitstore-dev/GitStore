@@ -1048,6 +1048,11 @@ type Category implements Node {
 
 A category's position in the tree is `status.resolved { path depth childCount productCount }`. It is computed by the controller manager, is `null` until the first reconcile, and is eventually consistent after an ancestor moves. `Category.path` and `Category.depth` no longer exist.
 
+`Category.products` is a paginated projection of Products assigned to that
+category or any resolved descendant. It is eventually consistent while a
+category move is being reconciled; callers should retry after the category's
+resolved path changes rather than treating the connection as a live aggregate.
+
 ### Collection
 
 ```graphql

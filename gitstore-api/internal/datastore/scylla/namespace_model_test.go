@@ -183,6 +183,7 @@ func TestScyllaSchemaIsPerResourceBaseline(t *testing.T) {
 		"008_file.cql",
 		"009_service_account.cql",
 		"010_category_ancestor_index.cql",
+		"011_category_product_index.cql",
 	}, names)
 }
 

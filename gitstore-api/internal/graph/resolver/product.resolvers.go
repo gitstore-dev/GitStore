@@ -93,6 +93,7 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 			status.Resolved.Category = &catalog.ResolvedCategoryDefinition{
 				Name: input.Resolved.Category.Name,
 				UID:  input.Resolved.Category.UID,
+				Path: append([]string(nil), input.Resolved.Category.Path...),
 			}
 		} else if status.Resolved != nil {
 			status.Resolved.Category = nil
@@ -128,7 +129,37 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 		}
 		return nil, gqlerror.Errorf("update product status: %v", err)
 	}
+	if index, ok := r.store.(datastore.CategoryProductIndex); ok {
+		memberUIDs, err := r.categoryMembershipUIDs(ctx, product.Namespace, status.Resolved)
+		if err != nil {
+			return nil, gqlerror.Errorf("resolve category membership: %v", err)
+		}
+		if err := index.ReplaceCategoryProductMembership(ctx, product, memberUIDs); err != nil {
+			return nil, gqlerror.Errorf("update category product membership: %v", err)
+		}
+	}
 	return &model.UpdateProductStatusPayload{Product: DatastoreProductToGraphQL(product)}, nil
+}
+
+func (r *mutationResolver) categoryMembershipUIDs(ctx context.Context, namespace string, resolved *catalog.ResolvedProductDefinition) ([]string, error) {
+	if resolved == nil || resolved.Category == nil {
+		return nil, nil
+	}
+	path := resolved.Category.Path
+	if len(path) == 0 {
+		path = []string{resolved.Category.Name}
+	}
+	uids := make([]string, 0, len(path))
+	for _, name := range path {
+		category, err := r.store.GetCategoryTaxonomyByName(ctx, namespace, name)
+		if err != nil {
+			return nil, err
+		}
+		// Projection keys are datastore identities. Relay IDs are API-boundary
+		// encodings and must never be persisted into a Scylla index.
+		uids = append(uids, category.UID)
+	}
+	return uids, nil
 }
 
 // CompleteProductDeletion is the resolver for the completeProductDeletion field.

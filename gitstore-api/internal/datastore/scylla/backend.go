@@ -63,7 +63,8 @@ type scyllaDatastore struct {
 	mutations                         *mutationExecutor
 	// namespaceWatchBucketSize starts at the configured constant and adopts the
 	// journal's persisted bucket size on first clock read.
-	namespaceWatchBucketSize atomic.Int64
+	namespaceWatchBucketSize       atomic.Int64
+	categoryProductProjectionReady atomic.Bool
 }
 
 // row structs mirror the CQL columns.
@@ -380,7 +381,27 @@ func New(cfg config.ScyllaConfig, log *zap.Logger, watchBucketSize ...int) (data
 		mutations:                         newMutationExecutor(nil),
 	}
 	ds.namespaceWatchBucketSize.Store(bucketSize)
+	_ = ds.refreshCategoryProductProjectionReady(context.Background())
 	return ds, nil
+}
+
+// refreshCategoryProductProjectionReady observes the durable rollout marker on
+// every connection read.  A repair command can set it while API replicas are
+// live, so startup-only caching would leave those replicas permanently stale.
+func (s *scyllaDatastore) refreshCategoryProductProjectionReady(ctx context.Context) error {
+	var ready struct {
+		Ready bool `db:"ready"`
+	}
+	err := s.session.Query("SELECT ready FROM category_product_projection_state WHERE projection=?", nil).WithContext(ctx).Bind("category-products").GetRelease(&ready)
+	if errors.Is(err, gocql.ErrNotFound) {
+		s.categoryProductProjectionReady.Store(false)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("scylla: read category product projection state: %w", err)
+	}
+	s.categoryProductProjectionReady.Store(ready.Ready)
+	return nil
 }
 
 // parseHosts splits "host:port" entries into plain hostnames and returns
@@ -718,6 +739,10 @@ func (s *scyllaDatastore) deleteProductWithResourceVersion(ctx context.Context, 
 		},
 	}
 	projections := []mutationAction{
+		{
+			Step:  catalogueStep("delete", "Product", uid, categoryProductsByProductTable, uid, "delete-category-memberships"),
+			Apply: func(ctx context.Context) error { return s.ReplaceCategoryProductMembership(ctx, p, nil) },
+		},
 		{
 			Step: catalogueStep("delete", "Product", uid, ownerReferenceDependentsTable, uid, "delete-owner-references"),
 			Apply: func(ctx context.Context) error {

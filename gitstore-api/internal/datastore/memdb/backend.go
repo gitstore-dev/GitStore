@@ -163,6 +163,13 @@ type memdbDatastore struct {
 	namespaceWatchRetention time.Duration
 	sessionRevocationMu     sync.RWMutex
 	sessionRevocations      map[string]time.Time
+	// categoryProducts is a projection, not an alternate product store. Keys
+	// are namespace/category UID and values are product UIDs. Keeping it
+	// alongside memdb makes the development backend exercise the same bounded
+	// lookup contract as Scylla.
+	categoryProductsMu sync.RWMutex
+	categoryProducts   map[string]map[string]struct{}
+	productCategories  map[string][]string
 }
 
 // New creates an empty in-memory datastore backed by go-memdb.
@@ -181,7 +188,78 @@ func New(watchRetention ...time.Duration) (datastore.Datastore, error) {
 		namespaceWatchProgress:  make(map[string]datastore.NamespaceCDCProgress),
 		namespaceWatchRetention: retention,
 		sessionRevocations:      make(map[string]time.Time),
+		categoryProducts:        make(map[string]map[string]struct{}),
+		productCategories:       make(map[string][]string),
 	}, nil
+}
+
+func categoryProductKey(namespace, categoryUID string) string {
+	return namespace + "\x00" + categoryUID
+}
+
+// ReplaceCategoryProductMembership atomically replaces a Product's resolved
+// category/ancestor memberships. It is called after the authoritative status
+// CAS succeeds, so retries are idempotent.
+func (m *memdbDatastore) ReplaceCategoryProductMembership(_ context.Context, product *datastore.Product, categoryUIDs []string) error {
+	if product == nil {
+		return fmt.Errorf("%w: product is nil", datastore.ErrInvalidArgument)
+	}
+	m.categoryProductsMu.Lock()
+	defer m.categoryProductsMu.Unlock()
+	for _, key := range m.productCategories[product.UID] {
+		if members := m.categoryProducts[key]; members != nil {
+			delete(members, product.UID)
+			if len(members) == 0 {
+				delete(m.categoryProducts, key)
+			}
+		}
+	}
+	keys := make([]string, 0, len(categoryUIDs))
+	seen := make(map[string]struct{}, len(categoryUIDs))
+	for _, uid := range categoryUIDs {
+		if uid == "" {
+			continue
+		}
+		key := categoryProductKey(product.Namespace, uid)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if m.categoryProducts[key] == nil {
+			m.categoryProducts[key] = make(map[string]struct{})
+		}
+		m.categoryProducts[key][product.UID] = struct{}{}
+		keys = append(keys, key)
+	}
+	m.productCategories[product.UID] = keys
+	return nil
+}
+
+func (m *memdbDatastore) ListCategoryProducts(_ context.Context, namespace, categoryUID string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+	if page.First > datastore.DefaultPageSize {
+		page.First = datastore.DefaultPageSize
+	}
+	if page.Last > datastore.DefaultPageSize {
+		page.Last = datastore.DefaultPageSize
+	}
+	m.categoryProductsMu.RLock()
+	ids := make([]string, 0, len(m.categoryProducts[categoryProductKey(namespace, categoryUID)]))
+	for uid := range m.categoryProducts[categoryProductKey(namespace, categoryUID)] {
+		ids = append(ids, uid)
+	}
+	m.categoryProductsMu.RUnlock()
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	items := make([]*datastore.Product, 0, len(ids))
+	for _, uid := range ids {
+		if raw, _ := txn.First("product", "id", uid); raw != nil {
+			p := raw.(*datastore.Product)
+			if p.Namespace == namespace {
+				items = append(items, cloneProduct(p))
+			}
+		}
+	}
+	return paginateSlice(items, page, func(p *datastore.Product) (time.Time, string) { return p.CreationTimestamp, p.UID }), nil
 }
 
 // RevokeSession records a revoked JTI until the caller-provided expiry.
@@ -613,6 +691,9 @@ func (m *memdbDatastore) deleteProduct(uid, expectedResourceVersion string, chec
 		return fmt.Errorf("memdb: delete product: %w", err)
 	}
 	txn.Commit()
+	// Removal is intentionally idempotent; a retry after a partially completed
+	// API mutation cannot leave a deleted Product visible in a category.
+	_ = m.ReplaceCategoryProductMembership(context.Background(), raw.(*datastore.Product), nil)
 	m.recordCommittedProduct(datastore.ResourceWatchDeleted, raw.(*datastore.Product), nil)
 	return nil
 }

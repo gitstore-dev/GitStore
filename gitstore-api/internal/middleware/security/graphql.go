@@ -18,6 +18,7 @@ import (
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
@@ -236,7 +237,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			Extensions: map[string]any{"code": "FORBIDDEN"},
 		}
 	}
-	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
+	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isCategoryProductsField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
 		return next(ctx)
 	}
 	var authz auth.AuthZProvider
@@ -259,6 +260,10 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		}
 	} else if isProductQueryField(fc) {
 		if err := a.authorizeProductQueryField(ctx, fc, principal, authz); err != nil {
+			return nil, err
+		}
+	} else if isCategoryProductsField(fc) {
+		if err := a.authorizeCategoryProductsField(ctx, fc, principal, authz); err != nil {
 			return nil, err
 		}
 	} else if isCategoryQueryField(fc) {
@@ -703,12 +708,46 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	return next(ctx)
 }
 
+// authorizeCategoryProductsField preserves the category parent's namespace
+// and namespace owner when checking product.list. gqlgen exposes the resolved
+// parent through FieldContext.Parent.Result before child field middleware is
+// invoked, so this check remains ahead of the membership-index read.
+func (a *Authorize) authorizeCategoryProductsField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) error {
+	var category *model.Category
+	if fc != nil && fc.Parent != nil {
+		category, _ = fc.Parent.Result.(*model.Category)
+	}
+	if category == nil || category.Metadata == nil || category.Metadata.Namespace == "" {
+		return gqlerror.Errorf("authorization error")
+	}
+	namespace := category.Metadata.Namespace
+	owner := ""
+	if a.store != nil {
+		ns, err := a.store.GetNamespaceByName(ctx, namespace)
+		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+			return gqlerror.Errorf("authorization error")
+		}
+		if ns != nil {
+			owner = ns.EffectiveOwnerSub()
+		}
+	}
+	return authorizeProductAction(ctx, authz, principal, "product.list", "", namespace, owner)
+}
+
 func isRepositoryQueryField(fc *graphql.FieldContext) bool {
 	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node" || fc.Field.Name == "nodes")
 }
 
 func isProductQueryField(fc *graphql.FieldContext) bool {
 	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "product" || fc.Field.Name == "products")
+}
+
+// The parent Category has already been authorized for read. gqlgen field
+// middleware does not expose its hydrated parent value, so this action check
+// deliberately uses the global list scope; resource-aware Category scoping is
+// enforced at the parent read boundary.
+func isCategoryProductsField(fc *graphql.FieldContext) bool {
+	return fc != nil && fc.Object == "Category" && fc.Field.Name == "products"
 }
 
 func isCategoryQueryField(fc *graphql.FieldContext) bool {
@@ -974,7 +1013,7 @@ func (a *Authorize) authorizeProductQueryField(ctx context.Context, fc *graphql.
 				owner = ns.EffectiveOwnerSub()
 			}
 		}
-		return authorizeProductAction(ctx, authz, principal, "product.read", "", namespace, owner)
+		return authorizeProductAction(ctx, authz, principal, "product.list", "", namespace, owner)
 	}
 	if a.store == nil {
 		return gqlerror.Errorf("authorization service unavailable")

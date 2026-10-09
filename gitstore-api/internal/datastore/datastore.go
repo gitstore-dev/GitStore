@@ -39,6 +39,9 @@ var (
 	// ordering can no longer be proven. Operator repair is required before a
 	// materializer may safely resume.
 	ErrNamespaceWatchDiscontinuity = errors.New("datastore: Namespace watch CDC ordering discontinuity")
+	// ErrProjectionNotReady prevents serving an incomplete rebuilt projection
+	// during a rolling deployment.
+	ErrProjectionNotReady = errors.New("datastore: projection not ready")
 )
 
 // DefaultPageSize is used when First/Last is zero.
@@ -439,6 +442,15 @@ type ProductStore interface {
 	UpdateProductStatus(ctx context.Context, namespace, name string, patch ProductStatusPatch) (*Product, error)
 	DeleteProduct(ctx context.Context, uid string) error
 	DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
+}
+
+// CategoryProductIndex is the materialized membership projection used by
+// Category.products.  It is deliberately separate from ProductStore: callers
+// must never implement this field by scanning products in a namespace.
+// CategoryUIDs contains the resolved category and every resolved ancestor.
+type CategoryProductIndex interface {
+	ReplaceCategoryProductMembership(ctx context.Context, product *Product, categoryUIDs []string) error
+	ListCategoryProducts(ctx context.Context, namespace, categoryUID string, page PageParams) (*PageResult[Product], error)
 }
 
 // ProductStatusPatch is a partial-merge update to a Product's status.

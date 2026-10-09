@@ -99,6 +99,12 @@ go run ./cmd/gitctl scylla-projection-repair --dry-run > projection-repair-plan.
 go run ./cmd/gitctl scylla-projection-repair --confirm > projection-repair-result.json
 ```
 
+For the `Category.products` membership projection, new API replicas fail
+closed with retryable `PROJECTION_NOT_READY` responses until this confirmed
+repair completes with no findings. The successful final verification writes the
+durable readiness marker; run this after old API writers are drained and before
+routing category-product traffic to the new replicas.
+
 Suggested dashboard panels and alerts:
 
 | Signal | Use |
