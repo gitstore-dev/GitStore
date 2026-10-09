@@ -53,14 +53,19 @@ func TestProductWatchAuthorizationRunsBeforeCursorHandling(t *testing.T) {
 
 func TestCategoryProductsRequiresProductListBeforeResolver(t *testing.T) {
 	authz := testutil.NewDenyAllAuthZ(t)
-	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{GetNamespaceByNameFunc: func(context.Context, string) (*datastore.Namespace, error) {
+		return &datastore.Namespace{Name: "private", CreationActor: "owner"}, nil
+	}}, zap.NewNop())
 	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "denied", AuthMethod: "bearer"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Category", Result: &model.Category{Metadata: &model.ObjectMeta{Namespace: "private"}}})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Category", Field: graphql.CollectedField{Field: &ast.Field{Name: "products"}}})
 	called := false
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
 	require.Error(t, err)
 	assert.False(t, called)
 	assert.Equal(t, "product.list", authz.Action)
+	assert.Equal(t, "private", authz.Resource.Attrs["namespace"])
+	assert.Equal(t, "owner", authz.Resource.OwnerSub)
 }
 
 func TestProductMutationAuthorizationMatrix(t *testing.T) {
