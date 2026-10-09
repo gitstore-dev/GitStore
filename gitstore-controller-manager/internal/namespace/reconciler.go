@@ -68,7 +68,7 @@ type DeletionClient interface {
 
 // Reconciler implements types.Reconciler for Namespace resources.
 type Reconciler struct {
-	cache          cache.CacheAccessor[Namespace]
+	lookup         cache.LookupFunc[Namespace]
 	statusClient   status.StatusClient
 	repositories   RepositoryClient
 	deletionClient DeletionClient
@@ -76,8 +76,12 @@ type Reconciler struct {
 
 // NewReconciler returns a Namespace reconciler.
 func NewReconciler(c cache.CacheAccessor[Namespace], statusClient status.StatusClient, repositories RepositoryClient, deletionClient DeletionClient) *Reconciler {
+	return NewReconcilerWithLookup(cache.LookupFrom(c), statusClient, repositories, deletionClient)
+}
+
+func NewReconcilerWithLookup(lookup cache.LookupFunc[Namespace], statusClient status.StatusClient, repositories RepositoryClient, deletionClient DeletionClient) *Reconciler {
 	return &Reconciler{
-		cache:          c,
+		lookup:         lookup,
 		statusClient:   statusClient,
 		repositories:   repositories,
 		deletionClient: deletionClient,
@@ -86,9 +90,14 @@ func NewReconciler(c cache.CacheAccessor[Namespace], statusClient status.StatusC
 
 // Reconcile provisions active admitted namespaces and drains terminating ones.
 func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
-	current, ok := r.cache.Get(key)
+	current, ok, err := r.lookup(ctx, key)
+	if err != nil {
+		return types.ResultTransient(fmt.Errorf("namespace: read projection: %w", err))
+	}
 	if !ok {
-		return types.ResultTerminal(fmt.Errorf("namespace: %q not found in cache", key.Name))
+		// A queued key can outlive its object after watch replay, deletion, or a
+		// checkpointed controller restart. Absence is the reconciled state.
+		return types.ResultOK()
 	}
 	if _, bootstrap := bootstrapNamespaces[current.Name]; bootstrap {
 		return types.ResultOK()
@@ -158,8 +167,8 @@ func mergeControllerConditions(current Namespace, admitted, systemReady bool, pr
 		if condition == nil || condition.Type == conditionSystemRepoReady || condition.Type == conditionReady {
 			continue
 		}
-		copy := *condition
-		conditions = append(conditions, &copy)
+		copied := *condition
+		conditions = append(conditions, &copied)
 	}
 
 	systemCondition := &status.Condition{

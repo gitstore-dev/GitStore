@@ -18,19 +18,17 @@ func TestRepositoryAuthorization_TwoUserNamespaceIsolation(t *testing.T) {
 	aliceRepository := uniqueName("alice-repository")
 	bobRepository := uniqueName("bob-repository")
 
-	createNamespaceAsUser(t, h, "test-user:alice", aliceNamespace)
-	createNamespaceAsUser(t, h, "test-user:bob", bobNamespace)
-	resp := h.gqlWithToken("test-user:alice", `
-		mutation($identifier: String!) {
-			deleteNamespace(input: {identifier: $identifier}) {
-				deletedIdentifier
-			}
-		}
-	`, map[string]any{"identifier": bobNamespace})
+	aliceToken := namespaceContractLogin(t, h, "alice", "admin123")
+	bobToken := namespaceContractLogin(t, h, "bob", "admin123")
+	createNamespaceAsUser(t, h, aliceToken, aliceNamespace)
+	createNamespaceAsUser(t, h, bobToken, bobNamespace)
+	bobNamespaceID, ok := h.lookupNamespaceID(bobNamespace)
+	require.True(t, ok)
+	resp := h.gqlWithToken(aliceToken, `mutation($id: ID!) { deleteNamespace(input: {id: $id}) { namespace { id } } }`, map[string]any{"id": bobNamespaceID})
 	require.Len(t, resp.Errors, 1)
 	assert.Contains(t, string(resp.Errors[0]), "permission denied: resource belongs to another user")
-	aliceRepositoryID := createRepositoryAsUser(t, h, "test-user:alice", aliceNamespace, aliceRepository)
-	bobRepositoryID := createRepositoryAsUser(t, h, "test-user:bob", bobNamespace, bobRepository)
+	aliceRepositoryID := createRepositoryAsUser(t, h, aliceToken, aliceNamespace, aliceRepository)
+	bobRepositoryID := createRepositoryAsUser(t, h, bobToken, bobNamespace, bobRepository)
 	t.Cleanup(func() {
 		repositoryReadContractDelete(t, h, aliceRepositoryID)
 		repositoryReadContractDelete(t, h, bobRepositoryID)
@@ -38,17 +36,16 @@ func TestRepositoryAuthorization_TwoUserNamespaceIsolation(t *testing.T) {
 		h.cleanupNamespace(bobNamespace)
 	})
 
-	aliceRepositories := repositoriesAsUser(t, h, "test-user:alice", aliceNamespace)
-	bobRepositories := repositoriesAsUser(t, h, "test-user:bob", bobNamespace)
+	aliceRepositories := repositoriesAsUser(t, h, aliceToken, aliceNamespace)
+	bobRepositories := repositoriesAsUser(t, h, bobToken, bobNamespace)
 
-	assertRepositoryNamespaceIsolation(t, aliceRepositories, aliceNamespace, aliceRepository, bobRepository, "alice")
-	assertRepositoryNamespaceIsolation(t, bobRepositories, bobNamespace, bobRepository, aliceRepository, "bob")
+	assertRepositoryNamespaceIsolation(t, aliceRepositories, aliceNamespace, aliceRepository, bobRepository)
+	assertRepositoryNamespaceIsolation(t, bobRepositories, bobNamespace, bobRepository, aliceRepository)
 }
 
 type authzRepositoryNode struct {
-	ID        string `json:"id"`
-	CreatedBy string `json:"createdBy"`
-	Metadata  struct {
+	ID       string `json:"id"`
+	Metadata struct {
 		Name      string `json:"name"`
 		Namespace string `json:"namespace"`
 		UID       string `json:"uid"`
@@ -71,7 +68,6 @@ func createNamespaceAsUser(t *testing.T, h *namespaceContractHarness, token, nam
 						uid
 						name
 					}
-					createdBy
 				}
 			}
 		}
@@ -81,9 +77,8 @@ func createNamespaceAsUser(t *testing.T, h *namespaceContractHarness, token, nam
 	var data struct {
 		CreateNamespace struct {
 			Namespace struct {
-				ID        string `json:"id"`
-				CreatedBy string `json:"createdBy"`
-				Metadata  struct {
+				ID       string `json:"id"`
+				Metadata struct {
 					UID  string `json:"uid"`
 					Name string `json:"name"`
 				} `json:"metadata"`
@@ -93,8 +88,16 @@ func createNamespaceAsUser(t *testing.T, h *namespaceContractHarness, token, nam
 	require.NoError(t, json.Unmarshal(resp.Data, &data))
 	assert.Equal(t, namespace, data.CreateNamespace.Namespace.Metadata.Name)
 	assert.NotEmpty(t, data.CreateNamespace.Namespace.Metadata.UID)
-	assert.NotEqual(t, data.CreateNamespace.Namespace.ID, data.CreateNamespace.Namespace.Metadata.UID)
-	assert.Equal(t, token[len("test-user:"):], data.CreateNamespace.Namespace.CreatedBy)
+	assert.Equal(t, data.CreateNamespace.Namespace.ID, data.CreateNamespace.Namespace.Metadata.UID, "metadata.uid uses the Namespace Relay encoding")
+
+	resp = h.gqlWithToken(token, `
+		mutation($namespace: String!) {
+			provisionNamespaceSystemRepository(input: {namespace: $namespace}) {
+				repository { id }
+			}
+		}
+	`, map[string]any{"namespace": namespace})
+	require.Empty(t, resp.Errors, namespaceContractErrors(resp.Errors))
 }
 
 func createRepositoryAsUser(
@@ -107,14 +110,18 @@ func createRepositoryAsUser(
 	t.Helper()
 	resp := h.gqlWithToken(token, `
 		mutation($namespace: String!, $name: String!) {
-			createRepository(input: {namespace: $namespace, name: $name, defaultBranch: "main"}) {
+			createRepository(input: {
+				apiVersion: "gitstore.dev/v1beta1"
+				kind: "Repository"
+				metadata: {namespace: $namespace, name: $name}
+				spec: {defaultBranch: "main", visibility: PRIVATE, storageClass: "standard"}
+			}) {
 				repository {
 					id
 					metadata {
 						uid
 						namespace
 					}
-					createdBy
 				}
 			}
 		}
@@ -131,7 +138,6 @@ func createRepositoryAsUser(
 	assert.Equal(t, namespace, repository.Metadata.Namespace)
 	assert.NotEmpty(t, repository.Metadata.UID)
 	assert.Equal(t, repository.ID, repository.Metadata.UID)
-	assert.Equal(t, token[len("test-user:"):], repository.CreatedBy)
 	return repository.ID
 }
 
@@ -153,7 +159,6 @@ func repositoriesAsUser(
 							namespace
 							uid
 						}
-						createdBy
 					}
 				}
 			}
@@ -181,8 +186,7 @@ func assertRepositoryNamespaceIsolation(
 	repositories []authzRepositoryNode,
 	namespace,
 	expectedName,
-	forbiddenName,
-	expectedActor string,
+	forbiddenName string,
 ) {
 	t.Helper()
 	var found bool
@@ -193,7 +197,6 @@ func assertRepositoryNamespaceIsolation(
 		assert.Equal(t, repository.ID, repository.Metadata.UID)
 		if repository.Metadata.Name == expectedName {
 			found = true
-			assert.Equal(t, expectedActor, repository.CreatedBy)
 		}
 	}
 	assert.True(t, found, "repository %q not found in namespace %q", expectedName, namespace)

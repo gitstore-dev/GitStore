@@ -8,11 +8,12 @@ package resolver
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
+	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
@@ -22,8 +23,6 @@ func (r *mutationResolver) CreateNamespace(ctx context.Context, input model.Crea
 	if err != nil {
 		return nil, err
 	}
-	r.publishNamespaceEvent(eventbus.Added, ns)
-
 	return &model.CreateNamespacePayload{
 		Namespace: DatastoreNamespaceToGraphQL(ns),
 	}, nil
@@ -35,44 +34,126 @@ func (r *mutationResolver) UpdateNamespace(ctx context.Context, input model.Upda
 	if err != nil {
 		return nil, err
 	}
-	r.publishNamespaceEvent(eventbus.Modified, ns)
 	return &model.UpdateNamespacePayload{Namespace: DatastoreNamespaceToGraphQL(ns)}, nil
+}
+
+// UpdateNamespaceStatus is the resolver for the updateNamespaceStatus field.
+func (r *mutationResolver) UpdateNamespaceStatus(ctx context.Context, input model.UpdateNamespaceStatusInput) (*model.UpdateNamespaceStatusPayload, error) {
+	namespace, err := r.service.GetNamespaceByName(ctx, input.Name)
+	if err != nil {
+		return nil, err
+	}
+	patch := datastore.NamespaceStatusPatch{ResourceVersion: input.ResourceVersion}
+	if input.ObservedGeneration != nil {
+		generation := int64(*input.ObservedGeneration)
+		patch.ObservedGeneration = &generation
+	}
+	patch.LastAppliedRevision = input.LastAppliedRevision
+	if input.Conditions != nil {
+		patch.Conditions = toConditions(input.Conditions)
+	}
+	if err := datastore.ApplyNamespaceStatusPatch(namespace, patch); err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			return nil, statusConflictError("Namespace", "", input.Name, namespace.ResourceVersion)
+		}
+		return nil, gqlerror.Errorf("update Namespace status: %v", err)
+	}
+	if err := r.service.Store().UpdateNamespace(ctx, namespace, input.ResourceVersion); err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			current, getErr := r.service.GetNamespaceByName(ctx, input.Name)
+			if getErr != nil {
+				return nil, gqlerror.Errorf("Namespace status update conflict")
+			}
+			return nil, statusConflictError("Namespace", "", input.Name, current.ResourceVersion)
+		}
+		return nil, gqlerror.Errorf("update Namespace status: %v", err)
+	}
+	return &model.UpdateNamespaceStatusPayload{Namespace: DatastoreNamespaceToGraphQL(namespace)}, nil
 }
 
 // DeleteNamespace is the resolver for the deleteNamespace field.
 func (r *mutationResolver) DeleteNamespace(ctx context.Context, input model.DeleteNamespaceInput) (*model.DeleteNamespacePayload, error) {
+	uid, err := decodeNodeIDAs(nodeKindNamespace, input.ID)
+	if err != nil {
+		return nil, gqlerror.Errorf("invalid namespace ID")
+	}
 	ns, ok := security.AuthorizedNamespaceForDeletion(ctx)
-	if !ok || ns.Name != input.Identifier {
+	if !ok || namespaceUID(ns) != uid {
 		return nil, gqlerror.Errorf("namespace deletion authorization context is missing")
 	}
-	if err := r.service.DeleteNamespace(ctx, ns); err != nil {
+	outcome, err := r.service.DeleteNamespace(ctx, ns)
+	if err != nil {
 		return nil, err
 	}
-	terminating, err := r.service.GetNamespaceByName(ctx, input.Identifier)
-	if err == nil {
-		r.publishNamespaceStatusEvent(terminating)
+	ns, err = r.service.GetNamespaceByID(ctx, uid)
+	if err != nil {
+		return nil, err
 	}
-
 	return &model.DeleteNamespacePayload{
-		DeletedIdentifier: input.Identifier,
+		Namespace: DatastoreNamespaceToGraphQL(ns),
+		Outcome:   model.ResourceDeletionOutcome(outcome),
 	}, nil
+}
+
+// TransferNamespaceOwner is the resolver for the transferNamespaceOwner field.
+func (r *mutationResolver) TransferNamespaceOwner(ctx context.Context, input model.TransferNamespaceOwnerInput) (*model.TransferNamespaceOwnerPayload, error) {
+	uid, err := decodeNodeIDAs(nodeKindNamespace, input.NamespaceID)
+	if err != nil {
+		return nil, gqlerror.Errorf("invalid namespace ID")
+	}
+	authorized, ok := security.AuthorizedNamespaceForTransfer(ctx)
+	if !ok || authorized.Namespace == nil || namespaceUID(authorized.Namespace) != uid {
+		return nil, gqlerror.Errorf("namespace transfer authorization context is missing")
+	}
+	ns, err := r.service.TransferNamespaceOwner(ctx, authorized.Namespace, authorized.TargetOwnerSub, callerUsernameOrAnon(ctx, r))
+	if err != nil {
+		return nil, err
+	}
+	return &model.TransferNamespaceOwnerPayload{Namespace: DatastoreNamespaceToGraphQL(ns)}, nil
 }
 
 // CompleteNamespaceDeletion is the resolver for the completeNamespaceDeletion field.
 func (r *mutationResolver) CompleteNamespaceDeletion(ctx context.Context, input model.CompleteNamespaceDeletionInput) (*model.CompleteNamespaceDeletionPayload, error) {
-	deleted, err := r.service.CompleteNamespaceDeletion(ctx, input.Identifier, input.ResourceVersion)
+	name := input.Name
+	if strings.TrimSpace(name) == "" {
+		return nil, &gqlerror.Error{Message: "name must not be empty", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
+	}
+	deleted, err := r.service.CompleteNamespaceDeletion(ctx, name, input.ResourceVersion)
 	if errors.Is(err, datastore.ErrConflict) {
-		return &model.CompleteNamespaceDeletionPayload{
-			Conflict: &model.StatusConflict{CurrentResourceVersion: deleted.ResourceVersion},
-		}, nil
+		if deleted == nil {
+			return nil, gqlerror.Errorf("namespace deletion conflict, and current version could not be read")
+		}
+		return nil, statusConflictError("Namespace", "", name, deleted.ResourceVersion)
 	}
 	if err != nil {
 		return nil, err
 	}
-	if deleted != nil {
-		r.publishNamespaceDeletedEvent(deleted)
+	id := mustEncodeNodeID(nodeKindNamespace, namespaceUID(deleted))
+	return &model.CompleteNamespaceDeletionPayload{ID: &id}, nil
+}
+
+// ProvisionNamespaceSystemRepository is the resolver for the provisionNamespaceSystemRepository field.
+func (r *mutationResolver) ProvisionNamespaceSystemRepository(ctx context.Context, input model.ProvisionNamespaceSystemRepositoryInput) (*model.ProvisionNamespaceSystemRepositoryPayload, error) {
+	if err := r.service.ProvisionSystemRepository(ctx, input.Namespace, callerUsernameOrAnon(ctx, r)); err != nil {
+		return nil, err
 	}
-	return &model.CompleteNamespaceDeletionPayload{DeletedIdentifier: &input.Identifier}, nil
+	namespace, err := r.service.GetNamespaceByName(ctx, input.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	mapping, err := r.service.LookupRepository(ctx, namespace.Name, SystemRepositoryName)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := r.service.GetRepository(ctx, mapping.RepositoryID)
+	if err != nil {
+		return nil, err
+	}
+	result, err := datastoreRepositoryToModelStrict(repository, namespace, r.storageDataDir)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to hydrate system repository: %v", err)
+	}
+	return &model.ProvisionNamespaceSystemRepositoryPayload{Repository: result}, nil
 }
 
 // Namespace is the resolver for the namespace field.
@@ -89,11 +170,7 @@ func (r *queryResolver) Namespace(ctx context.Context, by model.NamespaceBy) (*m
 		return DatastoreNamespaceToGraphQL(ns), nil
 	}
 
-	name := by.Name
-	if name == nil {
-		name = by.Identifier
-	}
-	ns, err := r.service.GetNamespaceByName(ctx, *name)
+	ns, err := r.service.GetNamespaceByName(ctx, *by.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -108,4 +185,72 @@ func (r *queryResolver) Namespaces(ctx context.Context, first *int32, after *str
 		return nil, err
 	}
 	return BuildNamespaceConnection(result), nil
+}
+
+// WatchNamespaces is the resolver for the watchNamespaces field.
+func (r *subscriptionResolver) WatchNamespaces(ctx context.Context, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.NamespaceWatchEvent, error) {
+	if r.namespaceSubscriber == nil {
+		return nil, namespaceWatchGraphQLError(&watchjournal.TerminalError{Code: watchjournal.CodeUnavailable, Reason: "MATERIALIZER_NOT_READY"})
+	}
+	rawCursor := ""
+	if resourceVersion != nil {
+		rawCursor = normalizeResourceWatchCursor(*resourceVersion)
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream, err := r.namespaceSubscriber.SubscribePath(streamCtx, rawCursor, "typed")
+	if err != nil {
+		cancel()
+		return nil, namespaceWatchGraphQLError(err)
+	}
+	out := make(chan *model.NamespaceWatchEvent, r.namespaceWatch.Subscriber.Buffer)
+	go func() {
+		defer cancel()
+		defer close(out)
+		events := stream.Events
+		errorsOut := stream.Errors
+		for events != nil || errorsOut != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case streamErr, ok := <-errorsOut:
+				if !ok {
+					errorsOut = nil
+					continue
+				}
+				if streamErr != nil {
+					addNamespaceWatchSubscriptionError(ctx, namespaceWatchGraphQLError(streamErr))
+					return
+				}
+			case event, ok := <-events:
+				if !ok {
+					events = nil
+					continue
+				}
+				if !namespaceJournalEventMatchesKind(event) {
+					continue
+				}
+				projected, matches := projectNamespaceJournalEventForSelector(event, selector)
+				if !matches {
+					continue
+				}
+				namespace, decodeErr := namespaceFromJournalEvent(projected)
+				if decodeErr != nil {
+					addNamespaceWatchSubscriptionError(ctx, decodeErr)
+					return
+				}
+				converted, convertErr := NamespaceJournalEventToGraphQL(projected, namespace)
+				if convertErr != nil {
+					addNamespaceWatchSubscriptionError(ctx, convertErr)
+					return
+				}
+				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, r.namespaceWatch.Subscriber.Backpressure, r.namespaceMetrics); sendErr != nil {
+					if streamCtx.Err() == nil {
+						addNamespaceWatchSubscriptionError(streamCtx, namespaceWatchGraphQLError(sendErr))
+					}
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }

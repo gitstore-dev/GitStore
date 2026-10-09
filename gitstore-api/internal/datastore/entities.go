@@ -54,6 +54,102 @@ type Namespace struct {
 	ID string
 }
 
+// ResourceWatchEventType is the normalized durable resource transition. A
+// single journal is deliberately shared by all GitStore resource kinds: its
+// cursor establishes a total order across kinds, while Kind and Namespace
+// make per-kind and per-namespace projections lossless.
+type ResourceWatchEventType string
+
+const (
+	ResourceWatchAdded    ResourceWatchEventType = "ADDED"
+	ResourceWatchModified ResourceWatchEventType = "MODIFIED"
+	ResourceWatchDeleted  ResourceWatchEventType = "DELETED"
+	ResourceWatchBookmark ResourceWatchEventType = "BOOKMARK"
+)
+
+// ResourceWatchCursor identifies one ordered event inside a journal epoch.
+// Its external encoding is owned by internal/watchjournal.
+type ResourceWatchCursor struct {
+	Epoch    string
+	Sequence uint64
+}
+
+// ResourceWatchEvent is the backend-neutral durable journal record. Payload
+// is a full committed resource postimage for ADDED/MODIFIED and nil for
+// DELETED/BOOKMARK. SelectorLabels preserves the postimage labels (or the
+// last-known labels for DELETED), while PreviousSelectorLabels preserves the
+// MODIFIED preimage labels. Together they let filtered watches express a
+// resource entering or leaving a selector without exposing deleted payloads.
+type ResourceWatchEvent struct {
+	Epoch    string
+	Sequence uint64
+	Type     ResourceWatchEventType
+	// Kind is the canonical API kind (for example Namespace or Repository).
+	Kind string
+	// Namespace is empty only for cluster-scoped resources.
+	Namespace              string
+	Name                   string
+	Payload                json.RawMessage
+	SelectorLabels         map[string]string
+	PreviousSelectorLabels map[string]string
+	DeduplicationKey       string
+	FencingToken           uint64
+	At                     time.Time
+}
+
+// ResourceWatchBounds is the retained interval in one journal epoch.
+type ResourceWatchBounds struct {
+	Epoch     string
+	Oldest    uint64
+	HighWater uint64
+	UpdatedAt time.Time
+	// BookmarkAt is the timestamp of the latest actual durable BOOKMARK.
+	// Unlike UpdatedAt, ordinary data events do not advance it.
+	BookmarkAt time.Time
+	// ProgressAt is the last time the CDC reader consumed a change or
+	// successfully advanced an empty query window. Durable bookmarks do not
+	// advance it.
+	ProgressAt time.Time
+}
+
+// ResourceWatchLease carries the materializer fencing token. Leases fence the
+// shared journal materializer, not one resource kind.
+type ResourceWatchLease struct {
+	Holder       string
+	FencingToken uint64
+	ExpiresAt    time.Time
+}
+
+// ResourceCDCProgress stores a source checkpoint or the published frontier's
+// bounded recovery manifest after its journal append.
+type ResourceCDCProgress struct {
+	// Source identifies the resource-kind CDC adapter which owns this position.
+	// StreamID is source-local, so both values form the durable progress key.
+	Source    string
+	StreamID  string
+	Position  []byte
+	UpdatedAt time.Time
+}
+
+// Namespace watch aliases are retained while the Namespace GraphQL adapter is
+// migrated onto ResourceWatchJournal. New code must use ResourceWatch*.
+// They are aliases rather than wrappers so existing durable backends remain
+// source-compatible during the alpha-only migration.
+type NamespaceWatchEventType = ResourceWatchEventType
+
+const (
+	NamespaceWatchAdded    = ResourceWatchAdded
+	NamespaceWatchModified = ResourceWatchModified
+	NamespaceWatchDeleted  = ResourceWatchDeleted
+	NamespaceWatchBookmark = ResourceWatchBookmark
+)
+
+type NamespaceWatchCursor = ResourceWatchCursor
+type NamespaceWatchEvent = ResourceWatchEvent
+type NamespaceWatchBounds = ResourceWatchBounds
+type NamespaceWatchLease = ResourceWatchLease
+type NamespaceCDCProgress = ResourceCDCProgress
+
 // Product is the fully hydrated catalogue product record stored in the
 // datastore. It merges author-supplied frontmatter (APIVersion, Kind,
 // Namespace, Name, Labels, Annotations, Spec, Body) with system-assigned
@@ -331,4 +427,90 @@ type NamespaceMapping struct {
 	// NamespaceID and RepoID are retained during the datastore naming migration.
 	NamespaceID string
 	RepoID      string
+}
+
+// ServiceAccount is the persistent, namespaced, non-human identity record
+// backing the serviceaccount-assertion/serviceaccount-jwt AuthN providers
+// (spec 061). Datastore-backed (memdb + Scylla) from the first implementation
+// phase — unlike the assertion-replay cache and WebSocket connection
+// registry, which are intentionally in-memory-only (single-instance scope).
+type ServiceAccount struct {
+	// Identity (primary key: Namespace + Name; subject string is derived as
+	// "serviceaccount:<Namespace>:<Name>", never stored redundantly)
+	UID       string // stable, survives Disabled toggles; changes only on delete+recreate
+	Namespace string // convention string, e.g. "controllers" — not GitStore's Namespace resource
+	Name      string // e.g. "gitstore-controller-manager" — names the *process*, not one of its reconcilers
+
+	Disabled bool // true blocks new assertion exchange and new access-token authentication immediately
+
+	Generation      int64  // advances only on PublicKeys change (author-controlled state)
+	ResourceVersion string // advances on every persisted change, including Disabled toggles
+
+	CreationTimestamp time.Time
+	CreationActor     string // subject of the admin principal that created this record
+	UpdateTimestamp   time.Time
+	UpdateActor       string
+
+	PublicKeys []ServiceAccountPublicKey
+
+	DeletionTimestamp *time.Time // set on deleteServiceAccount; hard-delete is immediate in Phase 1 (no finalizer/Terminating lifecycle)
+}
+
+// ServiceAccountPublicKey is one enrolled public key, supporting an overlap
+// window during rotation (multiple entries may be simultaneously valid).
+type ServiceAccountPublicKey struct {
+	KeyID      string // "kid" — protected-header value an assertion's kid must match
+	Algorithm  string // "Ed25519" (preferred) or "ECDSA-P256"
+	PublicKey  []byte // raw public key bytes (PEM-decoded at load, stored decoded)
+	EnrolledAt time.Time
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject: the
+// reserved OwnerAnnotationKey if the author (or a transfer) has set one,
+// else the immutable CreationActor (ADR-0010 §14 default).
+func (n *Namespace) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(n.Annotations, n.CreationActor)
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject (see
+// Namespace.EffectiveOwnerSub).
+func (r *Repository) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(r.Annotations, r.CreationActor)
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject (see
+// Namespace.EffectiveOwnerSub).
+func (c *CategoryTaxonomy) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(c.Annotations, c.CreationActor)
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject (see
+// Namespace.EffectiveOwnerSub).
+func (p *Product) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(p.Annotations, p.CreationActor)
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject (see
+// Namespace.EffectiveOwnerSub).
+func (v *ProductVariant) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(v.Annotations, v.CreationActor)
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject (see
+// Namespace.EffectiveOwnerSub).
+func (c *Collection) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(c.Annotations, c.CreationActor)
+}
+
+// EffectiveOwnerSub returns the resource's current owner subject (see
+// Namespace.EffectiveOwnerSub).
+func (f *File) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(f.Annotations, f.CreationActor)
+}
+
+func effectiveOwnerSub(annotations map[string]string, creationActor string) string {
+	if v, ok := annotations[OwnerAnnotationKey]; ok && v != "" {
+		return v
+	}
+	return creationActor
 }

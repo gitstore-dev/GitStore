@@ -72,8 +72,10 @@ impl ValidationHandler for SchemaValidationHandler {
             } else {
                 hook_ctx.repository_id.clone()
             },
-            blobs: blobs.iter().cloned().map(to_proto_blob).collect(),
-            trees: vec![],
+            trees: vec![ResourceValidationTree {
+                old_blobs: vec![],
+                proposed_blobs: blobs.iter().cloned().map(to_proto_blob).collect(),
+            }],
         };
         self.call(req, file_count, start).await
     }
@@ -135,17 +137,12 @@ impl SchemaValidationHandler {
             .iter()
             .map(|tree| tree.proposed_blobs.len())
             .sum::<usize>();
-        let proto_blobs = trees
-            .iter()
-            .flat_map(|tree| tree.proposed_blobs.clone())
-            .collect();
         let req = ValidateResourcesRequest {
             repository_id: if hook_ctx.repository_id.is_empty() {
                 self.repository_id.clone()
             } else {
                 hook_ctx.repository_id.clone()
             },
-            blobs: proto_blobs,
             trees,
         };
         self.call(req, file_count, start).await
@@ -192,18 +189,7 @@ impl SchemaValidationHandler {
                     self.record_metric("accepted");
                     Ok(AdmissionDecision::Accept)
                 } else {
-                    let aggregated = resp
-                        .errors
-                        .iter()
-                        .map(|e| {
-                            if e.file_path.is_empty() {
-                                e.message.clone()
-                            } else {
-                                format!("{}: {}", e.file_path, e.message)
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("; ");
+                    let aggregated = format_rejection(&resp.errors);
                     error!(file_count, duration_ms, outcome = "rejected", error_summary = %aggregated, "validation_callout_complete");
                     self.record_metric("rejected");
                     Ok(AdmissionDecision::Reject(aggregated))
@@ -216,6 +202,22 @@ impl SchemaValidationHandler {
         use crate::git::metrics::increment_schema_validation_total;
         increment_schema_validation_total(result);
     }
+}
+
+/// Joins validation errors as `file: message; …` (`message` when there is no
+/// file). The API produces byte-identical text for mutation rejections.
+fn format_rejection(errors: &[catalog_proto::ValidationError]) -> String {
+    errors
+        .iter()
+        .map(|e| {
+            if e.file_path.is_empty() {
+                e.message.clone()
+            } else {
+                format!("{}: {}", e.file_path, e.message)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn to_proto_blob(blob: ResourceBlob) -> ProtoBlob {
@@ -235,8 +237,8 @@ mod tests {
     use super::*;
     use catalog_proto::{
         catalog_service_server::{CatalogService, CatalogServiceServer},
-        AdmitResourcesRequest, AdmitResourcesResponse, ValidateCategoryTaxonomyDeletionRequest,
-        ValidateCategoryTaxonomyDeletionResponse, ValidateResourcesResponse, ValidationError,
+        AdmitResourcesRequest, AdmitResourcesResponse, ValidateResourceDeletionsRequest,
+        ValidateResourceDeletionsResponse, ValidateResourcesResponse, ValidationError,
     };
     use std::sync::Arc;
     use tonic::{transport::Server, Request, Response, Status};
@@ -267,11 +269,11 @@ mod tests {
             Ok(Response::new(AdmitResourcesResponse {}))
         }
 
-        async fn validate_category_taxonomy_deletion(
+        async fn validate_resource_deletions(
             &self,
-            _req: Request<ValidateCategoryTaxonomyDeletionRequest>,
-        ) -> Result<Response<ValidateCategoryTaxonomyDeletionResponse>, Status> {
-            Ok(Response::new(ValidateCategoryTaxonomyDeletionResponse {
+            _req: Request<ValidateResourceDeletionsRequest>,
+        ) -> Result<Response<ValidateResourceDeletionsResponse>, Status> {
+            Ok(Response::new(ValidateResourceDeletionsResponse {
                 accepted: true,
                 reason: String::new(),
             }))
@@ -333,6 +335,115 @@ mod tests {
         };
         let result = handler.validate(&blobs, &hook_ctx).await.unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
+    }
+
+    // Repository manifests are deliberately validated by CatalogService: the
+    // hook must preserve their authoritative system-repository path and carry
+    // a rejection back to receive-pack unchanged.  Keeping the kind-specific
+    // policy in the API avoids a second, divergent parser in the Git service.
+    #[tokio::test]
+    async fn test_repository_authoring_target_rejection_is_propagated() {
+        let addr = start_mock_server(|req| {
+            assert_eq!(req.repository_id, "namespace-system-repository");
+            assert_eq!(req.trees.len(), 1);
+            assert_eq!(req.trees[0].proposed_blobs.len(), 1);
+            assert_eq!(req.trees[0].proposed_blobs[0].path, "repositories/payments.md");
+            assert!(String::from_utf8_lossy(&req.trees[0].proposed_blobs[0].content).contains("kind: Repository"));
+            Ok(ValidateResourcesResponse {
+                accepted: false,
+                errors: vec![ValidationError {
+                    file_path: "repositories/payments.md".into(),
+                    field: "metadata.namespace".into(),
+                    constraint: "authoring-target".into(),
+                    message: "Repository manifests must be authored in the namespace gitstore-system repository".into(),
+                }],
+            })
+        })
+        .await;
+
+        let handler = SchemaValidationHandler::connect(
+            &addr,
+            Duration::from_secs(5),
+            "repository-default".into(),
+        )
+        .await
+        .unwrap();
+        let result = handler
+            .validate(
+                &[make_blob(
+                    "repositories/payments.md",
+                    b"apiVersion: gitstore.dev/v1beta1\nkind: Repository\n",
+                )],
+                &HookContext {
+                    repository_id: "namespace-system-repository".into(),
+                    ..HookContext::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(result, AdmissionDecision::Reject(message) if message.contains("namespace gitstore-system repository"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_file_credentials_delegate_without_rewriting_metadata() {
+        let typed = include_str!(
+            "../../../../gitstore-api/internal/validate/testdata/file/product-hero.md"
+        );
+        let bare = typed.replace(
+            "kind: CredentialsRef\n      type: aws-access-key/v1\n      secretRef:\n        kind: SecretRef\n        name: media-credentials",
+            "kind: SecretRef\n      name: media-credentials",
+        );
+        assert_ne!(bare, typed);
+        for (content, accepted) in [(typed.to_owned(), true), (bare, false)] {
+            let expected = content.as_bytes().to_vec();
+            let addr = start_mock_server(move |req| {
+                assert_eq!(req.repository_id, "file-repository");
+                assert_eq!(req.trees.len(), 1);
+                assert_eq!(req.trees[0].proposed_blobs.len(), 1);
+                assert_eq!(req.trees[0].proposed_blobs[0].path, "files/product-hero.md");
+                assert_eq!(req.trees[0].proposed_blobs[0].content, expected);
+                Ok(ValidateResourcesResponse {
+                    accepted,
+                    errors: if accepted {
+                        vec![]
+                    } else {
+                        vec![ValidationError {
+                            file_path: "files/product-hero.md".into(),
+                            field: "spec.source.credentialsRef".into(),
+                            constraint: "InvalidRef".into(),
+                            message: "validate: spec.source.credentialsRef: InvalidRef".into(),
+                        }]
+                    },
+                })
+            })
+            .await;
+            let handler = SchemaValidationHandler::connect(
+                &addr,
+                Duration::from_secs(5),
+                "file-repository".into(),
+            )
+            .await
+            .unwrap();
+            let blobs = vec![make_blob("files/product-hero.md", content.as_bytes())];
+            let decision = handler
+                .validate(&blobs, &HookContext::default())
+                .await
+                .unwrap();
+            assert_eq!(blobs[0].content, content.as_bytes());
+            match decision {
+                AdmissionDecision::Accept => assert!(accepted),
+                AdmissionDecision::Reject(message) => {
+                    assert!(!accepted);
+                    assert!(message.contains("files/product-hero.md"));
+                    assert!(message.contains("spec.source.credentialsRef"));
+                    assert!(!message.contains("media-credentials"));
+                    assert!(!message.contains("s3://"));
+                }
+            }
+        }
     }
 
     // T010b: mock returning accepted=false with two ValidationErrors → Reject with aggregated message
@@ -522,5 +633,36 @@ mod tests {
             matches!(result, AdmissionDecision::Reject(_)),
             "expected Reject when server is unreachable"
         );
+    }
+
+    /// The push rejection text must stay byte-identical to the API's
+    /// mutation rejection text for the same validation errors.
+    #[test]
+    fn format_rejection_matches_golden_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/fixtures/admission-rejection-golden.json");
+        let raw = std::fs::read_to_string(&path).expect("read golden fixture");
+        let fixture: serde_json::Value = serde_json::from_str(&raw).expect("parse golden fixture");
+        let cases = fixture["cases"].as_array().expect("cases array");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let errors: Vec<ValidationError> = case["errors"]
+                .as_array()
+                .expect("errors array")
+                .iter()
+                .map(|e| ValidationError {
+                    file_path: e["filePath"].as_str().unwrap_or_default().to_string(),
+                    field: e["field"].as_str().unwrap_or_default().to_string(),
+                    constraint: e["constraint"].as_str().unwrap_or_default().to_string(),
+                    message: e["message"].as_str().unwrap_or_default().to_string(),
+                })
+                .collect();
+            assert_eq!(
+                format_rejection(&errors),
+                case["expected"].as_str().expect("expected text"),
+                "case {}",
+                case["name"]
+            );
+        }
     }
 }

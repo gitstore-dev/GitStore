@@ -5,16 +5,43 @@ package scylla
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/google/uuid"
+	"github.com/scylladb/gocqlx/v3/migrate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMigrationHistoryRequiresEveryCompletedUnchangedFile(t *testing.T) {
+	data := []byte("-- comment;\nCREATE TABLE test (id text PRIMARY KEY);\n")
+	bundle := fstest.MapFS{"001.cql": &fstest.MapFile{Data: data}}
+	valid := migrate.Info{Name: "001.cql", Checksum: fmt.Sprintf("%x", md5.Sum(data)), Done: 2, EndTime: time.Now()}
+	require.NoError(t, validateMigrationHistory([]migrate.Info{valid}, bundle))
+	for name, history := range map[string][]migrate.Info{
+		"missing":    nil,
+		"ahead":      {valid, valid},
+		"renamed":    {{Name: "old.cql", Checksum: valid.Checksum, Done: 2, EndTime: valid.EndTime}},
+		"modified":   {{Name: valid.Name, Checksum: "different", Done: 2, EndTime: valid.EndTime}},
+		"partial":    {{Name: valid.Name, Checksum: valid.Checksum, Done: 1, EndTime: valid.EndTime}},
+		"unfinished": {{Name: valid.Name, Checksum: valid.Checksum, Done: 2}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Error(t, validateMigrationHistory(history, bundle))
+		})
+	}
+	data = []byte("CREATE TABLE test (id text PRIMARY KEY)")
+	bundle["001.cql"] = &fstest.MapFile{Data: data}
+	valid.Checksum, valid.Done = fmt.Sprintf("%x", md5.Sum(data)), 1
+	require.NoError(t, validateMigrationHistory([]migrate.Info{valid}, bundle), "match the library's optional final semicolon")
+}
 
 func TestCatalogueRowsPreserveCanonicalEnvelope(t *testing.T) {
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -57,7 +84,7 @@ func TestCatalogueRowsPreserveCanonicalEnvelope(t *testing.T) {
 	assert.Equal(t, category, fromCategoryTaxonomyRow(categoryRow))
 
 	collection := &datastore.Collection{
-		UID: uid, Namespace: "shop", Name: "collection", APIVersion: "catalog/v1", Kind: "Collection",
+		UID: uid, Namespace: "shop", Name: "collections_by_namespace", APIVersion: "catalog/v1", Kind: "Collection",
 		Generation: 4, ResourceVersion: "7", Revision: "main@sha", CreationTimestamp: now,
 		CreationActor: "creator", UpdateTimestamp: now.Add(time.Minute), UpdateActor: "updater",
 		Labels: product.Labels, Annotations: product.Annotations, OwnerReferences: owners,

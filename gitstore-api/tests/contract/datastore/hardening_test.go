@@ -7,12 +7,15 @@ package datastore_contract_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const concurrentReservationTrials = 100
@@ -65,6 +68,60 @@ func TestScyllaConcurrentSKUReservationHasOneWinner(t *testing.T) {
 			func() error { return first.CreateProductVariant(context.Background(), left) },
 			func() error { return second.CreateProductVariant(context.Background(), right) },
 		)
+	}
+}
+
+func TestScyllaRepositoryCreateAndNamespaceTerminationHaveOneWinner(t *testing.T) {
+	requireScyllaHardeningEnvironment(t)
+	createReplica, deleteReplica := newScyllaDatastores(t)
+
+	for trial := 0; trial < concurrentReservationTrials; trial++ {
+		namespace := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, createReplica.CreateNamespace(context.Background(), namespace))
+		current, err := deleteReplica.GetNamespace(context.Background(), namespace.UID)
+		require.NoError(t, err)
+		expectedResourceVersion := current.ResourceVersion
+		deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+		current.DeletionTimestamp = &deletedAt
+		datastore.AdvanceNamespaceSystemVersion(current)
+		repository := newRepository(namespace.Name)
+
+		start := make(chan struct{})
+		createResult := make(chan error, 1)
+		deleteResult := make(chan error, 1)
+		go func() {
+			<-start
+			createResult <- createReplica.CreateRepositoryInActiveNamespace(context.Background(), repository)
+		}()
+		go func() {
+			<-start
+			deleteResult <- deleteReplica.MarkNamespaceDeletion(context.Background(), current, expectedResourceVersion)
+		}()
+		close(start)
+		createErr := <-createResult
+		deleteErr := <-deleteResult
+
+		assert.False(t, createErr == nil && deleteErr == nil, "trial %d allowed both repository create and termination", trial)
+		switch {
+		case createErr == nil:
+			assert.True(t,
+				errors.Is(deleteErr, datastore.ErrNamespaceNotEmpty) || errors.Is(deleteErr, datastore.ErrConflict),
+				"trial %d delete error = %v", trial, deleteErr,
+			)
+			persisted, getErr := deleteReplica.GetNamespace(context.Background(), namespace.UID)
+			require.NoError(t, getErr)
+			assert.Nil(t, persisted.DeletionTimestamp)
+		case deleteErr == nil:
+			assert.True(t,
+				errors.Is(createErr, datastore.ErrNamespaceNotActive) || errors.Is(createErr, datastore.ErrConflict),
+				"trial %d create error = %v", trial, createErr,
+			)
+			persisted, getErr := createReplica.GetNamespace(context.Background(), namespace.UID)
+			require.NoError(t, getErr)
+			assert.NotNil(t, persisted.DeletionTimestamp)
+		default:
+			t.Fatalf("trial %d had no winner: create=%v delete=%v", trial, createErr, deleteErr)
+		}
 	}
 }
 

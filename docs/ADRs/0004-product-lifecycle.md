@@ -1,6 +1,6 @@
 # ADR 0004: Product Lifecycle
 
-**Status**: Proposed
+**Status**: Accepted (2026-09-18)
 
 **Date**: 2026-06-26
 

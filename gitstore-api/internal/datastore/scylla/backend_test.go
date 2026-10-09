@@ -142,6 +142,18 @@ func openRootSession(addr string) (*gocql.Session, error) {
 }
 
 func newTestStore(t *testing.T) datastore.Datastore {
+	return newTestStoreWithWatchBucket(t, 0)
+}
+
+func newTestStoreWithWatchBucket(t *testing.T, watchBucketSize int) datastore.Datastore {
+	t.Helper()
+	store, err := scylla.New(testScyllaConfig(t), zap.NewNop(), watchBucketSize)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func testScyllaConfig(t *testing.T) config.ScyllaConfig {
 	t.Helper()
 	host, portStr, splitErr := net.SplitHostPort(scyllaAddr)
 	if splitErr != nil {
@@ -149,22 +161,45 @@ func newTestStore(t *testing.T) datastore.Datastore {
 		portStr = "9042"
 	}
 	port, _ := strconv.Atoi(portStr)
-	cfg := config.ScyllaConfig{
+	return config.ScyllaConfig{
+		AutoMigrate:           true,
 		Hosts:                 []string{scyllaAddr},
 		Keyspace:              scyllaKeyspace,
 		DisableShardAwarePort: true,
 		IgnorePeerAddr:        true,
 		AddressTranslator:     contactPointTranslator(host, port),
 	}
-	store, err := scylla.New(cfg, zap.NewNop())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
-	return store
 }
 
 func newTestStores(t *testing.T) (datastore.Datastore, datastore.Datastore) {
 	t.Helper()
 	return newTestStore(t), newTestStore(t)
+}
+
+type sessionRevocationStore interface {
+	RevokeSession(context.Context, string, time.Time) error
+	IsSessionRevoked(context.Context, string) (bool, error)
+	ConsumeSession(context.Context, string, time.Time) (bool, error)
+}
+
+func TestSessionRevocationsAreSharedAcrossReplicas(t *testing.T) {
+	firstStore, secondStore := newTestStores(t)
+	first := firstStore.(sessionRevocationStore)
+	second := secondStore.(sessionRevocationStore)
+	ctx := context.Background()
+	jti := "logout-" + newID()
+	require.NoError(t, first.RevokeSession(ctx, jti, time.Now().Add(time.Hour)))
+	revoked, err := second.IsSessionRevoked(ctx, jti)
+	require.NoError(t, err)
+	assert.True(t, revoked)
+
+	refreshJTI := "refresh-" + newID()
+	consumed, err := first.ConsumeSession(ctx, refreshJTI, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	assert.True(t, consumed)
+	consumed, err = second.ConsumeSession(ctx, refreshJTI, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	assert.False(t, consumed)
 }
 
 func newID() string { return uuid.New().String() }
@@ -1088,6 +1123,90 @@ func TestScylla_NamespaceDirectUID_FullEnvelopeAndBodyRoundTrip(t *testing.T) {
 	assert.Equal(t, uid, got.UID)
 	assert.Equal(t, namespace.Body, got.Body)
 	assert.JSONEq(t, string(namespace.OwnerReferences), string(got.OwnerReferences))
+}
+
+func TestScylla_NamespaceRepositoryLifecycleCoordinationAcrossReplicas(t *testing.T) {
+	storeA, storeB := newTestStores(t)
+	ctx := context.Background()
+	namespace := &datastore.Namespace{
+		UID:               newID(),
+		Name:              "repository-lifecycle-" + newID()[:8],
+		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+	}
+	require.NoError(t, storeA.CreateNamespace(ctx, namespace))
+	repository := &datastore.Repository{
+		UID:               newID(),
+		Namespace:         namespace.Name,
+		Name:              "catalog",
+		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+	}
+
+	require.NoError(t, storeB.CreateRepositoryInActiveNamespace(ctx, repository))
+	current, err := storeA.GetNamespace(ctx, namespace.UID)
+	require.NoError(t, err)
+	deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+	expectedResourceVersion := current.ResourceVersion
+	current.DeletionTimestamp = &deletedAt
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.ErrorIs(t, storeA.MarkNamespaceDeletion(ctx, current, expectedResourceVersion), datastore.ErrNamespaceNotEmpty)
+
+	require.NoError(t, storeB.DeleteRepository(ctx, repository.UID))
+	current, err = storeA.GetNamespace(ctx, namespace.UID)
+	require.NoError(t, err)
+	expectedResourceVersion = current.ResourceVersion
+	current.DeletionTimestamp = &deletedAt
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.NoError(t, storeA.MarkNamespaceDeletion(ctx, current, expectedResourceVersion))
+
+	late := *repository
+	late.UID = newID()
+	late.Name = "late"
+	require.ErrorIs(t, storeB.CreateRepositoryInActiveNamespace(ctx, &late), datastore.ErrNamespaceNotActive)
+}
+
+func TestScylla_NamespaceRepositoryLifecycleLegacyNullFence(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	namespace := &datastore.Namespace{
+		UID:               newID(),
+		Name:              "legacy-fence-" + newID()[:8],
+		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+	}
+	require.NoError(t, store.CreateNamespace(ctx, namespace))
+	clearNamespaceRepositoryFence(t, namespace.UID)
+
+	repository := &datastore.Repository{
+		UID:               newID(),
+		Namespace:         namespace.Name,
+		Name:              "catalog",
+		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+	}
+	require.NoError(t, store.CreateRepositoryInActiveNamespace(ctx, repository))
+	require.NoError(t, store.DeleteRepository(ctx, repository.UID))
+
+	current, err := store.GetNamespace(ctx, namespace.UID)
+	require.NoError(t, err)
+	expectedResourceVersion := current.ResourceVersion
+	deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+	current.DeletionTimestamp = &deletedAt
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.NoError(t, store.MarkNamespaceDeletion(ctx, current, expectedResourceVersion))
+}
+
+func clearNamespaceRepositoryFence(t *testing.T, namespaceUID string) {
+	t.Helper()
+	session, err := openRootSession(scyllaAddr)
+	require.NoError(t, err)
+	t.Cleanup(session.Close)
+	uid, err := gocql.ParseUUID(namespaceUID)
+	require.NoError(t, err)
+	require.NoError(t, session.Query(
+		fmt.Sprintf(
+			"UPDATE %s.namespaces_by_uid SET repository_creation_epoch=null, pending_repository_creations=null WHERE uid=?",
+			scyllaKeyspace,
+		),
+		uid,
+	).Exec())
 }
 
 func TestScylla_RepositoryDirectUIDPathReversePath_FullEnvelopeAndBodyRoundTrip(t *testing.T) {

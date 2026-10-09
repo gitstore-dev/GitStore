@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,17 +23,21 @@ import (
 	"github.com/99designs/gqlgen/graphql/playground"
 	"github.com/gin-gonic/gin"
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/admissionreport"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/oidcjwt"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountassertion"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountjwt"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/userdirnone"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	dsfactory "github.com/gitstore-dev/gitstore/api/internal/datastore/factory"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/githttp"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
@@ -40,16 +46,16 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
+	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
+	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vektah/gqlparser/v2/ast"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
-const version = "0.1.0-alpha.2" // x-release-please-version
-
-// eventBusCapacity is the number of recent events retained per resource
-// kind for watch-subscription resume (spec 040, research.md R3).
-const eventBusCapacity = 1000
+const version = "0.1.0-alpha.6" // x-release-please-version
 
 // defaultRateLimitPerSecond/defaultRateLimitBurst mirror config.Load's
 // api.rate_limit_per_second/api.rate_limit_burst defaults, used as a
@@ -58,14 +64,15 @@ const eventBusCapacity = 1000
 const (
 	defaultRateLimitPerSecond = 50
 	defaultRateLimitBurst     = 100
+	namespaceWatchStopTimeout = 5 * time.Second
 )
 
-// policyReloader can reload its policy from disk.
-type policyReloader interface {
+// authReloader validates and reloads the complete configured auth provider set.
+type authReloader interface {
 	Reload() error
 }
 
-// providerShutdowner is implemented by auth providers that own background goroutines.
+// providerShutdowner is implemented by auth providers and runtimes that own resources.
 type providerShutdowner interface {
 	Shutdown()
 }
@@ -80,8 +87,49 @@ type Server struct {
 	gitServer        *http.Server
 	grpcServer       *grpc.Server
 	grpcListener     net.Listener
-	rbacReloader     policyReloader
+	authReloader     authReloader
 	providerShutdown []providerShutdowner
+	namespaceWatch   *namespaceWatchRuntime
+}
+
+type namespaceCDCRunner interface {
+	RunNamespaceCDC(context.Context, *watchjournal.Materializer, datastore.NamespaceWatchLease, time.Duration, time.Duration, func()) error
+}
+
+// repositoryCDCRunner is optional during the rolling upgrade: older
+// datastores continue serving Namespace CDC, while Scylla implementations
+// with the Repository authoritative source join the same lease and journal.
+type repositoryCDCRunner interface {
+	RunRepositoryCDC(context.Context, *watchjournal.Materializer, datastore.ResourceWatchLease, time.Duration, time.Duration, func()) error
+}
+
+// catalogCDCRunner serves every registered namespaced catalog kind (Product,
+// File, CategoryTaxonomy, ...) from its authoritative table into the shared
+// journal, one reader per kind.
+type catalogCDCRunner interface {
+	CatalogCDCKinds() []string
+	RunCatalogCDC(context.Context, string, *watchjournal.Materializer, datastore.ResourceWatchLease, time.Duration, time.Duration, func()) error
+}
+
+type namespaceWatchRuntime struct {
+	journal          datastore.NamespaceWatchJournal
+	materializer     *watchjournal.Materializer
+	leaseManager     *watchjournal.LeaseManager
+	metrics          *watchjournal.Metrics
+	runner           namespaceCDCRunner
+	repositoryRunner repositoryCDCRunner
+	catalogRunner    catalogCDCRunner
+	cfg              config.WatchJournalConfig
+	log              *zap.Logger
+	cancel           context.CancelFunc
+	done             chan struct{}
+}
+
+func namespaceWatchMetrics(runtime *namespaceWatchRuntime) *watchjournal.Metrics {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.metrics
 }
 
 // NewServer builds the API, Git HTTP, and catalog gRPC servers from config.
@@ -93,15 +141,62 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, fmt.Errorf("app: logger is required")
 	}
 	clock := apiruntime.SystemClock{}
+	instanceID := uuid.NewString()
 
-	store, err := dsfactory.NewDatastore(cfg.Datastore, log)
+	rawStore, err := dsfactory.NewDatastore(cfg.Api.Datastore, log, cfg.Api.Watch.Journal)
 	if err != nil {
 		return nil, fmt.Errorf("create datastore: %w", err)
 	}
-	store = datastore.NewInstrumentedDatastore(store, cfg.Datastore.Backend, log)
+	var namespaceWatch *namespaceWatchRuntime
+	var resourceJournal datastore.ResourceWatchJournal
+	{
+		// The durable watch journal reader and CDC materializer are always
+		// on — there is no watch mechanism besides the journal.
+		journal, journalErr := dsfactory.ResourceWatchJournal(rawStore)
+		if journalErr != nil {
+			_ = rawStore.Close()
+			return nil, fmt.Errorf("create resource watch journal: %w", journalErr)
+		}
+		resourceJournal = journal
+		metrics, metricsErr := watchjournal.NewMetrics(prometheus.DefaultRegisterer)
+		if metricsErr != nil {
+			_ = rawStore.Close()
+			return nil, fmt.Errorf("register Namespace watch metrics: %w", metricsErr)
+		}
+		clock := apiruntime.SystemClock{}
+		namespaceWatch = &namespaceWatchRuntime{
+			journal: journal,
+			materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{
+				EventTTL:         cfg.Api.Watch.Journal.Retention,
+				BookmarkInterval: cfg.Api.Watch.Journal.BookmarkInterval,
+				Clock:            clock,
+				Metrics:          metrics,
+			}),
+			leaseManager: watchjournal.NewLeaseManager(
+				journal,
+				instanceID,
+				cfg.Api.Watch.Journal.Materializer.LeaseTTL,
+				cfg.Api.Watch.Journal.Materializer.LeaseRenewInterval,
+				clock,
+			),
+			metrics: metrics,
+			cfg:     cfg.Api.Watch.Journal,
+			log:     log,
+		}
+		if runner, ok := rawStore.(namespaceCDCRunner); ok {
+			namespaceWatch.runner = runner
+		}
+		if runner, ok := rawStore.(repositoryCDCRunner); ok {
+			namespaceWatch.repositoryRunner = runner
+		}
+		if runner, ok := rawStore.(catalogCDCRunner); ok {
+			namespaceWatch.catalogRunner = runner
+		}
+	}
+	store := datastore.NewInstrumentedDatastore(rawStore, cfg.Api.Datastore.Backend, log)
 	ids := apiruntime.UUIDGenerator{}
 
-	gitClient, err := gitclient.NewClientWithAddr(cfg.Git.Grpc.Uri, cfg.Auth.Grpc.HmacSecret)
+	gitClient, err := gitclient.NewClientWithAddr(cfg.Api.GitService.Uri, cfg.GrpcAuth.HmacSecret)
 	if err != nil {
 		_ = store.Close()
 		return nil, fmt.Errorf("connect git-service: %w", err)
@@ -111,33 +206,53 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("bootstrap resources: %w", err)
 	}
-	registry, rbacReloader, providerShutdowns, err := buildProviderRegistry(cfg, log)
+	revocations, ok := rawStore.(staticusers.RevocationStore)
+	if !ok {
+		_ = gitClient.Close()
+		_ = store.Close()
+		return nil, fmt.Errorf("datastore does not implement shared session revocations")
+	}
+	registry, authReloader, providerShutdowns, err := buildProviderRegistry(cfg, store, log, revocations)
 	if err != nil {
 		_ = gitClient.Close()
 		_ = store.Close()
 		return nil, fmt.Errorf("build auth provider registry: %w", err)
 	}
 	log.Info("auth providers ready",
-		zap.Strings("authn_chain", cfg.Auth.AuthN.Chain),
-		zap.String("authz_provider", cfg.Auth.AuthZ.Provider),
-		zap.String("userdir_provider", cfg.Auth.UserDir.Provider),
+		zap.Strings("authn_chain", cfg.Api.Auth.AuthN.Chain),
+		zap.String("authz_provider", cfg.Api.Auth.AuthZ.Provider),
+		zap.String("userdir_provider", cfg.Api.Auth.UserDir.Provider),
 	)
 
-	// eventBus fans out CategoryTaxonomy admission events to GraphQL watch
-	// subscriptions (spec 040). Shared between the gRPC admission path
-	// (publisher) and the GraphQL resolvers (subscribers).
-	eventBus := eventbus.New(eventBusCapacity)
-
+	// The same admission runtime serves post-receive batches and synchronous
+	// GraphQL committed-manifest convergence. Build it before the GraphQL schema
+	// so resolvers never acquire a datastore-only authoring path.
+	catalogServer, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
+		Store:     store,
+		GitClient: gitClient,
+		Logger:    log,
+		Clock:     clock,
+	})
+	if err != nil {
+		_ = gitClient.Close()
+		_ = store.Close()
+		return nil, err
+	}
 	gqlRouter, err := NewGraphQLHandler(GraphQLHandlerDeps{
-		Store:              store,
-		GitWriter:          gitClient,
-		Logger:             log,
-		Registry:           registry,
-		Clock:              clock,
-		IDs:                ids,
-		EventBus:           eventBus,
-		RateLimitPerSecond: cfg.Api.RateLimitPerSecond,
-		RateLimitBurst:     cfg.Api.RateLimitBurst,
+		Store:                     store,
+		GitWriter:                 gitClient,
+		Logger:                    log,
+		Registry:                  registry,
+		Clock:                     clock,
+		IDs:                       ids,
+		CommittedManifestAdmitter: catalogServer,
+		ResourceJournal:           resourceJournal,
+		NamespaceWatch:            cfg.Api.Watch.Journal,
+		NamespaceMetrics:          namespaceWatchMetrics(namespaceWatch),
+		ServiceAccountAudience:    cfg.Api.Auth.ServiceAccount.Audience,
+		RateLimitPerSecond:        cfg.Api.RateLimit.PerSecond,
+		RateLimitBurst:            cfg.Api.RateLimit.Burst,
+		PushLimits:                cfg.PushLimits,
 	})
 	if err != nil {
 		_ = gitClient.Close()
@@ -145,7 +260,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, err
 	}
 
-	router := healthHandler(gqlRouter, store, log, clock)
+	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch, instanceID)
 	var graphQlHandler http.Handler = router
 
 	httpServer := &http.Server{
@@ -156,7 +271,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	gitHttpHandler := githttp.NewMuxWithStoreAndAuthz(githttp.SmartHttpDeps{
+	gitHttpHandler := githttp.NewMux(githttp.SmartHttpDeps{
 		GitClient: gitClient,
 		Store:     store,
 		Logger:    log,
@@ -178,19 +293,6 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, fmt.Errorf("listen on catalog gRPC port %d: %w", cfg.Api.GrpcPort, err)
 	}
 	grpcServer := grpc.NewServer()
-	catalogServer, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
-		Store:     store,
-		GitClient: gitClient,
-		Logger:    log,
-		Clock:     clock,
-		EventBus:  eventBus,
-	})
-	if err != nil {
-		_ = grpcListener.Close()
-		_ = gitClient.Close()
-		_ = store.Close()
-		return nil, err
-	}
 	catalogv1.RegisterCatalogServiceServer(grpcServer, catalogServer)
 
 	return &Server{
@@ -202,22 +304,30 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		gitServer:        gitHttpServer,
 		grpcServer:       grpcServer,
 		grpcListener:     grpcListener,
-		rbacReloader:     rbacReloader,
+		authReloader:     authReloader,
 		providerShutdown: providerShutdowns,
+		namespaceWatch:   namespaceWatch,
 	}, nil
 }
 
 // GraphQLHandlerDeps are the dependencies for NewGraphQLHandler.
 type GraphQLHandlerDeps struct {
-	Store     datastore.Datastore
-	GitWriter resolver.GitWriter
-	Logger    *zap.Logger
-	Registry  *auth.ProviderRegistry
-	Clock     apiruntime.Clock
-	IDs       apiruntime.IDGenerator
-	// EventBus backs the watchCategories/watchResources subscription
-	// resolvers (spec 040). Optional — nil disables watch subscriptions.
-	EventBus *eventbus.Bus
+	Store                     datastore.Datastore
+	GitWriter                 resolver.GitWriter
+	Logger                    *zap.Logger
+	Registry                  *auth.ProviderRegistry
+	Clock                     apiruntime.Clock
+	IDs                       apiruntime.IDGenerator
+	CommittedManifestAdmitter admission.CommittedManifestAdmitter
+	ResourceJournal           datastore.ResourceWatchJournal
+	NamespaceWatch            config.WatchJournalConfig
+	NamespaceMetrics          *watchjournal.Metrics
+	// PushLimits is the shared static platform push-size ceiling; see
+	// config.PushLimitsConfig.
+	PushLimits config.PushLimitsConfig
+	// ServiceAccountAudience is the configured audience value that the server
+	// issues tokens for. Must be provided to the resolver (spec 061).
+	ServiceAccountAudience string
 	// RateLimitPerSecond/RateLimitBurst configure the per-client-IP token
 	// bucket guarding /graphql. A zero RateLimitPerSecond falls back to
 	// defaultRateLimitPerSecond/defaultRateLimitBurst (the same defaults
@@ -225,6 +335,9 @@ type GraphQLHandlerDeps struct {
 	// tests) keep working unchanged.
 	RateLimitPerSecond float64
 	RateLimitBurst     int
+	// ConnectionRegistry tracks authenticated ServiceAccount WebSockets for
+	// immediate local revocation. A fresh registry is created when omitted.
+	ConnectionRegistry *wsregistry.Registry
 }
 
 // NewGraphQLHandler builds a GraphQL HTTP handler.
@@ -232,14 +345,24 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	if deps.Registry == nil || deps.Registry.AuthN() == nil || deps.Registry.AuthZ() == nil {
 		return nil, fmt.Errorf("app: authn and authz provider registry is required")
 	}
+	connectionRegistry := deps.ConnectionRegistry
+	if connectionRegistry == nil {
+		connectionRegistry = wsregistry.New()
+	}
 	rootResolver, err := resolver.NewResolver(resolver.ResolverDeps{
-		Store:       deps.Store,
-		GitWriter:   deps.GitWriter,
-		Registry:    deps.Registry,
-		Logger:      deps.Logger,
-		Clock:       deps.Clock,
-		IDGenerator: deps.IDs,
-		EventBus:    deps.EventBus,
+		Store:                     deps.Store,
+		GitWriter:                 deps.GitWriter,
+		Registry:                  deps.Registry,
+		Logger:                    deps.Logger,
+		Clock:                     deps.Clock,
+		IDGenerator:               deps.IDs,
+		CommittedManifestAdmitter: deps.CommittedManifestAdmitter,
+		ResourceJournal:           deps.ResourceJournal,
+		NamespaceWatch:            deps.NamespaceWatch,
+		NamespaceMetrics:          deps.NamespaceMetrics,
+		PushLimits:                deps.PushLimits,
+		ServiceAccountAudience:    deps.ServiceAccountAudience,
+		ConnectionRegistry:        connectionRegistry,
 	})
 	if err != nil {
 		return nil, err
@@ -249,6 +372,11 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 
 	gqlServer.AddTransport(transport.Websocket{
 		KeepAlivePingInterval: 10 * time.Second,
+		InitFunc:              webSocketInitFunc(deps.Registry, connectionRegistry, deps.Store),
+		CloseFunc: func(ctx context.Context, _ int) {
+			cancelWebSocketLifetime(ctx)
+			connectionRegistry.Unregister(ctx)
+		},
 	})
 	gqlServer.AddTransport(transport.Options{})
 	gqlServer.AddTransport(transport.GET{})
@@ -258,6 +386,7 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	gqlServer.SetQueryCache(lru.New[*ast.QueryDocument](1000))
 
 	gqlServer.Use(extension.Introspection{})
+	gqlServer.Use(admissionreport.Extension{})
 	gqlServer.Use(extension.AutomaticPersistedQuery{
 		Cache: lru.New[string](100),
 	})
@@ -267,6 +396,7 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	gqlServer.AroundOperations(authenticateMiddleware.GraphQLAuthenticator)
 	gqlServer.AroundOperations(authorizeMiddleware.GraphQLAuthorizer)
 	gqlServer.AroundFields(authorizeMiddleware.GraphQLFieldAuthorizer)
+	gqlServer.AroundResponses(authorizeMiddleware.GraphQLResponseAuthorizer)
 
 	gqlHandler := gin.HandlerFunc(func(c *gin.Context) {
 		ctx := security.ContextWithRemoteAddr(c.Request.Context(), c.RemoteIP())
@@ -300,17 +430,87 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	return r, nil
 }
 
+type webSocketLifetimeCancelContextKey struct{}
+
+func webSocketInitFunc(registry *auth.ProviderRegistry, connectionRegistry *wsregistry.Registry, store datastore.Datastore) transport.WebsocketInitFunc {
+	return func(ctx context.Context, initPayload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
+		if registry == nil || registry.AuthN() == nil {
+			return nil, nil, errors.New("unauthorized")
+		}
+		authorization := initPayload.Authorization()
+		if authorization == "" {
+			return nil, nil, errors.New("unauthorized")
+		}
+		headers := make(http.Header)
+		headers.Set("Authorization", authorization)
+
+		authCtx := ctx
+		if bearer, ok := strings.CutPrefix(authorization, "Bearer "); ok {
+			authCtx = auth.ContextWithRawToken(authCtx, bearer)
+		}
+		principal, decision, err := registry.AuthN().Authenticate(authCtx, auth.AuthRequest{
+			Header:     headers,
+			RemoteAddr: security.RemoteAddrFromContext(authCtx),
+		})
+		if err != nil || decision.Outcome != auth.OutcomeAllow || principal == nil || principal.AuthMethod == "none" {
+			return nil, nil, errors.New("unauthorized")
+		}
+		if !principal.ExpiresAt.IsZero() && !principal.ExpiresAt.After(time.Now()) {
+			return nil, nil, errors.New("unauthorized")
+		}
+
+		if principal.ServiceAccountUID != "" {
+			var cancel context.CancelFunc
+			if principal.ExpiresAt.IsZero() {
+				authCtx, cancel = context.WithCancel(authCtx)
+			} else {
+				authCtx, cancel = context.WithDeadline(authCtx, principal.ExpiresAt)
+			}
+			authCtx = context.WithValue(authCtx, webSocketLifetimeCancelContextKey{}, cancel)
+			authCtx = connectionRegistry.Register(authCtx, principal.ServiceAccountUID, cancel)
+		}
+		if principal.ServiceAccountUID != "" {
+			if store == nil {
+				cancelWebSocketLifetime(authCtx)
+				connectionRegistry.Unregister(authCtx)
+				return nil, nil, errors.New("unauthorized")
+			}
+			account, err := store.GetServiceAccountByUID(authCtx, principal.ServiceAccountUID)
+			if err != nil || account == nil || account.Disabled || account.DeletionTimestamp != nil {
+				cancelWebSocketLifetime(authCtx)
+				connectionRegistry.Unregister(authCtx)
+				return nil, nil, errors.New("unauthorized")
+			}
+		}
+		return auth.ContextWithPrincipal(authCtx, principal), nil, nil
+	}
+}
+
+func cancelWebSocketLifetime(ctx context.Context) {
+	if cancel, ok := ctx.Value(webSocketLifetimeCancelContextKey{}).(context.CancelFunc); ok {
+		cancel()
+	}
+}
+
 func playgroundHandler(c *gin.Context) {
 	h := playground.Handler("GraphQL Playground", "/graphql")
 	h.ServeHTTP(c.Writer, c.Request)
 }
 
-func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock) *gin.Engine {
+func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock, namespaceWatch *namespaceWatchRuntime, instanceID string) *gin.Engine {
+	var resourceWatchReady func(context.Context) error
+	if namespaceWatch != nil {
+		resourceWatchReady = func(ctx context.Context) error {
+			return namespaceWatchReadiness(ctx, namespaceWatch, clock.Now())
+		}
+	}
 	healthHandler := health.NewHandler(health.HandlerDeps{
-		Store:   store,
-		Logger:  log,
-		Version: version,
-		Clock:   clock,
+		Store:              store,
+		Logger:             log,
+		Version:            version,
+		Clock:              clock,
+		ResourceWatchReady: resourceWatchReady,
+		InstanceID:         instanceID,
 	})
 
 	router.GET("/health", healthHandler.Health)
@@ -319,75 +519,220 @@ func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logge
 	return router
 }
 
+func namespaceWatchReadiness(ctx context.Context, runtime *namespaceWatchRuntime, now time.Time) error {
+	bounds, err := runtime.journal.Bounds(ctx)
+	if err != nil {
+		return err
+	}
+	// Bounds are shared durable state. Refreshing metrics here keeps follower
+	// replicas aligned with the leader even though they do not receive the
+	// materializer's process-local observation callbacks.
+	runtime.metrics.SetBounds(bounds, now)
+	maxLag := runtime.cfg.Materializer.MaxLag
+	if bounds.ProgressAt.IsZero() || now.Sub(bounds.ProgressAt) > maxLag {
+		return watchjournal.ErrMaterializerNotReady
+	}
+	return nil
+}
+
+// serviceAccountStore is the narrow datastore seam shared by the
+// ServiceAccount AuthN providers. Assertion authentication additionally needs
+// the durable replay operation while JWT authentication uses only the lookup.
+type serviceAccountStore interface {
+	GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*datastore.ServiceAccount, error)
+	TryConsumeServiceAccountAssertion(ctx context.Context, jtiDigest string, expiresAt time.Time) (bool, error)
+}
+
 // buildProviderRegistry constructs a ProviderRegistry from the application config.
 // It reads authn chain, authz provider, and userdir provider from the resolved config.
-// The second return value is non-nil when rbac-local is active — callers may use it
-// for SIGHUP-triggered policy reloads. The third return value lists providers that
-// own background goroutines and must be shut down when the server stops.
-func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderRegistry, policyReloader, []providerShutdowner, error) {
+// The second return value validates and atomically swaps the complete auth set on
+// SIGHUP. The third return value lists resources that must be shut down with the server.
+func buildProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, authReloader, []providerShutdowner, error) {
+	registry, shutdowns, err := constructProviderRegistry(cfg, store, log, revocations)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	runtime := &providerRegistryRuntime{
+		cfg: cfg, store: store, log: log, revocations: revocations, registry: registry, shutdowns: shutdowns,
+	}
+	return registry, runtime, []providerShutdowner{runtime}, nil
+}
+
+type providerRegistryRuntime struct {
+	mu          sync.Mutex
+	cfg         *config.Config
+	store       serviceAccountStore
+	log         *zap.Logger
+	revocations staticusers.RevocationStore
+	registry    *auth.ProviderRegistry
+	shutdowns   []providerShutdowner
+	closed      bool
+}
+
+func (r *providerRegistryRuntime) Reload() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errors.New("auth provider registry is closed")
+	}
+	newRegistry, newShutdowns, err := constructProviderRegistry(r.cfg, r.store, r.log, r.revocations)
+	if err != nil {
+		return err
+	}
+	oldShutdowns := r.shutdowns
+	r.registry.Swap(newRegistry.AuthN(), newRegistry.AuthZ(), newRegistry.UserDir())
+	r.shutdowns = newShutdowns
+	for _, provider := range oldShutdowns {
+		provider.Shutdown()
+	}
+	return nil
+}
+
+func (r *providerRegistryRuntime) Shutdown() {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
+	r.closed = true
+	shutdowns := r.shutdowns
+	r.shutdowns = nil
+	r.mu.Unlock()
+	for _, provider := range shutdowns {
+		provider.Shutdown()
+	}
+}
+
+func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, []providerShutdowner, error) {
 	// Build AuthN providers in chain order.
-	chain := cfg.Auth.AuthN.Chain
+	chain := cfg.Api.Auth.AuthN.Chain
 	if len(chain) == 0 {
-		chain = []string{"static-admin", "anonymous"}
+		chain = []string{"static-users", "anonymous"}
 	}
 
 	var authnProviders []auth.AuthNProvider
 	var shutdowns []providerShutdowner
+	cleanup := func() {
+		for _, provider := range shutdowns {
+			provider.Shutdown()
+		}
+	}
+	var staticUsersProvider *staticusers.StaticUsersProvider
 	for _, name := range chain {
 		switch name {
-		case "static-admin":
-			p, err := staticadmin.New(cfg.Auth, log)
+		case "static-users":
+			p, err := staticusers.NewWithRevocationStore(cfg.Api.Auth, log, revocations)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("init static-admin provider: %w", err)
+				cleanup()
+				return nil, nil, fmt.Errorf("init static-users provider: %w", err)
 			}
+			staticUsersProvider = p
 			authnProviders = append(authnProviders, p)
 			shutdowns = append(shutdowns, p)
 		case "anonymous":
 			authnProviders = append(authnProviders, anonymous.New())
+		case "serviceaccount-assertion":
+			p, err := serviceaccountassertion.New(cfg.Api.Auth.ServiceAccount, store, log)
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("init serviceaccount-assertion provider: %w", err)
+			}
+			authnProviders = append(authnProviders, p)
+		case "serviceaccount-jwt":
+			p, err := serviceaccountjwt.New(cfg.Api.Auth.ServiceAccount, store, log)
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("init serviceaccount-jwt provider: %w", err)
+			}
+			authnProviders = append(authnProviders, p)
+			shutdowns = append(shutdowns, p)
+		case "oidc-jwt":
+			p, err := oidcjwt.New(context.Background(), cfg.Api.Auth.OIDC, log)
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("init oidc-jwt provider: %w", err)
+			}
+			authnProviders = append(authnProviders, p)
+			shutdowns = append(shutdowns, p)
 		default:
-			return nil, nil, nil, fmt.Errorf("unknown authn provider %q", name)
+			cleanup()
+			return nil, nil, fmt.Errorf("unknown authn provider %q", name)
 		}
 	}
 
 	// Build AuthZ provider.
 	var authzProvider auth.AuthZProvider
-	var reloader policyReloader
-	switch cfg.Auth.AuthZ.Provider {
+	var rbacProvider *rbaclocal.RBACLocalProvider
+	switch cfg.Api.Auth.AuthZ.Provider {
 	case "rbac-local":
-		p, err := rbaclocal.New(cfg.Auth.RBAC, log)
+		p, err := rbaclocal.New(cfg.Api.Auth.RBACLocal, log)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("init rbac-local authz provider: %w", err)
+			cleanup()
+			return nil, nil, fmt.Errorf("init rbac-local authz provider: %w", err)
 		}
 		authzProvider = p
-		reloader = p
-	case "allow-all", "":
-		// Default to allow-all so existing deployments without explicit config are unaffected.
+		rbacProvider = p
+	case "allow-all":
 		authzProvider = allowall.New(log)
 	default:
-		return nil, nil, nil, fmt.Errorf("unknown authz provider %q", cfg.Auth.AuthZ.Provider)
+		cleanup()
+		return nil, nil, fmt.Errorf("unknown authz provider %q", cfg.Api.Auth.AuthZ.Provider)
 	}
 	// DecisionLogger is the required middleware that keeps every AuthZ decision
 	// consistent with the pluggable auth architecture audit contract.
 	authzProvider = auth.NewDecisionLogger(authzProvider, log)
 
 	// Build UserDir provider.
-	userdirProvider := userdirnone.New()
+	var userdirProvider auth.UserDirProvider
+	switch cfg.Api.Auth.UserDir.Provider {
+	case "none", "":
+		userdirProvider = userdirnone.New()
+	case "static-users":
+		if staticUsersProvider == nil {
+			cleanup()
+			return nil, nil, errors.New("api.auth.userdir.provider=static-users requires static-users in api.auth.authn.chain")
+		}
+		userdirProvider = staticUsersProvider
+	default:
+		cleanup()
+		return nil, nil, fmt.Errorf("unknown userdir provider %q", cfg.Api.Auth.UserDir.Provider)
+	}
 
-	return auth.NewProviderRegistry(auth.NewChainedAuthN(authnProviders...), authzProvider, userdirProvider), reloader, shutdowns, nil
+	if staticUsersProvider != nil && rbacProvider != nil && !rbacProvider.HasAnyRoleBindingFor(staticUsersProvider.Usernames()) {
+		usernames := staticUsersProvider.Usernames()
+		first := ""
+		if len(usernames) > 0 {
+			first = usernames[0]
+		}
+		cleanup()
+		return nil, nil, fmt.Errorf("startup failed: static-users + rbac-local migration safety check\n\n  Problem: static-users is configured with %d user(s) (%s), but rbac-local's policy.yaml has no usable role_bindings entry for any of them. A usable binding's complete role set leaves at least one allowed action after explicit denies are applied\n\n  To fix, do ONE of the following:\n    1. Add a role_bindings entry in %s for at least one of the usernames above, e.g. role_bindings: %s: [admin]\n    2. If you don't want rbac-local enforcement yet, set GITSTORE_API__AUTH__AUTHZ__PROVIDER=allow-all instead\n\n  See specs/060-local-multiuser-authn/quickstart.md for a worked example", len(usernames), strings.Join(usernames, ", "), cfg.Api.Auth.RBACLocal.PolicyFile, first)
+	}
+	return auth.NewProviderRegistry(auth.NewChainedAuthN(authnProviders...), authzProvider, userdirProvider), shutdowns, nil
 }
 
 // Start starts all servers in background goroutines.
 func (s *Server) Start() {
-	// Listen for SIGHUP to trigger a live policy reload on rbac-local.
-	if s.rbacReloader != nil {
+	// The CDC materializer is always on — there is no watch mechanism besides
+	// the durable journal.
+	if s.namespaceWatch != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.namespaceWatch.cancel = cancel
+		s.namespaceWatch.done = make(chan struct{})
+		go func() {
+			defer close(s.namespaceWatch.done)
+			s.namespaceWatch.run(ctx)
+		}()
+	}
+	// Listen for SIGHUP to validate and atomically swap the complete auth set.
+	if s.authReloader != nil {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGHUP)
 		go func() {
 			for range sigCh {
-				if err := s.rbacReloader.Reload(); err != nil {
-					s.log.Error("rbac-local policy reload failed", zap.Error(err))
+				if err := s.authReloader.Reload(); err != nil {
+					s.log.Error("auth provider reload failed; previous configuration remains active", zap.Error(err))
 				} else {
-					s.log.Info("rbac-local policy reloaded")
+					s.log.Info("auth providers reloaded atomically")
 				}
 			}
 		}()
@@ -437,6 +782,18 @@ func (s *Server) Shutdown(ctx context.Context) {
 
 // Close releases non-server resources.
 func (s *Server) Close() {
+	if s.namespaceWatch != nil && s.namespaceWatch.cancel != nil {
+		s.namespaceWatch.cancel()
+		if s.namespaceWatch.done != nil {
+			timer := time.NewTimer(namespaceWatchStopTimeout)
+			defer timer.Stop()
+			select {
+			case <-s.namespaceWatch.done:
+			case <-timer.C:
+				s.log.Warn("Resource watch materializer shutdown timed out")
+			}
+		}
+	}
 	for _, p := range s.providerShutdown {
 		p.Shutdown()
 	}
@@ -448,5 +805,115 @@ func (s *Server) Close() {
 	}
 	if s.store != nil {
 		_ = s.store.Close()
+	}
+}
+
+func (r *namespaceWatchRuntime) run(ctx context.Context) {
+	retry := time.NewTicker(time.Second)
+	defer retry.Stop()
+	for {
+		lease, acquired, err := r.leaseManager.Acquire(ctx)
+		if err != nil {
+			r.log.Error("Resource watch materializer lease acquisition failed", zap.Error(err))
+		} else if acquired {
+			err = r.runAsLeader(ctx, lease)
+			if errors.Is(err, datastore.ErrNamespaceWatchDiscontinuity) {
+				r.log.Error("Resource watch materializer stopped after an ordering discontinuity; operator repair is required", zap.Error(err))
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-retry.C:
+		}
+	}
+}
+
+func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datastore.NamespaceWatchLease) error {
+	ctx, cancel := context.WithCancel(parent)
+	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
+	r.metrics.SetLeader(true)
+	defer r.metrics.SetLeader(false)
+
+	var catalogKinds []string
+	if r.catalogRunner != nil {
+		catalogKinds = r.catalogRunner.CatalogCDCKinds()
+	}
+	sources := len(catalogKinds) + 2
+	errCh := make(chan error, sources+1)
+	workers.Go(func() {
+		errCh <- r.leaseManager.Maintain(ctx, lease)
+	})
+	if r.runner != nil || r.repositoryRunner != nil || len(catalogKinds) > 0 {
+		ready := make(chan struct{}, sources)
+		readyCount := 0
+		changeAgeLimit := config.JournalCDCRetention
+		confidenceWindow := r.cfg.CDC.ConfidenceWindow
+		markReady := func() { ready <- struct{}{} }
+		if r.runner != nil {
+			readyCount++
+			workers.Go(func() {
+				errCh <- r.runner.RunNamespaceCDC(ctx, r.materializer, lease, changeAgeLimit, confidenceWindow, markReady)
+			})
+		}
+		if r.repositoryRunner != nil {
+			readyCount++
+			workers.Go(func() {
+				errCh <- r.repositoryRunner.RunRepositoryCDC(ctx, r.materializer, lease, changeAgeLimit, confidenceWindow, markReady)
+			})
+		}
+		for _, kind := range catalogKinds {
+			readyCount++
+			workers.Go(func() {
+				errCh <- r.catalogRunner.RunCatalogCDC(ctx, kind, r.materializer, lease, changeAgeLimit, confidenceWindow, markReady)
+			})
+		}
+		for range readyCount {
+			select {
+			case <-parent.Done():
+				return parent.Err()
+			case err := <-errCh:
+				if err != nil && !errors.Is(err, context.Canceled) {
+					r.log.Warn("Resource watch materializer failed before CDC readiness", zap.Error(err))
+				}
+				return err
+			case <-ready:
+			}
+		}
+	}
+	if _, err := r.materializer.AppendBookmark(ctx, lease); err != nil {
+		// Shutdown releases the lease (LeaseManager.Maintain), so a bookmark
+		// racing cancellation fails as a stale lease; report the cancellation.
+		if parent.Err() != nil {
+			return parent.Err()
+		}
+		r.log.Error("Resource watch materializer initial bookmark failed", zap.Error(err))
+		return err
+	}
+	bookmark := time.NewTicker(r.cfg.BookmarkInterval)
+	defer bookmark.Stop()
+	for {
+		select {
+		case <-parent.Done():
+			return parent.Err()
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				r.log.Warn("Resource watch materializer leadership ended", zap.Error(err))
+			}
+			return err
+		case <-bookmark.C:
+			if _, err := r.materializer.AppendBookmark(ctx, lease); err != nil {
+				if parent.Err() != nil {
+					return parent.Err()
+				}
+				r.log.Error("Resource watch materializer bookmark failed", zap.Error(err))
+				return err
+			}
+		}
 	}
 }

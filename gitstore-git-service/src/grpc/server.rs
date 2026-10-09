@@ -6,6 +6,8 @@
 #![allow(clippy::result_large_err)]
 
 use dashmap::DashMap;
+use std::fs::{File, OpenOptions};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -13,7 +15,7 @@ use tonic::{Request, Response, Status};
 
 use crate::git::hooks::{HookPipeline, NoopAdmissionHandler, NoopValidationHandler, RefUpdate};
 use crate::git::repo::{create_repository, delete_repository, fanout_path, list_tags};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 pub mod proto {
     include!(concat!(
@@ -34,10 +36,16 @@ use proto::*;
 
 use crate::git::hooks::HookContext;
 
+const COMMIT_FILE_MAX_ATTEMPTS: usize = 32;
+const COMMIT_FILE_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// T047: Convert a proto PushContext into a HookContext for the pipeline.
 impl From<&PushContext> for HookContext {
     fn from(ctx: &PushContext) -> Self {
-        let actor = ctx.actor.as_ref();
+        let actor = ctx
+            .authorization
+            .as_ref()
+            .and_then(|authz| authz.actor.as_ref());
         HookContext {
             repository_id: ctx.repository_id.clone(),
             actor_subject: actor.map(|a| a.subject.clone()).unwrap_or_default(),
@@ -57,42 +65,81 @@ impl From<&PushContext> for HookContext {
     }
 }
 
+/// Shared static platform push-size ceiling (see config::PushLimitsConfig).
+/// The effective per-push limit is `min(repository policy, ceiling)`,
+/// treating a 0/absent repository policy as the ceiling itself.
+#[derive(Clone, Copy, Debug)]
+pub struct PushLimits {
+    pub max_pack_size: u64,
+    pub max_file_size: u64,
+}
+
+impl Default for PushLimits {
+    fn default() -> Self {
+        // Mirrors config::default_toml's push_limits defaults.
+        Self {
+            max_pack_size: 512 * 1024 * 1024,
+            max_file_size: 100 * 1024 * 1024,
+        }
+    }
+}
+
+impl PushLimits {
+    /// Resolves the effective limit for a single push: the repository's
+    /// configured policy value clamped to the ceiling, or the ceiling
+    /// itself when the repository policy is 0/absent (there is no more
+    /// "0 = unlimited").
+    fn effective_pack_limit(&self, repository_policy: i64) -> i64 {
+        effective_limit(repository_policy, self.max_pack_size)
+    }
+
+    fn effective_file_limit(&self, repository_policy: i64) -> i64 {
+        effective_limit(repository_policy, self.max_file_size)
+    }
+}
+
+/// `repository_policy > 0` -> `min(repository_policy, ceiling)`; otherwise
+/// the ceiling itself. The ceiling is always positive (config validation
+/// enforces this), so the result is always a positive, enforceable limit.
+fn effective_limit(repository_policy: i64, ceiling: u64) -> i64 {
+    let ceiling = ceiling.min(i64::MAX as u64) as i64;
+    if repository_policy > 0 {
+        repository_policy.min(ceiling)
+    } else {
+        ceiling
+    }
+}
+
 pub struct GitServiceImpl {
     pub data_root: Arc<PathBuf>,
     pub repo_locks: Arc<DashMap<String, Arc<RwLock<()>>>>,
     pub hook_pipeline: Arc<HookPipeline>,
+    pub push_limits: PushLimits,
 }
 
 impl GitServiceImpl {
     pub fn new(data_root: PathBuf) -> Self {
-        use crate::config::{GitReceivePackHooks, HookToggle};
-        let default_hooks = GitReceivePackHooks {
-            pre_receive: HookToggle { enabled: false },
-            update: HookToggle { enabled: false },
-            post_receive: HookToggle { enabled: false },
-            proc_receive: HookToggle { enabled: false },
-            post_update: HookToggle { enabled: false },
-            reference_transaction: HookToggle { enabled: false },
-        };
         Self::with_pipeline(
             data_root,
             Arc::new(HookPipeline::new(
-                default_hooks,
-                "pre-receive".to_string(),
                 std::time::Duration::from_secs(10),
-                "post-receive".to_string(),
-                "refs/heads/main".to_string(),
                 Arc::new(NoopValidationHandler),
                 Arc::new(NoopAdmissionHandler),
             )),
+            PushLimits::default(),
         )
     }
 
-    pub fn with_pipeline(data_root: PathBuf, hook_pipeline: Arc<HookPipeline>) -> Self {
+    pub fn with_pipeline(
+        data_root: PathBuf,
+        hook_pipeline: Arc<HookPipeline>,
+        push_limits: PushLimits,
+    ) -> Self {
         Self {
             data_root: Arc::new(data_root),
             repo_locks: Arc::new(DashMap::new()),
             hook_pipeline,
+            push_limits,
         }
     }
 }
@@ -116,6 +163,42 @@ fn get_or_insert_lock(repo_locks: &DashMap<String, Arc<RwLock<()>>>, id: &str) -
         .clone()
 }
 
+/// Acquire an advisory lock whose ownership is tied to the open file
+/// descriptor. The file itself is intentionally persistent: the operating
+/// system releases the lock if a service process exits or is killed, so a
+/// leftover path never wedges later writers.
+fn acquire_repository_commit_lock(path: &Path, timeout: std::time::Duration) -> io::Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut backoff = std::time::Duration::from_millis(1);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "timed out acquiring repository commit lock",
+                    ));
+                }
+                std::thread::sleep(backoff);
+                backoff = std::cmp::min(backoff * 2, std::time::Duration::from_millis(100));
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error),
+        }
+    }
+}
+
+fn is_reference_content_conflict(message: &str) -> bool {
+    message.contains("actual content was")
+        && (message.contains("should have content") || message.contains("supposed to exist"))
+}
+
 /// Reject paths that could escape the repository working directory.
 fn validate_file_path(path: &str) -> Result<(), Status> {
     if std::path::Path::new(path).is_absolute() {
@@ -130,6 +213,50 @@ fn validate_file_path(path: &str) -> Result<(), Status> {
             path
         )));
     }
+    Ok(())
+}
+
+// validate_request_authorization enforces the API's signed-in, approved
+// authorization envelope. HMAC authenticates the API transport; this check
+// binds that authenticated caller's declared decision to this specific RPC and
+// repository without attempting to duplicate pluggable AuthZ policy in Rust.
+fn validate_request_authorization(
+    authorization: Option<&RequestAuthorization>,
+    repository_id: &str,
+    allowed_actions: &[&str],
+) -> Result<(), Status> {
+    let authorization = authorization
+        .ok_or_else(|| Status::invalid_argument("request authorization is required"))?;
+    let actor = authorization
+        .actor
+        .as_ref()
+        .ok_or_else(|| Status::invalid_argument("request authorization actor is required"))?;
+    if actor.subject.is_empty() || actor.auth_method.is_empty() {
+        return Err(Status::invalid_argument(
+            "request authorization actor is malformed",
+        ));
+    }
+    if authorization.resource_kind != "repository" || authorization.repository_id != repository_id {
+        return Err(Status::permission_denied(
+            "request authorization resource does not match repository",
+        ));
+    }
+    if !allowed_actions
+        .iter()
+        .any(|action| *action == authorization.action)
+    {
+        return Err(Status::permission_denied(
+            "request authorization action is not valid for this RPC",
+        ));
+    }
+    if actor.auth_method == "none"
+        && (actor.subject != "anon" || authorization.action != "repository.read.any")
+    {
+        return Err(Status::permission_denied(
+            "anonymous actors may only use repository.read.any",
+        ));
+    }
+    debug!(repo_id = %repository_id, subject = %actor.subject, action = %authorization.action, "request authorization accepted");
     Ok(())
 }
 
@@ -260,6 +387,11 @@ impl GitService for GitServiceImpl {
         request: Request<CreateRepositoryRequest>,
     ) -> Result<Response<CreateRepositoryResponse>, Status> {
         let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.create.own", "repository.create.any"],
+        )?;
         let repo_path = fanout_path(&self.data_root, &req.repository_id)?;
 
         if repo_path.exists() {
@@ -299,6 +431,11 @@ impl GitService for GitServiceImpl {
         request: Request<DeleteRepositoryRequest>,
     ) -> Result<Response<DeleteRepositoryResponse>, Status> {
         let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.delete.own", "repository.delete.any"],
+        )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
 
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
@@ -325,6 +462,11 @@ impl GitService for GitServiceImpl {
         request: Request<GetFileRequest>,
     ) -> Result<Response<GetFileResponse>, Status> {
         let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.read.own", "repository.read.any"],
+        )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.read().await;
@@ -379,6 +521,11 @@ impl GitService for GitServiceImpl {
         request: Request<GetFileStreamRequest>,
     ) -> Result<Response<Self::GetFileStreamStream>, Status> {
         let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.read.own", "repository.read.any"],
+        )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.read().await;
@@ -474,6 +621,11 @@ impl GitService for GitServiceImpl {
         request: Request<ListFilesRequest>,
     ) -> Result<Response<ListFilesResponse>, Status> {
         let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.read.own", "repository.read.any"],
+        )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.read().await;
@@ -506,6 +658,11 @@ impl GitService for GitServiceImpl {
         request: Request<CommitFileRequest>,
     ) -> Result<Response<CommitFileResponse>, Status> {
         let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.write.own", "repository.write.any"],
+        )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.write().await;
@@ -513,7 +670,24 @@ impl GitService for GitServiceImpl {
         tokio::task::spawn_blocking(move || {
             validate_file_path(&req.path)?;
 
-            let repo = gix::open(&repo_path)
+            // The async lock above coordinates this service instance. This
+            // repository-local advisory lock extends the same critical section
+            // to other Git-service processes sharing the bare repository. Its
+            // OS-owned lifetime makes it recoverable after a process crash.
+            let marker_lock_started = std::time::Instant::now();
+            let marker_lock_result = acquire_repository_commit_lock(
+                &repo_path.join("gitstore-commit.lock"),
+                COMMIT_FILE_LOCK_TIMEOUT,
+            );
+            debug!(
+                marker_lock_wait_seconds = marker_lock_started.elapsed().as_secs_f64(),
+                "CommitFile repository marker lock acquired"
+            );
+            let _repository_guard = marker_lock_result.map_err(|e| {
+                Status::resource_exhausted(format!("acquire repository commit lock: {e}"))
+            })?;
+
+            let object_repo = gix::open(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
             let author_name = if req.author_name.is_empty() {
@@ -534,68 +708,84 @@ impl GitService for GitServiceImpl {
             };
 
             // Write blob
-            let blob_oid: gix::ObjectId = repo
+            let blob_oid: gix::ObjectId = object_repo
                 .write_blob(&req.content)
                 .map_err(|e| Status::internal(format!("write_blob: {}", e)))?
                 .detach();
 
-            // Get current HEAD state (may be empty repo)
-            let maybe_head = repo.head_commit().ok();
+            for attempt in 0..COMMIT_FILE_MAX_ATTEMPTS {
+                // Re-read HEAD and rebuild the tree on every optimistic-ref
+                // retry. The in-process repository lock coordinates callers
+                // of this service instance; the ref transaction coordinates
+                // multiple Git-service replicas and other writers.
+                let repo = gix::open(&repo_path)
+                    .map_err(|e| Status::internal(format!("failed to reopen repo: {}", e)))?;
+                let maybe_head = repo.head_commit().ok();
+                let (new_tree_id, parents): (gix::ObjectId, Vec<gix::ObjectId>) =
+                    if let Some(head_commit) = maybe_head {
+                        let tree_id = head_commit
+                            .tree_id()
+                            .map_err(|e| Status::internal(e.to_string()))?
+                            .detach();
+                        let new_tree = repo
+                            .edit_tree(tree_id)
+                            .map_err(|e| Status::internal(format!("edit_tree: {}", e)))?
+                            .upsert(
+                                req.path.as_str(),
+                                gix::object::tree::EntryKind::Blob,
+                                blob_oid,
+                            )
+                            .map_err(|e| Status::internal(format!("upsert: {}", e)))?
+                            .write()
+                            .map_err(|e| Status::internal(format!("tree write: {}", e)))?;
+                        (new_tree.detach(), vec![head_commit.id().detach()])
+                    } else {
+                        let new_tree = repo
+                            .edit_tree(gix::ObjectId::empty_tree(gix::hash::Kind::Sha1))
+                            .map_err(|e| Status::internal(format!("edit_tree: {}", e)))?
+                            .upsert(
+                                req.path.as_str(),
+                                gix::object::tree::EntryKind::Blob,
+                                blob_oid,
+                            )
+                            .map_err(|e| Status::internal(format!("upsert: {}", e)))?
+                            .write()
+                            .map_err(|e| Status::internal(format!("tree write: {}", e)))?;
+                        (new_tree.detach(), vec![])
+                    };
 
-            let (new_tree_id, parents): (gix::ObjectId, Vec<gix::ObjectId>) =
-                if let Some(head_commit) = maybe_head {
-                    let tree_id = head_commit
-                        .tree_id()
-                        .map_err(|e| Status::internal(e.to_string()))?
-                        .detach();
-
-                    let new_tree = repo
-                        .edit_tree(tree_id)
-                        .map_err(|e| Status::internal(format!("edit_tree: {}", e)))?
-                        .upsert(
-                            req.path.as_str(),
-                            gix::object::tree::EntryKind::Blob,
-                            blob_oid,
-                        )
-                        .map_err(|e| Status::internal(format!("upsert: {}", e)))?
-                        .write()
-                        .map_err(|e| Status::internal(format!("tree write: {}", e)))?;
-
-                    let parent_id = head_commit.id().detach();
-                    (new_tree.detach(), vec![parent_id])
-                } else {
-                    // Empty repo: build tree from scratch
-                    let new_tree = repo
-                        .edit_tree(gix::ObjectId::empty_tree(gix::hash::Kind::Sha1))
-                        .map_err(|e| Status::internal(format!("edit_tree: {}", e)))?
-                        .upsert(
-                            req.path.as_str(),
-                            gix::object::tree::EntryKind::Blob,
-                            blob_oid,
-                        )
-                        .map_err(|e| Status::internal(format!("upsert: {}", e)))?
-                        .write()
-                        .map_err(|e| Status::internal(format!("tree write: {}", e)))?;
-                    (new_tree.detach(), vec![])
-                };
-
-            let mut time_buf = gix::date::parse::TimeBuf::default();
-            let sig_ref = sig.to_ref(&mut time_buf);
-            let commit_id = repo
-                .commit_as(
+                let mut time_buf = gix::date::parse::TimeBuf::default();
+                let sig_ref = sig.to_ref(&mut time_buf);
+                match repo.commit_as(
                     sig_ref,
                     sig_ref,
                     "HEAD",
                     &req.commit_message,
                     new_tree_id,
                     parents.iter().copied(),
-                )
-                .map_err(|e| Status::internal(format!("commit: {}", e)))?;
-
-            Ok(Response::new(CommitFileResponse {
-                commit_sha: commit_id.to_string(),
-                branch: "main".to_string(),
-            }))
+                ) {
+                    Ok(commit_id) => {
+                        return Ok(Response::new(CommitFileResponse {
+                            commit_sha: commit_id.to_string(),
+                            branch: "main".to_string(),
+                        }));
+                    }
+                    Err(err)
+                        if attempt + 1 < COMMIT_FILE_MAX_ATTEMPTS
+                            && is_reference_content_conflict(&err.to_string()) =>
+                    {
+                        debug!(
+                            retry_attempt = attempt + 1,
+                            "CommitFile optimistic reference conflict; retrying"
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            1_u64 << attempt.min(4),
+                        ));
+                    }
+                    Err(err) => return Err(Status::internal(format!("commit: {}", err))),
+                }
+            }
+            unreachable!("bounded commit loop always returns on its final attempt")
         })
         .await
         .map_err(|e| Status::internal(format!("task join error: {}", e)))?
@@ -606,6 +796,11 @@ impl GitService for GitServiceImpl {
         request: Request<DeleteFileRequest>,
     ) -> Result<Response<DeleteFileResponse>, Status> {
         let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.write.own", "repository.write.any"],
+        )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.write().await;
@@ -680,6 +875,11 @@ impl GitService for GitServiceImpl {
         request: Request<CreateTagRequest>,
     ) -> Result<Response<CreateTagResponse>, Status> {
         let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.write.own", "repository.write.any"],
+        )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.write().await;
@@ -746,6 +946,11 @@ impl GitService for GitServiceImpl {
         request: Request<ListTagsRequest>,
     ) -> Result<Response<ListTagsResponse>, Status> {
         let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.read.own", "repository.read.any"],
+        )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.read().await;
@@ -782,6 +987,16 @@ impl GitService for GitServiceImpl {
         request: Request<InfoRefsRequest>,
     ) -> Result<Response<InfoRefsResponse>, Status> {
         let req = request.into_inner();
+        let expected_action = match Service::try_from(req.service).unwrap_or(Service::Unspecified) {
+            Service::GitUploadPack => &["repository.read.own", "repository.read.any"][..],
+            Service::GitReceivePack => &["repository.write.own", "repository.write.any"][..],
+            Service::Unspecified => return Err(Status::invalid_argument("unknown service")),
+        };
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            expected_action,
+        )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.read().await;
@@ -840,13 +1055,22 @@ impl GitService for GitServiceImpl {
                 push_ctx.repository_id, repo_id
             )));
         }
+        validate_request_authorization(
+            push_ctx.authorization.as_ref(),
+            &repo_id,
+            &["repository.write.own", "repository.write.any"],
+        )?;
 
-        // T041: Extract pack size limit before any pack I/O.
-        let max_pack_size_bytes: i64 = push_ctx
-            .policy
-            .as_ref()
-            .map(|p| p.max_pack_size_bytes)
-            .unwrap_or(0);
+        // T041: Extract pack size limit before any pack I/O. Effective limit
+        // = min(repository policy, ceiling); a 0/absent repository policy
+        // means the ceiling itself (no more "0 = unlimited").
+        let max_pack_size_bytes: i64 = self.push_limits.effective_pack_limit(
+            push_ctx
+                .policy
+                .as_ref()
+                .map(|p| p.max_pack_size_bytes)
+                .unwrap_or(0),
+        );
 
         // T051: Build HookContext from validated PushContext.
         let hook_ctx = crate::git::hooks::HookContext::from(push_ctx);
@@ -947,13 +1171,17 @@ impl GitService for GitServiceImpl {
             Some(q)
         };
 
-        // T042: Enforce blob size limit on quarantined objects before any ref update.
-        let max_file_size_bytes: i64 = first
-            .push_context
-            .as_ref()
-            .and_then(|ctx| ctx.policy.as_ref())
-            .map(|p| p.max_file_size_bytes)
-            .unwrap_or(0);
+        // T042: Enforce blob size limit on quarantined objects before any ref
+        // update. Effective limit = min(repository policy, ceiling); a
+        // 0/absent repository policy means the ceiling itself.
+        let max_file_size_bytes: i64 = self.push_limits.effective_file_limit(
+            first
+                .push_context
+                .as_ref()
+                .and_then(|ctx| ctx.policy.as_ref())
+                .map(|p| p.max_file_size_bytes)
+                .unwrap_or(0),
+        );
         if max_file_size_bytes > 0 {
             if let Some(ref q) = quarantine {
                 let pack_path = q.pack_path.clone();
@@ -1032,25 +1260,14 @@ impl GitService for GitServiceImpl {
             .map(|i| pipeline_updates[*i].clone())
             .collect();
 
-        // Build ref_edits, prepare the gix transaction (acquires lock files), run the
-        // reference-transaction/prepared veto *while locks are held*, then commit or rollback.
-        // All of this runs in spawn_blocking because gix::Repository is !Send.
-        // block_in_place is used inside to drive the async veto call.
+        // Build ref_edits, prepare the gix transaction (acquires lock files), then
+        // commit. Runs in spawn_blocking because gix::Repository is !Send.
         let pipeline_updates_for_txn = pipeline_updates.clone();
         let accepted_indices_clone = accepted_indices.clone();
-        let accepted_updates_clone = accepted_updates.clone();
         let accepted_updates_for_callbacks = accepted_updates.clone();
         let repo_path_commit = repo_path.clone();
-        let pipeline_clone = Arc::clone(&pipeline);
-        let hook_ctx_txn = hook_ctx.clone();
         let hook_ctx_post = hook_ctx.clone();
-        // Result is either Ok(rt_committed) or Err(Status); we also need to know if the
-        // reference-transaction veto fired so we can call the right observation callback.
-        enum TxnOutcome {
-            Committed,
-            RejectedByHook(String), // veto reason
-        }
-        let txn_result: Result<TxnOutcome, Status> = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 
             let repo = gix::open(&repo_path_commit)
@@ -1104,7 +1321,7 @@ impl GitService for GitServiceImpl {
             }
 
             if ref_edits.is_empty() {
-                return Ok(TxnOutcome::Committed);
+                return Ok::<(), Status>(());
             }
 
             let file_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
@@ -1120,51 +1337,16 @@ impl GitService for GitServiceImpl {
                 .prepare(ref_edits, file_lock_fail, packed_lock_fail)
                 .map_err(|e| Status::internal(format!("prepare ref transaction: {}", e)))?;
 
-            // Run the veto hook while locks are held (matches the prepared state semantics).
-            let veto = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(
-                    pipeline_clone.run_reference_transaction_prepared(
-                        &repo_path_commit,
-                        &accepted_updates_clone,
-                        &hook_ctx_txn,
-                    ),
-                )
-            });
-
-            match veto {
-                Err(rejection) => {
-                    drop(txn); // releases all lock files
-                    Ok(TxnOutcome::RejectedByHook(rejection.reason))
-                }
-                Ok(()) => {
-                    if let Some(q) = quarantine {
-                        crate::git::pack_server::promote_quarantine(&repo, q)
-                            .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
-                    }
-                    txn.commit(None)
-                        .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
-                    Ok(TxnOutcome::Committed)
-                }
+            if let Some(q) = quarantine {
+                crate::git::pack_server::promote_quarantine(&repo, q)
+                    .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
             }
+            txn.commit(None)
+                .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
+            Ok(())
         })
         .await
-        .map_err(|e| Status::internal(format!("commit join: {}", e)))?;
-
-        match txn_result? {
-            TxnOutcome::Committed => {
-                pipeline.run_reference_transaction_committed(
-                    &repo_path,
-                    &accepted_updates_for_callbacks,
-                );
-            }
-            TxnOutcome::RejectedByHook(reason) => {
-                pipeline
-                    .run_reference_transaction_aborted(&repo_path, &accepted_updates_for_callbacks);
-                let all_refs: Vec<&str> = ref_updates.iter().map(|u| u.ref_name.as_str()).collect();
-                let report_status = build_rejection_status(&all_refs, &reason);
-                return Ok(Response::new(ReceivePackResponse { report_status }));
-            }
-        }
+        .map_err(|e| Status::internal(format!("commit join: {}", e)))??;
 
         info!(repo_id = %repo_id, "receive_pack: refs committed");
 
@@ -1200,6 +1382,11 @@ impl GitService for GitServiceImpl {
         request: Request<UploadPackRequest>,
     ) -> Result<Response<Self::UploadPackStream>, Status> {
         let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.read.own", "repository.read.any"],
+        )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.read().await;
@@ -1254,6 +1441,11 @@ impl GitService for GitServiceImpl {
         request: Request<GetLatestTagRequest>,
     ) -> Result<Response<GetLatestTagResponse>, Status> {
         let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.read.own", "repository.read.any"],
+        )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.read().await;
@@ -1489,6 +1681,45 @@ mod tests {
         GitServiceImpl::new(data_root.to_path_buf())
     }
 
+    fn make_test_service_with_push_limits(
+        data_root: &std::path::Path,
+        push_limits: PushLimits,
+    ) -> GitServiceImpl {
+        GitServiceImpl::with_pipeline(
+            data_root.to_path_buf(),
+            Arc::new(HookPipeline::new(
+                std::time::Duration::from_secs(10),
+                Arc::new(NoopValidationHandler),
+                Arc::new(NoopAdmissionHandler),
+            )),
+            push_limits,
+        )
+    }
+
+    async fn make_grpc_client_with_push_limits(
+        data_root: std::path::PathBuf,
+        push_limits: PushLimits,
+    ) -> proto::git_service_client::GitServiceClient<tonic::transport::Channel> {
+        use proto::git_service_server::GitServiceServer;
+
+        let svc = make_test_service_with_push_limits(&data_root, push_limits);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(GitServiceServer::new(svc))
+                .serve_with_incoming(incoming)
+                .await
+                .unwrap();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let url = format!("http://{}", addr);
+        proto::git_service_client::GitServiceClient::connect(url)
+            .await
+            .unwrap()
+    }
+
     /// Create a bare repo at the fanout path for `repo_id` with one commit.
     fn repo_with_commit(data_root: &std::path::Path, repo_id: &str) {
         let repo_path = fanout_path(data_root, repo_id).unwrap();
@@ -1658,10 +1889,90 @@ mod tests {
     const TEST_REPO_B: &str = "01960000-0000-7000-8000-000000000011";
     const TEST_REPO_C: &str = "01960000-0000-7000-8000-000000000012";
 
+    fn test_authorization(repo_id: &str, action: &str) -> Option<RequestAuthorization> {
+        Some(RequestAuthorization {
+            actor: Some(AuthContext {
+                subject: "system:api".to_string(),
+                issuer: "test".to_string(),
+                auth_method: "internal".to_string(),
+                roles: vec![],
+                groups: vec![],
+                scopes: vec![],
+            }),
+            action: action.to_string(),
+            resource_kind: "repository".to_string(),
+            resource_name: String::new(),
+            repository_id: repo_id.to_string(),
+        })
+    }
+
+    #[test]
+    fn reference_content_conflict_recognizes_existing_and_missing_expectations() {
+        assert!(is_reference_content_conflict(
+            "ref refs/heads/main should have content abc, actual content was def"
+        ));
+        assert!(is_reference_content_conflict(
+            "Reference refs/heads/main was not supposed to exist, but actual content was def"
+        ));
+        assert!(!is_reference_content_conflict("permission denied"));
+    }
+
+    #[test]
+    fn anonymous_read_authorization_is_accepted() {
+        let authorization = RequestAuthorization {
+            actor: Some(AuthContext {
+                subject: "anon".to_string(),
+                issuer: "gitstore".to_string(),
+                auth_method: "none".to_string(),
+                roles: vec![],
+                groups: vec![],
+                scopes: vec![],
+            }),
+            action: "repository.read.any".to_string(),
+            resource_kind: "repository".to_string(),
+            resource_name: String::new(),
+            repository_id: TEST_REPO_A.to_string(),
+        };
+
+        assert!(validate_request_authorization(
+            Some(&authorization),
+            TEST_REPO_A,
+            &["repository.read.any"],
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn anonymous_write_authorization_is_rejected() {
+        let authorization = RequestAuthorization {
+            actor: Some(AuthContext {
+                subject: "anon".to_string(),
+                issuer: "gitstore".to_string(),
+                auth_method: "none".to_string(),
+                roles: vec![],
+                groups: vec![],
+                scopes: vec![],
+            }),
+            action: "repository.write.any".to_string(),
+            resource_kind: "repository".to_string(),
+            resource_name: String::new(),
+            repository_id: TEST_REPO_A.to_string(),
+        };
+
+        let error = validate_request_authorization(
+            Some(&authorization),
+            TEST_REPO_A,
+            &["repository.write.any"],
+        )
+        .expect_err("anonymous writes must be rejected");
+        assert_eq!(error.code(), tonic::Code::PermissionDenied);
+    }
+
     fn make_create_req(id: &str) -> Request<CreateRepositoryRequest> {
         Request::new(CreateRepositoryRequest {
             repository_id: id.to_string(),
             storage_class: String::new(),
+            authorization: test_authorization(id, "repository.create.any"),
         })
     }
 
@@ -1720,6 +2031,7 @@ mod tests {
         let resp = svc
             .delete_repository(Request::new(DeleteRepositoryRequest {
                 repository_id: TEST_REPO_C.to_string(),
+                authorization: test_authorization(TEST_REPO_C, "repository.delete.any"),
             }))
             .await
             .unwrap()
@@ -1735,6 +2047,7 @@ mod tests {
         let err = svc
             .delete_repository(Request::new(DeleteRepositoryRequest {
                 repository_id: TEST_REPO_A.to_string(),
+                authorization: test_authorization(TEST_REPO_A, "repository.delete.any"),
             }))
             .await
             .unwrap_err();
@@ -1750,6 +2063,7 @@ mod tests {
                 repository_id: TEST_REPO_A.to_string(),
                 path: "README.md".to_string(),
                 r#ref: "HEAD".to_string(),
+                authorization: test_authorization(TEST_REPO_A, "repository.read.any"),
             }))
             .await
             .unwrap_err();
@@ -1768,6 +2082,7 @@ mod tests {
                     repository_id: bad_name.to_string(),
                     path: "README.md".to_string(),
                     r#ref: "HEAD".to_string(),
+                    authorization: test_authorization(bad_name, "repository.read.any"),
                 }))
                 .await
                 .unwrap_err();
@@ -1796,6 +2111,7 @@ mod tests {
             repository_id: TEST_REPO_D.to_string(),
             path: "products/p1.md".to_string(),
             r#ref: "HEAD".to_string(),
+            authorization: test_authorization(TEST_REPO_D, "repository.read.any"),
         });
         let resp = svc.get_file(req).await.unwrap();
         assert_eq!(resp.into_inner().content, b"---\nid: p1\n---\nhello");
@@ -1811,6 +2127,7 @@ mod tests {
             repository_id: TEST_REPO_D.to_string(),
             path: "products/p1.md".to_string(),
             r#ref: "nonexistent-branch".to_string(),
+            authorization: test_authorization(TEST_REPO_D, "repository.read.any"),
         });
         let err = svc.get_file(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::NotFound);
@@ -1826,6 +2143,7 @@ mod tests {
             repository_id: TEST_REPO_D.to_string(),
             path: "products/nonexistent.md".to_string(),
             r#ref: "HEAD".to_string(),
+            authorization: test_authorization(TEST_REPO_D, "repository.read.any"),
         });
         let err = svc.get_file(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::NotFound);
@@ -1842,6 +2160,7 @@ mod tests {
             r#ref: "HEAD".to_string(),
             path_prefix: "products/".to_string(),
             recursive: true,
+            authorization: test_authorization(TEST_REPO_D, "repository.read.any"),
         });
         let resp = svc.list_files(req).await.unwrap();
         let files = resp.into_inner().files;
@@ -1858,6 +2177,7 @@ mod tests {
         let req = Request::new(GetLatestTagRequest {
             repository_id: TEST_REPO_D.to_string(),
             prefix: "v".to_string(),
+            authorization: test_authorization(TEST_REPO_D, "repository.read.any"),
         });
         let resp = svc.get_latest_tag(req).await.unwrap().into_inner();
 
@@ -1879,6 +2199,7 @@ mod tests {
         let req = Request::new(GetLatestTagRequest {
             repository_id: TEST_REPO_A.to_string(),
             prefix: "v".to_string(),
+            authorization: test_authorization(TEST_REPO_A, "repository.read.any"),
         });
         let resp = svc.get_latest_tag(req).await.unwrap().into_inner();
 
@@ -1908,6 +2229,7 @@ mod tests {
             commit_message: "add new product".to_string(),
             author_name: "Tester".to_string(),
             author_email: "test@example.com".to_string(),
+            authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
         });
         let resp = svc.commit_file(req).await.unwrap().into_inner();
         assert!(!resp.commit_sha.is_empty());
@@ -1928,6 +2250,80 @@ mod tests {
         find_blob_in_tree(&repo, tree_id, "products/new.md").unwrap();
     }
 
+    #[test]
+    fn test_repository_commit_lock_recovers_when_owner_releases_descriptor() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("gitstore-commit.lock");
+        let owner =
+            acquire_repository_commit_lock(&path, std::time::Duration::from_millis(10)).unwrap();
+
+        let error =
+            acquire_repository_commit_lock(&path, std::time::Duration::from_millis(5)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+
+        // Process termination closes its descriptors without unlinking this
+        // file. Dropping the owner models that OS cleanup: the persistent path
+        // must immediately be reusable by a replacement service process.
+        drop(owner);
+        assert!(path.exists());
+        acquire_repository_commit_lock(&path, std::time::Duration::from_millis(10)).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_commit_file_coordinates_across_service_instances() {
+        const WRITES: usize = 16;
+
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_E);
+
+        // Each service instance owns a distinct in-process lock map, matching
+        // the coordination boundary between production replicas.
+        let services = [
+            Arc::new(make_test_service(dir.path())),
+            Arc::new(make_test_service(dir.path())),
+        ];
+        let barrier = Arc::new(tokio::sync::Barrier::new(WRITES));
+        let mut handles = Vec::with_capacity(WRITES);
+
+        for index in 0..WRITES {
+            let service = Arc::clone(&services[index % services.len()]);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                service
+                    .commit_file(Request::new(CommitFileRequest {
+                        repository_id: TEST_REPO_E.to_string(),
+                        path: format!("products/concurrent-{index}.md"),
+                        content: format!("---\nid: concurrent-{index}\n---").into_bytes(),
+                        commit_message: format!("add concurrent product {index}"),
+                        author_name: "Tester".to_string(),
+                        author_email: "test@example.com".to_string(),
+                        authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+                    }))
+                    .await
+            }));
+        }
+
+        for handle in handles {
+            handle.await.unwrap().unwrap();
+        }
+
+        let repo_path = fanout_path(dir.path(), TEST_REPO_E).unwrap();
+        let repo = gix::open(repo_path).unwrap();
+        let commit_id = resolve_ref_to_commit_id(&repo, "HEAD").unwrap();
+        let tree_id = repo
+            .find_object(commit_id)
+            .unwrap()
+            .try_into_commit()
+            .unwrap()
+            .tree_id()
+            .unwrap()
+            .detach();
+        for index in 0..WRITES {
+            find_blob_in_tree(&repo, tree_id, &format!("products/concurrent-{index}.md")).unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn test_delete_file_on_nonexistent_file_returns_not_found() {
         let dir = TempDir::new().unwrap();
@@ -1940,6 +2336,7 @@ mod tests {
             commit_message: "delete".to_string(),
             author_name: "T".to_string(),
             author_email: "t@t.com".to_string(),
+            authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
         });
         let err = svc.delete_file(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::NotFound);
@@ -1956,6 +2353,7 @@ mod tests {
             tag_name: "v1.0.0".to_string(),
             message: "duplicate".to_string(),
             target_commit_sha: "".to_string(),
+            authorization: test_authorization(TEST_REPO_D, "repository.write.any"),
         });
         let err = svc.create_tag(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::AlreadyExists);
@@ -1980,6 +2378,7 @@ mod tests {
                     commit_message: "from a".to_string(),
                     author_name: "A".to_string(),
                     author_email: "a@a.com".to_string(),
+                    authorization: test_authorization(TEST_REPO_F, "repository.write.any"),
                 }))
                 .await
                 .unwrap()
@@ -1994,6 +2393,7 @@ mod tests {
                     commit_message: "from b".to_string(),
                     author_name: "B".to_string(),
                     author_email: "b@b.com".to_string(),
+                    authorization: test_authorization(TEST_REPO_G, "repository.write.any"),
                 }))
                 .await
                 .unwrap()
@@ -2079,8 +2479,8 @@ mod tests {
             namespace: "ns".to_string(),
             repository_name: "repo".to_string(),
             config_resource_version: String::new(),
-            actor: None,
             policy: None,
+            authorization: test_authorization(repo_id, "repository.write.any"),
         }
     }
 
@@ -2161,11 +2561,11 @@ mod tests {
             namespace: "ns".to_string(),
             repository_name: "repo".to_string(),
             config_resource_version: String::new(),
-            actor: None,
             policy: Some(PushPolicy {
                 max_pack_size_bytes: 1,
                 max_file_size_bytes: 0,
             }),
+            authorization: test_authorization(TEST_REPO_I, "repository.write.any"),
         };
 
         // Build a pack payload: minimal data > 1 byte to trip the limit
@@ -2218,11 +2618,11 @@ mod tests {
             namespace: "ns".to_string(),
             repository_name: "repo".to_string(),
             config_resource_version: String::new(),
-            actor: None,
             policy: Some(PushPolicy {
                 max_pack_size_bytes: 0,
                 max_file_size_bytes: 1, // 1 byte — any blob will exceed this
             }),
+            authorization: test_authorization(target_id, "repository.write.any"),
         };
 
         let chunk = ReceivePackRequest {
@@ -2248,7 +2648,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_zero_limits_mean_unlimited() {
+    async fn test_zero_policy_falls_back_to_ceiling_not_unlimited() {
+        // A delete-only push skips pack staging entirely regardless of
+        // policy, so a zero/absent repository policy here exercises no size
+        // check either way — it must not be rejected for size reasons. The
+        // effective-limit resolution itself (0/absent policy -> ceiling, not
+        // "unlimited") is covered by test_ceiling_clamps_oversized_repository_policy.
         let dir = TempDir::new().unwrap();
         bare_repo_with_main(dir.path(), TEST_REPO_H);
         let mut client = make_grpc_client(dir.path().to_path_buf()).await;
@@ -2257,28 +2662,120 @@ mod tests {
         let repo = gix::open(&repo_path).unwrap();
         let head_oid = repo.head_id().unwrap().to_string();
 
-        // Both limits = 0 (unlimited) — a delete-only push with a large push_context should succeed
         let ctx = PushContext {
             repository_id: TEST_REPO_H.to_string(),
             namespace: "ns".to_string(),
             repository_name: "repo".to_string(),
             config_resource_version: String::new(),
-            actor: None,
             policy: Some(PushPolicy {
                 max_pack_size_bytes: 0,
                 max_file_size_bytes: 0,
             }),
+            authorization: test_authorization(TEST_REPO_H, "repository.write.any"),
         };
         let chunk = delete_ref_cmd_with_ctx(TEST_REPO_H, "refs/heads/main", &head_oid, ctx);
         let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
-        // With zero limits the push should not be rejected for size reasons;
-        // it may fail for other reasons (e.g. ref update semantics) but not ResourceExhausted
         if let Err(status) = &result {
             assert_ne!(
                 status.code(),
                 tonic::Code::ResourceExhausted,
-                "zero limits must never trigger size rejection"
+                "a delete-only push must never trigger size rejection"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_ceiling_clamps_oversized_repository_policy() {
+        // The repository's own policy claims a 1GiB pack limit, but the
+        // service's push_limits ceiling is 1 byte — effective limit must be
+        // min(repository policy, ceiling) = the ceiling, not the repository
+        // policy. Any non-trivial pack must therefore be rejected.
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_I);
+        let mut client = make_grpc_client_with_push_limits(
+            dir.path().to_path_buf(),
+            PushLimits {
+                max_pack_size: 1,
+                max_file_size: 1,
+            },
+        )
+        .await;
+
+        let ctx = PushContext {
+            repository_id: TEST_REPO_I.to_string(),
+            namespace: "ns".to_string(),
+            repository_name: "repo".to_string(),
+            config_resource_version: String::new(),
+            policy: Some(PushPolicy {
+                max_pack_size_bytes: 1024 * 1024 * 1024,
+                max_file_size_bytes: 1024 * 1024 * 1024,
+            }),
+            authorization: test_authorization(TEST_REPO_I, "repository.write.any"),
+        };
+        let chunk = ReceivePackRequest {
+            repository_id: TEST_REPO_I.to_string(),
+            ref_commands: vec![RefCommand {
+                old_oid: "0000000000000000000000000000000000000000".to_string(),
+                new_oid: "a".repeat(40),
+                ref_name: "refs/heads/feature".to_string(),
+            }],
+            pack_data: b"PACK\x00\x00\x00\x02".to_vec(), // 8 bytes > 1-byte ceiling
+            is_last: true,
+            push_context: Some(ctx),
+        };
+
+        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let status = result.unwrap_err();
+        assert_eq!(
+            status.code(),
+            tonic::Code::ResourceExhausted,
+            "a repository policy above the ceiling must still be clamped to the ceiling, got: {:?}",
+            status
+        );
+    }
+
+    #[tokio::test]
+    async fn test_absent_repository_policy_uses_ceiling_as_effective_limit() {
+        // No repository policy at all (None) — the effective limit must be
+        // the service's ceiling, not "unlimited".
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_I);
+        let mut client = make_grpc_client_with_push_limits(
+            dir.path().to_path_buf(),
+            PushLimits {
+                max_pack_size: 1,
+                max_file_size: 1,
+            },
+        )
+        .await;
+
+        let ctx = PushContext {
+            repository_id: TEST_REPO_I.to_string(),
+            namespace: "ns".to_string(),
+            repository_name: "repo".to_string(),
+            config_resource_version: String::new(),
+            policy: None,
+            authorization: test_authorization(TEST_REPO_I, "repository.write.any"),
+        };
+        let chunk = ReceivePackRequest {
+            repository_id: TEST_REPO_I.to_string(),
+            ref_commands: vec![RefCommand {
+                old_oid: "0000000000000000000000000000000000000000".to_string(),
+                new_oid: "a".repeat(40),
+                ref_name: "refs/heads/feature".to_string(),
+            }],
+            pack_data: b"PACK\x00\x00\x00\x02".to_vec(), // 8 bytes > 1-byte ceiling
+            is_last: true,
+            push_context: Some(ctx),
+        };
+
+        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let status = result.unwrap_err();
+        assert_eq!(
+            status.code(),
+            tonic::Code::ResourceExhausted,
+            "an absent repository policy must fall back to the ceiling, not unlimited, got: {:?}",
+            status
+        );
     }
 }

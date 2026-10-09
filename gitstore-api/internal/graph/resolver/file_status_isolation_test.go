@@ -6,6 +6,8 @@ package resolver
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -13,6 +15,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
 
@@ -52,7 +55,6 @@ func TestUpdateFileStatusGeneric_ScopedStrictlyToNamespaceAndNameIdentity(t *tes
 		Kind: "File", Namespace: "acme", Name: "hero", ResourceVersion: "1", Resolved: resolved,
 	})
 	require.NoError(t, err)
-	require.Nil(t, payload.Conflict)
 	require.NotNil(t, payload.Object)
 
 	acme, err := store.GetFileByName(ctx, "acme", "hero")
@@ -68,10 +70,11 @@ func TestUpdateFileStatusGeneric_ScopedStrictlyToNamespaceAndNameIdentity(t *tes
 	// A stale resourceVersion targeting the untouched namespace's row must
 	// surface as its own independent conflict, proving the two identities
 	// are tracked completely separately rather than sharing any state.
-	conflict, err := mr.UpdateResourceStatus(ctx, model.UpdateResourceStatusInput{
+	_, err = mr.UpdateResourceStatus(ctx, model.UpdateResourceStatusInput{
 		Kind: "File", Namespace: "other-tenant", Name: "hero", ResourceVersion: "2",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, conflict.Conflict)
-	require.Equal(t, "1", conflict.Conflict.CurrentResourceVersion)
+	var graphErr *gqlerror.Error
+	require.True(t, errors.As(err, &graphErr))
+	require.Equal(t, "CONFLICT", graphErr.Extensions["code"])
+	require.Contains(t, fmt.Sprint(graphErr.Extensions["diagnostics"]), "current resourceVersion is "+"1")
 }

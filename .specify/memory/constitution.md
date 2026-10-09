@@ -1,31 +1,31 @@
 <!--
 Sync Impact Report:
-- Version change: 1.0.0 -> 2.0.0
+- Version change: 2.0.0 -> 3.0.0
 - Modified principles:
-  - IV. Observability & Debuggability -> IV. Production Observability & Debuggability
-  - VI. Incremental Delivery -> VI. Independently Deployable Delivery
-  - VII. Simplicity & YAGNI -> VII. Simplicity with Proven Scale
-- Added principles:
-  - VIII. Horizontally Replicable Core Services
-  - IX. Multi-User Authentication, Authorization & Isolation
-  - X. Production Capacity, Backpressure & Load Validation
-- Added sections:
-  - Core Service Topology
-  - Replica Safety
-  - Production Capacity Envelope
-- Removed sections:
-  - None
+  - VI. Independently Deployable Delivery (service-specific rollout)
+  - VII. Simplicity with Proven Scale (explicit singleton Git constraint)
+  - VIII. Horizontally Replicable Core Services -> VIII. Service-Specific Replica Safety
+- Added sections: None
+- Removed sections: None
+- Rationale: Correct the unsupported all-service replication mandate introduced
+  in 5f69102 (#363); Git repository sharding/routing is not implemented.
+  This is a MAJOR redefinition, not evidence that API/controller HA is complete.
 - Templates requiring updates:
   - ✅ .specify/templates/plan-template.md
   - ✅ .specify/templates/spec-template.md
   - ✅ .specify/templates/tasks-template.md
   - ✅ .specify/templates/commands/ (directory absent; no command templates to update)
 - Runtime guidance updated:
+  - ✅ AGENTS.md (also used by the CLAUDE.md symlink)
   - ✅ README.md
-  - ✅ docs/architecture.md
+  - ✅ docs/architecture/README.md
   - ✅ docs/developer-guide.md
-  - ✅ AGENTS.md
-  - ✅ specs/048-scylla-query-design/plan.md
+  - ✅ docs/runbooks/production-readiness-testing.md
+  - ✅ docs/ADRs/0015-resource-lifecycle-hooks.md
+  - ✅ docs/ADRs/0018-controller-ownership-concurrency-and-fencing.md
+  - ✅ docs/implementation/036-git-service-extension-architecture.md
+  - ✅ gitstore-controller-manager/README.md
+  - ✅ specs/063-implement-secret-adrs/ (spec, plan, research, capacity contract, tasks)
 - Follow-up TODOs: None
 -->
 
@@ -91,37 +91,52 @@ outcomes rather than speculative infrastructure.
 ### VI. Independently Deployable Delivery
 
 Every delivery slice MUST preserve compatibility with independently deployed
-API, controller-manager, and Git-service replicas. Features MUST be deployable
-incrementally, support rolling upgrades, and remain correct when old and new
-replicas overlap within the documented compatibility window. Priority order is
+API, controller-manager, and Git-service versions. API/controller changes MUST
+remain correct when old and new replicas overlap within the documented
+compatibility window. Git-service replacement MUST stop the old process before
+starting its replacement against the retained repository storage; overlapping
+Git writers and zero-downtime Git failover are not supported. Priority order is
 defined by each feature specification rather than a fixed historical roadmap.
 
-**Rationale:** Core services scale and roll independently. Delivery that requires
-a simultaneous fleet restart is operationally unsafe.
+**Rationale:** Independent service delivery does not imply that every service
+can scale horizontally or roll with overlapping instances.
 
 ### VII. Simplicity with Proven Scale
 
 Implement the simplest design that satisfies the declared production envelope.
 New services, brokers, caches, indexes, and abstractions MUST have measured or
 contractual justification. Simplicity MUST NOT be used to justify process-local
-correctness state, unbounded scans, single-replica assumptions, authorization
-bypasses, or designs that fail at the required scale.
+correctness state, unbounded scans, undocumented single-replica assumptions,
+authorization bypasses, or designs that fail at the required scale. The explicit
+singleton Git constraint below MUST NOT be treated as a defect that unrelated
+features must solve.
 
 **Rationale:** Unnecessary components increase operational burden, but an
 under-designed system merely defers that burden to production incidents.
 
-### VIII. Horizontally Replicable Core Services (NON-NEGOTIABLE)
+### VIII. Service-Specific Replica Safety (NON-NEGOTIABLE)
 
-The API, controller manager, and Git service MUST each support deployment with
-multiple replicas and autoscaling. Correctness MUST NOT depend on requests
-returning to the same process. Durable state, work ownership, idempotency,
-concurrency control, repository placement, and recovery MUST have an explicit
-replica-safe design. A feature that introduces process-local correctness state
-MUST provide a replica-consistent replacement before production use.
+API and controller-manager changes MUST define and verify correctness with
+multiple replicas. Durable state, work ownership, idempotency, concurrency
+control and recovery MUST have an explicit replica-safe design. Process-local
+correctness state MUST NOT be presented as replica-safe without a consistent
+replacement. This requirement is not a claim that every current API provider,
+controller operation or deployment already satisfies it; plans MUST identify
+implementation gaps and limit readiness claims to verified paths.
 
-**Rationale:** Replica deployment is a core operating mode, not a future
-optimization. Autoscaling must increase capacity without creating divergent
-catalogue state, duplicate reconciliation, or conflicting Git references.
+The Git service is stateful and **singleton-only**: exactly one active
+`gitstore-git-service` process per deployment. Repository sharding and
+placement-aware routing are not implemented. Multiple Git instances with
+separate volumes are not a supported sharded deployment, and a shared volume
+does not make multiple writers safe. Feature specifications, plans, tasks and
+capacity gates MUST NOT require Git replicas, autoscaling or HA unless the
+feature explicitly implements and verifies repository sharding/placement,
+routing, writer safety, storage durability and recovery. Such work requires
+its own approved scope, not an inferred prerequisite of another feature.
+
+**Rationale:** Replica-safe API/controller behavior and singleton Git storage
+are different contracts. Treating an unimplemented scaling goal as a shipped
+capability repeatedly creates unsafe deployments and unrelated scope expansion.
 
 ### IX. Multi-User Authentication, Authorization & Isolation (NON-NEGOTIABLE)
 
@@ -176,12 +191,15 @@ not depend on another service's private storage.
   and idempotency semantics consistent across replicas.
 - Controller-manager replicas MUST use idempotent reconciliation and an explicit
   coordination, partitioning, or duplicate-safe work model.
-- Git-service replicas MUST define repository placement, single-writer or
-  equivalent reference-update safety, routing, storage durability, and failover.
+- Git service MUST remain singleton-only until the prerequisites in Principle
+  VIII are implemented and verified. Tests MUST retain one Git process and
+  MUST NOT infer replication support from disjoint repository volumes.
 - Local memory and local filesystem state MAY be used for development or caches,
   but production correctness MUST survive process replacement and rescheduling.
-- Rolling upgrades MUST preserve contract compatibility and avoid split-brain
-  state.
+  Git repository storage is authoritative persistent state, not a disposable
+  cache; replacement MUST retain it and prevent writer overlap.
+- API/controller rolling upgrades MUST preserve contract compatibility.
+  Git upgrades MUST use non-overlapping replacement and account for downtime.
 
 ### Production Capacity Envelope
 
@@ -194,8 +212,10 @@ not depend on another service's private storage.
   timeouts MUST have explicit bounds.
 - Feature plans MUST state measurable p95/p99 latency, throughput, error-rate,
   recovery, and resource-saturation objectives for affected production paths.
-- Autoscaling and failover tests MUST demonstrate correct behavior with at least
-  two replicas for every affected core service.
+- Replica tests MUST demonstrate correct behavior with at least two instances
+  of each affected API/controller service. Git MUST use exactly one active
+  instance, including in production-mode capacity evidence. A capacity pass
+  MUST NOT be described as proof of Git HA.
 
 ## Development Workflow
 
@@ -224,7 +244,10 @@ not depend on another service's private storage.
 
 - `make pr-ready` passes before a pull request is considered ready.
 - New behavior has tests that were demonstrated to fail before implementation.
-- Core-service changes document and test behavior with multiple replicas.
+- API/controller changes document and test concurrent-replica behavior and
+  implementation limitations. Git changes document and test singleton
+  concurrency, persistent-storage recovery and non-overlapping replacement
+  where applicable, not Git replication.
 - Load-bearing changes meet declared capacity and sustained-load objectives.
 - Protected operations include authentication and authorization tests.
 - Logs, metrics, readiness, and error handling cover new operational states.
@@ -267,4 +290,4 @@ preferences. Runtime guidance may add detail but may not weaken these rules.
 Day-to-day repository and agent instructions supplement this constitution.
 When they conflict, this constitution takes precedence.
 
-**Version**: 2.0.0 | **Ratified**: 2026-03-09 | **Last Amended**: 2026-08-19
+**Version**: 3.0.0 | **Ratified**: 2026-03-09 | **Last Amended**: 2026-10-03

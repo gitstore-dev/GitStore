@@ -8,13 +8,15 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
@@ -25,38 +27,66 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-func newTestRegistry(t *testing.T) (*auth.ProviderRegistry, *staticadmin.StaticAdminProvider) {
+func TestRateLimiterIsolatesOperationalEndpointsWithoutExemptingThem(t *testing.T) {
+	router := gin.New()
+	limiter := NewRateLimit(0.000001, 1)
+	router.Use(limiter.RateLimiter)
+	handler := func(c *gin.Context) { c.Status(http.StatusNoContent) }
+	router.POST("/graphql", handler)
+	router.GET("/graphql", handler)
+	router.GET("/playground", handler)
+	for _, path := range []string{"/metrics", "/health", "/ready"} {
+		router.GET(path, handler)
+	}
+	request := func(method, path string, want int) {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		req.RemoteAddr = "192.0.2.1:12345"
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		require.Equal(t, want, response.Code, "%s %s", method, path)
+	}
+	request(http.MethodPost, "/graphql", http.StatusNoContent)
+	request(http.MethodGet, "/graphql", http.StatusTooManyRequests)
+	request(http.MethodGet, "/playground", http.StatusTooManyRequests)
+	for _, path := range []string{"/metrics", "/health", "/ready"} {
+		request(http.MethodGet, path, http.StatusNoContent)
+		request(http.MethodGet, path, http.StatusTooManyRequests)
+	}
+	request(http.MethodPost, "/graphql", http.StatusTooManyRequests)
+}
+
+func newTestRegistry(t *testing.T) (*auth.ProviderRegistry, *staticusers.StaticUsersProvider) {
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.MinCost)
 	require.NoError(t, err)
 
+	usersFile := filepath.Join(t.TempDir(), "users.yaml")
+	require.NoError(t, os.WriteFile(usersFile, []byte("version: v1\nusers:\n  - username: admin\n    password_hash: \""+string(hash)+"\"\n"), 0600))
 	cfg := config.AuthConfig{
-		Admin: config.UserConfig{
-			Username: "admin",
-			Password: string(hash),
-		},
+		StaticUsers: config.StaticUsersConfig{UsersFile: usersFile},
 		JWT: config.JWTConfig{
-			Secret:   "dev-secret-change-in-production",
-			Issuer:   "gitstore",
-			Duration: "24h",
+			Secret: "dev-secret-change-in-production",
+			Issuer: "gitstore",
+			TTL:    24 * time.Hour,
 		},
 	}
 
-	staticAdmin, err := staticadmin.New(cfg, zap.NewNop())
+	staticUsers, err := staticusers.New(cfg, zap.NewNop())
 	require.NoError(t, err)
-	t.Cleanup(staticAdmin.Shutdown)
+	t.Cleanup(staticUsers.Shutdown)
 
 	registry := auth.NewProviderRegistry(
-		auth.NewChainedAuthN(staticAdmin, anonymous.New()),
+		auth.NewChainedAuthN(staticUsers, anonymous.New()),
 		nil,
 		nil,
 	)
-	return registry, staticAdmin
+	return registry, staticUsers
 }
 
 func TestAuthenticatorValidBearerSetsPrincipal(t *testing.T) {
-	registry, staticAdmin := newTestRegistry(t)
-	token, _, err := staticAdmin.IssueSession(t.Context(), "admin")
+	registry, staticUsers := newTestRegistry(t)
+	token, _, err := staticUsers.IssueSession(t.Context(), "admin")
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
@@ -73,8 +103,8 @@ func TestAuthenticatorValidBearerSetsPrincipal(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.NotNil(t, captured)
 	assert.Equal(t, "admin", captured.Subject)
-	assert.Equal(t, "static-admin", captured.AuthMethod)
-	assert.True(t, captured.IsAdmin())
+	assert.Equal(t, "static-users", captured.AuthMethod)
+	assert.False(t, captured.IsAdmin())
 	assert.NotEmpty(t, captured.TokenID)
 }
 
@@ -194,7 +224,7 @@ func TestPushContextInserter(t *testing.T) {
 
 	const repoID = "01960000-0000-7000-8000-000000000001"
 	const nsID = "01960000-0000-7000-8000-000000000010"
-	principal := &auth.Principal{Subject: "admin", Issuer: "static-admin", AuthMethod: "basic", Roles: []string{"admin"}}
+	principal := &auth.Principal{Subject: "admin", Issuer: "static-users", AuthMethod: "basic", Roles: []string{"admin"}}
 
 	store := &testutil.StubStore{
 		GetRepositoryFunc: func(_ context.Context, id string) (*datastore.Repository, error) {
@@ -228,6 +258,7 @@ func TestPushContextInserter(t *testing.T) {
 			ctx := auth.ContextWithPrincipal(c.Request.Context(), principal)
 			c.Request = c.Request.WithContext(ctx)
 			c.Set(repoIDKey, repoID)
+			c.Set(approvedRepositoryActionKey, "repository.write.any")
 			c.Next()
 		},
 		authorizeMiddleware.PushContextInserter,
@@ -247,7 +278,9 @@ func TestPushContextInserter(t *testing.T) {
 	pc := gitclient.PushContextFromContext(capturedCtx)
 	require.NotNil(t, pc, "PushContext must be set in request context")
 	assert.Equal(t, repoID, pc.RepositoryId)
-	assert.Equal(t, "admin", pc.Actor.Subject)
+	require.NotNil(t, pc.Authorization)
+	require.NotNil(t, pc.Authorization.Actor)
+	assert.Equal(t, "admin", pc.Authorization.Actor.Subject)
 	assert.Equal(t, int64(52428800), pc.Policy.MaxPackSizeBytes)
 	assert.Equal(t, int64(10485760), pc.Policy.MaxFileSizeBytes)
 }

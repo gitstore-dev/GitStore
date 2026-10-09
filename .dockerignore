@@ -23,17 +23,36 @@ specs/
 
 # Environment
 .env*
-!.env.example
+**/.env*
+.gitstore/
+graphify-out/
+
+# Example/template files — never needed at build or run time
+*.example
+
+# Local auth config (static-users/rbac-local) — operator-provided; must never
+# be baked into an image even if present locally and untracked by git.
+# NOTE: .dockerignore patterns are matched against the full path relative to the
+# build context root and are NOT recursive, so a bare `policy.yaml` would only
+# exclude a root-level file and would silently miss `gitstore-api/policy.yaml`
+# — which `docker/*.Dockerfile`'s `COPY gitstore-api/ ./` pulls into the build.
+# The `**/` form is required. Neither file is ever needed at build time; both
+# are runtime mounts.
+**/policy.yaml
+**/users.yaml
 
 # Build artifacts (will be rebuilt in container)
 target/
+**/target/
 node_modules/
+**/node_modules/
 dist/
 build/
 bin/
 
 # Logs
 *.log
+**/*.log
 logs/
 
 # Test files

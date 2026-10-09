@@ -4,9 +4,16 @@
 package cataloggrpc
 
 import (
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+// ObserveAdmissionRejection records the single admission rejection metric used
+// by both asynchronous Git admission and synchronous GraphQL authoring.
+func ObserveAdmissionRejection(kind string, phase admission.Phase) {
+	admissionRejectionsTotal.WithLabelValues(kind, string(phase)).Inc()
+}
 
 var (
 	categoryDeletionDependentLookupDuration = promauto.NewHistogram(
@@ -24,5 +31,24 @@ var (
 			Name:      "blocked_total",
 			Help:      "Category deletion requests blocked by a child owner reference.",
 		},
+	)
+	productDeletionDependentLookupDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "gitstore", Subsystem: "product_deletion", Name: "dependent_lookup_duration_seconds",
+			Help: "Latency of the bounded blocking ProductVariant lookup.",
+		},
+	)
+	productDeletionBlockedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "gitstore", Subsystem: "product_deletion", Name: "blocked_total",
+			Help: "Product deletion requests blocked by a ProductVariant owner reference.",
+		},
+	)
+	admissionRejectionsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "gitstore", Subsystem: "admission", Name: "rejections_total",
+			Help: "Manifests rejected by admission, by kind and phase.",
+		},
+		[]string{"kind", "phase"},
 	)
 )

@@ -40,25 +40,6 @@ type Repository implements Node {
   """
   status: RepositoryStatus!
 
-  name: String!
-    @deprecated(reason: "Use metadata.name; removal requires a future major GraphQL API release.")
-  namespace: Namespace!
-    @deprecated(reason: "Use metadata.namespace; removal requires a future major GraphQL API release.")
-  defaultBranch: String!
-    @deprecated(reason: "Use spec.defaultBranch; removal requires a future major GraphQL API release.")
-  storageClass: String!
-    @deprecated(reason: "Use status.resolved.storageClass; removal requires a future major GraphQL API release.")
-  storagePath: String!
-    @deprecated(reason: "Use status.resolved.storagePath; removal requires a future major GraphQL API release.")
-  createdAt: DateTime!
-    @deprecated(reason: "Use metadata.creationTimestamp; removal requires a future major GraphQL API release.")
-  createdBy: String!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-  updatedAt: DateTime!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-  updatedBy: String!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
   """
   Markdown body content (repository description).
   """
@@ -118,7 +99,6 @@ type RepositoryEdge {
 type RepositoryConnection {
   edges: [RepositoryEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }
 
 # ============================================================================
@@ -176,72 +156,147 @@ input RepositoryNamespacePath {
 }
 
 # ============================================================================
+# Subscription additions
+# ============================================================================
+
+extend type Subscription {
+  """
+  Global Repository watch. Omit namespace for the controller's fleet-wide
+  stream; provide it only to filter a tenant-scoped consumer. A Repository
+  event cursor is opaque and distinct from Repository.metadata.resourceVersion.
+  """
+  watchRepositories(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): RepositoryWatchEvent!
+}
+
+"""
+Strongly typed Repository lifecycle event. ADDED and MODIFIED events carry a
+Repository; DELETED and BOOKMARK events carry no repository payload.
+"""
+type RepositoryWatchEvent {
+  type: WatchEventType!
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+  repository: Repository
+}
+
+# ============================================================================
 # Mutation additions
 # ============================================================================
 
 extend type Mutation {
   """
-  Create a new repository within a namespace.
+  Create a new repository by committing its manifest to the owning namespace's
+  gitstore-system repository and awaiting admission.
   """
   createRepository(input: CreateRepositoryInput!): CreateRepositoryPayload!
 
-  """
-  Rename a repository within its namespace. Does not move storage.
-  """
-  renameRepository(input: RenameRepositoryInput!): RenameRepositoryPayload!
+  """Update an admitted Repository's author-controlled specification."""
+  updateRepository(input: UpdateRepositoryInput!): UpdateRepositoryPayload!
+
+  """Write controller-owned Repository status with optimistic concurrency."""
+  updateRepositoryStatus(input: UpdateRepositoryStatusInput!): UpdateRepositoryStatusPayload!
+
+  """Controller-only, idempotent provisioning of an admitted Repository's bare Git storage."""
+  provisionRepositoryStorage(input: ProvisionRepositoryStorageInput!): ProvisionRepositoryStoragePayload!
 
   """
-  Transfer a repository to a different namespace. Does not move storage.
-  """
-  transferRepository(input: TransferRepositoryInput!): TransferRepositoryPayload!
-
-  """
-  Delete a repository and its storage. Deletion is blocked when the repository contains catalog resources.
+  Start foreground deletion of a repository. Deletion is blocked when the
+  repository contains catalog resources; storage removal and record GC happen
+  asynchronously after controller finalizer completion.
   """
   deleteRepository(input: DeleteRepositoryInput!): DeleteRepositoryPayload!
+
+  """Controller-only completion of a terminating Repository deletion."""
+  completeRepositoryDeletion(input: CompleteRepositoryDeletionInput!): CompleteRepositoryDeletionPayload!
+}
+
+"""Author-controlled metadata shared by declarative resource mutations."""
+input ObjectMetaInput {
+  name: String!
+  namespace: String!
+  labels: JSON
+  annotations: JSON
+}
+
+input RepositorySpecInput {
+  defaultBranch: String
+  visibility: RepositoryVisibility
+  storageClass: String
+}
+
+"""Identifies an admitted, non-bootstrap Repository for controller provisioning."""
+input ProvisionRepositoryStorageInput {
+  namespace: String!
+  name: String!
+}
+
+type ProvisionRepositoryStoragePayload {
+  repository: Repository!
 }
 
 input CreateRepositoryInput {
-  namespace: String!
-  name: String!
-  defaultBranch: String
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Repository"
+  metadata: ObjectMetaInput!
+  spec: RepositorySpecInput!
 }
 
 type CreateRepositoryPayload {
   repository: Repository!
 }
 
-input RenameRepositoryInput {
-  """
-  Relay ID of the repository to rename.
-  """
-  repositoryId: ID!
-  newName: String!
+input UpdateRepositoryInput {
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Repository"
+  metadata: ObjectMetaInput!
+  spec: RepositorySpecInput!
 }
 
-type RenameRepositoryPayload {
-  repository: Repository!
+type UpdateRepositoryPayload {
+  repository: Repository
 }
 
-input TransferRepositoryInput {
-  """
-  Relay ID of the repository to transfer.
-  """
-  repositoryId: ID!
-  """
-  Relay ID of the destination namespace.
-  """
-  targetNamespaceId: ID!
+input UpdateRepositoryStatusInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [ConditionInput!]
+  resolved: RepositoryResolvedStatusInput
 }
 
-type TransferRepositoryPayload {
+"""System-computed Repository storage state written only by its controller."""
+input RepositoryResolvedStatusInput {
+  storagePath: String!
+  storageClass: String!
+}
+
+type UpdateRepositoryStatusPayload {
   repository: Repository!
 }
 
 input DeleteRepositoryInput {
-  repositoryId: ID!
+  id: ID!
 }
 
 type DeleteRepositoryPayload {
-  deletedRepositoryId: ID!
+  "The Repository while foreground termination is in progress."
+  repository: Repository
+  outcome: ResourceDeletionOutcome!
+}
+
+input CompleteRepositoryDeletionInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+}
+
+type CompleteRepositoryDeletionPayload {
+  id: ID
 }

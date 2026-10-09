@@ -49,12 +49,7 @@ pub struct ValidateResourcesRequest {
     /// Field 15 is the project-wide convention for the repository scoping key.
     #[prost(string, tag="15")]
     pub repository_id: ::prost::alloc::string::String,
-    /// blobs contains all candidate resource files from the incoming commit.
-    /// Only files with a YAML frontmatter block are included (detected by the git service).
-    #[prost(message, repeated, tag="1")]
-    pub blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
-    /// trees is the preferred receive-aware representation. blobs remains for
-    /// rolling compatibility with older Git-service/API replicas.
+    /// trees is the receive-aware representation used by all callers.
     #[prost(message, repeated, tag="2")]
     pub trees: ::prost::alloc::vec::Vec<ResourceValidationTree>,
 }
@@ -70,31 +65,21 @@ pub struct ValidateResourcesResponse {
     #[prost(message, repeated, tag="2")]
     pub errors: ::prost::alloc::vec::Vec<ValidationError>,
 }
-/// CategoryTaxonomyDeletionTree carries one old/proposed ref-tree pair. The Git
-/// service sends the complete resource sets because the proposed tree, rather
-/// than the currently admitted catalog state, determines whether a child is
-/// deleted or reparented atomically with its parent.
+/// ValidateResourceDeletionsRequest carries every changed ref tree in one
+/// atomic receive-pack operation. ResourceValidationTree is deliberately shared
+/// with schema validation so every Git-backed kind receives identical
+/// old/proposed-tree semantics.
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CategoryTaxonomyDeletionTree {
-    #[prost(message, repeated, tag="1")]
-    pub old_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
-    #[prost(message, repeated, tag="2")]
-    pub proposed_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
-}
-/// ValidateCategoryTaxonomyDeletionRequest carries every changed ref tree in
-/// an atomic receive-pack operation. The API only reads these resources and
-/// returns a precondition result; lifecycle mutation remains post-receive.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ValidateCategoryTaxonomyDeletionRequest {
+pub struct ValidateResourceDeletionsRequest {
     #[prost(string, tag="15")]
     pub repository_id: ::prost::alloc::string::String,
     #[prost(message, repeated, tag="1")]
-    pub trees: ::prost::alloc::vec::Vec<CategoryTaxonomyDeletionTree>,
+    pub trees: ::prost::alloc::vec::Vec<ResourceValidationTree>,
 }
-/// ValidateCategoryTaxonomyDeletionResponse is a stable, non-sensitive
-/// precondition result for the pre-receive hook.
+/// ValidateResourceDeletionsResponse is a stable, non-sensitive precondition
+/// result for generic OperationDelete validation.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ValidateCategoryTaxonomyDeletionResponse {
+pub struct ValidateResourceDeletionsResponse {
     #[prost(bool, tag="1")]
     pub accepted: bool,
     #[prost(string, tag="2")]
@@ -108,11 +93,6 @@ pub struct AdmitResourcesRequest {
     /// repository_id is the stable UUIDv7 of the repository.
     #[prost(string, tag="15")]
     pub repository_id: ::prost::alloc::string::String,
-    /// commit_sha is the full SHA of the accepted push commit.
-    /// Deprecated for new callers in favor of new_commit_sha, but retained as
-    /// the canonical new commit for older git-service versions.
-    #[prost(string, tag="1")]
-    pub commit_sha: ::prost::alloc::string::String,
     /// ref_name is the fully-qualified ref that was updated, e.g. "refs/heads/main".
     #[prost(string, tag="2")]
     pub ref_name: ::prost::alloc::string::String,
@@ -121,7 +101,6 @@ pub struct AdmitResourcesRequest {
     #[prost(string, tag="3")]
     pub old_commit_sha: ::prost::alloc::string::String,
     /// new_commit_sha is the ref tip after the accepted update.
-    /// If empty, consumers must use commit_sha for backwards compatibility.
     #[prost(string, tag="4")]
     pub new_commit_sha: ::prost::alloc::string::String,
     /// changed_paths optionally carries repository-relative paths known to have

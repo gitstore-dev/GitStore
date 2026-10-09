@@ -3,22 +3,46 @@
 
 use config::{Config, Environment, File, FileFormat};
 use regex::Regex;
+use std::time::Duration;
 
+/// Config grouped by owning service. gitstore-git-service owns everything
+/// under `[git_service]`; `[log]`, `[grpc_auth]` and `[push_limits]` are
+/// shared with gitstore-api (and, for `log`, every service reading this
+/// file).
 #[derive(Debug, serde::Deserialize)]
 pub struct AppConfig {
-    pub grpc: PortConfig,
-    pub git: GitConfig,
+    pub git_service: GitServiceConfig,
     pub log: LogConfig,
-    pub hooks: HooksConfig,
-    pub schema_validation: SchemaValidationConfig,
-    pub admission_control: AdmissionControlConfig,
-    pub catalog_service: CatalogServiceConfig,
-    pub auth: AuthConfig,
+    pub grpc_auth: GrpcAuthConfig,
+    pub push_limits: PushLimitsConfig,
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub struct AuthConfig {
-    pub grpc: GrpcAuthConfig,
+pub struct GitServiceConfig {
+    pub grpc_port: u16,
+    pub data_dir: String,
+    pub catalog: CatalogConfig,
+    pub validation: ValidationConfig,
+    pub admission: AdmissionConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct CatalogConfig {
+    /// Configured as `dns:///host:port`; resolved once at load time into an
+    /// `http://host:port` URI tonic can dial directly (tonic has no dns
+    /// resolver, so unlike Go's grpc.NewClient this does not round-robin
+    /// across resolved addresses — it connects to the first result once).
+    pub uri: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ValidationConfig {
+    pub timeout: GsDuration,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct AdmissionConfig {
+    pub branch_pattern: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -27,21 +51,13 @@ pub struct GrpcAuthConfig {
     pub hmac_secret_previous: Option<String>,
 }
 
+/// Shared static platform push-size ceiling enforced by both gitstore-api
+/// (admission) and gitstore-git-service (the actual clamp during
+/// receive-pack).
 #[derive(Debug, serde::Deserialize)]
-pub struct PortConfig {
-    pub port: u16,
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct GitConfig {
-    pub data_dir: String,
-    pub repo: RepoConfig,
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct RepoConfig {
-    pub max_file_size: u64,
-    pub max_pack_size_bytes: u64,
+pub struct PushLimitsConfig {
+    pub max_pack_size: IecSize,
+    pub max_file_size: IecSize,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -50,49 +66,67 @@ pub struct LogConfig {
     pub format: String,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct HooksConfig {
-    pub git_receive_pack: GitReceivePackHooks,
+/// Duration string restricted to a single magnitude with unit ms|s|m|h
+/// (rejecting humantime's otherwise-permissive `d`/`w` units and multi-unit
+/// compounds like "1h30m"), so values are portable with Go's
+/// time.ParseDuration grammar.
+#[derive(Debug, Clone, Copy)]
+pub struct GsDuration(pub Duration);
+
+impl From<GsDuration> for Duration {
+    fn from(value: GsDuration) -> Duration {
+        value.0
+    }
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct GitReceivePackHooks {
-    pub pre_receive: HookToggle,
-    pub update: HookToggle,
-    pub post_receive: HookToggle,
-    pub proc_receive: HookToggle,
-    pub post_update: HookToggle,
-    pub reference_transaction: HookToggle,
+static DURATION_PATTERN: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"^[0-9]+(\.[0-9]+)?(ms|s|m|h)$").unwrap());
+
+impl<'de> serde::Deserialize<'de> for GsDuration {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        if !DURATION_PATTERN.is_match(raw.trim()) {
+            return Err(serde::de::Error::custom(format!(
+                "{raw:?} is not a valid duration: expected a single magnitude with unit ms, s, m, or h, e.g. \"30s\""
+            )));
+        }
+        let parsed: humantime::Duration = raw.trim().parse().map_err(|e| {
+            serde::de::Error::custom(format!("{raw:?} is not a valid duration: {e}"))
+        })?;
+        Ok(GsDuration(parsed.into()))
+    }
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct HookToggle {
-    pub enabled: bool,
+/// Size string restricted to IEC units (plain "B" or binary-multiple
+/// KiB/MiB/GiB/TiB), so values are portable with Go's
+/// github.com/docker/go-units parsing.
+#[derive(Debug, Clone, Copy)]
+pub struct IecSize(pub u64);
+
+static SIZE_PATTERN: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"^[0-9]+(\.[0-9]+)?(B|KiB|MiB|GiB|TiB)$").unwrap());
+
+impl<'de> serde::Deserialize<'de> for IecSize {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        if !SIZE_PATTERN.is_match(raw.trim()) {
+            return Err(serde::de::Error::custom(format!(
+                "{raw:?} is not a valid size: expected IEC units (B, KiB, MiB, GiB, TiB), e.g. \"512KiB\""
+            )));
+        }
+        let parsed: bytesize::ByteSize = raw.trim().parse().map_err(|e: String| {
+            serde::de::Error::custom(format!("{raw:?} is not a valid size: {e}"))
+        })?;
+        Ok(IecSize(parsed.as_u64()))
+    }
 }
 
-#[derive(Debug, serde::Deserialize)]
-pub struct SchemaValidationConfig {
-    pub phase: String,
-    pub timeout_secs: u64,
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct AdmissionControlConfig {
-    pub phase: String,
-    pub branch_pattern: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct CatalogServiceConfig {
-    pub uri: String,
-}
-
-/// Load configuration from defaults → gitstore.toml → environment variables.
-///
-/// Nested hook and admission_control keys must be set via gitstore.toml TOML
-/// tables. Environment variable overrides for nested keys are not supported
-/// due to the ambiguity between struct-path separators and field-name
-/// underscores when using a single-underscore separator with config-rs.
 /// All validation failures collected into a single error.
 #[derive(Debug)]
 pub struct ConfigErrors(Vec<String>);
@@ -110,14 +144,14 @@ impl AppConfig {
     pub fn validate(&self) -> Result<(), ConfigErrors> {
         let mut errors = Vec::new();
 
-        if self.grpc.port == 0 {
+        if self.git_service.grpc_port == 0 {
             errors.push(format!(
-                "grpc.port must be between 1 and 65535 (got: {})",
-                self.grpc.port
+                "git_service.grpc_port must be between 1 and 65535 (got: {})",
+                self.git_service.grpc_port
             ));
         }
-        if self.git.data_dir.is_empty() {
-            errors.push("git.data_dir must not be empty".to_string());
+        if self.git_service.data_dir.is_empty() {
+            errors.push("git_service.data_dir must not be empty".to_string());
         }
         match self.log.format.to_ascii_lowercase().as_str() {
             "json" | "text" => {}
@@ -127,31 +161,29 @@ impl AppConfig {
             )),
         }
 
-        // FR-019: schema_validation and admission_control must run in different phases.
-        if self.schema_validation.phase == self.admission_control.phase {
+        if Regex::new(&self.git_service.admission.branch_pattern).is_err() {
             errors.push(format!(
-                "GITSTORE_SCHEMA_VALIDATION__PHASE and GITSTORE_ADMISSION_CONTROL__PHASE \
-                 must be different (both set to {:?})",
-                self.schema_validation.phase
+                "git_service.admission.branch_pattern is not a valid regex: {:?}",
+                self.git_service.admission.branch_pattern
             ));
         }
 
-        if Regex::new(&self.admission_control.branch_pattern).is_err() {
-            errors.push(format!(
-                "admission_control.branch_pattern is not a valid regex: {:?}",
-                self.admission_control.branch_pattern
-            ));
+        if self.grpc_auth.hmac_secret.is_empty() {
+            errors.push("grpc_auth.hmac_secret must not be empty".to_string());
         }
-
-        if self.auth.grpc.hmac_secret.is_empty() {
-            errors.push("auth.grpc.hmac_secret must not be empty".to_string());
-        }
-        if matches!(&self.auth.grpc.hmac_secret_previous, Some(s) if s.is_empty()) {
+        if matches!(&self.grpc_auth.hmac_secret_previous, Some(s) if s.is_empty()) {
             errors.push(
-                "auth.grpc.hmac_secret_previous must not be empty when set; \
+                "grpc_auth.hmac_secret_previous must not be empty when set; \
                  unset or remove it to disable the rotation window"
                     .to_string(),
             );
+        }
+
+        if self.push_limits.max_pack_size.0 == 0 {
+            errors.push("push_limits.max_pack_size must be greater than zero".to_string());
+        }
+        if self.push_limits.max_file_size.0 == 0 {
+            errors.push("push_limits.max_file_size must be greater than zero".to_string());
         }
 
         if errors.is_empty() {
@@ -159,6 +191,84 @@ impl AppConfig {
         } else {
             Err(ConfigErrors(errors))
         }
+    }
+}
+
+/// Every TOML path (or env var) gitstore-git-service used to own before the
+/// config-grouping refactor. Checked independently of the final merged
+/// config state so a renamed/removed key never silently resolves to a
+/// default. One file is mounted into every service, so this cannot use a
+/// global strict/deny-unknown-fields check — each service checks only the
+/// keys it used to own. Ordered most-specific-first so the most helpful
+/// match wins.
+const LEGACY_KEYS: &[(&str, &str)] = &[
+    ("grpc.port", "git_service.grpc_port"),
+    ("grpc", "git_service.grpc_port"),
+    ("git.data_dir", "git_service.data_dir"),
+    (
+        "git.repo.max_file_size",
+        "push_limits.max_file_size (removed; now a shared static ceiling)",
+    ),
+    (
+        "git.repo.max_pack_size_bytes",
+        "push_limits.max_pack_size (removed; now a shared static ceiling)",
+    ),
+    ("git.repo", "push_limits"),
+    ("git", "git_service.data_dir / push_limits"),
+    (
+        "hooks",
+        "removed; pre-receive validation and post-receive admission are always on",
+    ),
+    (
+        "schema_validation.phase",
+        "removed; schema validation always runs at pre-receive",
+    ),
+    (
+        "schema_validation.timeout_secs",
+        "git_service.validation.timeout",
+    ),
+    ("schema_validation", "git_service.validation.timeout"),
+    (
+        "admission_control.phase",
+        "removed; admission control always runs at post-receive",
+    ),
+    (
+        "admission_control.branch_pattern",
+        "git_service.admission.branch_pattern",
+    ),
+    ("admission_control", "git_service.admission.branch_pattern"),
+    ("catalog_service.uri", "git_service.catalog.uri"),
+    ("catalog_service", "git_service.catalog.uri"),
+    ("auth.grpc.hmac_secret", "grpc_auth.hmac_secret"),
+    (
+        "auth.grpc.hmac_secret_previous",
+        "grpc_auth.hmac_secret_previous",
+    ),
+    ("auth.grpc", "grpc_auth"),
+    ("auth", "grpc_auth"),
+];
+
+fn check_legacy_keys(cfg: &Config) -> Result<(), config::ConfigError> {
+    for (path, replacement) in LEGACY_KEYS {
+        if cfg.get::<config::Value>(path).is_ok() {
+            return Err(config::ConfigError::Message(format!(
+                "config: {path} is no longer recognised; use {replacement} instead"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Resolves a configured `dns:///host:port` gRPC URI into a URI tonic can
+/// dial directly. tonic has no dns resolver, so git-service resolves once
+/// at connect — unlike Go clients (grpc.NewClient), there is no
+/// client-side round-robin across resolved addresses.
+fn resolve_grpc_uri(field: &str, raw: &str) -> Result<String, config::ConfigError> {
+    match raw.strip_prefix("dns:///") {
+        Some(host_port) if !host_port.is_empty() => Ok(format!("http://{host_port}")),
+        _ => Err(config::ConfigError::Message(format!(
+            "{field} {raw:?} is not a valid gRPC URI: expected the \"dns:///host:port\" scheme"
+        ))),
     }
 }
 
@@ -178,7 +288,7 @@ pub fn load_config_from(config_file: Option<&str>) -> Result<AppConfig, config::
         )
         // Environment variables use double underscores between config-key levels,
         // so dotted keys map cleanly without splitting internal underscores in
-        // field names (for example, GITSTORE_GIT__REPO__MAX_FILE_SIZE).
+        // field names (for example, GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE).
         .add_source(
             Environment::with_prefix("GITSTORE")
                 .prefix_separator("_")
@@ -186,14 +296,20 @@ pub fn load_config_from(config_file: Option<&str>) -> Result<AppConfig, config::
                 .try_parsing(true),
         );
 
-    let cfg = builder.build()?.try_deserialize::<AppConfig>()?;
+    let built = builder.build()?;
+    check_legacy_keys(&built)?;
+    let mut cfg = built.try_deserialize::<AppConfig>()?;
+
+    cfg.git_service.catalog.uri =
+        resolve_grpc_uri("git_service.catalog.uri", &cfg.git_service.catalog.uri)?;
+
     tracing::info!(
-        grpc_port = cfg.grpc.port,
-        data_dir = %cfg.git.data_dir,
+        grpc_port = cfg.git_service.grpc_port,
+        data_dir = %cfg.git_service.data_dir,
         log_level = %cfg.log.level,
         log_format = %cfg.log.format,
-        max_file_size = cfg.git.repo.max_file_size,
-        max_pack_size_bytes = cfg.git.repo.max_pack_size_bytes,
+        max_pack_size = cfg.push_limits.max_pack_size.0,
+        max_file_size = cfg.push_limits.max_file_size.0,
         "resolved configuration"
     );
     Ok(cfg)
@@ -201,41 +317,29 @@ pub fn load_config_from(config_file: Option<&str>) -> Result<AppConfig, config::
 
 fn default_toml() -> String {
     r#"
-[grpc]
-port = 50051
+[git_service]
+grpc_port = 50051
+data_dir = "/var/lib/gitstore/repos"
 
-[git]
-data_dir = "/data/repos"
+[git_service.catalog]
+uri = "dns:///localhost:6000"
 
-[git.repo]
-max_file_size = 52428800
-max_pack_size_bytes = 52428800
+[git_service.validation]
+timeout = "10s"
+
+[git_service.admission]
+branch_pattern = "^refs/heads/main$"
 
 [log]
 level = "info"
 format = "json"
 
-[hooks.git_receive_pack]
-pre_receive           = { enabled = true }
-update                = { enabled = false }
-post_receive          = { enabled = true }
-proc_receive          = { enabled = false }
-post_update           = { enabled = false }
-reference_transaction = { enabled = false }
-
-[schema_validation]
-phase = "pre-receive"
-timeout_secs = 10
-
-[admission_control]
-phase = "post-receive"
-branch_pattern = "refs/heads/main"
-
-[catalog_service]
-uri = "http://localhost:6000"
-
-[auth.grpc]
+[grpc_auth]
 hmac_secret = ""
+
+[push_limits]
+max_pack_size = "512MiB"
+max_file_size = "100MiB"
 "#
     .to_string()
 }
@@ -251,10 +355,20 @@ mod tests {
 
     fn clear_env() {
         let keys = [
-            "GITSTORE_GRPC__PORT",
-            "GITSTORE_GIT__DATA_DIR",
+            "GITSTORE_GIT_SERVICE__GRPC_PORT",
+            "GITSTORE_GIT_SERVICE__DATA_DIR",
             "GITSTORE_LOG__LEVEL",
             "GITSTORE_LOG__FORMAT",
+            "GITSTORE_GIT_SERVICE__VALIDATION__TIMEOUT",
+            "GITSTORE_GIT_SERVICE__ADMISSION__BRANCH_PATTERN",
+            "GITSTORE_GIT_SERVICE__CATALOG__URI",
+            "GITSTORE_GRPC_AUTH__HMAC_SECRET",
+            "GITSTORE_GRPC_AUTH__HMAC_SECRET_PREVIOUS",
+            "GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE",
+            "GITSTORE_PUSH_LIMITS__MAX_FILE_SIZE",
+            // Legacy keys exercised by rejection tests.
+            "GITSTORE_GRPC__PORT",
+            "GITSTORE_GIT__DATA_DIR",
             "GITSTORE_GIT__REPO__MAX_FILE_SIZE",
             "GITSTORE_GIT__REPO__MAX_PACK_SIZE_BYTES",
             "GITSTORE_SCHEMA_VALIDATION__PHASE",
@@ -263,11 +377,6 @@ mod tests {
             "GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN",
             "GITSTORE_CATALOG_SERVICE__URI",
             "GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED",
-            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED",
-            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED",
-            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__PROC_RECEIVE__ENABLED",
-            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_UPDATE__ENABLED",
-            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__REFERENCE_TRANSACTION__ENABLED",
             "GITSTORE_AUTH__GRPC__HMAC_SECRET",
             "GITSTORE_AUTH__GRPC__HMAC_SECRET_PREVIOUS",
         ];
@@ -276,19 +385,42 @@ mod tests {
         }
     }
 
-    // T006: layered loading tests
-
     #[test]
     fn test_defaults_applied_when_no_source_set() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
         let cfg = load_config_from(None).expect("load_config failed");
-        assert_eq!(cfg.grpc.port, 50051);
-        assert_eq!(cfg.git.data_dir, "/data/repos");
+        assert_eq!(cfg.git_service.grpc_port, 50051);
+        assert_eq!(cfg.git_service.data_dir, "/var/lib/gitstore/repos");
         assert_eq!(cfg.log.level, "info");
         assert_eq!(cfg.log.format, "json");
-        assert_eq!(cfg.git.repo.max_file_size, 52428800);
-        assert_eq!(cfg.git.repo.max_pack_size_bytes, 52428800);
+        assert_eq!(cfg.push_limits.max_pack_size.0, 512 * 1024 * 1024);
+        assert_eq!(cfg.push_limits.max_file_size.0, 100 * 1024 * 1024);
+        assert_eq!(
+            cfg.git_service.validation.timeout.0,
+            std::time::Duration::from_secs(10)
+        );
+    }
+
+    #[test]
+    fn test_catalog_uri_dns_scheme_resolved_to_http() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        let cfg = load_config_from(None).expect("load_config failed");
+        assert_eq!(cfg.git_service.catalog.uri, "http://localhost:6000");
+    }
+
+    #[test]
+    fn test_catalog_uri_rejects_non_dns_scheme() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var(
+            "GITSTORE_GIT_SERVICE__CATALOG__URI",
+            "http://localhost:6000",
+        );
+        let err = load_config_from(None).expect_err("expected scheme rejection");
+        assert!(err.to_string().contains("dns:///"), "got: {err}");
+        clear_env();
     }
 
     #[test]
@@ -307,13 +439,10 @@ mod tests {
     fn test_config_file_value_applied_when_no_env_var() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        // Write a .toml file; pass path without extension so File::with_name
-        // probes and finds the .toml variant.
         let dir = tempfile::tempdir().expect("tempdir");
         let file_path = dir.path().join("custom_config.toml");
         std::fs::write(&file_path, "[log]\nlevel = \"warn\"\nformat = \"text\"\n")
             .expect("write config");
-        // Strip the .toml extension — File::with_name adds it when probing
         let stem = dir.path().join("custom_config");
         let path_str = stem.to_str().expect("path str");
         let cfg = load_config_from(Some(path_str)).expect("load_config failed");
@@ -325,84 +454,16 @@ mod tests {
     fn test_env_var_overrides_config_file() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        env::set_var("GITSTORE_GRPC__PORT", "6666");
+        env::set_var("GITSTORE_GIT_SERVICE__GRPC_PORT", "6666");
         let dir = tempfile::tempdir().expect("tempdir");
         let file_path = dir.path().join("custom_config.toml");
-        std::fs::write(&file_path, "[grpc]\nport = 7777\n").expect("write config");
+        std::fs::write(&file_path, "[git_service]\ngrpc_port = 7777\n").expect("write config");
         let stem = dir.path().join("custom_config");
         let path_str = stem.to_str().expect("path str");
         let cfg = load_config_from(Some(path_str)).expect("load_config failed");
-        assert_eq!(cfg.grpc.port, 6666);
+        assert_eq!(cfg.git_service.grpc_port, 6666);
         clear_env();
     }
-
-    // T008: debug output must not expose secrets and must include key fields
-
-    #[test]
-    fn test_app_config_debug_includes_key_fields() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        let cfg = load_config_from(None).expect("load_config failed");
-        let debug_str = format!("{:?}", cfg);
-        assert!(debug_str.contains("grpc"));
-        assert!(debug_str.contains("log"));
-    }
-
-    // T028: .env loading tests (US3)
-    // dotenvy is called in main() before load_config(); it sets env vars that
-    // load_config_from() then reads. These tests simulate that by setting env
-    // vars directly (mimicking what dotenvy would do from a .env file).
-
-    #[test]
-    fn test_env_file_values_are_loaded() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        // Simulate dotenvy having loaded GITSTORE_LOG__LEVEL=trace from .env
-        env::set_var("GITSTORE_LOG__LEVEL", "trace");
-        let cfg = load_config_from(None).expect("load failed");
-        assert_eq!(cfg.log.level, "trace");
-        clear_env();
-    }
-
-    #[test]
-    fn test_shell_var_takes_priority_over_env_file_value() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        // Simulate: dotenvy sets trace, but shell already had debug set.
-        // dotenvy does not overwrite existing env vars — shell wins.
-        // We model that here by just having debug set (the shell value).
-        env::set_var("GITSTORE_LOG__LEVEL", "debug");
-        let cfg = load_config_from(None).expect("load failed");
-        assert_eq!(cfg.log.level, "debug");
-        clear_env();
-    }
-
-    #[test]
-    fn test_absent_env_file_is_no_op() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        // No env vars set and no .env file — defaults must apply
-        let cfg = load_config_from(None).expect("load failed");
-        assert_eq!(cfg.grpc.port, 50051);
-    }
-
-    // T022: unknown keys in config file must not abort startup
-
-    #[test]
-    fn test_unknown_key_in_config_file_does_not_abort() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let file_path = dir.path().join("custom_config.toml");
-        std::fs::write(&file_path, "unknown_key = \"oops\"\n").expect("write config");
-        let stem = dir.path().join("custom_config");
-        let path_str = stem.to_str().expect("path str");
-        // config-rs ignores unknown keys by default — load must succeed
-        let cfg = load_config_from(Some(path_str)).expect("should load despite unknown key");
-        assert_eq!(cfg.grpc.port, 50051);
-    }
-
-    // Explicit --config-file with a missing path must fail, not silently use defaults.
 
     #[test]
     fn test_explicit_config_file_missing_returns_error() {
@@ -415,20 +476,18 @@ mod tests {
         );
     }
 
-    // T020: validation tests (US2)
-
     #[test]
     fn test_validate_port_out_of_range() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        env::set_var("GITSTORE_GRPC__PORT", "0");
+        env::set_var("GITSTORE_GIT_SERVICE__GRPC_PORT", "0");
         let cfg = load_config_from(None).expect("load failed");
         let result = cfg.validate();
         assert!(result.is_err(), "expected validation error for port 0");
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("grpc.port"),
-            "error should mention grpc.port, got: {err}"
+            err.to_string().contains("git_service.grpc_port"),
+            "error should mention git_service.grpc_port, got: {err}"
         );
         clear_env();
     }
@@ -450,7 +509,7 @@ mod tests {
     fn test_validate_data_dir_empty_fails() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        env::set_var("GITSTORE_GIT__DATA_DIR", "");
+        env::set_var("GITSTORE_GIT_SERVICE__DATA_DIR", "");
         let cfg = load_config_from(None).expect("load failed");
         let result = cfg.validate();
         assert!(
@@ -458,172 +517,14 @@ mod tests {
             "expected validation error for empty data_dir"
         );
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("git.data_dir"));
+        assert!(err.to_string().contains("git_service.data_dir"));
         clear_env();
     }
 
-    #[test]
-    fn test_validate_all_errors_collected() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        // Port 0 is invalid
-        env::set_var("GITSTORE_GRPC__PORT", "0");
-        env::set_var("GITSTORE_GIT__DATA_DIR", "");
-        let cfg = load_config_from(None).expect("load failed");
-        let result = cfg.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        // Both failures should appear in the single error string
-        let s = err.to_string();
-        assert!(
-            s.contains("grpc.port") || s.contains("git.data_dir"),
-            "got: {s}"
-        );
-        clear_env();
-    }
-
-    // T034: reference_transaction toggle defaults to false
-    #[test]
-    fn test_reference_transaction_toggle_defaults_to_false() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        let cfg = load_config_from(None).expect("load_config failed");
-        assert!(
-            !cfg.hooks.git_receive_pack.reference_transaction.enabled,
-            "reference_transaction should default to disabled"
-        );
-    }
-
-    // T007: phase-conflict validation (FR-019)
-
-    #[test]
-    fn test_validate_phase_conflict_rejected() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        // Set both phases to the same value — must fail
-        env::set_var("GITSTORE_SCHEMA_VALIDATION__PHASE", "pre-receive");
-        env::set_var("GITSTORE_ADMISSION_CONTROL__PHASE", "pre-receive");
-        let cfg = load_config_from(None).expect("load failed");
-        let result = cfg.validate();
-        assert!(
-            result.is_err(),
-            "expected conflict error when both phases are equal"
-        );
-        let err = result.unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("GITSTORE_SCHEMA_VALIDATION__PHASE")
-                && msg.contains("GITSTORE_ADMISSION_CONTROL__PHASE"),
-            "error should name both env vars, got: {msg}"
-        );
-        clear_env();
-    }
-
-    #[test]
-    fn test_validate_split_phases_pass() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET", "some-secret");
-        // Default split: pre-receive vs post-receive — must pass
-        let cfg = load_config_from(None).expect("load failed");
-        assert_eq!(cfg.schema_validation.phase, "pre-receive");
-        assert_eq!(cfg.admission_control.phase, "post-receive");
-        cfg.validate()
-            .expect("default split phases should pass validation");
-        clear_env();
-    }
-
-    #[test]
-    fn test_default_config_has_new_structure() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        let cfg = load_config_from(None).expect("load failed");
-        assert_eq!(cfg.schema_validation.phase, "pre-receive");
-        assert_eq!(cfg.schema_validation.timeout_secs, 10);
-        assert_eq!(cfg.admission_control.phase, "post-receive");
-        assert_eq!(cfg.admission_control.branch_pattern, "refs/heads/main");
-        assert_eq!(cfg.catalog_service.uri, "http://localhost:6000");
-    }
-
-    // T002: struct-accessibility check — verifies the HooksConfig API surface used by
-    // the startup log in main.rs compiles and the fields have the expected default values.
-    #[test]
-    fn test_hooks_config_fields_accessible_for_startup_log() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        let cfg = load_config_from(None).expect("load failed");
-        // All six phase toggles must be readable (this is what the startup log iterates).
-        let _ = cfg.hooks.git_receive_pack.pre_receive.enabled;
-        let _ = cfg.hooks.git_receive_pack.update.enabled;
-        let _ = cfg.hooks.git_receive_pack.post_receive.enabled;
-        let _ = cfg.hooks.git_receive_pack.proc_receive.enabled;
-        let _ = cfg.hooks.git_receive_pack.post_update.enabled;
-        let _ = cfg.hooks.git_receive_pack.reference_transaction.enabled;
-        let _ = cfg.admission_control.phase.as_str();
-        // Verify the defaults match the TOML baked-in values.
-        assert!(cfg.hooks.git_receive_pack.pre_receive.enabled);
-        assert!(!cfg.hooks.git_receive_pack.update.enabled);
-        assert!(cfg.hooks.git_receive_pack.post_receive.enabled);
-        assert!(!cfg.hooks.git_receive_pack.proc_receive.enabled);
-        assert!(!cfg.hooks.git_receive_pack.post_update.enabled);
-        assert!(!cfg.hooks.git_receive_pack.reference_transaction.enabled);
-    }
-
-    // T005: env-var round-trip — pre_receive and post_receive toggles.
-    #[test]
-    fn test_hook_toggle_env_vars_pre_receive_and_post_receive_round_trip() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        env::set_var(
-            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED",
-            "false",
-        );
-        env::set_var(
-            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED",
-            "false",
-        );
-        let cfg = load_config_from(None).expect("load failed");
-        assert!(
-            !cfg.hooks.git_receive_pack.pre_receive.enabled,
-            "pre_receive should be false via env var"
-        );
-        assert!(
-            !cfg.hooks.git_receive_pack.post_receive.enabled,
-            "post_receive should be false via env var"
-        );
-        // Other phases should remain at their defaults.
-        assert!(
-            !cfg.hooks.git_receive_pack.update.enabled,
-            "update default should be false"
-        );
-        clear_env();
-    }
-
-    // T006: env-var round-trip — update toggle (default false → true).
-    #[test]
-    fn test_hook_toggle_env_var_update_enabled_round_trip() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        env::set_var("GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED", "true");
-        let cfg = load_config_from(None).expect("load failed");
-        assert!(
-            cfg.hooks.git_receive_pack.update.enabled,
-            "update should be true via env var"
-        );
-        // pre_receive default must be unaffected.
-        assert!(
-            cfg.hooks.git_receive_pack.pre_receive.enabled,
-            "pre_receive default should remain true"
-        );
-        clear_env();
-    }
-
-    // T017: validate fails when hmac_secret is empty (written before interceptor impl)
     #[test]
     fn test_validate_hmac_secret_empty_fails() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        // Leave GITSTORE_AUTH__GRPC__HMAC_SECRET unset → defaults to ""
         let cfg = load_config_from(None).expect("load failed");
         let result = cfg.validate();
         assert!(
@@ -632,19 +533,17 @@ mod tests {
         );
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("auth.grpc.hmac_secret"),
-            "error should mention auth.grpc.hmac_secret, got: {err}"
+            err.to_string().contains("grpc_auth.hmac_secret"),
+            "error should mention grpc_auth.hmac_secret, got: {err}"
         );
     }
 
-    // T018: validate passes when hmac_secret is non-empty
     #[test]
     fn test_validate_hmac_secret_nonempty_passes() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET", "some-secret");
+        env::set_var("GITSTORE_GRPC_AUTH__HMAC_SECRET", "some-secret");
         let cfg = load_config_from(None).expect("load failed");
-        // validate() should not error on this field
         let result = cfg.validate();
         assert!(
             result.is_ok(),
@@ -654,29 +553,27 @@ mod tests {
         clear_env();
     }
 
-    // T035: env-var round-trip for hmac_secret_previous
     #[test]
     fn test_hmac_secret_previous_env_var() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET", "new-secret");
-        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET_PREVIOUS", "old-secret");
+        env::set_var("GITSTORE_GRPC_AUTH__HMAC_SECRET", "new-secret");
+        env::set_var("GITSTORE_GRPC_AUTH__HMAC_SECRET_PREVIOUS", "old-secret");
         let cfg = load_config_from(None).expect("load failed");
-        assert_eq!(cfg.auth.grpc.hmac_secret, "new-secret");
+        assert_eq!(cfg.grpc_auth.hmac_secret, "new-secret");
         assert_eq!(
-            cfg.auth.grpc.hmac_secret_previous,
+            cfg.grpc_auth.hmac_secret_previous,
             Some("old-secret".to_string())
         );
         clear_env();
     }
 
-    // T036: validate fails when hmac_secret_previous is explicitly set to empty string
     #[test]
     fn test_validate_hmac_secret_previous_empty_fails() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET", "primary-secret");
-        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET_PREVIOUS", "");
+        env::set_var("GITSTORE_GRPC_AUTH__HMAC_SECRET", "primary-secret");
+        env::set_var("GITSTORE_GRPC_AUTH__HMAC_SECRET_PREVIOUS", "");
         let cfg = load_config_from(None).expect("load failed");
         let result = cfg.validate();
         assert!(
@@ -687,6 +584,147 @@ mod tests {
         assert!(
             err.to_string().contains("hmac_secret_previous"),
             "error should mention hmac_secret_previous, got: {err}"
+        );
+        clear_env();
+    }
+
+    #[test]
+    fn test_default_config_has_new_structure() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        let cfg = load_config_from(None).expect("load failed");
+        assert_eq!(
+            cfg.git_service.admission.branch_pattern,
+            "^refs/heads/main$"
+        );
+        assert_eq!(cfg.git_service.catalog.uri, "http://localhost:6000");
+    }
+
+    // --- duration/size grammar restriction tests ---
+
+    #[test]
+    fn test_duration_rejects_compound_and_day_week_units() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        for bad in ["1h30m", "1d", "1w", "10ns", "10us"] {
+            clear_env();
+            env::set_var("GITSTORE_GIT_SERVICE__VALIDATION__TIMEOUT", bad);
+            let err = load_config_from(None).expect_err(&format!("{bad} should be rejected"));
+            assert!(
+                err.to_string().contains("valid duration"),
+                "got: {err} for input {bad}"
+            );
+        }
+        clear_env();
+    }
+
+    #[test]
+    fn test_duration_accepts_ms_s_m_h() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        for good in ["500ms", "30s", "10m", "1h"] {
+            clear_env();
+            env::set_var("GITSTORE_GIT_SERVICE__VALIDATION__TIMEOUT", good);
+            let cfg =
+                load_config_from(None).unwrap_or_else(|e| panic!("{good} should be accepted: {e}"));
+            assert!(cfg.git_service.validation.timeout.0.as_nanos() > 0);
+        }
+        clear_env();
+    }
+
+    #[test]
+    fn test_size_rejects_decimal_units_and_bare_numbers() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        for bad in ["50MB", "1024", "1 GiB"] {
+            clear_env();
+            env::set_var("GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE", bad);
+            let err = load_config_from(None).expect_err(&format!("{bad} should be rejected"));
+            assert!(
+                err.to_string().contains("valid size"),
+                "got: {err} for input {bad}"
+            );
+        }
+        clear_env();
+    }
+
+    #[test]
+    fn test_size_accepts_iec_units_and_resolves_bytes() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var("GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE", "1GiB");
+        let cfg = load_config_from(None).expect("load failed");
+        assert_eq!(cfg.push_limits.max_pack_size.0, 1024 * 1024 * 1024);
+        clear_env();
+    }
+
+    // --- legacy key rejection tests ---
+
+    #[test]
+    fn test_legacy_grpc_port_env_var_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var("GITSTORE_GRPC__PORT", "9999");
+        let err = load_config_from(None).expect_err("legacy grpc.port must be rejected");
+        assert!(
+            err.to_string().contains("git_service.grpc_port"),
+            "got: {err}"
+        );
+        clear_env();
+    }
+
+    #[test]
+    fn test_legacy_hooks_table_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_path = dir.path().join("custom_config.toml");
+        std::fs::write(
+            &file_path,
+            "[hooks.git_receive_pack]\npre_receive = { enabled = true }\n",
+        )
+        .expect("write config");
+        let stem = dir.path().join("custom_config");
+        let path_str = stem.to_str().expect("path str");
+        let err =
+            load_config_from(Some(path_str)).expect_err("legacy hooks table must be rejected");
+        assert!(err.to_string().contains("always on"), "got: {err}");
+    }
+
+    #[test]
+    fn test_legacy_auth_grpc_hmac_secret_env_var_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET", "legacy-secret");
+        let err =
+            load_config_from(None).expect_err("legacy auth.grpc.hmac_secret must be rejected");
+        assert!(
+            err.to_string().contains("grpc_auth.hmac_secret"),
+            "got: {err}"
+        );
+        clear_env();
+    }
+
+    #[test]
+    fn test_legacy_catalog_service_uri_env_var_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var("GITSTORE_CATALOG_SERVICE__URI", "http://localhost:6000");
+        let err = load_config_from(None).expect_err("legacy catalog_service.uri must be rejected");
+        assert!(
+            err.to_string().contains("git_service.catalog.uri"),
+            "got: {err}"
+        );
+        clear_env();
+    }
+
+    #[test]
+    fn test_legacy_schema_validation_timeout_secs_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var("GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS", "5");
+        let err = load_config_from(None)
+            .expect_err("legacy schema_validation.timeout_secs must be rejected");
+        assert!(
+            err.to_string().contains("git_service.validation.timeout"),
+            "got: {err}"
         );
         clear_env();
     }

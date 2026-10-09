@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,6 +59,23 @@ func newCollection() *datastore.Collection {
 		Name:       "coll-" + newID()[:8],
 		APIVersion: "catalog.gitstore.dev/v1beta1",
 		Kind:       "Collection",
+	}
+}
+
+func newServiceAccount() *datastore.ServiceAccount {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	return &datastore.ServiceAccount{
+		UID:               newID(),
+		Namespace:         "controllers",
+		Name:              "sa-" + newID()[:8],
+		ResourceVersion:   "1",
+		CreationTimestamp: now,
+		CreationActor:     "test-admin",
+		UpdateTimestamp:   now,
+		UpdateActor:       "test-admin",
+		PublicKeys: []datastore.ServiceAccountPublicKey{
+			{KeyID: "key-1", Algorithm: "Ed25519", PublicKey: []byte("stub-public-key-bytes"), EnrolledAt: now},
+		},
 	}
 }
 
@@ -789,9 +807,19 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		ns := newNamespace(datastore.NamespaceTierUser)
 		require.NoError(t, ds.CreateNamespace(ctx, ns))
 		assert.ErrorIs(t, ds.DeleteNamespaceWithResourceVersion(ctx, ns.UID, "stale"), datastore.ErrConflict)
+		got, err := ds.GetNamespaceByName(ctx, ns.Name)
+		require.NoError(t, err)
+		assert.Equal(t, ns.UID, got.UID, "a rejected delete must leave lookup projections intact")
+		listed, err := ds.ListNamespaces(ctx, datastore.PageParams{First: 100})
+		require.NoError(t, err)
+		listedAfterConflict := false
+		for _, candidate := range listed.Items {
+			listedAfterConflict = listedAfterConflict || candidate.UID == ns.UID
+		}
+		assert.True(t, listedAfterConflict, "a rejected delete must leave the bootstrap list intact")
 		require.NoError(t, ds.DeleteNamespaceWithResourceVersion(ctx, ns.UID, ns.ResourceVersion))
 
-		_, err := ds.GetNamespace(ctx, ns.UID)
+		_, err = ds.GetNamespace(ctx, ns.UID)
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 		_, err = ds.GetNamespaceByName(ctx, ns.Name)
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
@@ -845,6 +873,32 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.False(t, has)
 	})
 
+	t.Run("Namespace/TestRepositoryLifecycleCoordination", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+		repository := newRepository(ns.Name)
+
+		require.NoError(t, ds.CreateRepositoryInActiveNamespace(ctx, repository))
+		current, err := ds.GetNamespace(ctx, ns.UID)
+		require.NoError(t, err)
+		deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+		expectedResourceVersion := current.ResourceVersion
+		current.DeletionTimestamp = &deletedAt
+		datastore.AdvanceNamespaceSystemVersion(current)
+		require.ErrorIs(t, ds.MarkNamespaceDeletion(ctx, current, expectedResourceVersion), datastore.ErrNamespaceNotEmpty)
+
+		require.NoError(t, ds.DeleteRepository(ctx, repository.UID))
+		current, err = ds.GetNamespace(ctx, ns.UID)
+		require.NoError(t, err)
+		expectedResourceVersion = current.ResourceVersion
+		current.DeletionTimestamp = &deletedAt
+		datastore.AdvanceNamespaceSystemVersion(current)
+		require.NoError(t, ds.MarkNamespaceDeletion(ctx, current, expectedResourceVersion))
+
+		late := newRepository(ns.Name)
+		require.ErrorIs(t, ds.CreateRepositoryInActiveNamespace(ctx, late), datastore.ErrNamespaceNotActive)
+	})
+
 	t.Run("Repository/TestDuplicateUIDAndScopedName", func(t *testing.T) {
 		namespace := "repo-uniqueness-" + newID()[:8]
 		repository := newRepository(namespace)
@@ -879,13 +933,14 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, err)
 		require.Len(t, result.Items, 1)
 		assert.True(t, result.HasNext)
-		assert.True(t, result.TotalCount == -1 || result.TotalCount >= 2)
 	})
 
-	t.Run("Repository/TestMappingRenameAndTransfer", func(t *testing.T) {
+	t.Run("Repository/TestMappingRename", func(t *testing.T) {
 		repositoryID := newID()
 		fromNamespace := "mapping-from-" + newID()[:8]
-		toNamespace := "mapping-to-" + newID()[:8]
+		from := newNamespace(datastore.NamespaceTierUser)
+		from.Name = fromNamespace
+		require.NoError(t, ds.CreateNamespace(ctx, from))
 		mapping := &datastore.NamespaceMapping{
 			Namespace:    fromNamespace,
 			Name:         "old-name",
@@ -898,11 +953,10 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		_, err := ds.LookupRepository(ctx, fromNamespace, "old-name")
 		require.ErrorIs(t, err, datastore.ErrNotFound)
 
-		require.NoError(t, ds.TransferRepository(ctx, repositoryID, fromNamespace, toNamespace))
-		got, err := ds.LookupRepository(ctx, toNamespace, "new-name")
+		got, err := ds.LookupRepository(ctx, fromNamespace, "new-name")
 		require.NoError(t, err)
 		assert.Equal(t, repositoryID, got.RepositoryID)
-		assert.Equal(t, toNamespace, got.Namespace)
+		assert.Equal(t, fromNamespace, got.Namespace)
 	})
 
 	// ── HasCatalogResources ───────────────────────────────────────────────────
@@ -964,5 +1018,429 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		has, err = ds.HasCatalogResources(ctx, repo.UID)
 		require.NoError(t, err)
 		assert.False(t, has)
+	})
+
+	// ── ServiceAccount (spec 061) ──────────────────────────────────────────────
+
+	t.Run("ServiceAccount/CreateAndGetByUID", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		got, err := ds.GetServiceAccountByUID(ctx, sa.UID)
+		require.NoError(t, err)
+		assert.Equal(t, sa.UID, got.UID)
+		assert.Equal(t, sa.Namespace, got.Namespace)
+		assert.Equal(t, sa.Name, got.Name)
+		require.Len(t, got.PublicKeys, 1)
+		assert.Equal(t, sa.PublicKeys[0].KeyID, got.PublicKeys[0].KeyID)
+	})
+
+	t.Run("ServiceAccount/GetByUIDNotFound", func(t *testing.T) {
+		_, err := ds.GetServiceAccountByUID(ctx, newID())
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("ServiceAccount/GetBySubject", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		got, err := ds.GetServiceAccountBySubject(ctx, sa.Namespace, sa.Name)
+		require.NoError(t, err)
+		assert.Equal(t, sa.UID, got.UID)
+	})
+
+	t.Run("ServiceAccount/GetBySubjectNotFound", func(t *testing.T) {
+		_, err := ds.GetServiceAccountBySubject(ctx, "controllers", "does-not-exist-"+newID()[:8])
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("ServiceAccount/DuplicateUIDReturnsAlreadyExists", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+		err := ds.CreateServiceAccount(ctx, sa)
+		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
+	})
+
+	t.Run("ServiceAccount/DuplicateSubjectReturnsAlreadyExists", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		sa2 := newServiceAccount()
+		sa2.Namespace = sa.Namespace
+		sa2.Name = sa.Name // same namespace+name, different UID
+		err := ds.CreateServiceAccount(ctx, sa2)
+		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
+	})
+
+	t.Run("ServiceAccount/UpdateKeysAddAndRemove", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		add := []datastore.ServiceAccountPublicKey{
+			{KeyID: "key-2", Algorithm: "Ed25519", PublicKey: []byte("second-key"), EnrolledAt: time.Now().UTC()},
+		}
+		updated, err := ds.UpdateServiceAccountKeys(ctx, sa.UID, add, []string{"key-1"}, sa.ResourceVersion)
+		require.NoError(t, err)
+		require.Len(t, updated.PublicKeys, 1)
+		assert.Equal(t, "key-2", updated.PublicKeys[0].KeyID)
+		assert.NotEqual(t, sa.ResourceVersion, updated.ResourceVersion)
+
+		got, err := ds.GetServiceAccountByUID(ctx, sa.UID)
+		require.NoError(t, err)
+		require.Len(t, got.PublicKeys, 1)
+		assert.Equal(t, "key-2", got.PublicKeys[0].KeyID)
+	})
+
+	t.Run("ServiceAccount/UpdateKeysStaleResourceVersionReturnsConflict", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		_, err := ds.UpdateServiceAccountKeys(ctx, sa.UID, nil, nil, "stale-version")
+		assert.ErrorIs(t, err, datastore.ErrConflict)
+	})
+
+	t.Run("ServiceAccount/UpdateKeysEmptyResultReturnsInvalidArgument", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		_, err := ds.UpdateServiceAccountKeys(ctx, sa.UID, nil, []string{"key-1"}, sa.ResourceVersion)
+		assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
+	})
+
+	t.Run("ServiceAccount/SetDisabled", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		require.NoError(t, ds.SetServiceAccountDisabled(ctx, sa.UID, true))
+		got, err := ds.GetServiceAccountByUID(ctx, sa.UID)
+		require.NoError(t, err)
+		assert.True(t, got.Disabled)
+		assert.NotEqual(t, sa.ResourceVersion, got.ResourceVersion)
+		assert.Equal(t, sa.UID, got.UID) // UID survives Disabled toggle
+
+		require.NoError(t, ds.SetServiceAccountDisabled(ctx, sa.UID, false))
+		got, err = ds.GetServiceAccountByUID(ctx, sa.UID)
+		require.NoError(t, err)
+		assert.False(t, got.Disabled)
+	})
+
+	t.Run("ServiceAccount/SetDisabledNotFound", func(t *testing.T) {
+		err := ds.SetServiceAccountDisabled(ctx, newID(), true)
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("ServiceAccount/Delete", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+		require.NoError(t, ds.DeleteServiceAccount(ctx, sa.UID))
+
+		_, err := ds.GetServiceAccountByUID(ctx, sa.UID)
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+		_, err = ds.GetServiceAccountBySubject(ctx, sa.Namespace, sa.Name)
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("ServiceAccount/DeleteNotFound", func(t *testing.T) {
+		err := ds.DeleteServiceAccount(ctx, newID())
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("ServiceAccount/DeleteThenNameIsReusable", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+		require.NoError(t, ds.DeleteServiceAccount(ctx, sa.UID))
+
+		recreated := newServiceAccount()
+		recreated.Namespace = sa.Namespace
+		recreated.Name = sa.Name
+		require.NoError(t, ds.CreateServiceAccount(ctx, recreated))
+		assert.NotEqual(t, sa.UID, recreated.UID)
+	})
+
+	t.Run("ServiceAccount/ListIncludesCreated", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		page, err := ds.ListServiceAccounts(ctx, datastore.PageParams{})
+		require.NoError(t, err)
+		found := false
+		for _, item := range page.Items {
+			if item.UID == sa.UID {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "expected created service account %s to be present in ListServiceAccounts", sa.UID)
+	})
+
+	t.Run("ServiceAccount/AssertionReplayConsumesAtomically", func(t *testing.T) {
+		const consumers = 8
+		jtiDigest := "replay-" + newID()
+		expiresAt := time.Now().Add(time.Minute)
+		results := make(chan bool, consumers)
+		errors := make(chan error, consumers)
+		var wg sync.WaitGroup
+		wg.Add(consumers)
+		for range consumers {
+			go func() {
+				defer wg.Done()
+				consumed, err := ds.TryConsumeServiceAccountAssertion(ctx, jtiDigest, expiresAt)
+				if err != nil {
+					errors <- err
+					return
+				}
+				results <- consumed
+			}()
+		}
+		wg.Wait()
+		close(results)
+		close(errors)
+
+		for err := range errors {
+			require.NoError(t, err)
+		}
+		consumed := 0
+		for result := range results {
+			if result {
+				consumed++
+			}
+		}
+		assert.Equal(t, 1, consumed)
+	})
+
+	t.Run("ServiceAccount/AssertionReplayRejectsExpiredWindow", func(t *testing.T) {
+		_, err := ds.TryConsumeServiceAccountAssertion(ctx, "expired-"+newID(), time.Now().Add(-time.Second))
+		assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
+	})
+
+	t.Run("CategoryAncestorIndex", func(t *testing.T) {
+		runCategoryAncestorIndexContract(t, ds)
+	})
+}
+
+// ── CategoryAncestorIndex helpers ────────────────────────────────────────────
+
+// seedCategory creates a category and, when path is given, records it as
+// status.resolved.path (root-to-self, last element = name).
+func seedCategory(t *testing.T, ds datastore.Datastore, ns, name string, path ...string) *datastore.CategoryTaxonomy {
+	t.Helper()
+	c := newCategoryTaxonomyInNS(ns)
+	c.Name = name
+	require.NoError(t, ds.CreateCategoryTaxonomy(context.Background(), c))
+	if len(path) == 0 {
+		return c
+	}
+	return setResolvedPath(t, ds, ns, name, path...)
+}
+
+func setResolvedPath(t *testing.T, ds datastore.Datastore, ns, name string, path ...string) *datastore.CategoryTaxonomy {
+	t.Helper()
+	ctx := context.Background()
+	current, err := ds.GetCategoryTaxonomyByName(ctx, ns, name)
+	require.NoError(t, err)
+	updated, err := ds.UpdateCategoryTaxonomyStatus(ctx, ns, name, datastore.CategoryTaxonomyStatusPatch{
+		ResourceVersion: current.ResourceVersion,
+		Resolved:        &catalog.ResolvedCategoryTaxonomy{Depth: int8(len(path) - 1), Path: path},
+	})
+	require.NoError(t, err)
+	return updated
+}
+
+func categoryIndex(t *testing.T, ds datastore.Datastore) datastore.CategoryAncestorIndex {
+	t.Helper()
+	index, ok := ds.(datastore.CategoryAncestorIndex)
+	require.True(t, ok, "backend must implement datastore.CategoryAncestorIndex")
+	return index
+}
+
+// descendants lists the full subtree as "name@depth" in index order.
+func descendants(t *testing.T, ds datastore.Datastore, ns, ancestor string, includeSelf bool, maxDepth int) []string {
+	t.Helper()
+	result, err := categoryIndex(t, ds).ListCategoryDescendants(context.Background(), datastore.CategoryDescendantQuery{
+		Namespace: ns, Ancestor: ancestor, IncludeSelf: includeSelf, MaxDepth: maxDepth,
+		Page: datastore.PageParams{First: 100},
+	})
+	require.NoError(t, err)
+	out := make([]string, 0, len(result.Items))
+	for _, item := range result.Items {
+		out = append(out, fmt.Sprintf("%s@%d", item.Name, item.Depth))
+	}
+	return out
+}
+
+func runCategoryAncestorIndexContract(t *testing.T, ds datastore.Datastore) {
+	ctx := context.Background()
+
+	// electronics
+	// |- computers
+	// |  `- laptops
+	// `- computers-refurb
+	//    `- phones
+	newTree := func(t *testing.T) string {
+		ns := "idx-" + newID()[:8]
+		seedCategory(t, ds, ns, "electronics", "electronics")
+		seedCategory(t, ds, ns, "computers", "electronics", "computers")
+		seedCategory(t, ds, ns, "computers-refurb", "electronics", "computers-refurb")
+		seedCategory(t, ds, ns, "laptops", "electronics", "computers", "laptops")
+		seedCategory(t, ds, ns, "phones", "electronics", "computers-refurb", "phones")
+		return ns
+	}
+
+	t.Run("MatchesWholePathSegmentsOnly", func(t *testing.T) {
+		ns := newTree(t)
+		assert.Equal(t, []string{"laptops@1"}, descendants(t, ds, ns, "computers", false, 0))
+		assert.Equal(t, []string{"phones@1"}, descendants(t, ds, ns, "computers-refurb", false, 0))
+	})
+
+	t.Run("IncludeSelfAndOrdering", func(t *testing.T) {
+		ns := newTree(t)
+		assert.Equal(t, []string{"computers@0", "laptops@1"}, descendants(t, ds, ns, "computers", true, 0))
+		assert.Equal(t,
+			[]string{"computers@1", "computers-refurb@1", "laptops@2", "phones@2"},
+			descendants(t, ds, ns, "electronics", false, 0))
+		assert.Equal(t, "electronics@0", descendants(t, ds, ns, "electronics", true, 0)[0])
+		assert.Empty(t, descendants(t, ds, ns, "unknown", true, 0))
+	})
+
+	t.Run("MaxDepth", func(t *testing.T) {
+		ns := newTree(t)
+		assert.Equal(t, []string{"computers@1", "computers-refurb@1"}, descendants(t, ds, ns, "electronics", false, 1))
+		assert.Equal(t,
+			[]string{"electronics@0", "computers@1", "computers-refurb@1"},
+			descendants(t, ds, ns, "electronics", true, 1))
+	})
+
+	t.Run("ReparentRemovesStaleRows", func(t *testing.T) {
+		ns := newTree(t)
+		setResolvedPath(t, ds, ns, "laptops", "electronics", "computers-refurb", "laptops")
+		assert.Empty(t, descendants(t, ds, ns, "computers", false, 0))
+		assert.Equal(t, []string{"laptops@1", "phones@1"}, descendants(t, ds, ns, "computers-refurb", false, 0))
+		assert.Equal(t,
+			[]string{"computers@1", "computers-refurb@1", "laptops@2", "phones@2"},
+			descendants(t, ds, ns, "electronics", false, 0))
+
+		// Promoting to a root drops every old ancestor row.
+		setResolvedPath(t, ds, ns, "laptops", "laptops")
+		assert.NotContains(t, descendants(t, ds, ns, "electronics", false, 0), "laptops@2")
+		assert.Equal(t, []string{"laptops@0"}, descendants(t, ds, ns, "laptops", true, 0))
+	})
+
+	t.Run("FinalRemovalDeletesRows", func(t *testing.T) {
+		ns := newTree(t)
+		laptops, err := ds.GetCategoryTaxonomyByName(ctx, ns, "laptops")
+		require.NoError(t, err)
+		lifecycle, ok := ds.(datastore.CategoryTaxonomyDeletionStore)
+		require.True(t, ok)
+		marked, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, ns, "laptops", laptops.ResourceVersion, time.Now())
+		require.NoError(t, err)
+		// Foreground deletion keeps the rows until final removal.
+		assert.Contains(t, descendants(t, ds, ns, "computers", false, 0), "laptops@1")
+		_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, ns, "laptops", marked.ResourceVersion)
+		require.NoError(t, err)
+		assert.Empty(t, descendants(t, ds, ns, "computers", false, 0))
+		assert.NotContains(t, descendants(t, ds, ns, "electronics", false, 0), "laptops@2")
+
+		// DeleteCategoryTaxonomy removes rows as well.
+		phones, err := ds.GetCategoryTaxonomyByName(ctx, ns, "phones")
+		require.NoError(t, err)
+		require.NoError(t, ds.DeleteCategoryTaxonomy(ctx, phones.UID))
+		assert.Empty(t, descendants(t, ds, ns, "computers-refurb", false, 0))
+		assert.Equal(t, []string{"computers@1", "computers-refurb@1"}, descendants(t, ds, ns, "electronics", false, 0))
+	})
+
+	t.Run("NullResolvedOwnsNoRows", func(t *testing.T) {
+		ns := "idx-" + newID()[:8]
+		seedCategory(t, ds, ns, "draft")
+		assert.Empty(t, descendants(t, ds, ns, "draft", true, 0))
+
+		// A status write without Resolved leaves existing rows untouched.
+		seedCategory(t, ds, ns, "root", "root")
+		current, err := ds.GetCategoryTaxonomyByName(ctx, ns, "root")
+		require.NoError(t, err)
+		_, err = ds.UpdateCategoryTaxonomyStatus(ctx, ns, "root", datastore.CategoryTaxonomyStatusPatch{
+			ResourceVersion: current.ResourceVersion,
+			Conditions:      []catalog.Condition{},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"root@0"}, descendants(t, ds, ns, "root", true, 0))
+	})
+
+	t.Run("RepeatedStatusWritesAreIdempotent", func(t *testing.T) {
+		ns := newTree(t)
+		want := descendants(t, ds, ns, "electronics", true, 0)
+		for range 3 {
+			setResolvedPath(t, ds, ns, "laptops", "electronics", "computers", "laptops")
+		}
+		assert.Equal(t, want, descendants(t, ds, ns, "electronics", true, 0))
+		assert.Equal(t, []string{"laptops@1"}, descendants(t, ds, ns, "computers", false, 0))
+	})
+
+	t.Run("ConcurrentWritesKeepHigherResourceVersion", func(t *testing.T) {
+		ns := newTree(t)
+		base, err := ds.GetCategoryTaxonomyByName(ctx, ns, "laptops")
+		require.NoError(t, err)
+
+		parents := []string{"computers", "computers-refurb", "electronics"}
+		var wg sync.WaitGroup
+		results := make([]error, len(parents))
+		for i, parent := range parents {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				path := []string{"electronics", parent, "laptops"}
+				if parent == "electronics" {
+					path = []string{"electronics", "laptops"}
+				}
+				_, results[i] = ds.UpdateCategoryTaxonomyStatus(ctx, ns, "laptops", datastore.CategoryTaxonomyStatusPatch{
+					ResourceVersion: base.ResourceVersion,
+					Resolved:        &catalog.ResolvedCategoryTaxonomy{Depth: int8(len(path) - 1), Path: path},
+				})
+			}()
+		}
+		wg.Wait()
+		winners := 0
+		for _, err := range results {
+			if err == nil {
+				winners++
+			} else {
+				assert.ErrorIs(t, err, datastore.ErrConflict)
+			}
+		}
+		require.Equal(t, 1, winners, "exactly one writer may win the resource-version CAS")
+
+		// Rows follow the stored (winning) path, with no leftovers from losers.
+		stored, err := ds.GetCategoryTaxonomyByName(ctx, ns, "laptops")
+		require.NoError(t, err)
+		path, err := datastore.CategoryResolvedPath(string(stored.Status))
+		require.NoError(t, err)
+		require.NotEmpty(t, path)
+		holders := 0
+		for _, parent := range parents {
+			for _, entry := range descendants(t, ds, ns, parent, false, 0) {
+				if len(entry) >= 7 && entry[:7] == "laptops" {
+					holders++
+					if parent != "electronics" {
+						assert.Equal(t, path[len(path)-2], parent)
+					}
+				}
+			}
+		}
+		// electronics always holds laptops (depth 1 or 2); exactly one parent
+		// among computers/computers-refurb holds it when it is not a direct child.
+		if len(path) == 3 {
+			assert.Equal(t, 2, holders)
+		} else {
+			assert.Equal(t, 1, holders)
+		}
+	})
+
+	t.Run("ValidatesQuery", func(t *testing.T) {
+		index := categoryIndex(t, ds)
+		_, err := index.ListCategoryDescendants(ctx, datastore.CategoryDescendantQuery{Namespace: "ns"})
+		assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
+		_, err = index.ListCategoryDescendants(ctx, datastore.CategoryDescendantQuery{
+			Namespace: "ns", Ancestor: "a", MaxDepth: datastore.MaxCategoryHierarchyDepth + 1,
+		})
+		assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
 	})
 }

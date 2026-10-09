@@ -1,0 +1,76 @@
+# Kratos serve configuration for the GitStore reference OIDC provider stack.
+# Consumed by the `kratos` service in compose.oidc.yml.
+# Secrets and DSN arrive via environment variables (DSN, SECRETS_COOKIE,
+# SECRETS_DEFAULT — Ory's native env binding); only non-secret settings live here.
+
+version: v1.3.1
+
+serve:
+  public:
+    # Browser-reachable base URL of Kratos's public API.
+    base_url: http://localhost:4433/
+    host: 0.0.0.0
+    port: 4433
+    cors:
+      enabled: true
+      allowed_origins:
+        - http://localhost:4433
+        - http://localhost:4455
+  admin:
+    host: 0.0.0.0
+    port: 4434
+
+identity:
+  default_schema_id: gitstore-user
+  schemas:
+    - id: gitstore-user
+      url: file:///etc/config/kratos/identity.schema.json
+
+courier:
+  smtp:
+    # mailslurper catches all outbound mail in this dev/reference deployment.
+    connection_uri: smtp://mailslurper:1025/
+
+selfservice:
+  default_browser_return_url: http://localhost:4455/welcome
+  allowed_return_urls:
+    - http://localhost:4455
+    # The bridge's /login URL is a legitimate return_to target: it resumes a
+    # deferred Hydra login challenge after Kratos login completes.
+    - http://localhost:4445
+  methods:
+    password:
+      enabled: true
+  flows:
+    error:
+      ui_url: http://localhost:4455/error
+    settings:
+      ui_url: http://localhost:4455/settings
+    recovery:
+      enabled: true
+      ui_url: http://localhost:4455/recovery
+    verification:
+      enabled: true
+      ui_url: http://localhost:4455/verification
+    login:
+      ui_url: http://localhost:4455/login
+      lifespan: 10m
+    registration:
+      enabled: true
+      ui_url: http://localhost:4455/registration
+      lifespan: 10m
+      after:
+        password:
+          hooks:
+            # Establish a Kratos session immediately after registration so the
+            # user does not have to log in a second time.
+            - hook: session
+
+hashers:
+  algorithm: bcrypt
+  bcrypt:
+    cost: 8
+
+log:
+  level: info
+  format: json

@@ -194,30 +194,29 @@ func NewCategoryTaxonomyListWatcher(client *graphqlclient.Client) *CategoryTaxon
 	return &CategoryTaxonomyListWatcher{client: client}
 }
 
-// noResourceVersionSentinel is returned by List when the namespace has zero
-// CategoryTaxonomy resources, so there is no real resourceVersion to report
-// yet. checkpoint.FilesystemStore/spec 036's ListWatcher contract require a
-// non-empty cursor from List (an empty string is reserved for "no checkpoint
-// exists"), but gitstore-api's real resourceVersions are always >= "1"
-// (nextResourceVersion), so "0" can never collide with one. Watch treats it
-// identically to "" (subscribe from the beginning).
-const noResourceVersionSentinel = "0"
+// categoryWatchBootstrapCursor asks the API's durable journal for a bookmark
+// at its current high-water mark, so List can snapshot after a known cursor.
+const categoryWatchBootstrapCursor = "__category_watch_bootstrap__"
 
 const productWatchBootstrapCursor = "__product_watch_bootstrap__"
 
-// List paginates the categories query to completion, returning every
-// CategoryTaxonomy and the highest observed resourceVersion as the list-time
-// cursor. When the namespace has zero categories, ResourceVersion is
-// noResourceVersionSentinel rather than "" (see its doc comment).
+// List establishes a durable journal cursor before enumerating every
+// namespace, then paginates the categories query for each to completion.
+// Changes that race with the snapshot are replayed by the subsequent Watch
+// from that cursor.
 func (lw *CategoryTaxonomyListWatcher) List(ctx context.Context) (ListResponse[categorytaxonomy.CategoryTaxonomy], error) {
-	var items []categorytaxonomy.CategoryTaxonomy
-	highestRV := ""
-	namespaces, err := listNamespaceIdentifiers(ctx, lw.client)
-	if err != nil {
-		return ListResponse[categorytaxonomy.CategoryTaxonomy]{}, err
-	}
+	return collectList[categorytaxonomy.CategoryTaxonomy](ctx, lw)
+}
 
-	for _, ns := range namespaces {
+func (lw *CategoryTaxonomyListWatcher) ListPages(ctx context.Context, visit func([]categorytaxonomy.CategoryTaxonomy) error) (string, error) {
+	if visit == nil {
+		return "", errors.New("listwatch: missing category page visitor")
+	}
+	cursor, err := bootstrapCursor[categorytaxonomy.CategoryTaxonomy](ctx, lw, categoryWatchBootstrapCursor)
+	if err != nil {
+		return "", err
+	}
+	err = visitNamespaceIdentifiers(ctx, lw.client, func(ns string) error {
 		var after *string
 		for {
 			var resp categoriesListResponse
@@ -226,33 +225,31 @@ func (lw *CategoryTaxonomyListWatcher) List(ctx context.Context) (ListResponse[c
 				vars["after"] = *after
 			}
 			if err := lw.client.Query(ctx, categoriesListQuery, vars, &resp); err != nil {
-				return ListResponse[categorytaxonomy.CategoryTaxonomy]{}, fmt.Errorf("listwatch: list categories: %w", err)
+				return fmt.Errorf("listwatch: list categories: %w", err)
 			}
+			observeListPage(ctx, len(resp.Categories.Edges))
+			items := make([]categorytaxonomy.CategoryTaxonomy, 0, len(resp.Categories.Edges))
 			for _, edge := range resp.Categories.Edges {
-				c := edge.Node.toCategoryTaxonomy()
-				items = append(items, c)
-				if c.ResourceVersion > highestRV {
-					highestRV = c.ResourceVersion
-				}
+				items = append(items, edge.Node.toCategoryTaxonomy())
 			}
-			if !resp.Categories.PageInfo.HasNextPage || resp.Categories.PageInfo.EndCursor == nil {
-				break
+			if err := visit(items); err != nil {
+				return err
 			}
-			after = resp.Categories.PageInfo.EndCursor
+			var err error
+			after, err = nextListCursor(resp.Categories.PageInfo.HasNextPage, resp.Categories.PageInfo.EndCursor, after)
+			if err != nil || after == nil {
+				return err
+			}
 		}
+	})
+	if err != nil {
+		return "", err
 	}
-
-	if highestRV == "" {
-		highestRV = noResourceVersionSentinel
-	}
-	return ListResponse[categorytaxonomy.CategoryTaxonomy]{Items: items, ResourceVersion: highestRV}, nil
+	return cursor, nil
 }
 
 // Watch opens a watchCategories subscription starting after resourceVersion.
 func (lw *CategoryTaxonomyListWatcher) Watch(ctx context.Context, resourceVersion string) (Watcher[categorytaxonomy.CategoryTaxonomy], error) {
-	if resourceVersion == noResourceVersionSentinel {
-		resourceVersion = ""
-	}
 	vars := map[string]any{}
 	if resourceVersion != "" {
 		vars["resourceVersion"] = resourceVersion
@@ -265,7 +262,7 @@ func (lw *CategoryTaxonomyListWatcher) Watch(ctx context.Context, resourceVersio
 		return nil, fmt.Errorf("listwatch: watch categories: %w", err)
 	}
 
-	w := &categoryWatcher{sub: sub, events: make(chan WatchEvent[categorytaxonomy.CategoryTaxonomy], 16)}
+	w := &categoryWatcher{watchStop: newWatchStop(sub.Stop), sub: sub, events: make(chan WatchEvent[categorytaxonomy.CategoryTaxonomy], 16)}
 	go w.run()
 	return w, nil
 }
@@ -287,6 +284,7 @@ type watchCategoriesEventJSON struct {
 }
 
 type categoryWatcher struct {
+	*watchStop
 	sub    graphqlclient.Subscription
 	events chan WatchEvent[categorytaxonomy.CategoryTaxonomy]
 	err    error
@@ -296,7 +294,6 @@ func (w *categoryWatcher) Events() <-chan WatchEvent[categorytaxonomy.CategoryTa
 	return w.events
 }
 func (w *categoryWatcher) Err() error { return w.err }
-func (w *categoryWatcher) Stop()      { w.sub.Stop() }
 
 func (w *categoryWatcher) run() {
 	defer close(w.events)
@@ -334,10 +331,12 @@ func (w *categoryWatcher) run() {
 			obj.ResourceVersion = ev.ResourceVersion
 		}
 
-		w.events <- WatchEvent[categorytaxonomy.CategoryTaxonomy]{
+		if !sendWatchEvent(w.watchStop, w.events, WatchEvent[categorytaxonomy.CategoryTaxonomy]{
 			Type:            evType,
 			Object:          obj,
 			ResourceVersion: ev.ResourceVersion,
+		}) {
+			return
 		}
 	}
 	if err := w.sub.Err(); err != nil {
@@ -386,8 +385,14 @@ type namespacesListResponse struct {
 }
 
 const productFields = `
-  metadata { uid name namespace resourceVersion }
+  metadata { uid name namespace resourceVersion generation finalizers deletionTimestamp }
   spec { categoryRef { name } }
+  status {
+    observedGeneration
+    lastAppliedRevision
+    conditions { type status observedGeneration lastTransitionTime reason message }
+    resolved { category { name uid } }
+  }
 `
 
 // productsListQueryByNamespace paginates products within one namespace.
@@ -395,7 +400,7 @@ const productFields = `
 // then paginates this query once per namespace.
 const productsListQueryByNamespace = `
 query($namespace: String!, $after: String) {
-  products(namespace: $namespace, first: 100, after: $after) {
+  products(namespace: $namespace, first: 250, after: $after) {
     edges {
       cursor
       node {
@@ -420,10 +425,13 @@ subscription($namespace: String, $resourceVersion: String) {
 }`
 
 type productMetadataJSON struct {
-	UID             string `json:"uid"`
-	Name            string `json:"name"`
-	Namespace       string `json:"namespace"`
-	ResourceVersion string `json:"resourceVersion"`
+	UID               string     `json:"uid"`
+	Name              string     `json:"name"`
+	Namespace         string     `json:"namespace"`
+	ResourceVersion   string     `json:"resourceVersion"`
+	Generation        int64      `json:"generation"`
+	Finalizers        []string   `json:"finalizers"`
+	DeletionTimestamp *time.Time `json:"deletionTimestamp"`
 }
 
 type productSpecJSON struct {
@@ -432,20 +440,60 @@ type productSpecJSON struct {
 	} `json:"categoryRef"`
 }
 
+type productResolvedJSON struct {
+	Category *struct {
+		Name string `json:"name"`
+		UID  string `json:"uid"`
+	} `json:"category"`
+}
+
+type productStatusJSON struct {
+	ObservedGeneration  int64                `json:"observedGeneration"`
+	LastAppliedRevision string               `json:"lastAppliedRevision"`
+	Conditions          []conditionJSON      `json:"conditions"`
+	Resolved            *productResolvedJSON `json:"resolved"`
+}
+
 type productNodeJSON struct {
 	Metadata productMetadataJSON `json:"metadata"`
 	Spec     productSpecJSON     `json:"spec"`
+	Status   *productStatusJSON  `json:"status"`
 }
 
 func (n productNodeJSON) toProduct() categorytaxonomy.Product {
 	p := categorytaxonomy.Product{
-		UID:             n.Metadata.UID,
-		Namespace:       n.Metadata.Namespace,
-		Name:            n.Metadata.Name,
-		ResourceVersion: n.Metadata.ResourceVersion,
+		UID:               n.Metadata.UID,
+		Namespace:         n.Metadata.Namespace,
+		Name:              n.Metadata.Name,
+		Generation:        n.Metadata.Generation,
+		ResourceVersion:   n.Metadata.ResourceVersion,
+		Finalizers:        n.Metadata.Finalizers,
+		DeletionTimestamp: n.Metadata.DeletionTimestamp,
 	}
 	if n.Spec.CategoryRef != nil {
 		p.CategoryRefName = n.Spec.CategoryRef.Name
+	}
+	if n.Status == nil {
+		return p
+	}
+	p.Status = status.ResourceStatus{
+		ResourceVersion:     n.Metadata.ResourceVersion,
+		ObservedGeneration:  n.Status.ObservedGeneration,
+		LastAppliedRevision: n.Status.LastAppliedRevision,
+	}
+	for _, condition := range n.Status.Conditions {
+		p.Status.Conditions = append(p.Status.Conditions, &status.Condition{
+			Type: condition.Type, Status: condition.Status,
+			ObservedGeneration: condition.ObservedGeneration,
+			LastTransitionTime: condition.LastTransitionTime,
+			Reason:             condition.Reason, Message: condition.Message,
+		})
+	}
+	if n.Status.Resolved != nil && n.Status.Resolved.Category != nil {
+		resolvedJSON, err := json.Marshal(n.Status.Resolved)
+		if err == nil {
+			p.Status.Resolved = resolvedJSON
+		}
 	}
 	return p
 }
@@ -477,11 +525,7 @@ func NewProductListWatcher(client *graphqlclient.Client) *ProductListWatcher {
 	return &ProductListWatcher{client: client}
 }
 
-// listNamespaceIdentifiers paginates namespaces to completion and returns each
-// namespace identifier. Category and Product listwatchers both use it to keep
-// cross-namespace listing behaviour while issuing namespace-scoped list queries.
-func listNamespaceIdentifiers(ctx context.Context, client *graphqlclient.Client) ([]string, error) {
-	var identifiers []string
+func visitNamespaceIdentifiers(ctx context.Context, client *graphqlclient.Client, visit func(string) error) error {
 	var after *string
 	for {
 		var resp namespacesListResponse
@@ -490,58 +534,38 @@ func listNamespaceIdentifiers(ctx context.Context, client *graphqlclient.Client)
 			vars["after"] = *after
 		}
 		if err := client.Query(ctx, namespacesListQuery, vars, &resp); err != nil {
-			return nil, fmt.Errorf("listwatch: list namespaces: %w", err)
+			return fmt.Errorf("listwatch: list namespaces: %w", err)
 		}
+		observeListPage(ctx, len(resp.Namespaces.Edges))
 		for _, edge := range resp.Namespaces.Edges {
-			identifiers = append(identifiers, edge.Node.Metadata.Name)
+			if err := visit(edge.Node.Metadata.Name); err != nil {
+				return err
+			}
 		}
-		if !resp.Namespaces.PageInfo.HasNextPage || resp.Namespaces.PageInfo.EndCursor == nil {
-			break
+		var err error
+		after, err = nextListCursor(resp.Namespaces.PageInfo.HasNextPage, resp.Namespaces.PageInfo.EndCursor, after)
+		if err != nil || after == nil {
+			return err
 		}
-		after = resp.Namespaces.PageInfo.EndCursor
 	}
-	return identifiers, nil
 }
 
-// List establishes an event-bus cursor before enumerating every namespace,
+// List establishes a durable journal cursor before enumerating every namespace,
 // then paginates the products query for each to completion. Changes that race
 // with the snapshot are replayed by the subsequent Watch from that cursor.
-// When there are zero prior Product events, the cursor is
-// noResourceVersionSentinel.
 func (lw *ProductListWatcher) List(ctx context.Context) (ListResponse[categorytaxonomy.Product], error) {
-	watcher, err := lw.Watch(ctx, productWatchBootstrapCursor)
+	return collectList[categorytaxonomy.Product](ctx, lw)
+}
+
+func (lw *ProductListWatcher) ListPages(ctx context.Context, visit func([]categorytaxonomy.Product) error) (string, error) {
+	if visit == nil {
+		return "", errors.New("listwatch: missing product page visitor")
+	}
+	cursor, err := bootstrapCursor[categorytaxonomy.Product](ctx, lw, productWatchBootstrapCursor)
 	if err != nil {
-		return ListResponse[categorytaxonomy.Product]{}, fmt.Errorf("listwatch: establish product watch cursor: %w", err)
+		return "", err
 	}
-	defer watcher.Stop()
-
-	var cursorEvent WatchEvent[categorytaxonomy.Product]
-	select {
-	case ev, ok := <-watcher.Events():
-		if !ok {
-			if err := watcher.Err(); err != nil {
-				return ListResponse[categorytaxonomy.Product]{}, fmt.Errorf("listwatch: establish product watch cursor: %w", err)
-			}
-			return ListResponse[categorytaxonomy.Product]{}, fmt.Errorf("listwatch: product watch closed before bookmark")
-		}
-		cursorEvent = ev
-	case <-ctx.Done():
-		return ListResponse[categorytaxonomy.Product]{}, ctx.Err()
-	}
-	if cursorEvent.Type != Bookmark || cursorEvent.ResourceVersion == "" {
-		return ListResponse[categorytaxonomy.Product]{}, fmt.Errorf("listwatch: product watch did not return a bootstrap bookmark")
-	}
-	// The bookmark captured the lower bound. Close this temporary stream while
-	// listing; the real Watch below will replay any events after that cursor.
-	watcher.Stop()
-
-	namespaces, err := listNamespaceIdentifiers(ctx, lw.client)
-	if err != nil {
-		return ListResponse[categorytaxonomy.Product]{}, err
-	}
-
-	var items []categorytaxonomy.Product
-	for _, ns := range namespaces {
+	err = visitNamespaceIdentifiers(ctx, lw.client, func(ns string) error {
 		var after *string
 		for {
 			var resp productsListResponse
@@ -550,23 +574,31 @@ func (lw *ProductListWatcher) List(ctx context.Context) (ListResponse[categoryta
 				vars["after"] = *after
 			}
 			if err := lw.client.Query(ctx, productsListQueryByNamespace, vars, &resp); err != nil {
-				return ListResponse[categorytaxonomy.Product]{}, fmt.Errorf("listwatch: list products: %w", err)
+				return fmt.Errorf("listwatch: list products: %w", err)
 			}
+			observeListPage(ctx, len(resp.Products.Edges))
+			items := make([]categorytaxonomy.Product, 0, len(resp.Products.Edges))
 			for _, edge := range resp.Products.Edges {
 				p := edge.Node.toProduct()
 				items = append(items, p)
 			}
-			if !resp.Products.PageInfo.HasNextPage || resp.Products.PageInfo.EndCursor == nil {
-				break
+			if err := visit(items); err != nil {
+				return err
 			}
-			after = resp.Products.PageInfo.EndCursor
+			var err error
+			after, err = nextListCursor(resp.Products.PageInfo.HasNextPage, resp.Products.PageInfo.EndCursor, after)
+			if err != nil || after == nil {
+				return err
+			}
 		}
+	})
+	if err != nil {
+		return "", err
 	}
-
-	return ListResponse[categorytaxonomy.Product]{Items: items, ResourceVersion: cursorEvent.ResourceVersion}, nil
+	return cursor, nil
 }
 
-// Watch opens a watchProducts subscription (across all namespaces)
+// Watch opens a typed Product watch subscription (across all namespaces)
 // starting after resourceVersion.
 func (lw *ProductListWatcher) Watch(ctx context.Context, resourceVersion string) (Watcher[categorytaxonomy.Product], error) {
 	vars := map[string]any{}
@@ -581,7 +613,7 @@ func (lw *ProductListWatcher) Watch(ctx context.Context, resourceVersion string)
 		return nil, fmt.Errorf("listwatch: watch products: %w", err)
 	}
 
-	w := &productWatcher{sub: sub, events: make(chan WatchEvent[categorytaxonomy.Product], 16)}
+	w := &productWatcher{watchStop: newWatchStop(sub.Stop), sub: sub, events: make(chan WatchEvent[categorytaxonomy.Product], 16)}
 	go w.run()
 	return w, nil
 }
@@ -595,6 +627,7 @@ type watchProductsEventJSON struct {
 }
 
 type productWatcher struct {
+	*watchStop
 	sub    graphqlclient.Subscription
 	events chan WatchEvent[categorytaxonomy.Product]
 	err    error
@@ -604,7 +637,6 @@ func (w *productWatcher) Events() <-chan WatchEvent[categorytaxonomy.Product] {
 	return w.events
 }
 func (w *productWatcher) Err() error { return w.err }
-func (w *productWatcher) Stop()      { w.sub.Stop() }
 
 func (w *productWatcher) run() {
 	defer close(w.events)
@@ -617,7 +649,6 @@ func (w *productWatcher) run() {
 			return
 		}
 		ev := payload.WatchProducts
-
 		var evType EventType
 		switch ev.Type {
 		case "ADDED":
@@ -642,10 +673,12 @@ func (w *productWatcher) run() {
 			obj.ResourceVersion = ev.ResourceVersion
 		}
 
-		w.events <- WatchEvent[categorytaxonomy.Product]{
+		if !sendWatchEvent(w.watchStop, w.events, WatchEvent[categorytaxonomy.Product]{
 			Type:            evType,
 			Object:          obj,
 			ResourceVersion: ev.ResourceVersion,
+		}) {
+			return
 		}
 	}
 	if err := w.sub.Err(); err != nil {

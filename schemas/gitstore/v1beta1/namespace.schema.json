@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.gitstore.dev/gitstore/v1beta1/namespace.schema.json",
+  "title": "GitStore Namespace",
+  "description": "YAML frontmatter for a GitStore Namespace resource. A Namespace resource is a Markdown file: this schema validates only the frontmatter object between the opening and closing '---' delimiters. The remaining Markdown content is free-form documentation about the namespace and is not covered by this schema. Note: apiVersion for Namespace is the bare \"gitstore.dev\" API group, distinct from catalog resources (\"catalog.gitstore.dev\") and File (\"storage.gitstore.dev\"). A Namespace resource's metadata must NOT include a namespace field — namespaces are top-level and cannot themselves belong to a namespace. See docs/namespace/namespace-spec.md for the full authoring contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "gitstore.dev/v1beta1",
+      "description": "Must be exactly \"gitstore.dev/v1beta1\"."
+    },
+    "kind": {
+      "const": "Namespace",
+      "description": "Must be exactly \"Namespace\" (case-sensitive)."
+    },
+    "metadata": {
+      "$ref": "#/$defs/ObjectMeta"
+    },
+    "spec": {
+      "$ref": "#/$defs/NamespaceSpec"
+    }
+  },
+  "$defs": {
+    "ObjectMeta": {
+      "type": "object",
+      "description": "Author-writable resource metadata. Do NOT include a \"namespace\" field here — Namespace resources are not themselves namespaced, and its presence causes the push to be rejected. Do not set uid, resourceVersion, generation, creationTimestamp, revision, ownerReferences, or finalizers either — those fields are system-managed.",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "maxLength": 63,
+          "description": "DNS label format: lowercase alphanumeric and hyphens, 1-63 characters, no leading/trailing hyphen. Globally unique namespace identifier."
+        },
+        "labels": {
+          "type": "object",
+          "description": "Optional key/value labels. Keys may use an optional \"prefix/name\" form; prefix ≤ 253 chars, name segment ≤ 63 chars. Values ≤ 63 chars.",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 63
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Optional key/value annotations. No length restriction.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "RepositoryDefaults": {
+      "type": "object",
+      "description": "Default settings applied to repositories created under this namespace.",
+      "additionalProperties": false,
+      "properties": {
+        "visibility": {
+          "type": "string",
+          "enum": ["PUBLIC", "PRIVATE", "INTERNAL"],
+          "description": "Default visibility for new repositories in this namespace."
+        },
+        "defaultBranch": {
+          "type": "string",
+          "description": "Default branch name for new repositories in this namespace (e.g. \"main\")."
+        }
+      }
+    },
+    "PushPolicyDefaults": {
+      "type": "object",
+      "description": "Default push-size limits applied to repositories created under this namespace. Only these two fields are currently supported — other push-policy knobs described elsewhere are not yet implemented.",
+      "additionalProperties": false,
+      "properties": {
+        "maxPackSizeBytes": {
+          "type": "integer",
+          "description": "Maximum accepted git push pack size, in bytes."
+        },
+        "maxFileSizeBytes": {
+          "type": "integer",
+          "description": "Maximum accepted individual file size within a push, in bytes."
+        }
+      }
+    },
+    "NamespaceSpec": {
+      "type": "object",
+      "description": "Author-controlled declarative specification for a namespace.",
+      "additionalProperties": false,
+      "required": ["tier"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Optional human-readable display title. Max 200 characters."
+        },
+        "tier": {
+          "type": "string",
+          "enum": ["USER", "ORGANIZATION"],
+          "description": "Required. Determines namespace ownership semantics."
+        },
+        "repositoryDefaults": { "$ref": "#/$defs/RepositoryDefaults" },
+        "pushPolicyDefaults": { "$ref": "#/$defs/PushPolicyDefaults" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "apiVersion": "gitstore.dev/v1beta1",
+      "kind": "Namespace",
+      "metadata": {
+        "name": "acme-store",
+        "labels": { "gitstore.dev/plan": "growth" }
+      },
+      "spec": {
+        "title": "Acme Store",
+        "tier": "ORGANIZATION",
+        "repositoryDefaults": {
+          "visibility": "PRIVATE",
+          "defaultBranch": "main"
+        },
+        "pushPolicyDefaults": {
+          "maxPackSizeBytes": 536870912,
+          "maxFileSizeBytes": 104857600
+        }
+      }
+    }
+  ]
+}

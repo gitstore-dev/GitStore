@@ -170,6 +170,8 @@ func (m *memdbDatastore) ListNonBlockingProductOwnerDependents(_ context.Context
 }
 
 func (m *memdbDatastore) MarkCategoryTaxonomyDeletion(_ context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*datastore.CategoryTaxonomy, error) {
+	m.categoryMutationMu.Lock()
+	defer m.categoryMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, err := txn.First("category_taxonomy", "name_namespace", namespace, name)
 	if err != nil || raw == nil {
@@ -205,10 +207,13 @@ func (m *memdbDatastore) MarkCategoryTaxonomyDeletion(_ context.Context, namespa
 		return nil, err
 	}
 	txn.Commit()
+	m.recordCommittedCategoryTaxonomy(datastore.ResourceWatchModified, category, raw.(*datastore.CategoryTaxonomy).Labels)
 	return cloneCategoryTaxonomy(category), nil
 }
 
 func (m *memdbDatastore) CompleteCategoryTaxonomyDeletion(_ context.Context, namespace, name, expectedResourceVersion string) (*datastore.CategoryTaxonomy, error) {
+	m.categoryMutationMu.Lock()
+	defer m.categoryMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, err := txn.First("category_taxonomy", "name_namespace", namespace, name)
 	if err != nil || raw == nil {
@@ -228,11 +233,16 @@ func (m *memdbDatastore) CompleteCategoryTaxonomyDeletion(_ context.Context, nam
 		txn.Abort()
 		return nil, err
 	}
+	if err := deleteCategoryAncestorRows(txn, category); err != nil {
+		txn.Abort()
+		return nil, err
+	}
 	if err := txn.Delete("category_taxonomy", category); err != nil {
 		txn.Abort()
 		return nil, fmt.Errorf("memdb: complete category taxonomy deletion: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedCategoryTaxonomy(datastore.ResourceWatchDeleted, category, nil)
 	return cloneCategoryTaxonomy(category), nil
 }
 

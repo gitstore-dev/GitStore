@@ -151,3 +151,42 @@ func TestMemdb_NamespaceDuplicateUIDAndName(t *testing.T) {
 	duplicateName.UID = "00000000-0000-0000-0000-000000000114"
 	require.ErrorIs(t, ds.CreateNamespace(ctx, &duplicateName), datastore.ErrAlreadyExists)
 }
+
+func TestMemdb_NamespaceRepositoryLifecycleCoordination(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	namespace := &datastore.Namespace{
+		UID:               "00000000-0000-0000-0000-000000000115",
+		Name:              "repository-lifecycle",
+		CreationTimestamp: time.Now().UTC(),
+	}
+	require.NoError(t, ds.CreateNamespace(ctx, namespace))
+	repository := &datastore.Repository{
+		UID:               "00000000-0000-0000-0000-000000000116",
+		Namespace:         namespace.Name,
+		Name:              "catalog",
+		CreationTimestamp: time.Now().UTC(),
+	}
+
+	require.NoError(t, ds.CreateRepositoryInActiveNamespace(ctx, repository))
+	current, err := ds.GetNamespace(ctx, namespace.UID)
+	require.NoError(t, err)
+	deletedAt := time.Now().UTC()
+	current.DeletionTimestamp = &deletedAt
+	expectedResourceVersion := current.ResourceVersion
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.ErrorIs(t, ds.MarkNamespaceDeletion(ctx, current, expectedResourceVersion), datastore.ErrNamespaceNotEmpty)
+
+	require.NoError(t, ds.DeleteRepository(ctx, repository.UID))
+	current, err = ds.GetNamespace(ctx, namespace.UID)
+	require.NoError(t, err)
+	expectedResourceVersion = current.ResourceVersion
+	current.DeletionTimestamp = &deletedAt
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.NoError(t, ds.MarkNamespaceDeletion(ctx, current, expectedResourceVersion))
+
+	lateRepository := *repository
+	lateRepository.UID = "00000000-0000-0000-0000-000000000117"
+	lateRepository.Name = "late"
+	require.ErrorIs(t, ds.CreateRepositoryInActiveNamespace(ctx, &lateRepository), datastore.ErrNamespaceNotActive)
+}

@@ -8,11 +8,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -35,23 +37,26 @@ func mustBcrypt(t *testing.T, password string) string {
 
 func newTestConfig(t *testing.T, duration string) config.AuthConfig {
 	t.Helper()
+	ttl, err := time.ParseDuration(duration)
+	require.NoError(t, err)
 	return config.AuthConfig{
-		Admin: config.UserConfig{
-			Username: "admin",
-			Password: mustBcrypt(t, "testpass"),
-		},
+		StaticUsers: config.StaticUsersConfig{UsersFile: func() string {
+			path := filepath.Join(t.TempDir(), "users.yaml")
+			require.NoError(t, os.WriteFile(path, []byte("version: v1\nusers:\n  - username: admin\n    password_hash: \""+mustBcrypt(t, "testpass")+"\"\n"), 0600))
+			return path
+		}()},
 		JWT: config.JWTConfig{
 			Secret:       "test-secret",
 			Issuer:       "gitstore",
-			Duration:     duration,
-			RefreshGrace: "60s",
+			TTL:          ttl,
+			RefreshGrace: 60 * time.Second,
 		},
 	}
 }
 
-func newTestRegistry(t *testing.T, cfg config.AuthConfig) (*authpkg.ProviderRegistry, *staticadmin.StaticAdminProvider) {
+func newTestRegistry(t *testing.T, cfg config.AuthConfig) (*authpkg.ProviderRegistry, *staticusers.StaticUsersProvider) {
 	t.Helper()
-	p, err := staticadmin.New(cfg, zap.NewNop())
+	p, err := staticusers.New(cfg, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(p.Shutdown)
 	chain := authpkg.NewChainedAuthN(p)
@@ -84,13 +89,13 @@ func TestLogout_AuthenticatedBearer_ReturnsSuccess(t *testing.T) {
 	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	token, exp, err := p.IssueToken("admin")
+	token, exp, err := p.IssueSession(context.Background(), "admin")
 	require.NoError(t, err)
 
 	principal := &authpkg.Principal{
 		Subject:    "admin",
 		Roles:      []string{"admin"},
-		AuthMethod: "static-admin",
+		AuthMethod: "static-users",
 		ExpiresAt:  exp,
 		TokenID:    extractJTI(t, p, token),
 	}
@@ -132,7 +137,7 @@ func TestLogout_EmptyTokenID_NoOp_ReturnsSuccess(t *testing.T) {
 	principal := &authpkg.Principal{
 		Subject:    "admin",
 		Roles:      []string{"admin"},
-		AuthMethod: "static-admin",
+		AuthMethod: "static-users",
 		TokenID:    "", // empty — no jti
 	}
 	ctx := ctxWithPrincipal(principal)
@@ -150,7 +155,7 @@ func TestRefreshToken_ValidToken_ReturnsNewSession(t *testing.T) {
 	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	token, _, err := p.IssueToken("admin")
+	token, _, err := p.IssueSession(context.Background(), "admin")
 	require.NoError(t, err)
 
 	payload, err := r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: token})
@@ -169,7 +174,7 @@ func TestRefreshToken_ExpiredWithinGrace_Succeeds(t *testing.T) {
 	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	token, _, err := p.IssueToken("admin")
+	token, _, err := p.IssueSession(context.Background(), "admin")
 	require.NoError(t, err)
 
 	payload, err := r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: token})
@@ -183,7 +188,7 @@ func TestRefreshToken_ExpiredBeyondGrace_ReturnsError(t *testing.T) {
 	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	token, _, err := p.IssueToken("admin")
+	token, _, err := p.IssueSession(context.Background(), "admin")
 	require.NoError(t, err)
 
 	_, err = r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: token})
@@ -195,7 +200,7 @@ func TestRefreshToken_RevokedToken_ReturnsError(t *testing.T) {
 	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	token, exp, err := p.IssueToken("admin")
+	token, exp, err := p.IssueSession(context.Background(), "admin")
 	require.NoError(t, err)
 	// Revoke by doing a first refresh
 	jti := extractJTI(t, p, token)
@@ -221,7 +226,7 @@ func TestRefreshToken_UnsupportedScope_ReturnsError(t *testing.T) {
 	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	token, _, err := p.IssueToken("admin")
+	token, _, err := p.IssueSession(context.Background(), "admin")
 	require.NoError(t, err)
 	scope := "catalog:read"
 	_, err = r.RefreshToken(context.Background(), model.RefreshTokenInput{
@@ -308,7 +313,7 @@ func TestLogout_NilRegistry_ReturnsError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin", TokenID: "some-jti"}
+	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-users", TokenID: "some-jti"}
 	ctx := ctxWithPrincipal(principal)
 	_, err = r.Logout(ctx)
 	require.Error(t, err)
@@ -331,7 +336,7 @@ func TestRefreshToken_NilRegistry_ReturnsError(t *testing.T) {
 // --- helpers ---
 
 // extractJTI issues a new token and parses its jti by authenticating.
-func extractJTI(t *testing.T, p *staticadmin.StaticAdminProvider, token string) string {
+func extractJTI(t *testing.T, p *staticusers.StaticUsersProvider, token string) string {
 	t.Helper()
 	req := authpkg.AuthRequest{Header: http.Header{"Authorization": []string{"Bearer " + token}}}
 	principal, _, err := p.Authenticate(context.Background(), req)

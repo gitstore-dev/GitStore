@@ -98,7 +98,14 @@ func queryProduct(t *testing.T, namespace, name string) *productQueryResult {
 			}
 		`, map[string]any{"ns": namespace, "name": name})
 		if len(resp.Errors) > 0 {
-			t.Fatalf("graphql errors querying product %q: %s", name, resp.Errors)
+			if !graphqlErrorHasCode(resp.Errors, "NOT_FOUND") {
+				t.Fatalf("graphql errors querying product %q: %s", name, resp.Errors)
+			}
+			if time.Now().Before(deadline) {
+				time.Sleep(interval)
+				continue
+			}
+			return nil
 		}
 		var d struct {
 			Product *productQueryResult `json:"product"`
@@ -132,6 +139,9 @@ func queryProductAbsent(t *testing.T, namespace, name string) bool {
 			}
 		`, map[string]any{"ns": namespace, "name": name})
 		if len(resp.Errors) > 0 {
+			if graphqlErrorHasCode(resp.Errors, "NOT_FOUND") {
+				return true
+			}
 			t.Fatalf("graphql errors: %s", resp.Errors)
 		}
 		var d struct {
@@ -148,6 +158,20 @@ func queryProductAbsent(t *testing.T, namespace, name string) bool {
 		}
 		time.Sleep(interval)
 	}
+}
+
+func graphqlErrorHasCode(errors []json.RawMessage, code string) bool {
+	for _, raw := range errors {
+		var graphqlError struct {
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
+		}
+		if json.Unmarshal(raw, &graphqlError) == nil && graphqlError.Extensions.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────

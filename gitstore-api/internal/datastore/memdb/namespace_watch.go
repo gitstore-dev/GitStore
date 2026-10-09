@@ -1,0 +1,290 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
+package memdb
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+)
+
+func (m *memdbDatastore) NamespaceWatchJournal() datastore.NamespaceWatchJournal { return m }
+
+// ResourceWatchJournal exposes the shared durable journal. The storage field
+// names are intentionally retained during the alpha migration; their contents
+// now carry a Kind/Namespace envelope and are no longer Namespace-only.
+func (m *memdbDatastore) ResourceWatchJournal() datastore.ResourceWatchJournal { return m }
+
+func (m *memdbDatastore) Bounds(context.Context) (datastore.NamespaceWatchBounds, error) {
+	m.namespaceWatchMu.RLock()
+	defer m.namespaceWatchMu.RUnlock()
+	oldest := uint64(0)
+	updatedAt := time.Time{}
+	if len(m.namespaceWatchEvents) > 0 {
+		oldest = m.namespaceWatchEvents[0].Sequence
+		updatedAt = m.namespaceWatchEvents[len(m.namespaceWatchEvents)-1].At
+	}
+	return datastore.NamespaceWatchBounds{
+		Epoch:      m.namespaceWatchEpoch,
+		Oldest:     oldest,
+		HighWater:  m.namespaceWatchSequence,
+		UpdatedAt:  updatedAt,
+		BookmarkAt: m.namespaceWatchBookmark,
+		// memdb has no asynchronous CDC reader, so its in-process journal
+		// activity is also its materializer progress signal.
+		ProgressAt: updatedAt,
+	}, nil
+}
+
+func (m *memdbDatastore) Append(_ context.Context, lease datastore.NamespaceWatchLease, event datastore.NamespaceWatchEvent, ttl time.Duration) (datastore.NamespaceWatchEvent, error) {
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	if !m.validLeaseLocked(lease, time.Now()) {
+		return datastore.NamespaceWatchEvent{}, datastore.ErrStaleWatchLease
+	}
+	if event.At.IsZero() {
+		event.At = time.Now().UTC()
+	}
+	m.pruneLocked(event.At.Add(-ttl))
+	m.namespaceWatchSequence++
+	event.Epoch = m.namespaceWatchEpoch
+	event.Sequence = m.namespaceWatchSequence
+	event.FencingToken = lease.FencingToken
+	event.Payload = append([]byte(nil), event.Payload...)
+	m.namespaceWatchEvents = append(m.namespaceWatchEvents, event)
+	if event.Type == datastore.NamespaceWatchBookmark {
+		m.namespaceWatchBookmark = event.At
+	}
+	return cloneWatchEvent(event), nil
+}
+
+func (m *memdbDatastore) ReadAfter(_ context.Context, cursor datastore.NamespaceWatchCursor, limit int) ([]datastore.NamespaceWatchEvent, error) {
+	m.namespaceWatchMu.RLock()
+	defer m.namespaceWatchMu.RUnlock()
+	if cursor.Epoch != "" && cursor.Epoch != m.namespaceWatchEpoch {
+		return nil, datastore.ErrWatchCursorEpoch
+	}
+	if len(m.namespaceWatchEvents) > 0 && cursor.Sequence+1 < m.namespaceWatchEvents[0].Sequence {
+		return nil, datastore.ErrWatchRetentionExpired
+	}
+	if len(m.namespaceWatchEvents) == 0 && cursor.Sequence < m.namespaceWatchSequence {
+		return nil, datastore.ErrWatchRetentionExpired
+	}
+	if limit <= 0 || limit > 256 {
+		limit = 256
+	}
+	out := make([]datastore.NamespaceWatchEvent, 0, limit)
+	for _, event := range m.namespaceWatchEvents {
+		if event.Sequence <= cursor.Sequence {
+			continue
+		}
+		out = append(out, cloneWatchEvent(event))
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (m *memdbDatastore) AcquireLease(_ context.Context, holder string, now time.Time, ttl time.Duration) (datastore.NamespaceWatchLease, bool, error) {
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	if m.namespaceWatchLease.Holder != "" && now.Before(m.namespaceWatchLease.ExpiresAt) {
+		return datastore.NamespaceWatchLease{}, false, nil
+	}
+	m.namespaceWatchLease = datastore.NamespaceWatchLease{
+		Holder:       holder,
+		FencingToken: m.namespaceWatchLease.FencingToken + 1,
+		ExpiresAt:    now.Add(ttl),
+	}
+	return m.namespaceWatchLease, true, nil
+}
+
+func (m *memdbDatastore) RenewLease(_ context.Context, lease datastore.NamespaceWatchLease, now time.Time, ttl time.Duration) (datastore.NamespaceWatchLease, bool, error) {
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	if !m.validLeaseLocked(lease, now) {
+		return datastore.NamespaceWatchLease{}, false, nil
+	}
+	m.namespaceWatchLease.ExpiresAt = now.Add(ttl)
+	return m.namespaceWatchLease, true, nil
+}
+
+func (m *memdbDatastore) ReleaseLease(_ context.Context, lease datastore.NamespaceWatchLease) error {
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	if lease.Holder == m.namespaceWatchLease.Holder && lease.FencingToken == m.namespaceWatchLease.FencingToken {
+		m.namespaceWatchLease.Holder = ""
+		m.namespaceWatchLease.ExpiresAt = time.Time{}
+	}
+	return nil
+}
+
+func (m *memdbDatastore) LoadProgress(_ context.Context, streamID string) (datastore.NamespaceCDCProgress, error) {
+	m.namespaceWatchMu.RLock()
+	defer m.namespaceWatchMu.RUnlock()
+	progress, ok := m.namespaceWatchProgress[streamID]
+	if !ok {
+		return datastore.NamespaceCDCProgress{}, datastore.ErrNotFound
+	}
+	progress.Position = append([]byte(nil), progress.Position...)
+	return progress, nil
+}
+
+func (m *memdbDatastore) SaveProgress(_ context.Context, lease datastore.NamespaceWatchLease, progress datastore.NamespaceCDCProgress) error {
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	if !m.validLeaseLocked(lease, time.Now()) {
+		return datastore.ErrStaleWatchLease
+	}
+	if progress.StreamID == "" {
+		return fmt.Errorf("%w: CDC stream id is required", datastore.ErrInvalidArgument)
+	}
+	progress.Position = append([]byte(nil), progress.Position...)
+	m.namespaceWatchProgress[progress.StreamID] = progress
+	return nil
+}
+
+func (m *memdbDatastore) validLeaseLocked(lease datastore.NamespaceWatchLease, now time.Time) bool {
+	return lease.Holder != "" &&
+		lease.Holder == m.namespaceWatchLease.Holder &&
+		lease.FencingToken == m.namespaceWatchLease.FencingToken &&
+		now.Before(m.namespaceWatchLease.ExpiresAt)
+}
+
+func (m *memdbDatastore) pruneLocked(cutoff time.Time) {
+	first := 0
+	for first < len(m.namespaceWatchEvents) && m.namespaceWatchEvents[first].At.Before(cutoff) {
+		first++
+	}
+	if first > 0 {
+		m.namespaceWatchEvents = append([]datastore.NamespaceWatchEvent(nil), m.namespaceWatchEvents[first:]...)
+	}
+}
+
+func cloneWatchEvent(event datastore.NamespaceWatchEvent) datastore.NamespaceWatchEvent {
+	event.Payload = append([]byte(nil), event.Payload...)
+	event.SelectorLabels = cloneStringMap(event.SelectorLabels)
+	event.PreviousSelectorLabels = cloneStringMap(event.PreviousSelectorLabels)
+	return event
+}
+
+// recordCommittedNamespace is the development-backend equivalent of Scylla
+// CDC: it runs only after the memdb transaction commits and cannot invent an
+// event for a rejected/conflicting/no-op operation.
+func (m *memdbDatastore) recordCommittedNamespace(eventType datastore.NamespaceWatchEventType, namespace *datastore.Namespace, previousLabels map[string]string) {
+	if namespace == nil {
+		return
+	}
+	now := time.Now().UTC()
+	var payload []byte
+	if eventType == datastore.NamespaceWatchAdded || eventType == datastore.NamespaceWatchModified {
+		payload, _ = json.Marshal(normalizedNamespaceCopy(namespace))
+	}
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	m.pruneLocked(now.Add(-m.namespaceWatchRetention))
+	m.namespaceWatchSequence++
+	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.NamespaceWatchEvent{
+		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
+		Type: eventType, Kind: "Namespace", Name: namespace.Name, Payload: payload,
+		SelectorLabels:         cloneStringMap(namespace.Labels),
+		PreviousSelectorLabels: cloneStringMap(previousLabels),
+		DeduplicationKey:       fmt.Sprintf("memdb:%s:%s:%d", eventType, namespace.UID, m.namespaceWatchSequence),
+		At:                     now,
+	})
+}
+
+// recordCommittedRepository is the development-backend equivalent of the
+// Repository authoritative-table CDC source.  It is deliberately invoked only
+// after the memdb transaction commits, so a rejected optimistic write cannot
+// leak a watch transition.
+func (m *memdbDatastore) recordCommittedRepository(eventType datastore.ResourceWatchEventType, repository *datastore.Repository, previousLabels map[string]string) {
+	if repository == nil {
+		return
+	}
+	now := time.Now().UTC()
+	var payload []byte
+	if eventType == datastore.ResourceWatchAdded || eventType == datastore.ResourceWatchModified {
+		payload, _ = json.Marshal(normalizedRepositoryCopy(repository))
+	}
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	m.pruneLocked(now.Add(-m.namespaceWatchRetention))
+	m.namespaceWatchSequence++
+	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.ResourceWatchEvent{
+		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
+		Type: eventType, Kind: "Repository", Namespace: repository.Namespace, Name: repository.Name, Payload: payload,
+		SelectorLabels:         cloneStringMap(repository.Labels),
+		PreviousSelectorLabels: cloneStringMap(previousLabels),
+		DeduplicationKey:       fmt.Sprintf("memdb:%s:%s:%d", eventType, repository.UID, m.namespaceWatchSequence),
+		At:                     now,
+	})
+}
+
+// recordCommittedProduct is the Product equivalent of an authoritative-table
+// CDC record. It is invoked only after the write transaction commits.
+func (m *memdbDatastore) recordCommittedProduct(eventType datastore.ResourceWatchEventType, product *datastore.Product, previousLabels map[string]string) {
+	if product == nil {
+		return
+	}
+
+	now := time.Now().UTC()
+	var payload []byte
+	if eventType == datastore.ResourceWatchAdded || eventType == datastore.ResourceWatchModified {
+		payload, _ = json.Marshal(product)
+	}
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	m.pruneLocked(now.Add(-m.namespaceWatchRetention))
+	m.namespaceWatchSequence++
+	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.ResourceWatchEvent{
+		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
+		Type: eventType, Kind: "Product", Namespace: product.Namespace, Name: product.Name, Payload: payload,
+		SelectorLabels: cloneStringMap(product.Labels), PreviousSelectorLabels: cloneStringMap(previousLabels),
+		DeduplicationKey: fmt.Sprintf("memdb:%s:%s:%d", eventType, product.UID, m.namespaceWatchSequence),
+		At:               now,
+	})
+}
+
+// File writes hold fileMutationMu through commit and publication so concurrent
+// writers cannot publish versions in the opposite order to their commits.
+func (m *memdbDatastore) recordCommittedFile(eventType datastore.ResourceWatchEventType, file *datastore.File, previousLabels map[string]string, payload json.RawMessage) {
+	now := time.Now().UTC()
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	m.pruneLocked(now.Add(-m.namespaceWatchRetention))
+	m.namespaceWatchSequence++
+	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.ResourceWatchEvent{
+		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
+		Type: eventType, Kind: "File", Namespace: file.Namespace, Name: file.Name, Payload: payload,
+		SelectorLabels: cloneStringMap(file.Labels), PreviousSelectorLabels: cloneStringMap(previousLabels),
+		DeduplicationKey: fmt.Sprintf("memdb:%s:%s:%d", eventType, file.UID, m.namespaceWatchSequence),
+		At:               now,
+	})
+}
+
+// CategoryTaxonomy writes hold categoryMutationMu through commit and
+// publication, mirroring File, so journal order matches commit order.
+func (m *memdbDatastore) recordCommittedCategoryTaxonomy(eventType datastore.ResourceWatchEventType, category *datastore.CategoryTaxonomy, previousLabels map[string]string) {
+	now := time.Now().UTC()
+	var payload []byte
+	if eventType == datastore.ResourceWatchAdded || eventType == datastore.ResourceWatchModified {
+		payload, _ = json.Marshal(category)
+	}
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	m.pruneLocked(now.Add(-m.namespaceWatchRetention))
+	m.namespaceWatchSequence++
+	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.ResourceWatchEvent{
+		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
+		Type: eventType, Kind: "CategoryTaxonomy", Namespace: category.Namespace, Name: category.Name, Payload: payload,
+		SelectorLabels: cloneStringMap(category.Labels), PreviousSelectorLabels: cloneStringMap(previousLabels),
+		DeduplicationKey: fmt.Sprintf("memdb:%s:%s:%d", eventType, category.UID, m.namespaceWatchSequence),
+		At:               now,
+	})
+}

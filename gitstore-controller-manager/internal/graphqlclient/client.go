@@ -14,22 +14,29 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gorilla/websocket"
+	"golang.org/x/time/rate"
 )
 
 // Client issues GraphQL query/mutation requests over HTTP and opens
 // graphql-transport-ws subscriptions against a single gitstore-api base URL.
 type Client struct {
-	baseURL string
-	token   string
-	http    *http.Client
-	dialer  *websocket.Dialer
+	baseURL        string
+	credentials    CredentialSource
+	http           *http.Client
+	dialer         *websocket.Dialer
+	limiter        *rate.Limiter
+	throttleMu     sync.Mutex
+	throttledUntil time.Time
 
 	subIDs atomic.Uint64
 }
@@ -37,12 +44,102 @@ type Client struct {
 // New returns a Client targeting baseURL (e.g. "http://localhost:4000/graphql"
 // or "ws://localhost:4000/graphql" for a dedicated subscription dialer —
 // Subscribe rewrites an http(s) baseURL to ws(s) automatically).
-func New(baseURL, token string) *Client {
+// credentials must not be nil. NewStaticToken is available for isolated tests.
+func New(baseURL string, credentials CredentialSource) *Client {
+	client, err := NewWithRateLimit(baseURL, credentials, 40, 10)
+	if err != nil {
+		panic(err)
+	}
+	return client
+}
+
+// NewWithRateLimit shares one request budget across every kind, HTTP operation
+// and WebSocket handshake using this client. Credential renewal is independent.
+func NewWithRateLimit(baseURL string, credentials CredentialSource, requestsPerSecond, burst int) (*Client, error) {
+	if credentials == nil {
+		return nil, fmt.Errorf("graphqlclient: credentials must not be nil")
+	}
+	if requestsPerSecond <= 0 || burst <= 0 {
+		return nil, fmt.Errorf("graphqlclient: request rate and burst must be positive")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 200
+	transport.MaxIdleConnsPerHost = 100
 	return &Client{
-		baseURL: baseURL,
-		token:   token,
-		http:    http.DefaultClient,
-		dialer:  websocket.DefaultDialer,
+		baseURL:     baseURL,
+		credentials: credentials,
+		http:        &http.Client{Transport: transport},
+		dialer:      websocket.DefaultDialer,
+		limiter:     rate.NewLimiter(rate.Limit(requestsPerSecond), burst),
+	}, nil
+}
+
+func (c *Client) waitForCooldown(ctx context.Context) error {
+	for {
+		c.throttleMu.Lock()
+		delay := time.Until(c.throttledUntil)
+		c.throttleMu.Unlock()
+		if delay <= 0 {
+			return ctx.Err()
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (c *Client) waitForRequest(ctx context.Context) error {
+	for {
+		if err := c.waitForCooldown(ctx); err != nil {
+			return err
+		}
+		if err := c.limiter.Wait(ctx); err != nil {
+			return err
+		}
+		c.throttleMu.Lock()
+		blocked := time.Now().Before(c.throttledUntil)
+		c.throttleMu.Unlock()
+		if !blocked {
+			return nil
+		}
+	}
+}
+
+func (c *Client) recordThrottle() {
+	c.throttleMu.Lock()
+	defer c.throttleMu.Unlock()
+	c.throttledUntil = time.Now().Add(time.Second)
+}
+
+func (c *Client) requestToken(ctx context.Context) (string, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if err := c.waitForCooldown(ctx); err != nil {
+			return "", fmt.Errorf("graphqlclient: wait for shared dependency: %w", err)
+		}
+		token, err := c.credentials.Current(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("graphqlclient: acquire credentials: %w", err)
+			}
+			c.recordThrottle()
+			return "", fmt.Errorf("graphqlclient: acquire credentials: %w: %w", types.ErrCredentialsUnavailable, err)
+		}
+		// Pace after potentially slow renewal, so waiting callers cannot all
+		// spend old permits in a burst when the exchange finishes.
+		if err := c.waitForRequest(ctx); err != nil {
+			return "", fmt.Errorf("graphqlclient: wait for request budget: %w", err)
+		}
+		if source, ok := c.credentials.(interface{ tokenValid(string) bool }); ok && !source.tokenValid(token) {
+			continue
+		}
+		return token, nil
 	}
 }
 
@@ -58,6 +155,18 @@ func (e *Error) Error() string {
 		return "<nil>"
 	}
 	return e.Message
+}
+
+// IsConflictCode reports whether a GraphQL error's extensions["code"] value
+// signals an optimistic-concurrency conflict. RESOURCE_VERSION_CONFLICT is
+// the per-kind code every existing status/completion mutation returns today;
+// CONFLICT is the forward-compatible kind-neutral code an upcoming API
+// change folds it into. Every controller GraphQL client should map either
+// code to types.ErrConflict through this shared check rather than matching
+// RESOURCE_VERSION_CONFLICT alone.
+func IsConflictCode(code any) bool {
+	c, _ := code.(string)
+	return c == "RESOURCE_VERSION_CONFLICT" || c == "CONFLICT"
 }
 
 type gqlRequest struct {
@@ -86,13 +195,18 @@ func (c *Client) do(ctx context.Context, doc string, vars map[string]any, out an
 		return fmt.Errorf("graphqlclient: marshal request: %w", err)
 	}
 
+	token, err := c.requestToken(ctx)
+	if err != nil {
+		return err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("graphqlclient: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.http.Do(req)
@@ -102,7 +216,18 @@ func (c *Client) do(ctx context.Context, doc string, vars map[string]any, out an
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("graphqlclient: unexpected HTTP status %d", resp.StatusCode)
+		// Read (rather than discard) a bounded error body: it still fully
+		// drains the response so net/http can reuse the connection (rate-limit
+		// bursts otherwise leave thousands of short-lived sockets in TIME_WAIT
+		// and can exhaust a controller replica's ephemeral port range), but
+		// keeps the body available in the error instead of silently losing
+		// diagnostic detail like a GraphQL schema-validation message.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if resp.StatusCode == http.StatusTooManyRequests {
+			c.recordThrottle()
+			return fmt.Errorf("%w: HTTP status %d", types.ErrRateLimited, resp.StatusCode)
+		}
+		return fmt.Errorf("graphqlclient: unexpected HTTP status %d: %s", resp.StatusCode, body)
 	}
 
 	var gr gqlResponse
@@ -180,19 +305,34 @@ type subscribePayload struct {
 // streams "next" payloads until Stop is called or the server closes the
 // stream (via "complete" or "error").
 func (c *Client) Subscribe(ctx context.Context, subscriptionDoc string, vars map[string]any) (Subscription, error) {
+	token, err := c.requestToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	wsURL := toWebsocketURL(c.baseURL)
 
 	header := http.Header{}
 	header.Set("Sec-WebSocket-Protocol", "graphql-transport-ws")
 
-	conn, _, err := c.dialer.DialContext(ctx, wsURL, header)
+	conn, response, err := c.dialer.DialContext(ctx, wsURL, header)
 	if err != nil {
+		if response != nil {
+			if response.Body != nil {
+				_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+				_ = response.Body.Close()
+			}
+			if response.StatusCode == http.StatusTooManyRequests {
+				c.recordThrottle()
+				return nil, fmt.Errorf("graphqlclient: dial: %w: HTTP status 429", types.ErrRateLimited)
+			}
+		}
 		return nil, fmt.Errorf("graphqlclient: dial: %w", err)
 	}
 
 	initPayload := map[string]any{}
-	if c.token != "" {
-		initPayload["Authorization"] = "Bearer " + c.token
+	if token != "" {
+		initPayload["Authorization"] = "Bearer " + token
 	}
 	initPayloadJSON, err := json.Marshal(initPayload)
 	if err != nil {

@@ -5,11 +5,35 @@
 package health
 
 import (
+	"crypto/rand"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+var processInstanceID = rand.Text()
+
 var (
+	RecoveryInProgress = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "gitstore_controller_recovery_in_progress", Help: "1 while dispatch is gated on list/watch recovery.",
+	}, []string{"kind"})
+	RecoveryPages = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "gitstore_controller_recovery_pages", Help: "High-water number of enumeration pages in the current recovery.",
+	}, []string{"kind"})
+	RecoveryRows = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "gitstore_controller_recovery_rows", Help: "Rows enumerated at the recovery page high-water mark.",
+	}, []string{"kind"})
+	RecoveryLastProgress = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "gitstore_controller_recovery_last_progress_timestamp_seconds", Help: "Last actual list progress in this recovery.",
+	}, []string{"kind"})
+	ConflictRequeues = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "gitstore_controller_conflict_requeues_total", Help: "Requeues caused by optimistic-concurrency conflicts.",
+	}, []string{"kind"})
+	processInstanceInfo = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "gitstore_controller_process_instance_info",
+		Help: "Collision-safe identity of this controller-manager process.",
+	}, []string{"instance_id"})
+
 	QueueDepth = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "gitstore_controller_queue_depth",
 		Help: "Number of items waiting in the work queue per kind.",
@@ -71,3 +95,7 @@ var (
 		Help:      "Transient CategoryTaxonomy deletion reconciliation retries.",
 	})
 )
+
+func init() {
+	processInstanceInfo.WithLabelValues(processInstanceID).Set(1)
+}

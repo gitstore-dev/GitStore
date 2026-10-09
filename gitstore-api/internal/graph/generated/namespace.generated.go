@@ -75,59 +75,27 @@ func (ec *executionContext) fieldContext_AdmissionControlDefaults_branchPattern(
 	return graphql.NewScalarFieldContext("AdmissionControlDefaults", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _CompleteNamespaceDeletionPayload_deletedIdentifier(ctx context.Context, field graphql.CollectedField, obj *model.CompleteNamespaceDeletionPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _CompleteNamespaceDeletionPayload_id(ctx context.Context, field graphql.CollectedField, obj *model.CompleteNamespaceDeletionPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CompleteNamespaceDeletionPayload_deletedIdentifier(ctx, field)
+			return ec.fieldContext_CompleteNamespaceDeletionPayload_id(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.DeletedIdentifier, nil
+			return obj.ID, nil
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
+			return ec.marshalOID2ᚖstring(ctx, selections, v)
 		},
 		true,
 		false,
 	)
 }
-func (ec *executionContext) fieldContext_CompleteNamespaceDeletionPayload_deletedIdentifier(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CompleteNamespaceDeletionPayload", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _CompleteNamespaceDeletionPayload_conflict(ctx context.Context, field graphql.CollectedField, obj *model.CompleteNamespaceDeletionPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CompleteNamespaceDeletionPayload_conflict(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Conflict, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.StatusConflict) graphql.Marshaler {
-			return ec.marshalOStatusConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐStatusConflict(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_CompleteNamespaceDeletionPayload_conflict(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "CompleteNamespaceDeletionPayload",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_StatusConflict(ctx, field)
-		},
-	}
-	return fc, nil
+func (ec *executionContext) fieldContext_CompleteNamespaceDeletionPayload_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CompleteNamespaceDeletionPayload", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
 func (ec *executionContext) _CreateNamespacePayload_namespace(ctx context.Context, field graphql.CollectedField, obj *model.CreateNamespacePayload) (ret graphql.Marshaler) {
@@ -162,27 +130,59 @@ func (ec *executionContext) fieldContext_CreateNamespacePayload_namespace(_ cont
 	return fc, nil
 }
 
-func (ec *executionContext) _DeleteNamespacePayload_deletedIdentifier(ctx context.Context, field graphql.CollectedField, obj *model.DeleteNamespacePayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _DeleteNamespacePayload_namespace(ctx context.Context, field graphql.CollectedField, obj *model.DeleteNamespacePayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_DeleteNamespacePayload_deletedIdentifier(ctx, field)
+			return ec.fieldContext_DeleteNamespacePayload_namespace(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.DeletedIdentifier, nil
+			return obj.Namespace, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Namespace) graphql.Marshaler {
+			return ec.marshalONamespace2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespace(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_DeleteNamespacePayload_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeleteNamespacePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Namespace(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeleteNamespacePayload_outcome(ctx context.Context, field graphql.CollectedField, obj *model.DeleteNamespacePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DeleteNamespacePayload_outcome(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Outcome, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.ResourceDeletionOutcome) graphql.Marshaler {
+			return ec.marshalNResourceDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceDeletionOutcome(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_DeleteNamespacePayload_deletedIdentifier(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("DeleteNamespacePayload", field, false, false, errors.New("field of type String does not have child fields"))
+func (ec *executionContext) fieldContext_DeleteNamespacePayload_outcome(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("DeleteNamespacePayload", field, false, false, errors.New("field of type ResourceDeletionOutcome does not have child fields"))
 }
 
 func (ec *executionContext) _HookToggle_enabled(ctx context.Context, field graphql.CollectedField, obj *model.HookToggle) (ret graphql.Marshaler) {
@@ -373,167 +373,6 @@ func (ec *executionContext) fieldContext_Namespace_status(_ context.Context, fie
 	return fc, nil
 }
 
-func (ec *executionContext) _Namespace_identifier(ctx context.Context, field graphql.CollectedField, obj *model.Namespace) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Namespace_identifier(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Identifier, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Namespace_identifier(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Namespace", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Namespace_displayName(ctx context.Context, field graphql.CollectedField, obj *model.Namespace) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Namespace_displayName(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.DisplayName, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Namespace_displayName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Namespace", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Namespace_tier(ctx context.Context, field graphql.CollectedField, obj *model.Namespace) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Namespace_tier(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Tier, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v model.NamespaceTier) graphql.Marshaler {
-			return ec.marshalNNamespaceTier2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceTier(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Namespace_tier(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Namespace", field, false, false, errors.New("field of type NamespaceTier does not have child fields"))
-}
-
-func (ec *executionContext) _Namespace_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.Namespace) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Namespace_createdAt(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.CreatedAt, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
-			return ec.marshalNDateTime2timeᚐTime(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Namespace_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Namespace", field, false, false, errors.New("field of type DateTime does not have child fields"))
-}
-
-func (ec *executionContext) _Namespace_createdBy(ctx context.Context, field graphql.CollectedField, obj *model.Namespace) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Namespace_createdBy(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.CreatedBy, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Namespace_createdBy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Namespace", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Namespace_updatedAt(ctx context.Context, field graphql.CollectedField, obj *model.Namespace) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Namespace_updatedAt(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.UpdatedAt, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
-			return ec.marshalNDateTime2timeᚐTime(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Namespace_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Namespace", field, false, false, errors.New("field of type DateTime does not have child fields"))
-}
-
-func (ec *executionContext) _Namespace_updatedBy(ctx context.Context, field graphql.CollectedField, obj *model.Namespace) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Namespace_updatedBy(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.UpdatedBy, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Namespace_updatedBy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Namespace", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
 func (ec *executionContext) _Namespace_body(ctx context.Context, field graphql.CollectedField, obj *model.Namespace) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -619,29 +458,6 @@ func (ec *executionContext) fieldContext_NamespaceConnection_pageInfo(_ context.
 		},
 	}
 	return fc, nil
-}
-
-func (ec *executionContext) _NamespaceConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceConnection) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_NamespaceConnection_totalCount(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.TotalCount, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
-			return ec.marshalNInt2int32(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_NamespaceConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("NamespaceConnection", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _NamespaceEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceEdge) (ret graphql.Marshaler) {
@@ -910,6 +726,38 @@ func (ec *executionContext) fieldContext_NamespaceMetadata_ownerReferences(_ con
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_OwnerReference(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _NamespaceMetadata_owner(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_NamespaceMetadata_owner(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Owner, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ResourceOwner) graphql.Marshaler {
+			return ec.marshalNResourceOwner2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceOwner(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_NamespaceMetadata_owner(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NamespaceMetadata",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ResourceOwner(ctx, field)
 		},
 	}
 	return fc, nil
@@ -1314,6 +1162,139 @@ func (ec *executionContext) fieldContext_NamespaceStatus_conditions(_ context.Co
 	return fc, nil
 }
 
+func (ec *executionContext) _NamespaceWatchEvent_type(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_NamespaceWatchEvent_type(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Type, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.WatchEventType) graphql.Marshaler {
+			return ec.marshalNWatchEventType2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐWatchEventType(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_NamespaceWatchEvent_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("NamespaceWatchEvent", field, false, false, errors.New("field of type WatchEventType does not have child fields"))
+}
+
+func (ec *executionContext) _NamespaceWatchEvent_name(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_NamespaceWatchEvent_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_NamespaceWatchEvent_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("NamespaceWatchEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _NamespaceWatchEvent_resourceVersion(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_NamespaceWatchEvent_resourceVersion(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ResourceVersion, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_NamespaceWatchEvent_resourceVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("NamespaceWatchEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _NamespaceWatchEvent_namespace(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_NamespaceWatchEvent_namespace(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Namespace, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Namespace) graphql.Marshaler {
+			return ec.marshalONamespace2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespace(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_NamespaceWatchEvent_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NamespaceWatchEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Namespace(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ProvisionNamespaceSystemRepositoryPayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.ProvisionNamespaceSystemRepositoryPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProvisionNamespaceSystemRepositoryPayload_repository(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Repository, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Repository) graphql.Marshaler {
+			return ec.marshalNRepository2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepository(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProvisionNamespaceSystemRepositoryPayload_repository(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ProvisionNamespaceSystemRepositoryPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Repository(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ReceivePackHookDefaults_preReceive(ctx context.Context, field graphql.CollectedField, obj *model.ReceivePackHookDefaults) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1552,6 +1533,38 @@ func (ec *executionContext) fieldContext_SchemaValidationDefaults_timeoutSeconds
 	return graphql.NewScalarFieldContext("SchemaValidationDefaults", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
+func (ec *executionContext) _TransferNamespaceOwnerPayload_namespace(ctx context.Context, field graphql.CollectedField, obj *model.TransferNamespaceOwnerPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TransferNamespaceOwnerPayload_namespace(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Namespace, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Namespace) graphql.Marshaler {
+			return ec.marshalNNamespace2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespace(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TransferNamespaceOwnerPayload_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TransferNamespaceOwnerPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Namespace(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _UpdateNamespacePayload_namespace(ctx context.Context, field graphql.CollectedField, obj *model.UpdateNamespacePayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1584,6 +1597,38 @@ func (ec *executionContext) fieldContext_UpdateNamespacePayload_namespace(_ cont
 	return fc, nil
 }
 
+func (ec *executionContext) _UpdateNamespaceStatusPayload_namespace(ctx context.Context, field graphql.CollectedField, obj *model.UpdateNamespaceStatusPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UpdateNamespaceStatusPayload_namespace(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Namespace, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Namespace) graphql.Marshaler {
+			return ec.marshalNNamespace2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespace(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UpdateNamespaceStatusPayload_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UpdateNamespaceStatusPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Namespace(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 // endregion **************************** field.gotpl *****************************
 
 // region    **************************** input.gotpl *****************************
@@ -1599,20 +1644,20 @@ func (ec *executionContext) unmarshalInputCompleteNamespaceDeletionInput(ctx con
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"identifier", "resourceVersion"}
+	fieldsInOrder := [...]string{"name", "resourceVersion"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "identifier":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("identifier"))
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
 			data, err := ec.unmarshalNString2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.Identifier = data
+			it.Name = data
 		case "resourceVersion":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resourceVersion"))
 			data, err := ec.unmarshalNString2string(ctx, v)
@@ -1634,6 +1679,13 @@ func (ec *executionContext) unmarshalInputCreateNamespaceInput(ctx context.Conte
 	asMap := map[string]any{}
 	for k, v := range obj.(map[string]any) {
 		asMap[k] = v
+	}
+
+	if _, present := asMap["apiVersion"]; !present {
+		asMap["apiVersion"] = "gitstore.dev/v1beta1"
+	}
+	if _, present := asMap["kind"]; !present {
+		asMap["kind"] = "Namespace"
 	}
 
 	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "spec"}
@@ -1687,20 +1739,20 @@ func (ec *executionContext) unmarshalInputDeleteNamespaceInput(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"identifier"}
+	fieldsInOrder := [...]string{"id"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "identifier":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("identifier"))
-			data, err := ec.unmarshalNString2string(ctx, v)
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalNID2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.Identifier = data
+			it.ID = data
 		}
 	}
 	return it, nil
@@ -1717,7 +1769,7 @@ func (ec *executionContext) unmarshalInputNamespaceBy(ctx context.Context, obj a
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"id", "identifier", "name"}
+	fieldsInOrder := [...]string{"id", "name"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -1731,13 +1783,6 @@ func (ec *executionContext) unmarshalInputNamespaceBy(ctx context.Context, obj a
 				return it, err
 			}
 			it.ID = data
-		case "identifier":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("identifier"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Identifier = data
 		case "name":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
 			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
@@ -1919,6 +1964,73 @@ func (ec *executionContext) unmarshalInputNamespaceSpecInput(ctx context.Context
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputProvisionNamespaceSystemRepositoryInput(ctx context.Context, obj any) (model.ProvisionNamespaceSystemRepositoryInput, error) {
+	var it model.ProvisionNamespaceSystemRepositoryInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"namespace"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputTransferNamespaceOwnerInput(ctx context.Context, obj any) (model.TransferNamespaceOwnerInput, error) {
+	var it model.TransferNamespaceOwnerInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"namespaceId", "targetOwnerRef"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "namespaceId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespaceId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.NamespaceID = data
+		case "targetOwnerRef":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("targetOwnerRef"))
+			data, err := ec.unmarshalNResourceOwnerInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceOwnerInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TargetOwnerRef = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputUpdateNamespaceInput(ctx context.Context, obj any) (model.UpdateNamespaceInput, error) {
 	var it model.UpdateNamespaceInput
 	if obj == nil {
@@ -1928,6 +2040,13 @@ func (ec *executionContext) unmarshalInputUpdateNamespaceInput(ctx context.Conte
 	asMap := map[string]any{}
 	for k, v := range obj.(map[string]any) {
 		asMap[k] = v
+	}
+
+	if _, present := asMap["apiVersion"]; !present {
+		asMap["apiVersion"] = "gitstore.dev/v1beta1"
+	}
+	if _, present := asMap["kind"]; !present {
+		asMap["kind"] = "Namespace"
 	}
 
 	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "spec"}
@@ -1965,6 +2084,64 @@ func (ec *executionContext) unmarshalInputUpdateNamespaceInput(ctx context.Conte
 				return it, err
 			}
 			it.Spec = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUpdateNamespaceStatusInput(ctx context.Context, obj any) (model.UpdateNamespaceStatusInput, error) {
+	var it model.UpdateNamespaceStatusInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"name", "resourceVersion", "observedGeneration", "lastAppliedRevision", "conditions"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "resourceVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resourceVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ResourceVersion = data
+		case "observedGeneration":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("observedGeneration"))
+			data, err := ec.unmarshalOInt2ᚖint32(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ObservedGeneration = data
+		case "lastAppliedRevision":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("lastAppliedRevision"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.LastAppliedRevision = data
+		case "conditions":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("conditions"))
+			data, err := ec.unmarshalOConditionInput2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐConditionInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Conditions = data
 		}
 	}
 	return it, nil
@@ -2027,10 +2204,8 @@ func (ec *executionContext) _CompleteNamespaceDeletionPayload(ctx context.Contex
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("CompleteNamespaceDeletionPayload")
-		case "deletedIdentifier":
-			out.Values[i] = ec._CompleteNamespaceDeletionPayload_deletedIdentifier(ctx, field, obj)
-		case "conflict":
-			out.Values[i] = ec._CompleteNamespaceDeletionPayload_conflict(ctx, field, obj)
+		case "id":
+			out.Values[i] = ec._CompleteNamespaceDeletionPayload_id(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2104,8 +2279,10 @@ func (ec *executionContext) _DeleteNamespacePayload(ctx context.Context, sel ast
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("DeleteNamespacePayload")
-		case "deletedIdentifier":
-			out.Values[i] = ec._DeleteNamespacePayload_deletedIdentifier(ctx, field, obj)
+		case "namespace":
+			out.Values[i] = ec._DeleteNamespacePayload_namespace(ctx, field, obj)
+		case "outcome":
+			out.Values[i] = ec._DeleteNamespacePayload_outcome(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -2212,38 +2389,6 @@ func (ec *executionContext) _Namespace(ctx context.Context, sel ast.SelectionSet
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "identifier":
-			out.Values[i] = ec._Namespace_identifier(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "displayName":
-			out.Values[i] = ec._Namespace_displayName(ctx, field, obj)
-		case "tier":
-			out.Values[i] = ec._Namespace_tier(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "createdAt":
-			out.Values[i] = ec._Namespace_createdAt(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "createdBy":
-			out.Values[i] = ec._Namespace_createdBy(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "updatedAt":
-			out.Values[i] = ec._Namespace_updatedAt(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "updatedBy":
-			out.Values[i] = ec._Namespace_updatedBy(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "body":
 			out.Values[i] = ec._Namespace_body(ctx, field, obj)
 		default:
@@ -2287,11 +2432,6 @@ func (ec *executionContext) _NamespaceConnection(ctx context.Context, sel ast.Se
 			}
 		case "pageInfo":
 			out.Values[i] = ec._NamespaceConnection_pageInfo(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "totalCount":
-			out.Values[i] = ec._NamespaceConnection_totalCount(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -2406,6 +2546,11 @@ func (ec *executionContext) _NamespaceMetadata(ctx context.Context, sel ast.Sele
 			out.Values[i] = ec._NamespaceMetadata_revision(ctx, field, obj)
 		case "ownerReferences":
 			out.Values[i] = ec._NamespaceMetadata_ownerReferences(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "owner":
+			out.Values[i] = ec._NamespaceMetadata_owner(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -2610,6 +2755,96 @@ func (ec *executionContext) _NamespaceStatus(ctx context.Context, sel ast.Select
 	return out
 }
 
+var namespaceWatchEventImplementors = []string{"NamespaceWatchEvent"}
+
+func (ec *executionContext) _NamespaceWatchEvent(ctx context.Context, sel ast.SelectionSet, obj *model.NamespaceWatchEvent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, namespaceWatchEventImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("NamespaceWatchEvent")
+		case "type":
+			out.Values[i] = ec._NamespaceWatchEvent_type(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._NamespaceWatchEvent_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "resourceVersion":
+			out.Values[i] = ec._NamespaceWatchEvent_resourceVersion(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "namespace":
+			out.Values[i] = ec._NamespaceWatchEvent_namespace(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var provisionNamespaceSystemRepositoryPayloadImplementors = []string{"ProvisionNamespaceSystemRepositoryPayload"}
+
+func (ec *executionContext) _ProvisionNamespaceSystemRepositoryPayload(ctx context.Context, sel ast.SelectionSet, obj *model.ProvisionNamespaceSystemRepositoryPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, provisionNamespaceSystemRepositoryPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ProvisionNamespaceSystemRepositoryPayload")
+		case "repository":
+			out.Values[i] = ec._ProvisionNamespaceSystemRepositoryPayload_repository(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var receivePackHookDefaultsImplementors = []string{"ReceivePackHookDefaults"}
 
 func (ec *executionContext) _ReceivePackHookDefaults(ctx context.Context, sel ast.SelectionSet, obj *model.ReceivePackHookDefaults) graphql.Marshaler {
@@ -2694,6 +2929,45 @@ func (ec *executionContext) _SchemaValidationDefaults(ctx context.Context, sel a
 	return out
 }
 
+var transferNamespaceOwnerPayloadImplementors = []string{"TransferNamespaceOwnerPayload"}
+
+func (ec *executionContext) _TransferNamespaceOwnerPayload(ctx context.Context, sel ast.SelectionSet, obj *model.TransferNamespaceOwnerPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, transferNamespaceOwnerPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TransferNamespaceOwnerPayload")
+		case "namespace":
+			out.Values[i] = ec._TransferNamespaceOwnerPayload_namespace(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var updateNamespacePayloadImplementors = []string{"UpdateNamespacePayload"}
 
 func (ec *executionContext) _UpdateNamespacePayload(ctx context.Context, sel ast.SelectionSet, obj *model.UpdateNamespacePayload) graphql.Marshaler {
@@ -2707,6 +2981,45 @@ func (ec *executionContext) _UpdateNamespacePayload(ctx context.Context, sel ast
 			out.Values[i] = graphql.MarshalString("UpdateNamespacePayload")
 		case "namespace":
 			out.Values[i] = ec._UpdateNamespacePayload_namespace(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var updateNamespaceStatusPayloadImplementors = []string{"UpdateNamespaceStatusPayload"}
+
+func (ec *executionContext) _UpdateNamespaceStatusPayload(ctx context.Context, sel ast.SelectionSet, obj *model.UpdateNamespaceStatusPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, updateNamespaceStatusPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UpdateNamespaceStatusPayload")
+		case "namespace":
+			out.Values[i] = ec._UpdateNamespaceStatusPayload_namespace(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2896,6 +3209,39 @@ func (ec *executionContext) marshalNNamespaceTier2githubᚗcomᚋgitstoreᚑdev�
 	return v
 }
 
+func (ec *executionContext) marshalNNamespaceWatchEvent2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceWatchEvent(ctx context.Context, sel ast.SelectionSet, v model.NamespaceWatchEvent) graphql.Marshaler {
+	return ec._NamespaceWatchEvent(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNNamespaceWatchEvent2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceWatchEvent(ctx context.Context, sel ast.SelectionSet, v *model.NamespaceWatchEvent) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._NamespaceWatchEvent(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNProvisionNamespaceSystemRepositoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProvisionNamespaceSystemRepositoryInput(ctx context.Context, v any) (model.ProvisionNamespaceSystemRepositoryInput, error) {
+	res, err := ec.unmarshalInputProvisionNamespaceSystemRepositoryInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNProvisionNamespaceSystemRepositoryPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProvisionNamespaceSystemRepositoryPayload(ctx context.Context, sel ast.SelectionSet, v model.ProvisionNamespaceSystemRepositoryPayload) graphql.Marshaler {
+	return ec._ProvisionNamespaceSystemRepositoryPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNProvisionNamespaceSystemRepositoryPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProvisionNamespaceSystemRepositoryPayload(ctx context.Context, sel ast.SelectionSet, v *model.ProvisionNamespaceSystemRepositoryPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ProvisionNamespaceSystemRepositoryPayload(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNRepositoryVisibility2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositoryVisibility(ctx context.Context, v any) (model.RepositoryVisibility, error) {
 	var res model.RepositoryVisibility
 	err := res.UnmarshalGQL(v)
@@ -2904,6 +3250,35 @@ func (ec *executionContext) unmarshalNRepositoryVisibility2githubᚗcomᚋgitsto
 
 func (ec *executionContext) marshalNRepositoryVisibility2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositoryVisibility(ctx context.Context, sel ast.SelectionSet, v model.RepositoryVisibility) graphql.Marshaler {
 	return v
+}
+
+func (ec *executionContext) unmarshalNResourceDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceDeletionOutcome(ctx context.Context, v any) (model.ResourceDeletionOutcome, error) {
+	var res model.ResourceDeletionOutcome
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNResourceDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceDeletionOutcome(ctx context.Context, sel ast.SelectionSet, v model.ResourceDeletionOutcome) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) unmarshalNTransferNamespaceOwnerInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTransferNamespaceOwnerInput(ctx context.Context, v any) (model.TransferNamespaceOwnerInput, error) {
+	res, err := ec.unmarshalInputTransferNamespaceOwnerInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNTransferNamespaceOwnerPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTransferNamespaceOwnerPayload(ctx context.Context, sel ast.SelectionSet, v model.TransferNamespaceOwnerPayload) graphql.Marshaler {
+	return ec._TransferNamespaceOwnerPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNTransferNamespaceOwnerPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐTransferNamespaceOwnerPayload(ctx context.Context, sel ast.SelectionSet, v *model.TransferNamespaceOwnerPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._TransferNamespaceOwnerPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNUpdateNamespaceInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateNamespaceInput(ctx context.Context, v any) (model.UpdateNamespaceInput, error) {
@@ -2923,6 +3298,25 @@ func (ec *executionContext) marshalNUpdateNamespacePayload2ᚖgithubᚗcomᚋgit
 		return graphql.Null
 	}
 	return ec._UpdateNamespacePayload(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNUpdateNamespaceStatusInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateNamespaceStatusInput(ctx context.Context, v any) (model.UpdateNamespaceStatusInput, error) {
+	res, err := ec.unmarshalInputUpdateNamespaceStatusInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUpdateNamespaceStatusPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateNamespaceStatusPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateNamespaceStatusPayload) graphql.Marshaler {
+	return ec._UpdateNamespaceStatusPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNUpdateNamespaceStatusPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateNamespaceStatusPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateNamespaceStatusPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UpdateNamespaceStatusPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOAdmissionControlDefaults2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐAdmissionControlDefaults(ctx context.Context, sel ast.SelectionSet, v *model.AdmissionControlDefaults) graphql.Marshaler {

@@ -5,6 +5,9 @@ package cataloggrpc_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +17,62 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFileTypedCredentialsValidationAndAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ref  string
+		ok   bool
+	}{
+		{"typed", `{"kind":"CredentialsRef","type":"aws-access-key/v1","secretRef":{"kind":"SecretRef","name":"cloud","namespace":"gitstore"}}`, true},
+		{"unsupported-type-is-structural", `{"kind":"CredentialsRef","type":"future/v9","secretRef":{"kind":"SecretRef","name":"cloud"}}`, true},
+		{"cross-namespace", `{"kind":"CredentialsRef","type":"aws-access-key/v1","secretRef":{"kind":"SecretRef","name":"cloud","namespace":"other"}}`, false},
+		{"material-field", `{"kind":"CredentialsRef","type":"aws-access-key/v1","secretRef":{"kind":"SecretRef","name":"cloud","value":"MUST-NOT-LEAK"}}`, false},
+		{"missing-type", `{"kind":"CredentialsRef","secretRef":{"kind":"SecretRef","name":"cloud"}}`, false},
+		{"bare-reference", `{"kind":"SecretRef","name":"cloud"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestDatastore(t)
+			doc := []byte(fmt.Sprintf("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\n  namespace: gitstore\n  annotations:\n    rbac.authorization.gitstore.dev/owner: retained-owner\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/hero\n    credentialsRef: %s\n---\nAlt text", tc.ref))
+			git := &mockGitReader{
+				listFilesFunc: func(context.Context, string, string, string) ([]string, error) {
+					return []string{"files/hero.md"}, nil
+				},
+				readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
+					return doc, nil
+				},
+			}
+			srv := newCatalogServer(t, store, git)
+			result, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+				RepositoryId: testRepoID, Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "files/hero.md", Content: doc}}}},
+			})
+			require.NoError(t, err)
+			require.Equal(t, tc.ok, result.Accepted)
+			for _, failure := range result.Errors {
+				require.NotContains(t, failure.Message, "MUST-NOT-LEAK")
+			}
+			_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+				ActorSubject: "test-admission-actor",
+				RepositoryId: testRepoID, NewCommitSha: strings.Repeat("a", 40), RefName: "refs/heads/main",
+			})
+			require.NoError(t, err)
+			file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
+			if !tc.ok {
+				require.ErrorIs(t, err, datastore.ErrNotFound)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "retained-owner", file.Annotations["rbac.authorization.gitstore.dev/owner"])
+			var stored struct {
+				Source struct {
+					CredentialsRef json.RawMessage
+				}
+			}
+			require.NoError(t, json.Unmarshal(file.Spec, &stored))
+			require.JSONEq(t, tc.ref, string(stored.Source.CredentialsRef))
+		})
+	}
+}
 
 // secondNamespaceRepoID is a distinct repository/namespace pairing used
 // alongside newTestDatastore's "gitstore" namespace/testRepoID to exercise
@@ -64,7 +123,8 @@ func TestAdmitResources_FileIdentityIsolatedAcrossNamespaces(t *testing.T) {
 	}
 	srvA := newCatalogServer(t, store, gitA)
 	_, err := srvA.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, CommitSha: commitA, RefName: "refs/heads/main",
+		ActorSubject: "test-admission-actor",
+		RepositoryId: testRepoID, NewCommitSha: commitA, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -79,7 +139,8 @@ func TestAdmitResources_FileIdentityIsolatedAcrossNamespaces(t *testing.T) {
 	}
 	srvB := newCatalogServer(t, store, gitB)
 	_, err = srvB.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: secondNamespaceRepoID, CommitSha: commitB, RefName: "refs/heads/main",
+		ActorSubject: "test-admission-actor",
+		RepositoryId: secondNamespaceRepoID, NewCommitSha: commitB, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -117,7 +178,7 @@ func TestAdmitResources_FileIdentityIsolatedAcrossNamespaces(t *testing.T) {
 func TestAdmitResources_FileCrossNamespaceCredentialsRefNeverPersistedAtAdmission(t *testing.T) {
 	store := newTestDatastore(t)
 	commit := "6666666666666666666666666666666666666666"
-	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: leaky\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/leaky\n    credentialsRef:\n      kind: SecretRef\n      name: cloud-creds\n      namespace: acme-other\n---\nShould never be stored\n")
+	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: leaky\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/leaky\n    credentialsRef:\n      kind: CredentialsRef\n      type: aws-access-key/v1\n      secretRef:\n        kind: SecretRef\n        name: cloud-creds\n        namespace: acme-other\n---\nShould never be stored\n")
 	git := &mockGitReader{
 		listFilesFunc: func(context.Context, string, string, string) ([]string, error) {
 			return []string{"files/leaky.md"}, nil
@@ -129,7 +190,8 @@ func TestAdmitResources_FileCrossNamespaceCredentialsRefNeverPersistedAtAdmissio
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, CommitSha: commit, RefName: "refs/heads/main",
+		ActorSubject: "test-admission-actor",
+		RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err, "admission must tolerate the rejected file without failing the whole push")
 

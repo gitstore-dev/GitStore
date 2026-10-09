@@ -80,10 +80,11 @@ type EnqueueFunc func(types.WorkItemKey) error
 
 // Reconciler implements types.Reconciler for the CategoryTaxonomy kind.
 type Reconciler struct {
-	cache        cache.CacheAccessor[CategoryTaxonomy]
+	lookup       cache.LookupFunc[CategoryTaxonomy]
+	childCount   ProductCounter
+	children     func(context.Context, types.WorkItemKey) error
 	statusClient status.StatusClient
 	productCount ProductCounter
-	enqueue      EnqueueFunc
 	deletion     DeletionClient
 }
 
@@ -93,32 +94,54 @@ type Reconciler struct {
 // the caller does not need descendant propagation (e.g. in a test that only
 // exercises a single node).
 func NewReconciler(c cache.CacheAccessor[CategoryTaxonomy], statusClient status.StatusClient, productCounter ProductCounter, enqueue EnqueueFunc, deletionClients ...DeletionClient) *Reconciler {
+	childCount := func(ctx context.Context, namespace, name string) (int64, error) {
+		var count int64
+		for _, item := range c.List() {
+			if item.Namespace == namespace && item.ParentRefName == name {
+				count++
+			}
+		}
+		return count, ctx.Err()
+	}
+	children := func(ctx context.Context, parent types.WorkItemKey) error {
+		if enqueue == nil {
+			return nil
+		}
+		for _, item := range c.List() {
+			if item.Namespace == parent.Namespace && item.ParentRefName == parent.Name {
+				if err := enqueue(types.WorkItemKey{Kind: parent.Kind, Namespace: item.Namespace, Name: item.Name}); err != nil {
+					return err
+				}
+			}
+		}
+		return ctx.Err()
+	}
+	return NewReconcilerWithLookup(cache.LookupFrom(c), statusClient, productCounter, childCount, children, deletionClients...)
+}
+
+func NewReconcilerWithLookup(lookup cache.LookupFunc[CategoryTaxonomy], statusClient status.StatusClient, productCounter, childCount ProductCounter, children func(context.Context, types.WorkItemKey) error, deletionClients ...DeletionClient) *Reconciler {
 	var deletion DeletionClient
 	if len(deletionClients) > 0 {
 		deletion = deletionClients[0]
 	}
-	return &Reconciler{cache: c, statusClient: statusClient, productCount: productCounter, enqueue: enqueue, deletion: deletion}
+	return &Reconciler{lookup: lookup, childCount: childCount, children: children, statusClient: statusClient, productCount: productCounter, deletion: deletion}
 }
 
 // Reconcile implements types.Reconciler. See contracts/reconciler-contract.md
 // for the full 8-step algorithm this follows.
 func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
-	current, ok := r.cache.Get(key)
+	current, ok, err := r.lookup(ctx, key)
+	if err != nil {
+		return types.ResultTransient(fmt.Errorf("categorytaxonomy: read projection: %w", err))
+	}
 	if !ok {
-		return types.ResultTerminal(fmt.Errorf("categorytaxonomy: %s/%s not found in cache", key.Namespace, key.Name))
+		// A queued key can outlive its object after watch replay, deletion, or a
+		// checkpointed controller restart. Absence is the reconciled state.
+		return types.ResultOK()
 	}
-
-	parentMap := make(map[string]string)
-	for _, item := range r.cache.List() {
-		if item.Namespace == key.Namespace {
-			parentMap[item.Name] = item.ParentRefName
-		}
-	}
-	inCycle := detectCycles(parentMap)
 
 	previous := previousResolved(current.Status.Resolved)
 
-	var resolved ResolvedCategoryTaxonomy
 	productCount := int64(0)
 	if r.productCount != nil {
 		pc, err := r.productCount(ctx, key.Namespace, key.Name)
@@ -127,7 +150,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		}
 		productCount = pc
 	}
-	if inCycle[current.Name] {
+	resolved, inCycle, parentResolvedCond, err := boundedHierarchy(ctx, r.lookup, r.childCount, current, productCount)
+	if errors.Is(err, errHierarchyDepth) {
+		return types.ResultTerminal(err)
+	}
+	if err != nil {
+		return types.ResultTransient(fmt.Errorf("categorytaxonomy: resolve hierarchy: %w", err))
+	}
+	if inCycle {
 		// FR-008: cycle participants keep their last-observed Path/Depth —
 		// never recomputed, never reset — while ChildCount/ProductCount
 		// still reflect current cache state.
@@ -142,16 +172,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 			// category's Path uses, since nothing has been walked yet.
 			resolved.Path = []string{current.Name}
 		}
-		var childCount int64
-		for _, item := range r.cache.List() {
-			if item.Namespace == key.Namespace && item.ParentRefName == key.Name {
-				childCount++
-			}
-		}
-		resolved.ChildCount = childCount
-		resolved.ProductCount = productCount
-	} else {
-		resolved = computeHierarchy(r.cache, current, productCount)
 	}
 
 	resolvedJSON, err := json.Marshal(resolved)
@@ -159,8 +179,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		return types.ResultTransient(fmt.Errorf("categorytaxonomy: marshal resolved status: %w", err))
 	}
 
-	parentResolvedCond := computeParentResolved(r.cache, current)
-	acyclicCond := computeAcyclic(inCycle[current.Name])
+	acyclicCond := computeAcyclic(inCycle)
 	// current.Status.Conditions comes from the real GraphQL list/watch
 	// path, where ConditionStatus is the enum wire value ("TRUE"/"FALSE");
 	// acyclicCond.Status uses this package's statusTrue/statusFalse
@@ -202,6 +221,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 	if patch.IsNoOp(current.Status) {
 		return r.reconcileDeletion(ctx, current)
 	}
+	// Persist dependent work first: successful status writeback must not hide
+	// an enqueue failure behind IsNoOp on the next attempt.
+	if (hierarchyChanged(previous, resolved) || acyclicChanged) && r.children != nil {
+		if err := r.children(ctx, key); err != nil {
+			return types.ResultTransient(fmt.Errorf("categorytaxonomy: persist child reconciliation: %w", err))
+		}
+	}
 
 	// Any Apply failure -- including types.ErrConflict -- is retried: a
 	// conflict means the cache is stale and will be corrected on the next
@@ -210,19 +236,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		return types.ResultTransient(err)
 	}
 	if current.DeletionTimestamp != nil || slices.Contains(current.Finalizers, datastoreForegroundDeletionFinalizer) {
-		return r.reconcileDeletion(ctx, current)
-	}
-
-	// Re-enqueue whatever points at this node (its children per ParentRefName,
-	// or — for a cycle participant — the other cycle member(s), since a
-	// cycle's edges mean each participant is also the other's "child") on
-	// either a structural change or an Acyclic transition. Gating solely on
-	// hierarchyChanged missed the case where a cycle participant flips
-	// Acyclic without a Depth/Path change (FR-008 freezes those while
-	// cycling), leaving affected nodes stuck on stale conditions until an
-	// unrelated event happened to re-trigger them.
-	if hierarchyChanged(previous, resolved) || acyclicChanged {
-		r.reenqueueChildren(key)
+		// Do not call reconcileDeletion with `current` here: Apply just
+		// advanced this category's resourceVersion server-side, so
+		// DecoupleProducts/CompleteDeletion would immediately conflict
+		// against the write this very call just made. Let the watch event
+		// that write generates re-trigger this same key; the next reconcile
+		// observes patch.IsNoOp(current.Status)==true (its own status now
+		// matches) and proceeds straight to reconcileDeletion with a
+		// resourceVersion that actually matches the server. The bounded
+		// delay is a fallback only, in case that watch event is delayed.
+		return types.ResultAfter(categoryDeletionRetryInterval)
 	}
 
 	return types.ResultOK()
@@ -301,15 +324,4 @@ func hierarchyChanged(previous *ResolvedCategoryTaxonomy, current ResolvedCatego
 		return true
 	}
 	return previous.Depth != current.Depth || !slices.Equal(previous.Path, current.Path)
-}
-
-func (r *Reconciler) reenqueueChildren(parent types.WorkItemKey) {
-	if r.enqueue == nil {
-		return
-	}
-	for _, item := range r.cache.List() {
-		if item.Namespace == parent.Namespace && item.ParentRefName == parent.Name {
-			_ = r.enqueue(types.WorkItemKey{Kind: parent.Kind, Namespace: item.Namespace, Name: item.Name})
-		}
-	}
 }

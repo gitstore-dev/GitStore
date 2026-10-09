@@ -8,10 +8,13 @@ package resolver
 import (
 	"errors"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
+	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
 	"go.uber.org/zap"
 )
 
@@ -19,26 +22,39 @@ var errMissingLogger = errors.New("resolver: logger is required")
 
 // Resolver is the root GraphQL resolver
 type Resolver struct {
-	logger         *zap.Logger
-	store          datastore.Datastore
-	service        *Service
-	registry       *auth.ProviderRegistry
-	storageDataDir string // data_dir used to build storagePath in responses; defaults to "/data"
-	clock          apiruntime.Clock
-	eventBus       *eventbus.Bus
+	logger                 *zap.Logger
+	store                  datastore.Datastore
+	service                *Service
+	registry               *auth.ProviderRegistry
+	storageDataDir         string // data_dir used to build storagePath in responses; defaults to "/data"
+	clock                  apiruntime.Clock
+	resourceJournal        datastore.ResourceWatchJournal
+	namespaceSubscriber    *watchjournal.Subscriber
+	namespaceWatch         config.WatchJournalConfig
+	namespaceMetrics       *watchjournal.Metrics
+	serviceAccountAudience string
+	connectionRegistry     *wsregistry.Registry
 }
 
 // ResolverDeps contains dependencies for the root GraphQL resolver.
 type ResolverDeps struct {
-	Store       datastore.Datastore
-	GitWriter   GitWriter
-	Registry    *auth.ProviderRegistry
-	Logger      *zap.Logger
-	Clock       apiruntime.Clock
-	IDGenerator apiruntime.IDGenerator
-	// EventBus backs the watchCategories/watchResources subscription
-	// resolvers (spec 040). Optional — nil disables watch subscriptions.
-	EventBus *eventbus.Bus
+	Store                     datastore.Datastore
+	GitWriter                 GitWriter
+	Registry                  *auth.ProviderRegistry
+	Logger                    *zap.Logger
+	Clock                     apiruntime.Clock
+	IDGenerator               apiruntime.IDGenerator
+	CommittedManifestAdmitter admission.CommittedManifestAdmitter
+	ResourceJournal           datastore.ResourceWatchJournal
+	NamespaceWatch            config.WatchJournalConfig
+	NamespaceMetrics          *watchjournal.Metrics
+	// PushLimits is the shared static platform push-size ceiling; see
+	// config.PushLimitsConfig.
+	PushLimits config.PushLimitsConfig
+	// ServiceAccountAudience is the configured audience value for service
+	// account token issuance (spec 061).
+	ServiceAccountAudience string
+	ConnectionRegistry     *wsregistry.Registry
 }
 
 // NewResolver creates a new GraphQL resolver.
@@ -46,13 +62,28 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 	if deps.Logger == nil {
 		return nil, errMissingLogger
 	}
+	var namespaceSubscriber *watchjournal.Subscriber
+	if deps.ResourceJournal != nil {
+		namespaceSubscriber = watchjournal.NewSubscriber(deps.ResourceJournal, watchjournal.SubscriberConfig{
+			ReadBatchSize:       deps.NamespaceWatch.Read.BatchSize,
+			MaxReplayEvents:     deps.NamespaceWatch.Read.MaxReplayEvents,
+			BufferSize:          deps.NamespaceWatch.Subscriber.Buffer,
+			BackpressureTimeout: deps.NamespaceWatch.Subscriber.Backpressure,
+			PollMin:             deps.NamespaceWatch.Poll.Min,
+			PollMax:             deps.NamespaceWatch.Poll.Max,
+			MaxMaterializerLag:  deps.NamespaceWatch.Materializer.MaxLag,
+			Metrics:             deps.NamespaceMetrics,
+		})
+	}
 	SetConverterLogger(deps.Logger)
 	svc, err := NewService(ServiceDeps{
-		Store:       deps.Store,
-		GitWriter:   deps.GitWriter,
-		Logger:      deps.Logger,
-		Clock:       deps.Clock,
-		IDGenerator: deps.IDGenerator,
+		Store:                     deps.Store,
+		GitWriter:                 deps.GitWriter,
+		Logger:                    deps.Logger,
+		Clock:                     deps.Clock,
+		IDGenerator:               deps.IDGenerator,
+		CommittedManifestAdmitter: deps.CommittedManifestAdmitter,
+		PushLimits:                deps.PushLimits,
 	})
 	if err != nil {
 		return nil, err
@@ -62,13 +93,18 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		clock = apiruntime.SystemClock{}
 	}
 	return &Resolver{
-		logger:         deps.Logger,
-		store:          deps.Store,
-		service:        svc,
-		registry:       deps.Registry,
-		storageDataDir: "/data",
-		clock:          clock,
-		eventBus:       deps.EventBus,
+		logger:                 deps.Logger,
+		store:                  deps.Store,
+		service:                svc,
+		registry:               deps.Registry,
+		storageDataDir:         "/data",
+		clock:                  clock,
+		resourceJournal:        deps.ResourceJournal,
+		namespaceSubscriber:    namespaceSubscriber,
+		namespaceWatch:         deps.NamespaceWatch,
+		namespaceMetrics:       deps.NamespaceMetrics,
+		serviceAccountAudience: deps.ServiceAccountAudience,
+		connectionRegistry:     deps.ConnectionRegistry,
 	}, nil
 }
 

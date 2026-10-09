@@ -7,43 +7,133 @@ package resolver
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
 
-// Products is the resolver for the products field.
-func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
-	_, err := decodeNodeIDAs(nodeKindCategory, obj.ID)
+// Parent is the resolver for the parent field.
+func (r *categoryResolver) Parent(ctx context.Context, obj *model.Category) (*model.Category, error) {
+	if obj == nil || obj.Status == nil || obj.Status.Resolved == nil || obj.Spec == nil || obj.Spec.ParentRef == nil || obj.Metadata == nil {
+		return nil, nil
+	}
+	if !categoryConditionTrue(obj.Status.Conditions, catalog.ConditionParentResolved) {
+		return nil, nil
+	}
+	parent, err := r.store.GetCategoryTaxonomyByName(ctx, obj.Metadata.Namespace, obj.Spec.ParentRef.Name)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load parent category: %w", err)
+	}
+	return DatastoreCategoryTaxonomyToGraphQL(parent), nil
+}
+
+// Children is the resolver for the children field.
+func (r *categoryResolver) Children(ctx context.Context, obj *model.Category) ([]*model.Category, error) {
+	if obj == nil || obj.Status == nil || obj.Status.Resolved == nil || obj.Metadata == nil {
+		return []*model.Category{}, nil
+	}
+	maxDepth := int32(1)
+	conn, err := r.service.listCategoryDescendants(ctx, obj.Metadata.Namespace, &model.CategoryFilterInput{
+		DescendantOf: obj.Metadata.Name, MaxDepth: &maxDepth,
+	}, datastore.PageParams{First: categoryFilterMaxPage})
 	if err != nil {
 		return nil, err
 	}
-	// TODO: Add category-scoped product listing to the datastore interface.
-	// For now, return all products paginated (filter by category will be added later).
-	params := toPageParams(first, after, last, before)
-	result, err := r.service.GetProducts(ctx, "", params)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get products: %w", err)
+	children := make([]*model.Category, 0, len(conn.Edges))
+	for _, edge := range conn.Edges {
+		children = append(children, edge.Node)
 	}
-	return BuildProductConnection(result), nil
+	return children, nil
+}
+
+// Products is the resolver for the products field.
+func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
+	categoryUID, err := decodeNodeIDAs(nodeKindCategory, obj.ID)
+	if err != nil {
+		return nil, err
+	}
+	params := toPageParams(first, after, last, before)
+	if params.After, err = decodeCategoryProductCursor(categoryUID, params.After); err != nil {
+		return nil, gqlerror.Errorf("invalid category products cursor")
+	}
+	if params.Before, err = decodeCategoryProductCursor(categoryUID, params.Before); err != nil {
+		return nil, gqlerror.Errorf("invalid category products cursor")
+	}
+	index, ok := r.store.(datastore.CategoryProductIndex)
+	if !ok {
+		return nil, gqlerror.Errorf("category product projection is not ready")
+	}
+	result, err := index.ListCategoryProducts(ctx, obj.Metadata.Namespace, categoryUID, params)
+	if err != nil {
+		if errors.Is(err, datastore.ErrProjectionNotReady) {
+			return nil, &gqlerror.Error{Message: "category product projection is rebuilding; retry shortly", Extensions: map[string]any{"code": "PROJECTION_NOT_READY", "retryable": true}}
+		}
+		return nil, fmt.Errorf("list category products: %w", err)
+	}
+	return buildCategoryProductConnection(categoryUID, result), nil
+}
+
+func encodeCategoryProductCursor(categoryUID, cursor string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte("category-product\x00" + categoryUID + "\x00" + cursor))
+}
+func decodeCategoryProductCursor(categoryUID, cursor string) (string, error) {
+	if cursor == "" {
+		return "", nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return "", err
+	}
+	prefix := "category-product\x00" + categoryUID + "\x00"
+	if !strings.HasPrefix(string(b), prefix) {
+		return "", fmt.Errorf("cursor belongs to another category")
+	}
+	return strings.TrimPrefix(string(b), prefix), nil
+}
+func buildCategoryProductConnection(categoryUID string, result *datastore.PageResult[datastore.Product]) *model.ProductConnection {
+	edges := make([]*model.ProductEdge, len(result.Items))
+	for i, p := range result.Items {
+		edges[i] = &model.ProductEdge{Cursor: encodeCategoryProductCursor(categoryUID, EncodeKeysetCursor(p.CreationTimestamp, p.UID)), Node: DatastoreProductToGraphQL(p)}
+	}
+	pi := &model.PageInfo{HasNextPage: result.HasNext, HasPreviousPage: result.HasPrevious}
+	if len(edges) > 0 {
+		start, end := edges[0].Cursor, edges[len(edges)-1].Cursor
+		pi.StartCursor, pi.EndCursor = &start, &end
+	}
+	return &model.ProductConnection{Edges: edges, PageInfo: pi}
 }
 
 // CreateCategory is the resolver for the createCategory field.
-// Category mutations are managed via git push; this stub returns an informative error.
 func (r *mutationResolver) CreateCategory(ctx context.Context, input model.CreateCategoryInput) (*model.CreateCategoryPayload, error) {
-	return nil, errors.New("category mutations are managed via git push")
+	category, err := r.service.CommitCategoryManifest(ctx, CategoryManifestInput{
+		APIVersion: input.APIVersion, Kind: input.Kind, Metadata: input.Metadata, Spec: input.Spec, Body: input.Body,
+	}, callerUsernameOrAnon(ctx, r), true)
+	if err != nil {
+		return nil, categoryMutationGraphQLError(err)
+	}
+	return &model.CreateCategoryPayload{Category: DatastoreCategoryTaxonomyToGraphQL(category)}, nil
 }
 
 // UpdateCategory is the resolver for the updateCategory field.
-// Category mutations are managed via git push; this stub returns an informative error.
 func (r *mutationResolver) UpdateCategory(ctx context.Context, input model.UpdateCategoryInput) (*model.UpdateCategoryPayload, error) {
-	return nil, errors.New("category mutations are managed via git push")
+	category, err := r.service.CommitCategoryManifest(ctx, CategoryManifestInput{
+		APIVersion: input.APIVersion, Kind: input.Kind, Metadata: input.Metadata, Spec: input.Spec, Body: input.Body,
+	}, callerUsernameOrAnon(ctx, r), false)
+	if err != nil {
+		return nil, categoryMutationGraphQLError(err)
+	}
+	return &model.UpdateCategoryPayload{Category: DatastoreCategoryTaxonomyToGraphQL(category)}, nil
 }
 
 // DeleteCategory is the resolver for the existing CategoryTaxonomy-backed
@@ -53,68 +143,42 @@ func (r *mutationResolver) DeleteCategory(ctx context.Context, input model.Delet
 	if err != nil {
 		return nil, err
 	}
-	category, err := r.service.DeleteCategory(ctx, uid)
+	category, outcome, err := r.service.DeleteCategoryManifest(ctx, uid, callerUsernameOrAnon(ctx, r))
+	if err != nil {
+		return nil, categoryMutationGraphQLError(err)
+	}
+	return &model.DeleteCategoryPayload{Category: DatastoreCategoryTaxonomyToGraphQL(category), Outcome: outcome}, nil
+}
+
+// CompleteCategoryDeletion is the resolver for the completeCategoryDeletion field.
+func (r *mutationResolver) CompleteCategoryDeletion(ctx context.Context, input model.CompleteCategoryDeletionInput) (*model.CompleteCategoryDeletionPayload, error) {
+	deleted, err := r.completeCategoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
 	if err != nil {
 		return nil, err
 	}
-	r.publishCategoryTaxonomyStatusEvent(category)
-	return &model.DeleteCategoryPayload{DeletedCategoryID: &input.ID}, nil
-}
-
-// ReorderCategories is the resolver for the reorderCategories field.
-// Category mutations are managed via git push; this stub returns an informative error.
-func (r *mutationResolver) ReorderCategories(ctx context.Context, input model.ReorderCategoriesInput) (*model.ReorderCategoriesPayload, error) {
-	// Validate node IDs before rejecting (preserves existing validation behaviour).
-	if _, err := decodeNodeIDsAs(nodeKindCategory, input.OrderedIds); err != nil {
-		return nil, err
+	payload := &model.CompleteCategoryDeletionPayload{}
+	if deleted != nil {
+		id := mustEncodeNodeID(nodeKindCategory, deleted.UID)
+		payload.ID = &id
 	}
-	return nil, errors.New("category mutations are managed via git push")
+	return payload, nil
 }
 
 // UpdateCategoryStatus is the resolver for the updateCategoryStatus field.
 func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model.UpdateCategoryStatusInput) (*model.UpdateCategoryStatusPayload, error) {
 	if input.DecoupleProducts != nil && *input.DecoupleProducts {
-		products, hasMore, err := r.service.DecoupleCategoryProducts(ctx, input.Namespace, input.Name, input.ResourceVersion)
+		_, hasMore, err := r.service.DecoupleCategoryProducts(ctx, input.Namespace, input.Name, input.ResourceVersion)
 		if errors.Is(err, datastore.ErrConflict) {
 			current, getErr := r.store.GetCategoryTaxonomyByName(ctx, input.Namespace, input.Name)
 			if getErr != nil {
 				return nil, gqlerror.Errorf("decouple Products conflict, and could not re-fetch current version: %v", getErr)
 			}
-			return &model.UpdateCategoryStatusPayload{
-				Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion},
-			}, nil
+			return nil, statusConflictError("CategoryTaxonomy", input.Namespace, input.Name, current.ResourceVersion)
 		}
 		if err != nil {
 			return nil, err
-		}
-		for _, product := range products {
-			if r.eventBus != nil {
-				r.eventBus.Publish(eventbus.Event{
-					Type:            eventbus.Modified,
-					Kind:            "Product",
-					Namespace:       product.Namespace,
-					Name:            product.Name,
-					ResourceVersion: product.ResourceVersion,
-					Object:          product,
-				})
-			}
 		}
 		return &model.UpdateCategoryStatusPayload{HasMoreProductDependents: hasMore}, nil
-	}
-	if input.CompleteDeletion != nil && *input.CompleteDeletion {
-		deleted, err := r.service.CompleteCategoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
-		if errors.Is(err, datastore.ErrConflict) {
-			return &model.UpdateCategoryStatusPayload{
-				Conflict: &model.StatusConflict{CurrentResourceVersion: deleted.ResourceVersion},
-			}, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		if deleted != nil {
-			r.publishCategoryTaxonomyDeletedEvent(deleted)
-		}
-		return &model.UpdateCategoryStatusPayload{}, nil
 	}
 	patch := toCategoryTaxonomyStatusPatch(input)
 	updated, err := r.store.UpdateCategoryTaxonomyStatus(ctx, input.Namespace, input.Name, patch)
@@ -129,9 +193,7 @@ func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model
 			if getErr != nil {
 				return nil, gqlerror.Errorf("status update conflict, and could not re-fetch current version: %v", getErr)
 			}
-			return &model.UpdateCategoryStatusPayload{
-				Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion},
-			}, nil
+			return nil, statusConflictError("CategoryTaxonomy", input.Namespace, input.Name, current.ResourceVersion)
 		}
 		if errors.Is(err, datastore.ErrNotFound) {
 			return nil, &gqlerror.Error{
@@ -141,7 +203,6 @@ func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model
 		}
 		return nil, gqlerror.Errorf("update category status: %v", err)
 	}
-	r.publishCategoryTaxonomyStatusEvent(updated)
 	return &model.UpdateCategoryStatusPayload{Category: DatastoreCategoryTaxonomyToGraphQL(updated)}, nil
 }
 
@@ -170,10 +231,16 @@ func (r *queryResolver) Category(ctx context.Context, by model.CategoryBy) (*mod
 }
 
 // Categories returns categories as a Relay connection.
-func (r *queryResolver) Categories(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error) {
+func (r *queryResolver) Categories(ctx context.Context, namespace string, filter *model.CategoryFilterInput, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error) {
 	params := toPageParams(first, after, last, before)
+	if filter != nil {
+		return r.service.listCategoryDescendants(ctx, namespace, filter, params)
+	}
 	result, err := r.service.GetCategoryTaxonomies(ctx, namespace, params)
 	if err != nil {
+		if errors.Is(err, datastore.ErrInvalidArgument) {
+			return nil, badCategoryListArgument("cursor belongs to a filtered category list")
+		}
 		return nil, fmt.Errorf("failed to get categories: %w", err)
 	}
 	return BuildCategoryConnection(result), nil
@@ -181,54 +248,7 @@ func (r *queryResolver) Categories(ctx context.Context, namespace string, first 
 
 // WatchCategories is the resolver for the watchCategories field.
 func (r *subscriptionResolver) WatchCategories(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.CategoryWatchEvent, error) {
-	if r.eventBus == nil {
-		return nil, gqlerror.Errorf("watch subscriptions are not available")
-	}
-	rv := ""
-	if resourceVersion != nil {
-		rv = *resourceVersion
-	}
-	events, unsubscribe, err := r.eventBus.Subscribe("CategoryTaxonomy", rv)
-	if err != nil {
-		if errors.Is(err, eventbus.ErrWatchExpired) {
-			r.logger.Warn("watch cursor expired; controller must re-list",
-				zap.String("kind", "CategoryTaxonomy"),
-				zap.String("resource_version", rv))
-			return nil, &gqlerror.Error{
-				Message:    "watch cursor expired; re-list and resume from a fresh cursor",
-				Extensions: map[string]any{"code": "WATCH_EXPIRED"},
-			}
-		}
-		return nil, gqlerror.Errorf("watch subscription failed: %v", err)
-	}
-	r.logger.Debug("watch subscription opened",
-		zap.String("kind", "CategoryTaxonomy"),
-		zap.Bool("resumed", rv != ""))
-
-	out := make(chan *model.CategoryWatchEvent, 16)
-	go func() {
-		defer close(out)
-		defer unsubscribe()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case ev, ok := <-events:
-				if !ok {
-					return
-				}
-				if !categoryEventMatchesFilters(ev, namespace) || !categoryEventMatchesSelector(ev, selector) {
-					continue
-				}
-				select {
-				case out <- toCategoryWatchEvent(ev):
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}()
-	return out, nil
+	return watchCatalogJournal(ctx, r.Resolver, "CategoryTaxonomy", namespace, selector, resourceVersion, "typed", categoryJournalEventToGraphQL)
 }
 
 // Category returns generated.CategoryResolver implementation.

@@ -13,7 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,7 +26,6 @@ import (
 	admcatalog "github.com/gitstore-dev/gitstore/api/internal/admission/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
@@ -42,8 +43,6 @@ type GitReader interface {
 	ReadFile(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
 	ResolveRef(ctx context.Context, repositoryID, ref string) (string, error)
 }
-
-const namespaceAdmissionWriteAttempts = 4
 
 // ResourceParser is the parser behavior required by the CatalogService server.
 type ResourceParser interface {
@@ -79,34 +78,33 @@ func (r *gitClientReader) ResolveRef(ctx context.Context, repositoryID, ref stri
 // Server implements catalogv1.CatalogServiceServer.
 type Server struct {
 	catalogv1.UnimplementedCatalogServiceServer
-	store    datastore.Datastore
-	git      GitReader
-	log      *zap.Logger
-	eventBus *eventbus.Bus // nil-safe: publish is skipped if unset (e.g. in older tests)
+	store datastore.Datastore
+	git   GitReader
+	log   *zap.Logger
 
 	parser ResourceParser
 	clock  apiruntime.Clock
 	ids    apiruntime.IDGenerator
 	celEnv *cel.Env // shared, constructed once; nil means CEL unavailable (skip rather than reject)
 	chain  *admission.Chain
+
+	namespacePolicy  namespaceadmission.PolicyEvaluator
+	namespaceMetrics *namespaceadmission.Metrics
 }
 
 // ServerDeps contains dependencies for the CatalogService gRPC server.
 type ServerDeps struct {
-	Store                   datastore.Datastore
-	GitReader               GitReader
-	GitClient               *gitclient.Client
-	Logger                  *zap.Logger
-	Parser                  ResourceParser
-	Clock                   apiruntime.Clock
-	IDGenerator             apiruntime.IDGenerator
-	CELEnv                  *cel.Env
-	ExtraValidatingPolicies []admission.ValidatingAdmissionPolicy
-	// EventBus receives a change notification after every successful
-	// CategoryTaxonomy create/update/delete, fanning out to GraphQL watch
-	// subscriptions (spec 040, research.md R2). Optional — nil disables
-	// publishing (e.g. in tests that don't exercise the watch API).
-	EventBus *eventbus.Bus
+	Store                    datastore.Datastore
+	GitReader                GitReader
+	GitClient                *gitclient.Client
+	Logger                   *zap.Logger
+	Parser                   ResourceParser
+	Clock                    apiruntime.Clock
+	IDGenerator              apiruntime.IDGenerator
+	CELEnv                   *cel.Env
+	ExtraValidatingPolicies  []admission.ValidatingAdmissionPolicy
+	NamespacePolicyEvaluator namespaceadmission.PolicyEvaluator
+	NamespaceMetrics         *namespaceadmission.Metrics
 }
 
 // newCELEnv constructs a CEL environment for syntax-checking price eligibility expressions.
@@ -155,71 +153,26 @@ func NewServer(deps ServerDeps) (*Server, error) {
 	for _, p := range deps.ExtraValidatingPolicies {
 		chain.RegisterValidatingPolicy(p)
 	}
+	namespacePolicy := deps.NamespacePolicyEvaluator
+	if namespacePolicy == nil {
+		namespacePolicy = namespaceadmission.NewPolicyEvaluator(deps.Store)
+	}
+	namespaceMetrics := deps.NamespaceMetrics
+	if namespaceMetrics == nil {
+		namespaceMetrics = namespaceadmission.DefaultMetrics()
+	}
 	return &Server{
-		store:    deps.Store,
-		git:      git,
-		log:      deps.Logger,
-		eventBus: deps.EventBus,
-		parser:   parser,
-		clock:    clock,
-		ids:      ids,
-		celEnv:   celEnv,
-		chain:    chain,
+		store:            deps.Store,
+		git:              git,
+		log:              deps.Logger,
+		parser:           parser,
+		clock:            clock,
+		ids:              ids,
+		celEnv:           celEnv,
+		chain:            chain,
+		namespacePolicy:  namespacePolicy,
+		namespaceMetrics: namespaceMetrics,
 	}, nil
-}
-
-// publishCategoryTaxonomyEvent fans out a change notification for the
-// EventBus subscribers of GraphQL watch queries (spec 040). No-op when
-// eventBus is nil (e.g. tests that construct Server directly).
-func (s *Server) publishCategoryTaxonomyEvent(evType eventbus.EventType, c *datastore.CategoryTaxonomy) {
-	if s.eventBus == nil || c == nil {
-		return
-	}
-	s.eventBus.Publish(eventbus.Event{
-		Type:            evType,
-		Kind:            "CategoryTaxonomy",
-		Namespace:       c.Namespace,
-		Name:            c.Name,
-		ResourceVersion: c.ResourceVersion,
-		Object:          c,
-	})
-}
-
-// publishProductEvent fans out a change notification for the EventBus
-// subscribers of the watchProducts GraphQL subscription (spec 042). No-op
-// when eventBus is nil (e.g. tests that construct Server directly).
-func (s *Server) publishProductEvent(evType eventbus.EventType, p *datastore.Product) {
-	if s.eventBus == nil || p == nil {
-		return
-	}
-	s.eventBus.Publish(eventbus.Event{
-		Type:            evType,
-		Kind:            "Product",
-		Namespace:       p.Namespace,
-		Name:            p.Name,
-		ResourceVersion: p.ResourceVersion,
-		Object:          p,
-	})
-}
-
-func (s *Server) publishFileEvent(evType eventbus.EventType, f *datastore.File) {
-	if s.eventBus == nil || f == nil {
-		return
-	}
-	s.eventBus.Publish(eventbus.Event{Type: evType, Kind: "File", Namespace: f.Namespace, Name: f.Name, ResourceVersion: f.ResourceVersion, Object: f})
-}
-
-func (s *Server) publishNamespaceEvent(evType eventbus.EventType, namespace *datastore.Namespace) {
-	if s.eventBus == nil || namespace == nil {
-		return
-	}
-	s.eventBus.Publish(eventbus.Event{
-		Type:            evType,
-		Kind:            "Namespace",
-		Name:            namespace.Name,
-		ResourceVersion: namespace.ResourceVersion,
-		Object:          namespace,
-	})
 }
 
 func (s *Server) newUID(kind, name string) (string, bool) {
@@ -240,23 +193,130 @@ func (s *Server) ValidateResources(
 	ctx context.Context,
 	req *catalogv1.ValidateResourcesRequest,
 ) (*catalogv1.ValidateResourcesResponse, error) {
+	structuralStarted := time.Now()
 	var allErrors []*catalogv1.ValidationError
 	if len(req.GetTrees()) == 0 {
-		allErrors = append(allErrors, s.validateResourceBlobs(ctx, req.RepositoryId, req.Blobs)...)
-	} else {
-		for _, tree := range req.GetTrees() {
-			allErrors = append(allErrors, s.validateResourceBlobs(ctx, req.RepositoryId, tree.GetProposedBlobs())...)
-			allErrors = append(allErrors, s.validateImmutableResourceChanges(tree.GetOldBlobs(), tree.GetProposedBlobs())...)
+		return nil, grpcstatus.Error(codes.InvalidArgument, "validation trees are required")
+	}
+	for _, tree := range req.GetTrees() {
+		allErrors = append(allErrors, s.validateResourceBlobs(ctx, req.RepositoryId, tree.GetProposedBlobs())...)
+		allErrors = append(allErrors, s.validateImmutableResourceChanges(tree.GetOldBlobs(), tree.GetProposedBlobs())...)
+		deletionErrors, err := s.validateRepositoryDeletions(ctx, req.RepositoryId, tree.GetOldBlobs(), tree.GetProposedBlobs())
+		if err != nil {
+			return nil, grpcstatus.Error(codes.Unavailable, "repository deletion validation unavailable")
 		}
+		allErrors = append(allErrors, deletionErrors...)
+	}
+	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.StageStructural, time.Since(structuralStarted))
+
+	if len(allErrors) > 0 {
+		return &catalogv1.ValidateResourcesResponse{
+			Accepted: false,
+			Errors:   allErrors,
+		}, nil
 	}
 
-	if len(allErrors) == 0 {
-		return &catalogv1.ValidateResourcesResponse{Accepted: true}, nil
+	policyStarted := time.Now()
+	policyErrors, evaluated, err := s.validateNamespacePolicies(ctx, req)
+	if evaluated {
+		s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.StagePolicy, time.Since(policyStarted))
 	}
-	return &catalogv1.ValidateResourcesResponse{
-		Accepted: false,
-		Errors:   allErrors,
-	}, nil
+	if err != nil {
+		return nil, grpcstatus.Errorf(codes.Internal, "namespace policy evaluation failed")
+	}
+	if len(policyErrors) > 0 {
+		for _, validationErr := range policyErrors {
+			s.namespaceMetrics.ObserveRejection(namespacePolicyReason(validationErr.GetConstraint()))
+		}
+		return &catalogv1.ValidateResourcesResponse{Accepted: false, Errors: policyErrors}, nil
+	}
+	return &catalogv1.ValidateResourcesResponse{Accepted: true}, nil
+}
+
+func (s *Server) validateNamespacePolicies(
+	ctx context.Context,
+	req *catalogv1.ValidateResourcesRequest,
+) ([]*catalogv1.ValidationError, bool, error) {
+	type candidate struct {
+		path      string
+		name      string
+		tier      datastore.NamespaceTier
+		operation admission.Operation
+	}
+	var candidates []candidate
+	appendCandidates := func(oldBlobs, proposedBlobs []*catalogv1.ResourceBlob, correlateOperation bool) {
+		oldNamesByPath := make(map[string]string, len(oldBlobs))
+		for _, blob := range oldBlobs {
+			parsed, _, err := s.parser.ParseResource(bytes.NewReader(blob.GetContent()))
+			if err == nil && parsed != nil && parsed.Namespace != nil {
+				oldNamesByPath[blob.GetPath()] = parsed.Namespace.Metadata.Name
+			}
+		}
+		for _, blob := range proposedBlobs {
+			parsed, _, err := s.parser.ParseResource(bytes.NewReader(blob.GetContent()))
+			if err != nil || parsed == nil || parsed.Namespace == nil {
+				continue
+			}
+			name := parsed.Namespace.Metadata.Name
+			operation := admission.Operation("UPSERT")
+			if correlateOperation {
+				operation = admission.OperationCreate
+				if oldNamesByPath[blob.GetPath()] == name {
+					operation = admission.OperationUpdate
+				}
+			}
+			candidates = append(candidates, candidate{
+				path:      blob.GetPath(),
+				name:      name,
+				tier:      namespaceTier(parsed.Namespace.Spec.Tier),
+				operation: operation,
+			})
+		}
+	}
+	if len(req.GetTrees()) == 0 {
+		return nil, false, grpcstatus.Error(codes.InvalidArgument, "validation trees are required")
+	}
+	for _, tree := range req.GetTrees() {
+		appendCandidates(tree.GetOldBlobs(), tree.GetProposedBlobs(), true)
+	}
+
+	var validationErrors []*catalogv1.ValidationError
+	for _, candidate := range candidates {
+		if candidate.operation == admission.OperationCreate {
+			_, lookupErr := s.store.GetNamespaceByName(ctx, candidate.name)
+			switch {
+			case lookupErr == nil:
+				candidate.operation = admission.OperationUpdate
+			case errors.Is(lookupErr, datastore.ErrNotFound):
+			default:
+				return nil, true, fmt.Errorf("lookup Namespace %s for policy operation: %w", candidate.name, lookupErr)
+			}
+		}
+		decision, _, err := s.namespacePolicy.Evaluate(ctx, namespaceadmission.PolicyCheck{
+			Operation: candidate.operation,
+			Name:      candidate.name,
+			Tier:      candidate.tier,
+		})
+		if err != nil {
+			return nil, true, err
+		}
+		if decision == nil {
+			continue
+		}
+		decision.FilePath = candidate.path
+		s.log.Warn("validate_resources: Namespace policy rejection",
+			zap.String("operation", string(candidate.operation)),
+			zap.String("reason", string(decision.Reason)),
+			zap.String("namespace", candidate.name),
+			zap.Bool("conflict", false))
+		validationErrors = append(validationErrors, &catalogv1.ValidationError{
+			FilePath:   candidate.path,
+			Field:      decision.Field,
+			Constraint: decision.Constraint(),
+			Message:    decision.Message,
+		})
+	}
+	return validationErrors, len(candidates) > 0, nil
 }
 
 func (s *Server) validateResourceBlobs(ctx context.Context, repositoryID string, blobs []*catalogv1.ResourceBlob) []*catalogv1.ValidationError {
@@ -284,12 +344,19 @@ func (s *Server) validateResourceBlobs(ctx context.Context, repositoryID string,
 		if err == nil && parsed != nil && parsed.Namespace != nil {
 			err = s.validateNamespaceAuthoringTarget(ctx, repositoryID, blob.Path, parsed.Namespace.Metadata.Name)
 		}
+		if err == nil && parsed != nil && parsed.Repository != nil {
+			err = s.validateRepositoryAuthoringTarget(ctx, repositoryID, blob.Path, parsed.Repository.Metadata.Namespace, parsed.Repository.Metadata.Name)
+		}
 		if err == nil && parsed != nil && parsed.CategoryTaxonomy != nil {
 			category := parsed.CategoryTaxonomy
 			if category.Spec.ParentRef != nil && category.Spec.ParentRef.Name != "" {
 				namespace, resolveErr := s.resolveNamespaceIdentifier(ctx, repositoryID)
 				if resolveErr != nil {
 					err = fmt.Errorf("resolve category namespace: %w", resolveErr)
+				} else if refNamespace := category.Spec.ParentRef.Namespace; refNamespace != "" && refNamespace != namespace {
+					// Deliberately does not look the target up: the message must not
+					// reveal whether a category exists in another namespace.
+					err = fmt.Errorf("validate: spec.parentRef.namespace must be empty or the category's own namespace")
 				} else if parent, lookupErr := s.store.GetCategoryTaxonomyByName(ctx, namespace, category.Spec.ParentRef.Name); lookupErr == nil && parent.DeletionTimestamp != nil {
 					err = fmt.Errorf("parent category %q is terminating", category.Spec.ParentRef.Name)
 				} else if lookupErr != nil && !errors.Is(lookupErr, datastore.ErrNotFound) {
@@ -301,8 +368,21 @@ func (s *Server) validateResourceBlobs(ctx context.Context, repositoryID string,
 			continue
 		}
 
+		validationReason := namespaceStructuralReason(errorToValidationError(blob.Path, err.Error()))
+		namespaceName := ""
+		if parsed != nil && parsed.Namespace != nil {
+			namespaceName = parsed.Namespace.Metadata.Name
+		}
+		if namespaceName != "" || isNamespaceFrontmatter(blob.Content) {
+			s.namespaceMetrics.ObserveRejection(validationReason)
+		}
 		s.log.Warn("validate_resources: pre-receive rejection",
 			zap.String("path", blob.Path),
+			zap.String("operation", "VALIDATE"),
+			zap.String("stage", string(namespaceadmission.StageStructural)),
+			zap.String("reason", string(validationReason)),
+			zap.String("namespace", namespaceName),
+			zap.Bool("conflict", false),
 			zap.Error(err))
 
 		// Convert the error string into ValidationError messages.
@@ -316,13 +396,108 @@ func (s *Server) validateResourceBlobs(ctx context.Context, repositoryID string,
 	return allErrors
 }
 
+func isNamespaceFrontmatter(content []byte) bool {
+	trimmed := bytes.TrimLeft(content, " \t\r\n")
+	lines := bytes.Split(trimmed, []byte("\n"))
+	if len(lines) == 0 || strings.TrimSpace(string(lines[0])) != "---" {
+		return false
+	}
+	found := false
+	for _, rawLine := range lines[1:] {
+		line := strings.TrimSuffix(string(rawLine), "\r")
+		if strings.TrimSpace(line) == "---" {
+			break
+		}
+		if line == "" || line[0] == ' ' || line[0] == '\t' {
+			continue
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok || strings.TrimSpace(key) != "kind" {
+			continue
+		}
+		if found {
+			return false
+		}
+		value = strings.TrimSpace(value)
+		value = strings.Trim(value, `"'`)
+		if value != "Namespace" {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
 // validateImmutableResourceChanges compares only old/proposed Git blobs. It
 // deliberately performs no datastore reads: pre-receive must remain bounded
 // and must reject before an immutable update can advance the ref.
 func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*catalogv1.ResourceBlob) []*catalogv1.ValidationError {
+	oldNamespacesByPath := namespaceEntriesByPath(s.parser, oldBlobs)
+	proposedNamespacesByPath := namespaceEntriesByPath(s.parser, proposedBlobs)
+	var errorsOut []*catalogv1.ValidationError
+	for path, proposed := range proposedNamespacesByPath {
+		old, found := oldNamespacesByPath[path]
+		if !found || old.parsed.Namespace.Metadata.Name == proposed.parsed.Namespace.Metadata.Name {
+			continue
+		}
+		errorsOut = append(errorsOut, &catalogv1.ValidationError{
+			FilePath:   path,
+			Field:      "metadata.name",
+			Constraint: "immutable",
+			Message:    "validate: metadata.name is immutable at the same repository path",
+		})
+		s.namespaceMetrics.ObserveRejection(namespaceadmission.ReasonImmutableName)
+	}
+	oldRepositoriesByPath := repositoryEntriesByPath(s.parser, oldBlobs)
+	proposedRepositoriesByPath := repositoryEntriesByPath(s.parser, proposedBlobs)
+	for path, proposed := range proposedRepositoriesByPath {
+		old, found := oldRepositoriesByPath[path]
+		if !found {
+			continue
+		}
+		if old.parsed.Repository.Metadata.Name != proposed.parsed.Repository.Metadata.Name {
+			errorsOut = append(errorsOut, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.name", Constraint: "immutable",
+				Message: "validate: metadata.name is immutable at the same repository path",
+			})
+		}
+		if old.parsed.Repository.Metadata.Namespace != proposed.parsed.Repository.Metadata.Namespace {
+			errorsOut = append(errorsOut, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.namespace", Constraint: "immutable",
+				Message: "validate: metadata.namespace is immutable at the same repository path",
+			})
+		}
+		if isRepositoryStorageClassDowngrade(old.parsed.Repository.Spec.StorageClass, proposed.parsed.Repository.Spec.StorageClass) {
+			errorsOut = append(errorsOut, &catalogv1.ValidationError{
+				FilePath: path, Field: "spec.storageClass", Constraint: "immutable_downgrade",
+				Message: "validate: Repository storageClass downgrade is not allowed",
+			})
+		}
+	}
+
+	oldCategoriesByPath := categoryEntriesByPath(s.parser, oldBlobs)
+	for path, proposed := range categoryEntriesByPath(s.parser, proposedBlobs) {
+		old, found := oldCategoriesByPath[path]
+		if !found {
+			continue
+		}
+		oldMeta, newMeta := old.parsed.CategoryTaxonomy.Metadata, proposed.parsed.CategoryTaxonomy.Metadata
+		if oldMeta.Name != newMeta.Name {
+			errorsOut = append(errorsOut, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.name", Constraint: "immutable",
+				Message: "validate: metadata.name is immutable at the same repository path",
+			})
+		}
+		if oldMeta.Namespace != "" && newMeta.Namespace != "" && oldMeta.Namespace != newMeta.Namespace {
+			errorsOut = append(errorsOut, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.namespace", Constraint: "immutable",
+				Message: "validate: metadata.namespace is immutable at the same repository path",
+			})
+		}
+	}
+
 	oldEntries := immutableEntries(s.parser, oldBlobs)
 	proposedEntries := immutableEntries(s.parser, proposedBlobs)
-	var errorsOut []*catalogv1.ValidationError
 	for key, proposed := range proposedEntries {
 		old, found := oldEntries[key]
 		if !found {
@@ -333,6 +508,98 @@ func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*cat
 		}
 	}
 	return errorsOut
+}
+
+func categoryEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+	entries := make(map[string]*parsedEntry, len(blobs))
+	for _, blob := range blobs {
+		parsed, body, err := parser.ParseResource(bytes.NewReader(blob.GetContent()))
+		if err != nil || parsed == nil || parsed.CategoryTaxonomy == nil {
+			continue
+		}
+		entry, ok, err := newParsedEntry(blob.GetPath(), parsed, body, "")
+		if err == nil && ok {
+			entries[blob.GetPath()] = entry
+		}
+	}
+	return entries
+}
+
+func repositoryEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+	entries := make(map[string]*parsedEntry, len(blobs))
+	for _, blob := range blobs {
+		parsed, body, err := parser.ParseResource(bytes.NewReader(blob.GetContent()))
+		if err != nil || parsed == nil || parsed.Repository == nil {
+			continue
+		}
+		entry, ok, err := newParsedEntry(blob.GetPath(), parsed, body, "")
+		if err == nil && ok {
+			entries[blob.GetPath()] = entry
+		}
+	}
+	return entries
+}
+
+func (s *Server) validateRepositoryDeletions(ctx context.Context, repositoryID string, oldBlobs, proposedBlobs []*catalogv1.ResourceBlob) ([]*catalogv1.ValidationError, error) {
+	oldEntries := repositoryEntriesByPath(s.parser, oldBlobs)
+	proposedIdentities := make(map[string]struct{})
+	for _, entry := range repositoryEntriesByPath(s.parser, proposedBlobs) {
+		proposedIdentities[entry.identity.key()] = struct{}{}
+	}
+	var validationErrors []*catalogv1.ValidationError
+	for path, entry := range oldEntries {
+		if _, remains := proposedIdentities[entry.identity.key()]; remains {
+			continue
+		}
+		if err := s.validateRepositoryAuthoringTarget(ctx, repositoryID, path, entry.identity.Namespace, entry.identity.Name); err != nil {
+			validationErrors = append(validationErrors, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.name", Constraint: "authoring_target", Message: err.Error(),
+			})
+			continue
+		}
+		existing, err := s.lookupResourceByIdentity(ctx, entry.identity)
+		if errors.Is(err, datastore.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("lookup Repository deletion target: %w", err)
+		}
+		repository, ok := existing.(*datastore.Repository)
+		if !ok || repository == nil {
+			continue
+		}
+		if repository.Name == "gitstore-system" {
+			validationErrors = append(validationErrors, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.name", Constraint: "protected", Message: "validate: bootstrap Repository cannot be deleted",
+			})
+			continue
+		}
+		hasCatalogResources, err := s.store.HasCatalogResources(ctx, repository.UID)
+		if err != nil {
+			return nil, fmt.Errorf("check Repository deletion dependents: %w", err)
+		}
+		if hasCatalogResources {
+			validationErrors = append(validationErrors, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.name", Constraint: "dependent_resources", Message: "validate: Repository contains catalog resources and cannot be deleted",
+			})
+		}
+	}
+	return validationErrors, nil
+}
+
+func namespaceEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+	entries := make(map[string]*parsedEntry, len(blobs))
+	for _, blob := range blobs {
+		parsed, body, err := parser.ParseResource(bytes.NewReader(blob.GetContent()))
+		if err != nil || parsed == nil || parsed.Namespace == nil {
+			continue
+		}
+		entry, ok, err := newParsedEntry(blob.GetPath(), parsed, body, "")
+		if err == nil && ok {
+			entries[blob.GetPath()] = entry
+		}
+	}
+	return entries
 }
 
 func immutableEntries(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
@@ -366,10 +633,6 @@ func immutableChangeMessage(old, proposed *validate.ParsedResource) string {
 		if !reflect.DeepEqual(old.ProductVariant.Spec.ProductRef, proposed.ProductVariant.Spec.ProductRef) {
 			return "validate: spec.productRef is immutable after first admission"
 		}
-	case "Namespace":
-		if namespaceadmission.TierRank(namespaceTier(old.Namespace.Spec.Tier)) > namespaceadmission.TierRank(namespaceTier(proposed.Namespace.Spec.Tier)) {
-			return "validate: spec.tier cannot be demoted"
-		}
 	}
 	return ""
 }
@@ -382,18 +645,21 @@ func namespaceTier(value string) datastore.NamespaceTier {
 	return tier
 }
 
-// ValidateCategoryTaxonomyDeletion checks proposed trees without changing
-// datastore state. The complete old and proposed resource sets allow an atomic
-// child deletion or reparenting to satisfy a parent deletion precondition.
-func (s *Server) ValidateCategoryTaxonomyDeletion(
+// ValidateResourceDeletions checks proposed trees without changing datastore
+// state. The complete old and proposed resource sets allow an atomic deletion
+// or reparenting to satisfy resource-specific preconditions.
+func (s *Server) ValidateResourceDeletions(
 	ctx context.Context,
-	req *catalogv1.ValidateCategoryTaxonomyDeletionRequest,
-) (*catalogv1.ValidateCategoryTaxonomyDeletionResponse, error) {
+	req *catalogv1.ValidateResourceDeletionsRequest,
+) (*catalogv1.ValidateResourceDeletionsResponse, error) {
 	if req.GetRepositoryId() == "" {
 		return nil, grpcstatus.Error(codes.InvalidArgument, "repository_id is required")
 	}
 	namespace, err := s.resolveNamespaceIdentifier(ctx, req.GetRepositoryId())
 	if err != nil {
+		s.log.Error("validate_category_taxonomy_deletion: cannot resolve namespace for repository",
+			zap.String("repository_id", req.GetRepositoryId()),
+			zap.Error(err))
 		return nil, grpcstatus.Error(codes.Unavailable, "category deletion validation unavailable")
 	}
 
@@ -407,14 +673,21 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 			return nil, grpcstatus.Errorf(codes.InvalidArgument, "invalid proposed resource tree: %v", err)
 		}
 
+		operations := deriveResourceAdmissionOperations(oldEntries, proposedEntries, nil)
 		deletedCategories := make(map[string]struct{})
-		for _, operation := range deriveResourceAdmissionOperations(oldEntries, proposedEntries, nil) {
-			if operation.operation == admission.OperationDelete &&
-				operation.identity.Kind == "CategoryTaxonomy" {
+		deletedProducts := false
+		for _, operation := range operations {
+			if operation.operation != admission.OperationDelete {
+				continue
+			}
+			switch operation.identity.Kind {
+			case "CategoryTaxonomy":
 				deletedCategories[operation.identity.key()] = struct{}{}
+			case "Product":
+				deletedProducts = true
 			}
 		}
-		if len(deletedCategories) == 0 {
+		if len(deletedCategories) == 0 && !deletedProducts {
 			continue
 		}
 
@@ -433,7 +706,7 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 				Name:       parentRef.Name,
 			}
 			if _, blocked := deletedCategories[parent.key()]; blocked {
-				return &catalogv1.ValidateCategoryTaxonomyDeletionResponse{
+				return &catalogv1.ValidateResourceDeletionsResponse{
 					Accepted: false,
 					Reason:   "child categories present",
 				}, nil
@@ -445,9 +718,12 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 		// covers children authored in other repositories of the namespace.
 		owners, ok := s.store.(datastore.OwnerReferenceStore)
 		if !ok {
+			s.log.Error("validate_category_taxonomy_deletion: datastore does not implement OwnerReferenceStore",
+				zap.String("repository_id", req.GetRepositoryId()),
+				zap.String("namespace", namespace))
 			return nil, grpcstatus.Error(codes.Unavailable, "category deletion validation unavailable")
 		}
-		for _, operation := range deriveResourceAdmissionOperations(oldEntries, proposedEntries, nil) {
+		for _, operation := range operations {
 			if operation.operation != admission.OperationDelete || operation.identity.Kind != "CategoryTaxonomy" {
 				continue
 			}
@@ -456,17 +732,61 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 				if errors.Is(lookupErr, datastore.ErrNotFound) {
 					continue
 				}
+				s.log.Error("validate_category_taxonomy_deletion: lookup category taxonomy failed",
+					zap.String("repository_id", req.GetRepositoryId()),
+					zap.String("namespace", operation.identity.Namespace),
+					zap.String("name", operation.identity.Name),
+					zap.Error(lookupErr))
 				return nil, grpcstatus.Error(codes.Unavailable, "category deletion validation unavailable")
 			}
 			cursor := ""
 			for {
 				page, listErr := owners.ListBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{Namespace: owner.Namespace, RepositoryID: owner.RepositoryID}, owner.UID, cursor, datastore.MaxOwnerDependentPageSize)
 				if listErr != nil {
+					s.log.Error("validate_category_taxonomy_deletion: list blocking owner dependents failed",
+						zap.String("repository_id", req.GetRepositoryId()),
+						zap.String("namespace", owner.Namespace),
+						zap.String("owner_uid", owner.UID),
+						zap.String("cursor", cursor),
+						zap.Error(listErr))
 					return nil, grpcstatus.Error(codes.Unavailable, "category deletion validation unavailable")
 				}
 				for _, dependent := range page.Items {
 					if !proposedCategoryReleasesParent(proposedEntries, dependent, operation.identity.Name) {
-						return &catalogv1.ValidateCategoryTaxonomyDeletionResponse{Accepted: false, Reason: "child categories present"}, nil
+						return &catalogv1.ValidateResourceDeletionsResponse{Accepted: false, Reason: "child categories present"}, nil
+					}
+				}
+				if page.NextCursor == "" {
+					break
+				}
+				cursor = page.NextCursor
+			}
+		}
+
+		// Product foreground deletion follows the same proposed-tree rule. A
+		// ProductVariant deleted or retargeted in this push releases its
+		// blocking owner reference; a dependent in another repository remains a
+		// hard rejection through the durable reverse index.
+		for _, operation := range operations {
+			if operation.operation != admission.OperationDelete || operation.identity.Kind != "Product" {
+				continue
+			}
+			owner, lookupErr := s.store.GetProductByName(ctx, operation.identity.Namespace, operation.identity.Name)
+			if lookupErr != nil {
+				if errors.Is(lookupErr, datastore.ErrNotFound) {
+					continue
+				}
+				return nil, grpcstatus.Error(codes.Unavailable, "Product deletion validation unavailable")
+			}
+			cursor := ""
+			for {
+				page, listErr := owners.ListBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{Namespace: owner.Namespace, RepositoryID: owner.RepositoryID}, owner.UID, cursor, datastore.MaxOwnerDependentPageSize)
+				if listErr != nil {
+					return nil, grpcstatus.Error(codes.Unavailable, "Product deletion validation unavailable")
+				}
+				for _, dependent := range page.Items {
+					if !proposedProductVariantReleasesParent(proposedEntries, dependent, operation.identity.Name) {
+						return &catalogv1.ValidateResourceDeletionsResponse{Accepted: false, Reason: "ProductVariants present"}, nil
 					}
 				}
 				if page.NextCursor == "" {
@@ -477,7 +797,7 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 		}
 	}
 
-	return &catalogv1.ValidateCategoryTaxonomyDeletionResponse{Accepted: true}, nil
+	return &catalogv1.ValidateResourceDeletionsResponse{Accepted: true}, nil
 }
 
 func proposedCategoryReleasesParent(entries []*parsedEntry, dependent datastore.OwnerDependent, deletedParent string) bool {
@@ -490,6 +810,20 @@ func proposedCategoryReleasesParent(entries []*parsedEntry, dependent datastore.
 		}
 		parent := entry.parsed.CategoryTaxonomy.Spec.ParentRef
 		return parent == nil || parent.Name != deletedParent
+	}
+	return false
+}
+
+func proposedProductVariantReleasesParent(entries []*parsedEntry, dependent datastore.OwnerDependent, deletedParent string) bool {
+	if dependent.DependentKind != "ProductVariant" {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.identity.Kind != "ProductVariant" || entry.identity.Name != dependent.Name {
+			continue
+		}
+		ref := entry.parsed.ProductVariant.Spec.ProductRef
+		return ref == nil || ref.Name != deletedParent
 	}
 	return false
 }
@@ -532,6 +866,22 @@ func (s *Server) validateNamespaceAuthoringTarget(ctx context.Context, repositor
 	return nil
 }
 
+func (s *Server) validateRepositoryAuthoringTarget(ctx context.Context, repositoryID, sourcePath, namespaceName, name string) error {
+	repository, err := s.store.GetRepository(ctx, repositoryID)
+	if err != nil {
+		return fmt.Errorf("validate: Repository manifests require the namespace gitstore-system repository: %w", err)
+	}
+	datastore.NormalizeRepositoryContract(repository)
+	if repository.Name != "gitstore-system" || repository.Namespace != namespaceName {
+		return fmt.Errorf("validate: Repository manifests are accepted only in %s/gitstore-system", namespaceName)
+	}
+	expectedPath := fmt.Sprintf("repositories/%s.md", name)
+	if sourcePath != expectedPath {
+		return fmt.Errorf("validate: Repository %q must be stored at %s", name, expectedPath)
+	}
+	return nil
+}
+
 // splitValidationErrors splits the joined error string from validate.Parse into
 // individual messages.
 func splitValidationErrors(errStr string) []string {
@@ -562,9 +912,38 @@ func errorToValidationError(filePath, msg string) *catalogv1.ValidationError {
 	if strings.HasPrefix(trimmed, "status") {
 		field = "status"
 		constraint = "system-managed"
+	} else if strings.Contains(trimmed, "duplicate resource identity") {
+		field = "metadata.name"
+		constraint = "duplicate"
+	} else if strings.Contains(trimmed, "Namespace manifests") || strings.Contains(trimmed, "must be stored at namespaces/") {
+		field = "metadata.name"
+		constraint = "authoring-target"
+	} else if strings.Contains(trimmed, "reserved") {
+		field = "metadata.name"
+		constraint = "reserved"
+	} else if strings.HasPrefix(trimmed, "metadata.name must match DNS label format") {
+		field = "metadata.name"
+		constraint = "dns-label"
 	} else if strings.HasPrefix(trimmed, "spec.title exceeds") {
 		field = "spec.title"
 		constraint = "max=200"
+	} else if strings.HasSuffix(trimmed, " is required") {
+		field = strings.TrimSuffix(trimmed, " is required")
+		constraint = "required"
+	} else if path, _, ok := strings.Cut(trimmed, " must be \""); ok && !strings.Contains(path, " ") {
+		field = path
+		constraint = "eq"
+	} else if strings.Contains(trimmed, "must not reference the category itself") {
+		field = "spec.parentRef.name"
+		constraint = "self-parent"
+	} else if strings.HasPrefix(trimmed, "parent category ") && strings.HasSuffix(trimmed, " is terminating") {
+		field = "spec.parentRef.name"
+		constraint = "parent-terminating"
+	} else if strings.HasPrefix(trimmed, "spec.parentRef.namespace must") {
+		field = "spec.parentRef.namespace"
+		constraint = "cross-namespace"
+	} else if strings.Contains(trimmed, "malformed YAML") || strings.Contains(trimmed, "frontmatter") {
+		constraint = "envelope"
 	} else if strings.HasPrefix(trimmed, "metadata.") {
 		// "metadata.uid is read-only..."
 		parts := strings.SplitN(trimmed, " ", 2)
@@ -588,6 +967,32 @@ func errorToValidationError(filePath, msg string) *catalogv1.ValidationError {
 	}
 }
 
+func namespaceStructuralReason(validationErr *catalogv1.ValidationError) namespaceadmission.Reason {
+	switch validationErr.GetConstraint() {
+	case "immutable":
+		return namespaceadmission.ReasonImmutableName
+	case "authoring-target":
+		return namespaceadmission.ReasonInvalidAuthoringTarget
+	case "duplicate":
+		return namespaceadmission.ReasonDuplicateIdentity
+	case "reserved":
+		return namespaceadmission.ReasonReservedIdentifier
+	}
+	switch validationErr.GetField() {
+	case "metadata.name":
+		return namespaceadmission.ReasonInvalidIdentifier
+	case "spec.tier":
+		return namespaceadmission.ReasonInvalidTier
+	default:
+		return namespaceadmission.ReasonInvalidEnvelope
+	}
+}
+
+func namespacePolicyReason(constraint string) namespaceadmission.Reason {
+	value := strings.TrimPrefix(constraint, "policy/")
+	return namespaceadmission.Reason(strings.ToUpper(strings.ReplaceAll(value, "-", "_")))
+}
+
 // resolveNamespaceIdentifier looks up the namespace identifier string (e.g. "gitci")
 // for a given repository UUID. Returns an error if the repository or its namespace
 // cannot be resolved — storing catalog resources under a raw UUID is never correct.
@@ -605,30 +1010,10 @@ func (s *Server) resolveNamespaceIdentifier(ctx context.Context, repositoryID st
 }
 
 func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, refName, commitSHA string) bool {
-	if refName == "" {
-		return true
-	}
-
-	current, err := s.git.ResolveRef(ctx, repositoryID, refName)
-	if err != nil {
-		if isRefNotFound(err) {
-			if !isZeroOID(commitSHA) {
-				s.log.Info("admit_resources: ref no longer exists; stale admission skipped",
-					zap.String("repository_id", repositoryID),
-					zap.String("ref_name", refName),
-					zap.String("new_commit_sha", commitSHA))
-				return false
-			}
-			return true
-		}
-		s.log.Error("admit_resources: resolve ref failed",
-			zap.String("repository_id", repositoryID),
-			zap.String("ref_name", refName),
-			zap.String("new_commit_sha", commitSHA),
-			zap.Error(err))
+	current, ok := s.currentAdmissionCommit(ctx, repositoryID, refName, commitSHA)
+	if !ok {
 		return false
 	}
-
 	if isZeroOID(commitSHA) {
 		if current != "" {
 			s.log.Info("admit_resources: branch delete is stale; ref was recreated — skipping",
@@ -639,9 +1024,8 @@ func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, ref
 		}
 		return true
 	}
-
 	if current != "" && current != commitSHA {
-		s.log.Info("admit_resources: stale admission skipped",
+		s.log.Info("admit_resources: stale admission snapshot superseded",
 			zap.String("repository_id", repositoryID),
 			zap.String("ref_name", refName),
 			zap.String("admitted_commit_sha", commitSHA),
@@ -649,6 +1033,32 @@ func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, ref
 		return false
 	}
 	return true
+}
+
+func (s *Server) currentAdmissionCommit(ctx context.Context, repositoryID, refName, commitSHA string) (string, bool) {
+	if refName == "" {
+		return commitSHA, true
+	}
+	current, err := s.git.ResolveRef(ctx, repositoryID, refName)
+	if err != nil {
+		if isRefNotFound(err) {
+			if !isZeroOID(commitSHA) {
+				s.log.Info("admit_resources: ref no longer exists; stale admission skipped",
+					zap.String("repository_id", repositoryID),
+					zap.String("ref_name", refName),
+					zap.String("new_commit_sha", commitSHA))
+				return "", false
+			}
+			return "", true
+		}
+		s.log.Error("admit_resources: resolve ref failed",
+			zap.String("repository_id", repositoryID),
+			zap.String("ref_name", refName),
+			zap.String("new_commit_sha", commitSHA),
+			zap.Error(err))
+		return "", false
+	}
+	return current, true
 }
 
 // AdmitResources fetches, parses, and stores catalog resources from an accepted push commit.
@@ -664,16 +1074,9 @@ func (s *Server) AdmitResources(
 
 	newCommit := req.GetNewCommitSha()
 	if newCommit == "" {
-		newCommit = req.GetCommitSha()
-	}
-	if newCommit == "" {
 		s.log.Warn("admit_resources: missing new commit sha",
 			zap.String("repository_id", req.RepositoryId),
 			zap.String("ref_name", req.RefName))
-		return &catalogv1.AdmitResourcesResponse{}, nil
-	}
-
-	if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, newCommit) {
 		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
 
@@ -688,49 +1091,105 @@ func (s *Server) AdmitResources(
 		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
 
-	// Extract branch name from ref: "refs/heads/main" → "main"
-	branch := strings.TrimPrefix(req.RefName, "refs/heads/")
-	revision := branch + "@sha1:" + newCommit
 	now := s.clock.Now().UTC()
 	actorSubject := strings.TrimSpace(req.GetActorSubject())
 	if actorSubject == "" {
-		// Preserve compatibility with git-service replicas that predate actor_subject.
-		actorSubject = "admission"
+		return nil, grpcstatus.Error(codes.InvalidArgument, "admission actor is required")
 	}
 
-	// Build the admission context once so every per-file admit helper can read
-	// namespace, commit SHA, ref, and wall-clock time without re-querying the DB.
-	admCtx := AdmissionContext{
-		RepositoryID: req.RepositoryId,
-		Namespace:    repoNamespace,
-		ActorSubject: actorSubject,
-		CommitSHA:    newCommit,
-		RefName:      req.RefName,
-		Revision:     revision,
-		Now:          now,
-	}
+	branch := strings.TrimPrefix(req.RefName, "refs/heads/")
+	for range namespaceadmission.AdmissionWriteAttempts {
+		currentCommit, ok := s.currentAdmissionCommit(ctx, req.RepositoryId, req.RefName, newCommit)
+		if !ok {
+			return &catalogv1.AdmitResourcesResponse{}, nil
+		}
+		if isZeroOID(newCommit) && currentCommit != "" {
+			return &catalogv1.AdmitResourcesResponse{}, nil
+		}
+		effectiveCommit := newCommit
+		convergeNamespacesOnly := false
+		if currentCommit != "" && currentCommit != newCommit {
+			effectiveCommit = currentCommit
+			convergeNamespacesOnly = true
+		}
+		changedPaths := req.GetChangedPaths()
+		if convergeNamespacesOnly {
+			changedPaths = namespaceChangedPaths(changedPaths)
+			if len(changedPaths) == 0 {
+				return &catalogv1.AdmitResourcesResponse{}, nil
+			}
+		}
+		superseded := false
+		admCtx := AdmissionContext{
+			RepositoryID: req.RepositoryId,
+			Namespace:    repoNamespace,
+			ActorSubject: actorSubject,
+			CommitSHA:    effectiveCommit,
+			RefName:      req.RefName,
+			Revision:     branch + "@sha1:" + effectiveCommit,
+			Now:          now,
+			superseded:   &superseded,
+		}
 
-	oldEntries := s.loadParsedEntries(ctx, req.RepositoryId, req.GetOldCommitSha(), admCtx.Namespace, req.GetChangedPaths())
-	newEntries := s.loadParsedEntries(ctx, req.RepositoryId, newCommit, admCtx.Namespace, req.GetChangedPaths())
-	// A newer push may land while this replica is loading and parsing both
-	// trees. Recheck the ref immediately before datastore mutation so a stale
-	// in-flight update cannot overwrite the newer commit's durable state.
-	if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, newCommit) {
+		oldEntries := s.loadParsedEntries(ctx, req.RepositoryId, req.GetOldCommitSha(), admCtx.Namespace, changedPaths)
+		newEntries := s.loadParsedEntries(ctx, req.RepositoryId, effectiveCommit, admCtx.Namespace, changedPaths)
+		var requestedEntries []*parsedEntry
+		if convergeNamespacesOnly {
+			requestedEntries = s.loadParsedEntries(ctx, req.RepositoryId, newCommit, admCtx.Namespace, changedPaths)
+			changedPaths = namespaceConvergencePaths(newEntries, requestedEntries)
+			if len(changedPaths) == 0 {
+				return &catalogv1.AdmitResourcesResponse{}, nil
+			}
+			oldEntries = s.loadParsedEntries(ctx, req.RepositoryId, req.GetOldCommitSha(), admCtx.Namespace, changedPaths)
+			newEntries = s.loadParsedEntries(ctx, req.RepositoryId, effectiveCommit, admCtx.Namespace, changedPaths)
+		}
+		if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit) {
+			continue
+		}
+		if immutablePaths := repositoryImmutablePathChanges(oldEntries, newEntries); len(immutablePaths) > 0 {
+			s.log.Warn("admit_resources: Repository immutable identity change rejected",
+				zap.Strings("paths", immutablePaths),
+				zap.String("repository_id", req.RepositoryId),
+				zap.String("commit_sha", effectiveCommit))
+			return nil, grpcstatus.Errorf(codes.FailedPrecondition, "Repository metadata.name and metadata.namespace are immutable at %s", immutablePaths[0])
+		}
+		ops := deriveResourceAdmissionOperations(oldEntries, newEntries, changedPaths)
+		if convergeNamespacesOnly {
+			ops = namespaceConvergenceOperations(ops, requestedEntries)
+		}
+		if err := s.applyResourceOperations(ctx, ops, admCtx); err != nil {
+			s.log.Error("admit_resources: apply operations failed",
+				zap.String("repository_id", req.RepositoryId),
+				zap.String("commit_sha", effectiveCommit),
+				zap.Error(err))
+			if errors.Is(err, errCategoryDeletionBlocked) {
+				return nil, grpcstatus.Error(codes.FailedPrecondition, "child categories present")
+			}
+			return nil, grpcstatus.Errorf(codes.Internal, "admit_resources: %v", err)
+		}
+		if admCtx.wasSuperseded() {
+			continue
+		}
+		if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit) {
+			continue
+		}
 		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
-	ops := deriveResourceAdmissionOperations(oldEntries, newEntries, req.GetChangedPaths())
-	if err := s.applyResourceOperations(ctx, ops, admCtx); err != nil {
-		s.log.Error("admit_resources: apply operations failed",
-			zap.String("repository_id", req.RepositoryId),
-			zap.String("commit_sha", newCommit),
-			zap.Error(err))
-		if errors.Is(err, errCategoryDeletionBlocked) {
-			return nil, grpcstatus.Error(codes.FailedPrecondition, "child categories present")
-		}
-		return nil, grpcstatus.Errorf(codes.Internal, "admit_resources: %v", err)
-	}
-
+	s.log.Warn("admit_resources: Namespace convergence exhausted",
+		zap.String("repository_id", req.RepositoryId),
+		zap.String("ref_name", req.RefName),
+		zap.String("requested_commit_sha", newCommit))
 	return &catalogv1.AdmitResourcesResponse{}, nil
+}
+
+func namespaceChangedPaths(paths []string) []string {
+	namespacePaths := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if strings.HasPrefix(path, "namespaces/") {
+			namespacePaths = append(namespacePaths, path)
+		}
+	}
+	return namespacePaths
 }
 
 func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, namespace string, changedPaths []string) []*parsedEntry {
@@ -801,7 +1260,7 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 		switch op.operation {
 		case admission.OperationDelete:
 			deletes = append(deletes, op)
-		case admission.OperationCreate, admission.OperationUpdate:
+		case admission.OperationCreate, admission.OperationUpdate, namespaceConvergenceOperation:
 			if op.newEntry == nil {
 				continue
 			}
@@ -813,11 +1272,15 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 	// child CategoryTaxonomy may be reparented in the same accepted push that
 	// removes its former parent; deleting first would consult a stale reverse
 	// owner-reference projection and reject after the ref has already advanced.
-	if err := s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps); err != nil {
+	if _, err := s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps); err != nil {
 		return err
 	}
 	for _, op := range deletes {
-		if err := s.deleteResource(ctx, op.identity, admCtx.RepositoryID, admCtx.RefName); err != nil {
+		sourcePath := ""
+		if op.oldEntry != nil {
+			sourcePath = op.oldEntry.path
+		}
+		if err := s.deleteResource(ctx, op.identity, admCtx.RepositoryID, admCtx.RefName, sourcePath, admCtx.ActorSubject); err != nil {
 			return err
 		}
 	}
@@ -838,7 +1301,7 @@ func (s *Server) admitParsedEntries(
 	entries []*parsedEntry,
 	admCtx AdmissionContext,
 	explicitOps map[string]resourceAdmissionOperation,
-) error {
+) ([]admission.EntryDecision, error) {
 	// Build intra-push category graph: name → parentName
 	pushCategoryParents := make(map[string]string)
 	categoryEntries := make(map[string]*parsedEntry)
@@ -901,13 +1364,14 @@ func (s *Server) admitParsedEntries(
 	// inPushAncestorPaths is populated as each category is admitted so that
 	// children later in the same push see their parent's full computed path.
 	inPushAncestorPaths := make(map[string]string, len(topoOrder))
+	decisions := make([]admission.EntryDecision, 0, len(topoOrder))
 	for _, name := range topoOrder {
 		e := categoryEntries[name]
 		op, existing, err := s.operationForEntry(ctx, e, explicitOps)
 		if err != nil {
-			return err
+			return decisions, err
 		}
-		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, e.path, op, existing, inPushAncestorPaths, catPushSet)
+		decisions = append(decisions, s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, e.path, op, existing, inPushAncestorPaths, catPushSet))
 	}
 	for _, e := range entries {
 		if e.parsed.Kind == "CategoryTaxonomy" {
@@ -915,11 +1379,11 @@ func (s *Server) admitParsedEntries(
 		}
 		op, existing, err := s.operationForEntry(ctx, e, explicitOps)
 		if err != nil {
-			return err
+			return decisions, err
 		}
 		switch e.parsed.Kind {
 		case "Product":
-			s.admitProduct(ctx, e.parsed.Product, e.body, admCtx, e.path, op, existing)
+			decisions = append(decisions, s.admitProduct(ctx, e.parsed.Product, e.body, admCtx, e.path, op, existing))
 		case "Collection":
 			s.admitCollection(ctx, e.parsed.Collection, e.body, admCtx, e.path, op, existing)
 		case "ProductVariant":
@@ -928,9 +1392,13 @@ func (s *Server) admitParsedEntries(
 			s.admitNamespace(ctx, e.parsed.Namespace, e.body, admCtx, e.path, op, existing)
 		case "File":
 			s.admitFile(ctx, e.parsed.File, e.body, admCtx, e.path, op, existing)
+		case "Repository":
+			if err := s.admitRepository(ctx, e.parsed.Repository, e.body, admCtx, e.path, op, existing); err != nil {
+				return decisions, err
+			}
 		}
 	}
-	return nil
+	return decisions, nil
 }
 
 func (s *Server) operationForEntry(
@@ -945,6 +1413,10 @@ func (s *Server) operationForEntry(
 		existing, err := s.lookupResourceByIdentity(ctx, e.identity)
 		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
 			return "", nil, fmt.Errorf("lookup %s %s/%s: %w", e.identity.Kind, e.identity.Namespace, e.identity.Name, err)
+		}
+		if existingNamespace, ok := existing.(*datastore.Namespace); e.identity.Kind == "Namespace" &&
+			op.operation == admission.OperationCreate && ok && existingNamespace != nil {
+			return admission.OperationUpdate, existingNamespace, nil
 		}
 		return op.operation, existing, nil
 	}
@@ -975,14 +1447,111 @@ func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdenti
 		return s.store.GetNamespaceByName(ctx, id.Name)
 	case "File":
 		return s.store.GetFileByName(ctx, id.Namespace, id.Name)
+	case "Repository":
+		mapping, err := s.store.LookupRepository(ctx, id.Namespace, id.Name)
+		if err != nil {
+			return nil, err
+		}
+		return s.store.GetRepository(ctx, mapping.RepositoryID)
 	default:
 		return nil, datastore.ErrNotFound
 	}
 }
 
+// admitRepository is deliberately the only Git-admission write path for
+// non-bootstrap Repository records. The Namespace reference is resolved here,
+// rather than accepted from the author, so every new Repository owns exactly
+// one blocking Namespace reference from its first durable row.
+const maxRepositoryAdmissionUpdateAttempts = 8
+
+func (s *Server) admitRepository(ctx context.Context, resource *catalog.RepositoryResource, body []byte, admCtx AdmissionContext, sourcePath string, op admission.Operation, rawExisting any) error {
+	if resource == nil || resource.Metadata.Name == "" || resource.Metadata.Namespace == "" || resource.Metadata.Name == "gitstore-system" {
+		return nil
+	}
+	namespace, err := s.store.GetNamespaceByName(ctx, resource.Metadata.Namespace)
+	if err != nil {
+		return fmt.Errorf("admit Repository: resolve namespace: %w", err)
+	}
+	if namespace.DeletionTimestamp != nil {
+		return nil
+	}
+	existing, _ := rawExisting.(*datastore.Repository)
+	if op == admission.OperationUpdate && existing == nil {
+		return nil
+	}
+	if existing != nil && (existing.Name != resource.Metadata.Name || existing.Namespace != resource.Metadata.Namespace) {
+		return nil
+	}
+	specJSON, err := json.Marshal(resource.Spec)
+	if err != nil {
+		return fmt.Errorf("admit Repository: marshal spec: %w", err)
+	}
+	ownerReferences, err := json.Marshal([]catalog.OwnerReference{{APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace", Name: namespace.Name, UID: namespace.UID, BlockOwnerDeletion: true}})
+	if err != nil {
+		return fmt.Errorf("admit Repository: marshal owner references: %w", err)
+	}
+	if existing == nil {
+		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
+		if !ok {
+			return fmt.Errorf("admit Repository: generate UID")
+		}
+		repo := &datastore.Repository{APIVersion: resource.APIVersion, Kind: resource.Kind, UID: uid, ID: uid, RepositoryID: uid, Namespace: namespace.Name, NamespaceID: namespace.Name, Name: resource.Metadata.Name, Labels: cloneStringMap(resource.Metadata.Labels), Annotations: cloneStringMap(resource.Metadata.Annotations), OwnerReferences: ownerReferences, Finalizers: []string{}, Revision: admCtx.Revision, CreationTimestamp: admCtx.Now, CreationActor: admCtx.ActorSubject, UpdateTimestamp: admCtx.Now, UpdateActor: admCtx.ActorSubject, SourcePath: sourcePath, GitCommitSHA: admCtx.CommitSHA, GitRef: admCtx.RefName, Spec: specJSON, Body: string(body), DefaultBranch: resource.Spec.DefaultBranch, StorageClass: resource.Spec.StorageClass}
+		datastore.NormalizeRepositoryContract(repo)
+		repo.Status = admissionAcceptedStatus(repo.Generation, admCtx.Revision, admCtx.Now)
+		if err := s.store.CreateRepositoryInActiveNamespace(ctx, repo); err != nil {
+			return fmt.Errorf("admit Repository: create authoritative row: %w", err)
+		}
+		if err := s.store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: namespace.Name, Name: repo.Name, RepositoryID: uid}); err != nil {
+			return fmt.Errorf("admit Repository: create namespace mapping: %w", err)
+		}
+		return nil
+	}
+	if isRepositoryStorageClassDowngrade(existing.StorageClass, resource.Spec.StorageClass) {
+		return nil
+	}
+	for range maxRepositoryAdmissionUpdateAttempts {
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
+			admCtx.markSuperseded()
+			return nil
+		}
+		expected := existing.ResourceVersion
+		existing.Labels, existing.Annotations, existing.OwnerReferences = cloneStringMap(resource.Metadata.Labels), cloneStringMap(resource.Metadata.Annotations), ownerReferences
+		existing.Spec, existing.Body, existing.DefaultBranch, existing.StorageClass = specJSON, string(body), resource.Spec.DefaultBranch, resource.Spec.StorageClass
+		existing.Revision, existing.UpdateTimestamp, existing.UpdateActor, existing.SourcePath, existing.GitCommitSHA, existing.GitRef = admCtx.Revision, admCtx.Now, admCtx.ActorSubject, sourcePath, admCtx.CommitSHA, admCtx.RefName
+		datastore.AdvanceRepositorySpecVersion(existing)
+		existing.Status = admissionAcceptedStatus(existing.Generation, admCtx.Revision, admCtx.Now)
+		err = s.store.UpdateRepository(ctx, existing, expected)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, datastore.ErrConflict) {
+			return fmt.Errorf("admit Repository: update authoritative row: %w", err)
+		}
+		existing, err = s.store.GetRepository(ctx, existing.UID)
+		if err != nil {
+			return fmt.Errorf("admit Repository: reload after conflict: %w", err)
+		}
+		if existing.Name != resource.Metadata.Name || existing.Namespace != resource.Metadata.Namespace {
+			return fmt.Errorf("admit Repository: identity changed during conflict retry")
+		}
+	}
+	return fmt.Errorf("admit Repository: update conflict retry budget exhausted: %w", datastore.ErrConflict)
+}
+
+// isRepositoryStorageClassDowngrade recognizes the currently documented
+// storage tiers. Unknown classes deliberately remain for the later validation
+// matrix; treating arbitrary strings lexicographically made unrelated class
+// names appear to be upgrades or downgrades.
+func isRepositoryStorageClassDowngrade(current, proposed string) bool {
+	ranks := map[string]int{"standard": 1, "premium": 2}
+	currentRank, knownCurrent := ranks[strings.ToLower(current)]
+	proposedRank, knownProposed := ranks[strings.ToLower(proposed)]
+	return knownCurrent && knownProposed && proposedRank < currentRank
+}
+
 var errCategoryDeletionBlocked = errors.New("category deletion blocked by child categories")
 
-func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, repositoryID, refName string) error {
+func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, repositoryID, refName, sourcePath, actor string) error {
 	existing, err := s.lookupResourceByIdentity(ctx, id)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
@@ -1029,8 +1598,35 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 	var deleteErr error
 	switch r := existing.(type) {
 	case *datastore.Product:
-		uid = r.UID
-		deleteErr = s.store.DeleteProductWithResourceVersion(ctx, r.UID, r.ResourceVersion)
+		if r.DeletionTimestamp != nil {
+			return nil
+		}
+		owners, ok := s.store.(datastore.OwnerReferenceStore)
+		if !ok {
+			return fmt.Errorf("product deletion requires owner-reference datastore support")
+		}
+		lookupStarted := time.Now()
+		blocked, checkErr := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{
+			Namespace: r.Namespace, RepositoryID: r.RepositoryID,
+		}, r.UID)
+		productDeletionDependentLookupDuration.Observe(time.Since(lookupStarted).Seconds())
+		if checkErr != nil {
+			return fmt.Errorf("check product deletion dependents: %w", checkErr)
+		}
+		if blocked {
+			productDeletionBlockedTotal.Inc()
+			s.log.Info("Product deletion blocked by ProductVariant owner reference", zap.String("namespace", r.Namespace), zap.String("name", r.Name), zap.String("uid", r.UID))
+			return fmt.Errorf("product %s/%s has blocking ProductVariants", r.Namespace, r.Name)
+		}
+		lifecycle, ok := s.store.(datastore.ProductLifecycleStore)
+		if !ok {
+			return fmt.Errorf("product deletion requires lifecycle datastore support")
+		}
+		_, markErr := lifecycle.MarkProductTerminating(ctx, r.UID, r.ResourceVersion, "gitstore.dev/foreground-deletion", s.clock.Now().UTC())
+		if markErr != nil {
+			return fmt.Errorf("mark Product deletion: %w", markErr)
+		}
+		return nil
 	case *datastore.CategoryTaxonomy:
 		owners, ok := s.store.(datastore.OwnerReferenceStore)
 		if !ok {
@@ -1060,11 +1656,10 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 		if !ok {
 			return fmt.Errorf("category deletion requires lifecycle datastore support")
 		}
-		terminating, markErr := lifecycle.MarkCategoryTaxonomyDeletion(ctx, r.Namespace, r.Name, r.ResourceVersion, s.clock.Now().UTC())
+		_, markErr := lifecycle.MarkCategoryTaxonomyDeletion(ctx, r.Namespace, r.Name, r.ResourceVersion, s.clock.Now().UTC())
 		if markErr != nil {
 			return fmt.Errorf("mark category deletion: %w", markErr)
 		}
-		s.publishCategoryTaxonomyEvent(eventbus.Modified, terminating)
 		return nil
 	case *datastore.Collection:
 		uid = r.UID
@@ -1075,6 +1670,53 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 	case *datastore.Namespace:
 		s.log.Info("admit_resources: Namespace manifest deletion ignored; use deleteNamespace",
 			zap.String("name", r.Name))
+		return nil
+	case *datastore.Repository:
+		if err := s.validateRepositoryAuthoringTarget(ctx, repositoryID, sourcePath, r.Namespace, r.Name); err != nil {
+			s.log.Info("admit_resources: Repository deletion skipped; invalid authoring target",
+				zap.String("namespace", r.Namespace),
+				zap.String("name", r.Name),
+				zap.String("repository_id", repositoryID),
+				zap.String("source_path", sourcePath),
+				zap.Error(err))
+			return nil
+		}
+		if r.GitRef == "" || refName == "" || r.GitRef != refName {
+			s.log.Info("admit_resources: Repository deletion skipped; resource owned by a different ref",
+				zap.String("namespace", r.Namespace),
+				zap.String("name", r.Name),
+				zap.String("deleted_ref", refName),
+				zap.String("owning_ref", r.GitRef))
+			return nil
+		}
+		if r.DeletionTimestamp != nil {
+			return nil
+		}
+		hasCatalogResources, checkErr := s.store.HasCatalogResources(ctx, r.UID)
+		if checkErr != nil {
+			return fmt.Errorf("check Repository deletion dependents: %w", checkErr)
+		}
+		if hasCatalogResources {
+			return fmt.Errorf("repository %s/%s contains catalog resources and cannot be deleted", r.Namespace, r.Name)
+		}
+		expectedResourceVersion := r.ResourceVersion
+		now := s.clock.Now().UTC()
+		r.DeletionTimestamp = &now
+		if !containsStringValue(r.Finalizers, datastore.RepositoryForegroundDeletionFinalizer) {
+			r.Finalizers = append(r.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
+		}
+		r.UpdateTimestamp = now
+		r.UpdateActor = actor
+		datastore.AdvanceRepositorySystemVersion(r)
+		if updateErr := s.store.UpdateRepository(ctx, r, expectedResourceVersion); updateErr != nil {
+			if errors.Is(updateErr, datastore.ErrConflict) {
+				latest, reloadErr := s.store.GetRepository(ctx, r.UID)
+				if reloadErr == nil && latest.DeletionTimestamp != nil {
+					return nil
+				}
+			}
+			return fmt.Errorf("start Repository foreground deletion: %w", updateErr)
+		}
 		return nil
 	case *datastore.File:
 		uid = r.UID
@@ -1091,18 +1733,16 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 			zap.Error(deleteErr))
 		return fmt.Errorf("delete %s %s/%s: %w", id.Kind, id.Namespace, id.Name, deleteErr)
 	}
-	if catTaxonomy, ok := existing.(*datastore.CategoryTaxonomy); ok {
-		s.publishCategoryTaxonomyEvent(eventbus.Deleted, catTaxonomy)
-	}
-	if product, ok := existing.(*datastore.Product); ok {
-		s.publishProductEvent(eventbus.Deleted, product)
-	}
 	s.log.Info("admit_resources: resource deleted",
 		zap.String("kind", id.Kind),
 		zap.String("namespace", id.Namespace),
 		zap.String("name", id.Name),
 		zap.String("uid", uid))
 	return nil
+}
+
+func containsStringValue(values []string, target string) bool {
+	return slices.Contains(values, target)
 }
 
 // resourceOwnership returns existing's (RepositoryID, GitRef) and true, or
@@ -1168,29 +1808,52 @@ func specBodyChanged(existingSpec []byte, existingBody string, specJSON []byte, 
 	return !bytes.Equal(existingSpec, specJSON) || existingBody != string(body)
 }
 
-// productCategoryRefName extracts spec.categoryRef.name from a marshaled
-// ProductSpec, returning "" for no categoryRef (or on any parse failure —
-// unmarshal-once-marshaled-by-us specJSON is never expected to fail, but a
-// zero value is the safe default either way).
-func productCategoryRefName(specJSON []byte) string {
-	var spec catalog.ProductSpec
-	if err := json.Unmarshal(specJSON, &spec); err != nil || spec.CategoryRef == nil {
-		return ""
-	}
-	return spec.CategoryRef.Name
-}
-
 // resolvedCategoryOwnerReferences writes only controller-managed category
 // ownership. Author manifests cannot supply ownerReferences, and unresolved
 // references intentionally produce no reverse projection.
 func (s *Server) resolvedCategoryOwnerReferences(ctx context.Context, namespace string, reference *catalog.ObjectReference, blockOwnerDeletion bool) json.RawMessage {
+	references, err := ResolvedCategoryOwnerReferences(ctx, s.store, namespace, reference, blockOwnerDeletion)
+	if err != nil {
+		// Preserve this admission path's existing behavior exactly (fail
+		// open to an empty owner reference rather than rejecting the push) —
+		// only log it, now that the shared function actually reports it.
+		s.log.Warn("resolved_category_owner_references: category lookup failed",
+			zap.String("namespace", namespace),
+			zap.String("name", reference.Name),
+			zap.Error(err))
+		return json.RawMessage(`[]`)
+	}
+	return references
+}
+
+// ResolvedCategoryOwnerReferences resolves reference (by name, scoped to
+// namespace) against store and returns the CategoryTaxonomy-kind
+// OwnerReferences JSON payload it implies. It returns an empty array (never
+// an error) when reference is absent or genuinely does not resolve to an
+// existing, non-terminating category — that is a legitimate, expected
+// outcome. It returns a non-nil error only for a real lookup/marshal
+// failure, so a transient datastore blip is distinguishable from "no such
+// category" by callers that must retry rather than silently commit an empty
+// projection (spec 062: a caller that commits CategoryResolved=True without
+// actually establishing the owner reference leaves DecoupleCategoryProducts
+// unable to find that Product later). Exported so both admission (this
+// package) and the updateProductStatus resolver (spec 062) can synthesize
+// the exact same owner-reference shape from a single implementation, rather
+// than maintaining two independent copies that could drift.
+func ResolvedCategoryOwnerReferences(ctx context.Context, store datastore.Datastore, namespace string, reference *catalog.ObjectReference, blockOwnerDeletion bool) (json.RawMessage, error) {
 	empty := json.RawMessage(`[]`)
 	if reference == nil || reference.Name == "" {
-		return empty
+		return empty, nil
 	}
-	owner, err := s.store.GetCategoryTaxonomyByName(ctx, namespace, reference.Name)
-	if err != nil || owner == nil || owner.DeletionTimestamp != nil {
-		return empty
+	owner, err := store.GetCategoryTaxonomyByName(ctx, namespace, reference.Name)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return empty, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolved category owner references: look up %s/%s: %w", namespace, reference.Name, err)
+	}
+	if owner == nil || owner.DeletionTimestamp != nil {
+		return empty, nil
 	}
 	references, err := json.Marshal([]catalog.OwnerReference{{
 		APIVersion:         owner.APIVersion,
@@ -1201,13 +1864,43 @@ func (s *Server) resolvedCategoryOwnerReferences(ctx context.Context, namespace 
 		RepositoryID:       owner.RepositoryID,
 	}})
 	if err != nil {
-		s.log.Warn("admit_resources: marshal category owner reference failed",
-			zap.String("namespace", namespace),
-			zap.String("name", reference.Name),
-			zap.Error(err))
-		return empty
+		return nil, fmt.Errorf("resolved category owner references: marshal %s/%s: %w", namespace, reference.Name, err)
 	}
-	return references
+	return references, nil
+}
+
+// resolvedProductVariantOwnerReferences projects an admitted ProductVariant's
+// productRef into the datastore's reverse owner index. Product references that
+// cannot yet resolve deliberately remain absent: that preserves Git's
+// order-independent authoring model. A resolved, terminating Product is not a
+// valid target for a new dependent, however, because it could strand that
+// dependent behind foreground deletion.
+func (s *Server) resolvedProductVariantOwnerReferences(ctx context.Context, namespace string, reference *catalog.ObjectReference) (json.RawMessage, bool) {
+	empty := json.RawMessage(`[]`)
+	if reference == nil || reference.Name == "" {
+		return empty, false
+	}
+	owner, err := s.store.GetProductByName(ctx, namespace, reference.Name)
+	if err != nil || owner == nil {
+		return empty, false
+	}
+	if owner.DeletionTimestamp != nil {
+		return empty, true
+	}
+	references, err := json.Marshal([]catalog.OwnerReference{{
+		APIVersion:         owner.APIVersion,
+		Kind:               "Product",
+		Name:               owner.Name,
+		UID:                owner.UID,
+		BlockOwnerDeletion: true,
+		RepositoryID:       owner.RepositoryID,
+	}})
+	if err != nil {
+		s.log.Warn("admit_resources: marshal product owner reference failed",
+			zap.String("namespace", namespace), zap.String("name", reference.Name), zap.Error(err))
+		return empty, false
+	}
+	return references, false
 }
 
 func (s *Server) admitNamespace(
@@ -1221,21 +1914,25 @@ func (s *Server) admitNamespace(
 ) {
 	name := resource.Metadata.Name
 	existing, _ := rawExisting.(*datastore.Namespace)
+	if op == admission.OperationUpdate && existing == nil {
+		s.recordNamespaceAdmissionRejection(name, op, namespaceadmission.ReasonNamespaceNotFound, false, namespaceadmission.ErrNamespaceNotFound)
+		return
+	}
 	if namespaceadmission.IsBootstrap(name) {
-		s.log.Warn("admit_resources: Namespace rejected",
-			zap.String("name", name),
-			zap.String("operation", string(op)),
-			zap.Bool("existing", existing != nil),
-			zap.Error(namespaceadmission.ErrBootstrapNamespace))
+		s.recordNamespaceAdmissionRejection(name, op, namespaceadmission.ReasonBootstrapNamespace, existing != nil, namespaceadmission.ErrBootstrapNamespace)
+		return
+	}
+	if op == admission.OperationCreate && existing != nil {
+		s.recordNamespaceAdmissionRejection(name, op, namespaceadmission.ReasonNamespaceAlreadyExists, true, namespaceadmission.ErrNamespaceAlreadyExists)
+		return
+	}
+	if existing != nil && existing.DeletionTimestamp != nil {
+		s.recordNamespaceAdmissionRejection(name, op, namespaceadmission.ReasonNamespaceTerminating, true, namespaceadmission.ErrNamespaceTerminating)
 		return
 	}
 	tier, ok := namespaceadmission.TierFromManifest(resource.Spec.Tier)
 	if !ok {
-		s.log.Warn("admit_resources: Namespace rejected",
-			zap.String("name", name),
-			zap.String("operation", string(op)),
-			zap.Bool("existing", existing != nil),
-			zap.Error(fmt.Errorf("unsupported tier %q", resource.Spec.Tier)))
+		s.recordNamespaceAdmissionRejection(name, op, namespaceadmission.ReasonInvalidTier, existing != nil, fmt.Errorf("unsupported tier %q", resource.Spec.Tier))
 		return
 	}
 	specJSON, err := json.Marshal(resource.Spec)
@@ -1258,8 +1955,24 @@ func (s *Server) admitNamespace(
 		}
 	}
 
-	for attempt := 0; attempt < namespaceAdmissionWriteAttempts; attempt++ {
-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
+	for range namespaceadmission.AdmissionWriteAttempts {
+		refCheck := func(ctx context.Context) (bool, error) {
+			return s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA), nil
+		}
+		if namespaceadmission.RecheckAuthoringRef(ctx, refCheck) != nil {
+			admCtx.markSuperseded()
+			return
+		}
+		if op == admission.OperationCreate && existing != nil {
+			s.recordNamespaceAdmissionRejection(name, op, namespaceadmission.ReasonNamespaceAlreadyExists, true, namespaceadmission.ErrNamespaceAlreadyExists)
+			return
+		}
+		if op == admission.OperationUpdate && existing == nil {
+			s.recordNamespaceAdmissionRejection(name, op, namespaceadmission.ReasonNamespaceNotFound, false, namespaceadmission.ErrNamespaceNotFound)
+			return
+		}
+		if existing != nil && existing.DeletionTimestamp != nil {
+			s.recordNamespaceAdmissionRejection(name, op, namespaceadmission.ReasonNamespaceTerminating, true, namespaceadmission.ErrNamespaceTerminating)
 			return
 		}
 
@@ -1292,14 +2005,18 @@ func (s *Server) admitNamespace(
 			}
 			datastore.NormalizeNamespaceContract(namespace)
 			namespace.Status = namespaceadmission.AdmissionStatus(namespace.Generation, admCtx.Revision, admCtx.Now)
+			if namespaceadmission.RecheckAuthoringRef(ctx, refCheck) != nil {
+				admCtx.markSuperseded()
+				return
+			}
 			err = s.store.CreateNamespace(ctx, namespace)
 		} else if namespaceadmission.TierRank(tier) < namespaceadmission.TierRank(existing.Tier) {
 			err = namespaceadmission.ErrTierDemotion
 		} else {
 			authorChanged := existing.APIVersion != resource.APIVersion ||
 				existing.Kind != resource.Kind ||
-				!reflect.DeepEqual(existing.Labels, resource.Metadata.Labels) ||
-				!reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations) ||
+				!stringMapsEqual(existing.Labels, resource.Metadata.Labels) ||
+				!stringMapsEqual(existing.Annotations, resource.Metadata.Annotations) ||
 				specBodyChanged(existing.Spec, existing.Body, specJSON, body)
 			systemChanged := existing.Revision != admCtx.Revision ||
 				existing.SourcePath != sourcePath ||
@@ -1329,6 +2046,10 @@ func (s *Server) admitNamespace(
 				datastore.AdvanceNamespaceSystemVersion(existing)
 			}
 			existing.Status = namespaceadmission.AdmissionStatus(existing.Generation, admCtx.Revision, admCtx.Now)
+			if namespaceadmission.RecheckAuthoringRef(ctx, refCheck) != nil {
+				admCtx.markSuperseded()
+				return
+			}
 			err = s.store.UpdateNamespace(ctx, existing, expectedResourceVersion)
 		}
 		if errors.Is(err, datastore.ErrConflict) || errors.Is(err, datastore.ErrAlreadyExists) {
@@ -1337,29 +2058,55 @@ func (s *Server) admitNamespace(
 				continue
 			}
 			if errors.Is(err, datastore.ErrNotFound) {
+				if op == admission.OperationUpdate {
+					s.recordNamespaceAdmissionRejection(name, op, namespaceadmission.ReasonNamespaceNotFound, false, namespaceadmission.ErrNamespaceNotFound)
+					return
+				}
 				existing = nil
 				continue
 			}
 		}
 		if err != nil {
-			s.log.Warn("admit_resources: Namespace rejected",
-				zap.String("name", name),
-				zap.String("operation", string(op)),
-				zap.Bool("existing", existing != nil),
-				zap.Error(err))
+			reason := namespaceadmission.ReasonInvalidEnvelope
+			switch {
+			case errors.Is(err, namespaceadmission.ErrTierDemotion):
+				reason = namespaceadmission.ReasonTierDemotion
+			case errors.Is(err, datastore.ErrConflict):
+				reason = namespaceadmission.ReasonResourceVersionConflict
+			case errors.Is(err, datastore.ErrAlreadyExists):
+				reason = namespaceadmission.ReasonNamespaceAlreadyExists
+			}
+			s.recordNamespaceAdmissionRejection(name, op, reason, existing != nil, err)
 			return
 		}
-		eventType := eventbus.Modified
-		if created {
-			eventType = eventbus.Added
-		}
-		s.publishNamespaceEvent(eventType, namespace)
 		return
 	}
 	s.log.Warn("admit_resources: Namespace rejected after repeated concurrent updates",
-		zap.String("name", name),
+		zap.String("namespace", name),
 		zap.String("operation", string(op)),
-		zap.Int("attempts", namespaceAdmissionWriteAttempts))
+		zap.String("stage", string(namespaceadmission.StagePolicy)),
+		zap.String("reason", string(namespaceadmission.ReasonResourceVersionConflict)),
+		zap.Bool("conflict", true),
+		zap.Int("attempts", namespaceadmission.AdmissionWriteAttempts))
+	s.namespaceMetrics.ObserveRejection(namespaceadmission.ReasonResourceVersionConflict)
+}
+
+func (s *Server) recordNamespaceAdmissionRejection(
+	name string,
+	op admission.Operation,
+	reason namespaceadmission.Reason,
+	existing bool,
+	err error,
+) {
+	s.namespaceMetrics.ObserveRejection(reason)
+	s.log.Warn("admit_resources: Namespace rejected",
+		zap.String("namespace", name),
+		zap.String("operation", string(op)),
+		zap.String("stage", string(namespaceadmission.StagePolicy)),
+		zap.String("reason", string(reason)),
+		zap.Bool("existing", existing),
+		zap.Bool("conflict", errors.Is(err, datastore.ErrConflict)),
+		zap.Error(err))
 }
 
 func cloneStringMap(input map[string]string) map[string]string {
@@ -1367,10 +2114,12 @@ func cloneStringMap(input map[string]string) map[string]string {
 		return map[string]string{}
 	}
 	output := make(map[string]string, len(input))
-	for key, value := range input {
-		output[key] = value
-	}
+	maps.Copy(output, input)
 	return output
+}
+
+func stringMapsEqual(left, right map[string]string) bool {
+	return maps.Equal(left, right)
 }
 
 func fileAdmissionStatus(generation int64, revision string, now time.Time) []byte {
@@ -1425,7 +2174,6 @@ func (s *Server) admitFile(
 		}
 		f.Status = fileAdmissionStatus(1, admCtx.Revision, admCtx.Now)
 		if err := s.store.CreateFile(ctx, f); err == nil {
-			s.publishFileEvent(eventbus.Added, f)
 			return
 		} else if !errors.Is(err, datastore.ErrAlreadyExists) {
 			s.log.Error("admit_resources: create file failed", zap.Error(err))
@@ -1444,7 +2192,7 @@ func (s *Server) admitFile(
 			return
 		}
 	}
-	for attempt := 0; attempt < maxFileAdmissionUpdateAttempts; attempt++ {
+	for range maxFileAdmissionUpdateAttempts {
 		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
 		changedMetadata := existing.APIVersion != resource.APIVersion || existing.Kind != resource.Kind ||
 			!reflect.DeepEqual(existing.Labels, cloneStringMap(resource.Metadata.Labels)) ||
@@ -1471,7 +2219,6 @@ func (s *Server) admitFile(
 		existing.Status = fileAdmissionStatus(gen, admCtx.Revision, admCtx.Now)
 		err := s.store.UpdateFile(ctx, existing, expectedResourceVersion)
 		if err == nil {
-			s.publishFileEvent(eventbus.Modified, existing)
 			return
 		}
 		if !errors.Is(err, datastore.ErrConflict) {
@@ -1508,18 +2255,33 @@ func (s *Server) admitProduct(
 	sourcePath string,
 	op admission.Operation,
 	rawExisting any,
-) {
+) admission.EntryDecision {
+	decision := admission.EntryDecision{Kind: "Product", Path: sourcePath}
+	if resource != nil {
+		decision.Name, decision.Namespace = resource.Metadata.Name, resource.Metadata.Namespace
+	}
+	failed := func(err error) admission.EntryDecision {
+		decision.Outcome, decision.Err = admission.EntryFailed, err
+		return decision
+	}
+	// Lifecycle is author-owned desired state. Persist an explicit default so
+	// Git-authored Products and GraphQL-authored Products have identical
+	// admitted representations.
+	if resource.Spec.Lifecycle.State == "" {
+		resource.Spec.Lifecycle.State = "ACTIVE"
+	}
 	specJSON, err := json.Marshal(resource.Spec)
 	if err != nil {
 		s.log.Error("admit_resources: marshal product spec failed",
 			zap.String("name", resource.Metadata.Name), zap.Error(err))
-		return
+		return failed(fmt.Errorf("marshal product spec: %w", err))
 	}
 
 	namespace := resource.Metadata.Namespace
 	if namespace == "" {
 		namespace = admCtx.Namespace
 	}
+	decision.Namespace = namespace
 
 	existing, _ := rawExisting.(*datastore.Product)
 	var oldObject any
@@ -1558,13 +2320,19 @@ func (s *Server) admitProduct(
 			zap.String("name", resource.Metadata.Name),
 			zap.String("namespace", namespace),
 			zap.String("reason", d.Reason))
-		return
+		decision.Outcome = admission.EntryDenied
+		decision.Diagnostics = []admission.Diagnostic{{Reason: "POLICY_DENIED", Message: d.Reason, Level: admission.LevelFailure, File: sourcePath, Field: d.Field}}
+		ObserveAdmissionRejection("Product", admission.PhasePostReceive)
+		if existing != nil {
+			s.recordProductAdmissionDenied(ctx, existing, decision.Diagnostics, admCtx.Now)
+		}
+		return decision
 	}
 
-	if op == admission.OperationCreate || existing == nil {
+	if op == admission.OperationCreate {
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
 		if !ok {
-			return
+			return failed(fmt.Errorf("generate product UID"))
 		}
 		p := &datastore.Product{
 			UID:               uid,
@@ -1578,6 +2346,9 @@ func (s *Server) admitProduct(
 			Generation:        1,
 			ResourceVersion:   "1",
 			CreationTimestamp: admCtx.Now,
+			CreationActor:     admCtx.ActorSubject,
+			UpdateTimestamp:   admCtx.Now,
+			UpdateActor:       admCtx.ActorSubject,
 			Revision:          admCtx.Revision,
 			RepositoryID:      admCtx.RepositoryID,
 			SourcePath:        sourcePath,
@@ -1590,8 +2361,7 @@ func (s *Server) admitProduct(
 		if cerr := s.store.CreateProduct(ctx, p); cerr != nil {
 			s.log.Error("admit_resources: create product failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(cerr))
-		} else {
-			s.publishProductEvent(eventbus.Added, p)
+			return failed(fmt.Errorf("create product: %w", cerr))
 		}
 	} else {
 		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
@@ -1602,16 +2372,11 @@ func (s *Server) admitProduct(
 		changedProvenance := existing.RepositoryID != admCtx.RepositoryID ||
 			existing.SourcePath != sourcePath
 		changedOwnerReferences := !bytes.Equal(existing.OwnerReferences, ownerReferences)
-		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedOwnerReferences {
-			return
+		changedAdmission := !productAdmissionAccepted(existing.Status)
+		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedOwnerReferences && !changedAdmission {
+			decision.Outcome = admission.EntryNoOp
+			return decision
 		}
-		// Diff categoryRef before existing.Spec is overwritten below, so the
-		// watchProducts event only fires when the field CategoryTaxonomy
-		// reconciliation actually cares about changed (spec 042,
-		// contracts/product-watch-contract.md call site 2) — a spec change
-		// that is not a categoryRef change (e.g. price/description) still
-		// persists via the write below but must not publish an event.
-		categoryRefChanged := productCategoryRefName(existing.Spec) != productCategoryRefName(specJSON)
 		gen := existing.Generation
 		if changedSpecBody {
 			gen++
@@ -1623,6 +2388,8 @@ func (s *Server) admitProduct(
 		existing.OwnerReferences = ownerReferences
 		existing.Generation = gen
 		existing.ResourceVersion = nextResourceVersion(existing.ResourceVersion)
+		existing.UpdateTimestamp = admCtx.Now
+		existing.UpdateActor = admCtx.ActorSubject
 		existing.Revision = admCtx.Revision
 		existing.RepositoryID = admCtx.RepositoryID
 		existing.SourcePath = sourcePath
@@ -1634,10 +2401,53 @@ func (s *Server) admitProduct(
 		if uerr := s.store.UpdateProduct(ctx, existing); uerr != nil {
 			s.log.Error("admit_resources: update product failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(uerr))
-		} else if categoryRefChanged {
-			s.publishProductEvent(eventbus.Modified, existing)
+			return failed(fmt.Errorf("update product: %w", uerr))
 		}
 	}
+	decision.Outcome = admission.EntryAccepted
+	return decision
+}
+
+func (s *Server) recordProductAdmissionDenied(ctx context.Context, existing *datastore.Product, diagnostics []admission.Diagnostic, now time.Time) {
+	current := existing
+	for range maxRepositoryAdmissionUpdateAttempts {
+		var status catalog.ProductStatus
+		if len(current.Status) > 0 && json.Unmarshal(current.Status, &status) != nil {
+			return
+		}
+		denied := catalog.Condition{Type: catalog.ConditionAdmissionAccepted, Status: catalog.ConditionFalse, ObservedGeneration: current.Generation, LastTransitionTime: now, Reason: "AdmissionReportFailed", Message: admission.FormatRejection(diagnostics)}
+		conditions, replaced := make([]catalog.Condition, 0, len(status.Conditions)+1), false
+		for _, condition := range status.Conditions {
+			if condition.Type == catalog.ConditionAdmissionAccepted {
+				condition, replaced = denied, true
+			}
+			conditions = append(conditions, condition)
+		}
+		if !replaced {
+			conditions = append(conditions, denied)
+		}
+		_, err := s.store.UpdateProductStatus(ctx, current.Namespace, current.Name, datastore.ProductStatusPatch{ResourceVersion: current.ResourceVersion, Conditions: conditions})
+		if err == nil || !errors.Is(err, datastore.ErrConflict) {
+			return
+		}
+		current, err = s.store.GetProductByName(ctx, current.Namespace, current.Name)
+		if err != nil {
+			return
+		}
+	}
+}
+
+func productAdmissionAccepted(raw []byte) bool {
+	var status catalog.ProductStatus
+	if len(raw) == 0 || json.Unmarshal(raw, &status) != nil {
+		return true
+	}
+	for _, condition := range status.Conditions {
+		if condition.Type == catalog.ConditionAdmissionAccepted {
+			return condition.Status != catalog.ConditionFalse
+		}
+	}
+	return true
 }
 
 func (s *Server) admitCollection(
@@ -1700,7 +2510,7 @@ func (s *Server) admitCollection(
 		return
 	}
 
-	if op == admission.OperationCreate || existing == nil {
+	if op == admission.OperationCreate {
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
 		if !ok {
 			return
@@ -1807,6 +2617,14 @@ func (s *Server) admitProductVariant(
 		}
 		op = admission.OperationCreate
 	}
+	ownerReferences, parentTerminating := s.resolvedProductVariantOwnerReferences(ctx, namespace, resource.Spec.ProductRef)
+	if parentTerminating {
+		s.log.Warn("admit_resources: product_variant targets terminating product",
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace),
+			zap.String("product_ref", resource.Spec.ProductRef.Name))
+		return
+	}
 
 	// Run admission chain; map resulting conditions back to variantAdmitResult.
 	admitResult := variantAdmitResult{
@@ -1838,7 +2656,7 @@ func (s *Server) admitProductVariant(
 		return
 	case admission.Allowed:
 		for _, c := range dec.Conditions {
-			switch catalog.ConditionType(c.Type) {
+			switch c.Type {
 			case catalog.ConditionProductResolved:
 				admitResult.ProductResolved = c.Status
 			case catalog.ConditionOptionsAccepted:
@@ -1908,6 +2726,7 @@ func (s *Server) admitProductVariant(
 			GitRef:            admCtx.RefName,
 			SKU:               resource.Spec.SKU,
 			ProductRefName:    productRefName,
+			OwnerReferences:   ownerReferences,
 			Spec:              specJSON,
 			Body:              string(body),
 			Status:            statusJSON,
@@ -1934,7 +2753,8 @@ func (s *Server) admitProductVariant(
 		changedProvenance := existing.RepositoryID != admCtx.RepositoryID ||
 			existing.SourcePath != sourcePath
 		changedDenorm := existing.SKU != resource.Spec.SKU || existing.ProductRefName != productRefName
-		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedDenorm {
+		changedOwnerReferences := !bytes.Equal(existing.OwnerReferences, ownerReferences)
+		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedDenorm && !changedOwnerReferences {
 			return
 		}
 		gen := existing.Generation
@@ -1954,6 +2774,7 @@ func (s *Server) admitProductVariant(
 		existing.GitRef = admCtx.RefName
 		existing.SKU = resource.Spec.SKU
 		existing.ProductRefName = productRefName
+		existing.OwnerReferences = ownerReferences
 		existing.Spec = specJSON
 		existing.Body = string(body)
 		existing.Status = variantAdmissionStatus(gen, admCtx.Revision, admCtx.Now, admitResult)
@@ -1990,20 +2811,24 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	rawExisting any,
 	inPushAncestorPaths map[string]string,
 	catPushSet []admission.AdmissionRequest,
-) {
-	specJSON, err := json.Marshal(resource.Spec)
-	if err != nil {
-		s.log.Error("admit_resources: marshal category spec failed",
-			zap.String("name", resource.Metadata.Name), zap.Error(err))
-		return
-	}
-
+) admission.EntryDecision {
 	namespace := resource.Metadata.Namespace
 	if namespace == "" {
 		namespace = admCtx.Namespace
 	}
-
 	name := resource.Metadata.Name
+	decision := admission.EntryDecision{Kind: "CategoryTaxonomy", Namespace: namespace, Name: name, Path: sourcePath}
+	failed := func(err error) admission.EntryDecision {
+		decision.Outcome, decision.Err = admission.EntryFailed, err
+		return decision
+	}
+
+	specJSON, err := json.Marshal(resource.Spec)
+	if err != nil {
+		s.log.Error("admit_resources: marshal category spec failed",
+			zap.String("name", resource.Metadata.Name), zap.Error(err))
+		return failed(fmt.Errorf("marshal category spec: %w", err))
+	}
 
 	existing, _ := rawExisting.(*datastore.CategoryTaxonomy)
 	var oldObject any
@@ -2047,10 +2872,18 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 			zap.String("name", name),
 			zap.String("namespace", namespace),
 			zap.String("reason", dec.Reason))
-		return
+		decision.Outcome = admission.EntryDenied
+		decision.Diagnostics = []admission.Diagnostic{{
+			Reason: "POLICY_DENIED", Message: dec.Reason, Level: admission.LevelFailure, File: sourcePath, Field: dec.Field,
+		}}
+		ObserveAdmissionRejection("CategoryTaxonomy", admission.PhasePostReceive)
+		if existing != nil {
+			s.recordCategoryAdmissionDenied(ctx, existing, decision.Diagnostics, admCtx.Now)
+		}
+		return decision
 	case admission.Allowed:
 		for _, c := range dec.Conditions {
-			switch catalog.ConditionType(c.Type) {
+			switch c.Type {
 			case catalog.ConditionParentResolved:
 				parentResolved = c.Status
 			case catalog.ConditionAcyclic:
@@ -2091,7 +2924,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		statusJSON := categoryAdmissionStatusFull(1, admCtx.Revision, admCtx.Now, parentResolved, inCycle)
 		uid, ok := s.newUID(resource.Kind, name)
 		if !ok {
-			return
+			return failed(fmt.Errorf("generate category UID"))
 		}
 		c := &datastore.CategoryTaxonomy{
 			UID:               uid,
@@ -2119,9 +2952,8 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		if cerr := s.store.CreateCategoryTaxonomy(ctx, c); cerr != nil {
 			s.log.Error("admit_resources: create category failed",
 				zap.String("name", name), zap.Error(cerr))
-			return
+			return failed(fmt.Errorf("create category: %w", cerr))
 		}
-		s.publishCategoryTaxonomyEvent(eventbus.Added, c)
 		s.log.Info("admit_resources: category created",
 			zap.String("kind", resource.Kind),
 			zap.String("namespace", namespace),
@@ -2138,8 +2970,12 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 			existing.SourcePath != sourcePath
 		changedHierarchy := existing.ParentName != parentName || existing.AncestorPath != ancestorPath
 		changedOwnerReferences := !bytes.Equal(existing.OwnerReferences, ownerReferences)
-		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedHierarchy && !changedOwnerReferences {
-			return
+		// A previously denied update leaves AdmissionAccepted=False; re-admitting
+		// the accepted content must clear it.
+		changedAdmission := !categoryAdmissionAccepted(existing.Status)
+		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedHierarchy && !changedOwnerReferences && !changedAdmission {
+			decision.Outcome = admission.EntryNoOp
+			return decision
 		}
 		gen := existing.Generation
 		if changedSpecBody {
@@ -2165,15 +3001,86 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		if uerr := s.store.UpdateCategoryTaxonomy(ctx, existing); uerr != nil {
 			s.log.Error("admit_resources: update category failed",
 				zap.String("name", name), zap.Error(uerr))
-			return
+			return failed(fmt.Errorf("update category: %w", uerr))
 		}
-		s.publishCategoryTaxonomyEvent(eventbus.Modified, existing)
 		s.log.Info("admit_resources: category updated",
 			zap.String("kind", resource.Kind),
 			zap.String("namespace", namespace),
 			zap.String("name", name),
 			zap.String("ancestor_path", ancestorPath))
 	}
+	decision.Outcome = admission.EntryAccepted
+	return decision
+}
+
+// recordCategoryAdmissionDenied marks an existing category's AdmissionAccepted
+// condition False without touching spec, body or generation, so the last
+// accepted generation stays served while the denial is visible.
+func (s *Server) recordCategoryAdmissionDenied(ctx context.Context, existing *datastore.CategoryTaxonomy, diagnostics []admission.Diagnostic, now time.Time) {
+	current := existing
+	for range maxRepositoryAdmissionUpdateAttempts {
+		var status catalog.CategoryTaxonomyStatus
+		if len(current.Status) > 0 {
+			if err := json.Unmarshal(current.Status, &status); err != nil {
+				s.log.Error("admit_resources: decode category status failed", zap.String("name", current.Name), zap.Error(err))
+				return
+			}
+		}
+		denied := catalog.Condition{
+			Type:               catalog.ConditionAdmissionAccepted,
+			Status:             catalog.ConditionFalse,
+			ObservedGeneration: current.Generation,
+			LastTransitionTime: now,
+			Reason:             "AdmissionReportFailed",
+			Message:            admission.FormatRejection(diagnostics),
+		}
+		conditions := make([]catalog.Condition, 0, len(status.Conditions)+1)
+		replaced := false
+		for _, condition := range status.Conditions {
+			if condition.Type == catalog.ConditionAdmissionAccepted {
+				condition, replaced = denied, true
+			}
+			conditions = append(conditions, condition)
+		}
+		if !replaced {
+			conditions = append(conditions, denied)
+		}
+		_, err := s.store.UpdateCategoryTaxonomyStatus(ctx, current.Namespace, current.Name, datastore.CategoryTaxonomyStatusPatch{
+			ResourceVersion: current.ResourceVersion,
+			Conditions:      conditions,
+		})
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, datastore.ErrConflict) {
+			s.log.Error("admit_resources: record category denial failed", zap.String("name", current.Name), zap.Error(err))
+			return
+		}
+		current, err = s.store.GetCategoryTaxonomyByName(ctx, current.Namespace, current.Name)
+		if err != nil {
+			s.log.Error("admit_resources: reload category after conflict failed", zap.String("name", existing.Name), zap.Error(err))
+			return
+		}
+	}
+	s.log.Error("admit_resources: record category denial retry budget exhausted", zap.String("name", existing.Name))
+}
+
+// categoryAdmissionAccepted reports whether a stored status has no
+// AdmissionAccepted=False condition.
+func categoryAdmissionAccepted(raw []byte) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	var status catalog.CategoryTaxonomyStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return true
+	}
+	for _, condition := range status.Conditions {
+		if condition.Type == catalog.ConditionAdmissionAccepted {
+			return condition.Status != catalog.ConditionFalse
+		}
+	}
+	return true
 }
 
 // admissionAcceptedStatus builds the initial status JSON with AdmissionAccepted: True (FR-009).

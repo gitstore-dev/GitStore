@@ -20,7 +20,7 @@ make dev
 make compose
 
 # With ScyllaDB
-make compose-scylla
+make compose DATASTORE=scylla
 ```
 
 After startup:

@@ -5,23 +5,49 @@ package categorytaxonomy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
 
+// categoryDeletionStatusMutation queries only fields UpdateCategoryStatusPayload
+// actually declares (category, hasMoreProductDependents) — a resourceVersion
+// conflict is reported as a GraphQL error with a RESOURCE_VERSION_CONFLICT
+// (or forward-compatible CONFLICT) extension (see mapConflictErr below), not
+// a payload field, matching every other status mutation in this codebase
+// (graphql_status_client.go et al.).
 const categoryDeletionStatusMutation = `
 mutation($input: UpdateCategoryStatusInput!) {
   updateCategoryStatus(input: $input) {
-    conflict { currentResourceVersion }
     hasMoreProductDependents
   }
 }`
 
-// DeletionClient invokes lifecycle operations through the existing
-// updateCategoryStatus subresource mutation. No parallel CategoryTaxonomy
-// GraphQL mutation is introduced.
+// completeCategoryDeletionMutation finishes a terminating category's
+// foreground deletion.
+const completeCategoryDeletionMutation = `
+mutation($input: CompleteCategoryDeletionInput!) {
+  completeCategoryDeletion(input: $input) {
+    id
+  }
+}`
+
+// mapConflictErr maps a RESOURCE_VERSION_CONFLICT or forward-compatible
+// CONFLICT GraphQL error to types.ErrConflict; any other error (including a
+// NOT_FOUND-coded one) passes through wrapped but otherwise unchanged.
+func mapConflictErr(err error) error {
+	var gqlErr *graphqlclient.Error
+	if errors.As(err, &gqlErr) && graphqlclient.IsConflictCode(gqlErr.Extensions["code"]) {
+		return fmt.Errorf("%w: current resourceVersion %q: %w", types.ErrConflict, gqlErr.Extensions["resourceVersion"], err)
+	}
+	return err
+}
+
+// DeletionClient invokes the controller-only lifecycle operations: the
+// bounded Product drain through updateCategoryStatus, and final removal
+// through completeCategoryDeletion.
 type DeletionClient interface {
 	DecoupleProducts(ctx context.Context, namespace, name, resourceVersion string) (bool, error)
 	CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error
@@ -38,9 +64,6 @@ func NewGraphQLDeletionClient(client *graphqlclient.Client) DeletionClient {
 func (c *graphqlDeletionClient) DecoupleProducts(ctx context.Context, namespace, name, resourceVersion string) (bool, error) {
 	var response struct {
 		UpdateCategoryStatus struct {
-			Conflict *struct {
-				CurrentResourceVersion string `json:"currentResourceVersion"`
-			} `json:"conflict"`
 			HasMoreProductDependents bool `json:"hasMoreProductDependents"`
 		} `json:"updateCategoryStatus"`
 	}
@@ -52,34 +75,23 @@ func (c *graphqlDeletionClient) DecoupleProducts(ctx context.Context, namespace,
 			"decoupleProducts": true,
 		},
 	}, &response); err != nil {
-		return false, fmt.Errorf("category deletion client: decouple Products: %w", err)
-	}
-	if response.UpdateCategoryStatus.Conflict != nil {
-		return false, fmt.Errorf("%w: current resourceVersion %q", types.ErrConflict, response.UpdateCategoryStatus.Conflict.CurrentResourceVersion)
+		return false, fmt.Errorf("category deletion client: decouple Products: %w", mapConflictErr(err))
 	}
 	return response.UpdateCategoryStatus.HasMoreProductDependents, nil
 }
 
 func (c *graphqlDeletionClient) CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error {
 	var response struct {
-		UpdateCategoryStatus struct {
-			Conflict *struct {
-				CurrentResourceVersion string `json:"currentResourceVersion"`
-			} `json:"conflict"`
-		} `json:"updateCategoryStatus"`
+		CompleteCategoryDeletion struct{} `json:"completeCategoryDeletion"`
 	}
-	if err := c.client.Mutate(ctx, categoryDeletionStatusMutation, map[string]any{
+	if err := c.client.Mutate(ctx, completeCategoryDeletionMutation, map[string]any{
 		"input": map[string]any{
-			"namespace":        namespace,
-			"name":             name,
-			"resourceVersion":  resourceVersion,
-			"completeDeletion": true,
+			"namespace":       namespace,
+			"name":            name,
+			"resourceVersion": resourceVersion,
 		},
 	}, &response); err != nil {
-		return fmt.Errorf("category deletion client: complete deletion: %w", err)
-	}
-	if response.UpdateCategoryStatus.Conflict != nil {
-		return fmt.Errorf("%w: current resourceVersion %q", types.ErrConflict, response.UpdateCategoryStatus.Conflict.CurrentResourceVersion)
+		return fmt.Errorf("category deletion client: complete deletion: %w", mapConflictErr(err))
 	}
 	return nil
 }

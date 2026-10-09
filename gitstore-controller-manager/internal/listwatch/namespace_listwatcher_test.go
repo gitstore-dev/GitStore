@@ -57,8 +57,8 @@ func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 			}
 			_ = conn.WriteJSON(map[string]any{
 				"id": subMsg["id"], "type": "next",
-				"payload": map[string]any{"data": map[string]any{"watchResources": map[string]any{
-					"type": "BOOKMARK", "kind": "Namespace", "resourceVersion": "17",
+				"payload": map[string]any{"data": map[string]any{"watchNamespaces": map[string]any{
+					"type": "BOOKMARK", "resourceVersion": "17",
 				}}},
 			})
 			return
@@ -73,7 +73,7 @@ func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lw := listwatch.NewNamespaceListWatcher(graphqlclient.New(srv.URL, "token"))
+	lw := listwatch.NewNamespaceListWatcher(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	resp, err := lw.List(context.Background())
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
@@ -86,7 +86,7 @@ func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 	}
 }
 
-func TestNamespaceListWatcherMapsGenericWatchEvents(t *testing.T) {
+func TestNamespaceListWatcherMapsTypedWatchEvents(t *testing.T) {
 	upgrader := websocket.Upgrader{Subprotocols: []string{"graphql-transport-ws"}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -110,19 +110,18 @@ func TestNamespaceListWatcherMapsGenericWatchEvents(t *testing.T) {
 		out := map[string]any{"id": subMsg["id"]}
 		maps.Copy(out, map[string]any{
 			"type": "next",
-			"payload": map[string]any{"data": map[string]any{"watchResources": map[string]any{
+			"payload": map[string]any{"data": map[string]any{"watchNamespaces": map[string]any{
 				"type":            "MODIFIED",
-				"kind":            "Namespace",
 				"name":            "acme",
 				"resourceVersion": "9",
-				"object":          namespaceNodeJSON("acme", "9", 3, []string{"gitstore.dev/foreground-deletion"}),
+				"namespace":       namespaceNodeJSON("acme", "9", 3, []string{"gitstore.dev/foreground-deletion"}),
 			}}},
 		})
 		_ = conn.WriteJSON(out)
 	}))
 	defer srv.Close()
 
-	lw := listwatch.NewNamespaceListWatcher(graphqlclient.New("ws"+strings.TrimPrefix(srv.URL, "http"), "token"))
+	lw := listwatch.NewNamespaceListWatcher(graphqlclient.New("ws"+strings.TrimPrefix(srv.URL, "http"), graphqlclient.NewStaticToken("token")))
 	watcher, err := lw.Watch(context.Background(), "8")
 	if err != nil {
 		t.Fatalf("Watch failed: %v", err)

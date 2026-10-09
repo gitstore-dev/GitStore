@@ -1,7 +1,8 @@
 # Product Resource — Kubernetes-style GraphQL Schema
 # Full rewrite: alpha software, no backwards compatibility required.
 # All reads served from the datastore (fully hydrated view).
-# Mutations are git-driven; GraphQL mutations removed (deferred to GH#185/186).
+# Mutations are git-driven: GraphQL commits the canonical manifest and awaits
+# the same admission path as a Git push.
 
 extend type Query {
   """Fetch a single product by globally unique ID or namespace + name."""
@@ -20,8 +21,8 @@ extend type Query {
 extend type Subscription {
   """
   Dedicated, compile-time-typed watch entry point for Product. Same
-  list-then-watch/resourceVersion/expiry semantics as watchCategories
-  (spec 040), scoped to this kind. Callers obtain the initial list via
+  list-then-watch/resourceVersion/expiry semantics as watchCategories,
+  scoped to this kind. Callers obtain the initial list via
   the existing `products` query.
   """
   watchProducts(
@@ -32,10 +33,22 @@ extend type Subscription {
 }
 
 extend type Mutation {
+  """Create a Product in the namespace's implicit gitstore-system repository."""
+  createProduct(input: CreateProductInput!): CreateProductPayload!
+
+  """Update the canonical manifest at the admitted Product's stored provenance."""
+  updateProduct(input: UpdateProductInput!): UpdateProductPayload!
+
+  """Start or observe foreground Product termination."""
+  deleteProduct(input: DeleteProductInput!): DeleteProductPayload!
+
   """
   Controller-only Product status and category-resolution update.
   """
   updateProductStatus(input: UpdateProductStatusInput!): UpdateProductStatusPayload!
+
+  """Controller-only finalizer completion for a terminating Product."""
+  completeProductDeletion(input: CompleteProductDeletionInput!): CompleteProductDeletionPayload!
 }
 
 """
@@ -74,11 +87,97 @@ type Product implements Node {
 }
 
 type ProductSpec {
-  title: String
+  """
+  Human-readable display title for the product.
+  """
+  title: String!
   categoryRef: CatalogObjectReference
   tags: [String!]!
   media: [MediaDefinition!]!
   options: [ProductOptionDefinition!]!
+  lifecycle: ProductLifecycleSpec!
+}
+
+enum ProductLifecycleState {
+  ACTIVE
+  RETIRED
+}
+
+type ProductLifecycleSpec {
+  state: ProductLifecycleState!
+}
+
+input ProductLifecycleSpecInput {
+  state: ProductLifecycleState = ACTIVE
+}
+
+input ProductSpecInput {
+  title: String!
+  categoryRef: CatalogObjectReferenceInput
+  tags: [String!]
+  media: [MediaDefinitionInput!]
+  options: [ProductOptionDefinitionInput!]
+  lifecycle: ProductLifecycleSpecInput
+}
+
+input CatalogObjectReferenceInput {
+  apiVersion: String
+  kind: String
+  name: String!
+  namespace: String
+}
+
+input MediaDefinitionInput {
+  fileRef: FileReferenceInput!
+}
+
+input FileReferenceInput {
+  name: String!
+  kind: String!
+  optional: Boolean
+}
+
+input ProductOptionDefinitionInput {
+  name: String!
+  title: String
+  values: [String!]!
+}
+
+input CreateProductInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "Product"
+  metadata: ObjectMetaInput!
+  spec: ProductSpecInput!
+  body: String
+}
+
+input UpdateProductInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "Product"
+  metadata: ObjectMetaInput!
+  spec: ProductSpecInput!
+  body: String
+}
+
+input DeleteProductInput {
+  """Opaque global Product Node ID; never a raw UID or source selector."""
+  id: ID!
+}
+
+type CreateProductPayload {
+  product: Product
+}
+
+type UpdateProductPayload {
+  product: Product
+}
+
+type DeleteProductPayload {
+  "The current Product envelope, including terminating metadata."
+  product: Product
+
+  "Whether this request started termination or observed existing termination."
+  outcome: ResourceDeletionOutcome!
 }
 
 type ProductStatus {
@@ -92,13 +191,61 @@ input UpdateProductStatusInput {
   name: String!
   namespace: String!
   resourceVersion: String!
+
+  """Null = unchanged. Set on every successful reconcile, matching every other per-kind status mutation."""
+  observedGeneration: Int
+
+  """Null = unchanged, e.g. "main@sha1:a1b2c3d"."""
+  lastAppliedRevision: String
+
   conditions: [ConditionInput!]
-  removeOwnerUID: String
+
+  """
+  Null = unchanged. Kind-specific resolved payload for the fields this
+  feature needs (currently only the resolved category reference).
+  """
+  resolved: ResolvedProductStatusInput
+}
+
+"""Controller-only resolved-status payload accepted by updateProductStatus."""
+input ResolvedProductStatusInput {
+  """
+  Null clears any previously-resolved category reference. Non-null
+  declaratively sets it. Either way, the resolver synchronizes the
+  Product's non-blocking CategoryTaxonomy owner reference to match this
+  value (adds/updates it when set, removes it when null) — mirroring the
+  same synthesis admission already performs for a freshly-pushed Product
+  (resolvedCategoryOwnerReferences), so this is the only writer a
+  previously-unresolved Product ever needs.
+  """
+  category: ResolvedCategoryRefInput
+}
+
+"""
+A resolved CategoryTaxonomy reference: the category's name and its opaque
+Relay identifier (the same value CategoryTaxonomy.id already returns for
+that category), never the category's raw internal identifier.
+"""
+input ResolvedCategoryRefInput {
+  name: String!
+  uid: ID!
+
+  """Resolved root-to-self category names, maintained by the controller."""
+  path: [String!]
 }
 
 type UpdateProductStatusPayload {
   product: Product
-  conflict: StatusConflict
+}
+
+input CompleteProductDeletionInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+}
+
+type CompleteProductDeletionPayload {
+  id: ID
 }
 
 """A pointer to another catalogue resource."""
@@ -148,6 +295,13 @@ type ResolvedProductDefinition {
 type ResolvedCategoryDefinition {
   name: String!
   path: [String!]!
+
+  """
+  The resolved category's opaque Relay identifier, matching
+  CategoryTaxonomy.id. Present only while the owning Product's
+  CategoryResolved condition is True.
+  """
+  uid: ID
 }
 
 type PriceRangeDefinition {
@@ -178,5 +332,4 @@ type ProductEdge {
 type ProductConnection {
   edges: [ProductEdge!]!
   pageInfo: PageInfo!
-  totalCount: Int!
 }

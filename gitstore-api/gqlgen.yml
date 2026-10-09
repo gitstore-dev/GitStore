@@ -206,6 +206,10 @@ models:
     fields:
       products:
         resolver: true
+      parent:
+        resolver: true
+      children:
+        resolver: true
   Collection:
     fields:
       products:

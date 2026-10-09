@@ -2,8 +2,12 @@
 
 ## Normal operation
 
-`deleteCategory` marks an eligible category with
-`gitstore.dev/foreground-deletion` and a deletion timestamp. Child categories
+`deleteCategory` removes the category's manifest from Git (one commit) and the
+category is marked with
+`gitstore.dev/foreground-deletion` and a deletion timestamp. The response outcome
+is `TERMINATION_STARTED`; a repeat returns `ALREADY_TERMINATING` without a new
+commit. When children are gone and products are decoupled, the controller calls
+`completeCategoryDeletion` (permission `categoryTaxonomy.purge`). Child categories
 with `blockOwnerDeletion=true` reject the request. Products never block it:
 the controller removes their managed owner reference and writes
 `CategoryResolved=False` with reason `CategoryDeleted`; it does not change the
@@ -21,31 +25,21 @@ drained and Product pages complete.
    a replica is safe: the lifecycle is stored with an optimistic resource
    version and Product decoupling is idempotent.
 3. If a category remains terminating, inspect controller errors and the
-   Scylla `owner_reference_dependents` projection. Backfill or repair stale
-   projections before retrying completion; do not remove the finalizer by hand.
+   Scylla `owner_reference_dependents` projection. Repair stale projections
+   with the current consistency tooling before retrying completion; do not
+   remove the finalizer by hand.
 4. If Product drain is slow, retain the configured bounded page size and allow
    continuation reconciles rather than increasing a request timeout.
 
-Run the owner-reference backfill before enabling enforcement on records
-written before owner references existed. It is idempotent; use `--dry-run`
-first and retain the returned `resumeAfter` value to resume after an
-interruption:
-
-```bash
-(cd gitstore-api && go run ./cmd/backfill-owner-references --dry-run)
-(cd gitstore-api && go run ./cmd/backfill-owner-references --resume-after '<cursor>')
-```
-
-Do not enable deletion enforcement until the non-dry-run backfill completes
-without a resume cursor and verification reports no resolved resource missing
-its owner projection.
+This is a clean-break deployment: records written before required owner
+references are invalid. Reset and reseed development state instead of using a
+historical backfill command.
 
 ## Rollout and rollback
 
-Deploy the additive schema and GraphQL/list-watch fields first, then backfill
-existing resolved owner references, enable writers, and finally enable deletion
-enforcement and controller draining. Rollback may disable enforcement and
-draining without deleting owner-reference metadata or the Scylla projection.
+Deploy coordinated API/controller versions with fresh development state, then
+enable deletion enforcement and controller draining. Mixed old/new deployments
+are unsupported; do not delete persistent state automatically during rollback.
 
 CategoryTaxonomy manifest removal is checked synchronously in pre-receive
 against the full old and proposed ref trees. A parent-only deletion rejects;

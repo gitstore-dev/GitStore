@@ -73,24 +73,20 @@ RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/reg
 # in-process via gix (gitoxide).
 FROM alpine:3
 
+ARG GIT_REVISION=unknown
+LABEL org.opencontainers.image.revision=${GIT_REVISION}
+
 RUN apk add --no-cache \
     ca-certificates \
     libgcc && \
-    mkdir -p /data/repos
+    mkdir -p /var/lib/gitstore/repos
 
 WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /build/git-service /app/git-service
 
-# Expose git protocol and websocket ports
-EXPOSE 9418 8080
-
-ENV GITSTORE_HTTP__PORT=9418
-ENV GITSTORE_WS__PORT=8080
-ENV GITSTORE_GIT__DATA_DIR=/data/repos
-ENV GITSTORE_LOG__LEVEL=info
-ENV GITSTORE_LOG__FORMAT=json
-ENV GITSTORE_GIT__REPO__MAX_FILE_SIZE=52428800
+# The Git service exposes only its gRPC API.
+EXPOSE 50051
 
 CMD ["/app/git-service"]

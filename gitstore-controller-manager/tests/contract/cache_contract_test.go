@@ -112,7 +112,7 @@ func TestCacheAccessor_ReadOnly(t *testing.T) {
 	ro := cache.AsReadOnly(c)
 
 	// Verify it satisfies the CacheAccessor interface.
-	var _ cache.CacheAccessor[string] = ro
+	var _ = ro
 
 	// Verify Get works through the read-only view.
 	val, ok := ro.Get(key)

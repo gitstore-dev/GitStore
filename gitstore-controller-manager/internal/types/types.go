@@ -76,8 +76,10 @@ type Reconciler interface {
 }
 
 var (
-	ErrNotFound          = errors.New("not found")
-	ErrQueueShutdown     = errors.New("queue is shutting down")
-	ErrKindNotRegistered = errors.New("kind not registered")
-	ErrConflict          = errors.New("optimistic concurrency conflict")
+	ErrNotFound               = errors.New("not found")
+	ErrQueueShutdown          = errors.New("queue is shutting down")
+	ErrKindNotRegistered      = errors.New("kind not registered")
+	ErrConflict               = errors.New("optimistic concurrency conflict")
+	ErrRateLimited            = errors.New("remote API rate limited request")
+	ErrCredentialsUnavailable = errors.New("controller credentials unavailable")
 )

@@ -119,13 +119,11 @@ pub mod catalog_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        pub async fn validate_category_taxonomy_deletion(
+        pub async fn validate_resource_deletions(
             &mut self,
-            request: impl tonic::IntoRequest<
-                super::ValidateCategoryTaxonomyDeletionRequest,
-            >,
+            request: impl tonic::IntoRequest<super::ValidateResourceDeletionsRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::ValidateCategoryTaxonomyDeletionResponse>,
+            tonic::Response<super::ValidateResourceDeletionsResponse>,
             tonic::Status,
         > {
             self.inner
@@ -138,14 +136,14 @@ pub mod catalog_service_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/gitstore.catalog.v1.CatalogService/ValidateCategoryTaxonomyDeletion",
+                "/gitstore.catalog.v1.CatalogService/ValidateResourceDeletions",
             );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(
                     GrpcMethod::new(
                         "gitstore.catalog.v1.CatalogService",
-                        "ValidateCategoryTaxonomyDeletion",
+                        "ValidateResourceDeletions",
                     ),
                 );
             self.inner.unary(req, path, codec).await
@@ -201,11 +199,11 @@ pub mod catalog_service_server {
             tonic::Response<super::ValidateResourcesResponse>,
             tonic::Status,
         >;
-        async fn validate_category_taxonomy_deletion(
+        async fn validate_resource_deletions(
             &self,
-            request: tonic::Request<super::ValidateCategoryTaxonomyDeletionRequest>,
+            request: tonic::Request<super::ValidateResourceDeletionsRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::ValidateCategoryTaxonomyDeletionResponse>,
+            tonic::Response<super::ValidateResourceDeletionsResponse>,
             tonic::Status,
         >;
         async fn admit_resources(
@@ -338,17 +336,15 @@ pub mod catalog_service_server {
                     };
                     Box::pin(fut)
                 }
-                "/gitstore.catalog.v1.CatalogService/ValidateCategoryTaxonomyDeletion" => {
+                "/gitstore.catalog.v1.CatalogService/ValidateResourceDeletions" => {
                     #[allow(non_camel_case_types)]
-                    struct ValidateCategoryTaxonomyDeletionSvc<T: CatalogService>(
-                        pub Arc<T>,
-                    );
+                    struct ValidateResourceDeletionsSvc<T: CatalogService>(pub Arc<T>);
                     impl<
                         T: CatalogService,
                     > tonic::server::UnaryService<
-                        super::ValidateCategoryTaxonomyDeletionRequest,
-                    > for ValidateCategoryTaxonomyDeletionSvc<T> {
-                        type Response = super::ValidateCategoryTaxonomyDeletionResponse;
+                        super::ValidateResourceDeletionsRequest,
+                    > for ValidateResourceDeletionsSvc<T> {
+                        type Response = super::ValidateResourceDeletionsResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
@@ -356,12 +352,12 @@ pub mod catalog_service_server {
                         fn call(
                             &mut self,
                             request: tonic::Request<
-                                super::ValidateCategoryTaxonomyDeletionRequest,
+                                super::ValidateResourceDeletionsRequest,
                             >,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as CatalogService>::validate_category_taxonomy_deletion(
+                                <T as CatalogService>::validate_resource_deletions(
                                         &inner,
                                         request,
                                     )
@@ -376,7 +372,7 @@ pub mod catalog_service_server {
                     let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
-                        let method = ValidateCategoryTaxonomyDeletionSvc(inner);
+                        let method = ValidateResourceDeletionsSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

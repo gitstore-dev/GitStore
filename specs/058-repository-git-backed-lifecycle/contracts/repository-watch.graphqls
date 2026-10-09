@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 GitStore contributors
+
+# Additive Repository watch contract. It extends the durable, replica-safe
+# journal design shipped for Namespace by spec 050, but uses a distinct
+# Repository cursor epoch and per-kind order.
+
+extend type Subscription {
+  """
+  Canonical Repository watch. Namespace is optional: omitting it selects the
+  global controller stream. Authorization requires
+  repository.watch before cursor parsing, replay, or registration.
+
+  With resourceVersion omitted, future events begin at the current high-water
+  cursor. For a race-free initial view, clients use the private bootstrap
+  sentinel through the controller ListWatcher, wait for BOOKMARK, list the
+  namespace's repositories, then drain events after that cursor. A retained
+  cursor replays only later events. Any continuity failure terminates with
+  WATCH_EXPIRED; unavailable materialization terminates with WATCH_UNAVAILABLE.
+  """
+  watchRepositories(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): RepositoryWatchEvent!
+}
+
+"""
+Typed durable Repository lifecycle event. resourceVersion is the opaque
+Repository journal cursor, distinct from repository.metadata.resourceVersion.
+"""
+type RepositoryWatchEvent {
+  type: WatchEventType!
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+  repository: Repository
+}
+
+# Generic compatibility remains additive:
+# watchResources(kind: "Repository", namespace: <namespace>, ...).
+# It uses the same durable Repository journal and cursor semantics as
+# watchRepositories. ADDED/MODIFIED carry full Repository JSON; DELETED and
+# BOOKMARK carry no object payload.

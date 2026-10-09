@@ -1,0 +1,8 @@
+# DEVELOPMENT ONLY. Do not reuse these credentials outside local Compose.
+# Password for this fixture: admin123
+version: v1
+users:
+  - username: admin
+    password_hash: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
+    display_name: Local administrator
+    email: admin@localhost

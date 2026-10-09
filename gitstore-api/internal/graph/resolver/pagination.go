@@ -68,7 +68,6 @@ func BuildProductConnectionFromSlice(products []*datastore.Product, params datas
 		}
 	}
 
-	totalFiltered := len(products)
 	limit := params.Limit()
 	hasNext, hasPrevious := false, false
 
@@ -101,9 +100,8 @@ func BuildProductConnectionFromSlice(products []*datastore.Product, params datas
 		pi.EndCursor = &ec
 	}
 	return &model.ProductConnection{
-		Edges:      edges,
-		PageInfo:   pi,
-		TotalCount: int32(totalFiltered),
+		Edges:    edges,
+		PageInfo: pi,
 	}
 }
 
@@ -117,9 +115,8 @@ func BuildProductConnection(result *datastore.PageResult[datastore.Product]) *mo
 		}
 	}
 	return &model.ProductConnection{
-		Edges:      edges,
-		TotalCount: result.TotalCount,
-		PageInfo:   buildPageInfo(result, func(p *datastore.Product) string { return EncodeKeysetCursor(p.CreationTimestamp, p.UID) }),
+		Edges:    edges,
+		PageInfo: buildPageInfo(result, func(p *datastore.Product) string { return EncodeKeysetCursor(p.CreationTimestamp, p.UID) }),
 	}
 }
 
@@ -133,9 +130,8 @@ func BuildCategoryConnection(result *datastore.PageResult[datastore.CategoryTaxo
 		}
 	}
 	return &model.CategoryConnection{
-		Edges:      edges,
-		TotalCount: result.TotalCount,
-		PageInfo:   buildPageInfo(result, func(c *datastore.CategoryTaxonomy) string { return EncodeKeysetCursor(c.CreationTimestamp, c.UID) }),
+		Edges:    edges,
+		PageInfo: buildPageInfo(result, func(c *datastore.CategoryTaxonomy) string { return EncodeKeysetCursor(c.CreationTimestamp, c.UID) }),
 	}
 }
 
@@ -149,9 +145,8 @@ func BuildCollectionConnection(result *datastore.PageResult[datastore.Collection
 		}
 	}
 	return &model.CollectionConnection{
-		Edges:      edges,
-		TotalCount: result.TotalCount,
-		PageInfo:   buildPageInfo(result, func(c *datastore.Collection) string { return EncodeKeysetCursor(c.CreationTimestamp, c.UID) }),
+		Edges:    edges,
+		PageInfo: buildPageInfo(result, func(c *datastore.Collection) string { return EncodeKeysetCursor(c.CreationTimestamp, c.UID) }),
 	}
 }
 
@@ -179,7 +174,6 @@ func BuildVariantConnectionFromSlice(variants []*datastore.ProductVariant, param
 		}
 	}
 
-	totalFiltered := len(variants)
 	limit := params.Limit()
 	hasNext, hasPrevious := false, false
 
@@ -212,9 +206,8 @@ func BuildVariantConnectionFromSlice(variants []*datastore.ProductVariant, param
 		pi.EndCursor = &ec
 	}
 	return &model.ProductVariantConnection{
-		Edges:      edges,
-		PageInfo:   pi,
-		TotalCount: int32(totalFiltered),
+		Edges:    edges,
+		PageInfo: pi,
 	}
 }
 
@@ -228,9 +221,8 @@ func BuildVariantConnection(result *datastore.PageResult[datastore.ProductVarian
 		}
 	}
 	return &model.ProductVariantConnection{
-		Edges:      edges,
-		TotalCount: result.TotalCount,
-		PageInfo:   buildPageInfo(result, func(v *datastore.ProductVariant) string { return EncodeKeysetCursor(v.CreationTimestamp, v.UID) }),
+		Edges:    edges,
+		PageInfo: buildPageInfo(result, func(v *datastore.ProductVariant) string { return EncodeKeysetCursor(v.CreationTimestamp, v.UID) }),
 	}
 }
 
@@ -244,9 +236,8 @@ func BuildNamespaceConnection(result *datastore.PageResult[datastore.Namespace])
 		}
 	}
 	return &model.NamespaceConnection{
-		Edges:      edges,
-		TotalCount: result.TotalCount,
-		PageInfo:   buildPageInfo(result, func(ns *datastore.Namespace) string { return EncodeKeysetCursor(ns.CreationTimestamp, ns.UID) }),
+		Edges:    edges,
+		PageInfo: buildPageInfo(result, func(ns *datastore.Namespace) string { return EncodeKeysetCursor(ns.CreationTimestamp, ns.UID) }),
 	}
 }
 
@@ -269,8 +260,7 @@ func BuildRepositoryConnection(
 		}
 	}
 	return &model.RepositoryConnection{
-		Edges:      edges,
-		TotalCount: result.TotalCount,
-		PageInfo:   buildPageInfo(result, func(r *datastore.Repository) string { return EncodeKeysetCursor(r.CreationTimestamp, r.UID) }),
+		Edges:    edges,
+		PageInfo: buildPageInfo(result, func(r *datastore.Repository) string { return EncodeKeysetCursor(r.CreationTimestamp, r.UID) }),
 	}, nil
 }

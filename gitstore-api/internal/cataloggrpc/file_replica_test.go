@@ -60,7 +60,8 @@ func TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent(t *testing.
 		go func(srv *cataloggrpc.Server) {
 			defer wg.Done()
 			_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-				RepositoryId: testRepoID, CommitSha: commit, RefName: "refs/heads/main",
+				ActorSubject: "test-admission-actor",
+				RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
 			})
 			errs <- err
 		}(replica)
@@ -88,7 +89,8 @@ func TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent(t *testing.
 	// even though the stored representation normalizes omitted metadata maps
 	// to empty maps. In particular it must not erase controller-owned status.
 	_, err = replicas[0].AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, CommitSha: commit, RefName: "refs/heads/main",
+		ActorSubject: "test-admission-actor",
+		RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	file, err = store.GetFileByName(context.Background(), "gitstore", "hero")
@@ -125,7 +127,8 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 	seedCurrent := a
 	seedServer := newCatalogServer(t, store, newTreeGitReader(&seedCurrent, files))
 	_, err := seedServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, CommitSha: a, RefName: "refs/heads/main",
+		ActorSubject: "test-admission-actor",
+		RepositoryId: testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	seeded, err := store.GetFileByName(context.Background(), "gitstore", "hero")
@@ -176,7 +179,8 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 	olderDone := make(chan error, 1)
 	go func() {
 		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b, CommitSha: b,
+			ActorSubject: "test-admission-actor",
+			RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b,
 			RefName: "refs/heads/main", ChangedPaths: []string{path},
 		})
 		olderDone <- err
@@ -192,7 +196,8 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 	current = c
 	mu.Unlock()
 	_, err = newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, OldCommitSha: b, NewCommitSha: c, CommitSha: c,
+		ActorSubject: "test-admission-actor",
+		RepositoryId: testRepoID, OldCommitSha: b, NewCommitSha: c,
 		RefName: "refs/heads/main", ChangedPaths: []string{path},
 	})
 	require.NoError(t, err)
@@ -279,7 +284,8 @@ func TestAdmitResources_FileCurrentCreateRetriesAfterConcurrentCollision(t *test
 	olderDone := make(chan error, 1)
 	go func() {
 		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			RepositoryId: testRepoID, CommitSha: b, RefName: "refs/heads/main",
+			ActorSubject: "test-admission-actor",
+			RepositoryId: testRepoID, NewCommitSha: b, RefName: "refs/heads/main",
 		})
 		olderDone <- err
 	}()
@@ -295,7 +301,8 @@ func TestAdmitResources_FileCurrentCreateRetriesAfterConcurrentCollision(t *test
 	newerDone := make(chan error, 1)
 	go func() {
 		_, err := newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			RepositoryId: testRepoID, CommitSha: c, RefName: "refs/heads/main",
+			ActorSubject: "test-admission-actor",
+			RepositoryId: testRepoID, NewCommitSha: c, RefName: "refs/heads/main",
 		})
 		newerDone <- err
 	}()
@@ -359,7 +366,8 @@ func TestAdmitResources_FileCurrentCommitRetriesAfterConcurrentConflict(t *testi
 	current := a
 	seed := newCatalogServer(t, base, newTreeGitReader(&current, files))
 	_, err := seed.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, CommitSha: a, RefName: "refs/heads/main",
+		ActorSubject: "test-admission-actor",
+		RepositoryId: testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -382,7 +390,8 @@ func TestAdmitResources_FileCurrentCommitRetriesAfterConcurrentConflict(t *testi
 	olderDone := make(chan error, 1)
 	go func() {
 		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b, CommitSha: b,
+			ActorSubject: "test-admission-actor",
+			RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b,
 			RefName: "refs/heads/main", ChangedPaths: []string{path},
 		})
 		olderDone <- err
@@ -399,7 +408,8 @@ func TestAdmitResources_FileCurrentCommitRetriesAfterConcurrentConflict(t *testi
 	newerDone := make(chan error, 1)
 	go func() {
 		_, err := newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			RepositoryId: testRepoID, OldCommitSha: b, NewCommitSha: c, CommitSha: c,
+			ActorSubject: "test-admission-actor",
+			RepositoryId: testRepoID, OldCommitSha: b, NewCommitSha: c,
 			RefName: "refs/heads/main", ChangedPaths: []string{path},
 		})
 		newerDone <- err
@@ -452,7 +462,8 @@ func TestAdmitResources_FileUpdateSurvivesReplicaProcessReplacement(t *testing.T
 	}
 	process1 := newCatalogServer(t, store, gitA)
 	_, err := process1.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, CommitSha: a, RefName: "refs/heads/main",
+		ActorSubject: "test-admission-actor",
+		RepositoryId: testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	// process1 is deliberately never referenced again below — it represents
@@ -477,7 +488,8 @@ func TestAdmitResources_FileUpdateSurvivesReplicaProcessReplacement(t *testing.T
 	current = b
 	process2 := newCatalogServer(t, store, gitB)
 	_, err = process2.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b, CommitSha: b,
+		ActorSubject: "test-admission-actor",
+		RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b,
 		RefName: "refs/heads/main", ChangedPaths: []string{"files/hero.md"},
 	})
 	require.NoError(t, err)

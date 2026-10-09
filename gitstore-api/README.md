@@ -20,7 +20,7 @@ Post-receive admission is operation-aware for current Git-backed catalog resourc
 ## Boundaries
 
 - Clients send GraphQL traffic to this service on port `4000`.
-- Git clients send Smart HTTP traffic to this service on port `5000`.
+- Git clients use this service's Smart HTTP port `9000` in the default Compose deployment.
 - `gitstore-git-service` calls this service's CatalogService gRPC endpoint on port `6000`.
 - This service calls `gitstore-git-service` through GitService gRPC on port `50051`.
 - This service owns datastore persistence for control-plane records and admitted catalogue projections.
@@ -44,7 +44,7 @@ Post-receive admission is operation-aware for current Git-backed catalog resourc
 gitstore-api/
 ├── cmd/
 │   ├── server/       # API server entrypoint
-│   └── hashpw/       # bcrypt password hash helper
+│   └── gitctl/       # operator CLI: auth config, secrets, and datastore repair
 ├── gen/              # Generated protobuf Go code
 ├── internal/
 │   ├── app/          # Runtime composition
@@ -67,25 +67,33 @@ gitstore-api/
 
 ## Configuration Highlights
 
+Pass `--config-file PATH` to require and load an explicit TOML file. Environment
+variables override file values. Repeat the flag to layer additive overlays on
+top of a base file — `--config-file base.toml --config-file overlay.toml` —
+each later file is merged on top of the previous ones (later file wins per
+key), so an overlay only needs to declare the keys it changes. Root
+`make compose` uses the shared development-only `config/config.toml` and needs
+no API `.env` file.
+
 Required for local API startup unless provided by `.env`:
 
-| Variable                              | Default                  | Purpose                  |
-|---------------------------------------|--------------------------|--------------------------|
-| `GITSTORE_AUTH__ADMIN__USERNAME`      | unset                    | Admin username           |
-| `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | unset                    | bcrypt password hash     |
-| `GITSTORE_AUTH__JWT__SECRET`          | unset                    | JWT signing secret       |
-| `GITSTORE_API__PORT`                  | `4000`                   | GraphQL HTTP port        |
-| `GITSTORE_API__GIT_PORT`              | `5000`                   | Git Smart HTTP port      |
-| `GITSTORE_API__GRPC_PORT`             | `6000`                   | CatalogService gRPC port |
-| `GITSTORE_GIT__GRPC__URI`             | `dns:///localhost:50051` | GitService gRPC target   |
-| `GITSTORE_DATASTORE__BACKEND`         | `memdb`                  | `memdb` or `scylla`      |
-| `GITSTORE_LOG__LEVEL`                 | `info`                   | Log level                |
-| `GITSTORE_LOG__FORMAT`                | `json`                   | `json` or `text`         |
+| Variable                                        | Default                  | Purpose                  |
+|---------------------------------------------------|--------------------------|--------------------------|
+| `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE`  | `users.yaml`             | Local users YAML         |
+| `GITSTORE_API__AUTH__JWT__SECRET`               | unset                    | JWT signing secret       |
+| `GITSTORE_API__PORT`                            | `4000`                   | GraphQL HTTP port        |
+| `GITSTORE_API__GIT_PORT`                        | `5000`                   | Git Smart HTTP port      |
+| `GITSTORE_API__GRPC_PORT`                       | `6000`                   | CatalogService gRPC port |
+| `GITSTORE_API__GIT_SERVICE__URI`                | `dns:///localhost:50051` | GitService gRPC target   |
+| `GITSTORE_API__DATASTORE__BACKEND`              | `memdb`                  | `memdb` or `scylla`      |
+| `GITSTORE_LOG__LEVEL`                           | `info`                   | Log level                |
+| `GITSTORE_LOG__FORMAT`                          | `json`                   | `json` or `text`         |
 
 Copy the example file for local development:
 
 ```bash
 cp gitstore-api/.env.example gitstore-api/.env
+# The sample points at the tracked development fixture in config/users.yaml.
 ```
 
 ## Commands
@@ -96,7 +104,7 @@ From the repository root:
 make api
 make dev
 make compose DETACH=1
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```
 
 From this module:
@@ -104,7 +112,7 @@ From this module:
 ```bash
 go test ./...
 go generate ./...
-go run ./cmd/hashpw <password>
+go run ./cmd/gitctl hash-password <password>
 ```
 
 Scylla-backed tests:

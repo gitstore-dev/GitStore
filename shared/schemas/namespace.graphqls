@@ -55,50 +55,6 @@ type Namespace implements Node {
   status: NamespaceStatus!
 
   """
-  Human-readable identifier, globally unique across all tiers.
-  DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
-  Cannot begin or end with a hyphen.
-  """
-  identifier: String!
-    @deprecated(reason: "Use metadata.name; removal requires a future major GraphQL API release.")
-
-  """
-  Optional human-friendly display name.
-  """
-  displayName: String
-    @deprecated(reason: "Use spec.title; removal requires a future major GraphQL API release.")
-
-  """
-  The tier of this namespace.
-  """
-  tier: NamespaceTier!
-    @deprecated(reason: "Use spec.tier; removal requires a future major GraphQL API release.")
-
-  """
-  Timestamp when this namespace was created.
-  """
-  createdAt: DateTime!
-    @deprecated(reason: "Use metadata.creationTimestamp; removal requires a future major GraphQL API release.")
-
-  """
-  Username of the caller who created this namespace.
-  """
-  createdBy: String!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
-  """
-  Timestamp when this namespace was last modified.
-  """
-  updatedAt: DateTime!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
-  """
-  Username of the caller who last modified this namespace.
-  """
-  updatedBy: String!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
-  """
   Markdown body content (namespace description).
   """
   body: String
@@ -118,6 +74,7 @@ type NamespaceMetadata {
   creationTimestamp: DateTime!
   revision: String
   ownerReferences: [OwnerReference!]!
+  owner: ResourceOwner!
   finalizers: [String!]!
 }
 
@@ -210,11 +167,6 @@ type NamespaceConnection {
   Pagination information.
   """
   pageInfo: PageInfo!
-
-  """
-  Total count of namespaces.
-  """
-  totalCount: Int!
 }
 
 """
@@ -222,7 +174,6 @@ Selector for looking up a namespace by exactly one unique key.
 """
 input NamespaceBy @oneOf {
   id: ID
-  identifier: String @deprecated(reason: "Use name; removal requires a future major GraphQL API release.")
   name: String
 }
 
@@ -256,8 +207,8 @@ input NamespaceSpecInput {
 Declarative resource envelope for creating a namespace.
 """
 input CreateNamespaceInput {
-  apiVersion: String!
-  kind: String!
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Namespace"
   metadata: NamespaceMetadataInput!
   spec: NamespaceSpecInput!
 }
@@ -266,8 +217,8 @@ input CreateNamespaceInput {
 Declarative resource envelope for updating a namespace.
 """
 input UpdateNamespaceInput {
-  apiVersion: String!
-  kind: String!
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Namespace"
   metadata: NamespaceMetadataInput!
   spec: NamespaceSpecInput!
 }
@@ -281,14 +232,17 @@ input DeleteNamespaceInput {
   Deletion is blocked if any repositories exist within the namespace.
   Requires the caller to be the namespace owner (createdBy) or isAdmin.
   """
-  identifier: String!
+  id: ID!
 }
 
 """
 Controller-only finalizer completion for a terminating namespace.
 """
 input CompleteNamespaceDeletionInput {
-  identifier: String!
+  """
+  Name of the terminating namespace.
+  """
+  name: String!
   resourceVersion: String!
 }
 
@@ -306,19 +260,74 @@ type UpdateNamespacePayload {
   namespace: Namespace
 }
 
+input UpdateNamespaceStatusInput {
+  name: String!
+  resourceVersion: String!
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [ConditionInput!]
+}
+
+type UpdateNamespaceStatusPayload {
+  namespace: Namespace!
+}
+
+"""
+The successful result of requesting Namespace termination.
+"""
+enum ResourceDeletionOutcome {
+  """
+  This request set the deletion timestamp and foreground deletion finalizer.
+  """
+  TERMINATION_STARTED
+
+  """
+  The Namespace was already terminating, so no datastore write occurred.
+  """
+  ALREADY_TERMINATING
+}
+
 """
 Payload returned after successfully deleting a namespace.
 """
 type DeleteNamespacePayload {
+  "The Namespace while foreground termination is in progress."
+  namespace: Namespace
+
   """
-  The identifier of the deleted namespace.
+  Whether this request started termination or observed an existing termination.
   """
-  deletedIdentifier: String!
+  outcome: ResourceDeletionOutcome!
+}
+
+"""
+Reassign a namespace's owner.
+"""
+input TransferNamespaceOwnerInput {
+  namespaceId: ID!
+  targetOwnerRef: ResourceOwnerInput!
+}
+
+type TransferNamespaceOwnerPayload {
+  namespace: Namespace!
 }
 
 type CompleteNamespaceDeletionPayload {
-  deletedIdentifier: String
-  conflict: StatusConflict
+  id: ID
+}
+
+"""
+Controller-only bootstrap operation. Ensures the system-managed
+`gitstore-system` repository exists for an admitted Namespace. It is separate
+from createRepository because bootstrap repositories are not author-managed
+declarative Repository resources.
+"""
+input ProvisionNamespaceSystemRepositoryInput {
+  namespace: String!
+}
+
+type ProvisionNamespaceSystemRepositoryPayload {
+  repository: Repository!
 }
 
 extend type Query {
@@ -350,6 +359,9 @@ extend type Mutation {
   """
   updateNamespace(input: UpdateNamespaceInput!): UpdateNamespacePayload!
 
+  """Write controller-owned Namespace status with optimistic concurrency."""
+  updateNamespaceStatus(input: UpdateNamespaceStatusInput!): UpdateNamespaceStatusPayload!
+
   """
   Delete a namespace.
   Requires authentication. Caller must be the namespace owner or isAdmin.
@@ -358,7 +370,40 @@ extend type Mutation {
   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
 
   """
+  Reassign a namespace's owner. Requires authentication.
+  Caller must currently be the namespace owner (or isAdmin), and must be a
+  member of the target owner (or isAdmin).
+  """
+  transferNamespaceOwner(input: TransferNamespaceOwnerInput!): TransferNamespaceOwnerPayload!
+
+  """
   Permanently delete a terminating namespace after its repositories are gone.
   """
   completeNamespaceDeletion(input: CompleteNamespaceDeletionInput!): CompleteNamespaceDeletionPayload!
+
+  """Controller-only, idempotent Namespace bootstrap repository provisioning."""
+  provisionNamespaceSystemRepository(input: ProvisionNamespaceSystemRepositoryInput!): ProvisionNamespaceSystemRepositoryPayload!
+}
+
+extend type Subscription {
+  """
+  Canonical cluster-scoped Namespace watch. The bootstrap sentinel establishes
+  a high-water BOOKMARK before the caller lists Namespaces. A retained cursor
+  resumes strictly after that event; continuity failures return WATCH_EXPIRED.
+  """
+  watchNamespaces(
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): NamespaceWatchEvent!
+}
+
+"""
+Strongly typed Namespace journal event. resourceVersion is an opaque durable
+journal cursor and is distinct from namespace.metadata.resourceVersion.
+"""
+type NamespaceWatchEvent {
+  type: WatchEventType!
+  name: String!
+  resourceVersion: String!
+  namespace: Namespace
 }

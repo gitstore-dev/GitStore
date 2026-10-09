@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.gitstore.dev/gitstore/v1beta1/category.schema.json",
+  "title": "GitStore CategoryTaxonomy",
+  "description": "YAML frontmatter for a GitStore CategoryTaxonomy resource. A CategoryTaxonomy resource is a Markdown file: this schema validates only the frontmatter object between the opening and closing '---' delimiters. The remaining Markdown content is the free-form category description body and is not covered by this schema. Categories may nest via spec.parentRef to form a taxonomy tree. See docs/categories/category-taxonomy-spec.md for the full authoring contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "catalog.gitstore.dev/v1beta1",
+      "description": "Must be exactly \"catalog.gitstore.dev/v1beta1\"."
+    },
+    "kind": {
+      "const": "CategoryTaxonomy",
+      "description": "Must be exactly \"CategoryTaxonomy\" (case-sensitive)."
+    },
+    "metadata": {
+      "$ref": "#/$defs/ObjectMeta"
+    },
+    "spec": {
+      "$ref": "#/$defs/CategoryTaxonomySpec"
+    }
+  },
+  "$defs": {
+    "ObjectMeta": {
+      "type": "object",
+      "description": "Author-writable resource metadata. Do not set uid, resourceVersion, generation, creationTimestamp, revision, ownerReferences, or finalizers — those fields are system-managed and any of them present in an authored file causes the push to be rejected.",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "maxLength": 63,
+          "description": "DNS label format: lowercase alphanumeric and hyphens, 1-63 characters, no leading/trailing hyphen. Identifies this CategoryTaxonomy uniquely within its namespace."
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Optional. When omitted, the namespace is inferred from the owning repository at push time. When present, it is validated to match the inferred namespace."
+        },
+        "labels": {
+          "type": "object",
+          "description": "Optional key/value labels. Keys may use an optional \"prefix/name\" form; prefix ≤ 253 chars, name segment ≤ 63 chars. Values ≤ 63 chars.",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 63
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Optional key/value annotations. No length restriction.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ObjectReference": {
+      "type": "object",
+      "description": "A pointer to another catalogue resource.",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "apiVersion": { "type": "string" },
+        "kind": { "type": "string" },
+        "name": { "type": "string", "minLength": 1, "description": "Required. Name of the referenced resource." },
+        "namespace": { "type": "string" },
+        "uid": { "type": "string" },
+        "resourceVersion": { "type": "string" },
+        "fieldPath": { "type": "string" }
+      }
+    },
+    "FileReference": {
+      "type": "object",
+      "description": "Identifies a File resource by name and kind.",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "Required — the name of the referenced File resource, even when optional is true." },
+        "kind": { "type": "string", "minLength": 1, "description": "Required. Typically \"File\"." },
+        "optional": { "type": "boolean", "description": "When true, admission succeeds even if the referenced File is absent." }
+      }
+    },
+    "MediaDefinition": {
+      "type": "object",
+      "description": "A media slot referencing a File resource.",
+      "additionalProperties": false,
+      "required": ["fileRef"],
+      "properties": {
+        "fileRef": { "$ref": "#/$defs/FileReference" }
+      }
+    },
+    "CategoryTaxonomySpec": {
+      "type": "object",
+      "description": "Author-controlled declarative specification for a category taxonomy node.",
+      "additionalProperties": false,
+      "required": ["title"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Required. Human-readable display title. Max 200 characters."
+        },
+        "parentRef": {
+          "$ref": "#/$defs/ObjectReference",
+          "description": "Reference to a parent CategoryTaxonomy, forming a tree. Omit for a root-level category. Cycles are rejected at admission."
+        },
+        "media": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/MediaDefinition" }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "apiVersion": "catalog.gitstore.dev/v1beta1",
+      "kind": "CategoryTaxonomy",
+      "metadata": {
+        "name": "personal-computers",
+        "namespace": "acme-store",
+        "labels": { "gitstore.dev/department": "electronics" }
+      },
+      "spec": {
+        "title": "Personal Computers",
+        "parentRef": {
+          "kind": "CategoryTaxonomy",
+          "name": "electronics"
+        }
+      }
+    }
+  ]
+}

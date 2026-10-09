@@ -36,6 +36,20 @@ type ResourceStatus struct {
 	Resolved json.RawMessage
 }
 
+func (s *ResourceStatus) UnmarshalJSON(data []byte) error {
+	type wireStatus ResourceStatus
+	decoded := wireStatus(*s)
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	// A persisted absent payload must stay absent, not become non-nil "null".
+	if bytes.Equal(bytes.TrimSpace(decoded.Resolved), []byte("null")) {
+		decoded.Resolved = nil
+	}
+	*s = ResourceStatus(decoded)
+	return nil
+}
+
 // StatusPatch is a partial-merge update applied to a resource's .status sub-resource.
 // Only non-nil pointer fields are included in the API request.
 type StatusPatch struct {

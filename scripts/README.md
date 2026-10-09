@@ -2,13 +2,44 @@
 
 Utility scripts for GitStore development and demonstration.
 
+## run-capacity.sh
+
+Runs a named profile from `tests/capacity/profiles/` with pinned k6 and writes
+structured evidence beneath `.gitstore/capacity/`. Invoke it through the root
+Makefile:
+
+```bash
+make capacity TARGET=api PROFILE=readiness MODE=diagnostic CAPACITY_BASE_URL=http://localhost:4000
+```
+
+## run-chaos.sh
+
+Runs an explicitly confirmed, allowlisted Pumba fault profile against one
+GitStore container and records before/after inspection evidence:
+
+```bash
+make chaos CHAOS_PROFILE=api-pause-5s CHAOS_TARGET=gitstore-api CHAOS_CONFIRM=1
+```
+
 For normal repository checks, run the licence scripts through the root Make target:
 
 ```bash
-make license-check
+make check TARGET=licenses
 ```
 
 Use the scripts directly only when you need a narrower mode such as `--staged`.
+
+## check-credential-log-leakage.sh
+
+Checks the service-account assertion and access-token providers plus the
+controller GraphQL client for Zap fields that could carry raw tokens,
+assertions, or private keys. Run it through the root Makefile:
+
+```bash
+make check TARGET=credentials
+```
+
+The check excludes test files and is required by the main CI workflow.
 
 ## check-go-license-headers.sh
 
@@ -57,8 +88,8 @@ Updates a `KEY='value'` entry in one or more `.env` files. If the key exists, th
 ### Usage
 
 ```bash
-./scripts/update-env-secret.sh GITSTORE_AUTH__JWT__SECRET "new-secret" gitstore-api/.env
-./scripts/update-env-secret.sh GITSTORE_AUTH__GRPC__HMAC_SECRET "shared-secret" gitstore-api/.env gitstore-git-service/.env
+./scripts/update-env-secret.sh GITSTORE_API__AUTH__JWT__SECRET "new-secret" gitstore-api/.env
+./scripts/update-env-secret.sh GITSTORE_GRPC_AUTH__HMAC_SECRET "shared-secret" gitstore-api/.env gitstore-git-service/.env
 ```
 
 ## check-rust-license-headers.sh

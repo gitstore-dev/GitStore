@@ -9,55 +9,27 @@ import (
 	"context"
 	"errors"
 
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
-	"go.uber.org/zap"
 )
+
+// File is the resolver for the file field.
+func (r *queryResolver) File(ctx context.Context, namespace string, name string) (*model.File, error) {
+	if namespace == "" || name == "" {
+		return nil, &gqlerror.Error{Message: "File namespace and name are required", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
+	}
+	file, err := r.store.GetFileByName(ctx, namespace, name)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, gqlerror.Errorf("retrieve File: %v", err)
+	}
+	return DatastoreFileToGraphQL(file), nil
+}
 
 // WatchFiles is the resolver for the watchFiles field.
 func (r *subscriptionResolver) WatchFiles(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.FileWatchEvent, error) {
-	if r.eventBus == nil {
-		return nil, gqlerror.Errorf("watch subscriptions are not available")
-	}
-	rv := ""
-	if resourceVersion != nil {
-		rv = *resourceVersion
-	}
-	events, unsubscribe, err := r.eventBus.Subscribe("File", rv)
-	if err != nil {
-		if errors.Is(err, eventbus.ErrWatchExpired) {
-			r.logger.Warn("watch cursor expired; controller must re-list",
-				zap.String("kind", "File"), zap.String("resource_version", rv))
-			return nil, &gqlerror.Error{
-				Message:    "watch cursor expired; re-list and resume from a fresh cursor",
-				Extensions: map[string]any{"code": "WATCH_EXPIRED"},
-			}
-		}
-		return nil, gqlerror.Errorf("watch subscription failed: %v", err)
-	}
-	out := make(chan *model.FileWatchEvent, 16)
-	go func() {
-		defer close(out)
-		defer unsubscribe()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case ev, ok := <-events:
-				if !ok {
-					return
-				}
-				if !categoryEventMatchesFilters(ev, namespace) || !fileEventMatchesSelector(ev, selector) {
-					continue
-				}
-				select {
-				case out <- toFileWatchEvent(ev):
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}()
-	return out, nil
+	return watchCatalogJournal(ctx, r.Resolver, "File", namespace, selector, resourceVersion, "typed", fileJournalEventToGraphQL)
 }

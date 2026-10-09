@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+package staticusers
+
+import "errors"
+
+var (
+	ErrUserNotFound = errors.New("staticusers: user not found")
+	ErrUserExists   = errors.New("staticusers: user already exists")
+)

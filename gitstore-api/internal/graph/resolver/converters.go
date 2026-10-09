@@ -53,14 +53,13 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 		return nil
 	}
 	if ns.DeletionTimestamp != nil {
-		status.Conditions = upsertTerminatingCondition(status.Conditions, ns.Generation, *ns.DeletionTimestamp)
+		status.Conditions = upsertTerminatingCondition(status.Conditions, ns.Generation, *ns.DeletionTimestamp, "Namespace is awaiting foreground deletion completion.")
 	}
 	var revision *string
 	if ns.Revision != "" {
 		value := ns.Revision
 		revision = &value
 	}
-	displayName := spec.Title
 	apiVersion := ns.APIVersion
 	if apiVersion == "" {
 		apiVersion = namespaceAPIVersion
@@ -70,32 +69,27 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 		kind = namespaceKind
 	}
 	body := ns.Body
+	nodeID := mustEncodeNodeID(nodeKindNamespace, ns.UID)
 	return &model.Namespace{
-		ID:         mustEncodeNodeID(nodeKindNamespace, ns.UID),
+		ID:         nodeID,
 		APIVersion: apiVersion,
 		Kind:       kind,
 		Metadata: &model.NamespaceMetadata{
 			Name:              ns.Name,
 			Labels:            stringMapToJSONMap(ns.Labels),
 			Annotations:       stringMapToJSONMap(ns.Annotations),
-			UID:               ns.UID,
+			UID:               nodeID,
 			ResourceVersion:   ns.ResourceVersion,
 			Generation:        int32(ns.Generation),
 			CreationTimestamp: ns.CreationTimestamp,
 			Revision:          revision,
 			OwnerReferences:   ownerReferences,
+			Owner:             resourceOwnerFromSub(ns.EffectiveOwnerSub()),
 			Finalizers:        append([]string{}, ns.Finalizers...),
 		},
-		Spec:        spec,
-		Status:      status,
-		Identifier:  ns.Name,
-		DisplayName: displayName,
-		Tier:        datastoreNamespaceTierToModel(ns.Tier),
-		CreatedAt:   ns.CreationTimestamp,
-		CreatedBy:   ns.CreationActor,
-		UpdatedAt:   ns.UpdateTimestamp,
-		UpdatedBy:   ns.UpdateActor,
-		Body:        &body,
+		Spec:   spec,
+		Status: status,
+		Body:   &body,
 	}
 }
 
@@ -175,7 +169,7 @@ func namespaceStatusFromJSON(raw json.RawMessage) (*model.NamespaceStatus, error
 	return status, nil
 }
 
-func upsertTerminatingCondition(conditions []*model.Condition, generation int64, since time.Time) []*model.Condition {
+func upsertTerminatingCondition(conditions []*model.Condition, generation int64, since time.Time, message string) []*model.Condition {
 	out := make([]*model.Condition, 0, len(conditions)+1)
 	for _, condition := range conditions {
 		if condition != nil && condition.Type == catalog.ConditionTerminating {
@@ -189,7 +183,7 @@ func upsertTerminatingCondition(conditions []*model.Condition, generation int64,
 		ObservedGeneration: int32Pointer(int32(generation)),
 		LastTransitionTime: since,
 		Reason:             stringPointer("DeletionRequested"),
-		Message:            stringPointer("Namespace is awaiting foreground deletion completion."),
+		Message:            stringPointer(message),
 	})
 	return out
 }
@@ -215,9 +209,10 @@ func SetConverterLogger(l *zap.Logger) { converterLogger = l }
 // also return the empty spec.
 func specFromJSON(raw json.RawMessage) *model.ProductSpec {
 	empty := &model.ProductSpec{
-		Tags:    []string{},
-		Media:   []*model.MediaDefinition{},
-		Options: []*model.ProductOptionDefinition{},
+		Tags:      []string{},
+		Media:     []*model.MediaDefinition{},
+		Options:   []*model.ProductOptionDefinition{},
+		Lifecycle: &model.ProductLifecycleSpec{State: model.ProductLifecycleStateActive},
 	}
 	if len(raw) == 0 {
 		return empty
@@ -235,6 +230,9 @@ func specFromJSON(raw json.RawMessage) *model.ProductSpec {
 	}
 	if s.Options == nil {
 		s.Options = []*model.ProductOptionDefinition{}
+	}
+	if s.Lifecycle == nil {
+		s.Lifecycle = &model.ProductLifecycleSpec{State: model.ProductLifecycleStateActive}
 	}
 	return &s
 }
@@ -332,16 +330,53 @@ func ownerRefsFromJSON(raw json.RawMessage) []*model.OwnerReference {
 	return refs
 }
 
+// ownerReferenceNodeKind maps an OwnerReference's Kubernetes-style Kind
+// (e.g. "CategoryTaxonomy") to the internal Relay node-kind label
+// mustEncodeNodeID/decodeNodeIDAs use (e.g. "Category").
+func ownerReferenceNodeKind(kind string) (string, bool) {
+	switch kind {
+	case "Namespace":
+		return nodeKindNamespace, true
+	case "CategoryTaxonomy":
+		return nodeKindCategory, true
+	case "Product":
+		return nodeKindProduct, true
+	case "ProductVariant":
+		return nodeKindProductVariant, true
+	case "Repository":
+		return nodeKindRepository, true
+	case "Collection":
+		return nodeKindCollection, true
+	case "File":
+		return nodeKindFile, true
+	default:
+		return "", false
+	}
+}
+
 func ownerRefsFromJSONStrict(raw json.RawMessage) ([]*model.OwnerReference, error) {
 	if len(raw) == 0 {
 		return []*model.OwnerReference{}, nil
 	}
-	var refs []*model.OwnerReference
-	if err := json.Unmarshal(raw, &refs); err != nil {
+	var stored []catalog.OwnerReference
+	if err := json.Unmarshal(raw, &stored); err != nil {
 		return nil, fmt.Errorf("unmarshal owner references: %w", err)
 	}
-	if refs == nil {
-		return []*model.OwnerReference{}, nil
+	refs := make([]*model.OwnerReference, 0, len(stored))
+	for _, ref := range stored {
+		uid := ref.UID
+		if nodeKind, ok := ownerReferenceNodeKind(ref.Kind); ok {
+			if encoded, err := EncodeNodeID(nodeKind, ref.UID); err == nil {
+				uid = encoded
+			}
+		}
+		refs = append(refs, &model.OwnerReference{
+			APIVersion:         ref.APIVersion,
+			Kind:               ref.Kind,
+			Name:               ref.Name,
+			UID:                uid,
+			BlockOwnerDeletion: ref.BlockOwnerDeletion,
+		})
 	}
 	return refs, nil
 }
@@ -362,6 +397,7 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 		Generation:        gen,
 		CreationTimestamp: p.CreationTimestamp,
 		OwnerReferences:   ownerRefsFromJSON(p.OwnerReferences),
+		Owner:             resourceOwnerFromSub(p.EffectiveOwnerSub()),
 		Finalizers:        append([]string{}, p.Finalizers...),
 		DeletionTimestamp: p.DeletionTimestamp,
 	}
@@ -391,14 +427,6 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Category {
 	if c == nil {
 		return nil
-	}
-
-	// Compute path and depth from materialized AncestorPath.
-	var path []string
-	var depth int32
-	if c.AncestorPath != "" {
-		path = strings.Split(c.AncestorPath, "/")
-		depth = int32(len(path) - 1)
 	}
 
 	emptyProducts := &model.ProductConnection{
@@ -470,6 +498,7 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 		Generation:        gen,
 		CreationTimestamp: c.CreationTimestamp,
 		OwnerReferences:   ownerRefsFromJSON(c.OwnerReferences),
+		Owner:             resourceOwnerFromSub(c.EffectiveOwnerSub()),
 		Finalizers:        append([]string{}, c.Finalizers...),
 		DeletionTimestamp: c.DeletionTimestamp,
 	}
@@ -491,7 +520,7 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 		if categoryStatus == nil {
 			categoryStatus = &model.CategoryTaxonomyStatus{Conditions: []*model.Condition{}}
 		}
-		categoryStatus.Conditions = upsertTerminatingCondition(categoryStatus.Conditions, c.Generation, *c.DeletionTimestamp)
+		categoryStatus.Conditions = upsertTerminatingCondition(categoryStatus.Conditions, c.Generation, *c.DeletionTimestamp, "CategoryTaxonomy is awaiting foreground deletion completion.")
 	}
 
 	apiVersion := c.APIVersion
@@ -504,10 +533,6 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 		Spec:       spec,
 		Status:     categoryStatus,
 		Body:       nil,
-		Parent:     nil,
-		Children:   []*model.Category{},
-		Path:       path,
-		Depth:      depth,
 		Products:   emptyProducts,
 	}
 	if c.Body != "" {
@@ -542,6 +567,7 @@ func DatastoreFileToGraphQL(f *datastore.File) *model.File {
 		Annotations: stringMapToJSONMap(f.Annotations), UID: mustEncodeNodeID(nodeKindFile, f.UID),
 		ResourceVersion: f.ResourceVersion, Generation: int32(f.Generation),
 		CreationTimestamp: f.CreationTimestamp, OwnerReferences: ownerRefs,
+		Owner:      resourceOwnerFromSub(f.EffectiveOwnerSub()),
 		Finalizers: append([]string{}, f.Finalizers...), DeletionTimestamp: f.DeletionTimestamp,
 	}
 	if f.Revision != "" {
@@ -564,12 +590,12 @@ func DatastoreFileToGraphQL(f *datastore.File) *model.File {
 	}
 	if spec.Source.CredentialsRef != nil {
 		ref := spec.Source.CredentialsRef
-		fileSpec.Source.CredentialsRef = &model.SecretRef{Kind: ref.Kind, Name: ref.Name}
-		if ref.Key != "" {
-			fileSpec.Source.CredentialsRef.Key = &ref.Key
-		}
-		if ref.Namespace != "" {
-			fileSpec.Source.CredentialsRef.Namespace = &ref.Namespace
+		fileSpec.Source.CredentialsRef = &model.CredentialsRef{
+			Kind: ref.Kind, Type: ref.Type,
+			SecretRef: &model.SecretRef{
+				Kind: ref.SecretRef.Kind, Name: ref.SecretRef.Name,
+				Key: ref.SecretRef.Key, Namespace: ref.SecretRef.Namespace,
+			},
 		}
 	}
 	if spec.Processing != nil && spec.Processing.Image != nil {
@@ -666,6 +692,7 @@ func DatastoreCollectionToGraphQL(c *datastore.Collection) *model.Collection {
 		Generation:        gen,
 		CreationTimestamp: c.CreationTimestamp,
 		OwnerReferences:   ownerRefsFromJSON(c.OwnerReferences),
+		Owner:             resourceOwnerFromSub(c.EffectiveOwnerSub()),
 		Finalizers:        append([]string{}, c.Finalizers...),
 		DeletionTimestamp: c.DeletionTimestamp,
 	}
@@ -844,6 +871,7 @@ func DatastoreVariantToGraphQL(v *datastore.ProductVariant) *model.ProductVarian
 		Generation:        gen,
 		CreationTimestamp: v.CreationTimestamp,
 		OwnerReferences:   ownerRefsFromJSON(v.OwnerReferences),
+		Owner:             resourceOwnerFromSub(v.EffectiveOwnerSub()),
 		Finalizers:        append([]string{}, v.Finalizers...),
 	}
 	if v.Revision != "" {
@@ -1071,7 +1099,7 @@ func variantStatusFromJSON(raw json.RawMessage) *model.ProductVariantStatus {
 		if rs.Resolved.Product != nil {
 			resolved.Product = &model.ResolvedProductRef{
 				Name: rs.Resolved.Product.Name,
-				UID:  rs.Resolved.Product.UID,
+				UID:  mustEncodeNodeID(nodeKindProduct, rs.Resolved.Product.UID),
 			}
 		}
 		if rs.Resolved.SelectedOptionsHash != "" {
@@ -1135,15 +1163,8 @@ func datastoreRepositoryToModelStrict(r *datastore.Repository, ns *datastore.Nam
 	}
 	nodeID := mustEncodeNodeID(nodeKindRepository, repository.UID)
 	namespace := repository.Namespace
-	var legacyNamespace *model.Namespace
-	if ns != nil {
-		if ns.Name != namespace {
-			return nil, fmt.Errorf("Repository %q namespace %q does not match resolved Namespace %q", repository.UID, namespace, ns.Name)
-		}
-		legacyNamespace = DatastoreNamespaceToGraphQL(ns)
-		if legacyNamespace == nil {
-			return nil, fmt.Errorf("convert Namespace %q", ns.Name)
-		}
+	if ns != nil && ns.Name != namespace {
+		return nil, fmt.Errorf("Repository %q namespace %q does not match resolved Namespace %q", repository.UID, namespace, ns.Name)
 	}
 	ownerReferences, err := ownerRefsFromJSONStrict(repository.OwnerReferences)
 	if err != nil {
@@ -1187,20 +1208,12 @@ func datastoreRepositoryToModelStrict(r *datastore.Repository, ns *datastore.Nam
 			CreationTimestamp: repository.CreationTimestamp,
 			Revision:          revision,
 			OwnerReferences:   ownerReferences,
+			Owner:             resourceOwnerFromSub(repository.EffectiveOwnerSub()),
 			Finalizers:        append([]string{}, repository.Finalizers...),
 		},
-		Spec:          spec,
-		Status:        status,
-		Name:          repository.Name,
-		Namespace:     legacyNamespace,
-		DefaultBranch: repository.DefaultBranch,
-		StorageClass:  repository.StorageClass,
-		StoragePath:   storagePath,
-		CreatedAt:     repository.CreationTimestamp,
-		CreatedBy:     repository.CreationActor,
-		UpdatedAt:     repository.UpdateTimestamp,
-		UpdatedBy:     repository.UpdateActor,
-		Body:          &body,
+		Spec:   spec,
+		Status: status,
+		Body:   &body,
 	}
 	return repo, nil
 }
@@ -1239,9 +1252,10 @@ func repositorySpecFromDatastore(repository *datastore.Repository) (*model.Repos
 
 func repositoryStatusFromJSON(raw json.RawMessage, repositoryID, storagePath, storageClass string) (*model.RepositoryStatus, error) {
 	var stored struct {
-		ObservedGeneration  int32          `json:"observedGeneration"`
-		LastAppliedRevision string         `json:"lastAppliedRevision"`
-		Conditions          []rawCondition `json:"conditions"`
+		ObservedGeneration  int32                                 `json:"observedGeneration"`
+		LastAppliedRevision string                                `json:"lastAppliedRevision"`
+		Conditions          []rawCondition                        `json:"conditions"`
+		Resolved            *catalog.ResolvedRepositoryDefinition `json:"resolved,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &stored); err != nil {
 		return nil, fmt.Errorf("Repository %q: unmarshal status: %w", repositoryID, err)
@@ -1250,13 +1264,18 @@ func repositoryStatusFromJSON(raw json.RawMessage, repositoryID, storagePath, st
 	for _, condition := range stored.Conditions {
 		conditions = append(conditions, conditionFromRaw(condition))
 	}
+	resolved := &model.ResolvedRepositoryDefinition{
+		StoragePath:  storagePath,
+		StorageClass: storageClass,
+	}
+	if stored.Resolved != nil {
+		resolved.StoragePath = stored.Resolved.StoragePath
+		resolved.StorageClass = stored.Resolved.StorageClass
+	}
 	status := &model.RepositoryStatus{
 		ObservedGeneration: stored.ObservedGeneration,
 		Conditions:         conditions,
-		Resolved: &model.ResolvedRepositoryDefinition{
-			StoragePath:  storagePath,
-			StorageClass: storageClass,
-		},
+		Resolved:           resolved,
 	}
 	if stored.LastAppliedRevision != "" {
 		revision := stored.LastAppliedRevision

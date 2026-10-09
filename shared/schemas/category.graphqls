@@ -7,10 +7,14 @@ extend type Query {
   category(by: CategoryBy!): Category
 
   """
-  List categories with Relay cursor-based pagination
+  List categories with Relay cursor-based pagination. Without `filter`,
+  ordering is newest first. With `filter`, results are the subtree below
+  `filter.descendantOf`, ordered by relative depth and then name. Cursors
+  from one mode are rejected by the other.
   """
   categories(
     namespace: String!
+    filter: CategoryFilterInput
     first: Int
     after: String
     last: Int
@@ -20,46 +24,55 @@ extend type Query {
 
 extend type Mutation {
   """
-  Create a new category
+  Create a category by committing its manifest to the namespace's
+  gitstore-system repository and admitting it.
   """
   createCategory(input: CreateCategoryInput!): CreateCategoryPayload!
 
   """
-  Update an existing category
+  Update a category by committing its manifest to the repository and path
+  it was admitted from.
   """
   updateCategory(input: UpdateCategoryInput!): UpdateCategoryPayload!
 
   """
-  Delete a category
+  Start foreground deletion by removing the category's manifest from Git.
+  Blocked while child categories exist. Assigned products are decoupled
+  asynchronously.
   """
   deleteCategory(input: DeleteCategoryInput!): DeleteCategoryPayload!
 
   """
-  Reorder categories (drag-and-drop)
+  Controller-only completion of a terminating category's foreground
+  deletion.
   """
-  reorderCategories(input: ReorderCategoriesInput!): ReorderCategoriesPayload!
+  completeCategoryDeletion(input: CompleteCategoryDeletionInput!): CompleteCategoryDeletionPayload!
 
   """
   Partial-merge update to a CategoryTaxonomy's .status sub-resource.
   Only non-null input fields are changed; all other existing status
-  fields are left unchanged (FR-008, spec 040). Requires
+  fields are left unchanged. Requires
   resourceVersion to match the resource's current value or the
-  request fails with a StatusConflict (FR-009). Rejects any attempt
+  request fails with a CONFLICT GraphQL error carrying a
+  RESOURCE_VERSION_CONFLICT diagnostic whose message includes the
+  current resourceVersion. Rejects any attempt
   to alter .spec or author-controlled .metadata by construction —
-  this input type has no such fields (FR-010). Requires
+  this input type has no such fields. Requires
   controller-level authorization independent of the resourceVersion
-  outcome (FR-011).
+  outcome.
   """
   updateCategoryStatus(input: UpdateCategoryStatusInput!): UpdateCategoryStatusPayload!
 }
 
 extend type Subscription {
   """
-  Dedicated, compile-time-typed watch entry point for CategoryTaxonomy.
-  Same list-then-watch/resourceVersion/expiry semantics as the generic
-  watchResources field (FR-001 through FR-004, spec 040), scoped to
-  this kind. Callers obtain the initial list via the existing
-  `categories` query.
+  Dedicated, compile-time-typed watch entry point for CategoryTaxonomy,
+  served from the durable, replica-safe resource watch journal. Same
+  list-then-watch/resourceVersion/expiry semantics as the generic
+  watchResources field, scoped to
+  this kind; both are projections of the same journal record. Callers
+  obtain the initial list via the existing `categories` query. Requires
+  the `categoryTaxonomy.watch` permission.
   """
   watchCategories(
     namespace: String
@@ -71,7 +84,7 @@ extend type Subscription {
 """
 Category represents a hierarchical classification system for products.
 Follows the Kubernetes-style resource envelope: id / apiVersion / kind / metadata / spec / status.
-Tree-traversal convenience fields (parent, children, path, depth, products, body) are top-level
+Tree-traversal convenience fields (parent, children, products, body) are top-level
 because they are computed or graph-linked and do not belong in spec or status.
 """
 type Category implements Node {
@@ -111,12 +124,14 @@ type Category implements Node {
   body: String
 
   """
-  Parent category (null for root categories).
+  Resolved parent category. Null for roots, for an unresolved parent, and
+  before the category is first reconciled.
   """
   parent: Category
 
   """
-  Direct child categories.
+  Direct child categories (at most 100), ordered by name. A child appears
+  once it has been reconciled.
   """
   children: [Category!]!
 
@@ -129,17 +144,6 @@ type Category implements Node {
     last: Int
     before: String
   ): ProductConnection!
-
-  """
-  Full path from root (e.g., ["electronics", "computers", "laptops"]).
-  Derived from the materialized ancestor path stored at admission time.
-  """
-  path: [String!]!
-
-  """
-  Depth in tree (root = 0).
-  """
-  depth: Int!
 }
 
 """
@@ -152,20 +156,18 @@ type CategorySpec {
 }
 
 """
-A key-value pair for label maps.
-"""
-type KeyValuePair {
-  key: String!
-  value: String!
-}
-
-"""
 System-written status for a git-backed CategoryTaxonomy resource.
 """
 type CategoryTaxonomyStatus {
   observedGeneration: Int!
   lastAppliedRevision: String!
   conditions: [Condition!]!
+  """
+  Controller-computed hierarchy: the only source of a category's position in
+  the tree. Null until the category is first reconciled. After an ancestor
+  moves, descendants converge level by level, so the value is eventually
+  consistent.
+  """
   resolved: ResolvedCategoryTaxonomy
 }
 
@@ -173,15 +175,15 @@ type CategoryTaxonomyStatus {
 Controller-computed category hierarchy metadata.
 """
 type ResolvedCategoryTaxonomy {
+  """
+  Depth in the tree (root = 0).
+  """
   depth: Int!
 
   """
   Ancestor path from root to self, e.g. ["electronics", "computers",
   "laptops"] for the "laptops" category (root-to-self order). A root
   category's path is a single-element array containing its own name.
-  Distinct from Category.path, which is a read-time-derived field
-  computed from the separate ancestor_path datastore column (see
-  specs/040-controller-watch-status-api/research.md R9/R10).
   """
   path: [String!]!
   childCount: Int!
@@ -216,11 +218,6 @@ type CategoryConnection {
   Pagination information
   """
   pageInfo: PageInfo!
-
-  """
-  Total count of categories
-  """
-  totalCount: Int!
 }
 
 # ============================================================================
@@ -228,120 +225,9 @@ type CategoryConnection {
 # ============================================================================
 
 """
-Input for creating a category
-"""
-input CreateCategoryInput {
-
-
-
-  """
-  Category name
-  """
-  name: String!
-
-  """
-  URL-friendly slug (must be unique)
-  """
-  slug: String!
-
-  """
-  Parent category ID (null for root)
-  """
-  parentId: ID
-
-  """
-  Display order
-  """
-  displayOrder: Int
-
-  """
-  Markdown body content
-  """
-  body: String
-}
-
-"""
-Payload for createCategory mutation
-"""
-type CreateCategoryPayload {
-
-
-
-  """
-  The created category
-  """
-  category: Category
-}
-
-"""
-Input for updating a category
-"""
-input UpdateCategoryInput {
-
-
-
-  """
-  Category ID to update
-  """
-  id: ID!
-
-  """
-  New name
-  """
-  name: String
-
-  """
-  New slug
-  """
-  slug: String
-
-  """
-  New parent ID (null to make root, ID to change parent)
-  """
-  parentId: ID
-
-  """
-  New display order
-  """
-  displayOrder: Int
-
-  """
-  New body content
-  """
-  body: String
-
-  """
-  TODO: Should this be a datetime?
-  Version for optimistic locking
-  """
-  version: DateTime!
-}
-
-"""
-Payload for updateCategory mutation
-"""
-type UpdateCategoryPayload {
-
-
-
-  """
-  The updated category
-  """
-  category: Category
-
-  """
-  Conflict information (if optimistic lock failed)
-  """
-  conflict: CategoryOptimisticLockConflict
-}
-
-"""
 Input for deleting a category
 """
 input DeleteCategoryInput {
-
-
-
   """
   Category ID to delete
   """
@@ -352,90 +238,101 @@ input DeleteCategoryInput {
 Payload for deleteCategory mutation
 """
 type DeleteCategoryPayload {
-
-
-
   """
-  Deleted category ID
+  The category, now terminating.
   """
-  deletedCategoryId: ID
+  category: Category
 
-  """
-  Orphaned product IDs (products that referenced this category)
-  """
-  orphanedProductIds: [ID!]
+  outcome: ResourceDeletionOutcome!
 }
 
 """
-Input for reordering categories (drag-and-drop)
+Subtree filter. Hierarchy comes from each category's `status.resolved.path`:
+categories that have not yet been reconciled are not matched, and results are
+eventually consistent after an ancestor moves.
 """
-input ReorderCategoriesInput {
-
-
-
+input CategoryFilterInput {
   """
-  Ordered list of category IDs within parent
+  Name of the category whose descendants are returned. Unknown names return
+  an empty connection.
   """
-  orderedIds: [ID!]!
+  descendantOf: String!
 
   """
-  Parent category ID (null for root categories)
+  Include `descendantOf` itself as the first result.
   """
-  parentId: ID
+  includeSelf: Boolean = false
 
   """
-  Category ID being moved (for tree restructure)
+  Maximum levels below `descendantOf` (1–128). Omit for the whole subtree.
   """
-  movedCategoryId: ID
-
-  """
-  New parent ID for moved category (for tree restructure)
-  """
-  newParentId: ID
+  maxDepth: Int
 }
 
 """
-Payload for reorderCategories mutation
+Author-supplied category specification.
 """
-type ReorderCategoriesPayload {
-
-
-
-  """
-  Updated categories
-  """
-  categories: [Category!]
+input CategorySpecInput {
+  title: String!
+  parentRef: CatalogObjectReferenceInput
+  media: [MediaDefinitionInput!]
 }
 
-"""
-Optimistic lock conflict for category
-"""
-type CategoryOptimisticLockConflict {
-  """
-  TODO: Should this be a datetime?
-  Current version in database
-  """
-  currentVersion: DateTime!
+input CreateCategoryInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "CategoryTaxonomy"
+  metadata: ObjectMetaInput!
+  spec: CategorySpecInput!
 
   """
-  TODO: Should this be a datetime?
-  Version client attempted to update
+  Markdown body. Omit for an empty body.
   """
-  attemptedVersion: DateTime!
+  body: String
+}
+
+input UpdateCategoryInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "CategoryTaxonomy"
 
   """
-  Current state of the category
+  `name` and `namespace` identify the category and cannot change.
   """
-  current: Category!
+  metadata: ObjectMetaInput!
+  spec: CategorySpecInput!
 
   """
-  Diff between current and attempted
+  Markdown body. Omit to keep the current body.
   """
-  diff: String!
+  body: String
+}
+
+type CreateCategoryPayload {
+  category: Category
+}
+
+type UpdateCategoryPayload {
+  category: Category
+}
+
+input CompleteCategoryDeletionInput {
+  namespace: String!
+  name: String!
+
+  """
+  Must equal the category's current metadata.resourceVersion.
+  """
+  resourceVersion: String!
+}
+
+type CompleteCategoryDeletionPayload {
+  """
+  ID of the removed category.
+  """
+  id: ID
 }
 
 # ============================================================================
-# Status Subresource API (spec 040)
+# Status Subresource API
 # ============================================================================
 
 input UpdateCategoryStatusInput {
@@ -443,12 +340,12 @@ input UpdateCategoryStatusInput {
   namespace: String!
 
   """
-  Required optimistic-concurrency precondition (FR-009). Must equal
+  Required optimistic-concurrency precondition. Must equal
   the resource's current metadata.resourceVersion.
   """
   resourceVersion: String!
 
-  """Null = unchanged. Set on every successful reconcile per spec 026 FR-008."""
+  """Null = unchanged. Set on every successful reconcile."""
   observedGeneration: Int
 
   """Null = unchanged, e.g. "main@sha1:a1b2c3d"."""
@@ -459,13 +356,6 @@ input UpdateCategoryStatusInput {
 
   """Null = unchanged. Kind-specific — not part of any generic patch shape."""
   resolved: ResolvedCategoryTaxonomyInput
-
-  """
-  Controller-only foreground-deletion completion request. This extends the
-  existing status subresource rather than introducing a parallel
-  CategoryTaxonomy mutation.
-  """
-  completeDeletion: Boolean
 
   """
   Controller-only bounded Product drain. The server removes non-blocking
@@ -488,18 +378,15 @@ input ResolvedCategoryTaxonomyInput {
 }
 
 type UpdateCategoryStatusPayload {
-  """Null when the write failed (conflict or not-found)."""
+  """The updated CategoryTaxonomy."""
   category: Category
-
-  """Non-null only when the resourceVersion precondition failed."""
-  conflict: StatusConflict
 
   """True when another bounded Product page remains to be processed."""
   hasMoreProductDependents: Boolean!
 }
 
 # ============================================================================
-# Watch API (spec 040)
+# Watch API
 # ============================================================================
 
 """

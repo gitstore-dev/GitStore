@@ -3,6 +3,8 @@
 
 package memdb
 
+import "maps"
+
 import "github.com/hashicorp/go-memdb"
 
 var schema = &memdb.DBSchema{
@@ -18,6 +20,48 @@ var schema = &memdb.DBSchema{
 			"ancestor_path": optionalStringIndex("ancestor_path", "AncestorPath"),
 			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
 		}),
+		"category_ancestor_index": {
+			Name: "category_ancestor_index",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {
+					Name:    "id",
+					Unique:  true,
+					Indexer: &memdb.StringFieldIndex{Field: "ID"},
+				},
+				"ancestor": {
+					Name:   "ancestor",
+					Unique: false,
+					Indexer: &memdb.CompoundIndex{Indexes: []memdb.Indexer{
+						&memdb.StringFieldIndex{Field: "Namespace"},
+						&memdb.StringFieldIndex{Field: "Ancestor"},
+					}},
+				},
+				"descendant": {
+					Name:   "descendant",
+					Unique: false,
+					Indexer: &memdb.CompoundIndex{Indexes: []memdb.Indexer{
+						&memdb.StringFieldIndex{Field: "Namespace"},
+						&memdb.StringFieldIndex{Field: "Descendant"},
+					}},
+				},
+			},
+		},
+		"service_account": resourceTableSchema("service_account", map[string]*memdb.IndexSchema{}),
+		"service_account_assertion_replay": {
+			Name: "service_account_assertion_replay",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {
+					Name:    "id",
+					Unique:  true,
+					Indexer: &memdb.StringFieldIndex{Field: "JTIDigest"},
+				},
+				"expires_at": {
+					Name:    "expires_at",
+					Unique:  false,
+					Indexer: &memdb.StringFieldIndex{Field: "ExpiresAtIndex"},
+				},
+			},
+		},
 		"owner_reference": {
 			Name: "owner_reference",
 			Indexes: map[string]*memdb.IndexSchema{
@@ -160,9 +204,7 @@ func resourceTableSchema(name string, extra map[string]*memdb.IndexSchema) *memd
 			Indexer: &memdb.StringFieldIndex{Field: "Namespace"},
 		},
 	}
-	for indexName, index := range extra {
-		indexes[indexName] = index
-	}
+	maps.Copy(indexes, extra)
 	return &memdb.TableSchema{Name: name, Indexes: indexes}
 }
 

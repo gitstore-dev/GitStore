@@ -12,7 +12,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -326,7 +325,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expected[1:], namespaceTargetIDs(forward.Items, expected))
-		assertPaginationTotalCount(t, ds, forward.TotalCount, int32(len(namespaces)))
 
 		oldest := namespaces[len(namespaces)-1]
 		backward, err := ds.ListNamespaces(ctx, datastore.PageParams{
@@ -335,7 +333,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expected[:len(expected)-1], namespaceTargetIDs(backward.Items, expected))
-		assertPaginationTotalCount(t, ds, backward.TotalCount, int32(len(namespaces)))
 	})
 
 	t.Run("Repositories/ForwardPagination", func(t *testing.T) {
@@ -467,7 +464,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expected[1:], repositoryTargetIDs(forward.Items, expected))
-		assertPaginationTotalCount(t, ds, forward.TotalCount, int32(len(repositories)))
 
 		oldest := repositories[len(repositories)-1]
 		backward, err := ds.ListRepositoriesByNamespace(ctx, namespace.Name, datastore.PageParams{
@@ -476,7 +472,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expected[:len(expected)-1], repositoryTargetIDs(backward.Items, expected))
-		assertPaginationTotalCount(t, ds, backward.TotalCount, int32(len(repositories)))
 	})
 
 	t.Run("Repositories/ThreeMonthGlobalForwardBackwardWithEmptyBucket", func(t *testing.T) {
@@ -502,7 +497,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expected[1:], repositoryTargetIDs(forward.Items, expected))
-		assertPaginationTotalCount(t, ds, forward.TotalCount, int32(len(repositories)))
 
 		oldest := repositories[len(repositories)-1]
 		backward, err := global.ListRepositories(ctx, datastore.PageParams{
@@ -511,7 +505,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expected[:len(expected)-1], repositoryTargetIDs(backward.Items, expected))
-		assertPaginationTotalCount(t, ds, backward.TotalCount, int32(len(repositories)))
 	})
 
 	t.Run("EmptyResult/Products", func(t *testing.T) {
@@ -535,23 +528,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		assert.False(t, result.HasPrevious)
 	})
 
-	t.Run("TotalCount", func(t *testing.T) {
-		ctx := context.Background()
-		ns := "test-" + newID()[:8]
-
-		for range 5 {
-			require.NoError(t, ds.CreateProduct(ctx, newProductInNS(ns)))
-		}
-
-		result, err := ds.ListProducts(ctx, ns, datastore.PageParams{First: 2})
-		require.NoError(t, err)
-		assert.Len(t, result.Items, 2)
-		// memdb returns exact count; scylla may return -1
-		if result.TotalCount >= 0 {
-			assert.Equal(t, int32(5), result.TotalCount)
-		}
-	})
-
 	t.Run("Ordering/NewestFirst", func(t *testing.T) {
 		ctx := context.Background()
 		ns := "test-" + newID()[:8]
@@ -573,6 +549,159 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 				"items[%d].CreationTimestamp (%v) should be >= items[%d].CreationTimestamp (%v)",
 				i, result.Items[i].CreationTimestamp, i+1, result.Items[i+1].CreationTimestamp,
 			)
+		}
+	})
+
+	t.Run("ServiceAccounts/CursorPagination", func(t *testing.T) {
+		ctx := context.Background()
+		base := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Millisecond)
+		accounts := make([]*datastore.ServiceAccount, 5)
+		for i := range accounts {
+			accounts[i] = newServiceAccount()
+			accounts[i].Namespace = "pagination-" + newID()[:8]
+			accounts[i].CreationTimestamp = base.Add(time.Duration(i) * time.Second)
+			accounts[i].UpdateTimestamp = accounts[i].CreationTimestamp
+			require.NoError(t, ds.CreateServiceAccount(ctx, accounts[i]))
+		}
+
+		page1, err := ds.ListServiceAccounts(ctx, datastore.PageParams{First: 2})
+		require.NoError(t, err)
+		require.Len(t, page1.Items, 2)
+		assert.Equal(t, accounts[4].UID, page1.Items[0].UID)
+		assert.Equal(t, accounts[3].UID, page1.Items[1].UID)
+		assert.True(t, page1.HasNext)
+		assert.False(t, page1.HasPrevious)
+
+		page2, err := ds.ListServiceAccounts(ctx, datastore.PageParams{
+			First: 2,
+			After: encodeCursor(page1.Items[1].CreationTimestamp, page1.Items[1].UID),
+		})
+		require.NoError(t, err)
+		require.Len(t, page2.Items, 2)
+		assert.Equal(t, accounts[2].UID, page2.Items[0].UID)
+		assert.Equal(t, accounts[1].UID, page2.Items[1].UID)
+		assert.True(t, page2.HasNext)
+		assert.True(t, page2.HasPrevious)
+
+		page3, err := ds.ListServiceAccounts(ctx, datastore.PageParams{
+			First: 2,
+			After: encodeCursor(page2.Items[1].CreationTimestamp, page2.Items[1].UID),
+		})
+		require.NoError(t, err)
+		require.Len(t, page3.Items, 1)
+		assert.Equal(t, accounts[0].UID, page3.Items[0].UID)
+		assert.False(t, page3.HasNext)
+		assert.True(t, page3.HasPrevious)
+
+		backward, err := ds.ListServiceAccounts(ctx, datastore.PageParams{Last: 2})
+		require.NoError(t, err)
+		require.Len(t, backward.Items, 2)
+		assert.Equal(t, accounts[1].UID, backward.Items[0].UID)
+		assert.Equal(t, accounts[0].UID, backward.Items[1].UID)
+		assert.False(t, backward.HasNext)
+		assert.True(t, backward.HasPrevious)
+
+		before, err := ds.ListServiceAccounts(ctx, datastore.PageParams{
+			Last:   2,
+			Before: encodeCursor(page2.Items[0].CreationTimestamp, page2.Items[0].UID),
+		})
+		require.NoError(t, err)
+		require.Len(t, before.Items, 2)
+		assert.Equal(t, accounts[4].UID, before.Items[0].UID)
+		assert.Equal(t, accounts[3].UID, before.Items[1].UID)
+		assert.True(t, before.HasNext)
+		assert.False(t, before.HasPrevious)
+	})
+
+	t.Run("CategoryAncestorIndex", func(t *testing.T) {
+		runCategoryAncestorIndexPagination(t, ds)
+	})
+}
+
+func runCategoryAncestorIndexPagination(t *testing.T, ds datastore.Datastore) {
+	ctx := context.Background()
+	index := categoryIndex(t, ds)
+	ns := "idx-" + newID()[:8]
+	seedCategory(t, ds, ns, "root", "root")
+	for _, name := range []string{"a", "b", "c"} {
+		seedCategory(t, ds, ns, name, "root", name)
+	}
+	for _, name := range []string{"a1", "a2"} {
+		seedCategory(t, ds, ns, name, "root", "a", name)
+	}
+	query := func(page datastore.PageParams) *datastore.PageResult[datastore.CategoryDescendant] {
+		t.Helper()
+		result, err := index.ListCategoryDescendants(ctx, datastore.CategoryDescendantQuery{
+			Namespace: ns, Ancestor: "root", IncludeSelf: true, Page: page,
+		})
+		require.NoError(t, err)
+		return result
+	}
+	names := func(items []*datastore.CategoryDescendant) []string {
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			out = append(out, item.Name)
+		}
+		return out
+	}
+	cursorOf := func(item *datastore.CategoryDescendant) string {
+		return datastore.EncodeClosureCursor(item.Depth, item.Name)
+	}
+	full := []string{"root", "a", "b", "c", "a1", "a2"}
+
+	t.Run("ForwardRoundTrip", func(t *testing.T) {
+		var got []string
+		page := query(datastore.PageParams{First: 2})
+		require.Len(t, page.Items, 2)
+		assert.True(t, page.HasNext)
+		assert.False(t, page.HasPrevious)
+		for {
+			got = append(got, names(page.Items)...)
+			if !page.HasNext {
+				break
+			}
+			page = query(datastore.PageParams{First: 2, After: cursorOf(page.Items[len(page.Items)-1])})
+			assert.True(t, page.HasPrevious)
+		}
+		assert.Equal(t, full, got)
+	})
+
+	t.Run("CursorAcrossDepthBoundary", func(t *testing.T) {
+		page := query(datastore.PageParams{First: 10, After: datastore.EncodeClosureCursor(1, "c")})
+		assert.Equal(t, []string{"a1", "a2"}, names(page.Items))
+		assert.False(t, page.HasNext)
+		page = query(datastore.PageParams{First: 10, After: datastore.EncodeClosureCursor(2, "a2")})
+		assert.Empty(t, page.Items)
+	})
+
+	t.Run("Backward", func(t *testing.T) {
+		page := query(datastore.PageParams{Last: 2})
+		assert.Equal(t, []string{"a1", "a2"}, names(page.Items))
+		assert.True(t, page.HasPrevious)
+		page = query(datastore.PageParams{Last: 3, Before: cursorOf(page.Items[0])})
+		assert.Equal(t, []string{"a", "b", "c"}, names(page.Items))
+		assert.True(t, page.HasPrevious)
+		assert.True(t, page.HasNext)
+		page = query(datastore.PageParams{Last: 3, Before: cursorOf(page.Items[0])})
+		assert.Equal(t, []string{"root"}, names(page.Items))
+		assert.False(t, page.HasPrevious)
+	})
+
+	t.Run("KeysetCursorRejected", func(t *testing.T) {
+		keyset := encodeCursor(time.Now(), newID())
+		for _, page := range []datastore.PageParams{{First: 2, After: keyset}, {Last: 2, Before: keyset}} {
+			_, err := index.ListCategoryDescendants(ctx, datastore.CategoryDescendantQuery{
+				Namespace: ns, Ancestor: "root", Page: page,
+			})
+			assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
+		}
+	})
+
+	t.Run("ClosureCursorRejectedByKeysetList", func(t *testing.T) {
+		closure := datastore.EncodeClosureCursor(1, "a")
+		for _, page := range []datastore.PageParams{{First: 2, After: closure}, {Last: 2, Before: closure}} {
+			_, err := ds.ListCategoryTaxonomies(ctx, ns, page)
+			assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
 		}
 	})
 }
@@ -686,13 +815,4 @@ func repositoryTargetIDs(items []*datastore.Repository, targetIDs []string) []st
 		}
 	}
 	return ids
-}
-
-func assertPaginationTotalCount(t *testing.T, ds datastore.Datastore, got, minimum int32) {
-	t.Helper()
-	if strings.Contains(fmt.Sprintf("%T", ds), "scylla.") {
-		assert.Equal(t, int32(-1), got, "Scylla must not scan historical buckets for an exact count")
-		return
-	}
-	assert.GreaterOrEqual(t, got, minimum, "backend-neutral stores may provide an exact count")
 }

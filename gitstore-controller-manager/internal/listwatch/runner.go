@@ -51,11 +51,15 @@ const (
 // single dedicated goroutine — this is what satisfies "at most one active
 // list-or-watch loop per kind" without any additional locking.
 type Runner[T any] struct {
-	Kind        string
-	ListWatcher ListWatcher[T]
-	Cache       *cache.Cache[T] // mutable — Runner is the sole writer (Set/Delete/MarkSynced)
-	Store       checkpoint.Store
-	Enqueue     func(types.WorkItemKey) error
+	Kind               string
+	ListWatcher        ListWatcher[T]
+	Cache              *cache.Cache[T] // mutable — Runner is the sole writer (Set/Delete/MarkSynced)
+	Store              checkpoint.Store
+	Disk               *checkpoint.DiskStore
+	DiskIndexes        func(T) []string
+	DiskRelated        func(T) []types.WorkItemKey
+	DiskRelatedVersion func(T) string
+	Enqueue            func(types.WorkItemKey) error
 	// ReplayEnqueue receives related replay keys restored from the checkpoint.
 	// It is used when this runner observes changes whose durable work belongs to
 	// another controller kind.
@@ -72,6 +76,17 @@ type Runner[T any] struct {
 	// useful for observer-only runners whose durable work is represented by
 	// RelatedReplayKeys instead.
 	DisableReplay bool
+	// Durable watches validate resume asynchronously. Do not release recovered
+	// work until a bookmark has actually been consumed from the resumed stream.
+	WaitForWatchBookmark bool
+
+	// ResyncInterval, when non-zero, periodically re-enqueues every key
+	// currently in Cache regardless of whether it changed. This lets a
+	// reconciler revalidate its object against external system state that
+	// the watch stream itself cannot observe (e.g. a Repository's bare Git
+	// storage disappearing without a spec-generation change). Zero disables
+	// resync entirely (default).
+	ResyncInterval time.Duration
 
 	FlushIntervalEvents int           // events between checkpoint persists; default 100
 	MaxBackoff          time.Duration // cap on reconnect backoff; default 30s
@@ -97,7 +112,13 @@ type Runner[T any] struct {
 // caller is responsible for not starting a second Runner for the same kind.
 func (r *Runner[T]) Run(ctx context.Context) error {
 	r.applyDefaults()
+	if r.Disk != nil {
+		return r.runDisk(ctx)
+	}
 	defer r.finalFlush(ctx)
+	if err := r.Cache.BeginRecovery(ctx); err != nil {
+		return err
+	}
 
 	pendingDedup, err := r.bootstrapOrResume(ctx)
 	if err != nil {
@@ -105,6 +126,258 @@ func (r *Runner[T]) Run(ctx context.Context) error {
 	}
 
 	return r.watchLoop(ctx, pendingDedup)
+}
+
+// Lookup preserves storage errors; a recovering dependency is not "not found".
+func (r *Runner[T]) Lookup(ctx context.Context, key types.WorkItemKey) (T, bool, error) {
+	var value T
+	if !r.Cache.HasSynced() || r.Cache.RecoveryState().Recovering {
+		return value, false, checkpoint.ErrSnapshotInProgress
+	}
+	if r.Disk == nil {
+		value, found := r.Cache.Get(key)
+		return value, found, nil
+	}
+	item, found, _, err := r.Disk.Read(ctx, key)
+	if err != nil || !found {
+		return value, found, err
+	}
+	if err := json.Unmarshal(item.Value, &value); err != nil {
+		return value, false, fmt.Errorf("decode %s projection: %w", r.Kind, err)
+	}
+	if r.KeyFunc(value) != key || r.RevisionFunc(value) != item.Version {
+		return value, false, fmt.Errorf("%s stored projection identity mismatch", r.Kind)
+	}
+	return value, true, nil
+}
+
+func (r *Runner[T]) diskItem(value T) (checkpoint.DiskItem, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return checkpoint.DiskItem{}, err
+	}
+	item := checkpoint.DiskItem{Key: r.KeyFunc(value), Version: r.RevisionFunc(value), Value: data}
+	if r.DiskIndexes != nil {
+		item.Indexes = r.DiskIndexes(value)
+	}
+	if r.DiskRelated != nil {
+		item.Related = r.DiskRelated(value)
+	}
+	if r.DiskRelatedVersion != nil {
+		item.RelatedVersion = r.DiskRelatedVersion(value)
+	}
+	return item, nil
+}
+
+func (r *Runner[T]) diskRetry(ctx context.Context, action func() error) error {
+	b := backoff.NewExponentialBackOff()
+	b.InitialInterval = defaultListRetryInitialInterval
+	b.MaxInterval = r.MaxBackoff
+	_, err := backoff.Retry(ctx, func() (struct{}, error) {
+		return struct{}{}, action()
+	}, backoff.WithMaxElapsedTime(0), backoff.WithBackOff(b),
+		backoff.WithNotify(func(err error, delay time.Duration) {
+			r.log().Warn("durable controller operation failed; retrying",
+				zap.String("kind", r.Kind), zap.Duration("backoff", delay), zap.Error(err))
+		}))
+	return err
+}
+
+func (r *Runner[T]) listToDisk(ctx context.Context, lw PagedListWatcher[T]) error {
+	return r.diskRetry(ctx, func() error {
+		generation, err := r.Disk.BeginSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		progress := &listProgress{observe: r.Cache.ObserveListProgress}
+		listCtx := context.WithValue(ctx, listProgressKey{}, progress)
+		cursor, err := lw.ListPages(listCtx, func(items []T) error {
+			var page []checkpoint.DiskItem
+			size := 0
+			flush := func() error {
+				if len(page) == 0 {
+					return nil
+				}
+				if err := r.Disk.PutSnapshotPage(ctx, generation, page); err != nil {
+					return err
+				}
+				clear(page)
+				page, size = page[:0], 0
+				return nil
+			}
+			for _, value := range items {
+				item, err := r.diskItem(value)
+				if err != nil {
+					return err
+				}
+				encoded, err := json.Marshal(item)
+				if err != nil {
+					return err
+				}
+				if len(page) == checkpoint.DiskPageItems || size+len(encoded) > checkpoint.DiskPageBytes/4 {
+					if err := flush(); err != nil {
+						return err
+					}
+				}
+				page = append(page, item)
+				size += len(encoded)
+			}
+			return flush()
+		})
+		if err != nil {
+			return err
+		}
+		if err := r.Disk.FinishSnapshot(ctx, generation, cursor, func(pages int64) {
+			r.Cache.ObserveListProgress(progress.pages+pages, progress.rows)
+		}); err != nil {
+			return err
+		}
+		r.currentRV = cursor
+		r.Cache.MarkSynced()
+		return nil
+	})
+}
+
+func (r *Runner[T]) applyDiskEvent(ctx context.Context, event WatchEvent[T]) error {
+	if event.Type == Bookmark {
+		return r.Disk.AdvanceCursor(ctx, event.ResourceVersion)
+	}
+	if event.Type != Added && event.Type != Modified && event.Type != Deleted {
+		return fmt.Errorf("unknown %s watch event type %d", r.Kind, event.Type)
+	}
+	if event.Type == Deleted {
+		return r.Disk.Apply(ctx, checkpoint.DiskItem{Key: r.KeyFunc(event.Object)}, true, true, event.ResourceVersion)
+	}
+	item, err := r.diskItem(event.Object)
+	if err != nil {
+		return err
+	}
+	prior, exists, _, err := r.Disk.Read(ctx, item.Key)
+	if err != nil {
+		return err
+	}
+	enqueue := true
+	if exists {
+		var old T
+		if err := json.Unmarshal(prior.Value, &old); err != nil {
+			return fmt.Errorf("decode prior %s projection: %w", r.Kind, err)
+		}
+		if prior.Version == item.Version || r.AcceptUpdate != nil && !r.AcceptUpdate(old, event.Object) {
+			return r.Disk.AdvanceCursor(ctx, event.ResourceVersion)
+		}
+		if r.ShouldEnqueueUpdate != nil {
+			enqueue = r.ShouldEnqueueUpdate(old, event.Object)
+		}
+	}
+	return r.Disk.Apply(ctx, item, false, enqueue, event.ResourceVersion)
+}
+
+func (r *Runner[T]) collectDiskGarbage(ctx context.Context) error {
+	progress := r.Cache.RecoveryState()
+	return r.diskRetry(ctx, func() error {
+		return r.Disk.CollectGarbage(ctx, func(pages int64) {
+			r.Cache.ObserveListProgress(progress.Pages+pages, progress.Rows)
+		})
+	})
+}
+
+func (r *Runner[T]) runDisk(ctx context.Context) error {
+	lw, ok := r.ListWatcher.(PagedListWatcher[T])
+	if !ok {
+		return fmt.Errorf("%s disk runner requires streaming listing", r.Kind)
+	}
+	if err := r.Cache.BeginRecovery(ctx); err != nil {
+		return err
+	}
+	active, cursor, err := r.Disk.Active(ctx)
+	if err != nil {
+		return err
+	}
+	if active == 0 {
+		if err := r.listToDisk(ctx, lw); err != nil {
+			return err
+		}
+	} else {
+		if err := r.Disk.DiscardStaging(ctx); err != nil {
+			return err
+		}
+		r.currentRV = cursor
+		r.Cache.MarkSynced()
+	}
+	reconnect := backoff.NewExponentialBackOff()
+	if err := r.collectDiskGarbage(ctx); err != nil {
+		return err
+	}
+	reconnect.InitialInterval = defaultReconnectInitialInterval
+	reconnect.MaxInterval = r.MaxBackoff
+	reconnect.Reset()
+	for ctx.Err() == nil {
+		watcher, err := lw.Watch(ctx, r.currentRV)
+		if err == nil {
+			if !r.WaitForWatchBookmark {
+				r.Cache.EndRecovery()
+			}
+			opened := time.Now()
+			err = r.consumeDiskWatch(ctx, watcher, reconnect.Reset)
+			if time.Since(opened) >= time.Second {
+				reconnect.Reset()
+			}
+			watcher.Stop()
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(err, ErrWatchExpired) {
+			if err := r.Cache.BeginRecovery(ctx); err != nil {
+				return err
+			}
+			if err := r.listToDisk(ctx, lw); err != nil {
+				return err
+			}
+			if err := r.collectDiskGarbage(ctx); err != nil {
+				return err
+			}
+			reconnect.Reset()
+			continue
+		}
+		delay := reconnect.NextBackOff()
+		r.log().Warn("durable watch disconnected; reconnecting", zap.String("kind", r.Kind),
+			zap.Duration("backoff", delay), zap.Error(err))
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return ctx.Err()
+}
+
+func (r *Runner[T]) consumeDiskWatch(ctx context.Context, watcher Watcher[T], onProgress func()) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case event, ok := <-watcher.Events():
+			if !ok {
+				return watcher.Err()
+			}
+			if err := r.diskRetry(ctx, func() error {
+				if err := r.applyDiskEvent(ctx, event); err != nil {
+					return errors.Join(err, r.Cache.BeginRecovery(ctx))
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			r.currentRV = event.ResourceVersion
+			onProgress()
+			if !r.WaitForWatchBookmark || event.Type == Bookmark {
+				r.Cache.EndRecovery()
+			}
+		}
+	}
 }
 
 func (r *Runner[T]) applyDefaults() {
@@ -217,8 +490,13 @@ func (r *Runner[T]) retryList(ctx context.Context) (ListResponse[T], error) {
 	b.Multiplier = defaultListRetryMultiplier
 
 	return backoff.Retry(ctx, func() (ListResponse[T], error) {
-		return r.ListWatcher.List(ctx)
+		listCtx := ctx
+		if r.Cache != nil {
+			listCtx = context.WithValue(ctx, listProgressKey{}, &listProgress{observe: r.Cache.ObserveListProgress})
+		}
+		return r.ListWatcher.List(listCtx)
 	},
+		backoff.WithMaxElapsedTime(0),
 		backoff.WithBackOff(b),
 		backoff.WithNotify(func(err error, d time.Duration) {
 			r.log().Warn("list failed; retrying",
@@ -243,6 +521,15 @@ func (r *Runner[T]) watchLoop(ctx context.Context, pendingDedup map[types.WorkIt
 	reconnectBackoff.Multiplier = defaultReconnectMultiplier
 	reconnectBackoff.Reset()
 
+	// resyncC persists across reconnects (unlike per-connection watcher
+	// state) so a resync tick is never lost to a watch reconnect/relist.
+	var resyncC <-chan time.Time
+	if r.ResyncInterval > 0 {
+		ticker := time.NewTicker(r.ResyncInterval)
+		defer ticker.Stop()
+		resyncC = ticker.C
+	}
+
 	for {
 		watcher, err := r.ListWatcher.Watch(ctx, r.currentRV)
 		if err != nil {
@@ -265,7 +552,10 @@ func (r *Runner[T]) watchLoop(ctx context.Context, pendingDedup map[types.WorkIt
 		}
 		reconnectBackoff.Reset()
 
-		closeErr, processErr := r.drainWatcher(ctx, watcher, pendingDedup)
+		if !r.WaitForWatchBookmark {
+			r.Cache.EndRecovery()
+		}
+		closeErr, processErr := r.drainWatcher(ctx, watcher, pendingDedup, resyncC)
 		watcher.Stop()
 		if processErr != nil {
 			return processErr
@@ -311,12 +601,16 @@ func (r *Runner[T]) sleepBackoff(ctx context.Context, b *backoff.ExponentialBack
 }
 
 // drainWatcher processes events from watcher until its channel closes or
-// ctx is cancelled, returning watcher.Err() in the former case.
-func (r *Runner[T]) drainWatcher(ctx context.Context, watcher Watcher[T], pendingDedup map[types.WorkItemKey]string) (error, error) {
+// ctx is cancelled, returning watcher.Err() in the former case. A resync
+// tick (resyncC, nil when disabled) re-enqueues every cached key without
+// otherwise interrupting event processing.
+func (r *Runner[T]) drainWatcher(ctx context.Context, watcher Watcher[T], pendingDedup map[types.WorkItemKey]string, resyncC <-chan time.Time) (error, error) {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, nil
+		case <-resyncC:
+			r.resync()
 		case ev, ok := <-watcher.Events():
 			if !ok {
 				return watcher.Err(), nil
@@ -324,7 +618,21 @@ func (r *Runner[T]) drainWatcher(ctx context.Context, watcher Watcher[T], pendin
 			if err := r.handleEvent(ctx, ev, pendingDedup); err != nil {
 				return nil, err
 			}
+			if ev.Type == Bookmark {
+				r.Cache.EndRecovery()
+			}
 		}
+	}
+}
+
+// resync re-enqueues every key currently in Cache so its reconciler gets a
+// chance to revalidate against external system state the watch stream
+// itself cannot observe. It deliberately does not touch the cache or replay
+// tracking: a resync tick lost to a crash is corrected by the next tick, not
+// by checkpoint replay.
+func (r *Runner[T]) resync() {
+	for _, item := range r.Cache.List() {
+		r.enqueue(r.KeyFunc(item))
 	}
 }
 
@@ -336,8 +644,9 @@ func (r *Runner[T]) drainWatcher(ctx context.Context, watcher Watcher[T], pendin
 // just-enqueued key is not double-enqueued.
 func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKey]string, error) {
 	r.log().Warn("watch cursor expired; re-listing", zap.String("kind", r.Kind))
-	r.currentRV = ""
-	r.markCheckpointDirty()
+	if err := r.Cache.BeginRecovery(ctx); err != nil {
+		return nil, err
+	}
 
 	listResp, err := r.retryList(ctx)
 	if err != nil {
@@ -345,13 +654,12 @@ func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKe
 	}
 
 	pendingDedup := make(map[types.WorkItemKey]string, len(listResp.Items))
-	listedKeys := make(map[types.WorkItemKey]struct{}, len(listResp.Items))
+	items := make(map[types.WorkItemKey]T, len(listResp.Items))
 	for _, item := range listResp.Items {
 		key := r.KeyFunc(item)
 		newRev := r.RevisionFunc(item)
-		listedKeys[key] = struct{}{}
+		items[key] = item
 		cached, ok := r.Cache.Get(key)
-		r.Cache.Set(key, item)
 		pendingDedup[key] = newRev
 		if !ok || r.RevisionFunc(cached) != newRev {
 			r.rememberForReplay(key)
@@ -360,13 +668,13 @@ func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKe
 	}
 	for _, cached := range r.Cache.List() {
 		key := r.KeyFunc(cached)
-		if _, ok := listedKeys[key]; ok {
+		if _, ok := items[key]; ok {
 			continue
 		}
-		r.Cache.Delete(key)
 		r.rememberForReplay(key)
 		r.enqueue(key)
 	}
+	r.Cache.Replace(items)
 	r.currentRV = listResp.ResourceVersion
 	r.markCheckpointDirty()
 	if err := r.flushWithBackoff(ctx); err != nil {
@@ -417,6 +725,8 @@ func (r *Runner[T]) handleEvent(ctx context.Context, ev WatchEvent[T], pendingDe
 				r.Cache.Set(key, ev.Object)
 			case Deleted:
 				r.Cache.Delete(key)
+			default:
+				// Bookmark is handled above; this should never happen.
 			}
 		}
 

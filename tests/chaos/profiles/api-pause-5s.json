@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "description": "Pause one explicitly selected GitStore API replica for five seconds.",
+  "action": "pause",
+  "duration": "5s",
+  "expectedRecovery": "30s"
+}

@@ -1,0 +1,105 @@
+services:
+  scylla-1:
+    image: scylladb/scylla:2026.1
+    container_name: gitstore-scylla-1
+    mem_limit: ${SCYLLA_CLUSTER_MEMORY_LIMIT:-3g}
+    ports:
+      - "9042:9042"   # CQL native transport
+    command: --developer-mode=1 --overprovisioned=1 --smp=${SCYLLA_CLUSTER_SMP:-1} --max-networking-io-control-blocks=${SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS:-2048} --seeds=scylla-1
+    volumes:
+      - scylla-cluster-data-1:/var/lib/scylla
+    networks:
+      - gitstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  scylla-2:
+    image: scylladb/scylla:2026.1
+    container_name: gitstore-scylla-2
+    mem_limit: ${SCYLLA_CLUSTER_MEMORY_LIMIT:-3g}
+    command: --developer-mode=1 --overprovisioned=1 --smp=${SCYLLA_CLUSTER_SMP:-1} --max-networking-io-control-blocks=${SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS:-2048} --seeds=scylla-1
+    volumes:
+      - scylla-cluster-data-2:/var/lib/scylla
+    networks:
+      - gitstore-network
+    depends_on:
+      scylla-1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  scylla-3:
+    image: scylladb/scylla:2026.1
+    container_name: gitstore-scylla-3
+    mem_limit: ${SCYLLA_CLUSTER_MEMORY_LIMIT:-3g}
+    command: --developer-mode=1 --overprovisioned=1 --smp=${SCYLLA_CLUSTER_SMP:-1} --max-networking-io-control-blocks=${SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS:-2048} --seeds=scylla-1
+    volumes:
+      - scylla-cluster-data-3:/var/lib/scylla
+    networks:
+      - gitstore-network
+    depends_on:
+      scylla-1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  scylla-init:
+    image: scylladb/scylla:2026.1
+    depends_on:
+      scylla-1:
+        condition: service_healthy
+      scylla-2:
+        condition: service_healthy
+      scylla-3:
+        condition: service_healthy
+    networks:
+      - gitstore-network
+    entrypoint: []
+    command: >
+      cqlsh scylla-1 -e "
+        CREATE KEYSPACE IF NOT EXISTS gitstore
+          WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'}
+          AND durable_writes = true
+      "
+    restart: "no"
+
+  api:
+    depends_on:
+      scylla-init:
+        condition: service_completed_successfully
+    environment:
+      - GITSTORE_API__DATASTORE__BACKEND=scylla
+      - GITSTORE_API__DATASTORE__SCYLLA__HOSTS=scylla-1:9042,scylla-2:9042,scylla-3:9042
+      - GITSTORE_API__DATASTORE__SCYLLA__KEYSPACE=gitstore
+      - GITSTORE_API__WATCH__JOURNAL__RETENTION=168h
+      - GITSTORE_API__WATCH__JOURNAL__CDC__CONFIDENCE_WINDOW=500ms
+      - GITSTORE_API__WATCH__JOURNAL__READ__BATCH_SIZE=256
+      - GITSTORE_API__WATCH__JOURNAL__READ__MAX_REPLAY_EVENTS=100000
+      - GITSTORE_API__WATCH__JOURNAL__SUBSCRIBER__BUFFER=64
+      - GITSTORE_API__WATCH__JOURNAL__SUBSCRIBER__BACKPRESSURE=30s
+      - GITSTORE_API__WATCH__JOURNAL__POLL__MIN=100ms
+      - GITSTORE_API__WATCH__JOURNAL__POLL__MAX=2s
+      - GITSTORE_API__WATCH__JOURNAL__BOOKMARK_INTERVAL=30s
+      - GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__LEASE_TTL=30s
+      - GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__LEASE_RENEW_INTERVAL=10s
+      - GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__MAX_LAG=60s
+
+volumes:
+  scylla-cluster-data-1:
+    driver: local
+  scylla-cluster-data-2:
+    driver: local
+  scylla-cluster-data-3:
+    driver: local

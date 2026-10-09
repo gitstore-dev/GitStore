@@ -1,8 +1,18 @@
 # File Resource — typed watch contract
 
+extend type Query {
+  """
+  Read one persisted File by namespace and name. This does not subscribe to events.
+  """
+  file(namespace: String!, name: String!): File
+}
+
 extend type Subscription {
   """
-  Dedicated, compile-time-typed watch entry point for File resources.
+  Durable File changes, resumable across API replicas within journal retention.
+  An omitted cursor watches future changes, not an initial snapshot.
+  Use the shared bootstrap cursor to capture a bookmark before reading current
+  state, then resume from that bookmark. Legacy event-bus cursors are expired.
   """
   watchFiles(
     namespace: String
@@ -40,7 +50,13 @@ type FileSource {
   type: String!
   uri: String!
   checksum: FileChecksum
-  credentialsRef: SecretRef
+  credentialsRef: CredentialsRef
+}
+
+type CredentialsRef {
+  kind: String!
+  type: String!
+  secretRef: SecretRef!
 }
 
 type FileChecksum {

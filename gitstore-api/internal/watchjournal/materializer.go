@@ -1,0 +1,304 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
+package watchjournal
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"maps"
+	"sync"
+	"time"
+
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+)
+
+// Change is one logical authoritative resource CDC transition. Kind and
+// Namespace are copied into the durable envelope, so one total-order journal
+// can serve cluster-scoped and namespace-scoped resources together.
+type Change struct {
+	Kind             string
+	Namespace        string
+	StreamID         string
+	Position         []byte
+	DeduplicationKey string
+	Name             string
+	Before           json.RawMessage
+	After            json.RawMessage
+	At               time.Time
+}
+
+type MaterializerConfig struct {
+	EventTTL         time.Duration
+	BookmarkInterval time.Duration
+	Clock            Clock
+	Metrics          *Metrics
+	// LabelExtractor extracts selector labels from a resource post/preimage.
+	// It is resource-specific because payload schemas are intentionally not a
+	// watch-journal concern. Nil preserves the Namespace adapter behavior.
+	LabelExtractor func(json.RawMessage) map[string]string
+}
+
+type Materializer struct {
+	store MaterializerStore
+	cfg   MaterializerConfig
+	// appendMu serializes the leader's CDC and bookmark producers. The Scylla
+	// journal allocates sequence numbers with CAS, but one leader should not
+	// manufacture avoidable contention against itself.
+	appendMu sync.Mutex
+}
+
+type batchMaterializerStore interface {
+	AppendBatch(context.Context, datastore.ResourceWatchLease, []datastore.ResourceWatchEvent, time.Duration) ([]datastore.ResourceWatchEvent, error)
+}
+
+func NewMaterializer(store MaterializerStore, cfg MaterializerConfig) *Materializer {
+	if cfg.EventTTL <= 0 {
+		cfg.EventTTL = 7 * 24 * time.Hour
+	}
+	if cfg.BookmarkInterval <= 0 {
+		cfg.BookmarkInterval = 30 * time.Second
+	}
+	return &Materializer{store: store, cfg: cfg}
+}
+
+// ClassifyResource maps committed before/postimages into a resource-neutral
+// event. Label extraction is supplied by the source adapter; journal ordering
+// and selector transition semantics remain identical for every kind.
+func ClassifyResource(change Change, labels func(json.RawMessage) map[string]string) (datastore.ResourceWatchEvent, bool) {
+	event := datastore.ResourceWatchEvent{
+		Kind:             change.Kind,
+		Namespace:        change.Namespace,
+		Name:             change.Name,
+		DeduplicationKey: change.DeduplicationKey,
+		At:               change.At,
+	}
+	switch {
+	case len(change.Before) == 0 && len(change.After) > 0:
+		event.Type = datastore.ResourceWatchAdded
+		event.Payload = append([]byte(nil), change.After...)
+		event.SelectorLabels = labels(change.After)
+	case len(change.Before) > 0 && len(change.After) > 0:
+		if jsonEqual(change.Before, change.After) {
+			return datastore.ResourceWatchEvent{}, false
+		}
+		event.Type = datastore.ResourceWatchModified
+		event.Payload = append([]byte(nil), change.After...)
+		event.SelectorLabels = labels(change.After)
+		event.PreviousSelectorLabels = labels(change.Before)
+	case len(change.Before) > 0 && len(change.After) == 0:
+		event.Type = datastore.ResourceWatchDeleted
+		event.SelectorLabels = labels(change.Before)
+	default:
+		return datastore.ResourceWatchEvent{}, false
+	}
+	return event, true
+}
+
+// Classify is the compatibility Namespace adapter. New source adapters use
+// ClassifyResource and provide their own kind and label projection.
+func Classify(change Change) (datastore.ResourceWatchEvent, bool) {
+	if change.Kind == "" {
+		change.Kind = "Namespace"
+	}
+	return ClassifyResource(change, namespaceLabels)
+}
+
+func namespaceLabels(payload json.RawMessage) map[string]string {
+	var namespace datastore.Namespace
+	if json.Unmarshal(payload, &namespace) != nil || len(namespace.Labels) == 0 {
+		return nil
+	}
+	labels := make(map[string]string, len(namespace.Labels))
+	maps.Copy(labels, namespace.Labels)
+	return labels
+}
+
+func jsonEqual(left, right json.RawMessage) bool {
+	var l, r any
+	if json.Unmarshal(left, &l) != nil || json.Unmarshal(right, &r) != nil {
+		return string(left) == string(right)
+	}
+	lb, _ := json.Marshal(l)
+	rb, _ := json.Marshal(r)
+	return string(lb) == string(rb)
+}
+
+// Process appends before saving progress. A crash between those operations may
+// duplicate on recovery but cannot skip an acknowledged transition.
+func (m *Materializer) Process(ctx context.Context, lease datastore.ResourceWatchLease, change Change) (datastore.ResourceWatchEvent, error) {
+	m.appendMu.Lock()
+	defer m.appendMu.Unlock()
+	appended, err := m.materializeLocked(ctx, lease, change)
+	if err != nil || appended.Type == "" {
+		return appended, err
+	}
+	progress := datastore.ResourceCDCProgress{
+		Source:    sourceKey(change.Kind),
+		StreamID:  change.StreamID,
+		Position:  append([]byte(nil), change.Position...),
+		UpdatedAt: appended.At,
+	}
+	if err := m.store.SaveProgress(ctx, lease, progress); err != nil {
+		return appended, fmt.Errorf("save resource CDC progress: %w", err)
+	}
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.ObserveCDCProgress(progress.UpdatedAt)
+	}
+	return appended, nil
+}
+
+// Materialize appends a classified change without writing a checkpoint. CDC
+// adapters that own a richer ordering checkpoint use this method, then persist
+// their frontier and source progress after the append succeeds.
+func (m *Materializer) Materialize(ctx context.Context, lease datastore.ResourceWatchLease, change Change) (datastore.ResourceWatchEvent, error) {
+	m.appendMu.Lock()
+	defer m.appendMu.Unlock()
+	return m.materializeLocked(ctx, lease, change)
+}
+
+// MaterializeBatch classifies an ordered group and lets capable durable stores
+// amortize journal linearization across the group. Stores without a batch path
+// retain the single-event behavior, which keeps development/test backends and
+// rolling upgrades compatible.
+func (m *Materializer) MaterializeBatch(ctx context.Context, lease datastore.ResourceWatchLease, changes []Change) ([]datastore.ResourceWatchEvent, error) {
+	materializeStarted := time.Now()
+	if m.cfg.Metrics != nil {
+		for _, change := range changes {
+			m.cfg.Metrics.ObserveCDCDiscovery(change.At, materializeStarted)
+		}
+		defer func() { m.cfg.Metrics.ObserveMaterializerStage("total", time.Since(materializeStarted)) }()
+	}
+	m.appendMu.Lock()
+	defer m.appendMu.Unlock()
+	events := make([]datastore.ResourceWatchEvent, 0, len(changes))
+	for _, change := range changes {
+		event, ok := m.classify(change)
+		if !ok {
+			continue
+		}
+		if event.At.IsZero() {
+			if m.cfg.Clock != nil {
+				event.At = m.cfg.Clock.Now()
+			} else {
+				event.At = time.Now().UTC()
+			}
+		}
+		events = append(events, event)
+	}
+	if len(events) == 0 {
+		return nil, nil
+	}
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.ObserveMaterializerBatchSize(len(events))
+	}
+	var appended []datastore.ResourceWatchEvent
+	var err error
+	appendStarted := time.Now()
+	if store, ok := m.store.(batchMaterializerStore); ok {
+		appended, err = store.AppendBatch(ctx, lease, events, m.cfg.EventTTL)
+	} else {
+		appended = make([]datastore.ResourceWatchEvent, 0, len(events))
+		for _, event := range events {
+			var result datastore.ResourceWatchEvent
+			result, err = m.store.Append(ctx, lease, event, m.cfg.EventTTL)
+			if err != nil {
+				break
+			}
+			appended = append(appended, result)
+		}
+	}
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.ObserveMaterializerStage("journal_append", time.Since(appendStarted))
+	}
+	if err != nil {
+		if m.cfg.Metrics != nil {
+			m.cfg.Metrics.IncAppendError()
+		}
+		return nil, fmt.Errorf("append resource journal event batch: %w", err)
+	}
+	if m.cfg.Metrics != nil {
+		for _, event := range appended {
+			m.cfg.Metrics.ObserveMaterialized(event, time.Now())
+		}
+	}
+	return appended, nil
+}
+
+func (m *Materializer) materializeLocked(ctx context.Context, lease datastore.ResourceWatchLease, change Change) (datastore.ResourceWatchEvent, error) {
+	event, ok := m.classify(change)
+	if !ok {
+		return datastore.ResourceWatchEvent{}, nil
+	}
+	if event.At.IsZero() {
+		if m.cfg.Clock != nil {
+			event.At = m.cfg.Clock.Now()
+		} else {
+			event.At = time.Now().UTC()
+		}
+	}
+	appended, err := m.store.Append(ctx, lease, event, m.cfg.EventTTL)
+	if err != nil {
+		if m.cfg.Metrics != nil {
+			m.cfg.Metrics.IncAppendError()
+		}
+		return datastore.ResourceWatchEvent{}, fmt.Errorf("append resource journal event: %w", err)
+	}
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.ObserveMaterialized(appended, time.Now())
+	}
+	return appended, nil
+}
+
+// ObserveCDCProgress updates lag accounting when the CDC reader advances an
+// empty query window without materializing an event.
+func (m *Materializer) ObserveCDCProgress(at time.Time) {
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.ObserveCDCProgress(at)
+	}
+}
+
+// AppendBookmark advances the shared cursor while idle.
+func (m *Materializer) AppendBookmark(ctx context.Context, lease datastore.ResourceWatchLease) (datastore.ResourceWatchEvent, error) {
+	m.appendMu.Lock()
+	defer m.appendMu.Unlock()
+
+	now := time.Now().UTC()
+	if m.cfg.Clock != nil {
+		now = m.cfg.Clock.Now()
+	}
+	appended, err := m.store.Append(ctx, lease, datastore.ResourceWatchEvent{
+		Type:             datastore.ResourceWatchBookmark,
+		At:               now,
+		DeduplicationKey: "bookmark:" + now.UTC().Format(time.RFC3339Nano),
+	}, m.cfg.EventTTL)
+	if err != nil {
+		if m.cfg.Metrics != nil {
+			m.cfg.Metrics.IncAppendError()
+		}
+		return datastore.ResourceWatchEvent{}, err
+	}
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.ObserveMaterialized(appended, time.Now())
+	}
+	return appended, nil
+}
+
+func (m *Materializer) classify(change Change) (datastore.ResourceWatchEvent, bool) {
+	labels := m.cfg.LabelExtractor
+	if labels == nil {
+		labels = namespaceLabels
+	}
+	if change.Kind == "" {
+		change.Kind = "Namespace"
+	}
+	return ClassifyResource(change, labels)
+}
+
+func sourceKey(kind string) string {
+	if kind == "" {
+		return "Namespace"
+	}
+	return kind
+}

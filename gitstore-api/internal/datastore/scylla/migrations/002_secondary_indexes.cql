@@ -1,2 +1,0 @@
--- Query-first tables in 001_initial_schema.cql cover every supported access
--- pattern. Secondary indexes are intentionally absent from the alpha baseline.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/adrg/frontmatter"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	"github.com/go-playground/validator/v10"
 	"gopkg.in/yaml.v3"
 )
@@ -44,6 +45,7 @@ type ParsedResource struct {
 	ProductVariant   *catalog.ProductVariantResource
 	Namespace        *catalog.NamespaceResource
 	File             *catalog.FileResource
+	Repository       *catalog.RepositoryResource
 }
 
 // ParseResource reads a Markdown document, extracts YAML frontmatter,
@@ -178,6 +180,9 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		if res.Metadata.Namespace != "" {
 			errs = append(errs, fmt.Errorf("validate: metadata.namespace must not be set for Namespace resources"))
 		}
+		if err := namespaceadmission.ValidateIdentifier(res.Metadata.Name); err != nil {
+			errs = append(errs, fmt.Errorf("validate: %w", err))
+		}
 		if err := validateLabels(res.Metadata.Labels); err != nil {
 			errs = append(errs, err)
 		}
@@ -185,6 +190,27 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 			return nil, nil, errors.Join(errs...)
 		}
 		return &ParsedResource{Kind: "Namespace", Namespace: &res}, body, nil
+
+	case "Repository":
+		var res catalog.RepositoryResource
+		body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
+		}
+		var errs []error
+		if err := p.validator().Struct(res); err != nil {
+			errs = append(errs, toFriendlyError(err))
+		}
+		if res.Metadata.Namespace == "" {
+			errs = append(errs, fmt.Errorf("validate: metadata.namespace is required for Repository resources"))
+		}
+		if err := validateLabels(res.Metadata.Labels); err != nil {
+			errs = append(errs, err)
+		}
+		if len(errs) > 0 {
+			return nil, nil, errors.Join(errs...)
+		}
+		return &ParsedResource{Kind: "Repository", Repository: &res}, body, nil
 
 	case "File":
 		var res catalog.FileResource
@@ -306,10 +332,19 @@ func preParseChecks(fmRaw []byte) error {
 	if _, ok := raw["spec"]; !ok {
 		return fmt.Errorf("validate: spec is required")
 	}
+	if raw["kind"] == "File" {
+		spec, _ := raw["spec"].(map[string]any)
+		source, _ := spec["source"].(map[string]any)
+		if ref, present := source["credentialsRef"]; present {
+			if err := catalog.ValidateFileCredentialsInput(ref); err != nil {
+				return err
+			}
+		}
+	}
 
-	// Status is ignored for Namespace to preserve system ownership while
-	// allowing declarative clients to round-trip a full resource envelope.
-	if _, ok := raw["status"]; ok && raw["kind"] != "Namespace" {
+	// Status is system-managed and written only through the status path; it
+	// must never appear in an author-controlled Git manifest.
+	if _, ok := raw["status"]; ok {
 		return fmt.Errorf("validate: status is system-managed and must not be set by authors")
 	}
 

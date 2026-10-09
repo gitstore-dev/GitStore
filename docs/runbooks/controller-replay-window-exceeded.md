@@ -26,7 +26,7 @@ A controller's watch stream for a resource kind was disconnected for long enough
 
 ## Recovery Actions
 
-**No manual relist is required.** The `listwatch.Runner` self-heals from an expired watch cursor automatically: it discards the stale checkpoint, performs a full `List` against the API, persists a fresh checkpoint at the new `resourceVersion`, and resumes watching from there (this is FR-006 of spec 038, exercised by `TestIntegration_ReplayWindowExceeded_FallsBackToFullBootstrap` in `gitstore-controller-manager/tests/integration/disconnect_reconnect_test.go`). If you observe the symptom, the correct action is almost always to **wait and confirm recovery**, not to intervene.
+**No manual relist is required.** The `listwatch.Runner` self-heals from an expired watch cursor automatically: it discards the stale checkpoint, performs a full `List` against the API, persists a fresh checkpoint at the new `resourceVersion`, and resumes watching from there (exercised by `TestIntegration_ReplayWindowExceeded_FallsBackToFullBootstrap` in `gitstore-controller-manager/tests/integration/disconnect_reconnect_test.go`). If you observe the symptom, the correct action is almost always to **wait and confirm recovery**, not to intervene.
 
 If the checkpoint timestamp does *not* advance after a reasonable wait (several times the kind's `MaxWatchBackoff`), that indicates the Runner is not recovering on its own — this is a bug, not the expected self-healing path; escalate rather than trying to force a relist manually (there is no supported manual-relist operation).
 

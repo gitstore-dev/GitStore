@@ -7,9 +7,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,9 +21,10 @@ import (
 
 // stubDatastore is a minimal Datastore stub for decorator tests.
 type stubDatastore struct {
-	getProductErr     error
-	getProductVal     *datastore.Product
-	getProductFinding *datastore.ProjectionFinding
+	getProductErr          error
+	getProductVal          *datastore.Product
+	getProductFinding      *datastore.ProjectionFinding
+	consumeAssertionResult bool
 }
 
 func (s *stubDatastore) CreateFile(_ context.Context, _ *datastore.File) error {
@@ -65,11 +68,33 @@ func (s *stubDatastore) ListProducts(_ context.Context, _ string, _ datastore.Pa
 func (s *stubDatastore) UpdateProduct(_ context.Context, _ *datastore.Product) error {
 	return s.getProductErr
 }
+func (s *stubDatastore) UpdateProductStatus(_ context.Context, _, _ string, _ datastore.ProductStatusPatch) (*datastore.Product, error) {
+	return nil, s.getProductErr
+}
 func (s *stubDatastore) DeleteProduct(_ context.Context, _ string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) DeleteProductWithResourceVersion(_ context.Context, _, _ string) error {
 	return s.getProductErr
+}
+
+func TestInstrumentedDatastorePreservesProductLifecycleCapability(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	product := &datastore.Product{
+		UID: "00000000-0000-0000-0000-000000000551", Namespace: "acme", Name: "widget",
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "Product", ResourceVersion: "1", Generation: 1,
+	}
+	require.NoError(t, store.CreateProduct(context.Background(), product))
+	wrapped := datastore.NewInstrumentedDatastoreWithRegistry(store, "memdb", zap.NewNop(), prometheus.NewRegistry())
+	lifecycle, ok := wrapped.(datastore.ProductLifecycleStore)
+	require.True(t, ok, "instrumentation must not erase Product deletion capability")
+
+	terminating, err := lifecycle.MarkProductTerminating(context.Background(), product.UID, "1", "gitstore.dev/foreground-deletion", time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, terminating.DeletionTimestamp)
+	require.NoError(t, lifecycle.CompleteProductDeletion(context.Background(), product.UID, terminating.ResourceVersion))
 }
 func (s *stubDatastore) CreateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
 	return s.getProductErr
@@ -158,6 +183,9 @@ func (s *stubDatastore) ListNamespaces(_ context.Context, _ datastore.PageParams
 func (s *stubDatastore) UpdateNamespace(_ context.Context, _ *datastore.Namespace, _ string) error {
 	return s.getProductErr
 }
+func (s *stubDatastore) MarkNamespaceDeletion(_ context.Context, _ *datastore.Namespace, _ string) error {
+	return s.getProductErr
+}
 func (s *stubDatastore) DeleteNamespace(_ context.Context, _ string) error {
 	return s.getProductErr
 }
@@ -168,6 +196,9 @@ func (s *stubDatastore) HasRepositories(_ context.Context, _ string) (bool, erro
 	return false, s.getProductErr
 }
 func (s *stubDatastore) CreateRepository(_ context.Context, _ *datastore.Repository) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) CreateRepositoryInActiveNamespace(_ context.Context, _ *datastore.Repository) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) GetRepository(_ context.Context, _ string) (*datastore.Repository, error) {
@@ -197,12 +228,35 @@ func (s *stubDatastore) LookupNamespaceByRepoID(_ context.Context, _ string) (*d
 func (s *stubDatastore) RenameRepository(_ context.Context, _, _, _ string) error {
 	return s.getProductErr
 }
-func (s *stubDatastore) TransferRepository(_ context.Context, _, _, _ string) error {
-	return s.getProductErr
-}
 func (s *stubDatastore) DeleteNamespaceMapping(_ context.Context, _, _ string) error {
 	return s.getProductErr
 }
+
+func (s *stubDatastore) CreateServiceAccount(_ context.Context, _ *datastore.ServiceAccount) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) GetServiceAccountByUID(_ context.Context, _ string) (*datastore.ServiceAccount, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) GetServiceAccountBySubject(_ context.Context, _, _ string) (*datastore.ServiceAccount, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) ListServiceAccounts(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.ServiceAccount], error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) UpdateServiceAccountKeys(_ context.Context, _ string, _ []datastore.ServiceAccountPublicKey, _ []string, _ string) (*datastore.ServiceAccount, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) SetServiceAccountDisabled(_ context.Context, _ string, _ bool) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) DeleteServiceAccount(_ context.Context, _ string) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) TryConsumeServiceAccountAssertion(_ context.Context, _ string, _ time.Time) (bool, error) {
+	return s.consumeAssertionResult, s.getProductErr
+}
+
 func (s *stubDatastore) Close() error { return nil }
 
 // newTestInstrumented creates an InstrumentedDatastore with an observer logger
@@ -304,6 +358,16 @@ func TestInstrumentedDatastore_HistogramObservedOnSuccess(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(1), histogramObservationCount(t, reg, "GetProduct", "test-backend"))
+}
+
+func TestInstrumentedDatastore_ConsumesServiceAccountAssertion(t *testing.T) {
+	stub := &stubDatastore{consumeAssertionResult: true}
+	inst, _, reg := newTestInstrumented(t, stub)
+
+	consumed, err := inst.TryConsumeServiceAccountAssertion(context.Background(), "digest", time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	assert.True(t, consumed)
+	assert.Equal(t, uint64(1), histogramObservationCount(t, reg, "TryConsumeServiceAccountAssertion", "test-backend"))
 }
 
 func TestInstrumentedDatastore_HistogramObservedOnError(t *testing.T) {

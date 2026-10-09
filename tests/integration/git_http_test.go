@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// TestGitClone covers: git clone over port 5000 succeeds and produces a working repo.
+// TestGitClone covers: git clone over the default host port 9000 succeeds and produces a working repo.
 func TestGitClone(t *testing.T) {
 	namespace := getEnv("NAMESPACE", "gitstore-test")
 	repository := getEnv("REPOSITORY", "catalog")

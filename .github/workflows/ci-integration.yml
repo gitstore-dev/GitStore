@@ -18,7 +18,12 @@ on:
       - 'docker/api.Dockerfile'
       - 'docker/controller-manager.Dockerfile'
       - 'compose.yml'
+      - 'compose.local.yml'
+      - 'compose.ci.yml'
       - 'compose.scylla.yml'
+      - 'compose.scylla.cluster.yml'
+      - 'config/config.toml'
+      - 'config/policy.yaml'
       - '.github/workflows/ci-integration.yml'
   pull_request:
     branches: [ main ]
@@ -33,7 +38,12 @@ on:
       - 'docker/api.Dockerfile'
       - 'docker/controller-manager.Dockerfile'
       - 'compose.yml'
+      - 'compose.local.yml'
+      - 'compose.ci.yml'
       - 'compose.scylla.yml'
+      - 'compose.scylla.cluster.yml'
+      - 'config/config.toml'
+      - 'config/policy.yaml'
       - '.github/workflows/ci-integration.yml'
 
 permissions:
@@ -50,14 +60,11 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-    # Stub credentials available to every step (including Collect logs / Cleanup)
-    # so docker compose can interpolate compose.yml without the :? guard firing.
+    # CI-specific credentials override the tracked development fixture.
     env:
-      GITSTORE_GIT__DATA_DIR: ./data/repos
-      GITSTORE_AUTH__ADMIN__USERNAME: admin
-      GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
-      GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
-      GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
+      GITSTORE_GIT_SERVICE__DATA_DIR: ./data/repos
+      GITSTORE_API__AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
+      GITSTORE_GRPC_AUTH__HMAC_SECRET: ci-test-grpc-hmac-secret
 
     steps:
     - uses: actions/checkout@v6
@@ -74,13 +81,13 @@ jobs:
       uses: docker/setup-compose-action@v2
 
     - name: Build and start core stack
-      run: docker compose up -d --build
+      run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml up -d --build
 
     - name: Wait for services to be healthy
       run: |
         echo "Waiting for gitstore-api (GraphQL + git HTTP)..."
         timeout 60 sh -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
-        docker compose ps
+        docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml ps
 
     - name: Wait for git-service gRPC to be ready
       run: timeout 30 sh -c 'until nc -z localhost 50051; do sleep 1; done'
@@ -88,30 +95,11 @@ jobs:
     - name: Wait for CatalogService gRPC to be ready
       run: timeout 30 sh -c 'until nc -z localhost 6000; do sleep 1; done'
 
-    - name: Mint controller-manager bearer token and restart it with credentials
-      # controller-manager already started (via `docker compose up -d`) with no
-      # Authorization header, so its reconciler's status-write mutations are
-      # rejected outright by the API's "authentication required" gate (every
-      # mutation except login/refreshToken requires an authenticated principal,
-      # independent of the allow-all authz provider). Mint a real token now that
-      # the API is up, then recreate just this one container with it set.
-      run: |
-        token_json=$(curl -sf -H 'Content-Type: application/json' \
-          --data '{"query":"mutation($username: String!, $password: String!) { login(input: { username: $username, password: $password }) { token { accessToken } } }","variables":{"username":"admin","password":"admin123"}}' \
-          http://localhost:4000/graphql)
-        token=$(echo "$token_json" | jq -er '.data.login.token.accessToken')
-        echo "::add-mask::$token"
-        echo "GITSTORE_CONTROLLER__API_TOKEN=$token" >> "$GITHUB_ENV"
-
-    - name: Recreate controller-manager with its bearer token
-      run: docker compose up -d --no-deps controller-manager
-
     - name: Wait for controller-manager to be healthy
       run: timeout 30 sh -c 'until curl -sf http://localhost:5001/health; do sleep 1; done'
 
     - name: Bootstrap namespace and repository
-      # admin123 is the plaintext for the stub bcrypt hash set in GITSTORE_AUTH__ADMIN__PASSWORD_HASH above
-      run: make bootstrap ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
+      run: make bootstrap TARGET=all ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
 
     - name: Seed repository with initial commit
       run: |
@@ -119,9 +107,9 @@ jobs:
         git config --global user.name "CI"
         git config --global init.defaultBranch main
         git config --global credential.helper store
-        printf 'protocol=http\nhost=localhost:5000\nusername=admin\npassword=admin123\n\n' | git credential approve
+        printf 'protocol=http\nhost=localhost:9000\nusername=admin\npassword=admin123\n\n' | git credential approve
         tmpdir=$(mktemp -d)
-        git clone http://localhost:5000/gitci/catalog.git "$tmpdir"
+        git clone http://localhost:9000/gitci/catalog.git "$tmpdir"
         echo "# CI seed" > "$tmpdir/README.md"
         git -C "$tmpdir" add README.md
         git -C "$tmpdir" commit -m "ci: seed initial commit"
@@ -134,38 +122,16 @@ jobs:
         REPOSITORY: catalog
       run: go test -count=1 -v -timeout 240s ./...
 
+    - name: Run backend-neutral datastore hardening
+      run: make test TARGET=datastore
+
     - name: Collect logs on failure
       if: failure()
-      run: docker compose logs
+      run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml logs
 
     - name: Cleanup
       if: always()
-      run: docker compose down -v
-
-  datastore-contract-test:
-    name: Datastore Hardening (backend-neutral + memdb)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        persist-credentials: false
-
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.26.0'
-        cache-dependency-path: gitstore-api/go.sum
-
-    - name: Run backend-neutral datastore hardening
-      run: make test-scylla-hardening
-
-    - name: Run memdb datastore contracts
-      working-directory: ./gitstore-api
-      run: go test -tags memdb -count=1 -v -race -timeout 180s ./tests/contract/datastore/...
+      run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml down -v
 
   integration-test-scylla:
     name: Integration (ScyllaDB)
@@ -174,11 +140,9 @@ jobs:
     permissions:
       contents: read
     env:
-      GITSTORE_GIT__DATA_DIR: ./data/repos
-      GITSTORE_AUTH__ADMIN__USERNAME: admin
-      GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
-      GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
-      GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
+      GITSTORE_GIT_SERVICE__DATA_DIR: ./data/repos
+      GITSTORE_API__AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
+      GITSTORE_GRPC_AUTH__HMAC_SECRET: ci-test-grpc-hmac-secret
 
     steps:
       - uses: actions/checkout@v6
@@ -195,7 +159,7 @@ jobs:
         uses: docker/setup-compose-action@v2
 
       - name: Build and start core stack with ScyllaDB
-        run: docker compose -f compose.yml -f compose.scylla.yml up -d --build
+        run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml -f compose.scylla.yml up -d --build
 
       - name: Wait for ScyllaDB to be healthy
         run: timeout 120 sh -c 'until nc -z localhost 9042; do sleep 2; done'
@@ -204,7 +168,7 @@ jobs:
         run: |
           echo "Waiting for gitstore-api (GraphQL + git HTTP)..."
           timeout 90 sh -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
-          docker compose -f compose.yml -f compose.scylla.yml ps
+          docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml -f compose.scylla.yml ps
 
       - name: Wait for git-service gRPC to be ready
         run: timeout 30 sh -c 'until nc -z localhost 50051; do sleep 1; done'
@@ -212,26 +176,11 @@ jobs:
       - name: Wait for CatalogService gRPC to be ready
         run: timeout 30 sh -c 'until nc -z localhost 6000; do sleep 1; done'
 
-      - name: Mint controller-manager bearer token and restart it with credentials
-        # See the memdb job's identically-named step for why this is needed:
-        # every mutation requires an authenticated principal regardless of the
-        # allow-all authz provider, and controller-manager starts with no token.
-        run: |
-          token_json=$(curl -sf -H 'Content-Type: application/json' \
-            --data '{"query":"mutation($username: String!, $password: String!) { login(input: { username: $username, password: $password }) { token { accessToken } } }","variables":{"username":"admin","password":"admin123"}}' \
-            http://localhost:4000/graphql)
-          token=$(echo "$token_json" | jq -er '.data.login.token.accessToken')
-          echo "::add-mask::$token"
-          echo "GITSTORE_CONTROLLER__API_TOKEN=$token" >> "$GITHUB_ENV"
-
-      - name: Recreate controller-manager with its bearer token
-        run: docker compose -f compose.yml -f compose.scylla.yml up -d --no-deps controller-manager
-
       - name: Wait for controller-manager to be healthy
         run: timeout 30 sh -c 'until curl -sf http://localhost:5001/health; do sleep 1; done'
 
       - name: Bootstrap namespace and repository
-        run: make bootstrap ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
+        run: make bootstrap TARGET=all ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
 
       - name: Seed repository with initial commit
         run: |
@@ -239,9 +188,9 @@ jobs:
           git config --global user.name "CI"
           git config --global init.defaultBranch main
           git config --global credential.helper store
-          printf 'protocol=http\nhost=localhost:5000\nusername=admin\npassword=admin123\n\n' | git credential approve
+          printf 'protocol=http\nhost=localhost:9000\nusername=admin\npassword=admin123\n\n' | git credential approve
           tmpdir=$(mktemp -d)
-          git clone http://localhost:5000/gitci/catalog.git "$tmpdir"
+          git clone http://localhost:9000/gitci/catalog.git "$tmpdir"
           echo "# CI seed" > "$tmpdir/README.md"
           git -C "$tmpdir" add README.md
           git -C "$tmpdir" commit -m "ci: seed initial commit"
@@ -254,77 +203,16 @@ jobs:
           REPOSITORY: catalog
         run: go test -count=1 -v -timeout 240s ./...
 
+      - name: Run tagged Scylla datastore hardening and failure injection
+        run: make test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=127.0.0.1:9042
+
       - name: Collect logs on failure
         if: failure()
-        run: docker compose -f compose.yml -f compose.scylla.yml logs
+        run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml -f compose.scylla.yml logs
 
       - name: Cleanup
         if: always()
-        run: docker compose -f compose.yml -f compose.scylla.yml down -v
-
-  datastore-contract-test-scylla:
-    name: Datastore Hardening (tagged ScyllaDB + failure injection)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        persist-credentials: false
-
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.26.0'
-        cache-dependency-path: gitstore-api/go.sum
-
-    - name: Start ScyllaDB
-      run: |
-        docker run -d --name gitstore-scylla-test \
-          -p 9042:9042 \
-          scylladb/scylla:5.4 \
-          --developer-mode=1 --overprovisioned=1 --smp=1
-        timeout 120 sh -c 'until docker exec gitstore-scylla-test cqlsh -e "describe cluster"; do sleep 2; done'
-
-    - name: Run tagged Scylla hardening and failure-injection tests
-      run: make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042
-
-    - name: Stop ScyllaDB
-      if: always()
-      run: docker rm -f gitstore-scylla-test || true
-
-  repair-cli-test:
-    name: Projection Repair CLI Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        persist-credentials: false
-
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.26.0'
-        cache-dependency-path: gitstore-api/go.sum
-
-    - name: Run repair CLI tests
-      working-directory: ./gitstore-api
-      run: |
-        test -f ./cmd/gitctl/main_test.go
-        go test -count=1 -v -timeout 90s ./cmd/gitctl
-
-    - name: Run repair planning and conditional-apply tests
-      working-directory: ./gitstore-api
-      run: >-
-        go test -count=1 -v -timeout 90s
-        -run 'Test(BuildRepairPlan|ProjectionRepairService|ValidateRepairPlan)'
-        ./internal/datastore/scylla
+        run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml -f compose.scylla.yml down -v
 
   grpc-contract-test:
     name: gRPC Contract Tests (testcontainers)

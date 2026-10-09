@@ -7,17 +7,65 @@ ROOT := $(CURDIR)
 API_DIR := $(ROOT)/gitstore-api
 CONTROLLER_MANAGER_DIR := $(ROOT)/gitstore-controller-manager
 GIT_SERVICE_DIR := $(ROOT)/gitstore-git-service
-GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR)
+OIDC_BRIDGE_DIR := $(ROOT)/gitstore-oidc-bridge
+SECRET_MATERIAL_DIR := $(ROOT)/shared/secretmaterial
+GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR)
 
 API_ENV_FILE ?= $(API_DIR)/.env
+CONFIG_FILE ?= ./config/config.toml
+AUTH_CONFIG_DIR ?= $(ROOT)/config
+POLICY_FILE ?= $(AUTH_CONFIG_DIR)/policy.yaml
+USERS_FILE ?= $(AUTH_CONFIG_DIR)/users.yaml
+LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
+LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml $(IDENTITY_COMPOSE_FILE)
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
+GIT_GRPC_PORT ?= 50051
+CONTROLLER_CHECKPOINT_DIR ?= $(ROOT)/.gitstore/checkpoints
+CONTROLLER_SECRET_DIR ?= $(ROOT)/.gitstore/secrets
+CONTROLLER_SECRET_NAME ?= controller-manager
+CONTROLLER_SECRET_KEY ?= privateKey
+# API_SERVICEACCOUNT_SIGNING_KEY_PATH is the API's own ServiceAccount token
+# issuer/verifier key (distinct from the controller-manager's enrollment
+# key above). Required whenever auth.authn.chain includes
+# serviceaccount-jwt/serviceaccount-assertion (see gitstore-api's
+# validateServiceAccountSigningKeySource) — it must be supplied via the
+# GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY env var, never via config.toml.
+API_SERVICEACCOUNT_SIGNING_KEY_PATH ?= $(ROOT)/.gitstore/secrets/api-issuer/privateKey
+CONTROLLER_SERVICEACCOUNT_NAMESPACE ?= controllers
+CONTROLLER_SERVICEACCOUNT_NAME ?= gitstore-controller-manager
+CONTROLLER_SERVICEACCOUNT_KEY_ID ?= controller-key
+# CONTROLLER_SERVICEACCOUNT_UID is intentionally left unset by default: the
+# real UID is assigned by the API at enrollment time (see the `dev`/`controller`
+# targets' auto-enrollment step) and is not a value operators should hardcode.
+CONTROLLER_SERVICEACCOUNT_UID ?=
+# DEV_ADMIN_USERNAME/DEV_ADMIN_PASSWORD are used only to auto-enroll the
+# controller-manager's ServiceAccount against a locally running API in the
+# `dev`/`controller` targets. They default to the admin fixture already
+# checked into config/users.yaml for local development and must not be used
+# against any non-local environment (use ADMIN_USERNAME/ADMIN_PASSWORD with
+# the bootstrap-* targets for that).
+DEV_ADMIN_USERNAME ?= admin
+DEV_ADMIN_PASSWORD ?= admin123
 DIFF_BASE ?= origin/main
 
 COMPOSE_BAKE ?= true
+DATASTORE ?= memdb
+IDENTITY ?= none
+PROFILE ?= single
+SCYLLA_CLUSTER_SMP ?= 1
+SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS ?= 2048
+SCYLLA_COMPOSE_FILE = $(if $(filter cluster,$(PROFILE)),compose.scylla.cluster.yml,compose.scylla.yml)
+DATASTORE_COMPOSE_FILE = $(if $(filter scylla,$(DATASTORE)),-f $(SCYLLA_COMPOSE_FILE),)
+IDENTITY_COMPOSE_FILE = $(if $(filter oidc,$(IDENTITY)),-f compose.oidc.yml,)
+SCYLLA_SERVICES = $(if $(filter cluster,$(PROFILE)),scylla-1 scylla-2 scylla-3 scylla-init,scylla scylla-init)
+SCYLLA_LIFECYCLE_SERVICES = scylla scylla-1 scylla-2 scylla-3 scylla-init
+OIDC_SERVICES = hydra-postgres hydra-migrate hydra hydra-client-setup kratos-postgres kratos-migrate kratos kratos-selfservice-ui mailslurper oidc-bridge
+COMPOSE_SERVICE = $(if $(filter scylla,$(SERVICE)),$(SCYLLA_LIFECYCLE_SERVICES),$(if $(filter oidc,$(SERVICE)),$(OIDC_SERVICES),$(SERVICE)))
 DETACH_FLAG := $(if $(filter 1 true yes,$(DETACH)),-d,)
 SERVICE ?=
 
 API_URL ?= http://localhost:4000/graphql
+API_HEALTH_URL ?= $(patsubst %/graphql,%/health,$(API_URL))
 ADMIN_USERNAME ?= admin
 ADMIN_PASSWORD ?=
 BOOTSTRAP_TOKEN ?=
@@ -31,22 +79,124 @@ SCYLLA_TEST_ADDR ?= 127.0.0.1:9042
 SCYLLA_CAPACITY_PRODUCTS ?= 5000000
 SCYLLA_CAPACITY_CONCURRENCY ?= 32
 SCYLLA_CAPACITY_DURATION ?= 10m
+NAMESPACE_CAPACITY_DURATION ?= 30m
+NAMESPACE_WATCH_CAPACITY_DURATION ?= 60m
+NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS ?= 1000
+NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS ?= 10000
+NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES ?= 20
+NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL ?= 50
+NAMESPACE_WATCH_CAPACITY_BURST_INTERVAL ?= 1m
+NAMESPACE_WATCH_CAPACITY_BURST_SIZE ?= 100
+NAMESPACE_WATCH_CAPACITY_MUTATION_WORKERS ?= 20
+NAMESPACE_WATCH_CAPACITY_REPLACEMENT_DELAY ?=
+NAMESPACE_WATCH_CAPACITY_BASELINE_STABILIZATION ?= 5m
+NAMESPACE_WATCH_CAPACITY_POST_LOAD_STABILIZATION ?= 10m
+NAMESPACE_WATCH_CAPACITY_ALLOW_MISSING_METRICS ?= 0
+NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT ?= 0
+NAMESPACE_WATCH_API_A ?= http://localhost:4000
+NAMESPACE_WATCH_API_B ?= http://localhost:4001
+NAMESPACE_WATCH_API_REPLACEMENT ?=
+NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE ?=
+NAMESPACE_WATCH_TOKEN ?=
+NAMESPACE_WATCH_TOKEN_FILE ?=
+NAMESPACE_WATCH_OVERFLOW_TRANSITIONS ?=
+REPOSITORY_CAPACITY_DURATION ?=60m
+REPOSITORY_CAPACITY_SUBSCRIBERS ?=1000
+REPOSITORY_CAPACITY_REPLAY_EVENTS ?=10000
+REPOSITORY_CAPACITY_REPLAY_SAMPLES ?=20
+REPOSITORY_CAPACITY_RESOURCE_POOL ?=50
+REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS ?=1000
+REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT ?=31s
+REPOSITORY_CAPACITY_MUTATION_WORKERS ?=20
+REPOSITORY_CAPACITY_BURST_INTERVAL ?=1m
+REPOSITORY_CAPACITY_BURST_SIZE ?=100
+REPOSITORY_CAPACITY_TRANSITION_INTERVAL ?=100ms
+REPOSITORY_CAPACITY_REPLACEMENT_DELAY ?=
+REPOSITORY_CAPACITY_BASELINE_STABILIZATION ?=5m
+REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION ?=10m
+REPOSITORY_CAPACITY_SKIP_REPLACEMENT ?=0
+REPOSITORY_API_A ?=http://localhost:4000
+REPOSITORY_API_B ?=http://localhost:4001
+REPOSITORY_OVERFLOW_API ?=$(REPOSITORY_API_A)
+REPOSITORY_CONTROLLER_A ?=http://localhost:5001
+REPOSITORY_CONTROLLER_B ?=http://localhost:5002
+REPOSITORY_GIT_URL ?=http://localhost:9000
+REPOSITORY_API_REPLACEMENT ?=
+REPOSITORY_REPLACEMENT_TRIGGER_FILE ?=
+REPOSITORY_TOKEN ?=
+REPOSITORY_TOKEN_FILE ?=
+REPOSITORY_CAPACITY_NAMESPACE ?=repository-capacity
+REPOSITORY_CAPACITY_SECRET_DATASET_MANIFEST ?=
+REPOSITORY_CAPACITY_SECRET_DATASET_NAMESPACE ?=$(REPOSITORY_CAPACITY_NAMESPACE)
+REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE ?=1000
+export REPOSITORY_CAPACITY_SECRET_DATASET_MANIFEST REPOSITORY_CAPACITY_SECRET_DATASET_NAMESPACE REPOSITORY_CAPACITY_SECRET_DATASET_PAGE_SIZE
+REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR ?=
+REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT ?=0
+REPOSITORY_CAPACITY_SECRET_FIXTURE_ACTION ?=
+export REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT REPOSITORY_CAPACITY_SECRET_FIXTURE_ACTION
+CAPACITY_PROFILE ?= api-readiness
+MODE ?= diagnostic
+TARGET ?= api
+TEST_TARGET = $(if $(filter pr-ready,$(MAKECMDGOALS)),all,$(if $(filter file undefined default,$(origin TARGET)),all,$(TARGET)))
+CAPACITY_RUN_ID ?=
+CAPACITY_EVIDENCE_DIR ?= $(ROOT)/.gitstore/capacity
+CAPACITY_ENV_FILE ?=
+CAPACITY_TOKEN_FILE ?=
+CAPACITY_CONFIG_MANIFEST ?=
+CAPACITY_ENVIRONMENT_MANIFEST ?=
+CAPACITY_PROMETHEUS_URL ?=
+CAPACITY_PROMETHEUS_PORT ?= 9090
+CAPACITY_PROMETHEUS_RETENTION ?= 24h
+CAPACITY_PROMETHEUS_TARGETS ?= host.docker.internal:4000,host.docker.internal:4001
+CAPACITY_PROMETHEUS_CONTROLLER_TARGETS ?=
+export CAPACITY_PROMETHEUS_CONTROLLER_TARGETS
+CAPACITY_PROMETHEUS_TARGETS_FILE ?=
+CAPACITY_OBSERVABILITY ?= none
+CAPACITY_DATASTORE_CONTAINERS ?=
+K6_IMAGE ?= grafana/k6:2.1.0
+CHAOS_PROFILE ?= api-restart
+CHAOS_TARGET ?=
+CHAOS_CONFIRM ?= 0
+CHAOS_EVIDENCE_DIR ?= $(ROOT)/.gitstore/chaos
+PUMBA_IMAGE ?= ghcr.io/alexei-led/pumba:1.1.7
+CAPACITY_CHAOS_PROFILE ?=
+CAPACITY_CHAOS_TARGET ?=
+CAPACITY_CHAOS_DELAY ?=30s
+CAPACITY_CHAOS_CONFIRM ?=0
+REPOSITORY_CAPACITY_PROJECT ?= gitstore-repository-capacity
+REPOSITORY_CAPACITY_STATE_DIR ?= $(ROOT)/.gitstore/repository-capacity
+PRODUCT_CAPACITY_PROJECT ?= gitstore-product-capacity
+PRODUCT_CAPACITY_STATE_DIR ?= $(ROOT)/.gitstore/product-capacity
+REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT ?= 1536m
+REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES ?= 1610612736
 
 export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CACHE
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
-.PHONY: help git api controller dev compose scylla compose-scylla ps logs stop down
-.PHONY: build test lint license-check pr-ready test-scylla-hardening test-scylla-integration test-scylla-capacity
-.PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
-.PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools gen-admin-password gen-jwt-secret gen-hmac-secret
+.PHONY: help git api controller dev compose scylla ps logs stop down
+.PHONY: build test lint pr-ready check clean bootstrap secret capacity chaos
+.PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-repository-lifecycle _capacity-repository-overflow _capacity-observability _capacity-observability-down
+.PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
+.PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
+.PHONY: add-user add-role assign-role hash-user-password enroll-controller-serviceaccount
+.PHONY: oidc
 
 help: ## Show available targets and common variables.
 	@awk 'BEGIN {FS = ":.*##"; printf "GitStore make targets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\nCommon variables:\n"
 	@printf "  DETACH=1                  Run compose start targets in the background\n"
+	@printf "  DATASTORE=%s              Compose datastore: memdb or scylla\n" "$(DATASTORE)"
+	@printf "  IDENTITY=%s               Compose identity stack: none or oidc (Hydra + Kratos reference provider)\n" "$(IDENTITY)"
 	@printf "  COMPOSE_BAKE=true         Compose build bake setting for Docker Compose\n"
-	@printf "  SERVICE=<name>            Limit logs/stop to one compose service\n"
+	@printf "  PROFILE=%s                Scylla profile: single or cluster\n" "$(PROFILE)"
+	@printf "  SERVICE=<name>            Limit logs/stop to one compose service; SERVICE=scylla includes all Scylla variants; SERVICE=oidc (with IDENTITY=oidc) covers the whole OIDC stack\n"
+	@printf "  SCYLLA_COMPOSE_FILE=%s  Derived Scylla overlay used by scylla and compose DATASTORE=scylla\n" "$(SCYLLA_COMPOSE_FILE)"
+	@printf "  SCYLLA_CLUSTER_SMP=%s     CPU shards per Scylla node for PROFILE=cluster\n" "$(SCYLLA_CLUSTER_SMP)"
+	@printf "  SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS=%s  Networking AIO blocks per cluster node\n" "$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)"
 	@printf "  GIT_DATA_DIR=%s\n" "$(GIT_DATA_DIR)"
+	@printf "  CONTROLLER_CHECKPOINT_DIR=%s\n" "$(CONTROLLER_CHECKPOINT_DIR)"
+	@printf "  CONTROLLER_SECRET_DIR=%s\n" "$(CONTROLLER_SECRET_DIR)"
+	@printf "  CONFIG_FILE=%s        Shared local-profile configuration\n" "$(CONFIG_FILE)"
 	@printf "  API_URL=%s\n" "$(API_URL)"
 	@printf "  ADMIN_USERNAME=%s\n" "$(ADMIN_USERNAME)"
 	@printf "  ADMIN_PASSWORD=<password> Required for login unless BOOTSTRAP_TOKEN or cached token is available\n"
@@ -54,33 +204,140 @@ help: ## Show available targets and common variables.
 	@printf "  SCYLLA_CAPACITY_PRODUCTS=%s\n" "$(SCYLLA_CAPACITY_PRODUCTS)"
 	@printf "  SCYLLA_CAPACITY_CONCURRENCY=%s\n" "$(SCYLLA_CAPACITY_CONCURRENCY)"
 	@printf "  SCYLLA_CAPACITY_DURATION=%s\n" "$(SCYLLA_CAPACITY_DURATION)"
+	@printf "  NAMESPACE_CAPACITY_DURATION=%s\n" "$(NAMESPACE_CAPACITY_DURATION)"
+	@printf "  NAMESPACE_WATCH_CAPACITY_DURATION=%s\n" "$(NAMESPACE_WATCH_CAPACITY_DURATION)"
+	@printf "  NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS=%s\n" "$(NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS)"
+	@printf "  NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS=%s NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES=%s\n" "$(NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS)" "$(NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES)"
+	@printf "  NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL=%s\n" "$(NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL)"
+	@printf "  NAMESPACE_WATCH_CAPACITY_BASELINE_STABILIZATION=%s NAMESPACE_WATCH_CAPACITY_POST_LOAD_STABILIZATION=%s\n" "$(NAMESPACE_WATCH_CAPACITY_BASELINE_STABILIZATION)" "$(NAMESPACE_WATCH_CAPACITY_POST_LOAD_STABILIZATION)"
+	@printf "  TARGET=%s PROFILE=<scenario> MODE=%s  Capacity subsystem, scenario, and evidence class\n" "$(TARGET)" "$(MODE)"
+	@printf "  CAPACITY_OBSERVABILITY=%s  Optional capacity metrics collector: none or prometheus\n" "$(CAPACITY_OBSERVABILITY)"
+	@printf "  CAPACITY_PROMETHEUS_URL=<url> Export phase queries into the evidence bundle\n"
+	@printf "  CAPACITY_PROMETHEUS_TARGETS=%s  Scrape endpoints reachable from Prometheus\n" "$(CAPACITY_PROMETHEUS_TARGETS)"
+	@printf "  CAPACITY_PROMETHEUS_CONTROLLER_TARGETS=%s  Optional controller endpoints for retained time series\n" "$(CAPACITY_PROMETHEUS_CONTROLLER_TARGETS)"
+	@printf "  CAPACITY_API_ENDPOINTS=<urls>  Comma-separated live API replica endpoints\n"
+	@printf "  CAPACITY_API_CONTAINERS=<names>  Matching digest-pinned API containers\n"
+	@printf "  CAPACITY_GIT_SERVICE_CONTAINER=<name>  Digest-pinned Git-service container\n"
+	@printf "  CHAOS_PROFILE=%s           Reusable Pumba fault profile\n" "$(CHAOS_PROFILE)"
+	@printf "  CHAOS_TARGET=<name>        Explicit GitStore container targeted by chaos\n"
+	@printf "  NAMESPACE_WATCH_API_A=%s NAMESPACE_WATCH_API_B=%s\n" "$(NAMESPACE_WATCH_API_A)" "$(NAMESPACE_WATCH_API_B)"
+	@printf "  NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=<path> Required coordination signal for an actual replica restart\n"
+	@printf "  NAMESPACE_WATCH_TOKEN=<token> Required for the cross-replica Namespace watch probe\n"
+	@printf "  REPOSITORY_API_A=%s REPOSITORY_API_B=%s REPOSITORY_OVERFLOW_API=%s\n" "$(REPOSITORY_API_A)" "$(REPOSITORY_API_B)" "$(REPOSITORY_OVERFLOW_API)"
+	@printf "  REPOSITORY_CONTROLLER_A=%s REPOSITORY_CONTROLLER_B=%s\n" "$(REPOSITORY_CONTROLLER_A)" "$(REPOSITORY_CONTROLLER_B)"
+	@printf "  REPOSITORY_GIT_URL=%s  Git smart-HTTP endpoint used by the deployed raw-push probe\n" "$(REPOSITORY_GIT_URL)"
+	@printf "  REPOSITORY_REPLACEMENT_TRIGGER_FILE=<path> Required for Repository lifecycle rolling-replacement evidence\n"
+	@printf "  REPOSITORY_CAPACITY_PROJECT=%s  Isolated laptop alpha Compose project\n" "$(REPOSITORY_CAPACITY_PROJECT)"
+	@printf "  REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT=%s  Per-node laptop alpha Scylla limit\n" "$(REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT)"
 	@printf "  BOOTSTRAP_TOKEN=<token>   Use an existing bearer token for bootstrap\n"
+	@printf "  TARGET=<value>            Required selector for check, clean, bootstrap, secret, and capacity\n"
+	@printf "  test TARGET=<value>       all (default), datastore, or secret-integration\n"
+	@printf "  test TARGET=datastore DATASTORE=scylla  Run external Scylla contracts; default DATASTORE=memdb needs no external database\n"
 	@printf "  NAMESPACE=%s REPOSITORY=%s DEFAULT_BRANCH=%s\n" "$(NAMESPACE)" "$(REPOSITORY)" "$(DEFAULT_BRANCH)"
 
 git: ## Run gitstore-git-service locally in the foreground.
 	@mkdir -p "$(GIT_DATA_DIR)"
-	@cd "$(GIT_SERVICE_DIR)" && GITSTORE_GIT__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service
+	@cd "$(GIT_SERVICE_DIR)" && GITSTORE_GIT_SERVICE__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service
+
+# enroll-controller-serviceaccount registers the controller-manager's signing
+# key with a running API and resolves the real, API-assigned ServiceAccount
+# UID (there is no valid hardcoded default for this value — it is created by
+# the enrollment mutation). Safe to re-run: --replace-existing-key makes it
+# idempotent. Requires the API to already be listening on API_URL's host:port.
+CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE ?= $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/serviceaccount.env
+
+enroll-controller-serviceaccount: ## Enroll controller-manager's signing key with the API.
+	@mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"
+	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
+		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		echo "Generate one with: make secret TARGET=signing-key DESTINATION_PATH=$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		exit 2; \
+	}
+	@cd "$(API_DIR)" && go run ./cmd/gitctl enroll-serviceaccount \
+		--api-url "$(API_URL)" \
+		--admin-username "$(DEV_ADMIN_USERNAME)" \
+		--admin-password "$(DEV_ADMIN_PASSWORD)" \
+		--namespace "$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
+		--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
+		--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
+		--replace-existing-key \
+		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
+		--identity-output-path "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)"
+
+_enroll-controller-serviceaccount:
+	@mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"
+	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
+		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		echo "Generate one with: cd $(API_DIR) && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		exit 2; \
+	}
+	@cd "$(API_DIR)" && go run ./cmd/gitctl enroll-serviceaccount \
+		--api-url "$(API_URL)" \
+		--admin-username "$(DEV_ADMIN_USERNAME)" \
+		--admin-password "$(DEV_ADMIN_PASSWORD)" \
+		--namespace "$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
+		--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
+		--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
+		--replace-existing-key \
+		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
+		--identity-output-path "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)"
 
 controller: ## Run gitstore-controller-manager locally in the foreground.
-	@cd "$(CONTROLLER_MANAGER_DIR)" && go run ./cmd/controller
+	@mkdir -p "$(CONTROLLER_CHECKPOINT_DIR)"
+	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
+		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		echo "Generate one with: make secret TARGET=signing-key DESTINATION_PATH=$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		exit 2; \
+	}
+	@cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key \
+		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
+		--record-output-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json" --key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)"
+	@set -u; \
+	resolved_uid="$(CONTROLLER_SERVICEACCOUNT_UID)"; \
+	if [ -z "$$resolved_uid" ]; then \
+		test -f "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)" || { \
+			echo "No enrolled ServiceAccount UID found. Run: make enroll-controller-serviceaccount"; \
+			exit 2; \
+		}; \
+		resolved_uid=$$(sed -n 's/^GITSTORE_CONTROLLER__SERVICEACCOUNT__UID=//p' "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)"); \
+		test -n "$$resolved_uid" || { echo "Enrolled ServiceAccount identity file is missing a UID."; exit 2; }; \
+	fi; \
+	cd "$(CONTROLLER_MANAGER_DIR)" && \
+		GITSTORE_CONTROLLER__CHECKPOINT__DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$resolved_uid" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME="$(CONTROLLER_SECRET_NAME)" \
+		GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
+		go run ./cmd/controller
 
 api: ## Run gitstore-api locally in the foreground.
-	@if [ ! -f "$(API_ENV_FILE)" ] && { [ -z "$${GITSTORE_AUTH__ADMIN__USERNAME:-}" ] || [ -z "$${GITSTORE_AUTH__ADMIN__PASSWORD_HASH:-}" ] || [ -z "$${GITSTORE_AUTH__JWT__SECRET:-}" ]; }; then \
-		echo "make api requires $(API_ENV_FILE) or shell env for GITSTORE_AUTH__ADMIN__USERNAME, GITSTORE_AUTH__ADMIN__PASSWORD_HASH, and GITSTORE_AUTH__JWT__SECRET"; \
-		exit 2; \
-	fi
-	@cd "$(API_DIR)" && go run ./cmd/server
+	@mkdir -p "$$(dirname "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")"
+	@test -f "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" || \
+		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" )
+	@cd "$(API_DIR)" && \
+		GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
+		go run ./cmd/server
 
 dev: ## Run local git service and API together in the foreground.
-	@if [ ! -f "$(API_ENV_FILE)" ] && { [ -z "$${GITSTORE_AUTH__ADMIN__USERNAME:-}" ] || [ -z "$${GITSTORE_AUTH__ADMIN__PASSWORD_HASH:-}" ] || [ -z "$${GITSTORE_AUTH__JWT__SECRET:-}" ]; }; then \
-		echo "make dev requires $(API_ENV_FILE) or shell env for GITSTORE_AUTH__ADMIN__USERNAME, GITSTORE_AUTH__ADMIN__PASSWORD_HASH, and GITSTORE_AUTH__JWT__SECRET"; \
-		exit 2; \
-	fi
 	@set -u; \
 	mkdir -p "$(GIT_DATA_DIR)"; \
+	mkdir -p "$(CONTROLLER_CHECKPOINT_DIR)"; \
 	tmp=$$(mktemp -d); \
 	fifo="$$tmp/done"; \
 	mkfifo "$$fifo"; \
+	if [ ! -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ]; then \
+		mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"; \
+		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ); \
+	fi; \
+	( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key \
+		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
+		--record-output-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json" --key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" ) || exit $$?; \
+	if [ ! -f "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ]; then \
+		mkdir -p "$$(dirname "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")"; \
+		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ); \
+	fi; \
 	cleanup() { \
 		trap - INT TERM EXIT; \
 		[ -n "$${git_pid:-}" ] && kill "$$git_pid" 2>/dev/null || true; \
@@ -96,20 +353,69 @@ dev: ## Run local git service and API together in the foreground.
 	trap 'cleanup' EXIT; \
 	( set +e; \
 		cd "$(GIT_SERVICE_DIR)" || { printf 'git-service 1\n' > "$$fifo"; exit 0; }; \
-		GITSTORE_GIT__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service & child=$$!; \
+		GITSTORE_GIT_SERVICE__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
 		wait "$$child"; status=$$?; \
 		printf 'git-service %s\n' "$$status" > "$$fifo"; \
 	) & git_pid=$$!; \
 	( set +e; \
 		cd "$(API_DIR)" || { printf 'api 1\n' > "$$fifo"; exit 0; }; \
+		echo "api: waiting for git-service grpc on 127.0.0.1:$(GIT_GRPC_PORT)..."; \
+		waited=0; \
+		until (exec 3<>/dev/tcp/127.0.0.1/$(GIT_GRPC_PORT)) 2>/dev/null; do \
+			waited=$$((waited + 1)); \
+			if [ "$$waited" -ge 120 ]; then \
+				echo "api: timed out waiting for git-service grpc on 127.0.0.1:$(GIT_GRPC_PORT)" >&2; \
+				break; \
+			fi; \
+			sleep 0.5; \
+		done; \
+		exec 3<&- 2>/dev/null || true; \
+		exec 3>&- 2>/dev/null || true; \
+		GITSTORE_API__AUTH__AUTHN__CHAIN="static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous" \
+		GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
 		go run ./cmd/server & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
 		wait "$$child"; status=$$?; \
 		printf 'api %s\n' "$$status" > "$$fifo"; \
 	) & api_pid=$$!; \
+	echo "controller: waiting for API health at $(API_HEALTH_URL)..."; \
+	waited=0; \
+	until curl --silent --fail --output /dev/null "$(API_HEALTH_URL)" 2>/dev/null; do \
+		waited=$$((waited + 1)); \
+		if [ "$$waited" -ge 120 ]; then \
+			echo "controller: timed out waiting for API health at $(API_HEALTH_URL)" >&2; \
+			break; \
+		fi; \
+		sleep 0.5; \
+	done; \
+	resolved_uid="$(CONTROLLER_SERVICEACCOUNT_UID)"; \
+	if [ -z "$$resolved_uid" ]; then \
+		echo "controller: enrolling ServiceAccount with the API..."; \
+		if ( cd "$(API_DIR)" && go run ./cmd/gitctl enroll-serviceaccount \
+			--api-url "$(API_URL)" \
+			--admin-username "$(DEV_ADMIN_USERNAME)" \
+			--admin-password "$(DEV_ADMIN_PASSWORD)" \
+			--namespace "$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
+			--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
+			--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
+			--replace-existing-key \
+			--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
+			--identity-output-path "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)" ); then \
+			resolved_uid=$$(sed -n 's/^GITSTORE_CONTROLLER__SERVICEACCOUNT__UID=//p' "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)"); \
+		else \
+			echo "controller: enrollment failed; the controller-manager will not be able to authenticate" >&2; \
+		fi; \
+	fi; \
 	( set +e; \
 		cd "$(CONTROLLER_MANAGER_DIR)" || { printf 'controller 1\n' > "$$fifo"; exit 0; }; \
+		GITSTORE_CONTROLLER__CHECKPOINT__DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$resolved_uid" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME="$(CONTROLLER_SECRET_NAME)" \
+		GITSTORE_CONTROLLER__SECRET_PROVIDERS__BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
 		go run ./cmd/controller & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
 		wait "$$child"; status=$$?; \
@@ -121,46 +427,164 @@ dev: ## Run local git service and API together in the foreground.
 	trap - EXIT; \
 	exit "$$status"
 
-compose: ## Run API and git service with Docker Compose.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml up --build $(DETACH_FLAG)
+_check-local-config:
+	@test -f "$(CONFIG_FILE)" || { echo "CONFIG_FILE does not exist: $(CONFIG_FILE)"; exit 2; }
+	@test -r "$(CONFIG_FILE)" || { echo "CONFIG_FILE is not readable: $(CONFIG_FILE)"; exit 2; }
+	@test -f "$(POLICY_FILE)" || { echo "Local RBAC policy does not exist: $(POLICY_FILE)"; exit 2; }
+	@test -r "$(POLICY_FILE)" || { echo "Local RBAC policy is not readable: $(POLICY_FILE)"; exit 2; }
+	@cd "$(API_DIR)" && \
+		GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$${GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY:-config-validation-placeholder}" \
+		go run ./cmd/gitctl validate-local-config \
+			--config-file "$(abspath $(CONFIG_FILE))" --policy-file "$(abspath $(POLICY_FILE))"
 
-scylla: ## Run only local Scylla services with Docker Compose.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml up $(DETACH_FLAG) scylla scylla-init
+_check-compose-config: _check-local-config
+	@CONFIG_FILE="$(abspath $(CONFIG_FILE))" ./scripts/check-local-compose-config.sh
 
-compose-scylla: ## Run API, git service, and Scylla with Docker Compose.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml up --build $(DETACH_FLAG)
+compose: _check-local-config ## Run all core services; pass DATASTORE=scylla (optional PROFILE=cluster) and/or IDENTITY=oidc for optional stacks.
+	@case "$(DATASTORE)" in memdb|scylla) ;; *) echo "DATASTORE must be 'memdb' or 'scylla'"; exit 2;; esac
+	@case "$(IDENTITY)" in none|oidc) ;; *) echo "IDENTITY must be 'none' or 'oidc'"; exit 2;; esac
+	@case "$(PROFILE)" in single|cluster) ;; *) echo "PROFILE must be 'single' or 'cluster'"; exit 2;; esac
+	@SCYLLA_CLUSTER_SMP="$(SCYLLA_CLUSTER_SMP)" SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS="$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)" $(LOCAL_COMPOSE) $(DATASTORE_COMPOSE_FILE) $(IDENTITY_COMPOSE_FILE) up --build $(DETACH_FLAG)
+
+scylla: ## Run Scylla services; pass PROFILE=cluster for the local three-node cluster.
+	@case "$(PROFILE)" in single|cluster) ;; *) echo "PROFILE must be 'single' or 'cluster'"; exit 2;; esac
+	@SCYLLA_CLUSTER_SMP="$(SCYLLA_CLUSTER_SMP)" SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS="$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f $(SCYLLA_COMPOSE_FILE) up $(DETACH_FLAG) $(SCYLLA_SERVICES)
+
+oidc: ## Run only the optional reference OIDC provider stack (Hydra + Kratos + bridge).
+	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.oidc.yml up --build $(DETACH_FLAG) $(OIDC_SERVICES)
 
 ps: ## Show compose service status.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml -f compose.admin.yml ps
+	@$(LIFECYCLE_COMPOSE) ps
 
 logs: ## Follow compose logs; optionally pass SERVICE=<name>.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml -f compose.admin.yml logs -f $(SERVICE)
+	@$(LIFECYCLE_COMPOSE) logs -f $(COMPOSE_SERVICE)
 
 stop: ## Stop compose services; optionally pass SERVICE=<name>.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml -f compose.admin.yml stop $(SERVICE)
+	@$(LIFECYCLE_COMPOSE) stop $(COMPOSE_SERVICE)
 
 down: ## Stop and remove compose services and networks.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml -f compose.admin.yml down
+	@$(LIFECYCLE_COMPOSE) down --remove-orphans
 
-build: ## Build Rust and Go services.
+build: ## Build Rust/Go services and the shared secret-material module.
 	@cd "$(GIT_SERVICE_DIR)" && cargo build --verbose
 	@for dir in $(GO_MODULE_DIRS); do \
-		cd "$$dir" && go build -v ./...; \
+		( cd "$$dir" && go build -v ./... ) || exit 1; \
 	done
 
-test: ## Run Rust and Go test suites.
-	@cd "$(GIT_SERVICE_DIR)" && cargo test --verbose
-	@cd "$(API_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-	@cd "$(CONTROLLER_MANAGER_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+test: ## Run tests; TARGET=all (default), datastore, or secret-integration. Datastore tests use DATASTORE=memdb|scylla.
+ifeq ($(TEST_TARGET),secret-integration)
+	@test "$(SECRET_TEST_OWNED_DEPLOYMENT)" = "1" || { echo "SECRET_TEST_OWNED_DEPLOYMENT=1 is required"; exit 2; }
+	@test -n "$(SECRET_TEST_API_A)" -a -n "$(SECRET_TEST_API_B)" -a -n "$(SECRET_TEST_TOKEN_FILE)" || { echo "SECRET_TEST_API_A, SECRET_TEST_API_B and SECRET_TEST_TOKEN_FILE are required"; exit 2; }
+	@binary=$$(mktemp "$${TMPDIR:-/tmp}/gitstore-secret-controller.XXXXXX"); \
+		trap 'rm -f "$$binary"' EXIT INT TERM; \
+		(cd "$(CONTROLLER_MANAGER_DIR)" && GOWORK=off go build -o "$$binary" ./cmd/controller) && \
+		cd "$(ROOT)/tests/integration" && \
+		SECRET_TEST_RUN=1 SECRET_TEST_OWNED_DEPLOYMENT=1 \
+		SECRET_TEST_CONTROLLER_BINARY="$$binary" SECRET_TEST_API_A="$(SECRET_TEST_API_A)" \
+		SECRET_TEST_API_B="$(SECRET_TEST_API_B)" SECRET_TEST_TOKEN_FILE="$(abspath $(SECRET_TEST_TOKEN_FILE))" \
+		SECRET_TEST_NAMESPACE="$(SECRET_TEST_NAMESPACE)" SECRET_TEST_SERVICEACCOUNT="$(SECRET_TEST_SERVICEACCOUNT)" \
+		GOWORK=off go test -v -count=1 -timeout 10m -run '^TestSecretBootstrapRotationDeployed$$' .
 
-test-scylla-hardening: ## Run focused datastore hardening tests without an external Scylla instance.
-	@cd "$(API_DIR)" && go test -count=1 ./internal/datastore/... ./tests/contract/datastore/...
-
-test-scylla-integration: ## Run tagged datastore hardening tests against Scylla.
+else ifeq ($(TEST_TARGET),datastore)
+ifeq ($(DATASTORE),memdb)
+	@cd "$(API_DIR)" && go test -tags memdb -count=1 ./internal/datastore/... ./tests/contract/datastore/...
+else ifeq ($(DATASTORE),scylla)
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
-		go test -tags scylla -count=1 -timeout 180s ./internal/datastore/scylla/... ./tests/contract/datastore/...
+		go test -tags scylla -count=1 -timeout 10m ./internal/datastore/scylla/... ./tests/contract/datastore/...
+else
+	@echo "test TARGET=datastore requires DATASTORE=memdb or DATASTORE=scylla" >&2; exit 2
+endif
+else ifeq ($(TEST_TARGET),all)
+	@bash ./scripts/test-secret-config.sh
+	@bash ./scripts/test-secret-capacity-evidence.sh
+	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity' .
+	@./scripts/test-make-workflow-dispatch.sh
+	@./scripts/test-capacity-dispatch.sh
+	@./scripts/test-capacity-prometheus-export.sh
+	@./scripts/test-repository-capacity-stack.sh
+	@cd "$(GIT_SERVICE_DIR)" && cargo test --verbose
+	@for dir in $(GO_MODULE_DIRS); do \
+		echo "==> go test $$dir"; \
+		( cd "$$dir" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./... ) || exit 1; \
+	done
+else
+	@echo "test TARGET must be all, datastore, or secret-integration" >&2; exit 2
+endif
 
-test-scylla-capacity: ## Run the opt-in Scylla capacity and soak test.
+capacity: ## Run a capacity scenario; set TARGET, PROFILE, and MODE.
+ifeq ($(TARGET)/$(PROFILE)/$(MODE),repository/lifecycle/alpha)
+	@REPOSITORY_CAPACITY_PROJECT="$(REPOSITORY_CAPACITY_PROJECT)" \
+		REPOSITORY_CAPACITY_STATE_DIR="$(REPOSITORY_CAPACITY_STATE_DIR)" \
+		SCYLLA_CLUSTER_SMP=1 \
+		SCYLLA_CLUSTER_MEMORY_LIMIT="$(REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT)" \
+		REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES="$(REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES)" \
+		CAPACITY_EVIDENCE_DIR="$(CAPACITY_EVIDENCE_DIR)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" \
+		CAPACITY_OBSERVABILITY="$(CAPACITY_OBSERVABILITY)" CAPACITY_PROMETHEUS_URL="$(CAPACITY_PROMETHEUS_URL)" \
+		CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" \
+		CAPACITY_PROMETHEUS_TARGETS="$(CAPACITY_PROMETHEUS_TARGETS)" \
+		./scripts/repository-capacity-stack.sh local-alpha
+else ifeq ($(TARGET)/$(PROFILE)/$(MODE),product/lifecycle/alpha)
+	@REPOSITORY_CAPACITY_PROJECT="$(PRODUCT_CAPACITY_PROJECT)" \
+		REPOSITORY_CAPACITY_STATE_DIR="$(PRODUCT_CAPACITY_STATE_DIR)" \
+		CAPACITY_STACK_TARGET=product CAPACITY_STACK_PROFILE=lifecycle \
+		SCYLLA_CLUSTER_SMP=1 \
+		SCYLLA_CLUSTER_MEMORY_LIMIT="$(REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT)" \
+		REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES="$(REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES)" \
+		CAPACITY_EVIDENCE_DIR="$(CAPACITY_EVIDENCE_DIR)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" \
+		CAPACITY_OBSERVABILITY="$(CAPACITY_OBSERVABILITY)" CAPACITY_PROMETHEUS_URL="$(CAPACITY_PROMETHEUS_URL)" \
+		CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" \
+		CAPACITY_PROMETHEUS_TARGETS="$(CAPACITY_PROMETHEUS_TARGETS)" \
+		./scripts/repository-capacity-stack.sh local-alpha
+else
+	@CAPACITY_EVIDENCE_DIR="$(CAPACITY_EVIDENCE_DIR)" CAPACITY_PROMETHEUS_URL="$(CAPACITY_PROMETHEUS_URL)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" \
+		CAPACITY_OBSERVABILITY="$(CAPACITY_OBSERVABILITY)" CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" \
+		CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" CAPACITY_PROMETHEUS_TARGETS="$(CAPACITY_PROMETHEUS_TARGETS)" \
+		CAPACITY_CONFIG_MANIFEST="$(CAPACITY_CONFIG_MANIFEST)" CAPACITY_ENVIRONMENT_MANIFEST="$(CAPACITY_ENVIRONMENT_MANIFEST)" \
+		CAPACITY_DATASTORE_CONTAINERS="$(CAPACITY_DATASTORE_CONTAINERS)" \
+		./scripts/run-capacity-target.sh "$(TARGET)" "$(PROFILE)" "$(MODE)"
+endif
+
+_capacity-observability:
+	@test -n "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" || { echo "CAPACITY_PROMETHEUS_TARGETS_FILE is required"; exit 2; }
+	@./scripts/write-capacity-prometheus-targets.sh "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" "$(CAPACITY_PROMETHEUS_TARGETS)" "$(CAPACITY_PROMETHEUS_CONTROLLER_TARGETS)"
+	@CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" CAPACITY_PROMETHEUS_TARGETS_FILE="$(CAPACITY_PROMETHEUS_TARGETS_FILE)" \
+		docker compose --profile capacity -f compose.yml -f compose.capacity.yml up -d capacity-prometheus
+
+_capacity-observability-down:
+	@CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" CAPACITY_PROMETHEUS_TARGETS_FILE="$(CAPACITY_PROMETHEUS_TARGETS_FILE)" \
+		docker compose --profile capacity -f compose.yml -f compose.capacity.yml rm -sf capacity-prometheus
+
+_capacity-k6:
+	@CAPACITY_PROFILE="$(CAPACITY_PROFILE)" \
+		MODE="$(MODE)" \
+		CAPACITY_TARGET="$(CAPACITY_TARGET)" \
+		CAPACITY_SCENARIO="$(CAPACITY_SCENARIO)" \
+		CAPACITY_EVIDENCE_DIR="$(CAPACITY_EVIDENCE_DIR)" \
+		CAPACITY_ENV_FILE="$(CAPACITY_ENV_FILE)" \
+		CAPACITY_TOKEN_FILE="$(CAPACITY_TOKEN_FILE)" \
+		CAPACITY_CONFIG_MANIFEST="$(CAPACITY_CONFIG_MANIFEST)" \
+		CAPACITY_ENVIRONMENT_MANIFEST="$(CAPACITY_ENVIRONMENT_MANIFEST)" \
+		PRODUCT_CAPACITY_API_A="$${PRODUCT_CAPACITY_API_A}" \
+		PRODUCT_CAPACITY_API_B="$${PRODUCT_CAPACITY_API_B}" \
+		CAPACITY_DOCKER_NETWORK="$${CAPACITY_DOCKER_NETWORK}" \
+		CAPACITY_PROMETHEUS_URL="$(CAPACITY_PROMETHEUS_URL)" \
+		CAPACITY_DATASTORE_CONTAINERS="$(CAPACITY_DATASTORE_CONTAINERS)" \
+		CAPACITY_CHAOS_PROFILE="$(CAPACITY_CHAOS_PROFILE)" \
+		CAPACITY_CHAOS_TARGET="$(CAPACITY_CHAOS_TARGET)" \
+		CAPACITY_CHAOS_DELAY="$(CAPACITY_CHAOS_DELAY)" \
+		CAPACITY_CHAOS_CONFIRM="$(CAPACITY_CHAOS_CONFIRM)" \
+		K6_IMAGE="$(K6_IMAGE)" \
+		./scripts/run-capacity.sh "$(CAPACITY_PROFILE)"
+
+chaos: ## Inject an opt-in container fault and retain structured evidence.
+	@CHAOS_PROFILE="$(CHAOS_PROFILE)" \
+		CHAOS_TARGET="$(CHAOS_TARGET)" \
+		CHAOS_CONFIRM="$(CHAOS_CONFIRM)" \
+		CHAOS_EVIDENCE_DIR="$(CHAOS_EVIDENCE_DIR)" \
+		PUMBA_IMAGE="$(PUMBA_IMAGE)" \
+		./scripts/run-chaos.sh "$(CHAOS_PROFILE)"
+
+_capacity-scylla-soak:
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
 		GITSTORE_SCYLLA_CAPACITY_PRODUCTS="$(SCYLLA_CAPACITY_PRODUCTS)" \
 		GITSTORE_SCYLLA_CAPACITY_CONCURRENCY="$(SCYLLA_CAPACITY_CONCURRENCY)" \
@@ -168,7 +592,101 @@ test-scylla-capacity: ## Run the opt-in Scylla capacity and soak test.
 		GITSTORE_SCYLLA_CAPACITY_RUN=1 \
 		go test -tags scylla -count=1 -timeout 0 -run TestScyllaCapacity ./internal/datastore/scylla/...
 
-lint: ## Run Rust formatting/clippy and Go formatting/vet/staticcheck.
+_capacity-namespace-admission:
+	@cd "$(API_DIR)" && go test -list '^TestNamespaceValidationCapacity$$' ./internal/cataloggrpc | \
+		grep -qx 'TestNamespaceValidationCapacity' || { echo "Namespace validation capacity test is missing" >&2; exit 2; }
+	@cd "$(API_DIR)" && \
+		GITSTORE_NAMESPACE_CAPACITY_DURATION="$(NAMESPACE_CAPACITY_DURATION)" \
+		GITSTORE_NAMESPACE_CAPACITY_RUN=1 \
+		go test -count=1 -timeout 0 -run '^TestNamespaceValidationCapacity$$' ./internal/cataloggrpc
+
+_capacity-namespace-watch:
+	@cd "$(ROOT)/tests/integration" && \
+		NAMESPACE_WATCH_API_A="$(NAMESPACE_WATCH_API_A)" \
+		NAMESPACE_WATCH_API_B="$(NAMESPACE_WATCH_API_B)" \
+		NAMESPACE_WATCH_API_REPLACEMENT="$(NAMESPACE_WATCH_API_REPLACEMENT)" \
+		NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE="$(NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE)" \
+		NAMESPACE_WATCH_TOKEN="$(NAMESPACE_WATCH_TOKEN)" \
+		NAMESPACE_WATCH_TOKEN_FILE="$(NAMESPACE_WATCH_TOKEN_FILE)" \
+		NAMESPACE_WATCH_CAPACITY_DURATION="$(NAMESPACE_WATCH_CAPACITY_DURATION)" \
+		NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS="$(NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS)" \
+		NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS="$(NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS)" \
+		NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES="$(NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES)" \
+		NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL="$(NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL)" \
+		NAMESPACE_WATCH_CAPACITY_REPLAY_CATCHUP_TIMEOUT="$(NAMESPACE_WATCH_CAPACITY_REPLAY_CATCHUP_TIMEOUT)" \
+		NAMESPACE_WATCH_CAPACITY_BURST_INTERVAL="$(NAMESPACE_WATCH_CAPACITY_BURST_INTERVAL)" \
+		NAMESPACE_WATCH_CAPACITY_BURST_SIZE="$(NAMESPACE_WATCH_CAPACITY_BURST_SIZE)" \
+		NAMESPACE_WATCH_CAPACITY_MUTATION_WORKERS="$(NAMESPACE_WATCH_CAPACITY_MUTATION_WORKERS)" \
+		NAMESPACE_WATCH_CAPACITY_REPLACEMENT_DELAY="$(NAMESPACE_WATCH_CAPACITY_REPLACEMENT_DELAY)" \
+		NAMESPACE_WATCH_CAPACITY_BASELINE_STABILIZATION="$(NAMESPACE_WATCH_CAPACITY_BASELINE_STABILIZATION)" \
+		NAMESPACE_WATCH_CAPACITY_POST_LOAD_STABILIZATION="$(NAMESPACE_WATCH_CAPACITY_POST_LOAD_STABILIZATION)" \
+		NAMESPACE_WATCH_CAPACITY_ALLOW_MISSING_METRICS="$(NAMESPACE_WATCH_CAPACITY_ALLOW_MISSING_METRICS)" \
+		NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT="$(NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT)" \
+		MODE="$(MODE)" \
+		NAMESPACE_WATCH_CAPACITY_RUN=1 \
+		go test -v -count=1 -timeout 0 -run '^TestNamespaceWatchDeploymentCapacity$$' .
+
+_capacity-namespace-recovery:
+	@cd "$(ROOT)/tests/integration" && \
+		NAMESPACE_WATCH_API_A="$(NAMESPACE_WATCH_API_A)" \
+		NAMESPACE_WATCH_API_B="$(NAMESPACE_WATCH_API_B)" \
+		NAMESPACE_WATCH_API_REPLACEMENT="$(NAMESPACE_WATCH_API_REPLACEMENT)" \
+		NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE="$(NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE)" \
+		NAMESPACE_WATCH_TOKEN="$(NAMESPACE_WATCH_TOKEN)" \
+		NAMESPACE_WATCH_TOKEN_FILE="$(NAMESPACE_WATCH_TOKEN_FILE)" \
+		NAMESPACE_WATCH_OVERFLOW_TRANSITIONS="$(NAMESPACE_WATCH_OVERFLOW_TRANSITIONS)" \
+		go test -count=1 -run '^TestNamespaceWatch(CrossReplicaBootstrapAndResume|RecoveryProbe|DocumentedConsumer)$$' .
+
+_capacity-repository-lifecycle:
+	@cd "$(ROOT)/tests/integration" && \
+		REPOSITORY_CAPACITY_SECRET_SCENARIO="$(REPOSITORY_CAPACITY_SECRET_SCENARIO)" \
+		REPOSITORY_API_A="$(REPOSITORY_API_A)" \
+		REPOSITORY_API_B="$(REPOSITORY_API_B)" \
+		REPOSITORY_OVERFLOW_API="$(REPOSITORY_OVERFLOW_API)" \
+		REPOSITORY_CONTROLLER_A="$(REPOSITORY_CONTROLLER_A)" \
+		REPOSITORY_CONTROLLER_B="$(REPOSITORY_CONTROLLER_B)" \
+		API_URL="$(REPOSITORY_API_A)" \
+		GIT_URL="$(REPOSITORY_GIT_URL)" \
+		NAMESPACE="$(REPOSITORY_CAPACITY_NAMESPACE)" \
+		REPOSITORY_API_REPLACEMENT="$(REPOSITORY_API_REPLACEMENT)" \
+		REPOSITORY_REPLACEMENT_TRIGGER_FILE="$(REPOSITORY_REPLACEMENT_TRIGGER_FILE)" \
+		REPOSITORY_TOKEN="$(REPOSITORY_TOKEN)" \
+		REPOSITORY_TOKEN_FILE="$(REPOSITORY_TOKEN_FILE)" \
+		REPOSITORY_CAPACITY_NAMESPACE="$(REPOSITORY_CAPACITY_NAMESPACE)" \
+		REPOSITORY_CAPACITY_DURATION="$(REPOSITORY_CAPACITY_DURATION)" \
+		REPOSITORY_CAPACITY_SUBSCRIBERS="$(REPOSITORY_CAPACITY_SUBSCRIBERS)" \
+		REPOSITORY_CAPACITY_REPLAY_EVENTS="$(REPOSITORY_CAPACITY_REPLAY_EVENTS)" \
+		REPOSITORY_CAPACITY_REPLAY_SAMPLES="$(REPOSITORY_CAPACITY_REPLAY_SAMPLES)" \
+		REPOSITORY_CAPACITY_RESOURCE_POOL="$(REPOSITORY_CAPACITY_RESOURCE_POOL)" \
+		REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS="$(REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS)" \
+		REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT="$(REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT)" \
+		REPOSITORY_CAPACITY_MUTATION_WORKERS="$(REPOSITORY_CAPACITY_MUTATION_WORKERS)" \
+		REPOSITORY_CAPACITY_BURST_INTERVAL="$(REPOSITORY_CAPACITY_BURST_INTERVAL)" \
+		REPOSITORY_CAPACITY_BURST_SIZE="$(REPOSITORY_CAPACITY_BURST_SIZE)" \
+		REPOSITORY_CAPACITY_TRANSITION_INTERVAL="$(REPOSITORY_CAPACITY_TRANSITION_INTERVAL)" \
+		REPOSITORY_CAPACITY_REPLACEMENT_DELAY="$(REPOSITORY_CAPACITY_REPLACEMENT_DELAY)" \
+		REPOSITORY_CAPACITY_BASELINE_STABILIZATION="$(REPOSITORY_CAPACITY_BASELINE_STABILIZATION)" \
+		REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION="$(REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION)" \
+		REPOSITORY_CAPACITY_SKIP_REPLACEMENT="$(REPOSITORY_CAPACITY_SKIP_REPLACEMENT)" \
+		MODE="$(MODE)" REPOSITORY_LIFECYCLE_CAPACITY_RUN=1 \
+		go test -v -count=1 -timeout 0 -run '^TestRepositoryLifecycle_DeployedEvidenceGate$$' .
+
+_capacity-repository-overflow:
+	@cd "$(ROOT)/tests/integration" && \
+		REPOSITORY_API_A="$(REPOSITORY_API_A)" \
+		REPOSITORY_API_B="$(REPOSITORY_API_B)" \
+		REPOSITORY_OVERFLOW_API="$(REPOSITORY_OVERFLOW_API)" \
+		REPOSITORY_TOKEN="$(REPOSITORY_TOKEN)" \
+		REPOSITORY_TOKEN_FILE="$(REPOSITORY_TOKEN_FILE)" \
+		REPOSITORY_CAPACITY_NAMESPACE="$(REPOSITORY_CAPACITY_NAMESPACE)" \
+		REPOSITORY_CAPACITY_RESOURCE_POOL="$(REPOSITORY_CAPACITY_RESOURCE_POOL)" \
+		REPOSITORY_CAPACITY_MUTATION_WORKERS="$(REPOSITORY_CAPACITY_MUTATION_WORKERS)" \
+		REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS="$(REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS)" \
+		REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT="$(REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT)" \
+		MODE="$(MODE)" REPOSITORY_LIFECYCLE_OVERFLOW_RUN=1 \
+		go test -v -count=1 -timeout 0 -run '^TestRepositoryLifecycle_OverflowOnly$$' .
+
+lint: ## Run Rust and Go lint checks, including shared secret material.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check
 	@cd "$(GIT_SERVICE_DIR)" && cargo clippy --all-targets --all-features -- -D warnings
 	@for dir in $(GO_MODULE_DIRS); do \
@@ -179,14 +697,17 @@ lint: ## Run Rust formatting/clippy and Go formatting/vet/staticcheck.
 		fi; \
 	done
 	@for dir in $(GO_MODULE_DIRS); do \
-		cd "$$dir" && go vet ./...; \
+		( cd "$$dir" && go vet ./... ) || exit 1; \
 	done
 	@cd "$(API_DIR)" && go install honnef.co/go/tools/cmd/staticcheck@latest
 	@for dir in $(GO_MODULE_DIRS); do \
-		cd "$$dir" && "$$(go env GOPATH)"/bin/staticcheck ./...; \
+		( cd "$$dir" && "$$(go env GOPATH)"/bin/staticcheck ./... ) || exit 1; \
 	done
 
-license-check: ## Run Go, Rust, and JS/TS license header checks.
+check: ## Run validation checks; set TARGET=all, config, compose, licenses, or credentials.
+	@./scripts/run-make-workflow.sh check "$(TARGET)"
+
+_check-licenses:
 	@./scripts/check-go-license-headers.sh --all
 	@./scripts/check-go-license-headers.sh --diff-base "$(DIFF_BASE)"
 	@./scripts/check-rust-license-headers.sh --all
@@ -194,60 +715,104 @@ license-check: ## Run Go, Rust, and JS/TS license header checks.
 	@./scripts/check-js-license-headers.sh --all
 	@./scripts/check-js-license-headers.sh --diff-base "$(DIFF_BASE)"
 
-pr-ready: lint build test license-check ## Run the full PR readiness workflow.
+_check-credential-output:
+	@./scripts/check-enroll-serviceaccount-output.sh
 
-bootstrap: bootstrap-namespace bootstrap-repository ## Create the default namespace and repository through the API.
+_check-credential-leakage:
+	@./scripts/check-credential-log-leakage.sh
 
-bootstrap-tools:
+_check-credentials: _check-credential-output _check-credential-leakage
+
+_check-all: _check-compose-config _check-licenses _check-credentials
+
+pr-ready: lint build test _check-licenses _check-credentials ## Run the full PR readiness workflow.
+
+bootstrap: ## Bootstrap local resources; set TARGET=all, token, namespace, or repository.
+	@./scripts/run-make-workflow.sh bootstrap "$(TARGET)"
+
+_bootstrap-all:
+	@$(MAKE) --no-print-directory _bootstrap-namespace
+	@$(MAKE) --no-print-directory _bootstrap-repository
+
+_bootstrap-tools:
 	@command -v curl >/dev/null 2>&1 || { echo "curl is required for bootstrap targets"; exit 127; }
 	@command -v jq >/dev/null 2>&1 || { echo "jq is required for bootstrap targets"; exit 127; }
 
-gen-admin-password: ## Generate a bcrypt hash for ADMIN_PASSWORD and write it to gitstore-api/.env.
-	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \
-		echo "Usage: make gen-admin-password ADMIN_PASSWORD='<password>'"; \
+hash-user-password: ## Generate a bcrypt hash for PASSWORD for manual users.yaml maintenance.
+	@if [ -z "$${PASSWORD:-}" ]; then \
+		echo "Usage: make hash-user-password PASSWORD='<password>'"; \
 		exit 2; \
 	fi
-	@hash=$$(cd "$(API_DIR)" && go run ./cmd/gitctl hash-password "$$ADMIN_PASSWORD") || { \
+	@hash=$$(printf '%s\n' "$$PASSWORD" | (cd "$(API_DIR)" && go run ./cmd/gitctl hash-password)) || { \
 		echo "Failed to generate bcrypt hash. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
-	env_file="$(API_DIR)/.env"; \
-	if [ -f "$$env_file" ]; then \
-		if grep -q 'GITSTORE_AUTH__ADMIN__PASSWORD_HASH' "$$env_file"; then \
-			if [ "$$(uname)" = "Darwin" ]; then \
-				sed -i '' "s|^GITSTORE_AUTH__ADMIN__PASSWORD_HASH=.*|GITSTORE_AUTH__ADMIN__PASSWORD_HASH='$$hash'|" "$$env_file"; \
-			else \
-				sed -i "s|^GITSTORE_AUTH__ADMIN__PASSWORD_HASH=.*|GITSTORE_AUTH__ADMIN__PASSWORD_HASH='$$hash'|" "$$env_file"; \
-			fi; \
-			echo "Updated GITSTORE_AUTH__ADMIN__PASSWORD_HASH in $$env_file"; \
-		else \
-			printf "GITSTORE_AUTH__ADMIN__PASSWORD_HASH='%s'\n" "$$hash" >> "$$env_file"; \
-			echo "Appended GITSTORE_AUTH__ADMIN__PASSWORD_HASH to $$env_file"; \
-		fi; \
-	else \
-		printf "GITSTORE_AUTH__ADMIN__PASSWORD_HASH='%s'\n" "$$hash" > "$$env_file"; \
-		echo "Created $$env_file with GITSTORE_AUTH__ADMIN__PASSWORD_HASH"; \
-	fi; \
-	echo "Hash: $$hash"
+	echo "bcrypt hash (put this in users.yaml password_hash): $$hash"
 
-gen-jwt-secret: ## Generate a JWT secret and write GITSTORE_AUTH__JWT__SECRET to gitstore-api/.env.
-	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-jwt-secret | sed -n 's/^GITSTORE_AUTH__JWT__SECRET=//p') || { \
+add-user: ## Add a local user to USERS_FILE; requires USERNAME and PASSWORD.
+	@if [ -z "$${USERNAME:-}" ] || [ -z "$${PASSWORD:-}" ]; then \
+		echo "Usage: make add-user USERNAME=<user> PASSWORD='<password>' [EMAIL=<email>] [DISPLAY_NAME='<name>'] [USERS_FILE=<path>]"; \
+		exit 2; \
+	fi
+	@printf '%s\n' "$$PASSWORD" | (cd "$(API_DIR)" && go run ./cmd/gitctl users add \
+		--file "$(abspath $(USERS_FILE))" \
+		--username "$$USERNAME" \
+		--email "$${EMAIL:-}" \
+		--display-name "$${DISPLAY_NAME:-}" \
+		--password-stdin)
+
+add-role: ## Add a role to POLICY_FILE; requires ROLE and ALLOW and/or DENY.
+	@if [ -z "$${ROLE:-}" ] || { [ -z "$${ALLOW:-}" ] && [ -z "$${DENY:-}" ]; }; then \
+		echo "Usage: make add-role ROLE=<role> [ALLOW='action,action'] [DENY='action,action'] [POLICY_FILE=<path>]"; \
+		exit 2; \
+	fi
+	@cd "$(API_DIR)" && go run ./cmd/gitctl rbac role add \
+		--file "$(abspath $(POLICY_FILE))" \
+		--name "$$ROLE" \
+		$${ALLOW:+--allow "$$ALLOW"} \
+		$${DENY:+--deny "$$DENY"}
+
+assign-role: ## Assign an existing role to a subject in POLICY_FILE.
+	@if [ -z "$${SUBJECT:-}" ] || [ -z "$${ROLE:-}" ]; then \
+		echo "Usage: make assign-role SUBJECT=<subject> ROLE=<role> [POLICY_FILE=<path>]"; \
+		exit 2; \
+	fi
+	@cd "$(API_DIR)" && go run ./cmd/gitctl rbac binding add \
+		--file "$(abspath $(POLICY_FILE))" \
+		--subject "$$SUBJECT" \
+		--role "$$ROLE"
+
+secret: ## Generate local security material; set TARGET=jwt, grpc-hmac, or signing-key.
+	@./scripts/run-make-workflow.sh secret "$(TARGET)"
+
+_secret-jwt:
+	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-jwt-secret | sed -n 's/^GITSTORE_API__AUTH__JWT__SECRET=//p') || { \
 		echo "Failed to generate JWT secret. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
-	./scripts/update-env-secret.sh GITSTORE_AUTH__JWT__SECRET "$$secret" "$(API_DIR)/.env"
+	./scripts/update-env-secret.sh GITSTORE_API__AUTH__JWT__SECRET "$$secret" "$(API_DIR)/.env"
 
-gen-hmac-secret: ## Generate an HMAC secret and write GITSTORE_AUTH__GRPC__HMAC_SECRET to both service .env files.
-	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-hmac-secret | sed -n 's/^GITSTORE_AUTH__GRPC__HMAC_SECRET=//p') || { \
+_secret-grpc-hmac:
+	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-hmac-secret | sed -n 's/^GITSTORE_GRPC_AUTH__HMAC_SECRET=//p') || { \
 		echo "Failed to generate HMAC secret. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
-	./scripts/update-env-secret.sh GITSTORE_AUTH__GRPC__HMAC_SECRET "$$secret" "$(API_DIR)/.env" "$(GIT_SERVICE_DIR)/.env"; \
+	./scripts/update-env-secret.sh GITSTORE_GRPC_AUTH__HMAC_SECRET "$$secret" "$(API_DIR)/.env" "$(GIT_SERVICE_DIR)/.env"; \
 	echo "HMAC secret updated in $(API_DIR)/.env and $(GIT_SERVICE_DIR)/.env"
 
-bootstrap-token: bootstrap-tools ## Login and print/cache a bootstrap bearer token.
+_secret-signing-key:
+	@if [ -z "$(DESTINATION_PATH)" ]; then \
+		echo "DESTINATION_PATH is required for make secret TARGET=signing-key"; \
+		exit 2; \
+	fi
+	@abs_path="$$(cd "$(ROOT)" && pwd)/$$(echo "$(DESTINATION_PATH)" | sed 's|^/||')"; \
+	if echo "$(DESTINATION_PATH)" | grep -q '^/'; then abs_path="$(DESTINATION_PATH)"; fi; \
+	mkdir -p "$$(dirname "$$abs_path")"; \
+	cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$$abs_path"
+
+_bootstrap-token: _bootstrap-tools
 	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \
-		echo "ADMIN_PASSWORD is required for bootstrap-token"; \
+		echo "ADMIN_PASSWORD is required for make bootstrap TARGET=token"; \
 		exit 2; \
 	fi
 	@mkdir -p "$$(dirname "$${BOOTSTRAP_TOKEN_CACHE}")"
@@ -259,19 +824,19 @@ bootstrap-token: bootstrap-tools ## Login and print/cache a bootstrap bearer tok
 	}; \
 	if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
 		echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
-		echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match the hash in gitstore-api/.env (run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate)."; \
+		echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match users.yaml (run 'make hash-user-password PASSWORD=<password>' to generate a hash)."; \
 		exit 1; \
 	fi; \
 	token=$$(echo "$$response" | jq -er '.data.login.token.accessToken // empty') || { \
 		echo "Login response did not contain a token. Check ADMIN_USERNAME, ADMIN_PASSWORD, and API_URL."; \
-		echo "Hint: run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate the password hash in gitstore-api/.env."; \
+		echo "Hint: run 'make hash-user-password PASSWORD=<password>' to generate a users.yaml password hash."; \
 		exit 1; \
 	}; \
 	printf '%s\n' "$$token"; \
 	printf '%s\n' "$$token" > "$${BOOTSTRAP_TOKEN_CACHE}"; \
 	echo "Token cached at $${BOOTSTRAP_TOKEN_CACHE}" >&2
 
-bootstrap-namespace: bootstrap-tools ## Create only the bootstrap namespace.
+_bootstrap-namespace: _bootstrap-tools
 	@set -u; \
 	token="$${BOOTSTRAP_TOKEN:-}"; \
 	if [ -z "$$token" ] && [ -f "$${BOOTSTRAP_TOKEN_CACHE}" ]; then token=$$(cat "$${BOOTSTRAP_TOKEN_CACHE}"); fi; \
@@ -288,12 +853,12 @@ bootstrap-namespace: bootstrap-tools ## Create only the bootstrap namespace.
 		}; \
 		if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
 			echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
-			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match the hash in gitstore-api/.env (run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate)."; \
+			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match users.yaml (run 'make hash-user-password PASSWORD=<password>' to generate a hash)."; \
 			exit 1; \
 		fi; \
 		token=$$(echo "$$response" | jq -er '.data.login.token.accessToken // empty') || { \
 			echo "Login response did not contain a token."; \
-			echo "Hint: run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate the password hash in gitstore-api/.env."; \
+			echo "Hint: run 'make hash-user-password PASSWORD=<password>' to generate a users.yaml password hash."; \
 			exit 1; \
 		}; \
 	fi; \
@@ -309,7 +874,7 @@ bootstrap-namespace: bootstrap-tools ## Create only the bootstrap namespace.
 	fi; \
 	echo "$$response" | jq -r '.data.createNamespace.namespace | "Created namespace \(.metadata.name) (\(.id))"'
 
-bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; namespace must already exist.
+_bootstrap-repository: _bootstrap-tools
 	@set -u; \
 	token="$${BOOTSTRAP_TOKEN:-}"; \
 	if [ -z "$$token" ] && [ -f "$${BOOTSTRAP_TOKEN_CACHE}" ]; then token=$$(cat "$${BOOTSTRAP_TOKEN_CACHE}"); fi; \
@@ -326,17 +891,17 @@ bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; n
 		}; \
 		if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
 			echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
-			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match the hash in gitstore-api/.env (run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate)."; \
+			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match users.yaml (run 'make hash-user-password PASSWORD=<password>' to generate a hash)."; \
 			exit 1; \
 		fi; \
 		token=$$(echo "$$response" | jq -er '.data.login.token.accessToken // empty') || { \
 			echo "Login response did not contain a token."; \
-			echo "Hint: run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate the password hash in gitstore-api/.env."; \
+			echo "Hint: run 'make hash-user-password PASSWORD=<password>' to generate a users.yaml password hash."; \
 			exit 1; \
 		}; \
 	fi; \
-	query='query Namespace($$identifier: String!) { namespace(by: { identifier: $$identifier }) { id metadata { name } } }'; \
-	payload=$$(jq -n --arg query "$$query" --arg identifier "$${NAMESPACE}" '{query: $$query, variables: {identifier: $$identifier}}'); \
+	query='query Namespace($$name: String!) { namespace(by: { name: $$name }) { id metadata { name } } }'; \
+	payload=$$(jq -n --arg query "$$query" --arg name "$${NAMESPACE}" '{query: $$query, variables: {name: $$name}}'); \
 	response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
 		echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
 		exit 1; \
@@ -346,40 +911,69 @@ bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; n
 		exit 1; \
 	fi; \
 	namespace_id=$$(echo "$$response" | jq -er '.data.namespace.id // empty') || { \
-		echo "Namespace \"$${NAMESPACE}\" was not found. Run make bootstrap-namespace first."; \
+		echo "Namespace \"$${NAMESPACE}\" was not found. Run make bootstrap TARGET=namespace first."; \
 		exit 1; \
 	}; \
-	query='mutation CreateRepository($$namespace: String!, $$name: String!, $$defaultBranch: String!) { createRepository(input: { namespace: $$namespace, name: $$name, defaultBranch: $$defaultBranch }) { repository { id name defaultBranch storagePath namespace { metadata { name } } } } }'; \
-	payload=$$(jq -n --arg query "$$query" --arg namespace "$${NAMESPACE}" --arg name "$${REPOSITORY}" --arg defaultBranch "$${DEFAULT_BRANCH}" '{query: $$query, variables: {namespace: $$namespace, name: $$name, defaultBranch: $$defaultBranch}}'); \
-	response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
-		echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
-		exit 1; \
-	}; \
-	if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
+	query='mutation CreateRepository($$input: CreateRepositoryInput!) { createRepository(input: $$input) { repository { id metadata { name namespace } spec { defaultBranch } status { resolved { storagePath } } } } }'; \
+	payload=$$(jq -n --arg query "$$query" --arg namespace "$${NAMESPACE}" --arg name "$${REPOSITORY}" --arg defaultBranch "$${DEFAULT_BRANCH}" '{query: $$query, variables: {input: {apiVersion: "gitstore.dev/v1beta1", kind: "Repository", metadata: {namespace: $$namespace, name: $$name}, spec: {defaultBranch: $$defaultBranch, visibility: "PRIVATE", storageClass: "standard"}}}}'); \
+	attempt=0; \
+	while :; do \
+		response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
+			echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
+			exit 1; \
+		}; \
+		if ! echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then break; fi; \
+		if [ "$$attempt" -lt 60 ] && echo "$$response" | jq -e 'any(.errors[]?; .message | contains("namespace system repository is unavailable"))' >/dev/null; then \
+			attempt=$$((attempt + 1)); \
+			sleep 1; \
+			continue; \
+		fi; \
 		echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
 		exit 1; \
-	fi; \
-	echo "$$response" | jq -r '.data.createRepository.repository | "Created repository \(.namespace.metadata.name)/\(.name) (\(.id))\nClone URL: http://localhost:5000/\(.namespace.metadata.name)/\(.name).git"'
+	done; \
+	created_response="$$response"; \
+	query='query RepositoryReadiness($$namespace: String!, $$name: String!) { repository(by: {namespacePath: {namespace: $$namespace, name: $$name}}) { status { conditions { type status } } } }'; \
+	payload=$$(jq -n --arg query "$$query" --arg namespace "$${NAMESPACE}" --arg name "$${REPOSITORY}" '{query: $$query, variables: {namespace: $$namespace, name: $$name}}'); \
+	attempt=0; \
+	while :; do \
+		response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
+			echo "Failed to reach GitStore API at $${API_URL} while waiting for repository storage."; \
+			exit 1; \
+		}; \
+		if echo "$$response" | jq -e '((.errors // []) | length == 0) and ([.data.repository.status.conditions[]? | select(.type == "StorageProvisioned" and .status == "TRUE")] | length > 0) and ([.data.repository.status.conditions[]? | select(.type == "Ready" and .status == "TRUE")] | length > 0)' >/dev/null; then break; fi; \
+		if [ "$$attempt" -ge 60 ]; then \
+			echo "Repository $${NAMESPACE}/$${REPOSITORY} was admitted but did not become ready within 60 seconds."; \
+			echo "$$response" | jq .; \
+			exit 1; \
+		fi; \
+		attempt=$$((attempt + 1)); \
+		sleep 1; \
+	done; \
+	echo "$$created_response" | jq -r '.data.createRepository.repository | "Created repository \(.metadata.namespace)/\(.metadata.name) (\(.id))\nClone URL: http://localhost:9000/\(.metadata.namespace)/\(.metadata.name).git"'
 
-git-clean-data: ## Remove native local git-service repository data; requires CONFIRM=1.
+clean: ## Remove scoped local runtime state; set TARGET and CONFIRM=1.
+	@./scripts/run-make-workflow.sh clean "$(TARGET)"
+
+_clean-git-data:
 	@if [ "$(CONFIRM)" != "1" ]; then \
 		echo "Refusing to remove $(GIT_DATA_DIR). Re-run with CONFIRM=1."; \
 		exit 2; \
 	fi
-	@if [ -z "$(GIT_DATA_DIR)" ] || [ "$(GIT_DATA_DIR)" = "/" ]; then \
+	@if [ -z "$(GIT_DATA_DIR)" ] || [ "$(abspath $(GIT_DATA_DIR))" = "/" ] || [ "$(abspath $(GIT_DATA_DIR))" = "$(abspath $(ROOT))" ] || [ "$(abspath $(GIT_DATA_DIR))" = "$(HOME)" ]; then \
 		echo "Refusing to remove unsafe GIT_DATA_DIR=$(GIT_DATA_DIR)"; \
 		exit 2; \
 	fi
-	@rm -rf "$(GIT_DATA_DIR)"
+	@echo "Removing Git data only: $(abspath $(GIT_DATA_DIR))"
+	@rm -rf "$(abspath $(GIT_DATA_DIR))"
 
-admin-compose: ## Run the optional admin compose stack.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.admin.yml up --build $(DETACH_FLAG) admin
-
-admin-down: ## Stop and remove the admin compose stack.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.admin.yml down
-
-admin-stop: ## Stop only the admin compose service.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.admin.yml stop admin
-
-admin-logs: ## Follow admin compose logs.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.admin.yml logs -f admin
+_clean-controller-checkpoints:
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "Refusing to remove $(CONTROLLER_CHECKPOINT_DIR). Re-run with CONFIRM=1."; \
+		exit 2; \
+	fi
+	@if [ -z "$(CONTROLLER_CHECKPOINT_DIR)" ] || [ "$(abspath $(CONTROLLER_CHECKPOINT_DIR))" = "/" ] || [ "$(abspath $(CONTROLLER_CHECKPOINT_DIR))" = "$(abspath $(ROOT))" ] || [ "$(abspath $(CONTROLLER_CHECKPOINT_DIR))" = "$(HOME)" ]; then \
+		echo "Refusing to remove unsafe CONTROLLER_CHECKPOINT_DIR=$(CONTROLLER_CHECKPOINT_DIR)"; \
+		exit 2; \
+	fi
+	@echo "Removing controller checkpoints only: $(abspath $(CONTROLLER_CHECKPOINT_DIR))"
+	@rm -rf "$(abspath $(CONTROLLER_CHECKPOINT_DIR))"
