@@ -5,7 +5,7 @@
 | Operation | Structural/pre-receive phase | Policy phase | Success effect |
 |---|---|---|---|
 | Create | Envelope, API version/kind, shared DNS/reserved identifier rules, required spec, tier enum, authoring repository/path, duplicate request identity | Existing spec 046 bootstrap-name rejection and durable name uniqueness | Create complete authored row; set `AdmissionAccepted=True` |
-| Update | Same shape checks as create; same-path `metadata.name` changes receive `IMMUTABLE_NAME` | Existing row required; tier demotion rejected; terminating target rejected | Conditional complete-authored update; advance generation only for authored changes; set `AdmissionAccepted=True` |
+| Update | Same shape checks as create; same-path `metadata.name` changes receive `IMMUTABLE_NAME` | Existing row required; tier demotion rejected; terminating target rejected | Conditional complete-authored update; **#481 supersedes this row's former metadata rule:** advance generation only for spec/body changes; set `AdmissionAccepted=True` |
 | Delete | Identifier, authorization context, and authorized UID/name continuity | Already terminating is idempotent; bootstrap and non-empty blockers are evaluated together | Conditional repository-fenced termination marker/finalizer write |
 
 If any structural error exists in a validation request, including
@@ -68,7 +68,8 @@ not inferred to be a rename.
 
 Successful persistence includes API version, kind, labels, annotations, full
 spec, body, revision, source path, commit SHA, and ref. Any authored
-metadata/spec/body change advances generation and resourceVersion.
+spec/body changes advance generation and resourceVersion. **#481 supersedes the
+former metadata rule:** labels and annotations advance only resourceVersion.
 Provenance-only movement advances resourceVersion only.
 
 ## Repository creation/deletion coordination contract

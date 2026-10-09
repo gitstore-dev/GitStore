@@ -118,7 +118,7 @@ func TestAdmitResourcesNamespaceProvenanceOnlyChangeKeepsGeneration(t *testing.T
 	assert.Equal(t, descendantCommit, updated.GitCommitSHA)
 }
 
-func TestAdmitResourcesNamespaceEmptyValuedLabelKeyChangeAdvancesGeneration(t *testing.T) {
+func TestAdmitResourcesNamespaceEmptyValuedLabelKeyChangeKeepsGeneration(t *testing.T) {
 	store := newNamespacePolicyDatastore(t)
 	zero := strings.Repeat("0", 40)
 	first := strings.Repeat("9", 40)
@@ -171,7 +171,8 @@ spec:
 	updated, err := store.GetNamespaceByName(context.Background(), "presence-aware-labels")
 	require.NoError(t, err)
 
-	assert.Equal(t, created.Generation+1, updated.Generation)
+	assert.Equal(t, created.Generation, updated.Generation)
+	assert.Equal(t, "2", updated.ResourceVersion)
 	assert.Equal(t, map[string]string{"new-key": ""}, updated.Labels)
 }
 

@@ -203,6 +203,10 @@ func ApplyManifestOrdered(
 	}
 	specJSON := mustMarshalSpec(resource.Spec)
 	body := string(options.Body)
+	ownerReferences, err := json.Marshal(resource.Metadata.OwnerReferences)
+	if err != nil {
+		return nil, false, fmt.Errorf("namespace admission: marshal owner references: %w", err)
+	}
 
 	preflight := options.Preflight
 	if !preflight.Captured {
@@ -266,6 +270,7 @@ func ApplyManifestOrdered(
 				Tier:              tier,
 				Labels:            cloneStringMap(resource.Metadata.Labels),
 				Annotations:       cloneStringMap(resource.Metadata.Annotations),
+				OwnerReferences:   ownerReferences,
 				Spec:              specJSON,
 				Body:              body,
 				Revision:          revision,
@@ -280,17 +285,22 @@ func ApplyManifestOrdered(
 			datastore.NormalizeNamespaceContract(candidate)
 			candidate.Status = AdmissionStatus(candidate.Generation, revision, now)
 		} else {
-			authorChanged := candidate.APIVersion != resource.APIVersion ||
+			// Generation represents desired state only: the authored spec and
+			// Markdown body. Metadata and Git provenance still form observable
+			// resource updates, but do not invalidate controller work for the
+			// accepted desired state.
+			desiredStateChanged := candidate.APIVersion != resource.APIVersion ||
 				candidate.Kind != resource.Kind ||
-				!stringMapsEqual(candidate.Labels, resource.Metadata.Labels) ||
-				!stringMapsEqual(candidate.Annotations, resource.Metadata.Annotations) ||
 				!bytes.Equal(candidate.Spec, specJSON) ||
 				candidate.Body != body
-			systemChanged := candidate.Revision != revision ||
+			metadataChanged := !stringMapsEqual(candidate.Labels, resource.Metadata.Labels) ||
+				!stringMapsEqual(candidate.Annotations, resource.Metadata.Annotations) ||
+				!bytes.Equal(candidate.OwnerReferences, ownerReferences)
+			provenanceChanged := candidate.Revision != revision ||
 				candidate.SourcePath != options.SourcePath ||
 				candidate.GitCommitSHA != options.GitCommitSHA ||
 				candidate.GitRef != options.GitRef
-			if !authorChanged && !systemChanged {
+			if !desiredStateChanged && !metadataChanged && !provenanceChanged {
 				return candidate, false, nil
 			}
 			expectedResourceVersion = candidate.ResourceVersion
@@ -301,6 +311,7 @@ func ApplyManifestOrdered(
 			candidate.Kind = resource.Kind
 			candidate.Labels = cloneStringMap(resource.Metadata.Labels)
 			candidate.Annotations = cloneStringMap(resource.Metadata.Annotations)
+			candidate.OwnerReferences = ownerReferences
 			candidate.Title = resource.Spec.Title
 			candidate.Tier = tier
 			candidate.Spec = append([]byte(nil), specJSON...)
@@ -311,12 +322,12 @@ func ApplyManifestOrdered(
 			candidate.SourcePath = options.SourcePath
 			candidate.GitCommitSHA = options.GitCommitSHA
 			candidate.GitRef = options.GitRef
-			if authorChanged {
+			if desiredStateChanged {
 				datastore.AdvanceNamespaceSpecVersion(candidate)
 			} else {
 				datastore.AdvanceNamespaceSystemVersion(candidate)
 			}
-			candidate.Status = AdmissionStatus(candidate.Generation, revision, now)
+			candidate.Status = MergeAdmissionStatus(candidate.Status, candidate.Generation, revision, now)
 		}
 
 		if err := RecheckAuthoringRef(ctx, options.CheckAuthoringRef); err != nil {
@@ -472,6 +483,37 @@ func AdmissionStatus(generation int64, revision string, now time.Time) []byte {
 	data, err := json.Marshal(status)
 	if err != nil {
 		return []byte(`{"observedGeneration":0,"conditions":[]}`)
+	}
+	return data
+}
+
+// MergeAdmissionStatus updates only the fields owned by admission. Controller
+// observations and conditions are deliberately retained across an admitted
+// author update, including metadata- and provenance-only updates.
+func MergeAdmissionStatus(raw []byte, generation int64, revision string, now time.Time) []byte {
+	var status catalog.NamespaceStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return AdmissionStatus(generation, revision, now)
+	}
+	status.LastAppliedRevision = revision
+	accepted := catalog.Condition{
+		Type:               catalog.ConditionAdmissionAccepted,
+		Status:             catalog.ConditionTrue,
+		ObservedGeneration: generation,
+		LastTransitionTime: now,
+		Reason:             "AdmittedByHookPipeline",
+		Message:            "Namespace manifest admitted successfully.",
+	}
+	conditions := make([]catalog.Condition, 0, len(status.Conditions)+1)
+	for _, condition := range status.Conditions {
+		if condition.Type != catalog.ConditionAdmissionAccepted {
+			conditions = append(conditions, condition)
+		}
+	}
+	status.Conditions = append([]catalog.Condition{accepted}, conditions...)
+	data, err := json.Marshal(status)
+	if err != nil {
+		return AdmissionStatus(generation, revision, now)
 	}
 	return data
 }
