@@ -210,6 +210,26 @@ that verifies bearer JWTs via OIDC Discovery + JWKS. It is enabled only when
 | `api.auth.rbac_local.policy_file` | `GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE` | string | `policy.yaml` | No | No | YAML RBAC policy path, used when `authz.provider = "rbac-local"` |
 | `api.auth.userdir.provider` | `GITSTORE_API__AUTH__USERDIR__PROVIDER` | string | `none` | No | No | Active user-directory provider |
 
+#### Upgrading: `purge` grants for deletion completion
+
+The controller-only deletion-completion mutations are authorized with a
+dedicated `purge` action per resource kind: `completeNamespaceDeletion`
+requires `namespace.purge`, `completeRepositoryDeletion` requires
+`repository.purge`, and `completeProductDeletion` requires `product.purge`.
+The shipped development policy grants these to the controller role; production
+deployments with a custom reviewed policy must add the same three grants to
+the role their controller service account is bound to **before** upgrading the
+API, otherwise deletion finalization is denied and affected Namespace,
+Repository, and Product resources remain terminating.
+
+During a rolling upgrade with mixed API versions, keep both the new `*.purge`
+grants and the legacy grants (`namespace.status.write`,
+`repository.status.write`, `product.delete.complete`) on the controller role
+so old and new replicas both authorize the controller. The legacy grants
+become unused once every replica runs the new version and may be dropped in
+the next release; the `*.status.write` grants stay required for the
+`update*Status` mutations and `provisionRepositoryStorage`.
+
 ### Logging
 
 | Key          | Env Var                | Type   | Default | Required | Sensitive | Description                            |
