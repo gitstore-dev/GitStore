@@ -504,7 +504,9 @@ func MergeAdmissionStatus(raw []byte, generation int64, revision string, now tim
 		Reason:             "AdmittedByHookPipeline",
 		Message:            "Namespace manifest admitted successfully.",
 	}
-	conditions := make([]catalog.Condition, 0, len(status.Conditions)+1)
+	// Do not preallocate from untrusted persisted data: a corrupt or hostile
+	// condition count could overflow len+1 before allocation.
+	var conditions []catalog.Condition
 	for _, condition := range status.Conditions {
 		if condition.Type != catalog.ConditionAdmissionAccepted {
 			conditions = append(conditions, condition)

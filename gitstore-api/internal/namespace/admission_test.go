@@ -325,6 +325,28 @@ func TestMergeAdmissionStatusPreservesControllerState(t *testing.T) {
 	assert.Equal(t, "ControllerReady", merged.Conditions[1].Reason)
 }
 
+// This models a rolling replacement boundary: a controller status write wins
+// the first optimistic-concurrency attempt, then the replacement admission
+// retry reloads and reclassifies the current row. The retry must retain the
+// controller state while applying the desired-state generation transition.
+func TestApplyManifestRetryPreservesConcurrentControllerStatus(t *testing.T) {
+	ctx := context.Background()
+	store := newAdmissionStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	created, _, err := namespaceadmission.ApplyManifest(ctx, store, fixedIDs{id: "00000000-0000-0000-0000-000000000060"}, namespaceResource("upgrade", "USER"), now, "main@sha1:old", "alice", admission.OperationCreate)
+	require.NoError(t, err)
+	racing := &controllerStatusConflictOnceStore{Datastore: store, now: now.Add(time.Minute)}
+	updated, _, err := namespaceadmission.ApplyManifestOrdered(ctx, racing, fixedIDs{id: "unused"}, namespaceResource("upgrade", "ORGANIZATION"), now.Add(2*time.Minute), "main@sha1:new", "alice", namespaceadmission.ApplyManifestOptions{Operation: admission.OperationUpdate, WriteAttempts: 2})
+	require.NoError(t, err)
+	assert.Equal(t, created.Generation+1, updated.Generation)
+	assert.Equal(t, "3", updated.ResourceVersion)
+	var status catalog.NamespaceStatus
+	require.NoError(t, json.Unmarshal(updated.Status, &status))
+	assert.Equal(t, int64(1), status.ObservedGeneration)
+	require.Len(t, status.Conditions, 2)
+	assert.Equal(t, catalog.ConditionReady, status.Conditions[1].Type)
+}
+
 func TestApplyManifestRejectedUpdatesPreserveLastAcceptedStatusAndGeneration(t *testing.T) {
 	ctx := context.Background()
 
@@ -422,6 +444,34 @@ func assertAdmissionAcceptedForGeneration(t *testing.T, namespace *datastore.Nam
 
 type conflictingNamespaceStore struct {
 	datastore.Datastore
+}
+
+type controllerStatusConflictOnceStore struct {
+	datastore.Datastore
+	now  time.Time
+	done bool
+}
+
+func (s *controllerStatusConflictOnceStore) UpdateNamespace(ctx context.Context, namespace *datastore.Namespace, expected string) error {
+	if s.done {
+		return s.Datastore.UpdateNamespace(ctx, namespace, expected)
+	}
+	s.done = true
+	current, err := s.Datastore.GetNamespaceByName(ctx, namespace.Name)
+	if err != nil {
+		return err
+	}
+	status := catalog.NamespaceStatus{ObservedGeneration: current.Generation, LastAppliedRevision: "controller", Conditions: []catalog.Condition{{Type: catalog.ConditionReady, Status: catalog.ConditionTrue, ObservedGeneration: current.Generation, LastTransitionTime: s.now}}}
+	current.Status, err = json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	version := current.ResourceVersion
+	datastore.AdvanceNamespaceSystemVersion(current)
+	if err := s.Datastore.UpdateNamespace(ctx, current, version); err != nil {
+		return err
+	}
+	return datastore.ErrConflict
 }
 
 func (s *conflictingNamespaceStore) UpdateNamespace(context.Context, *datastore.Namespace, string) error {

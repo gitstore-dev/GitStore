@@ -2034,13 +2034,16 @@ func (s *Server) admitNamespace(
 				existing.Kind != resource.Kind ||
 				specBodyChanged(existing.Spec, existing.Body, specJSON, body)
 			metadataChanged := !stringMapsEqual(existing.Labels, resource.Metadata.Labels) ||
-				!stringMapsEqual(existing.Annotations, resource.Metadata.Annotations) ||
-				!bytes.Equal(existing.OwnerReferences, ownerReferences)
+				!stringMapsEqual(existing.Annotations, resource.Metadata.Annotations)
+			// Namespace owner references are system-owned and authored manifests
+			// are rejected when they contain them. Retain any existing system
+			// projection unless a future admission path supplies one explicitly.
+			ownerReferencesChanged := len(resource.Metadata.OwnerReferences) > 0 && !bytes.Equal(existing.OwnerReferences, ownerReferences)
 			provenanceChanged := existing.Revision != admCtx.Revision ||
 				existing.SourcePath != sourcePath ||
 				existing.GitCommitSHA != admCtx.CommitSHA ||
 				existing.GitRef != admCtx.RefName
-			if !desiredStateChanged && !metadataChanged && !provenanceChanged {
+			if !desiredStateChanged && !metadataChanged && !ownerReferencesChanged && !provenanceChanged {
 				return
 			}
 			expectedResourceVersion := existing.ResourceVersion
@@ -2051,7 +2054,9 @@ func (s *Server) admitNamespace(
 			existing.UpdateActor = admCtx.ActorSubject
 			existing.Labels = cloneStringMap(resource.Metadata.Labels)
 			existing.Annotations = cloneStringMap(resource.Metadata.Annotations)
-			existing.OwnerReferences = ownerReferences
+			if ownerReferencesChanged {
+				existing.OwnerReferences = ownerReferences
+			}
 			existing.SourcePath = sourcePath
 			existing.GitCommitSHA = admCtx.CommitSHA
 			existing.GitRef = admCtx.RefName
@@ -3138,7 +3143,9 @@ func mergeRepositoryAdmissionStatus(raw []byte, generation int64, revision strin
 		Reason:             "AdmittedByHookPipeline",
 		Message:            "Resource admitted via the post-receive hook pipeline.",
 	}
-	conditions := make([]catalog.Condition, 0, len(status.Conditions)+1)
+	// Do not preallocate from untrusted persisted data: a corrupt or hostile
+	// condition count could overflow len+1 before allocation.
+	var conditions []catalog.Condition
 	for _, condition := range status.Conditions {
 		if condition.Type != catalog.ConditionAdmissionAccepted {
 			conditions = append(conditions, condition)

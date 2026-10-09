@@ -84,9 +84,6 @@ func waitForNamespaceLifecycle(t *testing.T, name string, generation int) *names
 
 func requireAdmissionAccepted(t *testing.T, state *namespaceLifecycleState) {
 	t.Helper()
-	if state.Status.ObservedGeneration != state.Metadata.Generation {
-		t.Fatalf("status.observedGeneration = %d, want %d", state.Status.ObservedGeneration, state.Metadata.Generation)
-	}
 	if state.Status.LastAppliedRevision == nil || *state.Status.LastAppliedRevision == "" {
 		t.Fatal("status.lastAppliedRevision is empty")
 	}
@@ -96,6 +93,20 @@ func requireAdmissionAccepted(t *testing.T, state *namespaceLifecycleState) {
 		}
 	}
 	t.Fatalf("AdmissionAccepted=True not found in %+v", state.Status.Conditions)
+}
+
+func waitForNamespaceObservedGeneration(t *testing.T, name string, generation int) *namespaceLifecycleState {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		state := queryNamespaceLifecycle(t, name)
+		if state != nil && state.Status.ObservedGeneration == generation {
+			return state
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("namespace %q status did not observe generation %d", name, generation)
+	return nil
 }
 
 func TestNamespaceLifecycle_CreateAndUpdateThroughAdmission(t *testing.T) {
@@ -117,6 +128,7 @@ func TestNamespaceLifecycle_CreateAndUpdateThroughAdmission(t *testing.T) {
 
 	updated := waitForNamespaceLifecycle(t, name, 2)
 	requireAdmissionAccepted(t, updated)
+	updated = waitForNamespaceObservedGeneration(t, name, 2)
 	if updated.Metadata.ResourceVersion == initialVersion {
 		t.Fatalf("resourceVersion did not advance from %q", initialVersion)
 	}
