@@ -388,6 +388,18 @@ func TestUpdateCategoryRejections(t *testing.T) {
 		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "PROVENANCE_UNAVAILABLE")
 		assert.Zero(t, env.git.commitCount())
 	})
+	t.Run("admitted from another ref", func(t *testing.T) {
+		env := newCategoryLifecycleEnv(t)
+		record := env.pushCategory(t, lifecycleSystemRepoID, "categories/laptops.md", "laptops", "Laptops", "", "")
+		record.GitRef = "refs/heads/feature"
+		require.NoError(t, env.store.UpdateCategoryTaxonomy(context.Background(), record))
+		_, err := env.service.CommitCategoryManifest(context.Background(), categoryInput("laptops", "Laptops 2", ""), "bob", false)
+		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "PROVENANCE_UNAVAILABLE")
+		_, _, err = env.service.DeleteCategoryManifest(context.Background(), record.UID, "bob")
+		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "PROVENANCE_UNAVAILABLE")
+		assert.Zero(t, env.git.commitCount())
+		assert.Empty(t, env.git.deletes)
+	})
 	t.Run("owner annotation change", func(t *testing.T) {
 		env := newCategoryLifecycleEnv(t)
 		env.pushCategory(t, lifecycleSystemRepoID, "categories/laptops.md", "laptops", "Laptops", "", "")

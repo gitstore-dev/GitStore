@@ -194,9 +194,11 @@ type CategoryTaxonomyDeletionStore interface {
 	CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*CategoryTaxonomy, error)
 }
 
-// MaxCategoryHierarchyDepth bounds category hierarchy depth and therefore the
-// ancestor index depth range.
-const MaxCategoryHierarchyDepth = 128
+// MaxCategoryHierarchyDepth is the deepest relative depth an ancestor index
+// row can hold. The controller resolves paths of at most 128 categories, so
+// depth (len(path)-1) is at most 127, which is also the range of the
+// status.resolved.depth field and the index's tinyint depth column.
+const MaxCategoryHierarchyDepth = 127
 
 // CategoryDescendant is one row of an ancestor's subtree.
 type CategoryDescendant struct {

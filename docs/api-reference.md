@@ -1174,7 +1174,7 @@ Errors raised by other operations continue to use the codes in the table at the 
 | `SUPERSEDED`, `RESOURCE_VERSION_CONFLICT` | `CONFLICT` |
 | `INVALID_ARGUMENT` | `BAD_USER_INPUT` |
 
-`PROVENANCE_UNAVAILABLE` means the category has no recorded repository and path to commit to, so `updateCategory` and `deleteCategory` cannot target it.
+`PROVENANCE_UNAVAILABLE` means `updateCategory` and `deleteCategory` cannot target the category: it has no recorded repository and path, or it was admitted from a ref other than the default branch (API mutations commit only to the default branch).
 
 #### Warnings on success: `extensions.admission`
 

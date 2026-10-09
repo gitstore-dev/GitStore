@@ -110,6 +110,9 @@ func (s *Service) commitCategoryManifest(ctx context.Context, input CategoryMani
 			return nil, "", admission.NewError(admission.CodeFailedPrecondition, "PROVENANCE_UNAVAILABLE",
 				fmt.Sprintf("category %q has no recorded source repository and path", existing.Name))
 		}
+		if err := requireDefaultBranchProvenance(existing); err != nil {
+			return nil, "", err
+		}
 		if err := guardOwnerAnnotationUnchanged(existing.Annotations, annotations); err != nil {
 			return nil, "", admission.Rejected(admission.PhasePreReceive, "", []admission.Diagnostic{{
 				Reason: "IMMUTABLE_OWNER", Message: err.Error(), Level: admission.LevelFailure,
@@ -320,6 +323,9 @@ func (s *Service) deleteCategoryManifest(ctx context.Context, uid, caller string
 		return category, "", "", admission.NewError(admission.CodeFailedPrecondition, "PROVENANCE_UNAVAILABLE",
 			fmt.Sprintf("category %q has no recorded source repository and path", category.Name))
 	}
+	if err := requireDefaultBranchProvenance(category); err != nil {
+		return category, "", "", err
+	}
 	owners, ok := s.store.(datastore.OwnerReferenceStore)
 	if !ok {
 		return nil, "", "", fmt.Errorf("category deletion is unavailable while owner-reference indexing is disabled")
@@ -343,10 +349,7 @@ func (s *Service) deleteCategoryManifest(ctx context.Context, uid, caller string
 	if err != nil {
 		return nil, "", "", fmt.Errorf("delete category manifest: %w", err)
 	}
-	refName := category.GitRef
-	if refName == "" {
-		refName = categoryRefName
-	}
+	refName := categoryRefName
 	if _, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{
 		RepositoryID: category.RepositoryID, Namespace: category.Namespace, ActorSubject: caller,
 		CommitSHA: commitSHA, RefName: refName, Path: category.SourcePath,
@@ -378,8 +381,11 @@ func (r *mutationResolver) completeCategoryDeletion(ctx context.Context, namespa
 }
 
 const (
-	categoryFilterMaxPage     = datastore.DefaultPageSize
-	categoryFilterFetchFanout = 16
+	// categoryFilterMaxDepthArgument is the documented upper bound of the
+	// maxDepth argument.
+	categoryFilterMaxDepthArgument = 128
+	categoryFilterMaxPage          = datastore.DefaultPageSize
+	categoryFilterFetchFanout      = 16
 )
 
 func badCategoryListArgument(message string) error {
@@ -393,10 +399,12 @@ func badCategoryListArgument(message string) error {
 func (s *Service) listCategoryDescendants(ctx context.Context, namespace string, filter *model.CategoryFilterInput, page datastore.PageParams) (*model.CategoryConnection, error) {
 	maxDepth := 0
 	if filter.MaxDepth != nil {
-		if *filter.MaxDepth < 1 || *filter.MaxDepth > datastore.MaxCategoryHierarchyDepth {
-			return nil, badCategoryListArgument(fmt.Sprintf("maxDepth must be between 1 and %d", datastore.MaxCategoryHierarchyDepth))
+		if *filter.MaxDepth < 1 || *filter.MaxDepth > categoryFilterMaxDepthArgument {
+			return nil, badCategoryListArgument(fmt.Sprintf("maxDepth must be between 1 and %d", categoryFilterMaxDepthArgument))
 		}
-		maxDepth = int(*filter.MaxDepth)
+		// No row is deeper than the index can hold, so a larger bound is the
+		// whole subtree.
+		maxDepth = min(int(*filter.MaxDepth), datastore.MaxCategoryHierarchyDepth)
 	}
 	if page.First > categoryFilterMaxPage {
 		page.First = categoryFilterMaxPage
@@ -471,4 +479,16 @@ func categoryConditionTrue(conditions []*model.Condition, conditionType string) 
 		}
 	}
 	return false
+}
+
+// requireDefaultBranchProvenance rejects mutating a category admitted from a
+// ref other than the default branch: the Git writer commits only to the
+// default branch, so writing there would fork the manifest from the ref the
+// category was admitted from.
+func requireDefaultBranchProvenance(category *datastore.CategoryTaxonomy) error {
+	if category.GitRef == "" || category.GitRef == categoryRefName {
+		return nil
+	}
+	return admission.NewError(admission.CodeFailedPrecondition, "PROVENANCE_UNAVAILABLE",
+		fmt.Sprintf("category %q was admitted from %s; API mutations write only %s", category.Name, category.GitRef, categoryRefName))
 }

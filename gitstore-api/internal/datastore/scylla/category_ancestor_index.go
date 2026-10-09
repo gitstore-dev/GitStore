@@ -62,7 +62,7 @@ func (s *scyllaDatastore) readCategoryAncestorRow(ctx context.Context, namespace
 	const stmt = `SELECT descendant_uid, resource_version FROM category_ancestor_index
 		WHERE namespace=? AND ancestor=? AND depth=? AND descendant=?`
 	var row categoryAncestorStoredRow
-	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(namespace, ancestor, int8(depth), descendant).GetRelease(&row); err != nil {
+	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(namespace, ancestor, ancestorDepth(depth), descendant).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, nil
 		}
@@ -85,7 +85,7 @@ func (s *scyllaDatastore) upsertCategoryAncestorRow(ctx context.Context, namespa
 				(namespace, ancestor, depth, descendant, descendant_uid, resource_version)
 				VALUES (?, ?, ?, ?, ?, ?) IF NOT EXISTS`
 			applied, err = s.session.Query(insert, nil).WithContext(ctx).Bind(
-				namespace, ancestor, int8(depth), descendant, uid, resourceVersion,
+				namespace, ancestor, ancestorDepth(depth), descendant, uid, resourceVersion,
 			).ExecCASRelease()
 		} else {
 			if current.DescendantUID == uid && compareResourceVersions(current.ResourceVersion, resourceVersion) >= 0 {
@@ -95,7 +95,7 @@ func (s *scyllaDatastore) upsertCategoryAncestorRow(ctx context.Context, namespa
 			const update = `UPDATE category_ancestor_index SET descendant_uid=?, resource_version=?
 				WHERE namespace=? AND ancestor=? AND depth=? AND descendant=? IF resource_version=?`
 			applied, err = s.session.Query(update, nil).WithContext(ctx).Bind(
-				uid, resourceVersion, namespace, ancestor, int8(depth), descendant, current.ResourceVersion,
+				uid, resourceVersion, namespace, ancestor, ancestorDepth(depth), descendant, current.ResourceVersion,
 			).ExecCASRelease()
 		}
 		if err != nil {
@@ -124,7 +124,7 @@ func (s *scyllaDatastore) deleteObsoleteCategoryAncestorRow(ctx context.Context,
 		const stmt = `DELETE FROM category_ancestor_index
 			WHERE namespace=? AND ancestor=? AND depth=? AND descendant=? IF resource_version=?`
 		applied, err := s.session.Query(stmt, nil).WithContext(ctx).Bind(
-			namespace, ancestor, int8(depth), descendant, current.ResourceVersion,
+			namespace, ancestor, ancestorDepth(depth), descendant, current.ResourceVersion,
 		).ExecCASRelease()
 		if err != nil {
 			return fmt.Errorf("scylla: delete category ancestor index: %w", err)
@@ -149,6 +149,39 @@ func (s *scyllaDatastore) syncCategoryAncestorRows(ctx context.Context, c *datas
 	}
 	for _, row := range obsolete {
 		if err := s.deleteObsoleteCategoryAncestorRow(ctx, c.Namespace, row.Ancestor, row.Depth, c.Name, uid, c.ResourceVersion); err != nil {
+			datastore.CategoryAncestorIndexWritesTotal.WithLabelValues("failed").Inc()
+			return err
+		}
+	}
+	return s.fenceCategoryAncestorRows(ctx, c, current)
+}
+
+// fenceCategoryAncestorRows closes the window in which a delayed older writer
+// re-inserts a row that a newer writer has already removed: the per-row
+// version check cannot protect a row that is absent. After writing, the
+// writer re-reads the authoritative record; if a newer status write has
+// committed, it removes every row it wrote that the newer path does not own.
+// Those deletes carry the newer resource version, so they only remove rows
+// older than it. Whichever writer finishes last therefore converges the index
+// to the authoritative path.
+func (s *scyllaDatastore) fenceCategoryAncestorRows(ctx context.Context, c *datastore.CategoryTaxonomy, written []datastore.CategoryAncestorRow) error {
+	latest, err := s.GetCategoryTaxonomy(ctx, c.UID)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return nil // final removal deletes the rows
+	}
+	if err != nil {
+		return fmt.Errorf("scylla: re-read category for ancestor index fence: %w", err)
+	}
+	if latest.ResourceVersion == c.ResourceVersion {
+		return nil
+	}
+	latestRows, err := categoryAncestorRowsFor(latest)
+	if err != nil {
+		return err
+	}
+	uid := mustParseUUID(c.UID)
+	for _, row := range datastore.ObsoleteCategoryAncestorRows(written, latestRows) {
+		if err := s.deleteObsoleteCategoryAncestorRow(ctx, c.Namespace, row.Ancestor, row.Depth, c.Name, uid, latest.ResourceVersion); err != nil {
 			datastore.CategoryAncestorIndexWritesTotal.WithLabelValues("failed").Inc()
 			return err
 		}
@@ -179,7 +212,7 @@ func (s *scyllaDatastore) removeCategoryAncestorRows(ctx context.Context, c *dat
 		WHERE namespace=? AND ancestor=? AND depth=? AND descendant=? IF descendant_uid=?`
 	for _, row := range rows {
 		if _, err := s.session.Query(stmt, nil).WithContext(ctx).Bind(
-			c.Namespace, row.Ancestor, int8(row.Depth), c.Name, uid,
+			c.Namespace, row.Ancestor, ancestorDepth(row.Depth), c.Name, uid,
 		).ExecCASRelease(); err != nil {
 			return fmt.Errorf("scylla: delete category ancestor index: %w", err)
 		}
@@ -223,7 +256,7 @@ func (s *scyllaDatastore) ListCategoryDescendants(ctx context.Context, q datasto
 	var segments []segment
 	rangeSegment := func(from, to int) {
 		if from <= to {
-			segments = append(segments, segment{"depth >= ? AND depth <= ?", []any{int8(from), int8(to)}})
+			segments = append(segments, segment{"depth >= ? AND depth <= ?", []any{ancestorDepth(from), ancestorDepth(to)}})
 		}
 	}
 	switch {
@@ -231,12 +264,12 @@ func (s *scyllaDatastore) ListCategoryDescendants(ctx context.Context, q datasto
 		rangeSegment(lo, hi)
 	case !backward:
 		if cursorDepth >= lo && cursorDepth <= hi {
-			segments = append(segments, segment{"depth = ? AND descendant > ?", []any{int8(cursorDepth), cursorName}})
+			segments = append(segments, segment{"depth = ? AND descendant > ?", []any{ancestorDepth(cursorDepth), cursorName}})
 		}
 		rangeSegment(max(cursorDepth+1, lo), hi)
 	default:
 		if cursorDepth >= lo && cursorDepth <= hi {
-			segments = append(segments, segment{"depth = ? AND descendant < ?", []any{int8(cursorDepth), cursorName}})
+			segments = append(segments, segment{"depth = ? AND descendant < ?", []any{ancestorDepth(cursorDepth), cursorName}})
 		}
 		rangeSegment(lo, min(cursorDepth-1, hi))
 	}
@@ -271,4 +304,16 @@ func (s *scyllaDatastore) ListCategoryDescendants(ctx context.Context, q datasto
 		}
 	}
 	return buildPageResult(items, limit, q.Page), nil
+}
+
+// ancestorDepth converts a validated depth to the tinyint column type,
+// clamping to [0, MaxCategoryHierarchyDepth] so the narrowing is always safe.
+func ancestorDepth(depth int) int8 {
+	if depth < 0 {
+		return 0
+	}
+	if depth > datastore.MaxCategoryHierarchyDepth {
+		return datastore.MaxCategoryHierarchyDepth
+	}
+	return int8(depth)
 }

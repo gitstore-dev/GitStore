@@ -118,6 +118,8 @@ func TestCategoriesFilterRejectsBadArguments(t *testing.T) {
 	qr, store := newCategoryResolverEnv(t)
 	seedElectronicsTree(t, store)
 	ctx := context.Background()
+	_, err := qr.Categories(ctx, "shop", &model.CategoryFilterInput{DescendantOf: "electronics", MaxDepth: int32Ptr(128)}, nil, nil, nil, nil)
+	require.NoError(t, err, "the documented upper bound is accepted")
 	for _, maxDepth := range []int32{0, -1, 129} {
 		_, err := qr.Categories(ctx, "shop", &model.CategoryFilterInput{DescendantOf: "electronics", MaxDepth: int32Ptr(maxDepth)}, nil, nil, nil, nil)
 		requireBadUserInput(t, err)

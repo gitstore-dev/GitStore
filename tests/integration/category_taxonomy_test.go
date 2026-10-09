@@ -644,7 +644,6 @@ func TestCategoryCrossNamespaceParentRef_NoDisclosurePush(t *testing.T) {
 	otherNS := uniqueName("cat-other")
 	createNamespaceAsUser(t, h, token, otherNS)
 	t.Cleanup(func() { h.cleanupNamespace(otherNS) })
-	waitForRepositoryReady(t, token, otherNS, "gitstore-system")
 
 	known := uniqueName("known")
 	created := gqlQueryWithURL(t, apiURL, token, `

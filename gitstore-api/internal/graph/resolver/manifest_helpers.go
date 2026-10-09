@@ -17,9 +17,7 @@ func renderManifest(envelope map[string]any, body []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	content := make([]byte, 0, len(frontmatter)+len(body)+8)
-	content = append(content, "---\n"...)
-	content = append(content, frontmatter...)
+	content := append([]byte("---\n"), frontmatter...)
 	content = append(content, "---\n"...)
 	return append(content, body...), nil
 }

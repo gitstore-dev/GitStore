@@ -131,7 +131,6 @@ func (m *memdbDatastore) ListCategoryDescendants(_ context.Context, q datastore.
 			window = append(window, row)
 		}
 	}
-	items := make([]*datastore.CategoryDescendant, 0, limit)
 	hasNext, hasPrevious := false, false
 	if backward {
 		if len(window) > limit {
@@ -146,6 +145,7 @@ func (m *memdbDatastore) ListCategoryDescendants(_ context.Context, q datastore.
 		}
 		hasPrevious = q.Page.After != ""
 	}
+	items := make([]*datastore.CategoryDescendant, 0, len(window))
 	for _, row := range window {
 		items = append(items, &datastore.CategoryDescendant{Name: row.Descendant, UID: row.DescendantUID, Depth: row.Depth})
 	}
