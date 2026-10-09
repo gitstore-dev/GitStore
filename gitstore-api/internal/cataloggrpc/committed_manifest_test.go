@@ -122,6 +122,13 @@ func TestAdmitCommittedManifest_RepairsCurrentTipAfterWriteFailureButPreservesEr
 	assert.Equal(t, commit, stored.GitCommitSHA)
 }
 
+func TestAdmitCommittedManifest_UnavailableRuntimeDoesNotAttemptRepair(t *testing.T) {
+	store := newTestDatastore(t)
+	srv := newCatalogServer(t, store, nil)
+	_, err := admitCommittedCategory(t, srv, strings.Repeat("a", 40), categoryManifestTitled("electronics", "Electronics"), admission.OperationCreate)
+	require.EqualError(t, err, "committed admission is unavailable")
+}
+
 func TestAdmitCommittedManifest_CategoryTaxonomyIdenticalReadmissionIsNoOp(t *testing.T) {
 	store := newTestDatastore(t)
 	first, second := strings.Repeat("a", 40), strings.Repeat("c", 40)
