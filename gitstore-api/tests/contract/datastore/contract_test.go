@@ -100,6 +100,89 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	t.Helper()
 	ctx := context.Background()
 
+	t.Run("Product/StatusCASPreservesSpecAndSynchronizesOwnerReferences", func(t *testing.T) {
+		namespace := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, namespace))
+		repositoryID := newID()
+		require.NoError(t, ds.CreateRepository(ctx, &datastore.Repository{
+			UID: repositoryID, Namespace: namespace.Name, Name: "catalog",
+		}))
+		product := newProduct()
+		product.Namespace, product.RepositoryID = namespace.Name, repositoryID
+		product.ResourceVersion, product.Generation = "1", 1
+		product.Spec = json.RawMessage(`{"title":"Original Title"}`)
+		product.Body, product.GitCommitSHA = "original body", "original-commit"
+		product.Finalizers = []string{"gitstore.dev/product-protection"}
+		ownerUID := newID()
+		ownerReferences, err := json.Marshal([]catalog.OwnerReference{{
+			APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy", Name: "category", UID: ownerUID,
+		}})
+		require.NoError(t, err)
+		require.NoError(t, ds.CreateProduct(ctx, product))
+
+		product.Spec = json.RawMessage(`{"title":"Updated Title"}`)
+		product.Body, product.GitCommitSHA = "updated body", "updated-commit"
+		product.ResourceVersion, product.Generation = "2", 2
+		require.NoError(t, ds.UpdateProduct(ctx, product))
+		patch := datastore.ProductStatusPatch{ResourceVersion: "1", OwnerReferences: ownerReferences}
+		_, err = ds.UpdateProductStatus(ctx, product.Namespace, product.Name, patch)
+		require.ErrorIs(t, err, datastore.ErrConflict)
+		current, err := ds.GetProduct(ctx, product.UID)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"title":"Updated Title"}`, string(current.Spec))
+		assert.Empty(t, current.OwnerReferences)
+
+		patch.ResourceVersion = current.ResourceVersion
+		updated, err := ds.UpdateProductStatus(ctx, product.Namespace, product.Name, patch)
+		require.NoError(t, err)
+		assert.Equal(t, current.Spec, updated.Spec)
+		assert.Equal(t, current.Body, updated.Body)
+		assert.Equal(t, current.GitCommitSHA, updated.GitCommitSHA)
+		assert.Equal(t, current.Generation, updated.Generation)
+		assert.Equal(t, current.UID, updated.UID)
+		assert.Equal(t, current.Finalizers, updated.Finalizers)
+		assert.Equal(t, "3", updated.ResourceVersion)
+		assert.JSONEq(t, string(ownerReferences), string(updated.OwnerReferences))
+		owners := ds.(datastore.OwnerReferenceStore)
+		scope := datastore.OwnerReferenceScope{Namespace: product.Namespace, RepositoryID: repositoryID}
+		page, err := owners.ListNonBlockingProductOwnerDependents(ctx, scope, ownerUID, "", 10)
+		require.NoError(t, err)
+		require.Len(t, page.Items, 1)
+		assert.Equal(t, updated.ResourceVersion, page.Items[0].ResourceVersion)
+
+		preserved, err := ds.UpdateProductStatus(ctx, product.Namespace, product.Name, datastore.ProductStatusPatch{ResourceVersion: updated.ResourceVersion})
+		require.NoError(t, err)
+		assert.JSONEq(t, string(ownerReferences), string(preserved.OwnerReferences))
+		cleared, err := ds.UpdateProductStatus(ctx, product.Namespace, product.Name, datastore.ProductStatusPatch{
+			ResourceVersion: preserved.ResourceVersion, OwnerReferences: json.RawMessage(`[]`),
+		})
+		require.NoError(t, err)
+		assert.JSONEq(t, `[]`, string(cleared.OwnerReferences))
+		page, err = owners.ListNonBlockingProductOwnerDependents(ctx, scope, ownerUID, "", 10)
+		require.NoError(t, err)
+		assert.Empty(t, page.Items)
+
+		start := make(chan struct{})
+		results := make(chan error, 2)
+		for range 2 {
+			go func() {
+				<-start
+				_, err := ds.UpdateProductStatus(ctx, product.Namespace, product.Name, datastore.ProductStatusPatch{
+					ResourceVersion: cleared.ResourceVersion,
+				})
+				results <- err
+			}()
+		}
+		close(start)
+		first, second := <-results, <-results
+		if first == nil {
+			require.ErrorIs(t, second, datastore.ErrConflict)
+		} else {
+			require.ErrorIs(t, first, datastore.ErrConflict)
+			require.NoError(t, second)
+		}
+	})
+
 	t.Run("CanonicalEnvelope/AllResourcesRoundTrip", func(t *testing.T) {
 		now := time.Now().UTC().Truncate(time.Millisecond)
 		deletedAt := now.Add(time.Hour)

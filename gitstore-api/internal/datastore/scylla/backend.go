@@ -705,15 +705,16 @@ func (s *scyllaDatastore) UpdateProductStatus(ctx context.Context, namespace, na
 		return nil, err
 	}
 	expected := existing.ResourceVersion
+	oldOwnerReferences := existing.OwnerReferences
 	if err := datastore.ApplyProductStatusPatch(existing, patch); err != nil {
 		return nil, err
 	}
 	uid := mustParseUUID(existing.UID)
-	const statement = "UPDATE products_by_namespace SET resource_version=?, status=? WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
+	const statement = "UPDATE products_by_namespace SET resource_version=?, status=?, owner_references=? WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
 	authoritative := mutationAction{
 		Step: catalogueStep("update-status", "Product", existing.UID, "products_by_namespace", existing.UID, "update-authoritative"),
 		Apply: func(ctx context.Context) error {
-			applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(existing.ResourceVersion, existing.Status, existing.Namespace, existing.CreationTimestamp, uid, expected).ExecCASRelease()
+			applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(existing.ResourceVersion, existing.Status, existing.OwnerReferences, existing.Namespace, existing.CreationTimestamp, uid, expected).ExecCASRelease()
 			if err != nil {
 				return fmt.Errorf("scylla: update products_by_namespace status: %w", err)
 			}
@@ -726,7 +727,7 @@ func (s *scyllaDatastore) UpdateProductStatus(ctx context.Context, namespace, na
 	if err := s.mutations.executeUpdate(ctx, existing.ResourceVersion, authoritative, mutationAction{
 		Step: catalogueStep("update-status", "Product", existing.UID, ownerReferenceDependentsTable, existing.UID, "converge-owner-references"),
 		Apply: func(ctx context.Context) error {
-			return s.syncOwnerReferenceDependents(ctx, existing.Namespace, existing.RepositoryID, "Product", existing.UID, existing.Name, existing.ResourceVersion, existing.OwnerReferences, existing.OwnerReferences)
+			return s.syncOwnerReferenceDependents(ctx, existing.Namespace, existing.RepositoryID, "Product", existing.UID, existing.Name, existing.ResourceVersion, oldOwnerReferences, existing.OwnerReferences)
 		},
 	}); err != nil {
 		return nil, err

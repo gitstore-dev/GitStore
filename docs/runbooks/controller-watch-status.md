@@ -19,9 +19,9 @@ other replica.
    sum by (reason) (rate(gitstore_resource_watch_expired_total[5m]))
    ```
 
-   A reconnect that resumes from its cursor without a matching
-   `expired_total` increment is a normal transient disconnect and needs no
-   operator action.
+   A reconnect that successfully resumes from its cursor while journal
+   readiness remains healthy, without a matching `expired_total` increment,
+   is a normal transient disconnect and needs no operator action.
 
 2. If streams are expiring, the `reason` label tells you why:
 
@@ -44,9 +44,17 @@ other replica.
    (`api.watch.journal.subscriber.buffer`) filled up and its stream was ended with
    `WATCH_EXPIRED/SUBSCRIBER_OVERFLOW`. Overflow never drops events silently.
 
+4. If reconnects do not recover, check the API's `/ready` response and
+   materializer logs. `WATCH_UNAVAILABLE/MATERIALIZER_NOT_READY` can persist
+   without incrementing the expired-cursor counter. A CDC ordering
+   discontinuity stops the materializer deliberately; controller liveness
+   can remain healthy while reconciliation is stalled. Preserve the logged
+   stream and CDC positions and involve the datastore owner rather than
+   treating repeated reconnects as successful recovery.
+
 ## Recovery Actions: Watch Disconnects
 
-- **Transient reconnect (no `expired_total` increment)**: no action needed.
+- **Successful transient reconnect with healthy journal readiness**: no action needed.
 - **Expired cursor**: the controller's `listwatch.Runner` discards the cursor,
   re-lists from a fresh journal bookmark and resumes automatically. Repeated
   `RETENTION_EXPIRED`/`REPLAY_LIMIT` expiries for a controller mean it is
@@ -55,6 +63,22 @@ other replica.
 - **Overflow**: the affected controller is not draining its watch fast enough.
   Check its queue-depth/worker-saturation signals (see
   [controller-lag.md](./controller-lag.md)) before reconnecting.
+
+### CDC generation boundaries
+
+An empty query on a retiring CDC stream can finish beyond the next generation's
+start. Its query-end timestamp is evidence of that stream's read progress, not
+an event published by the next generation. Namespace, Repository, Product,
+CategoryTaxonomy and File sequencing therefore compares incoming changes with
+the last actually published change, not with empty-query timestamps. Per-stream
+read checkpoints still advance while idle and keep readiness fresh.
+
+Namespace recovery persists the published-change position separately from
+per-stream read progress before acknowledging those checkpoints, including
+when no event has yet been published. Recovery uses the same qualified source
+table identity as the CDC reader; older manifests' unqualified recovery keys
+are reconciled into that identity before resuming. A genuinely older change still fails closed;
+do not clear checkpoints or ignore a discontinuity to make readiness green.
 
 ## Diagnostic Steps: Status-Write Conflicts
 
@@ -73,6 +97,15 @@ other replica.
    ```
 
    If the same `namespace`/`name` pair appears repeatedly in a short window, two writers are racing on that specific resource. If many different resources of the same kind are conflicting, the reconciler for that kind may be operating on a stale cache snapshot (e.g. a watch resume gap — cross-reference with the watch-disconnect signals above).
+
+Product status writes and category-deletion owner cleanup use a status-only
+datastore compare-and-swap against the caller's resource version.
+Owner-reference changes, when supplied, participate in that same conditional
+write. A concurrent Git spec
+update must cause stale status work to conflict, never overwrite the new spec,
+body, Git revision or finalizers with a cached full-resource snapshot. On
+conflict, reconcile again from current state; category deletion retains the
+Product for its next bounded cleanup continuation.
 
 ## Controller API throttling and recovery
 

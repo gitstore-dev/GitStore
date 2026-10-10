@@ -99,11 +99,15 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 			status.Resolved.Category = nil
 		}
 	}
-	statusJSON, err := json.Marshal(status)
-	if err != nil {
-		return nil, gqlerror.Errorf("encode product status: %v", err)
+	patch := datastore.ProductStatusPatch{
+		ResourceVersion:     input.ResourceVersion,
+		LastAppliedRevision: input.LastAppliedRevision,
+		Conditions:          status.Conditions,
+		Resolved:            status.Resolved,
 	}
-	product.Status = statusJSON
+	if input.ObservedGeneration != nil {
+		patch.ObservedGeneration = &status.ObservedGeneration
+	}
 	if input.Resolved != nil {
 		var categoryRef *catalog.ObjectReference
 		if input.Resolved.Category != nil {
@@ -117,10 +121,10 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 			// is deleted. Fail the whole write so the controller retries.
 			return nil, gqlerror.Errorf("resolve category owner reference: %v", err)
 		}
-		product.OwnerReferences = ownerReferences
+		patch.OwnerReferences = ownerReferences
 	}
-	datastore.AdvanceProductSystemVersion(product)
-	if err := r.store.UpdateProduct(ctx, product); err != nil {
+	product, err = r.store.UpdateProductStatus(ctx, input.Namespace, input.Name, patch)
+	if err != nil {
 		if errors.Is(err, datastore.ErrConflict) {
 			current, getErr := r.store.GetProductByName(ctx, input.Namespace, input.Name)
 			if getErr == nil {
