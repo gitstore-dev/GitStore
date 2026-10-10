@@ -220,12 +220,9 @@ func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind st
 			return nil, admission.NewError(admission.CodeFailedPrecondition, "PROVENANCE_UNAVAILABLE", "Product was not authored from the default branch")
 		}
 	}
-	current, err := s.gitWriter.ReadFileForRepo(ctx, repositoryID, path, productRef)
+	current, err := s.readManifestForWrite(ctx, repositoryID, path, productRef, create)
 	if err != nil {
-		if status.Code(err) != codes.NotFound {
-			return nil, fmt.Errorf("read current Product manifest: %w", err)
-		}
-		current = nil
+		return nil, fmt.Errorf("read current Product manifest: %w", err)
 	}
 	manifestBody := []byte{}
 	if body != nil {

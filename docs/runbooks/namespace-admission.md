@@ -111,6 +111,9 @@ readable tree.
 A missing authoring repository/ref or a path occupied by a non-file entry returns
 `FAILED_PRECONDITION`. Unavailable or unreadable authoring storage blocks both
 Namespace and Repository completion even when a prior removal commit is recorded.
+Product and Category creation may initialize an unborn branch through the Git
+commit operation, which still requires existing repository storage. This
+write-only handling does not apply to updates or deletion verification.
 
 Catalog admission retries transient Namespace fence contention within a bounded
 request budget rather than immediately rejecting a committed push. A confirmed

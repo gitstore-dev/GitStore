@@ -19,8 +19,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"go.uber.org/zap"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func encodeCategoryProductCursor(categoryUID, cursor string) string {
@@ -156,12 +154,9 @@ func (s *Service) commitCategoryManifest(ctx context.Context, input CategoryMani
 		repositoryID, path = existing.RepositoryID, existing.SourcePath
 	}
 
-	current, err := s.gitWriter.ReadFileForRepo(ctx, repositoryID, path, categoryRefName)
+	current, err := s.readManifestForWrite(ctx, repositoryID, path, categoryRefName, create)
 	if err != nil {
-		if status.Code(err) != codes.NotFound {
-			return nil, "", fmt.Errorf("read current category manifest: %w", err)
-		}
-		current = nil
+		return nil, "", fmt.Errorf("read current category manifest: %w", err)
 	}
 	var body []byte
 	switch {

@@ -92,12 +92,20 @@ func (g *memGit) CommitFileForRepo(_ context.Context, repositoryID string, p git
 func (g *memGit) ResolveRefForRepo(_ context.Context, repositoryID, ref string) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.resolve(repositoryID, ref), nil
+	head := g.resolve(repositoryID, ref)
+	if _, exists := g.trees[head]; !exists {
+		return "", status.Error(codes.NotFound, "ref not found")
+	}
+	return head, nil
 }
 func (g *memGit) ReadFileForRepo(_ context.Context, repositoryID, path, ref string) ([]byte, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	content, ok := g.trees[g.resolve(repositoryID, ref)][path]
+	tree, exists := g.trees[g.resolve(repositoryID, ref)]
+	if !exists {
+		return nil, status.Error(codes.FailedPrecondition, "ref not found")
+	}
+	content, ok := tree[path]
 	if !ok {
 		return nil, status.Error(codes.NotFound, "file not found")
 	}
@@ -230,6 +238,32 @@ func categoryInput(name, title string, parent string) CategoryManifestInput {
 		APIVersion: categoryAPIVersion, Kind: categoryKind,
 		Metadata: &model.ObjectMetaInput{Name: name, Namespace: lifecycleNamespace},
 		Spec:     spec,
+	}
+}
+
+func TestManifestCreationInitializesUnbornRef(t *testing.T) {
+	for _, kind := range []string{"Product", "CategoryTaxonomy"} {
+		t.Run(kind, func(t *testing.T) {
+			env := newCategoryLifecycleEnv(t)
+			ctx := context.Background()
+			_, err := env.git.ResolveRefForRepo(ctx, lifecycleSystemRepoID, categoryRefName)
+			require.Equal(t, codes.NotFound, status.Code(err))
+			_, err = env.git.ReadFileForRepo(ctx, lifecycleSystemRepoID, "missing.md", categoryRefName)
+			require.Equal(t, codes.FailedPrecondition, status.Code(err))
+			_, err = env.service.readManifestForWrite(ctx, lifecycleSystemRepoID, "missing.md", categoryRefName, false)
+			require.Equal(t, codes.FailedPrecondition, status.Code(err), "updates must not initialize a missing ref")
+			if kind == "CategoryTaxonomy" {
+				_, err = env.service.CommitCategoryManifest(ctx, categoryInput("first", "First", ""), "alice", true)
+			} else {
+				_, err = env.service.CommitProductManifest(ctx, "catalog.gitstore.dev/v1beta1", kind,
+					&model.ObjectMetaInput{Name: "first", Namespace: lifecycleNamespace},
+					&model.ProductSpecInput{Title: "First"}, nil, "alice", true)
+			}
+			require.NoError(t, err)
+			require.Len(t, env.git.commits, 1)
+			_, err = env.git.ResolveRefForRepo(ctx, lifecycleSystemRepoID, categoryRefName)
+			require.NoError(t, err)
+		})
 	}
 }
 
