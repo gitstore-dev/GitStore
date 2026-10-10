@@ -447,8 +447,8 @@ type ProductStore interface {
 	GetProductByName(ctx context.Context, namespace, name string) (*Product, error)
 	ListProducts(ctx context.Context, namespace string, page PageParams) (*PageResult[Product], error)
 	UpdateProduct(ctx context.Context, p *Product) error
-	// UpdateProductStatus applies a status-only CAS patch without replacing
-	// author or controller owned fields outside .status.
+	// UpdateProductStatus applies a CAS patch to status and optional
+	// controller-managed category owner references, without replacing author fields.
 	UpdateProductStatus(ctx context.Context, namespace, name string, patch ProductStatusPatch) (*Product, error)
 	DeleteProduct(ctx context.Context, uid string) error
 	DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
@@ -471,6 +471,7 @@ type ProductStatusPatch struct {
 	LastAppliedRevision *string
 	Conditions          []catalog.Condition
 	Resolved            *catalog.ResolvedProductDefinition
+	OwnerReferences     json.RawMessage // nil = unchanged; non-nil = controller-managed replacement
 }
 
 func ApplyProductStatusPatch(product *Product, patch ProductStatusPatch) error {
@@ -500,6 +501,9 @@ func ApplyProductStatusPatch(product *Product, patch ProductStatusPatch) error {
 		return err
 	}
 	product.Status = raw
+	if patch.OwnerReferences != nil {
+		product.OwnerReferences = append(json.RawMessage(nil), patch.OwnerReferences...)
+	}
 	AdvanceProductSystemVersion(product)
 	return nil
 }

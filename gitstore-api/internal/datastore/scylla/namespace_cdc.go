@@ -45,6 +45,7 @@ func (s *scyllaDatastore) RunNamespaceCDC(ctx context.Context, materializer *wat
 		return err
 	}
 	sequencer := newNamespaceCDCSequencer(materializer, lease)
+	sequencer.progressTable = s.keyspace + ".namespaces_by_uid"
 	sequencer.publishedThrough = publishedThrough
 	sequencer.hasPublished = hasPublished
 	sequencer.persistFrontier = progress.SavePublishedFrontier
@@ -287,6 +288,7 @@ type namespaceCDCSequencer struct {
 	publishedThrough gocql.UUID
 	hasPublished     bool
 	persistFrontier  func(context.Context, namespaceCDCPublishedBatch) error
+	progressTable    string
 }
 
 type namespaceCDCPublishedBatch struct {
@@ -297,10 +299,11 @@ type namespaceCDCPublishedBatch struct {
 
 func newNamespaceCDCSequencer(materializer *watchjournal.Materializer, lease datastore.NamespaceWatchLease) *namespaceCDCSequencer {
 	return &namespaceCDCSequencer{
-		materializer: materializer,
-		lease:        lease,
-		messages:     make(chan namespaceCDCSequenceMessage, 256),
-		done:         make(chan struct{}),
+		materializer:  materializer,
+		lease:         lease,
+		messages:      make(chan namespaceCDCSequenceMessage, 256),
+		done:          make(chan struct{}),
+		progressTable: "namespaces_by_uid",
 	}
 }
 
@@ -480,7 +483,8 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 		published := 0
 		latestProgress := make(map[string]namespaceCDCSequenceRequest, len(active))
 		changes := make([]watchjournal.Change, 0, len(pending))
-		var batchFrontier gocql.UUID
+		batchFrontier := publishedThrough
+		batchHasPublished := hasPublished
 		for published < len(pending) {
 			request := pending[published]
 			if len(active) > 0 && scyllacdc.CompareTimeUUID(request.cdcTime, frontier) > 0 {
@@ -496,17 +500,20 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 			}
 			if publish && !request.progressOnly {
 				changes = append(changes, request.change)
+				batchFrontier = request.cdcTime
+				batchHasPublished = true
 			}
 			latestProgress[request.streamID] = request
-			batchFrontier = request.cdcTime
 			published++
 		}
 		if published > 0 {
 			if _, err := s.materializer.MaterializeBatch(ctx, s.lease, changes); err != nil {
 				return err
 			}
-			// Journal appends are idempotent by CDC position. Persist the global
-			// published frontier before advancing any source checkpoint so a crash
+			// Empty query windows can extend beyond a retiring generation's
+			// boundary; they do not order events in the next generation. Keep
+			// their read progress separate from the last published change.
+			// Persist the published frontier before any source checkpoint so a crash
 			// cannot restore a frontier older than records whose source positions
 			// have already moved past them. The same durable record retains the
 			// latest position for each stream in this batch, allowing a new leader
@@ -514,7 +521,7 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 			if s.persistFrontier != nil {
 				progress := make(map[string]gocql.UUID, len(latestProgress))
 				for streamID, request := range latestProgress {
-					progress[cdcProgressKeyEncoded(currentGeneration, "namespaces_by_uid", streamID)] = request.cdcTime
+					progress[cdcProgressKeyEncoded(currentGeneration, s.progressTable, streamID)] = request.cdcTime
 				}
 				if err := s.persistFrontier(ctx, namespaceCDCPublishedBatch{
 					Frontier: batchFrontier, Generation: currentGeneration, Progress: progress,
@@ -533,7 +540,7 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 				}
 			}
 			publishedThrough = batchFrontier
-			hasPublished = true
+			hasPublished = batchHasPublished
 			pending = retainUnpublishedCDCRequests(pending, published)
 		}
 	}
@@ -1007,12 +1014,14 @@ func (m *namespaceCDCProgressManager) PublishedFrontier(ctx context.Context) (go
 	if jsonErr := json.Unmarshal(progress.Position, &record); jsonErr != nil {
 		return gocql.UUID{}, false, fmt.Errorf("decode Namespace CDC published frontier manifest: %w", jsonErr)
 	}
-	if record.Version != 1 || record.Generation == 0 || len(record.Progress) == 0 {
+	if (record.Version != 1 && record.Version != 2) || record.Generation == 0 || len(record.Progress) == 0 {
 		return gocql.UUID{}, false, fmt.Errorf("decode Namespace CDC published frontier manifest: invalid version, generation, or progress")
 	}
-	frontier, err = gocql.ParseUUID(record.Frontier)
-	if err != nil {
-		return gocql.UUID{}, false, fmt.Errorf("decode Namespace CDC published frontier UUID: %w", err)
+	if record.Frontier != "" || record.Version == 1 {
+		frontier, err = gocql.ParseUUID(record.Frontier)
+		if err != nil {
+			return gocql.UUID{}, false, fmt.Errorf("decode Namespace CDC published frontier UUID: %w", err)
+		}
 	}
 	m.recovery = namespaceCDCPublishedBatch{Frontier: frontier, Generation: time.Unix(0, record.Generation).UTC(), Progress: make(map[string]gocql.UUID, len(record.Progress))}
 	for streamID, value := range record.Progress {
@@ -1022,21 +1031,31 @@ func (m *namespaceCDCProgressManager) PublishedFrontier(ctx context.Context) (go
 		}
 		m.recovery.Progress[streamID] = position
 	}
-	return frontier, true, nil
+	return frontier, frontier != (gocql.UUID{}), nil
 }
 
 func (m *namespaceCDCProgressManager) SavePublishedFrontier(ctx context.Context, batch namespaceCDCPublishedBatch) error {
-	if batch.Frontier == (gocql.UUID{}) || batch.Generation.IsZero() || len(batch.Progress) == 0 {
-		return fmt.Errorf("encode Namespace CDC published frontier: frontier, generation, and progress are required")
+	if batch.Generation.IsZero() || len(batch.Progress) == 0 {
+		return fmt.Errorf("encode Namespace CDC published frontier: generation and progress are required")
 	}
 	record := struct {
 		Version    int               `json:"version"`
 		Frontier   string            `json:"frontier"`
 		Generation int64             `json:"generation"`
 		Progress   map[string]string `json:"progress"`
-	}{Version: 1, Frontier: batch.Frontier.String(), Generation: batch.Generation.UnixNano(), Progress: make(map[string]string, len(batch.Progress))}
+	}{Version: 2, Generation: batch.Generation.UnixNano(), Progress: make(map[string]string, len(batch.Progress))}
+	if batch.Frontier != (gocql.UUID{}) {
+		record.Frontier = batch.Frontier.String()
+	}
+	var readThrough gocql.UUID
 	for streamID, position := range batch.Progress {
+		if position == (gocql.UUID{}) {
+			return fmt.Errorf("encode Namespace CDC published frontier: stream %s has no progress", streamID)
+		}
 		record.Progress[streamID] = position.String()
+		if readThrough == (gocql.UUID{}) || scyllacdc.CompareTimeUUID(position, readThrough) > 0 {
+			readThrough = position
+		}
 	}
 	encoded, err := json.Marshal(record)
 	if err != nil {
@@ -1045,14 +1064,14 @@ func (m *namespaceCDCProgressManager) SavePublishedFrontier(ctx context.Context,
 	if len(encoded) > namespaceCDCPublishedManifestLimit {
 		return fmt.Errorf("encode Namespace CDC published frontier: recovery manifest exceeds %d bytes", namespaceCDCPublishedManifestLimit)
 	}
-	frontierAt := batch.Frontier.Time().UTC()
+	progressAt := readThrough.Time().UTC()
 	err = m.journal.SaveProgress(ctx, m.lease, datastore.NamespaceCDCProgress{
 		StreamID:  namespaceCDCPublishedFrontierProgress,
 		Position:  encoded,
-		UpdatedAt: frontierAt,
+		UpdatedAt: progressAt,
 	})
 	if err == nil && m.observeProgress != nil {
-		m.observeProgress(frontierAt)
+		m.observeProgress(progressAt)
 	}
 	return err
 }

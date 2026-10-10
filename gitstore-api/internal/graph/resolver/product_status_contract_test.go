@@ -176,6 +176,138 @@ func TestUpdateProductStatus_StaleResourceVersionRejected(t *testing.T) {
 	require.Error(t, err)
 }
 
+type productUpdateAfterStatusReadStore struct {
+	datastore.Datastore
+	afterRead func(context.Context) error
+}
+
+func (s *productUpdateAfterStatusReadStore) GetProductByName(ctx context.Context, namespace, name string) (*datastore.Product, error) {
+	product, err := s.Datastore.GetProductByName(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	if s.afterRead != nil {
+		afterRead := s.afterRead
+		s.afterRead = nil
+		if err := afterRead(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return product, nil
+}
+
+func TestUpdateProductStatus_ConcurrentSpecUpdateIsNotOverwritten(t *testing.T) {
+	_, store, product, _ := newProductStatusTestFixture(t)
+	ctx := context.Background()
+	product.Spec = json.RawMessage(`{"title":"Original Title"}`)
+	require.NoError(t, store.UpdateProduct(ctx, product))
+
+	interleaved := &productUpdateAfterStatusReadStore{Datastore: store}
+	interleaved.afterRead = func(ctx context.Context) error {
+		current, err := store.GetProduct(ctx, product.UID)
+		if err != nil {
+			return err
+		}
+		current.Spec = json.RawMessage(`{"title":"Updated Title"}`)
+		current.Generation++
+		current.ResourceVersion = "2"
+		return store.UpdateProduct(ctx, current)
+	}
+	r, err := NewResolver(ResolverDeps{Store: interleaved, Logger: zap.NewNop()})
+	require.NoError(t, err)
+	_, updateErr := (&mutationResolver{Resolver: r}).UpdateProductStatus(ctx, model.UpdateProductStatusInput{
+		Namespace: product.Namespace, Name: product.Name, ResourceVersion: "1",
+		Conditions: []*model.ConditionInput{{Type: string(catalog.ConditionReady), Status: model.ConditionStatusTrue}},
+	})
+	persisted, err := store.GetProduct(ctx, product.UID)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"title":"Updated Title"}`, string(persisted.Spec),
+		"a controller status snapshot must not overwrite an intervening Git-authored spec")
+	require.Error(t, updateErr, "the stale status resourceVersion must conflict")
+}
+
+type productUpdateAfterDependentReadStore struct {
+	datastore.Datastore
+	datastore.OwnerReferenceStore
+	afterRead func(context.Context) error
+}
+
+func (s *productUpdateAfterDependentReadStore) GetProduct(ctx context.Context, uid string) (*datastore.Product, error) {
+	product, err := s.Datastore.GetProduct(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+	if s.afterRead != nil {
+		afterRead := s.afterRead
+		s.afterRead = nil
+		if err := afterRead(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return product, nil
+}
+
+func TestDecoupleCategoryProducts_ConcurrentSpecUpdateIsNotOverwritten(t *testing.T) {
+	_, store, product, category := newProductStatusTestFixture(t)
+	ctx := context.Background()
+	product.Spec = json.RawMessage(`{"title":"Original Title","categoryRef":{"name":"laptops"}}`)
+	product.Generation = 1
+	product.Finalizers = []string{"gitstore.dev/product-protection"}
+	product.OwnerReferences, _ = json.Marshal([]catalog.OwnerReference{{
+		APIVersion: category.APIVersion, Kind: category.Kind, Name: category.Name, UID: category.UID,
+	}})
+	require.NoError(t, store.UpdateProduct(ctx, product))
+	terminating, err := store.(datastore.CategoryTaxonomyDeletionStore).MarkCategoryTaxonomyDeletion(
+		ctx, category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
+	require.NoError(t, err)
+
+	interleaved := &productUpdateAfterDependentReadStore{
+		Datastore: store, OwnerReferenceStore: store.(datastore.OwnerReferenceStore),
+	}
+	interleaved.afterRead = func(ctx context.Context) error {
+		current, err := store.GetProduct(ctx, product.UID)
+		if err != nil {
+			return err
+		}
+		current.Spec = json.RawMessage(`{"title":"Updated Title","categoryRef":{"name":"laptops"}}`)
+		current.Generation, current.ResourceVersion = 2, "2"
+		return store.UpdateProduct(ctx, current)
+	}
+	r, err := NewResolver(ResolverDeps{Store: interleaved, Logger: zap.NewNop()})
+	require.NoError(t, err)
+	mutation := &mutationResolver{Resolver: r}
+	decouple := true
+	input := model.UpdateCategoryStatusInput{
+		Namespace: category.Namespace, Name: category.Name, ResourceVersion: terminating.ResourceVersion, DecoupleProducts: &decouple,
+	}
+	payload, err := mutation.UpdateCategoryStatus(ctx, input)
+	require.NoError(t, err)
+	persisted, err := store.GetProduct(ctx, product.UID)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"title":"Updated Title","categoryRef":{"name":"laptops"}}`, string(persisted.Spec))
+	assert.Equal(t, product.Finalizers, persisted.Finalizers)
+	assert.Equal(t, int64(2), persisted.Generation)
+	assert.Equal(t, "2", persisted.ResourceVersion)
+	assert.JSONEq(t, string(product.OwnerReferences), string(persisted.OwnerReferences))
+	require.True(t, payload.HasMoreProductDependents, "a conflicted cleanup must remain in the bounded continuation")
+
+	payload, err = mutation.UpdateCategoryStatus(ctx, input)
+	require.NoError(t, err)
+	require.False(t, payload.HasMoreProductDependents)
+	cleaned, err := store.GetProduct(ctx, product.UID)
+	require.NoError(t, err)
+	assert.Equal(t, persisted.Spec, cleaned.Spec)
+	assert.Equal(t, persisted.Generation, cleaned.Generation)
+	assert.Equal(t, persisted.Finalizers, cleaned.Finalizers)
+	assert.Equal(t, "3", cleaned.ResourceVersion)
+	assert.JSONEq(t, `[]`, string(cleaned.OwnerReferences))
+	var status catalog.ProductStatus
+	require.NoError(t, json.Unmarshal(cleaned.Status, &status))
+	require.Len(t, status.Conditions, 1)
+	assert.Equal(t, catalog.ConditionCategoryResolved, status.Conditions[0].Type)
+	assert.Equal(t, "CategoryDeleted", status.Conditions[0].Reason)
+}
+
 // TestUpdateProductStatus_ThenDecoupleCategoryProducts_ConvergesCategoryDeleted
 // is T031: a regression test proving R7's "no new controller code" claim —
 // the owner reference T020's declarative resolved.category sync establishes

@@ -557,15 +557,20 @@ func (s *Service) DecoupleCategoryProducts(ctx context.Context, namespace, name,
 			Reason:             "CategoryDeleted",
 			Message:            "Referenced category is being deleted.",
 		}})
-		product.Status, err = json.Marshal(productStatus)
-		if err != nil {
-			return nil, false, gqlerror.Errorf("encode Product status: %v", err)
+		cleaned, err := s.store.UpdateProductStatus(ctx, product.Namespace, product.Name, datastore.ProductStatusPatch{
+			ResourceVersion: product.ResourceVersion,
+			Conditions:      productStatus.Conditions,
+			OwnerReferences: product.OwnerReferences,
+		})
+		if errors.Is(err, datastore.ErrConflict) {
+			// The Product changed after the dependent read. Leave its current
+			// owner projection for the next bounded continuation.
+			continue
 		}
-		datastore.AdvanceProductSystemVersion(product)
-		if err := s.store.UpdateProduct(ctx, product); err != nil {
+		if err != nil {
 			return nil, false, gqlerror.Errorf("decouple Product %q: %v", product.Name, err)
 		}
-		updated = append(updated, product)
+		updated = append(updated, cleaned)
 	}
 
 	remaining, err := owners.ListNonBlockingProductOwnerDependents(ctx, datastore.OwnerReferenceScope{
