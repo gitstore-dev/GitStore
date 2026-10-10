@@ -76,7 +76,8 @@ read checkpoints still advance while idle and keep readiness fresh.
 Namespace recovery persists the published-change position separately from
 per-stream read progress before acknowledging those checkpoints, including
 when no event has yet been published. Recovery uses the same qualified source
-table identity as the CDC reader. A genuinely older change still fails closed;
+table identity as the CDC reader; older manifests' unqualified recovery keys
+are reconciled into that identity before resuming. A genuinely older change still fails closed;
 do not clear checkpoints or ignore a discontinuity to make readiness green.
 
 ## Diagnostic Steps: Status-Write Conflicts

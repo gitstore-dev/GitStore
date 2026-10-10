@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -928,6 +929,7 @@ type namespaceCDCProgressManager struct {
 	observeProgress func(time.Time)
 	beginGeneration func(context.Context, time.Time) error
 	recovery        namespaceCDCPublishedBatch
+	recoveryVersion int
 }
 
 func (m *namespaceCDCProgressManager) GetCurrentGeneration(ctx context.Context) (time.Time, error) {
@@ -974,6 +976,11 @@ func (m *namespaceCDCProgressManager) GetProgress(ctx context.Context, generatio
 		}
 	}
 	recovered, ok := m.recovery.Progress[key]
+	if !ok && m.recoveryVersion == 1 {
+		if dot := strings.LastIndexByte(table, '.'); dot >= 0 {
+			recovered, ok = m.recovery.Progress[cdcProgressKey(generation, table[dot+1:], streamID)]
+		}
+	}
 	if ok && (position == (gocql.UUID{}) || scyllacdc.CompareTimeUUID(recovered, position) > 0) {
 		progress = datastore.NamespaceCDCProgress{StreamID: key, Position: recovered.Bytes(), UpdatedAt: recovered.Time().UTC()}
 		if err := m.journal.SaveProgress(ctx, m.lease, progress); err != nil {
@@ -1031,6 +1038,7 @@ func (m *namespaceCDCProgressManager) PublishedFrontier(ctx context.Context) (go
 		}
 		m.recovery.Progress[streamID] = position
 	}
+	m.recoveryVersion = record.Version
 	return frontier, frontier != (gocql.UUID{}), nil
 }
 

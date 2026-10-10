@@ -407,6 +407,44 @@ func TestNamespaceCDCIdleCheckpointRestoresReadProgressWithoutInventingPublished
 	}
 }
 
+func TestNamespaceCDCProgressManagerRecoversUnqualifiedV1ManifestKeys(t *testing.T) {
+	ctx := context.Background()
+	db, err := memdb.New()
+	require.NoError(t, err)
+	journal := db.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	generation := time.Now().UTC()
+	lease, acquired, err := journal.AcquireLease(ctx, "replacement", generation, time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	stream := scyllacdc.StreamID("legacy-stream")
+	position := gocql.MinTimeUUID(generation.Add(time.Millisecond))
+	encoded, err := json.Marshal(struct {
+		Version    int               `json:"version"`
+		Frontier   string            `json:"frontier"`
+		Generation int64             `json:"generation"`
+		Progress   map[string]string `json:"progress"`
+	}{
+		Version: 1, Frontier: position.String(), Generation: generation.UnixNano(),
+		Progress: map[string]string{cdcProgressKey(generation, "namespaces_by_uid", stream): position.String()},
+	})
+	require.NoError(t, err)
+	require.NoError(t, journal.SaveProgress(ctx, lease, datastore.NamespaceCDCProgress{
+		StreamID: namespaceCDCPublishedFrontierProgress, Position: encoded, UpdatedAt: generation,
+	}))
+
+	manager := &namespaceCDCProgressManager{journal: journal, lease: lease}
+	frontier, found, err := manager.PublishedFrontier(ctx)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, position, frontier)
+	progress, err := manager.GetProgress(ctx, generation, "gitstore.namespaces_by_uid", stream)
+	require.NoError(t, err)
+	require.Equal(t, position, progress.LastProcessedRecordTime)
+	saved, err := journal.LoadProgress(ctx, cdcProgressKey(generation, "gitstore.namespaces_by_uid", stream))
+	require.NoError(t, err)
+	require.Equal(t, position.Bytes(), saved.Position, "recovered progress must use the reader's qualified key")
+}
+
 func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t *testing.T) {
 	store := &sequencerStore{}
 	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
