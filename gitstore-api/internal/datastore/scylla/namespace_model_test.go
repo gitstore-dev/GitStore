@@ -185,6 +185,7 @@ func TestScyllaSchemaIsPerResourceBaseline(t *testing.T) {
 		"010_category_ancestor_index.cql",
 		"011_category_product_index.cql",
 		"012_repository_catalog_index.cql",
+		"013_repository_resource_membership.cql",
 	}, names)
 }
 

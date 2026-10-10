@@ -81,7 +81,7 @@ func TestCompleteDeletion_ConflictExtensionMapsToErrConflict(t *testing.T) {
 	client := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	dc := categorytaxonomy.NewGraphQLDeletionClient(client)
 
-	err := dc.CompleteDeletion(context.Background(), "acme", "laptops", "1")
+	err := dc.CompleteDeletion(context.Background(), "acme", "laptops", "1", "category-1")
 	if !errors.Is(err, types.ErrConflict) {
 		t.Fatalf("CompleteDeletion err = %v, want errors.Is(..., types.ErrConflict)", err)
 	}
@@ -100,15 +100,18 @@ func TestCompleteDeletion_SendsCompleteCategoryDeletion(t *testing.T) {
 	defer srv.Close()
 
 	dc := categorytaxonomy.NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token")))
-	if err := dc.CompleteDeletion(context.Background(), "acme", "laptops", "7"); err != nil {
+	if err := dc.CompleteDeletion(context.Background(), "acme", "laptops", "7", "category-1"); err != nil {
 		t.Fatalf("CompleteDeletion failed: %v", err)
 	}
 	if !strings.Contains(body.Query, "completeCategoryDeletion") || strings.Contains(body.Query, "updateCategoryStatus") {
 		t.Fatalf("CompleteDeletion must send completeCategoryDeletion, got %s", body.Query)
 	}
 	input, _ := body.Variables["input"].(map[string]any)
-	if input["namespace"] != "acme" || input["name"] != "laptops" || input["resourceVersion"] != "7" {
+	if input["namespace"] != "acme" || input["name"] != "laptops" || input["resourceVersion"] != "7" || input["id"] != "category-1" {
 		t.Fatalf("unexpected input %v", input)
+	}
+	if _, exists := input["uid"]; exists {
+		t.Fatal("completion must not send the removed uid input field")
 	}
 }
 
@@ -120,7 +123,7 @@ func TestCompleteDeletion_FoldedConflictMapsToErrConflict(t *testing.T) {
 	defer srv.Close()
 
 	dc := categorytaxonomy.NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token")))
-	if err := dc.CompleteDeletion(context.Background(), "acme", "laptops", "1"); !errors.Is(err, types.ErrConflict) {
+	if err := dc.CompleteDeletion(context.Background(), "acme", "laptops", "1", "category-1"); !errors.Is(err, types.ErrConflict) {
 		t.Fatalf("CompleteDeletion err = %v, want errors.Is(..., types.ErrConflict)", err)
 	}
 }

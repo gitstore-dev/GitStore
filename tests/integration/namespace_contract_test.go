@@ -852,7 +852,7 @@ func (h *namespaceContractHarness) deleteRepositoryAndComplete(repoID string) []
 				namespace: $namespace
 				name: $name
 				resourceVersion: $resourceVersion
-				uid: $uid
+				id: $uid
 			}) { id }
 		}
 	`, map[string]any{
@@ -1303,7 +1303,7 @@ func TestNamespaceContract_DeleteNamespaceFinalizesEmptySystemRepository(t *test
 	if data.DeleteNamespace.Namespace == nil || data.DeleteNamespace.Namespace.ID != namespaceID {
 		t.Fatalf("namespace ID = %+v, want %q", data.DeleteNamespace.Namespace, namespaceID)
 	}
-	resp = h.gql(`mutation($name: String!, $uid: ID!, $rv: String!) { completeNamespaceDeletion(input: {name: $name, uid: $uid, resourceVersion: $rv}) { id } }`,
+	resp = h.gql(`mutation($name: String!, $uid: ID!, $rv: String!) { completeNamespaceDeletion(input: {name: $name, id: $uid, resourceVersion: $rv}) { id } }`,
 		map[string]any{"name": identifier, "uid": namespaceID, "rv": data.DeleteNamespace.Namespace.Metadata.ResourceVersion})
 	require.Empty(t, resp.Errors)
 	_, exists := h.lookupNamespaceID(identifier)

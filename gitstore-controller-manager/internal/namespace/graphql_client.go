@@ -116,7 +116,7 @@ func (c *GraphQLDeletionClient) CompleteDeletion(ctx context.Context, namespace,
 		"input": map[string]any{
 			"name":            namespace,
 			"resourceVersion": resourceVersion,
-			"uid":             uid,
+			"id":              uid,
 		},
 	}, &response); err != nil {
 		var gqlErr *graphqlclient.Error

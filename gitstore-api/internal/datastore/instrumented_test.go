@@ -29,6 +29,30 @@ func TestInstrumentedDatastoreForwardsRepositoryCompletion(t *testing.T) {
 	require.ErrorIs(t, completion.CompleteRepositoryDeletion(context.Background(), "00000000-0000-0000-0000-000000000299", "1"), datastore.ErrNotFound)
 }
 
+func TestInstrumentedDatastoreForwardsCategoryCompletionIdentity(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := t.Context()
+	now := time.Now().UTC()
+	category := &datastore.CategoryTaxonomy{
+		UID: "00000000-0000-0000-0000-000000000298", Namespace: "acme", Name: "category",
+		ResourceVersion: "7", CreationTimestamp: now, DeletionTimestamp: &now,
+		Finalizers: []string{datastore.CategoryTaxonomyForegroundDeletionFinalizer},
+	}
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, category))
+	wrapped := datastore.NewInstrumentedDatastoreWithRegistry(store, "memdb", zap.NewNop(), prometheus.NewRegistry())
+	completion := wrapped.(datastore.CategoryTaxonomyDeletionStore)
+	_, err = completion.CompleteCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion,
+		"00000000-0000-0000-0000-000000000297")
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	_, err = completion.CompleteCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, "stale", category.UID)
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	deleted, err := completion.CompleteCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, category.UID)
+	require.NoError(t, err)
+	require.Equal(t, category.UID, deleted.UID)
+}
+
 // stubDatastore is a minimal Datastore stub for decorator tests.
 type stubDatastore struct {
 	getProductErr          error

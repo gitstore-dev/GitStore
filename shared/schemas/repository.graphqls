@@ -292,8 +292,8 @@ type DeleteRepositoryPayload {
 }
 
 input CompleteRepositoryDeletionInput {
-  """Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers."""
-  uid: ID
+  """Relay Node ID of the exact repository incarnation being finalized."""
+  id: ID!
   namespace: String!
   name: String!
   resourceVersion: String!

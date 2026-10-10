@@ -50,7 +50,7 @@ func mapConflictErr(err error) error {
 // through completeCategoryDeletion.
 type DeletionClient interface {
 	DecoupleProducts(ctx context.Context, namespace, name, resourceVersion string) (bool, error)
-	CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error
+	CompleteDeletion(ctx context.Context, namespace, name, resourceVersion, uid string) error
 }
 
 type graphqlDeletionClient struct {
@@ -80,12 +80,13 @@ func (c *graphqlDeletionClient) DecoupleProducts(ctx context.Context, namespace,
 	return response.UpdateCategoryStatus.HasMoreProductDependents, nil
 }
 
-func (c *graphqlDeletionClient) CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error {
+func (c *graphqlDeletionClient) CompleteDeletion(ctx context.Context, namespace, name, resourceVersion, uid string) error {
 	var response struct {
 		CompleteCategoryDeletion struct{} `json:"completeCategoryDeletion"`
 	}
 	if err := c.client.Mutate(ctx, completeCategoryDeletionMutation, map[string]any{
 		"input": map[string]any{
+			"id":              uid,
 			"namespace":       namespace,
 			"name":            name,
 			"resourceVersion": resourceVersion,

@@ -143,7 +143,11 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 
 // CompleteProductDeletion is the resolver for the completeProductDeletion field.
 func (r *mutationResolver) CompleteProductDeletion(ctx context.Context, input model.CompleteProductDeletionInput) (*model.CompleteProductDeletionPayload, error) {
-	deleted, err := r.service.CompleteProductDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
+	uid, err := decodeNodeIDAs(nodeKindProduct, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	deleted, err := r.service.CompleteProductDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion, uid)
 	if errors.Is(err, datastore.ErrConflict) {
 		return nil, statusConflictError("Product", input.Namespace, input.Name, deleted.ResourceVersion)
 	}

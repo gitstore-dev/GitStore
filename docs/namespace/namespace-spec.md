@@ -171,6 +171,12 @@ survives controller status patches. The Namespace name remains reserved through
 finalization. Ordinary repositories and catalog resources block deletion; the
 verified empty system repository is cleaned up during completion.
 
+`completeNamespaceDeletion` requires the observed Relay Node `id`, `name`, and
+`resourceVersion`. Its input identity field is `id`, not `uid`; output
+`metadata.uid` is unchanged. Completion verifies the exact namespace incarnation
+before cleanup, rejecting a stale request for a same-name replacement even when
+the resource version matches.
+
 ## Admission and deletion phase matrix
 
 | Operation | Structural/pre-receive phase                                                                                                                 | Stateful policy phase                                                                                                              | Successful result                                                                          |

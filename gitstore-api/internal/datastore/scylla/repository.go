@@ -418,7 +418,7 @@ func (s *scyllaDatastore) createRepository(ctx context.Context, repository *data
 	if err := s.insertRepositoryProjections(ctx, repository.Namespace, bucket, repository.CreationTimestamp, row.UID); err != nil {
 		return s.failRepositoryCreate(ctx, repository, path, pathCreated, reverseCreated, err)
 	}
-	if err := s.session.Query("INSERT INTO repository_catalog_projection_state (repository_id,ready) VALUES (?,?)", nil).
+	if err := s.session.Query("INSERT INTO repository_catalog_projection_state (repository_id,membership_ready) VALUES (?,?)", nil).
 		WithContext(ctx).Bind(row.UID, true).ExecRelease(); err != nil {
 		return s.failRepositoryCreate(ctx, repository, path, pathCreated, reverseCreated, err)
 	}
@@ -842,7 +842,7 @@ func (s *scyllaDatastore) completeRepositoryDeletion(ctx context.Context, uidStr
 		if err := s.mutations.injector.Inject("complete-repository-projections", failureAfter); err != nil {
 			return err
 		}
-		if err := s.session.Query("INSERT INTO repository_catalog_projection_state (repository_id,ready,deleted) VALUES (?,?,?)", nil).
+		if err := s.session.Query("INSERT INTO repository_catalog_projection_state (repository_id,membership_ready,deleted) VALUES (?,?,?)", nil).
 			WithContext(cleanupCtx).Bind(uid, true, true).ExecRelease(); err != nil {
 			return err
 		}

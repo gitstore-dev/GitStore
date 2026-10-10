@@ -9,21 +9,76 @@ policy, lifecycle, or blocker details are returned.
 
 ## Repository lifecycle fence
 
-### Git-backed deletion rollout
+### Git-backed deletion safety
 
-The deletion protocol requires a coordinated writer transition, distinct from
-the older fence-only rollout below. Quiesce infrastructure deletes and old
-controllers, upgrade the singleton Git service with retained storage and
-non-overlapping replacement, upgrade all API writers, then upgrade controllers.
-Resume deletion only after old writers are drained. An old Git service ignores
-additive deletion preconditions; an old API can still bypass Git removal.
-Do not roll back to either while new-format deletion operations exist.
+Use matching current Git service, API, and controller builds. GitStore is under
+active development; mixed-version writers and upgrade compatibility with older
+binaries are not supported. Concurrent current-version API/controller replicas
+and restart recovery must remain correct. Keep exactly one active Git service,
+with retained storage and non-overlapping replacement.
 
-Scylla deployments must also apply migration `012_repository_catalog_index.cql`
-and backfill the catalog blocker index before resuming deletion. After draining
-old API writers, keep catalog writes, repository creation/rename/transfer,
-lifecycle transitions, and controller writes quiesced throughout repair and
-verification. Run the existing commands from `gitstore-api/`:
+All implemented `complete*Deletion` inputs require the resource's GraphQL
+`id: ID!`, its current `resourceVersion`, and its existing name/namespace scope.
+A conflict requires a fresh resource read, never retrying stale work against a
+same-name replacement. The check applies equally to Namespace, Repository,
+Product, and CategoryTaxonomy.
+
+An empty, verified system repository does not block Namespace initiation.
+Contained resources, including Files, do, as do all ordinary repositories
+(including terminating ones). Completion cleans up system storage by UID before
+releasing the Namespace. Neither path cascades resources or ordinary repositories.
+
+### Repository membership index
+
+Repository emptiness uses one polymorphic `resources_by_repository` table:
+`PRIMARY KEY ((repository_id, shard), kind, uid)`. A new kind adds rows, not a new
+table or another per-kind query. Product, ProductVariant, CategoryTaxonomy,
+Collection, and File use the same membership-write and deletion-fence protocol.
+Namespace/Repository child checks continue using their existing indexed
+relationships; no parallel per-kind membership tables are needed.
+
+Membership is distinct from optional semantic owner references: a Product
+without a Category owner still occupies its repository, and a nonblocking owner
+reference must not permit deletion of its backing repository. Membership cannot
+be removed by editing `ownerReferences`. The existing owner-dependent index
+continues to answer its different, owner-specific queries.
+
+An emptiness check performs at most 32 partition-key lookups with `LIMIT 1`,
+short-circuiting on the first member. It never enumerates kinds, uses
+`ALLOW FILTERING`, or performs a live count. Membership is written conservatively
+before authoritative admission and removed only after authoritative removal is
+confirmed; errors cannot be interpreted as emptiness. The shared fence excludes
+admission while the parent transitions to deletion.
+
+These are separate bounds: table count and query fan-out are independent of
+kind count, but index storage necessarily grows with resource count. Fixed hash
+sharding spreads rows; it does **not** impose a hard partition-size limit, and
+`LIMIT 1` bounds returned rows, not tombstone or SSTable read work. Request
+deadlines and datastore errors fail closed. Capacity acceptance must measure
+worst-case partition size, skew, churn/tombstones, and empty-check latency.
+Do not claim unlimited-cardinality performance or introduce an undocumented
+resource quota. More buckets or adaptive partitioning require measured evidence.
+
+The design follows Cassandra's
+[partition sizing and bucketing guidance](https://github.com/apache/cassandra/blob/trunk/doc/modules/cassandra/pages/developing/data-modeling/data-modeling_refining.adoc)
+and [CQL key restrictions, limits, and filtering semantics](https://github.com/apache/cassandra/blob/trunk/doc/modules/cassandra/pages/developing/cql/dml.adoc).
+ScyllaDB's engineering discussion of
+[hot partitions and goodput](https://www.scylladb.com/2024/04/17/per-partition-query-rate-limiting/)
+explains why a single large, hot parent partition is not an adequate alternative.
+A native counter or asynchronously materialized total is not deletion proof:
+an ambiguous update or lagging projection must never authorize storage removal.
+
+Migration history is immutable and non-destructive. The older per-kind tables
+remain historical schema artifacts, but no runtime reads or writes use them.
+The membership table and its per-repository readiness/tombstone metadata are
+fixed schema, not a template for adding more tables per resource kind.
+
+### Repairing incomplete projections
+
+Missing membership readiness fails closed. Fresh repositories initialize it
+when their empty authoritative record is created. For retained development data
+or a damaged projection, stop relevant mutations and controller writes while
+running the existing maintenance commands from `gitstore-api/`:
 
 ```bash
 go run ./cmd/gitctl scylla-projection-audit --hosts "$HOSTS" --keyspace "$KEYSPACE"
@@ -33,29 +88,17 @@ go run ./cmd/gitctl scylla-projection-audit --hosts "$HOSTS" --keyspace "$KEYSPA
 ```
 
 Supply database passwords through `GITSTORE_API__DATASTORE__SCYLLA__PASSWORD`.
-The repair commands cover all projections, not just the catalog blocker index.
-Pre-existing repositories without a readiness marker fail closed rather than
-appearing empty. Repair publishes readiness only after complete verification;
+The repair commands cover all projections, not just repository membership.
+Repair publishes readiness only after complete verification;
 an interrupted repair can be retried with a fresh audit and confirmed repair.
-These markers guard initial backfill, not subsequent manual index corruption.
-Resume writers and upgraded controllers only after the final audit is clean.
-
-Controller `completeNamespaceDeletion` and `completeRepositoryDeletion` inputs
-must carry the current GraphQL `metadata.uid` as `uid`, in addition to
-`resourceVersion` and name. The schema field is additive/nullable for discovery,
-but upgraded servers reject omission. A conflict requires a fresh resource read,
-never retrying stale work against a same-name replacement.
-
-An empty, verified system repository does not block Namespace initiation. Its
-catalog resources do, as do all ordinary repositories (including terminating
-ones). Completion cleans up system storage by UID before releasing the Namespace.
-Neither path cascades catalog resources or ordinary repositories.
+Readiness is not a detector of subsequent manual index corruption.
+Resume writers only after the final audit is clean.
 
 `DeletionPending=True` records recoverable mutation work before the Git call.
 Controllers resume that work after API replacement. `SUPERSEDED` means the
 manifest content changed: do not overwrite it or clear the operation blindly.
-`DELETION_REPAIR_REQUIRED` blocks legacy termination without removal evidence.
-Inventory retained manifests and terminating rows before the transition, compare
+`DELETION_REPAIR_REQUIRED` blocks termination without removal evidence.
+Inspect retained manifests and terminating rows, compare
 their UID, admitted path/ref/revision and current tree, and resolve ambiguous
 ownership before allowing cleanup. A missing file alone is not proof of a
 successful authorized mutation.
@@ -75,7 +118,7 @@ Unprovable interrupted publication, restored files, legacy unmarked receipts, an
 ancestry exceeding the bounded recovery walk fail closed and require operator
 reconciliation; retrying an arbitrary absent path is not sufficient.
 
-For a legacy terminating resource with a retained manifest, use an authenticated
+For a terminating resource with a retained manifest, use an authenticated
 Git checkout of the canonical authoring repository as the maintenance surface.
 Record the GraphQL `metadata.uid` and `resourceVersion`, fetch `main`, and compare
 the exact file against its admitted revision. Re-read the resource to confirm
@@ -93,32 +136,6 @@ serialize namespace deletion against in-flight repository creation) is always
 enabled on every backend; it is not configurable and has no rollout gate.
 `deleteNamespace`, `completeNamespaceDeletion`, and `createRepository` always
 enforce it.
-
-### Upgrading from a release with the fence rollout setting
-
-Earlier releases controlled the fence with `features.namespace_repository_fence`.
-Remove that key, and the `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE`
-environment variable, before deploying. The API refuses to start while either is
-present.
-
-A fence-only rolling upgrade needs no extra quiescing (this does not apply to
-the Git-backed deletion protocol above):
-
-- Older replicas with the fence disabled (the `auto` default on Scylla) do not
-  run the three mutations unfenced. They reject them with
-  `NAMESPACE_REPOSITORY_FENCE_DISABLED`.
-- Older replicas with the fence enabled, and all upgraded replicas, enforce it.
-
-No replica can therefore let repository creation race namespace deletion. Until
-the last older replica is replaced, requests that reach one fail and can be
-retried. Rolling back to such a release has the same effect: the three
-mutations are rejected until the fence is enabled on the older fleet.
-
-A binary built before the per-resource schema baseline is **not** a supported
-rollback artifact. gocqlx correctly rejects a keyspace whose migration history
-it does not recognise. Reverting an API replica before disabling `outcome`
-selections also causes GraphQL validation failures on requests routed to the old
-schema.
 
 ## Stable response codes
 

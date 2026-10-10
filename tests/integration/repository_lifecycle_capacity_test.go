@@ -1227,7 +1227,7 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 		if previousUID != "" {
 			require.NotEqual(t, previousUID, current.Repository.ID)
 			stale := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($ns: String!, $name: String!, $uid: ID!, $rv: String!) {
-				completeRepositoryDeletion(input: {namespace: $ns, name: $name, uid: $uid, resourceVersion: $rv}) { id }
+				completeRepositoryDeletion(input: {namespace: $ns, name: $name, id: $uid, resourceVersion: $rv}) { id }
 			}`, map[string]any{"ns": cfg.namespace, "name": name, "uid": previousUID, "rv": current.Repository.Metadata.ResourceVersion})
 			require.NotEmpty(t, stale.Errors, "stale completion must reject a same-name replacement")
 			var staleError struct {

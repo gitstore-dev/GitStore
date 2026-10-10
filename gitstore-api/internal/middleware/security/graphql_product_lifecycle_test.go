@@ -203,7 +203,7 @@ func TestProductAuthorizationCapabilitiesAreAttributedAcrossPrincipalProviders(t
 		{
 			name:      "controller completes product deletion",
 			principal: &auth.Principal{Subject: "serviceaccount:controllers:gitstore-controller-manager", AuthMethod: "grpc-forwarded"},
-			field:     "completeProductDeletion", args: map[string]any{"input": model.CompleteProductDeletionInput{Namespace: "acme", Name: "widget", ResourceVersion: "3"}}, action: "product.purge",
+			field:     "completeProductDeletion", args: map[string]any{"input": model.CompleteProductDeletionInput{ID: "Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC9wcm9kdWN0LTE=", Namespace: "acme", Name: "widget", ResourceVersion: "3"}}, action: "product.purge",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -120,7 +120,11 @@ func (r *mutationResolver) DeleteCategory(ctx context.Context, input model.Delet
 
 // CompleteCategoryDeletion is the resolver for the completeCategoryDeletion field.
 func (r *mutationResolver) CompleteCategoryDeletion(ctx context.Context, input model.CompleteCategoryDeletionInput) (*model.CompleteCategoryDeletionPayload, error) {
-	deleted, err := r.completeCategoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
+	uid, err := decodeNodeIDAs(nodeKindCategory, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	deleted, err := r.completeCategoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion, uid)
 	if err != nil {
 		return nil, err
 	}

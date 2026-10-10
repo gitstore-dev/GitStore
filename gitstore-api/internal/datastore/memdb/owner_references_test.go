@@ -94,12 +94,78 @@ func TestCategoryTaxonomyDeletionLifecycleUsesResourceVersionPreconditions(t *te
 	require.NotNil(t, terminating.DeletionTimestamp)
 	assert.Contains(t, terminating.Finalizers, datastore.CategoryTaxonomyForegroundDeletionFinalizer)
 
-	_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, "1")
+	_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, "1", category.UID)
 	require.ErrorIs(t, err, datastore.ErrConflict)
-	_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, terminating.ResourceVersion)
+	_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, terminating.ResourceVersion, category.UID)
 	require.NoError(t, err)
 	_, err = store.GetCategoryTaxonomyByName(ctx, category.Namespace, category.Name)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestCategoryTaxonomyCompletionFencesSameNameReplacement(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := t.Context()
+	lifecycle := store.(datastore.CategoryTaxonomyDeletionStore)
+	now := time.Now().UTC()
+	old := &datastore.CategoryTaxonomy{
+		UID: "00000000-0000-0000-0000-000000000060", Namespace: "acme", Name: "child", RepositoryID: "catalog",
+		ResourceVersion: "7", CreationTimestamp: now, DeletionTimestamp: &now,
+		Finalizers: []string{datastore.CategoryTaxonomyForegroundDeletionFinalizer},
+	}
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, old))
+	observed, err := store.GetCategoryTaxonomyByName(ctx, old.Namespace, old.Name)
+	require.NoError(t, err)
+	_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, old.Namespace, old.Name, old.ResourceVersion, old.UID)
+	require.NoError(t, err)
+	replacement := *old
+	replacement.UID = "00000000-0000-0000-0000-000000000061"
+	replacement.OwnerReferences = json.RawMessage(`[{"kind":"CategoryTaxonomy","name":"parent","uid":"00000000-0000-0000-0000-000000000062","blockOwnerDeletion":true}]`)
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, &replacement))
+
+	// Another replica has already deleted the observed incarnation and created
+	// a same-name replacement before this replica enters its write transaction.
+	for _, uid := range []string{observed.UID, ""} {
+		_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, observed.Namespace, observed.Name, observed.ResourceVersion, uid)
+		require.ErrorIs(t, err, datastore.ErrConflict)
+	}
+	current, err := store.GetCategoryTaxonomyByName(ctx, replacement.Namespace, replacement.Name)
+	require.NoError(t, err)
+	require.Equal(t, replacement, *current)
+	blocked, err := store.(datastore.OwnerReferenceStore).HasBlockingOwnerDependents(ctx,
+		datastore.OwnerReferenceScope{Namespace: replacement.Namespace, RepositoryID: replacement.RepositoryID},
+		"00000000-0000-0000-0000-000000000062")
+	require.NoError(t, err)
+	require.True(t, blocked, "a rejected completion must leave replacement projections untouched")
+	_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, current.Namespace, current.Name, "stale", current.UID)
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, current.Namespace, current.Name, current.ResourceVersion, current.UID)
+	require.NoError(t, err)
+}
+
+func TestProductCompletionFencesSameNameReplacement(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := t.Context()
+	lifecycle := store.(datastore.ProductLifecycleStore)
+	now := time.Now().UTC()
+	old := &datastore.Product{
+		UID: "00000000-0000-0000-0000-000000000070", Namespace: "acme", Name: "widget", ResourceVersion: "7",
+		CreationTimestamp: now, DeletionTimestamp: &now, Finalizers: []string{"gitstore.dev/foreground-deletion"},
+	}
+	require.NoError(t, store.CreateProduct(ctx, old))
+	require.NoError(t, lifecycle.CompleteProductDeletion(ctx, old.UID, old.ResourceVersion))
+	replacement := *old
+	replacement.UID = "00000000-0000-0000-0000-000000000071"
+	require.NoError(t, store.CreateProduct(ctx, &replacement))
+	require.ErrorIs(t, lifecycle.CompleteProductDeletion(ctx, old.UID, old.ResourceVersion), datastore.ErrNotFound)
+	require.ErrorIs(t, lifecycle.CompleteProductDeletion(ctx, replacement.UID, "stale"), datastore.ErrConflict)
+	current, err := store.GetProductByName(ctx, replacement.Namespace, replacement.Name)
+	require.NoError(t, err)
+	require.Equal(t, replacement, *current)
+	require.NoError(t, lifecycle.CompleteProductDeletion(ctx, current.UID, current.ResourceVersion))
 }
 
 func TestOwnerReferenceProjectionUsesOwnerRepositoryScope(t *testing.T) {

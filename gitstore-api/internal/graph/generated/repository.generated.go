@@ -1056,20 +1056,20 @@ func (ec *executionContext) unmarshalInputCompleteRepositoryDeletionInput(ctx co
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"uid", "namespace", "name", "resourceVersion"}
+	fieldsInOrder := [...]string{"id", "namespace", "name", "resourceVersion"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "uid":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("uid"))
-			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalNID2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.UID = data
+			it.ID = data
 		case "namespace":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
 			data, err := ec.unmarshalNString2string(ctx, v)

@@ -28,6 +28,28 @@ const (
 	globalIDTestFileUID      = "00000000-0000-0000-0000-000000000007"
 )
 
+func TestCompletionResolversRejectInvalidNodeIDs(t *testing.T) {
+	mutation := &mutationResolver{}
+	for _, kind := range []string{nodeKindNamespace, nodeKindRepository, nodeKindProduct, nodeKindCategory} {
+		t.Run(kind, func(t *testing.T) {
+			for _, id := range []string{"", "not-a-node-id", globalIDTestProductUID, mustEncodeNodeID(nodeKindFile, globalIDTestFileUID)} {
+				var err error
+				switch kind {
+				case nodeKindNamespace:
+					_, err = mutation.CompleteNamespaceDeletion(t.Context(), model.CompleteNamespaceDeletionInput{ID: id, Name: "acme", ResourceVersion: "1"})
+				case nodeKindRepository:
+					_, err = mutation.CompleteRepositoryDeletion(t.Context(), model.CompleteRepositoryDeletionInput{ID: id, Namespace: "acme", Name: "item", ResourceVersion: "1"})
+				case nodeKindProduct:
+					_, err = mutation.CompleteProductDeletion(t.Context(), model.CompleteProductDeletionInput{ID: id, Namespace: "acme", Name: "item", ResourceVersion: "1"})
+				case nodeKindCategory:
+					_, err = mutation.CompleteCategoryDeletion(t.Context(), model.CompleteCategoryDeletionInput{ID: id, Namespace: "acme", Name: "item", ResourceVersion: "1"})
+				}
+				require.ErrorContains(t, err, "invalid global ID", "completion must reject invalid or wrong-kind IDs before accessing storage")
+			}
+		})
+	}
+}
+
 func TestQueryNodeResolvesByGlobalID(t *testing.T) {
 	ctx := context.Background()
 	store, resolver := newGlobalIDTestResolver(t)

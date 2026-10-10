@@ -337,16 +337,17 @@ func (s *Service) DeleteProductManifest(ctx context.Context, uid, caller string)
 
 // CompleteProductDeletion repeats the blocker check at the controller-owned
 // finalizer boundary so at-least-once reconciliation cannot orphan a variant.
-func (s *Service) CompleteProductDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*datastore.Product, error) {
+func (s *Service) CompleteProductDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*datastore.Product, error) {
 	product, err := s.store.GetProductByName(ctx, namespace, name)
 	if err != nil {
 		return nil, err
 	}
+	if expectedUID == "" || expectedResourceVersion == "" || name == "" || namespace == "" ||
+		product.ResourceVersion != expectedResourceVersion || product.UID != expectedUID || product.Name != name || product.Namespace != namespace {
+		return product, datastore.ErrConflict
+	}
 	if product.DeletionTimestamp == nil {
 		return product, gqlerror.Errorf("Product %q is not terminating", name)
-	}
-	if product.ResourceVersion != expectedResourceVersion {
-		return product, datastore.ErrConflict
 	}
 	owners, ok := s.store.(datastore.OwnerReferenceStore)
 	if !ok {
@@ -433,7 +434,7 @@ func (s *Service) GetCategoryTaxonomyByName(ctx context.Context, namespace, name
 // CompleteCategoryDeletion finalizes a controller-observed foreground
 // deletion. It repeats the blocking-dependent check immediately before the
 // resource-version-guarded delete so a child-created race cannot orphan it.
-func (s *Service) CompleteCategoryDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*datastore.CategoryTaxonomy, error) {
+func (s *Service) CompleteCategoryDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*datastore.CategoryTaxonomy, error) {
 	category, err := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
 	if errors.Is(err, datastore.ErrNotFound) {
 		return nil, nil
@@ -441,7 +442,8 @@ func (s *Service) CompleteCategoryDeletion(ctx context.Context, namespace, name,
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to retrieve category deletion state")
 	}
-	if category.ResourceVersion != expectedResourceVersion {
+	if expectedUID == "" || expectedResourceVersion == "" || name == "" || namespace == "" ||
+		category.ResourceVersion != expectedResourceVersion || category.UID != expectedUID || category.Name != name || category.Namespace != namespace {
 		return category, datastore.ErrConflict
 	}
 	if category.DeletionTimestamp == nil || !containsString(category.Finalizers, datastore.CategoryTaxonomyForegroundDeletionFinalizer) {
@@ -473,12 +475,12 @@ func (s *Service) CompleteCategoryDeletion(ctx context.Context, namespace, name,
 	if !ok {
 		return nil, gqlerror.Errorf("category deletion lifecycle is unavailable")
 	}
-	deleted, err := lifecycle.CompleteCategoryTaxonomyDeletion(ctx, namespace, name, expectedResourceVersion)
+	deleted, err := lifecycle.CompleteCategoryTaxonomyDeletion(ctx, namespace, name, expectedResourceVersion, expectedUID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return category, err
 	}
 	return deleted, nil
 }
@@ -1509,7 +1511,8 @@ func (s *Service) CompleteNamespaceDeletion(ctx context.Context, name, expectedR
 		}
 		return nil, gqlerror.Errorf("failed to complete namespace deletion")
 	}
-	if current.ResourceVersion != expectedResourceVersion || current.UID != expectedUID {
+	if expectedUID == "" || expectedResourceVersion == "" || name == "" ||
+		current.ResourceVersion != expectedResourceVersion || current.UID != expectedUID || current.Name != name {
 		return current, datastore.ErrConflict
 	}
 	intent, err := admission.ReadDeletionIntent(current.Status)
@@ -1906,7 +1909,7 @@ func (s *Service) deleteRepositoryWithOutcome(ctx context.Context, repoID, calle
 // the row only when no finalizer remains. Catalog resources are never
 // cascaded.
 func (s *Service) CompleteRepositoryDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*datastore.Repository, error) {
-	if expectedUID == "" {
+	if expectedUID == "" || expectedResourceVersion == "" || name == "" || namespace == "" {
 		return nil, datastore.ErrConflict
 	}
 	repositoryID := expectedUID

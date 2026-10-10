@@ -42,7 +42,7 @@ func (c *restartDeletionClient) DecoupleProducts(context.Context, string, string
 	return false, nil
 }
 
-func (c *restartDeletionClient) CompleteDeletion(context.Context, string, string, string) error {
+func (c *restartDeletionClient) CompleteDeletion(context.Context, string, string, string, string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.completions++

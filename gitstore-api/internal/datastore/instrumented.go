@@ -667,7 +667,7 @@ func (d *InstrumentedDatastore) MarkCategoryTaxonomyDeletion(ctx context.Context
 	return v, err
 }
 
-func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*CategoryTaxonomy, error) {
+func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*CategoryTaxonomy, error) {
 	start := time.Now()
 	lifecycle, ok := d.next.(CategoryTaxonomyDeletionStore)
 	if !ok {
@@ -675,7 +675,7 @@ func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Con
 		d.observe("CompleteCategoryTaxonomyDeletion", start, err)
 		return nil, err
 	}
-	v, err := lifecycle.CompleteCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion)
+	v, err := lifecycle.CompleteCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion, expectedUID)
 	d.observe("CompleteCategoryTaxonomyDeletion", start, err)
 	return v, err
 }

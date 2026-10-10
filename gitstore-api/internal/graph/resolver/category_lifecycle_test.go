@@ -543,11 +543,79 @@ func terminatingCategory(t *testing.T, env *categoryLifecycleEnv, name string) *
 	return terminating
 }
 
+type categoryCompletionRaceStore struct {
+	datastore.Datastore
+	datastore.OwnerReferenceStore
+	datastore.CategoryTaxonomyDeletionStore
+	beforeComplete func()
+}
+
+func (s *categoryCompletionRaceStore) CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, resourceVersion, expectedUID string) (*datastore.CategoryTaxonomy, error) {
+	s.beforeComplete()
+	return s.CategoryTaxonomyDeletionStore.CompleteCategoryTaxonomyDeletion(ctx, namespace, name, resourceVersion, expectedUID)
+}
+
 func TestCompleteCategoryDeletion(t *testing.T) {
+	t.Run("replacement between service check and atomic completion is fenced", func(t *testing.T) {
+		env := newCategoryLifecycleEnv(t)
+		ctx := t.Context()
+		old := terminatingCategory(t, env, "laptops")
+		replacement := *old
+		replacement.UID = "00000000-0000-0000-0000-00000000b003"
+		lifecycle := env.store.(datastore.CategoryTaxonomyDeletionStore)
+		env.service.store = &categoryCompletionRaceStore{
+			Datastore: env.store, OwnerReferenceStore: env.store.(datastore.OwnerReferenceStore), CategoryTaxonomyDeletionStore: lifecycle,
+			beforeComplete: func() {
+				_, err := lifecycle.CompleteCategoryTaxonomyDeletion(ctx, old.Namespace, old.Name, old.ResourceVersion, old.UID)
+				require.NoError(t, err)
+				require.NoError(t, env.store.CreateCategoryTaxonomy(ctx, &replacement))
+			},
+		}
+		_, err := env.mut.CompleteCategoryDeletion(ctx, model.CompleteCategoryDeletionInput{
+			ID: mustEncodeNodeID(nodeKindCategory, old.UID), Namespace: old.Namespace, Name: old.Name, ResourceVersion: old.ResourceVersion,
+		})
+		var gqlErr *gqlerror.Error
+		require.ErrorAs(t, err, &gqlErr)
+		require.Equal(t, "CONFLICT", gqlErr.Extensions["code"])
+		current, err := env.store.GetCategoryTaxonomyByName(ctx, old.Namespace, old.Name)
+		require.NoError(t, err)
+		require.Equal(t, replacement.UID, current.UID)
+		require.Equal(t, replacement.ResourceVersion, current.ResourceVersion)
+		require.Equal(t, replacement.Finalizers, current.Finalizers)
+	})
+	t.Run("same name and version replacement rejects stale identity", func(t *testing.T) {
+		env := newCategoryLifecycleEnv(t)
+		ctx := context.Background()
+		old := terminatingCategory(t, env, "laptops")
+		_, err := env.service.CompleteCategoryDeletion(ctx, old.Namespace, old.Name, old.ResourceVersion, old.UID)
+		require.NoError(t, err)
+		replacement := *old
+		replacement.UID = "00000000-0000-0000-0000-00000000b002"
+		require.NoError(t, env.store.CreateCategoryTaxonomy(ctx, &replacement))
+		_, err = env.mut.CompleteCategoryDeletion(ctx, model.CompleteCategoryDeletionInput{
+			ID: mustEncodeNodeID(nodeKindCategory, old.UID), Namespace: old.Namespace, Name: old.Name, ResourceVersion: old.ResourceVersion,
+		})
+		var gqlErr *gqlerror.Error
+		require.ErrorAs(t, err, &gqlErr)
+		require.Equal(t, "CONFLICT", gqlErr.Extensions["code"])
+		current, err := env.store.GetCategoryTaxonomyByName(ctx, replacement.Namespace, replacement.Name)
+		require.NoError(t, err)
+		require.Equal(t, replacement.UID, current.UID)
+		require.Equal(t, replacement.ResourceVersion, current.ResourceVersion)
+		require.Equal(t, replacement.Finalizers, current.Finalizers)
+		_, err = env.service.CompleteCategoryDeletion(ctx, replacement.Namespace, replacement.Name, replacement.ResourceVersion, old.UID)
+		require.ErrorIs(t, err, datastore.ErrConflict)
+		payload, err := env.mut.CompleteCategoryDeletion(ctx, model.CompleteCategoryDeletionInput{
+			ID: mustEncodeNodeID(nodeKindCategory, replacement.UID), Namespace: replacement.Namespace, Name: replacement.Name, ResourceVersion: replacement.ResourceVersion,
+		})
+		require.NoError(t, err)
+		require.Equal(t, mustEncodeNodeID(nodeKindCategory, replacement.UID), *payload.ID)
+	})
 	t.Run("success removes the record", func(t *testing.T) {
 		env := newCategoryLifecycleEnv(t)
 		category := terminatingCategory(t, env, "laptops")
 		payload, err := env.mut.CompleteCategoryDeletion(context.Background(), model.CompleteCategoryDeletionInput{
+			ID:        mustEncodeNodeID(nodeKindCategory, category.UID),
 			Namespace: lifecycleNamespace, Name: "laptops", ResourceVersion: category.ResourceVersion,
 		})
 		require.NoError(t, err)
@@ -558,8 +626,9 @@ func TestCompleteCategoryDeletion(t *testing.T) {
 	})
 	t.Run("resource version mismatch", func(t *testing.T) {
 		env := newCategoryLifecycleEnv(t)
-		terminatingCategory(t, env, "laptops")
+		category := terminatingCategory(t, env, "laptops")
 		_, err := env.mut.CompleteCategoryDeletion(context.Background(), model.CompleteCategoryDeletionInput{
+			ID:        mustEncodeNodeID(nodeKindCategory, category.UID),
 			Namespace: lifecycleNamespace, Name: "laptops", ResourceVersion: "stale",
 		})
 		var gqlErr *gqlerror.Error
@@ -569,7 +638,7 @@ func TestCompleteCategoryDeletion(t *testing.T) {
 	t.Run("not terminating", func(t *testing.T) {
 		env := newCategoryLifecycleEnv(t)
 		record := env.pushCategory(t, lifecycleSystemRepoID, "categories/laptops.md", "laptops", "Laptops", "", "")
-		_, err := env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "laptops", record.ResourceVersion)
+		_, err := env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "laptops", record.ResourceVersion, record.UID)
 		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "CATEGORY_NOT_TERMINATING")
 	})
 	t.Run("children present", func(t *testing.T) {
@@ -577,7 +646,7 @@ func TestCompleteCategoryDeletion(t *testing.T) {
 		category := terminatingCategory(t, env, "electronics")
 		// A blocking child that appeared after termination started.
 		blockingChild(t, env, category, lifecycleSystemRepoID)
-		_, err := env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "electronics", category.ResourceVersion)
+		_, err := env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "electronics", category.ResourceVersion, category.UID)
 		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "CHILD_CATEGORIES_PRESENT")
 	})
 	t.Run("products still to decouple", func(t *testing.T) {
@@ -589,7 +658,7 @@ func TestCompleteCategoryDeletion(t *testing.T) {
 			UID: "00000000-0000-0000-0000-00000000b001", Namespace: lifecycleNamespace, RepositoryID: category.RepositoryID, Name: "widget",
 			ResourceVersion: "1", OwnerReferences: refs, Spec: []byte(`{"categoryRef":{"name":"laptops"}}`),
 		}))
-		_, err = env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "laptops", category.ResourceVersion)
+		_, err = env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "laptops", category.ResourceVersion, category.UID)
 		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "PRODUCT_DECOUPLING_INCOMPLETE")
 	})
 }

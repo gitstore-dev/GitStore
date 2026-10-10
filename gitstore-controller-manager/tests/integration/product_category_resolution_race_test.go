@@ -17,7 +17,7 @@ import (
 
 type raceCompletionClient struct{}
 
-func (raceCompletionClient) CompleteDeletion(context.Context, string, string, string) error {
+func (raceCompletionClient) CompleteDeletion(context.Context, string, string, string, string) error {
 	return nil
 }
 

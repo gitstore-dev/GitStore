@@ -240,8 +240,8 @@ input DeleteNamespaceInput {
 Controller-only finalizer completion for a terminating namespace.
 """
 input CompleteNamespaceDeletionInput {
-  """Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers."""
-  uid: ID
+  """Relay Node ID of the exact namespace incarnation being finalized."""
+  id: ID!
   """
   Name of the terminating namespace.
   """

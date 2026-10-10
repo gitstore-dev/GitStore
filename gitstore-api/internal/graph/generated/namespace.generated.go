@@ -1644,20 +1644,20 @@ func (ec *executionContext) unmarshalInputCompleteNamespaceDeletionInput(ctx con
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"uid", "name", "resourceVersion"}
+	fieldsInOrder := [...]string{"id", "name", "resourceVersion"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "uid":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("uid"))
-			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalNID2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.UID = data
+			it.ID = data
 		case "name":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
 			data, err := ec.unmarshalNString2string(ctx, v)

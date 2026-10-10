@@ -1152,7 +1152,7 @@ func TestScylla_RepositoryCatalogProjectionUpgradeRepair(t *testing.T) {
 	repositoryUID, err := gocql.ParseUUID(repository.UID)
 	require.NoError(t, err)
 	for shard := int8(0); shard < 32; shard++ {
-		require.NoError(t, session.Query("DELETE FROM "+cfg.Keyspace+".products_by_repository WHERE repository_id=? AND shard=?", repositoryUID, shard).Exec())
+		require.NoError(t, session.Query("DELETE FROM "+cfg.Keyspace+".resources_by_repository WHERE repository_id=? AND shard=?", repositoryUID, shard).Exec())
 	}
 	require.NoError(t, session.Query("DELETE FROM "+cfg.Keyspace+".repository_catalog_projection_state WHERE repository_id=?", repositoryUID).Exec())
 	_, err = store.HasCatalogResources(ctx, repository.UID)
@@ -1170,6 +1170,42 @@ func TestScylla_RepositoryCatalogProjectionUpgradeRepair(t *testing.T) {
 	require.True(t, blocked)
 	require.NoError(t, store.DeleteProduct(ctx, product.UID))
 	blocked, err = store.HasCatalogResources(ctx, repository.UID)
+	require.NoError(t, err)
+	require.False(t, blocked)
+}
+
+func TestScylla_RepositoryMembershipDoesNotEnumerateKinds(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	ns := &datastore.Namespace{UID: newID(), Name: "future-kinds-" + newID()[:8], CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond)}
+	require.NoError(t, store.CreateNamespace(ctx, ns))
+	repo := &datastore.Repository{UID: newID(), Namespace: ns.Name, Name: "catalog", CreationTimestamp: ns.CreationTimestamp}
+	require.NoError(t, store.CreateRepositoryInActiveNamespace(ctx, repo))
+	session, err := openRootSession(scyllaAddr)
+	require.NoError(t, err)
+	t.Cleanup(session.Close)
+	repoUID, err := gocql.ParseUUID(repo.UID)
+	require.NoError(t, err)
+	memberUID, err := gocql.ParseUUID(newID())
+	require.NoError(t, err)
+	// Distinct future kinds may share a UID without colliding in this index.
+	for i := range 40 {
+		require.NoError(t, session.Query("INSERT INTO "+scyllaKeyspace+".resources_by_repository (repository_id,shard,kind,uid) VALUES (?,?,?,?)",
+			repoUID, int8(31), fmt.Sprintf("FutureKind%d", i), memberUID).Exec())
+	}
+	blocked, err := store.HasCatalogResources(ctx, repo.UID)
+	require.NoError(t, err)
+	require.True(t, blocked)
+	for i := range 39 {
+		require.NoError(t, session.Query("DELETE FROM "+scyllaKeyspace+".resources_by_repository WHERE repository_id=? AND shard=? AND kind=? AND uid=?",
+			repoUID, int8(31), fmt.Sprintf("FutureKind%d", i), memberUID).Exec())
+	}
+	blocked, err = store.HasCatalogResources(ctx, repo.UID)
+	require.NoError(t, err)
+	require.True(t, blocked, "an unregistered kind must still block deletion")
+	require.NoError(t, session.Query("DELETE FROM "+scyllaKeyspace+".resources_by_repository WHERE repository_id=? AND shard=? AND kind=? AND uid=?",
+		repoUID, int8(31), "FutureKind39", memberUID).Exec())
+	blocked, err = store.HasCatalogResources(ctx, repo.UID)
 	require.NoError(t, err)
 	require.False(t, blocked)
 }
@@ -1298,10 +1334,17 @@ func TestScylla_CatalogAdmissionRacesDeletionIntentAcrossReplicas(t *testing.T) 
 			require.NoError(t, storeA.CreateRepositoryInActiveNamespace(ctx, repo))
 			product := &datastore.Product{UID: newID(), Namespace: ns.Name, Name: "product", RepositoryID: repo.UID, ResourceVersion: "1"}
 			start := make(chan struct{})
+			create := func() error { return storeB.CreateProduct(ctx, product) }
+			remove := func() error { return storeB.DeleteProduct(ctx, product.UID) }
+			if round%2 != 0 {
+				file := &datastore.File{UID: product.UID, Namespace: ns.Name, Name: "file", RepositoryID: repo.UID, ResourceVersion: "1"}
+				create = func() error { return storeB.CreateFile(ctx, file) }
+				remove = func() error { return storeB.DeleteFile(ctx, file.UID) }
+			}
 			createResult, intentResult := make(chan error, 1), make(chan error, 1)
 			go func() {
 				<-start
-				createResult <- storeB.CreateProduct(ctx, product)
+				createResult <- create()
 			}()
 			go func() {
 				<-start
@@ -1326,15 +1369,13 @@ func TestScylla_CatalogAdmissionRacesDeletionIntentAcrossReplicas(t *testing.T) 
 				blocked, err := storeA.HasCatalogResources(ctx, repo.UID)
 				require.NoError(t, err)
 				require.True(t, blocked)
-				require.NoError(t, storeB.DeleteProduct(ctx, product.UID))
+				require.NoError(t, remove())
 				blocked, err = storeA.HasCatalogResources(ctx, repo.UID)
 				require.NoError(t, err)
 				require.False(t, blocked)
 			}
 			if intentErr == nil {
-				late := *product
-				late.UID = newID()
-				require.Error(t, storeB.CreateProduct(ctx, &late))
+				require.Error(t, create())
 			}
 		}
 	}

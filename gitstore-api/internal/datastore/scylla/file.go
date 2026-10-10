@@ -60,13 +60,7 @@ func (s *scyllaDatastore) CreateFile(ctx context.Context, f *datastore.File) err
 	if f == nil {
 		return datastore.ErrInvalidArgument
 	}
-	if f.RepositoryID == "" {
-		return s.createFile(ctx, f)
-	}
-	return s.withNamespaceCatalogFence(ctx, f.Namespace, false, func() error {
-		if err := s.catalogParentsActive(ctx, f.Namespace, f.RepositoryID); err != nil {
-			return err
-		}
+	return s.catalogMutation(ctx, "File", f.Namespace, f.RepositoryID, f.UID, false, func() error {
 		return s.createFile(ctx, f)
 	})
 }
@@ -162,13 +156,7 @@ func (s *scyllaDatastore) UpdateFile(ctx context.Context, f *datastore.File, exp
 	if f == nil {
 		return datastore.ErrInvalidArgument
 	}
-	if f.RepositoryID == "" {
-		return s.updateFile(ctx, f, expectedResourceVersion)
-	}
-	return s.withNamespaceCatalogFence(ctx, f.Namespace, false, func() error {
-		if err := s.catalogParentsActive(ctx, f.Namespace, f.RepositoryID); err != nil {
-			return err
-		}
+	return s.catalogMutation(ctx, "File", f.Namespace, f.RepositoryID, f.UID, false, func() error {
 		return s.updateFile(ctx, f, expectedResourceVersion)
 	})
 }
@@ -209,6 +197,12 @@ func (s *scyllaDatastore) DeleteFileWithResourceVersion(ctx context.Context, uid
 	return s.deleteFileWithResourceVersion(ctx, f, expectedResourceVersion)
 }
 func (s *scyllaDatastore) deleteFileWithResourceVersion(ctx context.Context, f *datastore.File, expectedResourceVersion string) error {
+	return s.catalogMutation(ctx, "File", f.Namespace, f.RepositoryID, f.UID, true, func() error {
+		return s.deleteFileFenced(ctx, f, expectedResourceVersion)
+	})
+}
+
+func (s *scyllaDatastore) deleteFileFenced(ctx context.Context, f *datastore.File, expectedResourceVersion string) error {
 	uid := f.UID
 	parsed := mustParseUUID(uid)
 	if err := s.deleteFileAuthoritative(ctx, toFileRow(f), expectedResourceVersion); err != nil {

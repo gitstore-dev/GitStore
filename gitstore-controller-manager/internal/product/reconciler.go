@@ -55,7 +55,7 @@ type resolvedCategoryRef struct {
 }
 
 type CompletionClient interface {
-	CompleteDeletion(context.Context, string, string, string) error
+	CompleteDeletion(context.Context, string, string, string, string) error
 }
 
 // Reconciler implements types.Reconciler for the Product kind: it resolves
@@ -89,7 +89,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		return types.ResultOK()
 	}
 	if p.DeletionTimestamp != nil && hasFinalizer(p.Finalizers) {
-		if err := r.completion.CompleteDeletion(ctx, p.Namespace, p.Name, p.ResourceVersion); err != nil {
+		if err := r.completion.CompleteDeletion(ctx, p.Namespace, p.Name, p.ResourceVersion, p.UID); err != nil {
 			if errors.Is(err, types.ErrConflict) {
 				health.ConflictRequeues.WithLabelValues("Product").Inc()
 				return types.ResultAfter(conflictRequeueDelay)

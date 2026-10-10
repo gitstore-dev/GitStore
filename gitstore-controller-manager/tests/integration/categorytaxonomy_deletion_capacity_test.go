@@ -72,7 +72,7 @@ func (c *scriptedPages) DecoupleProducts(context.Context, string, string, string
 	return c.pages > 0, nil
 }
 
-func (c *scriptedPages) CompleteDeletion(context.Context, string, string, string) error {
+func (c *scriptedPages) CompleteDeletion(context.Context, string, string, string, string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.completions++

@@ -114,10 +114,7 @@ func (r *mutationResolver) TransferNamespaceOwner(ctx context.Context, input mod
 
 // CompleteNamespaceDeletion is the resolver for the completeNamespaceDeletion field.
 func (r *mutationResolver) CompleteNamespaceDeletion(ctx context.Context, input model.CompleteNamespaceDeletionInput) (*model.CompleteNamespaceDeletionPayload, error) {
-	if input.UID == nil || *input.UID == "" {
-		return nil, gqlerror.Errorf("namespace completion requires uid")
-	}
-	uid, err := decodeNodeIDAs(nodeKindNamespace, *input.UID)
+	uid, err := decodeNodeIDAs(nodeKindNamespace, input.ID)
 	if err != nil {
 		return nil, err
 	}

@@ -34,8 +34,11 @@ func TestGraphQLCompletionClientCompletesRepositoryDeletion(t *testing.T) {
 	if err := client.CompleteDeletion(context.Background(), "acme", "catalog", "7", "repo-1"); err != nil {
 		t.Fatalf("CompleteDeletion() error = %v", err)
 	}
-	if gotInput["namespace"] != "acme" || gotInput["name"] != "catalog" || gotInput["resourceVersion"] != "7" || gotInput["uid"] != "repo-1" {
-		t.Fatalf("input = %#v, want namespace/name/resourceVersion/uid", gotInput)
+	if gotInput["namespace"] != "acme" || gotInput["name"] != "catalog" || gotInput["resourceVersion"] != "7" || gotInput["id"] != "repo-1" {
+		t.Fatalf("input = %#v, want namespace/name/resourceVersion/id", gotInput)
+	}
+	if _, exists := gotInput["uid"]; exists {
+		t.Fatal("completion must not send the removed uid input field")
 	}
 }
 

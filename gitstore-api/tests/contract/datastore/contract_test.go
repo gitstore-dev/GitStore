@@ -1030,6 +1030,16 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.True(t, has)
 		require.NoError(t, ds.DeleteCollection(ctx, coll.UID))
 
+		file := &datastore.File{
+			UID: newID(), Namespace: ns.Name, Name: "file-" + newID()[:8],
+			RepositoryID: repo.UID, ResourceVersion: "1", CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+		}
+		require.NoError(t, ds.CreateFile(ctx, file))
+		has, err = ds.HasCatalogResources(ctx, repo.UID)
+		require.NoError(t, err)
+		assert.True(t, has, "File must block deletion just like every other repository resource")
+		require.NoError(t, ds.DeleteFile(ctx, file.UID))
+
 		has, err = ds.HasCatalogResources(ctx, repo.UID)
 		require.NoError(t, err)
 		assert.False(t, has)
@@ -1350,7 +1360,7 @@ func runCategoryAncestorIndexContract(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, err)
 		// Foreground deletion keeps the rows until final removal.
 		assert.Contains(t, descendants(t, ds, ns, "computers", false, 0), "laptops@1")
-		_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, ns, "laptops", marked.ResourceVersion)
+		_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, ns, "laptops", marked.ResourceVersion, marked.UID)
 		require.NoError(t, err)
 		assert.Empty(t, descendants(t, ds, ns, "computers", false, 0))
 		assert.NotContains(t, descendants(t, ds, ns, "electronics", false, 0), "laptops@2")

@@ -257,6 +257,8 @@ type CollectionStatus struct {
 }
 
 type CompleteCategoryDeletionInput struct {
+	// Relay Node ID of the exact category incarnation being finalized.
+	ID        string `json:"id"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	// Must equal the category's current metadata.resourceVersion.
@@ -270,8 +272,8 @@ type CompleteCategoryDeletionPayload struct {
 
 // Controller-only finalizer completion for a terminating namespace.
 type CompleteNamespaceDeletionInput struct {
-	// Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers.
-	UID *string `json:"uid,omitempty"`
+	// Relay Node ID of the exact namespace incarnation being finalized.
+	ID string `json:"id"`
 	// Name of the terminating namespace.
 	Name            string `json:"name"`
 	ResourceVersion string `json:"resourceVersion"`
@@ -282,6 +284,8 @@ type CompleteNamespaceDeletionPayload struct {
 }
 
 type CompleteProductDeletionInput struct {
+	// Relay Node ID of the exact product incarnation being finalized.
+	ID              string `json:"id"`
 	Namespace       string `json:"namespace"`
 	Name            string `json:"name"`
 	ResourceVersion string `json:"resourceVersion"`
@@ -292,11 +296,11 @@ type CompleteProductDeletionPayload struct {
 }
 
 type CompleteRepositoryDeletionInput struct {
-	// Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers.
-	UID             *string `json:"uid,omitempty"`
-	Namespace       string  `json:"namespace"`
-	Name            string  `json:"name"`
-	ResourceVersion string  `json:"resourceVersion"`
+	// Relay Node ID of the exact repository incarnation being finalized.
+	ID              string `json:"id"`
+	Namespace       string `json:"namespace"`
+	Name            string `json:"name"`
+	ResourceVersion string `json:"resourceVersion"`
 }
 
 type CompleteRepositoryDeletionPayload struct {

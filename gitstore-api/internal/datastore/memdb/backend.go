@@ -1657,7 +1657,7 @@ func (m *memdbDatastore) DeleteRepository(_ context.Context, uid string) error {
 
 // catalogTablesWithRepositoryID lists every table indexed on RepositoryID,
 // checked in order by HasCatalogResources with short-circuit on first match.
-var catalogTablesWithRepositoryID = []string{"product", "product_variant", "category_taxonomy", "collection"}
+var catalogTablesWithRepositoryID = []string{"product", "product_variant", "category_taxonomy", "collection", "file"}
 
 func (m *memdbDatastore) HasCatalogResources(_ context.Context, repositoryID string) (bool, error) {
 	txn := m.db.Txn(false)

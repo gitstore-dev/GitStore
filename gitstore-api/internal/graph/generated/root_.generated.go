@@ -4827,6 +4827,8 @@ type UpdateCategoryPayload {
 }
 
 input CompleteCategoryDeletionInput {
+  """Relay Node ID of the exact category incarnation being finalized."""
+  id: ID!
   namespace: String!
   name: String!
 
@@ -5453,8 +5455,8 @@ input DeleteNamespaceInput {
 Controller-only finalizer completion for a terminating namespace.
 """
 input CompleteNamespaceDeletionInput {
-  """Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers."""
-  uid: ID
+  """Relay Node ID of the exact namespace incarnation being finalized."""
+  id: ID!
   """
   Name of the terminating namespace.
   """
@@ -5867,6 +5869,8 @@ type UpdateProductStatusPayload {
 }
 
 input CompleteProductDeletionInput {
+  """Relay Node ID of the exact product incarnation being finalized."""
+  id: ID!
   namespace: String!
   name: String!
   resourceVersion: String!
@@ -6677,8 +6681,8 @@ type DeleteRepositoryPayload {
 }
 
 input CompleteRepositoryDeletionInput {
-  """Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers."""
-  uid: ID
+  """Relay Node ID of the exact repository incarnation being finalized."""
+  id: ID!
   namespace: String!
   name: String!
   resourceVersion: String!

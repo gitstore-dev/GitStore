@@ -405,8 +405,8 @@ func (s *Service) deleteCategoryManifest(ctx context.Context, uid, caller string
 }
 
 // completeCategoryDeletion backs the completeCategoryDeletion mutation.
-func (r *mutationResolver) completeCategoryDeletion(ctx context.Context, namespace, name, resourceVersion string) (*datastore.CategoryTaxonomy, error) {
-	deleted, err := r.service.CompleteCategoryDeletion(ctx, namespace, name, resourceVersion)
+func (r *mutationResolver) completeCategoryDeletion(ctx context.Context, namespace, name, resourceVersion, expectedUID string) (*datastore.CategoryTaxonomy, error) {
+	deleted, err := r.service.CompleteCategoryDeletion(ctx, namespace, name, resourceVersion, expectedUID)
 	if errors.Is(err, datastore.ErrConflict) {
 		if deleted == nil {
 			return nil, fmt.Errorf("complete category deletion conflict, and current version could not be read")

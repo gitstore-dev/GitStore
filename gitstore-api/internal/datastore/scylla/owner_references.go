@@ -246,13 +246,13 @@ func (s *scyllaDatastore) MarkCategoryTaxonomyDeletion(
 
 func (s *scyllaDatastore) CompleteCategoryTaxonomyDeletion(
 	ctx context.Context,
-	namespace, name, expectedResourceVersion string,
+	namespace, name, expectedResourceVersion, expectedUID string,
 ) (*datastore.CategoryTaxonomy, error) {
 	category, err := s.GetCategoryTaxonomyByName(ctx, namespace, name)
 	if err != nil {
 		return nil, err
 	}
-	if category.ResourceVersion != expectedResourceVersion {
+	if expectedUID == "" || category.UID != expectedUID || category.ResourceVersion != expectedResourceVersion {
 		return nil, datastore.ErrConflict
 	}
 	if category.DeletionTimestamp == nil || !containsFinalizer(category.Finalizers, datastore.CategoryTaxonomyForegroundDeletionFinalizer) {

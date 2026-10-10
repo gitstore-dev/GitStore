@@ -19,13 +19,13 @@ type GraphQLCompletionClient struct{ client *graphqlclient.Client }
 func NewGraphQLCompletionClient(client *graphqlclient.Client) *GraphQLCompletionClient {
 	return &GraphQLCompletionClient{client: client}
 }
-func (c *GraphQLCompletionClient) CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error {
+func (c *GraphQLCompletionClient) CompleteDeletion(ctx context.Context, namespace, name, resourceVersion, uid string) error {
 	var response struct {
 		CompleteProductDeletion struct {
 			ID *string `json:"id"`
 		} `json:"completeProductDeletion"`
 	}
-	if err := c.client.Mutate(ctx, completeProductDeletionMutation, map[string]any{"input": map[string]any{"namespace": namespace, "name": name, "resourceVersion": resourceVersion}}, &response); err != nil {
+	if err := c.client.Mutate(ctx, completeProductDeletionMutation, map[string]any{"input": map[string]any{"id": uid, "namespace": namespace, "name": name, "resourceVersion": resourceVersion}}, &response); err != nil {
 		var gqlErr *graphqlclient.Error
 		if errors.As(err, &gqlErr) && graphqlclient.IsConflictCode(gqlErr.Extensions["code"]) {
 			return fmt.Errorf("product completion: %w", types.ErrConflict)

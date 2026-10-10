@@ -194,7 +194,9 @@ type OwnerReferenceStore interface {
 // lifecycle used by both Git admission and the existing deleteCategory API.
 type CategoryTaxonomyDeletionStore interface {
 	MarkCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*CategoryTaxonomy, error)
-	CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*CategoryTaxonomy, error)
+	// Completion must compare the observed UID and resource version at the
+	// destructive boundary, never finalizing a same-name replacement.
+	CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*CategoryTaxonomy, error)
 }
 
 // MaxCategoryHierarchyDepth is the deepest relative depth an ancestor index

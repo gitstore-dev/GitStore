@@ -106,3 +106,39 @@ func TestProductDeletionMetricsRecordIdempotentLifecycleOutcome(t *testing.T) {
 	assert.Equal(t, product.UID, got.UID)
 	assert.Equal(t, before+1, testutil.ToFloat64(productDeletionOutcomes.WithLabelValues("ALREADY_TERMINATING")))
 }
+
+func TestCompleteProductDeletionRejectsStaleIncarnation(t *testing.T) {
+	ctx := context.Background()
+	store, err := memdb.New()
+	require.NoError(t, err)
+	service, err := NewService(ServiceDeps{Store: store, Logger: zap.NewNop()})
+	require.NoError(t, err)
+	mutation := &mutationResolver{Resolver: &Resolver{service: service}}
+	old := productLifecycleFixture("acme", "widget")
+	now := time.Now().UTC()
+	old.DeletionTimestamp = &now
+	old.Finalizers = []string{"gitstore.dev/foreground-deletion"}
+	require.NoError(t, store.CreateProduct(ctx, old))
+	_, err = service.CompleteProductDeletion(ctx, old.Namespace, old.Name, old.ResourceVersion, old.UID)
+	require.NoError(t, err)
+
+	replacement := *old
+	replacement.UID = uuid.NewString()
+	require.NoError(t, store.CreateProduct(ctx, &replacement))
+	_, err = mutation.CompleteProductDeletion(ctx, model.CompleteProductDeletionInput{
+		ID: mustEncodeNodeID(nodeKindProduct, old.UID), Namespace: old.Namespace, Name: old.Name, ResourceVersion: old.ResourceVersion,
+	})
+	require.Error(t, err)
+	current, err := store.GetProductByName(ctx, replacement.Namespace, replacement.Name)
+	require.NoError(t, err)
+	require.Equal(t, replacement.UID, current.UID)
+	require.Equal(t, replacement.Finalizers, current.Finalizers)
+	require.Equal(t, replacement.ResourceVersion, current.ResourceVersion)
+	_, err = service.CompleteProductDeletion(ctx, replacement.Namespace, replacement.Name, replacement.ResourceVersion, old.UID)
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	payload, err := mutation.CompleteProductDeletion(ctx, model.CompleteProductDeletionInput{
+		ID: mustEncodeNodeID(nodeKindProduct, replacement.UID), Namespace: replacement.Namespace, Name: replacement.Name, ResourceVersion: replacement.ResourceVersion,
+	})
+	require.NoError(t, err)
+	require.Equal(t, mustEncodeNodeID(nodeKindProduct, replacement.UID), *payload.ID)
+}

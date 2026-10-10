@@ -192,10 +192,7 @@ func (r *mutationResolver) DeleteRepository(ctx context.Context, input model.Del
 
 // CompleteRepositoryDeletion is the resolver for the completeRepositoryDeletion field.
 func (r *mutationResolver) CompleteRepositoryDeletion(ctx context.Context, input model.CompleteRepositoryDeletionInput) (*model.CompleteRepositoryDeletionPayload, error) {
-	if input.UID == nil || *input.UID == "" {
-		return nil, gqlerror.Errorf("repository completion requires uid")
-	}
-	uid, err := decodeNodeIDAs(nodeKindRepository, *input.UID)
+	uid, err := decodeNodeIDAs(nodeKindRepository, input.ID)
 	if err != nil {
 		return nil, err
 	}

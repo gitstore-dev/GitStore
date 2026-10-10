@@ -127,8 +127,11 @@ func TestGraphQLDeletionClientCompletesDeletion(t *testing.T) {
 	if err := client.CompleteDeletion(context.Background(), "acme", "9", "namespace-1"); err != nil {
 		t.Fatalf("CompleteDeletion failed: %v", err)
 	}
-	if gotInput["name"] != "acme" || gotInput["resourceVersion"] != "9" || gotInput["uid"] != "namespace-1" {
-		t.Fatalf("input = %#v, want name/resourceVersion/uid", gotInput)
+	if gotInput["name"] != "acme" || gotInput["resourceVersion"] != "9" || gotInput["id"] != "namespace-1" {
+		t.Fatalf("input = %#v, want name/resourceVersion/id", gotInput)
+	}
+	if _, exists := gotInput["uid"]; exists {
+		t.Fatal("completion must not send the removed uid input field")
 	}
 }
 

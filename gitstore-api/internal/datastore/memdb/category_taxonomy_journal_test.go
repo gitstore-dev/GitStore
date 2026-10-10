@@ -64,7 +64,7 @@ func TestCategoryTaxonomyJournalRecordsOnlyCommittedWritesInOrder(t *testing.T) 
 	require.NoError(t, err)
 	marked, err := deletion.MarkCategoryTaxonomyDeletion(t.Context(), "test-ns", "shoes", current.ResourceVersion, time.Now().UTC())
 	require.NoError(t, err)
-	_, err = deletion.CompleteCategoryTaxonomyDeletion(t.Context(), "test-ns", "shoes", marked.ResourceVersion)
+	_, err = deletion.CompleteCategoryTaxonomyDeletion(t.Context(), "test-ns", "shoes", marked.ResourceVersion, marked.UID)
 	require.NoError(t, err)
 
 	events, err := journal.ReadAfter(t.Context(), datastore.ResourceWatchCursor{}, 32)

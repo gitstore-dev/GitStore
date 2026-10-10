@@ -817,7 +817,7 @@ func TestCategoryTaxonomyCDCReaderMaterializesLifecycle(t *testing.T) {
 	require.Equal(t, terminating.ResourceVersion, observed.ResourceVersion)
 	require.NotNil(t, observed.DeletionTimestamp)
 
-	_, err = deletion.CompleteCategoryTaxonomyDeletion(context.Background(), category.Namespace, category.Name, terminating.ResourceVersion)
+	_, err = deletion.CompleteCategoryTaxonomyDeletion(context.Background(), category.Namespace, category.Name, terminating.ResourceVersion, category.UID)
 	require.NoError(t, err)
 	deleted := next(datastore.ResourceWatchDeleted)
 	require.Empty(t, deleted.Payload)

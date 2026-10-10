@@ -2939,17 +2939,10 @@ func (s *scyllaDatastore) deleteNamespaceIndexesAndConfirm(ctx context.Context, 
 	return nil
 }
 
-// catalogTablesByRepositoryID lists the sharded repository catalog indexes,
-// checked in order by HasCatalogResources with short-circuit on first match.
-var catalogTablesByRepositoryID = []string{
-	"products_by_repository",
-	"product_variants_by_repository",
-	"category_taxonomies_by_repository",
-	"collections_by_repository",
-}
+const repositoryResourcesTable = "resources_by_repository"
 
-// HasCatalogResources reports whether at least one Product, ProductVariant,
-// CategoryTaxonomy, or Collection row currently has repository_id == repoID.
+// HasCatalogResources checks repository membership across all resource kinds,
+// including File. The number of partition reads is independent of kind count.
 func (s *scyllaDatastore) HasCatalogResources(ctx context.Context, repoID string) (bool, error) {
 	if _, err := gocql.ParseUUID(repoID); err != nil {
 		return false, datastore.ErrInvalidArgument
@@ -2957,7 +2950,7 @@ func (s *scyllaDatastore) HasCatalogResources(ctx context.Context, repoID string
 	var ready struct {
 		Ready bool `db:"ready"`
 	}
-	err := s.session.Query("SELECT ready FROM repository_catalog_projection_state WHERE repository_id=?", nil).
+	err := s.session.Query("SELECT membership_ready AS ready FROM repository_catalog_projection_state WHERE repository_id=?", nil).
 		WithContext(ctx).Bind(mustParseUUID(repoID)).GetRelease(&ready)
 	if errors.Is(err, gocql.ErrNotFound) || (err == nil && !ready.Ready) {
 		return false, datastore.ErrProjectionNotReady
@@ -2965,41 +2958,24 @@ func (s *scyllaDatastore) HasCatalogResources(ctx context.Context, repoID string
 	if err != nil {
 		return false, err
 	}
-	for _, tableName := range catalogTablesByRepositoryID {
-		for shard := int8(0); shard < categoryProductShardCount; shard++ {
-			var row struct {
-				UID gocql.UUID `db:"uid"`
-			}
-			err := s.session.Query("SELECT uid FROM "+tableName+" WHERE repository_id=? AND shard=? LIMIT 1", nil).
-				WithContext(ctx).Bind(mustParseUUID(repoID), shard).GetRelease(&row)
-			if err == nil {
-				return true, nil
-			}
-			if !errors.Is(err, gocql.ErrNotFound) {
-				return false, fmt.Errorf("scylla: has catalog resources (%s): %w", tableName, err)
-			}
+	for shard := int8(0); shard < categoryProductShardCount; shard++ {
+		var row struct {
+			UID gocql.UUID `db:"uid"`
+		}
+		err := s.session.Query("SELECT uid FROM "+repositoryResourcesTable+" WHERE repository_id=? AND shard=? LIMIT 1", nil).
+			WithContext(ctx).Bind(mustParseUUID(repoID), shard).GetRelease(&row)
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, gocql.ErrNotFound) {
+			return false, fmt.Errorf("scylla: check repository membership: %w", err)
 		}
 	}
 	return false, nil
 }
 
-func catalogRepositoryTable(kind string) string {
-	switch kind {
-	case "Product":
-		return "products_by_repository"
-	case "ProductVariant":
-		return "product_variants_by_repository"
-	case "CategoryTaxonomy":
-		return "category_taxonomies_by_repository"
-	case "Collection":
-		return "collections_by_repository"
-	default:
-		return ""
-	}
-}
-
 func (s *scyllaDatastore) catalogResourceProjection(ctx context.Context, kind, uid string) (*ProjectionRecord, error) {
-	record := &ProjectionRecord{Table: catalogRepositoryTable(kind), UID: uid, Shard: categoryProductShard(uid)}
+	record := &ProjectionRecord{Table: repositoryResourcesTable, Kind: kind, UID: uid, Shard: categoryProductShard(uid)}
 	switch kind {
 	case "Product":
 		r, err := s.GetProduct(ctx, uid)
@@ -3025,6 +3001,12 @@ func (s *scyllaDatastore) catalogResourceProjection(ctx context.Context, kind, u
 			return nil, err
 		}
 		record.RepositoryID, record.Namespace, record.Name, record.CreationTimestamp = r.RepositoryID, r.Namespace, r.Name, r.CreationTimestamp
+	case "File":
+		r, err := s.GetFile(ctx, uid)
+		if err != nil {
+			return nil, err
+		}
+		record.RepositoryID, record.Namespace, record.Name, record.CreationTimestamp = r.RepositoryID, r.Namespace, r.Name, r.CreationTimestamp
 	default:
 		return nil, datastore.ErrInvalidArgument
 	}
@@ -3032,13 +3014,13 @@ func (s *scyllaDatastore) catalogResourceProjection(ctx context.Context, kind, u
 }
 
 func (s *scyllaDatastore) writeCatalogRepositoryIndex(ctx context.Context, record *ProjectionRecord) error {
-	return s.session.Query("INSERT INTO "+record.Table+" (repository_id,shard,uid,namespace,name,creation_timestamp) VALUES (?,?,?,?,?,?)", nil).
-		WithContext(ctx).Bind(mustParseUUID(record.RepositoryID), record.Shard, mustParseUUID(record.UID), record.Namespace, record.Name, record.CreationTimestamp).ExecRelease()
+	return s.session.Query("INSERT INTO "+repositoryResourcesTable+" (repository_id,shard,kind,uid,namespace,name,creation_timestamp) VALUES (?,?,?,?,?,?,?)", nil).
+		WithContext(ctx).Bind(mustParseUUID(record.RepositoryID), record.Shard, record.Kind, mustParseUUID(record.UID), record.Namespace, record.Name, record.CreationTimestamp).ExecRelease()
 }
 
 func (s *scyllaDatastore) deleteCatalogRepositoryIndex(ctx context.Context, record *ProjectionRecord) error {
-	return s.session.Query("DELETE FROM "+record.Table+" WHERE repository_id=? AND shard=? AND uid=?", nil).
-		WithContext(ctx).Bind(mustParseUUID(record.RepositoryID), record.Shard, mustParseUUID(record.UID)).ExecRelease()
+	return s.session.Query("DELETE FROM "+repositoryResourcesTable+" WHERE repository_id=? AND shard=? AND kind=? AND uid=?", nil).
+		WithContext(ctx).Bind(mustParseUUID(record.RepositoryID), record.Shard, record.Kind, mustParseUUID(record.UID)).ExecRelease()
 }
 
 func (s *scyllaDatastore) catalogMutation(ctx context.Context, kind, namespace, repositoryID, uid string, deleting bool, operation func() error) error {
@@ -3061,7 +3043,7 @@ func (s *scyllaDatastore) catalogMutation(ctx context.Context, kind, namespace, 
 		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
 			return err
 		}
-		candidate := &ProjectionRecord{Table: catalogRepositoryTable(kind), RepositoryID: repositoryID, UID: uid, Namespace: namespace, Shard: categoryProductShard(uid)}
+		candidate := &ProjectionRecord{Table: repositoryResourcesTable, Kind: kind, RepositoryID: repositoryID, UID: uid, Namespace: namespace, Shard: categoryProductShard(uid)}
 		if !deleting {
 			// The conservative index entry precedes the authoritative write.
 			// Failure may leave a blocker, never an invisible admitted child.
