@@ -37,12 +37,12 @@ func (f *fakeStorageClient) EnsureStorage(_ context.Context, namespace, name str
 }
 
 type fakeCompletionClient struct {
-	calls []struct{ namespace, name, resourceVersion string }
+	calls []struct{ namespace, name, resourceVersion, uid string }
 	err   error
 }
 
-func (f *fakeCompletionClient) CompleteDeletion(_ context.Context, namespace, name, resourceVersion string) error {
-	f.calls = append(f.calls, struct{ namespace, name, resourceVersion string }{namespace, name, resourceVersion})
+func (f *fakeCompletionClient) CompleteDeletion(_ context.Context, namespace, name, resourceVersion, uid string) error {
+	f.calls = append(f.calls, struct{ namespace, name, resourceVersion, uid string }{namespace, name, resourceVersion, uid})
 	return f.err
 }
 
@@ -309,8 +309,24 @@ func TestReconcileTerminatingRepositoryCompletesDeletion(t *testing.T) {
 	if _, ok := result.(types.Success); !ok {
 		t.Fatalf("Reconcile result = %T, want types.Success", result)
 	}
-	if len(completion.calls) != 1 || completion.calls[0] != (struct{ namespace, name, resourceVersion string }{"acme", "catalog", "9"}) {
+
+	if len(completion.calls) != 1 || completion.calls[0] != (struct{ namespace, name, resourceVersion, uid string }{"acme", "catalog", "9", current.UID}) {
 		t.Fatalf("completion calls = %#v, want acme/catalog/9", completion.calls)
+	}
+}
+
+func TestReconcilePendingRepositoryResumesDeletionWithoutProvisioning(t *testing.T) {
+	current := repositoryFixture(func(repository *Repository) {
+		repository.Status.Conditions = []*status.Condition{{Type: "DeletionPending", Status: "TRUE"}}
+	})
+	storage := &fakeStorageClient{}
+	completion := &fakeCompletionClient{}
+	r := NewReconciler(seedRepositoryCache(t, current), &fakeStatusClient{}, storage, completion)
+	if _, ok := r.Reconcile(context.Background(), repositoryKey(current.Namespace, current.Name)).(types.Success); !ok {
+		t.Fatal("pending deletion did not complete")
+	}
+	if len(completion.calls) != 1 || completion.calls[0].uid != current.UID || len(storage.calls) != 0 {
+		t.Fatalf("completion=%v storage=%v", completion.calls, storage.calls)
 	}
 }
 

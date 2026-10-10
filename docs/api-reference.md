@@ -713,7 +713,11 @@ Input fields:
 
 ### deleteNamespace
 
-Deletes an empty namespace. Deletion is blocked if repositories remain.
+Starts foreground deletion by removing the Namespace manifest from
+`gitstore-system/gitstore-system`. Ordinary repositories, including terminating
+ones, and catalog resources in the namespace's system repository block deletion.
+An empty system repository alone does not block it; controller completion removes
+that repository before releasing the Namespace name.
 
 ```graphql
 mutation DeleteNamespace($id: ID!) {
@@ -763,7 +767,10 @@ mutation CreateRepository($namespace: String!) {
 
 ### deleteRepository
 
-Deletes repository metadata and storage.
+Starts foreground deletion by removing `repositories/<name>.md` from the
+namespace's `gitstore-system` repository. Catalog resources block deletion.
+Backing Git storage and the name reservation remain until controller completion.
+Direct deletion of the system repository is rejected.
 
 ```graphql
 mutation DeleteRepository($id: ID!) {
@@ -834,6 +841,21 @@ mutation DeleteCategory($input: DeleteCategoryInput!) {
 ### completeCategoryDeletion
 
 Controller-only. Finishes foreground deletion of a terminating category once its children are gone and its products are decoupled. Requires `categoryTaxonomy.purge`. `resourceVersion` must equal the category's current value, otherwise the request fails with `CONFLICT` (`RESOURCE_VERSION_CONFLICT`). Fails with `FAILED_PRECONDITION` (`CATEGORY_NOT_TERMINATING`, `CHILD_CATEGORIES_PRESENT` or `PRODUCT_DECOUPLING_INCOMPLETE`) when the category is not ready to be removed. Returns `{ id }` of the removed category.
+
+### Completion identity
+
+`completeNamespaceDeletion`, `completeRepositoryDeletion`, `completeProductDeletion`,
+and `completeCategoryDeletion` all require `input.id: ID!`: the resource's opaque
+Relay Node `id`, also exposed as `metadata.uid`. Raw datastore UIDs and IDs of a
+different Node type are rejected. CategoryTaxonomy uses the GraphQL `Category`
+Node type. The input field is `id`, not `uid`; output `metadata.uid` is unchanged.
+
+Supply the observed `name` and `resourceVersion`, plus `namespace` for namespaced
+resources. Completion checks that the ID, route, and version identify the same
+incarnation before finalizing it. A stale request cannot finalize a same-name
+replacement, even if its version matches. Controller authorization, dependent
+checks, and finalizer safeguards still apply. Other resource kinds do not expose
+a separate deletion-completion mutation.
 
 ### updateCategoryStatus
 

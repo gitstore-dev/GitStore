@@ -141,11 +141,13 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, err)
 		assert.Equal(t, namespace, gotNamespace)
 
+		activeNamespace := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, activeNamespace))
 		repository := &datastore.Repository{
 			APIVersion:        "catalog.gitstore.dev/v1beta1",
 			Kind:              "Repository",
 			UID:               newID(),
-			Namespace:         namespace.Name,
+			Namespace:         activeNamespace.Name,
 			Name:              "envelope-repo-" + newID()[:8],
 			Generation:        7,
 			ResourceVersion:   "9",
@@ -174,13 +176,19 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, err)
 		assert.Equal(t, repository, gotRepository)
 
+		catalogRepository := &datastore.Repository{
+			UID: newID(), Namespace: activeNamespace.Name, Name: "catalog-" + newID()[:8],
+			CreationTimestamp: now,
+		}
+		require.NoError(t, ds.CreateRepository(ctx, catalogRepository))
 		product := newProduct()
+		product.Namespace = activeNamespace.Name
 		product.Generation, product.ResourceVersion, product.Revision = 7, "9", "main@sha1:product"
 		product.CreationActor, product.UpdateTimestamp, product.UpdateActor = "creator", now.Add(time.Minute), "updater"
 		product.CreationTimestamp = now
 		product.Labels, product.Annotations = labels, annotations
 		product.OwnerReferences, product.Finalizers, product.DeletionTimestamp = ownerReferences, finalizers, &deletedAt
-		product.RepositoryID, product.SourcePath, product.GitCommitSHA, product.GitRef = repository.UID, "products/item.md", "product-sha", "refs/heads/main"
+		product.RepositoryID, product.SourcePath, product.GitCommitSHA, product.GitRef = catalogRepository.UID, "products/item.md", "product-sha", "refs/heads/main"
 		product.Spec, product.Body, product.Status = spec, "# Product body\n", status
 		require.NoError(t, ds.CreateProduct(ctx, product))
 		gotProduct, err := ds.GetProduct(ctx, product.UID)
@@ -188,14 +196,14 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.Equal(t, product, gotProduct)
 
 		variant := &datastore.ProductVariant{
-			UID: newID(), Namespace: namespace.Name, Name: "variant-" + newID()[:8],
+			UID: newID(), Namespace: activeNamespace.Name, Name: "variant-" + newID()[:8],
 			APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "ProductVariant",
 			Generation: 7, ResourceVersion: "9", Revision: "main@sha1:variant",
 			CreationTimestamp: now, CreationActor: "creator", UpdateTimestamp: now.Add(time.Minute), UpdateActor: "updater",
 			Labels: labels, Annotations: annotations, OwnerReferences: ownerReferences,
 			Finalizers: finalizers, DeletionTimestamp: &deletedAt,
 			SKU: "sku-" + newID()[:8], ProductRefName: product.Name,
-			RepositoryID: repository.UID, SourcePath: "variants/item.md", GitCommitSHA: "variant-sha", GitRef: "refs/heads/main",
+			RepositoryID: catalogRepository.UID, SourcePath: "variants/item.md", GitCommitSHA: "variant-sha", GitRef: "refs/heads/main",
 			Spec: spec, Body: "# Variant body\n", Status: status,
 		}
 		require.NoError(t, ds.CreateProductVariant(ctx, variant))
@@ -204,12 +212,12 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.Equal(t, variant, gotVariant)
 
 		collection := newCollection()
-		collection.Namespace, collection.CreationTimestamp = namespace.Name, now
+		collection.Namespace, collection.CreationTimestamp = activeNamespace.Name, now
 		collection.Generation, collection.ResourceVersion, collection.Revision = 7, "9", "main@sha1:collection"
 		collection.CreationActor, collection.UpdateTimestamp, collection.UpdateActor = "creator", now.Add(time.Minute), "updater"
 		collection.Labels, collection.Annotations, collection.OwnerReferences = labels, annotations, ownerReferences
 		collection.Finalizers, collection.DeletionTimestamp = finalizers, &deletedAt
-		collection.RepositoryID, collection.SourcePath, collection.GitCommitSHA, collection.GitRef = repository.UID, "collections/item.md", "collection-sha", "refs/heads/main"
+		collection.RepositoryID, collection.SourcePath, collection.GitCommitSHA, collection.GitRef = catalogRepository.UID, "collections/item.md", "collection-sha", "refs/heads/main"
 		collection.Spec, collection.Body, collection.Status = spec, "# Collection body\n", status
 		require.NoError(t, ds.CreateCollection(ctx, collection))
 		gotCollection, err := ds.GetCollection(ctx, collection.UID)
@@ -217,12 +225,12 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.Equal(t, collection, gotCollection)
 
 		category := newCategoryTaxonomy()
-		category.Namespace, category.CreationTimestamp = namespace.Name, now
+		category.Namespace, category.CreationTimestamp = activeNamespace.Name, now
 		category.Generation, category.ResourceVersion, category.Revision = 7, "9", "main@sha1:category"
 		category.CreationActor, category.UpdateTimestamp, category.UpdateActor = "creator", now.Add(time.Minute), "updater"
 		category.Labels, category.Annotations, category.OwnerReferences = labels, annotations, ownerReferences
 		category.Finalizers, category.DeletionTimestamp = finalizers, &deletedAt
-		category.RepositoryID, category.SourcePath, category.GitCommitSHA, category.GitRef = repository.UID, "categories/item.md", "category-sha", "refs/heads/main"
+		category.RepositoryID, category.SourcePath, category.GitCommitSHA, category.GitRef = catalogRepository.UID, "categories/item.md", "category-sha", "refs/heads/main"
 		category.Spec, category.Body, category.Status = spec, "# Category body\n", status
 		require.NoError(t, ds.CreateCategoryTaxonomy(ctx, category))
 		gotCategory, err := ds.GetCategoryTaxonomy(ctx, category.UID)
@@ -817,6 +825,13 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 			listedAfterConflict = listedAfterConflict || candidate.UID == ns.UID
 		}
 		assert.True(t, listedAfterConflict, "a rejected delete must leave the bootstrap list intact")
+		assert.ErrorIs(t, ds.DeleteNamespaceWithResourceVersion(ctx, ns.UID, ns.ResourceVersion), datastore.ErrConflict,
+			"active namespaces cannot be finalized")
+		expectedVersion := ns.ResourceVersion
+		deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+		ns.DeletionTimestamp = &deletedAt
+		datastore.AdvanceNamespaceSystemVersion(ns)
+		require.NoError(t, ds.MarkNamespaceDeletion(ctx, ns, expectedVersion))
 		require.NoError(t, ds.DeleteNamespaceWithResourceVersion(ctx, ns.UID, ns.ResourceVersion))
 
 		_, err = ds.GetNamespace(ctx, ns.UID)
@@ -1014,6 +1029,16 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, err)
 		assert.True(t, has)
 		require.NoError(t, ds.DeleteCollection(ctx, coll.UID))
+
+		file := &datastore.File{
+			UID: newID(), Namespace: ns.Name, Name: "file-" + newID()[:8],
+			RepositoryID: repo.UID, ResourceVersion: "1", CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+		}
+		require.NoError(t, ds.CreateFile(ctx, file))
+		has, err = ds.HasCatalogResources(ctx, repo.UID)
+		require.NoError(t, err)
+		assert.True(t, has, "File must block deletion just like every other repository resource")
+		require.NoError(t, ds.DeleteFile(ctx, file.UID))
 
 		has, err = ds.HasCatalogResources(ctx, repo.UID)
 		require.NoError(t, err)
@@ -1216,6 +1241,59 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	t.Run("CategoryAncestorIndex", func(t *testing.T) {
 		runCategoryAncestorIndexContract(t, ds)
 	})
+
+	t.Run("Repository/MissingParentRejectsAllCatalogWrites", func(t *testing.T) {
+		for _, kind := range []string{"Product", "ProductVariant", "CategoryTaxonomy", "Collection", "File"} {
+			t.Run(kind, func(t *testing.T) {
+				ns := newNamespace(datastore.NamespaceTierUser)
+				require.NoError(t, ds.CreateNamespace(ctx, ns))
+				repo := &datastore.Repository{UID: newID(), Namespace: ns.Name, Name: "catalog"}
+				require.NoError(t, ds.CreateRepositoryInActiveNamespace(ctx, repo))
+				uid, missingRepositoryID := newID(), newID()
+				now := time.Now().UTC().Truncate(time.Millisecond)
+				var repositoryID *string
+				var create, update func() error
+				switch kind {
+				case "Product":
+					r := &datastore.Product{UID: uid, Namespace: ns.Name, Name: "child", ResourceVersion: "1", CreationTimestamp: now}
+					repositoryID = &r.RepositoryID
+					create = func() error { return ds.CreateProduct(ctx, r) }
+					update = func() error { return ds.UpdateProduct(ctx, r) }
+				case "ProductVariant":
+					r := &datastore.ProductVariant{UID: uid, Namespace: ns.Name, Name: "child", SKU: "child", ProductRefName: "parent", ResourceVersion: "1", CreationTimestamp: now}
+					repositoryID = &r.RepositoryID
+					create = func() error { return ds.CreateProductVariant(ctx, r) }
+					update = func() error { return ds.UpdateProductVariant(ctx, r) }
+				case "CategoryTaxonomy":
+					r := &datastore.CategoryTaxonomy{UID: uid, Namespace: ns.Name, Name: "child", ResourceVersion: "1", CreationTimestamp: now}
+					repositoryID = &r.RepositoryID
+					create = func() error { return ds.CreateCategoryTaxonomy(ctx, r) }
+					update = func() error { return ds.UpdateCategoryTaxonomy(ctx, r) }
+				case "Collection":
+					r := &datastore.Collection{UID: uid, Namespace: ns.Name, Name: "child", ResourceVersion: "1", CreationTimestamp: now}
+					repositoryID = &r.RepositoryID
+					create = func() error { return ds.CreateCollection(ctx, r) }
+					update = func() error { return ds.UpdateCollection(ctx, r) }
+				case "File":
+					r := &datastore.File{UID: uid, Namespace: ns.Name, Name: "child", ResourceVersion: "1", CreationTimestamp: now}
+					repositoryID = &r.RepositoryID
+					create = func() error { return ds.CreateFile(ctx, r) }
+					update = func() error { return ds.UpdateFile(ctx, r, r.ResourceVersion) }
+				default:
+					t.Fatalf("unhandled kind %s", kind)
+				}
+				*repositoryID = missingRepositoryID
+				require.ErrorIs(t, create(), datastore.ErrNotFound)
+				*repositoryID = repo.UID
+				require.NoError(t, create(), "rejected admission must not leave an authoritative row")
+				*repositoryID = missingRepositoryID
+				require.ErrorIs(t, update(), datastore.ErrNotFound)
+				blocked, err := ds.HasCatalogResources(ctx, repo.UID)
+				require.NoError(t, err)
+				require.True(t, blocked, "rejected update must retain the original membership")
+			})
+		}
+	})
 }
 
 // ── CategoryAncestorIndex helpers ────────────────────────────────────────────
@@ -1335,7 +1413,7 @@ func runCategoryAncestorIndexContract(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, err)
 		// Foreground deletion keeps the rows until final removal.
 		assert.Contains(t, descendants(t, ds, ns, "computers", false, 0), "laptops@1")
-		_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, ns, "laptops", marked.ResourceVersion)
+		_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, ns, "laptops", marked.ResourceVersion, marked.UID)
 		require.NoError(t, err)
 		assert.Empty(t, descendants(t, ds, ns, "computers", false, 0))
 		assert.NotContains(t, descendants(t, ds, ns, "electronics", false, 0), "laptops@2")

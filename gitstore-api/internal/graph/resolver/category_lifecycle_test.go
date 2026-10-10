@@ -32,19 +32,20 @@ import (
 // its repository and advances refs/heads/main. It serves both the GraphQL
 // writer and the admission reader, like the real Git service.
 type memGit struct {
-	mu      sync.Mutex
-	seq     int
-	heads   map[string]string
-	trees   map[string]map[string][]byte // commit -> path -> content
-	commits []gitclient.CommitFileParams
-	deletes []gitclient.DeleteFileParams
+	mu       sync.Mutex
+	seq      int
+	heads    map[string]string
+	trees    map[string]map[string][]byte // commit -> path -> content
+	commits  []gitclient.CommitFileParams
+	deletes  []gitclient.DeleteFileParams
+	receipts map[string]string
 	// afterWrite runs after each commit, outside the lock; tests use it to
 	// race a concurrent commit in before admission.
 	afterWrite func(repositoryID string)
 }
 
 func newMemGit() *memGit {
-	return &memGit{heads: map[string]string{}, trees: map[string]map[string][]byte{}}
+	return &memGit{heads: map[string]string{}, trees: map[string]map[string][]byte{}, receipts: map[string]string{}}
 }
 
 func (g *memGit) write(repositoryID, path string, content []byte) string {
@@ -91,12 +92,20 @@ func (g *memGit) CommitFileForRepo(_ context.Context, repositoryID string, p git
 func (g *memGit) ResolveRefForRepo(_ context.Context, repositoryID, ref string) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.resolve(repositoryID, ref), nil
+	head := g.resolve(repositoryID, ref)
+	if _, exists := g.trees[head]; !exists {
+		return "", status.Error(codes.NotFound, "ref not found")
+	}
+	return head, nil
 }
 func (g *memGit) ReadFileForRepo(_ context.Context, repositoryID, path, ref string) ([]byte, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	content, ok := g.trees[g.resolve(repositoryID, ref)][path]
+	tree, exists := g.trees[g.resolve(repositoryID, ref)]
+	if !exists {
+		return nil, status.Error(codes.FailedPrecondition, "ref not found")
+	}
+	content, ok := tree[path]
 	if !ok {
 		return nil, status.Error(codes.NotFound, "file not found")
 	}
@@ -107,9 +116,38 @@ func (g *memGit) DeleteFile(context.Context, gitclient.DeleteFileParams) (string
 }
 func (g *memGit) DeleteFileForRepo(_ context.Context, repositoryID string, p gitclient.DeleteFileParams) (string, error) {
 	g.mu.Lock()
+	key := repositoryID + "\x00" + p.RefName + "\x00" + p.Path + "\x00" + p.ExpectedCommitSHA
+	if p.ExpectedCommitSHA != "" && g.heads[repositoryID] != p.ExpectedCommitSHA {
+		receipt := g.receipts[key]
+		_, exists := g.trees[g.heads[repositoryID]][p.Path]
+		g.mu.Unlock()
+		if receipt != "" && !exists {
+			return receipt, nil
+		}
+		if receipt != "" {
+			return "", status.Error(codes.FailedPrecondition, "manifest restored after removal")
+		}
+		return "", status.Error(codes.Aborted, "deletion revision conflict")
+	}
 	g.deletes = append(g.deletes, p)
+	g.seq++
+	sha := fmt.Sprintf("%040x", g.seq)
+	tree := map[string][]byte{}
+	for path, content := range g.trees[g.heads[repositoryID]] {
+		if path != p.Path {
+			tree[path] = content
+		}
+	}
+	g.trees[sha], g.heads[repositoryID] = tree, sha
+	if p.ExpectedCommitSHA != "" {
+		g.receipts[key] = sha
+	}
+	hook := g.afterWrite
 	g.mu.Unlock()
-	return g.write(repositoryID, p.Path, nil), nil
+	if hook != nil {
+		hook(repositoryID)
+	}
+	return sha, nil
 }
 func (g *memGit) CreateTag(context.Context, gitclient.CreateTagParams) (string, error) {
 	return "", nil
@@ -200,6 +238,32 @@ func categoryInput(name, title string, parent string) CategoryManifestInput {
 		APIVersion: categoryAPIVersion, Kind: categoryKind,
 		Metadata: &model.ObjectMetaInput{Name: name, Namespace: lifecycleNamespace},
 		Spec:     spec,
+	}
+}
+
+func TestManifestCreationInitializesUnbornRef(t *testing.T) {
+	for _, kind := range []string{"Product", "CategoryTaxonomy"} {
+		t.Run(kind, func(t *testing.T) {
+			env := newCategoryLifecycleEnv(t)
+			ctx := context.Background()
+			_, err := env.git.ResolveRefForRepo(ctx, lifecycleSystemRepoID, categoryRefName)
+			require.Equal(t, codes.NotFound, status.Code(err))
+			_, err = env.git.ReadFileForRepo(ctx, lifecycleSystemRepoID, "missing.md", categoryRefName)
+			require.Equal(t, codes.FailedPrecondition, status.Code(err))
+			_, err = env.service.readManifestForWrite(ctx, lifecycleSystemRepoID, "missing.md", categoryRefName, false)
+			require.Equal(t, codes.FailedPrecondition, status.Code(err), "updates must not initialize a missing ref")
+			if kind == "CategoryTaxonomy" {
+				_, err = env.service.CommitCategoryManifest(ctx, categoryInput("first", "First", ""), "alice", true)
+			} else {
+				_, err = env.service.CommitProductManifest(ctx, "catalog.gitstore.dev/v1beta1", kind,
+					&model.ObjectMetaInput{Name: "first", Namespace: lifecycleNamespace},
+					&model.ProductSpecInput{Title: "First"}, nil, "alice", true)
+			}
+			require.NoError(t, err)
+			require.Len(t, env.git.commits, 1)
+			_, err = env.git.ResolveRefForRepo(ctx, lifecycleSystemRepoID, categoryRefName)
+			require.NoError(t, err)
+		})
 	}
 }
 
@@ -513,11 +577,79 @@ func terminatingCategory(t *testing.T, env *categoryLifecycleEnv, name string) *
 	return terminating
 }
 
+type categoryCompletionRaceStore struct {
+	datastore.Datastore
+	datastore.OwnerReferenceStore
+	datastore.CategoryTaxonomyDeletionStore
+	beforeComplete func()
+}
+
+func (s *categoryCompletionRaceStore) CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, resourceVersion, expectedUID string) (*datastore.CategoryTaxonomy, error) {
+	s.beforeComplete()
+	return s.CategoryTaxonomyDeletionStore.CompleteCategoryTaxonomyDeletion(ctx, namespace, name, resourceVersion, expectedUID)
+}
+
 func TestCompleteCategoryDeletion(t *testing.T) {
+	t.Run("replacement between service check and atomic completion is fenced", func(t *testing.T) {
+		env := newCategoryLifecycleEnv(t)
+		ctx := t.Context()
+		old := terminatingCategory(t, env, "laptops")
+		replacement := *old
+		replacement.UID = "00000000-0000-0000-0000-00000000b003"
+		lifecycle := env.store.(datastore.CategoryTaxonomyDeletionStore)
+		env.service.store = &categoryCompletionRaceStore{
+			Datastore: env.store, OwnerReferenceStore: env.store.(datastore.OwnerReferenceStore), CategoryTaxonomyDeletionStore: lifecycle,
+			beforeComplete: func() {
+				_, err := lifecycle.CompleteCategoryTaxonomyDeletion(ctx, old.Namespace, old.Name, old.ResourceVersion, old.UID)
+				require.NoError(t, err)
+				require.NoError(t, env.store.CreateCategoryTaxonomy(ctx, &replacement))
+			},
+		}
+		_, err := env.mut.CompleteCategoryDeletion(ctx, model.CompleteCategoryDeletionInput{
+			ID: mustEncodeNodeID(nodeKindCategory, old.UID), Namespace: old.Namespace, Name: old.Name, ResourceVersion: old.ResourceVersion,
+		})
+		var gqlErr *gqlerror.Error
+		require.ErrorAs(t, err, &gqlErr)
+		require.Equal(t, "CONFLICT", gqlErr.Extensions["code"])
+		current, err := env.store.GetCategoryTaxonomyByName(ctx, old.Namespace, old.Name)
+		require.NoError(t, err)
+		require.Equal(t, replacement.UID, current.UID)
+		require.Equal(t, replacement.ResourceVersion, current.ResourceVersion)
+		require.Equal(t, replacement.Finalizers, current.Finalizers)
+	})
+	t.Run("same name and version replacement rejects stale identity", func(t *testing.T) {
+		env := newCategoryLifecycleEnv(t)
+		ctx := context.Background()
+		old := terminatingCategory(t, env, "laptops")
+		_, err := env.service.CompleteCategoryDeletion(ctx, old.Namespace, old.Name, old.ResourceVersion, old.UID)
+		require.NoError(t, err)
+		replacement := *old
+		replacement.UID = "00000000-0000-0000-0000-00000000b002"
+		require.NoError(t, env.store.CreateCategoryTaxonomy(ctx, &replacement))
+		_, err = env.mut.CompleteCategoryDeletion(ctx, model.CompleteCategoryDeletionInput{
+			ID: mustEncodeNodeID(nodeKindCategory, old.UID), Namespace: old.Namespace, Name: old.Name, ResourceVersion: old.ResourceVersion,
+		})
+		var gqlErr *gqlerror.Error
+		require.ErrorAs(t, err, &gqlErr)
+		require.Equal(t, "CONFLICT", gqlErr.Extensions["code"])
+		current, err := env.store.GetCategoryTaxonomyByName(ctx, replacement.Namespace, replacement.Name)
+		require.NoError(t, err)
+		require.Equal(t, replacement.UID, current.UID)
+		require.Equal(t, replacement.ResourceVersion, current.ResourceVersion)
+		require.Equal(t, replacement.Finalizers, current.Finalizers)
+		_, err = env.service.CompleteCategoryDeletion(ctx, replacement.Namespace, replacement.Name, replacement.ResourceVersion, old.UID)
+		require.ErrorIs(t, err, datastore.ErrConflict)
+		payload, err := env.mut.CompleteCategoryDeletion(ctx, model.CompleteCategoryDeletionInput{
+			ID: mustEncodeNodeID(nodeKindCategory, replacement.UID), Namespace: replacement.Namespace, Name: replacement.Name, ResourceVersion: replacement.ResourceVersion,
+		})
+		require.NoError(t, err)
+		require.Equal(t, mustEncodeNodeID(nodeKindCategory, replacement.UID), *payload.ID)
+	})
 	t.Run("success removes the record", func(t *testing.T) {
 		env := newCategoryLifecycleEnv(t)
 		category := terminatingCategory(t, env, "laptops")
 		payload, err := env.mut.CompleteCategoryDeletion(context.Background(), model.CompleteCategoryDeletionInput{
+			ID:        mustEncodeNodeID(nodeKindCategory, category.UID),
 			Namespace: lifecycleNamespace, Name: "laptops", ResourceVersion: category.ResourceVersion,
 		})
 		require.NoError(t, err)
@@ -528,8 +660,9 @@ func TestCompleteCategoryDeletion(t *testing.T) {
 	})
 	t.Run("resource version mismatch", func(t *testing.T) {
 		env := newCategoryLifecycleEnv(t)
-		terminatingCategory(t, env, "laptops")
+		category := terminatingCategory(t, env, "laptops")
 		_, err := env.mut.CompleteCategoryDeletion(context.Background(), model.CompleteCategoryDeletionInput{
+			ID:        mustEncodeNodeID(nodeKindCategory, category.UID),
 			Namespace: lifecycleNamespace, Name: "laptops", ResourceVersion: "stale",
 		})
 		var gqlErr *gqlerror.Error
@@ -539,7 +672,7 @@ func TestCompleteCategoryDeletion(t *testing.T) {
 	t.Run("not terminating", func(t *testing.T) {
 		env := newCategoryLifecycleEnv(t)
 		record := env.pushCategory(t, lifecycleSystemRepoID, "categories/laptops.md", "laptops", "Laptops", "", "")
-		_, err := env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "laptops", record.ResourceVersion)
+		_, err := env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "laptops", record.ResourceVersion, record.UID)
 		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "CATEGORY_NOT_TERMINATING")
 	})
 	t.Run("children present", func(t *testing.T) {
@@ -547,7 +680,7 @@ func TestCompleteCategoryDeletion(t *testing.T) {
 		category := terminatingCategory(t, env, "electronics")
 		// A blocking child that appeared after termination started.
 		blockingChild(t, env, category, lifecycleSystemRepoID)
-		_, err := env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "electronics", category.ResourceVersion)
+		_, err := env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "electronics", category.ResourceVersion, category.UID)
 		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "CHILD_CATEGORIES_PRESENT")
 	})
 	t.Run("products still to decouple", func(t *testing.T) {
@@ -559,7 +692,7 @@ func TestCompleteCategoryDeletion(t *testing.T) {
 			UID: "00000000-0000-0000-0000-00000000b001", Namespace: lifecycleNamespace, RepositoryID: category.RepositoryID, Name: "widget",
 			ResourceVersion: "1", OwnerReferences: refs, Spec: []byte(`{"categoryRef":{"name":"laptops"}}`),
 		}))
-		_, err = env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "laptops", category.ResourceVersion)
+		_, err = env.service.CompleteCategoryDeletion(context.Background(), lifecycleNamespace, "laptops", category.ResourceVersion, category.UID)
 		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "PRODUCT_DECOUPLING_INCOMPLETE")
 	})
 }

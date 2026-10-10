@@ -5,10 +5,33 @@ package resolver
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 )
+
+// Creation can initialize an unborn branch through CommitFile, which still
+// requires existing repository storage. This is not deletion-removal evidence.
+func (s *Service) readManifestForWrite(ctx context.Context, repositoryID, path, ref string, create bool) ([]byte, error) {
+	if create {
+		head, err := s.gitWriter.ResolveRefForRepo(ctx, repositoryID, ref)
+		if status.Code(err) == codes.NotFound {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		ref = head
+	}
+	content, err := s.gitWriter.ReadFileForRepo(ctx, repositoryID, path, ref)
+	if status.Code(err) == codes.NotFound {
+		return nil, nil
+	}
+	return content, err
+}
 
 // renderManifest renders a Markdown manifest: YAML frontmatter followed by the
 // body. Map keys are sorted by the encoder, so equal input renders equal bytes.

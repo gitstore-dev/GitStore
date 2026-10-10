@@ -152,6 +152,143 @@ func TestMemdb_NamespaceDuplicateUIDAndName(t *testing.T) {
 	require.ErrorIs(t, ds.CreateNamespace(ctx, &duplicateName), datastore.ErrAlreadyExists)
 }
 
+func TestMemdb_NamespaceDeletionAllowsOnlyEmptyProvisionedSystemRepository(t *testing.T) {
+	ctx := context.Background()
+	ds := newBackend(t)
+	ns := &datastore.Namespace{UID: "00000000-0000-0000-0000-000000000201", Name: "deletion"}
+	require.NoError(t, ds.CreateNamespace(ctx, ns))
+	repo := &datastore.Repository{UID: "00000000-0000-0000-0000-000000000202", RepositoryID: "00000000-0000-0000-0000-000000000202", Namespace: ns.Name, Name: "gitstore-system"}
+	require.NoError(t, ds.CreateRepositoryInActiveNamespace(ctx, repo))
+	blocked, err := datastore.NamespaceDeletionBlocked(ctx, ds, ns)
+	require.NoError(t, err)
+	require.False(t, blocked)
+	exists, err := ds.HasRepositories(ctx, ns.Name)
+	require.NoError(t, err)
+	require.True(t, exists, "generic existence must include the system repository")
+
+	product := &datastore.Product{UID: "00000000-0000-0000-0000-000000000203", Namespace: ns.Name, Name: "product", RepositoryID: repo.UID}
+	require.NoError(t, ds.CreateProduct(ctx, product))
+	blocked, err = datastore.NamespaceDeletionBlocked(ctx, ds, ns)
+	require.NoError(t, err)
+	require.True(t, blocked)
+	now := time.Now().UTC()
+	ns.DeletionTimestamp = &now
+	previous := ns.ResourceVersion
+	datastore.AdvanceNamespaceSystemVersion(ns)
+	require.ErrorIs(t, ds.MarkNamespaceDeletion(ctx, ns, previous), datastore.ErrNamespaceNotEmpty)
+	require.NoError(t, ds.DeleteProduct(ctx, product.UID))
+	require.NoError(t, ds.MarkNamespaceDeletion(ctx, ns, previous))
+	require.ErrorIs(t, ds.CreateProduct(ctx, product), datastore.ErrNamespaceNotActive)
+	require.ErrorIs(t, ds.DeleteNamespaceWithResourceVersion(ctx, ns.UID, ns.ResourceVersion), datastore.ErrNamespaceNotEmpty)
+	repo.DeletionTimestamp = &now
+	repo.Finalizers = []string{datastore.RepositoryForegroundDeletionFinalizer}
+	previous = repo.ResourceVersion
+	datastore.AdvanceRepositorySystemVersion(repo)
+	require.NoError(t, ds.UpdateRepository(ctx, repo, previous))
+	require.NoError(t, ds.(datastore.RepositoryDeletionStore).CompleteRepositoryDeletion(ctx, repo.UID, repo.ResourceVersion))
+	require.ErrorIs(t, ds.CreateRepository(ctx, repo), datastore.ErrConflict)
+	require.NoError(t, ds.DeleteNamespaceWithResourceVersion(ctx, ns.UID, ns.ResourceVersion))
+	require.ErrorIs(t, ds.CreateProduct(ctx, product), datastore.ErrNotFound)
+}
+
+func TestMemdb_RepositoryCompletionGuardsAndMappingIdentity(t *testing.T) {
+	ctx := context.Background()
+	ds := newBackend(t)
+	repo := &datastore.Repository{UID: "00000000-0000-0000-0000-000000000204", Namespace: "shop", Name: "catalog"}
+	require.NoError(t, ds.CreateRepository(ctx, repo))
+	completion := ds.(datastore.RepositoryDeletionStore)
+	require.ErrorIs(t, completion.CompleteRepositoryDeletion(ctx, repo.UID, repo.ResourceVersion), datastore.ErrConflict)
+	now := time.Now().UTC()
+	repo.DeletionTimestamp = &now
+	repo.Finalizers = []string{datastore.RepositoryForegroundDeletionFinalizer, "other/finalizer"}
+	previous := repo.ResourceVersion
+	datastore.AdvanceRepositorySystemVersion(repo)
+	require.NoError(t, ds.UpdateRepository(ctx, repo, previous))
+	require.ErrorIs(t, completion.CompleteRepositoryDeletion(ctx, repo.UID, previous), datastore.ErrConflict)
+	require.ErrorIs(t, completion.CompleteRepositoryDeletion(ctx, repo.UID, repo.ResourceVersion), datastore.ErrConflict)
+	previous = repo.ResourceVersion
+	repo.Finalizers = []string{datastore.RepositoryForegroundDeletionFinalizer}
+	datastore.AdvanceRepositorySystemVersion(repo)
+	require.NoError(t, ds.UpdateRepository(ctx, repo, previous))
+	reversed := *repo
+	reversed.DeletionTimestamp = nil
+	datastore.AdvanceRepositorySystemVersion(&reversed)
+	require.ErrorIs(t, ds.UpdateRepository(ctx, &reversed, repo.ResourceVersion), datastore.ErrConflict)
+	require.NoError(t, ds.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: repo.Namespace, Name: repo.Name, RepositoryID: "00000000-0000-0000-0000-000000000205"}))
+	require.NoError(t, completion.CompleteRepositoryDeletion(ctx, repo.UID, repo.ResourceVersion))
+	mapping, err := ds.LookupRepository(ctx, repo.Namespace, repo.Name)
+	require.NoError(t, err)
+	require.Equal(t, "00000000-0000-0000-0000-000000000205", mapping.RepositoryID)
+}
+func TestMemdb_DeletionIntentFencesRepositoryAndCatalogAdmission(t *testing.T) {
+	ctx := context.Background()
+	ds := newBackend(t)
+	ns := &datastore.Namespace{UID: "00000000-0000-0000-0000-000000000211", Name: "intent"}
+	require.NoError(t, ds.CreateNamespace(ctx, ns))
+	repository := &datastore.Repository{UID: "00000000-0000-0000-0000-000000000212", Namespace: ns.Name, Name: "catalog"}
+	require.NoError(t, ds.CreateRepositoryInActiveNamespace(ctx, repository))
+	ns.Status = json.RawMessage(`{"deletionIntent":{"uid":"intent"},"conditions":[{"type":"DeletionPending","status":"True"}]}`)
+	previous := ns.ResourceVersion
+	datastore.AdvanceNamespaceSystemVersion(ns)
+	require.ErrorIs(t, ds.UpdateNamespace(ctx, ns, previous), datastore.ErrNamespaceNotEmpty)
+	require.NoError(t, ds.DeleteRepository(ctx, repository.UID))
+	require.NoError(t, ds.UpdateNamespace(ctx, ns, previous))
+	require.ErrorIs(t, ds.CreateRepositoryInActiveNamespace(ctx, repository), datastore.ErrNamespaceNotActive)
+	product := &datastore.Product{UID: "00000000-0000-0000-0000-000000000213", Namespace: ns.Name, Name: "product"}
+	require.ErrorIs(t, ds.CreateProduct(ctx, product), datastore.ErrNamespaceNotActive)
+	current, err := ds.GetNamespace(ctx, ns.UID)
+	require.NoError(t, err)
+	current.Status = json.RawMessage(`{"conditions":[]}`)
+	previous = current.ResourceVersion
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.NoError(t, ds.UpdateNamespace(ctx, current, previous))
+	require.True(t, datastore.HasDeletionIntent(current.Status))
+}
+
+func TestMemdb_TerminalRepositoryRejectsCatalogCreatesAndUpdates(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		create func(datastore.Datastore, string) error
+		update func(datastore.Datastore, string) error
+	}{
+		{"product", func(ds datastore.Datastore, repo string) error {
+			return ds.CreateProduct(ctx, &datastore.Product{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo})
+		}, func(ds datastore.Datastore, repo string) error {
+			return ds.UpdateProduct(ctx, &datastore.Product{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo})
+		}},
+		{"variant", func(ds datastore.Datastore, repo string) error {
+			return ds.CreateProductVariant(ctx, &datastore.ProductVariant{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo, SKU: "sku", ProductRefName: "product"})
+		}, func(ds datastore.Datastore, repo string) error {
+			return ds.UpdateProductVariant(ctx, &datastore.ProductVariant{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo, SKU: "sku", ProductRefName: "product"})
+		}},
+		{"category", func(ds datastore.Datastore, repo string) error {
+			return ds.CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo})
+		}, func(ds datastore.Datastore, repo string) error {
+			return ds.UpdateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo})
+		}},
+		{"collection", func(ds datastore.Datastore, repo string) error {
+			return ds.CreateCollection(ctx, &datastore.Collection{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo})
+		}, func(ds datastore.Datastore, repo string) error {
+			return ds.UpdateCollection(ctx, &datastore.Collection{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := newBackend(t)
+			repo := &datastore.Repository{UID: "00000000-0000-0000-0000-000000000222", Namespace: "terminal", Name: "repo"}
+			require.NoError(t, ds.CreateRepository(ctx, repo))
+			require.NoError(t, tc.create(ds, repo.UID))
+			require.NoError(t, ds.DeleteRepository(ctx, repo.UID))
+			now := time.Now().UTC()
+			repo.DeletionTimestamp = &now
+			require.NoError(t, ds.CreateRepository(ctx, repo))
+			require.ErrorIs(t, tc.create(ds, repo.UID), datastore.ErrConflict)
+			require.ErrorIs(t, tc.update(ds, repo.UID), datastore.ErrConflict)
+			require.ErrorIs(t, ds.(datastore.RepositoryDeletionStore).CompleteRepositoryDeletion(ctx, repo.UID, repo.ResourceVersion), datastore.ErrConflict)
+		})
+	}
+}
+
 func TestMemdb_NamespaceRepositoryLifecycleCoordination(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()

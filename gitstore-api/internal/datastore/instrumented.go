@@ -528,6 +528,17 @@ func (d *InstrumentedDatastore) HasCatalogResources(ctx context.Context, repoID 
 	return v, err
 }
 
+func (d *InstrumentedDatastore) CompleteRepositoryDeletion(ctx context.Context, uid, expectedResourceVersion string) error {
+	start := time.Now()
+	store, ok := d.next.(RepositoryDeletionStore)
+	if !ok {
+		return ErrInvalidArgument
+	}
+	err := store.CompleteRepositoryDeletion(d.withFindingObserver(ctx), uid, expectedResourceVersion)
+	d.observe("CompleteRepositoryDeletion", start, err)
+	return err
+}
+
 // ── NamespaceMapping ──────────────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) CreateNamespaceMapping(ctx context.Context, m *NamespaceMapping) error {
@@ -656,7 +667,7 @@ func (d *InstrumentedDatastore) MarkCategoryTaxonomyDeletion(ctx context.Context
 	return v, err
 }
 
-func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*CategoryTaxonomy, error) {
+func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*CategoryTaxonomy, error) {
 	start := time.Now()
 	lifecycle, ok := d.next.(CategoryTaxonomyDeletionStore)
 	if !ok {
@@ -664,7 +675,7 @@ func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Con
 		d.observe("CompleteCategoryTaxonomyDeletion", start, err)
 		return nil, err
 	}
-	v, err := lifecycle.CompleteCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion)
+	v, err := lifecycle.CompleteCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion, expectedUID)
 	d.observe("CompleteCategoryTaxonomyDeletion", start, err)
 	return v, err
 }

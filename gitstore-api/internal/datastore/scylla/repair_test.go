@@ -13,9 +13,48 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
 
+func TestRepositoryCatalogProjectionIsIncludedInRepair(t *testing.T) {
+	for _, kind := range []string{"Product", "ProductVariant", "CategoryTaxonomy", "Collection", "File"} {
+		t.Run(kind, func(t *testing.T) {
+			resource := AuthoritativeResource{Kind: kind, UID: "11111111-1111-1111-1111-111111111111",
+				RepositoryID: "22222222-2222-2222-2222-222222222222", Namespace: "shop", Name: "product",
+				ResourceVersion: "1", CreationTimestamp: time.Now().UTC()}
+			projections := expectedProjections(resource)
+			if len(projections) != 3 {
+				t.Fatalf("got %d projections, want name, UID and repository index", len(projections))
+			}
+			index := projections[2]
+			if index.Table != repositoryResourcesTable || index.Kind != resource.Kind || index.RepositoryID != resource.RepositoryID || index.Shard != categoryProductShard(resource.UID) {
+				t.Fatalf("unexpected repository index: %+v", index)
+			}
+			if !index.Equal(index) || index.Key() == "" {
+				t.Fatal("repository index must be comparable and addressable")
+			}
+			plan, err := BuildRepairPlan(ProjectionSnapshot{Authoritative: []AuthoritativeResource{resource}, Projections: projections[:2]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.Actions) != 1 || actionTable(plan.Actions[0]) != repositoryResourcesTable {
+				t.Fatalf("missing repository index not repaired: %+v", plan)
+			}
+			other := index
+			other.Kind = "FutureResource"
+			if other.Key() == index.Key() || index.Equal(other) || other.resourceKind() != "FutureResource" {
+				t.Fatal("membership identity must include the kind without adding a table")
+			}
+			requirePlanErr := ValidateRepairPlan(plan)
+			if requirePlanErr != nil {
+				t.Fatal(requirePlanErr)
+			}
+		})
+	}
+}
+
 func TestProjectionTableKinds(t *testing.T) {
 	t.Parallel()
 	tests := map[string]string{
+		"files_by_name":                    "File",
+		"files_by_uid":                     "File",
 		"namespaces_by_name":               "Namespace",
 		"namespaces_by_bucket":             "Namespace",
 		"repositories_by_namespace":        "Repository",

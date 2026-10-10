@@ -1549,6 +1549,9 @@ spec:
 func TestValidateResourceDeletionsCategoryTaxonomyRejectsIndexedChildOutsideProposedTree(t *testing.T) {
 	store := newTestDatastore(t)
 	ctx := context.Background()
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{
+		UID: wrongNamespaceRepoID, Namespace: "gitstore", Name: "other-catalog",
+	}))
 	parent := &datastore.CategoryTaxonomy{
 		UID: "00000000-0000-0000-0000-000000000311", Namespace: "gitstore", Name: "parent",
 		RepositoryID: testRepoID, ResourceVersion: "1", APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy",
@@ -2321,7 +2324,11 @@ func newTreeGitReader(current *string, files map[string]map[string][]byte) *mock
 			return paths, nil
 		},
 		readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
-			return files[ref][path], nil
+			content, ok := files[ref][path]
+			if !ok {
+				return nil, grpcstatus.Error(codes.NotFound, "file not found")
+			}
+			return content, nil
 		},
 		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
 			return *current, nil

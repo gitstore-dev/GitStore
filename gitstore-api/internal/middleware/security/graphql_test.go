@@ -612,7 +612,7 @@ func TestGraphQLFieldAuthorizerCompleteNamespaceDeletionUsesControllerPolicy(t *
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "completeNamespaceDeletion"}},
-		Args:   map[string]any{"input": model.CompleteNamespaceDeletionInput{Name: "obsolete", ResourceVersion: "7"}},
+		Args:   map[string]any{"input": model.CompleteNamespaceDeletionInput{ID: "Z2lkOi8vR2l0U3RvcmUvTmFtZXNwYWNlL25hbWVzcGFjZS0x", Name: "obsolete", ResourceVersion: "7"}},
 	})
 
 	called := false
@@ -636,7 +636,7 @@ func TestGraphQLFieldAuthorizerCompleteRepositoryDeletionUsesControllerPolicy(t 
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "completeRepositoryDeletion"}},
-		Args:   map[string]any{"input": model.CompleteRepositoryDeletionInput{Namespace: "acme", Name: "catalog", ResourceVersion: "9"}},
+		Args:   map[string]any{"input": model.CompleteRepositoryDeletionInput{ID: "Z2lkOi8vR2l0U3RvcmUvUmVwb3NpdG9yeS9yZXBvLTE=", Namespace: "acme", Name: "catalog", ResourceVersion: "9"}},
 	})
 
 	called := false

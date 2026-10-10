@@ -20,10 +20,12 @@ import (
 type fakeCompletionClient struct {
 	calls int
 	err   error
+	uid   string
 }
 
-func (f *fakeCompletionClient) CompleteDeletion(context.Context, string, string, string) error {
+func (f *fakeCompletionClient) CompleteDeletion(_ context.Context, _, _, _, uid string) error {
 	f.calls++
+	f.uid = uid
 	return f.err
 }
 
@@ -53,12 +55,15 @@ func reconcilerFor(t *testing.T, item categorytaxonomy.Product, client *fakeComp
 func TestReconcileCompletesTerminatingProduct(t *testing.T) {
 	now := time.Now()
 	client := &fakeCompletionClient{}
-	r := reconcilerFor(t, categorytaxonomy.Product{Namespace: "acme", Name: "widget", ResourceVersion: "8", DeletionTimestamp: &now, Finalizers: []string{foregroundDeletionFinalizer}}, client)
+	r := reconcilerFor(t, categorytaxonomy.Product{UID: "product-node-id", Namespace: "acme", Name: "widget", ResourceVersion: "8", DeletionTimestamp: &now, Finalizers: []string{foregroundDeletionFinalizer}}, client)
 	if _, ok := r.Reconcile(context.Background(), productKey()).(types.Success); !ok {
 		t.Fatal("want success")
 	}
 	if client.calls != 1 {
 		t.Fatalf("calls = %d, want 1", client.calls)
+	}
+	if client.uid != "product-node-id" {
+		t.Fatalf("completion identity = %q, want observed product identity", client.uid)
 	}
 }
 

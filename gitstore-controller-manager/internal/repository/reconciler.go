@@ -53,8 +53,8 @@ const (
 )
 
 // Repository is the cache entity populated by RepositoryListWatcher.
-// UID is retained for cache identity and diagnostics; the controller invokes
-// storage provisioning by stable namespace/name through the API.
+// UID binds completion to an incarnation; storage provisioning uses
+// namespace/name through the API.
 type Repository struct {
 	UID             string
 	Namespace       string
@@ -86,7 +86,7 @@ type StorageClient interface {
 // the catalog-resource drain condition, clears the finalizer, and only then
 // permits hard deletion. The controller never cascades catalog resources.
 type CompletionClient interface {
-	CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error
+	CompleteDeletion(ctx context.Context, namespace, name, resourceVersion, uid string) error
 }
 
 // Reconciler implements types.Reconciler for Repository resources.
@@ -162,7 +162,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 	if current.Name == SystemRepositoryName {
 		return types.ResultOK()
 	}
-	if slices.Contains(current.Finalizers, ForegroundDeletionFinalizer) {
+	if slices.Contains(current.Finalizers, ForegroundDeletionFinalizer) || conditionTrue(current.Status.Conditions, "DeletionPending") {
 		return r.reconcileDeletion(ctx, current)
 	}
 	return r.reconcileActive(ctx, key, current)
@@ -233,7 +233,7 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 }
 
 func (r *Reconciler) reconcileDeletion(ctx context.Context, current Repository) types.ReconcileResult {
-	if err := r.completionClient.CompleteDeletion(ctx, current.Namespace, current.Name, current.ResourceVersion); err != nil {
+	if err := r.completionClient.CompleteDeletion(ctx, current.Namespace, current.Name, current.ResourceVersion, current.UID); err != nil {
 		if errors.Is(err, types.ErrConflict) {
 			return types.ResultAfter(conflictRequeueDelay)
 		}

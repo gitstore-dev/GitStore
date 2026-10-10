@@ -1204,13 +1204,20 @@ func (ec *executionContext) unmarshalInputCompleteCategoryDeletionInput(ctx cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"namespace", "name", "resourceVersion"}
+	fieldsInOrder := [...]string{"id", "namespace", "name", "resourceVersion"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
 		case "namespace":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
 			data, err := ec.unmarshalNString2string(ctx, v)

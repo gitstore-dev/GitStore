@@ -257,6 +257,8 @@ type CollectionStatus struct {
 }
 
 type CompleteCategoryDeletionInput struct {
+	// Relay Node ID of the exact category incarnation being finalized.
+	ID        string `json:"id"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	// Must equal the category's current metadata.resourceVersion.
@@ -270,6 +272,8 @@ type CompleteCategoryDeletionPayload struct {
 
 // Controller-only finalizer completion for a terminating namespace.
 type CompleteNamespaceDeletionInput struct {
+	// Relay Node ID of the exact namespace incarnation being finalized.
+	ID string `json:"id"`
 	// Name of the terminating namespace.
 	Name            string `json:"name"`
 	ResourceVersion string `json:"resourceVersion"`
@@ -280,6 +284,8 @@ type CompleteNamespaceDeletionPayload struct {
 }
 
 type CompleteProductDeletionInput struct {
+	// Relay Node ID of the exact product incarnation being finalized.
+	ID              string `json:"id"`
 	Namespace       string `json:"namespace"`
 	Name            string `json:"name"`
 	ResourceVersion string `json:"resourceVersion"`
@@ -290,6 +296,8 @@ type CompleteProductDeletionPayload struct {
 }
 
 type CompleteRepositoryDeletionInput struct {
+	// Relay Node ID of the exact repository incarnation being finalized.
+	ID              string `json:"id"`
 	Namespace       string `json:"namespace"`
 	Name            string `json:"name"`
 	ResourceVersion string `json:"resourceVersion"`
@@ -406,7 +414,8 @@ type DeleteCategoryPayload struct {
 // Input for deleting a namespace.
 type DeleteNamespaceInput struct {
 	// The identifier of the namespace to delete.
-	// Deletion is blocked if any repositories exist within the namespace.
+	// Ordinary repositories and catalog resources block deletion.
+	// The empty system repository is removed during controller completion.
 	// Requires the caller to be the namespace owner (createdBy) or isAdmin.
 	ID string `json:"id"`
 }

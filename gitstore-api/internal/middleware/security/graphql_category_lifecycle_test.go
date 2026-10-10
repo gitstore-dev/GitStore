@@ -68,7 +68,7 @@ func TestCategoryMutationAuthorizationMatrix(t *testing.T) {
 		{field: "createCategory", action: "categoryTaxonomy.create", args: map[string]any{"input": model.CreateCategoryInput{Metadata: createMeta}}},
 		{field: "updateCategory", action: "categoryTaxonomy.update", owner: "owner-sub", repositoryID: "repo-stored", args: map[string]any{"input": model.UpdateCategoryInput{Metadata: updateMeta}}},
 		{field: "deleteCategory", action: "categoryTaxonomy.delete", owner: "owner-sub", repositoryID: "repo-stored", args: map[string]any{"input": model.DeleteCategoryInput{ID: categoryID}}},
-		{field: "completeCategoryDeletion", action: "categoryTaxonomy.purge", args: map[string]any{"input": model.CompleteCategoryDeletionInput{Namespace: "acme", Name: "laptops", ResourceVersion: "3"}}},
+		{field: "completeCategoryDeletion", action: "categoryTaxonomy.purge", args: map[string]any{"input": model.CompleteCategoryDeletionInput{ID: "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvY2F0ZWdvcnktMQ==", Namespace: "acme", Name: "laptops", ResourceVersion: "3"}}},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			authz, called, err := authorizeCategoryField(t, &auth.Principal{Subject: "denied", AuthMethod: "bearer"}, tc.field, tc.args)

@@ -239,6 +239,8 @@ type UpdateProductStatusPayload {
 }
 
 input CompleteProductDeletionInput {
+  """Relay Node ID of the exact product incarnation being finalized."""
+  id: ID!
   namespace: String!
   name: String!
   resourceVersion: String!

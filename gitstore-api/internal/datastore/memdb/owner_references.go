@@ -211,7 +211,7 @@ func (m *memdbDatastore) MarkCategoryTaxonomyDeletion(_ context.Context, namespa
 	return cloneCategoryTaxonomy(category), nil
 }
 
-func (m *memdbDatastore) CompleteCategoryTaxonomyDeletion(_ context.Context, namespace, name, expectedResourceVersion string) (*datastore.CategoryTaxonomy, error) {
+func (m *memdbDatastore) CompleteCategoryTaxonomyDeletion(_ context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*datastore.CategoryTaxonomy, error) {
 	m.categoryMutationMu.Lock()
 	defer m.categoryMutationMu.Unlock()
 	txn := m.db.Txn(true)
@@ -221,7 +221,7 @@ func (m *memdbDatastore) CompleteCategoryTaxonomyDeletion(_ context.Context, nam
 		return nil, fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrNotFound, namespace, name)
 	}
 	category := raw.(*datastore.CategoryTaxonomy)
-	if category.ResourceVersion != expectedResourceVersion {
+	if expectedUID == "" || category.UID != expectedUID || category.ResourceVersion != expectedResourceVersion {
 		txn.Abort()
 		return nil, datastore.ErrConflict
 	}

@@ -359,6 +359,7 @@ func TestValidateResourcesNamespacePolicyMatrix(t *testing.T) {
 		},
 		"terminating target": {
 			prepare: func(t *testing.T, store datastore.Datastore) {
+				require.NoError(t, store.DeleteRepository(context.Background(), wrongNamespaceRepoID))
 				namespace, err := store.GetNamespaceByName(context.Background(), "other")
 				require.NoError(t, err)
 				expected := namespace.ResourceVersion

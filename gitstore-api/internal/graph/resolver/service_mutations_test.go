@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +27,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // mockGitWriter implements resolver.GitWriter for testing.
@@ -58,6 +61,29 @@ type testCommittedNamespaceAdmitter struct {
 }
 
 func (a testCommittedNamespaceAdmitter) AdmitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	if req.Operation == admission.OperationDelete {
+		if req.Kind == "Repository" {
+			repo, err := a.store.GetRepository(ctx, req.ExpectedUID)
+			if err != nil {
+				return nil, err
+			}
+			if err := admission.MarkInfrastructureDeletion(ctx, a.store, repo, time.Now().UTC(), req.ActorSubject); err != nil {
+				return nil, err
+			}
+			return &admission.CommittedManifestResult{Kind: req.Kind, Name: req.Name, CommitSHA: req.CommitSHA}, nil
+		}
+		ns, err := a.store.GetNamespaceByName(ctx, req.Name)
+		if err != nil {
+			return nil, err
+		}
+		if ns.UID != req.ExpectedUID {
+			return nil, datastore.ErrConflict
+		}
+		if err := admission.MarkInfrastructureDeletion(ctx, a.store, ns, time.Now().UTC(), req.ActorSubject); err != nil {
+			return nil, err
+		}
+		return &admission.CommittedManifestResult{Kind: req.Kind, Name: req.Name, CommitSHA: req.CommitSHA}, nil
+	}
 	parsed, body, err := validate.NewParser().ParseResource(bytes.NewReader(req.Content))
 	if err != nil || parsed == nil || parsed.Namespace == nil {
 		if err == nil {
@@ -132,7 +158,7 @@ func (m *mockGitWriter) ReadFileForRepo(_ context.Context, _, path, _ string) ([
 		if m.readErr != nil {
 			return nil, m.readErr
 		}
-		return nil, errors.New("file read is not configured")
+		return nil, status.Error(codes.NotFound, "file not found")
 	}
 	return append([]byte(nil), content...), nil
 }
@@ -153,6 +179,7 @@ func (m *mockGitWriter) DeleteFile(_ context.Context, p gitclient.DeleteFilePara
 	if m.deleteErr != nil {
 		return "", m.deleteErr
 	}
+	delete(m.files, p.Path)
 	return "cafe1234", nil
 }
 func (m *mockGitWriter) DeleteFileForRepo(_ context.Context, _ string, p gitclient.DeleteFileParams) (string, error) {
@@ -220,6 +247,20 @@ func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
 	})
 	require.NoError(t, err)
 	return svc
+}
+
+func prepareRepositoryDeletion(t *testing.T, svc *resolver.Service, writer *mockGitWriter, repo *datastore.Repository) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, svc.ProvisionSystemRepository(ctx, repo.Namespace, "controller"))
+	current, err := svc.GetRepository(ctx, repo.UID)
+	require.NoError(t, err)
+	expected := current.ResourceVersion
+	current.SourcePath = "repositories/" + current.Name + ".md"
+	current.GitRef, current.GitCommitSHA = "refs/heads/main", "deadbeef"
+	datastore.AdvanceRepositorySystemVersion(current)
+	require.NoError(t, svc.Store().UpdateRepository(ctx, current, expected))
+	writer.setFile(current.SourcePath, []byte(fmt.Sprintf("---\napiVersion: gitstore.dev/v1beta1\nkind: Repository\nmetadata:\n  name: %s\n  namespace: %s\nspec:\n  defaultBranch: main\n---\n", current.Name, current.Namespace)))
 }
 
 func createNamespaceInput(name string, tier model.NamespaceTier) model.CreateNamespaceInput {

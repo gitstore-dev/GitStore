@@ -269,7 +269,7 @@ func (r *Reconciler) reconcileDeletion(ctx context.Context, current CategoryTaxo
 		health.CategoryDeletionProductPagesTotal.Inc()
 		return types.ResultAfter(categoryDeletionRetryInterval)
 	}
-	if err := r.deletion.CompleteDeletion(ctx, current.Namespace, current.Name, current.ResourceVersion); err != nil {
+	if err := r.deletion.CompleteDeletion(ctx, current.Namespace, current.Name, current.ResourceVersion, current.UID); err != nil {
 		if errors.Is(err, types.ErrConflict) {
 			health.CategoryDeletionConflictsTotal.Inc()
 		} else {

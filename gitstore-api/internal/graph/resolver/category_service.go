@@ -6,8 +6,10 @@ package resolver
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,9 +19,39 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"go.uber.org/zap"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
+
+func encodeCategoryProductCursor(categoryUID, cursor string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte("category-product\x00" + categoryUID + "\x00" + cursor))
+}
+
+func decodeCategoryProductCursor(categoryUID, cursor string) (string, error) {
+	if cursor == "" {
+		return "", nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return "", err
+	}
+	prefix := "category-product\x00" + categoryUID + "\x00"
+	if !strings.HasPrefix(string(b), prefix) {
+		return "", fmt.Errorf("cursor belongs to another category")
+	}
+	return strings.TrimPrefix(string(b), prefix), nil
+}
+
+func buildCategoryProductConnection(categoryUID string, result *datastore.PageResult[datastore.Product]) *model.ProductConnection {
+	edges := make([]*model.ProductEdge, len(result.Items))
+	for i, p := range result.Items {
+		edges[i] = &model.ProductEdge{Cursor: encodeCategoryProductCursor(categoryUID, EncodeKeysetCursor(p.CreationTimestamp, p.UID)), Node: DatastoreProductToGraphQL(p)}
+	}
+	pi := &model.PageInfo{HasNextPage: result.HasNext, HasPreviousPage: result.HasPrevious}
+	if len(edges) > 0 {
+		start, end := edges[0].Cursor, edges[len(edges)-1].Cursor
+		pi.StartCursor, pi.EndCursor = &start, &end
+	}
+	return &model.ProductConnection{Edges: edges, PageInfo: pi}
+}
 
 const (
 	categoryAPIVersion = "catalog.gitstore.dev/v1beta1"
@@ -122,12 +154,9 @@ func (s *Service) commitCategoryManifest(ctx context.Context, input CategoryMani
 		repositoryID, path = existing.RepositoryID, existing.SourcePath
 	}
 
-	current, err := s.gitWriter.ReadFileForRepo(ctx, repositoryID, path, categoryRefName)
+	current, err := s.readManifestForWrite(ctx, repositoryID, path, categoryRefName, create)
 	if err != nil {
-		if status.Code(err) != codes.NotFound {
-			return nil, "", fmt.Errorf("read current category manifest: %w", err)
-		}
-		current = nil
+		return nil, "", fmt.Errorf("read current category manifest: %w", err)
 	}
 	var body []byte
 	switch {
@@ -371,8 +400,8 @@ func (s *Service) deleteCategoryManifest(ctx context.Context, uid, caller string
 }
 
 // completeCategoryDeletion backs the completeCategoryDeletion mutation.
-func (r *mutationResolver) completeCategoryDeletion(ctx context.Context, namespace, name, resourceVersion string) (*datastore.CategoryTaxonomy, error) {
-	deleted, err := r.service.CompleteCategoryDeletion(ctx, namespace, name, resourceVersion)
+func (r *mutationResolver) completeCategoryDeletion(ctx context.Context, namespace, name, resourceVersion, expectedUID string) (*datastore.CategoryTaxonomy, error) {
+	deleted, err := r.service.CompleteCategoryDeletion(ctx, namespace, name, resourceVersion, expectedUID)
 	if errors.Is(err, datastore.ErrConflict) {
 		if deleted == nil {
 			return nil, fmt.Errorf("complete category deletion conflict, and current version could not be read")

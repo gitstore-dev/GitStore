@@ -29,6 +29,8 @@ type CommittedManifestRequest struct {
 	// exists at CommitSHA. They are used only for OperationDelete.
 	Kind string
 	Name string
+	// ExpectedUID binds infrastructure deletion to the admitted incarnation.
+	ExpectedUID string
 }
 
 // CommittedManifestResult identifies the resource admitted from a committed

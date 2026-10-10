@@ -45,6 +45,7 @@ type fakeDeletionClient struct {
 	completeCalls int
 	decoupleErr   error
 	completeErr   error
+	completeUID   string
 }
 
 func (f *fakeDeletionClient) DecoupleProducts(context.Context, string, string, string) (bool, error) {
@@ -52,8 +53,9 @@ func (f *fakeDeletionClient) DecoupleProducts(context.Context, string, string, s
 	return f.hasMore, f.decoupleErr
 }
 
-func (f *fakeDeletionClient) CompleteDeletion(context.Context, string, string, string) error {
+func (f *fakeDeletionClient) CompleteDeletion(_ context.Context, _, _, _, uid string) error {
 	f.completeCalls++
+	f.completeUID = uid
 	return f.completeErr
 }
 
@@ -209,6 +211,7 @@ func TestReconcile_TerminatingCategoryDecouplesProductsThenCompletes(t *testing.
 	if deletion.decoupleCalls != 1 || deletion.completeCalls != 1 {
 		t.Fatalf("deletion calls = decouple %d, complete %d; want 1 each", deletion.decoupleCalls, deletion.completeCalls)
 	}
+	assert.Equal(t, settled.UID, deletion.completeUID)
 }
 
 func TestReconcile_TerminatingCategoryContinuesAfterBoundedProductPage(t *testing.T) {

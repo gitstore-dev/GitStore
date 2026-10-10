@@ -379,8 +379,14 @@ func TestNamespaceAuthoritativeCommitsProduceCDCButRejectedWritesDoNot(t *testin
 	time.Sleep(200 * time.Millisecond)
 	assert.Equal(t, afterUpdate, namespaceCDCRowCount(t), "conflict must not create CDC rows")
 
+	expected = current.ResourceVersion
+	deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+	current.DeletionTimestamp = &deletedAt
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.NoError(t, store.MarkNamespaceDeletion(ctx, current, expected))
+	afterMark := waitForNamespaceCDCRows(t, afterUpdate)
 	require.NoError(t, store.DeleteNamespaceWithResourceVersion(ctx, current.UID, current.ResourceVersion))
-	assert.Greater(t, waitForNamespaceCDCRows(t, afterUpdate), afterUpdate)
+	assert.Greater(t, waitForNamespaceCDCRows(t, afterMark), afterMark)
 }
 
 func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
@@ -676,6 +682,12 @@ func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *tes
 		}, 75*time.Second, 100*time.Millisecond, "File CDC event %s version %s was not persisted", eventType, version)
 		return found
 	}
+	require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{
+		UID: newID(), Name: file.Namespace, CreationTimestamp: file.CreationTimestamp,
+	}))
+	require.NoError(t, store.CreateRepositoryInActiveNamespace(t.Context(), &datastore.Repository{
+		UID: file.RepositoryID, Namespace: file.Namespace, Name: "catalog", CreationTimestamp: file.CreationTimestamp,
+	}))
 	require.NoError(t, store.CreateFile(t.Context(), file))
 	added := next(datastore.ResourceWatchAdded, "1")
 	require.Equal(t, file.Labels, added.SelectorLabels)
@@ -805,7 +817,7 @@ func TestCategoryTaxonomyCDCReaderMaterializesLifecycle(t *testing.T) {
 	require.Equal(t, terminating.ResourceVersion, observed.ResourceVersion)
 	require.NotNil(t, observed.DeletionTimestamp)
 
-	_, err = deletion.CompleteCategoryTaxonomyDeletion(context.Background(), category.Namespace, category.Name, terminating.ResourceVersion)
+	_, err = deletion.CompleteCategoryTaxonomyDeletion(context.Background(), category.Namespace, category.Name, terminating.ResourceVersion, category.UID)
 	require.NoError(t, err)
 	deleted := next(datastore.ResourceWatchDeleted)
 	require.Empty(t, deleted.Payload)

@@ -112,6 +112,20 @@ non-deprecated. Removal requires a future major GraphQL API release.
 
 ## Valid and invalid expectations
 
+Deletion removes the manifest in the namespace's system repository at initiation,
+not at `completeRepositoryDeletion`. Admission retains the terminating record and
+name mapping until UID-bound backing-storage cleanup completes. Catalog resources
+block deletion; other finalizers block final record removal. A pending authorized
+Git deletion is durable system state, not an authored manifest field. Direct
+user deletion of the system repository is not supported: Namespace completion
+removes it only when empty.
+
+`completeRepositoryDeletion` requires the observed Relay Node `id`, `namespace`,
+`name`, and `resourceVersion`. The input identity field is `id`, not `uid`;
+`metadata.uid` remains an output field. Completion verifies the exact resource
+incarnation before deleting backing storage, so a delayed request cannot delete a
+same-name replacement.
+
 Valid:
 
 - An existing row with no contract fields returns non-null metadata, spec,

@@ -184,7 +184,20 @@ func TestScyllaSchemaIsPerResourceBaseline(t *testing.T) {
 		"009_service_account.cql",
 		"010_category_ancestor_index.cql",
 		"011_category_product_index.cql",
+		"012_repository_resource_membership.cql",
 	}, names)
+}
+
+func TestRepositoryMembershipMigrationDefinesOnlySharedTables(t *testing.T) {
+	content, err := migrations.Files.ReadFile("012_repository_resource_membership.cql")
+	require.NoError(t, err)
+	schema := string(content)
+	assert.Equal(t, 2, strings.Count(schema, "CREATE TABLE"))
+	assert.Contains(t, schema, "CREATE TABLE IF NOT EXISTS resources_by_repository (")
+	assert.Contains(t, schema, "PRIMARY KEY ((repository_id, shard), kind, uid)")
+	assert.Contains(t, schema, "CREATE TABLE IF NOT EXISTS repository_catalog_projection_state (")
+	assert.Contains(t, schema, "membership_ready boolean")
+	assert.NotContains(t, schema, "ALTER TABLE")
 }
 
 func TestInfraMigrationDefinesSharedTables(t *testing.T) {

@@ -30,9 +30,19 @@ func (deletionAuthZ) Authorize(context.Context, *auth.Principal, string, auth.Re
 }
 
 func TestDeleteNamespaceResolverOutcomes(t *testing.T) {
-	mutation, store := newNamespaceDeletionResolver(t)
+	e := newCategoryLifecycleEnv(t)
+	mutation, store := e.mut, e.store
 	ctx := context.Background()
 	ns := seedDeletionNamespace(t, store, "resolver-delete")
+	global := seedDeletionNamespace(t, store, "gitstore-system")
+	author := uuid.NewString()
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{UID: author, Namespace: global.Name, Name: SystemRepositoryName}))
+	require.NoError(t, store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: global.Name, Name: SystemRepositoryName, RepositoryID: author}))
+	expected := ns.ResourceVersion
+	ns.SourcePath, ns.GitRef = "namespaces/"+ns.Name+".md", "refs/heads/main"
+	ns.GitCommitSHA = e.git.write(author, ns.SourcePath, []byte("---\napiVersion: gitstore.dev/v1beta1\nkind: Namespace\nmetadata:\n  name: resolver-delete\nspec:\n  tier: USER\n---\n"))
+	datastore.AdvanceNamespaceSystemVersion(ns)
+	require.NoError(t, store.UpdateNamespace(ctx, ns, expected))
 
 	payload, err := invokeDeleteNamespaceResolver(t, mutation, store, ctx, ns.Name)
 	require.NoError(t, err)

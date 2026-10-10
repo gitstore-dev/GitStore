@@ -103,18 +103,26 @@ For `updateRepository` mutations: the API commits an updated manifest to
    the repository.
    - If catalog resources exist, the delete is **rejected** with
      `FailedPrecondition: catalog resources present`.
-3. If the repository is clear, the API adds the `gitstore.dev/foreground-deletion`
-   finalizer and sets `metadata.deletionTimestamp`.
+3. If the repository is clear, the mutation removes
+   `<namespace>/gitstore-system:repositories/<name>.md` with an expected-ref/commit
+   precondition. Shared push/mutation admission then adds the
+   `gitstore.dev/foreground-deletion` finalizer and sets `metadata.deletionTimestamp`.
 4. Repository enters `Terminating` status.
-5. The controller drains platform records referencing this repository
-   (`HydrationRecord`, `AdmissionResult`, `ReconcileJob`) and then
-   triggers git-service to archive or remove the bare repository from disk.
+5. Controller completion rechecks blockers and triggers git-service to remove
+   the bare repository by immutable UID, not namespace/name.
 6. After the git-service confirms removal, the controller removes the finalizer.
 7. Once all finalizers are cleared, the datastore record is hard-deleted.
 
 The `gitstore-system` repository cannot be deleted while the namespace exists. Its
 deletion is only permitted as part of namespace finalisation (see
 [ADR-0002](0002-namespace-lifecycle.md)).
+
+**Deletion parity amendment:** The manifest disappears at initiation; backing
+storage, the name mapping, and the resource row remain until completion. Durable
+system-owned intent and guarded Git removal evidence recover interrupted
+mutations. Completion is UID/version-bound, preserves other finalizers, and
+rechecks catalog blockers. Retained Git UID tombstones prevent stale provisioning
+from resurrecting removed storage; new same-name resources use new UIDs.
 
 ### Git write path
 

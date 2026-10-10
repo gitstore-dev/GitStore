@@ -250,7 +250,7 @@ func TestRepositoryStatusMutationUsesControllerWriteAction(t *testing.T) {
 	}{
 		{name: "status", field: "updateRepositoryStatus", input: model.UpdateRepositoryStatusInput{Namespace: h.sourceNamespace.Name, Name: h.repository.Name}, action: "repository.status.write"},
 		{name: "provision storage", field: "provisionRepositoryStorage", input: model.ProvisionRepositoryStorageInput{Namespace: h.sourceNamespace.Name, Name: h.repository.Name}, action: "repository.status.write"},
-		{name: "complete deletion", field: "completeRepositoryDeletion", input: model.CompleteRepositoryDeletionInput{Namespace: h.sourceNamespace.Name, Name: h.repository.Name, ResourceVersion: "1"}, action: "repository.purge"},
+		{name: "complete deletion", field: "completeRepositoryDeletion", input: model.CompleteRepositoryDeletionInput{ID: h.repositoryNodeID, Namespace: h.sourceNamespace.Name, Name: h.repository.Name, ResourceVersion: "1"}, action: "repository.purge"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h.authz.reset()

@@ -53,11 +53,13 @@ type fakeDeletionClient struct {
 	err   error
 	calls []string
 	rvs   []string
+	uids  []string
 }
 
-func (f *fakeDeletionClient) CompleteDeletion(_ context.Context, namespace, resourceVersion string) error {
+func (f *fakeDeletionClient) CompleteDeletion(_ context.Context, namespace, resourceVersion, uid string) error {
 	f.calls = append(f.calls, namespace)
 	f.rvs = append(f.rvs, resourceVersion)
+	f.uids = append(f.uids, uid)
 	return f.err
 }
 
@@ -370,24 +372,40 @@ func TestReconcileBootstrapNamespacesAreIgnored(t *testing.T) {
 	}
 }
 
-func TestReconcileTerminatingNamespaceRequeuesWhileRepositoriesRemain(t *testing.T) {
+func TestReconcileTerminatingNamespaceDelegatesSystemRepositoryCleanup(t *testing.T) {
 	current := Namespace{
 		Name:            "acme",
 		ResourceVersion: "9",
 		Finalizers:      []string{ForegroundDeletionFinalizer},
 	}
+
 	repos := &fakeRepositoryClient{hasRepos: true}
 	deletion := &fakeDeletionClient{}
 	r := NewReconciler(seedNamespaceCache(t, current), &fakeStatusClient{}, repos, deletion)
 
 	result := r.Reconcile(context.Background(), namespaceKey("acme"))
 
-	requeue, ok := result.(types.RequeueAfter)
-	if !ok || requeue.After <= 0 {
-		t.Fatalf("Reconcile result = %#v, want positive types.RequeueAfter", result)
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %#v, want success", result)
 	}
-	if len(deletion.calls) != 0 {
-		t.Fatalf("CompleteDeletion calls = %v, want none while repositories remain", deletion.calls)
+	if len(deletion.calls) != 1 {
+		t.Fatalf("CompleteDeletion calls = %v, want API-owned system repository cleanup", deletion.calls)
+	}
+}
+
+func TestReconcilePendingNamespaceResumesDeletionWithoutProvisioning(t *testing.T) {
+	current := Namespace{
+		UID: "namespace-incarnation", Name: "acme", ResourceVersion: "9",
+		Status: status.ResourceStatus{Conditions: []*status.Condition{{Type: "DeletionPending", Status: "TRUE"}}},
+	}
+	repos := &fakeRepositoryClient{}
+	deletion := &fakeDeletionClient{}
+	r := NewReconciler(seedNamespaceCache(t, current), &fakeStatusClient{}, repos, deletion)
+	if _, ok := r.Reconcile(context.Background(), namespaceKey("acme")).(types.Success); !ok {
+		t.Fatal("pending deletion did not complete")
+	}
+	if len(deletion.calls) != 1 || deletion.uids[0] != current.UID || len(repos.ensured) != 0 {
+		t.Fatalf("pending deletion calls=%v uids=%v provisioning=%v", deletion.calls, deletion.uids, repos.ensured)
 	}
 }
 

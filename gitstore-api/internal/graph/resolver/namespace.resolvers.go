@@ -114,11 +114,15 @@ func (r *mutationResolver) TransferNamespaceOwner(ctx context.Context, input mod
 
 // CompleteNamespaceDeletion is the resolver for the completeNamespaceDeletion field.
 func (r *mutationResolver) CompleteNamespaceDeletion(ctx context.Context, input model.CompleteNamespaceDeletionInput) (*model.CompleteNamespaceDeletionPayload, error) {
+	uid, err := decodeNodeIDAs(nodeKindNamespace, input.ID)
+	if err != nil {
+		return nil, err
+	}
 	name := input.Name
 	if strings.TrimSpace(name) == "" {
 		return nil, &gqlerror.Error{Message: "name must not be empty", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
 	}
-	deleted, err := r.service.CompleteNamespaceDeletion(ctx, name, input.ResourceVersion)
+	deleted, err := r.service.CompleteNamespaceDeletion(ctx, name, input.ResourceVersion, uid)
 	if errors.Is(err, datastore.ErrConflict) {
 		if deleted == nil {
 			return nil, gqlerror.Errorf("namespace deletion conflict, and current version could not be read")
@@ -127,6 +131,9 @@ func (r *mutationResolver) CompleteNamespaceDeletion(ctx context.Context, input 
 	}
 	if err != nil {
 		return nil, err
+	}
+	if deleted == nil {
+		return &model.CompleteNamespaceDeletionPayload{}, nil
 	}
 	id := mustEncodeNodeID(nodeKindNamespace, namespaceUID(deleted))
 	return &model.CompleteNamespaceDeletionPayload{ID: &id}, nil

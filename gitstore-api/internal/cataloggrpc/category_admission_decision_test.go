@@ -58,6 +58,10 @@ func categoryManifest(name, title string) string {
 
 func newDecisionServer(t *testing.T, store datastore.Datastore) *Server {
 	t.Helper()
+	require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{UID: "00000000-0000-0000-0000-000000000002", Name: "gitstore"}))
+	require.NoError(t, store.CreateRepository(t.Context(), &datastore.Repository{
+		UID: "00000000-0000-0000-0000-000000000001", Namespace: "gitstore", Name: "catalog",
+	}))
 	srv, err := NewServer(ServerDeps{
 		Store:                   store,
 		Logger:                  zap.NewNop(),

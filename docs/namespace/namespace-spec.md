@@ -164,6 +164,19 @@ admitted generation, and records the admitted Git revision in
 `resourceVersion`, and sets `SystemRepoReady` and `Ready`. Accepted deletion
 sets the deletion timestamp/finalizer and exposes `Terminating`.
 
+Deletion removes the authored manifest before termination is admitted, for both
+Git pushes and GraphQL mutations. `DeletionPending=True` identifies an authorized
+mutation whose Git/admission work must be recovered; it is system-owned and
+survives controller status patches. The Namespace name remains reserved through
+finalization. Ordinary repositories and catalog resources block deletion; the
+verified empty system repository is cleaned up during completion.
+
+`completeNamespaceDeletion` requires the observed Relay Node `id`, `name`, and
+`resourceVersion`. Its input identity field is `id`, not `uid`; output
+`metadata.uid` is unchanged. Completion verifies the exact namespace incarnation
+before cleanup, rejecting a stale request for a same-name replacement even when
+the resource version matches.
+
 ## Admission and deletion phase matrix
 
 | Operation | Structural/pre-receive phase                                                                                                                 | Stateful policy phase                                                                                                              | Successful result                                                                          |

@@ -4,6 +4,8 @@
 package resolver
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +13,41 @@ import (
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/validator/rules"
 )
+
+func TestCompletionDeletionIdentitySchemaContract(t *testing.T) {
+	schema := productContractSchema(t)
+	kinds := []string{"Namespace", "Repository", "Product", "Category"}
+	var completions []string
+	for _, field := range schema.Mutation.Fields {
+		if strings.HasPrefix(field.Name, "complete") && strings.HasSuffix(field.Name, "Deletion") {
+			completions = append(completions, field.Name)
+		}
+	}
+	require.ElementsMatch(t, []string{"completeNamespaceDeletion", "completeRepositoryDeletion", "completeProductDeletion", "completeCategoryDeletion"}, completions,
+		"all implemented deletion completion endpoints must enforce the same identity contract")
+	for _, kind := range kinds {
+		t.Run(kind, func(t *testing.T) {
+			input := "Complete" + kind + "DeletionInput"
+			requireGraphQLField(t, schema, input, "id", "ID!")
+			requireGraphQLField(t, schema, input, "name", "String!")
+			requireGraphQLField(t, schema, input, "resourceVersion", "String!")
+			require.Nil(t, schema.Types[input].Fields.ForName("uid"), "completion inputs use Node id, not metadata.uid")
+			route := `name: "item", resourceVersion: "1"`
+			if kind != "Namespace" {
+				requireGraphQLField(t, schema, input, "namespace", "String!")
+				route += `, namespace: "acme"`
+			}
+			for _, identity := range []string{"", "id: null,", `uid: "old-input",`} {
+				query := fmt.Sprintf(`mutation { complete%sDeletion(input: {%s %s}) { id } }`, kind, identity, route)
+				_, errs := gqlparser.LoadQueryWithRules(schema, query, rules.NewDefaultRules())
+				require.NotEmpty(t, errs, "missing/null id and removed uid input must fail schema validation")
+			}
+			query := fmt.Sprintf(`mutation($id: ID!) { complete%sDeletion(input: {id: $id, %s}) { id } }`, kind, route)
+			_, errs := gqlparser.LoadQueryWithRules(schema, query, rules.NewDefaultRules())
+			require.Empty(t, errs)
+		})
+	}
+}
 
 func TestCreateCategorySchemaContract(t *testing.T) {
 	schema := productContractSchema(t)

@@ -57,6 +57,15 @@ func fromFileRow(r *fileRow) *datastore.File {
 }
 
 func (s *scyllaDatastore) CreateFile(ctx context.Context, f *datastore.File) error {
+	if f == nil {
+		return datastore.ErrInvalidArgument
+	}
+	return s.catalogMutation(ctx, "File", f.Namespace, f.RepositoryID, f.UID, false, func() error {
+		return s.createFile(ctx, f)
+	})
+}
+
+func (s *scyllaDatastore) createFile(ctx context.Context, f *datastore.File) error {
 	if f == nil || f.UID == "" || f.Namespace == "" || f.Name == "" {
 		return fmt.Errorf("%w: file uid, namespace, and name are required", datastore.ErrInvalidArgument)
 	}
@@ -144,6 +153,15 @@ func (s *scyllaDatastore) ListFiles(ctx context.Context, ns string, page datasto
 	return buildPageResult(items, page.Limit(), page), nil
 }
 func (s *scyllaDatastore) UpdateFile(ctx context.Context, f *datastore.File, expectedResourceVersion string) error {
+	if f == nil {
+		return datastore.ErrInvalidArgument
+	}
+	return s.catalogMutation(ctx, "File", f.Namespace, f.RepositoryID, f.UID, false, func() error {
+		return s.updateFile(ctx, f, expectedResourceVersion)
+	})
+}
+
+func (s *scyllaDatastore) updateFile(ctx context.Context, f *datastore.File, expectedResourceVersion string) error {
 	old, err := s.GetFile(ctx, f.UID)
 	if err != nil {
 		return err
@@ -179,6 +197,12 @@ func (s *scyllaDatastore) DeleteFileWithResourceVersion(ctx context.Context, uid
 	return s.deleteFileWithResourceVersion(ctx, f, expectedResourceVersion)
 }
 func (s *scyllaDatastore) deleteFileWithResourceVersion(ctx context.Context, f *datastore.File, expectedResourceVersion string) error {
+	return s.catalogMutation(ctx, "File", f.Namespace, f.RepositoryID, f.UID, true, func() error {
+		return s.deleteFileFenced(ctx, f, expectedResourceVersion)
+	})
+}
+
+func (s *scyllaDatastore) deleteFileFenced(ctx context.Context, f *datastore.File, expectedResourceVersion string) error {
 	uid := f.UID
 	parsed := mustParseUUID(uid)
 	if err := s.deleteFileAuthoritative(ctx, toFileRow(f), expectedResourceVersion); err != nil {

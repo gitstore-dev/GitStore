@@ -4,9 +4,17 @@
 package datastore
 
 import (
+	"context"
 	"encoding/json"
 	"math/big"
 )
+
+// RepositoryDeletionStore is an optional guarded completion capability.
+// Completion requires the current UID/version, termination, no foreign
+// finalizers and a fresh empty-catalog check. Mapping cleanup is UID-owned.
+type RepositoryDeletionStore interface {
+	CompleteRepositoryDeletion(ctx context.Context, uid, expectedResourceVersion string) error
+}
 
 const (
 	RepositoryInitialGeneration      int64  = 1

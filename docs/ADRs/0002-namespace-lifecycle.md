@@ -97,20 +97,28 @@ Bootstrap namespaces are system-managed and reject `updateNamespace`.
 #### Delete
 
 1. Caller issues `deleteNamespace` mutation or deletes the manifest from git.
-2. Before any record is removed, the API checks whether repositories exist in the
-   namespace.
-   - If repositories exist, the delete is **rejected** with
+2. Before removing the manifest, admission checks for ordinary repositories
+   (including terminating ones) and catalog resources in the system repository.
+   - If either exists, the delete is **rejected** with
      `FailedPrecondition: repositories present`.
-3. If the namespace is clear, the API sets `metadata.deletionTimestamp` and adds
+3. The mutation removes `namespaces/<name>.md` from the canonical authoring
+   repository using an expected-ref/commit precondition. Push removal and mutation
+   removal share admission, which sets `metadata.deletionTimestamp` and adds
    the `gitstore.dev/foreground-deletion` finalizer to the datastore record.
 4. The namespace enters `Terminating` status.
-5. The controller drains any remaining platform records (e.g. `HydrationRecord`,
-   `AuditLog` entries, `gitstore-system` repository) and then removes the finalizer.
+5. Controller completion removes the verified empty system repository, using
+   UID-bound Repository cleanup. Other finalizers remain blockers.
 6. Once all finalizers are removed, the datastore record is hard-deleted.
 
-**Cascade rule:** Repositories must be deleted (and their own finalizers drained) before
+**Cascade rule:** Ordinary repositories must be deleted (and their own finalizers drained) before
 namespace deletion can proceed. `deleteNamespace` must never trigger silent cascade
 deletion of repositories — the caller must delete repositories explicitly.
+
+**Deletion parity amendment:** The authoring manifest disappears at initiation,
+not completion. The Namespace row reserves the name until finalization. A durable
+system-owned deletion intent bridges Git writes and admission; finalization
+requires recorded removal evidence and the same resource UID/version. An empty
+system repository is the only repository-cleanup exception, not a general cascade.
 
 > Bootstrap namespaces cannot be deleted.
 

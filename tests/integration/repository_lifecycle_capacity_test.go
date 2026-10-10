@@ -134,6 +134,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	poolPrefix := "rcp-" + runID + "-"
 	createRepositoryCapacityPool(t, client, cfg, poolPrefix)
 	assertRepositoryCrossReplicaRead(t, cfg, poolPrefix+"1")
+	assertRepositoryCapacityDeletionParity(t, client, cfg, "rcd-"+runID)
 	var fileWorkload *secretCapacityFileWorkload
 	if secretCapacityRequested() {
 		fileWorkload = prepareSecretCapacityFileWorkload(t, cfg, poolPrefix, runID)
@@ -1198,6 +1199,89 @@ func TestOpenRepositoryCapacityOverflowSubscriberWaitsForBookmark(t *testing.T) 
 	case <-time.After(2 * time.Second):
 		t.Fatal("overflow subscriber did not return after its registration BOOKMARK")
 	}
+}
+
+func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, name string) {
+	t.Helper()
+	ctx := context.Background()
+	gitURL := strings.TrimRight(os.Getenv("GIT_URL"), "/")
+	require.NoError(t, validateSecretCapacityGitEndpoint(gitURL))
+	var previousUID string
+	directory := filepath.Join(t.TempDir(), "authoring")
+	for _, mode := range []string{"mutation", "push"} {
+		require.NoError(t, repositoryCapacityMutation(ctx, client, cfg.apiA, cfg.token, true, cfg.namespace, name, "deletion", 0, ""))
+		response := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
+			repository(by: {namespacePath: {namespace: $namespace, name: $name}}) { id metadata { resourceVersion } }
+		}`, map[string]any{"namespace": cfg.namespace, "name": name})
+		require.Empty(t, response.Errors)
+		var current struct {
+			Repository struct {
+				ID       string `json:"id"`
+				Metadata struct {
+					ResourceVersion string `json:"resourceVersion"`
+				} `json:"metadata"`
+			} `json:"repository"`
+		}
+		require.NoError(t, json.Unmarshal(response.Data, &current))
+		require.NotEmpty(t, current.Repository.ID)
+		if previousUID != "" {
+			require.NotEqual(t, previousUID, current.Repository.ID)
+			stale := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($ns: String!, $name: String!, $uid: ID!, $rv: String!) {
+				completeRepositoryDeletion(input: {namespace: $ns, name: $name, id: $uid, resourceVersion: $rv}) { id }
+			}`, map[string]any{"ns": cfg.namespace, "name": name, "uid": previousUID, "rv": current.Repository.Metadata.ResourceVersion})
+			require.NotEmpty(t, stale.Errors, "stale completion must reject a same-name replacement")
+			var staleError struct {
+				Extensions struct {
+					Code string `json:"code"`
+				} `json:"extensions"`
+			}
+			require.NoError(t, json.Unmarshal(stale.Errors[0], &staleError))
+			require.Equal(t, "CONFLICT", staleError.Extensions.Code)
+		}
+		path := "repositories/" + name + ".md"
+		if mode == "mutation" {
+			_, err := newSecretCapacityGitWorker(ctx, directory, gitURL+"/"+cfg.namespace+"/gitstore-system.git", cfg.namespace, name, cfg.token, 0)
+			require.NoError(t, err)
+		} else {
+			_, err := secretCapacityGit(ctx, directory, cfg.token, "fetch", "--quiet", "--depth=1", "origin", "refs/heads/main")
+			require.NoError(t, err)
+			_, err = secretCapacityGit(ctx, directory, "", "checkout", "--quiet", "--detach", "FETCH_HEAD")
+			require.NoError(t, err)
+		}
+		contents, err := secretCapacityGit(ctx, directory, "", "ls-tree", "--name-only", "HEAD", "--", path)
+		require.NoError(t, err)
+		require.Equal(t, path, strings.TrimSpace(string(contents)), "created manifest must exist")
+		if mode == "mutation" {
+			deleted := gqlQueryWithURL(t, cfg.apiB, cfg.token, `mutation($id: ID!) {
+				deleteRepository(input: {id: $id}) { outcome repository { metadata { deletionTimestamp } } }
+			}`, map[string]any{"id": current.Repository.ID})
+			require.Empty(t, deleted.Errors)
+			require.Contains(t, string(deleted.Data), "TERMINATION_STARTED")
+		} else {
+			_, err := secretCapacityGit(ctx, directory, "", "rm", "--", path)
+			require.NoError(t, err)
+			_, err = secretCapacityGit(ctx, directory, "", "commit", "--quiet", "-m", "Delete capacity Repository")
+			require.NoError(t, err)
+			_, err = secretCapacityGit(ctx, directory, cfg.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+			require.NoError(t, err)
+		}
+		_, err = secretCapacityGit(ctx, directory, cfg.token, "fetch", "--quiet", "--depth=1", "origin", "refs/heads/main")
+		require.NoError(t, err)
+		contents, err = secretCapacityGit(ctx, directory, "", "ls-tree", "--name-only", "FETCH_HEAD", "--", path)
+		require.NoError(t, err)
+		require.Empty(t, strings.TrimSpace(string(contents)), "initiation must remove the authoring manifest")
+		require.Eventually(t, func() bool {
+			for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+				read := gqlQueryWithURL(t, endpoint, cfg.token, `query($id: ID!) { node(id: $id) { id } }`, map[string]any{"id": current.Repository.ID})
+				if len(read.Errors) != 0 || !bytes.Contains(read.Data, []byte(`"node":null`)) {
+					return false
+				}
+			}
+			return true
+		}, 60*time.Second, 250*time.Millisecond, "controllers must complete deletion on both replicas")
+		previousUID = current.Repository.ID
+	}
+	t.Log("repository deletion parity: mutation/push manifest removal, controller completion, name reuse and stale UID rejection verified")
 }
 
 func assertRepositoryCrossReplicaRead(t *testing.T, cfg repositoryCapacityConfig, name string) {

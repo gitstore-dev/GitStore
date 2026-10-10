@@ -70,6 +70,7 @@ type GitWriter interface {
 	CommitFile(ctx context.Context, p gitclient.CommitFileParams) (string, error)
 	CommitFileForRepo(ctx context.Context, repositoryID string, p gitclient.CommitFileParams) (string, error)
 	ResolveRefForRepo(ctx context.Context, repositoryID, ref string) (string, error)
+	// NotFound must mean confirmed path absence, never a missing repository/ref.
 	ReadFileForRepo(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
 	DeleteFile(ctx context.Context, p gitclient.DeleteFileParams) (string, error)
 	DeleteFileForRepo(ctx context.Context, repositoryID string, p gitclient.DeleteFileParams) (string, error)
@@ -219,12 +220,9 @@ func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind st
 			return nil, admission.NewError(admission.CodeFailedPrecondition, "PROVENANCE_UNAVAILABLE", "Product was not authored from the default branch")
 		}
 	}
-	current, err := s.gitWriter.ReadFileForRepo(ctx, repositoryID, path, productRef)
+	current, err := s.readManifestForWrite(ctx, repositoryID, path, productRef, create)
 	if err != nil {
-		if status.Code(err) != codes.NotFound {
-			return nil, fmt.Errorf("read current Product manifest: %w", err)
-		}
-		current = nil
+		return nil, fmt.Errorf("read current Product manifest: %w", err)
 	}
 	manifestBody := []byte{}
 	if body != nil {
@@ -337,16 +335,17 @@ func (s *Service) DeleteProductManifest(ctx context.Context, uid, caller string)
 
 // CompleteProductDeletion repeats the blocker check at the controller-owned
 // finalizer boundary so at-least-once reconciliation cannot orphan a variant.
-func (s *Service) CompleteProductDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*datastore.Product, error) {
+func (s *Service) CompleteProductDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*datastore.Product, error) {
 	product, err := s.store.GetProductByName(ctx, namespace, name)
 	if err != nil {
 		return nil, err
 	}
+	if expectedUID == "" || expectedResourceVersion == "" || name == "" || namespace == "" ||
+		product.ResourceVersion != expectedResourceVersion || product.UID != expectedUID || product.Name != name || product.Namespace != namespace {
+		return product, datastore.ErrConflict
+	}
 	if product.DeletionTimestamp == nil {
 		return product, gqlerror.Errorf("Product %q is not terminating", name)
-	}
-	if product.ResourceVersion != expectedResourceVersion {
-		return product, datastore.ErrConflict
 	}
 	owners, ok := s.store.(datastore.OwnerReferenceStore)
 	if !ok {
@@ -433,7 +432,7 @@ func (s *Service) GetCategoryTaxonomyByName(ctx context.Context, namespace, name
 // CompleteCategoryDeletion finalizes a controller-observed foreground
 // deletion. It repeats the blocking-dependent check immediately before the
 // resource-version-guarded delete so a child-created race cannot orphan it.
-func (s *Service) CompleteCategoryDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*datastore.CategoryTaxonomy, error) {
+func (s *Service) CompleteCategoryDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*datastore.CategoryTaxonomy, error) {
 	category, err := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
 	if errors.Is(err, datastore.ErrNotFound) {
 		return nil, nil
@@ -441,7 +440,8 @@ func (s *Service) CompleteCategoryDeletion(ctx context.Context, namespace, name,
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to retrieve category deletion state")
 	}
-	if category.ResourceVersion != expectedResourceVersion {
+	if expectedUID == "" || expectedResourceVersion == "" || name == "" || namespace == "" ||
+		category.ResourceVersion != expectedResourceVersion || category.UID != expectedUID || category.Name != name || category.Namespace != namespace {
 		return category, datastore.ErrConflict
 	}
 	if category.DeletionTimestamp == nil || !containsString(category.Finalizers, datastore.CategoryTaxonomyForegroundDeletionFinalizer) {
@@ -473,12 +473,12 @@ func (s *Service) CompleteCategoryDeletion(ctx context.Context, namespace, name,
 	if !ok {
 		return nil, gqlerror.Errorf("category deletion lifecycle is unavailable")
 	}
-	deleted, err := lifecycle.CompleteCategoryTaxonomyDeletion(ctx, namespace, name, expectedResourceVersion)
+	deleted, err := lifecycle.CompleteCategoryTaxonomyDeletion(ctx, namespace, name, expectedResourceVersion, expectedUID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return category, err
 	}
 	return deleted, nil
 }
@@ -765,6 +765,13 @@ func (s *Service) preflightRepositoryManifestOperation(ctx context.Context, name
 	if err != nil {
 		return gqlerror.Errorf("failed to validate Repository operation")
 	}
+	intent, err := admission.ReadDeletionIntent(existing.Status)
+	if err != nil {
+		return err
+	}
+	if existing.DeletionTimestamp != nil || intent != nil {
+		return admission.NewError(admission.CodeFailedPrecondition, "REPOSITORY_TERMINATING", "repository deletion is pending")
+	}
 	if err := guardOwnerAnnotationUnchanged(existing.Annotations, annotations); err != nil {
 		return err
 	}
@@ -801,6 +808,13 @@ func (s *Service) UpdateNamespace(ctx context.Context, input model.UpdateNamespa
 	existing, lookupErr := s.store.GetNamespaceByName(ctx, resource.Metadata.Name)
 	switch {
 	case lookupErr == nil:
+		intent, err := admission.ReadDeletionIntent(existing.Status)
+		if err != nil {
+			return nil, err
+		}
+		if existing.DeletionTimestamp != nil || intent != nil {
+			return nil, admissionMutationGraphQLError(admission.NewError(admission.CodeFailedPrecondition, "NAMESPACE_TERMINATING", "namespace deletion is pending"))
+		}
 		if err := guardOwnerAnnotationUnchanged(existing.Annotations, resource.Metadata.Annotations); err != nil {
 			return nil, err
 		}
@@ -1253,6 +1267,17 @@ func (s *Service) ProvisionSystemRepository(ctx context.Context, namespace, call
 	if err != nil {
 		return err
 	}
+	current, err := s.store.GetNamespaceByName(ctx, namespaceName)
+	if err != nil {
+		return err
+	}
+	intent, err := admission.ReadDeletionIntent(current.Status)
+	if err != nil {
+		return err
+	}
+	if current.DeletionTimestamp != nil || intent != nil {
+		return admission.NewError(admission.CodeFailedPrecondition, "NAMESPACE_TERMINATING", "namespace deletion is pending")
+	}
 	if _, err := s.store.LookupRepository(ctx, namespaceName, SystemRepositoryName); err == nil {
 		s.logger.Info("system repository already provisioned",
 			zap.String("namespace", namespaceName),
@@ -1409,7 +1434,7 @@ func (s *Service) DeleteNamespace(ctx context.Context, ns *datastore.Namespace) 
 	if namespaceadmission.IsBootstrap(current.Name) {
 		blockers = append(blockers, namespaceadmission.ReasonBootstrapNamespace)
 	}
-	hasRepos, err := s.store.HasRepositories(ctx, current.Name)
+	hasRepos, err := datastore.NamespaceDeletionBlocked(ctx, s.store, current)
 	if err != nil {
 		s.logger.Error("failed to check for existing repositories",
 			zap.String("operation", "delete"),
@@ -1436,51 +1461,22 @@ func (s *Service) DeleteNamespace(ctx context.Context, ns *datastore.Namespace) 
 		return "", NewNamespaceDeletionBlockedError(blockers, fmt.Sprintf("namespace %q cannot be deleted", current.Name))
 	}
 
-	now := s.clock.Now().UTC()
-	current.DeletionTimestamp = &now
-	if !containsString(current.Finalizers, datastore.NamespaceForegroundDeletionFinalizer) {
-		current.Finalizers = append(current.Finalizers, datastore.NamespaceForegroundDeletionFinalizer)
-	}
-	expectedResourceVersion := current.ResourceVersion
-	datastore.AdvanceNamespaceSystemVersion(current)
-	current.UpdateTimestamp = now
-	if err := s.store.MarkNamespaceDeletion(ctx, current, expectedResourceVersion); err != nil {
-		if errors.Is(err, datastore.ErrNamespaceNotEmpty) {
-			s.namespaceMetrics.ObserveDeletionBlocked(namespaceadmission.ReasonNamespaceNotEmpty)
-			return "", NewNamespaceDeletionBlockedError(
-				[]namespaceadmission.Reason{namespaceadmission.ReasonNamespaceNotEmpty},
-				fmt.Sprintf("namespace %q cannot be deleted", current.Name),
-			)
+	if err := s.deleteInfrastructureManifest(ctx, current, deletionActor(ctx)); err != nil {
+		latest, getErr := s.store.GetNamespaceByName(ctx, current.Name)
+		if getErr == nil && latest.UID == current.UID && latest.DeletionTimestamp != nil {
+			s.namespaceMetrics.ObserveDeletionOutcome(namespaceadmission.DeletionOutcomeAlreadyTerminating)
+			return namespaceadmission.DeletionOutcomeAlreadyTerminating, nil
 		}
-		if errors.Is(err, datastore.ErrNamespaceNotActive) {
-			latest, reloadErr := s.store.GetNamespaceByName(ctx, current.Name)
-			if reloadErr == nil &&
-				namespaceUID(latest) == namespaceUID(current) &&
-				latest.DeletionTimestamp != nil {
-				outcome := namespaceadmission.DeletionOutcomeAlreadyTerminating
-				s.namespaceMetrics.ObserveDeletionOutcome(outcome)
-				s.logger.Info("Namespace deletion completed",
-					zap.String("operation", "delete"),
-					zap.String("namespace", latest.Name),
-					zap.String("outcome", string(outcome)),
-					zap.Int("blocker_count", 0))
-				return outcome, nil
-			}
+		if errors.Is(err, datastore.ErrNamespaceNotEmpty) {
+			return "", NewNamespaceDeletionBlockedError([]namespaceadmission.Reason{namespaceadmission.ReasonNamespaceNotEmpty}, "namespace contains repositories or catalog resources")
 		}
 		if errors.Is(err, datastore.ErrConflict) {
-			conflictErr := NewNamespaceConflictError(
-				namespaceadmission.ReasonResourceVersionConflict,
-				fmt.Sprintf("namespace %q changed while deletion was requested", current.Name),
-			)
-			s.recordNamespaceGraphQLError("delete", current.Name, conflictErr)
-			return "", conflictErr
+			mapped := NewNamespaceConflictError(namespaceadmission.ReasonResourceVersionConflict, "namespace changed before deletion was admitted")
+			s.recordNamespaceGraphQLError("DELETE", current.Name, mapped)
+			return "", mapped
 		}
-		s.logger.Error("failed to delete namespace",
-			zap.String("operation", "delete"),
-			zap.String("namespace", current.Name),
-			zap.Error(err),
-		)
-		return "", gqlerror.Errorf("failed to delete namespace")
+		s.logger.Error("failed to admit namespace deletion", zap.String("namespace", current.Name), zap.Error(err))
+		return "", admissionMutationGraphQLError(err)
 	}
 	outcome := namespaceadmission.DeletionOutcomeTerminationStarted
 	s.namespaceMetrics.ObserveDeletionOutcome(outcome)
@@ -1502,7 +1498,7 @@ func namespaceUID(ns *datastore.Namespace) string {
 	return ns.ID
 }
 
-func (s *Service) CompleteNamespaceDeletion(ctx context.Context, name, expectedResourceVersion string) (*datastore.Namespace, error) {
+func (s *Service) CompleteNamespaceDeletion(ctx context.Context, name, expectedResourceVersion, expectedUID string) (*datastore.Namespace, error) {
 	if namespaceadmission.IsBootstrap(name) {
 		return nil, gqlerror.Errorf("bootstrap namespace %q is system-managed", name)
 	}
@@ -1513,12 +1509,29 @@ func (s *Service) CompleteNamespaceDeletion(ctx context.Context, name, expectedR
 		}
 		return nil, gqlerror.Errorf("failed to complete namespace deletion")
 	}
-	if current.ResourceVersion != expectedResourceVersion {
+	if expectedUID == "" || expectedResourceVersion == "" || name == "" ||
+		current.ResourceVersion != expectedResourceVersion || current.UID != expectedUID || current.Name != name {
+		return current, datastore.ErrConflict
+	}
+	intent, err := admission.ReadDeletionIntent(current.Status)
+	if err != nil {
+		return current, err
+	}
+	if current.DeletionTimestamp == nil && intent != nil {
+		if err := s.deleteInfrastructureManifest(ctx, current, intent.Actor); err != nil {
+			return current, err
+		}
 		return current, datastore.ErrConflict
 	}
 	if current.DeletionTimestamp == nil ||
 		!containsString(current.Finalizers, datastore.NamespaceForegroundDeletionFinalizer) {
 		return nil, gqlerror.Errorf("namespace %q is not awaiting foreground deletion", name)
+	}
+	if err := s.verifyInfrastructureRemoval(ctx, current.Status, current.UID); err != nil {
+		return current, err
+	}
+	if err := s.finalizeNamespaceSystemRepository(ctx, current); err != nil {
+		return current, err
 	}
 	hasRepos, err := s.store.HasRepositories(ctx, current.Name)
 	if err != nil {
@@ -1526,6 +1539,9 @@ func (s *Service) CompleteNamespaceDeletion(ctx context.Context, name, expectedR
 	}
 	if hasRepos {
 		return nil, gqlerror.Errorf("namespace %q still contains repositories", name)
+	}
+	if len(current.Finalizers) != 1 {
+		return current, gqlerror.Errorf("namespace has other finalizers")
 	}
 	if err := s.store.DeleteNamespaceWithResourceVersion(ctx, current.ID, expectedResourceVersion); err != nil {
 		if errors.Is(err, datastore.ErrConflict) {
@@ -1716,6 +1732,13 @@ func (s *Service) ProvisionRepositoryStorage(ctx context.Context, namespace, nam
 	if repository.DeletionTimestamp != nil {
 		return nil, gqlerror.Errorf("repository %q is terminating", repository.Name)
 	}
+	intent, err := admission.ReadDeletionIntent(repository.Status)
+	if err != nil {
+		return nil, err
+	}
+	if intent != nil {
+		return nil, gqlerror.Errorf("repository %q deletion is pending", repository.Name)
+	}
 	if !repositoryAdmissionAccepted(repository.Status) {
 		return nil, gqlerror.Errorf("repository %q has not been admitted", repository.Name)
 	}
@@ -1840,6 +1863,9 @@ func (s *Service) deleteRepositoryWithOutcome(ctx context.Context, repoID, calle
 		return nil, false, gqlerror.Errorf("failed to retrieve repository")
 	}
 	datastore.NormalizeRepositoryContract(repo)
+	if repo.Name == SystemRepositoryName {
+		return nil, false, admission.NewError(admission.CodeFailedPrecondition, "SYSTEM_REPOSITORY", "system repository is removed only during Namespace finalization")
+	}
 	if repo.DeletionTimestamp != nil {
 		// A repeated delete is deliberately a no-op. In particular, do not
 		// repeat a drain check after termination has already been accepted.
@@ -1860,25 +1886,19 @@ func (s *Service) deleteRepositoryWithOutcome(ctx context.Context, repoID, calle
 		return nil, false, gqlerror.Errorf("repository %q contains catalog resources and cannot be deleted", repo.Name)
 	}
 
-	now := s.clock.Now().UTC()
-	expectedResourceVersion := repo.ResourceVersion
-	repo.DeletionTimestamp = &now
-	if !containsString(repo.Finalizers, datastore.RepositoryForegroundDeletionFinalizer) {
-		repo.Finalizers = append(repo.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
-	}
-	repo.UpdateTimestamp = now
-	repo.UpdateActor = caller
-	datastore.AdvanceRepositorySystemVersion(repo)
-	if err := s.store.UpdateRepository(ctx, repo, expectedResourceVersion); err != nil {
-		if errors.Is(err, datastore.ErrConflict) {
-			latest, reloadErr := s.store.GetRepository(ctx, repoID)
-			if reloadErr == nil && latest.DeletionTimestamp != nil {
-				return latest, false, nil
-			}
+	if err := s.deleteInfrastructureManifest(ctx, repo, caller); err != nil {
+		latest, getErr := s.store.GetRepository(ctx, repo.UID)
+		if getErr == nil && latest.UID == repo.UID && latest.DeletionTimestamp != nil {
+			return latest, false, nil
 		}
-		return nil, false, gqlerror.Errorf("failed to start repository deletion")
+		if errors.Is(err, datastore.ErrConflict) {
+			return nil, false, statusConflictError("Repository", repo.Namespace, repo.Name, repo.ResourceVersion)
+		}
+		s.logger.Error("failed to admit repository deletion", zap.String("uid", repo.UID), zap.Error(err))
+		return nil, false, admissionMutationGraphQLError(err)
 	}
-	return repo, true, nil
+	updated, err := s.store.GetRepository(ctx, repo.UID)
+	return updated, true, err
 }
 
 // CompleteRepositoryDeletion is the controller-only finalizer completion
@@ -1886,24 +1906,54 @@ func (s *Service) deleteRepositoryWithOutcome(ctx context.Context, repoID, calle
 // backing storage, clears this controller's finalizer, and garbage-collects
 // the row only when no finalizer remains. Catalog resources are never
 // cascaded.
-func (s *Service) CompleteRepositoryDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*datastore.Repository, error) {
+func (s *Service) CompleteRepositoryDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*datastore.Repository, error) {
+	if expectedUID == "" || expectedResourceVersion == "" || name == "" || namespace == "" {
+		return nil, datastore.ErrConflict
+	}
+	repositoryID := expectedUID
 	mapping, err := s.store.LookupRepository(ctx, namespace, name)
-	if err != nil {
-		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, nil
-		}
+	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
 		return nil, gqlerror.Errorf("failed to complete repository deletion")
 	}
-	repo, err := s.store.GetRepository(ctx, mapping.RepositoryID)
+	if mapping != nil {
+		repositoryID = mapping.RepositoryID
+	}
+	// A cleanup attempt may have removed the path before the authoritative row.
+	// The controller's UID still identifies that exact terminating incarnation.
+	repo, err := s.store.GetRepository(ctx, repositoryID)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, nil
+			if mapping == nil {
+				return nil, nil
+			}
+			return nil, gqlerror.Errorf("repository mapping remains without its resource; reconciliation required")
 		}
 		return nil, gqlerror.Errorf("failed to complete repository deletion")
 	}
 	datastore.NormalizeRepositoryContract(repo)
-	if repo.ResourceVersion != expectedResourceVersion {
+	if repo.ResourceVersion != expectedResourceVersion || repo.UID != expectedUID || repo.Namespace != namespace || repo.Name != name {
 		return repo, datastore.ErrConflict
+	}
+	intent, err := admission.ReadDeletionIntent(repo.Status)
+	if err != nil {
+		return repo, err
+	}
+	if repo.DeletionTimestamp == nil && intent != nil {
+		if err := s.deleteInfrastructureManifest(ctx, repo, intent.Actor); err != nil {
+			return repo, err
+		}
+		return repo, datastore.ErrConflict
+	}
+	if repo.Name == SystemRepositoryName {
+		parent, err := s.store.GetNamespaceByName(ctx, namespace)
+		if err != nil {
+			return repo, err
+		}
+		if parent.DeletionTimestamp == nil {
+			return repo, gqlerror.Errorf("system repository cleanup requires terminating namespace")
+		}
+	} else if err := s.verifyInfrastructureRemoval(ctx, repo.Status, repo.UID); err != nil {
+		return repo, err
 	}
 	if repo.DeletionTimestamp == nil || !containsString(repo.Finalizers, datastore.RepositoryForegroundDeletionFinalizer) {
 		return nil, gqlerror.Errorf("repository %q is not awaiting foreground deletion", name)
@@ -1915,46 +1965,27 @@ func (s *Service) CompleteRepositoryDeletion(ctx context.Context, namespace, nam
 	if hasCatalogResources {
 		return nil, gqlerror.Errorf("repository %q still contains catalog resources", name)
 	}
-	if s.gitWriter != nil {
-		if err := s.gitWriter.DeleteRepository(ctx, repo.UID); err != nil && status.Code(err) != codes.NotFound {
-			s.logger.Error("gRPC DeleteRepository failed during finalizer completion", zap.String("repo_id", repo.UID), zap.Error(err))
-			return nil, gqlerror.Errorf("failed to delete repository storage")
-		}
+	if len(repo.Finalizers) != 1 {
+		return repo, gqlerror.Errorf("repository has other finalizers")
 	}
-
-	updated := *repo
-	updated.Finalizers = removeString(updated.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
-	updated.UpdateTimestamp = s.clock.Now().UTC()
-	datastore.AdvanceRepositorySystemVersion(&updated)
-	if err := s.store.UpdateRepository(ctx, &updated, expectedResourceVersion); err != nil {
+	lifecycle, ok := s.store.(datastore.RepositoryDeletionStore)
+	if !ok || s.gitWriter == nil {
+		return repo, gqlerror.Errorf("repository deletion runtime is unavailable")
+	}
+	if err := s.gitWriter.DeleteRepository(ctx, repo.UID); err != nil && status.Code(err) != codes.NotFound {
+		s.logger.Error("gRPC DeleteRepository failed during finalizer completion", zap.String("repo_id", repo.UID), zap.Error(err))
+		return nil, gqlerror.Errorf("failed to delete repository storage")
+	}
+	if err := lifecycle.CompleteRepositoryDeletion(ctx, repo.UID, expectedResourceVersion); err != nil {
 		if errors.Is(err, datastore.ErrConflict) {
 			latest, reloadErr := s.store.GetRepository(ctx, repo.UID)
 			if reloadErr == nil {
 				return latest, datastore.ErrConflict
 			}
 		}
-		return nil, gqlerror.Errorf("failed to complete repository deletion")
+		return nil, fmt.Errorf("complete repository deletion: %w", err)
 	}
-	if len(updated.Finalizers) != 0 {
-		return &updated, nil
-	}
-	if err := s.store.DeleteNamespaceMapping(ctx, updated.Namespace, updated.Name); err != nil && !errors.Is(err, datastore.ErrNotFound) {
-		return nil, gqlerror.Errorf("failed to garbage collect repository mapping")
-	}
-	if err := s.store.DeleteRepository(ctx, updated.UID); err != nil && !errors.Is(err, datastore.ErrNotFound) {
-		return nil, gqlerror.Errorf("failed to garbage collect repository")
-	}
-	return &updated, nil
-}
-
-func removeString(values []string, target string) []string {
-	result := values[:0]
-	for _, value := range values {
-		if value != target {
-			result = append(result, value)
-		}
-	}
-	return result
+	return repo, nil
 }
 
 // ── ProductVariant ─────────────────────────────────────────────────────────
