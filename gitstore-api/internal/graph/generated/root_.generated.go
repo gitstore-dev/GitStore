@@ -6716,19 +6716,27 @@ interface Node {
 }
 
 """
-An object that has a human-readable name. This represents both the Subject and the Delegate:
-- creation_actor
-- update_actor
-- creation_on_behalf_of_actor OR creation_subject
-- update_on_behalf_of_actor OR update_subject
-
-Implemented in
-- User
-- ServiceAccount
+An object that has a human-readable name. This represents both the Subject and the Delegate
 """
+# Auditing (once we support delegation):
+# - creation_actor
+# - update_actor
+# - creation_on_behalf_of_actor OR creation_subject
+# - update_on_behalf_of_actor OR update_subject
+#
+# Implementations include:
+# - User (Staff, Customer)
+# - ServiceAccount
 interface Actor {
   metadata: ObjectMeta!
+  # inspired by product lifecycle
+  # lifecycle.state: ActorLifecycleState!
+  # Does status conflict with .status for Resource types?
   status: ActorStatus!
+  # OpenShift-style envelope
+  # fullName: String ??
+  # identities: [String!]
+  # groups: [String!]
 }
 
 """

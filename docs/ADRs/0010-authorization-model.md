@@ -135,9 +135,9 @@ defined in [doc 037](../implementation/037-custom-commerce-workflows.md) and
 
 | Kind               | Control-plane verbs                  | Subresources                                         | Other verbs / conditions                  |
 |--------------------|--------------------------------------|------------------------------------------------------|-------------------------------------------|
-| `namespace`        | create·read·list·watch·update·delete | `status.write`                                       | `create` gated on `attrs.tier` (org/user) |
-| `repository`       | create·read·list·watch·update·delete | `status.write`, `contents.read`, `contents.write`    | —                                         |
-| `categoryTaxonomy` | create·read·list·watch·update·delete | `status.write`                                       | —                                         |
+| `namespace`        | create·read·list·watch·update·delete | `status.write`                                       | `create` gated on `attrs.tier` (org/user); `purge` |
+| `repository`       | create·read·list·watch·update·delete | `status.write`, `contents.read`, `contents.write`    | `purge`                                   |
+| `categoryTaxonomy` | create·read·list·watch·update·delete | `status.write`                                       | `purge`                                   |
 | `product`          | create·read·list·watch·update·delete | `status.write`, `management.read`, `management.list` | `purge` (hard delete, §5)                 |
 | `productVariant`   | create·read·list·watch·update·delete | `status.write`, `management.read`, `management.list` | —                                         |
 | `collection`       | create·read·list·watch·update·delete | `status.write`                                       | —                                         |
@@ -145,6 +145,13 @@ defined in [doc 037](../implementation/037-custom-commerce-workflows.md) and
 | `serviceAccount`   | create·read·list·update·delete       | `token.issue`, `key.rotate`                          | —                                         |
 
 `categoryTaxonomy` is the **single** slug; `category.*` is retired.
+
+**`purge` is the verb of every `complete*Deletion` mutation** (amended 2026-10-08). Final,
+finalizer-gated removal of a terminating resource is authorized as `<kind>.purge` for every kind that
+has a completion mutation: `namespace`, `repository`, `categoryTaxonomy` and `product`. A kind gains
+`purge` when it gains such a mutation. Completion is neither a status write nor a qualifier on
+`delete`: `completeNamespaceDeletion`/`completeRepositoryDeletion` no longer check `*.status.write`,
+and `product.delete.complete` maps to `product.purge` as before.
 
 ### 4. `.own`/`.any` are removed; scope and ownership are orthogonal binding-level axes
 
