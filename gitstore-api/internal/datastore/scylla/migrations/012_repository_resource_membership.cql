@@ -9,4 +9,8 @@ CREATE TABLE IF NOT EXISTS resources_by_repository (
     PRIMARY KEY ((repository_id, shard), kind, uid)
 ) WITH gc_grace_seconds = 864000;
 
-ALTER TABLE repository_catalog_projection_state ADD membership_ready boolean;
+CREATE TABLE IF NOT EXISTS repository_catalog_projection_state (
+    repository_id uuid PRIMARY KEY,
+    membership_ready boolean,
+    deleted boolean
+) WITH gc_grace_seconds = 864000;

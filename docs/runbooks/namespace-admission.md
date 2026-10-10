@@ -68,10 +68,9 @@ explains why a single large, hot parent partition is not an adequate alternative
 A native counter or asynchronously materialized total is not deletion proof:
 an ambiguous update or lagging projection must never authorize storage removal.
 
-Migration history is immutable and non-destructive. The older per-kind tables
-remain historical schema artifacts, but no runtime reads or writes use them.
-The membership table and its per-repository readiness/tombstone metadata are
-fixed schema, not a template for adding more tables per resource kind.
+The schema contains one shared membership table and its per-repository
+readiness/tombstone metadata, not separate membership tables per resource kind.
+Released migration history remains immutable and non-destructive.
 
 ### Repairing incomplete projections
 
