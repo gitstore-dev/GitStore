@@ -210,6 +210,7 @@ func TestDeleteRepository_marksTerminatingWithoutRemovingStorageOrMapping(t *tes
 
 	repo, err := svc.CreateRepository(ctx, testNsID1, "to-delete", "main", "default", "test-user")
 	require.NoError(t, err)
+	prepareRepositoryDeletion(t, svc, writer, repo)
 
 	err = svc.DeleteRepository(ctx, repo.ID, "test-user")
 	require.NoError(t, err)
@@ -222,7 +223,7 @@ func TestDeleteRepository_marksTerminatingWithoutRemovingStorageOrMapping(t *tes
 	require.NoError(t, err)
 	require.NotNil(t, persisted.DeletionTimestamp)
 	assert.Contains(t, persisted.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
-	assert.Equal(t, "2", persisted.ResourceVersion)
+	assert.Equal(t, "5", persisted.ResourceVersion)
 	_, err = svcStore(t, svc).LookupRepository(ctx, "ns-del", "to-delete")
 	require.NoError(t, err)
 
@@ -243,11 +244,12 @@ func TestCompleteRepositoryDeletion_removesStorageThenMetadataAfterDrain(t *test
 	}))
 	repo, err := svc.CreateRepository(ctx, testNsID1, "to-complete", "main", "default", "test-user")
 	require.NoError(t, err)
+	prepareRepositoryDeletion(t, svc, writer, repo)
 	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "test-user"))
 	terminating, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
 	require.NoError(t, err)
 
-	_, err = svc.CompleteRepositoryDeletion(ctx, terminating.Namespace, terminating.Name, terminating.ResourceVersion)
+	_, err = svc.CompleteRepositoryDeletion(ctx, terminating.Namespace, terminating.Name, terminating.ResourceVersion, terminating.UID)
 	require.NoError(t, err)
 	writer.mu.Lock()
 	require.Equal(t, []string{repo.ID}, writer.deleteRepoCalls)
@@ -267,17 +269,18 @@ func TestCompleteRepositoryDeletionTreatsMissingStorageAsIdempotentSuccess(t *te
 	}))
 	repo, err := svc.CreateRepository(ctx, testNsID1, "already-removed", "main", "default", "test-user")
 	require.NoError(t, err)
+	prepareRepositoryDeletion(t, svc, writer, repo)
 	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "test-user"))
 	terminating, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
 	require.NoError(t, err)
 
-	_, err = svc.CompleteRepositoryDeletion(ctx, terminating.Namespace, terminating.Name, terminating.ResourceVersion)
+	_, err = svc.CompleteRepositoryDeletion(ctx, terminating.Namespace, terminating.Name, terminating.ResourceVersion, terminating.UID)
 	require.NoError(t, err)
 	_, err = svcStore(t, svc).GetRepository(ctx, repo.ID)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
-func TestCompleteRepositoryDeletion_keepsTerminatingRecordWhenCatalogResourcesReappear(t *testing.T) {
+func TestCompleteRepositoryDeletionRejectsLateCatalogAdmission(t *testing.T) {
 	writer := &mockGitWriter{}
 	svc := newTestSvc(t, writer)
 	ctx := context.Background()
@@ -286,18 +289,16 @@ func TestCompleteRepositoryDeletion_keepsTerminatingRecordWhenCatalogResourcesRe
 	}))
 	repo, err := svc.CreateRepository(ctx, testNsID1, "still-owned", "main", "default", "test-user")
 	require.NoError(t, err)
+	prepareRepositoryDeletion(t, svc, writer, repo)
 	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "test-user"))
 	terminating, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
 	require.NoError(t, err)
-	require.NoError(t, svcStore(t, svc).CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{
+	require.Error(t, svcStore(t, svc).CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{
 		UID: "01960000-0000-7000-8000-000000000097", Namespace: terminating.Namespace, Name: "late-owner",
 		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy", Generation: 1, ResourceVersion: "1",
 		CreationTimestamp: time.Now(), RepositoryID: repo.ID,
 	}))
 
-	_, err = svc.CompleteRepositoryDeletion(ctx, terminating.Namespace, terminating.Name, terminating.ResourceVersion)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "still contains catalog resources")
 	persisted, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
 	require.NoError(t, err)
 	assert.NotNil(t, persisted.DeletionTimestamp)
@@ -316,6 +317,7 @@ func TestCompleteRepositoryDeletion_preservesOtherFinalizers(t *testing.T) {
 	}))
 	repo, err := svc.CreateRepository(ctx, testNsID1, "extra-finalizer", "main", "default", "test-user")
 	require.NoError(t, err)
+	prepareRepositoryDeletion(t, svc, writer, repo)
 	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "test-user"))
 	terminating, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
 	require.NoError(t, err)
@@ -324,11 +326,11 @@ func TestCompleteRepositoryDeletion_preservesOtherFinalizers(t *testing.T) {
 	datastore.AdvanceRepositorySystemVersion(terminating)
 	require.NoError(t, svcStore(t, svc).UpdateRepository(ctx, terminating, expected))
 
-	_, err = svc.CompleteRepositoryDeletion(ctx, terminating.Namespace, terminating.Name, terminating.ResourceVersion)
-	require.NoError(t, err)
+	_, err = svc.CompleteRepositoryDeletion(ctx, terminating.Namespace, terminating.Name, terminating.ResourceVersion, terminating.UID)
+	require.ErrorContains(t, err, "other finalizers")
 	persisted, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
 	require.NoError(t, err)
-	assert.NotContains(t, persisted.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
+	assert.Contains(t, persisted.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
 	assert.Contains(t, persisted.Finalizers, "example.test/retain")
 	assert.NotNil(t, persisted.DeletionTimestamp)
 }
@@ -383,6 +385,7 @@ func TestDeleteRepository_afterCatalogResourcesRemoved_succeeds(t *testing.T) {
 
 	repo, err := svc.CreateRepository(ctx, testNsID1, "catalog-cleared", "main", "default", "test-user")
 	require.NoError(t, err)
+	prepareRepositoryDeletion(t, svc, writer, repo)
 
 	require.NoError(t, svcStore(t, svc).CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{
 		UID:               "01960000-0000-7000-8000-000000000098",

@@ -164,6 +164,13 @@ admitted generation, and records the admitted Git revision in
 `resourceVersion`, and sets `SystemRepoReady` and `Ready`. Accepted deletion
 sets the deletion timestamp/finalizer and exposes `Terminating`.
 
+Deletion removes the authored manifest before termination is admitted, for both
+Git pushes and GraphQL mutations. `DeletionPending=True` identifies an authorized
+mutation whose Git/admission work must be recovered; it is system-owned and
+survives controller status patches. The Namespace name remains reserved through
+finalization. Ordinary repositories and catalog resources block deletion; the
+verified empty system repository is cleaned up during completion.
+
 ## Admission and deletion phase matrix
 
 | Operation | Structural/pre-receive phase                                                                                                                 | Stateful policy phase                                                                                                              | Successful result                                                                          |

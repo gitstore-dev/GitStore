@@ -6,8 +6,10 @@ package resolver
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +22,38 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func encodeCategoryProductCursor(categoryUID, cursor string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte("category-product\x00" + categoryUID + "\x00" + cursor))
+}
+
+func decodeCategoryProductCursor(categoryUID, cursor string) (string, error) {
+	if cursor == "" {
+		return "", nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return "", err
+	}
+	prefix := "category-product\x00" + categoryUID + "\x00"
+	if !strings.HasPrefix(string(b), prefix) {
+		return "", fmt.Errorf("cursor belongs to another category")
+	}
+	return strings.TrimPrefix(string(b), prefix), nil
+}
+
+func buildCategoryProductConnection(categoryUID string, result *datastore.PageResult[datastore.Product]) *model.ProductConnection {
+	edges := make([]*model.ProductEdge, len(result.Items))
+	for i, p := range result.Items {
+		edges[i] = &model.ProductEdge{Cursor: encodeCategoryProductCursor(categoryUID, EncodeKeysetCursor(p.CreationTimestamp, p.UID)), Node: DatastoreProductToGraphQL(p)}
+	}
+	pi := &model.PageInfo{HasNextPage: result.HasNext, HasPreviousPage: result.HasPrevious}
+	if len(edges) > 0 {
+		start, end := edges[0].Cursor, edges[len(edges)-1].Cursor
+		pi.StartCursor, pi.EndCursor = &start, &end
+	}
+	return &model.ProductConnection{Edges: edges, PageInfo: pi}
+}
 
 const (
 	categoryAPIVersion = "catalog.gitstore.dev/v1beta1"

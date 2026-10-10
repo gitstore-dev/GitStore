@@ -34,8 +34,6 @@ const (
 	// casing.
 	statusTrue  = "TRUE"
 	statusFalse = "FALSE"
-
-	namespaceDrainPollInterval = 5 * time.Second
 )
 
 var bootstrapNamespaces = map[string]struct{}{
@@ -63,7 +61,7 @@ type RepositoryClient interface {
 // DeletionClient removes the foreground-deletion finalizer and completes the
 // Namespace deletion after the repository drain condition clears.
 type DeletionClient interface {
-	CompleteDeletion(ctx context.Context, namespace, resourceVersion string) error
+	CompleteDeletion(ctx context.Context, namespace, resourceVersion, uid string) error
 }
 
 // Reconciler implements types.Reconciler for Namespace resources.
@@ -102,7 +100,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 	if _, bootstrap := bootstrapNamespaces[current.Name]; bootstrap {
 		return types.ResultOK()
 	}
-	if slices.Contains(current.Finalizers, ForegroundDeletionFinalizer) {
+	if slices.Contains(current.Finalizers, ForegroundDeletionFinalizer) || conditionTrue(current.Status.Conditions, "DeletionPending") {
 		return r.reconcileDeletion(ctx, current)
 	}
 	return r.reconcileActive(ctx, key, current)
@@ -139,14 +137,7 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 }
 
 func (r *Reconciler) reconcileDeletion(ctx context.Context, current Namespace) types.ReconcileResult {
-	hasRepositories, err := r.repositories.HasRepositories(ctx, current.Name)
-	if err != nil {
-		return types.ResultTransient(fmt.Errorf("namespace: check repositories: %w", err))
-	}
-	if hasRepositories {
-		return types.ResultAfter(namespaceDrainPollInterval)
-	}
-	if err := r.deletionClient.CompleteDeletion(ctx, current.Name, current.ResourceVersion); err != nil {
+	if err := r.deletionClient.CompleteDeletion(ctx, current.Name, current.ResourceVersion, current.UID); err != nil {
 		return types.ResultTransient(fmt.Errorf("namespace: complete deletion: %w", err))
 	}
 	return types.ResultOK()

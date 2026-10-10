@@ -9,6 +9,78 @@ policy, lifecycle, or blocker details are returned.
 
 ## Repository lifecycle fence
 
+### Git-backed deletion rollout
+
+The deletion protocol requires a coordinated writer transition, distinct from
+the older fence-only rollout below. Quiesce infrastructure deletes and old
+controllers, upgrade the singleton Git service with retained storage and
+non-overlapping replacement, upgrade all API writers, then upgrade controllers.
+Resume deletion only after old writers are drained. An old Git service ignores
+additive deletion preconditions; an old API can still bypass Git removal.
+Do not roll back to either while new-format deletion operations exist.
+
+Scylla deployments must also apply migration `012_repository_catalog_index.cql`
+and backfill the catalog blocker index before resuming deletion. After draining
+old API writers, keep catalog writes, repository creation/rename/transfer,
+lifecycle transitions, and controller writes quiesced throughout repair and
+verification. Run the existing commands from `gitstore-api/`:
+
+```bash
+go run ./cmd/gitctl scylla-projection-audit --hosts "$HOSTS" --keyspace "$KEYSPACE"
+go run ./cmd/gitctl scylla-projection-repair --dry-run --hosts "$HOSTS" --keyspace "$KEYSPACE"
+go run ./cmd/gitctl scylla-projection-repair --confirm --hosts "$HOSTS" --keyspace "$KEYSPACE"
+go run ./cmd/gitctl scylla-projection-audit --hosts "$HOSTS" --keyspace "$KEYSPACE"
+```
+
+Supply database passwords through `GITSTORE_API__DATASTORE__SCYLLA__PASSWORD`.
+The repair commands cover all projections, not just the catalog blocker index.
+Pre-existing repositories without a readiness marker fail closed rather than
+appearing empty. Repair publishes readiness only after complete verification;
+an interrupted repair can be retried with a fresh audit and confirmed repair.
+These markers guard initial backfill, not subsequent manual index corruption.
+Resume writers and upgraded controllers only after the final audit is clean.
+
+Controller `completeNamespaceDeletion` and `completeRepositoryDeletion` inputs
+must carry the current GraphQL `metadata.uid` as `uid`, in addition to
+`resourceVersion` and name. The schema field is additive/nullable for discovery,
+but upgraded servers reject omission. A conflict requires a fresh resource read,
+never retrying stale work against a same-name replacement.
+
+An empty, verified system repository does not block Namespace initiation. Its
+catalog resources do, as do all ordinary repositories (including terminating
+ones). Completion cleans up system storage by UID before releasing the Namespace.
+Neither path cascades catalog resources or ordinary repositories.
+
+`DeletionPending=True` records recoverable mutation work before the Git call.
+Controllers resume that work after API replacement. `SUPERSEDED` means the
+manifest content changed: do not overwrite it or clear the operation blindly.
+`DELETION_REPAIR_REQUIRED` blocks legacy termination without removal evidence.
+Inventory retained manifests and terminating rows before the transition, compare
+their UID, admitted path/ref/revision and current tree, and resolve ambiguous
+ownership before allowing cleanup. A missing file alone is not proof of a
+successful authorized mutation.
+
+Keep the Git service's UID tombstones permanently and include its private
+operation refs in repository backups. They fence stale provisioning and prove
+uncertain deletion outcomes. A prepared receipt can resume only while its durable
+preparation marker and original expected tip still prove it was not published.
+Unprovable interrupted publication, restored files, legacy unmarked receipts, and
+ancestry exceeding the bounded recovery walk fail closed and require operator
+reconciliation; retrying an arbitrary absent path is not sufficient.
+
+For a legacy terminating resource with a retained manifest, use an authenticated
+Git checkout of the canonical authoring repository as the maintenance surface.
+Record the GraphQL `metadata.uid` and `resourceVersion`, fetch `main`, and compare
+the exact file against its admitted revision. Re-read the resource to confirm
+the same UID/version, remove only that file, commit, and push with an explicit
+`--force-with-lease=refs/heads/main:<reviewed-head>` precondition. Admission
+records removal evidence for that terminating UID; controller completion can
+then proceed. A changed manifest is rejected rather than silently discarded.
+Do not fabricate a removal for an absent row, restore a manifest just to delete
+it again, or clear finalizers directly. Retained files with missing records and
+unverifiable provenance require manual ownership reconciliation while writers
+remain quiesced.
+
 The repository lifecycle fence (Scylla LWT columns on the Namespace row that
 serialize namespace deletion against in-flight repository creation) is always
 enabled on every backend; it is not configurable and has no rollout gate.
@@ -22,7 +94,8 @@ Remove that key, and the `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE`
 environment variable, before deploying. The API refuses to start while either is
 present.
 
-A rolling upgrade needs no extra quiescing:
+A fence-only rolling upgrade needs no extra quiescing (this does not apply to
+the Git-backed deletion protocol above):
 
 - Older replicas with the fence disabled (the `auto` default on Scylla) do not
   run the three mutations unfenced. They reject them with
@@ -80,7 +153,7 @@ including when another replica wins a concurrent deletion request.
 
 Controllers accept both the earlier `RESOURCE_VERSION_CONFLICT` code and
 `CONFLICT` and treat either as "re-read and retry", so the API and controller
-manager can be upgraded in either order.
+manager can be upgraded in either order for the error-code change alone.
 
 ## Metrics
 
@@ -106,6 +179,14 @@ Correlate policy rejections with deployments and client changes; do not treat
 expected user rejections as server failures.
 
 ## Capacity and saturation
+
+The Repository lifecycle gate (`make capacity TARGET=repository PROFILE=lifecycle
+MODE=production`) includes a bounded mutation/push deletion probe against the two
+API replicas and active controllers. It fetches the authoring repository to prove
+manifest removal, waits for final resource deletion, recreates the same name with
+a new UID, and rejects completion carrying the old UID. It requires the existing
+`GIT_URL` and an identity authorized for deletion and controller completion.
+Local service tests do not replace this deployed evidence.
 
 Run the opt-in production harness:
 

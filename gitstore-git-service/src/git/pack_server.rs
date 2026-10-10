@@ -188,8 +188,8 @@ fn collect_refs(repo: &gix::Repository) -> Result<Vec<(String, String)>> {
             Err(_) => continue,
         };
         let name = reference.name().as_bstr().to_string();
-        if name == "HEAD" {
-            continue; // already added above
+        if name == "HEAD" || name == "refs/gitstore" || name.starts_with("refs/gitstore/") {
+            continue;
         }
         let oid = match reference.target() {
             TargetRef::Object(id) => id.to_string(),

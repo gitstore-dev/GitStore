@@ -108,15 +108,27 @@ func TestGraphQLRepositoryClientReportsRepositoryAbsence(t *testing.T) {
 // / #394 removed the payload's conflict field) rather than a payload-level
 // conflict that no longer exists.
 func TestGraphQLDeletionClientCompletesDeletion(t *testing.T) {
+	var gotInput map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		gotInput, _ = request.Variables["input"].(map[string]any)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":{"id":"namespace-1"}}}`))
 	}))
 	defer srv.Close()
 
 	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
-	if err := client.CompleteDeletion(context.Background(), "acme", "9"); err != nil {
+	if err := client.CompleteDeletion(context.Background(), "acme", "9", "namespace-1"); err != nil {
 		t.Fatalf("CompleteDeletion failed: %v", err)
+	}
+	if gotInput["name"] != "acme" || gotInput["resourceVersion"] != "9" || gotInput["uid"] != "namespace-1" {
+		t.Fatalf("input = %#v, want name/resourceVersion/uid", gotInput)
 	}
 }
 
@@ -131,7 +143,7 @@ func TestGraphQLDeletionClientReturnsConflictOnLegacyCode(t *testing.T) {
 	defer srv.Close()
 
 	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
-	err := client.CompleteDeletion(context.Background(), "acme", "9")
+	err := client.CompleteDeletion(context.Background(), "acme", "9", "namespace-1")
 	if !errors.Is(err, types.ErrConflict) {
 		t.Fatalf("CompleteDeletion error = %v, want conflict", err)
 	}
@@ -148,7 +160,7 @@ func TestGraphQLDeletionClientReturnsConflictOnForwardCompatibleCode(t *testing.
 	defer srv.Close()
 
 	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
-	err := client.CompleteDeletion(context.Background(), "acme", "9")
+	err := client.CompleteDeletion(context.Background(), "acme", "9", "namespace-1")
 	if !errors.Is(err, types.ErrConflict) {
 		t.Fatalf("CompleteDeletion error = %v, want conflict", err)
 	}
@@ -165,7 +177,7 @@ func TestGraphQLDeletionClientPropagatesOtherErrors(t *testing.T) {
 	defer srv.Close()
 
 	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
-	err := client.CompleteDeletion(context.Background(), "acme", "9")
+	err := client.CompleteDeletion(context.Background(), "acme", "9", "namespace-1")
 	if err == nil {
 		t.Fatal("CompleteDeletion succeeded, want error")
 	}

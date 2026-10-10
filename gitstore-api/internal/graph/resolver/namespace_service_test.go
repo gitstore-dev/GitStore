@@ -364,7 +364,7 @@ func TestDeleteNamespace_owner_success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, terminating.DeletionTimestamp)
 	assert.Contains(t, terminating.Finalizers, datastore.NamespaceForegroundDeletionFinalizer)
-	assert.Equal(t, "2", terminating.ResourceVersion)
+	assert.Equal(t, "4", terminating.ResourceVersion)
 }
 
 func TestDeleteNamespace_admin_canDeleteAny(t *testing.T) {
@@ -417,7 +417,8 @@ func TestDeleteNamespace_withRepository_rejected(t *testing.T) {
 }
 
 func TestDeleteNamespace_afterRepositoriesRemoved_succeeds(t *testing.T) {
-	svc := newTestSvc(t, &mockGitWriter{})
+	writer := &mockGitWriter{}
+	svc := newTestSvc(t, writer)
 	ctx := context.Background()
 	input := createNamespaceInput("ns-repo-removed", model.NamespaceTierUser)
 	ns, err := svc.CreateNamespace(ctx, input, "alice")
@@ -425,11 +426,12 @@ func TestDeleteNamespace_afterRepositoriesRemoved_succeeds(t *testing.T) {
 
 	repo, err := svc.CreateRepository(ctx, ns.ID, "temp-repo", "main", "default", "alice")
 	require.NoError(t, err)
+	prepareRepositoryDeletion(t, svc, writer, repo)
 
 	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "alice"))
 	terminatingRepo, err := svc.GetRepository(ctx, repo.ID)
 	require.NoError(t, err)
-	_, err = svc.CompleteRepositoryDeletion(ctx, terminatingRepo.Namespace, terminatingRepo.Name, terminatingRepo.ResourceVersion)
+	_, err = svc.CompleteRepositoryDeletion(ctx, terminatingRepo.Namespace, terminatingRepo.Name, terminatingRepo.ResourceVersion, terminatingRepo.UID)
 	require.NoError(t, err)
 
 	_, err = svc.DeleteNamespace(ctx, ns)
@@ -464,7 +466,6 @@ func TestDeleteNamespace_bootstrapRejected(t *testing.T) {
 	_, err = svc.DeleteNamespace(context.Background(), ns)
 	requireDeletionReasons(t, err,
 		namespaceadmission.ReasonBootstrapNamespace,
-		namespaceadmission.ReasonNamespaceNotEmpty,
 	)
 }
 
@@ -478,7 +479,7 @@ func TestCompleteNamespaceDeletion_removesTerminatingNamespace(t *testing.T) {
 	terminating, err := svc.GetNamespaceByName(ctx, ns.Name)
 	require.NoError(t, err)
 
-	deleted, err := svc.CompleteNamespaceDeletion(ctx, ns.Name, terminating.ResourceVersion)
+	deleted, err := svc.CompleteNamespaceDeletion(ctx, ns.Name, terminating.ResourceVersion, ns.UID)
 	require.NoError(t, err)
 	require.NotNil(t, deleted)
 	assert.Equal(t, terminating.ResourceVersion, deleted.ResourceVersion)
@@ -494,10 +495,10 @@ func TestCompleteNamespaceDeletion_staleVersionConflicts(t *testing.T) {
 	_, err = svc.DeleteNamespace(ctx, ns)
 	require.NoError(t, err)
 
-	current, err := svc.CompleteNamespaceDeletion(ctx, ns.Name, ns.ResourceVersion)
+	current, err := svc.CompleteNamespaceDeletion(ctx, ns.Name, ns.ResourceVersion, ns.UID)
 	require.ErrorIs(t, err, datastore.ErrConflict)
 	require.NotNil(t, current)
-	assert.Equal(t, "2", current.ResourceVersion)
+	assert.Equal(t, "4", current.ResourceVersion)
 }
 
 func TestCreateRepository_terminatingNamespaceRejected(t *testing.T) {
@@ -512,7 +513,7 @@ func TestCreateRepository_terminatingNamespaceRejected(t *testing.T) {
 	_, err = svc.CreateRepository(ctx, ns.ID, "late-repo", "main", "default", "alice")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "terminating")
-	assert.Equal(t, "2", terminating.ResourceVersion)
+	assert.Equal(t, "4", terminating.ResourceVersion)
 }
 
 type namespaceDeleteCreateRaceStore struct {
@@ -534,7 +535,7 @@ func (s *namespaceDeleteCreateRaceStore) UpdateNamespace(
 	namespace *datastore.Namespace,
 	expectedResourceVersion string,
 ) error {
-	if namespace.DeletionTimestamp != nil {
+	if namespace.DeletionTimestamp != nil || datastore.HasDeletionIntent(namespace.Status) {
 		s.blockDeletionMark()
 	}
 	return s.Datastore.UpdateNamespace(ctx, namespace, expectedResourceVersion)
@@ -554,7 +555,8 @@ func (s *namespaceDeleteCreateRaceStore) MarkNamespaceDeletion(
 
 func TestNamespaceReplicaRepositoryCreateCannotCommitAcrossDeletionMark(t *testing.T) {
 	ctx := context.Background()
-	seed := newTestSvc(t, &mockGitWriter{})
+	writer := &mockGitWriter{}
+	seed := newTestSvc(t, writer)
 	namespace, err := seed.CreateNamespace(ctx, createNamespaceInput("delete-create-race", model.NamespaceTierUser), "alice")
 	require.NoError(t, err)
 
@@ -564,9 +566,10 @@ func TestNamespaceReplicaRepositoryCreateCannotCommitAcrossDeletionMark(t *testi
 		release:   make(chan struct{}),
 	}
 	deleteReplica, err := resolver.NewService(resolver.ServiceDeps{
-		Store:     store,
-		GitWriter: &mockGitWriter{},
-		Logger:    zap.NewNop(),
+		Store:                     store,
+		GitWriter:                 writer,
+		Logger:                    zap.NewNop(),
+		CommittedManifestAdmitter: testCommittedNamespaceAdmitter{store: store},
 	})
 	require.NoError(t, err)
 	createReplica, err := resolver.NewService(resolver.ServiceDeps{

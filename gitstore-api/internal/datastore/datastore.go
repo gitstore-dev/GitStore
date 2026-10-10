@@ -339,6 +339,10 @@ func ApplyRepositoryStatusPatch(repository *Repository, patch RepositoryStatusPa
 	if err != nil {
 		return fmt.Errorf("datastore: marshal updated Repository status: %w", err)
 	}
+	data, err = PreserveDeletionStatus(repository.Status, data)
+	if err != nil {
+		return err
+	}
 	repository.Status = data
 	AdvanceRepositorySystemVersion(repository)
 	return nil
@@ -366,6 +370,10 @@ func ApplyNamespaceStatusPatch(namespace *Namespace, patch NamespaceStatusPatch)
 	data, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("datastore: marshal updated Namespace status: %w", err)
+	}
+	data, err = PreserveDeletionStatus(namespace.Status, data)
+	if err != nil {
+		return err
 	}
 	namespace.Status = data
 	AdvanceNamespaceSystemVersion(namespace)
@@ -551,10 +559,13 @@ type NamespaceStore interface {
 	GetNamespaceByName(ctx context.Context, name string) (*Namespace, error)
 	ListNamespaces(ctx context.Context, page PageParams) (*PageResult[Namespace], error)
 	UpdateNamespace(ctx context.Context, ns *Namespace, expectedResourceVersion string) error
-	// MarkNamespaceDeletion atomically verifies the resourceVersion and that no
-	// repository can commit across the empty-to-terminating transition.
+	// MarkNamespaceDeletion checks the deletion-specific blockers (allowing
+	// one empty provisioned system repository) and fences repository creation
+	// across the transition. Catalog admissions participate in the child fence.
 	MarkNamespaceDeletion(ctx context.Context, ns *Namespace, expectedResourceVersion string) error
 	DeleteNamespace(ctx context.Context, uid string) error
+	// DeleteNamespaceWithResourceVersion completes only a terminating Namespace
+	// with no repositories and no finalizers owned by another controller.
 	DeleteNamespaceWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 	// HasRepositories reports whether at least one Repository record
 	// currently belongs to namespace. Used by DeleteNamespace to

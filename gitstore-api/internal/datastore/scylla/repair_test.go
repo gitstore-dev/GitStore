@@ -13,28 +13,56 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
 
+func TestRepositoryCatalogProjectionIsIncludedInRepair(t *testing.T) {
+	resource := AuthoritativeResource{Kind: "Product", UID: "11111111-1111-1111-1111-111111111111",
+		RepositoryID: "22222222-2222-2222-2222-222222222222", Namespace: "shop", Name: "product",
+		ResourceVersion: "1", CreationTimestamp: time.Now().UTC()}
+	projections := expectedProjections(resource)
+	if len(projections) != 3 {
+		t.Fatalf("got %d projections, want name, UID and repository index", len(projections))
+	}
+	index := projections[2]
+	if index.Table != "products_by_repository" || index.RepositoryID != resource.RepositoryID || index.Shard != categoryProductShard(resource.UID) {
+		t.Fatalf("unexpected repository index: %+v", index)
+	}
+	if !index.Equal(index) || index.Key() == "" {
+		t.Fatal("repository index must be comparable and addressable")
+	}
+	plan, err := BuildRepairPlan(ProjectionSnapshot{Authoritative: []AuthoritativeResource{resource}, Projections: projections[:2]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 1 || actionTable(plan.Actions[0]) != "products_by_repository" {
+		t.Fatalf("missing repository index not repaired: %+v", plan)
+	}
+}
+
 func TestProjectionTableKinds(t *testing.T) {
 	t.Parallel()
 	tests := map[string]string{
-		"namespaces_by_name":               "Namespace",
-		"namespaces_by_bucket":             "Namespace",
-		"repositories_by_namespace":        "Repository",
-		"repositories_by_bucket":           "Repository",
-		"namespace_mappings":               "Repository",
-		"namespace_mappings_by_repository": "Repository",
-		"products_by_name":                 "Product",
-		"products_by_uid":                  "Product",
-		"category_products_by_category":    "Product",
-		"category_products_by_product":     "Product",
-		"category_taxonomies_by_name":      "CategoryTaxonomy",
-		"category_taxonomies_by_uid":       "CategoryTaxonomy",
-		"category_ancestor_index":          "CategoryTaxonomy",
-		"collections_by_name":              "Collection",
-		"collections_by_uid":               "Collection",
-		"product_variants_by_name":         "ProductVariant",
-		"product_variants_by_uid":          "ProductVariant",
-		"product_variants_by_sku":          "ProductVariant",
-		"product_variants_by_product_ref":  "ProductVariant",
+		"products_by_repository":            "Product",
+		"product_variants_by_repository":    "ProductVariant",
+		"category_taxonomies_by_repository": "CategoryTaxonomy",
+		"collections_by_repository":         "Collection",
+		"namespaces_by_name":                "Namespace",
+		"namespaces_by_bucket":              "Namespace",
+		"repositories_by_namespace":         "Repository",
+		"repositories_by_bucket":            "Repository",
+		"namespace_mappings":                "Repository",
+		"namespace_mappings_by_repository":  "Repository",
+		"products_by_name":                  "Product",
+		"products_by_uid":                   "Product",
+		"category_products_by_category":     "Product",
+		"category_products_by_product":      "Product",
+		"category_taxonomies_by_name":       "CategoryTaxonomy",
+		"category_taxonomies_by_uid":        "CategoryTaxonomy",
+		"category_ancestor_index":           "CategoryTaxonomy",
+		"collections_by_name":               "Collection",
+		"collections_by_uid":                "Collection",
+		"product_variants_by_name":          "ProductVariant",
+		"product_variants_by_uid":           "ProductVariant",
+		"product_variants_by_sku":           "ProductVariant",
+		"product_variants_by_product_ref":   "ProductVariant",
 	}
 	if len(tests) != len(projectionTableKinds) {
 		t.Fatalf("projection table test coverage = %d tables, registry = %d", len(tests), len(projectionTableKinds))

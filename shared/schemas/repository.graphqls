@@ -205,13 +205,13 @@ extend type Mutation {
   provisionRepositoryStorage(input: ProvisionRepositoryStorageInput!): ProvisionRepositoryStoragePayload!
 
   """
-  Start foreground deletion of a repository. Deletion is blocked when the
+  Remove the authored manifest from Git and start foreground deletion. Deletion is blocked when the
   repository contains catalog resources; storage removal and record GC happen
   asynchronously after controller finalizer completion.
   """
   deleteRepository(input: DeleteRepositoryInput!): DeleteRepositoryPayload!
 
-  """Controller-only completion of a terminating Repository deletion."""
+  """Controller-only storage and record cleanup, bound to the current metadata.uid and resourceVersion."""
   completeRepositoryDeletion(input: CompleteRepositoryDeletionInput!): CompleteRepositoryDeletionPayload!
 }
 
@@ -292,6 +292,8 @@ type DeleteRepositoryPayload {
 }
 
 input CompleteRepositoryDeletionInput {
+  """Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers."""
+  uid: ID
   namespace: String!
   name: String!
   resourceVersion: String!

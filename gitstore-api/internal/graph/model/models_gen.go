@@ -270,6 +270,8 @@ type CompleteCategoryDeletionPayload struct {
 
 // Controller-only finalizer completion for a terminating namespace.
 type CompleteNamespaceDeletionInput struct {
+	// Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers.
+	UID *string `json:"uid,omitempty"`
 	// Name of the terminating namespace.
 	Name            string `json:"name"`
 	ResourceVersion string `json:"resourceVersion"`
@@ -290,9 +292,11 @@ type CompleteProductDeletionPayload struct {
 }
 
 type CompleteRepositoryDeletionInput struct {
-	Namespace       string `json:"namespace"`
-	Name            string `json:"name"`
-	ResourceVersion string `json:"resourceVersion"`
+	// Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers.
+	UID             *string `json:"uid,omitempty"`
+	Namespace       string  `json:"namespace"`
+	Name            string  `json:"name"`
+	ResourceVersion string  `json:"resourceVersion"`
 }
 
 type CompleteRepositoryDeletionPayload struct {
@@ -406,7 +410,8 @@ type DeleteCategoryPayload struct {
 // Input for deleting a namespace.
 type DeleteNamespaceInput struct {
 	// The identifier of the namespace to delete.
-	// Deletion is blocked if any repositories exist within the namespace.
+	// Ordinary repositories and catalog resources block deletion.
+	// The empty system repository is removed during controller completion.
 	// Requires the caller to be the namespace owner (createdBy) or isAdmin.
 	ID string `json:"id"`
 }

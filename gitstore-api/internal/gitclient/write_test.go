@@ -118,6 +118,32 @@ func TestDeleteFile_NotFound(t *testing.T) {
 	assert.Equal(t, codes.NotFound, status.Code(err))
 }
 
+func TestDeleteFile_Preconditions(t *testing.T) {
+	for _, guarded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "legacy", true: "guarded"}[guarded], func(t *testing.T) {
+			p := gitclient.DeleteFileParams{Path: "products/p1.md"}
+			if guarded {
+				p.RefName = "refs/heads/catalog"
+				p.ExpectedCommitSHA = "0123456789012345678901234567890123456789"
+			}
+			c := startBufconn(t, &writeStub{
+				deleteFileFunc: func(req *gitv1.DeleteFileRequest) (*gitv1.DeleteFileResponse, error) {
+					assert.Equal(t, "selected-repository", req.RepositoryId)
+					assert.Equal(t, p.RefName, req.GetRefName())
+					assert.Equal(t, p.ExpectedCommitSHA, req.GetExpectedCommitSha())
+					if !guarded {
+						assert.Nil(t, req.RefName)
+						assert.Nil(t, req.ExpectedCommitSha)
+					}
+					return nil, status.Error(codes.Aborted, "ref changed")
+				},
+			})
+			_, err := c.DeleteFileForRepo(context.Background(), "selected-repository", p)
+			assert.Equal(t, codes.Aborted, status.Code(err))
+		})
+	}
+}
+
 func TestCreateTag_OK(t *testing.T) {
 	c := startBufconn(t, &writeStub{
 		createTagFunc: func(req *gitv1.CreateTagRequest) (*gitv1.CreateTagResponse, error) {

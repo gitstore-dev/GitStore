@@ -18,6 +18,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ErrCommittedManifestSuperseded is retained as an alias for callers that
@@ -78,9 +80,13 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 		return nil, fmt.Errorf("committed admission requires repository, ref, commit, and path")
 	}
 	if req.Operation == admission.OperationDelete {
+		if req.Kind == "Namespace" || req.Kind == "Repository" {
+			return s.admitCommittedInfrastructureDeletion(ctx, req)
+		}
 		if req.Kind == "CategoryTaxonomy" {
 			return s.admitCommittedCategoryDeletion(ctx, req)
 		}
+
 		return s.admitCommittedProductDeletion(ctx, req)
 	}
 	if req.Operation != admission.OperationCreate && req.Operation != admission.OperationUpdate {
@@ -309,6 +315,54 @@ func errorText(err error) string {
 		return "unknown error"
 	}
 	return err.Error()
+}
+
+func (s *Server) admitCommittedInfrastructureDeletion(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	if !ok || current != req.CommitSHA {
+		return nil, ErrCommittedManifestSuperseded
+	}
+	id := resourceIdentity{Kind: req.Kind, Namespace: req.Namespace, Name: req.Name}
+	resource, err := s.lookupResourceByIdentity(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	var uid, path, ref string
+	var raw json.RawMessage
+	switch r := resource.(type) {
+	case *datastore.Namespace:
+		uid, path, ref, raw = r.UID, r.SourcePath, r.GitRef, r.Status
+		err = s.validateNamespaceAuthoringTarget(ctx, req.RepositoryID, path, r.Name)
+	case *datastore.Repository:
+		uid, path, ref, raw = r.UID, r.SourcePath, r.GitRef, r.Status
+		err = s.validateRepositoryAuthoringTarget(ctx, req.RepositoryID, path, r.Namespace, r.Name)
+	default:
+		return nil, fmt.Errorf("unsupported infrastructure deletion")
+	}
+	if err != nil {
+		return nil, err
+	}
+	intent, err := admission.ReadDeletionIntent(raw)
+	if err != nil {
+		return nil, err
+	}
+	if req.ExpectedUID == "" || uid != req.ExpectedUID || path != req.Path || ref != req.RefName ||
+		intent == nil || intent.UID != uid || intent.RepositoryID != req.RepositoryID || intent.Path != path || intent.Ref != ref || intent.RemovalCommit == "" {
+		return nil, admission.NewError(admission.CodeConflict, "DELETION_IDENTITY_MISMATCH", "deletion does not match recorded identity and provenance")
+	}
+	if _, err := s.git.ReadFile(ctx, req.RepositoryID, path, intent.RemovalCommit); status.Code(err) != codes.NotFound {
+		return nil, admission.NewError(admission.CodeFailedPrecondition, "REMOVAL_UNVERIFIED", "recorded removal cannot be verified")
+	}
+	if _, err := s.git.ReadFile(ctx, req.RepositoryID, path, req.CommitSHA); status.Code(err) != codes.NotFound {
+		if err != nil {
+			return nil, err
+		}
+		return nil, admission.NewError(admission.CodeFailedPrecondition, "MANIFEST_PRESENT", "deletion commit still contains the manifest")
+	}
+	if err := admission.MarkInfrastructureDeletion(ctx, s.store, resource, s.clock.Now().UTC(), req.ActorSubject); err != nil {
+		return nil, err
+	}
+	return &admission.CommittedManifestResult{Kind: req.Kind, Namespace: req.Namespace, Name: req.Name, CommitSHA: req.CommitSHA}, nil
 }
 
 func (s *Server) admitCommittedProductDeletion(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {

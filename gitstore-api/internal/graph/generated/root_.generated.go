@@ -5442,7 +5442,8 @@ Input for deleting a namespace.
 input DeleteNamespaceInput {
   """
   The identifier of the namespace to delete.
-  Deletion is blocked if any repositories exist within the namespace.
+  Ordinary repositories and catalog resources block deletion.
+  The empty system repository is removed during controller completion.
   Requires the caller to be the namespace owner (createdBy) or isAdmin.
   """
   id: ID!
@@ -5452,6 +5453,8 @@ input DeleteNamespaceInput {
 Controller-only finalizer completion for a terminating namespace.
 """
 input CompleteNamespaceDeletionInput {
+  """Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers."""
+  uid: ID
   """
   Name of the terminating namespace.
   """
@@ -5576,9 +5579,10 @@ extend type Mutation {
   updateNamespaceStatus(input: UpdateNamespaceStatusInput!): UpdateNamespaceStatusPayload!
 
   """
-  Delete a namespace.
+  Remove the authored manifest from Git and start foreground Namespace deletion.
   Requires authentication. Caller must be the namespace owner or isAdmin.
-  Deletion is blocked when the namespace contains repositories.
+  Ordinary repositories and catalog resources block deletion.
+  An empty system repository alone does not block initiation.
   """
   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
 
@@ -5590,7 +5594,8 @@ extend type Mutation {
   transferNamespaceOwner(input: TransferNamespaceOwnerInput!): TransferNamespaceOwnerPayload!
 
   """
-  Permanently delete a terminating namespace after its repositories are gone.
+  Finalize a terminating namespace, cleaning up its empty system repository.
+  Requires the current metadata.uid and resourceVersion and recorded manifest removal.
   """
   completeNamespaceDeletion(input: CompleteNamespaceDeletionInput!): CompleteNamespaceDeletionPayload!
 
@@ -6585,13 +6590,13 @@ extend type Mutation {
   provisionRepositoryStorage(input: ProvisionRepositoryStorageInput!): ProvisionRepositoryStoragePayload!
 
   """
-  Start foreground deletion of a repository. Deletion is blocked when the
+  Remove the authored manifest from Git and start foreground deletion. Deletion is blocked when the
   repository contains catalog resources; storage removal and record GC happen
   asynchronously after controller finalizer completion.
   """
   deleteRepository(input: DeleteRepositoryInput!): DeleteRepositoryPayload!
 
-  """Controller-only completion of a terminating Repository deletion."""
+  """Controller-only storage and record cleanup, bound to the current metadata.uid and resourceVersion."""
   completeRepositoryDeletion(input: CompleteRepositoryDeletionInput!): CompleteRepositoryDeletionPayload!
 }
 
@@ -6672,6 +6677,8 @@ type DeleteRepositoryPayload {
 }
 
 input CompleteRepositoryDeletionInput {
+  """Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers."""
+  uid: ID
   namespace: String!
   name: String!
   resourceVersion: String!

@@ -528,6 +528,17 @@ func (d *InstrumentedDatastore) HasCatalogResources(ctx context.Context, repoID 
 	return v, err
 }
 
+func (d *InstrumentedDatastore) CompleteRepositoryDeletion(ctx context.Context, uid, expectedResourceVersion string) error {
+	start := time.Now()
+	store, ok := d.next.(RepositoryDeletionStore)
+	if !ok {
+		return ErrInvalidArgument
+	}
+	err := store.CompleteRepositoryDeletion(d.withFindingObserver(ctx), uid, expectedResourceVersion)
+	d.observe("CompleteRepositoryDeletion", start, err)
+	return err
+}
+
 // ── NamespaceMapping ──────────────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) CreateNamespaceMapping(ctx context.Context, m *NamespaceMapping) error {

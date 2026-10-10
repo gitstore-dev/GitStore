@@ -336,8 +336,8 @@ func TestAdmitResources_RepositoryRejectsBootstrapAndTerminatingNamespace(t *tes
 			if test.terminating {
 				namespace.DeletionTimestamp = &now
 			}
-			require.NoError(t, store.CreateNamespace(ctx, namespace))
 			require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{UID: testRepoID, ID: testRepoID, RepositoryID: testRepoID, Namespace: "acme", Name: "gitstore-system"}))
+			require.NoError(t, store.CreateNamespace(ctx, namespace))
 			commit := strings.Repeat("a", 40)
 			path := "repositories/" + test.manifestName + ".md"
 			current := commit

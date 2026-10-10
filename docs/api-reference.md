@@ -713,7 +713,11 @@ Input fields:
 
 ### deleteNamespace
 
-Deletes an empty namespace. Deletion is blocked if repositories remain.
+Starts foreground deletion by removing the Namespace manifest from
+`gitstore-system/gitstore-system`. Ordinary repositories, including terminating
+ones, and catalog resources in the namespace's system repository block deletion.
+An empty system repository alone does not block it; controller completion removes
+that repository before releasing the Namespace name.
 
 ```graphql
 mutation DeleteNamespace($id: ID!) {
@@ -763,7 +767,10 @@ mutation CreateRepository($namespace: String!) {
 
 ### deleteRepository
 
-Deletes repository metadata and storage.
+Starts foreground deletion by removing `repositories/<name>.md` from the
+namespace's `gitstore-system` repository. Catalog resources block deletion.
+Backing Git storage and the name reservation remain until controller completion.
+Direct deletion of the system repository is rejected.
 
 ```graphql
 mutation DeleteRepository($id: ID!) {

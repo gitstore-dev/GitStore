@@ -317,6 +317,16 @@ message DeleteFileRequest {
   string commit_message = 2;
   string author_name    = 3;
   string author_email   = 4;
+  // Supply both fields for a conditional deletion on an explicit branch.
+  // The branch must still point to expected_commit_sha when the commit is
+  // published; mismatches without a receipt return ABORTED without changing it.
+  // Retrying the same repository/ref/path/expected commit returns the original
+  // deletion commit only with a private durable receipt, absent path, and proven
+  // publication in bounded branch history. Restored paths or existing receipts
+  // that cannot prove publication return FAILED_PRECONDITION, never re-delete.
+  // Omitting both preserves the legacy default-branch behavior.
+  optional string ref_name = 6; // Fully qualified refs/heads/... name.
+  optional string expected_commit_sha = 7; // Full commit object ID.
   RequestAuthorization authorization = 14;
 }
 

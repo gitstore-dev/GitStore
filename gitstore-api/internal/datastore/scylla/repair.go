@@ -39,6 +39,7 @@ const (
 )
 
 type AuthoritativeResource struct {
+	RepositoryID      string    `json:"repositoryID,omitempty"`
 	Kind              string    `json:"kind"`
 	UID               string    `json:"uid"`
 	Namespace         string    `json:"namespace,omitempty"`
@@ -54,6 +55,7 @@ type AuthoritativeResource struct {
 }
 
 type ProjectionRecord struct {
+	RepositoryID      string    `json:"repositoryID,omitempty"`
 	Table             string    `json:"table"`
 	UID               string    `json:"uid"`
 	Namespace         string    `json:"namespace,omitempty"`
@@ -141,6 +143,9 @@ func OpenProjectionRepairService(cfg config.ScyllaConfig) (*ProjectionRepairServ
 	cluster.Consistency = gocql.Quorum
 	cluster.DisableShardAwarePort = cfg.DisableShardAwarePort
 	cluster.IgnorePeerAddr = cfg.IgnorePeerAddr
+	if translator, ok := cfg.AddressTranslator.(gocql.AddressTranslator); ok {
+		cluster.AddressTranslator = translator
+	}
 	if port > 0 {
 		cluster.Port = port
 	}
@@ -263,6 +268,11 @@ func (s *ProjectionRepairService) Apply(ctx context.Context, plan RepairPlan) (R
 	if marker, ok := s.store.(interface{ MarkCategoryProductProjectionReady(context.Context) error }); ok {
 		if err := marker.MarkCategoryProductProjectionReady(ctx); err != nil {
 			return result, fmt.Errorf("mark category product projection ready: %w", err)
+		}
+	}
+	if marker, ok := s.store.(interface{ MarkRepositoryCatalogProjectionReady(context.Context) error }); ok {
+		if err := marker.MarkRepositoryCatalogProjectionReady(ctx); err != nil {
+			return result, fmt.Errorf("mark repository catalog projection ready: %w", err)
 		}
 	}
 	return result, nil
@@ -547,7 +557,15 @@ func validateNamespaceRepositoryFence(fence NamespaceRepositoryFenceRepair) erro
 	return nil
 }
 
-func expectedProjections(resource AuthoritativeResource) []ProjectionRecord {
+func expectedProjections(resource AuthoritativeResource) (result []ProjectionRecord) {
+	defer func() {
+		if resource.RepositoryID != "" && catalogRepositoryTable(resource.Kind) != "" {
+			result = append(result, ProjectionRecord{
+				Table: catalogRepositoryTable(resource.Kind), UID: resource.UID, RepositoryID: resource.RepositoryID,
+				Namespace: resource.Namespace, Name: resource.Name, CreationTimestamp: resource.CreationTimestamp, Shard: categoryProductShard(resource.UID),
+			})
+		}
+	}()
 	base := ProjectionRecord{
 		UID: resource.UID, Namespace: resource.Namespace, Name: resource.Name,
 		CreationTimestamp: resource.CreationTimestamp, Bucket: resource.CreationTimestamp.UTC().Format("2006-01"),
@@ -619,6 +637,9 @@ func catalogProjections(base ProjectionRecord, nameTable, uidTable string) []Pro
 
 func (p ProjectionRecord) Key() string {
 	ts := p.CreationTimestamp.UTC().Format(time.RFC3339Nano)
+	if strings.HasSuffix(p.Table, "_by_repository") && p.Table != "namespace_mappings_by_repository" {
+		return strings.Join([]string{p.RepositoryID, strconv.Itoa(int(p.Shard)), p.UID}, "/")
+	}
 	switch p.Table {
 	case "namespaces_by_name":
 		return p.Name
@@ -655,6 +676,10 @@ func (p ProjectionRecord) Equal(other ProjectionRecord) bool {
 	if p.Table != other.Table || p.UID != other.UID {
 		return false
 	}
+	if strings.HasSuffix(p.Table, "_by_repository") && p.Table != "namespace_mappings_by_repository" {
+		return p.RepositoryID == other.RepositoryID && p.Shard == other.Shard && p.Namespace == other.Namespace &&
+			p.Name == other.Name && p.CreationTimestamp.Equal(other.CreationTimestamp)
+	}
 	switch p.Table {
 	case "namespaces_by_name":
 		return p.Name == other.Name
@@ -686,25 +711,29 @@ func (p ProjectionRecord) Equal(other ProjectionRecord) bool {
 }
 
 var projectionTableKinds = map[string]string{
-	"namespaces_by_name":               "Namespace",
-	"namespaces_by_bucket":             "Namespace",
-	"repositories_by_namespace":        "Repository",
-	"repositories_by_bucket":           "Repository",
-	"namespace_mappings":               "Repository",
-	"namespace_mappings_by_repository": "Repository",
-	"products_by_name":                 "Product",
-	"products_by_uid":                  "Product",
-	"category_taxonomies_by_name":      "CategoryTaxonomy",
-	"category_taxonomies_by_uid":       "CategoryTaxonomy",
-	"category_ancestor_index":          "CategoryTaxonomy",
-	"category_products_by_category":    "Product",
-	"category_products_by_product":     "Product",
-	"collections_by_name":              "Collection",
-	"collections_by_uid":               "Collection",
-	"product_variants_by_name":         "ProductVariant",
-	"product_variants_by_uid":          "ProductVariant",
-	"product_variants_by_sku":          "ProductVariant",
-	"product_variants_by_product_ref":  "ProductVariant",
+	"products_by_repository":            "Product",
+	"product_variants_by_repository":    "ProductVariant",
+	"category_taxonomies_by_repository": "CategoryTaxonomy",
+	"collections_by_repository":         "Collection",
+	"namespaces_by_name":                "Namespace",
+	"namespaces_by_bucket":              "Namespace",
+	"repositories_by_namespace":         "Repository",
+	"repositories_by_bucket":            "Repository",
+	"namespace_mappings":                "Repository",
+	"namespace_mappings_by_repository":  "Repository",
+	"products_by_name":                  "Product",
+	"products_by_uid":                   "Product",
+	"category_taxonomies_by_name":       "CategoryTaxonomy",
+	"category_taxonomies_by_uid":        "CategoryTaxonomy",
+	"category_ancestor_index":           "CategoryTaxonomy",
+	"category_products_by_category":     "Product",
+	"category_products_by_product":      "Product",
+	"collections_by_name":               "Collection",
+	"collections_by_uid":                "Collection",
+	"product_variants_by_name":          "ProductVariant",
+	"product_variants_by_uid":           "ProductVariant",
+	"product_variants_by_sku":           "ProductVariant",
+	"product_variants_by_product_ref":   "ProductVariant",
 }
 
 func projectionKind(table string) string {
@@ -875,10 +904,10 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 	}{
 		{"Namespace", "namespaces_by_uid", "repository_creation_epoch,pending_repository_creations,"},
 		{"Repository", "repositories_by_uid", "namespace,"},
-		{"Product", "products_by_namespace", "namespace,status,"},
-		{"CategoryTaxonomy", "category_taxonomies_by_namespace", "namespace,status,"},
-		{"Collection", "collections_by_namespace", "namespace,"},
-		{"ProductVariant", "product_variants_by_namespace", "namespace,sku,product_ref_name,"},
+		{"Product", "products_by_namespace", "namespace,status,repository_id,"},
+		{"CategoryTaxonomy", "category_taxonomies_by_namespace", "namespace,status,repository_id,"},
+		{"Collection", "collections_by_namespace", "namespace,repository_id,"},
+		{"ProductVariant", "product_variants_by_namespace", "namespace,sku,product_ref_name,repository_id,"},
 	}
 	for _, source := range authoritative {
 		statement := fmt.Sprintf(
@@ -894,6 +923,9 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 				Kind: source.kind, UID: row.UID.String(), Namespace: row.Namespace, Name: row.Name,
 				ResourceVersion: row.ResourceVersion, CreationTimestamp: row.CreationTimestamp,
 				SKU: row.SKU, ProductRefName: row.ProductRefName,
+			}
+			if row.RepositoryID != (gocql.UUID{}) {
+				resource.RepositoryID = row.RepositoryID.String()
 			}
 			if source.kind == "CategoryTaxonomy" {
 				path, err := datastore.CategoryResolvedPath(row.Status)
@@ -968,6 +1000,10 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		columns string
 		uid     func(auditRow) gocql.UUID
 	}{
+		{"products_by_repository", "repository_id,shard,uid,namespace,name,creation_timestamp", rowUID},
+		{"product_variants_by_repository", "repository_id,shard,uid,namespace,name,creation_timestamp", rowUID},
+		{"category_taxonomies_by_repository", "repository_id,shard,uid,namespace,name,creation_timestamp", rowUID},
+		{"collections_by_repository", "repository_id,shard,uid,namespace,name,creation_timestamp", rowUID},
 		{"namespaces_by_name", "name,uid", rowUID},
 		{"namespaces_by_bucket", "bucket,creation_timestamp,uid", rowUID},
 		{"repositories_by_namespace", "namespace,bucket,creation_timestamp,uid", rowUID},
@@ -999,6 +1035,12 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 				Table: source.table, UID: uid.String(), Namespace: row.Namespace, Name: row.Name,
 				Bucket: row.Bucket, CreationTimestamp: row.CreationTimestamp,
 				SKU: row.SKU, ProductRefName: row.ProductRefName,
+			}
+			if row.RepositoryID != (gocql.UUID{}) {
+				record.RepositoryID = row.RepositoryID.String()
+			}
+			if catalogRepositoryTable(projectionKind(source.table)) == source.table {
+				record.Shard = row.Shard
 			}
 			if source.table == "category_ancestor_index" {
 				record.Name = row.Descendant
@@ -1147,6 +1189,23 @@ func (s *scyllaProjectionRepairStore) MarkCategoryProductProjectionReady(ctx con
 	return s.session.Query("INSERT INTO category_product_projection_state (projection,ready) VALUES (?,?)", nil).WithContext(ctx).Bind("category-products", true).ExecRelease()
 }
 
+// Repair runs under the existing operator-enforced writer maintenance window.
+// Readiness is published only after the full projection verification succeeds.
+func (s *scyllaProjectionRepairStore) MarkRepositoryCatalogProjectionReady(ctx context.Context) error {
+	iter := s.session.Query("SELECT uid FROM repositories_by_uid", nil).WithContext(ctx).PageSize(100).Iter()
+	var row struct {
+		UID gocql.UUID `db:"uid"`
+	}
+	for iter.StructScan(&row) {
+		if err := s.session.Query("INSERT INTO repository_catalog_projection_state (repository_id,ready) VALUES (?,?)", nil).
+			WithContext(ctx).Bind(row.UID, true).ExecRelease(); err != nil {
+			_ = iter.Close()
+			return err
+		}
+	}
+	return iter.Close()
+}
+
 func repairDeleteResourceMatches(action RepairAction, resource *AuthoritativeResource) bool {
 	if action.RequireAbsentResource {
 		return resource == nil
@@ -1158,6 +1217,10 @@ func repairDeleteResourceMatches(action RepairAction, resource *AuthoritativeRes
 
 func (s *scyllaProjectionRepairStore) insertProjection(ctx context.Context, row ProjectionRecord) (bool, error) {
 	uid := mustRepairUUID(row.UID)
+	if catalogRepositoryTable(projectionKind(row.Table)) == row.Table {
+		return s.session.Query("INSERT INTO "+row.Table+" (repository_id,shard,uid,namespace,name,creation_timestamp) VALUES (?,?,?,?,?,?) IF NOT EXISTS", nil).
+			WithContext(ctx).Bind(mustRepairUUID(row.RepositoryID), row.Shard, uid, row.Namespace, row.Name, row.CreationTimestamp).ExecCASRelease()
+	}
 	var statement string
 	var args []any
 	switch row.Table {
@@ -1196,6 +1259,10 @@ func (s *scyllaProjectionRepairStore) insertProjection(ctx context.Context, row 
 
 func (s *scyllaProjectionRepairStore) updateProjection(ctx context.Context, before, after ProjectionRecord) (bool, error) {
 	uid := mustRepairUUID(after.UID)
+	if catalogRepositoryTable(projectionKind(after.Table)) == after.Table {
+		return s.session.Query("UPDATE "+after.Table+" SET namespace=?,name=?,creation_timestamp=? WHERE repository_id=? AND shard=? AND uid=? IF namespace=? AND name=? AND creation_timestamp=?", nil).
+			WithContext(ctx).Bind(after.Namespace, after.Name, after.CreationTimestamp, mustRepairUUID(after.RepositoryID), after.Shard, uid, before.Namespace, before.Name, before.CreationTimestamp).ExecCASRelease()
+	}
 	var statement string
 	var args []any
 	switch after.Table {
@@ -1221,6 +1288,10 @@ func (s *scyllaProjectionRepairStore) updateProjection(ctx context.Context, befo
 }
 
 func (s *scyllaProjectionRepairStore) deleteProjection(ctx context.Context, row ProjectionRecord) (bool, error) {
+	if catalogRepositoryTable(projectionKind(row.Table)) == row.Table {
+		return s.session.Query("DELETE FROM "+row.Table+" WHERE repository_id=? AND shard=? AND uid=? IF EXISTS", nil).
+			WithContext(ctx).Bind(mustRepairUUID(row.RepositoryID), row.Shard, mustRepairUUID(row.UID)).ExecCASRelease()
+	}
 	uid := mustRepairUUID(row.UID)
 	var statement string
 	var args []any

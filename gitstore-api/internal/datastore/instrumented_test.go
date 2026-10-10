@@ -19,6 +19,16 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
+func TestInstrumentedDatastoreForwardsRepositoryCompletion(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	wrapped := datastore.NewInstrumentedDatastoreWithRegistry(store, "memdb", zap.NewNop(), prometheus.NewRegistry())
+	completion, ok := any(wrapped).(datastore.RepositoryDeletionStore)
+	require.True(t, ok)
+	require.ErrorIs(t, completion.CompleteRepositoryDeletion(context.Background(), "00000000-0000-0000-0000-000000000299", "1"), datastore.ErrNotFound)
+}
+
 // stubDatastore is a minimal Datastore stub for decorator tests.
 type stubDatastore struct {
 	getProductErr          error

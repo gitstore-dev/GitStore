@@ -192,7 +192,14 @@ func (r *mutationResolver) DeleteRepository(ctx context.Context, input model.Del
 
 // CompleteRepositoryDeletion is the resolver for the completeRepositoryDeletion field.
 func (r *mutationResolver) CompleteRepositoryDeletion(ctx context.Context, input model.CompleteRepositoryDeletionInput) (*model.CompleteRepositoryDeletionPayload, error) {
-	deleted, err := r.service.CompleteRepositoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
+	if input.UID == nil || *input.UID == "" {
+		return nil, gqlerror.Errorf("repository completion requires uid")
+	}
+	uid, err := decodeNodeIDAs(nodeKindRepository, *input.UID)
+	if err != nil {
+		return nil, err
+	}
+	deleted, err := r.service.CompleteRepositoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion, uid)
 	if errors.Is(err, datastore.ErrConflict) {
 		if deleted == nil {
 			return nil, gqlerror.Errorf("Repository deletion conflict, and current version could not be read")

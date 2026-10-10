@@ -106,7 +106,7 @@ func NewGraphQLDeletionClient(client *graphqlclient.Client) *GraphQLDeletionClie
 	return &GraphQLDeletionClient{client: client}
 }
 
-func (c *GraphQLDeletionClient) CompleteDeletion(ctx context.Context, namespace, resourceVersion string) error {
+func (c *GraphQLDeletionClient) CompleteDeletion(ctx context.Context, namespace, resourceVersion, uid string) error {
 	var response struct {
 		CompleteNamespaceDeletion struct {
 			ID *string `json:"id"`
@@ -116,6 +116,7 @@ func (c *GraphQLDeletionClient) CompleteDeletion(ctx context.Context, namespace,
 		"input": map[string]any{
 			"name":            namespace,
 			"resourceVersion": resourceVersion,
+			"uid":             uid,
 		},
 	}, &response); err != nil {
 		var gqlErr *graphqlclient.Error

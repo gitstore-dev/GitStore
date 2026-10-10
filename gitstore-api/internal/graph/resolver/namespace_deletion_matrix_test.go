@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
@@ -79,6 +78,7 @@ func TestDeleteNamespaceBlockerMatrix(t *testing.T) {
 		ctx := context.Background()
 		ns, err := svc.GetNamespaceByName(ctx, "gitstore-system")
 		require.NoError(t, err)
+		require.NoError(t, svc.Store().CreateRepository(ctx, &datastore.Repository{UID: uuid.NewString(), Namespace: ns.Name, Name: "ordinary"}))
 
 		_, err = svc.DeleteNamespace(ctx, ns)
 		requireDeletionReasons(t, err,
@@ -101,7 +101,7 @@ func TestDeleteNamespaceOutcomeMatrix(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, first.DeletionTimestamp)
 	assert.Contains(t, first.Finalizers, datastore.NamespaceForegroundDeletionFinalizer)
-	assert.Equal(t, "2", first.ResourceVersion)
+	assert.Equal(t, "4", first.ResourceVersion)
 
 	outcome, err = svc.DeleteNamespace(ctx, first)
 	require.NoError(t, err)
@@ -114,26 +114,19 @@ func TestDeleteNamespaceOutcomeMatrix(t *testing.T) {
 
 func TestDeleteNamespaceConcurrentWinnerReturnsAlreadyTerminating(t *testing.T) {
 	ctx := context.Background()
-	base, err := memdb.New()
+	writer := &mockGitWriter{}
+	seed := newTestSvc(t, writer)
+	base := seed.Store()
+	namespace, err := seed.CreateNamespace(ctx, createNamespaceInput("concurrent-delete", model.NamespaceTierUser), "alice")
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, base.Close()) })
 	store := &concurrentNamespaceDeleteStore{Datastore: base}
 	svc, err := resolver.NewService(resolver.ServiceDeps{
-		Store:  store,
-		Logger: zap.NewNop(),
+		Store:                     store,
+		Logger:                    zap.NewNop(),
+		GitWriter:                 writer,
+		CommittedManifestAdmitter: testCommittedNamespaceAdmitter{store: store},
 	})
 	require.NoError(t, err)
-	now := time.Now().UTC()
-	namespace := &datastore.Namespace{
-		ID:                uuid.NewString(),
-		Name:              "concurrent-delete",
-		ResourceVersion:   "1",
-		Generation:        1,
-		CreationTimestamp: now,
-		UpdateTimestamp:   now,
-	}
-	namespace.UID = namespace.ID
-	require.NoError(t, base.CreateNamespace(ctx, namespace))
 
 	outcome, err := svc.DeleteNamespace(ctx, namespace)
 
@@ -165,29 +158,24 @@ func TestDeleteNamespaceRecreatedIdentifierProtection(t *testing.T) {
 
 func TestDeleteNamespaceRecordsBoundedOutcomesBlockersAndLogs(t *testing.T) {
 	ctx := context.Background()
-	store, err := memdb.New()
+	writer := &mockGitWriter{}
+	seed := newTestSvc(t, writer)
+	store := seed.Store()
+	eligible, err := seed.CreateNamespace(ctx, createNamespaceInput("observable-delete", model.NamespaceTierUser), "alice")
 	require.NoError(t, err)
 	registry := prometheus.NewRegistry()
 	metrics := namespaceadmission.NewMetrics(registry)
 	core, logs := observer.New(zapcore.InfoLevel)
 	svc, err := resolver.NewService(resolver.ServiceDeps{
-		Store:            store,
-		Logger:           zap.New(core),
-		NamespaceMetrics: metrics,
+		Store:                     store,
+		Logger:                    zap.New(core),
+		NamespaceMetrics:          metrics,
+		GitWriter:                 writer,
+		CommittedManifestAdmitter: testCommittedNamespaceAdmitter{store: store},
 	})
 	require.NoError(t, err)
 
 	now := time.Now().UTC()
-	eligible := &datastore.Namespace{
-		ID:                uuid.NewString(),
-		Name:              "observable-delete",
-		ResourceVersion:   "1",
-		Generation:        1,
-		CreationTimestamp: now,
-		UpdateTimestamp:   now,
-	}
-	eligible.UID = eligible.ID
-	require.NoError(t, store.CreateNamespace(ctx, eligible))
 	outcome, err := svc.DeleteNamespace(ctx, eligible)
 	require.NoError(t, err)
 	assert.Equal(t, namespaceadmission.DeletionOutcomeTerminationStarted, outcome)
@@ -197,16 +185,8 @@ func TestDeleteNamespaceRecordsBoundedOutcomesBlockersAndLogs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, namespaceadmission.DeletionOutcomeAlreadyTerminating, outcome)
 
-	blocked := &datastore.Namespace{
-		ID:                uuid.NewString(),
-		Name:              "gitstore-system",
-		ResourceVersion:   "1",
-		Generation:        1,
-		CreationTimestamp: now,
-		UpdateTimestamp:   now,
-	}
-	blocked.UID = blocked.ID
-	require.NoError(t, store.CreateNamespace(ctx, blocked))
+	blocked, err := store.GetNamespaceByName(ctx, "gitstore-system")
+	require.NoError(t, err)
 	repoID := uuid.NewString()
 	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{
 		UID:               repoID,

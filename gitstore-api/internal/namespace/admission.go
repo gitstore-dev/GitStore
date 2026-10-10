@@ -253,6 +253,15 @@ func ApplyManifestOrdered(
 		if existing != nil && existing.DeletionTimestamp != nil {
 			return nil, false, ErrNamespaceTerminating
 		}
+		if existing != nil {
+			intent, err := admission.ReadDeletionIntent(existing.Status)
+			if err != nil {
+				return nil, false, err
+			}
+			if intent != nil {
+				return nil, false, ErrNamespaceTerminating
+			}
+		}
 		if existing != nil && !createRetry && TierRank(tier) < TierRank(existing.Tier) {
 			return nil, false, ErrTierDemotion
 		}

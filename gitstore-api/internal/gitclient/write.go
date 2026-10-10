@@ -22,10 +22,12 @@ type CommitFileParams struct {
 
 // DeleteFileParams holds parameters for a DeleteFile RPC call.
 type DeleteFileParams struct {
-	Path          string
-	CommitMessage string
-	AuthorName    string
-	AuthorEmail   string
+	Path              string
+	CommitMessage     string
+	AuthorName        string
+	AuthorEmail       string
+	RefName           string
+	ExpectedCommitSHA string
 }
 
 // CreateTagParams holds parameters for a CreateTag RPC call.
@@ -93,7 +95,10 @@ func (c *Client) CommitFileForRepo(ctx context.Context, repositoryID string, p C
 	return resp.CommitSha, nil
 }
 
-// DeleteFile removes a file and commits the deletion to the default branch.
+// DeleteFile removes a file on RefName, or the default branch when preconditions
+// are omitted. RefName and ExpectedCommitSHA must be supplied together.
+// Guarded retries return the recorded deletion commit; restored content or
+// unprovable existing receipts fail with FailedPrecondition instead of re-deleting.
 // Returns the new commit SHA on success.
 func (c *Client) DeleteFile(ctx context.Context, p DeleteFileParams) (string, error) {
 	return c.DeleteFileForRepo(ctx, c.RepositoryID, p)
@@ -105,14 +110,21 @@ func (c *Client) DeleteFileForRepo(ctx context.Context, repositoryID string, p D
 	if err != nil {
 		return "", err
 	}
-	resp, err := c.Git.DeleteFile(ctx, &gitv1.DeleteFileRequest{
+	req := &gitv1.DeleteFileRequest{
 		RepositoryId:  repositoryID,
 		Path:          p.Path,
 		CommitMessage: p.CommitMessage,
 		AuthorName:    p.AuthorName,
 		AuthorEmail:   p.AuthorEmail,
 		Authorization: authorization,
-	})
+	}
+	if p.RefName != "" {
+		req.RefName = &p.RefName
+	}
+	if p.ExpectedCommitSHA != "" {
+		req.ExpectedCommitSha = &p.ExpectedCommitSHA
+	}
+	resp, err := c.Git.DeleteFile(ctx, req)
 	if err != nil {
 		return "", err
 	}

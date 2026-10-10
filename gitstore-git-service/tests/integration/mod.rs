@@ -199,19 +199,31 @@ async fn test_concurrent_repos_are_isolated() {
     );
 }
 
-/// Delete on an unknown repository returns NOT_FOUND (FR-017).
+/// Deleting absent storage succeeds and fences stale provisioning of that UID.
 #[tokio::test]
-async fn test_delete_unknown_repo_returns_not_found() {
+async fn test_delete_unknown_repo_fences_stale_provisioning() {
     let (svc, _dir) = make_service();
 
+    for _ in 0..2 {
+        let response = svc
+            .delete_repository(Request::new(proto::DeleteRepositoryRequest {
+                repository_id: INT_REPO_1.to_string(),
+                authorization: test_authorization(INT_REPO_1, "repository.delete.any"),
+            }))
+            .await
+            .expect("idempotent deletion")
+            .into_inner();
+        assert_eq!(response.repository_id, INT_REPO_1);
+    }
     let err = svc
-        .delete_repository(Request::new(proto::DeleteRepositoryRequest {
+        .create_repository(Request::new(proto::CreateRepositoryRequest {
             repository_id: INT_REPO_1.to_string(),
-            authorization: test_authorization(INT_REPO_1, "repository.delete.any"),
+            storage_class: String::new(),
+            authorization: test_authorization(INT_REPO_1, "repository.create.any"),
         }))
         .await
-        .expect_err("expected NOT_FOUND");
-    assert_eq!(err.code(), tonic::Code::NotFound);
+        .expect_err("deleted UID must not be provisioned");
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
 }
 
 /// Invalid repository IDs (non-UUID) are rejected with INVALID_ARGUMENT on create.

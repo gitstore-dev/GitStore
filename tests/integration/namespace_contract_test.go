@@ -169,6 +169,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -187,10 +189,15 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type mockGitWriter struct {
 	mu sync.Mutex
+	seq int
+	heads map[string]string
+	trees map[string]map[string][]byte
 }
 
 // namespaceOwnerAuthZ mirrors namespace-scoped authorization: a non-admin
@@ -221,40 +228,69 @@ func (n *namespaceOwnerAuthZ) Authorize(
 	return authpkg.Allow("namespace-owner-test", "owner or unowned resource"), nil
 }
 
-func (m *mockGitWriter) CommitFile(_ context.Context, _ gitclient.CommitFileParams) (string, error) {
-	return "deadbeef", nil
+func (m *mockGitWriter) CommitFile(ctx context.Context, p gitclient.CommitFileParams) (string, error) {
+	return m.CommitFileForRepo(ctx, "", p)
 }
 
-func (m *mockGitWriter) CommitFileForRepo(_ context.Context, _ string, _ gitclient.CommitFileParams) (string, error) {
-	return "deadbeef", nil
+func (m *mockGitWriter) write(repo, path string, content []byte) string {
+	if m.heads == nil { m.heads = map[string]string{}; m.trees = map[string]map[string][]byte{} }
+	tree := map[string][]byte{}
+	for path, content := range m.trees[m.heads[repo]] { tree[path] = content }
+	if content == nil { delete(tree, path) } else { tree[path] = append([]byte(nil), content...) }
+	m.seq++
+	commit := fmt.Sprintf("%040x", m.seq)
+	m.trees[commit], m.heads[repo] = tree, commit
+	return commit
 }
 
-func (m *mockGitWriter) DeleteFileForRepo(_ context.Context, _ string, _ gitclient.DeleteFileParams) (string, error) {
-	return "cafe1234", nil
+func (m *mockGitWriter) CommitFileForRepo(_ context.Context, repo string, p gitclient.CommitFileParams) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.write(repo, p.Path, p.Content), nil
 }
 
-func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, _ string, _ string) (string, error) {
-	return "deadbeef", nil
+func (m *mockGitWriter) DeleteFileForRepo(_ context.Context, repo string, p gitclient.DeleteFileParams) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p.ExpectedCommitSHA != "" && p.ExpectedCommitSHA != m.heads[repo] { return "", status.Error(codes.Aborted, "revision changed") }
+	return m.write(repo, p.Path, nil), nil
 }
 
-func (m *mockGitWriter) ReadFileForRepo(_ context.Context, _ string, _ string, _ string) ([]byte, error) {
-	return nil, nil
+func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, repo string, _ string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.heads[repo], nil
 }
 
-func (m *mockGitWriter) ListFiles(_ context.Context, _ string, _ string, _ string) ([]string, error) {
-	return nil, nil
+func (m *mockGitWriter) ReadFileForRepo(_ context.Context, repo, path, ref string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if strings.HasPrefix(ref, "refs/") || ref == "HEAD" { ref = m.heads[repo] }
+	content, ok := m.trees[ref][path]
+	if !ok { return nil, status.Error(codes.NotFound, "file not found") }
+	return append([]byte(nil), content...), nil
 }
 
-func (m *mockGitWriter) ReadFile(_ context.Context, _ string, _ string, _ string) ([]byte, error) {
-	return nil, nil
+func (m *mockGitWriter) ListFiles(_ context.Context, repo, prefix, ref string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if strings.HasPrefix(ref, "refs/") || ref == "HEAD" { ref = m.heads[repo] }
+	var paths []string
+	for path := range m.trees[ref] { if strings.HasPrefix(path, prefix) { paths = append(paths, path) } }
+	sort.Strings(paths)
+	return paths, nil
 }
 
-func (m *mockGitWriter) ResolveRef(_ context.Context, _ string, _ string) (string, error) {
-	return "deadbeef", nil
+func (m *mockGitWriter) ReadFile(ctx context.Context, repo, path, ref string) ([]byte, error) {
+	return m.ReadFileForRepo(ctx, repo, path, ref)
 }
 
-func (m *mockGitWriter) DeleteFile(_ context.Context, _ gitclient.DeleteFileParams) (string, error) {
-	return "cafe1234", nil
+func (m *mockGitWriter) ResolveRef(ctx context.Context, repo, ref string) (string, error) {
+	return m.ResolveRefForRepo(ctx, repo, ref)
+}
+
+func (m *mockGitWriter) DeleteFile(ctx context.Context, p gitclient.DeleteFileParams) (string, error) {
+	return m.DeleteFileForRepo(ctx, "", p)
 }
 
 func (m *mockGitWriter) CreateTag(_ context.Context, _ gitclient.CreateTagParams) (string, error) {
@@ -681,9 +717,8 @@ func assertNamespaceContractShape(t *testing.T, got *namespaceContractNamespace,
 	if got.Status.ObservedGeneration != 1 {
 		t.Fatalf("status.observedGeneration = %d, want %d", got.Status.ObservedGeneration, 1)
 	}
-	if got.Status.LastAppliedRevision == nil || *got.Status.LastAppliedRevision != "main@sha1:deadbeef" {
-		t.Fatalf("status.lastAppliedRevision = %v, want %q", got.Status.LastAppliedRevision, "main@sha1:deadbeef")
-	}
+	require.NotNil(t, got.Status.LastAppliedRevision)
+	require.Regexp(t, `^main@sha1:[0-9a-f]{40}$`, *got.Status.LastAppliedRevision)
 	if len(got.Status.Conditions) != 1 ||
 		got.Status.Conditions[0].Type != "AdmissionAccepted" ||
 		got.Status.Conditions[0].Status != "TRUE" {
@@ -693,13 +728,6 @@ func assertNamespaceContractShape(t *testing.T, got *namespaceContractNamespace,
 
 func (h *namespaceContractHarness) cleanupNamespace(identifier string) {
 	h.t.Helper()
-
-	repoID, ok := h.lookupRepositoryID(identifier, namespaceContractSystemRepository)
-	if ok {
-		if errors := h.deleteRepositoryAndComplete(repoID); len(errors) > 0 {
-			h.t.Logf("cleanup deleteRepository(%s/%s) errors: %s", identifier, namespaceContractSystemRepository, namespaceContractErrors(errors))
-		}
-	}
 
 	namespaceID, ok := h.lookupNamespaceID(identifier)
 	if !ok {
@@ -757,15 +785,15 @@ func (h *namespaceContractHarness) lookupRepositoryID(namespace, name string) (s
 	return data.Repository.ID, true
 }
 
-func (h *namespaceContractHarness) requireDeleteSystemRepository(namespace string) {
+func (h *namespaceContractHarness) requireSystemDeletionRejected(namespace string) {
 	h.t.Helper()
 	repoID, ok := h.lookupRepositoryID(namespace, namespaceContractSystemRepository)
 	if !ok {
 		h.t.Fatalf("system repository %q not found in namespace %q", namespaceContractSystemRepository, namespace)
 	}
 
-	if errors := h.deleteRepositoryAndComplete(repoID); len(errors) > 0 {
-		h.t.Fatalf("graphql errors deleting system repository %s/%s: %s", namespace, namespaceContractSystemRepository, namespaceContractErrors(errors))
+	if errors := h.deleteRepositoryAndComplete(repoID); len(errors) == 0 {
+		h.t.Fatal("direct system repository deletion unexpectedly succeeded")
 	}
 }
 
@@ -819,17 +847,19 @@ func (h *namespaceContractHarness) deleteRepositoryAndComplete(repoID string) []
 		return []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"message":%q}`, err.Error()))}
 	}
 	resp = h.gql(`
-		mutation($namespace: String!, $name: String!, $resourceVersion: String!) {
+		mutation($namespace: String!, $name: String!, $resourceVersion: String!, $uid: ID!) {
 			completeRepositoryDeletion(input: {
 				namespace: $namespace
 				name: $name
 				resourceVersion: $resourceVersion
+				uid: $uid
 			}) { id }
 		}
 	`, map[string]any{
 		"namespace":       current.Repository.Metadata.Namespace,
 		"name":            current.Repository.Metadata.Name,
 		"resourceVersion": current.Repository.Metadata.ResourceVersion,
+		"uid":             repoID,
 	})
 	return resp.Errors
 }
@@ -1232,7 +1262,7 @@ func TestNamespaceContract_CreateNamespaceReturnsAdditiveContract(t *testing.T) 
 	assertNamespaceContractShape(t, data.CreateNamespace.Namespace, identifier, namespaceContractStringPtr(title), "USER")
 }
 
-func TestNamespaceContract_DeleteNamespaceBehaviorUnchanged(t *testing.T) {
+func TestNamespaceContract_DeleteNamespaceFinalizesEmptySystemRepository(t *testing.T) {
 	h := newNamespaceContractHarness(t)
 	identifier := uniqueName("namespace-contract-delete")
 	displayName := fmt.Sprintf("Delete %s", identifier)
@@ -1245,11 +1275,11 @@ func TestNamespaceContract_DeleteNamespaceBehaviorUnchanged(t *testing.T) {
 
 	h.createNamespace(identifier, displayName)
 	created = true
-	h.requireDeleteSystemRepository(identifier)
+	h.requireSystemDeletionRejected(identifier)
 
 	namespaceID, ok := h.lookupNamespaceID(identifier)
 	require.True(t, ok)
-	resp := h.gql(`mutation($id: ID!) { deleteNamespace(input: {id: $id}) { namespace { id } outcome } }`, map[string]any{"id": namespaceID})
+	resp := h.gql(`mutation($id: ID!) { deleteNamespace(input: {id: $id}) { namespace { id metadata { resourceVersion } } outcome } }`, map[string]any{"id": namespaceID})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql errors deleting namespace: %s", namespaceContractErrors(resp.Errors))
 	}
@@ -1257,7 +1287,10 @@ func TestNamespaceContract_DeleteNamespaceBehaviorUnchanged(t *testing.T) {
 	var data struct {
 		DeleteNamespace *struct {
 			Namespace *struct {
-				ID string `json:"id"`
+				ID       string `json:"id"`
+				Metadata struct {
+					ResourceVersion string `json:"resourceVersion"`
+				} `json:"metadata"`
 			} `json:"namespace"`
 		} `json:"deleteNamespace"`
 	}
@@ -1270,5 +1303,12 @@ func TestNamespaceContract_DeleteNamespaceBehaviorUnchanged(t *testing.T) {
 	if data.DeleteNamespace.Namespace == nil || data.DeleteNamespace.Namespace.ID != namespaceID {
 		t.Fatalf("namespace ID = %+v, want %q", data.DeleteNamespace.Namespace, namespaceID)
 	}
+	resp = h.gql(`mutation($name: String!, $uid: ID!, $rv: String!) { completeNamespaceDeletion(input: {name: $name, uid: $uid, resourceVersion: $rv}) { id } }`,
+		map[string]any{"name": identifier, "uid": namespaceID, "rv": data.DeleteNamespace.Namespace.Metadata.ResourceVersion})
+	require.Empty(t, resp.Errors)
+	_, exists := h.lookupNamespaceID(identifier)
+	require.False(t, exists)
+	_, exists = h.lookupRepositoryID(identifier, namespaceContractSystemRepository)
+	require.False(t, exists)
 	created = false
 }

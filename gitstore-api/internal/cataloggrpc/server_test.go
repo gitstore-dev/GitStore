@@ -2321,7 +2321,11 @@ func newTreeGitReader(current *string, files map[string]map[string][]byte) *mock
 			return paths, nil
 		},
 		readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
-			return files[ref][path], nil
+			content, ok := files[ref][path]
+			if !ok {
+				return nil, grpcstatus.Error(codes.NotFound, "file not found")
+			}
+			return content, nil
 		},
 		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
 			return *current, nil

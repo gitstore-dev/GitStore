@@ -3,7 +3,32 @@
 
 package resolver
 
-import "github.com/gitstore-dev/gitstore/api/internal/catalog"
+import (
+	"context"
+
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+)
+
+func (r *mutationResolver) categoryMembershipUIDs(ctx context.Context, namespace string, resolved *catalog.ResolvedProductDefinition) ([]string, error) {
+	if resolved == nil || resolved.Category == nil {
+		return nil, nil
+	}
+	path := resolved.Category.Path
+	if len(path) == 0 {
+		path = []string{resolved.Category.Name}
+	}
+	uids := make([]string, 0, len(path))
+	for _, name := range path {
+		category, err := r.store.GetCategoryTaxonomyByName(ctx, namespace, name)
+		if err != nil {
+			return nil, err
+		}
+		// Projection keys are datastore identities. Relay IDs are API-boundary
+		// encodings and must never be persisted into a Scylla index.
+		uids = append(uids, category.UID)
+	}
+	return uids, nil
+}
 
 func mergeProductConditions(existing, incoming []catalog.Condition) []catalog.Condition {
 	byType := make(map[catalog.ConditionType]catalog.Condition, len(existing)+len(incoming))

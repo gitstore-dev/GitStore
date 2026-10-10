@@ -141,27 +141,6 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 	return &model.UpdateProductStatusPayload{Product: DatastoreProductToGraphQL(product)}, nil
 }
 
-func (r *mutationResolver) categoryMembershipUIDs(ctx context.Context, namespace string, resolved *catalog.ResolvedProductDefinition) ([]string, error) {
-	if resolved == nil || resolved.Category == nil {
-		return nil, nil
-	}
-	path := resolved.Category.Path
-	if len(path) == 0 {
-		path = []string{resolved.Category.Name}
-	}
-	uids := make([]string, 0, len(path))
-	for _, name := range path {
-		category, err := r.store.GetCategoryTaxonomyByName(ctx, namespace, name)
-		if err != nil {
-			return nil, err
-		}
-		// Projection keys are datastore identities. Relay IDs are API-boundary
-		// encodings and must never be persisted into a Scylla index.
-		uids = append(uids, category.UID)
-	}
-	return uids, nil
-}
-
 // CompleteProductDeletion is the resolver for the completeProductDeletion field.
 func (r *mutationResolver) CompleteProductDeletion(ctx context.Context, input model.CompleteProductDeletionInput) (*model.CompleteProductDeletionPayload, error) {
 	deleted, err := r.service.CompleteProductDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)

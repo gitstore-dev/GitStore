@@ -15,7 +15,6 @@ import (
 	"io"
 	"maps"
 	"reflect"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -276,11 +275,41 @@ func (s *Server) validateNamespacePolicies(
 	if len(req.GetTrees()) == 0 {
 		return nil, false, grpcstatus.Error(codes.InvalidArgument, "validation trees are required")
 	}
+	var validationErrors []*catalogv1.ValidationError
+	hasNamespaces := false
 	for _, tree := range req.GetTrees() {
 		appendCandidates(tree.GetOldBlobs(), tree.GetProposedBlobs(), true)
+		oldEntries := namespaceEntriesByPath(s.parser, tree.GetOldBlobs())
+		proposed := namespaceEntriesByPath(s.parser, tree.GetProposedBlobs())
+		hasNamespaces = hasNamespaces || len(oldEntries) > 0 || len(proposed) > 0
+		remaining := map[string]bool{}
+		for _, entry := range proposed {
+			remaining[entry.identity.Name] = true
+		}
+		for path, entry := range oldEntries {
+			if remaining[entry.identity.Name] {
+				continue
+			}
+			if err := s.validateNamespaceAuthoringTarget(ctx, req.GetRepositoryId(), path, entry.identity.Name); err != nil {
+				validationErrors = append(validationErrors, &catalogv1.ValidationError{FilePath: path, Constraint: "authoring_target", Message: err.Error()})
+				continue
+			}
+			ns, err := s.store.GetNamespaceByName(ctx, entry.identity.Name)
+			if errors.Is(err, datastore.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, true, err
+			}
+			if err := admission.CheckInfrastructureDeletion(ctx, s.store, ns); err != nil {
+				var rejected *admission.Error
+				if !errors.As(err, &rejected) {
+					return nil, true, err
+				}
+				validationErrors = append(validationErrors, &catalogv1.ValidationError{FilePath: path, Constraint: "dependent_resources", Message: err.Error()})
+			}
+		}
 	}
-
-	var validationErrors []*catalogv1.ValidationError
 	for _, candidate := range candidates {
 		if candidate.operation == admission.OperationCreate {
 			_, lookupErr := s.store.GetNamespaceByName(ctx, candidate.name)
@@ -316,7 +345,7 @@ func (s *Server) validateNamespacePolicies(
 			Message:    decision.Message,
 		})
 	}
-	return validationErrors, len(candidates) > 0, nil
+	return validationErrors, hasNamespaces, nil
 }
 
 func (s *Server) validateResourceBlobs(ctx context.Context, repositoryID string, blobs []*catalogv1.ResourceBlob) []*catalogv1.ValidationError {
@@ -1280,7 +1309,7 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 		if op.oldEntry != nil {
 			sourcePath = op.oldEntry.path
 		}
-		if err := s.deleteResource(ctx, op.identity, admCtx.RepositoryID, admCtx.RefName, sourcePath, admCtx.ActorSubject); err != nil {
+		if err := s.deleteResource(ctx, op.identity, admCtx.RepositoryID, admCtx.RefName, sourcePath, admCtx.ActorSubject, op.oldEntry); err != nil {
 			return err
 		}
 	}
@@ -1476,6 +1505,15 @@ func (s *Server) admitRepository(ctx context.Context, resource *catalog.Reposito
 		return nil
 	}
 	existing, _ := rawExisting.(*datastore.Repository)
+	if existing != nil {
+		intent, err := admission.ReadDeletionIntent(existing.Status)
+		if err != nil {
+			return err
+		}
+		if existing.DeletionTimestamp != nil || intent != nil {
+			return admission.NewError(admission.CodeFailedPrecondition, "REPOSITORY_TERMINATING", "repository deletion is pending")
+		}
+	}
 	if op == admission.OperationUpdate && existing == nil {
 		return nil
 	}
@@ -1510,6 +1548,13 @@ func (s *Server) admitRepository(ctx context.Context, resource *catalog.Reposito
 		return nil
 	}
 	for range maxRepositoryAdmissionUpdateAttempts {
+		intent, err := admission.ReadDeletionIntent(existing.Status)
+		if err != nil {
+			return err
+		}
+		if existing.DeletionTimestamp != nil || intent != nil {
+			return admission.NewError(admission.CodeFailedPrecondition, "REPOSITORY_TERMINATING", "repository deletion is pending")
+		}
 		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
 			admCtx.markSuperseded()
 			return nil
@@ -1568,7 +1613,73 @@ func isRepositoryStorageClassDowngrade(current, proposed string) bool {
 
 var errCategoryDeletionBlocked = errors.New("category deletion blocked by child categories")
 
-func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, repositoryID, refName, sourcePath, actor string) error {
+func (s *Server) markPushedInfrastructureDeletion(ctx context.Context, resource any, repositoryID, refName, path, actor string) error {
+	current, err := s.git.ResolveRef(ctx, repositoryID, refName)
+	if err != nil {
+		return fmt.Errorf("resolve deletion ref: %w", err)
+	}
+	if _, err := s.git.ReadFile(ctx, repositoryID, path, current); grpcstatus.Code(err) != codes.NotFound {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("deletion superseded: manifest still exists")
+	}
+	now := s.clock.Now().UTC()
+	switch r := resource.(type) {
+	case *datastore.Namespace:
+		intent, readErr := admission.ReadDeletionIntent(r.Status)
+		if readErr != nil {
+			return readErr
+		}
+		if intent == nil {
+			intent = &admission.InfrastructureDeletionIntent{UID: r.UID, RepositoryID: repositoryID, Path: path, Ref: refName, ExpectedCommit: r.GitCommitSHA, Actor: actor}
+		}
+		if intent.UID != r.UID || intent.RepositoryID != repositoryID || intent.Path != path || intent.Ref != refName {
+			return fmt.Errorf("pushed removal does not match pending namespace deletion")
+		}
+		if intent.RemovalCommit == "" {
+			intent.RemovalCommit = current
+		}
+		r.Status, err = admission.WithDeletionIntent(r.Status, intent, r.Generation, now)
+		if err == nil && r.DeletionTimestamp != nil {
+			if err := admission.CheckInfrastructureDeletion(ctx, s.store, r); err != nil {
+				return err
+			}
+			expected := r.ResourceVersion
+			datastore.AdvanceNamespaceSystemVersion(r)
+			return s.store.UpdateNamespace(ctx, r, expected)
+		}
+	case *datastore.Repository:
+		intent, readErr := admission.ReadDeletionIntent(r.Status)
+		if readErr != nil {
+			return readErr
+		}
+		if intent == nil {
+			intent = &admission.InfrastructureDeletionIntent{UID: r.UID, RepositoryID: repositoryID, Path: path, Ref: refName, ExpectedCommit: r.GitCommitSHA, Actor: actor}
+		}
+		if intent.UID != r.UID || intent.RepositoryID != repositoryID || intent.Path != path || intent.Ref != refName {
+			return fmt.Errorf("pushed removal does not match pending repository deletion")
+		}
+		if intent.RemovalCommit == "" {
+			intent.RemovalCommit = current
+		}
+		r.Status, err = admission.WithDeletionIntent(r.Status, intent, r.Generation, now)
+		if err == nil && r.DeletionTimestamp != nil {
+			if err := admission.CheckInfrastructureDeletion(ctx, s.store, r); err != nil {
+				return err
+			}
+			expected := r.ResourceVersion
+			datastore.AdvanceRepositorySystemVersion(r)
+			return s.store.UpdateRepository(ctx, r, expected)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	return admission.MarkInfrastructureDeletion(ctx, s.store, resource, now, actor)
+}
+
+func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, repositoryID, refName, sourcePath, actor string, removed ...*parsedEntry) error {
 	existing, err := s.lookupResourceByIdentity(ctx, id)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
@@ -1613,6 +1724,30 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 
 	var uid string
 	var deleteErr error
+	if id.Kind == "Namespace" || id.Kind == "Repository" {
+		var commit, namespace string
+		switch r := existing.(type) {
+		case *datastore.Namespace:
+			commit = r.GitCommitSHA
+		case *datastore.Repository:
+			commit, namespace = r.GitCommitSHA, r.Namespace
+		}
+		if commit == "" || len(removed) == 0 || removed[0] == nil {
+			return fmt.Errorf("infrastructure deletion requires admitted and removed manifest evidence")
+		}
+		content, err := s.git.ReadFile(ctx, repositoryID, sourcePath, commit)
+		if err != nil {
+			return fmt.Errorf("read admitted deletion manifest: %w", err)
+		}
+		parsed, body, err := s.parser.ParseResource(bytes.NewReader(content))
+		if err != nil {
+			return err
+		}
+		entry, ok, err := newParsedEntry(sourcePath, parsed, body, namespace)
+		if err != nil || !ok || entry.contentHash != removed[0].contentHash {
+			return fmt.Errorf("removed infrastructure manifest does not match admitted revision")
+		}
+	}
 	switch r := existing.(type) {
 	case *datastore.Product:
 		if r.DeletionTimestamp != nil {
@@ -1685,9 +1820,13 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 		uid = r.UID
 		deleteErr = s.store.DeleteProductVariantWithResourceVersion(ctx, r.UID, r.ResourceVersion)
 	case *datastore.Namespace:
-		s.log.Info("admit_resources: Namespace manifest deletion ignored; use deleteNamespace",
-			zap.String("name", r.Name))
-		return nil
+		if err := s.validateNamespaceAuthoringTarget(ctx, repositoryID, sourcePath, r.Name); err != nil {
+			return err
+		}
+		if r.SourcePath != sourcePath || r.GitRef != refName {
+			return fmt.Errorf("namespace deletion provenance mismatch")
+		}
+		return s.markPushedInfrastructureDeletion(ctx, r, repositoryID, refName, sourcePath, actor)
 	case *datastore.Repository:
 		if err := s.validateRepositoryAuthoringTarget(ctx, repositoryID, sourcePath, r.Namespace, r.Name); err != nil {
 			s.log.Info("admit_resources: Repository deletion skipped; invalid authoring target",
@@ -1706,35 +1845,7 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 				zap.String("owning_ref", r.GitRef))
 			return nil
 		}
-		if r.DeletionTimestamp != nil {
-			return nil
-		}
-		hasCatalogResources, checkErr := s.store.HasCatalogResources(ctx, r.UID)
-		if checkErr != nil {
-			return fmt.Errorf("check Repository deletion dependents: %w", checkErr)
-		}
-		if hasCatalogResources {
-			return fmt.Errorf("repository %s/%s contains catalog resources and cannot be deleted", r.Namespace, r.Name)
-		}
-		expectedResourceVersion := r.ResourceVersion
-		now := s.clock.Now().UTC()
-		r.DeletionTimestamp = &now
-		if !containsStringValue(r.Finalizers, datastore.RepositoryForegroundDeletionFinalizer) {
-			r.Finalizers = append(r.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
-		}
-		r.UpdateTimestamp = now
-		r.UpdateActor = actor
-		datastore.AdvanceRepositorySystemVersion(r)
-		if updateErr := s.store.UpdateRepository(ctx, r, expectedResourceVersion); updateErr != nil {
-			if errors.Is(updateErr, datastore.ErrConflict) {
-				latest, reloadErr := s.store.GetRepository(ctx, r.UID)
-				if reloadErr == nil && latest.DeletionTimestamp != nil {
-					return nil
-				}
-			}
-			return fmt.Errorf("start Repository foreground deletion: %w", updateErr)
-		}
-		return nil
+		return s.markPushedInfrastructureDeletion(ctx, r, repositoryID, refName, sourcePath, actor)
 	case *datastore.File:
 		uid = r.UID
 		deleteErr = s.store.DeleteFileWithResourceVersion(ctx, r.UID, r.ResourceVersion)
@@ -1756,10 +1867,6 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 		zap.String("name", id.Name),
 		zap.String("uid", uid))
 	return nil
-}
-
-func containsStringValue(values []string, target string) bool {
-	return slices.Contains(values, target)
 }
 
 // resourceOwnership returns existing's (RepositoryID, GitRef) and true, or

@@ -32,19 +32,20 @@ import (
 // its repository and advances refs/heads/main. It serves both the GraphQL
 // writer and the admission reader, like the real Git service.
 type memGit struct {
-	mu      sync.Mutex
-	seq     int
-	heads   map[string]string
-	trees   map[string]map[string][]byte // commit -> path -> content
-	commits []gitclient.CommitFileParams
-	deletes []gitclient.DeleteFileParams
+	mu       sync.Mutex
+	seq      int
+	heads    map[string]string
+	trees    map[string]map[string][]byte // commit -> path -> content
+	commits  []gitclient.CommitFileParams
+	deletes  []gitclient.DeleteFileParams
+	receipts map[string]string
 	// afterWrite runs after each commit, outside the lock; tests use it to
 	// race a concurrent commit in before admission.
 	afterWrite func(repositoryID string)
 }
 
 func newMemGit() *memGit {
-	return &memGit{heads: map[string]string{}, trees: map[string]map[string][]byte{}}
+	return &memGit{heads: map[string]string{}, trees: map[string]map[string][]byte{}, receipts: map[string]string{}}
 }
 
 func (g *memGit) write(repositoryID, path string, content []byte) string {
@@ -107,9 +108,38 @@ func (g *memGit) DeleteFile(context.Context, gitclient.DeleteFileParams) (string
 }
 func (g *memGit) DeleteFileForRepo(_ context.Context, repositoryID string, p gitclient.DeleteFileParams) (string, error) {
 	g.mu.Lock()
+	key := repositoryID + "\x00" + p.RefName + "\x00" + p.Path + "\x00" + p.ExpectedCommitSHA
+	if p.ExpectedCommitSHA != "" && g.heads[repositoryID] != p.ExpectedCommitSHA {
+		receipt := g.receipts[key]
+		_, exists := g.trees[g.heads[repositoryID]][p.Path]
+		g.mu.Unlock()
+		if receipt != "" && !exists {
+			return receipt, nil
+		}
+		if receipt != "" {
+			return "", status.Error(codes.FailedPrecondition, "manifest restored after removal")
+		}
+		return "", status.Error(codes.Aborted, "deletion revision conflict")
+	}
 	g.deletes = append(g.deletes, p)
+	g.seq++
+	sha := fmt.Sprintf("%040x", g.seq)
+	tree := map[string][]byte{}
+	for path, content := range g.trees[g.heads[repositoryID]] {
+		if path != p.Path {
+			tree[path] = content
+		}
+	}
+	g.trees[sha], g.heads[repositoryID] = tree, sha
+	if p.ExpectedCommitSHA != "" {
+		g.receipts[key] = sha
+	}
+	hook := g.afterWrite
 	g.mu.Unlock()
-	return g.write(repositoryID, p.Path, nil), nil
+	if hook != nil {
+		hook(repositoryID)
+	}
+	return sha, nil
 }
 func (g *memGit) CreateTag(context.Context, gitclient.CreateTagParams) (string, error) {
 	return "", nil
