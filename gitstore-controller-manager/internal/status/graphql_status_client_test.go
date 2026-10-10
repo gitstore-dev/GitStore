@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +110,22 @@ func TestApply_ConflictExtensionMapsToErrConflict(t *testing.T) {
 	err := sc.Apply(context.Background(), testKey(), testPatch())
 	if !errors.Is(err, types.ErrConflict) {
 		t.Fatalf("Apply err = %v, want errors.Is(..., types.ErrConflict)", err)
+	}
+}
+
+func TestApply_ConflictDiagnosticReportsCurrentResourceVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":null,"errors":[{"message":"CategoryTaxonomy acme/electronics status update conflict","extensions":{"code":"CONFLICT","diagnostics":[{"reason":"RESOURCE_VERSION_CONFLICT","message":"current resourceVersion is 5","level":"FAILURE"}]}}]}`))
+	}))
+	defer srv.Close()
+
+	err := status.NewGraphQLStatusClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))).Apply(context.Background(), testKey(), testPatch())
+	if !errors.Is(err, types.ErrConflict) {
+		t.Fatalf("Apply err = %v, want errors.Is(..., types.ErrConflict)", err)
+	}
+	if !strings.Contains(err.Error(), `current resourceVersion "5"`) {
+		t.Errorf("Apply error = %q, want current resourceVersion 5", err)
 	}
 }
 

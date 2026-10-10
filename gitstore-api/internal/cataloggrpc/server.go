@@ -1514,12 +1514,29 @@ func (s *Server) admitRepository(ctx context.Context, resource *catalog.Reposito
 			admCtx.markSuperseded()
 			return nil
 		}
+		desiredStateChanged := existing.APIVersion != resource.APIVersion ||
+			existing.Kind != resource.Kind ||
+			specBodyChanged(existing.Spec, existing.Body, specJSON, body)
+		metadataChanged := !stringMapsEqual(existing.Labels, resource.Metadata.Labels) ||
+			!stringMapsEqual(existing.Annotations, resource.Metadata.Annotations) ||
+			!bytes.Equal(existing.OwnerReferences, ownerReferences)
+		provenanceChanged := existing.Revision != admCtx.Revision ||
+			existing.SourcePath != sourcePath ||
+			existing.GitCommitSHA != admCtx.CommitSHA ||
+			existing.GitRef != admCtx.RefName
+		if !desiredStateChanged && !metadataChanged && !provenanceChanged {
+			return nil
+		}
 		expected := existing.ResourceVersion
 		existing.Labels, existing.Annotations, existing.OwnerReferences = cloneStringMap(resource.Metadata.Labels), cloneStringMap(resource.Metadata.Annotations), ownerReferences
 		existing.Spec, existing.Body, existing.DefaultBranch, existing.StorageClass = specJSON, string(body), resource.Spec.DefaultBranch, resource.Spec.StorageClass
 		existing.Revision, existing.UpdateTimestamp, existing.UpdateActor, existing.SourcePath, existing.GitCommitSHA, existing.GitRef = admCtx.Revision, admCtx.Now, admCtx.ActorSubject, sourcePath, admCtx.CommitSHA, admCtx.RefName
-		datastore.AdvanceRepositorySpecVersion(existing)
-		existing.Status = admissionAcceptedStatus(existing.Generation, admCtx.Revision, admCtx.Now)
+		if desiredStateChanged {
+			datastore.AdvanceRepositorySpecVersion(existing)
+		} else {
+			datastore.AdvanceRepositorySystemVersion(existing)
+		}
+		existing.Status = mergeRepositoryAdmissionStatus(existing.Status, existing.Generation, admCtx.Revision, admCtx.Now)
 		err = s.store.UpdateRepository(ctx, existing, expected)
 		if err == nil {
 			return nil
@@ -2013,16 +2030,20 @@ func (s *Server) admitNamespace(
 		} else if namespaceadmission.TierRank(tier) < namespaceadmission.TierRank(existing.Tier) {
 			err = namespaceadmission.ErrTierDemotion
 		} else {
-			authorChanged := existing.APIVersion != resource.APIVersion ||
+			desiredStateChanged := existing.APIVersion != resource.APIVersion ||
 				existing.Kind != resource.Kind ||
-				!stringMapsEqual(existing.Labels, resource.Metadata.Labels) ||
-				!stringMapsEqual(existing.Annotations, resource.Metadata.Annotations) ||
 				specBodyChanged(existing.Spec, existing.Body, specJSON, body)
-			systemChanged := existing.Revision != admCtx.Revision ||
+			metadataChanged := !stringMapsEqual(existing.Labels, resource.Metadata.Labels) ||
+				!stringMapsEqual(existing.Annotations, resource.Metadata.Annotations)
+			// Namespace owner references are system-owned and authored manifests
+			// are rejected when they contain them. Retain any existing system
+			// projection unless a future admission path supplies one explicitly.
+			ownerReferencesChanged := len(resource.Metadata.OwnerReferences) > 0 && !bytes.Equal(existing.OwnerReferences, ownerReferences)
+			provenanceChanged := existing.Revision != admCtx.Revision ||
 				existing.SourcePath != sourcePath ||
 				existing.GitCommitSHA != admCtx.CommitSHA ||
 				existing.GitRef != admCtx.RefName
-			if !authorChanged && !systemChanged {
+			if !desiredStateChanged && !metadataChanged && !ownerReferencesChanged && !provenanceChanged {
 				return
 			}
 			expectedResourceVersion := existing.ResourceVersion
@@ -2033,6 +2054,9 @@ func (s *Server) admitNamespace(
 			existing.UpdateActor = admCtx.ActorSubject
 			existing.Labels = cloneStringMap(resource.Metadata.Labels)
 			existing.Annotations = cloneStringMap(resource.Metadata.Annotations)
+			if ownerReferencesChanged {
+				existing.OwnerReferences = ownerReferences
+			}
 			existing.SourcePath = sourcePath
 			existing.GitCommitSHA = admCtx.CommitSHA
 			existing.GitRef = admCtx.RefName
@@ -2040,12 +2064,12 @@ func (s *Server) admitNamespace(
 			existing.Body = string(body)
 			existing.Title = resource.Spec.Title
 			existing.Tier = tier
-			if authorChanged {
+			if desiredStateChanged {
 				datastore.AdvanceNamespaceSpecVersion(existing)
 			} else {
 				datastore.AdvanceNamespaceSystemVersion(existing)
 			}
-			existing.Status = namespaceadmission.AdmissionStatus(existing.Generation, admCtx.Revision, admCtx.Now)
+			existing.Status = namespaceadmission.MergeAdmissionStatus(existing.Status, existing.Generation, admCtx.Revision, admCtx.Now)
 			if namespaceadmission.RecheckAuthoringRef(ctx, refCheck) != nil {
 				admCtx.markSuperseded()
 				return
@@ -3100,6 +3124,38 @@ func admissionAcceptedStatus(generation int64, revision string, now time.Time) [
 		},
 	}
 	b, _ := json.Marshal(status)
+	return b
+}
+
+// mergeRepositoryAdmissionStatus updates admission-owned status without
+// discarding controller-owned observation, conditions, or resolved storage.
+func mergeRepositoryAdmissionStatus(raw []byte, generation int64, revision string, now time.Time) []byte {
+	var status catalog.RepositoryStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return admissionAcceptedStatus(generation, revision, now)
+	}
+	status.LastAppliedRevision = revision
+	accepted := catalog.Condition{
+		Type:               catalog.ConditionAdmissionAccepted,
+		Status:             catalog.ConditionTrue,
+		ObservedGeneration: generation,
+		LastTransitionTime: now,
+		Reason:             "AdmittedByHookPipeline",
+		Message:            "Resource admitted via the post-receive hook pipeline.",
+	}
+	// Do not preallocate from untrusted persisted data: a corrupt or hostile
+	// condition count could overflow len+1 before allocation.
+	var conditions []catalog.Condition
+	for _, condition := range status.Conditions {
+		if condition.Type != catalog.ConditionAdmissionAccepted {
+			conditions = append(conditions, condition)
+		}
+	}
+	status.Conditions = append([]catalog.Condition{accepted}, conditions...)
+	b, err := json.Marshal(status)
+	if err != nil {
+		return admissionAcceptedStatus(generation, revision, now)
+	}
 	return b
 }
 

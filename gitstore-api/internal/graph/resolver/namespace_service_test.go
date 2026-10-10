@@ -164,7 +164,7 @@ func TestUpdateNamespace_advancesGenerationAndAdmissionRevision(t *testing.T) {
 	assert.Equal(t, "2", updated.ResourceVersion)
 	var status catalog.NamespaceStatus
 	require.NoError(t, json.Unmarshal(updated.Status, &status))
-	assert.Equal(t, updated.Generation, status.ObservedGeneration)
+	assert.Equal(t, created.Generation, status.ObservedGeneration)
 	assert.Equal(t, "main@sha1:deadbeef", status.LastAppliedRevision)
 	require.Len(t, status.Conditions, 1)
 	assert.Equal(t, updated.Generation, status.Conditions[0].ObservedGeneration)

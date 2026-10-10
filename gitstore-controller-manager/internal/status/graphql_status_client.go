@@ -62,7 +62,7 @@ func (c *graphqlStatusClient) Apply(ctx context.Context, key types.WorkItemKey, 
 			case gqlErr.Extensions["code"] == "NOT_FOUND":
 				return fmt.Errorf("graphqlStatusClient: %w: %w", types.ErrNotFound, err)
 			case graphqlclient.IsConflictCode(gqlErr.Extensions["code"]):
-				return fmt.Errorf("graphqlStatusClient: %w: current resourceVersion %q: %w", types.ErrConflict, gqlErr.Extensions["resourceVersion"], err)
+				return fmt.Errorf("graphqlStatusClient: %w: current resourceVersion %q: %w", types.ErrConflict, conflictResourceVersion(gqlErr.Extensions), err)
 			}
 		}
 		return fmt.Errorf("graphqlStatusClient: updateCategoryStatus: %w", err)

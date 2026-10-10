@@ -72,11 +72,25 @@ semantics.
 
 ## Version transitions
 
+`generation` tracks desired state only: changes to the Repository `spec` or
+Markdown body advance both counters. Labels, annotations, canonical Namespace
+owner-reference projections, and Git provenance changes (including a source
+path move) advance only `resourceVersion`; exact re-admission changes neither.
+Admission preserves controller-owned status fields while refreshing its
+accepted revision and `AdmissionAccepted` condition.
+
 | Transition              | UID       | Generation | ResourceVersion | Status            |
 |-------------------------|-----------|------------|-----------------|-------------------|
 | Create                  | New       | `1`        | `"1"`           | Initial status    |
 | Manifest spec write     | Preserved | `+1`       | `+1`            | Admission updated |
 | Controller status write | Preserved | Unchanged  | `+1`            | Updated           |
+
+## Generation-semantics rollout
+
+Pause external GraphQL authoring and Git pushes, drain admissions, replace all
+API replicas, then resume authoring. Repeat that pause and drain before a
+rollback so an older replica cannot write under the prior semantics. Controller
+status writes can remain enabled because they do not advance generation.
 
 Rows created before this contract normalize to generation `1`,
 resourceVersion `"1"`, and

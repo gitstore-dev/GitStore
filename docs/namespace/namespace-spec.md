@@ -87,14 +87,25 @@ written only through the status path.
 | `status`                                     | System   | Status-write path only   |
 
 Accepted writes persist the complete authored envelope, labels, annotations,
-full `spec`, and Markdown body. Any authored change advances both `generation`
-and `resourceVersion`. A Git path, commit, ref, or revision change with
-otherwise identical authored content advances only `resourceVersion`.
+full `spec`, and Markdown body. `generation` tracks desired state only: a
+`spec` or Markdown-body change advances both counters. Labels, annotations,
+owner-reference projections, and Git provenance (path, commit, ref, or
+revision) advance only `resourceVersion`. Exact re-admission advances neither.
+Admission refreshes its accepted revision and `AdmissionAccepted` condition
+without discarding controller-owned status observations or conditions.
 
 Validation, immutable-field enforcement, policy ceilings, phase validation, and
 admission are defined by GH#173. Watch and resume behavior is defined by
 GH#174. Repository override merging and effective policy resolution are
 defined by GH#249.
+
+## Generation-semantics rollout
+
+For this change, pause external GraphQL authoring and Git pushes, drain
+in-flight admissions, replace every API replica, then resume authoring. Use
+the same pause and drain before rollback; an older replica must not write using
+the former generation semantics. Controller status traffic may continue because
+it changes only `resourceVersion`.
 
 ## Hydrated API representation
 
