@@ -1771,11 +1771,12 @@ func catalogParentsActive(txn *gomemdb.Txn, namespace, repositoryID string) erro
 	if err != nil {
 		return err
 	}
-	if raw != nil {
-		repository := raw.(*datastore.Repository)
-		if repository.Namespace != namespace || repository.DeletionTimestamp != nil || datastore.HasDeletionIntent(repository.Status) {
-			return datastore.ErrConflict
-		}
+	if raw == nil {
+		return datastore.ErrNotFound
+	}
+	repository := raw.(*datastore.Repository)
+	if repository.Namespace != namespace || repository.DeletionTimestamp != nil || datastore.HasDeletionIntent(repository.Status) {
+		return datastore.ErrConflict
 	}
 	return nil
 }

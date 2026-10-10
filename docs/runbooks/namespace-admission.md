@@ -22,6 +22,9 @@ All implemented `complete*Deletion` inputs require the resource's GraphQL
 A conflict requires a fresh resource read, never retrying stale work against a
 same-name replacement. The check applies equally to Namespace, Repository,
 Product, and CategoryTaxonomy.
+An error-free empty Namespace completion payload means the resource is already
+absent and is successful on retry; transport, authorization, and conflict errors
+remain failures.
 
 An empty, verified system repository does not block Namespace initiation.
 Contained resources, including Files, do, as do all ordinary repositories
@@ -34,6 +37,8 @@ Repository emptiness uses one polymorphic `resources_by_repository` table:
 `PRIMARY KEY ((repository_id, shard), kind, uid)`. A new kind adds rows, not a new
 table or another per-kind query. Product, ProductVariant, CategoryTaxonomy,
 Collection, and File use the same membership-write and deletion-fence protocol.
+Both datastores reject their creates and updates when the referenced repository
+UUID has no live repository row.
 Namespace/Repository child checks continue using their existing indexed
 relationships; no parallel per-kind membership tables are needed.
 
@@ -101,6 +106,11 @@ Inspect retained manifests and terminating rows, compare
 their UID, admitted path/ref/revision and current tree, and resolve ambiguous
 ownership before allowing cleanup. A missing file alone is not proof of a
 successful authorized mutation.
+For `GetFile` and `GetFileStream`, `NOT_FOUND` means the path is absent from a
+readable tree.
+A missing authoring repository/ref or a path occupied by a non-file entry returns
+`FAILED_PRECONDITION`. Unavailable or unreadable authoring storage blocks both
+Namespace and Repository completion even when a prior removal commit is recorded.
 
 Catalog admission retries transient Namespace fence contention within a bounded
 request budget rather than immediately rejecting a committed push. A confirmed

@@ -67,6 +67,8 @@ func TestDeleteProductReturnsTerminatingEnvelopeAndIsIdempotent(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 	product := productLifecycleFixture("acme", "widget")
+	require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{UID: uuid.NewString(), Name: product.Namespace}))
+	require.NoError(t, store.CreateRepository(t.Context(), &datastore.Repository{UID: product.RepositoryID, Namespace: product.Namespace, Name: "catalog"}))
 	require.NoError(t, store.CreateProduct(context.Background(), product))
 	writer := &repositoryLifecycleWriter{}
 	admitter := &productLifecycleAdmitter{store: store}
@@ -93,6 +95,8 @@ func TestProductDeletionMetricsRecordIdempotentLifecycleOutcome(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 	product := productLifecycleFixture("acme", "already-terminating")
+	require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{UID: uuid.NewString(), Name: product.Namespace}))
+	require.NoError(t, store.CreateRepository(t.Context(), &datastore.Repository{UID: product.RepositoryID, Namespace: product.Namespace, Name: "catalog"}))
 	now := time.Now().UTC()
 	product.DeletionTimestamp = &now
 	require.NoError(t, store.CreateProduct(context.Background(), product))
@@ -115,6 +119,8 @@ func TestCompleteProductDeletionRejectsStaleIncarnation(t *testing.T) {
 	require.NoError(t, err)
 	mutation := &mutationResolver{Resolver: &Resolver{service: service}}
 	old := productLifecycleFixture("acme", "widget")
+	require.NoError(t, store.CreateNamespace(ctx, &datastore.Namespace{UID: uuid.NewString(), Name: old.Namespace}))
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{UID: old.RepositoryID, Namespace: old.Namespace, Name: "catalog"}))
 	now := time.Now().UTC()
 	old.DeletionTimestamp = &now
 	old.Finalizers = []string{"gitstore.dev/foreground-deletion"}

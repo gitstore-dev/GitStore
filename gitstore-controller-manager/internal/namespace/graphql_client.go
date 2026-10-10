@@ -128,8 +128,5 @@ func (c *GraphQLDeletionClient) CompleteDeletion(ctx context.Context, namespace,
 		}
 		return fmt.Errorf("namespace deletion client: complete deletion: %w", err)
 	}
-	if response.CompleteNamespaceDeletion.ID == nil {
-		return fmt.Errorf("namespace deletion client: completion returned no deleted identifier")
-	}
 	return nil
 }

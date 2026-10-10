@@ -1241,6 +1241,59 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	t.Run("CategoryAncestorIndex", func(t *testing.T) {
 		runCategoryAncestorIndexContract(t, ds)
 	})
+
+	t.Run("Repository/MissingParentRejectsAllCatalogWrites", func(t *testing.T) {
+		for _, kind := range []string{"Product", "ProductVariant", "CategoryTaxonomy", "Collection", "File"} {
+			t.Run(kind, func(t *testing.T) {
+				ns := newNamespace(datastore.NamespaceTierUser)
+				require.NoError(t, ds.CreateNamespace(ctx, ns))
+				repo := &datastore.Repository{UID: newID(), Namespace: ns.Name, Name: "catalog"}
+				require.NoError(t, ds.CreateRepositoryInActiveNamespace(ctx, repo))
+				uid, missingRepositoryID := newID(), newID()
+				now := time.Now().UTC().Truncate(time.Millisecond)
+				var repositoryID *string
+				var create, update func() error
+				switch kind {
+				case "Product":
+					r := &datastore.Product{UID: uid, Namespace: ns.Name, Name: "child", ResourceVersion: "1", CreationTimestamp: now}
+					repositoryID = &r.RepositoryID
+					create = func() error { return ds.CreateProduct(ctx, r) }
+					update = func() error { return ds.UpdateProduct(ctx, r) }
+				case "ProductVariant":
+					r := &datastore.ProductVariant{UID: uid, Namespace: ns.Name, Name: "child", SKU: "child", ProductRefName: "parent", ResourceVersion: "1", CreationTimestamp: now}
+					repositoryID = &r.RepositoryID
+					create = func() error { return ds.CreateProductVariant(ctx, r) }
+					update = func() error { return ds.UpdateProductVariant(ctx, r) }
+				case "CategoryTaxonomy":
+					r := &datastore.CategoryTaxonomy{UID: uid, Namespace: ns.Name, Name: "child", ResourceVersion: "1", CreationTimestamp: now}
+					repositoryID = &r.RepositoryID
+					create = func() error { return ds.CreateCategoryTaxonomy(ctx, r) }
+					update = func() error { return ds.UpdateCategoryTaxonomy(ctx, r) }
+				case "Collection":
+					r := &datastore.Collection{UID: uid, Namespace: ns.Name, Name: "child", ResourceVersion: "1", CreationTimestamp: now}
+					repositoryID = &r.RepositoryID
+					create = func() error { return ds.CreateCollection(ctx, r) }
+					update = func() error { return ds.UpdateCollection(ctx, r) }
+				case "File":
+					r := &datastore.File{UID: uid, Namespace: ns.Name, Name: "child", ResourceVersion: "1", CreationTimestamp: now}
+					repositoryID = &r.RepositoryID
+					create = func() error { return ds.CreateFile(ctx, r) }
+					update = func() error { return ds.UpdateFile(ctx, r, r.ResourceVersion) }
+				default:
+					t.Fatalf("unhandled kind %s", kind)
+				}
+				*repositoryID = missingRepositoryID
+				require.ErrorIs(t, create(), datastore.ErrNotFound)
+				*repositoryID = repo.UID
+				require.NoError(t, create(), "rejected admission must not leave an authoritative row")
+				*repositoryID = missingRepositoryID
+				require.ErrorIs(t, update(), datastore.ErrNotFound)
+				blocked, err := ds.HasCatalogResources(ctx, repo.UID)
+				require.NoError(t, err)
+				require.True(t, blocked, "rejected update must retain the original membership")
+			})
+		}
+	})
 }
 
 // ── CategoryAncestorIndex helpers ────────────────────────────────────────────

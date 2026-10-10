@@ -42,6 +42,7 @@ func newProductStatusTestFixture(t *testing.T) (*mutationResolver, datastore.Dat
 
 	require.NoError(t, store.CreateNamespace(ctx, &datastore.Namespace{UID: uuid.NewString(), Name: "acme", ResourceVersion: "1"}))
 	repositoryID := uuid.NewString()
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{UID: repositoryID, Namespace: "acme", Name: "catalog"}))
 
 	category := &datastore.CategoryTaxonomy{
 		UID: uuid.NewString(), APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy",

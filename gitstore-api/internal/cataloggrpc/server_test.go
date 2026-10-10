@@ -1549,6 +1549,9 @@ spec:
 func TestValidateResourceDeletionsCategoryTaxonomyRejectsIndexedChildOutsideProposedTree(t *testing.T) {
 	store := newTestDatastore(t)
 	ctx := context.Background()
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{
+		UID: wrongNamespaceRepoID, Namespace: "gitstore", Name: "other-catalog",
+	}))
 	parent := &datastore.CategoryTaxonomy{
 		UID: "00000000-0000-0000-0000-000000000311", Namespace: "gitstore", Name: "parent",
 		RepositoryID: testRepoID, ResourceVersion: "1", APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy",

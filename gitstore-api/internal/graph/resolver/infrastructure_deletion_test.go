@@ -40,6 +40,10 @@ func TestRepositoryDeletionRemovesAuthoringManifest(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, started)
 	require.Len(t, e.git.deletes, 1)
+	assertInfrastructureReadFailuresBlockCompletion(t, e, func() error {
+		_, err := e.service.CompleteRepositoryDeletion(ctx, lifecycleNamespace, before.Name, deleted.ResourceVersion, before.UID)
+		return err
+	})
 	_, err = e.service.CompleteRepositoryDeletion(ctx, lifecycleNamespace, before.Name, deleted.ResourceVersion, before.UID)
 	require.NoError(t, err)
 	_, err = e.store.GetRepository(ctx, before.UID)
@@ -95,6 +99,47 @@ func TestInfrastructureDeletionRecoversAfterAdmissionProcessLoss(t *testing.T) {
 }
 
 type lostDeletionResponse struct{ GitWriter }
+
+type unavailableDeletionRead struct {
+	GitWriter
+	readErr        error
+	storageDeletes int
+}
+
+func (w *unavailableDeletionRead) ReadFileForRepo(context.Context, string, string, string) ([]byte, error) {
+	return nil, w.readErr
+}
+
+func (w *unavailableDeletionRead) DeleteRepository(context.Context, string) error {
+	w.storageDeletes++
+	return errors.New("storage deletion must not be attempted")
+}
+
+func assertInfrastructureReadFailuresBlockCompletion(t *testing.T, e *categoryLifecycleEnv, complete func() error) {
+	t.Helper()
+	writer := e.service.gitWriter
+	defer func() { e.service.gitWriter = writer }()
+	for _, fault := range []struct {
+		name string
+		code codes.Code
+	}{
+		{"authoring-repository-missing", codes.FailedPrecondition},
+		{"authoring-ref-missing", codes.FailedPrecondition},
+		{"path-is-directory", codes.FailedPrecondition},
+		{"transport-unavailable", codes.Unavailable},
+		{"unreadable-tree", codes.Internal},
+		{"read-denied", codes.PermissionDenied},
+	} {
+		t.Run(fault.name, func(t *testing.T) {
+			failed := &unavailableDeletionRead{GitWriter: writer, readErr: status.Error(fault.code, fault.name)}
+			e.service.gitWriter = failed
+			err := complete()
+			require.Error(t, err)
+			require.Equal(t, fault.code, status.Code(err))
+			require.Zero(t, failed.storageDeletes)
+		})
+	}
+}
 
 func (w lostDeletionResponse) DeleteFileForRepo(ctx context.Context, repo string, p gitclient.DeleteFileParams) (string, error) {
 	_, err := w.GitWriter.DeleteFileForRepo(ctx, repo, p)
@@ -255,6 +300,10 @@ func TestInfrastructureNamespacePushRemovalStartsTermination(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, current.DeletionTimestamp)
 	require.Equal(t, ns.Generation, current.Generation)
+	assertInfrastructureReadFailuresBlockCompletion(t, e, func() error {
+		_, err := e.service.CompleteNamespaceDeletion(ctx, current.Name, current.ResourceVersion, current.UID)
+		return err
+	})
 	_, err = e.service.CompleteNamespaceDeletion(ctx, current.Name, current.ResourceVersion, current.UID)
 	require.NoError(t, err)
 }
@@ -289,6 +338,10 @@ func TestNamespaceDeletionRemovesManifestAndFinalizesEmptySystemRepository(t *te
 	require.NoError(t, err)
 	require.NotNil(t, current.DeletionTimestamp)
 	require.Equal(t, ns.Generation, current.Generation)
+	assertInfrastructureReadFailuresBlockCompletion(t, e, func() error {
+		_, err := e.service.CompleteNamespaceDeletion(ctx, current.Name, current.ResourceVersion, current.UID)
+		return err
+	})
 	_, err = e.service.CompleteNamespaceDeletion(ctx, current.Name, current.ResourceVersion, current.UID)
 	require.NoError(t, err)
 	_, err = e.store.GetNamespaceByName(ctx, current.Name)

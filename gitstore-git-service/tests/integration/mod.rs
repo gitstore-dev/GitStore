@@ -105,7 +105,7 @@ async fn test_create_commit_list_delete() {
     .await
     .expect("delete_repository");
 
-    // 6. Subsequent operation on deleted repo returns NOT_FOUND
+    // Missing storage must not be mistaken for an absent file in a readable tree.
     let err = svc
         .get_file(Request::new(proto::GetFileRequest {
             repository_id: INT_REPO_1.to_string(),
@@ -114,8 +114,8 @@ async fn test_create_commit_list_delete() {
             authorization: test_authorization(INT_REPO_1, "repository.read.any"),
         }))
         .await
-        .expect_err("expected NOT_FOUND after delete");
-    assert_eq!(err.code(), tonic::Code::NotFound);
+        .expect_err("expected FAILED_PRECONDITION after repository deletion");
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
 }
 
 /// Two repositories created in the same service instance are isolated: a file

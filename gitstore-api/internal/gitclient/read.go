@@ -31,6 +31,8 @@ func (c *Client) ReadFile(ctx context.Context, path, ref string) ([]byte, error)
 
 // ReadFileForRepo fetches the raw bytes of a single file at the given ref for
 // the specified repository. Safe for concurrent calls with different repository IDs.
+// NotFound means a missing path in a readable tree; a missing repository/ref or
+// a non-file entry returns FailedPrecondition, not evidence of path absence.
 func (c *Client) ReadFileForRepo(ctx context.Context, repositoryID, path, ref string) ([]byte, error) {
 	authorization, err := RequestAuthorization(ctx, "repository.read.any", repositoryID)
 	if err != nil {

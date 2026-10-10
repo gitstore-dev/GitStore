@@ -70,6 +70,7 @@ type GitWriter interface {
 	CommitFile(ctx context.Context, p gitclient.CommitFileParams) (string, error)
 	CommitFileForRepo(ctx context.Context, repositoryID string, p gitclient.CommitFileParams) (string, error)
 	ResolveRefForRepo(ctx context.Context, repositoryID, ref string) (string, error)
+	// NotFound must mean confirmed path absence, never a missing repository/ref.
 	ReadFileForRepo(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
 	DeleteFile(ctx context.Context, p gitclient.DeleteFileParams) (string, error)
 	DeleteFileForRepo(ctx context.Context, repositoryID string, p gitclient.DeleteFileParams) (string, error)

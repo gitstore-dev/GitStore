@@ -157,6 +157,15 @@ fn resolve_repo_path(data_root: &Path, id: &str) -> Result<PathBuf, Status> {
     Ok(path)
 }
 
+// File-read NOT_FOUND proves path absence, not an unavailable repository or ref.
+fn file_read_target_error(error: Status) -> Status {
+    if error.code() == tonic::Code::NotFound {
+        Status::failed_precondition(error.message())
+    } else {
+        error
+    }
+}
+
 /// Get or insert a per-repository lock.
 fn get_or_insert_lock(repo_locks: &DashMap<String, Arc<RwLock<()>>>, id: &str) -> Arc<RwLock<()>> {
     repo_locks
@@ -843,7 +852,8 @@ impl GitService for GitServiceImpl {
             &req.repository_id,
             &["repository.read.own", "repository.read.any"],
         )?;
-        let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
+        let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)
+            .map_err(file_read_target_error)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.read().await;
 
@@ -856,7 +866,8 @@ impl GitService for GitServiceImpl {
             } else {
                 req.r#ref.clone()
             };
-            let commit_id = resolve_ref_to_commit_id(&repo, &ref_str)?;
+            let commit_id =
+                resolve_ref_to_commit_id(&repo, &ref_str).map_err(file_read_target_error)?;
             let commit = repo
                 .find_object(commit_id)
                 .map_err(|e| Status::internal(e.to_string()))?
@@ -902,7 +913,8 @@ impl GitService for GitServiceImpl {
             &req.repository_id,
             &["repository.read.own", "repository.read.any"],
         )?;
-        let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
+        let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)
+            .map_err(file_read_target_error)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.read().await;
 
@@ -930,7 +942,7 @@ impl GitService for GitServiceImpl {
             let commit_id = match resolve_ref_to_commit_id(&repo, &ref_str) {
                 Ok(id) => id,
                 Err(e) => {
-                    send(Err(e));
+                    send(Err(file_read_target_error(e)));
                     return;
                 }
             };
@@ -2173,7 +2185,10 @@ fn find_blob_in_tree(
                     use gix::object::tree::EntryKind;
                     match entry.mode.kind() {
                         EntryKind::Blob | EntryKind::BlobExecutable => Ok(oid),
-                        _ => Err(Status::not_found(format!("'{}' is not a file", path))),
+                        _ => Err(Status::failed_precondition(format!(
+                            "'{}' is not a file",
+                            path
+                        ))),
                     }
                 }
             };
@@ -2702,7 +2717,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_operation_on_unknown_repo_returns_not_found() {
+    async fn test_get_file_unknown_repo_returns_failed_precondition() {
         let dir = TempDir::new().unwrap();
         let svc = make_test_service(dir.path());
         let err = svc
@@ -2714,7 +2729,7 @@ mod tests {
             }))
             .await
             .unwrap_err();
-        assert_eq!(err.code(), tonic::Code::NotFound);
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
     }
 
     #[tokio::test]
@@ -2765,7 +2780,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_file_unknown_ref_returns_not_found() {
+    async fn test_get_file_unknown_ref_returns_failed_precondition() {
         let dir = TempDir::new().unwrap();
         repo_with_commit(dir.path(), TEST_REPO_D);
 
@@ -2777,7 +2792,7 @@ mod tests {
             authorization: test_authorization(TEST_REPO_D, "repository.read.any"),
         });
         let err = svc.get_file(req).await.unwrap_err();
-        assert_eq!(err.code(), tonic::Code::NotFound);
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
     }
 
     #[tokio::test]
@@ -2794,6 +2809,66 @@ mod tests {
         });
         let err = svc.get_file(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_file_reads_distinguish_absence_from_unavailable_target() {
+        use tokio_stream::StreamExt;
+
+        let dir = TempDir::new().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_D);
+        let svc = make_test_service(dir.path());
+        for (repository_id, reference, path, code) in [
+            (
+                TEST_REPO_A,
+                "HEAD",
+                "products/p1.md",
+                tonic::Code::FailedPrecondition,
+            ),
+            (
+                TEST_REPO_D,
+                "missing-ref",
+                "products/p1.md",
+                tonic::Code::FailedPrecondition,
+            ),
+            (
+                TEST_REPO_D,
+                "HEAD",
+                "products/missing.md",
+                tonic::Code::NotFound,
+            ),
+            (
+                TEST_REPO_D,
+                "HEAD",
+                "products",
+                tonic::Code::FailedPrecondition,
+            ),
+        ] {
+            let err = svc
+                .get_file(Request::new(GetFileRequest {
+                    repository_id: repository_id.to_string(),
+                    path: path.to_string(),
+                    r#ref: reference.to_string(),
+                    authorization: test_authorization(repository_id, "repository.read.any"),
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(err.code(), code);
+
+            let err = match svc
+                .get_file_stream(Request::new(GetFileStreamRequest {
+                    repository_id: repository_id.to_string(),
+                    path: path.to_string(),
+                    r#ref: reference.to_string(),
+                    authorization: test_authorization(repository_id, "repository.read.any"),
+                }))
+                .await
+            {
+                Err(err) => err,
+                Ok(response) => response.into_inner().next().await.unwrap().unwrap_err(),
+            };
+            assert_eq!(err.code(), code);
+        }
     }
 
     #[tokio::test]

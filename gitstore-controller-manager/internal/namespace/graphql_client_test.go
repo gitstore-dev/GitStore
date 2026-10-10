@@ -135,9 +135,24 @@ func TestGraphQLDeletionClientCompletesDeletion(t *testing.T) {
 	}
 }
 
-// TestGraphQLDeletionClientReturnsConflictOnLegacyCode covers the
-// RESOURCE_VERSION_CONFLICT extension code every existing status/completion
-// mutation reports today.
+func TestGraphQLDeletionClientAcceptsAlreadyAbsent(t *testing.T) {
+	for _, payload := range []string{`{}`, `{"id":null}`} {
+		t.Run(payload, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":` + payload + `}}`))
+			}))
+			defer srv.Close()
+			client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
+			for range 2 {
+				if err := client.CompleteDeletion(context.Background(), "acme", "9", "namespace-1"); err != nil {
+					t.Fatalf("already-absent completion retry failed: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestGraphQLDeletionClientReturnsConflictOnLegacyCode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
