@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.0-alpha.7](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.6...v0.1.0-alpha.7) (2026-10-10)
+
+
+### Features
+
+* **auth:** authorize every complete*Deletion mutation as &lt;kind&gt;.purge ([#478](https://github.com/gitstore-dev/GitStore/issues/478)) ([aa839a6](https://github.com/gitstore-dev/GitStore/commit/aa839a6463297b1c33531aef47bfca81861679cf))
+* **category:** scope products to resolved subtree ([#480](https://github.com/gitstore-dev/GitStore/issues/480)) ([41e68ff](https://github.com/gitstore-dev/GitStore/commit/41e68ff39c4791f6750d358531e4e57ea45144b7))
+
+
+### Bug Fixes
+
+* **api:** align namespace and repository generation semantics ([#483](https://github.com/gitstore-dev/GitStore/issues/483)) ([9eb0f6b](https://github.com/gitstore-dev/GitStore/commit/9eb0f6b4aa21fb55e397ada65f461ea88d45b2e7))
+* **lifecycle:** align namespace and repository Git-backed deletion ([#485](https://github.com/gitstore-dev/GitStore/issues/485)) ([91ffa11](https://github.com/gitstore-dev/GitStore/commit/91ffa11eadf35d0448af286f4f5034aede820ef2))
+* preserve CDC ordering and concurrent Product updates ([#486](https://github.com/gitstore-dev/GitStore/issues/486)) ([b11da97](https://github.com/gitstore-dev/GitStore/commit/b11da979e1556ef066ae683992675eaa03aaf16d))
+
 ## [0.1.0-alpha.6](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.5...v0.1.0-alpha.6) (2026-10-09)
 
 
