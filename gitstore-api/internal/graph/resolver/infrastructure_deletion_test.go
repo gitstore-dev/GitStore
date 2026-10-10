@@ -193,6 +193,28 @@ func TestInfrastructureAuthorizedPushRepairsIncompleteDeletion(t *testing.T) {
 	}
 }
 
+func TestInfrastructureCompletionResumesWithoutNameMapping(t *testing.T) {
+	e := newCategoryLifecycleEnv(t)
+	ctx := context.Background()
+	before := createInfrastructureRepository(t, e, "partial-cleanup")
+	terminating, _, err := e.service.deleteRepositoryWithOutcome(ctx, before.UID, "alice")
+	require.NoError(t, err)
+	require.NoError(t, e.store.DeleteNamespaceMapping(ctx, before.Namespace, before.Name))
+
+	_, err = e.service.CompleteRepositoryDeletion(ctx, before.Namespace, "wrong-name", terminating.ResourceVersion, before.UID)
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	_, err = e.service.CompleteRepositoryDeletion(ctx, before.Namespace, before.Name, "stale", before.UID)
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	completed, err := e.service.CompleteRepositoryDeletion(ctx, before.Namespace, before.Name, terminating.ResourceVersion, before.UID)
+	require.NoError(t, err)
+	require.NotNil(t, completed)
+	_, err = e.store.GetRepository(ctx, before.UID)
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+	completed, err = e.service.CompleteRepositoryDeletion(ctx, before.Namespace, before.Name, terminating.ResourceVersion, before.UID)
+	require.NoError(t, err)
+	require.Nil(t, completed)
+}
+
 func TestInfrastructureCompletionRejectsStaleIncarnation(t *testing.T) {
 	e := newCategoryLifecycleEnv(t)
 	ctx := context.Background()

@@ -22,6 +22,11 @@ func TestOwnerReferenceProjection_ScyllaLimitOneAndKeysetRecovery(t *testing.T) 
 	owners := store.(datastore.OwnerReferenceStore)
 	ctx := context.Background()
 	namespace, repositoryID := "owner-refs-"+newID()[:8], newID()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	require.NoError(t, store.CreateNamespace(ctx, &datastore.Namespace{UID: newID(), Name: namespace, CreationTimestamp: now}))
+	require.NoError(t, store.CreateRepositoryInActiveNamespace(ctx, &datastore.Repository{
+		UID: repositoryID, Namespace: namespace, Name: "catalog", CreationTimestamp: now,
+	}))
 	parentUID := newID()
 	scope := datastore.OwnerReferenceScope{Namespace: namespace, RepositoryID: repositoryID}
 	blocking, err := json.Marshal([]catalog.OwnerReference{{

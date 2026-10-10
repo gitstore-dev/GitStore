@@ -367,7 +367,7 @@ func TestRunMigrations_BaselinePrefixRefusesNewerKeyspace(t *testing.T) {
 	require.ErrorContains(t, err, "database is ahead")
 
 	require.NoError(t, scylla.RunMigrationsWithFS(ctx, session, scyllaKeyspace, uuid.New().String(), log,
-		migrationSetThrough(t, "011_category_product_index.cql")))
+		migrations.Files))
 }
 
 func migrationSetThrough(t *testing.T, last string) fstest.MapFS {

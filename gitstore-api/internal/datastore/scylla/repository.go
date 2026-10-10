@@ -55,8 +55,9 @@ type repositoryIndexRow struct {
 }
 
 const (
-	namespaceRepositoryFenceAttempts  = 8
-	namespaceRepositoryReleaseTimeout = 5 * time.Second
+	namespaceRepositoryFenceAttempts   = 8
+	namespaceRepositoryReleaseTimeout  = 5 * time.Second
+	namespaceCatalogReservationTimeout = 5 * time.Second
 )
 
 // The pending counter blocks termination while a create is in flight. The
@@ -240,8 +241,11 @@ func (s *scyllaDatastore) reserveNamespaceRepository(ctx context.Context, namesp
 // the existing Namespace child fence. No expiry can release an in-flight
 // writer: ambiguous outcomes retain the reservation for projection repair.
 func (s *scyllaDatastore) reserveNamespaceCatalog(ctx context.Context, namespaceUID string, allowTerminating bool) error {
+	ctx, cancel := context.WithTimeout(ctx, namespaceCatalogReservationTimeout)
+	defer cancel()
 	uid := mustParseUUID(namespaceUID)
-	for range namespaceRepositoryFenceAttempts {
+	delay := 10 * time.Millisecond
+	for {
 		fence, err := s.loadNamespaceRepositoryFence(ctx, namespaceUID)
 		if err != nil {
 			return err
@@ -249,21 +253,29 @@ func (s *scyllaDatastore) reserveNamespaceCatalog(ctx context.Context, namespace
 		if !allowTerminating && (fence.DeletionTimestamp != nil || fence.hasDeletionIntent()) {
 			return datastore.ErrNamespaceNotActive
 		}
-		if fence.pending() != 0 {
-			return datastore.ErrConflict
+		if fence.pending() == 0 {
+			applied, err := s.session.Query(
+				"UPDATE namespaces_by_uid SET repository_creation_epoch=?, pending_repository_creations=? WHERE uid=? "+
+					"IF repository_creation_epoch=? AND pending_repository_creations=? AND deletion_timestamp=? AND status=?", nil,
+			).WithContext(ctx).Bind(fence.epoch()+1, int64(1), uid, fence.expectedEpoch(), fence.expectedPending(), fence.DeletionTimestamp, fence.Status).ExecCASRelease()
+			if err != nil {
+				return err
+			}
+			if applied {
+				return nil
+			}
 		}
-		applied, err := s.session.Query(
-			"UPDATE namespaces_by_uid SET repository_creation_epoch=?, pending_repository_creations=? WHERE uid=? "+
-				"IF repository_creation_epoch=? AND pending_repository_creations=? AND deletion_timestamp=? AND status=?", nil,
-		).WithContext(ctx).Bind(fence.epoch()+1, int64(1), uid, fence.expectedEpoch(), fence.expectedPending(), fence.DeletionTimestamp, fence.Status).ExecCASRelease()
-		if err != nil {
-			return err
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
 		}
-		if applied {
-			return nil
+		if delay < 100*time.Millisecond {
+			delay = min(2*delay, 100*time.Millisecond)
 		}
 	}
-	return datastore.ErrConflict
 }
 
 func (s *scyllaDatastore) withNamespaceCatalogFence(ctx context.Context, namespace string, allowTerminating bool, operation func() error) error {
@@ -827,14 +839,23 @@ func (s *scyllaDatastore) completeRepositoryDeletion(ctx context.Context, uidStr
 		if len(cleanupErrors) > 0 {
 			return errors.Join(cleanupErrors...)
 		}
+		if err := s.mutations.injector.Inject("complete-repository-projections", failureAfter); err != nil {
+			return err
+		}
 		if err := s.session.Query("INSERT INTO repository_catalog_projection_state (repository_id,ready,deleted) VALUES (?,?,?)", nil).
 			WithContext(cleanupCtx).Bind(uid, true, true).ExecRelease(); err != nil {
 			return err
 		}
 		return nil
 	}, func() error {
+		if err := s.mutations.injector.Inject("complete-repository-authoritative", failureBefore); err != nil {
+			return err
+		}
 		applied, err := s.session.Query("DELETE FROM repositories_by_uid WHERE uid=? IF resource_version=?", nil).
 			WithContext(cleanupCtx).Bind(uid, expectedResourceVersion).ExecCASRelease()
+		if err == nil && applied {
+			err = s.mutations.injector.Inject("complete-repository-authoritative", failureAfter)
+		}
 		if err != nil || !applied {
 			// Resolve a lost CAS response before restoring projections.
 			var found struct {
@@ -857,7 +878,19 @@ func (s *scyllaDatastore) completeRepositoryDeletion(ctx context.Context, uidStr
 	}, func() error {
 		restoreCtx, restoreCancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceProjectionCleanupTimeout)
 		defer restoreCancel()
-		return s.insertRepositoryProjections(restoreCtx, repository.Namespace, namespaceBucket(repository.CreationTimestamp), repository.CreationTimestamp, uid)
+		path := repositoryPath{namespace: repository.Namespace, name: repository.Name}
+		restoreErr := errors.Join(
+			s.reserveRepositoryPath(restoreCtx, path, uidString),
+			s.reserveRepositoryReverseMapping(restoreCtx, path, uidString),
+			s.insertRepositoryProjections(restoreCtx, repository.Namespace, namespaceBucket(repository.CreationTimestamp), repository.CreationTimestamp, uid),
+		)
+		if restoreErr != nil {
+			return datastore.NewRepairRequiredError(
+				datastore.MutationStep{Operation: "complete_repository_deletion", ResourceKind: "Repository", ResourceUID: uidString, Projection: "repository_projections", Action: "restore_visibility"},
+				fmt.Errorf("repository deletion did not commit"), restoreErr,
+			)
+		}
+		return nil
 	})
 }
 

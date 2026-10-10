@@ -1906,22 +1906,31 @@ func (s *Service) deleteRepositoryWithOutcome(ctx context.Context, repoID, calle
 // the row only when no finalizer remains. Catalog resources are never
 // cascaded.
 func (s *Service) CompleteRepositoryDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*datastore.Repository, error) {
+	if expectedUID == "" {
+		return nil, datastore.ErrConflict
+	}
+	repositoryID := expectedUID
 	mapping, err := s.store.LookupRepository(ctx, namespace, name)
-	if err != nil {
-		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, nil
-		}
+	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
 		return nil, gqlerror.Errorf("failed to complete repository deletion")
 	}
-	repo, err := s.store.GetRepository(ctx, mapping.RepositoryID)
+	if mapping != nil {
+		repositoryID = mapping.RepositoryID
+	}
+	// A cleanup attempt may have removed the path before the authoritative row.
+	// The controller's UID still identifies that exact terminating incarnation.
+	repo, err := s.store.GetRepository(ctx, repositoryID)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
+			if mapping == nil {
+				return nil, nil
+			}
 			return nil, gqlerror.Errorf("repository mapping remains without its resource; reconciliation required")
 		}
 		return nil, gqlerror.Errorf("failed to complete repository deletion")
 	}
 	datastore.NormalizeRepositoryContract(repo)
-	if repo.ResourceVersion != expectedResourceVersion || repo.UID != expectedUID {
+	if repo.ResourceVersion != expectedResourceVersion || repo.UID != expectedUID || repo.Namespace != namespace || repo.Name != name {
 		return repo, datastore.ErrConflict
 	}
 	intent, err := admission.ReadDeletionIntent(repo.Status)

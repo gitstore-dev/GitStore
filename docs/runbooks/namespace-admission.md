@@ -60,6 +60,13 @@ their UID, admitted path/ref/revision and current tree, and resolve ambiguous
 ownership before allowing cleanup. A missing file alone is not proof of a
 successful authorized mutation.
 
+Catalog admission retries transient Namespace fence contention within a bounded
+request budget rather than immediately rejecting a committed push. A confirmed
+failed repository cleanup restores both name mappings and list projections
+before releasing its fence. Controllers can also resume a known terminating UID
+when its name mapping is missing; a different name, version, or UID is rejected.
+If restoration itself fails, the fence remains held for projection repair.
+
 Keep the Git service's UID tombstones permanently and include its private
 operation refs in repository backups. They fence stale provisioning and prove
 uncertain deletion outcomes. A prepared receipt can resume only while its durable

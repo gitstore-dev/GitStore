@@ -1174,6 +1174,118 @@ func TestScylla_RepositoryCatalogProjectionUpgradeRepair(t *testing.T) {
 	require.False(t, blocked)
 }
 
+func TestScylla_CatalogAdmissionsWaitForNamespaceFence(t *testing.T) {
+	storeA, storeB := newTestStores(t)
+	ctx := context.Background()
+	ns := &datastore.Namespace{UID: newID(), Name: "catalog-wait-" + newID()[:8]}
+	require.NoError(t, storeA.CreateNamespace(ctx, ns))
+	repo := &datastore.Repository{UID: newID(), Namespace: ns.Name, Name: "catalog"}
+	require.NoError(t, storeA.CreateRepositoryInActiveNamespace(ctx, repo))
+	session, err := openRootSession(scyllaAddr)
+	require.NoError(t, err)
+	t.Cleanup(session.Close)
+	nsUID, err := gocql.ParseUUID(ns.UID)
+	require.NoError(t, err)
+	setPending := func(pending int64) {
+		t.Helper()
+		require.NoError(t, session.Query("UPDATE "+scyllaKeyspace+".namespaces_by_uid SET pending_repository_creations=? WHERE uid=?", pending, nsUID).Exec())
+	}
+	setPending(1)
+	t.Cleanup(func() { setPending(0) })
+
+	canceledCtx, cancel := context.WithTimeout(ctx, 60*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, storeB.CreateProduct(canceledCtx, &datastore.Product{
+		UID: newID(), Namespace: ns.Name, Name: "canceled", RepositoryID: repo.UID,
+	}), context.DeadlineExceeded)
+	_, err = storeA.GetProductByName(ctx, ns.Name, "canceled")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+
+	const writers = 8
+	results := make(chan error, writers)
+	products := make([]*datastore.Product, writers)
+	for i := range writers {
+		products[i] = &datastore.Product{UID: newID(), Namespace: ns.Name, Name: fmt.Sprintf("product-%d", i), RepositoryID: repo.UID}
+		go func(i int) {
+			writer := storeA
+			if i%2 == 0 {
+				writer = storeB
+			}
+			results <- writer.CreateProduct(ctx, products[i])
+		}(i)
+	}
+	select {
+	case err := <-results:
+		t.Fatalf("admission returned before reservation release: %v", err)
+	case <-time.After(120 * time.Millisecond):
+	}
+	setPending(0)
+	for range writers {
+		require.NoError(t, <-results)
+	}
+	for _, product := range products {
+		got, err := storeA.GetProduct(ctx, product.UID)
+		require.NoError(t, err)
+		require.Equal(t, product.Name, got.Name)
+	}
+}
+
+func TestScylla_RepositoryCompletionRestoresAllLookups(t *testing.T) {
+	storeA, storeB := newTestStores(t)
+	ctx := context.Background()
+	for _, stage := range []struct {
+		name  string
+		step  string
+		after bool
+	}{
+		{"partial-cleanup", "complete-repository-projections", true},
+		{"before-authoritative-delete", "complete-repository-authoritative", false},
+		{"lost-authoritative-response", "complete-repository-authoritative", true},
+	} {
+		t.Run(stage.name, func(t *testing.T) {
+			ns := &datastore.Namespace{UID: newID(), Name: "completion-" + newID()[:8], CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond)}
+			require.NoError(t, storeA.CreateNamespace(ctx, ns))
+			repo := &datastore.Repository{UID: newID(), Namespace: ns.Name, Name: "catalog", CreationTimestamp: ns.CreationTimestamp}
+			require.NoError(t, storeA.CreateRepositoryInActiveNamespace(ctx, repo))
+			require.NoError(t, storeA.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: ns.Name, Name: repo.Name, RepositoryID: repo.UID}))
+			previous := repo.ResourceVersion
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			repo.DeletionTimestamp = &now
+			repo.Finalizers = []string{datastore.RepositoryForegroundDeletionFinalizer}
+			datastore.AdvanceRepositorySystemVersion(repo)
+			require.NoError(t, storeA.UpdateRepository(ctx, repo, previous))
+			restoreInjector := scylla.InjectRepositoryCompletionFailureForTest(storeA, stage.step, stage.after)
+			t.Cleanup(restoreInjector)
+			err := storeA.(datastore.RepositoryDeletionStore).CompleteRepositoryDeletion(ctx, repo.UID, repo.ResourceVersion)
+			if stage.name != "lost-authoritative-response" {
+				require.Error(t, err)
+				current, err := storeB.GetRepository(ctx, repo.UID)
+				require.NoError(t, err)
+				require.Equal(t, repo.ResourceVersion, current.ResourceVersion)
+				mapping, err := storeB.LookupRepository(ctx, ns.Name, repo.Name)
+				require.NoError(t, err)
+				require.Equal(t, repo.UID, mapping.RepositoryID)
+				reverse, err := storeB.LookupNamespaceByRepoID(ctx, repo.UID)
+				require.NoError(t, err)
+				require.Equal(t, repo.Name, reverse.Name)
+				list, err := storeB.ListRepositoriesByNamespace(ctx, ns.Name, datastore.PageParams{First: 2})
+				require.NoError(t, err)
+				require.Len(t, list.Items, 1)
+				require.Equal(t, repo.UID, list.Items[0].UID)
+				require.NoError(t, storeB.(datastore.RepositoryDeletionStore).CompleteRepositoryDeletion(ctx, repo.UID, repo.ResourceVersion))
+			} else {
+				require.NoError(t, err)
+			}
+			_, err = storeB.GetRepository(ctx, repo.UID)
+			require.ErrorIs(t, err, datastore.ErrNotFound)
+			_, err = storeB.LookupRepository(ctx, ns.Name, repo.Name)
+			require.ErrorIs(t, err, datastore.ErrNotFound)
+			_, err = storeB.LookupNamespaceByRepoID(ctx, repo.UID)
+			require.ErrorIs(t, err, datastore.ErrNotFound)
+		})
+	}
+}
+
 func TestScylla_CatalogAdmissionRacesDeletionIntentAcrossReplicas(t *testing.T) {
 	storeA, storeB := newTestStores(t)
 	ctx := context.Background()
