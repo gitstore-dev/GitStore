@@ -36,8 +36,9 @@ ServiceAccounts); spec 065 (groups and profile type from the UserDir).
 - RBAC is allow-only and `when` uses spec 064's structured condition grammar,
   so every rule translates to OPA, Cedar and OpenFGA without loss.
 - Image-size reduction (stripped builds, folding `gitctl` into the API
-  binary, smaller base image) is a follow-up chore issue filed after this
-  spec ships, not part of it.
+  binary, smaller base image) is tracked separately in #487 and is not part
+  of this spec. The size impact of the embedded OPA provider is measured
+  during planning of this spec and reported there.
 - Q: Do operator guardrail policies (restrict-only OPA policy) ship here? →
   A: No; only the fixed GitStore policy module. Deferred until there is
   customer demand.
