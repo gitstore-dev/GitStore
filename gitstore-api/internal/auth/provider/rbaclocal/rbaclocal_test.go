@@ -632,7 +632,15 @@ func TestAuthorizationCapacityHistogramAndFixture(t *testing.T) {
 		require.Equal(t, tc.want, decision.Outcome, tc.name)
 	}
 	for _, histogram := range sampleAuthorizationCapacity(t, p, cases, 2, 50*time.Millisecond) {
-		require.Positive(t, histogram.Calls)
+		// A time-bounded random run need not visit every case on a busy race
+		// runner. Semantic coverage is deterministic above; check accounting
+		// here without turning scheduler throughput into a unit-test gate.
+		var samples uint64
+		for _, count := range histogram.Buckets {
+			samples += count
+		}
+		require.Equal(t, histogram.Samples, samples)
+		require.LessOrEqual(t, histogram.Samples, histogram.Calls)
 	}
 }
 

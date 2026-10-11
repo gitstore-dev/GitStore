@@ -36,6 +36,16 @@ assert_dispatch generate all _generate-all
 bootstrap_output="$(env -u NAMESPACE_TIER make --no-print-directory -C "${repo_root}" -np bootstrap TARGET=namespace | sed -n '/^NAMESPACE_TIER /p')"
 [[ "${bootstrap_output}" == "NAMESPACE_TIER = ORGANIZATION" ]]
 
+# CI's shared gitci namespace is not the admin user's personal namespace.
+ci_bootstrap_count=0
+while IFS= read -r line; do
+  if [[ "${line}" == *"run: make bootstrap "* ]]; then
+    [[ "${line}" == *"NAMESPACE_TIER=ORGANIZATION"* ]]
+    ci_bootstrap_count=$((ci_bootstrap_count + 1))
+  fi
+done < "${repo_root}/.github/workflows/ci-integration.yml"
+[[ "${ci_bootstrap_count}" -eq 2 ]]
+
 for legacy_namespace in controllers ''; do
   if make --no-print-directory -C "${repo_root}" -n controller CONTROLLER_SERVICEACCOUNT_NAMESPACE="${legacy_namespace}" >/dev/null 2>&1; then
     echo "removed CONTROLLER_SERVICEACCOUNT_NAMESPACE was accepted" >&2; exit 1
