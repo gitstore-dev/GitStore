@@ -30,6 +30,7 @@ assert_dispatch bootstrap namespace _bootstrap-namespace
 assert_dispatch bootstrap repository _bootstrap-repository
 assert_dispatch secret jwt _secret-jwt
 assert_dispatch secret grpc-hmac _secret-grpc-hmac
+assert_dispatch secret signing-key _secret-signing-key
 assert_dispatch generate authz _generate-authz
 assert_dispatch generate all _generate-all
 
@@ -60,6 +61,59 @@ for target in controller dev enroll-controller-serviceaccount; do
   output="$(make --no-print-directory -C "${repo_root}" -n "${target}")"
   [[ "${output}" != *"--namespace"* && "${output}" != *"SERVICEACCOUNT__NAMESPACE"* ]]
 done
+
+# Generation owns both private files; enrollment only registers public material.
+signing_root="${test_dir}/controller secrets"
+signing_key="${signing_root}/test-controller/privateKey"
+signing_record="${signing_root}/test-controller.json"
+for attempt in 1 2; do
+  output="$(make --no-print-directory -C "${repo_root}" secret TARGET=signing-key \
+    CONTROLLER_SECRET_DIR="${signing_root}" CONTROLLER_SECRET_NAME=test-controller \
+    CONTROLLER_SERVICEACCOUNT_KEY_ID=test-key)"
+  [[ "${output}" != *"PRIVATE KEY"* ]]
+  jq -e --rawfile pem "${signing_key}" \
+    '.format == "serviceaccount-signing-key/v1" and .values.privateKey == ($pem | @base64) and .values.keyID == ("test-key" | @base64)' \
+    "${signing_record}" >/dev/null
+  if [[ "${attempt}" == 1 ]]; then
+    cp "${signing_key}" "${test_dir}/original-key"
+    cp "${signing_record}" "${test_dir}/original-record"
+  else
+    cmp "${signing_key}" "${test_dir}/original-key"
+    cmp "${signing_record}" "${test_dir}/original-record"
+  fi
+done
+if make --no-print-directory -C "${repo_root}" secret TARGET=signing-key \
+  CONTROLLER_SECRET_DIR="${signing_root}" CONTROLLER_SECRET_NAME=test-controller \
+  CONTROLLER_SERVICEACCOUNT_KEY_ID=different-key >/dev/null 2>&1; then
+  echo "signing record silently accepted a changed key ID" >&2; exit 1
+fi
+cmp "${signing_record}" "${test_dir}/original-record"
+for target in controller enroll-controller-serviceaccount; do
+  output="$(make --no-print-directory -C "${repo_root}" -n "${target}" \
+    CONTROLLER_SECRET_DIR="${signing_root}" CONTROLLER_SECRET_NAME=test-controller \
+    CONTROLLER_SERVICEACCOUNT_KEY_ID=test-key)"
+  [[ "${output}" != *"generate-signing-key"* && "${output}" != *"--record-output-path"* ]]
+done
+make --no-print-directory -C "${repo_root}" secret TARGET=signing-key \
+  DESTINATION_PATH="${test_dir}/custom/private.pem" >/dev/null
+[[ -f "${test_dir}/custom/private.pem.json" ]]
+make --no-print-directory -C "${repo_root}" secret TARGET=signing-key \
+  DESTINATION_PATH="${test_dir}/custom/private.pem" RECORD_OUTPUT_PATH="${test_dir}/records/controller.json" >/dev/null
+cmp "${test_dir}/custom/private.pem.json" "${test_dir}/records/controller.json"
+make --no-print-directory -C "${repo_root}" secret TARGET=signing-key \
+  DESTINATION_PATH="${test_dir}/issuer/private.pem" RECORD_OUTPUT_PATH= >/dev/null
+[[ -f "${test_dir}/issuer/private.pem" && ! -e "${test_dir}/issuer/private.pem.json" ]]
+make --no-print-directory -C "${repo_root}" secret TARGET=signing-key \
+  ROOT="${test_dir}/relative-root" API_DIR="${repo_root}/gitstore-api" \
+  DESTINATION_PATH=keys/private.pem RECORD_OUTPUT_PATH=records/controller.json >/dev/null
+[[ -f "${test_dir}/relative-root/keys/private.pem" && -f "${test_dir}/relative-root/records/controller.json" ]]
+if make --no-print-directory -C "${repo_root}" controller \
+  CONTROLLER_SECRET_DIR="${test_dir}/missing-secrets" CONTROLLER_CHECKPOINT_DIR="${test_dir}/empty-checkpoints" \
+  >"${test_dir}/missing-record.log" 2>&1; then
+  echo "controller started without a signing record" >&2; exit 1
+fi
+rg -q 'Missing controller signing record' "${test_dir}/missing-record.log"
+[[ ! -e "${test_dir}/missing-secrets/controller-manager.json" ]]
 
 # The parent test target exports its bootstrap namespace; this case tests an
 # invocation without an operator-supplied namespace.

@@ -36,13 +36,16 @@ $(error CONTROLLER_SERVICEACCOUNT_NAMESPACE is removed; ServiceAccounts are clus
 endif
 CONTROLLER_SERVICEACCOUNT_NAME ?= gitstore-controller-manager
 CONTROLLER_SERVICEACCOUNT_KEY_ID ?= controller-key
+# With no destination override, generate the native controller's matching pair.
+# Custom destinations default to a sibling JSON record; an explicitly empty
+# RECORD_OUTPUT_PATH requests PEM only (for example, an API issuer key).
+RECORD_OUTPUT_PATH ?= $(if $(DESTINATION_PATH),$(DESTINATION_PATH).json,$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json)
 # CONTROLLER_SERVICEACCOUNT_UID is intentionally left unset by default: the
-# real UID is assigned by the API at enrollment time (see the `dev`/`controller`
-# targets' auto-enrollment step) and is not a value operators should hardcode.
+# real UID is assigned by the API at enrollment time (`make dev` automates
+# enrollment) and is not a value operators should hardcode.
 CONTROLLER_SERVICEACCOUNT_UID ?=
-# DEV_ADMIN_USERNAME/DEV_ADMIN_PASSWORD are used only to auto-enroll the
-# controller-manager's ServiceAccount against a locally running API in the
-# `dev`/`controller` targets. They default to the admin fixture already
+# DEV_ADMIN_USERNAME/DEV_ADMIN_PASSWORD are used by enrollment and `make dev`
+# against a locally running API. They default to the admin fixture already
 # checked into config/users.yaml for local development and must not be used
 # against any non-local environment (use ADMIN_USERNAME/ADMIN_PASSWORD with
 # the bootstrap-* targets for that).
@@ -183,7 +186,7 @@ export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 .PHONY: _capacity-authorization
 .PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
 .PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
-.PHONY: add-user add-role assign-role hash-user-password enroll-controller-serviceaccount
+.PHONY: add-user add-role assign-role hash-user-password enroll-controller-serviceaccount _enroll-controller-serviceaccount
 .PHONY: oidc
 
 help: ## Show available targets and common variables.
@@ -201,6 +204,7 @@ help: ## Show available targets and common variables.
 	@printf "  GIT_DATA_DIR=%s\n" "$(GIT_DATA_DIR)"
 	@printf "  CONTROLLER_CHECKPOINT_DIR=%s\n" "$(CONTROLLER_CHECKPOINT_DIR)"
 	@printf "  CONTROLLER_SECRET_DIR=%s\n" "$(CONTROLLER_SECRET_DIR)"
+	@printf "  secret TARGET=signing-key  Generate controller PEM + JSON; optional DESTINATION_PATH, RECORD_OUTPUT_PATH (empty for PEM only), CONTROLLER_SERVICEACCOUNT_KEY_ID\n"
 	@printf "  CONFIG_FILE=%s        Shared local-profile configuration\n" "$(CONFIG_FILE)"
 	@printf "  API_URL=%s\n" "$(API_URL)"
 	@printf "  ADMIN_USERNAME=%s\n" "$(ADMIN_USERNAME)"
@@ -251,28 +255,13 @@ git: ## Run gitstore-git-service locally in the foreground.
 # idempotent. Requires the API to already be listening on API_URL's host:port.
 CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE ?= $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/serviceaccount.env
 
-enroll-controller-serviceaccount: ## Enroll controller-manager's signing key with the API.
-	@mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"
-	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
-		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
-		echo "Generate one with: make secret TARGET=signing-key DESTINATION_PATH=$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
-		exit 2; \
-	}
-	@cd "$(API_DIR)" && go run ./cmd/gitctl enroll-serviceaccount \
-		--api-url "$(API_URL)" \
-		--admin-username "$(DEV_ADMIN_USERNAME)" \
-		--admin-password "$(DEV_ADMIN_PASSWORD)" \
-		--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
-		--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
-		--replace-existing-key \
-		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
-		--identity-output-path "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)"
+enroll-controller-serviceaccount: _enroll-controller-serviceaccount ## Enroll the existing controller public key and save its API-assigned UID.
 
 _enroll-controller-serviceaccount:
 	@mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"
 	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
 		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
-		echo "Generate one with: cd $(API_DIR) && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		echo "Generate one with: make secret TARGET=signing-key (use the same CONTROLLER_* overrides)"; \
 		exit 2; \
 	}
 	@cd "$(API_DIR)" && go run ./cmd/gitctl enroll-serviceaccount \
@@ -287,14 +276,10 @@ _enroll-controller-serviceaccount:
 
 controller: ## Run gitstore-controller-manager locally in the foreground.
 	@mkdir -p "$(CONTROLLER_CHECKPOINT_DIR)"
-	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
-		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
-		echo "Generate one with: make secret TARGET=signing-key DESTINATION_PATH=$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json" || { \
+		echo "Missing controller signing record. Run: make secret TARGET=signing-key (use the same CONTROLLER_* overrides)"; \
 		exit 2; \
 	}
-	@cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key \
-		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
-		--record-output-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json" --key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)"
 	@set -u; \
 	resolved_uid="$(CONTROLLER_SERVICEACCOUNT_UID)"; \
 	if [ -z "$$resolved_uid" ]; then \
@@ -322,7 +307,7 @@ api: ## Run gitstore-api locally in the foreground.
 		GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
 		go run ./cmd/server
 
-dev: ## Run local git service and API together in the foreground.
+dev: ## Generate/enroll local credentials and run all three core services in the foreground.
 	@set -u; \
 	mkdir -p "$(GIT_DATA_DIR)"; \
 	mkdir -p "$(CONTROLLER_CHECKPOINT_DIR)"; \
@@ -784,7 +769,7 @@ add-role: ## Add canonical ALLOW actions to a role; SCOPE=cluster or namespace. 
 assign-role: ## Bind ROLE to SUBJECT; typed SUBJECT_KIND/ROLE_KIND and SCOPE selectors, explicit NAMESPACE for namespace bindings.
 	@POLICY_FILE="$(abspath $(POLICY_FILE))" RBAC_NAMESPACE="$(RBAC_EXPLICIT_NAMESPACE)" ./scripts/run-make-workflow.sh rbac binding-add
 
-secret: ## Generate local security material; set TARGET=jwt, grpc-hmac, or signing-key.
+secret: ## Generate local security material; TARGET=jwt, grpc-hmac, or signing-key (controller PEM + JSON).
 	@./scripts/run-make-workflow.sh secret "$(TARGET)"
 
 _secret-jwt:
@@ -803,14 +788,18 @@ _secret-grpc-hmac:
 	echo "HMAC secret updated in $(API_DIR)/.env and $(GIT_SERVICE_DIR)/.env"
 
 _secret-signing-key:
-	@if [ -z "$(DESTINATION_PATH)" ]; then \
-		echo "DESTINATION_PATH is required for make secret TARGET=signing-key"; \
-		exit 2; \
-	fi
-	@abs_path="$$(cd "$(ROOT)" && pwd)/$$(echo "$(DESTINATION_PATH)" | sed 's|^/||')"; \
-	if echo "$(DESTINATION_PATH)" | grep -q '^/'; then abs_path="$(DESTINATION_PATH)"; fi; \
-	mkdir -p "$$(dirname "$$abs_path")"; \
-	cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$$abs_path"
+	@set -eu; \
+	key_path="$(or $(DESTINATION_PATH),$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY))"; \
+	record_path="$(RECORD_OUTPUT_PATH)"; \
+	case "$$key_path" in /*) ;; *) key_path="$(ROOT)/$$key_path" ;; esac; \
+	mkdir -p "$$(dirname "$$key_path")"; \
+	set -- --private-key-path "$$key_path"; \
+	if [ -n "$$record_path" ]; then \
+		case "$$record_path" in /*) ;; *) record_path="$(ROOT)/$$record_path" ;; esac; \
+		mkdir -p "$$(dirname "$$record_path")"; \
+		set -- "$$@" --record-output-path "$$record_path" --key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)"; \
+	fi; \
+	cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key "$$@"
 
 _bootstrap-token: _bootstrap-tools
 	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \

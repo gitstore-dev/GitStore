@@ -15,7 +15,8 @@ usage:
   make check TARGET=<all|config|compose|licenses|credentials>
   make clean TARGET=<git-data|controller-checkpoints> CONFIRM=1
   make bootstrap TARGET=<all|token|namespace|repository>
-  make secret TARGET=<jwt|grpc-hmac|signing-key> [DESTINATION_PATH=<path>]
+  make secret TARGET=<jwt|grpc-hmac|signing-key> [DESTINATION_PATH=<path>] [RECORD_OUTPUT_PATH=<path>]
+    signing-key defaults to controller PEM + JSON; RECORD_OUTPUT_PATH= requests PEM only
   make add-role ROLE=<role> ALLOW=<canonical-actions> [SCOPE=cluster|namespace]
   make assign-role ROLE=<role> SUBJECT=<name> [SUBJECT_KIND=User|Group|ServiceAccount] [ROLE_KIND=ClusterRole|Role] [SCOPE=cluster|namespace] [NAMESPACE=<explicit-binding-namespace>]
 EOF

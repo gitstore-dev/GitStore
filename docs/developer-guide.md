@@ -1,6 +1,6 @@
 # GitStore Developer Guide
 
-**Date**: 2026-06-17
+**Date**: 2026-10-11
 
 **Audience**: Contributors, operators, and integration engineers
 **Prerequisites**: Docker, Git, Go, Rust, Make, curl, jq
@@ -89,15 +89,17 @@ Choose an alternate shared file with
 `make compose CONFIG_FILE=./config/config.stage.toml`; the selected host path
 is mounted at the same container path for every service.
 
-Run native services:
+Run native Git and API services in separate terminals (with their required
+environment configuration):
 
 ```bash
 make git
 make api
-make controller
 ```
 
-Run the Git service and API together in the foreground:
+Once the API is listening, follow the controller setup below. Alternatively,
+`make dev` generates/enrolls local credentials and runs all three core services
+together in the foreground with shutdown trapping:
 
 ```bash
 make dev
@@ -121,6 +123,63 @@ Useful variables:
 | `REPOSITORY`      | `catalog`                       | Repository to create                        |
 | `DEFAULT_BRANCH`  | `main`                          | Repository default branch                   |
 | `CONFIG_FILE`     | `./config/config.toml`          | Shared local Compose configuration          |
+
+### Native controller credentials: generate → enroll → run
+
+With a running local API and the shipped development identity/policy fixtures:
+
+```bash
+make secret TARGET=signing-key
+make enroll-controller-serviceaccount
+make controller
+```
+
+Each command has a separate responsibility:
+
+| Command                                 | Result with native defaults                                                                                                                                                                          |
+|-----------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `make secret TARGET=signing-key`        | Creates `.gitstore/secrets/controller-manager/privateKey` and `.gitstore/secrets/controller-manager.json`, containing the matching private key and `controller-key` ID. No API connection is needed. |
+| `make enroll-controller-serviceaccount` | Registers the public key with the API and saves its assigned UID to `.gitstore/secrets/controller-manager/serviceaccount.env`. Does not write the JSON record or generate private material.          |
+| `make controller`                       | Uses that JSON record and UID to run the controller. Missing material is an error; startup does not generate it.                                                                                     |
+
+The PEM and JSON record are private files (mode `0600`); never commit them or
+mount the controller record into the API/Git service. Re-running generation
+preserves an existing key and identical record. A different record/key ID is
+rejected, not overwritten; follow the
+[rotation runbook](runbooks/secret-material-rotation.md) for rotation.
+
+Enrollment uses `API_URL` (default `http://localhost:4000/graphql`) and
+`DEV_ADMIN_USERNAME` / `DEV_ADMIN_PASSWORD` (local fixtures: `admin` / `admin123`).
+It re-enrolls the selected key ID with `--replace-existing-key`; it does not
+grant RBAC permissions. The shipped policy already binds the cluster-scoped
+`gitstore-controller-manager` account. No ServiceAccount namespace is accepted.
+
+Use the same `CONTROLLER_SECRET_DIR` (absolute path), `CONTROLLER_SECRET_NAME`,
+`CONTROLLER_SECRET_KEY`, and `CONTROLLER_SERVICEACCOUNT_KEY_ID` overrides across
+all three commands. For example, export them before running the sequence.
+`CONTROLLER_SERVICEACCOUNT_NAME` selects the account, while
+`CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE` can override the UID file destination.
+Changing the account name also requires matching policy bindings.
+
+For a custom signing-key destination, Make writes `<DESTINATION_PATH>.json` by
+default. Override `RECORD_OUTPUT_PATH` explicitly when the record must match a
+configured `key_ref.name`; relative paths resolve from the repository root:
+
+```bash
+make secret TARGET=signing-key \
+  DESTINATION_PATH=/run/controller-secrets/gitstore-controller-manager-signing-key \
+  RECORD_OUTPUT_PATH=/run/controller-secrets/gitstore-controller-manager-signing-key.json \
+  CONTROLLER_SERVICEACCOUNT_KEY_ID=controller-key
+```
+
+These output-path overrides apply to generation only; they do not reconfigure
+enrollment or controller startup. For a separate API issuer PEM without a
+controller record, use `RECORD_OUTPUT_PATH=` explicitly. Never reuse the
+controller private key as the API issuer key.
+
+`make compose` and `make dev` already automate their own generation and
+enrollment; the manual sequence above is for separately started native services.
+Compose keeps its credentials in dedicated volumes, separate from native files.
 
 ## Datastore Backends
 
