@@ -315,7 +315,7 @@ func buildCredentialSource(ctx context.Context, cfg *config.Config, log *zap.Log
 		return nil, fmt.Errorf("configure controller.serviceaccount.key_ref")
 	}
 
-	owner := "serviceaccount:" + controller.ServiceAccount.Namespace + ":" + controller.ServiceAccount.Name + ":" + controller.ServiceAccount.UID
+	owner := "system:serviceaccount:" + controller.ServiceAccount.Name + ":" + controller.ServiceAccount.UID
 	resolver, err := secret.NewBootstrapResolver(controller.SecretProviders.Bootstrap, owner,
 		controller.ServiceAccount.KeyRef, secret.NewObserver(log))
 	if err != nil {
@@ -327,7 +327,6 @@ func buildCredentialSource(ctx context.Context, cfg *config.Config, log *zap.Log
 	}
 	return graphqlclient.NewServiceAccountSource(
 		controller.ApiURI,
-		controller.ServiceAccount.Namespace,
 		controller.ServiceAccount.Name,
 		signer,
 		controller.ServiceAccount.AssertionAudience,

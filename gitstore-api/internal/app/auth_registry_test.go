@@ -32,10 +32,10 @@ func TestProviderRegistryReloadPreservesUsableBindingInvariant(t *testing.T) {
 		require.NoError(t, os.WriteFile(usersPath, []byte("version: v1\nusers:\n  - username: "+username+"\n    password_hash: "+string(hash)+"\n"), 0600))
 	}
 	writePolicy := func(username string) {
-		require.NoError(t, os.WriteFile(policyPath, []byte("version: v1\ndefault_deny: true\nroles:\n  admin:\n    allow: [\"*\"]\nrole_bindings:\n  "+username+": [admin]\n"), 0600))
+		require.NoError(t, os.WriteFile(policyPath, []byte("apiVersion: rbac.authorization.gitstore.dev/v1beta1\nkind: RbacLocalConfiguration\nclusterRoles:\n  admin:\n    rules: [{resources: ['*'], verbs: ['*']}]\nclusterRoleBindings:\n  - roleRef: {kind: ClusterRole, name: admin}\n    subjects: [{kind: User, name: "+username+"}]\n"), 0600))
 	}
 	writeFullyDeniedPolicy := func(username string) {
-		require.NoError(t, os.WriteFile(policyPath, []byte("version: v1\ndefault_deny: true\nroles:\n  admin:\n    allow: [\"*\"]\n    deny: [\"*\"]\nrole_bindings:\n  "+username+": [admin]\n"), 0600))
+		require.NoError(t, os.WriteFile(policyPath, []byte("apiVersion: rbac.authorization.gitstore.dev/v1beta1\nkind: RbacLocalConfiguration\nclusterRoles:\n  admin: {rules: []}\nclusterRoleBindings:\n  - roleRef: {kind: ClusterRole, name: admin}\n    subjects: [{kind: User, name: "+username+"}]\n"), 0600))
 	}
 	writeUsers("alice")
 	writePolicy("alice")
@@ -56,6 +56,11 @@ func TestProviderRegistryReloadPreservesUsableBindingInvariant(t *testing.T) {
 	for _, shutdown := range shutdowns {
 		t.Cleanup(shutdown.Shutdown)
 	}
+	// One bound administrator must not hide another active user with no grant.
+	require.NoError(t, os.WriteFile(usersPath, []byte("version: v1\nusers:\n  - username: alice\n    password_hash: "+string(hash)+"\n  - username: bob\n    password_hash: "+string(hash)+"\n"), 0600))
+	require.Error(t, reloader.Reload(), "all active local users need an effective grant")
+	assertLoginDecision(t, registry, "alice", auth.OutcomeAllow)
+	assertLoginDecision(t, registry, "bob", auth.OutcomeDeny)
 
 	writeUsers("bob")
 	require.Error(t, reloader.Reload())

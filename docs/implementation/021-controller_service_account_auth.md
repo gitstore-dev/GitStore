@@ -1,5 +1,16 @@
 # Service-Account Authentication for GitStore Controllers
-**Status**: 🟡️ Proposed (not yet implemented)
+**Status**: Historical research; superseded operationally by [controller authentication](../runbooks/controller-auth.md) and the [064 authorization baseline](../configuration.md#authorization-baseline-064).
+
+> **064 implementation update (2026-10-11):** Current ServiceAccounts are
+> cluster-scoped, named globally and bound to immutable UIDs. Subjects use
+> `system:serviceaccount:<name>`; namespace arguments/configuration and legacy
+> namespaced tokens are rejected, not translated. The current principal carries
+> trusted subject/groups, never roles. Token issuance requires both the canonical
+> `serviceAccount.token.issue` decision and valid enrolled-key proof, audience,
+> UID and atomic replay checks. Controllers use bounded, coalesced reacquisition
+> on definitive authentication rejection, not blind retries of mutations.
+> The namespaced examples and proposed interfaces below document the original
+> research only; they are not supported configuration or an upgrade path.
 
 > **Configuration update (spec 063, 2026-10-03):** The controller
 > configuration now uses nested typed settings with the same `GITSTORE_` /

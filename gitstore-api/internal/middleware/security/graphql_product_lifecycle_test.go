@@ -45,7 +45,7 @@ func TestProductWatchAuthorizationRunsBeforeCursorHandling(t *testing.T) {
 			require.Error(t, err)
 			assert.False(t, called)
 			assert.Equal(t, "product.watch", authz.Action)
-			assert.Equal(t, "Product", authz.Resource.Kind)
+			assert.Equal(t, "product", authz.Resource.Kind)
 			assert.Equal(t, "acme", authz.Resource.Attrs["namespace"])
 		})
 	}
@@ -63,7 +63,9 @@ func TestCategoryProductsRequiresProductListBeforeResolver(t *testing.T) {
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
 	require.Error(t, err)
 	assert.False(t, called)
-	assert.Equal(t, "product.list", authz.Action)
+	require.Len(t, authz.Calls, 2)
+	assert.Equal(t, "product.list", authz.Calls[0].Action)
+	assert.Equal(t, "product.management.list", authz.Calls[1].Action)
 	assert.Equal(t, "private", authz.Resource.Attrs["namespace"])
 	assert.Equal(t, "owner", authz.Resource.OwnerSub)
 }
@@ -98,7 +100,7 @@ func TestProductMutationAuthorizationMatrix(t *testing.T) {
 			require.Error(t, err)
 			assert.False(t, called)
 			assert.Equal(t, tc.action, authz.Action)
-			assert.Equal(t, "Product", authz.Resource.Kind)
+			assert.Equal(t, "product", authz.Resource.Kind)
 			assert.Equal(t, "acme", authz.Resource.Attrs["namespace"])
 		})
 	}
@@ -119,7 +121,9 @@ func TestProductReadAuthorizationRunsBeforeResolver(t *testing.T) {
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
 	require.Error(t, err)
 	assert.False(t, called)
-	assert.Equal(t, "product.read", authz.Action)
+	require.Len(t, authz.Calls, 2)
+	assert.Equal(t, "product.read", authz.Calls[0].Action)
+	assert.Equal(t, "product.management.read", authz.Calls[1].Action)
 	assert.Equal(t, "acme", authz.Resource.Attrs["namespace"])
 }
 
@@ -134,7 +138,9 @@ func TestProductListAuthorizationDoesNotDiscloseCrossNamespaceExistence(t *testi
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
 	require.Error(t, err)
 	assert.False(t, called, "the list resolver must not reveal whether private Products exist")
-	assert.Equal(t, "product.list", authz.Action)
+	require.Len(t, authz.Calls, 2)
+	assert.Equal(t, "product.list", authz.Calls[0].Action)
+	assert.Equal(t, "product.management.list", authz.Calls[1].Action)
 	assert.Equal(t, "private", authz.Resource.Attrs["namespace"])
 	assert.Equal(t, "namespace-owner", authz.Resource.OwnerSub)
 }
@@ -152,7 +158,9 @@ func TestProductNodeAuthorizationRunsBeforeResolver(t *testing.T) {
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
 	require.Error(t, err)
 	assert.False(t, called)
-	assert.Equal(t, "product.read", authz.Action)
+	require.Len(t, authz.Calls, 2)
+	assert.Equal(t, "product.read", authz.Calls[0].Action)
+	assert.Equal(t, "product.management.read", authz.Calls[1].Action)
 }
 
 // TestProductAuthorizationCapabilitiesAreAttributedAcrossPrincipalProviders

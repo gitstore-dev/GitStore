@@ -11,6 +11,7 @@ import (
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -18,10 +19,12 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/metadata"
 )
 
 // Typed and generic Product streams are projections of the same durable
@@ -175,6 +178,7 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 	require.NoError(t, store.CreateRepository(ctx, repo))
 
 	srv, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
+		Registry: auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil), ServiceSecret: "watch-fixture-service",
 		Store:  store,
 		Logger: zap.NewNop(),
 		GitReader: &stubGitReader{
@@ -199,11 +203,11 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 	events, err := r.Subscription().WatchProducts(watchCtx, nil, nil, nil)
 	require.NoError(t, err)
 
-	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
-		RepositoryId: repoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
-		ActorSubject: "test-admission",
+	_, err = admitWatchFixture(ctx, srv, &catalogv1.AdmitResourcesRequest{
+		RepositoryId:  repoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 
@@ -270,6 +274,7 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 	}
 
 	srv, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
+		Registry: auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil), ServiceSecret: "watch-fixture-service",
 		Store:     store,
 		Logger:    zap.NewNop(),
 		GitReader: git,
@@ -291,12 +296,12 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 	events, err := r.Subscription().WatchProducts(watchCtx, nil, nil, nil)
 	require.NoError(t, err)
 
-	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
-		RepositoryId: repoID,
-		OldCommitSha: zero,
-		NewCommitSha: a,
-		RefName:      "refs/heads/main",
-		ActorSubject: "test-admission",
+	_, err = admitWatchFixture(ctx, srv, &catalogv1.AdmitResourcesRequest{
+		RepositoryId:  repoID,
+		OldCommitSha:  zero,
+		NewCommitSha:  a,
+		RefName:       "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 
@@ -308,12 +313,12 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 	}
 
 	current = b
-	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
-		RepositoryId: repoID,
-		OldCommitSha: a,
-		NewCommitSha: b,
-		RefName:      "refs/heads/main",
-		ActorSubject: "test-admission",
+	_, err = admitWatchFixture(ctx, srv, &catalogv1.AdmitResourcesRequest{
+		RepositoryId:  repoID,
+		OldCommitSha:  a,
+		NewCommitSha:  b,
+		RefName:       "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 
@@ -328,4 +333,18 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for terminating watchProducts event")
 	}
+}
+
+func admitWatchFixture(ctx context.Context, srv *cataloggrpc.Server, req *catalogv1.AdmitResourcesRequest) (*catalogv1.AdmitResourcesResponse, error) {
+	if req.OldCommitSha == "" {
+		req.OldCommitSha = strings.Repeat("0", 40)
+	}
+	req.Authorization.RepositoryId = req.RepositoryId
+	req.Authorization.ReceiveId = "watch-fixture-receive"
+	req.Authorization.Refs = []*catalogv1.ReceiveRef{{RefName: req.RefName, OldCommitSha: req.OldCommitSha, NewCommitSha: req.NewCommitSha}}
+	envelope, err := auth.SignRPC("watch-fixture-service", "gitstore-api", catalogv1.CatalogService_AdmitResources_FullMethodName, req)
+	if err != nil {
+		return nil, err
+	}
+	return srv.AdmitResources(metadata.NewIncomingContext(ctx, metadata.Pairs(auth.RPCSignatureMetadata, envelope)), req)
 }

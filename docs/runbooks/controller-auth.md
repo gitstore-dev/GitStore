@@ -28,10 +28,11 @@ administrator-issued bearer token.
    its public key through `gitctl enroll-serviceaccount`, `createServiceAccount`,
    or `rotateServiceAccountKey`. Give the key a unique `kid`; record the
    returned ServiceAccount UID.
-3. Ensure the RBAC policy binds
-   `serviceaccount:<namespace>:<name>` to only the controller role. Enrollment
-   does not grant authorization by itself.
-4. Configure `controller.serviceaccount.namespace`, `.name`, and `.uid`, plus
+3. In a v1beta1 policy, bind `{kind: ServiceAccount, name: <name>}` to the
+   controller role and a separate `serviceAccount/token` issue role restricted
+   by `resourceNames: [<name>]`. The authenticated subject is
+   `system:serviceaccount:<name>`. Enrollment does not grant authorization.
+4. Configure `controller.serviceaccount.name` and `.uid`, plus
    a complete `controller.serviceaccount.key_ref` (`kind = "SecretRef"`,
    `name = "<logical-secret-name>"`; `key` must be omitted — the resolver
    reads one atomic JSON signing record, not an individual field). For the
@@ -49,6 +50,13 @@ administrator-issued bearer token.
 The controller requires `controller.serviceaccount.key_ref`; static controller
 API tokens are not supported.
 
+ServiceAccounts are cluster-scoped. `--namespace`,
+`controller.serviceaccount.namespace`, its environment equivalent and the
+`CONTROLLER_SERVICEACCOUNT_NAMESPACE` Make variable are errors, even when empty.
+Old v1 policies and namespaced token subjects are rejected; there is no
+translation or dual-format period. The shipped Compose enrollment job uses
+name-only enrollment and keeps the existing isolated key/UID mounts.
+
 ## Renewal, readiness, and backoff
 
 The controller signs a fresh, 45-second proof-of-possession assertion and
@@ -63,7 +71,7 @@ capped at 30 seconds.
 2. Confirm the API is reachable at `controller.api_uri`, then verify the API
    authentication chain includes both `serviceaccount-assertion` and
    `serviceaccount-jwt`.
-3. Compare only non-secret identity metadata: namespace, name, UID, `kid`, and
+3. Compare only non-secret identity metadata: name, UID, `kid`, and
    both configured audiences. Confirm the `kid` remains enrolled and the
    ServiceAccount is enabled.
 4. For a file resolver, verify the mounted directory and logical
@@ -120,7 +128,7 @@ overlap first and validate every replica before promotion.
 
 ## Recover an accidentally deleted ServiceAccount
 
-Deletion invalidates the old UID. Recreating the same namespace/name does not
+Deletion invalidates the old UID. Recreating the same name does not
 restore the old identity.
 
 1. Keep the controller stopped or remove it from service while it is not ready.

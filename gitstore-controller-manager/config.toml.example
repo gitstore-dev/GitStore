@@ -10,7 +10,6 @@ per_second = 40
 burst = 10
 
 [controller.serviceaccount]
-namespace = "controllers"
 name = "gitstore-controller-manager"
 uid = ""
 assertion_audience = "gitstore-api/serviceaccount-token"

@@ -29,7 +29,7 @@ import (
 // none of these tests exercise actual lookups.
 type stubServiceAccountLookup struct{}
 
-func (stubServiceAccountLookup) GetServiceAccountBySubject(_ context.Context, _, _ string) (*datastore.ServiceAccount, error) {
+func (stubServiceAccountLookup) GetServiceAccountBySubject(_ context.Context, _ string) (*datastore.ServiceAccount, error) {
 	return nil, datastore.ErrNotFound
 }
 

@@ -83,6 +83,28 @@
   §14 addendum names: it makes the authorizer, not caller code, decide
   ownership.
 
+### Session 2026-10-11
+
+- Use cryptographic replay protection for inter-service requests. Replace the
+  discovered bearer-only RPC transport with signed, expiring, audience/method/
+  request-bound envelopes and bounded replay state retained across Git
+  replacement and shared across API replicas. Do not accept legacy bearer-only
+  requests as a fallback.
+- Reject old configuration rather than translating or ignoring removed fields.
+  Ship coherent policy, controller enrollment and Docker Compose examples for
+  the new baseline; verify real Compose startup as well as rendered config.
+
+- The existing namespaced ServiceAccount schema is an undeployed alpha baseline,
+  with no released deployment/data contract to preserve. Replace its table
+  definitions directly with cluster-scoped, name-only tables in
+  `009_service_account.cql`; do not add migration 013 merely to retain the old
+  schema. No compatibility layer, parallel legacy tables, backfill, dual reads,
+  identity migration or legacy rollback path is required. Development fixtures
+  use a fresh schema and enroll accounts by name. This is an explicit,
+  feature-scoped exception to preserving applied migrations, not a change to
+  that rule for deployed schemas. Same-version replica correctness, unique
+  names/UIDs and fail-closed rejection of legacy inputs remain required.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Operator grants least-privilege access with one vocabulary (Priority: P1)
@@ -289,8 +311,8 @@ valid v1beta1 document that the API loads and enforces.
 - Owner is a group and the caller is the creator but not a group member →
   `when: owner` is false.
 - Unrecognized verb for a kind (e.g. `namespace.publish`) → validation error.
-- An old API replica sends a legacy action to an upgraded Git service during
-  rollout → the Git service denies it with an explicit error (fail closed);
+- A legacy-action negative fixture reaches the new Git service → the Git
+  service denies it with an explicit error (fail closed);
   it is never treated as allowed.
 
 ## Requirements *(mandatory)*
@@ -480,19 +502,17 @@ valid v1beta1 document that the API loads and enforces.
 - **PR-001 Replica Safety**: Every API replica evaluates the same policy
   document deterministically; decisions depend only on the loaded document,
   the principal and the `ResourceContext`, with no per-replica state.
-  Rolling upgrade: because v1 is unsupported, the v1beta1 policy file MUST be
-  delivered with the new release; an old replica that is handed a v1beta1
-  file on reload rejects it and keeps its previous policy, and a new replica
-  handed a v1 file refuses to start. Rollout guidance MUST state this
-  ordering. Old API replicas presenting legacy actions to an upgraded Git
-  service are denied (fail closed); the Git service is singleton and is
-  replaced non-overlapping, so the denial window is bounded by the API
-  rollout. The ServiceAccount subject change means tokens issued by old API
-  replicas are rejected by new ones; controllers re-acquire a token on
-  rejection through their existing credential renewal, so convergence is
-  bounded by one token exchange per controller after the API rollout. The
-  enrolled controller ServiceAccount record MUST be re-created by name only
-  as part of the upgrade (documented).
+  The undeployed alpha baseline permits direct replacement of namespaced
+  ServiceAccount tables in migration 009 with the cluster-scoped definitions;
+  no legacy storage, data migration or compatibility layer is required.
+  Initialize development/test schemas from the replacement baseline and enroll
+  controllers by name with fresh UIDs. Policy/configuration and service binaries
+  use the new contract together. Verify same-version rolling replacement with
+  two APIs/two controllers and non-overlapping singleton Git replacement.
+  Legacy policy/action/subject inputs remain negative contract tests: new
+  binaries reject them, invalid policy reload keeps the last valid policy,
+  and definitive token rejection triggers bounded credential reacquisition.
+  There is no deployed old/new fleet cutover or old-schema rollback requirement.
 - **PR-002 Multi-User Security**: Default deny; no permission without a
   binding; namespace bindings never leak across namespaces; reserved
   `system:` identities only from authentication; conditions fail closed;

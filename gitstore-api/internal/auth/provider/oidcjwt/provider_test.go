@@ -127,6 +127,32 @@ func TestNameAndCapabilities(t *testing.T) {
 	assert.Equal(t, auth.CapAuthenticate|auth.CapIntrospect, p.Capabilities())
 }
 
+func TestAuthenticateRejectsReservedMappedIdentity(t *testing.T) {
+	for _, subject := range []string{"system:api", "system:serviceaccount:controller", "system:masters", "serviceaccount:ns:controller", "anon"} {
+		for _, source := range []string{"sub", "preferred_username", "userinfo"} {
+			t.Run(subject+"/"+source, func(t *testing.T) {
+				issuer := newMockIssuer(t)
+				claim := source
+				if source == "userinfo" {
+					claim = "preferred_username"
+				}
+				p := newProvider(t, issuer, config.OIDCConfig{UsernameClaim: claim})
+				claims := issuer.validClaims()
+				if source == "userinfo" {
+					delete(claims, "preferred_username")
+					issuer.userinfo = map[string]any{"sub": claims["sub"], "preferred_username": subject}
+				} else {
+					claims[source] = subject
+				}
+				principal, decision, err := p.Authenticate(context.Background(), bearerReq(issuer.sign(t, claims)))
+				require.NoError(t, err)
+				require.Equal(t, auth.OutcomeDeny, decision.Outcome)
+				require.Nil(t, principal)
+			})
+		}
+	}
+}
+
 func TestAuthenticateDoesNotImportExternalRoles(t *testing.T) {
 	// Regression: a token claiming roles:["admin"] must NOT gain local admin
 	// — rbac-local seeds its effective role set from Principal.Roles, and
@@ -141,7 +167,7 @@ func TestAuthenticateDoesNotImportExternalRoles(t *testing.T) {
 	principal, decision, err := p.Authenticate(context.Background(), bearerReq(token))
 	require.NoError(t, err)
 	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
-	assert.Empty(t, principal.Roles)
+
 	assert.Empty(t, principal.Groups)
 }
 

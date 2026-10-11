@@ -38,9 +38,9 @@ func TestAdmitResourcesNamespacePersistsCompleteAuthoredState(t *testing.T) {
 		OldCommitSha: zero,
 		NewCommitSha: createCommit,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{path},
-		ActorSubject: "alice",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{path},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 	created, err := store.GetNamespaceByName(context.Background(), "git-authored-state")
@@ -57,9 +57,9 @@ func TestAdmitResourcesNamespacePersistsCompleteAuthoredState(t *testing.T) {
 		OldCommitSha: createCommit,
 		NewCommitSha: updateCommit,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{path},
-		ActorSubject: "bob",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{path},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "bob", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 	updated, err := store.GetNamespaceByName(context.Background(), "git-authored-state")
@@ -86,12 +86,12 @@ func TestAdmitResourcesNamespaceProvenanceOnlyChangeKeepsGeneration(t *testing.T
 	path := "namespaces/provenance-only-git.md"
 	otherPath := "namespaces/provenance-only-other.md"
 	current := createCommit
-	manifest := namespaceManifest("provenance-only-git", "Provenance", "USER")
+	manifest := namespaceManifest("provenance-only-git", "Provenance", "ORGANIZATION")
 	srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{
 		createCommit: {path: manifest},
 		descendantCommit: {
 			path:      manifest,
-			otherPath: namespaceManifest("provenance-only-other", "Other", "USER"),
+			otherPath: namespaceManifest("provenance-only-other", "Other", "ORGANIZATION"),
 		},
 	}))
 
@@ -100,9 +100,9 @@ func TestAdmitResourcesNamespaceProvenanceOnlyChangeKeepsGeneration(t *testing.T
 		OldCommitSha: zero,
 		NewCommitSha: createCommit,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{path},
-		ActorSubject: "alice",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{path},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}},
 	}
 	_, err := srv.AdmitResources(context.Background(), request)
 	require.NoError(t, err)
@@ -136,7 +136,7 @@ metadata:
     %s: ""
 spec:
   title: Presence-aware labels
-  tier: USER
+  tier: ORGANIZATION
 ---
 `, key))
 	}
@@ -150,9 +150,9 @@ spec:
 		OldCommitSha: zero,
 		NewCommitSha: first,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{path},
-		ActorSubject: "alice",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{path},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 	created, err := store.GetNamespaceByName(context.Background(), "presence-aware-labels")
@@ -164,9 +164,9 @@ spec:
 		OldCommitSha: first,
 		NewCommitSha: second,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{path},
-		ActorSubject: "bob",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{path},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "bob", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 	updated, err := store.GetNamespaceByName(context.Background(), "presence-aware-labels")
@@ -186,13 +186,13 @@ func TestAdmitResourcesNamespaceMetadataUpdatePreservesSystemOwnerReferences(t *
 	path := "namespaces/system-owner-reference.md"
 	current := first
 	manifest := func(label string) []byte {
-		return []byte(fmt.Sprintf("---\napiVersion: gitstore.dev/v1beta1\nkind: Namespace\nmetadata:\n  name: system-owner-reference\n  labels:\n    team: %s\nspec:\n  title: System owner reference\n  tier: USER\n---\n", label))
+		return []byte(fmt.Sprintf("---\napiVersion: gitstore.dev/v1beta1\nkind: Namespace\nmetadata:\n  name: system-owner-reference\n  labels:\n    team: %s\nspec:\n  title: System owner reference\n  tier: ORGANIZATION\n---\n", label))
 	}
 	srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{
 		first:  {path: manifest("catalog")},
 		second: {path: manifest("platform")},
 	}))
-	_, err := srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{ActorSubject: "alice", RepositoryId: testRepoID, OldCommitSha: zero, NewCommitSha: first, RefName: "refs/heads/main", ChangedPaths: []string{path}})
+	_, err := srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}}, RepositoryId: testRepoID, OldCommitSha: zero, NewCommitSha: first, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 	require.NoError(t, err)
 	namespace, err := store.GetNamespaceByName(ctx, "system-owner-reference")
 	require.NoError(t, err)
@@ -204,7 +204,7 @@ func TestAdmitResourcesNamespaceMetadataUpdatePreservesSystemOwnerReferences(t *
 	require.NoError(t, store.UpdateNamespace(ctx, namespace, expected))
 
 	current = second
-	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{ActorSubject: "bob", RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: second, RefName: "refs/heads/main", ChangedPaths: []string{path}})
+	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "bob", AuthMethod: "static-users"}}, RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: second, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 	require.NoError(t, err)
 	updated, err := store.GetNamespaceByName(ctx, "system-owner-reference")
 	require.NoError(t, err)
@@ -225,7 +225,7 @@ metadata:
     owner: %s
 spec:
   title: Authored state
-  tier: USER
+  tier: ORGANIZATION
   repositoryDefaults:
     visibility: PRIVATE
     defaultBranch: %s

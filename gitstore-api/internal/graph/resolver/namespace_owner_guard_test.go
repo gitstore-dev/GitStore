@@ -31,7 +31,7 @@ func (s *failingNamespaceLookupStore) GetNamespaceByName(ctx context.Context, na
 func TestUpdateNamespace_FailsClosedWhenOwnerGuardLookupFails(t *testing.T) {
 	ctx := context.Background()
 	seed := newTestSvc(t, &mockGitWriter{})
-	_, err := seed.CreateNamespace(ctx, createNamespaceInput("owner-guard-lookup", model.NamespaceTierUser), "alice")
+	_, err := seed.CreateNamespace(ctx, createNamespaceInput("owner-guard-lookup", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 
 	writer := &mockGitWriter{}
@@ -42,7 +42,7 @@ func TestUpdateNamespace_FailsClosedWhenOwnerGuardLookupFails(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = svc.UpdateNamespace(ctx, updateNamespaceInput("owner-guard-lookup", model.NamespaceTierUser), "alice")
+	_, err = svc.UpdateNamespace(ctx, updateNamespaceInput("owner-guard-lookup", model.NamespaceTierOrganization), "alice")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to validate Namespace operation")
 }
@@ -50,7 +50,7 @@ func TestUpdateNamespace_FailsClosedWhenOwnerGuardLookupFails(t *testing.T) {
 func TestTransferNamespaceOwner_RejectsWhenOwnerChangedSinceAuthorization(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestSvc(t, &mockGitWriter{})
-	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("owner-transfer-race", model.NamespaceTierUser), "alice")
+	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("owner-transfer-race", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 
 	stale := *ns

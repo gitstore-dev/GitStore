@@ -46,12 +46,9 @@ type idTokenClaims struct {
 	Issuer            string `json:"iss"`
 	Email             string `json:"email"`
 	PreferredUsername string `json:"preferred_username"`
-	// Identity claims only. Roles/Groups are deliberately NOT mapped onto
-	// Principal.Roles/Principal.Groups: authentication providers establish
-	// identity, and rbac-local seeds its effective role set from
-	// Principal.Roles — importing an external `roles` claim would let any
-	// configured issuer mint local admin without a role_bindings entry.
-	// (Both remain visible in raw token claims if an operator needs them.)
+	// Identity claims only. Arbitrary roles/groups claims are not trusted group
+	// membership. Authorization comes from typed policy bindings; Principal has
+	// no roles. Raw claims are retained only as non-authorizing identity metadata.
 	Scope     string   `json:"scope"`
 	Scp       []string `json:"scp"`
 	TokenID   string   `json:"jti"`
@@ -197,6 +194,9 @@ func (p *OIDCJWTProvider) Authenticate(ctx context.Context, req auth.AuthRequest
 		}
 	}
 
+	if !auth.ValidExternalUsername(subject) {
+		return nil, auth.Deny(p.Name(), "reserved or invalid mapped username"), nil
+	}
 	principal := &auth.Principal{
 		Subject:    subject,
 		Issuer:     claims.Issuer,

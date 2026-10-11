@@ -361,9 +361,7 @@ pub fn build_pack_for_wants(
     }
 
     // Count commit-reachable objects (trees + blobs via TreeContents expansion).
-    let mut ids_iter = walk_ids
-        .iter()
-        .map(|id| Ok::<_, Box<dyn std::error::Error + Send + Sync>>(*id));
+    let mut ids_iter = walk_ids.iter().map(|id| Ok::<_, gix::Error>(*id));
 
     let (mut counts, _) = gix_pack::data::output::count::objects_unthreaded(
         &odb,
@@ -376,9 +374,7 @@ pub fn build_pack_for_wants(
 
     // Include tag objects themselves (AsIs — no expansion needed for tag blobs).
     if !extra_objects.is_empty() {
-        let mut tag_iter = extra_objects
-            .iter()
-            .map(|id| Ok::<_, Box<dyn std::error::Error + Send + Sync>>(*id));
+        let mut tag_iter = extra_objects.iter().map(|id| Ok::<_, gix::Error>(*id));
         let (tag_counts, _) = gix_pack::data::output::count::objects_unthreaded(
             &odb,
             &mut tag_iter,
@@ -402,14 +398,14 @@ pub fn build_pack_for_wants(
             thread_limit: Some(1),
             ..Default::default()
         },
-    );
+    )
+    .context("resolving pack entry locations")?;
 
     // Collect all entries first so we know the exact count before creating
     // FromEntriesIter. Passing an incorrect count causes an index-out-of-bounds
     // panic in gix-pack 0.71.0 when delta expansion inflates the entry count
     // beyond counts.len().
-    type BatchResult =
-        Result<Vec<output::Entry>, gix_pack::data::output::entry::iter_from_counts::Error>;
+    type BatchResult = Result<Vec<output::Entry>, gix::Error>;
     let all_entries: Vec<Vec<output::Entry>> = entries_iter
         .into_iter()
         .map(|r| -> BatchResult { r.map(|(_seq, entries)| entries) })
@@ -424,9 +420,7 @@ pub fn build_pack_for_wants(
     let mut pack_bytes: Vec<u8> = Vec::new();
     type EntryBatch = Vec<output::Entry>;
     let mut bytes_iter = gix_pack::data::output::bytes::FromEntriesIter::new(
-        all_entries
-            .into_iter()
-            .map(Ok::<EntryBatch, std::convert::Infallible>),
+        all_entries.into_iter().map(Ok::<EntryBatch, gix::Error>),
         &mut pack_bytes,
         num_entries,
         gix_pack::data::Version::V2,
@@ -540,11 +534,12 @@ pub fn stage_pack_from_reader<R: std::io::Read, O: gix_pack::Find + gix::prelude
         &mut progress,
         &interrupt,
         odb,
+        gix::hash::Kind::Sha1,
         Options {
             thread_limit: Some(1),
             iteration_mode: gix_pack::data::input::Mode::Verify,
             index_version: gix_pack::index::Version::V2,
-            object_hash: gix::hash::Kind::Sha1,
+            ..Default::default()
         },
     )
     .context("write pack to quarantine")?;
@@ -642,13 +637,13 @@ pub fn check_blob_sizes_in_quarantine_paths(
             | gix_pack::data::entry::Header::RefDelta { .. } => {
                 // Delta-encoded entry: decode to resolve the true object size and kind.
                 let mut out = Vec::new();
-                let mut inflate = gix::features::zlib::Inflate::default();
+                let mut inflate = gix::zlib::Inflate::default();
                 let outcome = pack_file
                     .decode_entry(
                         pack_entry,
                         &mut out,
                         &mut inflate,
-                        &|_, _| None,
+                        &|_, _| Ok(None),
                         &mut gix_pack::cache::Never,
                     )
                     .with_context(|| {

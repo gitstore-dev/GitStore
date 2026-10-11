@@ -4,10 +4,12 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 
 ## Active Technologies
 
+- Spec 064 planning uses the current Go 1.26.0 API/controller modules and existing Rust stack; no new third-party dependencies. It plans bounded v1beta1 RBAC snapshots and direct replacement of the undeployed ServiceAccount baseline with cluster-scoped storage; these changes are not implemented yet.
+
 Baseline stack, established in early specs (025-035) and reused unchanged by every later spec unless a delta is called out below:
-- **Go** 1.25 (`gitstore-api`, `gitstore-controller-manager`; container builders on 1.26.1) — `gqlgen v0.17.90` (GraphQL schema/resolver codegen + `transport.Websocket` subscriptions), `go-playground/validator/v10`, `go.uber.org/zap`, `google/uuid`, `encoding/json`, `github.com/prometheus/client_golang v1.23.2`, `github.com/google/cel-go/cel` (admission rule evaluation), `golang-jwt/v5 v5.3.1`, `golang.org/x/crypto` (bcrypt), `github.com/spf13/viper`.
+- **Go** 1.26.0 (`gitstore-api`, `gitstore-controller-manager`; container builders on 1.26.1) — `gqlgen v0.17.90` (GraphQL schema/resolver codegen + `transport.Websocket` subscriptions), `go-playground/validator/v10`, `go.uber.org/zap`, `google/uuid`, `encoding/json`, `github.com/prometheus/client_golang v1.23.2`, `github.com/google/cel-go/cel` (admission rule evaluation), `golang-jwt/v5 v5.3.1`, `golang.org/x/crypto` (bcrypt), `github.com/spf13/viper`.
 - **Controller manager** adds: `golang.org/x/time` (queue rate limiting), `github.com/alitto/pond/v2 v2.7.1` (worker pools), `github.com/cenkalti/backoff/v5 v5.0.3` (retry/backoff), `github.com/syndtr/goleveldb v1.0.0` (bounded disk-backed controller projections, work and indexes).
-- **Rust** 1.x (`gitstore-git-service`) — `gix 0.84.0` (+ `gix-ref 0.64.0`), `tokio 1.35`, `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`, `async-trait 0.1`, `serde 1.0`, `serde_yaml 0.9`.
+- **Rust** ≥1.88 (`gitstore-git-service`) — `gix 0.89.0` (+ `gix-ref 0.69.0`, `gix-pack 0.76.0`), `tokio 1.35`, `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`, `async-trait 0.1`, `serde 1.0`; signed RPC uses `hmac 0.13`, `sha2 0.11` and `getrandom 0.4`.
 - **Storage**: bare Git repositories on local filesystem for Git-backed resources; `datastore.Datastore` abstraction backed by `go-memdb v1.3.5` in development and `gocqlx/v3 v3.0.4` + `gocql` (ScyllaDB 5.x+) in production. Cross-service auth uses a shared `GITSTORE_GRPC_AUTH__HMAC_SECRET`.
 
 Reusable internal interfaces, defined once and instantiated unchanged by later specs (CategoryTaxonomy, Namespace, Repository, Product, etc.) rather than reimplemented:
@@ -30,6 +32,7 @@ Deltas not covered above: 028 (branch-deletion admission, no new Go deps), 029 (
 ## Commands
 
 ### Workspace
+- `make generate TARGET=<authz|all>` — regenerate committed authorization catalog tables, or all API generation directives. `make test` and `make check TARGET=all` reject catalog drift without rewriting files.
 - `make help` — list root commands and common variables.
 - `make git` — run `gitstore-git-service` locally in the foreground using `GIT_DATA_DIR` (default: `.gitstore/repos`).
 - `make api` — run `gitstore-api` locally in the foreground. Requires `gitstore-api/.env` or shell env for required auth secrets.
@@ -46,8 +49,8 @@ Deltas not covered above: 028 (branch-deletion admission, no new Go deps), 029 (
 - `make ps`, `make logs`, `make stop`, `make down` — compose lifecycle helpers. Use `SERVICE=<name>` with `logs` or `stop` to scope the command; `SERVICE=scylla` includes both the single-node service and the three-node cluster services.
 - `make add-user USERNAME=<user> PASSWORD=<password> [EMAIL=<email>] [DISPLAY_NAME=<name>] [USERS_FILE=<path>]` — add a local human identity to `users.yaml` using an atomic YAML-aware write; fails if the username already exists and reminds you to add its `policy.yaml` role binding.
 - `make hash-user-password PASSWORD=<password>` — print a bcrypt hash for manual `users.yaml` maintenance.
-- `make add-role ROLE=<role> ALLOW=<actions> [DENY=<actions>] [POLICY_FILE=<path>]` — add an RBAC role through an atomic YAML-aware write; comma-separate multiple actions.
-- `make assign-role SUBJECT=<subject> ROLE=<role> [POLICY_FILE=<path>]` — idempotently bind an existing role to any authentication subject.
+- `make add-role ROLE=<role> ALLOW=<canonical-actions> [SCOPE=cluster|namespace] [POLICY_FILE=<path>]` — atomically add a v1beta1 ClusterRole (default) or Role. DENY and legacy actions are rejected.
+- `make assign-role SUBJECT=<name> ROLE=<role> [SUBJECT_KIND=User|Group|ServiceAccount] [ROLE_KIND=ClusterRole|Role] [SCOPE=cluster|namespace] [NAMESPACE=<explicit-binding-namespace>] [POLICY_FILE=<path>]` — idempotently add a typed binding; namespace scope requires an explicit NAMESPACE.
 - `make secret TARGET=<jwt|grpc-hmac|signing-key> [DESTINATION_PATH=<path>]` — generate local authentication material. `jwt` updates `gitstore-api/.env`; `grpc-hmac` writes the same shared secret to both service `.env` files.
 - `make bootstrap TARGET=<all|token|namespace|repository> [ADMIN_PASSWORD=<password>]` — authenticate/cache a token or create selected bootstrap resources. `repository` requires the namespace to exist.
 - API schema preparation can run independently through `gitctl migrate --hosts <host:port,...> --keyspace <existing-keyspace> --timeout 5m`, including in an init container. Set `GITSTORE_API__DATASTORE__SCYLLA__AUTO_MIGRATE=false` on API replicas to require read-only migration-history validation at startup; the compatible default remains `true`. Data transfers are not part of this command.
@@ -56,7 +59,8 @@ Deltas not covered above: 028 (branch-deletion admission, no new Go deps), 029 (
 - `make test` defaults to the existing Rust/Go/shared-module suites, including local capacity regressions. Select existing specialized suites with `TARGET=datastore` (optionally `DATASTORE=scylla`) or `TARGET=secret-integration`. `make pr-ready` always keeps the full default test suite; capacity scenarios remain exclusively under `make capacity`.
 - The Go build/test/lint aggregates include `shared/secretmaterial`; its dependency-free module also builds and tests independently with `GOWORK=off`.
 - `make test TARGET=datastore` — run backend-neutral datastore contracts without an external Scylla instance.
-- `make test TARGET=secret-integration SECRET_TEST_OWNED_DEPLOYMENT=1 SECRET_TEST_API_A=<base-url> SECRET_TEST_API_B=<base-url> SECRET_TEST_TOKEN_FILE=<path>` — run real controller bootstrap, isolated provider outage, enrolled-key overlap/retirement and process replacement against an isolated two-API deployment sharing Scylla. Both APIs must clamp ServiceAccount tokens to 60s. The existing `controllers/gitstore-controller-manager` identity must have controller RBAC permissions; optional `SECRET_TEST_NAMESPACE`/`SECRET_TEST_SERVICEACCOUNT` select another test identity. Only test-generated keys are enrolled/removed; controllers, private records and checkpoints are test-owned. Never point this at an operator deployment.
+- `make capacity TARGET=api PROFILE=authorization MODE=diagnostic` — sample bounded per-case authorization latency at the maximum policy dimensions and concurrency 1/8/32. Defaults to 60s warm-up plus 10m per concurrency; `AUTHZ_CAPACITY_WARMUP` and `AUTHZ_CAPACITY_DURATION` may shorten diagnostic exploration only. Alpha/production are rejected until the separate reload-soak and zero-I/O evidence is complete; this does not replace readiness or lifecycle gates.
+- `make test TARGET=secret-integration SECRET_TEST_OWNED_DEPLOYMENT=1 SECRET_TEST_API_A=<base-url> SECRET_TEST_API_B=<base-url> SECRET_TEST_TOKEN_FILE=<path>` — run real controller bootstrap, isolated provider outage, enrolled-key overlap/retirement and process replacement against an isolated two-API deployment sharing Scylla. Both APIs must clamp ServiceAccount tokens to 60s. The existing cluster-scoped `gitstore-controller-manager` identity must have controller RBAC permissions; optional `SECRET_TEST_SERVICEACCOUNT` selects another test identity; SECRET_TEST_NAMESPACE is rejected. Only test-generated keys are enrolled/removed; controllers, private records and checkpoints are test-owned. Never point this at an operator deployment.
 - `REPOSITORY_CAPACITY_SECRET_SCENARIO=1 make capacity TARGET=repository PROFILE=lifecycle MODE=<mode>` runs the connected File/fault/resource scenario only with `CHAOS_CONFIRM=1`, provisioned owned fixtures and an acknowledged Product manifest. The finalizer hashes/scans all closed artifacts; the Repository-only profile and local fixtures cannot substitute for a full production run.
 - `make test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=<host:port>` — run tagged Scylla datastore contracts.
 - `make capacity TARGET=<api|namespace|repository|category|scylla> PROFILE=<scenario> MODE=<diagnostic|alpha|production>` — the only public capacity interface. Valid target/profile pairs are `api/readiness`, `namespace/admission`, `namespace/validation`, `namespace/watch`, `namespace/recovery`, `repository/lifecycle`, `category/hierarchy` (spec 057: 10,000-descendant subtree, mutations plus filtered pages, re-parent cascade, SC-007/SC-009 verifier; needs a companion Git push driver, see `tests/capacity/README.md`), and `scylla/soak`. Repository lifecycle is the real two-API/two-controller Git-admission, durable-watch, load, overflow, rolling-replacement, and recovery gate. Diagnostic evidence cannot pass a gate; alpha watch evidence enforces visibility p95 ≤2s and warns above the unchanged 1s production target; production enforces p95 ≤1s and p99 ≤3s. Set `CAPACITY_OBSERVABILITY=prometheus` and `CAPACITY_PROMETHEUS_TARGETS=<host:port,...>` to have the dispatcher manage an isolated scraper and export current-run API phase queries into the evidence bundle.
@@ -73,7 +77,7 @@ Common bootstrap variables:
 - `BOOTSTRAP_TOKEN` overrides login/cached-token lookup.
 - `NAMESPACE ?= gitstore-test`
 - `NAMESPACE_DISPLAY_NAME ?= GitStore Test`
-- `NAMESPACE_TIER ?= USER`
+- `NAMESPACE_TIER ?= ORGANIZATION`
 - `REPOSITORY ?= catalog`
 - `DEFAULT_BRANCH ?= main`
 
@@ -82,9 +86,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 064-authz-action-vocabulary: Planned canonical actions, allow-only v1beta1 RBAC, name-only ServiceAccounts, signed identity migration and replica/load validation. No implementation or new third-party dependency in the planning change.
 - 057-categorytaxonomy-path-freshness: Added Go 1.25 (`gitstore-api`, `gitstore-controller-manager`); Rust 1.x (`gitstore-git-service`, golden-fixture parity test only) + Existing only: gqlgen v0.17.90, gocqlx/gocql, go-memdb, `internal/gitclient` Git writer gRPC, `internal/admission`, `cataloggrpc`, zap, Prometheus. No new third-party dependency.
 - 063-implement-secret-adrs: Added Go 1.25 module baseline (API and controller); existing Rust Git service; current Go container builders use 1.26.1. + Existing gqlgen, validator, zap, Prometheus client, JWT/crypto and standard library; new repository-local `shared/secretmaterial` Go module, no new third-party dependency.
-- 062-product-category-readiness: Added Go 1.25 (`gitstore-api`, `gitstore-controller-manager`) + `github.com/99designs/gqlgen v0.17.90` (schema/resolver codegen), existing `internal/graphqlclient.Client`, existing `internal/status.StatusPatch`/`StatusClient` (`gitstore-controller-manager`), existing `internal/cache.Cache[T]`/`CacheAccessor[T]` (spec 026), existing `internal/listwatch.Runner[T]` (spec 036/042), existing `internal/manager.Manager` reconciler registration (spec 026); no new external dependency in either service.
 
 
 <!-- MANUAL ADDITIONS START -->
@@ -147,7 +151,7 @@ Common bootstrap variables:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/063-implement-secret-adrs/plan.md
+at specs/064-authz-action-vocabulary/plan.md
 <!-- SPECKIT END -->
 
 ## graphify

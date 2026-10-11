@@ -6,3 +6,4 @@
 package api
 
 //go:generate go tool gqlgen generate
+//go:generate go run ./cmd/gitctl generate authz --root ..

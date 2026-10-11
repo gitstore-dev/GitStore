@@ -39,7 +39,7 @@ type webSocketAuthProvider struct {
 	expiresAt time.Time
 }
 
-func (p *webSocketAuthProvider) Name() string { return "websocket-test" }
+func (p *webSocketAuthProvider) Name() string { return "serviceaccount-jwt" }
 
 func (p *webSocketAuthProvider) Capabilities() auth.Capability {
 	return auth.CapAuthenticate
@@ -64,7 +64,7 @@ func (p *webSocketAuthProvider) Authenticate(ctx context.Context, request auth.A
 
 func (p *webSocketAuthProvider) principal(expiresAt time.Time) *auth.Principal {
 	return &auth.Principal{
-		Subject:           datastore.ServiceAccountSubject(webSocketTestNamespace, webSocketTestName),
+		Subject:           datastore.ServiceAccountSubject(webSocketTestName),
 		AuthMethod:        "serviceaccount-jwt",
 		ServiceAccountUID: webSocketTestUID,
 		ExpiresAt:         expiresAt,
@@ -97,7 +97,6 @@ func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTe
 	now := time.Now().UTC()
 	require.NoError(t, store.CreateServiceAccount(context.Background(), &datastore.ServiceAccount{
 		UID:               webSocketTestUID,
-		Namespace:         webSocketTestNamespace,
 		Name:              webSocketTestName,
 		ResourceVersion:   "1",
 		CreationTimestamp: now,
@@ -223,6 +222,23 @@ func TestGraphQLWebSocketConnectionInitAuthenticates(t *testing.T) {
 			var closeErr *websocket.CloseError
 			require.ErrorAs(t, err, &closeErr)
 			assert.Equal(t, websocket.CloseNormalClosure, closeErr.Code)
+		})
+	}
+}
+
+func TestGraphQLWebSocketUpgradeRejectsInvalidBearerBeforeHandshake(t *testing.T) {
+	for _, token := range []string{"invalid", "expired"} {
+		t.Run(token, func(t *testing.T) {
+			env := newWebSocketTestEnvironment(t, time.Now().Add(time.Minute))
+			dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
+			conn, response, err := dialer.Dial("ws"+strings.TrimPrefix(env.server.URL, "http")+"/graphql", http.Header{"Authorization": []string{"Bearer " + token}})
+			if conn != nil {
+				_ = conn.Close()
+			}
+			require.Error(t, err)
+			require.NotNil(t, response)
+			defer response.Body.Close()
+			require.Equal(t, http.StatusUnauthorized, response.StatusCode)
 		})
 	}
 }
@@ -358,7 +374,7 @@ func TestGraphQLWebSocketConnectionClosesWhenServiceAccountDeleted(t *testing.T)
 	conn := env.dial(t)
 	require.Equal(t, "connection_ack", initWebSocket(t, conn, map[string]any{"Authorization": "Bearer valid"})["type"])
 
-	body := strings.NewReader(`{"query":"mutation { deleteServiceAccount(input: {apiVersion: \"v1\", kind: \"ServiceAccount\", metadata: {namespace: \"controllers\", name: \"controller\"}}) { serviceAccount { metadata { uid } } } }"}`)
+	body := strings.NewReader(`{"query":"mutation { deleteServiceAccount(input: {apiVersion: \"v1\", kind: \"ServiceAccount\", metadata: {name: \"controller\"}}) { serviceAccount { metadata { uid } } } }"}`)
 	request, err := http.NewRequest(http.MethodPost, env.server.URL+"/graphql", body)
 	require.NoError(t, err)
 	request.Header.Set("Authorization", "Bearer valid")

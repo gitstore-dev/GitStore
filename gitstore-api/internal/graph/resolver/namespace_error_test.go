@@ -152,7 +152,7 @@ func TestNamespaceCreateUpdateErrorsUseStableExtensions(t *testing.T) {
 
 	t.Run("duplicate create", func(t *testing.T) {
 		svc := newTestSvc(t, &mockGitWriter{})
-		input := createNamespaceInput("duplicate", model.NamespaceTierUser)
+		input := createNamespaceInput("duplicate", model.NamespaceTierOrganization)
 		_, err := svc.CreateNamespace(context.Background(), input, "alice")
 		require.NoError(t, err)
 		_, err = svc.CreateNamespace(context.Background(), input, "alice")
@@ -176,7 +176,7 @@ func TestNamespaceCreateUpdateErrorsUseStableExtensions(t *testing.T) {
 	t.Run("terminating target", func(t *testing.T) {
 		ctx := context.Background()
 		svc := newTestSvc(t, &mockGitWriter{})
-		created, err := svc.CreateNamespace(ctx, createNamespaceInput("terminating", model.NamespaceTierUser), "alice")
+		created, err := svc.CreateNamespace(ctx, createNamespaceInput("terminating", model.NamespaceTierOrganization), "alice")
 		require.NoError(t, err)
 		_, err = svc.DeleteNamespace(ctx, created)
 		require.NoError(t, err)

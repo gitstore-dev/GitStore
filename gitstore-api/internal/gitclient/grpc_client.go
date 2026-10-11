@@ -16,9 +16,12 @@ import (
 	"strings"
 
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	grpcprom "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 )
 
 // Client wraps the generated GitServiceClient with connection lifecycle management.
@@ -27,13 +30,20 @@ type Client struct {
 	conn         *grpc.ClientConn
 	Git          gitv1.GitServiceClient
 	RepositoryID string
+	Registry     *auth.ProviderRegistry
+	Store        interface {
+		GetRepository(context.Context, string) (*datastore.Repository, error)
+	}
 }
 
-// NewClientWithAddr dials the given address with an HMAC bearer token for inter-service auth.
+// NewClientWithAddr dials with signed, expiring, single-use inter-service requests.
 func NewClientWithAddr(addr, hmacSecret string) (*Client, error) {
+	if strings.TrimSpace(hmacSecret) == "" {
+		return nil, fmt.Errorf("git RPC signing key is required")
+	}
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithPerRPCCredentials(hmacCreds{token: hmacSecret}),
+		grpc.WithDisableRetry(),
 		grpc.WithUnaryInterceptor(grpcprom.UnaryClientInterceptor),
 		grpc.WithStreamInterceptor(grpcprom.StreamClientInterceptor),
 	}
@@ -43,7 +53,7 @@ func NewClientWithAddr(addr, hmacSecret string) (*Client, error) {
 	}
 	return &Client{
 		conn: conn,
-		Git:  gitv1.NewGitServiceClient(conn),
+		Git:  gitv1.NewGitServiceClient(signedConn{ClientConnInterface: conn, secret: hmacSecret}),
 	}, nil
 }
 
@@ -57,11 +67,11 @@ func (c *Client) Close() error {
 
 // InfoRefs returns the ref advertisement bytes and service for the given repository.
 func (c *Client) InfoRefs(ctx context.Context, repoID string, service gitv1.Service) ([]byte, gitv1.Service, error) {
-	action := "repository.read.any"
+	action := "repository.contents.read"
 	if service == gitv1.Service_SERVICE_GIT_RECEIVE_PACK {
-		action = "repository.write.any"
+		action = "repository.contents.write"
 	}
-	authorization, err := RequestAuthorization(ctx, action, repoID)
+	authorization, err := c.authorizeRequest(ctx, action, repoID)
 	if err != nil {
 		return nil, gitv1.Service_SERVICE_UNSPECIFIED, err
 	}
@@ -78,7 +88,7 @@ func (c *Client) InfoRefs(ctx context.Context, repoID string, service gitv1.Serv
 
 // UploadPack sends the want/have body and returns an io.Reader streaming pack response chunks.
 func (c *Client) UploadPack(ctx context.Context, repoID string, body []byte) (io.Reader, error) {
-	authorization, err := RequestAuthorization(ctx, "repository.read.any", repoID)
+	authorization, err := c.authorizeRequest(ctx, "repository.contents.read", repoID)
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +108,17 @@ func (c *Client) UploadPack(ctx context.Context, repoID string, body []byte) (io
 // (0000), then raw PACK data. This function parses those ref commands and sends them in the
 // first gRPC chunk alongside any initial pack bytes.
 func (c *Client) ReceivePack(ctx context.Context, repoID string, body io.Reader) ([]byte, error) {
+	authorization, err := c.authorizeRequest(ctx, auth.ActionRepositoryContentsWrite, repoID)
+	if err != nil {
+		return nil, err
+	}
+	// Copy the request snapshot; never mutate a context shared by other work.
+	previous := PushContextFromContext(ctx)
+	if previous == nil || previous.Authorization == nil {
+		return nil, fmt.Errorf("receive-pack requires approved request authorization")
+	}
+	pushCtx := proto.Clone(previous).(*gitv1.PushContext)
+	pushCtx.Authorization = authorization
 	stream, err := c.Git.ReceivePack(ctx)
 	if err != nil {
 		return nil, err
@@ -107,12 +128,6 @@ func (c *Client) ReceivePack(ctx context.Context, repoID string, body io.Reader)
 	refCmds, err := parsePktLineRefCommands(br)
 	if err != nil {
 		return nil, fmt.Errorf("parse ref commands: %w", err)
-	}
-
-	// Read PushContext from context — set by PushContextInserter middleware.
-	pushCtx := PushContextFromContext(ctx)
-	if pushCtx == nil || pushCtx.Authorization == nil {
-		return nil, fmt.Errorf("receive-pack requires approved request authorization")
 	}
 
 	const chunkSize = 64 * 1024

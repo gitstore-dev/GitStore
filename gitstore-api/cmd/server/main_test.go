@@ -244,7 +244,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.NotEmpty(t, loginResponse.Data.Login.Token.AccessToken)
 	assert.Equal(t, "Bearer", loginResponse.Data.Login.Token.TokenType)
 
-	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { metadata { name } } } }"}`))
+	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: ORGANIZATION } }) { namespace { metadata { name } } } }"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+loginResponse.Data.Login.Token.AccessToken)
 	w := httptest.NewRecorder()

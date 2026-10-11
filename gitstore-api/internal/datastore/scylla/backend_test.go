@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -174,6 +175,85 @@ func testScyllaConfig(t *testing.T) config.ScyllaConfig {
 func newTestStores(t *testing.T) (datastore.Datastore, datastore.Datastore) {
 	t.Helper()
 	return newTestStore(t), newTestStore(t)
+}
+
+func TestServiceAccountClusterConcurrentIdentityAndRepair(t *testing.T) {
+	first, second := newTestStores(t)
+	raw := newRawSession(t)
+	ctx := t.Context()
+	for _, sameUID := range []bool{false, true} {
+		name, uid := "sa-"+newID(), newID()
+		var wg sync.WaitGroup
+		results := make(chan error, 12)
+		for i := range 12 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				n, u := name, newID()
+				if sameUID {
+					n, u = "sa-"+newID(), uid
+				}
+				store := first
+				if i%2 != 0 {
+					store = second
+				}
+				results <- store.CreateServiceAccount(ctx, &datastore.ServiceAccount{UID: u, Name: n, ResourceVersion: "1", CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond)})
+			}()
+		}
+		wg.Wait()
+		close(results)
+		winners := 0
+		for err := range results {
+			if err == nil {
+				winners++
+			} else {
+				require.ErrorIs(t, err, datastore.ErrAlreadyExists)
+			}
+		}
+		require.Equal(t, 1, winners, "exactly one API may reserve a global name or UID")
+	}
+	name, uid := "interrupted-"+newID(), gocql.TimeUUID()
+	created := time.Now().UTC().Truncate(time.Millisecond)
+	require.NoError(t, raw.Query("INSERT INTO service_accounts_by_cluster_name (name,uid,creation_timestamp,resource_version,public_keys,enrollment_complete) VALUES (?,?,?,?,?,?)", name, uid, created, "1", "[]", false).Exec())
+	_, err := first.GetServiceAccountBySubject(ctx, name)
+	require.ErrorIs(t, err, datastore.ErrNotFound, "incomplete create must not authenticate")
+	repair, err := scylla.OpenProjectionRepairService(testScyllaConfig(t))
+	require.NoError(t, err)
+	defer repair.Close()
+	plan, err := repair.Audit(ctx)
+	require.NoError(t, err)
+	require.Len(t, plan.ServiceAccountEnrollments, 1)
+	_, err = repair.Apply(ctx, plan)
+	require.NoError(t, err)
+	account, err := second.GetServiceAccountByUID(ctx, uid.String())
+	require.NoError(t, err)
+	require.Equal(t, name, account.Name)
+	// An interrupted delete leaves projections behind, but neither can authenticate.
+	require.NoError(t, raw.Query("DELETE FROM service_accounts_by_cluster_name WHERE name=?", name).Exec())
+	_, err = second.GetServiceAccountByUID(ctx, uid.String())
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+	replacement := &datastore.ServiceAccount{UID: newID(), Name: name, ResourceVersion: "1", CreationTimestamp: created.Add(time.Second)}
+	require.NoError(t, first.CreateServiceAccount(ctx, replacement))
+	plan, err = repair.Audit(ctx)
+	require.NoError(t, err)
+	_, err = repair.Apply(ctx, plan)
+	require.NoError(t, err)
+	_, err = second.GetServiceAccountByUID(ctx, uid.String())
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+	got, err := second.GetServiceAccountByUID(ctx, replacement.UID)
+	require.NoError(t, err)
+	require.Equal(t, name, got.Name)
+	// Stale listing rows must not turn a nonempty collection into an empty page.
+	listed := &datastore.ServiceAccount{UID: newID(), Name: "listed-" + newID(), ResourceVersion: "1", CreationTimestamp: created.Add(2 * time.Hour)}
+	require.NoError(t, first.CreateServiceAccount(ctx, listed))
+	for i := range 4 {
+		ts := listed.CreationTimestamp.Add(time.Duration(i+1) * time.Second)
+		require.NoError(t, raw.Query("INSERT INTO service_accounts_by_cluster_bucket (bucket,creation_timestamp,uid,name) VALUES (?,?,?,?)", ts.Format("2006-01"), ts, gocql.TimeUUID(), "dangling").Exec())
+	}
+	page, err := second.ListServiceAccounts(ctx, datastore.PageParams{First: 1})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	require.Equal(t, listed.UID, page.Items[0].UID)
 }
 
 type sessionRevocationStore interface {
@@ -603,12 +683,13 @@ func TestScylla_UpdateProductVariant_UpdatesSKUIndex(t *testing.T) {
 	newSKU := "sku-new-" + newID()[:8]
 
 	v := newProductVariant(ns, name, oldSKU, "product-a")
+	v.ResourceVersion = "1"
 	require.NoError(t, store.CreateProductVariant(ctx, v))
 
 	v.SKU = newSKU
 	v.Generation = 2
 	v.ResourceVersion = "2"
-	require.NoError(t, store.UpdateProductVariant(ctx, v))
+	require.NoError(t, store.UpdateProductVariant(ctx, v, "1"))
 
 	_, err := store.GetProductVariantBySKU(ctx, ns, oldSKU)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
@@ -626,7 +707,9 @@ func TestScylla_UpdateProduct(t *testing.T) {
 	p := newProduct("test-ns", "upd-"+newID()[:8])
 	require.NoError(t, store.CreateProduct(ctx, p))
 	p.GitRef = "main"
-	require.NoError(t, store.UpdateProduct(ctx, p))
+	expected := p.ResourceVersion
+	datastore.AdvanceProductSystemVersion(p)
+	require.NoError(t, store.UpdateProduct(ctx, p, expected))
 
 	got, err := store.GetProduct(ctx, p.UID)
 	require.NoError(t, err)
@@ -637,7 +720,7 @@ func TestScylla_UpdateProduct_NotFound(t *testing.T) {
 	store := newTestStore(t)
 	p := newProduct("test-ns", "ghost-"+newID()[:8])
 	p.UID = newID() // does not exist
-	err := store.UpdateProduct(context.Background(), p)
+	err := store.UpdateProduct(context.Background(), p, "1")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
@@ -734,7 +817,9 @@ func TestScylla_UpdateCategoryTaxonomy(t *testing.T) {
 	c := newCategoryTaxonomy("test-ns", "upd-cat-"+newID()[:8])
 	require.NoError(t, store.CreateCategoryTaxonomy(ctx, c))
 	c.AncestorPath = "electronics"
-	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, c))
+	expected := c.ResourceVersion
+	datastore.AdvanceCategoryTaxonomySystemVersion(c)
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, c, expected))
 
 	got, err := store.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name)
 	require.NoError(t, err)
@@ -744,7 +829,7 @@ func TestScylla_UpdateCategoryTaxonomy(t *testing.T) {
 func TestScylla_UpdateCategoryTaxonomy_NotFound(t *testing.T) {
 	store := newTestStore(t)
 	c := newCategoryTaxonomy("test-ns", "ghost-cat-"+newID()[:8])
-	err := store.UpdateCategoryTaxonomy(context.Background(), c)
+	err := store.UpdateCategoryTaxonomy(context.Background(), c, "1")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
@@ -836,7 +921,9 @@ func TestScylla_UpdateCollection(t *testing.T) {
 	c.Body = "Before"
 	require.NoError(t, store.CreateCollection(ctx, c))
 	c.Body = "After"
-	require.NoError(t, store.UpdateCollection(ctx, c))
+	expected := c.ResourceVersion
+	datastore.AdvanceCollectionSystemVersion(c)
+	require.NoError(t, store.UpdateCollection(ctx, c, expected))
 
 	got, err := store.GetCollection(ctx, c.UID)
 	require.NoError(t, err)
@@ -845,7 +932,7 @@ func TestScylla_UpdateCollection(t *testing.T) {
 
 func TestScylla_UpdateCollection_NotFound(t *testing.T) {
 	store := newTestStore(t)
-	err := store.UpdateCollection(context.Background(), newCollection("test-ns", "ghost-col-"+newID()[:8]))
+	err := store.UpdateCollection(context.Background(), newCollection("test-ns", "ghost-col-"+newID()[:8]), "1")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
@@ -929,7 +1016,9 @@ func TestScylla_UpdateProduct_BatchFanOut(t *testing.T) {
 
 	p.GitRef = "main"
 	p.GitCommitSHA = "abc123"
-	require.NoError(t, store.UpdateProduct(ctx, p))
+	expected := p.ResourceVersion
+	datastore.AdvanceProductSystemVersion(p)
+	require.NoError(t, store.UpdateProduct(ctx, p, expected))
 
 	byUID, err := store.GetProduct(ctx, p.UID)
 	require.NoError(t, err)

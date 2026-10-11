@@ -5,10 +5,13 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
-	"slices"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ErrNotSupported is returned by providers for operations they do not implement.
@@ -22,6 +25,97 @@ var ErrTokenRevoked = errors.New("auth: token has been revoked")
 
 // ErrInvalidToken is returned when a refresh token cannot be parsed or validated.
 var ErrInvalidToken = errors.New("auth: invalid token")
+
+const MaxPrincipalGroups = 256
+
+// VisibilityFromSpec exposes only an existing, typed visibility fact. Missing,
+// null, malformed or wrong-type values remain absent, never implicitly public.
+// Repository manifests already permit upper/lower-case enum spellings.
+func VisibilityFromSpec(spec json.RawMessage) (string, bool) {
+	var fields struct {
+		Visibility *string `json:"visibility"`
+	}
+	if json.Unmarshal(spec, &fields) != nil || fields.Visibility == nil {
+		return "", false
+	}
+	return strings.ToLower(*fields.Visibility), true
+}
+
+// ValidTrustedPrincipal checks a sanitized identity snapshot after its transport
+// has been authenticated. It does not authenticate user-supplied claims.
+func ValidTrustedPrincipal(p *Principal) bool {
+	text := func(s string) bool {
+		return s != "" && len(s) <= 256 && utf8.ValidString(s) && strings.IndexFunc(s, unicode.IsControl) < 0
+	}
+	if p == nil || !text(p.Subject) || !text(p.AuthMethod) || len(p.Groups) > MaxPrincipalGroups {
+		return false
+	}
+	for _, group := range p.Groups {
+		if !text(group) {
+			return false
+		}
+	}
+	if p.Subject == "system:api" {
+		return p.AuthMethod == "internal" && p.ServiceAccountUID == ""
+	}
+	if name, ok := strings.CutPrefix(p.Subject, "system:serviceaccount:"); ok {
+		return text(name) && !strings.ContainsAny(name, ":/") && text(p.ServiceAccountUID) && (p.AuthMethod == "serviceaccount-jwt" || p.AuthMethod == "serviceaccount-assertion")
+	}
+	if p.Subject == "anon" {
+		return p.AuthMethod == "none" && p.ServiceAccountUID == ""
+	}
+	return ValidExternalUsername(p.Subject) && p.ServiceAccountUID == "" && p.AuthMethod != "internal" && p.AuthMethod != "none" && !strings.HasPrefix(p.AuthMethod, "serviceaccount-")
+}
+
+// ValidExternalUsername excludes identities that only trusted in-process work
+// or verified ServiceAccount providers may construct.
+func ValidExternalUsername(subject string) bool {
+	return subject != "" && subject != "anon" && len(subject) <= 256 && utf8.ValidString(subject) &&
+		!strings.HasPrefix(subject, "system:") && !strings.HasPrefix(subject, "serviceaccount:")
+}
+
+// normalizeAuthenticatedPrincipal runs once at the successful AuthN boundary.
+// It does not interpret token claims as group membership or authorization.
+func normalizeAuthenticatedPrincipal(provider string, principal *Principal) (*Principal, bool) {
+	if principal == nil || len(principal.Groups) > MaxPrincipalGroups {
+		return nil, false
+	}
+	normalized := *principal
+	normalized.Groups = nil
+	anonymous := provider == "anonymous" && principal.Subject == "anon" && principal.AuthMethod == "none" && principal.ServiceAccountUID == ""
+	saProvider := provider == "serviceaccount-jwt" || provider == "serviceaccount-assertion"
+	if anonymous {
+		normalized.Groups = []string{"system:unauthenticated"}
+		return &normalized, true
+	}
+	if saProvider {
+		name, ok := strings.CutPrefix(principal.Subject, "system:serviceaccount:")
+		if !ok || name == "" || strings.ContainsAny(name, ":/") || len(principal.Subject) > 256 || !utf8.ValidString(name) || principal.ServiceAccountUID == "" || principal.AuthMethod != provider {
+			return nil, false
+		}
+	} else if !ValidExternalUsername(principal.Subject) || principal.ServiceAccountUID != "" || principal.AuthMethod == "none" || principal.AuthMethod == "internal" || strings.HasPrefix(principal.AuthMethod, "serviceaccount-") {
+		return nil, false
+	}
+	seen := make(map[string]bool, len(principal.Groups)+2)
+	for _, group := range principal.Groups {
+		if group == "" || len(group) > 256 || !utf8.ValidString(group) {
+			return nil, false
+		}
+		if group == "system:authenticated" || group == "system:unauthenticated" || group == "system:serviceaccounts" || seen[group] {
+			continue
+		}
+		seen[group] = true
+		normalized.Groups = append(normalized.Groups, group)
+	}
+	normalized.Groups = append(normalized.Groups, "system:authenticated")
+	if saProvider {
+		normalized.Groups = append(normalized.Groups, "system:serviceaccounts")
+	}
+	if !ValidTrustedPrincipal(&normalized) {
+		return nil, false
+	}
+	return &normalized, true
+}
 
 // Outcome is the result of an auth decision.
 type Outcome uint8
@@ -60,7 +154,6 @@ type Principal struct {
 	Tenant     string         `json:"tenant,omitempty"`
 	Namespace  string         `json:"namespace,omitempty"`
 	Groups     []string       `json:"groups,omitempty"`
-	Roles      []string       `json:"roles,omitempty"`
 	Scopes     []string       `json:"scopes,omitempty"`
 	Claims     map[string]any `json:"claims,omitempty"`
 	AuthMethod string         `json:"auth_method"`
@@ -69,14 +162,6 @@ type Principal struct {
 	// Empty for Basic Auth sessions and anonymous principals.
 	TokenID           string `json:"jti,omitempty"`
 	ServiceAccountUID string `json:"service_account_uid,omitempty"`
-}
-
-// IsAdmin reports whether AuthZ assigned the built-in "admin" role.
-// Authentication providers establish identity only; they must not grant roles.
-// In particular, static-users principals are role-free until rbac-local (or
-// another AuthZ provider) resolves their bindings.
-func (p *Principal) IsAdmin() bool {
-	return slices.Contains(p.Roles, "admin")
 }
 
 // Anonymous returns a Principal with no identity.
@@ -128,7 +213,7 @@ type ResourceContext struct {
 // AuthZProvider makes access-control decisions for a given (principal, action, resource).
 type AuthZProvider interface {
 	Name() string
-	// Authorize returns Allow or Deny. action follows dot-notation: "namespace.delete.any".
+	// Authorize returns Allow or Deny for a registered action, e.g. "namespace.delete".
 	Authorize(ctx context.Context, p *Principal, action string, res ResourceContext) (Decision, error)
 }
 

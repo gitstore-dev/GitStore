@@ -64,7 +64,7 @@ func TestDeleteNamespaceBlockerMatrix(t *testing.T) {
 	t.Run("non-empty only", func(t *testing.T) {
 		svc := newTestSvc(t, &mockGitWriter{})
 		ctx := context.Background()
-		ns, err := svc.CreateNamespace(ctx, createNamespaceInput("occupied", model.NamespaceTierUser), "alice")
+		ns, err := svc.CreateNamespace(ctx, createNamespaceInput("occupied", model.NamespaceTierOrganization), "alice")
 		require.NoError(t, err)
 		_, err = svc.CreateRepository(ctx, ns.ID, "catalog", "main", "default", "alice")
 		require.NoError(t, err)
@@ -91,7 +91,7 @@ func TestDeleteNamespaceBlockerMatrix(t *testing.T) {
 func TestDeleteNamespaceOutcomeMatrix(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	ctx := context.Background()
-	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("delete-outcomes", model.NamespaceTierUser), "alice")
+	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("delete-outcomes", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 
 	outcome, err := svc.DeleteNamespace(ctx, ns)
@@ -117,7 +117,7 @@ func TestDeleteNamespaceConcurrentWinnerReturnsAlreadyTerminating(t *testing.T) 
 	writer := &mockGitWriter{}
 	seed := newTestSvc(t, writer)
 	base := seed.Store()
-	namespace, err := seed.CreateNamespace(ctx, createNamespaceInput("concurrent-delete", model.NamespaceTierUser), "alice")
+	namespace, err := seed.CreateNamespace(ctx, createNamespaceInput("concurrent-delete", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 	store := &concurrentNamespaceDeleteStore{Datastore: base}
 	svc, err := resolver.NewService(resolver.ServiceDeps{
@@ -140,7 +140,7 @@ func TestDeleteNamespaceConcurrentWinnerReturnsAlreadyTerminating(t *testing.T) 
 func TestDeleteNamespaceRecreatedIdentifierProtection(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	ctx := context.Background()
-	input := createNamespaceInput("replacement-safe", model.NamespaceTierUser)
+	input := createNamespaceInput("replacement-safe", model.NamespaceTierOrganization)
 	authorized, err := svc.CreateNamespace(ctx, input, "alice")
 	require.NoError(t, err)
 	require.NoError(t, svc.Store().DeleteNamespace(ctx, authorized.ID))
@@ -161,7 +161,7 @@ func TestDeleteNamespaceRecordsBoundedOutcomesBlockersAndLogs(t *testing.T) {
 	writer := &mockGitWriter{}
 	seed := newTestSvc(t, writer)
 	store := seed.Store()
-	eligible, err := seed.CreateNamespace(ctx, createNamespaceInput("observable-delete", model.NamespaceTierUser), "alice")
+	eligible, err := seed.CreateNamespace(ctx, createNamespaceInput("observable-delete", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 	registry := prometheus.NewRegistry()
 	metrics := namespaceadmission.NewMetrics(registry)

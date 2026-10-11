@@ -105,13 +105,13 @@ Key environment variables:
 
 ### Git Engine — gitoxide (gix)
 
-`gitstore-git-service` uses [gitoxide (`gix 0.83.0`)](https://github.com/GitoxideLabs/gitoxide), a pure-Rust Git implementation, as its only Git library. The `git2` / libgit2 C binding was removed entirely in feature `007-migrate-gitoxide`.
+`gitstore-git-service` uses [gitoxide (`gix 0.89.0`)](https://github.com/GitoxideLabs/gitoxide), a pure-Rust Git implementation, as its only Git library. The `git2` / libgit2 C binding was removed entirely in feature `007-migrate-gitoxide`.
 
 Key consequences of this change:
 
 - **No native library dependency**: the service binary links only Rust crates; no libgit2 or OpenSSL linkage.
 - **Tree-editor writes**: `commit_file` and `delete_file` use gix's built-in tree-editor API to mutate bare repository trees directly, eliminating the previous clone-to-tmpdir pattern.
-- **MSRV 1.82**: required by `gix 0.83.0`; the Rust toolchain must be ≥ 1.82.
+- **MSRV 1.88**: required by `gix 0.89.0`; the Rust toolchain must be ≥ 1.88. Tree editing remains available without the removed `tree-editor` Cargo feature.
 
 ### Multi-Repository Hosting
 

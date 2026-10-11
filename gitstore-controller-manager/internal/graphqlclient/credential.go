@@ -66,7 +66,6 @@ type ServiceAccountSource struct {
 	// Configuration
 	endpoint            string
 	httpClient          *http.Client
-	namespace           string
 	name                string
 	signer              TokenSigner
 	assertionAudience   string
@@ -96,7 +95,7 @@ type TokenSigner interface {
 	// SignAssertion creates and signs a client assertion JWT for the given
 	// namespace/name service account, to be exchanged for an access token
 	// with the specified TTL and audience.
-	SignAssertion(ctx context.Context, namespace, name string, ttl time.Duration, audience string) (string, error)
+	SignAssertion(ctx context.Context, name string, ttl time.Duration, audience string) (string, error)
 }
 
 // NewServiceAccountSource returns a CredentialSource that automatically
@@ -104,7 +103,6 @@ type TokenSigner interface {
 // The signer is responsible for loading the service account's private key.
 func NewServiceAccountSource(
 	endpoint string,
-	namespace string,
 	name string,
 	signer TokenSigner,
 	assertionAudience string,
@@ -115,7 +113,6 @@ func NewServiceAccountSource(
 	return &ServiceAccountSource{
 		endpoint:            endpoint,
 		httpClient:          &http.Client{Timeout: exchangeHTTPTimeout},
-		namespace:           namespace,
 		name:                name,
 		signer:              signer,
 		assertionAudience:   assertionAudience,
@@ -222,6 +219,18 @@ func (s *ServiceAccountSource) tokenValid(token string) bool {
 	return token == s.token && s.hasValidToken(time.Now())
 }
 
+// Invalidate evicts only the rejected generation. In-flight requests carrying
+// an older token cannot evict a successful renewal; exchanges remain coalesced
+// by Current and existing outage backoff is never reset by a rejection.
+func (s *ServiceAccountSource) Invalidate(rejectedToken string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rejectedToken != "" && s.token == rejectedToken {
+		s.token = ""
+		s.expiresAt = time.Time{}
+	}
+}
+
 // issueToken signs an assertion and exchanges it for an access token.
 func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Time, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.exchangeTimeout)
@@ -235,7 +244,7 @@ func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Tim
 	if s.accessTokenAudience == "" {
 		return "", time.Time{}, fmt.Errorf("service account access-token audience is empty")
 	}
-	assertion, err := s.signer.SignAssertion(ctx, s.namespace, s.name, assertionSigningLifetime, s.assertionAudience)
+	assertion, err := s.signer.SignAssertion(ctx, s.name, assertionSigningLifetime, s.assertionAudience)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("sign assertion: %w", err)
 	}
@@ -258,8 +267,7 @@ func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Tim
 			"apiVersion": "authentication.gitstore.dev/v1beta1",
 			"kind":       "TokenRequest",
 			"metadata": map[string]any{
-				"namespace": s.namespace,
-				"name":      s.name,
+				"name": s.name,
 			},
 			"spec": map[string]any{
 				"audiences":         []string{s.accessTokenAudience},

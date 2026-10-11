@@ -13,13 +13,44 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
 )
 
+func TestRemovedServiceAccountNamespaceSettingIsRejected(t *testing.T) {
+	for _, source := range []string{"toml", "env"} {
+		t.Run(source, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			contents := ""
+			if source == "toml" {
+				contents = "[controller.serviceaccount]\nnamespace = 'legacy'\n"
+			} else {
+				t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE", "legacy")
+			}
+			if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.LoadFrom(path)
+			if err == nil || !strings.Contains(err.Error(), "cluster-scoped") {
+				t.Fatalf("expected actionable namespace removal error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestShippedComposeConfigUsesClusterIdentity(t *testing.T) {
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "enrolled-by-compose")
+	cfg, err := config.LoadFrom("../../../config/config.toml")
+	if err != nil {
+		t.Fatalf("shipped Compose configuration must load: %v", err)
+	}
+	if cfg.Controller.ServiceAccount.Name != "gitstore-controller-manager" {
+		t.Fatal("unexpected controller identity")
+	}
+}
+
 func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "shared.toml")
 	content := `[controller]
 port = 6111
 api_uri = "http://api:4000/graphql"
 [controller.serviceaccount]
-namespace = "controllers"
 name = "gitstore-controller-manager"
 uid = "sa-uid-1"
 key_ref = { kind = "SecretRef", name = "controller-manager" }
@@ -65,7 +96,6 @@ func TestLoadFromFiles_OverlayMergesOnTopOfBase(t *testing.T) {
 port = 5001
 api_uri = "http://api:4000/graphql"
 [controller.serviceaccount]
-namespace = "controllers"
 name = "gitstore-controller-manager"
 uid = "sa-uid-1"
 key_ref = { kind = "SecretRef", name = "controller-manager" }
@@ -118,7 +148,6 @@ func TestLoadFromFiles_EmptyFails(t *testing.T) {
 // setenv sets environment variables for a test and clears them on cleanup.
 func setenv(t *testing.T, pairs ...string) {
 	t.Helper()
-	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE", "controllers")
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME", "gitstore-controller-manager")
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "sa-uid-1")
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND", "SecretRef")
@@ -389,8 +418,8 @@ func TestLoad_ServiceAccountCredentialModeRequiresCompleteIdentity(t *testing.T)
 	if err == nil {
 		t.Fatal("Load() error = nil")
 	}
-	if !strings.Contains(err.Error(), "controller.serviceaccount.namespace") {
-		t.Errorf("Load() error = %q, want missing namespace", err)
+	if !strings.Contains(err.Error(), "controller.serviceaccount.uid") {
+		t.Errorf("Load() error = %q, want missing UID", err)
 	}
 }
 

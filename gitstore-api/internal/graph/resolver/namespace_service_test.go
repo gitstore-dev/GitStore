@@ -27,11 +27,11 @@ import (
 
 func TestCreateNamespace_userTier_success(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	input := createNamespaceInput("acme-corp", model.NamespaceTierUser)
+	input := createNamespaceInput("alice", model.NamespaceTierUser)
 	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 	require.NotNil(t, ns)
-	assert.Equal(t, "acme-corp", ns.Name)
+	assert.Equal(t, "alice", ns.Name)
 	assert.Equal(t, "alice", ns.CreationActor)
 	assert.NotEmpty(t, ns.ID)
 }
@@ -47,7 +47,7 @@ func TestCreateNamespace_orgTier_success(t *testing.T) {
 
 func TestCreateNamespace_duplicateIdentifier_conflict(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	input := createNamespaceInput("duplicate-ns", model.NamespaceTierUser)
+	input := createNamespaceInput("duplicate-ns", model.NamespaceTierOrganization)
 	_, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 
@@ -59,14 +59,14 @@ func TestCreateNamespace_duplicateIdentifier_conflict(t *testing.T) {
 
 func TestCreateNamespace_invalidIdentifier_spaces(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	input := createNamespaceInput("invalid identifier", model.NamespaceTierUser)
+	input := createNamespaceInput("invalid identifier", model.NamespaceTierOrganization)
 	_, err := svc.CreateNamespace(context.Background(), input, "alice")
 	assert.Error(t, err)
 }
 
 func TestCreateNamespace_uppercaseIdentifier_normalizedToLowercase(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	input := createNamespaceInput("InvalidNS", model.NamespaceTierUser)
+	input := createNamespaceInput("InvalidNS", model.NamespaceTierOrganization)
 	// uppercase is folded to lowercase before validation; "invalidns" is a valid identifier
 	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
@@ -75,14 +75,14 @@ func TestCreateNamespace_uppercaseIdentifier_normalizedToLowercase(t *testing.T)
 
 func TestCreateNamespace_invalidIdentifier_leadingHyphen(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	input := createNamespaceInput("-leading-hyphen", model.NamespaceTierUser)
+	input := createNamespaceInput("-leading-hyphen", model.NamespaceTierOrganization)
 	_, err := svc.CreateNamespace(context.Background(), input, "alice")
 	assert.Error(t, err)
 }
 
 func TestCreateNamespace_reservedIdentifier_admin(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	input := createNamespaceInput("admin", model.NamespaceTierUser)
+	input := createNamespaceInput("admin", model.NamespaceTierOrganization)
 	_, err := svc.CreateNamespace(context.Background(), input, "alice")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "reserved")
@@ -102,7 +102,7 @@ func TestCreateNamespace_enterpriseTier_rejected(t *testing.T) {
 func TestCreateNamespace_commitsManifestToBootstrapRepository(t *testing.T) {
 	writer := &mockGitWriter{}
 	svc := newTestSvc(t, writer)
-	input := createNamespaceInput("committed-namespace", model.NamespaceTierUser)
+	input := createNamespaceInput("committed-namespace", model.NamespaceTierOrganization)
 	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 	require.NotNil(t, ns)
@@ -115,7 +115,7 @@ func TestCreateNamespace_commitsManifestToBootstrapRepository(t *testing.T) {
 func TestCreateNamespace_bootstrapNameRejected(t *testing.T) {
 	writer := &mockGitWriter{}
 	svc := newTestSvc(t, writer)
-	_, err := svc.CreateNamespace(context.Background(), createNamespaceInput("default", model.NamespaceTierUser), "alice")
+	_, err := svc.CreateNamespace(context.Background(), createNamespaceInput("default", model.NamespaceTierOrganization), "alice")
 	require.ErrorContains(t, err, "system-managed")
 	assert.Empty(t, writer.commitCalls)
 }
@@ -123,7 +123,7 @@ func TestCreateNamespace_bootstrapNameRejected(t *testing.T) {
 func TestCreateNamespace_commitFailureDoesNotCreateDatastoreRow(t *testing.T) {
 	writer := &mockGitWriter{commitErr: errors.New("commit failed")}
 	svc := newTestSvc(t, writer)
-	_, err := svc.CreateNamespace(context.Background(), createNamespaceInput("commit-failure", model.NamespaceTierUser), "alice")
+	_, err := svc.CreateNamespace(context.Background(), createNamespaceInput("commit-failure", model.NamespaceTierOrganization), "alice")
 	require.ErrorContains(t, err, "failed to commit")
 	_, err = svc.GetNamespaceByName(context.Background(), "commit-failure")
 	require.Error(t, err)
@@ -133,7 +133,7 @@ func TestCreateNamespace_setsAdmissionStatusForCurrentGeneration(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	ns, err := svc.CreateNamespace(
 		context.Background(),
-		createNamespaceInput("admission-status", model.NamespaceTierUser),
+		createNamespaceInput("admission-status", model.NamespaceTierOrganization),
 		"alice",
 	)
 	require.NoError(t, err)
@@ -151,7 +151,7 @@ func TestCreateNamespace_setsAdmissionStatusForCurrentGeneration(t *testing.T) {
 func TestUpdateNamespace_advancesGenerationAndAdmissionRevision(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	ctx := context.Background()
-	created, err := svc.CreateNamespace(ctx, createNamespaceInput("status-update", model.NamespaceTierUser), "alice")
+	created, err := svc.CreateNamespace(ctx, createNamespaceInput("status-update", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 
 	input := updateNamespaceInput(created.Name, model.NamespaceTierOrganization)
@@ -174,7 +174,7 @@ func TestUpdateNamespacePreservesCurrentGitMarkdownBody(t *testing.T) {
 	ctx := context.Background()
 	writer := &mockGitWriter{}
 	svc := newTestSvc(t, writer)
-	created, err := svc.CreateNamespace(ctx, createNamespaceInput("preserved-body", model.NamespaceTierUser), "alice")
+	created, err := svc.CreateNamespace(ctx, createNamespaceInput("preserved-body", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 	require.Len(t, writer.commitCalls, 1)
 
@@ -200,7 +200,7 @@ func TestUpdateNamespaceAllowsMissingMainBranchManifest(t *testing.T) {
 	ctx := context.Background()
 	writer := &mockGitWriter{}
 	svc := newTestSvc(t, writer)
-	created, err := svc.CreateNamespace(ctx, createNamespaceInput("non-main-authored", model.NamespaceTierUser), "alice")
+	created, err := svc.CreateNamespace(ctx, createNamespaceInput("non-main-authored", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 
 	writer.mu.Lock()
@@ -231,7 +231,7 @@ func TestNamespaceGraphQLPersistsCompleteAuthoredStateAndProvenance(t *testing.T
 	defaultBranch := "trunk"
 	maxPack := int64(4096)
 	maxFile := int64(1024)
-	input := createNamespaceInput("complete-authored", model.NamespaceTierUser)
+	input := createNamespaceInput("complete-authored", model.NamespaceTierOrganization)
 	input.Metadata.Labels = map[string]any{"team": "catalog"}
 	input.Metadata.Annotations = map[string]any{"owner": "alice"}
 	input.Spec.Title = &title
@@ -260,7 +260,7 @@ func TestNamespaceGraphQLPersistsCompleteAuthoredStateAndProvenance(t *testing.T
 	assert.Equal(t, maxPack, createdSpec.PushPolicyDefaults.MaxPackSizeBytes)
 	assert.Equal(t, maxFile, createdSpec.PushPolicyDefaults.MaxFileSizeBytes)
 
-	updatedInput := updateNamespaceInput(created.Name, model.NamespaceTierUser)
+	updatedInput := updateNamespaceInput(created.Name, model.NamespaceTierOrganization)
 	updatedInput.Metadata.Labels = map[string]any{"team": "platform"}
 	updatedInput.Metadata.Annotations = map[string]any{"owner": "bob"}
 	updatedInput.Spec.Title = &title
@@ -300,11 +300,11 @@ func TestNamespaceGraphQLSystemOnlyProvenanceAdvancesOnlyResourceVersion(t *test
 	writer := newCommitOrderGitWriter("deadbeef", createSHA, updateSHA)
 	svc := newTestSvc(t, &mockGitWriter{})
 	svc.SetGitWriter(writer)
-	input := createNamespaceInput("provenance-only", model.NamespaceTierUser)
+	input := createNamespaceInput("provenance-only", model.NamespaceTierOrganization)
 
 	created, err := svc.CreateNamespace(ctx, input, "alice")
 	require.NoError(t, err)
-	updated, err := svc.UpdateNamespace(ctx, updateNamespaceInput(created.Name, model.NamespaceTierUser), "alice")
+	updated, err := svc.UpdateNamespace(ctx, updateNamespaceInput(created.Name, model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 
 	assert.Equal(t, created.Generation, updated.Generation)
@@ -320,7 +320,7 @@ func TestListNamespaces_returnsAll(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 
 	for _, id := range []string{"ns-alpha", "ns-beta", "ns-gamma"} {
-		input := createNamespaceInput(id, model.NamespaceTierUser)
+		input := createNamespaceInput(id, model.NamespaceTierOrganization)
 		_, err := svc.CreateNamespace(context.Background(), input, "alice")
 		require.NoError(t, err)
 	}
@@ -334,7 +334,7 @@ func TestListNamespaces_returnsAll(t *testing.T) {
 
 func TestGetNamespaceByName_success(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	input := createNamespaceInput("lookup-me", model.NamespaceTierUser)
+	input := createNamespaceInput("lookup-me", model.NamespaceTierOrganization)
 	created, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 
@@ -353,7 +353,7 @@ func TestGetNamespaceByName_notFound(t *testing.T) {
 
 func TestDeleteNamespace_owner_success(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	input := createNamespaceInput("to-delete", model.NamespaceTierUser)
+	input := createNamespaceInput("to-delete", model.NamespaceTierOrganization)
 	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 
@@ -369,7 +369,7 @@ func TestDeleteNamespace_owner_success(t *testing.T) {
 
 func TestDeleteNamespace_admin_canDeleteAny(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	input := createNamespaceInput("owned-by-alice", model.NamespaceTierUser)
+	input := createNamespaceInput("owned-by-alice", model.NamespaceTierOrganization)
 	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 
@@ -380,7 +380,7 @@ func TestDeleteNamespace_admin_canDeleteAny(t *testing.T) {
 
 func TestDeleteNamespace_withoutAuthorizationCheck_serviceAllowsDelete(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	input := createNamespaceInput("alices-ns", model.NamespaceTierUser)
+	input := createNamespaceInput("alices-ns", model.NamespaceTierOrganization)
 	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 
@@ -397,7 +397,7 @@ func TestDeleteNamespace_unknownIdentifier_notFound(t *testing.T) {
 func TestDeleteNamespace_withRepository_rejected(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	ctx := context.Background()
-	input := createNamespaceInput("ns-with-repo", model.NamespaceTierUser)
+	input := createNamespaceInput("ns-with-repo", model.NamespaceTierOrganization)
 	ns, err := svc.CreateNamespace(ctx, input, "alice")
 	require.NoError(t, err)
 
@@ -420,7 +420,7 @@ func TestDeleteNamespace_afterRepositoriesRemoved_succeeds(t *testing.T) {
 	writer := &mockGitWriter{}
 	svc := newTestSvc(t, writer)
 	ctx := context.Background()
-	input := createNamespaceInput("ns-repo-removed", model.NamespaceTierUser)
+	input := createNamespaceInput("ns-repo-removed", model.NamespaceTierOrganization)
 	ns, err := svc.CreateNamespace(ctx, input, "alice")
 	require.NoError(t, err)
 
@@ -444,7 +444,7 @@ func TestDeleteNamespace_afterRepositoriesRemoved_succeeds(t *testing.T) {
 func TestDeleteNamespace_redundantDeleteDoesNotAdvanceVersion(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	ctx := context.Background()
-	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("redundant-delete", model.NamespaceTierUser), "alice")
+	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("redundant-delete", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 
 	_, err = svc.DeleteNamespace(ctx, ns)
@@ -472,7 +472,7 @@ func TestDeleteNamespace_bootstrapRejected(t *testing.T) {
 func TestCompleteNamespaceDeletion_removesTerminatingNamespace(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	ctx := context.Background()
-	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("complete-delete", model.NamespaceTierUser), "alice")
+	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("complete-delete", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 	_, err = svc.DeleteNamespace(ctx, ns)
 	require.NoError(t, err)
@@ -490,7 +490,7 @@ func TestCompleteNamespaceDeletion_removesTerminatingNamespace(t *testing.T) {
 func TestCompleteNamespaceDeletion_staleVersionConflicts(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	ctx := context.Background()
-	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("stale-complete", model.NamespaceTierUser), "alice")
+	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("stale-complete", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 	_, err = svc.DeleteNamespace(ctx, ns)
 	require.NoError(t, err)
@@ -504,7 +504,7 @@ func TestCompleteNamespaceDeletion_staleVersionConflicts(t *testing.T) {
 func TestCreateRepository_terminatingNamespaceRejected(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	ctx := context.Background()
-	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("repo-race-delete", model.NamespaceTierUser), "alice")
+	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("repo-race-delete", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 	_, err = svc.DeleteNamespace(ctx, ns)
 	require.NoError(t, err)
@@ -557,7 +557,7 @@ func TestNamespaceReplicaRepositoryCreateCannotCommitAcrossDeletionMark(t *testi
 	ctx := context.Background()
 	writer := &mockGitWriter{}
 	seed := newTestSvc(t, writer)
-	namespace, err := seed.CreateNamespace(ctx, createNamespaceInput("delete-create-race", model.NamespaceTierUser), "alice")
+	namespace, err := seed.CreateNamespace(ctx, createNamespaceInput("delete-create-race", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 
 	store := &namespaceDeleteCreateRaceStore{
@@ -610,7 +610,7 @@ func TestNamespaceReplicaRepositoryCreateCannotCommitAcrossDeletionMark(t *testi
 
 func TestDeleteNamespace_recreatedIdentifierDoesNotDeleteReplacement(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	input := createNamespaceInput("auth-test-ns", model.NamespaceTierUser)
+	input := createNamespaceInput("auth-test-ns", model.NamespaceTierOrganization)
 	authorized, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 	require.NoError(t, svc.Store().DeleteNamespace(context.Background(), authorized.ID))

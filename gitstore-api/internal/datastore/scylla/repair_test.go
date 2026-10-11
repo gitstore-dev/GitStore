@@ -53,27 +53,29 @@ func TestRepositoryCatalogProjectionIsIncludedInRepair(t *testing.T) {
 func TestProjectionTableKinds(t *testing.T) {
 	t.Parallel()
 	tests := map[string]string{
-		"files_by_name":                    "File",
-		"files_by_uid":                     "File",
-		"namespaces_by_name":               "Namespace",
-		"namespaces_by_bucket":             "Namespace",
-		"repositories_by_namespace":        "Repository",
-		"repositories_by_bucket":           "Repository",
-		"namespace_mappings":               "Repository",
-		"namespace_mappings_by_repository": "Repository",
-		"products_by_name":                 "Product",
-		"products_by_uid":                  "Product",
-		"category_products_by_category":    "Product",
-		"category_products_by_product":     "Product",
-		"category_taxonomies_by_name":      "CategoryTaxonomy",
-		"category_taxonomies_by_uid":       "CategoryTaxonomy",
-		"category_ancestor_index":          "CategoryTaxonomy",
-		"collections_by_name":              "Collection",
-		"collections_by_uid":               "Collection",
-		"product_variants_by_name":         "ProductVariant",
-		"product_variants_by_uid":          "ProductVariant",
-		"product_variants_by_sku":          "ProductVariant",
-		"product_variants_by_product_ref":  "ProductVariant",
+		"service_accounts_by_cluster_uid":    "ServiceAccount",
+		"service_accounts_by_cluster_bucket": "ServiceAccount",
+		"files_by_name":                      "File",
+		"files_by_uid":                       "File",
+		"namespaces_by_name":                 "Namespace",
+		"namespaces_by_bucket":               "Namespace",
+		"repositories_by_namespace":          "Repository",
+		"repositories_by_bucket":             "Repository",
+		"namespace_mappings":                 "Repository",
+		"namespace_mappings_by_repository":   "Repository",
+		"products_by_name":                   "Product",
+		"products_by_uid":                    "Product",
+		"category_products_by_category":      "Product",
+		"category_products_by_product":       "Product",
+		"category_taxonomies_by_name":        "CategoryTaxonomy",
+		"category_taxonomies_by_uid":         "CategoryTaxonomy",
+		"category_ancestor_index":            "CategoryTaxonomy",
+		"collections_by_name":                "Collection",
+		"collections_by_uid":                 "Collection",
+		"product_variants_by_name":           "ProductVariant",
+		"product_variants_by_uid":            "ProductVariant",
+		"product_variants_by_sku":            "ProductVariant",
+		"product_variants_by_product_ref":    "ProductVariant",
 	}
 	if len(tests) != len(projectionTableKinds) {
 		t.Fatalf("projection table test coverage = %d tables, registry = %d", len(tests), len(projectionTableKinds))
@@ -96,6 +98,38 @@ func TestProjectionTableKinds(t *testing.T) {
 	}
 	if knownProjectionTable(unknown) {
 		t.Errorf("knownProjectionTable(%q) = true, want false", unknown)
+	}
+}
+
+func TestServiceAccountRepairUsesGlobalAuthority(t *testing.T) {
+	account := AuthoritativeResource{Kind: "ServiceAccount", UID: "11111111-1111-1111-1111-111111111111", Name: "controller", ResourceVersion: "1", CreationTimestamp: time.Unix(100, 0).UTC()}
+	plan, err := BuildRepairPlan(ProjectionSnapshot{Authoritative: []AuthoritativeResource{account}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 2 {
+		t.Fatalf("missing reservation and listing repairs: %+v", plan)
+	}
+	for _, action := range plan.Actions {
+		if action.UID != account.UID || action.After.Name != account.Name || action.ExpectedResourceVersion != "1" {
+			t.Fatalf("repair lost identity guard: %+v", action)
+		}
+	}
+	if err := ValidateRepairPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	projections := expectedProjections(account)
+	plan, err = BuildRepairPlan(ProjectionSnapshot{Projections: projections})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 2 {
+		t.Fatalf("interrupted deletion not repaired: %+v", plan)
+	}
+	for _, action := range plan.Actions {
+		if !action.RequireAbsentResource || action.Type != RepairDelete {
+			t.Fatalf("unguarded deletion: %+v", action)
+		}
 	}
 }
 

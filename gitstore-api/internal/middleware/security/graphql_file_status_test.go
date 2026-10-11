@@ -38,7 +38,7 @@ func TestGraphQLFieldAuthorizerUpdateResourceStatusFileUsesFileStatusWriteAction
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-users", Roles: []string{"controller"}})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "updateResourceStatus"}},
@@ -60,7 +60,7 @@ func TestGraphQLFieldAuthorizerUpdateResourceStatusFileUsesFileStatusWriteAction
 	require.NoError(t, err)
 	assert.True(t, called)
 	assert.Equal(t, "file.status.write", authz.Action)
-	assert.Equal(t, "File", authz.Resource.Kind)
+	assert.Equal(t, "file", authz.Resource.Kind)
 	assert.Equal(t, "hero", authz.Resource.Name)
 }
 
@@ -124,7 +124,7 @@ func TestGraphQLFieldAuthorizerRejectsUnauthorizedFileWatch(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, called)
 	assert.Equal(t, "file.watch", authz.Action)
-	assert.Equal(t, "File", authz.Resource.Kind)
+	assert.Equal(t, "file", authz.Resource.Kind)
 	assert.Equal(t, "acme-store", authz.Resource.Attrs["namespace"])
 	var gqlErr *gqlerror.Error
 	require.True(t, errors.As(err, &gqlErr))
@@ -172,7 +172,7 @@ func TestFileReadsAuthorizeLookupAndRelayNodesBeforeResolver(t *testing.T) {
 			require.Error(t, err)
 			require.False(t, called)
 			require.Equal(t, "file.read", authz.Action)
-			require.Equal(t, "File", authz.Resource.Kind)
+			require.Equal(t, "file", authz.Resource.Kind)
 			require.Equal(t, "private", authz.Resource.Attrs["namespace"])
 		})
 	}

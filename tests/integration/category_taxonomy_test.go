@@ -526,8 +526,8 @@ func TestCategoryAuthorization_TwoUserNamespaceIsolation(t *testing.T) {
 	h := newNamespaceContractHarness(t)
 	aliceToken := namespaceContractLogin(t, h, "alice", "admin123")
 	bobToken := namespaceContractLogin(t, h, "bob", "admin123")
-	aliceNS := uniqueName("cat-alice")
-	bobNS := uniqueName("cat-bob")
+	aliceNS := "alice"
+	bobNS := "bob"
 	createNamespaceAsUser(t, h, aliceToken, aliceNS)
 	createNamespaceAsUser(t, h, bobToken, bobNS)
 	t.Cleanup(func() {
@@ -597,8 +597,8 @@ func TestCategoryCrossNamespaceParentRef_NoDisclosureMutation(t *testing.T) {
 	h := newNamespaceContractHarness(t)
 	aliceToken := namespaceContractLogin(t, h, "alice", "admin123")
 	bobToken := namespaceContractLogin(t, h, "bob", "admin123")
-	aliceNS := uniqueName("cat-alice")
-	bobNS := uniqueName("cat-bob")
+	aliceNS := "alice"
+	bobNS := "bob"
 	missingNS := uniqueName("cat-missing")
 	createNamespaceAsUser(t, h, aliceToken, aliceNS)
 	createNamespaceAsUser(t, h, bobToken, bobNS)
@@ -642,7 +642,7 @@ func TestCategoryCrossNamespaceParentRef_NoDisclosurePush(t *testing.T) {
 	token := namespaceContractBootstrapToken(t, apiURL)
 	h := &namespaceContractHarness{t: t, apiURL: apiURL, token: token}
 	otherNS := uniqueName("cat-other")
-	createNamespaceAsUser(t, h, token, otherNS)
+	h.createNamespace(otherNS, "Other organization")
 	t.Cleanup(func() { h.cleanupNamespace(otherNS) })
 
 	known := uniqueName("known")

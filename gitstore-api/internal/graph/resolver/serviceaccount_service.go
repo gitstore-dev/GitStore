@@ -34,13 +34,15 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 		return nil, gqlerror.Errorf("authenticated principal is required")
 	}
 
-	namespace := input.Metadata.Namespace
+	if input.Metadata.Namespace != "" {
+		return nil, gqlerror.Errorf("ServiceAccount is cluster-scoped; omit metadata.namespace")
+	}
 	name := input.Metadata.Name
 
 	// Check if already exists
-	existing, err := r.store.GetServiceAccountBySubject(ctx, namespace, name)
+	existing, err := r.store.GetServiceAccountBySubject(ctx, name)
 	if err == nil && existing != nil {
-		return nil, gqlerror.Errorf("service account %s:%s already exists", namespace, name)
+		return nil, gqlerror.Errorf("service account %s already exists", name)
 	}
 	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
 		return nil, err
@@ -60,7 +62,6 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 	now := time.Now().UTC()
 	sa := &datastore.ServiceAccount{
 		UID:               uuid.New().String(),
-		Namespace:         namespace,
 		Name:              name,
 		Generation:        1,
 		ResourceVersion:   "1",
@@ -93,7 +94,6 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 func serviceAccountObjectMeta(sa *datastore.ServiceAccount) *model.ObjectMeta {
 	return &model.ObjectMeta{
 		Name:              sa.Name,
-		Namespace:         sa.Namespace,
 		UID:               sa.UID,
 		ResourceVersion:   sa.ResourceVersion,
 		Owner:             resourceOwnerFromSub(sa.CreationActor),
@@ -129,11 +129,13 @@ func (r *Resolver) RotateServiceAccountKey(ctx context.Context, input *model.Rot
 	if input == nil || input.Metadata == nil {
 		return nil, gqlerror.Errorf("metadata is required")
 	}
-	namespace := input.Metadata.Namespace
+	if input.Metadata.Namespace != "" {
+		return nil, gqlerror.Errorf("ServiceAccount is cluster-scoped; omit metadata.namespace")
+	}
 	name := input.Metadata.Name
 
 	// Get existing service account
-	sa, err := r.store.GetServiceAccountBySubject(ctx, namespace, name)
+	sa, err := r.store.GetServiceAccountBySubject(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -169,10 +171,12 @@ func (r *Resolver) DeleteServiceAccount(ctx context.Context, input *model.Delete
 	if input == nil || input.Metadata == nil {
 		return nil, gqlerror.Errorf("metadata is required")
 	}
-	namespace := input.Metadata.Namespace
+	if input.Metadata.Namespace != "" {
+		return nil, gqlerror.Errorf("ServiceAccount is cluster-scoped; omit metadata.namespace")
+	}
 	name := input.Metadata.Name
 
-	sa, err := r.store.GetServiceAccountBySubject(ctx, namespace, name)
+	sa, err := r.store.GetServiceAccountBySubject(ctx, name)
 	if errors.Is(err, datastore.ErrNotFound) {
 		// Idempotent: the account is already absent. The payload field is
 		// nullable, so return null rather than fabricating a zero-valued
@@ -218,18 +222,20 @@ func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.Is
 		return nil, gqlerror.Errorf("metadata and spec are required")
 	}
 
-	namespace := input.Metadata.Namespace
+	if input.Metadata.Namespace != "" {
+		return nil, gqlerror.Errorf("ServiceAccount is cluster-scoped; omit metadata.namespace")
+	}
 	name := input.Metadata.Name
 	principal := auth.PrincipalFromContext(ctx)
 	if principal == nil || principal.AuthMethod != "serviceaccount-assertion" {
 		return nil, gqlerror.Errorf("service account assertion authentication is required")
 	}
-	expectedSubject := datastore.ServiceAccountSubject(namespace, name)
+	expectedSubject := datastore.ServiceAccountSubject(name)
 	if principal.Subject != expectedSubject {
 		return nil, gqlerror.Errorf("service account can only issue tokens for itself")
 	}
 
-	sa, err := r.store.GetServiceAccountBySubject(ctx, namespace, name)
+	sa, err := r.store.GetServiceAccountBySubject(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("could not find service account: %w", err)
 	}

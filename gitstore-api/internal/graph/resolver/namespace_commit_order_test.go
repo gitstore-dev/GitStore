@@ -118,7 +118,7 @@ func (w *advancingAfterAdmissionGitWriter) ResolveRefForRepo(
 		sha := string(rune('a'+resolveCount)) + "000000000000000000000000000000000000000"
 		tree := cloneCommitTree(w.trees[w.current])
 		tree["namespaces/unrelated-"+sha[:1]+".md"] = namespaceManifestForGraphQL(
-			"unrelated-"+sha[:1], "Unrelated", model.NamespaceTierUser,
+			"unrelated-"+sha[:1], "Unrelated", model.NamespaceTierOrganization,
 		)
 		w.trees[sha] = tree
 		w.current = sha
@@ -239,14 +239,14 @@ func TestNamespaceGraphQLCommitOrderPreventsOlderStateWinning(t *testing.T) {
 	t.Run("update", func(t *testing.T) {
 		seed := newTestSvc(t, &mockGitWriter{})
 		ctx := context.Background()
-		created, err := seed.CreateNamespace(ctx, createNamespaceInput("commit-order-update", model.NamespaceTierUser), "alice")
+		created, err := seed.CreateNamespace(ctx, createNamespaceInput("commit-order-update", model.NamespaceTierOrganization), "alice")
 		require.NoError(t, err)
 
 		olderSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		newerSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 		writer := newCommitOrderGitWriter("deadbeef", olderSHA, newerSHA)
 		writer.trees["deadbeef"]["namespaces/"+created.Name+".md"] =
-			namespaceManifestForGraphQL(created.Name, created.Title, model.NamespaceTierUser)
+			namespaceManifestForGraphQL(created.Name, created.Title, model.NamespaceTierOrganization)
 		olderStore := &blockingOlderNamespaceUpdateStore{
 			Datastore: seed.Store(),
 			name:      created.Name,
@@ -306,7 +306,7 @@ func TestNamespaceGraphQLCommitOrderPreventsOlderStateWinning(t *testing.T) {
 		older := newCommitOrderService(t, olderStore, writer)
 		newer := newCommitOrderService(t, newerStore, writer)
 
-		olderInput := createNamespaceInput(name, model.NamespaceTierUser)
+		olderInput := createNamespaceInput(name, model.NamespaceTierOrganization)
 		olderTitle := "Older creation"
 		olderInput.Spec.Title = &olderTitle
 		newerInput := createNamespaceInput(name, model.NamespaceTierOrganization)
@@ -353,12 +353,12 @@ func TestNamespaceGraphQLDescendantConvergence(t *testing.T) {
 
 		olderDone := make(chan error, 1)
 		go func() {
-			_, err := older.CreateNamespace(ctx, createNamespaceInput("descendant-x", model.NamespaceTierUser), "alice")
+			_, err := older.CreateNamespace(ctx, createNamespaceInput("descendant-x", model.NamespaceTierOrganization), "alice")
 			olderDone <- err
 		}()
 
 		waitForCommitOrderPoint(t, writer.firstResolveStarted, "older mutation did not pause after its commit")
-		_, err := newer.CreateNamespace(ctx, createNamespaceInput("descendant-y", model.NamespaceTierUser), "bob")
+		_, err := newer.CreateNamespace(ctx, createNamespaceInput("descendant-y", model.NamespaceTierOrganization), "bob")
 		require.NoError(t, err)
 		close(writer.releaseFirstResolve)
 		require.NoError(t, waitForCommitOrderResult(t, olderDone))
@@ -374,7 +374,7 @@ func TestNamespaceGraphQLDescendantConvergence(t *testing.T) {
 	t.Run("same resource converges to newer content", func(t *testing.T) {
 		seed := newTestSvc(t, &mockGitWriter{})
 		ctx := context.Background()
-		created, err := seed.CreateNamespace(ctx, createNamespaceInput("descendant-same", model.NamespaceTierUser), "seed")
+		created, err := seed.CreateNamespace(ctx, createNamespaceInput("descendant-same", model.NamespaceTierOrganization), "seed")
 		require.NoError(t, err)
 
 		olderSHA := "3333333333333333333333333333333333333333"
@@ -390,7 +390,7 @@ func TestNamespaceGraphQLDescendantConvergence(t *testing.T) {
 		newerTitle := "Newer descendant"
 		newerInput.Spec.Title = &newerTitle
 		writer.trees["deadbeef"]["namespaces/descendant-same.md"] =
-			namespaceManifestForGraphQL(created.Name, created.Title, model.NamespaceTierUser)
+			namespaceManifestForGraphQL(created.Name, created.Title, model.NamespaceTierOrganization)
 
 		olderDone := make(chan error, 1)
 		go func() {
@@ -424,7 +424,7 @@ func TestNamespaceGraphQLReturnsAfterExactHeadAdmissionDespiteLaterDisjointCommi
 
 	created, err := service.CreateNamespace(
 		context.Background(),
-		createNamespaceInput("post-admission-progress", model.NamespaceTierUser),
+		createNamespaceInput("post-admission-progress", model.NamespaceTierOrganization),
 		"alice",
 	)
 	require.NoError(t, err)
@@ -449,7 +449,7 @@ func TestNamespaceGraphQLAdmissionProgressesWhileDisjointCommitsContinuouslyAdva
 
 	created, err := service.CreateNamespace(
 		context.Background(),
-		createNamespaceInput("pre-admission-progress", model.NamespaceTierUser),
+		createNamespaceInput("pre-admission-progress", model.NamespaceTierOrganization),
 		"alice",
 	)
 	require.NoError(t, err)
@@ -464,14 +464,14 @@ func TestNamespaceGraphQLDescendantSameResourceRejectsStaleRowBeforeExactHeadAdm
 	t.Skip("stale-row protection moved from the resolver to shared committed admission")
 	ctx := context.Background()
 	seed := newTestSvc(t, &mockGitWriter{})
-	created, err := seed.CreateNamespace(ctx, createNamespaceInput("descendant-audit-same", model.NamespaceTierUser), "seed")
+	created, err := seed.CreateNamespace(ctx, createNamespaceInput("descendant-audit-same", model.NamespaceTierOrganization), "seed")
 	require.NoError(t, err)
 
 	olderSHA := "5555555555555555555555555555555555555555"
 	newerSHA := "6666666666666666666666666666666666666666"
 	writer := newDescendantCommitGitWriter("deadbeef", olderSHA, newerSHA)
 	path := "namespaces/descendant-audit-same.md"
-	writer.trees["deadbeef"][path] = namespaceManifestForGraphQL(created.Name, "", model.NamespaceTierUser)
+	writer.trees["deadbeef"][path] = namespaceManifestForGraphQL(created.Name, "", model.NamespaceTierOrganization)
 	olderTime := time.Date(2026, 8, 29, 14, 0, 0, 0, time.UTC)
 	newerTime := olderTime.Add(time.Hour)
 	newerStore := &blockingTitleNamespaceUpdateStore{
@@ -542,14 +542,14 @@ func TestNamespaceGraphQLDescendantDisjointCommitKeepsRequestAudit(t *testing.T)
 
 	olderDone := make(chan error, 1)
 	go func() {
-		_, createErr := older.CreateNamespace(ctx, createNamespaceInput("descendant-audit-x", model.NamespaceTierUser), "alice")
+		_, createErr := older.CreateNamespace(ctx, createNamespaceInput("descendant-audit-x", model.NamespaceTierOrganization), "alice")
 		olderDone <- createErr
 	}()
 	waitForCommitOrderPoint(t, writer.firstResolveStarted, "older mutation did not pause after its commit")
 
 	newerDone := make(chan error, 1)
 	go func() {
-		_, createErr := newer.CreateNamespace(ctx, createNamespaceInput("descendant-audit-y", model.NamespaceTierUser), "bob")
+		_, createErr := newer.CreateNamespace(ctx, createNamespaceInput("descendant-audit-y", model.NamespaceTierOrganization), "bob")
 		newerDone <- createErr
 	}()
 	waitForCommitOrderPoint(t, newerStore.started, "newer disjoint mutation did not reach its datastore write")

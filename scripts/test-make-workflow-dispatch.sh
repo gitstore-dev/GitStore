@@ -30,21 +30,55 @@ assert_dispatch bootstrap namespace _bootstrap-namespace
 assert_dispatch bootstrap repository _bootstrap-repository
 assert_dispatch secret jwt _secret-jwt
 assert_dispatch secret grpc-hmac _secret-grpc-hmac
+assert_dispatch generate authz _generate-authz
+assert_dispatch generate all _generate-all
 
-for invalid in check/unknown clean/all bootstrap/unknown secret/hmac; do
+bootstrap_output="$(env -u NAMESPACE_TIER make --no-print-directory -C "${repo_root}" -np bootstrap TARGET=namespace | sed -n '/^NAMESPACE_TIER /p')"
+[[ "${bootstrap_output}" == "NAMESPACE_TIER = ORGANIZATION" ]]
+
+for legacy_namespace in controllers ''; do
+  if make --no-print-directory -C "${repo_root}" -n controller CONTROLLER_SERVICEACCOUNT_NAMESPACE="${legacy_namespace}" >/dev/null 2>&1; then
+    echo "removed CONTROLLER_SERVICEACCOUNT_NAMESPACE was accepted" >&2; exit 1
+  fi
+done
+for target in controller dev enroll-controller-serviceaccount; do
+  output="$(make --no-print-directory -C "${repo_root}" -n "${target}")"
+  [[ "${output}" != *"--namespace"* && "${output}" != *"SERVICEACCOUNT__NAMESPACE"* ]]
+done
+
+# The parent test target exports its bootstrap namespace; this case tests an
+# invocation without an operator-supplied namespace.
+role_output="$(env -u NAMESPACE make --no-print-directory -C "${repo_root}" add-role ROLE=reader ALLOW=product.read SCOPE=namespace WORKFLOW_DRY_RUN=1)"
+[[ "${role_output}" == *"--scope namespace"* && "${role_output}" != *"--namespace"* ]]
+binding_output="$(make --no-print-directory -C "${repo_root}" assign-role ROLE=reader SUBJECT=bot SUBJECT_KIND=ServiceAccount ROLE_KIND=Role SCOPE=namespace NAMESPACE=acme WORKFLOW_DRY_RUN=1)"
+[[ "${binding_output}" == *"--namespace acme"* && "${binding_output}" == *"--subject-kind ServiceAccount"* && "${binding_output}" == *"--role-kind Role"* ]]
+cluster_output="$(env -u NAMESPACE make --no-print-directory -C "${repo_root}" assign-role ROLE=reader SUBJECT=alice WORKFLOW_DRY_RUN=1)"
+[[ "${cluster_output}" == *"--scope cluster"* && "${cluster_output}" != *"--namespace"* ]]
+if env -u NAMESPACE make --no-print-directory -C "${repo_root}" assign-role ROLE=reader SUBJECT=alice SCOPE=namespace WORKFLOW_DRY_RUN=1 >/dev/null 2>&1; then
+  echo "namespace binding silently used bootstrap NAMESPACE" >&2; exit 1
+fi
+if make --no-print-directory -C "${repo_root}" add-role ROLE=reader ALLOW=product.read DENY= WORKFLOW_DRY_RUN=1 >/dev/null 2>&1; then
+  echo "DENY variable was accepted" >&2; exit 1
+fi
+if make --no-print-directory -C "${repo_root}" add-role ROLE=reader ALLOW=product.read NAMESPACE=acme WORKFLOW_DRY_RUN=1 >/dev/null 2>&1; then
+  echo "role definition accepted a namespace" >&2; exit 1
+fi
+
+for invalid in check/unknown clean/all bootstrap/unknown secret/hmac generate/unknown; do
   if WORKFLOW_DRY_RUN=1 "${dispatcher}" "${invalid%/*}" "${invalid#*/}" >/dev/null 2>&1; then
     echo "invalid workflow ${invalid} unexpectedly succeeded" >&2
     exit 1
   fi
 done
 
-for public_target in check clean bootstrap secret; do
+for public_target in check clean bootstrap secret generate; do
   output="$(make --no-print-directory -C "${repo_root}" "${public_target}" TARGET="$({
     case "${public_target}" in
       check) printf all ;;
       clean) printf git-data ;;
       bootstrap) printf all ;;
       secret) printf jwt ;;
+      generate) printf authz ;;
     esac
   })" WORKFLOW_DRY_RUN=1)"
   [[ "${output}" == *"family=${public_target}"* ]]

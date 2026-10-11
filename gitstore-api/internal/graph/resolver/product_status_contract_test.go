@@ -200,7 +200,9 @@ func TestUpdateProductStatus_ConcurrentSpecUpdateIsNotOverwritten(t *testing.T) 
 	_, store, product, _ := newProductStatusTestFixture(t)
 	ctx := context.Background()
 	product.Spec = json.RawMessage(`{"title":"Original Title"}`)
-	require.NoError(t, store.UpdateProduct(ctx, product))
+	expected := product.ResourceVersion
+	datastore.AdvanceProductSystemVersion(product)
+	require.NoError(t, store.UpdateProduct(ctx, product, expected))
 
 	interleaved := &productUpdateAfterStatusReadStore{Datastore: store}
 	interleaved.afterRead = func(ctx context.Context) error {
@@ -210,13 +212,14 @@ func TestUpdateProductStatus_ConcurrentSpecUpdateIsNotOverwritten(t *testing.T) 
 		}
 		current.Spec = json.RawMessage(`{"title":"Updated Title"}`)
 		current.Generation++
-		current.ResourceVersion = "2"
-		return store.UpdateProduct(ctx, current)
+		snapshotVersion := current.ResourceVersion
+		datastore.AdvanceProductSystemVersion(current)
+		return store.UpdateProduct(ctx, current, snapshotVersion)
 	}
 	r, err := NewResolver(ResolverDeps{Store: interleaved, Logger: zap.NewNop()})
 	require.NoError(t, err)
 	_, updateErr := (&mutationResolver{Resolver: r}).UpdateProductStatus(ctx, model.UpdateProductStatusInput{
-		Namespace: product.Namespace, Name: product.Name, ResourceVersion: "1",
+		Namespace: product.Namespace, Name: product.Name, ResourceVersion: product.ResourceVersion,
 		Conditions: []*model.ConditionInput{{Type: string(catalog.ConditionReady), Status: model.ConditionStatusTrue}},
 	})
 	persisted, err := store.GetProduct(ctx, product.UID)
@@ -256,7 +259,9 @@ func TestDecoupleCategoryProducts_ConcurrentSpecUpdateIsNotOverwritten(t *testin
 	product.OwnerReferences, _ = json.Marshal([]catalog.OwnerReference{{
 		APIVersion: category.APIVersion, Kind: category.Kind, Name: category.Name, UID: category.UID,
 	}})
-	require.NoError(t, store.UpdateProduct(ctx, product))
+	expected := product.ResourceVersion
+	datastore.AdvanceProductSystemVersion(product)
+	require.NoError(t, store.UpdateProduct(ctx, product, expected))
 	terminating, err := store.(datastore.CategoryTaxonomyDeletionStore).MarkCategoryTaxonomyDeletion(
 		ctx, category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
 	require.NoError(t, err)
@@ -270,8 +275,10 @@ func TestDecoupleCategoryProducts_ConcurrentSpecUpdateIsNotOverwritten(t *testin
 			return err
 		}
 		current.Spec = json.RawMessage(`{"title":"Updated Title","categoryRef":{"name":"laptops"}}`)
-		current.Generation, current.ResourceVersion = 2, "2"
-		return store.UpdateProduct(ctx, current)
+		current.Generation = 2
+		snapshotVersion := current.ResourceVersion
+		datastore.AdvanceProductSystemVersion(current)
+		return store.UpdateProduct(ctx, current, snapshotVersion)
 	}
 	r, err := NewResolver(ResolverDeps{Store: interleaved, Logger: zap.NewNop()})
 	require.NoError(t, err)
@@ -287,7 +294,7 @@ func TestDecoupleCategoryProducts_ConcurrentSpecUpdateIsNotOverwritten(t *testin
 	assert.JSONEq(t, `{"title":"Updated Title","categoryRef":{"name":"laptops"}}`, string(persisted.Spec))
 	assert.Equal(t, product.Finalizers, persisted.Finalizers)
 	assert.Equal(t, int64(2), persisted.Generation)
-	assert.Equal(t, "2", persisted.ResourceVersion)
+	assert.Equal(t, "3", persisted.ResourceVersion)
 	assert.JSONEq(t, string(product.OwnerReferences), string(persisted.OwnerReferences))
 	require.True(t, payload.HasMoreProductDependents, "a conflicted cleanup must remain in the bounded continuation")
 
@@ -299,7 +306,7 @@ func TestDecoupleCategoryProducts_ConcurrentSpecUpdateIsNotOverwritten(t *testin
 	assert.Equal(t, persisted.Spec, cleaned.Spec)
 	assert.Equal(t, persisted.Generation, cleaned.Generation)
 	assert.Equal(t, persisted.Finalizers, cleaned.Finalizers)
-	assert.Equal(t, "3", cleaned.ResourceVersion)
+	assert.Equal(t, "4", cleaned.ResourceVersion)
 	assert.JSONEq(t, `[]`, string(cleaned.OwnerReferences))
 	var status catalog.ProductStatus
 	require.NoError(t, json.Unmarshal(cleaned.Status, &status))

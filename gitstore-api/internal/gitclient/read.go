@@ -15,11 +15,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// NewClientFromConn wraps an existing gRPC connection (useful for tests).
-func NewClientFromConn(conn *grpc.ClientConn) *Client {
+// NewClientFromConn wraps an existing connection with the same signed wire as production.
+func NewClientFromConn(conn *grpc.ClientConn, secret string) *Client {
 	return &Client{
 		conn: conn,
-		Git:  gitv1.NewGitServiceClient(conn),
+		Git:  gitv1.NewGitServiceClient(signedConn{ClientConnInterface: conn, secret: secret}),
 	}
 }
 
@@ -34,7 +34,7 @@ func (c *Client) ReadFile(ctx context.Context, path, ref string) ([]byte, error)
 // NotFound means a missing path in a readable tree; a missing repository/ref or
 // a non-file entry returns FailedPrecondition, not evidence of path absence.
 func (c *Client) ReadFileForRepo(ctx context.Context, repositoryID, path, ref string) ([]byte, error) {
-	authorization, err := RequestAuthorization(ctx, "repository.read.any", repositoryID)
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.read", repositoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +71,7 @@ func (c *Client) ListFilesForRepo(ctx context.Context, repositoryID, prefix, ref
 // ref_commit_sha field is populated before the file walk, so this is safe and
 // avoids transferring the full tree over gRPC on every staleness check.
 func (c *Client) ResolveRefForRepo(ctx context.Context, repositoryID, ref string) (string, error) {
-	authorization, err := RequestAuthorization(ctx, "repository.read.any", repositoryID)
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.read", repositoryID)
 	if err != nil {
 		return "", err
 	}
@@ -91,7 +91,7 @@ func (c *Client) ResolveRefForRepo(ctx context.Context, repositoryID, ref string
 }
 
 func (c *Client) listFilesForRepo(ctx context.Context, repositoryID, prefix, ref string) (*gitv1.ListFilesResponse, error) {
-	authorization, err := RequestAuthorization(ctx, "repository.read.any", repositoryID)
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.read", repositoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func (c *Client) listFilesForRepo(ctx context.Context, repositoryID, prefix, ref
 // GetLatestTag returns the latest semver release tag.
 // Returns an error (wrapping codes.NotFound) if no tags exist.
 func (c *Client) GetLatestTag(ctx context.Context) (*gitv1.TagEntry, error) {
-	authorization, err := RequestAuthorization(ctx, "repository.read.any", c.RepositoryID)
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.read", c.RepositoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +130,7 @@ func (c *Client) GetLatestTag(ctx context.Context) (*gitv1.TagEntry, error) {
 
 // ListTags enumerates tags with an optional prefix filter.
 func (c *Client) ListTags(ctx context.Context, prefix string) ([]*gitv1.TagEntry, error) {
-	authorization, err := RequestAuthorization(ctx, "repository.read.any", c.RepositoryID)
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.read", c.RepositoryID)
 	if err != nil {
 		return nil, err
 	}

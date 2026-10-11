@@ -193,7 +193,7 @@ func TestWatchCategories_DeliversEventsInOrder(t *testing.T) {
 	category := watchCategoryFixture("c1000000-0000-0000-0000-000000000001", "acme", "electronics", nil)
 	require.NoError(t, store.CreateCategoryTaxonomy(ctx, category))
 	category.ResourceVersion = "2"
-	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category))
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category, "1"))
 	require.NoError(t, store.DeleteCategoryTaxonomy(ctx, category.UID))
 
 	e1 := mustReceiveCategoryEvent(t, events)
@@ -223,7 +223,7 @@ func TestWatchCategories_ResumeFromValidCursor(t *testing.T) {
 	require.NoError(t, store.CreateCategoryTaxonomy(ctx, category))
 	added := mustReceiveCategoryEvent(t, first)
 	category.ResourceVersion = "2"
-	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category))
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category, "1"))
 
 	rv := added.ResourceVersion
 	events, err := r.Subscription().WatchCategories(ctx, nil, nil, &rv)
@@ -372,7 +372,7 @@ func TestWatchCategories_LabelSelectorFiltersEvents(t *testing.T) {
 
 	matching.Labels = map[string]string{"tier": "standard"}
 	matching.ResourceVersion = "2"
-	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, matching))
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, matching, "1"))
 	exit := mustReceiveCategoryEvent(t, events)
 	require.Equal(t, model.WatchEventTypeDeleted, exit.Type)
 	require.Equal(t, "premium-cat", exit.Name)

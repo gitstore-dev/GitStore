@@ -6,12 +6,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
@@ -19,6 +21,147 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 )
+
+func TestGenerateAuthorizationCatalog(t *testing.T) {
+	seed, err := os.ReadFile("../../../specs/064-authz-action-vocabulary/contracts/action-vocabulary.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	catalog := filepath.Join(root, "catalog.json")
+	if err := os.WriteFile(catalog, seed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"generate", "authz", "--root", root, "--catalog", catalog}
+	var stdout, stderr bytes.Buffer
+	if code := run(args, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("generation failed: code=%d stderr=%s", code, stderr.String())
+	}
+	paths := []string{"gitstore-api/internal/auth/actions_generated.go", "gitstore-git-service/src/auth/actions_generated.rs"}
+	var definition struct {
+		Actions []struct {
+			Action, Kind, Scope, Resource, Verb string
+			Reserved                            bool
+		}
+	}
+	if err := json.Unmarshal(seed, &definition); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		first, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range definition.Actions {
+			if !bytes.Contains(first, []byte(`"`+entry.Action+`"`)) {
+				t.Errorf("%s missing %s", path, entry.Action)
+			}
+		}
+		if code := run(args, strings.NewReader(""), &stdout, &stderr); code != 0 {
+			t.Fatalf("regenerate: %s", stderr.String())
+		}
+		second, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(first, second) {
+			t.Errorf("non-deterministic output %s", path)
+		}
+	}
+	if code := run(append(args, "--check"), strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("check: %s", stderr.String())
+	}
+	if err := os.WriteFile(filepath.Join(root, paths[0]), []byte("drift"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stderr.Reset()
+	if code := run(append(args, "--check"), strings.NewReader(""), &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "drift") {
+		t.Fatalf("drift not detected: %s", stderr.String())
+	}
+	unchanged, _ := os.ReadFile(filepath.Join(root, paths[0]))
+	if string(unchanged) != "drift" {
+		t.Fatal("check mutated output")
+	}
+
+	var tree map[string]any
+	if err := json.Unmarshal(seed, &tree); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutation := range []string{"duplicate", "pair", "scope", "partial-wildcard", "kind", "unknown-field"} {
+		t.Run(mutation, func(t *testing.T) {
+			if err := json.Unmarshal(seed, &tree); err != nil {
+				t.Fatal(err)
+			}
+			actions := tree["actions"].([]any)
+			entry := actions[0].(map[string]any)
+			switch mutation {
+			case "duplicate":
+				tree["actions"] = append(actions, entry)
+			case "pair":
+				entry["resource"] = "repository/contents"
+			case "scope":
+				entry["scope"] = "arbitrary"
+			case "partial-wildcard":
+				entry["action"] = "namespace.*"
+			case "kind":
+				entry["kind"] = "Namespace"
+			case "unknown-field":
+				entry["unrecognized"] = true
+			}
+			data, err := json.Marshal(tree)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(catalog, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if code := run(args, strings.NewReader(""), &stdout, &stderr); code == 0 {
+				t.Fatal("invalid catalog accepted")
+			}
+		})
+	}
+}
+
+func TestCommittedAuthorizationCatalogParity(t *testing.T) {
+	data, err := os.ReadFile("../../../shared/schemas/authorization-actions.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := os.ReadFile("../../../specs/064-authz-action-vocabulary/contracts/action-vocabulary.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(bytes.TrimSpace(data), bytes.TrimSpace(seed)) {
+		t.Fatal("reviewed catalog snapshot drift")
+	}
+	var catalog authorizationCatalog
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Actions) != 82 {
+		t.Fatalf("unexpected catalog size %d", len(catalog.Actions))
+	}
+	for _, e := range catalog.Actions {
+		got, ok := auth.LookupAction(e.Action)
+		if !ok || got.Kind != e.Kind || got.Scope != e.Scope || got.Resource != e.Resource || got.Verb != e.Verb || got.Reserved != e.Reserved {
+			t.Fatalf("generated metadata drift for %s", e.Action)
+		}
+	}
+	for _, legacy := range []string{"*", "repository.*", "category.read", "repository.read.any", "namespace.create.user", "product.read.management", "product.delete.complete", "workflow.action.foo"} {
+		if _, ok := auth.LookupAction(legacy); ok {
+			t.Errorf("unregistered action accepted: %s", legacy)
+		}
+	}
+	copy := auth.AuthorizationActions()
+	copy[0].Action = "tampered"
+	if _, ok := auth.LookupAction("tampered"); ok {
+		t.Fatal("caller mutated catalog")
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"generate", "authz", "--root", "../../..", "--check"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("committed catalog drift: %s", stderr.String())
+	}
+}
 
 func TestMigrateRunsExplicitlyWithDeadlineAndReportsFailure(t *testing.T) {
 	original := migrateSchema
@@ -83,7 +226,7 @@ func TestUsersAddCreatesFileWithHashedPassword(t *testing.T) {
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte("secret")); err != nil {
 		t.Fatalf("stored password hash does not match: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "role_bindings") {
+	if !strings.Contains(stdout.String(), "typed role binding") {
 		t.Fatalf("stdout = %q, want role binding reminder", stdout.String())
 	}
 }
@@ -140,7 +283,7 @@ func TestRBACRoleAddAndBindingAdd(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{
 		"rbac", "role", "add", "--file", path, "--name", "developer",
-		"--allow", "repository.read,repository.write", "--deny", "repository.delete.any",
+		"--allow", "repository.read,repository.contents.write",
 	}, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("role add code = %d, stderr = %q", code, stderr.String())
@@ -158,10 +301,63 @@ func TestRBACRoleAddAndBindingAdd(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(b)
-	for _, want := range []string{"developer:", "repository.read", "repository.write", "repository.delete.any", "alice:"} {
+	for _, want := range []string{"developer:", "repository", "contents", "read", "write", "name: alice", "kind: ClusterRole"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("policy missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestRBACScopedCLIAndInvalidWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	exec := func(args ...string) (int, string) {
+		var out, err bytes.Buffer
+		code := run(append([]string{"rbac"}, args...), strings.NewReader(""), &out, &err)
+		return code, err.String()
+	}
+	if code, err := exec("role", "add", "--file", path, "--name", "reader", "--allow", "product.read", "--scope", "namespace"); code != 0 {
+		t.Fatalf("%d: %s", code, err)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"role", "add", "--name", "bad", "--allow", "product.read", "--deny", ""},
+		{"role", "add", "--name", "bad", "--allow", "repository.read.any"},
+		{"role", "add", "--name", "bad", "--allow", "product.read", "--namespace", "acme"},
+		{"binding", "add", "--subject", "alice", "--role", "reader", "--scope", "namespace", "--role-kind", "Role"},
+		{"binding", "add", "--subject", "alice", "--role", "reader", "--namespace", "acme"},
+		{"binding", "add", "--subject", "alice", "--role", "reader", "--scope", "wrong"},
+	} {
+		if code, _ := exec(append(args, "--file", path)...); code == 0 {
+			t.Fatalf("accepted %v", args)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(original, after) {
+			t.Fatalf("invalid operation changed file: %v", args)
+		}
+	}
+	args := []string{"binding", "add", "--file", path, "--subject", "controller", "--subject-kind", "ServiceAccount", "--role", "reader", "--role-kind", "Role", "--scope", "namespace", "--namespace", "acme"}
+	if code, err := exec(args...); code != 0 {
+		t.Fatalf("%d: %s", code, err)
+	}
+	original, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, err := exec(args...); code != 0 {
+		t.Fatalf("%d: %s", code, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(original, after) {
+		t.Fatal("duplicate binding changed file")
 	}
 }
 

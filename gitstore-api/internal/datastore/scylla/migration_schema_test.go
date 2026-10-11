@@ -15,6 +15,25 @@ import (
 
 const fullImageCDC = "cdc = {'enabled': 'true', 'preimage': 'full', 'postimage': 'true', 'ttl': '1209600'}"
 
+func TestServiceAccountFreshSchemaIsClusterScoped(t *testing.T) {
+	const file = "009_service_account.cql"
+	name := strings.Join(strings.Fields(createStatement(t, file, "service_accounts_by_cluster_name")), " ")
+	assert.Contains(t, name, "primary key ((name))")
+	assert.Contains(t, name, "enrollment_complete boolean")
+	uid := strings.Join(strings.Fields(createStatement(t, file, "service_accounts_by_cluster_uid")), " ")
+	assert.Contains(t, uid, "primary key ((uid))")
+	assert.Contains(t, uid, "name text")
+	bucket := strings.Join(strings.Fields(createStatement(t, file, "service_accounts_by_cluster_bucket")), " ")
+	assert.Contains(t, bucket, "primary key ((bucket), creation_timestamp, uid)")
+	assert.Contains(t, bucket, "name text")
+	raw, err := migrations.Files.ReadFile(file)
+	require.NoError(t, err)
+	for _, legacy := range []string{"namespace", "service_accounts_by_name", "service_accounts_by_uid", "service_accounts_by_bucket"} {
+		assert.NotContains(t, string(raw), legacy)
+	}
+	assert.Contains(t, string(raw), "service_account_assertion_replays")
+}
+
 // createStatement returns the CREATE TABLE statement for table, up to its
 // terminating semicolon.
 func createStatement(t *testing.T, file, table string) string {

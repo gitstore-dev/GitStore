@@ -19,8 +19,8 @@ func TestProductAuthorization_TwoUserNamespaceIsolation(t *testing.T) {
 	h := newNamespaceContractHarness(t)
 	aliceToken := namespaceContractLogin(t, h, "alice", "admin123")
 	bobToken := namespaceContractLogin(t, h, "bob", "admin123")
-	aliceNamespace := uniqueName("product-alice")
-	bobNamespace := uniqueName("product-bob")
+	aliceNamespace := "alice"
+	bobNamespace := "bob"
 	aliceProduct := uniqueName("widget-alice")
 	bobProduct := uniqueName("widget-bob")
 
@@ -65,7 +65,7 @@ func TestProductAuthorization_TwoUserNamespaceIsolation(t *testing.T) {
 		t.Run("bob_cannot_"+tc.name+"_alice_product", func(t *testing.T) {
 			response := h.gqlWithToken(bobToken, tc.query, tc.vars)
 			require.Len(t, response.Errors, 1, namespaceContractErrors(response.Errors))
-			assert.Contains(t, namespaceContractErrors(response.Errors), "resource belongs to another user")
+			assert.Contains(t, namespaceContractErrors(response.Errors), `"code":"FORBIDDEN"`)
 		})
 	}
 }

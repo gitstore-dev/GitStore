@@ -49,7 +49,6 @@ type RateLimitConfig struct {
 }
 
 type ServiceAccountConfig struct {
-	Namespace           string     `mapstructure:"namespace"`
 	Name                string     `mapstructure:"name"`
 	UID                 string     `mapstructure:"uid"`
 	KeyRef              secret.Ref `mapstructure:"key_ref"`
@@ -86,7 +85,6 @@ var defaults = map[string]any{
 	"controller.api_uri":                                 "http://localhost:4000/graphql",
 	"controller.api_client.rate_limit.per_second":        40,
 	"controller.api_client.rate_limit.burst":             10,
-	"controller.serviceaccount.namespace":                "",
 	"controller.serviceaccount.name":                     "gitstore-controller-manager",
 	"controller.serviceaccount.uid":                      "",
 	"controller.serviceaccount.key_ref.kind":             "",
@@ -221,11 +219,13 @@ func validateSource(path string, value any) error {
 }
 
 func sourceError(path, env string) error {
+	if strings.Contains(path, "serviceaccount.namespace") || strings.Contains(path, "serviceaccount_namespace") {
+		return fmt.Errorf("ServiceAccount is cluster-scoped: remove %s %s; configure controller.serviceaccount.name, uid and key_ref", path, env)
+	}
 	replacement := strings.Replace(path, "controller.controller.", "controller.", 1)
 	for old, next := range map[string]string{
 		"api_client.requests_per_second":       "api_client.rate_limit.per_second",
 		"api_client.burst":                     "api_client.rate_limit.burst",
-		"serviceaccount_namespace":             "serviceaccount.namespace",
 		"serviceaccount_name":                  "serviceaccount.name",
 		"serviceaccount_uid":                   "serviceaccount.uid",
 		"serviceaccount_key_id":                "serviceaccount.key_id",
@@ -319,7 +319,6 @@ func validate(cfg *Config) error {
 	}
 	provider := c.SecretProviders.Bootstrap
 	for _, required := range []struct{ path, value string }{
-		{"controller.serviceaccount.namespace", c.ServiceAccount.Namespace},
 		{"controller.serviceaccount.name", c.ServiceAccount.Name},
 		{"controller.serviceaccount.uid", c.ServiceAccount.UID},
 		{"controller.serviceaccount.assertion_audience", c.ServiceAccount.AssertionAudience},

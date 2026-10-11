@@ -777,7 +777,8 @@ type ObjectMeta struct {
 
 // Author-controlled metadata shared by declarative resource mutations.
 type ObjectMetaInput struct {
-	Name        string         `json:"name"`
+	Name string `json:"name"`
+	// Required by namespaced resources; omit for cluster-scoped resources.
 	Namespace   string         `json:"namespace"`
 	Labels      map[string]any `json:"labels,omitempty"`
 	Annotations map[string]any `json:"annotations,omitempty"`
@@ -1382,8 +1383,9 @@ type SelectedOptionDefinition struct {
 	Value string `json:"value"`
 }
 
-// A GitStore-issued non-human identity. Implements the Actor interface so it can
-// appear anywhere a Subject/Delegate is referenced.
+// A cluster-scoped GitStore-issued non-human identity. Its global metadata.name
+// and immutable UID identify the account. metadata.namespace is unset on output;
+// nonempty metadata.namespace is rejected on every ServiceAccount operation.
 type ServiceAccount struct {
 	APIVersion string      `json:"apiVersion"`
 	Kind       string      `json:"kind"`

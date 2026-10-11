@@ -32,6 +32,29 @@ type ProviderRegistry struct {
 	userdir    UserDirProvider
 }
 
+// EffectivePermissionChecker is an optional local-policy validation capability;
+// it does not change the runtime AuthZProvider contract or enumerate resources.
+type EffectivePermissionChecker interface {
+	HasEffectivePermission(*Principal) bool
+}
+
+// ValidateActiveUserPermissions checks every configured active user, including
+// the groups synthesized at authentication. A bound admin cannot mask an
+// unbound user. Disabled directory profiles do not need a grant.
+func ValidateActiveUserPermissions(checker EffectivePermissionChecker, users []*UserProfile) error {
+	for _, user := range users {
+		if user == nil || !user.Active {
+			continue
+		}
+		groups := append([]string(nil), user.Groups...)
+		groups = append(groups, "system:authenticated")
+		if !checker.HasEffectivePermission(&Principal{Subject: user.Subject, AuthMethod: "static-users", Groups: groups}) {
+			return fmt.Errorf("rbac-local: active local user %q has no satisfiable v1beta1 grant; add a User or Group binding", user.Subject)
+		}
+	}
+	return nil
+}
+
 func NewProviderRegistry(chain *ChainedAuthN, authz AuthZProvider, userdir UserDirProvider) *ProviderRegistry {
 	return &ProviderRegistry{authnChain: chain, authz: authz, userdir: userdir}
 }
@@ -84,7 +107,11 @@ func (c *ChainedAuthN) Authenticate(ctx context.Context, req AuthRequest) (*Prin
 		}
 		switch decision.Outcome {
 		case OutcomeAllow:
-			return principal, decision, nil
+			normalized, valid := normalizeAuthenticatedPrincipal(p.Name(), principal)
+			if !valid {
+				return nil, Deny(p.Name(), "invalid or reserved authenticated identity"), nil
+			}
+			return normalized, decision, nil
 		case OutcomeDeny:
 			return nil, decision, nil
 		case OutcomeChallenge:

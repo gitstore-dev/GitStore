@@ -19,14 +19,14 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: inttest-%d
-  namespace: acme-store
+  namespace: %s
 spec:
   title: Integration Test Product
   tags: [integration, test]
 ---
 
 Integration test product for core-stack contract verification.
-`, ts)
+`, ts, getEnv("NAMESPACE", "gitstore-test"))
 }
 
 // pushHelper holds state for a single test push scenario.

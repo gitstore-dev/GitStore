@@ -1,4 +1,5 @@
 # GitStore Pluggable AuthN/AuthZ Architecture Design
+
 **Status**: ⚠️ In Progress
 
 > Generated 2026-06-20 via deep-research workflow (110 agents, 27 sources, 20 verified claims).
@@ -7,12 +8,15 @@
 > deployment/evaluation details, and defines GraphQL read scopes plus hybrid IAM data ownership.
 
 **Research-verified findings driving key decisions:**
-- `go-oidc/v3` is a required new dependency (golang-jwt/v5 already in go.mod cannot perform JWKS-backed RSA/EC verification)
+
+- `go-oidc/v3` is a required new dependency (golang-jwt/v5 already in go.mod cannot perform JWKS-backed RSA/EC
+  verification)
 - Tonic gRPC interceptors in v0.14 are synchronous (`fn check_auth`) — no `async` in the trait
 - Shared HMAC token is the pragmatic phase-1 choice; mTLS moves to phase 2 when cert infra matures
 - OPA is chosen over OpenFGA for production AuthZ (file-based Rego aligns with the rbac-local migration path)
 - RFC 7519 MAY leeway for clock skew is operative — configure 1–2 min leeway in the oidc-jwt provider
-- `RemoteKeySet` does NOT guarantee immediate rotation propagation; force `Refresh()` on key-not-found before returning 401
+- `RemoteKeySet` does NOT guarantee immediate rotation propagation; force `Refresh()` on key-not-found before returning
+  401
 
 ---
 
@@ -26,148 +30,148 @@
 package auth
 
 import (
-    "context"
-    "net/http"
-    "time"
+	"context"
+	"net/http"
+	"time"
 )
 
 // Outcome is the result of an auth decision.
 type Outcome uint8
 
 const (
-    OutcomeAllow     Outcome = iota
-    OutcomeDeny
-    OutcomeChallenge // issued when credentials are present but need a second factor
+	OutcomeAllow Outcome = iota
+	OutcomeDeny
+	OutcomeChallenge // issued when credentials are present but need a second factor
 )
 
 // Decision is returned by AuthNProvider.Authenticate and AuthZProvider.Authorize.
 type Decision struct {
-    Outcome   Outcome   `json:"outcome"`
-    Reason    string    `json:"reason"`
-    RequestID string    `json:"request_id"`
-    At        time.Time `json:"at"`
-    // Provider that produced this decision (e.g. "static-users", "oidc-jwt").
-    Provider  string    `json:"provider"`
+	Outcome   Outcome   `json:"outcome"`
+	Reason    string    `json:"reason"`
+	RequestID string    `json:"request_id"`
+	At        time.Time `json:"at"`
+	// Provider that produced this decision (e.g. "static-users", "oidc-jwt").
+	Provider string `json:"provider"`
 }
 
 func Allow(provider, reason string) Decision {
-    return Decision{Outcome: OutcomeAllow, Provider: provider, Reason: reason, At: time.Now()}
+	return Decision{Outcome: OutcomeAllow, Provider: provider, Reason: reason, At: time.Now()}
 }
 
 func Deny(provider, reason string) Decision {
-    return Decision{Outcome: OutcomeDeny, Provider: provider, Reason: reason, At: time.Now()}
+	return Decision{Outcome: OutcomeDeny, Provider: provider, Reason: reason, At: time.Now()}
 }
 
 func Challenge(provider, reason string) Decision {
-    return Decision{Outcome: OutcomeChallenge, Provider: provider, Reason: reason, At: time.Now()}
+	return Decision{Outcome: OutcomeChallenge, Provider: provider, Reason: reason, At: time.Now()}
 }
 
 // Principal is the provider-agnostic identity passed through the system.
 // After authentication, every request carries exactly one Principal in context.
 type Principal struct {
-    Subject    string            `json:"sub"`
-    Issuer     string            `json:"iss"`
-    Tenant     string            `json:"tenant,omitempty"`
-    Namespace  string            `json:"namespace,omitempty"`
-    Groups     []string          `json:"groups,omitempty"`
-    Roles      []string          `json:"roles,omitempty"`
-    Scopes     []string          `json:"scopes,omitempty"`
-    Claims     map[string]any    `json:"claims,omitempty"`
-    AuthMethod string            `json:"auth_method"` // e.g. "static-users", "oidc-jwt"
-    ExpiresAt  time.Time         `json:"exp,omitempty"`
+	Subject    string         `json:"sub"`
+	Issuer     string         `json:"iss"`
+	Tenant     string         `json:"tenant,omitempty"`
+	Namespace  string         `json:"namespace,omitempty"`
+	Groups     []string       `json:"groups,omitempty"`
+	Roles      []string       `json:"roles,omitempty"`
+	Scopes     []string       `json:"scopes,omitempty"`
+	Claims     map[string]any `json:"claims,omitempty"`
+	AuthMethod string         `json:"auth_method"` // e.g. "static-users", "oidc-jwt"
+	ExpiresAt  time.Time      `json:"exp,omitempty"`
 }
 
 // IsAdmin returns true when the principal carries the built-in "admin" role.
 // This replaces the former middleware.User.IsAdmin boolean field.
 func (p *Principal) IsAdmin() bool {
-    for _, r := range p.Roles {
-        if r == "admin" {
-            return true
-        }
-    }
-    return false
+	for _, r := range p.Roles {
+		if r == "admin" {
+			return true
+		}
+	}
+	return false
 }
 
 // Anonymous returns a Principal with no identity (anon calls).
 func Anonymous() *Principal {
-    return &Principal{Subject: "anon", Issuer: "gitstore", AuthMethod: "none"}
+	return &Principal{Subject: "anon", Issuer: "gitstore", AuthMethod: "none"}
 }
 
 // Capability flags returned by AuthNProvider.Capabilities.
 type Capability uint32
 
 const (
-    CapAuthenticate       Capability = 1 << iota
-    CapIssueSession
-    CapIntrospect
-    CapGroupResolution
-    CapUserLookup
+	CapAuthenticate Capability = 1 << iota
+	CapIssueSession
+	CapIntrospect
+	CapGroupResolution
+	CapUserLookup
 )
 
 // AuthRequest wraps the inbound HTTP request to pass to AuthNProvider.Authenticate.
 // This is intentionally not *http.Request to keep the interface testable.
 type AuthRequest struct {
-    Header     http.Header
-    RemoteAddr string
-    // ForwardedSubject is non-empty when the request arrived via gRPC metadata
-    // from the Git-HTTP proxy. Providers that see this skip HTTP credential extraction.
-    ForwardedSubject string
+	Header     http.Header
+	RemoteAddr string
+	// ForwardedSubject is non-empty when the request arrived via gRPC metadata
+	// from the Git-HTTP proxy. Providers that see this skip HTTP credential extraction.
+	ForwardedSubject string
 }
 
 // AuthNProvider authenticates an inbound request and returns a Principal + Decision.
 type AuthNProvider interface {
-    // Name returns the canonical provider name (e.g. "static-users").
-    Name() string
-    // Capabilities returns the set of operations this provider can perform.
-    Capabilities() Capability
-    // Authenticate inspects req and returns (principal, decision).
-    // Returns OutcomeAllow with a populated Principal on success.
-    // Returns OutcomeDeny to hard-fail (chain stops).
-    // Returns a nil Principal + OutcomeChallenge to signal "not my token, try next".
-    Authenticate(ctx context.Context, req AuthRequest) (*Principal, Decision, error)
-    // RevokeSession invalidates the token identified by jti.
-    // Providers that don't support revocation return ErrNotSupported.
-    RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error
-    // RefreshSession validates oldToken and issues a replacement.
-    // Providers that don't support refresh return ErrNotSupported.
-    RefreshSession(ctx context.Context, oldToken string) (newToken string, exp time.Time, err error)
+	// Name returns the canonical provider name (e.g. "static-users").
+	Name() string
+	// Capabilities returns the set of operations this provider can perform.
+	Capabilities() Capability
+	// Authenticate inspects req and returns (principal, decision).
+	// Returns OutcomeAllow with a populated Principal on success.
+	// Returns OutcomeDeny to hard-fail (chain stops).
+	// Returns a nil Principal + OutcomeChallenge to signal "not my token, try next".
+	Authenticate(ctx context.Context, req AuthRequest) (*Principal, Decision, error)
+	// RevokeSession invalidates the token identified by jti.
+	// Providers that don't support revocation return ErrNotSupported.
+	RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error
+	// RefreshSession validates oldToken and issues a replacement.
+	// Providers that don't support refresh return ErrNotSupported.
+	RefreshSession(ctx context.Context, oldToken string) (newToken string, exp time.Time, err error)
 }
 
 // ResourceContext carries the resource identifier passed to AuthZProvider.Authorize.
 type ResourceContext struct {
-    Kind      string         // e.g. "namespace", "repository"
-    Name      string         // e.g. "my-org"
-    OwnerSub  string         // subject of the resource owner, if known
-    Attrs     map[string]any // extra attributes (e.g. tier)
+	Kind     string         // e.g. "namespace", "repository"
+	Name     string         // e.g. "my-org"
+	OwnerSub string         // subject of the resource owner, if known
+	Attrs    map[string]any // extra attributes (e.g. tier)
 }
 
 // AuthZProvider makes access-control decisions for a given (principal, action, resource).
 type AuthZProvider interface {
-    Name() string
-    // Authorize returns Allow or Deny for the given action on the resource.
-    // action follows the canonical grammar <kind>[.<subresource>].<verb> per ADR 0010
-    // (no qualifier position — the last dot-segment is always the verb):
-    // e.g. "namespace.delete", "repository.contents.read", "product.management.read".
-    Authorize(ctx context.Context, p *Principal, action string, res ResourceContext) (Decision, error)
+	Name() string
+	// Authorize returns Allow or Deny for the given action on the resource.
+	// action follows the canonical grammar <kind>[.<subresource>].<verb> per ADR 0010
+	// (no qualifier position — the last dot-segment is always the verb):
+	// e.g. "namespace.delete", "repository.contents.read", "product.management.read".
+	Authorize(ctx context.Context, p *Principal, action string, res ResourceContext) (Decision, error)
 }
 
 // UserProfile is a provider-agnostic user record.
 type UserProfile struct {
-    Subject     string
-    DisplayName string
-    Email       string
-    Groups      []string
-    Active      bool
+	Subject     string
+	DisplayName string
+	Email       string
+	Groups      []string
+	Active      bool
 }
 
 // UserDirProvider provides user-directory operations (optional plane).
 type UserDirProvider interface {
-    Name() string
-    GetBySubject(ctx context.Context, subject string) (*UserProfile, error)
-    ListGroups(ctx context.Context, subject string) ([]string, error)
-    SearchUsers(ctx context.Context, query string, limit int) ([]*UserProfile, error)
-    UpsertProfile(ctx context.Context, p *UserProfile) error
-    Deactivate(ctx context.Context, subject string) error
+	Name() string
+	GetBySubject(ctx context.Context, subject string) (*UserProfile, error)
+	ListGroups(ctx context.Context, subject string) ([]string, error)
+	SearchUsers(ctx context.Context, query string, limit int) ([]*UserProfile, error)
+	UpsertProfile(ctx context.Context, p *UserProfile) error
+	Deactivate(ctx context.Context, subject string) error
 }
 
 // ErrNotSupported is returned by providers for operations they do not implement.
@@ -176,7 +180,8 @@ var ErrNotSupported = errors.New("auth: operation not supported by this provider
 
 ### 1b. Rust AuthN Traits (git-service layer)
 
-The git-service needs two AuthN surfaces: validating gRPC callers (HMAC interceptor) and authenticating Git smart-HTTP requests.
+The git-service needs two AuthN surfaces: validating gRPC callers (HMAC interceptor) and authenticating Git smart-HTTP
+requests.
 
 ```rust
 // File: gitstore-git-service/src/auth/mod.rs
@@ -261,70 +266,78 @@ impl GrpcAuthN for HmacGrpcAuthN {
 package auth
 
 import (
-    "context"
-    "fmt"
-    "sync"
+	"context"
+	"fmt"
+	"sync"
 )
 
 // ProviderRegistry holds the active provider for each plane.
 type ProviderRegistry struct {
-    mu         sync.RWMutex
-    authnChain *ChainedAuthN
-    authz      AuthZProvider
-    userdir    UserDirProvider
+	mu         sync.RWMutex
+	authnChain *ChainedAuthN
+	authz      AuthZProvider
+	userdir    UserDirProvider
 }
 
 func NewProviderRegistry(chain *ChainedAuthN, authz AuthZProvider, userdir UserDirProvider) *ProviderRegistry {
-    return &ProviderRegistry{authnChain: chain, authz: authz, userdir: userdir}
+	return &ProviderRegistry{authnChain: chain, authz: authz, userdir: userdir}
 }
 
-func (r *ProviderRegistry) AuthN() *ChainedAuthN     { r.mu.RLock(); defer r.mu.RUnlock(); return r.authnChain }
-func (r *ProviderRegistry) AuthZ() AuthZProvider     { r.mu.RLock(); defer r.mu.RUnlock(); return r.authz }
-func (r *ProviderRegistry) UserDir() UserDirProvider { r.mu.RLock(); defer r.mu.RUnlock(); return r.userdir }
+func (r *ProviderRegistry) AuthN() *ChainedAuthN {
+	r.mu.RLock();
+	defer r.mu.RUnlock();
+	return r.authnChain
+}
+func (r *ProviderRegistry) AuthZ() AuthZProvider { r.mu.RLock(); defer r.mu.RUnlock(); return r.authz }
+func (r *ProviderRegistry) UserDir() UserDirProvider {
+	r.mu.RLock();
+	defer r.mu.RUnlock();
+	return r.userdir
+}
 
 // ChainedAuthN tries each provider in order; first Allow wins.
 // An explicit Deny from any provider short-circuits the chain immediately.
 // A nil Principal with OutcomeChallenge means "not my token, continue".
 type ChainedAuthN struct {
-    providers []AuthNProvider
+	providers []AuthNProvider
 }
 
 func NewChainedAuthN(providers ...AuthNProvider) *ChainedAuthN {
-    return &ChainedAuthN{providers: providers}
+	return &ChainedAuthN{providers: providers}
 }
 
 func (c *ChainedAuthN) Authenticate(ctx context.Context, req AuthRequest) (*Principal, Decision, error) {
-    for _, p := range c.providers {
-        principal, decision, err := p.Authenticate(ctx, req)
-        if err != nil {
-            return nil, Deny(p.Name(), fmt.Sprintf("provider error: %v", err)), err
-        }
-        switch decision.Outcome {
-        case OutcomeAllow:
-            return principal, decision, nil // ← short-circuit: first success wins
-        case OutcomeDeny:
-            return nil, decision, nil       // ← short-circuit: explicit deny stops chain
-        case OutcomeChallenge:
-            continue                        // ← not my token, try next
-        }
-    }
-    // All providers returned Challenge — credentials were present but no provider accepted
-    // them. This is an authentication failure, not an anonymous request.
-    return nil, Deny("chain", "credentials present but no provider accepted them"), nil
+	for _, p := range c.providers {
+		principal, decision, err := p.Authenticate(ctx, req)
+		if err != nil {
+			return nil, Deny(p.Name(), fmt.Sprintf("provider error: %v", err)), err
+		}
+		switch decision.Outcome {
+		case OutcomeAllow:
+			return principal, decision, nil // ← short-circuit: first success wins
+		case OutcomeDeny:
+			return nil, decision, nil // ← short-circuit: explicit deny stops chain
+		case OutcomeChallenge:
+			continue // ← not my token, try next
+		}
+	}
+	// All providers returned Challenge — credentials were present but no provider accepted
+	// them. This is an authentication failure, not an anonymous request.
+	return nil, Deny("chain", "credentials present but no provider accepted them"), nil
 }
 
 // RevokeSession delegates to the first provider that supports it.
 func (c *ChainedAuthN) RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error {
-    for _, p := range c.providers {
-        err := p.RevokeSession(ctx, jti, expiresAt)
-        if err == nil {
-            return nil
-        }
-        if err != ErrNotSupported {
-            return err
-        }
-    }
-    return ErrNotSupported
+	for _, p := range c.providers {
+		err := p.RevokeSession(ctx, jti, expiresAt)
+		if err == nil {
+			return nil
+		}
+		if err != ErrNotSupported {
+			return err
+		}
+	}
+	return ErrNotSupported
 }
 ```
 
@@ -343,60 +356,64 @@ package staticusers
 //   api.auth.jwt.secret              → GITSTORE_API__AUTH__JWT__SECRET
 
 type StaticUsersProvider struct {
-    users        map[string]UserEntry
-    usersFile    string
-    revocations  RevocationStore
+	users       map[string]UserEntry
+	usersFile   string
+	revocations RevocationStore
 }
 
 func New(cfg config.AuthConfig, logger *zap.Logger) (*StaticUsersProvider, error) {
-    // Load usersFile as versioned YAML; each entry contains a username,
-    // bcrypt password_hash, and optional display_name/email metadata.
-    panic("not implemented")
+	// Load usersFile as versioned YAML; each entry contains a username,
+	// bcrypt password_hash, and optional display_name/email metadata.
+	panic("not implemented")
 }
 
 func (p *StaticUsersProvider) Name() string { return "static-users" }
 
 func (p *StaticUsersProvider) Capabilities() auth.Capability {
-    return auth.CapAuthenticate | auth.CapIssueSession | auth.CapIntrospect | auth.CapUserLookup
+	return auth.CapAuthenticate | auth.CapIssueSession | auth.CapIntrospect | auth.CapUserLookup
 }
 
 func (p *StaticUsersProvider) Authenticate(ctx context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
-    // 1. Extract Authorization: Bearer <jwt>
-    // 2. Parse the JWT (golang-jwt/v5, HS256, using GITSTORE_API__AUTH__JWT__SECRET)
-    // 3. If parse fails → OutcomeChallenge (not my token, try next provider)
-    // 4. Validate issuer == configured base + "/static-users" (always appended)
-    //    or the exact legacy configured base during rolling upgrade
-    // 5. Check blacklist by jti claim
-    // 6. If blacklisted → OutcomeDeny("token revoked")
-    // 7. Build Principal{Subject: claims.sub, Issuer: issuer, Roles: nil, AuthMethod: "static-users"}
-    // 8. Return Allow
+	// 1. Extract Authorization: Bearer <jwt>
+	// 2. Parse the JWT (golang-jwt/v5, HS256, using GITSTORE_API__AUTH__JWT__SECRET)
+	// 3. If parse fails → OutcomeChallenge (not my token, try next provider)
+	// 4. Validate issuer == configured base + "/static-users" (always appended)
+	//    or the exact legacy configured base during rolling upgrade
+	// 5. Check blacklist by jti claim
+	// 6. If blacklisted → OutcomeDeny("token revoked")
+	// 7. Build Principal{Subject: claims.sub, Issuer: issuer, Roles: nil, AuthMethod: "static-users"}
+	// 8. Return Allow
 
-    // Also handles Basic Auth for Git smart-HTTP:
-    // 1. Check for Authorization: Basic header
-    // 2. Decode credentials
-    // 3. Compare username, bcrypt.CompareHashAndPassword(hash, password)
-    // 4. On match → build Principal with Roles: ["admin"] and issue a short-lived JWT
-    // 5. Return Allow
-    panic("not implemented")
+	// Also handles Basic Auth for Git smart-HTTP:
+	// 1. Check for Authorization: Basic header
+	// 2. Decode credentials
+	// 3. Compare username, bcrypt.CompareHashAndPassword(hash, password)
+	// 4. On match → build Principal with Roles: ["admin"] and issue a short-lived JWT
+	// 5. Return Allow
+	panic("not implemented")
 }
 
 func (p *StaticUsersProvider) RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error {
-    p.blacklist.add(jti, expiresAt)
-    return nil
+	p.blacklist.add(jti, expiresAt)
+	return nil
 }
 
 func (p *StaticAdminProvider) RefreshSession(ctx context.Context, oldToken string) (string, time.Time, error) {
-    // Parse old token (ignore expiry), validate all other claims, check not blacklisted,
-    // revoke old jti, issue new JWT with new jti and exp=now+duration, return.
-    panic("not implemented")
+	// Parse old token (ignore expiry), validate all other claims, check not blacklisted,
+	// revoke old jti, issue new JWT with new jti and exp=now+duration, return.
+	panic("not implemented")
 }
 ```
 
-Session revocations are stored in the shared ScyllaDB `auth_session_revocations` table with per-JTI TTL through token expiry plus verifier leeway. Refresh uses an `IF NOT EXISTS` consume operation so only one replica can rotate a token. The memdb backend implements the same contract in process for development.
+Session revocations are stored in the shared ScyllaDB `auth_session_revocations` table with per-JTI TTL through token
+expiry plus verifier leeway. Refresh uses an `IF NOT EXISTS` consume operation so only one replica can rotate a token.
+The memdb backend implements the same contract in process for development.
 
 ### 2b. oidc-jwt (AuthN)
 
-> **New dependency required:** `github.com/coreos/go-oidc/v3` must be added to `go.mod`. Justification: golang-jwt/v5 already in go.mod validates HS256 but cannot perform JWKS-backed RSA/EC signature verification or OIDC Discovery. No existing dependency provides equivalent functionality.
+> **New dependency required:** `github.com/coreos/go-oidc/v3` must be added to `go.mod`. Justification: golang-jwt/v5
+already in go.mod validates HS256 but cannot perform JWKS-backed RSA/EC signature verification or OIDC Discovery. No
+existing dependency provides equivalent functionality.
 
 ```go
 // File: gitstore-api/internal/auth/provider/oidcjwt/provider.go
@@ -409,59 +426,59 @@ package oidcjwt
 //   api.auth.oidc_jwt.clock_skew   → GITSTORE_API__AUTH__OIDC_JWT__CLOCK_SKEW   (default "2m")
 
 type OIDCJWTProvider struct {
-    verifier    *oidc.IDTokenVerifier
-    issuerURI   string
-    clientID    string
-    provider    *oidc.Provider
-    logger      *zap.Logger
+	verifier  *oidc.IDTokenVerifier
+	issuerURI string
+	clientID  string
+	provider  *oidc.Provider
+	logger    *zap.Logger
 }
 
 func New(ctx context.Context, cfg *viper.Viper, logger *zap.Logger) (*OIDCJWTProvider, error) {
-    issuerURI := cfg.GetString("api.auth.oidc_jwt.issuer_uri")
-    clientID  := cfg.GetString("api.auth.oidc_jwt.client_id")
-    // go-oidc performs OIDC Discovery (/.well-known/openid-configuration) here:
-    provider, err := oidc.NewProvider(ctx, issuerURI)
-    // verifier enforces iss + aud; clock skew leeway is handled by go-oidc internally
-    // through oidc.Config.Now which can be overridden in tests
-    verifier := provider.Verifier(&oidc.Config{
-        ClientID:        clientID,
-        SkipExpiryCheck: false, // RFC 7519 §4.1.4 MUST validate exp
-        // go-oidc applies a 1-minute built-in leeway; set GITSTORE_API__AUTH__OIDC_JWT__CLOCK_SKEW for override
-    })
-    return &OIDCJWTProvider{verifier: verifier, issuerURI: issuerURI, clientID: clientID,
-        provider: provider, logger: logger}, nil
+	issuerURI := cfg.GetString("api.auth.oidc_jwt.issuer_uri")
+	clientID := cfg.GetString("api.auth.oidc_jwt.client_id")
+	// go-oidc performs OIDC Discovery (/.well-known/openid-configuration) here:
+	provider, err := oidc.NewProvider(ctx, issuerURI)
+	// verifier enforces iss + aud; clock skew leeway is handled by go-oidc internally
+	// through oidc.Config.Now which can be overridden in tests
+	verifier := provider.Verifier(&oidc.Config{
+		ClientID:        clientID,
+		SkipExpiryCheck: false, // RFC 7519 §4.1.4 MUST validate exp
+		// go-oidc applies a 1-minute built-in leeway; set GITSTORE_API__AUTH__OIDC_JWT__CLOCK_SKEW for override
+	})
+	return &OIDCJWTProvider{verifier: verifier, issuerURI: issuerURI, clientID: clientID,
+		provider: provider, logger: logger}, nil
 }
 
 func (p *OIDCJWTProvider) Name() string { return "oidc-jwt" }
 
 func (p *OIDCJWTProvider) Capabilities() auth.Capability {
-    return auth.CapAuthenticate | auth.CapIntrospect | auth.CapGroupResolution
+	return auth.CapAuthenticate | auth.CapIntrospect | auth.CapGroupResolution
 }
 
 func (p *OIDCJWTProvider) Authenticate(ctx context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
-    // 1. Extract bearer token from Authorization header
-    // 2. Check JWT issuer claim WITHOUT verifying signature (just parse, no verify)
-    //    If issuer != p.issuerURI → return OutcomeChallenge (not my token)
-    //    This prevents passing gitstore-issued HS256 tokens to the JWKS verifier.
-    // 3. verifier.Verify(ctx, rawToken):
-    //    - On ErrKeyNotFound: call provider.RemoteKeySet forced refresh, retry once
-    //    - On other errors: OutcomeChallenge (malformed, not an OIDC token)
-    // 4. Extract standard claims:
-    //    - sub, iss, exp, groups (custom claim), roles (custom claim)
-    // 5. Build Principal{Subject: sub, Issuer: iss, Groups: groups, Roles: roles,
-    //                     AuthMethod: "oidc-jwt", ExpiresAt: exp}
-    // 6. Return Allow
-    panic("not implemented")
+	// 1. Extract bearer token from Authorization header
+	// 2. Check JWT issuer claim WITHOUT verifying signature (just parse, no verify)
+	//    If issuer != p.issuerURI → return OutcomeChallenge (not my token)
+	//    This prevents passing gitstore-issued HS256 tokens to the JWKS verifier.
+	// 3. verifier.Verify(ctx, rawToken):
+	//    - On ErrKeyNotFound: call provider.RemoteKeySet forced refresh, retry once
+	//    - On other errors: OutcomeChallenge (malformed, not an OIDC token)
+	// 4. Extract standard claims:
+	//    - sub, iss, exp, groups (custom claim), roles (custom claim)
+	// 5. Build Principal{Subject: sub, Issuer: iss, Groups: groups, Roles: roles,
+	//                     AuthMethod: "oidc-jwt", ExpiresAt: exp}
+	// 6. Return Allow
+	panic("not implemented")
 }
 
 func (p *OIDCJWTProvider) RevokeSession(_ context.Context, _ string, _ time.Time) error {
-    // OIDC tokens are stateless; revocation requires the IdP's revocation endpoint.
-    // Phase 1: return ErrNotSupported. Phase 2: call RFC 7009 revocation endpoint.
-    return auth.ErrNotSupported
+	// OIDC tokens are stateless; revocation requires the IdP's revocation endpoint.
+	// Phase 1: return ErrNotSupported. Phase 2: call RFC 7009 revocation endpoint.
+	return auth.ErrNotSupported
 }
 
 func (p *OIDCJWTProvider) RefreshSession(_ context.Context, _ string) (string, time.Time, error) {
-    return "", time.Time{}, auth.ErrNotSupported
+	return "", time.Time{}, auth.ErrNotSupported
 }
 ```
 
@@ -476,14 +493,14 @@ package allowall
 type AllowAllProvider struct{ warned bool }
 
 func New(logger *zap.Logger) *AllowAllProvider {
-    logger.Warn("SECURITY: authz provider is allow-all — ALL authorization checks are disabled. DO NOT use in production.")
-    return &AllowAllProvider{warned: true}
+	logger.Warn("SECURITY: authz provider is allow-all — ALL authorization checks are disabled. DO NOT use in production.")
+	return &AllowAllProvider{warned: true}
 }
 
 func (p *AllowAllProvider) Name() string { return "allow-all" }
 
 func (p *AllowAllProvider) Authorize(_ context.Context, _ *auth.Principal, action string, _ auth.ResourceContext) (auth.Decision, error) {
-    return auth.Allow("allow-all", "allow-all provider permits everything"), nil
+	return auth.Allow("allow-all", "allow-all provider permits everything"), nil
 }
 ```
 
@@ -497,32 +514,34 @@ package rbaclocal
 //   api.auth.rbac_local.policy_file → GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE (default "policy.yaml")
 
 type RBACLocalProvider struct {
-    mu     sync.RWMutex
-    policy *Policy
-    path   string
-    logger *zap.Logger
+	mu     sync.RWMutex
+	policy *Policy
+	path   string
+	logger *zap.Logger
 }
 
 func New(cfg config.RBACConfig, logger *zap.Logger) (*RBACLocalProvider, error) {
-    path := cfg.PolicyFile
-    if path == "" { path = "policy.yaml" }
-    p := &RBACLocalProvider{path: path, logger: logger}
-    return p, p.reload()
+	path := cfg.PolicyFile
+	if path == "" {
+		path = "policy.yaml"
+	}
+	p := &RBACLocalProvider{path: path, logger: logger}
+	return p, p.reload()
 }
 
 func (p *RBACLocalProvider) Authorize(ctx context.Context, principal *auth.Principal, action string, res auth.ResourceContext) (auth.Decision, error) {
-    p.mu.RLock()
-    policy := p.policy
-    p.mu.RUnlock()
+	p.mu.RLock()
+	policy := p.policy
+	p.mu.RUnlock()
 
-    // 1. For each role in principal.Roles, look up role in policy.Roles
-    // 2. Check if action is in role.Allow
-    // 3. Check if action matches any glob in role.AllowGlob
-    // 4. Check role.DenyActions — explicit deny overrides allow
-    // 5. Check policy.DefaultDeny
-    // If any allow matches and no deny matches → OutcomeAllow
-    // Otherwise → OutcomeDeny
-    panic("not implemented")
+	// 1. For each role in principal.Roles, look up role in policy.Roles
+	// 2. Check if action is in role.Allow
+	// 3. Check if action matches any glob in role.AllowGlob
+	// 4. Check role.DenyActions — explicit deny overrides allow
+	// 5. Check policy.DefaultDeny
+	// If any allow matches and no deny matches → OutcomeAllow
+	// Otherwise → OutcomeDeny
+	panic("not implemented")
 }
 ```
 
@@ -548,21 +567,21 @@ kind: RbacLocalConfiguration
 clusterRoles:
   cluster-admin:
     rules:
-      - resources: ["*"]
-        verbs: ["*"]
-  namespace-owner:                               # cluster-tier role, gated to owned namespaces
+      - resources: [ "*" ]
+        verbs: [ "*" ]
+  namespace-owner: # cluster-tier role, gated to owned namespaces
     rules:
-      - resources: ["namespace"]
-        verbs: ["read", "update", "delete"]
+      - resources: [ "namespace" ]
+        verbs: [ "read", "update", "delete" ]
         when: owner                              # OwnerSub ∈ {principal.subject} ∪ principal.groups
 
-roles:                                           # namespaced rule-sets; namespace comes from binding
+roles: # namespaced rule-sets; namespace comes from binding
   developer:
     rules:
-      - resources: ["repository"]
-        verbs: ["read", "list", "watch"]
-      - resources: ["repository/contents"]       # git fetch/push via subresource path
-        verbs: ["read", "write"]
+      - resources: [ "repository" ]
+        verbs: [ "read", "list", "watch" ]
+      - resources: [ "repository/contents" ]       # git fetch/push via subresource path
+        verbs: [ "read", "write" ]
 
 clusterRoleBindings:
   - roleRef: { kind: ClusterRole, name: cluster-admin }
@@ -578,8 +597,8 @@ roleBindings:
 defaultDeny: true
 ```
 
-Repository control-plane operations use the canonical verbs
-(`repository.create|read|list|watch|update|delete`) with scope decided by the
+Repository control-plane operations use the canonical verbs (`repository.create|read|list|watch|update|delete`) with
+scope decided by the
 binding tier (`ClusterRoleBinding` for cross-namespace reach) or `resourceNames`
 for specific instances — not `.own`/`.any` suffixes. Git smart HTTP uses the
 `repository.contents.read` / `repository.contents.write` subresource actions; the
@@ -610,21 +629,21 @@ func (p *AnonymousProvider) Name() string { return "anonymous" }
 func (p *AnonymousProvider) Capabilities() auth.Capability { return auth.CapAuthenticate }
 
 func (p *AnonymousProvider) Authenticate(_ context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
-    hasCredentials := req.Header.Get("Authorization") != "" || req.ForwardedSubject != ""
-    if hasCredentials {
-        // Credentials were presented but no prior provider accepted them.
-        // Return Challenge so the chain fallthrough becomes a Deny.
-        return nil, auth.Challenge("anonymous", "credentials present but unrecognized"), nil
-    }
-    return auth.Anonymous(), auth.Allow("anonymous", "no credentials presented"), nil
+	hasCredentials := req.Header.Get("Authorization") != "" || req.ForwardedSubject != ""
+	if hasCredentials {
+		// Credentials were presented but no prior provider accepted them.
+		// Return Challenge so the chain fallthrough becomes a Deny.
+		return nil, auth.Challenge("anonymous", "credentials present but unrecognized"), nil
+	}
+	return auth.Anonymous(), auth.Allow("anonymous", "no credentials presented"), nil
 }
 
 func (p *AnonymousProvider) RevokeSession(_ context.Context, _ string, _ time.Time) error {
-    return auth.ErrNotSupported
+	return auth.ErrNotSupported
 }
 
 func (p *AnonymousProvider) RefreshSession(_ context.Context, _ string) (string, time.Time, error) {
-    return "", time.Time{}, auth.ErrNotSupported
+	return "", time.Time{}, auth.ErrNotSupported
 }
 ```
 
@@ -646,19 +665,19 @@ func New() *NoneProvider { return &NoneProvider{} }
 func (p *NoneProvider) Name() string { return "none" }
 
 func (p *NoneProvider) GetBySubject(_ context.Context, _ string) (*auth.UserProfile, error) {
-    return nil, auth.ErrNotSupported
+	return nil, auth.ErrNotSupported
 }
 func (p *NoneProvider) ListGroups(_ context.Context, _ string) ([]string, error) {
-    return nil, auth.ErrNotSupported
+	return nil, auth.ErrNotSupported
 }
 func (p *NoneProvider) SearchUsers(_ context.Context, _ string, _ int) ([]*auth.UserProfile, error) {
-    return nil, auth.ErrNotSupported
+	return nil, auth.ErrNotSupported
 }
 func (p *NoneProvider) UpsertProfile(_ context.Context, _ *auth.UserProfile) error {
-    return auth.ErrNotSupported
+	return auth.ErrNotSupported
 }
 func (p *NoneProvider) Deactivate(_ context.Context, _ string) error {
-    return auth.ErrNotSupported
+	return auth.ErrNotSupported
 }
 ```
 
@@ -686,13 +705,18 @@ IsAdmin   bool                  → (removed)            derived via Principal.I
                                   ExpiresAt  time.Time (json:"exp")          NEW
 ```
 
-The **context key** in `middleware/auth.go` changes from `userContextKey` (type `struct{}`) to `principalContextKey` (new package-private key in `internal/auth/context.go`). The `GetUserFromContext(ctx) *middleware.User` function is replaced by `auth.PrincipalFromContext(ctx) *auth.Principal`. A compatibility shim `middleware.GetUserFromContext` existed during the transition and has been deleted (T028) — all callers have been migrated to use `auth.PrincipalFromContext` directly.
+The **context key** in `middleware/auth.go` changes from `userContextKey` (type `struct{}`) to `principalContextKey`
+(new package-private key in `internal/auth/context.go`). The `GetUserFromContext(ctx) *middleware.User` function is
+replaced by `auth.PrincipalFromContext(ctx) *auth.Principal`. A compatibility shim `middleware.GetUserFromContext`
+existed during the transition and has been deleted (T028) — all callers have been migrated to use
+`auth.PrincipalFromContext` directly.
 
 ### 3b. Migrating the Two Live isAdmin Checks
 
 Both checks in `service.go` follow the same three-step pattern without breaking existing behaviour:
 
 **createNamespace (tier validation):**
+
 ```text
 Before:
   if tier == ORGANIZATION && !user.IsAdmin {
@@ -706,6 +730,7 @@ After:
       return ErrForbidden(decision.Reason)
   }
 ```
+
 The verb is the canonical `namespace.create`; the ORGANIZATION-vs-USER tier gate is a rule
 condition on `attrs.tier` ([ADR 0010 §9](../ADRs/0010-authorization-model.md)), not a
 `namespace.create.organization` action variant. The `rbac-local` policy grants unconditional
@@ -713,6 +738,7 @@ condition on `attrs.tier` ([ADR 0010 §9](../ADRs/0010-authorization-model.md)),
 unconditionally; behaviour is identical to the current check.
 
 **deleteNamespace (owner-or-admin):**
+
 ```text
 Before:
   if ns.OwnerUsername != user.Username && !user.IsAdmin {
@@ -726,6 +752,7 @@ After:
       return ErrForbidden(decision.Reason)
   }
 ```
+
 The verb is the canonical `namespace.delete`; the caller no longer pre-computes ownership into the
 action string. Ownership is a rule condition (`when: owner`, comparing `ResourceContext.OwnerSub`
 against `{principal.subject} ∪ principal.groups`) and cross-tenant reach is a `ClusterRoleBinding`
@@ -760,6 +787,7 @@ After:
 Both mutations are provider-agnostic by delegating to `ChainedAuthN`:
 
 **Logout:**
+
 ```text
 mutation Logout(token: String!): Boolean
   1. Parse the JWT (no signature verify, just claims) to extract jti + exp
@@ -771,6 +799,7 @@ mutation Logout(token: String!): Boolean
 ```
 
 **RefreshToken:**
+
 ```text
 mutation RefreshToken(token: String!): AuthPayload
   1. Call registry.AuthN().RefreshSession(ctx, oldToken)
@@ -780,7 +809,8 @@ mutation RefreshToken(token: String!): AuthPayload
   2. Return new token + expiry
 ```
 
-The **token revocation store** is shared by API replicas. ScyllaDB persists JTIs with bounded TTL, while memdb provides the development implementation. Refresh consumes a JTI atomically so concurrent replica requests cannot both rotate it.
+The **token revocation store** is shared by API replicas. ScyllaDB persists JTIs with bounded TTL, while memdb provides
+the development implementation. Refresh consumes a JTI atomically so concurrent replica requests cannot both rotate it.
 
 ---
 
@@ -790,7 +820,12 @@ The **token revocation store** is shared by API replicas. ScyllaDB persists JTIs
 
 **Decision:** Use a shared HMAC bearer token passed as gRPC metadata.
 
-**Justification:** mTLS (option i) requires PKI infrastructure (CA, cert generation, rotation tooling) that does not exist today. Adding it from scratch in phase 1 would block progress on the auth framework itself. Network-only trust (option iii) is acceptable for development but unacceptable once the Git smart-HTTP layer carries real user identities. A shared HMAC secret is operationally simple, requires one new config key on each side, provides cryptographic identity of the caller (not just network adjacency), and can be rotated without cert infrastructure. mTLS is the phase-2 upgrade once a cert management solution is chosen.
+**Justification:** mTLS (option i) requires PKI infrastructure (CA, cert generation, rotation tooling) that does not
+exist today. Adding it from scratch in phase 1 would block progress on the auth framework itself. Network-only trust
+(option iii) is acceptable for development but unacceptable once the Git smart-HTTP layer carries real user identities.
+A shared HMAC secret is operationally simple, requires one new config key on each side, provides cryptographic identity
+of the caller (not just network adjacency), and can be rotated without cert infrastructure. mTLS is the phase-2 upgrade
+once a cert management solution is chosen.
 
 **Rust Tonic interceptor:**
 
@@ -841,7 +876,7 @@ impl Interceptor for HmacInterceptor {
 type hmacCreds struct{ token string }
 
 func (h hmacCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
-    return map[string]string{"authorization": "Bearer " + h.token}, nil
+return map[string]string{"authorization": "Bearer " + h.token}, nil
 }
 func (h hmacCreds) RequireTransportSecurity() bool { return false }
 
@@ -851,9 +886,14 @@ func (h hmacCreds) RequireTransportSecurity() bool { return false }
 
 ### 4b. Git Smart-HTTP Authentication
 
-**Design overview:** The existing `githttp.Handler` in Go is wrapped by provider-chain authentication before handing off to the Git backend. The API remains the AuthN/AuthZ decision point for Git Smart HTTP: it authenticates the caller, authorizes the requested repository action, resolves `(namespace, repository)` to the stable `repository_id`, and resolves any effective push-time policy before opening the gRPC call to gitstore-git-service.
+**Design overview:** The existing `githttp.Handler` in Go is wrapped by provider-chain authentication before handing off
+to the Git backend. The API remains the AuthN/AuthZ decision point for Git Smart HTTP: it authenticates the caller,
+authorizes the requested repository action, resolves `(namespace, repository)` to the stable `repository_id`, and
+resolves any effective push-time policy before opening the gRPC call to gitstore-git-service.
 
-The git-service validates the API as the inter-service caller via the HMAC metadata described in §4a. It does not run the pluggable AuthZ provider itself, but it is not a purely dumb storage layer: receive-pack must enforce the effective git-layer policy supplied by the API for that operation.
+The git-service validates the API as the inter-service caller via the HMAC metadata described in §4a. It does not run
+the pluggable AuthZ provider itself, but it is not a purely dumb storage layer: receive-pack must enforce the effective
+git-layer policy supplied by the API for that operation.
 
 **Go layer — githttp/handler.go changes:**
 
@@ -863,33 +903,40 @@ The git-service validates the API as the inter-service caller via the HMAC metad
 // credentials return 401 before the request reaches git-service.
 // Authenticates git smart http.
 func (a *Authenticate) BasicAuthenticator(c *gin.Context) {
-	if a.logger == nil {
-		a.logger = zap.NewNop()
-	}
-	req := auth.AuthRequest{
-		Header:     c.Request.Header, 
-		RemoteAddr: c.RemoteIP(),
-	}
-    ctx := c.Request.Context()
-	principal, decision, err := a.registry.AuthN().Authenticate(ctx, req)
-	if err != nil || decision.Outcome == auth.OutcomeDeny {
-		c.Header("WWW-Authenticate", `Basic realm="GitStore"`)
-		// Return 401 (not 403) so that Git credential helpers prompt for credentials.
-		c.AbortWithStatus(http.StatusUnauthorized)
-		return
-	}
-	// Store principal in context for downstream use.
-	ctx = auth.ContextWithPrincipal(ctx, principal)
-    c.Request = c.Request.WithContext(ctx)
-	c.Next()
+if a.logger == nil {
+a.logger = zap.NewNop()
+}
+req := auth.AuthRequest{
+Header:     c.Request.Header,
+RemoteAddr: c.RemoteIP(),
+}
+ctx := c.Request.Context()
+principal, decision, err := a.registry.AuthN().Authenticate(ctx, req)
+if err != nil || decision.Outcome == auth.OutcomeDeny {
+c.Header("WWW-Authenticate", `Basic realm="GitStore"`)
+// Return 401 (not 403) so that Git credential helpers prompt for credentials.
+c.AbortWithStatus(http.StatusUnauthorized)
+return
+}
+// Store principal in context for downstream use.
+ctx = auth.ContextWithPrincipal(ctx, principal)
+c.Request = c.Request.WithContext(ctx)
+c.Next()
 }
 ```
 
-**Push-time operation context** — when the Go layer handles `git-receive-pack`, it resolves the effective policy for that repository and sends a typed context on the first `ReceivePackRequest` message. This context is immutable for the lifetime of the stream. Later chunks must not carry a different context.
+**Push-time operation context** — when the Go layer handles `git-receive-pack`, it resolves the effective policy for
+that repository and sends a typed context on the first `ReceivePackRequest` message. This context is immutable for the
+lifetime of the stream. Later chunks must not carry a different context.
 
-The effective policy is resolved from trusted control-plane state, such as the Namespace and Repository resources defined by #170 and #249. It must not be read from untrusted content in the incoming push and applied to that same push. If repository-authored configuration changes in a push, those changes apply only after successful validation/admission and status reconciliation.
+The effective policy is resolved from trusted control-plane state, such as the Namespace and Repository resources
+defined by #170 and #249. It must not be read from untrusted content in the incoming push and applied to that same push.
+If repository-authored configuration changes in a push, those changes apply only after successful validation/admission
+and status reconciliation.
 
-Operator-level service configuration remains the safety boundary. Repository policy may tighten limits, but it cannot relax global ceilings such as maximum pack size, maximum file size, required validation, or required admission unless an administrator-controlled policy explicitly allows it.
+Operator-level service configuration remains the safety boundary. Repository policy may tighten limits, but it cannot
+relax global ceilings such as maximum pack size, maximum file size, required validation, or required admission unless an
+administrator-controlled policy explicitly allows it.
 
 ```proto
 message ReceivePackRequest {
@@ -930,9 +977,15 @@ message PushPolicy {
 }
 ```
 
-`AuthContext` is a sanitized principal snapshot, not a bearer token or raw credential. If a future transport can resolve the end-user principal idiomatically from authenticated peer state, the server can construct the same `AuthContext` internally. With the current API → git-service HMAC model, the git-service can authenticate only the API caller from metadata, so the end-user actor must be supplied explicitly.
+`AuthContext` is a sanitized principal snapshot, not a bearer token or raw credential. If a future transport can resolve
+the end-user principal idiomatically from authenticated peer state, the server can construct the same `AuthContext`
+internally. With the current API → git-service HMAC model, the git-service can authenticate only the API caller from
+metadata, so the end-user actor must be supplied explicitly.
 
-**Rust git-service** — the receive-pack implementation validates that the first stream message contains a `PushContext` whose `repository_id` matches the first chunk repository ID. It applies `PushPolicy` while staging the pack, running validation, and invoking admission. The in-process hook pipeline receives a typed `HookContext` derived from `PushContext`; it must not read authentication or policy from process environment variables.
+**Rust git-service** — the receive-pack implementation validates that the first stream message contains a `PushContext`
+whose `repository_id` matches the first chunk repository ID. It applies `PushPolicy` while staging the pack, running
+validation, and invoking admission. The in-process hook pipeline receives a typed `HookContext` derived from
+`PushContext`; it must not read authentication or policy from process environment variables.
 
 ```rust
 pub struct HookContext {
@@ -980,6 +1033,7 @@ grpc_auth.hmac_secret                    GITSTORE_GRPC_AUTH__HMAC_SECRET        
 ```
 
 **gitstore-api/.env — local-fast profile:**
+
 ```text
 # local-fast: no external services required
 GITSTORE_API__AUTH__ADMIN__USERNAME=admin
@@ -993,6 +1047,7 @@ GITSTORE_GRPC_AUTH__HMAC_SECRET=dev-grpc-secret
 ```
 
 **gitstore-api/.env — future local-secure profile with OIDC (Phase 6):**
+
 ```text
 GITSTORE_API__AUTH__ADMIN__USERNAME=admin
 GITSTORE_API__AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
@@ -1009,6 +1064,7 @@ GITSTORE_GRPC_AUTH__HMAC_SECRET=local-grpc-hmac-secret
 ```
 
 **gitstore-api/.env — future production profile with OIDC/OPA (Phase 6+):**
+
 ```text
 GITSTORE_API__AUTH__ADMIN__USERNAME=admin
 GITSTORE_API__AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
@@ -1079,7 +1135,11 @@ fn default_http_auth_mode() -> String { "header".into() }
 
 **Decision: In-process only in phase 1.**
 
-**Trade-off weighed:** External gRPC/webhook providers (e.g., OPA sidecar, OpenFGA server) offer greater policy flexibility and are production-grade. However, they introduce a mandatory external service dependency that violates the `local-fast` profile constraint (must run with zero external services). Implementing the HTTP client wrappers and circuit-breaker logic for external providers before the interface contracts are stable adds risk to an already broad phase-1 scope.
+**Trade-off weighed:** External gRPC/webhook providers (e.g., OPA sidecar, OpenFGA server) offer greater policy
+flexibility and are production-grade. However, they introduce a mandatory external service dependency that violates the
+`local-fast` profile constraint (must run with zero external services). Implementing the HTTP client wrappers and
+circuit-breaker logic for external providers before the interface contracts are stable adds risk to an already broad
+phase-1 scope.
 
 **Constraint on future providers:** Every provider (embedded OPA, external OpenFGA, webhook, or
 otherwise) must implement the same `AuthZProvider` or `AuthNProvider` interface defined in §1a.
@@ -1091,19 +1151,34 @@ therefore has no remote dependency. See `022-opa-data-authorization.md` §6 and 
 
 **Decision: Log stream only in phase 1.**
 
-**Trade-off weighed:** Persisting every authz decision in ScyllaDB enables audit queries, compliance reporting, and anomaly detection dashboards. However, it requires a new datastore table schema migration, adds a write on every authorized request (hot path), and requires a decision about retention policy before any data is written. Structured log output via `zap` to stdout is immediately parseable by any log aggregation stack (Loki, Elasticsearch) without schema migrations.
+**Trade-off weighed:** Persisting every authz decision in ScyllaDB enables audit queries, compliance reporting, and
+anomaly detection dashboards. However, it requires a new datastore table schema migration, adds a write on every
+authorized request (hot path), and requires a decision about retention policy before any data is written. Structured log
+output via `zap` to stdout is immediately parseable by any log aggregation stack (Loki, Elasticsearch) without schema
+migrations.
 
-**Constraint on future providers:** Each `AuthZProvider.Authorize` call must emit a structured log line with at minimum: `provider`, `subject`, `action`, `resource_kind`, `resource_name`, `outcome`, `reason`, `request_id`, `latency_ms`. A `DecisionLogger` middleware wrapping `AuthZProvider` provides this uniformly so individual providers do not need to log themselves. A phase-3 `AuditStore` interface can optionally persist these log records without changing the `AuthZProvider` interface.
+**Constraint on future providers:** Each `AuthZProvider.Authorize` call must emit a structured log line with at minimum:
+`provider`, `subject`, `action`, `resource_kind`, `resource_name`, `outcome`, `reason`, `request_id`, `latency_ms`. A
+`DecisionLogger` middleware wrapping `AuthZProvider` provides this uniformly so individual providers do not need to log
+themselves. A phase-3 `AuditStore` interface can optionally persist these log records without changing the
+`AuthZProvider` interface.
 
 ### Decision 3: Default production AuthZ engine — OpenFGA or OPA?
 
 **Decision: OPA (Open Policy Agent) for production.**
 
-**Trade-off weighed:** OpenFGA is purpose-built for Relationship-Based Access Control (ReBAC) and excels at "does user X have permission Y on object Z via a chain of relationships?" — exactly the model needed if GitStore later implements org membership hierarchies, inherited repository permissions, or team-scoped access. OPA uses Rego, a general-purpose policy language, and its policy file model maps directly onto the `rbac-local` YAML schema used in phase 1, making the migration from `rbac-local` → OPA a matter of translating the YAML policy into Rego without changing the `AuthZProvider` interface or the action name vocabulary. OpenFGA requires a running relational store (PostgreSQL/MySQL) and a tuple-loading pipeline from GitStore's data — infrastructure that does not exist today.
+**Trade-off weighed:** OpenFGA is purpose-built for Relationship-Based Access Control (ReBAC) and excels at "does user X
+have permission Y on object Z via a chain of relationships?" — exactly the model needed if GitStore later implements org
+membership hierarchies, inherited repository permissions, or team-scoped access. OPA uses Rego, a general-purpose policy
+language, and its policy file model maps directly onto the `rbac-local` YAML schema used in phase 1, making the
+migration from `rbac-local` → OPA a matter of translating the YAML policy into Rego without changing the `AuthZProvider`
+interface or the action name vocabulary. OpenFGA requires a running relational store (PostgreSQL/MySQL) and a
+tuple-loading pipeline from GitStore's data — infrastructure that does not exist today.
 
 **Constraint on future providers:** The canonical action vocabulary (`namespace.delete`,
 `repository.contents.read`, `product.management.read`, etc.; see
-[ADR 0010](../ADRs/0010-authorization-model.md)) and `ResourceContext` struct are the contract between GraphQL middleware
+[ADR 0010](../ADRs/0010-authorization-model.md)) and `ResourceContext` struct are the contract between GraphQL
+middleware
 and the AuthZ provider. OPA Rego receives a minimized, typed projection of `(principal, action,
 ResourceContext)` plus allowlisted GraphQL field metadata. The raw GraphQL operation, schema,
 credentials, claims map, and unrelated variables are not policy input. `AuthZProvider.Authorize`
@@ -1116,78 +1191,130 @@ action-name changes. See `022-opa-data-authorization.md` §5–§9.
 ## 7. Rollout Phases
 
 ### Phase 1 — Interface foundation and static-users migration ✅ COMPLETE (031/060)
+
 **Milestone:** `auth-framework-v1`
-**Deliverable:** `internal/auth/types.go`, `ProviderRegistry`, `ChainedAuthN`, `StaticUsersProvider`, `AllowAllProvider`, `RBACLocalProvider`, `AnonymousProvider`, `NoneUserDirProvider`, `DecisionLogger`. Replace `middleware.User` context with `Principal`. Wire `allow-all` as default authz; local default authn chain is `["static-users","anonymous"]`. SIGHUP reloads local users and `rbac-local` policy. `GetUserFromContext` shim deleted; all callers use `auth.PrincipalFromContext` directly.
-**Affected packages:** `gitstore-api/internal/auth/`, `gitstore-api/internal/middleware/`, `gitstore-api/internal/graph/resolver/`
-**Test strategy:** Unit tests for each provider; integration coverage authenticates users from the configured static-users file and verifies role resolution remains an AuthZ concern; test that `allow-all` emits a zap warning on startup.
-**Rollback trigger:** Any existing integration test (login, createNamespace, deleteNamespace) fails.
+**Deliverable:** `internal/auth/types.go`, `ProviderRegistry`, `ChainedAuthN`, `StaticUsersProvider`,
+`AllowAllProvider`, `RBACLocalProvider`, `AnonymousProvider`, `NoneUserDirProvider`, `DecisionLogger`. Replace
+`middleware.User` context with `Principal`. Wire `allow-all` as default authz; local default authn chain is
+`["static-users","anonymous"]`. SIGHUP reloads local users and `rbac-local` policy. `GetUserFromContext` shim deleted;
+all callers use `auth.PrincipalFromContext` directly. **Affected packages:** `gitstore-api/internal/auth/`,
+`gitstore-api/internal/middleware/`, `gitstore-api/internal/graph/resolver/`
+**Test strategy:** Unit tests for each provider; integration coverage authenticates users from the configured
+static-users file and verifies role resolution remains an AuthZ concern; test that `allow-all` emits a zap warning on
+startup. **Rollback trigger:** Any existing integration test (login, createNamespace, deleteNamespace) fails.
 
 ### Phase 2 — Live isAdmin checks migrated to AuthZ + callerUsernameOrAnon fix ✅ COMPLETE (031)
+
 **Milestone:** `auth-framework-v1`
-**Deliverable:** `service.go` isAdmin checks replaced with `authz.Authorize` calls (§3b); `callerUsernameOrAnon` uses `Principal.Subject` (§3c); compatibility shim removed.
-**Affected packages:** `gitstore-api/internal/graph/resolver/service.go`, `gitstore-api/internal/graph/resolver/helpers.go`
-**Test strategy:** Service-layer unit tests for createNamespace (ENTERPRISE tier rejection) and deleteNamespace (non-owner rejection) with both `allow-all` and `rbac-local` providers. Golden-path test: admin can create ENTERPRISE namespace; non-admin cannot.
-**Rollback trigger:** Either of the two existing auth checks behaves differently from before.
+**Deliverable:** `service.go` isAdmin checks replaced with `authz.Authorize` calls (§3b); `callerUsernameOrAnon` uses
+`Principal.Subject` (§3c); compatibility shim removed. **Affected packages:**
+`gitstore-api/internal/graph/resolver/service.go`, `gitstore-api/internal/graph/resolver/helpers.go`
+**Test strategy:** Service-layer unit tests for createNamespace (ENTERPRISE tier rejection) and deleteNamespace
+(non-owner rejection) with both `allow-all` and `rbac-local` providers. Golden-path test: admin can create ENTERPRISE
+namespace; non-admin cannot. **Rollback trigger:** Either of the two existing auth checks behaves differently from
+before.
 
 ### Phase 3 — Logout and RefreshToken mutations implemented ✅ COMPLETE (032)
+
 **Milestone:** `auth-framework-v1`
-**Deliverable:** `Logout` mutation calls `ChainedAuthN.RevokeSession`; `RefreshToken` mutation calls `ChainedAuthN.RefreshSession`; `StaticAdminProvider` blacklist is functional. `Login` resolver migrated away from legacy `authMiddleware` stubs — `user.isAdmin` and `user.username` now derived from `Principal`. `IssueSession` added to `AuthNProvider` interface. `Principal.TokenID` carries JWT `jti`. `ContextWithRawToken`/`RawTokenFromContext` store the raw Bearer string for refresh. `GITSTORE_API__AUTH__JWT__REFRESH_GRACE` (default `60s`) bounds the refresh window.
-**Affected packages:** `gitstore-api/internal/auth/types.go`, `gitstore-api/internal/auth/context.go`, `gitstore-api/internal/auth/registry.go`, `gitstore-api/internal/auth/provider/staticadmin/`, `gitstore-api/internal/auth/provider/anonymous/`, `gitstore-api/internal/middleware/auth.go`, `gitstore-api/internal/graph/resolver/`
-**Session lifecycle:** Production revocation state survives API restart in ScyllaDB and is shared across replicas. Rows expire automatically after the token's natural expiry plus verifier leeway.
-**Test strategy:** Unit tests for all three mutations (logout, refreshToken, login) in `tests/unit/resolver/auth_resolvers_test.go`; grace-window and TokenID population tests in `tests/unit/auth/staticadmin_test.go`.
-**Rollback trigger:** Logout or RefreshToken returns 500 or leaves token valid after revocation; login returns wrong `isAdmin` or `username`.
+**Deliverable:** `Logout` mutation calls `ChainedAuthN.RevokeSession`; `RefreshToken` mutation calls
+`ChainedAuthN.RefreshSession`; `StaticAdminProvider` blacklist is functional. `Login` resolver migrated away from legacy
+`authMiddleware` stubs — `user.isAdmin` and `user.username` now derived from `Principal`. `IssueSession` added to
+`AuthNProvider` interface. `Principal.TokenID` carries JWT `jti`. `ContextWithRawToken`/`RawTokenFromContext` store the
+raw Bearer string for refresh. `GITSTORE_API__AUTH__JWT__REFRESH_GRACE` (default `60s`) bounds the refresh window.
+**Affected packages:** `gitstore-api/internal/auth/types.go`, `gitstore-api/internal/auth/context.go`,
+`gitstore-api/internal/auth/registry.go`, `gitstore-api/internal/auth/provider/staticadmin/`,
+`gitstore-api/internal/auth/provider/anonymous/`, `gitstore-api/internal/middleware/auth.go`,
+`gitstore-api/internal/graph/resolver/`
+**Session lifecycle:** Production revocation state survives API restart in ScyllaDB and is shared across replicas. Rows
+expire automatically after the token's natural expiry plus verifier leeway. **Test strategy:** Unit tests for all three
+mutations (logout, refreshToken, login) in `tests/unit/resolver/auth_resolvers_test.go`; grace-window and TokenID
+population tests in `tests/unit/auth/staticadmin_test.go`. **Rollback trigger:** Logout or RefreshToken returns 500 or
+leaves token valid after revocation; login returns wrong `isAdmin` or `username`.
 
 ### Phase 4 — gRPC HMAC inter-service authentication ✅ COMPLETE (033)
+
 **Milestone:** `auth-framework-git-v1`
-**Deliverable:** `HmacInterceptor` in Rust git-service; `hmacCreds` on Go gRPC client; `GITSTORE_GRPC_AUTH__HMAC_SECRET` wired on both sides; `cmd/gitctl` binary with `gen-hmac-secret` subcommand.
-**Affected packages:** `gitstore-git-service/src/auth/`, `gitstore-api/internal/gitclient/`, `gitstore-api/cmd/gitctl/`, `gitstore-api/internal/config/`
-**Test strategy:** Unit tests: `HmacInterceptor` rejects missing/wrong token, accepts correct token and previous token during rotation window; `hmacCreds.GetRequestMetadata` injects `Authorization: Bearer` header; config validation fails on empty secret.
-**Rollback trigger:** Any gRPC call from API to git-service fails in CI.
+**Deliverable:** `HmacInterceptor` in Rust git-service; `hmacCreds` on Go gRPC client; `GITSTORE_GRPC_AUTH__HMAC_SECRET`
+wired on both sides; `cmd/gitctl` binary with `gen-hmac-secret` subcommand. **Affected packages:**
+`gitstore-git-service/src/auth/`, `gitstore-api/internal/gitclient/`, `gitstore-api/cmd/gitctl/`,
+`gitstore-api/internal/config/`
+**Test strategy:** Unit tests: `HmacInterceptor` rejects missing/wrong token, accepts correct token and previous token
+during rotation window; `hmacCreds.GetRequestMetadata` injects `Authorization: Bearer` header; config validation fails
+on empty secret. **Rollback trigger:** Any gRPC call from API to git-service fails in CI.
 
 ### Phase 5 — Git smart-HTTP authentication ✅ COMPLETE (035)
+
 **Milestone:** `auth-framework-git-v1`
-**Deliverable:** Gin middleware chain (`BasicAuthenticator` → `RepoResolver` → `GitHttpAuthorizer` → `PushContextInserter`) enforcing auth/authz before any git-service contact; `PushContext` proto attached to first `ReceivePackRequest` chunk carrying actor identity, auth method, and push policy; git-service enforces `max_pack_size_bytes` and `max_file_size_bytes` limits; typed `HookContext` threaded through all `HookPipeline` stages; admission log entries include `actor_subject`.
-**Affected packages:** `gitstore-api/internal/githttp/`, `gitstore-api/internal/middleware/security/`, `gitstore-api/internal/gitclient/`, `gitstore-api/internal/health/`, `gitstore-api/internal/app/`, `shared/proto/gitstore/git/v1/`, `gitstore-git-service/src/grpc/`, `gitstore-git-service/src/git/hooks/`, `gitstore-git-service/src/git/pack_server.rs`
+**Deliverable:** Gin middleware chain (`BasicAuthenticator` → `RepoResolver` → `GitHttpAuthorizer` →
+`PushContextInserter`) enforcing auth/authz before any git-service contact; `PushContext` proto attached to first
+`ReceivePackRequest` chunk carrying actor identity, auth method, and push policy; git-service enforces
+`max_pack_size_bytes` and `max_file_size_bytes` limits; typed `HookContext` threaded through all `HookPipeline` stages;
+admission log entries include `actor_subject`. **Affected packages:** `gitstore-api/internal/githttp/`,
+`gitstore-api/internal/middleware/security/`, `gitstore-api/internal/gitclient/`, `gitstore-api/internal/health/`,
+`gitstore-api/internal/app/`, `shared/proto/gitstore/git/v1/`, `gitstore-git-service/src/grpc/`,
+`gitstore-git-service/src/git/hooks/`, `gitstore-git-service/src/git/pack_server.rs`
 
 **Middleware chain order:**
+
 ```
 BasicAuthenticator → RepoResolver → GitHttpAuthorizer → [PushContextInserter on receive-pack only]
 ```
 
 **PushContext propagation:**
+
 1. `PushContextInserter` middleware builds `gitv1.PushContext` (actor, policy) from gin context + `store.GetRepository`.
-2. `gitclient.ReceivePack` reads `PushContext` from `context.Value` and attaches it to the first `ReceivePackRequest` chunk.
+2. `gitclient.ReceivePack` reads `PushContext` from `context.Value` and attaches it to the first `ReceivePackRequest`
+   chunk.
 3. `receive_pack` in Rust validates `push_context` presence and `repository_id` consistency (FR-011).
 4. `HookContext::from(&PushContext)` maps proto fields to a typed struct passed to all pipeline stages.
 
 **Enforcement points:**
+
 - 401 + `WWW-Authenticate: Basic realm="GitStore"` on credential rejection.
 - 503 on transient auth errors (chain returns `err != nil`).
 - 404 pkt-line on unknown namespace/repository.
-- 403 on insufficient permissions (`repository.contents.read` required for upload-pack, `repository.contents.write` for receive-pack; scope decided by binding tier / `resourceNames` per ADR 0010).
+- 403 on insufficient permissions (`repository.contents.read` required for upload-pack, `repository.contents.write` for
+  receive-pack; scope decided by binding tier / `resourceNames` per ADR 0010).
 - `resource_exhausted` gRPC status when `max_pack_size_bytes` or `max_file_size_bytes` exceeded.
 - `invalid_argument` gRPC status when `push_context` is missing or inconsistent.
 
-**Observability:** `gitstore_git_http_auth_requests_total{outcome, service}` counter; `GET /metrics` endpoint serving Prometheus exposition format.
+**Observability:** `gitstore_git_http_auth_requests_total{outcome, service}` counter; `GET /metrics` endpoint serving
+Prometheus exposition format.
 
-**Test strategy:** Unit tests for each middleware (`TestBasicAuthTransientError`, `TestBasicAuthCredentialRejection`, `TestBasicAuthAllow`, `TestRepoResolverNotFound`, `TestGitHttpAuthorizerReadOnly`, `TestPushContextInserter`, `TestReceivePackAttachesPushContext`); Rust unit tests for pack/blob size enforcement and push_context validation; integration tests verify full hook pipeline with `HookContext` propagation.
-**Rollback trigger:** Legitimate push/fetch from an authenticated client fails.
+**Test strategy:** Unit tests for each middleware (`TestBasicAuthTransientError`, `TestBasicAuthCredentialRejection`,
+`TestBasicAuthAllow`, `TestRepoResolverNotFound`, `TestGitHttpAuthorizerReadOnly`, `TestPushContextInserter`,
+`TestReceivePackAttachesPushContext`); Rust unit tests for pack/blob size enforcement and push_context validation;
+integration tests verify full hook pipeline with `HookContext` propagation. **Rollback trigger:** Legitimate push/fetch
+from an authenticated client fails.
 
 ### Phase 6 — GraphQL auth/authz middleware centralization ✅ COMPLETE
+
 **Milestone:** `auth-framework-graphql-v1`
-**Deliverable:** GraphQL authentication moved from Gin route middleware to gqlgen operation middleware (`AroundOperations`) via `GraphQLAuthenticator`. A new `GraphQLAuthorizer` operation middleware provides a centralized GraphQL security seam and enforces authentication for non-login mutations. Principal and raw bearer token propagation now occur in GraphQL middleware context instead of Gin route hooks.
-**Affected packages:** `gitstore-api/internal/app/`, `gitstore-api/internal/middleware/security/`, `gitstore-api/cmd/server/`
-**Test strategy:** Unit tests for GraphQL middleware decision paths (valid bearer, invalid bearer, anonymous mutation deny, login allow) plus GraphQL handler test for invalid bearer rejection.
-**Auth responsibility boundary:** GraphQL authn/authz checks for mutation access and namespace policy decisions (canonical `namespace.create` gated on `attrs.tier`, `namespace.delete` with the `when: owner` condition / cluster tier per ADR 0010) run in gqlgen middleware (`AroundOperations` + `AroundFields`). Resolver/service layers keep business validation and datastore rules only.
-**Justified exceptions:** `login` intentionally performs credential verification inside its resolver because credentials are GraphQL input payloads (not request headers). `logout`/`refreshToken` resolvers keep token lifecycle execution (revoke/refresh calls), while authentication gating and bearer-token presence requirements are enforced by middleware.
-**Rollback trigger:** GraphQL login or authenticated mutation flows regress, or unauthenticated mutations are no longer blocked.
+**Deliverable:** GraphQL authentication moved from Gin route middleware to gqlgen operation middleware
+(`AroundOperations`) via `GraphQLAuthenticator`. A new `GraphQLAuthorizer` operation middleware provides a centralized
+GraphQL security seam and enforces authentication for non-login mutations. Principal and raw bearer token propagation
+now occur in GraphQL middleware context instead of Gin route hooks. **Affected packages:** `gitstore-api/internal/app/`,
+`gitstore-api/internal/middleware/security/`, `gitstore-api/cmd/server/`
+**Test strategy:** Unit tests for GraphQL middleware decision paths (valid bearer, invalid bearer, anonymous mutation
+deny, login allow) plus GraphQL handler test for invalid bearer rejection. **Auth responsibility boundary:** GraphQL
+authn/authz checks for mutation access and namespace policy decisions (canonical `namespace.create` gated on
+`attrs.tier`, `namespace.delete` with the `when: owner` condition / cluster tier per ADR 0010) run in gqlgen middleware
+(`AroundOperations` + `AroundFields`). Resolver/service layers keep business validation and datastore rules only.
+**Justified exceptions:** `login` intentionally performs credential verification inside its resolver because credentials
+are GraphQL input payloads (not request headers). `logout`/`refreshToken` resolvers keep token lifecycle execution
+(revoke/refresh calls), while authentication gating and bearer-token presence requirements are enforced by middleware.
+**Rollback trigger:** GraphQL login or authenticated mutation flows regress, or unauthenticated mutations are no longer
+blocked.
 
 ### Phase 7 — OIDC JWT provider ✅ COMPLETE
+
 **Milestone:** `auth-framework-v2`
-**Deliverable:** `OIDCJWTProvider`; `go-oidc/v3` added to `go.mod`; local-secure profile end-to-end tested.
-**Affected packages:** `gitstore-api/internal/auth/provider/oidcjwt/`, `go.mod`
-**Test strategy:** Unit test with a mock JWKS server; integration test with a real local IdP (e.g., Dex running in Docker Compose test profile); test key rotation forced-refresh behavior.
-**Rollback trigger:** OIDC provider causes 500s on valid tokens, or breaks the static-users fallback in the chain.
+**Deliverable:** `OIDCJWTProvider`; `go-oidc/v3` added to `go.mod`; local-secure profile end-to-end tested. **Affected
+packages:** `gitstore-api/internal/auth/provider/oidcjwt/`, `go.mod`
+**Test strategy:** Unit test with a mock JWKS server; integration test with a real local IdP (e.g., Dex running in
+Docker Compose test profile); test key rotation forced-refresh behavior. **Rollback trigger:** OIDC provider causes 500s
+on valid tokens, or breaks the static-users fallback in the chain.
 
 **Addendum — controller/machine identity (spec 061):** `OIDCJWTProvider` remains exactly as
 specified above — a Relying Party for **human** identities authenticated through an external/bring-your-own
@@ -1214,25 +1341,24 @@ architecture rationale (including why Hydra was chosen over a Dex-based alternat
 identity-to-`Principal` claims mapping; nothing in it changes this Phase's Relying-Party design.
 
 ### Phase 8 — OPA production AuthZ provider
+
 **Milestone:** `auth-framework-v3`
-**Authoritative design:** `022-opa-data-authorization.md`.
-**Deliverable:** An opt-in embedded `OPAProvider` using
+**Authoritative design:** `022-opa-data-authorization.md`. **Deliverable:** An opt-in embedded `OPAProvider` using
 `github.com/open-policy-agent/opa/v1/rego`, a cached prepared decision query, and
 `storage/inmem` for built-in plus namespace IAM projections. Add provider-neutral semantic Decision
 scopes, server-owned GraphQL `@authorize` metadata, and authorized Product/ProductVariant query
 types that select public or management datastore projections before pagination. The provider does
-not call an OPA sidecar and does not send the raw GraphQL query or schema per evaluation.
-**Affected packages:** `gitstore-api/internal/auth/`, `gitstore-api/internal/auth/provider/opa/`,
+not call an OPA sidecar and does not send the raw GraphQL query or schema per evaluation. **Affected packages:**
+`gitstore-api/internal/auth/`, `gitstore-api/internal/auth/provider/opa/`,
 GraphQL middleware/schema, IAM datastore implementations, catalog read services, and public
-Product/ProductVariant projections.
-**Test strategy:** Decision parity with `rbac-local` for existing actions; direct/custom-role/group
+Product/ProductVariant projections. **Test strategy:** Decision parity with `rbac-local` for existing actions;
+direct/custom-role/group
 IAM expansion; deny precedence and revision freshness; every Product/ProductVariant GraphQL path;
 public versus management Relay correctness on memdb and ScyllaDB; atomic reload, concurrency,
-timeouts, malformed results, and benchmarks proving preparation is not per request.
-**Rollout constraint:** `opa` remains opt-in until a later decision changes production defaults.
+timeouts, malformed results, and benchmarks proving preparation is not per request. **Rollout constraint:** `opa`
+remains opt-in until a later decision changes production defaults.
 Public ProductVariant reads remain fail closed until GH#314 materializes variant publication
-eligibility.
-**Rollback trigger:** Any existing action diverges unexpectedly from the reference provider, a
+eligibility. **Rollback trigger:** Any existing action diverges unexpectedly from the reference provider, a
 stale/invalid decision does not fail closed, or scoped Relay results expose an ineligible resource.
 
 ---
@@ -1240,21 +1366,48 @@ stale/invalid decision does not fail closed, or scoped Relay results expose an i
 ## 8. Gaps and Risks
 
 ### Risk 1: JWT Clock Skew (exp validation)
-**Description:** Distributed nodes with unsynchronized clocks can cause valid tokens to be rejected (or expired tokens to be accepted) at the boundary. The research verified that RFC 7519 MAY (not MUST) apply leeway — go-oidc v3 applies 1 minute by default, but the static-admin HS256 path (golang-jwt/v5) uses no leeway by default.
-**Mitigation:** Configure `2m` clock skew leeway (`GITSTORE_API__AUTH__OIDC_JWT__CLOCK_SKEW=2m`) for the oidc-jwt provider and the static-users JWT parser. Enforce NTP synchronization in production deployment runbooks. Monitor NTP synchronization and token rejection rate as alert signals for clock drift.
+
+**Description:** Distributed nodes with unsynchronized clocks can cause valid tokens to be rejected (or expired tokens
+to be accepted) at the boundary. The research verified that RFC 7519 MAY (not MUST) apply leeway — go-oidc v3 applies 1
+minute by default, but the static-admin HS256 path (golang-jwt/v5) uses no leeway by default. **Mitigation:** Configure
+`2m` clock skew leeway (`GITSTORE_API__AUTH__OIDC_JWT__CLOCK_SKEW=2m`) for the oidc-jwt provider and the static-users
+JWT parser. Enforce NTP synchronization in production deployment runbooks. Monitor NTP synchronization and token
+rejection rate as alert signals for clock drift.
 
 ### Risk 2: JWKS Key Rotation Window
-**Description:** `RemoteKeySet` (go-oidc v3) caches JWKS and does NOT immediately propagate rotated keys. During the rotation window, tokens signed with the new key are rejected as "key not found."
-**Mitigation:** In the `OIDCJWTProvider.Authenticate` method, on any signature verification error matching "key not found" or "verification error," force a JWKS refresh via the provider's `RemoteKeySet` and retry the verification exactly once before returning 401. This closes the rotation window to a single request's latency. Log the forced-refresh event for observability.
+
+**Description:** `RemoteKeySet` (go-oidc v3) caches JWKS and does NOT immediately propagate rotated keys. During the
+rotation window, tokens signed with the new key are rejected as "key not found."
+**Mitigation:** In the `OIDCJWTProvider.Authenticate` method, on any signature verification error matching "key not
+found" or "verification error," force a JWKS refresh via the provider's `RemoteKeySet` and retry the verification
+exactly once before returning 401. This closes the rotation window to a single request's latency. Log the forced-refresh
+event for observability.
 
 ### Risk 3: HMAC Secret Rotation (gRPC inter-service)
-**Description:** Rotating `GITSTORE_GRPC_AUTH__HMAC_SECRET` requires a coordinated deployment of both API and git-service. A window exists where one service has the new secret and the other has the old, causing all gRPC calls to fail with `Status::unauthenticated`.
-**Mitigation:** Implement a two-token validation window in `HmacInterceptor`: accept both `hmac_secret` and `hmac_secret_previous` during rotation. The Go client always sends `hmac_secret`. This allows a rolling deployment without a service outage. Remove `hmac_secret_previous` after both services confirm the new secret.
+
+**Description:** Rotating `GITSTORE_GRPC_AUTH__HMAC_SECRET` requires a coordinated deployment of both API and
+git-service. A window exists where one service has the new secret and the other has the old, causing all gRPC calls to
+fail with `Status::unauthenticated`. **Mitigation:** Implement a two-token validation window in `HmacInterceptor`:
+accept both `hmac_secret` and `hmac_secret_previous` during rotation. The Go client always sends `hmac_secret`. This
+allows a rolling deployment without a service outage. Remove `hmac_secret_previous` after both services confirm the new
+secret.
 
 ### Risk 4: Policy Hot-Reload Race Condition (rbac-local)
-**Description:** The `RBACLocalProvider` holds the policy in memory behind a `sync.RWMutex`. If the policy YAML file is replaced during a concurrent authorization request (e.g., `mv policy.yaml.new policy.yaml`), a partial read could occur if the file is not atomically replaced.
-**Mitigation:** Use `os.Rename` (atomic on POSIX filesystems) for all policy file updates — never write in-place. On startup, validate the policy file schema before accepting it. Do NOT add `fsnotify` for hot-reload in phase 1 (it is not in `go.mod` and adds race complexity); reload is triggered by a SIGHUP handler or API restart instead. Document this constraint clearly.
+
+**Description:** The `RBACLocalProvider` holds the policy in memory behind a `sync.RWMutex`. If the policy YAML file is
+replaced during a concurrent authorization request (e.g., `mv policy.yaml.new policy.yaml`), a partial read could occur
+if the file is not atomically replaced. **Mitigation:** Use `os.Rename` (atomic on POSIX filesystems) for all policy
+file updates — never write in-place. On startup, validate the policy file schema before accepting it. Do NOT add
+`fsnotify` for hot-reload in phase 1 (it is not in `go.mod` and adds race complexity); reload is triggered by a SIGHUP
+handler or API restart instead. Document this constraint clearly.
 
 ### Risk 5: Anonymous Principal Leaking into Authorization Checks
-**Description:** The `anonymous` provider returns an `Anonymous()` principal only when no credential signals are present. However, if `RequireAuth` middleware is accidentally omitted from a mutation route, the anonymous principal could reach an `authz.Authorize` call.
-**Mitigation:** `RequireAuth` middleware must be applied to all mutation resolvers. With the `anonymous` provider gating the only path to an `Anonymous()` principal, the scenario of "credentials present but no provider accepted them" now results in a hard `Deny` at the chain level — it never reaches authz. The `rbac-local` policy still explicitly grants the `anonymous` role only `read` actions as a defense-in-depth backstop. CI lint rule: ban direct calls to `GetUserFromContext` in resolver files after migration is complete (replaced by `auth.PrincipalFromContext` which is checked).
+
+**Description:** The `anonymous` provider returns an `Anonymous()` principal only when no credential signals are
+present. However, if `RequireAuth` middleware is accidentally omitted from a mutation route, the anonymous principal
+could reach an `authz.Authorize` call. **Mitigation:** `RequireAuth` middleware must be applied to all mutation
+resolvers. With the `anonymous` provider gating the only path to an `Anonymous()` principal, the scenario of
+"credentials present but no provider accepted them" now results in a hard `Deny` at the chain level — it never reaches
+authz. The `rbac-local` policy still explicitly grants the `anonymous` role only `read` actions as a defense-in-depth
+backstop. CI lint rule: ban direct calls to `GetUserFromContext` in resolver files after migration is complete (replaced
+by `auth.PrincipalFromContext` which is checked).

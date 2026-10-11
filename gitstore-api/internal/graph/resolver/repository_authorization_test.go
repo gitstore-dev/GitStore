@@ -5,6 +5,7 @@ package resolver_test
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -19,8 +20,30 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
+
+func TestRepositoryDeniedReadConcealsOnlyPresentNonpublicVisibility(t *testing.T) {
+	for _, tc := range []struct{ spec, code string }{
+		{`{}`, "FORBIDDEN"}, {`{"visibility":"PUBLIC"}`, "FORBIDDEN"},
+		{`{"visibility":"PRIVATE"}`, "NOT_FOUND"}, {`{"visibility":"internal"}`, "NOT_FOUND"},
+		{`{"visibility":true}`, "FORBIDDEN"},
+	} {
+		t.Run(tc.spec, func(t *testing.T) {
+			h := newRepositoryAuthzHarness(t)
+			repo, err := h.store.GetRepository(t.Context(), h.repository.UID)
+			require.NoError(t, err)
+			repo.Spec = json.RawMessage(tc.spec)
+			require.NoError(t, h.store.UpdateRepository(t.Context(), repo, repo.ResourceVersion))
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
+			err = h.authorizeField(ctx, "Query", "repository", map[string]any{"by": model.RepositoryBy{ID: &h.repositoryNodeID}})
+			var gqlErr *gqlerror.Error
+			require.ErrorAs(t, err, &gqlErr)
+			require.Equal(t, tc.code, gqlErr.Extensions["code"])
+		})
+	}
+}
 
 const (
 	repositoryAuthzSourceNamespaceID = "01960000-0000-7000-8000-000000000130"
@@ -161,7 +184,7 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 	}{
 		{
 			name:   "create",
-			action: "repository.create.any",
+			action: "repository.create",
 			object: "Mutation", field: "createRepository", args: map[string]any{"input": model.CreateRepositoryInput{
 				APIVersion: "gitstore.dev/v1beta1",
 				Kind:       "Repository",
@@ -171,7 +194,7 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 		},
 		{
 			name:   "update",
-			action: "repository.update.any",
+			action: "repository.update",
 			object: "Mutation", field: "updateRepository", args: map[string]any{"input": model.UpdateRepositoryInput{
 				APIVersion: "gitstore.dev/v1beta1",
 				Kind:       "Repository",
@@ -181,19 +204,19 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 		},
 		{
 			name:   "delete",
-			action: "repository.delete.any",
+			action: "repository.delete",
 			object: "Mutation", field: "deleteRepository", args: map[string]any{"input": model.DeleteRepositoryInput{
 				ID: h.repositoryNodeID,
 			}},
 		},
 		{
 			name:   "read by ID",
-			action: "repository.read.any",
+			action: "repository.read",
 			object: "Query", field: "repository", args: map[string]any{"by": model.RepositoryBy{ID: &h.repositoryNodeID}},
 		},
 		{
 			name:   "read by namespace path",
-			action: "repository.read.any",
+			action: "repository.read",
 			object: "Query", field: "repository", args: map[string]any{"by": model.RepositoryBy{
 				NamespacePath: &model.RepositoryNamespacePath{
 					Namespace: h.sourceNamespace.Name,
@@ -203,17 +226,17 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 		},
 		{
 			name:   "read through node",
-			action: "repository.read.any",
+			action: "repository.read",
 			object: "Query", field: "node", args: map[string]any{"id": h.repositoryNodeID},
 		},
 		{
 			name:   "read through batched nodes",
-			action: "repository.read.any",
+			action: "repository.read",
 			object: "Query", field: "nodes", args: map[string]any{"ids": []string{h.repositoryNodeID}},
 		},
 		{
 			name:   "list namespace repositories",
-			action: "repository.read.any",
+			action: "repository.list",
 			object: "Query", field: "repositories", args: map[string]any{"namespace": h.sourceNamespace.Name, "first": &first},
 		},
 	}
@@ -224,7 +247,7 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 
 			err := h.authorizeField(ctx, test.object, test.field, test.args)
 
-			require.EqualError(t, err, "input: permission denied: cross-tenant access denied")
+			require.EqualError(t, err, "input: permission denied")
 			calls := h.authz.callsSnapshot()
 			require.Len(t, calls, 1)
 			assert.Equal(t, test.action, calls[0].action)
@@ -282,16 +305,16 @@ func TestRepositoryNamespacePathAuthorizationDoesNotLeakSameNamedRepositoryAcros
 	err := h.authorizeField(ctx, "Query", "repository", map[string]any{"by": model.RepositoryBy{
 		NamespacePath: &model.RepositoryNamespacePath{Namespace: h.targetNamespace.Name, Name: h.repository.Name},
 	}})
-	require.EqualError(t, err, "input: permission denied: cross-tenant access denied")
+	require.EqualError(t, err, "input: permission denied")
 	calls := h.authz.callsSnapshot()
 	require.Len(t, calls, 1)
-	assert.Equal(t, "repository.read.any", calls[0].action)
+	assert.Equal(t, "repository.read", calls[0].action)
 	assert.Equal(t, "catalog", calls[0].resource.Name)
 	assert.Equal(t, "bob", calls[0].resource.OwnerSub)
 	assert.Equal(t, h.targetNamespace.Name, calls[0].resource.Attrs["namespace"])
 }
 
-func TestRepositoryFieldAuthorizerUsesOwnActionForTenantOwner(t *testing.T) {
+func TestRepositoryFieldAuthorizerUsesCanonicalActionForTenantOwner(t *testing.T) {
 	h := newRepositoryAuthzHarness(t)
 	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
 		Subject:    "alice",
@@ -303,6 +326,6 @@ func TestRepositoryFieldAuthorizerUsesOwnActionForTenantOwner(t *testing.T) {
 	require.NoError(t, err)
 	calls := h.authz.callsSnapshot()
 	require.Len(t, calls, 1)
-	assert.Equal(t, "repository.read.own", calls[0].action)
+	assert.Equal(t, "repository.read", calls[0].action)
 	assert.Equal(t, "alice", calls[0].resource.OwnerSub)
 }

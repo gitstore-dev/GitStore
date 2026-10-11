@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -16,17 +17,24 @@ import (
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 )
 
 // testRepoID is a fixed UUID used as the repository ID in AdmitResources tests.
@@ -34,24 +42,199 @@ import (
 const testRepoID = "00000000-0000-0000-0000-000000000001"
 const wrongNamespaceRepoID = "00000000-0000-0000-0000-000000000002"
 
-func newCatalogServer(t *testing.T, store datastore.Datastore, git cataloggrpc.GitReader, opts ...func(*cataloggrpc.ServerDeps)) *cataloggrpc.Server {
+// Domain tests supply an authenticated fixture actor. Security/wire tests use
+// the embedded Server directly; never register this fixture wrapper on gRPC.
+type catalogTestServer struct {
+	*cataloggrpc.Server
+	serviceSecret string
+}
+
+func fixtureCallbackActor() *catalogv1.CallbackActor {
+	return &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users", Groups: []string{"system:authenticated"}}
+}
+func (s *catalogTestServer) fixtureContext(ctx context.Context, request proto.Message) context.Context {
+	method := "/gitstore.catalog.v1.CatalogService/" + strings.TrimSuffix(string(request.ProtoReflect().Descriptor().Name()), "Request")
+	envelope, err := auth.SignRPC(s.serviceSecret, "gitstore-api", method, request)
+	if err != nil {
+		panic(err)
+	}
+	return metadata.NewIncomingContext(ctx, metadata.Pairs(auth.RPCSignatureMetadata, envelope))
+}
+func fixtureValidationEnvelope(repositoryID string, trees []*catalogv1.ResourceValidationTree) *catalogv1.CallbackAuthorization {
+	refs := make([]*catalogv1.ReceiveRef, 0, len(trees))
+	for i, tree := range trees {
+		if tree.Ref == nil {
+			tree.Ref = &catalogv1.ReceiveRef{RefName: fmt.Sprintf("refs/heads/fixture-%d", i), OldCommitSha: strings.Repeat("0", 40), NewCommitSha: strings.Repeat("a", 40)}
+		}
+		refs = append(refs, proto.Clone(tree.Ref).(*catalogv1.ReceiveRef))
+	}
+	return &catalogv1.CallbackAuthorization{RepositoryId: repositoryID, ReceiveId: "domain-test-receive", Actor: fixtureCallbackActor(), Refs: refs}
+}
+func (s *catalogTestServer) ValidateResources(ctx context.Context, request *catalogv1.ValidateResourcesRequest) (*catalogv1.ValidateResourcesResponse, error) {
+	req := proto.Clone(request).(*catalogv1.ValidateResourcesRequest)
+	req.Authorization = fixtureValidationEnvelope(req.RepositoryId, req.Trees)
+	return s.Server.ValidateResources(s.fixtureContext(ctx, req), req)
+}
+func (s *catalogTestServer) ValidateResourceDeletions(ctx context.Context, request *catalogv1.ValidateResourceDeletionsRequest) (*catalogv1.ValidateResourceDeletionsResponse, error) {
+	req := proto.Clone(request).(*catalogv1.ValidateResourceDeletionsRequest)
+	req.Authorization = fixtureValidationEnvelope(req.RepositoryId, req.Trees)
+	return s.Server.ValidateResourceDeletions(s.fixtureContext(ctx, req), req)
+}
+func (s *catalogTestServer) AdmitResources(ctx context.Context, request *catalogv1.AdmitResourcesRequest) (*catalogv1.AdmitResourcesResponse, error) {
+	req := proto.Clone(request).(*catalogv1.AdmitResourcesRequest)
+	actor := req.GetAuthorization().GetActor()
+	if actor == nil {
+		actor = fixtureCallbackActor()
+	}
+	if req.OldCommitSha == "" {
+		req.OldCommitSha = strings.Repeat("0", 40)
+	}
+	if req.RefName == "" {
+		req.RefName = "refs/heads/main"
+	}
+	req.Authorization = &catalogv1.CallbackAuthorization{RepositoryId: req.RepositoryId, ReceiveId: "domain-test-receive", Actor: actor, Refs: []*catalogv1.ReceiveRef{{RefName: req.RefName, OldCommitSha: req.OldCommitSha, NewCommitSha: req.NewCommitSha}}}
+	return s.Server.AdmitResources(s.fixtureContext(ctx, req), req)
+}
+func (s *catalogTestServer) AdmitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	ctx = auth.ContextWithPrincipal(ctx, &auth.Principal{Subject: req.ActorSubject, AuthMethod: "static-users", Groups: []string{"system:authenticated"}})
+	return s.Server.AdmitCommittedManifest(ctx, req)
+}
+
+func (s *catalogTestServer) ValidateManifest(ctx context.Context, req admission.ManifestValidationRequest) ([]admission.Diagnostic, error) {
+	ctx = auth.ContextWithPrincipal(ctx, &auth.Principal{Subject: "test-admission-actor", AuthMethod: "static-users", Groups: []string{"system:authenticated"}})
+	return s.Server.ValidateManifest(ctx, req)
+}
+
+func newCatalogServer(t *testing.T, store datastore.Datastore, git cataloggrpc.GitReader, opts ...func(*cataloggrpc.ServerDeps)) *catalogTestServer {
 	t.Helper()
 	if store == nil {
-		var err error
-		store, err = memdb.New()
-		require.NoError(t, err)
+		store = newTestDatastore(t)
 	}
 	deps := cataloggrpc.ServerDeps{
-		Store:     store,
-		GitReader: git,
-		Logger:    zap.NewNop(),
+		Registry:      auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil),
+		ServiceSecret: "domain-fixture-service-secret",
+		Store:         store,
+		GitReader:     git,
+		Logger:        zap.NewNop(),
 	}
 	for _, opt := range opts {
 		opt(&deps)
 	}
 	srv, err := cataloggrpc.NewServer(deps)
 	require.NoError(t, err)
-	return srv
+	return &catalogTestServer{Server: srv, serviceSecret: deps.ServiceSecret}
+}
+
+func TestCallbackBindingAndLiveSemanticPolicy(t *testing.T) {
+	allow := testutil.NewAllowAllAuthZ()
+	registry := auth.NewProviderRegistry(nil, allow, nil)
+	srv := newCatalogServer(t, newTestDatastore(t), nil, func(deps *cataloggrpc.ServerDeps) {
+		deps.Registry = registry
+		deps.ServiceSecret = "callback-test-secret"
+	})
+	ref := &catalogv1.ReceiveRef{RefName: "refs/heads/main", OldCommitSha: strings.Repeat("0", 40), NewCommitSha: strings.Repeat("a", 40)}
+	req := &catalogv1.ValidateResourcesRequest{RepositoryId: testRepoID, Trees: []*catalogv1.ResourceValidationTree{{Ref: ref, ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: makeProduct("widget")}}}}, Authorization: &catalogv1.CallbackAuthorization{RepositoryId: testRepoID, ReceiveId: "test-receive", Refs: []*catalogv1.ReceiveRef{ref}, Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users", Groups: []string{"system:authenticated"}}}}
+	ctx := srv.fixtureContext(t.Context(), req)
+	for _, mutate := range []func(*catalogv1.ValidateResourcesRequest){
+		func(r *catalogv1.ValidateResourcesRequest) { r.Authorization.RepositoryId = "other" },
+		func(r *catalogv1.ValidateResourcesRequest) {
+			r.Authorization.Refs[0].NewCommitSha = strings.Repeat("b", 40)
+		},
+		func(r *catalogv1.ValidateResourcesRequest) { r.Authorization.ReceiveId = "" },
+		func(r *catalogv1.ValidateResourcesRequest) { r.Authorization.Actor.Subject = "system:api" },
+	} {
+		candidate := proto.Clone(req).(*catalogv1.ValidateResourcesRequest)
+		mutate(candidate)
+		_, err := srv.Server.ValidateResources(srv.fixtureContext(t.Context(), candidate), candidate)
+		require.Error(t, err)
+	}
+	response, err := srv.Server.ValidateResources(ctx, req)
+	require.NoError(t, err)
+	require.True(t, response.Accepted)
+	require.NotEmpty(t, allow.Calls)
+	require.Equal(t, "product.create", allow.Action)
+	require.Equal(t, "product", allow.Resource.Kind)
+	require.Equal(t, "gitstore", allow.Resource.Attrs["namespace"])
+	_, err = srv.Server.ValidateResources(ctx, req)
+	require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err), "captured callback must not execute twice")
+	deny := testutil.NewDenyAllAuthZ(t)
+	registry.Swap(nil, deny, nil)
+	_, err = srv.Server.ValidateResources(srv.fixtureContext(t.Context(), req), req)
+	require.Equal(t, codes.PermissionDenied, grpcstatus.Code(err))
+	require.Equal(t, "product.create", deny.Action)
+}
+
+func TestCallbacksRequireServiceAuthenticationAndBoundActor(t *testing.T) {
+	srv := newCatalogServer(t, newTestDatastore(t), nil)
+	_, err := srv.Server.ValidateResources(t.Context(), &catalogv1.ValidateResourcesRequest{RepositoryId: testRepoID, Trees: []*catalogv1.ResourceValidationTree{{}}})
+	require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err), "a nonempty validation tree is not callback authority")
+	_, err = srv.Server.ValidateResourceDeletions(t.Context(), &catalogv1.ValidateResourceDeletionsRequest{RepositoryId: testRepoID, Trees: []*catalogv1.ResourceValidationTree{{}}})
+	require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
+	_, err = srv.Server.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, NewCommitSha: strings.Repeat("a", 40), RefName: "refs/heads/main"})
+	require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
+}
+
+func TestSignedCallbackReplaySharedAcrossReplicasAndReplacement(t *testing.T) {
+	store := newTestDatastore(t)
+	first := newCatalogServer(t, store, nil)
+	req := &catalogv1.ValidateResourcesRequest{RepositoryId: testRepoID, Trees: []*catalogv1.ResourceValidationTree{{}}}
+	req.Authorization = fixtureValidationEnvelope(req.RepositoryId, req.Trees)
+	ctx := first.fixtureContext(t.Context(), req)
+	_, err := first.Server.ValidateResources(ctx, req)
+	require.NoError(t, err)
+	for range 2 {
+		replica := newCatalogServer(t, store, nil)
+		_, err := replica.Server.ValidateResources(ctx, req)
+		require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
+		_, err = replica.Server.ValidateResources(replica.fixtureContext(t.Context(), req), req)
+		require.NoError(t, err, "fresh signed callback remains valid")
+	}
+}
+
+func TestCallbackTransportAuthenticatesEveryRPCAndRechecksLivePolicy(t *testing.T) {
+	registry := auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil)
+	fixture := newCatalogServer(t, newTestDatastore(t), nil, func(deps *cataloggrpc.ServerDeps) { deps.Registry = registry })
+	listener := bufconn.Listen(1 << 20)
+	server := grpc.NewServer()
+	catalogv1.RegisterCatalogServiceServer(server, fixture.Server)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
+	conn, err := grpc.NewClient("passthrough:///catalog-test", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	client := catalogv1.NewCatalogServiceClient(conn)
+	ref := &catalogv1.ReceiveRef{RefName: "refs/heads/main", OldCommitSha: strings.Repeat("0", 40), NewCommitSha: strings.Repeat("a", 40)}
+	envelope := &catalogv1.CallbackAuthorization{RepositoryId: testRepoID, ReceiveId: "wire-test-receive", Actor: fixtureCallbackActor(), Refs: []*catalogv1.ReceiveRef{ref}}
+	trees := []*catalogv1.ResourceValidationTree{{Ref: ref, ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: makeProduct("widget")}}}}
+	validation := &catalogv1.ValidateResourcesRequest{RepositoryId: testRepoID, Trees: trees, Authorization: envelope}
+	_, err = client.ValidateResources(t.Context(), validation)
+	require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
+	_, err = client.ValidateResourceDeletions(t.Context(), &catalogv1.ValidateResourceDeletionsRequest{RepositoryId: testRepoID, Trees: trees, Authorization: envelope})
+	require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
+	_, err = client.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, RefName: ref.RefName, OldCommitSha: ref.OldCommitSha, NewCommitSha: ref.NewCommitSha, Authorization: envelope})
+	require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
+	md, _ := metadata.FromIncomingContext(fixture.fixtureContext(t.Context(), validation))
+	ctx := metadata.NewOutgoingContext(t.Context(), md)
+	response, err := client.ValidateResources(ctx, validation)
+	require.NoError(t, err)
+	require.True(t, response.Accepted)
+	_, err = client.ValidateResources(ctx, validation)
+	require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
+	registry.Swap(nil, testutil.NewDenyAllAuthZ(t), nil)
+	md, _ = metadata.FromIncomingContext(fixture.fixtureContext(t.Context(), validation))
+	ctx = metadata.NewOutgoingContext(t.Context(), md)
+	_, err = client.ValidateResources(ctx, validation)
+	require.Equal(t, codes.PermissionDenied, grpcstatus.Code(err), "same authenticated callback must not retain an old grant")
+}
+
+func TestCommittedAdmissionRequiresMatchingAuthenticatedActor(t *testing.T) {
+	srv := newCatalogServer(t, newTestDatastore(t), nil)
+	req := admission.CommittedManifestRequest{ActorSubject: "alice"}
+	_, err := srv.Server.AdmitCommittedManifest(t.Context(), req)
+	require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
+	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
+	_, err = srv.Server.AdmitCommittedManifest(ctx, req)
+	require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
 }
 
 func TestNewServerRequiresDatastore(t *testing.T) {
@@ -79,13 +262,13 @@ func TestAdmitResourcesRequiresActorSubject(t *testing.T) {
 	srv := newCatalogServer(t, store, git)
 	for _, actor := range []string{"", " \t\n"} {
 		response, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			RepositoryId: testRepoID,
-			NewCommitSha: strings.Repeat("a", 40),
-			RefName:      "refs/heads/main",
-			ActorSubject: actor,
+			RepositoryId:  testRepoID,
+			NewCommitSha:  strings.Repeat("a", 40),
+			RefName:       "refs/heads/main",
+			Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: actor, AuthMethod: "static-users"}},
 		})
 		require.Nil(t, response)
-		require.Equal(t, codes.InvalidArgument, grpcstatus.Code(err))
+		require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
 	}
 	assert.Empty(t, journalEvents(t, store, "Product"))
 }
@@ -116,8 +299,8 @@ func TestNewServerDefaultsOptionalDependencies(t *testing.T) {
 			{Path: "products/widget.md", BlobOid: "abc", Content: []byte(validProduct)},
 		}}},
 	})
-	require.NoError(t, err)
-	assert.True(t, resp.Accepted)
+	require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err), "optional parser dependencies must not create an authentication bypass")
+	assert.Nil(t, resp)
 }
 
 // validProduct is a minimal valid product YAML frontmatter blob.
@@ -156,7 +339,7 @@ func TestValidateResources_NamespaceRepositoryPolicy(t *testing.T) {
 			RepositoryId: testRepoID,
 			Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{
 				Path:    "namespaces/acme-store.md",
-				Content: namespaceManifest("acme-store", "Acme Store", "USER"),
+				Content: namespaceManifest("acme-store", "Acme Store", "ORGANIZATION"),
 			}}}},
 		})
 		require.NoError(t, err)
@@ -168,7 +351,7 @@ func TestValidateResources_NamespaceRepositoryPolicy(t *testing.T) {
 			RepositoryId: wrongNamespaceRepoID,
 			Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{
 				Path:    "namespaces/acme-store.md",
-				Content: namespaceManifest("acme-store", "Acme Store", "USER"),
+				Content: namespaceManifest("acme-store", "Acme Store", "ORGANIZATION"),
 			}}}},
 		})
 		require.NoError(t, err)
@@ -182,7 +365,7 @@ func TestValidateResources_NamespaceRepositoryPolicy(t *testing.T) {
 			RepositoryId: testRepoID,
 			Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{
 				Path:    "catalog/acme-store.md",
-				Content: namespaceManifest("acme-store", "Acme Store", "USER"),
+				Content: namespaceManifest("acme-store", "Acme Store", "ORGANIZATION"),
 			}}}},
 		})
 		require.NoError(t, err)
@@ -201,7 +384,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 	current := a
 	path := "namespaces/acme-store.md"
 	git := newTreeGitReader(&current, map[string]map[string][]byte{
-		a: {path: namespaceManifest("acme-store", "Acme Store", "USER")},
+		a: {path: namespaceManifest("acme-store", "Acme Store", "ORGANIZATION")},
 		b: {path: namespaceManifest("acme-store", "Acme Store Updated", "ORGANIZATION")},
 		c: {path: namespaceManifest("acme-store", "Demoted", "USER")},
 	})
@@ -212,15 +395,15 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 		OldCommitSha: zero,
 		NewCommitSha: a,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{path},
-		ActorSubject: "alice",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{path},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 	created, err := store.GetNamespaceByName(context.Background(), "acme-store")
 	require.NoError(t, err)
 	assert.Equal(t, "Acme Store", created.Title)
-	assert.Equal(t, datastore.NamespaceTierUser, created.Tier)
+	assert.Equal(t, datastore.NamespaceTierOrganization, created.Tier)
 	assert.Equal(t, int64(1), created.Generation)
 	assert.Equal(t, "1", created.ResourceVersion)
 	assert.Equal(t, "gitstore.dev/v1beta1", created.APIVersion)
@@ -231,16 +414,16 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 	assert.Equal(t, path, created.SourcePath)
 	assert.Equal(t, a, created.GitCommitSHA)
 	assert.Equal(t, "refs/heads/main", created.GitRef)
-	assert.JSONEq(t, `{"title":"Acme Store","tier":"USER"}`, string(created.Spec))
+	assert.JSONEq(t, `{"title":"Acme Store","tier":"ORGANIZATION"}`, string(created.Spec))
 	assert.Equal(t, "", created.Body)
 	assert.Contains(t, string(created.Status), "AdmissionAccepted")
 
 	current = b
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: a,
-		NewCommitSha: b,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  a,
+		NewCommitSha:  b,
 
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
@@ -257,10 +440,10 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 
 	current = c
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: b,
-		NewCommitSha: c,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  b,
+		NewCommitSha:  c,
 
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
@@ -292,7 +475,7 @@ metadata:
     owner: platform
 spec:
   title: Body Store
-  tier: USER
+  tier: ORGANIZATION
 ---
 %s`, label, body))
 	}
@@ -303,10 +486,10 @@ spec:
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: zero,
-		NewCommitSha: a,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  zero,
+		NewCommitSha:  a,
 
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
@@ -321,10 +504,10 @@ spec:
 
 	current = b
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: a,
-		NewCommitSha: b,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  a,
+		NewCommitSha:  b,
 
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
@@ -347,9 +530,9 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 	path := "namespaces/race-store.md"
 	seedNamespaceForReplicaRace(t, store, "race-store", "Initial Revision", initial, path)
 	files := map[string]map[string][]byte{
-		initial: {path: namespaceManifest("race-store", "Initial Revision", "USER")},
-		a:       {path: namespaceManifest("race-store", "Older Revision", "USER")},
-		b:       {path: namespaceManifest("race-store", "Newer Revision", "USER")},
+		initial: {path: namespaceManifest("race-store", "Initial Revision", "ORGANIZATION")},
+		a:       {path: namespaceManifest("race-store", "Older Revision", "ORGANIZATION")},
+		b:       {path: namespaceManifest("race-store", "Newer Revision", "ORGANIZATION")},
 	}
 
 	var mu sync.Mutex
@@ -394,10 +577,10 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 	olderDone := make(chan error, 1)
 	go func() {
 		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			ActorSubject: "test-admission-actor",
-			RepositoryId: testRepoID,
-			OldCommitSha: initial,
-			NewCommitSha: a,
+			Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+			RepositoryId:  testRepoID,
+			OldCommitSha:  initial,
+			NewCommitSha:  a,
 
 			RefName:      "refs/heads/main",
 			ChangedPaths: []string{path},
@@ -415,10 +598,10 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 	current = b
 	mu.Unlock()
 	_, err := newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: a,
-		NewCommitSha: b,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  a,
+		NewCommitSha:  b,
 
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
@@ -452,10 +635,10 @@ func TestAdmitResources_NamespaceBootstrapNameRejected(t *testing.T) {
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: zero,
-		NewCommitSha: a,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  zero,
+		NewCommitSha:  a,
 
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
@@ -465,7 +648,7 @@ func TestAdmitResources_NamespaceBootstrapNameRejected(t *testing.T) {
 	bootstrap, err := store.GetNamespaceByName(context.Background(), "default")
 	require.NoError(t, err)
 	assert.NotEqual(t, "Changed Default", bootstrap.Title)
-	assert.Equal(t, datastore.NamespaceTierUser, bootstrap.Tier)
+	assert.Equal(t, datastore.NamespaceTierOrganization, bootstrap.Tier)
 }
 
 // T011a: blob with valid frontmatter → accepted=true, empty errors
@@ -675,8 +858,8 @@ func TestValidateAndAdmitResources_File(t *testing.T) {
 	require.NotEmpty(t, invalid.Errors)
 	assert.Contains(t, invalid.Errors[0].Message, "spec.source.type")
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
@@ -731,14 +914,14 @@ func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
 	})
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	current = b
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b, RefName: "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, OldCommitSha: a, NewCommitSha: b, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
@@ -746,8 +929,8 @@ func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
 	assert.Contains(t, string(file.Spec), `"ContentType":"image/jpeg"`)
 	current = c
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, OldCommitSha: b, NewCommitSha: c, RefName: "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, OldCommitSha: b, NewCommitSha: c, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	file, err = store.GetFileByName(context.Background(), "gitstore", "hero")
@@ -790,10 +973,10 @@ func TestAdmitResources_NewProduct_Created(t *testing.T) {
 		deps.IDGenerator = apiruntime.NewSequenceIDGenerator(uid)
 	})
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
-		ActorSubject: "alice",
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 
@@ -859,10 +1042,10 @@ func TestAdmitResources_NewProductWithCategoryRef_JournalsAddedEvent(t *testing.
 	srv := newCatalogServer(t, memStore, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -891,10 +1074,10 @@ func TestAdmitResources_UpdateProduct_JournalsModifiedEvents(t *testing.T) {
 	admit := func(sha string) {
 		t.Helper()
 		_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			ActorSubject: "test-admission-actor",
-			RepositoryId: testRepoID,
-			NewCommitSha: strings.Repeat(sha, 40),
-			RefName:      "refs/heads/main",
+			Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+			RepositoryId:  testRepoID,
+			NewCommitSha:  strings.Repeat(sha, 40),
+			RefName:       "refs/heads/main",
 		})
 		require.NoError(t, err)
 	}
@@ -938,10 +1121,10 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 
 	// First admission — creates the product
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
-		ActorSubject: "alice",
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 
@@ -953,10 +1136,10 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 
 	// Second admission — updates the product
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("b", 40),
-		RefName:      "refs/heads/main",
-		ActorSubject: "bob",
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("b", 40),
+		RefName:       "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "bob", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 
@@ -986,10 +1169,10 @@ func TestAdmitResources_TwoProducts_BothStored(t *testing.T) {
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1017,10 +1200,10 @@ func TestAdmitResources_OneParseFailure_OtherStored(t *testing.T) {
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err, "AdmitResources must not fail even when one product parse fails")
 
@@ -1045,10 +1228,10 @@ func TestAdmitResources_AdmissionAcceptedConditionSet(t *testing.T) {
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1267,10 +1450,10 @@ func TestAdmitResources_CategoryTaxonomy_Created(t *testing.T) {
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1300,10 +1483,10 @@ func TestAdmitResources_CategoryTaxonomy_Updated(t *testing.T) {
 
 	// First admission
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1314,10 +1497,10 @@ func TestAdmitResources_CategoryTaxonomy_Updated(t *testing.T) {
 
 	// Second admission — update
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("b", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("b", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1340,10 +1523,10 @@ func TestAdmitResources_CategoryTaxonomy_AdmissionAcceptedCondition(t *testing.T
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1380,10 +1563,10 @@ func TestAdmitResources_CategoryTaxonomy_RootAncestorPath(t *testing.T) {
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1622,10 +1805,10 @@ func TestAdmitResources_IntraPushCycle_BothStoredWithAcyclicFalse(t *testing.T) 
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1672,10 +1855,10 @@ func TestAdmitResources_ValidChain_BothStoredWithAcyclicTrue(t *testing.T) {
 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1721,10 +1904,10 @@ func TestAdmitResources_RootCategory_AncestorPathEqualsName(t *testing.T) {
 	}
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1747,10 +1930,10 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 	}
 	srv := newCatalogServer(t, memStore, git1)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1765,10 +1948,10 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 	}
 	srv2 := newCatalogServer(t, memStore, git2)
 	_, err = srv2.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("b", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("b", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1802,10 +1985,10 @@ func TestAdmitResources_CoCreation_ParentAndChildInSamePush(t *testing.T) {
 	}
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1826,10 +2009,10 @@ func TestAdmitResources_ChildWithMissingParent_TentativeRoot_ParentResolvedFalse
 	}
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1877,10 +2060,10 @@ func TestAdmitResources_DeepCoCreation_GrandchildAncestorPath(t *testing.T) {
 	}
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -1912,10 +2095,10 @@ func TestAdmitResources_TailCycle_AllMembersMarkedAcyclicFalse(t *testing.T) {
 	}
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -2054,10 +2237,10 @@ body
 	}
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: "abc123",
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  "abc123",
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -2109,10 +2292,10 @@ body
 	}
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: "abc123",
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  "abc123",
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -2148,10 +2331,10 @@ body
 	}
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: "abc123",
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  "abc123",
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -2179,7 +2362,7 @@ func newTestDatastore(t *testing.T) datastore.Datastore {
 		ID:                uuid.New().String(),
 		Name:              "gitstore",
 		Title:             "GitStore Test",
-		Tier:              datastore.NamespaceTierUser,
+		Tier:              datastore.NamespaceTierOrganization,
 		CreationTimestamp: now,
 		CreationActor:     "test",
 		UpdateTimestamp:   now,
@@ -2224,7 +2407,7 @@ func newNamespacePolicyDatastore(t *testing.T) datastore.Datastore {
 		ID:                uuid.New().String(),
 		Name:              "default",
 		Title:             "Default",
-		Tier:              datastore.NamespaceTierUser,
+		Tier:              datastore.NamespaceTierOrganization,
 		CreationTimestamp: now,
 		CreationActor:     "system",
 		UpdateTimestamp:   now,
@@ -2234,13 +2417,13 @@ func newNamespacePolicyDatastore(t *testing.T) datastore.Datastore {
 		ID:                uuid.New().String(),
 		Name:              "other",
 		Title:             "Other",
-		Tier:              datastore.NamespaceTierUser,
+		Tier:              datastore.NamespaceTierOrganization,
 		CreationTimestamp: now,
 		CreationActor:     "test",
 		UpdateTimestamp:   now,
 		UpdateActor:       "test",
 	}
-	for _, namespace := range []*datastore.Namespace{systemNamespace, defaultNamespace, otherNamespace} {
+	for _, namespace := range []*datastore.Namespace{systemNamespace, defaultNamespace, otherNamespace, {UID: uuid.NewString(), Name: "gitstore", Tier: datastore.NamespaceTierOrganization, CreationActor: "test"}} {
 		require.NoError(t, store.CreateNamespace(ctx, namespace))
 	}
 	for _, repository := range []*datastore.Repository{
@@ -2336,14 +2519,14 @@ func newTreeGitReader(current *string, files map[string]map[string][]byte) *mock
 	}
 }
 
-func admitDelta(t *testing.T, srv *cataloggrpc.Server, oldCommit, newCommit string) {
+func admitDelta(t *testing.T, srv *catalogTestServer, oldCommit, newCommit string) {
 	t.Helper()
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: oldCommit,
-		NewCommitSha: newCommit,
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  oldCommit,
+		NewCommitSha:  newCommit,
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 }
@@ -2357,8 +2540,9 @@ func (s *concurrentProductDeleteStore) DeleteProductWithResourceVersion(ctx cont
 	if err != nil {
 		return err
 	}
-	current.ResourceVersion = "concurrent-write"
-	if err := s.UpdateProduct(ctx, current); err != nil {
+	snapshotVersion := current.ResourceVersion
+	datastore.AdvanceProductSystemVersion(current)
+	if err := s.UpdateProduct(ctx, current, snapshotVersion); err != nil {
 		return err
 	}
 	return s.Datastore.DeleteProductWithResourceVersion(ctx, uid, expectedResourceVersion)
@@ -2369,8 +2553,9 @@ func (s *concurrentProductDeleteStore) MarkProductTerminating(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	current.ResourceVersion = "concurrent-write"
-	if err := s.UpdateProduct(ctx, current); err != nil {
+	snapshotVersion := current.ResourceVersion
+	datastore.AdvanceProductSystemVersion(current)
+	if err := s.UpdateProduct(ctx, current, snapshotVersion); err != nil {
 		return nil, err
 	}
 	return s.Datastore.(datastore.ProductLifecycleStore).MarkProductTerminating(ctx, uid, expectedResourceVersion, finalizer, at)
@@ -2408,18 +2593,18 @@ func TestAdmitResources_DeleteRejectsConcurrentReownership(t *testing.T) {
 
 	current = b
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: a,
-		NewCommitSha: b,
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  a,
+		NewCommitSha:  b,
+		RefName:       "refs/heads/main",
 	})
 	require.Equal(t, codes.Internal, grpcstatus.Code(err))
 	require.ErrorContains(t, err, datastore.ErrConflict.Error())
 
 	product, getErr := base.GetProductByName(context.Background(), "gitstore", "widget")
 	require.NoError(t, getErr)
-	assert.Equal(t, "concurrent-write", product.ResourceVersion)
+	assert.Equal(t, "2", product.ResourceVersion)
 }
 
 func TestAdmitResources_OperationAwareDeleteRemovesProductVariant(t *testing.T) {
@@ -2703,10 +2888,10 @@ func TestAdmitResources_EmptySHAFromResolveRef_AdmissionProceeds(t *testing.T) {
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: zero,
-		NewCommitSha: a,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  zero,
+		NewCommitSha:  a,
 
 		RefName: "refs/heads/main",
 	})
@@ -2735,10 +2920,10 @@ func TestExtraValidatingPolicies_CalledForAdmittedResources(t *testing.T) {
 	})
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -2777,10 +2962,10 @@ func TestDeniedAdmission_BlocksStorage(t *testing.T) {
 	})
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -2817,10 +3002,10 @@ func TestAdmitResources_BranchDeleteRecreated_SkipsDeleteAdmission(t *testing.T)
 
 	// Simulate a branch-delete admission: newCommit is all zeros.
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: a,
-		NewCommitSha: zero,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  a,
+		NewCommitSha:  zero,
 
 		RefName: "refs/heads/main",
 	})
@@ -2853,10 +3038,10 @@ func TestAdmitResources_BranchDeleteRefGone_ProceedsWithDeletion(t *testing.T) {
 	}
 	seedSrv := newCatalogServer(t, store, seedGit)
 	_, err := seedSrv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: a,
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  a,
+		RefName:       "refs/heads/main",
 	})
 	require.NoError(t, err)
 	_, err = store.GetProductByName(context.Background(), "gitstore", "widget")
@@ -2879,10 +3064,10 @@ func TestAdmitResources_BranchDeleteRefGone_ProceedsWithDeletion(t *testing.T) {
 	}
 	deleteSrv := newCatalogServer(t, store, deleteGit)
 	_, err = deleteSrv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: a,
-		NewCommitSha: zero,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  a,
+		NewCommitSha:  zero,
 
 		RefName: "refs/heads/main",
 	})
@@ -2935,9 +3120,9 @@ func TestAdmitResourcesLegacyPathAbsent(t *testing.T) {
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: a,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  a,
 
 		// OldCommitSha is intentionally empty — was the legacy trigger.
 		OldCommitSha: "",
@@ -2984,12 +3169,12 @@ func TestAdmitResourcesChangedPathsFastPath(t *testing.T) {
 	readCalls = make(map[string]int)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: a,
-		NewCommitSha: b,
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{"products/widget.md"},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  a,
+		NewCommitSha:  b,
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{"products/widget.md"},
 	})
 	require.NoError(t, err)
 
@@ -3084,10 +3269,10 @@ func TestAdmitResources_OperationSetCorrectly(t *testing.T) {
 	})
 
 	req := &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		NewCommitSha: strings.Repeat("a", 40),
-		RefName:      "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		NewCommitSha:  strings.Repeat("a", 40),
+		RefName:       "refs/heads/main",
 	}
 
 	_, err := srv.AdmitResources(context.Background(), req)

@@ -10,12 +10,11 @@ use tracing::{error, info};
 
 use std::sync::Arc;
 
-use gitstore::auth::interceptor::HmacInterceptor;
+use gitstore::auth::interceptor::RPCVerifier;
 use gitstore::git::hooks::{
     admission_handler::AdmissionControlHandler,
     category_taxonomy_deletion_handler::ResourceDeletionHandler,
     validation_handler::SchemaValidationHandler, ChainedValidationHandler, HookPipeline,
-    NoopAdmissionHandler, NoopValidationHandler,
 };
 use gitstore::grpc::server::{proto::git_service_server::GitServiceServer, GitServiceImpl};
 
@@ -85,13 +84,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (Ok(schema), Ok(deletion)) => {
                 info!(url = %catalog_url, "schema and resource deletion validators connected");
                 Arc::new(ChainedValidationHandler::new(vec![
-                    Arc::new(schema),
-                    Arc::new(deletion),
+                    Arc::new(schema.with_service_token(&cfg.grpc_auth.hmac_secret)),
+                    Arc::new(deletion.with_service_token(&cfg.grpc_auth.hmac_secret)),
                 ]))
             }
-            (schema, deletion) => {
-                tracing::warn!(schema_error = ?schema.err(), deletion_error = ?deletion.err(), "validation handlers unavailable at startup; using noop");
-                Arc::new(NoopValidationHandler)
+            (Err(error), _) | (_, Err(error)) => {
+                return Err(error.context("catalog validation is required").into())
             }
         }
     };
@@ -106,12 +104,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             Ok(h) => {
                 info!(url = %catalog_url, "AdmissionControlHandler connected");
-                Arc::new(h)
+                Arc::new(h.with_service_token(&cfg.grpc_auth.hmac_secret))
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "AdmissionControlHandler unavailable at startup; using noop");
-                Arc::new(NoopAdmissionHandler)
-            }
+            Err(error) => return Err(error.context("catalog admission is required").into()),
         };
 
     // Start gRPC server
@@ -125,11 +120,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_pack_size: cfg.push_limits.max_pack_size.0,
         max_file_size: cfg.push_limits.max_file_size.0,
     };
-    let grpc_service = GitServiceImpl::with_pipeline(data_path.clone(), hook_pipeline, push_limits);
-    let interceptor = HmacInterceptor::new(
+    let rpc_auth = RPCVerifier::new(
         &cfg.grpc_auth.hmac_secret,
         cfg.grpc_auth.hmac_secret_previous.as_deref(),
-    );
+        &data_path,
+    )?;
+    let grpc_service =
+        GitServiceImpl::with_pipeline(data_path.clone(), hook_pipeline, push_limits, rpc_auth);
     info!(
         rotation_window_open = cfg.grpc_auth.hmac_secret_previous.is_some(),
         "gRPC HMAC auth active"
@@ -140,10 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let grpc_handle = tokio::spawn(async move {
         if let Err(e) = tonic::transport::Server::builder()
-            .add_service(GitServiceServer::with_interceptor(
-                grpc_service,
-                interceptor,
-            ))
+            .add_service(GitServiceServer::new(grpc_service))
             .serve(grpc_addr)
             .await
         {

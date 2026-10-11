@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -12,8 +13,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/format"
 	"io"
 	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +55,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "generate":
+		return runGenerate(args[1:], stdout, stderr)
 	case "hash-password":
 		var password string
 		if len(args) >= 2 {
@@ -110,6 +117,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "Usage: gitctl <subcommand> [args]")
 	fmt.Fprintln(output, "Subcommands:")
+	fmt.Fprintln(output, "  generate authz --root <repository-root> [--catalog <path>] [--check]")
 	fmt.Fprintln(output, "  hash-password <password>")
 	fmt.Fprintln(output, "  users add --file <users.yaml> --username <name> --password-stdin [--email <email>] [--display-name <name>]")
 	fmt.Fprintln(output, "  rbac role add --file <policy.yaml> --name <role> [--allow <action>] [--deny <action>]")
@@ -122,6 +130,149 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  enroll-serviceaccount --api-url <url> --admin-token <token> --namespace <namespace> --name <name> --key-id <id> --private-key-path <path> [--replace-existing-key]")
 	fmt.Fprintln(output, "  generate-signing-key --private-key-path <path> [--record-output-path <path> --key-id <id>]")
 	fmt.Fprintln(output, "  validate-local-config --config-file <config.toml> --policy-file <policy.yaml>")
+}
+
+// Catalog generation deliberately does not import generated definitions: a
+// clean checkout can bootstrap or repair them from the one shared authority.
+type authorizationCatalog struct {
+	SchemaVersion int                   `json:"schemaVersion"`
+	Grammar       string                `json:"grammar"`
+	Description   string                `json:"description"`
+	Actions       []authorizationAction `json:"actions"`
+}
+
+type authorizationAction struct {
+	Action   string `json:"action"`
+	Kind     string `json:"kind"`
+	Scope    string `json:"scope"`
+	Resource string `json:"resource"`
+	Verb     string `json:"verb"`
+	Reserved bool   `json:"reserved,omitempty"`
+}
+
+func runGenerate(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "authz" {
+		fmt.Fprintln(stderr, "generate requires target authz")
+		return 2
+	}
+	flags := flag.NewFlagSet("generate authz", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", "..", "repository root")
+	catalogPath := flags.String("catalog", "", "catalog override for validation")
+	check := flags.Bool("check", false, "report drift without modifying files")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "unexpected generate arguments")
+		return 2
+	}
+	if *catalogPath == "" {
+		*catalogPath = filepath.Join(*root, "shared/schemas/authorization-actions.json")
+	}
+	data, err := os.ReadFile(*catalogPath)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	outputs, err := generateAuthorizationCatalog(data)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	paths := []string{"gitstore-api/internal/auth/actions_generated.go", "gitstore-git-service/src/auth/actions_generated.rs"}
+	for i, relative := range paths {
+		path := filepath.Join(*root, relative)
+		if *check {
+			current, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(current, outputs[i]) {
+				fmt.Fprintf(stderr, "authorization catalog drift: %s (run make generate TARGET=authz)\n", relative)
+				return 1
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := os.WriteFile(path, outputs[i], 0644); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	fmt.Fprintln(stdout, "authorization catalog verified")
+	return 0
+}
+
+func generateAuthorizationCatalog(data []byte) ([][]byte, error) {
+	var catalog authorizationCatalog
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&catalog); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, errors.New("catalog must contain exactly one JSON document")
+	}
+	if catalog.SchemaVersion != 1 || catalog.Grammar != "<kind>[.<subresource>].<verb>" || len(catalog.Actions) == 0 {
+		return nil, errors.New("invalid catalog version, grammar or empty actions")
+	}
+	identifier := regexp.MustCompile(`^[a-z][a-zA-Z0-9]*(?:-[a-z0-9]+)*$`)
+	seen, scopes, constants := map[string]bool{}, map[string]string{}, map[string]bool{}
+	for _, entry := range catalog.Actions {
+		parts := strings.Split(entry.Resource, "/")
+		if len(parts) > 2 || parts[0] != entry.Kind || !identifier.MatchString(entry.Kind) || !identifier.MatchString(entry.Verb) || (len(parts) == 2 && !identifier.MatchString(parts[1])) {
+			return nil, fmt.Errorf("invalid resource/verb projection for %q", entry.Action)
+		}
+		if entry.Action != strings.ReplaceAll(entry.Resource, "/", ".")+"."+entry.Verb || seen[entry.Action] {
+			return nil, fmt.Errorf("duplicate or mismatched catalog action %q", entry.Action)
+		}
+		if entry.Scope != "cluster" && entry.Scope != "namespace" {
+			return nil, fmt.Errorf("invalid scope for %q", entry.Action)
+		}
+		if scope, ok := scopes[entry.Kind]; ok && scope != entry.Scope {
+			return nil, fmt.Errorf("inconsistent scope for %q", entry.Kind)
+		}
+		name := actionConstant(entry.Action)
+		if constants[name] {
+			return nil, fmt.Errorf("duplicate generated constant %q", name)
+		}
+		seen[entry.Action], scopes[entry.Kind], constants[name] = true, entry.Scope, true
+	}
+	sort.Slice(catalog.Actions, func(i, j int) bool { return catalog.Actions[i].Action < catalog.Actions[j].Action })
+	header := "// SPDX-License-Identifier: AGPL-3.0-or-later\n// Copyright (c) 2026 GitStore contributors\n\n// Code generated from shared/schemas/authorization-actions.json; DO NOT EDIT.\n"
+	var goCode, rustCode bytes.Buffer
+	goCode.WriteString(header + "package auth\n\n// ActionDefinition is a finite registered authorization capability.\ntype ActionDefinition struct { Action, Kind, Scope, Resource, Verb string; Reserved bool }\n\nconst (\n")
+	for _, entry := range catalog.Actions {
+		fmt.Fprintf(&goCode, "%s = %q\n", actionConstant(entry.Action), entry.Action)
+	}
+	goCode.WriteString(")\n\nvar authorizationActions = [...]ActionDefinition{\n")
+	for _, e := range catalog.Actions {
+		fmt.Fprintf(&goCode, "{%q, %q, %q, %q, %q, %t},\n", e.Action, e.Kind, e.Scope, e.Resource, e.Verb, e.Reserved)
+	}
+	goCode.WriteString("}\n\nvar authorizationActionIndex = func() map[string]ActionDefinition { m := make(map[string]ActionDefinition, len(authorizationActions)); for _, a := range authorizationActions { m[a.Action] = a }; return m }()\n\n// LookupAction returns an immutable copy; unknown and legacy spellings never match.\nfunc LookupAction(action string) (ActionDefinition, bool) { a, ok := authorizationActionIndex[action]; return a, ok }\n\n// AuthorizationActions returns a defensive copy in canonical action order.\nfunc AuthorizationActions() []ActionDefinition { return append([]ActionDefinition(nil), authorizationActions[:]...) }\n")
+	rustCode.WriteString(header + "\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub struct ActionDefinition {\n    pub action: &'static str,\n    pub kind: &'static str,\n    pub scope: &'static str,\n    pub resource: &'static str,\n    pub verb: &'static str,\n    pub reserved: bool,\n}\n\n")
+	for _, entry := range catalog.Actions {
+		fmt.Fprintf(&rustCode, "pub const %s: &str = %q;\n", strings.ToUpper(strings.NewReplacer(".", "_", "-", "_").Replace(entry.Action)), entry.Action)
+	}
+	rustCode.WriteString("\n#[rustfmt::skip]\npub const AUTHORIZATION_ACTIONS: &[ActionDefinition] = &[\n")
+	for _, e := range catalog.Actions {
+		fmt.Fprintf(&rustCode, "    ActionDefinition { action: %q, kind: %q, scope: %q, resource: %q, verb: %q, reserved: %t },\n", e.Action, e.Kind, e.Scope, e.Resource, e.Verb, e.Reserved)
+	}
+	rustCode.WriteString("];\n\npub fn lookup_action(action: &str) -> Option<&'static ActionDefinition> {\n    AUTHORIZATION_ACTIONS\n        .binary_search_by_key(&action, |entry| entry.action)\n        .ok()\n        .map(|index| &AUTHORIZATION_ACTIONS[index])\n}\n")
+	formatted, err := format.Source(goCode.Bytes())
+	if err != nil {
+		return nil, err
+	}
+	return [][]byte{formatted, rustCode.Bytes()}, nil
+}
+
+func actionConstant(action string) string {
+	parts := strings.FieldsFunc(action, func(r rune) bool { return r == '.' || r == '-' })
+	for i, part := range parts {
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return "Action" + strings.Join(parts, "")
 }
 
 func runValidateLocalConfig(args []string, stdout, stderr io.Writer) int {
@@ -173,17 +324,32 @@ func runRBAC(args []string, stdout, stderr io.Writer) int {
 		flags.SetOutput(stderr)
 		path := flags.String("file", "", "path to policy.yaml")
 		name := flags.String("name", "", "new role name")
+		scope := flags.String("scope", "cluster", "role scope: cluster or namespace (definitions have no namespace)")
 		var allow, deny actionList
 		flags.Var(&allow, "allow", "allowed action; repeat or use commas")
 		flags.Var(&deny, "deny", "denied action; repeat or use commas")
 		if err := flags.Parse(args[2:]); err != nil {
 			return 2
 		}
+		denyPresent := false
+		flags.Visit(func(f *flag.Flag) {
+			if f.Name == "deny" {
+				denyPresent = true
+			}
+		})
+		if denyPresent {
+			fmt.Fprintln(stderr, "DENY/--deny is unsupported; v1beta1 policy is allow-only")
+			return 2
+		}
+		if flags.NArg() != 0 {
+			fmt.Fprintln(stderr, "unexpected role arguments")
+			return 2
+		}
 		if *path == "" || strings.TrimSpace(*name) == "" {
 			fmt.Fprintln(stderr, "rbac role add requires --file and --name")
 			return 2
 		}
-		if err := rbaclocal.AddRole(*path, *name, rbaclocal.RolePolicy{Allow: allow, Deny: deny}); err != nil {
+		if err := rbaclocal.AddRole(*path, *name, rbaclocal.RolePolicy{Allow: allow}, rbaclocal.RoleOptions{Scope: *scope}); err != nil {
 			fmt.Fprintf(stderr, "Error adding role: %v\n", err)
 			return 1
 		}
@@ -195,6 +361,10 @@ func runRBAC(args []string, stdout, stderr io.Writer) int {
 		path := flags.String("file", "", "path to policy.yaml")
 		subject := flags.String("subject", "", "identity subject")
 		role := flags.String("role", "", "existing role name")
+		scope := flags.String("scope", "cluster", "binding scope: cluster or namespace")
+		namespace := flags.String("namespace", "", "explicit namespace required only for namespace bindings")
+		subjectKind := flags.String("subject-kind", "User", "User, Group or ServiceAccount")
+		roleKind := flags.String("role-kind", "ClusterRole", "ClusterRole or Role")
 		if err := flags.Parse(args[2:]); err != nil {
 			return 2
 		}
@@ -202,7 +372,11 @@ func runRBAC(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "rbac binding add requires --file, --subject, and --role")
 			return 2
 		}
-		added, err := rbaclocal.AssignRole(*path, *subject, *role)
+		if flags.NArg() != 0 {
+			fmt.Fprintln(stderr, "unexpected binding arguments")
+			return 2
+		}
+		added, err := rbaclocal.AssignRole(*path, *subject, *role, rbaclocal.BindingOptions{Scope: *scope, Namespace: *namespace, SubjectKind: *subjectKind, RoleKind: *roleKind})
 		if err != nil {
 			fmt.Fprintf(stderr, "Error assigning role: %v\n", err)
 			return 1
@@ -260,7 +434,7 @@ func runUsers(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "Added user %q to %s\n", *username, *path)
-	fmt.Fprintln(stdout, "Reminder: add a role_bindings entry in policy.yaml before reloading the API.")
+	fmt.Fprintln(stdout, "Reminder: add a typed role binding in policy.yaml before reloading the API.")
 	return 0
 }
 

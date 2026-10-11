@@ -201,11 +201,6 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("connect git-service: %w", err)
 	}
-	if err := ensureBootstrapResources(context.Background(), store, gitClient, clock, ids, log); err != nil {
-		_ = gitClient.Close()
-		_ = store.Close()
-		return nil, fmt.Errorf("bootstrap resources: %w", err)
-	}
 	revocations, ok := rawStore.(staticusers.RevocationStore)
 	if !ok {
 		_ = gitClient.Close()
@@ -223,15 +218,28 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		zap.String("authz_provider", cfg.Api.Auth.AuthZ.Provider),
 		zap.String("userdir_provider", cfg.Api.Auth.UserDir.Provider),
 	)
+	gitClient.Registry = registry
+	gitClient.Store = store
+	if err := ensureBootstrapResources(context.Background(), store, gitClient, clock, ids, log); err != nil {
+		for _, provider := range providerShutdowns {
+			provider.Shutdown()
+		}
+		_ = gitClient.Close()
+		_ = store.Close()
+		return nil, fmt.Errorf("bootstrap resources: %w", err)
+	}
 
 	// The same admission runtime serves post-receive batches and synchronous
 	// GraphQL committed-manifest convergence. Build it before the GraphQL schema
 	// so resolvers never acquire a datastore-only authoring path.
 	catalogServer, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
-		Store:     store,
-		GitClient: gitClient,
-		Logger:    log,
-		Clock:     clock,
+		Registry:              registry,
+		ServiceSecret:         cfg.GrpcAuth.HmacSecret,
+		ServiceSecretPrevious: cfg.GrpcAuth.HmacSecretPrevious,
+		Store:                 store,
+		GitClient:             gitClient,
+		Logger:                log,
+		Clock:                 clock,
 	})
 	if err != nil {
 		_ = gitClient.Close()
@@ -399,6 +407,9 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	gqlServer.AroundResponses(authorizeMiddleware.GraphQLResponseAuthorizer)
 
 	gqlHandler := gin.HandlerFunc(func(c *gin.Context) {
+		if !authenticateMiddleware.AuthenticateWebSocketUpgrade(c) {
+			return
+		}
 		ctx := security.ContextWithRemoteAddr(c.Request.Context(), c.RemoteIP())
 		c.Request = c.Request.WithContext(ctx)
 		gqlServer.ServeHTTP(c.Writer, c.Request)
@@ -539,7 +550,7 @@ func namespaceWatchReadiness(ctx context.Context, runtime *namespaceWatchRuntime
 // ServiceAccount AuthN providers. Assertion authentication additionally needs
 // the durable replay operation while JWT authentication uses only the lookup.
 type serviceAccountStore interface {
-	GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*datastore.ServiceAccount, error)
+	GetServiceAccountBySubject(ctx context.Context, name string) (*datastore.ServiceAccount, error)
 	TryConsumeServiceAccountAssertion(ctx context.Context, jtiDigest string, expiresAt time.Time) (bool, error)
 }
 
@@ -698,14 +709,20 @@ func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, lo
 		return nil, nil, fmt.Errorf("unknown userdir provider %q", cfg.Api.Auth.UserDir.Provider)
 	}
 
-	if staticUsersProvider != nil && rbacProvider != nil && !rbacProvider.HasAnyRoleBindingFor(staticUsersProvider.Usernames()) {
-		usernames := staticUsersProvider.Usernames()
-		first := ""
-		if len(usernames) > 0 {
-			first = usernames[0]
+	if staticUsersProvider != nil && rbacProvider != nil {
+		profiles := make([]*auth.UserProfile, 0)
+		for _, username := range staticUsersProvider.Usernames() {
+			profile, err := staticUsersProvider.GetBySubject(context.Background(), username)
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("validate local user: %w", err)
+			}
+			profiles = append(profiles, profile)
 		}
-		cleanup()
-		return nil, nil, fmt.Errorf("startup failed: static-users + rbac-local migration safety check\n\n  Problem: static-users is configured with %d user(s) (%s), but rbac-local's policy.yaml has no usable role_bindings entry for any of them. A usable binding's complete role set leaves at least one allowed action after explicit denies are applied\n\n  To fix, do ONE of the following:\n    1. Add a role_bindings entry in %s for at least one of the usernames above, e.g. role_bindings: %s: [admin]\n    2. If you don't want rbac-local enforcement yet, set GITSTORE_API__AUTH__AUTHZ__PROVIDER=allow-all instead\n\n  See specs/060-local-multiuser-authn/quickstart.md for a worked example", len(usernames), strings.Join(usernames, ", "), cfg.Api.Auth.RBACLocal.PolicyFile, first)
+		if err := rbacProvider.SetActiveUsers(profiles); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("startup failed: %w (policy %s)", err, cfg.Api.Auth.RBACLocal.PolicyFile)
+		}
 	}
 	return auth.NewProviderRegistry(auth.NewChainedAuthN(authnProviders...), authzProvider, userdirProvider), shutdowns, nil
 }

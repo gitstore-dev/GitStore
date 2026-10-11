@@ -3,7 +3,37 @@
 
 package datastore
 
-import "math/big"
+import (
+	"fmt"
+	"math/big"
+)
+
+// ValidateCatalogUpdateVersion binds a desired-state write to the snapshot
+// authorized by the caller. An empty version is a literal initial version, never
+// a wildcard. Every successful replacement must advance the token exactly once.
+func ValidateCatalogUpdateVersion(current, expected, desired string) error {
+	if current != expected {
+		return fmt.Errorf("%w: resource version changed", ErrConflict)
+	}
+	if current == "" {
+		current = "0"
+	}
+	before, beforeOK := new(big.Int).SetString(current, 10)
+	after, afterOK := new(big.Int).SetString(desired, 10)
+	if !beforeOK || !afterOK || before.Sign() < 0 || after.Sign() < 1 ||
+		after.Cmp(new(big.Int).Add(before, big.NewInt(1))) != 0 {
+		return fmt.Errorf("%w: resource version must advance exactly once", ErrConflict)
+	}
+	return nil
+}
+
+// AdvanceCollectionSystemVersion advances the optimistic-concurrency token.
+func AdvanceCollectionSystemVersion(collection *Collection) {
+	if collection == nil {
+		return
+	}
+	collection.ResourceVersion = nextResourceVersion(collection.ResourceVersion)
+}
 
 // nextResourceVersion advances a positive decimal resourceVersion. Invalid,
 // empty, and non-positive values normalize to the initial version.

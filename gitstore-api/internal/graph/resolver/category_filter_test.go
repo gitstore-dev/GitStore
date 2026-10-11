@@ -25,7 +25,9 @@ func seedResolvedCategory(t *testing.T, store datastore.Datastore, ns string, pa
 	c := seedCategory(t, store, ns, name, time.Now().UTC())
 	if len(path) > 1 {
 		c.ParentName = path[len(path)-2]
-		require.NoError(t, store.UpdateCategoryTaxonomy(context.Background(), c))
+		expectedResourceVersion := c.ResourceVersion
+		datastore.AdvanceCategoryTaxonomySystemVersion(c)
+		require.NoError(t, store.UpdateCategoryTaxonomy(context.Background(), c, expectedResourceVersion))
 		c, _ = store.GetCategoryTaxonomyByName(context.Background(), ns, name)
 	}
 	updated, err := store.UpdateCategoryTaxonomyStatus(context.Background(), ns, name, datastore.CategoryTaxonomyStatusPatch{
@@ -204,7 +206,9 @@ func TestCategoryParentAndChildren(t *testing.T) {
 		c, err := store.GetCategoryTaxonomyByName(ctx, "shop", name)
 		require.NoError(t, err)
 		c.Spec = []byte(`{"title":"` + name + `","parentRef":{"name":"` + parent + `"}}`)
-		require.NoError(t, store.UpdateCategoryTaxonomy(ctx, c))
+		expectedResourceVersion := c.ResourceVersion
+		datastore.AdvanceCategoryTaxonomySystemVersion(c)
+		require.NoError(t, store.UpdateCategoryTaxonomy(ctx, c, expectedResourceVersion))
 	}
 
 	specWithParent("computers", "electronics")

@@ -18,7 +18,7 @@ metadata:
   name: %s
 spec:
   title: %s
-  tier: USER
+  tier: ORGANIZATION
 ---
 `, name, title)
 }

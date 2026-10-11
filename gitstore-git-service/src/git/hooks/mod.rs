@@ -37,12 +37,45 @@ pub struct HookContext {
     pub actor_subject: String,
     /// Auth mechanism (e.g. "basic", "bearer").
     pub actor_auth_method: String,
+    pub actor_groups: Vec<String>,
+    pub actor_service_account_uid: String,
+    pub receive_id: String,
     /// Pack size limit; 0 = unlimited.
     pub max_pack_size_bytes: i64,
     /// Per-blob size limit; 0 = unlimited.
     pub max_file_size_bytes: i64,
     /// Opaque audit tag from the datastore record.
     pub config_resource_version: String,
+}
+
+impl HookContext {
+    pub fn callback_authorization(
+        &self,
+        refs: Vec<validation_handler::catalog_proto::ReceiveRef>,
+    ) -> validation_handler::catalog_proto::CallbackAuthorization {
+        use validation_handler::catalog_proto::{CallbackActor, CallbackAuthorization};
+        CallbackAuthorization {
+            repository_id: self.repository_id.clone(),
+            receive_id: self.receive_id.clone(),
+            refs,
+            actor: Some(CallbackActor {
+                subject: self.actor_subject.clone(),
+                groups: self.actor_groups.clone(),
+                auth_method: self.actor_auth_method.clone(),
+                service_account_uid: self.actor_service_account_uid.clone(),
+            }),
+        }
+    }
+}
+
+impl From<&RefUpdate> for validation_handler::catalog_proto::ReceiveRef {
+    fn from(update: &RefUpdate) -> Self {
+        Self {
+            ref_name: update.ref_name.clone(),
+            old_commit_sha: update.old_oid.clone(),
+            new_commit_sha: update.new_oid.clone(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

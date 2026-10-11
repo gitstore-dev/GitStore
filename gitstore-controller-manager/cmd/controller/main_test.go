@@ -150,10 +150,9 @@ func TestBuildCredentialSourceUsesResolvedServiceAccountKey(t *testing.T) {
 		Controller: config.ControllerConfig{
 			ApiURI: "http://api.example.test/graphql",
 			ServiceAccount: config.ServiceAccountConfig{
-				Namespace: "controllers",
-				Name:      "gitstore-controller-manager",
-				UID:       "sa-uid-1",
-				KeyRef:    ref,
+				Name:   "gitstore-controller-manager",
+				UID:    "sa-uid-1",
+				KeyRef: ref,
 			},
 			SecretProviders: config.SecretProvidersConfig{Bootstrap: provider},
 		},
@@ -209,7 +208,7 @@ func TestBuildCredentialSourceFailsClosedOnInvalidRecords(t *testing.T) {
 			cfg := &config.Config{Controller: config.ControllerConfig{
 				ApiURI: "http://must-not-call.invalid",
 				ServiceAccount: config.ServiceAccountConfig{
-					Namespace: "controllers", Name: "manager", UID: "uid",
+					Name: "manager", UID: "uid",
 					KeyRef: secret.Ref{Kind: "SecretRef", Name: "controller"},
 				},
 				SecretProviders: config.SecretProvidersConfig{Bootstrap: secret.BootstrapProviderConfig{

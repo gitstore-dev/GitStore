@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
+use crate::auth::interceptor::RPCVerifier;
 use crate::git::hooks::{HookPipeline, NoopAdmissionHandler, NoopValidationHandler, RefUpdate};
 use crate::git::repo::{create_repository, delete_repository, fanout_path, list_tags};
 use tracing::{debug, error, info};
@@ -52,6 +53,24 @@ impl From<&PushContext> for HookContext {
             repository_id: ctx.repository_id.clone(),
             actor_subject: actor.map(|a| a.subject.clone()).unwrap_or_default(),
             actor_auth_method: actor.map(|a| a.auth_method.clone()).unwrap_or_default(),
+            actor_groups: actor.map(|a| a.groups.clone()).unwrap_or_default(),
+            actor_service_account_uid: actor
+                .map(|a| a.service_account_uid.clone())
+                .unwrap_or_default(),
+            // Correlation identity is generated inside the authenticated Git
+            // receive boundary, never copied from author-supplied metadata.
+            receive_id: {
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                format!(
+                    "{:x}-{:x}-{:x}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos(),
+                    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                )
+            },
             max_pack_size_bytes: ctx
                 .policy
                 .as_ref()
@@ -113,6 +132,7 @@ fn effective_limit(repository_policy: i64, ceiling: u64) -> i64 {
 }
 
 pub struct GitServiceImpl {
+    rpc_auth: RPCVerifier,
     pub data_root: Arc<PathBuf>,
     pub repo_locks: Arc<DashMap<String, Arc<RwLock<()>>>>,
     pub hook_pipeline: Arc<HookPipeline>,
@@ -120,7 +140,7 @@ pub struct GitServiceImpl {
 }
 
 impl GitServiceImpl {
-    pub fn new(data_root: PathBuf) -> Self {
+    pub fn new(data_root: PathBuf, rpc_auth: RPCVerifier) -> Self {
         Self::with_pipeline(
             data_root,
             Arc::new(HookPipeline::new(
@@ -129,6 +149,7 @@ impl GitServiceImpl {
                 Arc::new(NoopAdmissionHandler),
             )),
             PushLimits::default(),
+            rpc_auth,
         )
     }
 
@@ -136,8 +157,10 @@ impl GitServiceImpl {
         data_root: PathBuf,
         hook_pipeline: Arc<HookPipeline>,
         push_limits: PushLimits,
+        rpc_auth: RPCVerifier,
     ) -> Self {
         Self {
+            rpc_auth,
             data_root: Arc::new(data_root),
             repo_locks: Arc::new(DashMap::new()),
             hook_pipeline,
@@ -235,9 +258,10 @@ fn acquire_repository_commit_lock(path: &Path, timeout: std::time::Duration) -> 
     }
 }
 
-fn is_reference_content_conflict(message: &str) -> bool {
-    message.contains("actual content was")
-        && (message.contains("should have content") || message.contains("supposed to exist"))
+fn is_reference_content_conflict(error: &gix::Error) -> bool {
+    use gix::refs::file::transaction::prepare::{MustNotExist, ReferenceOutOfDate};
+    error.downcast_any_ref::<ReferenceOutOfDate>().is_some()
+        || error.downcast_any_ref::<MustNotExist>().is_some()
 }
 
 fn publish_delete_ref(
@@ -284,9 +308,7 @@ fn publish_delete_ref(
         .transaction()
         .prepare(edits, fail, fail)
         .map_err(|e| {
-            let message = e.to_string();
-            if is_reference_content_conflict(&message) || message.contains("was supposed to exist")
-            {
+            if is_reference_content_conflict(&e) || e.is_not_found() {
                 if receipt_ref.is_some() {
                     Status::failed_precondition(format!("prepared deletion was not published: {e}"))
                 } else {
@@ -593,9 +615,48 @@ fn validate_request_authorization(
         .actor
         .as_ref()
         .ok_or_else(|| Status::invalid_argument("request authorization actor is required"))?;
-    if actor.subject.is_empty() || actor.auth_method.is_empty() {
+    let valid_text = |value: &str| {
+        !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+    };
+    if !valid_text(&actor.subject)
+        || !valid_text(&actor.auth_method)
+        || actor.groups.len() > 256
+        || actor.groups.iter().any(|group| !valid_text(group))
+        || actor.service_account_uid.len() > 256
+    {
         return Err(Status::invalid_argument(
             "request authorization actor is malformed",
+        ));
+    }
+    let service_account = actor.subject.strip_prefix("system:serviceaccount:");
+    let valid_identity = if actor.subject == "system:api" {
+        actor.auth_method == "internal" && actor.service_account_uid.is_empty()
+    } else if let Some(name) = service_account {
+        valid_text(name)
+            && !name.contains([':', '/'])
+            && actor.auth_method == "serviceaccount-jwt"
+            && !actor.service_account_uid.is_empty()
+    } else if actor.subject == "anon" {
+        actor.auth_method == "none" && actor.service_account_uid.is_empty()
+    } else {
+        !actor.subject.starts_with("system:")
+            && !actor.subject.starts_with("serviceaccount:")
+            && actor.service_account_uid.is_empty()
+            && !matches!(
+                actor.auth_method.as_str(),
+                "internal" | "none" | "serviceaccount-jwt" | "serviceaccount-assertion"
+            )
+    };
+    if !valid_identity {
+        return Err(Status::permission_denied(
+            "request authorization actor identity is invalid",
+        ));
+    }
+    let definition = crate::auth::actions_generated::lookup_action(&authorization.action)
+        .ok_or_else(|| Status::permission_denied("unregistered authorization action"))?;
+    if definition.kind != "repository" || definition.reserved {
+        return Err(Status::permission_denied(
+            "authorization action is not a repository operation",
         ));
     }
     if authorization.resource_kind != "repository" || authorization.repository_id != repository_id {
@@ -612,10 +673,10 @@ fn validate_request_authorization(
         ));
     }
     if actor.auth_method == "none"
-        && (actor.subject != "anon" || authorization.action != "repository.read.any")
+        && (actor.subject != "anon" || authorization.action != "repository.contents.read")
     {
         return Err(Status::permission_denied(
-            "anonymous actors may only use repository.read.any",
+            "anonymous actors may only use repository.contents.read",
         ));
     }
     debug!(repo_id = %repository_id, subject = %actor.subject, action = %authorization.action, "request authorization accepted");
@@ -748,11 +809,18 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<CreateRepositoryRequest>,
     ) -> Result<Response<CreateRepositoryResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/CreateRepository",
+                request.get_ref(),
+            )
+            .await?;
         let req = request.into_inner();
         validate_request_authorization(
             req.authorization.as_ref(),
             &req.repository_id,
-            &["repository.create.own", "repository.create.any"],
+            &["repository.create"],
         )?;
         let repo_path = fanout_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
@@ -798,11 +866,18 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<DeleteRepositoryRequest>,
     ) -> Result<Response<DeleteRepositoryResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/DeleteRepository",
+                request.get_ref(),
+            )
+            .await?;
         let req = request.into_inner();
         validate_request_authorization(
             req.authorization.as_ref(),
             &req.repository_id,
-            &["repository.delete.own", "repository.delete.any"],
+            &["repository.delete"],
         )?;
         let repo_path = fanout_path(&self.data_root, &req.repository_id)?;
 
@@ -846,11 +921,18 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<GetFileRequest>,
     ) -> Result<Response<GetFileResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/GetFile",
+                request.get_ref(),
+            )
+            .await?;
         let req = request.into_inner();
         validate_request_authorization(
             req.authorization.as_ref(),
             &req.repository_id,
-            &["repository.read.own", "repository.read.any"],
+            &["repository.contents.read"],
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)
             .map_err(file_read_target_error)?;
@@ -907,11 +989,18 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<GetFileStreamRequest>,
     ) -> Result<Response<Self::GetFileStreamStream>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/GetFileStream",
+                request.get_ref(),
+            )
+            .await?;
         let req = request.into_inner();
         validate_request_authorization(
             req.authorization.as_ref(),
             &req.repository_id,
-            &["repository.read.own", "repository.read.any"],
+            &["repository.contents.read"],
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)
             .map_err(file_read_target_error)?;
@@ -1008,11 +1097,18 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<ListFilesRequest>,
     ) -> Result<Response<ListFilesResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/ListFiles",
+                request.get_ref(),
+            )
+            .await?;
         let req = request.into_inner();
         validate_request_authorization(
             req.authorization.as_ref(),
             &req.repository_id,
-            &["repository.read.own", "repository.read.any"],
+            &["repository.contents.read"],
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
@@ -1045,11 +1141,18 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<CommitFileRequest>,
     ) -> Result<Response<CommitFileResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/CommitFile",
+                request.get_ref(),
+            )
+            .await?;
         let req = request.into_inner();
         validate_request_authorization(
             req.authorization.as_ref(),
             &req.repository_id,
-            &["repository.write.own", "repository.write.any"],
+            &["repository.contents.write"],
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
@@ -1160,7 +1263,7 @@ impl GitService for GitServiceImpl {
                     }
                     Err(err)
                         if attempt + 1 < COMMIT_FILE_MAX_ATTEMPTS
-                            && is_reference_content_conflict(&err.to_string()) =>
+                            && is_reference_content_conflict(&err) =>
                     {
                         debug!(
                             retry_attempt = attempt + 1,
@@ -1183,11 +1286,18 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<DeleteFileRequest>,
     ) -> Result<Response<DeleteFileResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/DeleteFile",
+                request.get_ref(),
+            )
+            .await?;
         let req = request.into_inner();
         validate_request_authorization(
             req.authorization.as_ref(),
             &req.repository_id,
-            &["repository.write.own", "repository.write.any"],
+            &["repository.contents.write"],
         )?;
         let precondition = match (&req.ref_name, &req.expected_commit_sha) {
             (None, None) => None,
@@ -1392,11 +1502,18 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<CreateTagRequest>,
     ) -> Result<Response<CreateTagResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/CreateTag",
+                request.get_ref(),
+            )
+            .await?;
         let req = request.into_inner();
         validate_request_authorization(
             req.authorization.as_ref(),
             &req.repository_id,
-            &["repository.write.own", "repository.write.any"],
+            &["repository.contents.write"],
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
@@ -1463,11 +1580,18 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<ListTagsRequest>,
     ) -> Result<Response<ListTagsResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/ListTags",
+                request.get_ref(),
+            )
+            .await?;
         let req = request.into_inner();
         validate_request_authorization(
             req.authorization.as_ref(),
             &req.repository_id,
-            &["repository.read.own", "repository.read.any"],
+            &["repository.contents.read"],
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
@@ -1504,10 +1628,17 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<InfoRefsRequest>,
     ) -> Result<Response<InfoRefsResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/InfoRefs",
+                request.get_ref(),
+            )
+            .await?;
         let req = request.into_inner();
         let expected_action = match Service::try_from(req.service).unwrap_or(Service::Unspecified) {
-            Service::GitUploadPack => &["repository.read.own", "repository.read.any"][..],
-            Service::GitReceivePack => &["repository.write.own", "repository.write.any"][..],
+            Service::GitUploadPack => &["repository.contents.read"][..],
+            Service::GitReceivePack => &["repository.contents.write"][..],
             Service::Unspecified => return Err(Status::invalid_argument("unknown service")),
         };
         validate_request_authorization(
@@ -1552,6 +1683,7 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<tonic::Streaming<ReceivePackRequest>>,
     ) -> Result<Response<ReceivePackResponse>, Status> {
+        let metadata = request.metadata().clone();
         let mut stream = request.into_inner();
 
         // First chunk carries repo_id + ref_commands + optional initial pack_data
@@ -1561,6 +1693,9 @@ impl GitService for GitServiceImpl {
             .map_err(|e| Status::internal(format!("recv first chunk: {}", e)))?
             .ok_or_else(|| Status::invalid_argument("empty stream"))?;
 
+        self.rpc_auth
+            .verify(&metadata, "/gitstore.git.v1.GitService/ReceivePack", &first)
+            .await?;
         let repo_id = first.repository_id.clone();
 
         // T040: Validate push_context presence and repo_id consistency (FR-011).
@@ -1576,7 +1711,7 @@ impl GitService for GitServiceImpl {
         validate_request_authorization(
             push_ctx.authorization.as_ref(),
             &repo_id,
-            &["repository.write.own", "repository.write.any"],
+            &["repository.contents.write"],
         )?;
 
         // T041: Extract pack size limit before any pack I/O. Effective limit
@@ -1913,11 +2048,18 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<UploadPackRequest>,
     ) -> Result<Response<Self::UploadPackStream>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/UploadPack",
+                request.get_ref(),
+            )
+            .await?;
         let req = request.into_inner();
         validate_request_authorization(
             req.authorization.as_ref(),
             &req.repository_id,
-            &["repository.read.own", "repository.read.any"],
+            &["repository.contents.read"],
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
@@ -1972,11 +2114,18 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<GetLatestTagRequest>,
     ) -> Result<Response<GetLatestTagResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/GetLatestTag",
+                request.get_ref(),
+            )
+            .await?;
         let req = request.into_inner();
         validate_request_authorization(
             req.authorization.as_ref(),
             &req.repository_id,
-            &["repository.read.own", "repository.read.any"],
+            &["repository.contents.read"],
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
@@ -2212,8 +2361,35 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn signed_test_request<T: prost::Message>(message: T) -> Request<T> {
+        let name = std::any::type_name::<T>()
+            .rsplit("::")
+            .next()
+            .unwrap()
+            .trim_end_matches("Request");
+        crate::auth::interceptor::sign_request(
+            message,
+            "fixture-key",
+            "gitstore-git",
+            &format!("/gitstore.git.v1.GitService/{name}"),
+        )
+        .unwrap()
+    }
+
+    fn signed_test_stream(
+        chunks: Vec<ReceivePackRequest>,
+    ) -> Request<impl tokio_stream::Stream<Item = ReceivePackRequest>> {
+        let signed = signed_test_request(chunks[0].clone());
+        let mut request = Request::new(tokio_stream::iter(chunks));
+        *request.metadata_mut() = signed.metadata().clone();
+        request
+    }
+
     fn make_test_service(data_root: &std::path::Path) -> GitServiceImpl {
-        GitServiceImpl::new(data_root.to_path_buf())
+        GitServiceImpl::new(
+            data_root.to_path_buf(),
+            RPCVerifier::new("fixture-key", None, data_root).unwrap(),
+        )
     }
 
     fn make_test_service_with_push_limits(
@@ -2228,6 +2404,7 @@ mod tests {
                 Arc::new(NoopAdmissionHandler),
             )),
             push_limits,
+            RPCVerifier::new("fixture-key", None, data_root).unwrap(),
         )
     }
 
@@ -2430,7 +2607,7 @@ mod tests {
                 subject: "system:api".to_string(),
                 issuer: "test".to_string(),
                 auth_method: "internal".to_string(),
-                roles: vec![],
+                service_account_uid: String::new(),
                 groups: vec![],
                 scopes: vec![],
             }),
@@ -2443,13 +2620,82 @@ mod tests {
 
     #[test]
     fn reference_content_conflict_recognizes_existing_and_missing_expectations() {
-        assert!(is_reference_content_conflict(
-            "ref refs/heads/main should have content abc, actual content was def"
-        ));
-        assert!(is_reference_content_conflict(
-            "Reference refs/heads/main was not supposed to exist, but actual content was def"
-        ));
-        assert!(!is_reference_content_conflict("permission denied"));
+        use gix::refs::file::transaction::prepare::{MustNotExist, ReferenceOutOfDate};
+        let actual = gix::refs::Target::Object(gix::ObjectId::null(gix::hash::Kind::Sha1));
+        assert!(is_reference_content_conflict(&gix::Error::from_error(
+            ReferenceOutOfDate {
+                full_name: "refs/heads/main".into(),
+                actual: actual.clone()
+            }
+        )));
+        assert!(is_reference_content_conflict(&gix::Error::from_error(
+            MustNotExist {
+                full_name: "refs/heads/main".into(),
+                actual
+            }
+        )));
+        assert!(!is_reference_content_conflict(&gix::Error::from_error(
+            io::Error::new(io::ErrorKind::PermissionDenied, "permission denied")
+        )));
+    }
+
+    #[test]
+    fn canonical_authorization_rejects_legacy_and_spoofed_actors() {
+        for action in [
+            "repository.read.any",
+            "repository.write.own",
+            "repository.future",
+            "product.read",
+        ] {
+            let envelope = test_authorization(TEST_REPO_A, action);
+            assert!(
+                validate_request_authorization(envelope.as_ref(), TEST_REPO_A, &[action]).is_err(),
+                "{action}"
+            );
+        }
+        for (subject, method, uid) in [
+            ("system:api", "static-users", ""),
+            ("alice", "internal", ""),
+            ("serviceaccount:ns:controller", "serviceaccount-jwt", "uid"),
+            ("system:serviceaccount:controller", "serviceaccount-jwt", ""),
+            ("system:serviceaccount:controller", "oidc-jwt", "uid"),
+            ("alice", "static-users", "uid"),
+            ("anon", "static-users", ""),
+        ] {
+            let mut envelope = test_authorization(TEST_REPO_A, "repository.contents.read").unwrap();
+            let actor = envelope.actor.as_mut().unwrap();
+            actor.subject = subject.into();
+            actor.auth_method = method.into();
+            actor.service_account_uid = uid.into();
+            assert!(
+                validate_request_authorization(
+                    Some(&envelope),
+                    TEST_REPO_A,
+                    &["repository.contents.read"]
+                )
+                .is_err(),
+                "{subject}/{method}"
+            );
+        }
+        let envelope = test_authorization(TEST_REPO_A, "repository.contents.read");
+        assert!(validate_request_authorization(
+            envelope.as_ref(),
+            TEST_REPO_A,
+            &["repository.contents.read"]
+        )
+        .is_ok());
+        assert!(validate_request_authorization(
+            envelope.as_ref(),
+            TEST_REPO_B,
+            &["repository.contents.read"]
+        )
+        .is_err());
+        assert!(validate_request_authorization(
+            envelope.as_ref(),
+            TEST_REPO_A,
+            &["repository.contents.write"]
+        )
+        .is_err());
     }
 
     #[test]
@@ -2459,11 +2705,11 @@ mod tests {
                 subject: "anon".to_string(),
                 issuer: "gitstore".to_string(),
                 auth_method: "none".to_string(),
-                roles: vec![],
+                service_account_uid: String::new(),
                 groups: vec![],
                 scopes: vec![],
             }),
-            action: "repository.read.any".to_string(),
+            action: "repository.contents.read".to_string(),
             resource_kind: "repository".to_string(),
             resource_name: String::new(),
             repository_id: TEST_REPO_A.to_string(),
@@ -2472,9 +2718,51 @@ mod tests {
         assert!(validate_request_authorization(
             Some(&authorization),
             TEST_REPO_A,
-            &["repository.read.any"],
+            &["repository.contents.read"],
         )
         .is_ok());
+    }
+
+    #[test]
+    fn hook_actor_snapshot_is_bound_to_verified_receive() {
+        let mut authorization =
+            test_authorization(TEST_REPO_A, "repository.contents.write").unwrap();
+        let actor = authorization.actor.as_mut().unwrap();
+        actor.subject = "system:serviceaccount:controller".into();
+        actor.auth_method = "serviceaccount-jwt".into();
+        actor.service_account_uid = "enrolled-uid".into();
+        actor.groups = vec![
+            "system:authenticated".into(),
+            "system:serviceaccounts".into(),
+        ];
+        validate_request_authorization(
+            Some(&authorization),
+            TEST_REPO_A,
+            &["repository.contents.write"],
+        )
+        .unwrap();
+        let push = PushContext {
+            repository_id: TEST_REPO_A.into(),
+            authorization: Some(authorization),
+            ..Default::default()
+        };
+        let hook = HookContext::from(&push);
+        let binding = hook.callback_authorization(vec![
+            crate::git::hooks::validation_handler::catalog_proto::ReceiveRef {
+                ref_name: "refs/heads/main".into(),
+                old_commit_sha: "0".repeat(40),
+                new_commit_sha: "a".repeat(40),
+            },
+        ]);
+        assert_eq!(binding.repository_id, TEST_REPO_A);
+        assert!(!binding.receive_id.is_empty());
+        let actor = binding.actor.unwrap();
+        assert_eq!(actor.service_account_uid, "enrolled-uid");
+        assert_eq!(
+            actor.groups,
+            vec!["system:authenticated", "system:serviceaccounts"]
+        );
+        assert_eq!(binding.refs[0].new_commit_sha, "a".repeat(40));
     }
 
     #[test]
@@ -2484,11 +2772,11 @@ mod tests {
                 subject: "anon".to_string(),
                 issuer: "gitstore".to_string(),
                 auth_method: "none".to_string(),
-                roles: vec![],
+                service_account_uid: String::new(),
                 groups: vec![],
                 scopes: vec![],
             }),
-            action: "repository.write.any".to_string(),
+            action: "repository.contents.write".to_string(),
             resource_kind: "repository".to_string(),
             resource_name: String::new(),
             repository_id: TEST_REPO_A.to_string(),
@@ -2497,17 +2785,17 @@ mod tests {
         let error = validate_request_authorization(
             Some(&authorization),
             TEST_REPO_A,
-            &["repository.write.any"],
+            &["repository.contents.write"],
         )
         .expect_err("anonymous writes must be rejected");
         assert_eq!(error.code(), tonic::Code::PermissionDenied);
     }
 
     fn make_create_req(id: &str) -> Request<CreateRepositoryRequest> {
-        Request::new(CreateRepositoryRequest {
+        signed_test_request(CreateRepositoryRequest {
             repository_id: id.to_string(),
             storage_class: String::new(),
-            authorization: test_authorization(id, "repository.create.any"),
+            authorization: test_authorization(id, "repository.create"),
         })
     }
 
@@ -2564,9 +2852,9 @@ mod tests {
         assert!(repo_path.exists());
 
         let resp = svc
-            .delete_repository(Request::new(DeleteRepositoryRequest {
+            .delete_repository(signed_test_request(DeleteRepositoryRequest {
                 repository_id: TEST_REPO_C.to_string(),
-                authorization: test_authorization(TEST_REPO_C, "repository.delete.any"),
+                authorization: test_authorization(TEST_REPO_C, "repository.delete"),
             }))
             .await
             .unwrap()
@@ -2580,9 +2868,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let svc = make_test_service(dir.path());
         for _ in 0..2 {
-            svc.delete_repository(Request::new(DeleteRepositoryRequest {
+            svc.delete_repository(signed_test_request(DeleteRepositoryRequest {
                 repository_id: TEST_REPO_A.to_string(),
-                authorization: test_authorization(TEST_REPO_A, "repository.delete.any"),
+                authorization: test_authorization(TEST_REPO_A, "repository.delete"),
             }))
             .await
             .unwrap();
@@ -2607,9 +2895,9 @@ mod tests {
         std::fs::create_dir(repo_path.with_extension("git.deleted")).unwrap();
         let svc = make_test_service(dir.path());
         let err = svc
-            .delete_repository(Request::new(DeleteRepositoryRequest {
+            .delete_repository(signed_test_request(DeleteRepositoryRequest {
                 repository_id: TEST_REPO_A.into(),
-                authorization: test_authorization(TEST_REPO_A, "repository.delete.any"),
+                authorization: test_authorization(TEST_REPO_A, "repository.delete"),
             }))
             .await
             .unwrap_err();
@@ -2632,9 +2920,9 @@ mod tests {
         // A non-directory forces removal to fail after the durable deletion intent.
         std::fs::write(&repo_path, b"incomplete storage").unwrap();
         let request = || {
-            Request::new(DeleteRepositoryRequest {
+            signed_test_request(DeleteRepositoryRequest {
                 repository_id: TEST_REPO_A.into(),
-                authorization: test_authorization(TEST_REPO_A, "repository.delete.any"),
+                authorization: test_authorization(TEST_REPO_A, "repository.delete"),
             })
         };
         assert_eq!(
@@ -2658,12 +2946,12 @@ mod tests {
             tonic::Code::FailedPrecondition
         );
         let err = replacement
-            .delete_file(Request::new(DeleteFileRequest {
+            .delete_file(signed_test_request(DeleteFileRequest {
                 repository_id: TEST_REPO_A.into(),
                 path: "products/p1.md".into(),
                 ref_name: Some("refs/heads/main".into()),
                 expected_commit_sha: Some(initial),
-                authorization: test_authorization(TEST_REPO_A, "repository.write.any"),
+                authorization: test_authorization(TEST_REPO_A, "repository.contents.write"),
                 ..Default::default()
             }))
             .await
@@ -2704,9 +2992,9 @@ mod tests {
         svc.create_repository(make_create_req(TEST_REPO_A))
             .await
             .unwrap();
-        svc.delete_repository(Request::new(DeleteRepositoryRequest {
+        svc.delete_repository(signed_test_request(DeleteRepositoryRequest {
             repository_id: TEST_REPO_A.into(),
-            authorization: test_authorization(TEST_REPO_A, "repository.delete.any"),
+            authorization: test_authorization(TEST_REPO_A, "repository.delete"),
         }))
         .await
         .unwrap();
@@ -2721,11 +3009,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let svc = make_test_service(dir.path());
         let err = svc
-            .get_file(Request::new(GetFileRequest {
+            .get_file(signed_test_request(GetFileRequest {
                 repository_id: TEST_REPO_A.to_string(),
                 path: "README.md".to_string(),
                 r#ref: "HEAD".to_string(),
-                authorization: test_authorization(TEST_REPO_A, "repository.read.any"),
+                authorization: test_authorization(TEST_REPO_A, "repository.contents.read"),
             }))
             .await
             .unwrap_err();
@@ -2740,11 +3028,11 @@ mod tests {
         // Non-UUID names must be rejected with INVALID_ARGUMENT
         for bad_name in &["", "myrepo", "../etc", "a/b", "a\\b"] {
             let err = svc
-                .get_file(Request::new(GetFileRequest {
+                .get_file(signed_test_request(GetFileRequest {
                     repository_id: bad_name.to_string(),
                     path: "README.md".to_string(),
                     r#ref: "HEAD".to_string(),
-                    authorization: test_authorization(bad_name, "repository.read.any"),
+                    authorization: test_authorization(bad_name, "repository.contents.read"),
                 }))
                 .await
                 .unwrap_err();
@@ -2769,11 +3057,11 @@ mod tests {
         repo_with_commit(dir.path(), TEST_REPO_D);
 
         let svc = make_test_service(dir.path());
-        let req = Request::new(GetFileRequest {
+        let req = signed_test_request(GetFileRequest {
             repository_id: TEST_REPO_D.to_string(),
             path: "products/p1.md".to_string(),
             r#ref: "HEAD".to_string(),
-            authorization: test_authorization(TEST_REPO_D, "repository.read.any"),
+            authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
         });
         let resp = svc.get_file(req).await.unwrap();
         assert_eq!(resp.into_inner().content, b"---\nid: p1\n---\nhello");
@@ -2785,11 +3073,11 @@ mod tests {
         repo_with_commit(dir.path(), TEST_REPO_D);
 
         let svc = make_test_service(dir.path());
-        let req = Request::new(GetFileRequest {
+        let req = signed_test_request(GetFileRequest {
             repository_id: TEST_REPO_D.to_string(),
             path: "products/p1.md".to_string(),
             r#ref: "nonexistent-branch".to_string(),
-            authorization: test_authorization(TEST_REPO_D, "repository.read.any"),
+            authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
         });
         let err = svc.get_file(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
@@ -2801,11 +3089,11 @@ mod tests {
         repo_with_commit(dir.path(), TEST_REPO_D);
 
         let svc = make_test_service(dir.path());
-        let req = Request::new(GetFileRequest {
+        let req = signed_test_request(GetFileRequest {
             repository_id: TEST_REPO_D.to_string(),
             path: "products/nonexistent.md".to_string(),
             r#ref: "HEAD".to_string(),
-            authorization: test_authorization(TEST_REPO_D, "repository.read.any"),
+            authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
         });
         let err = svc.get_file(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::NotFound);
@@ -2845,22 +3133,22 @@ mod tests {
             ),
         ] {
             let err = svc
-                .get_file(Request::new(GetFileRequest {
+                .get_file(signed_test_request(GetFileRequest {
                     repository_id: repository_id.to_string(),
                     path: path.to_string(),
                     r#ref: reference.to_string(),
-                    authorization: test_authorization(repository_id, "repository.read.any"),
+                    authorization: test_authorization(repository_id, "repository.contents.read"),
                 }))
                 .await
                 .unwrap_err();
             assert_eq!(err.code(), code);
 
             let err = match svc
-                .get_file_stream(Request::new(GetFileStreamRequest {
+                .get_file_stream(signed_test_request(GetFileStreamRequest {
                     repository_id: repository_id.to_string(),
                     path: path.to_string(),
                     r#ref: reference.to_string(),
-                    authorization: test_authorization(repository_id, "repository.read.any"),
+                    authorization: test_authorization(repository_id, "repository.contents.read"),
                 }))
                 .await
             {
@@ -2877,12 +3165,12 @@ mod tests {
         repo_with_commit(dir.path(), TEST_REPO_D);
 
         let svc = make_test_service(dir.path());
-        let req = Request::new(ListFilesRequest {
+        let req = signed_test_request(ListFilesRequest {
             repository_id: TEST_REPO_D.to_string(),
             r#ref: "HEAD".to_string(),
             path_prefix: "products/".to_string(),
             recursive: true,
-            authorization: test_authorization(TEST_REPO_D, "repository.read.any"),
+            authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
         });
         let resp = svc.list_files(req).await.unwrap();
         let files = resp.into_inner().files;
@@ -2896,10 +3184,10 @@ mod tests {
         repo_with_commit(dir.path(), TEST_REPO_D);
 
         let svc = make_test_service(dir.path());
-        let req = Request::new(GetLatestTagRequest {
+        let req = signed_test_request(GetLatestTagRequest {
             repository_id: TEST_REPO_D.to_string(),
             prefix: "v".to_string(),
-            authorization: test_authorization(TEST_REPO_D, "repository.read.any"),
+            authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
         });
         let resp = svc.get_latest_tag(req).await.unwrap().into_inner();
 
@@ -2918,10 +3206,10 @@ mod tests {
         gix::init_bare(&repo_path).unwrap();
 
         let svc = make_test_service(dir.path());
-        let req = Request::new(GetLatestTagRequest {
+        let req = signed_test_request(GetLatestTagRequest {
             repository_id: TEST_REPO_A.to_string(),
             prefix: "v".to_string(),
-            authorization: test_authorization(TEST_REPO_A, "repository.read.any"),
+            authorization: test_authorization(TEST_REPO_A, "repository.contents.read"),
         });
         let resp = svc.get_latest_tag(req).await.unwrap().into_inner();
 
@@ -2944,14 +3232,14 @@ mod tests {
         bare_repo_with_main(dir.path(), TEST_REPO_E);
 
         let svc = make_test_service(dir.path());
-        let req = Request::new(CommitFileRequest {
+        let req = signed_test_request(CommitFileRequest {
             repository_id: TEST_REPO_E.to_string(),
             path: "products/new.md".to_string(),
             content: b"---\nid: new\n---".to_vec(),
             commit_message: "add new product".to_string(),
             author_name: "Tester".to_string(),
             author_email: "test@example.com".to_string(),
-            authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+            authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
         });
         let resp = svc.commit_file(req).await.unwrap().into_inner();
         assert!(!resp.commit_sha.is_empty());
@@ -3013,14 +3301,14 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 barrier.wait().await;
                 service
-                    .commit_file(Request::new(CommitFileRequest {
+                    .commit_file(signed_test_request(CommitFileRequest {
                         repository_id: TEST_REPO_E.to_string(),
                         path: format!("products/concurrent-{index}.md"),
                         content: format!("---\nid: concurrent-{index}\n---").into_bytes(),
                         commit_message: format!("add concurrent product {index}"),
                         author_name: "Tester".to_string(),
                         author_email: "test@example.com".to_string(),
-                        authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+                        authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
                     }))
                     .await
             }));
@@ -3059,7 +3347,7 @@ mod tests {
             path: "products/p1.md".into(),
             ref_name: Some("refs/heads/main".into()),
             expected_commit_sha: Some(initial.to_string()),
-            authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+            authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
             ..Default::default()
         };
         let tree = repo
@@ -3126,7 +3414,7 @@ mod tests {
             let replacement = make_test_service(dir.path());
             assert_eq!(
                 replacement
-                    .delete_file(Request::new(request.clone()))
+                    .delete_file(signed_test_request(request.clone()))
                     .await
                     .unwrap_err()
                     .code(),
@@ -3166,7 +3454,7 @@ mod tests {
         let replacement = make_test_service(dir.path());
         assert_eq!(
             replacement
-                .delete_file(Request::new(request.clone()))
+                .delete_file(signed_test_request(request.clone()))
                 .await
                 .unwrap()
                 .into_inner()
@@ -3183,7 +3471,7 @@ mod tests {
         let replacement = make_test_service(dir.path());
         assert_eq!(
             replacement
-                .delete_file(Request::new(request))
+                .delete_file(signed_test_request(request))
                 .await
                 .unwrap()
                 .into_inner()
@@ -3210,7 +3498,7 @@ mod tests {
             path: "products/p1.md".into(),
             ref_name: Some("refs/heads/main".into()),
             expected_commit_sha: Some(initial.to_string()),
-            authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+            authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
             ..Default::default()
         };
         let receipt_ref = delete_receipt_ref(&repo, &request, initial).unwrap();
@@ -3230,7 +3518,7 @@ mod tests {
         }
         let svc = make_test_service(dir.path());
         let removed = svc
-            .delete_file(Request::new(request))
+            .delete_file(signed_test_request(request))
             .await
             .unwrap()
             .into_inner()
@@ -3259,7 +3547,7 @@ mod tests {
                 delete_ref_cmd_with_ctx(TEST_REPO_E, &name, &old, minimal_push_ctx(TEST_REPO_E));
             chunk.ref_commands[0].new_oid = new;
             let response = client
-                .receive_pack(tokio_stream::iter(vec![chunk]))
+                .receive_pack(signed_test_stream(vec![chunk]))
                 .await
                 .unwrap()
                 .into_inner();
@@ -3287,11 +3575,11 @@ mod tests {
             ref_name: Some("refs/heads/main".into()),
             expected_commit_sha: Some(initial.to_string()),
             commit_message: "guarded removal".into(),
-            authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+            authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
             ..Default::default()
         };
         let svc = make_test_service(dir.path());
-        svc.delete_file(Request::new(request.clone()))
+        svc.delete_file(signed_test_request(request.clone()))
             .await
             .unwrap();
         repo.reference(
@@ -3304,7 +3592,7 @@ mod tests {
         let replacement = make_test_service(dir.path());
         assert_eq!(
             replacement
-                .delete_file(Request::new(request.clone()))
+                .delete_file(signed_test_request(request.clone()))
                 .await
                 .unwrap_err()
                 .code(),
@@ -3316,14 +3604,14 @@ mod tests {
         unrelated.expected_commit_sha = None;
         unrelated.commit_message = "unrelated removal".into();
         replacement
-            .delete_file(Request::new(unrelated))
+            .delete_file(signed_test_request(unrelated))
             .await
             .unwrap();
         // A durable prepared receipt alone, with no ancestry proof of publication,
         // must not turn an unrelated removal into successful guarded deletion.
         assert_eq!(
             replacement
-                .delete_file(Request::new(request))
+                .delete_file(signed_test_request(request))
                 .await
                 .unwrap_err()
                 .code(),
@@ -3338,13 +3626,13 @@ mod tests {
         let repo = gix::open(fanout_path(dir.path(), TEST_REPO_E).unwrap()).unwrap();
         let initial = repo.head_commit().unwrap().id().to_string();
         let request = || {
-            Request::new(DeleteFileRequest {
+            signed_test_request(DeleteFileRequest {
                 repository_id: TEST_REPO_E.into(),
                 path: "products/p1.md".into(),
                 ref_name: Some("refs/heads/main".into()),
                 expected_commit_sha: Some(initial.clone()),
                 commit_message: "guarded removal".into(),
-                authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+                authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
                 ..Default::default()
             })
         };
@@ -3367,12 +3655,12 @@ mod tests {
         );
         for path in ["products/unrelated.md", "products/p1.md"] {
             replacement
-                .commit_file(Request::new(CommitFileRequest {
+                .commit_file(signed_test_request(CommitFileRequest {
                     repository_id: TEST_REPO_E.into(),
                     path: path.into(),
                     content: b"newer content".to_vec(),
                     commit_message: "newer push".into(),
-                    authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+                    authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
                     ..Default::default()
                 }))
                 .await
@@ -3396,7 +3684,7 @@ mod tests {
                 wrong_path.path = "products/arbitrary.md".into();
                 assert_eq!(
                     replacement
-                        .delete_file(Request::new(wrong_path))
+                        .delete_file(signed_test_request(wrong_path))
                         .await
                         .unwrap_err()
                         .code(),
@@ -3417,16 +3705,16 @@ mod tests {
             repository_id: TEST_REPO_E.into(),
             path: "products/p1.md".into(),
             commit_message: "unrelated removal".into(),
-            authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+            authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
             ..Default::default()
         };
-        svc.delete_file(Request::new(request.clone()))
+        svc.delete_file(signed_test_request(request.clone()))
             .await
             .unwrap();
         request.ref_name = Some("refs/heads/main".into());
         request.expected_commit_sha = Some(initial);
         assert_eq!(
-            svc.delete_file(Request::new(request.clone()))
+            svc.delete_file(signed_test_request(request.clone()))
                 .await
                 .unwrap_err()
                 .code(),
@@ -3434,7 +3722,7 @@ mod tests {
         );
         request.expected_commit_sha = Some(repo.head_commit().unwrap().id().to_string());
         assert_eq!(
-            svc.delete_file(Request::new(request))
+            svc.delete_file(signed_test_request(request))
                 .await
                 .unwrap_err()
                 .code(),
@@ -3450,12 +3738,12 @@ mod tests {
         let initial = repo.head_commit().unwrap().id().detach();
         let svc = make_test_service(dir.path());
         let pushed = svc
-            .commit_file(Request::new(CommitFileRequest {
+            .commit_file(signed_test_request(CommitFileRequest {
                 repository_id: TEST_REPO_E.into(),
                 path: "products/pushed.md".into(),
                 content: b"concurrent push".to_vec(),
                 commit_message: "push".into(),
-                authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+                authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
                 ..Default::default()
             }))
             .await
@@ -3541,11 +3829,11 @@ mod tests {
             ),
         ] {
             let err = svc
-                .delete_file(Request::new(DeleteFileRequest {
+                .delete_file(signed_test_request(DeleteFileRequest {
                     repository_id: TEST_REPO_E.into(),
                     path: "products/p1.md".into(),
                     commit_message: "delete".into(),
-                    authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+                    authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
                     ref_name: ref_name.map(str::to_owned),
                     expected_commit_sha,
                     ..Default::default()
@@ -3579,11 +3867,11 @@ mod tests {
             .unwrap();
             let svc = make_test_service(dir.path());
             let result = svc
-                .delete_file(Request::new(DeleteFileRequest {
+                .delete_file(signed_test_request(DeleteFileRequest {
                     repository_id: TEST_REPO_E.into(),
                     path: "products/p1.md".into(),
                     commit_message: "delete".into(),
-                    authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+                    authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
                     ref_name: guarded.then(|| "refs/heads/catalog".into()),
                     expected_commit_sha: guarded.then(|| initial.to_string()),
                     ..Default::default()
@@ -3624,13 +3912,13 @@ mod tests {
         bare_repo_with_main(dir.path(), TEST_REPO_E);
 
         let svc = make_test_service(dir.path());
-        let req = Request::new(DeleteFileRequest {
+        let req = signed_test_request(DeleteFileRequest {
             repository_id: TEST_REPO_E.to_string(),
             path: "products/missing.md".to_string(),
             commit_message: "delete".to_string(),
             author_name: "T".to_string(),
             author_email: "t@t.com".to_string(),
-            authorization: test_authorization(TEST_REPO_E, "repository.write.any"),
+            authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
             ..Default::default()
         });
         let err = svc.delete_file(req).await.unwrap_err();
@@ -3643,12 +3931,12 @@ mod tests {
         repo_with_commit(dir.path(), TEST_REPO_D); // creates v1.0.0
 
         let svc = make_test_service(dir.path());
-        let req = Request::new(CreateTagRequest {
+        let req = signed_test_request(CreateTagRequest {
             repository_id: TEST_REPO_D.to_string(),
             tag_name: "v1.0.0".to_string(),
             message: "duplicate".to_string(),
             target_commit_sha: "".to_string(),
-            authorization: test_authorization(TEST_REPO_D, "repository.write.any"),
+            authorization: test_authorization(TEST_REPO_D, "repository.contents.write"),
         });
         let err = svc.create_tag(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::AlreadyExists);
@@ -3666,14 +3954,14 @@ mod tests {
 
         let h_a = tokio::spawn(async move {
             svc_a
-                .commit_file(Request::new(CommitFileRequest {
+                .commit_file(signed_test_request(CommitFileRequest {
                     repository_id: TEST_REPO_F.to_string(),
                     path: "file-a.md".to_string(),
                     content: b"a".to_vec(),
                     commit_message: "from a".to_string(),
                     author_name: "A".to_string(),
                     author_email: "a@a.com".to_string(),
-                    authorization: test_authorization(TEST_REPO_F, "repository.write.any"),
+                    authorization: test_authorization(TEST_REPO_F, "repository.contents.write"),
                 }))
                 .await
                 .unwrap()
@@ -3681,14 +3969,14 @@ mod tests {
 
         let h_b = tokio::spawn(async move {
             svc_b
-                .commit_file(Request::new(CommitFileRequest {
+                .commit_file(signed_test_request(CommitFileRequest {
                     repository_id: TEST_REPO_G.to_string(),
                     path: "file-b.md".to_string(),
                     content: b"b".to_vec(),
                     commit_message: "from b".to_string(),
                     author_name: "B".to_string(),
                     author_email: "b@b.com".to_string(),
-                    authorization: test_authorization(TEST_REPO_G, "repository.write.any"),
+                    authorization: test_authorization(TEST_REPO_G, "repository.contents.write"),
                 }))
                 .await
                 .unwrap()
@@ -3775,7 +4063,7 @@ mod tests {
             repository_name: "repo".to_string(),
             config_resource_version: String::new(),
             policy: None,
-            authorization: test_authorization(repo_id, "repository.write.any"),
+            authorization: test_authorization(repo_id, "repository.contents.write"),
         }
     }
 
@@ -3799,7 +4087,7 @@ mod tests {
 
         // Send first chunk with NO push_context — must be rejected InvalidArgument
         let chunks = vec![delete_ref_cmd(TEST_REPO_H, "refs/heads/main", &head_oid)];
-        let stream = tokio_stream::iter(chunks);
+        let stream = signed_test_stream(chunks);
         let result = client.receive_pack(stream).await;
         let status = result.unwrap_err();
         assert_eq!(
@@ -3834,7 +4122,7 @@ mod tests {
             is_last: true,
             push_context: Some(ctx),
         };
-        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let result = client.receive_pack(signed_test_stream(vec![chunk])).await;
         let status = result.unwrap_err();
         assert_eq!(
             status.code(),
@@ -3860,7 +4148,7 @@ mod tests {
                 max_pack_size_bytes: 1,
                 max_file_size_bytes: 0,
             }),
-            authorization: test_authorization(TEST_REPO_I, "repository.write.any"),
+            authorization: test_authorization(TEST_REPO_I, "repository.contents.write"),
         };
 
         // Build a pack payload: minimal data > 1 byte to trip the limit
@@ -3877,7 +4165,7 @@ mod tests {
             push_context: Some(ctx),
         };
 
-        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let result = client.receive_pack(signed_test_stream(vec![chunk])).await;
         let status = result.unwrap_err();
         assert_eq!(
             status.code(),
@@ -3917,7 +4205,7 @@ mod tests {
                 max_pack_size_bytes: 0,
                 max_file_size_bytes: 1, // 1 byte — any blob will exceed this
             }),
-            authorization: test_authorization(target_id, "repository.write.any"),
+            authorization: test_authorization(target_id, "repository.contents.write"),
         };
 
         let chunk = ReceivePackRequest {
@@ -3932,7 +4220,7 @@ mod tests {
             push_context: Some(ctx),
         };
 
-        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let result = client.receive_pack(signed_test_stream(vec![chunk])).await;
         let status = result.unwrap_err();
         assert_eq!(
             status.code(),
@@ -3966,10 +4254,10 @@ mod tests {
                 max_pack_size_bytes: 0,
                 max_file_size_bytes: 0,
             }),
-            authorization: test_authorization(TEST_REPO_H, "repository.write.any"),
+            authorization: test_authorization(TEST_REPO_H, "repository.contents.write"),
         };
         let chunk = delete_ref_cmd_with_ctx(TEST_REPO_H, "refs/heads/main", &head_oid, ctx);
-        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let result = client.receive_pack(signed_test_stream(vec![chunk])).await;
         if let Err(status) = &result {
             assert_ne!(
                 status.code(),
@@ -4005,7 +4293,7 @@ mod tests {
                 max_pack_size_bytes: 1024 * 1024 * 1024,
                 max_file_size_bytes: 1024 * 1024 * 1024,
             }),
-            authorization: test_authorization(TEST_REPO_I, "repository.write.any"),
+            authorization: test_authorization(TEST_REPO_I, "repository.contents.write"),
         };
         let chunk = ReceivePackRequest {
             repository_id: TEST_REPO_I.to_string(),
@@ -4019,7 +4307,7 @@ mod tests {
             push_context: Some(ctx),
         };
 
-        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let result = client.receive_pack(signed_test_stream(vec![chunk])).await;
         let status = result.unwrap_err();
         assert_eq!(
             status.code(),
@@ -4050,7 +4338,7 @@ mod tests {
             repository_name: "repo".to_string(),
             config_resource_version: String::new(),
             policy: None,
-            authorization: test_authorization(TEST_REPO_I, "repository.write.any"),
+            authorization: test_authorization(TEST_REPO_I, "repository.contents.write"),
         };
         let chunk = ReceivePackRequest {
             repository_id: TEST_REPO_I.to_string(),
@@ -4064,7 +4352,7 @@ mod tests {
             push_context: Some(ctx),
         };
 
-        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let result = client.receive_pack(signed_test_stream(vec![chunk])).await;
         let status = result.unwrap_err();
         assert_eq!(
             status.code(),

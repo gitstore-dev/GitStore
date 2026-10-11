@@ -93,6 +93,6 @@ func TestUnauthorizedFileWatchRejectedThroughWebSocket(t *testing.T) {
 	deny.mu.Lock()
 	defer deny.mu.Unlock()
 	assert.Equal(t, "file.watch", deny.action)
-	assert.Equal(t, "File", deny.resource.Kind)
+	assert.Equal(t, "file", deny.resource.Kind)
 	assert.Equal(t, "acme-store", deny.resource.Attrs["namespace"])
 }

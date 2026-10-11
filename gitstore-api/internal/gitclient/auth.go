@@ -3,20 +3,111 @@
 
 package gitclient
 
-import "context"
+import (
+	"context"
+	"errors"
+	"sync"
 
-// hmacCreds injects a Bearer token into every outbound gRPC call's metadata.
-// It implements google.golang.org/grpc/credentials.PerRPCCredentials.
-type hmacCreds struct {
-	token string
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
+)
+
+// signedConn binds each call to its exact method and request. Streaming calls
+// are opened on their first SendMsg, so ReceivePack signs the first chunk's
+// actor, repository, policy and complete ref commands without buffering a pack.
+type signedConn struct {
+	grpc.ClientConnInterface
+	secret string
 }
 
-func (h hmacCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
-	return map[string]string{"authorization": "Bearer " + h.token}, nil
+func signedContext(ctx context.Context, secret, method string, request any) (context.Context, error) {
+	message, ok := request.(proto.Message)
+	if !ok {
+		return nil, errors.New("protobuf RPC request required")
+	}
+	envelope, err := auth.SignRPC(secret, "gitstore-git", method, message)
+	if err != nil {
+		return nil, err
+	}
+	md, _ := metadata.FromOutgoingContext(ctx)
+	md = md.Copy()
+	md.Delete("authorization")
+	md.Set(auth.RPCSignatureMetadata, envelope)
+	return metadata.NewOutgoingContext(ctx, md), nil
+}
+func (c signedConn) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
+	ctx, err := signedContext(ctx, c.secret, method, args)
+	if err != nil {
+		return err
+	}
+	return c.ClientConnInterface.Invoke(ctx, method, args, reply, opts...)
+}
+func (c signedConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return &signedStream{ctx: ctx, conn: c, desc: desc, method: method, opts: opts}, nil
 }
 
-// RequireTransportSecurity returns false because the API→git-service channel is
-// on an internal network (Docker bridge / Kubernetes pod network) with no
-// user-facing exposure. TLS can be added in a future phase without code changes
-// here — flip to true and add grpc.WithTransportCredentials to grpc_client.go.
-func (h hmacCreds) RequireTransportSecurity() bool { return false }
+type signedStream struct {
+	mu     sync.Mutex
+	stream grpc.ClientStream
+	ctx    context.Context
+	conn   signedConn
+	desc   *grpc.StreamDesc
+	method string
+	opts   []grpc.CallOption
+}
+
+func (s *signedStream) SendMsg(message any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stream == nil {
+		ctx, err := signedContext(s.ctx, s.conn.secret, s.method, message)
+		if err != nil {
+			return err
+		}
+		stream, err := s.conn.ClientConnInterface.NewStream(ctx, s.desc, s.method, s.opts...)
+		if err != nil {
+			return err
+		}
+		s.stream = stream
+	}
+	return s.stream.SendMsg(message)
+}
+func (s *signedStream) current() (grpc.ClientStream, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stream == nil {
+		return nil, errors.New("signed RPC requires a first request message")
+	}
+	return s.stream, nil
+}
+func (s *signedStream) Header() (metadata.MD, error) {
+	stream, err := s.current()
+	if err != nil {
+		return nil, err
+	}
+	return stream.Header()
+}
+func (s *signedStream) Trailer() metadata.MD {
+	stream, err := s.current()
+	if err != nil {
+		return nil
+	}
+	return stream.Trailer()
+}
+func (s *signedStream) CloseSend() error {
+	stream, err := s.current()
+	if err != nil {
+		return err
+	}
+	return stream.CloseSend()
+}
+func (s *signedStream) Context() context.Context { return s.ctx }
+func (s *signedStream) RecvMsg(message any) error {
+	stream, err := s.current()
+	if err != nil {
+		return err
+	}
+	return stream.RecvMsg(message)
+}

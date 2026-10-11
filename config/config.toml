@@ -82,7 +82,6 @@ burst = 10
 
 # The UID is provisioned by the Compose enrollment job into a controller-only mount.
 [controller.serviceaccount]
-namespace = "controllers"
 name = "gitstore-controller-manager"
 key_ref = { kind = "SecretRef", name = "gitstore-controller-manager-signing-key" }
 assertion_audience = "gitstore-api/serviceaccount-token"
@@ -105,6 +104,8 @@ max_backoff = "30s"
 resync_interval = "10m"
 
 [grpc_auth]
+# Signs single-use, expiring RPC requests in both directions; never sent as a
+# bearer token. Retain Git's .rpc-replay-v1 directory on process replacement.
 hmac_secret = "local-development-grpc-hmac-secret"
 
 [push_limits]

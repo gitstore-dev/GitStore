@@ -56,7 +56,6 @@ type scyllaDatastore struct {
 	repositoryByBucketTable           *table.Table
 	namespaceMappingTable             *table.Table
 	namespaceMappingByRepositoryTable *table.Table
-	serviceAccountByNamespaceTable    *table.Table
 	serviceAccountByNameTable         *table.Table
 	serviceAccountByUIDTable          *table.Table
 	serviceAccountByBucketTable       *table.Table
@@ -374,7 +373,6 @@ func New(cfg config.ScyllaConfig, log *zap.Logger, watchBucketSize ...int) (data
 		repositoryByBucketTable:           RepositoryByBucket,
 		namespaceMappingTable:             NamespaceMapping,
 		namespaceMappingByRepositoryTable: NamespaceMappingByRepository,
-		serviceAccountByNamespaceTable:    ServiceAccountByNamespace,
 		serviceAccountByNameTable:         ServiceAccountByName,
 		serviceAccountByUIDTable:          ServiceAccountByUID,
 		serviceAccountByBucketTable:       ServiceAccountByBucket,
@@ -622,14 +620,14 @@ func (s *scyllaDatastore) ListProducts(_ context.Context, namespace string, page
 	return buildPageResult(products, limit, page), nil
 }
 
-func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Product) error {
+func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Product, expectedResourceVersion string) error {
 	if p == nil {
 		return datastore.ErrInvalidArgument
 	}
-	return s.catalogMutation(ctx, "Product", p.Namespace, p.RepositoryID, p.UID, false, func() error { return s.updateProduct(ctx, p) })
+	return s.catalogMutation(ctx, "Product", p.Namespace, p.RepositoryID, p.UID, false, func() error { return s.updateProduct(ctx, p, expectedResourceVersion) })
 }
 
-func (s *scyllaDatastore) updateProduct(ctx context.Context, p *datastore.Product) error {
+func (s *scyllaDatastore) updateProduct(ctx context.Context, p *datastore.Product, expectedResourceVersion string) error {
 	if p != nil {
 		if err := s.catalogParentsActive(ctx, p.Namespace, p.RepositoryID); err != nil {
 			return err
@@ -654,7 +652,7 @@ func (s *scyllaDatastore) updateProduct(ctx context.Context, p *datastore.Produc
 	if existing.Namespace != p.Namespace || existing.Name != p.Name {
 		return fmt.Errorf("%w: product identity is immutable", datastore.ErrConflict)
 	}
-	if err := validateResourceVersionTransition(existing.ResourceVersion, p.ResourceVersion); err != nil {
+	if err := datastore.ValidateCatalogUpdateVersion(existing.ResourceVersion, expectedResourceVersion, p.ResourceVersion); err != nil {
 		return err
 	}
 	row := toProductRow(p)
@@ -665,7 +663,7 @@ func (s *scyllaDatastore) updateProduct(ctx context.Context, p *datastore.Produc
 		mutationAction{
 			Step: catalogueStep("update", "Product", p.UID, "products_by_namespace", p.UID, "update-authoritative"),
 			Apply: func(ctx context.Context) error {
-				return s.updateProductAuthoritative(ctx, row, existing.ResourceVersion)
+				return s.updateProductAuthoritative(ctx, row, expectedResourceVersion)
 			},
 		},
 		mutationAction{
@@ -1012,14 +1010,14 @@ func (s *scyllaDatastore) ListCategoryTaxonomies(_ context.Context, namespace st
 	return buildPageResult(cats, limit, page), nil
 }
 
-func (s *scyllaDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *datastore.CategoryTaxonomy) error {
+func (s *scyllaDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *datastore.CategoryTaxonomy, expectedResourceVersion string) error {
 	if c == nil {
 		return datastore.ErrInvalidArgument
 	}
-	return s.catalogMutation(ctx, "CategoryTaxonomy", c.Namespace, c.RepositoryID, c.UID, false, func() error { return s.updateCategoryTaxonomy(ctx, c) })
+	return s.catalogMutation(ctx, "CategoryTaxonomy", c.Namespace, c.RepositoryID, c.UID, false, func() error { return s.updateCategoryTaxonomy(ctx, c, expectedResourceVersion) })
 }
 
-func (s *scyllaDatastore) updateCategoryTaxonomy(ctx context.Context, c *datastore.CategoryTaxonomy) error {
+func (s *scyllaDatastore) updateCategoryTaxonomy(ctx context.Context, c *datastore.CategoryTaxonomy, expectedResourceVersion string) error {
 	if c != nil {
 		if err := s.catalogParentsActive(ctx, c.Namespace, c.RepositoryID); err != nil {
 			return err
@@ -1044,7 +1042,7 @@ func (s *scyllaDatastore) updateCategoryTaxonomy(ctx context.Context, c *datasto
 	if existing.Namespace != c.Namespace || existing.Name != c.Name {
 		return fmt.Errorf("%w: category taxonomy identity is immutable", datastore.ErrConflict)
 	}
-	if err := validateResourceVersionTransition(existing.ResourceVersion, c.ResourceVersion); err != nil {
+	if err := datastore.ValidateCatalogUpdateVersion(existing.ResourceVersion, expectedResourceVersion, c.ResourceVersion); err != nil {
 		return err
 	}
 	row := toCategoryTaxonomyRow(c)
@@ -1055,7 +1053,7 @@ func (s *scyllaDatastore) updateCategoryTaxonomy(ctx context.Context, c *datasto
 		mutationAction{
 			Step: catalogueStep("update", "CategoryTaxonomy", c.UID, "category_taxonomies_by_namespace", c.UID, "update-authoritative"),
 			Apply: func(ctx context.Context) error {
-				return s.updateCategoryTaxonomyAuthoritative(ctx, row, existing.ResourceVersion)
+				return s.updateCategoryTaxonomyAuthoritative(ctx, row, expectedResourceVersion)
 			},
 		},
 		mutationAction{
@@ -1413,14 +1411,14 @@ func (s *scyllaDatastore) ListCollections(_ context.Context, namespace string, p
 	return buildPageResult(items, limit, page), nil
 }
 
-func (s *scyllaDatastore) UpdateCollection(ctx context.Context, c *datastore.Collection) error {
+func (s *scyllaDatastore) UpdateCollection(ctx context.Context, c *datastore.Collection, expectedResourceVersion string) error {
 	if c == nil {
 		return datastore.ErrInvalidArgument
 	}
-	return s.catalogMutation(ctx, "Collection", c.Namespace, c.RepositoryID, c.UID, false, func() error { return s.updateCollection(ctx, c) })
+	return s.catalogMutation(ctx, "Collection", c.Namespace, c.RepositoryID, c.UID, false, func() error { return s.updateCollection(ctx, c, expectedResourceVersion) })
 }
 
-func (s *scyllaDatastore) updateCollection(ctx context.Context, c *datastore.Collection) error {
+func (s *scyllaDatastore) updateCollection(ctx context.Context, c *datastore.Collection, expectedResourceVersion string) error {
 	if c != nil {
 		if err := s.catalogParentsActive(ctx, c.Namespace, c.RepositoryID); err != nil {
 			return err
@@ -1445,7 +1443,7 @@ func (s *scyllaDatastore) updateCollection(ctx context.Context, c *datastore.Col
 	if existing.Namespace != c.Namespace || existing.Name != c.Name {
 		return fmt.Errorf("%w: collection identity is immutable", datastore.ErrConflict)
 	}
-	if err := validateResourceVersionTransition(existing.ResourceVersion, c.ResourceVersion); err != nil {
+	if err := datastore.ValidateCatalogUpdateVersion(existing.ResourceVersion, expectedResourceVersion, c.ResourceVersion); err != nil {
 		return err
 	}
 	row := toCollectionRow(c)
@@ -1456,7 +1454,7 @@ func (s *scyllaDatastore) updateCollection(ctx context.Context, c *datastore.Col
 		mutationAction{
 			Step: catalogueStep("update", "Collection", c.UID, "collections_by_namespace", c.UID, "update-authoritative"),
 			Apply: func(ctx context.Context) error {
-				return s.updateCollectionAuthoritative(ctx, row, existing.ResourceVersion)
+				return s.updateCollectionAuthoritative(ctx, row, expectedResourceVersion)
 			},
 		},
 		mutationAction{
@@ -1854,14 +1852,14 @@ func (s *scyllaDatastore) ListProductVariantsByProductRef(ctx context.Context, n
 	return result, nil
 }
 
-func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore.ProductVariant) error {
+func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore.ProductVariant, expectedResourceVersion string) error {
 	if v == nil {
 		return datastore.ErrInvalidArgument
 	}
-	return s.catalogMutation(ctx, "ProductVariant", v.Namespace, v.RepositoryID, v.UID, false, func() error { return s.updateProductVariant(ctx, v) })
+	return s.catalogMutation(ctx, "ProductVariant", v.Namespace, v.RepositoryID, v.UID, false, func() error { return s.updateProductVariant(ctx, v, expectedResourceVersion) })
 }
 
-func (s *scyllaDatastore) updateProductVariant(ctx context.Context, v *datastore.ProductVariant) error {
+func (s *scyllaDatastore) updateProductVariant(ctx context.Context, v *datastore.ProductVariant, expectedResourceVersion string) error {
 	if v != nil {
 		if err := s.catalogParentsActive(ctx, v.Namespace, v.RepositoryID); err != nil {
 			return err
@@ -1886,7 +1884,7 @@ func (s *scyllaDatastore) updateProductVariant(ctx context.Context, v *datastore
 	if existing.Namespace != v.Namespace || existing.Name != v.Name {
 		return fmt.Errorf("%w: product variant identity is immutable", datastore.ErrConflict)
 	}
-	if err := validateResourceVersionTransition(existing.ResourceVersion, v.ResourceVersion); err != nil {
+	if err := datastore.ValidateCatalogUpdateVersion(existing.ResourceVersion, expectedResourceVersion, v.ResourceVersion); err != nil {
 		return err
 	}
 	row := toProductVariantRow(v)
@@ -1979,7 +1977,7 @@ func (s *scyllaDatastore) updateProductVariant(ctx context.Context, v *datastore
 		mutationAction{
 			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variants_by_namespace", v.UID, "update-authoritative"),
 			Apply: func(ctx context.Context) error {
-				return s.updateProductVariantAuthoritative(ctx, row, existing.ResourceVersion)
+				return s.updateProductVariantAuthoritative(ctx, row, expectedResourceVersion)
 			},
 		},
 		projections...,
@@ -2099,6 +2097,8 @@ func catalogueStep(operation, resourceKind, uid, projection, lookupKey, action s
 	}
 }
 
+// File updates already carry a separate expected-version precondition. Keep
+// their existing transition semantics separate from strict catalog replacement.
 func validateResourceVersionTransition(current, desired string) error {
 	if current == "" || desired == "" || current == desired {
 		return nil

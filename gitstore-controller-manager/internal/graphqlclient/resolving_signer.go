@@ -47,13 +47,13 @@ func (s *ResolvingTokenSigner) load(ctx context.Context) (*PrivateKeyTokenSigner
 	return NewPrivateKeyTokenSigner(key, id, s.uid)
 }
 
-func (s *ResolvingTokenSigner) SignAssertion(ctx context.Context, namespace, name string, ttl time.Duration, audience string) (string, error) {
+func (s *ResolvingTokenSigner) SignAssertion(ctx context.Context, name string, ttl time.Duration, audience string) (string, error) {
 	key, err := s.load(ctx)
 	if err != nil {
 		return "", err
 	}
 	defer key.clear()
-	return key.SignAssertion(ctx, namespace, name, ttl, audience)
+	return key.SignAssertion(ctx, name, ttl, audience)
 }
 
 func (s *ResolvingTokenSigner) Close() error { return s.resolver.Close() }

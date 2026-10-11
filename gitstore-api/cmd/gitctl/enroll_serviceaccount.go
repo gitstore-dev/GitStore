@@ -30,17 +30,17 @@ var errServiceAccountAlreadyExists = errors.New("service account already exists"
 const signingRecordRotationHint = "For hot rotation, enroll a distinct key ID, atomically replace the controller-only signing record, and observe all replicas before retiring the old key. Never put private records in Git or shared config."
 
 const (
-	createServiceAccountMutation = `mutation CreateServiceAccount($namespace: String!, $name: String!, $keyID: String!, $algorithm: String!, $publicKey: String!) {
+	createServiceAccountMutation = `mutation CreateServiceAccount($name: String!, $keyID: String!, $algorithm: String!, $publicKey: String!) {
   createServiceAccount(input: {
     apiVersion: "gitstore.dev/v1beta1"
     kind: "ServiceAccount"
-    metadata: { namespace: $namespace, name: $name }
+    metadata: { name: $name }
     publicKeys: [{ kid: $keyID, algorithm: $algorithm, publicKeyPEM: $publicKey }]
   }) { serviceAccount { metadata { uid } } }
 }`
-	rotateServiceAccountKeyMutation = `mutation RotateServiceAccountKey($namespace: String!, $name: String!, $keyID: String!, $algorithm: String!, $publicKey: String!) {
+	rotateServiceAccountKeyMutation = `mutation RotateServiceAccountKey($name: String!, $keyID: String!, $algorithm: String!, $publicKey: String!) {
   rotateServiceAccountKey(input: {
-    metadata: { namespace: $namespace, name: $name }
+    metadata: { name: $name }
     add: [{ kid: $keyID, algorithm: $algorithm, publicKeyPEM: $publicKey }]
     removeKids: [$keyID]
   }) { serviceAccount { metadata { uid } } }
@@ -50,7 +50,6 @@ const (
 type serviceAccountEnrollment struct {
 	apiURL         string
 	adminToken     string
-	namespace      string
 	name           string
 	keyID          string
 	privateKeyPath string
@@ -65,12 +64,17 @@ type enrollmentClient struct {
 }
 
 func runEnrollServiceAccount(args []string, stdout, stderr io.Writer) int {
+	for _, arg := range args {
+		if arg == "--namespace" || arg == "-namespace" || strings.HasPrefix(arg, "--namespace=") || strings.HasPrefix(arg, "-namespace=") {
+			fmt.Fprintln(stderr, "ServiceAccount is cluster-scoped: remove --namespace and enroll with --name; existing UID/key checks still apply")
+			return 2
+		}
+	}
 	flags := flag.NewFlagSet("enroll-serviceaccount", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	enrollment := serviceAccountEnrollment{}
 	flags.StringVar(&enrollment.apiURL, "api-url", envOrDefault("API_URL", "http://localhost:4000/graphql"), "GitStore GraphQL API URL")
 	flags.StringVar(&enrollment.adminToken, "admin-token", "", "authenticated administrator bearer token")
-	flags.StringVar(&enrollment.namespace, "namespace", "controllers", "ServiceAccount namespace")
 	flags.StringVar(&enrollment.name, "name", "gitstore-controller-manager", "ServiceAccount name")
 	flags.StringVar(&enrollment.keyID, "key-id", "controller-key", "enrolled public key ID")
 	flags.StringVar(&enrollment.privateKeyPath, "private-key-path", "", "explicit secure local private-key file path")
@@ -168,7 +172,7 @@ func runEnrollServiceAccount(args []string, stdout, stderr io.Writer) int {
 }
 
 func (e serviceAccountEnrollment) validate() error {
-	for _, value := range []string{e.apiURL, e.namespace, e.name, e.keyID, e.privateKeyPath} {
+	for _, value := range []string{e.apiURL, e.name, e.keyID, e.privateKeyPath} {
 		if strings.TrimSpace(value) == "" {
 			return errors.New("required enrollment value is empty")
 		}
@@ -339,7 +343,6 @@ func writeNewFile(path string, value []byte) error {
 
 func (c enrollmentClient) enroll(ctx context.Context, enrollment serviceAccountEnrollment, publicKey, algorithm string) (string, error) {
 	payload, err := c.graphQL(ctx, enrollment, createServiceAccountMutation, map[string]string{
-		"namespace": enrollment.namespace,
 		"name":      enrollment.name,
 		"keyID":     enrollment.keyID,
 		"algorithm": algorithm,
@@ -353,7 +356,6 @@ func (c enrollmentClient) enroll(ctx context.Context, enrollment serviceAccountE
 
 func (c enrollmentClient) rotate(ctx context.Context, enrollment serviceAccountEnrollment, publicKey, algorithm string) (string, error) {
 	payload, err := c.graphQL(ctx, enrollment, rotateServiceAccountKeyMutation, map[string]string{
-		"namespace": enrollment.namespace,
 		"name":      enrollment.name,
 		"keyID":     enrollment.keyID,
 		"algorithm": algorithm,

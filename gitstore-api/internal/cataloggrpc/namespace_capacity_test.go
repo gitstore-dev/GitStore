@@ -346,7 +346,7 @@ func TestNamespaceCapacityReplicaProcess(t *testing.T) {
 	store := newNamespacePolicyDatastore(t)
 	server := newCatalogServer(t, store, nil)
 	grpcServer := grpc.NewServer()
-	catalogv1.RegisterCatalogServiceServer(grpcServer, server)
+	catalogv1.RegisterCatalogServiceServer(grpcServer, server.Server)
 	go func() {
 		if serveErr := grpcServer.Serve(grpcListener); serveErr != nil {
 			panic(serveErr)
@@ -605,7 +605,7 @@ func namespaceCapacityRequests() (*catalogv1.ValidateResourcesRequest, *catalogv
 	validBlobs := make([]*catalogv1.ResourceBlob, 0, namespaceCapacityFilesPerRequest)
 	for i := 0; i < namespaceCapacityManifestsPerRequest; i++ {
 		name := fmt.Sprintf("capacity-ns-%02d", i)
-		validBlobs = append(validBlobs, namespaceBlob("namespaces/"+name+".md", name, "USER"))
+		validBlobs = append(validBlobs, namespaceBlob("namespaces/"+name+".md", name, "ORGANIZATION"))
 	}
 	for i := namespaceCapacityManifestsPerRequest; i < namespaceCapacityFilesPerRequest; i++ {
 		name := fmt.Sprintf("capacity-product-%03d", i)
@@ -624,7 +624,7 @@ spec:
 		})
 	}
 	invalidBlobs := append([]*catalogv1.ResourceBlob(nil), validBlobs...)
-	invalidBlobs[0] = namespaceBlob("namespaces/invalid.md", "Invalid Name", "USER")
+	invalidBlobs[0] = namespaceBlob("namespaces/invalid.md", "Invalid Name", "ORGANIZATION")
 	return &catalogv1.ValidateResourcesRequest{
 			RepositoryId: testRepoID,
 			Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: validBlobs}},

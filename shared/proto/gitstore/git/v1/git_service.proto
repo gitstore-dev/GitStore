@@ -42,9 +42,11 @@ message AuthContext {
   string subject     = 1; // principal identifier (e.g. "admin", OIDC sub claim)
   string issuer      = 2; // auth provider (e.g. "static-admin", OIDC issuer URL)
   string auth_method = 3; // mechanism used (e.g. "basic", "bearer", "none")
-  repeated string roles  = 4;
+  reserved 4;
+  reserved "roles";
   repeated string groups = 5;
   repeated string scopes = 6;
+  string service_account_uid = 7; // verified immutable account identity, never a role
 }
 
 // RequestAuthorization is the API-approved, non-secret authorization decision

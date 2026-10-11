@@ -4,17 +4,211 @@
 package cataloggrpc
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
+	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+func reflectNil(value any) bool {
+	return value == nil || (reflect.ValueOf(value).Kind() == reflect.Pointer && reflect.ValueOf(value).IsNil())
+}
+
+// Removing an explicit owner annotation restores the immutable creation actor;
+// that is still an ownership transfer, not an ordinary metadata-only update.
+func resourceCreationActor(resource any) string {
+	switch r := resource.(type) {
+	case *datastore.Namespace:
+		return r.CreationActor
+	case *datastore.Repository:
+		return r.CreationActor
+	case *datastore.Product:
+		return r.CreationActor
+	case *datastore.CategoryTaxonomy:
+		return r.CreationActor
+	case *datastore.File:
+		return r.CreationActor
+	case *datastore.Collection:
+		return r.CreationActor
+	case *datastore.ProductVariant:
+		return r.CreationActor
+	default:
+		return ""
+	}
+}
+
+func (s *Server) authorizeOperation(ctx context.Context, identity resourceIdentity, operation admission.Operation, proposed *parsedEntry, existing any) error {
+	principal := auth.PrincipalFromContext(ctx)
+	if !auth.ValidTrustedPrincipal(principal) || principal.AuthMethod == "none" || principal.AuthMethod == "serviceaccount-assertion" {
+		return status.Error(codes.Unauthenticated, "verified resource actor required")
+	}
+	if s.registry == nil || s.registry.AuthZ() == nil {
+		return status.Error(codes.Unavailable, "resource authorizer unavailable")
+	}
+	kind := identity.Kind
+	if kind != "" {
+		kind = strings.ToLower(kind[:1]) + kind[1:]
+	}
+	verb := strings.ToLower(string(operation))
+	if operation == namespaceConvergenceOperation {
+		verb = "update"
+	}
+	action := kind + "." + verb
+	definition, found := auth.LookupAction(action)
+	if !found || definition.Reserved {
+		return status.Error(codes.PermissionDenied, "unsupported resource operation")
+	}
+	resource := auth.ResourceContext{Kind: definition.Kind, Name: identity.Name, Attrs: map[string]any{}}
+	if definition.Scope == "namespace" {
+		resource.Attrs["namespace"] = identity.Namespace
+	}
+	if owner, ok := existing.(interface{ EffectiveOwnerSub() string }); ok && !reflectNil(existing) {
+		resource.OwnerSub = owner.EffectiveOwnerSub()
+	}
+	if operation == admission.OperationCreate && identity.Namespace != "" {
+		ns, err := s.store.GetNamespaceByName(ctx, identity.Namespace)
+		if err != nil {
+			return status.Error(codes.Unavailable, "namespace authorization facts unavailable")
+		}
+		resource.OwnerSub = ns.EffectiveOwnerSub()
+	}
+	if ns, ok := existing.(*datastore.Namespace); ok && ns != nil {
+		switch ns.Tier {
+		case datastore.NamespaceTierUser:
+			resource.Attrs["tier"] = "USER"
+		case datastore.NamespaceTierOrganization:
+			resource.Attrs["tier"] = "ORGANIZATION"
+		}
+	}
+	if proposed != nil && proposed.parsed.Namespace != nil {
+		resource.Attrs["tier"] = string(proposed.parsed.Namespace.Spec.Tier)
+	}
+	check := func(action string) error {
+		decision, err := s.registry.AuthZ().Authorize(ctx, principal, action, resource)
+		if err != nil {
+			return status.Error(codes.Unavailable, "resource authorization failed")
+		}
+		if decision.Outcome != auth.OutcomeAllow {
+			return status.Error(codes.PermissionDenied, "resource operation forbidden")
+		}
+		return nil
+	}
+	if proposed != nil && operation != admission.OperationCreate && !reflectNil(existing) {
+		cmp, _ := comparableForParsed(proposed.parsed, proposed.body, identity.Namespace)
+		target := cmp.Annotations[datastore.OwnerAnnotationKey]
+		if target == "" {
+			target = resourceCreationActor(existing)
+		}
+		if target != resource.OwnerSub {
+			ownerKind, name := datastore.DecodeOwnerSubject(target)
+			resource.Attrs["targetOwnerRef"] = map[string]any{"kind": string(ownerKind), "name": name}
+			if err := check(kind + ".transfer"); err != nil {
+				return err
+			}
+			if ownerOnlyChange(proposed, existing, identity.Namespace) {
+				return nil
+			}
+		}
+	}
+	return check(action)
+}
+
+// Owner transfer is an independently grantable operation. Compare only
+// author-writable fields; controller-owned status/provenance are not permissions.
+// Any other desired-state change still needs the ordinary update grant.
+func ownerOnlyChange(proposed *parsedEntry, existing any, namespace string) bool {
+	desired, ok := comparableForParsed(proposed.parsed, proposed.body, namespace)
+	if !ok {
+		return false
+	}
+	stored := comparableResource{}
+	var path string
+	fill := func(apiVersion, kind, ns, name string, labels, annotations map[string]string, spec json.RawMessage, body, sourcePath string) {
+		stored = comparableResource{APIVersion: apiVersion, Kind: kind, Namespace: ns, Name: name, Labels: labels, Annotations: annotations, Spec: spec, Body: body}
+		path = sourcePath
+	}
+	switch r := existing.(type) {
+	case *datastore.Namespace:
+		fill(r.APIVersion, r.Kind, "", r.Name, r.Labels, r.Annotations, r.Spec, r.Body, r.SourcePath)
+	case *datastore.Repository:
+		fill(r.APIVersion, r.Kind, r.Namespace, r.Name, r.Labels, r.Annotations, r.Spec, r.Body, r.SourcePath)
+	case *datastore.Product:
+		fill(r.APIVersion, r.Kind, r.Namespace, r.Name, r.Labels, r.Annotations, r.Spec, r.Body, r.SourcePath)
+	case *datastore.CategoryTaxonomy:
+		fill(r.APIVersion, r.Kind, r.Namespace, r.Name, r.Labels, r.Annotations, r.Spec, r.Body, r.SourcePath)
+	case *datastore.File:
+		fill(r.APIVersion, r.Kind, r.Namespace, r.Name, r.Labels, r.Annotations, r.Spec, r.Body, r.SourcePath)
+	case *datastore.Collection:
+		fill(r.APIVersion, r.Kind, r.Namespace, r.Name, r.Labels, r.Annotations, r.Spec, r.Body, r.SourcePath)
+	case *datastore.ProductVariant:
+		fill(r.APIVersion, r.Kind, r.Namespace, r.Name, r.Labels, r.Annotations, r.Spec, r.Body, r.SourcePath)
+	default:
+		return false
+	}
+	if path != proposed.path {
+		return false
+	}
+	desired.Annotations, stored.Annotations = maps.Clone(desired.Annotations), maps.Clone(stored.Annotations)
+	delete(desired.Annotations, datastore.OwnerAnnotationKey)
+	delete(stored.Annotations, datastore.OwnerAnnotationKey)
+	// Decode both JSON representations so object key order is insignificant.
+	left, err := json.Marshal(desired)
+	if err != nil {
+		return false
+	}
+	right, err := json.Marshal(stored)
+	if err != nil {
+		return false
+	}
+	var a, b any
+	if json.Unmarshal(left, &a) != nil || json.Unmarshal(right, &b) != nil {
+		return false
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+func (s *Server) authorizeOperations(ctx context.Context, operations []resourceAdmissionOperation) error {
+	// A personal namespace identity cannot be moved by spelling a rename as
+	// deletion plus a new declaration (possibly at another path or tier).
+	// Separate deletion and unrelated creation into distinct pushes.
+	removedUser, createdNamespace := false, false
+	for _, op := range operations {
+		if op.identity.Kind != "Namespace" {
+			continue
+		}
+		createdNamespace = createdNamespace || op.operation == admission.OperationCreate
+		if op.operation == admission.OperationDelete && op.oldEntry != nil && op.oldEntry.parsed.Namespace != nil && op.oldEntry.parsed.Namespace.Spec.Tier == "USER" {
+			removedUser = true
+		}
+	}
+	if removedUser && createdNamespace {
+		return status.Error(codes.PermissionDenied, "USER namespace rename is forbidden; delete and unrelated creation require separate pushes")
+	}
+	for _, op := range operations {
+		existing, err := s.lookupResourceByIdentity(ctx, op.identity)
+		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+			return status.Error(codes.Unavailable, "resource authorization facts unavailable")
+		}
+		if err := s.authorizeOperation(ctx, op.identity, op.operation, op.newEntry, existing); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type resourceIdentity struct {
 	APIVersion string

@@ -49,7 +49,7 @@ type secretTestController struct {
 	log      string
 }
 
-func startSecretTestController(t *testing.T, binary, api, namespace, name, uid, privateKey, kid string) *secretTestController {
+func startSecretTestController(t *testing.T, binary, api, name, uid, privateKey, kid string) *secretTestController {
 	t.Helper()
 	root := t.TempDir()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -68,7 +68,6 @@ func startSecretTestController(t *testing.T, binary, api, namespace, name, uid, 
 port = %d
 api_uri = %q
 [controller.serviceaccount]
-namespace = %q
 name = %q
 uid = %q
 key_ref = { kind = "SecretRef", name = "controller" }
@@ -81,7 +80,7 @@ flush_interval_events = 1
 [controller.watch]
 resync_interval = "1s"
 max_backoff = "2s"
-`, port, api+"/graphql", namespace, name, uid, providerRoot, filepath.Join(root, "checkpoints"))
+`, port, api+"/graphql", name, uid, providerRoot, filepath.Join(root, "checkpoints"))
 	require.NoError(t, os.WriteFile(c.config, []byte(config), 0600))
 	c.start(t, binary)
 	return c
@@ -197,13 +196,13 @@ func secretTestGraphQL(t *testing.T, api, token, query string, variables map[str
 	return result
 }
 
-func secretTestRotate(t *testing.T, api, token, namespace, name string, add []secretCapacityOwnedKey, remove []string) string {
+func secretTestRotate(t *testing.T, api, token, name string, add []secretCapacityOwnedKey, remove []string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	client := &http.Client{Timeout: 10 * time.Second}
 	defer client.CloseIdleConnections()
-	fixture := secretCapacityOwnedFixture{Namespace: namespace, Name: name}
+	fixture := secretCapacityOwnedFixture{Name: name}
 	uid, err := fixture.rotate(ctx, client, api, token, add, remove)
 	require.NoError(t, err, "test-key enrollment/retirement failed")
 	return uid
@@ -226,7 +225,8 @@ func TestSecretBootstrapRotationDeployed(t *testing.T) {
 	clear(tokenBytes)
 	client := &http.Client{Timeout: 5 * time.Second}
 	require.NotEqual(t, repositoryCapacityAPIIdentity(t, client, apiA), repositoryCapacityAPIIdentity(t, client, apiB))
-	namespace := getEnv("SECRET_TEST_NAMESPACE", "controllers")
+	_, legacyNamespace := os.LookupEnv("SECRET_TEST_NAMESPACE")
+	require.False(t, legacyNamespace, "SECRET_TEST_NAMESPACE is removed; use SECRET_TEST_SERVICEACCOUNT")
 	name := getEnv("SECRET_TEST_SERVICEACCOUNT", "gitstore-controller-manager")
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
 	kidA, kidB, kidNext := "spec063 A "+suffix, "spec063 B "+suffix, "spec063 rotated "+suffix
@@ -234,21 +234,21 @@ func TestSecretBootstrapRotationDeployed(t *testing.T) {
 	publicKey := func(kid, private string) secretCapacityOwnedKey {
 		return secretCapacityOwnedKey{ID: kid, Public: extractPublicKeyPEM(t, private)}
 	}
-	uid := secretTestRotate(t, apiA, token, namespace, name,
+	uid := secretTestRotate(t, apiA, token, name,
 		[]secretCapacityOwnedKey{publicKey(kidA, privateA), publicKey(kidB, privateB)}, []string{})
 	t.Cleanup(func() {
-		secretTestRotate(t, apiA, token, namespace, name, nil, []string{kidA, kidB, kidNext})
+		secretTestRotate(t, apiA, token, name, nil, []string{kidA, kidB, kidNext})
 	})
 	h := &serviceAccountAuthHarness{t: t, apiURL: apiA, token: token}
 	const issue = `mutation($input: IssueServiceAccountTokenInput!) {
   issueServiceAccountToken(input:$input) { tokenRequest { status { token expirationTimestamp } } }
 }`
 	input := map[string]any{"input": map[string]any{
-		"metadata": map[string]string{"namespace": namespace, "name": name},
+		"metadata": map[string]string{"name": name},
 		"spec":     map[string]any{"audiences": []string{"gitstore-api"}, "expirationSeconds": 600},
 	}}
 	for _, api := range []string{apiA, apiB} {
-		assertion := h.signClientAssertionWithKeyID(namespace, name, uid, kidA, privateA)
+		assertion := h.signClientAssertionWithKeyID(name, uid, kidA, privateA)
 		result := secretTestGraphQL(t, api, assertion, issue, input)
 		require.True(t, len(result.Errors) == 0, "authorized assertion was denied")
 		var data struct {
@@ -265,15 +265,15 @@ func TestSecretBootstrapRotationDeployed(t *testing.T) {
 		require.NotNil(t, claims.ExpiresAt)
 		require.NotNil(t, claims.IssuedAt)
 		require.Equal(t, time.Minute, claims.ExpiresAt.Sub(claims.IssuedAt.Time), "test APIs must clamp access-token TTL to 60s")
-		bad := h.signClientAssertionWithKeyID(namespace, "wrong-subject", uid, kidA, privateA)
+		bad := h.signClientAssertionWithKeyID("wrong-subject", uid, kidA, privateA)
 		denied := secretTestGraphQL(t, api, bad, issue, input)
 		require.NotEmpty(t, denied.Errors, "wrong subject must be denied")
 		require.NotContains(t, string(denied.Data), "eyJ", "denial must not deliver a token")
-		mismatched := h.signClientAssertionWithKeyID(namespace, name, uid, kidA, privateB)
+		mismatched := h.signClientAssertionWithKeyID(name, uid, kidA, privateB)
 		require.NotEmpty(t, secretTestGraphQL(t, api, mismatched, issue, input).Errors, "mismatched signing key was accepted")
 	}
-	a := startSecretTestController(t, binary, apiA, namespace, name, uid, privateA, kidA)
-	b := startSecretTestController(t, binary, apiB, namespace, name, uid, privateB, kidB)
+	a := startSecretTestController(t, binary, apiA, name, uid, privateA, kidA)
+	b := startSecretTestController(t, binary, apiB, name, uid, privateB, kidB)
 	require.NotEqual(t, repositoryControllerIdentity(t, client, a.endpoint), repositoryControllerIdentity(t, client, b.endpoint))
 	snapshot, err := os.ReadFile(a.config)
 	require.NoError(t, err)
@@ -299,13 +299,13 @@ func TestSecretBootstrapRotationDeployed(t *testing.T) {
 	waitSecretTestReady(t, a, false, time.Second)
 	writeSecretTestRecord(t, a.record, privateA, kidA)
 	waitSecretTestReady(t, a, true, 60*time.Second)
-	secretTestRotate(t, apiB, token, namespace, name, []secretCapacityOwnedKey{publicKey(kidNext, privateNext)}, []string{})
+	secretTestRotate(t, apiB, token, name, []secretCapacityOwnedKey{publicKey(kidNext, privateNext)}, []string{})
 	writeSecretTestRecord(t, a.record, privateNext, kidNext)
 	writeSecretTestRecord(t, b.record, privateNext, kidNext)
 	// Wait past the previously issued tokens before retiring their signing keys.
 	secretTestHealthyWindow(t, a, b, 65*time.Second)
-	secretTestRotate(t, apiA, token, namespace, name, nil, []string{kidA, kidB})
-	oldAssertion := h.signClientAssertionWithKeyID(namespace, name, uid, kidA, privateA)
+	secretTestRotate(t, apiA, token, name, nil, []string{kidA, kidB})
+	oldAssertion := h.signClientAssertionWithKeyID(name, uid, kidA, privateA)
 	require.NotEmpty(t, secretTestGraphQL(t, apiB, oldAssertion, issue, input).Errors, "retired assertion key was accepted")
 	secretTestHealthyWindow(t, a, b, 65*time.Second)
 	before := repositoryControllerIdentity(t, client, a.endpoint)
@@ -371,10 +371,10 @@ type secretCapacityOwnedKey struct {
 var secretCapacityFixtureRunID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
 type secretCapacityOwnedFixture struct {
-	SchemaVersion  int                      `json:"schemaVersion"`
-	RunID          string                   `json:"runID"`
-	Project        string                   `json:"project"`
-	Namespace      string                   `json:"namespace"`
+	SchemaVersion int    `json:"schemaVersion"`
+	RunID         string `json:"runID"`
+	Project       string `json:"project"`
+
 	Name           string                   `json:"name"`
 	UID            string                   `json:"uid"`
 	Keys           []secretCapacityOwnedKey `json:"keys"`
@@ -450,7 +450,7 @@ func (fixture secretCapacityOwnedFixture) rotate(ctx context.Context, client *ht
 	err := secretCapacityGraphQL(ctx, client, api, token, `mutation($input:RotateServiceAccountKeyInput!) {
 		rotateServiceAccountKey(input:$input) { serviceAccount { metadata { uid } } }
 	}`, map[string]any{"input": map[string]any{
-		"metadata": map[string]string{"namespace": fixture.Namespace, "name": fixture.Name},
+		"metadata": map[string]string{"name": fixture.Name},
 		"add":      keys, "removeKids": remove,
 	}}, &data)
 	uid := data.RotateServiceAccountKey.ServiceAccount.Metadata.UID
@@ -476,7 +476,7 @@ func (fixture secretCapacityOwnedFixture) assertion(key secretCapacityOwnedKey, 
 	}
 	defer clear(private)
 	now := time.Now()
-	subject := "serviceaccount:" + fixture.Namespace + ":" + subjectName
+	subject := "system:serviceaccount:" + subjectName
 	assertion := jwt.NewWithClaims(jwt.SigningMethodEdDSA, jwt.MapClaims{
 		"iss": subject, "sub": subject, "aud": []string{"gitstore-api/serviceaccount-token"},
 		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(45 * time.Second).Unix(),
@@ -528,7 +528,7 @@ func readSecretCapacityOwnedFixture(root, runID string) (secretCapacityOwnedFixt
 	}
 	clear(body)
 	if fixture.SchemaVersion != 1 || fixture.RunID != runID || fixture.Project == "" ||
-		fixture.Namespace != "controllers" || fixture.Name != "gitstore-controller-manager" || len(fixture.Keys) != 3 {
+		fixture.Name != "gitstore-controller-manager" || len(fixture.Keys) != 3 {
 		return secretCapacityOwnedFixture{}, invalid
 	}
 	seen := make(map[string]bool)
@@ -585,8 +585,8 @@ func TestSecretCapacityFixtureProvision(t *testing.T) {
 	require.Equal(t, "provision", action)
 	require.NoError(t, os.Mkdir(root, 0700), "refuse to overwrite any existing fixture directory")
 	fixture := secretCapacityOwnedFixture{SchemaVersion: 1, RunID: runID,
-		Project:   getEnv("REPOSITORY_CAPACITY_PROJECT", "gitstore-repository-capacity"),
-		Namespace: "controllers", Name: "gitstore-controller-manager"}
+		Project: getEnv("REPOSITORY_CAPACITY_PROJECT", "gitstore-repository-capacity"),
+		Name:    "gitstore-controller-manager"}
 	fixture.RuntimeMarkers = []string{}
 	for range 3 {
 		key, err := newSecretCapacityOwnedKey()
@@ -606,7 +606,6 @@ func TestSecretCapacityFixtureProvision(t *testing.T) {
 port = 5001
 api_uri = "http://api-%s:4000/graphql"
 [controller.serviceaccount]
-namespace = "controllers"
 name = "gitstore-controller-manager"
 uid = %q
 key_ref = {kind = "SecretRef", name = "controller"}
@@ -899,7 +898,7 @@ func (driver *secretCapacityFaultDriver) issue(ctx context.Context, api string, 
 			issueServiceAccountToken(input:$input) { tokenRequest { status { token expirationTimestamp } } }
 		}`,
 		"variables": map[string]any{"input": map[string]any{
-			"metadata": map[string]string{"namespace": driver.fixture.Namespace, "name": driver.fixture.Name},
+			"metadata": map[string]string{"name": driver.fixture.Name},
 			"spec":     map[string]any{"audiences": []string{"gitstore-api"}, "expirationSeconds": 600},
 		}},
 	})
@@ -969,7 +968,7 @@ func (driver *secretCapacityFaultDriver) issue(ctx context.Context, api string, 
 	_, _, parseErr := jwt.NewParser().ParseUnverified(status.Token, &claims)
 	if len(data.Errors) != 0 || parseErr != nil || claims.ExpiresAt == nil || claims.IssuedAt == nil ||
 		claims.ExpiresAt.Sub(claims.IssuedAt.Time) != time.Minute || !status.ExpirationTimestamp.Truncate(time.Second).Equal(claims.ExpiresAt.Time) ||
-		claims.Subject != "serviceaccount:"+driver.fixture.Namespace+":"+driver.fixture.Name {
+		claims.Subject != "system:serviceaccount:"+driver.fixture.Name {
 		return errors.New("secret capacity: authorized issuance must deliver the expected subject and a 60-second token")
 	}
 	return nil
@@ -1822,7 +1821,7 @@ func TestSecretCapacityOwnedFixtureRecordsAndAssertions(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.Chmod(root, 0700))
 	fixture := secretCapacityOwnedFixture{SchemaVersion: 1, RunID: "fixture-test",
-		Project: "gitstore-owned-test", Namespace: "controllers", Name: "gitstore-controller-manager", UID: "owned-uid"}
+		Project: "gitstore-owned-test", Name: "gitstore-controller-manager", UID: "owned-uid"}
 	fixture.RuntimeMarkers = []string{}
 	for range 3 {
 		key, err := newSecretCapacityOwnedKey()
@@ -1867,6 +1866,8 @@ func TestSecretCapacityOwnedFixtureRecordsAndAssertions(t *testing.T) {
 	require.True(t, err == nil && parsed.Valid, "owned assertion must verify against its enrolled public key")
 	require.Equal(t, "gitstore-sa-assertion+jwt", parsed.Header["typ"])
 	require.Equal(t, fixture.Keys[2].ID, parsed.Header["kid"])
+	require.Equal(t, "system:serviceaccount:gitstore-controller-manager", claims["sub"])
+	require.Equal(t, claims["sub"], claims["iss"])
 	require.Equal(t, float64(45), claims["exp"].(float64)-claims["iat"].(float64))
 	second, err := fixture.assertion(fixture.Keys[2], fixture.Name)
 	require.NoError(t, err)
@@ -1957,13 +1958,13 @@ func TestSecretCapacityIssuanceRequiresClampedTTL(t *testing.T) {
 	block, _ := pem.Decode([]byte(key.Private))
 	private, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	require.NoError(t, err)
-	fixture := secretCapacityOwnedFixture{Namespace: "controllers", Name: "gitstore-controller-manager", UID: "owned-uid"}
+	fixture := secretCapacityOwnedFixture{Name: "gitstore-controller-manager", UID: "owned-uid"}
 	for _, ttl := range []time.Duration{time.Minute, 2 * time.Minute} {
 		t.Run(ttl.String(), func(t *testing.T) {
 			now := time.Now().Truncate(time.Second).Add(123 * time.Millisecond)
 			expiry := now.Add(ttl)
 			token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, jwt.RegisteredClaims{
-				Subject:  "serviceaccount:controllers:gitstore-controller-manager",
+				Subject:  "system:serviceaccount:gitstore-controller-manager",
 				IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(expiry),
 			})
 			signed, err := token.SignedString(private)
@@ -1990,7 +1991,7 @@ func TestSecretCapacityIssuanceRequiresClampedTTL(t *testing.T) {
 func TestSecretCapacityIssuanceDoesNotCountTransportErrorsAsDenials(t *testing.T) {
 	key, err := newSecretCapacityOwnedKey()
 	require.NoError(t, err)
-	fixture := secretCapacityOwnedFixture{Namespace: "controllers", Name: "gitstore-controller-manager", UID: "owned-uid"}
+	fixture := secretCapacityOwnedFixture{Name: "gitstore-controller-manager", UID: "owned-uid"}
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError, http.StatusTemporaryRedirect} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
