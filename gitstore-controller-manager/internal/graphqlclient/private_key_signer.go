@@ -86,12 +86,12 @@ func (s *PrivateKeyTokenSigner) clear() {
 }
 
 // SignAssertion creates a short-lived proof-of-possession JWT.
-func (s *PrivateKeyTokenSigner) SignAssertion(ctx context.Context, namespace, name string, ttl time.Duration, audience string) (string, error) {
+func (s *PrivateKeyTokenSigner) SignAssertion(ctx context.Context, name string, ttl time.Duration, audience string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(namespace) == "" || strings.TrimSpace(name) == "" {
-		return "", fmt.Errorf("service account namespace and name must not be empty")
+	if strings.TrimSpace(name) == "" || strings.ContainsAny(name, ":/") {
+		return "", fmt.Errorf("service account name must be nonempty and contain no colon or slash")
 	}
 	if strings.TrimSpace(audience) == "" {
 		return "", fmt.Errorf("assertion audience must not be empty")
@@ -104,7 +104,7 @@ func (s *PrivateKeyTokenSigner) SignAssertion(ctx context.Context, namespace, na
 		return "", fmt.Errorf("generate assertion ID: %w", err)
 	}
 	now := time.Now().UTC()
-	subject := "serviceaccount:" + namespace + ":" + name
+	subject := "system:serviceaccount:" + name
 	header, err := json.Marshal(struct {
 		Algorithm string `json:"alg"`
 		KeyID     string `json:"kid"`

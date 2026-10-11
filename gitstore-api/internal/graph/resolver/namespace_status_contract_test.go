@@ -39,7 +39,7 @@ func TestNamespaceQueryReadsPersistedAdmissionAndDerivedTerminationStatus(t *tes
 			APIVersion: "gitstore.dev/v1beta1",
 			Kind:       "Namespace",
 			Metadata:   catalog.ObjectMeta{Name: "status-query"},
-			Spec:       catalog.NamespaceSpec{Title: "Status Query", Tier: "USER"},
+			Spec:       catalog.NamespaceSpec{Title: "Status Query", Tier: "ORGANIZATION"},
 		},
 		time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC),
 		"main@sha1:accepted",

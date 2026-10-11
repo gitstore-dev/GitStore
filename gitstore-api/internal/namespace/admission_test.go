@@ -15,6 +15,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,6 +23,70 @@ import (
 type fixedIDs struct{ id string }
 
 func (f fixedIDs) NewID() string { return f.id }
+
+func TestUserNamespaceInvariants(t *testing.T) {
+	const fixtureID = "00000000-0000-0000-0000-000000000064"
+	for _, tc := range []struct{ name, actor, owner string }{
+		{"bob", "alice", ""},
+		{"alice", "admin", "alice"},
+		{"alice", "alice", "system:group:alice"},
+		{"alice", "alice", "system:serviceaccount:alice"},
+		{"alice", "system:serviceaccount:alice", "alice"},
+	} {
+		t.Run(tc.name+"/"+tc.actor+"/"+tc.owner, func(t *testing.T) {
+			store := newAdmissionStore(t)
+			resource := namespaceResource(tc.name, "USER")
+			resource.Metadata.Annotations = map[string]string{datastore.OwnerAnnotationKey: tc.owner}
+			_, _, err := namespaceadmission.ApplyManifest(context.Background(), store, fixedIDs{fixtureID}, resource, time.Now(), "revision", tc.actor, admission.OperationCreate)
+			require.Error(t, err)
+			_, err = store.GetNamespaceByName(context.Background(), tc.name)
+			require.ErrorIs(t, err, datastore.ErrNotFound)
+		})
+	}
+	t.Run("immutable personal identity and tier", func(t *testing.T) {
+		store := newAdmissionStore(t)
+		resource := namespaceResource("alice", "USER")
+		_, _, err := namespaceadmission.ApplyManifest(context.Background(), store, fixedIDs{fixtureID}, resource, time.Now(), "revision", "alice", admission.OperationCreate)
+		require.NoError(t, err)
+		for _, actor := range []string{"alice", "admin", "system:api"} {
+			resource.Spec.Tier = "ORGANIZATION"
+			_, _, err = namespaceadmission.ApplyManifest(context.Background(), store, fixedIDs{fixtureID}, resource, time.Now(), "revision", actor, admission.OperationUpdate)
+			require.Error(t, err)
+			resource.Spec.Tier = "USER"
+			resource.Metadata.Annotations = map[string]string{datastore.OwnerAnnotationKey: "bob"}
+			_, _, err = namespaceadmission.ApplyManifest(context.Background(), store, fixedIDs{fixtureID}, resource, time.Now(), "revision", actor, admission.OperationUpdate)
+			require.Error(t, err)
+			resource.Metadata.Annotations = nil
+		}
+		current, err := store.GetNamespaceByName(context.Background(), "alice")
+		require.NoError(t, err)
+		require.Equal(t, datastore.NamespaceTierUser, current.Tier)
+		require.Equal(t, "alice", current.EffectiveOwnerSub())
+	})
+}
+
+func TestUserNamespaceConcurrentCreateHasOneWinner(t *testing.T) {
+	store := newAdmissionStore(t)
+	start, results := make(chan struct{}), make(chan error, 16)
+	for range 16 {
+		go func() {
+			<-start
+			_, _, err := namespaceadmission.ApplyManifest(context.Background(), store, fixedIDs{uuid.NewString()}, namespaceResource("alice", "USER"), time.Now(), "revision", "alice", admission.OperationCreate)
+			results <- err
+		}()
+	}
+	close(start)
+	winners := 0
+	for range 16 {
+		if err := <-results; err == nil {
+			winners++
+		}
+	}
+	require.Equal(t, 1, winners)
+	current, err := store.GetNamespaceByName(context.Background(), "alice")
+	require.NoError(t, err)
+	require.Equal(t, "alice", current.EffectiveOwnerSub())
+}
 
 func TestApplyManifestPolicyRejections(t *testing.T) {
 	ctx := context.Background()
@@ -53,7 +118,7 @@ func TestApplyManifestPolicyRejections(t *testing.T) {
 func TestApplyManifestDurableVersionCheckRemainsAuthoritative(t *testing.T) {
 	ctx := context.Background()
 	store := newAdmissionStore(t)
-	seedNamespace(t, store, "acme", datastore.NamespaceTierUser, nil)
+	seedNamespace(t, store, "acme", datastore.NamespaceTierOrganization, nil)
 	racing := &conflictingNamespaceStore{Datastore: store}
 
 	_, _, err := namespaceadmission.ApplyManifest(ctx, racing, fixedIDs{id: "new-id"}, namespaceResource("acme", "ORGANIZATION"), time.Now().UTC(), "main@sha1:b", "alice", admission.OperationUpdate)
@@ -62,7 +127,7 @@ func TestApplyManifestDurableVersionCheckRemainsAuthoritative(t *testing.T) {
 
 	current, getErr := store.GetNamespaceByName(ctx, "acme")
 	require.NoError(t, getErr)
-	assert.Equal(t, datastore.NamespaceTierUser, current.Tier)
+	assert.Equal(t, datastore.NamespaceTierOrganization, current.Tier)
 }
 
 func TestApplyManifestPersistsAdmissionAcceptedForAcceptedCreateAndUpdate(t *testing.T) {
@@ -74,7 +139,7 @@ func TestApplyManifestPersistsAdmissionAcceptedForAcceptedCreateAndUpdate(t *tes
 		ctx,
 		store,
 		fixedIDs{id: "00000000-0000-0000-0000-000000000047"},
-		namespaceResource("acme", "USER"),
+		namespaceResource("acme", "ORGANIZATION"),
 		now,
 		"main@sha1:create",
 		"alice",
@@ -84,11 +149,13 @@ func TestApplyManifestPersistsAdmissionAcceptedForAcceptedCreateAndUpdate(t *tes
 	assert.True(t, createdNew)
 	assertAdmissionAcceptedForGeneration(t, created, 1, 1, "main@sha1:create")
 
+	changed := namespaceResource("acme", "ORGANIZATION")
+	changed.Spec.Title = "Changed"
 	updated, createdNew, err := namespaceadmission.ApplyManifest(
 		ctx,
 		store,
 		fixedIDs{id: "00000000-0000-0000-0000-000000000048"},
-		namespaceResource("acme", "ORGANIZATION"),
+		changed,
 		now.Add(time.Minute),
 		"main@sha1:update",
 		"alice",
@@ -118,7 +185,7 @@ func TestApplyManifestPersistsAndVersionsCompleteAuthoredState(t *testing.T) {
 		},
 		Spec: catalog.NamespaceSpec{
 			Title: "Authored state",
-			Tier:  "USER",
+			Tier:  "ORGANIZATION",
 			RepositoryDefaults: &catalog.NamespaceRepositoryDefaults{
 				Visibility:    visibility,
 				DefaultBranch: "trunk",
@@ -185,7 +252,7 @@ func TestApplyManifestEmptyValuedLabelKeyChangeKeepsGeneration(t *testing.T) {
 	ctx := context.Background()
 	store := newAdmissionStore(t)
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
-	resource := namespaceResource("presence-aware-labels", "USER")
+	resource := namespaceResource("presence-aware-labels", "ORGANIZATION")
 	resource.Metadata.Labels = map[string]string{"old-key": ""}
 
 	created, _, err := namespaceadmission.ApplyManifest(
@@ -224,7 +291,7 @@ func TestApplyManifestBodyAndProvenanceVersionSemantics(t *testing.T) {
 	ctx := context.Background()
 	store := newAdmissionStore(t)
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
-	resource := namespaceResource("body-provenance", "USER")
+	resource := namespaceResource("body-provenance", "ORGANIZATION")
 
 	created, createdNew, err := namespaceadmission.ApplyManifestOrdered(
 		ctx,
@@ -333,10 +400,12 @@ func TestApplyManifestRetryPreservesConcurrentControllerStatus(t *testing.T) {
 	ctx := context.Background()
 	store := newAdmissionStore(t)
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
-	created, _, err := namespaceadmission.ApplyManifest(ctx, store, fixedIDs{id: "00000000-0000-0000-0000-000000000060"}, namespaceResource("upgrade", "USER"), now, "main@sha1:old", "alice", admission.OperationCreate)
+	created, _, err := namespaceadmission.ApplyManifest(ctx, store, fixedIDs{id: "00000000-0000-0000-0000-000000000060"}, namespaceResource("upgrade", "ORGANIZATION"), now, "main@sha1:old", "alice", admission.OperationCreate)
 	require.NoError(t, err)
 	racing := &controllerStatusConflictOnceStore{Datastore: store, now: now.Add(time.Minute)}
-	updated, _, err := namespaceadmission.ApplyManifestOrdered(ctx, racing, fixedIDs{id: "unused"}, namespaceResource("upgrade", "ORGANIZATION"), now.Add(2*time.Minute), "main@sha1:new", "alice", namespaceadmission.ApplyManifestOptions{Operation: admission.OperationUpdate, WriteAttempts: 2})
+	changed := namespaceResource("upgrade", "ORGANIZATION")
+	changed.Spec.Title = "Changed"
+	updated, _, err := namespaceadmission.ApplyManifestOrdered(ctx, racing, fixedIDs{id: "unused"}, changed, now.Add(2*time.Minute), "main@sha1:new", "alice", namespaceadmission.ApplyManifestOptions{Operation: admission.OperationUpdate, WriteAttempts: 2})
 	require.NoError(t, err)
 	assert.Equal(t, created.Generation+1, updated.Generation)
 	assert.Equal(t, "3", updated.ResourceVersion)
@@ -365,7 +434,7 @@ func TestApplyManifestRejectedUpdatesPreserveLastAcceptedStatusAndGeneration(t *
 		},
 		{
 			name:        "terminating target",
-			initialTier: "USER",
+			initialTier: "ORGANIZATION",
 			rejected:    namespaceResource("acme", "ORGANIZATION"),
 			prepare: func(t *testing.T, store datastore.Datastore, current *datastore.Namespace) {
 				t.Helper()

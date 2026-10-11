@@ -6,6 +6,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"regexp"
 	"slices"
@@ -125,7 +126,8 @@ type ServiceAccountConfig struct {
 // between gitstore-api and gitstore-git-service via the top-level
 // [grpc_auth] table.
 type GrpcAuthConfig struct {
-	HmacSecret string `mapstructure:"hmac_secret" validate:"required"`
+	HmacSecret         string `mapstructure:"hmac_secret" validate:"required"`
+	HmacSecretPrevious string `mapstructure:"hmac_secret_previous"`
 }
 
 // AuthNConfig controls the authentication provider chain.
@@ -285,6 +287,9 @@ type legacyKey struct {
 // final merged state so a renamed/removed key never silently resolves to a
 // default. Ordered most-specific-first so the most helpful match wins.
 var legacyKeys = []legacyKey{
+	// Shared-file validation must reject the removed identity selector before
+	// Compose starts any services, not only when the controller finally boots.
+	{"controller.serviceaccount.namespace", "controller.serviceaccount.name (ServiceAccounts are cluster-scoped; remove namespace)"},
 	{"api.rate_limit_per_second", "api.rate_limit.per_second"},
 	{"api.rate_limit_burst", "api.rate_limit.burst"},
 	{"git.grpc.uri", "api.git_service.uri"},
@@ -378,6 +383,7 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("grpc_auth.hmac_secret", "")
+	v.SetDefault("grpc_auth.hmac_secret_previous", "")
 	v.SetDefault("push_limits.max_pack_size", "512MiB")
 	v.SetDefault("push_limits.max_file_size", "100MiB")
 	v.SetDefault("api.auth.static_users.users_file", "users.yaml")
@@ -499,8 +505,9 @@ func load(paths []string) (*Config, error) {
 // check — each service checks only the keys it used to own.
 func checkLegacyKeys(v *viper.Viper) error {
 	for _, legacy := range legacyKeys {
-		if v.IsSet(legacy.path) {
-			envName := "GITSTORE_" + strings.ToUpper(strings.ReplaceAll(legacy.path, ".", "__"))
+		envName := "GITSTORE_" + strings.ToUpper(strings.ReplaceAll(legacy.path, ".", "__"))
+		_, envPresent := os.LookupEnv(envName)
+		if v.IsSet(legacy.path) || envPresent {
 			return fmt.Errorf(
 				"config: %s (env: %s) is no longer recognised; use %s instead",
 				legacy.path, envName, legacy.replacement,
@@ -818,6 +825,7 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("api.auth.jwt.issuer", c.Api.Auth.JWT.Issuer)
 	enc.AddDuration("api.auth.jwt.refresh_grace", c.Api.Auth.JWT.RefreshGrace)
 	enc.AddString("grpc_auth.hmac_secret", redact(c.GrpcAuth.HmacSecret))
+	enc.AddString("grpc_auth.hmac_secret_previous", redact(c.GrpcAuth.HmacSecretPrevious))
 	enc.AddString("api.auth.serviceaccount.issuer", c.Api.Auth.ServiceAccount.Issuer)
 	enc.AddString("api.auth.serviceaccount.audience", c.Api.Auth.ServiceAccount.Audience)
 	enc.AddString("api.auth.serviceaccount.assertion_audience", c.Api.Auth.ServiceAccount.AssertionAudience)

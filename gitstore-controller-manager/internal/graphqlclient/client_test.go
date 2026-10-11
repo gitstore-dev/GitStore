@@ -26,6 +26,119 @@ import (
 
 // ── Query / Mutate ──────────────────────────────────────────────────────────
 
+type rejectingCredentials struct {
+	generation    atomic.Int32
+	invalidations atomic.Int32
+}
+
+func (s *rejectingCredentials) Current(context.Context) (string, error) {
+	return fmt.Sprintf("token-%d", s.generation.Load()), nil
+}
+func (s *rejectingCredentials) Invalidate(token string) {
+	if token == "token-0" && s.generation.CompareAndSwap(0, 1) {
+		s.invalidations.Add(1)
+	}
+}
+
+func TestClientRetriesOnlyDefinitiveAuthenticationRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		retry  bool
+	}{
+		{"http-401", 401, "unauthorized", true},
+		{"preexecution", 200, `{"errors":[{"message":"expired","extensions":{"code":"UNAUTHENTICATED"}}]}`, true},
+		{"forbidden", 403, "forbidden", false},
+		{"partial-data", 200, `{"data":{"update":null},"errors":[{"message":"expired","extensions":{"code":"UNAUTHENTICATED"}}]}`, false},
+		{"executed-path", 200, `{"data":null,"errors":[{"message":"expired","path":["update"],"extensions":{"code":"UNAUTHENTICATED"}}]}`, false},
+		{"mixed-errors", 200, `{"errors":[{"message":"expired","extensions":{"code":"UNAUTHENTICATED"}},{"message":"failed","extensions":{"code":"INTERNAL_SERVER_ERROR"}}]}`, false},
+		{"server-error", 500, "ambiguous completion", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			source := &rejectingCredentials{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
+					w.WriteHeader(tc.status)
+					_, _ = io.WriteString(w, tc.body)
+					return
+				}
+				require.Equal(t, "Bearer token-1", r.Header.Get("Authorization"))
+				_, _ = io.WriteString(w, `{"data":{"update":true}}`)
+			}))
+			defer server.Close()
+			err := graphqlclient.New(server.URL, source).Mutate(t.Context(), "mutation { update }", nil, nil)
+			if tc.retry {
+				require.NoError(t, err)
+				require.EqualValues(t, 2, calls.Load())
+				require.EqualValues(t, 1, source.invalidations.Load())
+			} else {
+				require.Error(t, err)
+				require.EqualValues(t, 1, calls.Load())
+				require.Zero(t, source.invalidations.Load())
+			}
+		})
+	}
+}
+
+func TestClientAuthenticationRetryIsBounded(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.WriteHeader(401) }))
+	defer server.Close()
+	require.Error(t, graphqlclient.New(server.URL, &rejectingCredentials{}).Mutate(t.Context(), "mutation { update }", nil, nil))
+	require.EqualValues(t, 2, calls.Load())
+}
+
+func TestClientWebsocketRejectInvalidatesForReconnect(t *testing.T) {
+	for _, code := range []int{4401, 4403} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			source := &rejectingCredentials{}
+			upgrader := websocket.Upgrader{Subprotocols: []string{"graphql-transport-ws"}}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				var init map[string]any
+				if conn.ReadJSON(&init) != nil {
+					return
+				}
+				_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, "rejected"), time.Now().Add(time.Second))
+			}))
+			defer server.Close()
+			_, err := graphqlclient.New(server.URL, source).Subscribe(t.Context(), "subscription { watch }", nil)
+			require.Error(t, err)
+			if code == 4401 {
+				require.EqualValues(t, 1, source.invalidations.Load())
+			} else {
+				require.Zero(t, source.invalidations.Load(), "forbidden is not token expiry")
+			}
+		})
+	}
+}
+
+func TestClientWebsocketSendsBearerAndInvalidatesRejectedHandshake(t *testing.T) {
+	for _, code := range []int{401, 403} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			source := &rejectingCredentials{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "Bearer token-0", r.Header.Get("Authorization"))
+				w.WriteHeader(code)
+			}))
+			defer server.Close()
+			_, err := graphqlclient.New(server.URL, source).Subscribe(t.Context(), "subscription { watch }", nil)
+			require.Error(t, err)
+			if code == 401 {
+				require.EqualValues(t, 1, source.invalidations.Load())
+			} else {
+				require.Zero(t, source.invalidations.Load())
+			}
+		})
+	}
+}
+
 func TestClientSharesThrottleCooldownAcrossHTTPAndWebSocket(t *testing.T) {
 	for _, websocketFirst := range []bool{false, true} {
 		t.Run(fmt.Sprint(websocketFirst), func(t *testing.T) {

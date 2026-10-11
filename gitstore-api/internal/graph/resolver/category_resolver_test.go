@@ -286,7 +286,9 @@ func TestUpdateCategoryStatusDecouplesNonBlockingProducts(t *testing.T) {
 	ctx := context.Background()
 	category := seedCategory(t, store, "test-ns", "parent", time.Now().UTC())
 	category.RepositoryID = "repo-1"
-	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category))
+	expectedResourceVersion := category.ResourceVersion
+	datastore.AdvanceCategoryTaxonomySystemVersion(category)
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category, expectedResourceVersion))
 	lifecycle := store.(datastore.CategoryTaxonomyDeletionStore)
 	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
 	require.NoError(t, err)
@@ -320,7 +322,9 @@ func TestUpdateCategoryStatusDecouplesProductsInBoundedPages(t *testing.T) {
 	ctx := context.Background()
 	category := seedCategory(t, store, "test-ns", "parent", time.Now().UTC())
 	category.RepositoryID = "repo-1"
-	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category))
+	expectedResourceVersion := category.ResourceVersion
+	datastore.AdvanceCategoryTaxonomySystemVersion(category)
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category, expectedResourceVersion))
 	lifecycle := store.(datastore.CategoryTaxonomyDeletionStore)
 	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
 	require.NoError(t, err)

@@ -15,6 +15,14 @@ owner and reference at construction and resolves a fresh signing record for
 every token exchange; only access tokens are cached. The File integration
 remains metadata validation plus a contract-only runtime consumer.
 
+The controller bootstrap owner is the cluster-scoped subject
+`system:serviceaccount:<name>`, bound to its enrolled immutable UID. No
+ServiceAccount namespace is accepted in configuration, enrollment or token
+claims. This does not remove namespaces from runtime catalog secret references:
+their environment/namespace containment remains enforced. Authentication
+rejection invalidates the matching cached token and coalesces reacquisition;
+authorization denial never triggers a token refresh or mutation replay.
+
 Use pure `ValidateSecretRef`/`ValidateCredentialsRef` for admission. JSON
 decoding rejects unknown/duplicate/case-folded fields and explicit null
 optionals; validation against the containing namespace remains mandatory.

@@ -66,7 +66,6 @@ func newServiceAccount() *datastore.ServiceAccount {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	return &datastore.ServiceAccount{
 		UID:               newID(),
-		Namespace:         "controllers",
 		Name:              "sa-" + newID()[:8],
 		ResourceVersion:   "1",
 		CreationTimestamp: now,
@@ -100,6 +99,214 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	t.Helper()
 	ctx := context.Background()
 
+	t.Run("Product/OwnerCAS", func(t *testing.T) {
+		original := &datastore.Product{UID: newID(), Namespace: "cas-ns", Name: "cas-" + newID()[:8], ResourceVersion: "1", CreationTimestamp: time.Now(), Annotations: map[string]string{"gitstore.dev/owner": "alice"}, Body: "original"}
+		require.NoError(t, ds.CreateProduct(ctx, original))
+		winner := *original
+		winner.ResourceVersion = "2"
+		winner.Status = json.RawMessage(`{"phase":"new-owner"}`)
+		winner.Annotations = map[string]string{"gitstore.dev/owner": "bob"}
+		require.NoError(t, ds.UpdateProduct(ctx, &winner, "1"))
+		stale := *original
+		stale.ResourceVersion, stale.Body = "2", "stale overwrite"
+		require.ErrorIs(t, ds.UpdateProduct(ctx, &stale, "1"), datastore.ErrConflict)
+		current, err := ds.GetProduct(ctx, original.UID)
+		require.NoError(t, err)
+		assert.Equal(t, "bob", current.Annotations["gitstore.dev/owner"])
+		assert.Equal(t, "original", current.Body)
+		assert.JSONEq(t, `{"phase":"new-owner"}`, string(current.Status))
+		assert.Equal(t, "2", current.ResourceVersion)
+		require.ErrorIs(t, ds.UpdateProduct(ctx, current, "2"), datastore.ErrConflict, "same-version replacement must not bypass CAS")
+		current.ResourceVersion = "3"
+		require.ErrorIs(t, ds.UpdateProduct(ctx, current, ""), datastore.ErrConflict, "empty expected version is not a wildcard")
+		current.ResourceVersion = "4"
+		require.ErrorIs(t, ds.UpdateProduct(ctx, current, "2"), datastore.ErrConflict, "skipped versions are rejected")
+
+		results := make(chan error, 8)
+		start := make(chan struct{})
+		for i := range 8 {
+			go func() {
+				contender := *current
+				contender.ResourceVersion = "3"
+				contender.Annotations = map[string]string{"gitstore.dev/owner": fmt.Sprintf("owner-%d", i)}
+				<-start
+				results <- ds.UpdateProduct(ctx, &contender, "2")
+			}()
+		}
+		close(start)
+		winners := 0
+		for range 8 {
+			err := <-results
+			if err == nil {
+				winners++
+			} else {
+				require.ErrorIs(t, err, datastore.ErrConflict)
+			}
+		}
+		require.Equal(t, 1, winners, "one writer may consume a version")
+		final, err := ds.GetProduct(ctx, original.UID)
+		require.NoError(t, err)
+		assert.Equal(t, "3", final.ResourceVersion)
+		assert.Contains(t, final.Annotations["gitstore.dev/owner"], "owner-")
+		assert.Equal(t, "original", final.Body)
+	})
+
+	t.Run("CategoryTaxonomy/OwnerCAS", func(t *testing.T) {
+		original := &datastore.CategoryTaxonomy{UID: newID(), Namespace: "cas-ns", Name: "cas-" + newID()[:8], ResourceVersion: "1", CreationTimestamp: time.Now(), Annotations: map[string]string{"gitstore.dev/owner": "alice"}, Body: "original"}
+		require.NoError(t, ds.CreateCategoryTaxonomy(ctx, original))
+		winner := *original
+		winner.ResourceVersion = "2"
+		winner.Status = json.RawMessage(`{"phase":"new-owner"}`)
+		winner.Annotations = map[string]string{"gitstore.dev/owner": "bob"}
+		require.NoError(t, ds.UpdateCategoryTaxonomy(ctx, &winner, "1"))
+		stale := *original
+		stale.ResourceVersion, stale.Body = "2", "stale overwrite"
+		require.ErrorIs(t, ds.UpdateCategoryTaxonomy(ctx, &stale, "1"), datastore.ErrConflict)
+		current, err := ds.GetCategoryTaxonomy(ctx, original.UID)
+		require.NoError(t, err)
+		assert.Equal(t, "bob", current.Annotations["gitstore.dev/owner"])
+		assert.Equal(t, "original", current.Body)
+		assert.JSONEq(t, `{"phase":"new-owner"}`, string(current.Status))
+		assert.Equal(t, "2", current.ResourceVersion)
+		require.ErrorIs(t, ds.UpdateCategoryTaxonomy(ctx, current, "2"), datastore.ErrConflict, "same-version replacement must not bypass CAS")
+		current.ResourceVersion = "3"
+		require.ErrorIs(t, ds.UpdateCategoryTaxonomy(ctx, current, ""), datastore.ErrConflict, "empty expected version is not a wildcard")
+		current.ResourceVersion = "4"
+		require.ErrorIs(t, ds.UpdateCategoryTaxonomy(ctx, current, "2"), datastore.ErrConflict, "skipped versions are rejected")
+
+		results := make(chan error, 8)
+		start := make(chan struct{})
+		for i := range 8 {
+			go func() {
+				contender := *current
+				contender.ResourceVersion = "3"
+				contender.Annotations = map[string]string{"gitstore.dev/owner": fmt.Sprintf("owner-%d", i)}
+				<-start
+				results <- ds.UpdateCategoryTaxonomy(ctx, &contender, "2")
+			}()
+		}
+		close(start)
+		winners := 0
+		for range 8 {
+			err := <-results
+			if err == nil {
+				winners++
+			} else {
+				require.ErrorIs(t, err, datastore.ErrConflict)
+			}
+		}
+		require.Equal(t, 1, winners, "one writer may consume a version")
+		final, err := ds.GetCategoryTaxonomy(ctx, original.UID)
+		require.NoError(t, err)
+		assert.Equal(t, "3", final.ResourceVersion)
+		assert.Contains(t, final.Annotations["gitstore.dev/owner"], "owner-")
+		assert.Equal(t, "original", final.Body)
+	})
+
+	t.Run("Collection/OwnerCAS", func(t *testing.T) {
+		original := &datastore.Collection{UID: newID(), Namespace: "cas-ns", Name: "cas-" + newID()[:8], ResourceVersion: "1", CreationTimestamp: time.Now(), Annotations: map[string]string{"gitstore.dev/owner": "alice"}, Body: "original"}
+		require.NoError(t, ds.CreateCollection(ctx, original))
+		winner := *original
+		winner.ResourceVersion = "2"
+		winner.Status = json.RawMessage(`{"phase":"new-owner"}`)
+		winner.Annotations = map[string]string{"gitstore.dev/owner": "bob"}
+		require.NoError(t, ds.UpdateCollection(ctx, &winner, "1"))
+		stale := *original
+		stale.ResourceVersion, stale.Body = "2", "stale overwrite"
+		require.ErrorIs(t, ds.UpdateCollection(ctx, &stale, "1"), datastore.ErrConflict)
+		current, err := ds.GetCollection(ctx, original.UID)
+		require.NoError(t, err)
+		assert.Equal(t, "bob", current.Annotations["gitstore.dev/owner"])
+		assert.Equal(t, "original", current.Body)
+		assert.JSONEq(t, `{"phase":"new-owner"}`, string(current.Status))
+		assert.Equal(t, "2", current.ResourceVersion)
+		require.ErrorIs(t, ds.UpdateCollection(ctx, current, "2"), datastore.ErrConflict, "same-version replacement must not bypass CAS")
+		current.ResourceVersion = "3"
+		require.ErrorIs(t, ds.UpdateCollection(ctx, current, ""), datastore.ErrConflict, "empty expected version is not a wildcard")
+		current.ResourceVersion = "4"
+		require.ErrorIs(t, ds.UpdateCollection(ctx, current, "2"), datastore.ErrConflict, "skipped versions are rejected")
+
+		results := make(chan error, 8)
+		start := make(chan struct{})
+		for i := range 8 {
+			go func() {
+				contender := *current
+				contender.ResourceVersion = "3"
+				contender.Annotations = map[string]string{"gitstore.dev/owner": fmt.Sprintf("owner-%d", i)}
+				<-start
+				results <- ds.UpdateCollection(ctx, &contender, "2")
+			}()
+		}
+		close(start)
+		winners := 0
+		for range 8 {
+			err := <-results
+			if err == nil {
+				winners++
+			} else {
+				require.ErrorIs(t, err, datastore.ErrConflict)
+			}
+		}
+		require.Equal(t, 1, winners, "one writer may consume a version")
+		final, err := ds.GetCollection(ctx, original.UID)
+		require.NoError(t, err)
+		assert.Equal(t, "3", final.ResourceVersion)
+		assert.Contains(t, final.Annotations["gitstore.dev/owner"], "owner-")
+		assert.Equal(t, "original", final.Body)
+	})
+
+	t.Run("ProductVariant/OwnerCAS", func(t *testing.T) {
+		original := &datastore.ProductVariant{SKU: newID(), ProductRefName: "parent", UID: newID(), Namespace: "cas-ns", Name: "cas-" + newID()[:8], ResourceVersion: "1", CreationTimestamp: time.Now(), Annotations: map[string]string{"gitstore.dev/owner": "alice"}, Body: "original"}
+		require.NoError(t, ds.CreateProductVariant(ctx, original))
+		winner := *original
+		winner.ResourceVersion = "2"
+		winner.Status = json.RawMessage(`{"phase":"new-owner"}`)
+		winner.Annotations = map[string]string{"gitstore.dev/owner": "bob"}
+		require.NoError(t, ds.UpdateProductVariant(ctx, &winner, "1"))
+		stale := *original
+		stale.ResourceVersion, stale.Body = "2", "stale overwrite"
+		require.ErrorIs(t, ds.UpdateProductVariant(ctx, &stale, "1"), datastore.ErrConflict)
+		current, err := ds.GetProductVariant(ctx, original.UID)
+		require.NoError(t, err)
+		assert.Equal(t, "bob", current.Annotations["gitstore.dev/owner"])
+		assert.Equal(t, "original", current.Body)
+		assert.JSONEq(t, `{"phase":"new-owner"}`, string(current.Status))
+		assert.Equal(t, "2", current.ResourceVersion)
+		require.ErrorIs(t, ds.UpdateProductVariant(ctx, current, "2"), datastore.ErrConflict, "same-version replacement must not bypass CAS")
+		current.ResourceVersion = "3"
+		require.ErrorIs(t, ds.UpdateProductVariant(ctx, current, ""), datastore.ErrConflict, "empty expected version is not a wildcard")
+		current.ResourceVersion = "4"
+		require.ErrorIs(t, ds.UpdateProductVariant(ctx, current, "2"), datastore.ErrConflict, "skipped versions are rejected")
+
+		results := make(chan error, 8)
+		start := make(chan struct{})
+		for i := range 8 {
+			go func() {
+				contender := *current
+				contender.ResourceVersion = "3"
+				contender.Annotations = map[string]string{"gitstore.dev/owner": fmt.Sprintf("owner-%d", i)}
+				<-start
+				results <- ds.UpdateProductVariant(ctx, &contender, "2")
+			}()
+		}
+		close(start)
+		winners := 0
+		for range 8 {
+			err := <-results
+			if err == nil {
+				winners++
+			} else {
+				require.ErrorIs(t, err, datastore.ErrConflict)
+			}
+		}
+		require.Equal(t, 1, winners, "one writer may consume a version")
+		final, err := ds.GetProductVariant(ctx, original.UID)
+		require.NoError(t, err)
+		assert.Equal(t, "3", final.ResourceVersion)
+		assert.Contains(t, final.Annotations["gitstore.dev/owner"], "owner-")
+		assert.Equal(t, "original", final.Body)
+	})
+
 	t.Run("Product/StatusCASPreservesSpecAndSynchronizesOwnerReferences", func(t *testing.T) {
 		namespace := newNamespace(datastore.NamespaceTierUser)
 		require.NoError(t, ds.CreateNamespace(ctx, namespace))
@@ -123,7 +330,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		product.Spec = json.RawMessage(`{"title":"Updated Title"}`)
 		product.Body, product.GitCommitSHA = "updated body", "updated-commit"
 		product.ResourceVersion, product.Generation = "2", 2
-		require.NoError(t, ds.UpdateProduct(ctx, product))
+		require.NoError(t, ds.UpdateProduct(ctx, product, "1"))
 		patch := datastore.ProductStatusPatch{ResourceVersion: "1", OwnerReferences: ownerReferences}
 		_, err = ds.UpdateProductStatus(ctx, product.Namespace, product.Name, patch)
 		require.ErrorIs(t, err, datastore.ErrConflict)
@@ -373,7 +580,9 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.CreateProduct(ctx, p))
 
 		p.GitRef = "main"
-		require.NoError(t, ds.UpdateProduct(ctx, p))
+		expected := p.ResourceVersion
+		datastore.AdvanceProductSystemVersion(p)
+		require.NoError(t, ds.UpdateProduct(ctx, p, expected))
 
 		got, err := ds.GetProduct(ctx, p.UID)
 		require.NoError(t, err)
@@ -383,7 +592,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	t.Run("Product/UpdateNotFound", func(t *testing.T) {
 		p := newProduct()
 		p.UID = newID() // does not exist
-		err := ds.UpdateProduct(ctx, p)
+		err := ds.UpdateProduct(ctx, p, "1")
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
@@ -530,7 +739,8 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
 
 		c.AncestorPath = "electronics"
-		require.NoError(t, ds.UpdateCategoryTaxonomy(ctx, c))
+		datastore.AdvanceCategoryTaxonomySystemVersion(c)
+		require.NoError(t, ds.UpdateCategoryTaxonomy(ctx, c, "1"))
 
 		got, err := ds.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name)
 		require.NoError(t, err)
@@ -539,7 +749,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 
 	t.Run("CategoryTaxonomy/UpdateNotFound", func(t *testing.T) {
 		c := newCategoryTaxonomy()
-		err := ds.UpdateCategoryTaxonomy(ctx, c)
+		err := ds.UpdateCategoryTaxonomy(ctx, c, "1")
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
@@ -587,7 +797,9 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.CreateCollection(ctx, c))
 
 		c.Body = "Updated description"
-		require.NoError(t, ds.UpdateCollection(ctx, c))
+		expected := c.ResourceVersion
+		datastore.AdvanceCollectionSystemVersion(c)
+		require.NoError(t, ds.UpdateCollection(ctx, c, expected))
 
 		got, err := ds.GetCollection(ctx, c.UID)
 		require.NoError(t, err)
@@ -597,7 +809,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	t.Run("Collection/UpdateNotFound", func(t *testing.T) {
 		c := newCollection()
 		c.UID = newID()
-		err := ds.UpdateCollection(ctx, c)
+		err := ds.UpdateCollection(ctx, c, "1")
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
@@ -1137,7 +1349,6 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		got, err := ds.GetServiceAccountByUID(ctx, sa.UID)
 		require.NoError(t, err)
 		assert.Equal(t, sa.UID, got.UID)
-		assert.Equal(t, sa.Namespace, got.Namespace)
 		assert.Equal(t, sa.Name, got.Name)
 		require.Len(t, got.PublicKeys, 1)
 		assert.Equal(t, sa.PublicKeys[0].KeyID, got.PublicKeys[0].KeyID)
@@ -1152,13 +1363,13 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		sa := newServiceAccount()
 		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
 
-		got, err := ds.GetServiceAccountBySubject(ctx, sa.Namespace, sa.Name)
+		got, err := ds.GetServiceAccountBySubject(ctx, sa.Name)
 		require.NoError(t, err)
 		assert.Equal(t, sa.UID, got.UID)
 	})
 
 	t.Run("ServiceAccount/GetBySubjectNotFound", func(t *testing.T) {
-		_, err := ds.GetServiceAccountBySubject(ctx, "controllers", "does-not-exist-"+newID()[:8])
+		_, err := ds.GetServiceAccountBySubject(ctx, "does-not-exist-"+newID()[:8])
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
@@ -1174,8 +1385,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
 
 		sa2 := newServiceAccount()
-		sa2.Namespace = sa.Namespace
-		sa2.Name = sa.Name // same namespace+name, different UID
+		sa2.Name = sa.Name // same global name, different UID
 		err := ds.CreateServiceAccount(ctx, sa2)
 		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
 	})
@@ -1244,7 +1454,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 
 		_, err := ds.GetServiceAccountByUID(ctx, sa.UID)
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
-		_, err = ds.GetServiceAccountBySubject(ctx, sa.Namespace, sa.Name)
+		_, err = ds.GetServiceAccountBySubject(ctx, sa.Name)
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
@@ -1259,7 +1469,6 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.DeleteServiceAccount(ctx, sa.UID))
 
 		recreated := newServiceAccount()
-		recreated.Namespace = sa.Namespace
 		recreated.Name = sa.Name
 		require.NoError(t, ds.CreateServiceAccount(ctx, recreated))
 		assert.NotEqual(t, sa.UID, recreated.UID)
@@ -1341,22 +1550,22 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 					r := &datastore.Product{UID: uid, Namespace: ns.Name, Name: "child", ResourceVersion: "1", CreationTimestamp: now}
 					repositoryID = &r.RepositoryID
 					create = func() error { return ds.CreateProduct(ctx, r) }
-					update = func() error { return ds.UpdateProduct(ctx, r) }
+					update = func() error { return ds.UpdateProduct(ctx, r, "1") }
 				case "ProductVariant":
 					r := &datastore.ProductVariant{UID: uid, Namespace: ns.Name, Name: "child", SKU: "child", ProductRefName: "parent", ResourceVersion: "1", CreationTimestamp: now}
 					repositoryID = &r.RepositoryID
 					create = func() error { return ds.CreateProductVariant(ctx, r) }
-					update = func() error { return ds.UpdateProductVariant(ctx, r) }
+					update = func() error { return ds.UpdateProductVariant(ctx, r, "1") }
 				case "CategoryTaxonomy":
 					r := &datastore.CategoryTaxonomy{UID: uid, Namespace: ns.Name, Name: "child", ResourceVersion: "1", CreationTimestamp: now}
 					repositoryID = &r.RepositoryID
 					create = func() error { return ds.CreateCategoryTaxonomy(ctx, r) }
-					update = func() error { return ds.UpdateCategoryTaxonomy(ctx, r) }
+					update = func() error { return ds.UpdateCategoryTaxonomy(ctx, r, "1") }
 				case "Collection":
 					r := &datastore.Collection{UID: uid, Namespace: ns.Name, Name: "child", ResourceVersion: "1", CreationTimestamp: now}
 					repositoryID = &r.RepositoryID
 					create = func() error { return ds.CreateCollection(ctx, r) }
-					update = func() error { return ds.UpdateCollection(ctx, r) }
+					update = func() error { return ds.UpdateCollection(ctx, r, "1") }
 				case "File":
 					r := &datastore.File{UID: uid, Namespace: ns.Name, Name: "child", ResourceVersion: "1", CreationTimestamp: now}
 					repositoryID = &r.RepositoryID

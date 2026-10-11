@@ -1,91 +1,88 @@
-# policy.yaml.example — rbac-local policy file
-#
-# Copy this file to `policy.yaml` (or any path referenced by
-# GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE) when GITSTORE_API__AUTH__AUTHZ__PROVIDER=rbac-local.
-#
-# `version` must be "v1".
-version: v1
-
-# roles maps role name -> permissions.
-roles:
+# DEVELOPMENT / EVALUATION ONLY. Production requires a reviewed policy.
+# Breaking v1beta1 baseline: legacy action lists, deny rules and namespaced
+# ServiceAccount subjects are rejected, never translated.
+apiVersion: rbac.authorization.gitstore.dev/v1beta1
+kind: RbacLocalConfiguration
+defaultDeny: true
+clusterRoles:
+  cluster-admin:
+    rules:
+      - resources: ["*"]
+        verbs: ["*"]
   admin:
-    allow:
-      - "*"                  # wildcard: all actions
-    deny: []
-
-  controller:
-    allow:
-      - "*.status.write"
-      - "category.status.write"
-      - "categoryTaxonomy.list"
-      - "categoryTaxonomy.purge"
-      - "namespace.purge"
-      - "namespace.status.write"
-      - "namespace.watch"
-      - "repository.create.any"
-      - "repository.purge"
-      - "product.purge"
-      - "serviceaccount.token.issue"
-    deny: []
-
+    rules:
+      - resources: [repository, categoryTaxonomy, product, productVariant, collection, file]
+        verbs: [create, read, list, watch, update, delete, transfer]
+      - resources: [repository, categoryTaxonomy, product]
+        verbs: [purge]
+      - resources: [product/management, productVariant/management]
+        verbs: [read, list]
+  edit:
+    rules:
+      - resources: [repository, categoryTaxonomy, product, productVariant, collection, file]
+        verbs: [create, read, list, watch, update, delete]
+      - resources: [product/management, productVariant/management]
+        verbs: [read, list]
+  view:
+    rules:
+      - resources: [repository, categoryTaxonomy, product, productVariant, collection, file]
+        verbs: [read, list, watch]
+      - resources: [product/management, productVariant/management]
+        verbs: [read, list]
   namespace-owner:
-    allow:
-      - namespace.read
-      - namespace.update
-      - namespace.delete.own     # only own namespaces
-      - namespace.transfer       # API also requires caller owns the namespace and is a member of the target owner
-      - repository.read
-      - repository.write
-      - repository.create.own
-      - repository.rename.own
-      - repository.transfer.own
-      - repository.delete.own
-      - repository.read.own
-      - categoryTaxonomy.list
-      - categoryTaxonomy.read
-    deny:
-      - namespace.delete.any     # cannot delete other owners' namespaces
-
-  # Category mutations (categoryTaxonomy.create|update|delete) are not granted
-  # to these shared roles: rbac-local grants are global, not namespace-scoped.
-  # Grant them to a per-tenant role, or use a provider that scopes decisions by
-  # the request's namespace attribute.
-  developer:
-    allow:
-      - namespace.read
-      - repository.read
-      - repository.write
-      - repository.read.any
-      - categoryTaxonomy.list
-      - categoryTaxonomy.read
-    deny: []
-
-  anonymous:
-    allow:
-      - categoryTaxonomy.list
-      - categoryTaxonomy.read
-      - namespace.read
-      - repository.read
-      - repository.read.any
-    deny:
-      - repository.write
-      - namespace.create
-      - namespace.delete.any
-
-# default_deny applies when no role rule matches. Defaults to true if omitted.
-default_deny: true
-
-# role_bindings maps subject (username from your AuthN provider, e.g. a
-# static-users entry, or service account subject) -> list of roles. Every
-# configured static-users identity and service account that should be able
-# to access the API MUST have an entry here, or every request from that
-# identity will be denied by default_deny.
-#
-# Service account subjects use the format: serviceaccount:<namespace>:<name>
-role_bindings:
-  "alice":
-    - admin
-  "bob":
-    - developer
-  "serviceaccount:controllers:gitstore-controller-manager":
-    - controller
+    rules:
+      - resources: [namespace]
+        verbs: [read, update, delete, transfer]
+        when: [owner]
+  namespace-creator:
+    rules:
+      - resources: [namespace]
+        verbs: [create]
+        when: [{attr: tier, op: eq, value: USER}]
+  controller:
+    rules:
+      - resources: [namespace, repository, categoryTaxonomy, product, file]
+        verbs: [read, list, watch]
+      - resources: [namespace/status, repository/status, categoryTaxonomy/status, product/status, file/status]
+        verbs: [write]
+      - resources: [namespace, repository, categoryTaxonomy, product]
+        verbs: [purge]
+      - resources: [namespace/system-repository]
+        verbs: [provision]
+      - resources: [repository]
+        verbs: [create]
+      - resources: [product/management]
+        verbs: [read, list]
+  controller-token:
+    rules:
+      - resources: [serviceAccount/token]
+        verbs: [issue]
+        resourceNames: [gitstore-controller-manager]
+  system:api-internal:
+    rules:
+      - resources: [repository]
+        verbs: [create, delete]
+      - resources: [repository/contents]
+        verbs: [read, write]
+  public-reader:
+    rules:
+      - resources: [repository/contents]
+        verbs: [read]
+        when: [{attr: visibility, op: eq, value: public}]
+roles: {}
+clusterRoleBindings:
+  - roleRef: {kind: ClusterRole, name: cluster-admin}
+    subjects: [{kind: User, name: admin}]
+  - roleRef: {kind: ClusterRole, name: namespace-owner}
+    subjects: [{kind: Group, name: 'system:authenticated'}]
+  - roleRef: {kind: ClusterRole, name: namespace-creator}
+    subjects: [{kind: Group, name: 'system:authenticated'}]
+  - roleRef: {kind: ClusterRole, name: controller}
+    subjects: [{kind: ServiceAccount, name: gitstore-controller-manager}]
+  - roleRef: {kind: ClusterRole, name: controller-token}
+    subjects: [{kind: ServiceAccount, name: gitstore-controller-manager}]
+  - roleRef: {kind: ClusterRole, name: 'system:api-internal'}
+    subjects: [{kind: User, name: 'system:api'}]
+  - roleRef: {kind: ClusterRole, name: public-reader}
+    subjects: [{kind: Group, name: 'system:unauthenticated'}]
+roleBindings: []

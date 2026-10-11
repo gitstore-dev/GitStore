@@ -122,7 +122,9 @@ func TestProductResolver_SpecHydratedViaResolver(t *testing.T) {
 	qr, store := newProductResolverEnv(t)
 	p := seedProduct(t, store, "my-store", "spec-product")
 	p.Spec = []byte(`{"title":"My Widget","tags":["featured"]}`)
-	require.NoError(t, store.UpdateProduct(context.Background(), p))
+	expectedResourceVersion := p.ResourceVersion
+	datastore.AdvanceProductSystemVersion(p)
+	require.NoError(t, store.UpdateProduct(context.Background(), p, expectedResourceVersion))
 
 	encodedID := mustEncodeNodeID(nodeKindProduct, p.UID)
 	by := model.ProductBy{ID: &encodedID}

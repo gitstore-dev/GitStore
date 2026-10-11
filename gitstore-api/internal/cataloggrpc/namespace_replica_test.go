@@ -89,7 +89,7 @@ func TestNamespaceReplicaStaleUpdateCannotOverwriteConcurrentDeletion(t *testing
 	}
 	current := newCommit
 	git := newTreeGitReader(&current, map[string]map[string][]byte{
-		oldCommit: {path: namespaceManifest(name, "Original", "USER")},
+		oldCommit: {path: namespaceManifest(name, "Original", "ORGANIZATION")},
 		newCommit: {path: namespaceManifest(name, "Stale Update", "ORGANIZATION")},
 	})
 	updateReplica := newCatalogServer(t, store, git)
@@ -97,10 +97,10 @@ func TestNamespaceReplicaStaleUpdateCannotOverwriteConcurrentDeletion(t *testing
 	updateDone := make(chan error, 1)
 	go func() {
 		_, updateErr := updateReplica.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			ActorSubject: "test-admission-actor",
-			RepositoryId: testRepoID,
-			OldCommitSha: oldCommit,
-			NewCommitSha: newCommit,
+			Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+			RepositoryId:  testRepoID,
+			OldCommitSha:  oldCommit,
+			NewCommitSha:  newCommit,
 
 			RefName:      "refs/heads/main",
 			ChangedPaths: []string{path},
@@ -142,7 +142,7 @@ func TestNamespaceReplicaStaleDeleteCannotOverwriteConcurrentUpdate(t *testing.T
 	}
 	current := newCommit
 	updateReplica := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{
-		oldCommit: {path: namespaceManifest(name, "Original", "USER")},
+		oldCommit: {path: namespaceManifest(name, "Original", "ORGANIZATION")},
 		newCommit: {path: namespaceManifest(name, "Winning Update", "ORGANIZATION")},
 	}))
 
@@ -156,10 +156,10 @@ func TestNamespaceReplicaStaleDeleteCannotOverwriteConcurrentUpdate(t *testing.T
 
 	waitForReplicaRace(t, store.started, "stale delete did not reach its conditional write")
 	_, err = updateReplica.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: oldCommit,
-		NewCommitSha: newCommit,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  oldCommit,
+		NewCommitSha:  newCommit,
 
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
@@ -189,7 +189,7 @@ func seedNamespaceForReplicaRace(
 		UID:               uuid.NewString(),
 		Name:              name,
 		Title:             title,
-		Tier:              datastore.NamespaceTierUser,
+		Tier:              datastore.NamespaceTierOrganization,
 		Generation:        1,
 		ResourceVersion:   "1",
 		Revision:          "main@sha1:" + commit,

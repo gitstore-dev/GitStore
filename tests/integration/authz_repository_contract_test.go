@@ -12,9 +12,13 @@ import (
 )
 
 func TestRepositoryAuthorization_TwoUserNamespaceIsolation(t *testing.T) {
+	// This harness uses namespaceOwnerAuthZ, not config/policy.yaml. It verifies
+	// boundary isolation only; shipped-policy baseline decisions are pinned by
+	// TestAuthorizationBaselineShippedPolicy in the API provider package.
+	// USER creation uses the authenticated username; each harness is isolated.
 	h := newNamespaceContractHarness(t)
-	aliceNamespace := uniqueName("alice-namespace")
-	bobNamespace := uniqueName("bob-namespace")
+	aliceNamespace := "alice"
+	bobNamespace := "bob"
 	aliceRepository := uniqueName("alice-repository")
 	bobRepository := uniqueName("bob-repository")
 

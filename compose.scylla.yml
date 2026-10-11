@@ -33,6 +33,10 @@ services:
     restart: "no"
 
   api:
+    # First boot performs baseline DDL/CDC schema agreement before HTTP starts.
+    # Successful readiness still releases dependents immediately.
+    healthcheck:
+      start_period: 5m
     depends_on:
       scylla-init:
         condition: service_completed_successfully

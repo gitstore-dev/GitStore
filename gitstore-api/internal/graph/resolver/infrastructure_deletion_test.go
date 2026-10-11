@@ -222,7 +222,7 @@ func TestInfrastructureAuthorizedPushRepairsIncompleteDeletion(t *testing.T) {
 			commit := e.git.write(lifecycleSystemRepoID, before.SourcePath, nil)
 			_, err := e.catalog.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
 				RepositoryId: lifecycleSystemRepoID, OldCommitSha: before.GitCommitSHA, NewCommitSha: commit,
-				RefName: before.GitRef, ChangedPaths: []string{before.SourcePath}, ActorSubject: "operator",
+				RefName: before.GitRef, ChangedPaths: []string{before.SourcePath}, Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "operator", AuthMethod: "static-users"}},
 			})
 			require.NoError(t, err)
 			current, err := e.store.GetRepository(ctx, before.UID)
@@ -287,13 +287,13 @@ func TestInfrastructureNamespacePushRemovalStartsTermination(t *testing.T) {
 	ns, err := e.service.CreateNamespace(ctx, model.CreateNamespaceInput{
 		APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace",
 		Metadata: &model.NamespaceMetadataInput{Name: "pushed"},
-		Spec:     &model.NamespaceSpecInput{Tier: model.NamespaceTierUser},
+		Spec:     &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
 	}, "alice")
 	require.NoError(t, err)
 	commit := e.git.write(author, ns.SourcePath, nil)
 	_, err = e.catalog.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
 		RepositoryId: author, OldCommitSha: ns.GitCommitSHA, NewCommitSha: commit,
-		RefName: ns.GitRef, ChangedPaths: []string{ns.SourcePath}, ActorSubject: "alice",
+		RefName: ns.GitRef, ChangedPaths: []string{ns.SourcePath}, Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 	current, err := e.store.GetNamespaceByName(ctx, ns.Name)
@@ -326,7 +326,7 @@ func TestNamespaceDeletionRemovesManifestAndFinalizesEmptySystemRepository(t *te
 	ns, err := e.service.CreateNamespace(ctx, model.CreateNamespaceInput{
 		APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace",
 		Metadata: &model.NamespaceMetadataInput{Name: "removable"},
-		Spec:     &model.NamespaceSpecInput{Tier: model.NamespaceTierUser},
+		Spec:     &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
 	}, "alice")
 	require.NoError(t, err)
 	require.NoError(t, e.service.ProvisionSystemRepository(ctx, ns.Name, "controller"))

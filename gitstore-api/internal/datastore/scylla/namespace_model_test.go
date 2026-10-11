@@ -126,7 +126,7 @@ func TestServiceAccountListingUsesBoundedCursorQuery(t *testing.T) {
 		nil,
 	)
 
-	assert.Contains(t, query.Stmt, "FROM service_accounts_by_bucket")
+	assert.Contains(t, query.Stmt, "FROM service_accounts_by_cluster_bucket")
 	assert.Contains(t, query.Stmt, "bucket = ?")
 	assert.Contains(t, query.Stmt, "(creation_timestamp, uid) < (?, ?)")
 	assert.Contains(t, query.Stmt, "ORDER BY creation_timestamp DESC, uid DESC LIMIT 3")

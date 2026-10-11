@@ -425,6 +425,13 @@ func TestDocumentationExamples_ParseCorrectly(t *testing.T) {
 			name := uniqueName("docexample")
 			// Replace the metadata.name in the example with a unique name to avoid collisions.
 			fixture := string(content)
+			for _, line := range strings.Split(fixture, "\n") {
+				if strings.HasPrefix(line, "  name:") {
+					fixture = strings.Replace(fixture, line, "  name: "+name, 1)
+					break
+				}
+			}
+			fixture = strings.Replace(fixture, "namespace: acme-store", "namespace: "+getEnv("NAMESPACE", "gitstore-test"), 1)
 			if !strings.Contains(fixture, "name:") {
 				t.Fatalf("example file %s has no metadata.name field", tc.file)
 			}

@@ -46,7 +46,7 @@ func TestGraphQLFieldAuthorizerRejectsUnauthorizedCategoryWatches(t *testing.T) 
 			require.Error(t, err)
 			assert.False(t, called)
 			assert.Equal(t, "categoryTaxonomy.watch", authz.Action)
-			assert.Equal(t, "CategoryTaxonomy", authz.Resource.Kind)
+			assert.Equal(t, "categoryTaxonomy", authz.Resource.Kind)
 			assert.Equal(t, "acme-store", authz.Resource.Attrs["namespace"])
 			var gqlErr *gqlerror.Error
 			require.True(t, errors.As(err, &gqlErr))

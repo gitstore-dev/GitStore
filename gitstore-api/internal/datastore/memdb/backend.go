@@ -573,7 +573,7 @@ func (m *memdbDatastore) ListProducts(_ context.Context, namespace string, page 
 	}), nil
 }
 
-func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) error {
+func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product, expectedResourceVersion string) error {
 	if p == nil {
 		return fmt.Errorf("%w: product is nil", datastore.ErrInvalidArgument)
 	}
@@ -586,6 +586,10 @@ func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) 
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, p.UID)
+	}
+	if err := datastore.ValidateCatalogUpdateVersion(raw.(*datastore.Product).ResourceVersion, expectedResourceVersion, p.ResourceVersion); err != nil {
+		txn.Abort()
+		return err
 	}
 	if raw, _ := txn.First("product", "name_namespace", p.Namespace, p.Name); raw != nil && raw.(*datastore.Product).UID != p.UID {
 		txn.Abort()
@@ -820,7 +824,7 @@ func (m *memdbDatastore) ListProductVariantsByProductRef(_ context.Context, name
 	return result, nil
 }
 
-func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.ProductVariant) error {
+func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.ProductVariant, expectedResourceVersion string) error {
 	if v == nil {
 		return fmt.Errorf("%w: product variant is nil", datastore.ErrInvalidArgument)
 	}
@@ -833,6 +837,10 @@ func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.Pr
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product_variant uid %s", datastore.ErrNotFound, v.UID)
+	}
+	if err := datastore.ValidateCatalogUpdateVersion(raw.(*datastore.ProductVariant).ResourceVersion, expectedResourceVersion, v.ResourceVersion); err != nil {
+		txn.Abort()
+		return err
 	}
 	if raw, _ := txn.First("product_variant", "name_namespace", v.Namespace, v.Name); raw != nil && raw.(*datastore.ProductVariant).UID != v.UID {
 		txn.Abort()
@@ -968,7 +976,7 @@ func (m *memdbDatastore) ListCategoryTaxonomies(_ context.Context, namespace str
 	}), nil
 }
 
-func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy) error {
+func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy, expectedResourceVersion string) error {
 	if c == nil {
 		return fmt.Errorf("%w: category taxonomy is nil", datastore.ErrInvalidArgument)
 	}
@@ -983,6 +991,10 @@ func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.
 	if previous == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: category_taxonomy uid %s", datastore.ErrNotFound, c.UID)
+	}
+	if err := datastore.ValidateCatalogUpdateVersion(previous.(*datastore.CategoryTaxonomy).ResourceVersion, expectedResourceVersion, c.ResourceVersion); err != nil {
+		txn.Abort()
+		return err
 	}
 	if raw, _ := txn.First("category_taxonomy", "name_namespace", c.Namespace, c.Name); raw != nil && raw.(*datastore.CategoryTaxonomy).UID != c.UID {
 		txn.Abort()
@@ -1127,7 +1139,7 @@ func (m *memdbDatastore) ListCollections(_ context.Context, namespace string, pa
 	}), nil
 }
 
-func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collection) error {
+func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collection, expectedResourceVersion string) error {
 	if c == nil {
 		return fmt.Errorf("%w: collection is nil", datastore.ErrInvalidArgument)
 	}
@@ -1136,9 +1148,14 @@ func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collec
 		txn.Abort()
 		return err
 	}
-	if raw, _ := txn.First("collection", "id", c.UID); raw == nil {
+	raw, _ := txn.First("collection", "id", c.UID)
+	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: collection uid %s", datastore.ErrNotFound, c.UID)
+	}
+	if err := datastore.ValidateCatalogUpdateVersion(raw.(*datastore.Collection).ResourceVersion, expectedResourceVersion, c.ResourceVersion); err != nil {
+		txn.Abort()
+		return err
 	}
 	if raw, _ := txn.First("collection", "name_namespace", c.Namespace, c.Name); raw != nil && raw.(*datastore.Collection).UID != c.UID {
 		txn.Abort()
@@ -2001,9 +2018,9 @@ func (m *memdbDatastore) CreateServiceAccount(_ context.Context, sa *datastore.S
 		txn.Abort()
 		return fmt.Errorf("%w: service account uid %s", datastore.ErrAlreadyExists, sa.UID)
 	}
-	if raw, _ := txn.First("service_account", "name_namespace", sa.Namespace, sa.Name); raw != nil {
+	if raw, _ := txn.First("service_account", "name", sa.Name); raw != nil {
 		txn.Abort()
-		return fmt.Errorf("%w: service account %s/%s", datastore.ErrAlreadyExists, sa.Namespace, sa.Name)
+		return fmt.Errorf("%w: service account %s", datastore.ErrAlreadyExists, sa.Name)
 	}
 	if err := txn.Insert("service_account", cloneServiceAccount(sa)); err != nil {
 		txn.Abort()
@@ -2023,10 +2040,10 @@ func (m *memdbDatastore) GetServiceAccountByUID(_ context.Context, uid string) (
 	return cloneServiceAccount(raw.(*datastore.ServiceAccount)), nil
 }
 
-func (m *memdbDatastore) GetServiceAccountBySubject(_ context.Context, namespace, name string) (*datastore.ServiceAccount, error) {
+func (m *memdbDatastore) GetServiceAccountBySubject(_ context.Context, name string) (*datastore.ServiceAccount, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
-	raw, err := txn.First("service_account", "name_namespace", namespace, name)
+	raw, err := txn.First("service_account", "name", name)
 	if err != nil || raw == nil {
 		return nil, notFoundOrErr(err)
 	}

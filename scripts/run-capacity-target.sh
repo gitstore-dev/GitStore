@@ -15,6 +15,7 @@ usage: make capacity TARGET=<target> PROFILE=<profile> MODE=<mode>
 
 valid target/profile combinations:
   api/readiness
+  api/authorization (diagnostic only until reload-soak evidence is implemented)
   namespace/admission
   namespace/validation
   namespace/watch
@@ -37,6 +38,14 @@ case "${target}/${profile}" in
   api/readiness)
     runner_kind=k6
     command=(make --no-print-directory _capacity-k6 CAPACITY_PROFILE=api-readiness "MODE=${mode}")
+    ;;
+  api/authorization)
+    [[ "${mode}" == diagnostic ]] || {
+      echo 'authorization sampling is diagnostic until reload-soak and zero-I/O acceptance evidence are complete' >&2
+      exit 2
+    }
+    runner_kind=go-test
+    command=(make --no-print-directory _capacity-authorization "MODE=${mode}")
     ;;
   namespace/admission)
     runner_kind=k6

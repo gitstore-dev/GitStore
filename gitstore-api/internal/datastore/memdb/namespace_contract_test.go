@@ -255,22 +255,22 @@ func TestMemdb_TerminalRepositoryRejectsCatalogCreatesAndUpdates(t *testing.T) {
 		{"product", func(ds datastore.Datastore, repo string) error {
 			return ds.CreateProduct(ctx, &datastore.Product{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo})
 		}, func(ds datastore.Datastore, repo string) error {
-			return ds.UpdateProduct(ctx, &datastore.Product{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo})
+			return ds.UpdateProduct(ctx, &datastore.Product{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo}, "1")
 		}},
 		{"variant", func(ds datastore.Datastore, repo string) error {
 			return ds.CreateProductVariant(ctx, &datastore.ProductVariant{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo, SKU: "sku", ProductRefName: "product"})
 		}, func(ds datastore.Datastore, repo string) error {
-			return ds.UpdateProductVariant(ctx, &datastore.ProductVariant{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo, SKU: "sku", ProductRefName: "product"})
+			return ds.UpdateProductVariant(ctx, &datastore.ProductVariant{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo, SKU: "sku", ProductRefName: "product"}, "1")
 		}},
 		{"category", func(ds datastore.Datastore, repo string) error {
 			return ds.CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo})
 		}, func(ds datastore.Datastore, repo string) error {
-			return ds.UpdateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo})
+			return ds.UpdateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo}, "1")
 		}},
 		{"collection", func(ds datastore.Datastore, repo string) error {
 			return ds.CreateCollection(ctx, &datastore.Collection{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo})
 		}, func(ds datastore.Datastore, repo string) error {
-			return ds.UpdateCollection(ctx, &datastore.Collection{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo})
+			return ds.UpdateCollection(ctx, &datastore.Collection{UID: "00000000-0000-0000-0000-000000000221", Namespace: "terminal", Name: "catalog", RepositoryID: repo}, "1")
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

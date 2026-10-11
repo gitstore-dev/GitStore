@@ -249,15 +249,14 @@ func (r *repositoryLifecycleGitReader) ResolveRef(context.Context, string, strin
 func TestRepositoryLifecycleResolverUsesRealCatalogAdmissionForStatusAndVersions(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
-	ctx := context.Background()
+	ctx := lifecycleActor(context.Background(), "author")
 	const systemRepositoryID = "01960000-0000-7000-8000-000000000076"
 	require.NoError(t, store.CreateNamespace(ctx, &datastore.Namespace{UID: "01960000-0000-7000-8000-000000000077", Name: "acme", CreationActor: "author", UpdateActor: "author"}))
 	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{UID: systemRepositoryID, RepositoryID: systemRepositoryID, Namespace: "acme", NamespaceID: "acme", Name: SystemRepositoryName, CreationTimestamp: time.Now().UTC()}))
 	require.NoError(t, store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "acme", Name: SystemRepositoryName, RepositoryID: systemRepositoryID}))
 	first, second := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	current := first
-	admitter, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{Store: store, GitReader: &repositoryLifecycleGitReader{current: &current}, Logger: zap.NewNop()})
-	require.NoError(t, err)
+	admitter := newLifecycleCatalogFixture(t, cataloggrpc.ServerDeps{Store: store, GitReader: &repositoryLifecycleGitReader{current: &current}, Logger: zap.NewNop()})
 	writer := &repositoryLifecycleWriter{sha: first}
 	service, err := NewService(ServiceDeps{Store: store, GitWriter: writer, Logger: zap.NewNop(), CommittedManifestAdmitter: admitter})
 	require.NoError(t, err)

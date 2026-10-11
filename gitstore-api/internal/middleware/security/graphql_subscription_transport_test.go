@@ -5,6 +5,7 @@ package security_test
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -45,6 +46,38 @@ func (d *transportDenyAuthZ) Authorize(_ context.Context, _ *auth.Principal, act
 // middleware. An anonymous caller must receive FORBIDDEN before WatchFiles
 // opens a durable journal subscription.
 func TestUnauthorizedFileWatchRejectedThroughWebSocket(t *testing.T) {
+	assertWatchDeniedThroughWebSocket(t, `subscription { aliased: watchFiles(namespace: "acme-store") { name } }`, "file", "acme-store")
+}
+
+func TestCanonicalWatchesDeniedThroughWebSocket(t *testing.T) {
+	for _, tc := range []struct{ kind, canonical, field string }{
+		{"Namespace", "namespace", "watchNamespaces"},
+		{"Repository", "repository", "watchRepositories"},
+		{"Product", "product", "watchProducts"},
+		{"CategoryTaxonomy", "categoryTaxonomy", "watchCategories"},
+		{"File", "file", "watchFiles"},
+	} {
+		namespace, args := "acme-store", `(namespace: "acme-store")`
+		genericArgs := fmt.Sprintf(`(kind: %q, namespace: "acme-store")`, tc.kind)
+		if tc.kind == "Namespace" {
+			namespace, args = "", ""
+			genericArgs = `(kind: "Namespace")`
+		}
+		for _, field := range []string{tc.field, "watchResources"} {
+			t.Run(field+"/"+tc.kind, func(t *testing.T) {
+				fieldArgs := args
+				if field == "watchResources" {
+					fieldArgs = genericArgs
+				}
+				query := fmt.Sprintf(`subscription { aliased: %s%s { name } }`, field, fieldArgs)
+				assertWatchDeniedThroughWebSocket(t, query, tc.canonical, namespace)
+			})
+		}
+	}
+}
+
+func assertWatchDeniedThroughWebSocket(t *testing.T, query, kind, namespace string) {
+	t.Helper()
 	store := &testutil.StubStore{}
 	deny := &transportDenyAuthZ{}
 	registry := auth.NewProviderRegistry(auth.NewChainedAuthN(anonymous.New()), deny, nil)
@@ -75,7 +108,7 @@ func TestUnauthorizedFileWatchRejectedThroughWebSocket(t *testing.T) {
 	require.Equal(t, "connection_ack", message["type"])
 	require.NoError(t, conn.WriteJSON(map[string]any{
 		"id": "file-watch", "type": "subscribe",
-		"payload": map[string]any{"query": `subscription { watchFiles(namespace: "acme-store") { name } }`},
+		"payload": map[string]any{"query": query},
 	}))
 	require.NoError(t, conn.ReadJSON(&message))
 	assert.Equal(t, "next", message["type"])
@@ -92,7 +125,12 @@ func TestUnauthorizedFileWatchRejectedThroughWebSocket(t *testing.T) {
 
 	deny.mu.Lock()
 	defer deny.mu.Unlock()
-	assert.Equal(t, "file.watch", deny.action)
-	assert.Equal(t, "File", deny.resource.Kind)
-	assert.Equal(t, "acme-store", deny.resource.Attrs["namespace"])
+	assert.Equal(t, kind+".watch", deny.action)
+	assert.Equal(t, kind, deny.resource.Kind)
+	assert.Empty(t, deny.resource.Name)
+	if namespace == "" {
+		assert.NotContains(t, deny.resource.Attrs, "namespace")
+	} else {
+		assert.Equal(t, namespace, deny.resource.Attrs["namespace"])
+	}
 }

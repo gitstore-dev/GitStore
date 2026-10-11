@@ -99,7 +99,7 @@ func (s *stubDatastore) GetProductByName(_ context.Context, _, _ string) (*datas
 func (s *stubDatastore) ListProducts(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) UpdateProduct(_ context.Context, _ *datastore.Product) error {
+func (s *stubDatastore) UpdateProduct(_ context.Context, _ *datastore.Product, expectedResourceVersion string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) UpdateProductStatus(_ context.Context, _, _ string, _ datastore.ProductStatusPatch) (*datastore.Product, error) {
@@ -142,7 +142,7 @@ func (s *stubDatastore) GetCategoryTaxonomyByName(_ context.Context, _, _ string
 func (s *stubDatastore) ListCategoryTaxonomies(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
+func (s *stubDatastore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy, expectedResourceVersion string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) DeleteCategoryTaxonomy(_ context.Context, _ string) error {
@@ -169,7 +169,7 @@ func (s *stubDatastore) ListProductVariants(_ context.Context, _ string, _ datas
 func (s *stubDatastore) ListProductVariantsByProductRef(_ context.Context, _, _ string) ([]*datastore.ProductVariant, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) UpdateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
+func (s *stubDatastore) UpdateProductVariant(_ context.Context, _ *datastore.ProductVariant, expectedResourceVersion string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) DeleteProductVariant(_ context.Context, _ string) error {
@@ -190,7 +190,7 @@ func (s *stubDatastore) GetCollectionByName(_ context.Context, _, _ string) (*da
 func (s *stubDatastore) ListCollections(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) UpdateCollection(_ context.Context, _ *datastore.Collection) error {
+func (s *stubDatastore) UpdateCollection(_ context.Context, _ *datastore.Collection, expectedResourceVersion string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) DeleteCollection(_ context.Context, _ string) error {
@@ -272,7 +272,7 @@ func (s *stubDatastore) CreateServiceAccount(_ context.Context, _ *datastore.Ser
 func (s *stubDatastore) GetServiceAccountByUID(_ context.Context, _ string) (*datastore.ServiceAccount, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) GetServiceAccountBySubject(_ context.Context, _, _ string) (*datastore.ServiceAccount, error) {
+func (s *stubDatastore) GetServiceAccountBySubject(_ context.Context, _ string) (*datastore.ServiceAccount, error) {
 	return nil, s.getProductErr
 }
 func (s *stubDatastore) ListServiceAccounts(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.ServiceAccount], error) {

@@ -401,6 +401,7 @@ func main() {
 	}
 	gitWriter := &mockGitWriter{}
 	committedAdmitter, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
+		Registry:    registry,
 		Store:       store,
 		GitReader:   gitWriter,
 		Logger:      zap.NewNop(),
@@ -880,7 +881,7 @@ func (h *namespaceContractHarness) createNamespace(identifier, title string) {
 		"apiVersion": "gitstore.dev/v1beta1",
 		"kind":       "Namespace",
 		"metadata":   map[string]any{"name": identifier},
-		"spec":       map[string]any{"title": title, "tier": "USER"},
+		"spec":       map[string]any{"title": title, "tier": "ORGANIZATION"},
 	}})
 	if len(resp.Errors) > 0 {
 		h.t.Fatalf("graphql errors creating namespace %q: %s", identifier, namespaceContractErrors(resp.Errors))
@@ -922,7 +923,7 @@ func TestNamespaceContract_QueryNamespaceProjectsDeclarativeFields(t *testing.T)
 	title := namespaceContractStringPtr("Namespace Contract Query")
 	h.createNamespace(identifier, *title)
 
-	resp := h.gqlAnonymous(`
+	resp := h.gql(`
 		query($identifier: String!) {
 			namespace(by: {name: $identifier}) {
 				id
@@ -970,7 +971,7 @@ func TestNamespaceContract_QueryNamespaceProjectsDeclarativeFields(t *testing.T)
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
 		t.Fatalf("unmarshal namespace response: %v", err)
 	}
-	assertNamespaceContractShape(t, data.Namespace, identifier, title, "USER")
+	assertNamespaceContractShape(t, data.Namespace, identifier, title, "ORGANIZATION")
 }
 
 func TestNamespaceContract_NamespacesConnectionProjectsDeclarativeFields(t *testing.T) {
@@ -1048,7 +1049,7 @@ func TestNamespaceContract_NamespacesConnectionProjectsDeclarativeFields(t *test
 
 	for _, edge := range data.Namespaces.Edges {
 		if edge.Node != nil && edge.Node.Metadata != nil && edge.Node.Metadata.Name == identifier {
-			assertNamespaceContractShape(t, edge.Node, identifier, title, "USER")
+			assertNamespaceContractShape(t, edge.Node, identifier, title, "ORGANIZATION")
 			return
 		}
 	}
@@ -1109,7 +1110,7 @@ func TestNamespaceContract_DirectAndConnectionEnvelopeBodyParity(t *testing.T) {
 		body
 	}`
 
-	directResponse := h.gqlAnonymous(
+	directResponse := h.gql(
 		`query($identifier: String!) {
 			namespace(by: {name: $identifier}) `+selection+`
 		}`,
@@ -1131,7 +1132,7 @@ func TestNamespaceContract_DirectAndConnectionEnvelopeBodyParity(t *testing.T) {
 		t.Fatal("direct namespace metadata is nil")
 	}
 
-	connectionResponse := h.gqlAnonymous(
+	connectionResponse := h.gql(
 		`query {
 			namespaces(first: 100) {
 				edges {
@@ -1241,7 +1242,7 @@ func TestNamespaceContract_CreateNamespaceReturnsAdditiveContract(t *testing.T) 
 		"apiVersion": "gitstore.dev/v1beta1",
 		"kind":       "Namespace",
 		"metadata":   map[string]any{"name": identifier},
-		"spec":       map[string]any{"title": title, "tier": "USER"},
+		"spec":       map[string]any{"title": title, "tier": "ORGANIZATION"},
 	}})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql errors creating namespace additive contract: %s", namespaceContractErrors(resp.Errors))
@@ -1259,7 +1260,7 @@ func TestNamespaceContract_CreateNamespaceReturnsAdditiveContract(t *testing.T) 
 		t.Fatal("createNamespace payload is nil")
 	}
 	created = true
-	assertNamespaceContractShape(t, data.CreateNamespace.Namespace, identifier, namespaceContractStringPtr(title), "USER")
+	assertNamespaceContractShape(t, data.CreateNamespace.Namespace, identifier, namespaceContractStringPtr(title), "ORGANIZATION")
 }
 
 func TestNamespaceContract_DeleteNamespaceFinalizesEmptySystemRepository(t *testing.T) {

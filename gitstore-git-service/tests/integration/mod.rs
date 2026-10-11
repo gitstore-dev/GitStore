@@ -15,9 +15,27 @@ const INT_REPO_1: &str = "01960001-0000-7000-8000-000000000001";
 const INT_REPO_A: &str = "01960001-0000-7000-8000-000000000002";
 const INT_REPO_B: &str = "01960001-0000-7000-8000-000000000003";
 
+fn signed_request<T: prost::Message>(message: T) -> Request<T> {
+    let name = std::any::type_name::<T>()
+        .rsplit("::")
+        .next()
+        .unwrap()
+        .trim_end_matches("Request");
+    gitstore::auth::interceptor::sign_request(
+        message,
+        "fixture-key",
+        "gitstore-git",
+        &format!("/gitstore.git.v1.GitService/{name}"),
+    )
+    .unwrap()
+}
+
 fn make_service() -> (GitServiceImpl, TempDir) {
     let dir = TempDir::new().expect("tempdir");
-    let svc = GitServiceImpl::new(dir.path().to_path_buf());
+    let svc = GitServiceImpl::new(
+        dir.path().to_path_buf(),
+        gitstore::auth::interceptor::RPCVerifier::new("fixture-key", None, dir.path()).unwrap(),
+    );
     (svc, dir)
 }
 
@@ -27,7 +45,7 @@ fn test_authorization(repository_id: &str, action: &str) -> Option<proto::Reques
             subject: "system:api".to_string(),
             issuer: "integration-test".to_string(),
             auth_method: "internal".to_string(),
-            roles: vec![],
+            service_account_uid: String::new(),
             groups: vec![],
             scopes: vec![],
         }),
@@ -39,10 +57,10 @@ fn test_authorization(repository_id: &str, action: &str) -> Option<proto::Reques
 }
 
 fn create_req(id: &str) -> Request<proto::CreateRepositoryRequest> {
-    Request::new(proto::CreateRepositoryRequest {
+    signed_request(proto::CreateRepositoryRequest {
         repository_id: id.to_string(),
         storage_class: String::new(),
-        authorization: test_authorization(id, "repository.create.any"),
+        authorization: test_authorization(id, "repository.create"),
     })
 }
 
@@ -58,26 +76,26 @@ async fn test_create_commit_list_delete() {
         .expect("create_repository");
 
     // 2. Commit an initial file
-    svc.commit_file(Request::new(proto::CommitFileRequest {
+    svc.commit_file(signed_request(proto::CommitFileRequest {
         repository_id: INT_REPO_1.to_string(),
         path: "README.md".to_string(),
         content: b"# Integration test\n".to_vec(),
         commit_message: "Initial commit".to_string(),
         author_name: "Test".to_string(),
         author_email: "test@example.com".to_string(),
-        authorization: test_authorization(INT_REPO_1, "repository.write.any"),
+        authorization: test_authorization(INT_REPO_1, "repository.contents.write"),
     }))
     .await
     .expect("commit_file");
 
     // 3. List files — README.md must appear
     let list_resp = svc
-        .list_files(Request::new(proto::ListFilesRequest {
+        .list_files(signed_request(proto::ListFilesRequest {
             repository_id: INT_REPO_1.to_string(),
             r#ref: String::new(),
             path_prefix: String::new(),
             recursive: true,
-            authorization: test_authorization(INT_REPO_1, "repository.read.any"),
+            authorization: test_authorization(INT_REPO_1, "repository.contents.read"),
         }))
         .await
         .expect("list_files");
@@ -89,29 +107,29 @@ async fn test_create_commit_list_delete() {
     );
 
     // 4. List tags — should succeed (empty list is fine for a fresh repo)
-    svc.list_tags(Request::new(proto::ListTagsRequest {
+    svc.list_tags(signed_request(proto::ListTagsRequest {
         repository_id: INT_REPO_1.to_string(),
         prefix: String::new(),
-        authorization: test_authorization(INT_REPO_1, "repository.read.any"),
+        authorization: test_authorization(INT_REPO_1, "repository.contents.read"),
     }))
     .await
     .expect("list_tags");
 
     // 5. Delete repository
-    svc.delete_repository(Request::new(proto::DeleteRepositoryRequest {
+    svc.delete_repository(signed_request(proto::DeleteRepositoryRequest {
         repository_id: INT_REPO_1.to_string(),
-        authorization: test_authorization(INT_REPO_1, "repository.delete.any"),
+        authorization: test_authorization(INT_REPO_1, "repository.delete"),
     }))
     .await
     .expect("delete_repository");
 
     // Missing storage must not be mistaken for an absent file in a readable tree.
     let err = svc
-        .get_file(Request::new(proto::GetFileRequest {
+        .get_file(signed_request(proto::GetFileRequest {
             repository_id: INT_REPO_1.to_string(),
             path: "README.md".to_string(),
             r#ref: String::new(),
-            authorization: test_authorization(INT_REPO_1, "repository.read.any"),
+            authorization: test_authorization(INT_REPO_1, "repository.contents.read"),
         }))
         .await
         .expect_err("expected FAILED_PRECONDITION after repository deletion");
@@ -131,38 +149,38 @@ async fn test_concurrent_repos_are_isolated() {
     }
 
     // Write different files to each repo to verify isolation
-    svc.commit_file(Request::new(proto::CommitFileRequest {
+    svc.commit_file(signed_request(proto::CommitFileRequest {
         repository_id: INT_REPO_A.to_string(),
         path: "file-a.txt".to_string(),
         content: b"only in repo-a".to_vec(),
         commit_message: "add file-a".to_string(),
         author_name: "Test".to_string(),
         author_email: "test@example.com".to_string(),
-        authorization: test_authorization(INT_REPO_A, "repository.write.any"),
+        authorization: test_authorization(INT_REPO_A, "repository.contents.write"),
     }))
     .await
     .expect("commit to repo-a");
 
-    svc.commit_file(Request::new(proto::CommitFileRequest {
+    svc.commit_file(signed_request(proto::CommitFileRequest {
         repository_id: INT_REPO_B.to_string(),
         path: "file-b.txt".to_string(),
         content: b"only in repo-b".to_vec(),
         commit_message: "add file-b".to_string(),
         author_name: "Test".to_string(),
         author_email: "test@example.com".to_string(),
-        authorization: test_authorization(INT_REPO_B, "repository.write.any"),
+        authorization: test_authorization(INT_REPO_B, "repository.contents.write"),
     }))
     .await
     .expect("commit to repo-b");
 
     // repo-b must not contain file-a.txt
     let b_files = svc
-        .list_files(Request::new(proto::ListFilesRequest {
+        .list_files(signed_request(proto::ListFilesRequest {
             repository_id: INT_REPO_B.to_string(),
             r#ref: String::new(),
             path_prefix: String::new(),
             recursive: true,
-            authorization: test_authorization(INT_REPO_B, "repository.read.any"),
+            authorization: test_authorization(INT_REPO_B, "repository.contents.read"),
         }))
         .await
         .expect("list_files repo-b")
@@ -176,12 +194,12 @@ async fn test_concurrent_repos_are_isolated() {
 
     // repo-a listing must contain the file
     let a_files = svc
-        .list_files(Request::new(proto::ListFilesRequest {
+        .list_files(signed_request(proto::ListFilesRequest {
             repository_id: INT_REPO_A.to_string(),
             r#ref: String::new(),
             path_prefix: String::new(),
             recursive: true,
-            authorization: test_authorization(INT_REPO_A, "repository.read.any"),
+            authorization: test_authorization(INT_REPO_A, "repository.contents.read"),
         }))
         .await
         .expect("list_files repo-a")
@@ -206,9 +224,9 @@ async fn test_delete_unknown_repo_fences_stale_provisioning() {
 
     for _ in 0..2 {
         let response = svc
-            .delete_repository(Request::new(proto::DeleteRepositoryRequest {
+            .delete_repository(signed_request(proto::DeleteRepositoryRequest {
                 repository_id: INT_REPO_1.to_string(),
-                authorization: test_authorization(INT_REPO_1, "repository.delete.any"),
+                authorization: test_authorization(INT_REPO_1, "repository.delete"),
             }))
             .await
             .expect("idempotent deletion")
@@ -216,10 +234,10 @@ async fn test_delete_unknown_repo_fences_stale_provisioning() {
         assert_eq!(response.repository_id, INT_REPO_1);
     }
     let err = svc
-        .create_repository(Request::new(proto::CreateRepositoryRequest {
+        .create_repository(signed_request(proto::CreateRepositoryRequest {
             repository_id: INT_REPO_1.to_string(),
             storage_class: String::new(),
-            authorization: test_authorization(INT_REPO_1, "repository.create.any"),
+            authorization: test_authorization(INT_REPO_1, "repository.create"),
         }))
         .await
         .expect_err("deleted UID must not be provisioned");
@@ -233,10 +251,10 @@ async fn test_invalid_repo_id_rejected_on_create() {
 
     for bad_id in ["", "myrepo", "../etc", "a/b", "a\\b"] {
         let err = svc
-            .create_repository(Request::new(proto::CreateRepositoryRequest {
+            .create_repository(signed_request(proto::CreateRepositoryRequest {
                 repository_id: bad_id.to_string(),
                 storage_class: String::new(),
-                authorization: test_authorization(bad_id, "repository.create.any"),
+                authorization: test_authorization(bad_id, "repository.create"),
             }))
             .await
             .expect_err(&format!("expected INVALID_ARGUMENT for {bad_id:?}"));

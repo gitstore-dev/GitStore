@@ -57,6 +57,29 @@ message ResourceBlob {
 message ResourceValidationTree {
   repeated ResourceBlob old_blobs = 1;
   repeated ResourceBlob proposed_blobs = 2;
+  ReceiveRef ref = 3;
+}
+
+// Only the authenticated Git service forwards these verified identity facts.
+// No bearer token, role name, or unverified Git author metadata is accepted.
+message CallbackActor {
+  string subject = 1;
+  repeated string groups = 2;
+  string auth_method = 3;
+  string service_account_uid = 4;
+}
+
+message ReceiveRef {
+  string ref_name = 1;
+  string old_commit_sha = 2;
+  string new_commit_sha = 3;
+}
+
+message CallbackAuthorization {
+  string repository_id = 1;
+  string receive_id = 2;
+  CallbackActor actor = 3;
+  repeated ReceiveRef refs = 4;
 }
 
 // ValidationError is a single field-level violation returned by ValidateResources.
@@ -86,6 +109,7 @@ message ValidateResourcesRequest {
 
   // trees is the receive-aware representation used by all callers.
   repeated ResourceValidationTree trees = 2;
+  CallbackAuthorization authorization = 3;
 }
 
 // ValidateResourcesResponse carries the aggregate validation outcome.
@@ -106,6 +130,7 @@ message ValidateResourcesResponse {
 message ValidateResourceDeletionsRequest {
   string repository_id = 15;
   repeated ResourceValidationTree trees = 1;
+  CallbackAuthorization authorization = 2;
 }
 
 // ValidateResourceDeletionsResponse is a stable, non-sensitive precondition
@@ -140,9 +165,9 @@ message AdmitResourcesRequest {
   // changed resource set by comparing old_commit_sha and new_commit_sha.
   repeated string changed_paths = 5;
 
-  // actor_subject is the authenticated principal that performed the push.
-  // It contains only the stable subject identifier, never raw credentials.
-  string actor_subject = 6;
+  reserved 6;
+  reserved "actor_subject";
+  CallbackAuthorization authorization = 7;
 }
 
 // AdmitResourcesResponse is intentionally empty.

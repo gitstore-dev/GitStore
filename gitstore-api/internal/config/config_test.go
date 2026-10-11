@@ -1208,6 +1208,8 @@ func TestLoad_RejectsLegacyConfigKeysViaEnv(t *testing.T) {
 		{"auth_grpc_hmac_secret_renamed", "GITSTORE_AUTH__GRPC__HMAC_SECRET", "x", "grpc_auth.hmac_secret"},
 		{"watch_namespace_bucket_size_removed", "GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE", "4096", "fixed at 4096"},
 		{"watch_namespace_readers_enabled_removed", "GITSTORE_WATCH__NAMESPACE__READERS_ENABLED", "false", "always on"},
+		{"serviceaccount_namespace_removed", "GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE", "controllers", "cluster-scoped"},
+		{"empty_serviceaccount_namespace_removed", "GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE", "", "cluster-scoped"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -28,7 +28,7 @@ func TestPrivateKeyTokenSignerEd25519ClaimsAndSignature(t *testing.T) {
 	signer, privateKeyPEM := newSigner(t, privateKey)
 
 	before := time.Now().UTC()
-	token, err := signer.SignAssertion(context.Background(), "controllers", "manager", assertionSigningLifetime, "gitstore-api/serviceaccount-token")
+	token, err := signer.SignAssertion(context.Background(), "manager", assertionSigningLifetime, "gitstore-api/serviceaccount-token")
 	after := time.Now().UTC()
 	if err != nil {
 		t.Fatalf("SignAssertion() error: %v", err)
@@ -37,7 +37,7 @@ func TestPrivateKeyTokenSignerEd25519ClaimsAndSignature(t *testing.T) {
 	if assertion.Header.Algorithm != "EdDSA" || assertion.Header.KeyID != "key-1" || assertion.Header.Type != assertionTokenType {
 		t.Errorf("header = %+v", assertion.Header)
 	}
-	if assertion.Claims.Issuer != "serviceaccount:controllers:manager" ||
+	if assertion.Claims.Issuer != "system:serviceaccount:manager" ||
 		assertion.Claims.Subject != assertion.Claims.Issuer ||
 		assertion.Claims.ServiceAccountUID != "sa-uid-1" {
 		t.Errorf("claims identity = %+v", assertion.Claims)
@@ -72,7 +72,7 @@ func TestPrivateKeyTokenSignerECDSAP256ClaimsAndSignature(t *testing.T) {
 	}
 	signer, _ := newSigner(t, privateKey)
 
-	token, err := signer.SignAssertion(context.Background(), "controllers", "manager", 30*time.Second, "gitstore-api/serviceaccount-token")
+	token, err := signer.SignAssertion(context.Background(), "manager", 30*time.Second, "gitstore-api/serviceaccount-token")
 	if err != nil {
 		t.Fatalf("SignAssertion() error: %v", err)
 	}
@@ -120,19 +120,18 @@ func TestPrivateKeyTokenSignerRejectsInvalidKeysAndAssertionInputs(t *testing.T)
 	signer, _ := newSigner(t, edPrivateKey)
 	for _, tt := range []struct {
 		name      string
-		namespace string
 		nameValue string
 		ttl       time.Duration
 		audience  string
 	}{
-		{name: "missing namespace", nameValue: "manager", ttl: time.Minute, audience: "aud"},
-		{name: "missing name", namespace: "controllers", ttl: time.Minute, audience: "aud"},
-		{name: "missing audience", namespace: "controllers", nameValue: "manager", ttl: time.Minute},
-		{name: "zero ttl", namespace: "controllers", nameValue: "manager", audience: "aud"},
-		{name: "long ttl", namespace: "controllers", nameValue: "manager", ttl: time.Minute + time.Second, audience: "aud"},
+		{name: "legacy subject as name", nameValue: "controllers:manager", ttl: time.Minute, audience: "aud"},
+		{name: "missing name", ttl: time.Minute, audience: "aud"},
+		{name: "missing audience", nameValue: "manager", ttl: time.Minute},
+		{name: "zero ttl", nameValue: "manager", audience: "aud"},
+		{name: "long ttl", nameValue: "manager", ttl: time.Minute + time.Second, audience: "aud"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := signer.SignAssertion(context.Background(), tt.namespace, tt.nameValue, tt.ttl, tt.audience); err == nil {
+			if _, err := signer.SignAssertion(context.Background(), tt.nameValue, tt.ttl, tt.audience); err == nil {
 				t.Fatal("SignAssertion() error = nil")
 			}
 		})

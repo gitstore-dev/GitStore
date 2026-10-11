@@ -79,8 +79,6 @@ services:
       - enroll-serviceaccount
       - --api-url
       - http://api:4000/graphql
-      - --namespace
-      - controllers
       - --name
       - gitstore-controller-manager
       - --key-id

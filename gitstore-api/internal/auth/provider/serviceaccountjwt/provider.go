@@ -38,7 +38,7 @@ const (
 // deliberately not the full datastore.Datastore interface, so this package
 // depends only on the one read path it actually uses.
 type ServiceAccountLookup interface {
-	GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*datastore.ServiceAccount, error)
+	GetServiceAccountBySubject(ctx context.Context, name string) (*datastore.ServiceAccount, error)
 }
 
 // accessTokenClaims carries the private sa_uid claim documented in
@@ -142,7 +142,8 @@ func (p *Provider) Authenticate(ctx context.Context, req auth.AuthRequest) (*aut
 	if _, _, err := jwt.NewParser().ParseUnverified(bearer, &peek); err != nil {
 		return nil, auth.Challenge(providerName, "jwt parse failed: "+err.Error()), nil
 	}
-	if peek.Issuer != p.issuer || !strings.HasPrefix(peek.Subject, "serviceaccount:") {
+	_, serviceAccountSubject := datastore.ParseServiceAccountSubject(peek.Subject)
+	if peek.Issuer != p.issuer || !serviceAccountSubject {
 		return nil, auth.Challenge(providerName, "not a service account token"), nil
 	}
 
@@ -171,11 +172,11 @@ func (p *Provider) Authenticate(ctx context.Context, req auth.AuthRequest) (*aut
 
 	// Step 5: look up the ServiceAccount by subject; disabled/deleted/UID
 	// mismatch are all authoritative, persistent denial conditions.
-	namespace, name, ok := datastore.ParseServiceAccountSubject(claims.Subject)
+	name, ok := datastore.ParseServiceAccountSubject(claims.Subject)
 	if !ok {
 		return nil, auth.Deny(providerName, "subject is not a serviceaccount identifier"), nil
 	}
-	sa, err := p.lookup.GetServiceAccountBySubject(ctx, namespace, name)
+	sa, err := p.lookup.GetServiceAccountBySubject(ctx, name)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
 			return nil, auth.Deny(providerName, "service account not found"), nil
@@ -197,9 +198,9 @@ func (p *Provider) Authenticate(ctx context.Context, req auth.AuthRequest) (*aut
 	}
 
 	principal := &auth.Principal{
-		Subject:           claims.Subject,
-		Issuer:            claims.Issuer,
-		Roles:             nil, // roles are resolved exclusively by rbac-local's role_bindings (FR-011) — never embedded here
+		Subject: claims.Subject,
+		Issuer:  claims.Issuer,
+
 		AuthMethod:        providerName,
 		TokenID:           claims.ID,
 		ServiceAccountUID: sa.UID,
@@ -271,7 +272,7 @@ func (p *Provider) IssueAccessToken(sa *datastore.ServiceAccount, audience strin
 	claims := accessTokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    p.issuer,
-			Subject:   datastore.ServiceAccountSubject(sa.Namespace, sa.Name),
+			Subject:   datastore.ServiceAccountSubject(sa.Name),
 			Audience:  jwt.ClaimStrings{audience},
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),

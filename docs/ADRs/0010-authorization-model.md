@@ -1,514 +1,280 @@
-# ADR 0010: Authorization Model — Scope Tiers, Canonical Verbs, and Capability Qualifiers
+# ADR 0010: Authorization Model — Canonical Actions, Scope and Conditions
 
-**Status**: Proposed
+**Status**: Accepted (2026-10-11)
 
 **Date**: 2026-09-24
 
-**Audience**: GitStore API, controller, git-service, IAM/policy, and deployment authors.
+**Audience**: API, controller, Git service, policy and deployment authors.
 
 ## Context
 
-GitStore's `AuthZProvider.Authorize(ctx, principal, action, ResourceContext)` contract
-([ADR-referenced doc 020](../implementation/020-pluggable_auth_architecture.md)) is stable, and
-the OPA data-authorization design ([doc 022](../implementation/022-opa-data-authorization.md))
-fixes the production engine and the `PUBLIC`/`MANAGEMENT` decision-scope semantics. What was never
-pinned down is the **action-string vocabulary itself** — the set of `action` values middleware
-passes to `Authorize`. As a result the vocabulary drifted:
+The original vocabulary mixed ownership decisions into `.own`/`.any`,
+used both `category` and `categoryTaxonomy`, and conflated metadata reads
+with Git contents access. Callers selected permissions after comparing owners,
+preventing a pluggable authorizer from making the complete decision.
 
-- **`.own`/`.any` suffixes** (`namespace.delete.own`, `repository.read.any`) bake an ownership
-  *decision* into the verb. The caller pre-computes ownership (`ns.OwnerUsername != principal.Subject`)
-  and selects the action string, so the authorizer can no longer make that decision — even though
-  `ResourceContext.OwnerSub` already carries the fact needed to make it.
-- **Two slugs for one resource** — `category.*` in the live policy vs `categoryTaxonomy.*` in code.
-- **Inconsistent repository verbs** — `repository.write`, `repository.read`, `repository.read.any`,
-  `repository.create.own`, `repository.rename.own`, `repository.transfer.own` mix CRUD, git-content,
-  and ownership concerns with no closed set.
-- **No `list` or `watch` verbs** despite both being distinct control-plane operations.
-- **Cluster-scoped subjects and cluster-scoped resources** had no model: role bindings were keyed by
-  subject only, with cluster reach expressed implicitly through `.any`.
-
-This ADR defines one canonical authorization vocabulary and scope model for the seven core resources
-plus `serviceAccount`, reconciled with the frozen contracts in 020 and 022. It is **design-only**;
-implementation (policy loader, evaluator, `ResourceContext` consumption) is deferred to a feature spec.
+**Amendment (2026-10-11, spec 064):** The implementation adopts the strict,
+allow-only model below, replacing the draft's deny precedence, expression
+strings, namespaced ServiceAccounts and compatibility shim. Acceptance is
+prepared in the implementing change; the date is the status-flip date because
+its merge date is not yet known (README dating rule 3). Remaining capacity and
+deployed fault evidence is tracked in [#451](https://github.com/gitstore-dev/GitStore/issues/451).
+Architectural acceptance is not capacity acceptance. `rbac-local` remains
+development/evaluation-only.
 
 ## Decision
 
-### The core relationship: Subject · Group · Role · Permission
+### 1. Preserve the provider contract
 
-The model has four nouns and one edge:
+`AuthZProvider.Authorize(ctx, principal, action, ResourceContext)` and
+`ResourceContext{Kind, Name, OwnerSub, Attrs}` are unchanged. Callers supply
+authoritative facts; providers decide access. Principals carry trusted
+subject/groups, not roles or `IsAdmin`. Role names belong to policy, never
+token or signed-wire authority.
 
-- **Subject** — an authenticated principal identity: a `User`, a `ServiceAccount`, or a system
-  identity. It is `principal.subject` on the `Principal`.
-- **Group** — a named collection of subjects. Membership is asserted by the IdP/UserDir and arrives as
-  `principal.groups`; GitStore persists *bindings*, never membership lists
-  ([022 §8](../implementation/022-opa-data-authorization.md)).
-- **Permission** — a single `<kind>[.<subresource>].<verb>` capability, with no qualifier position
-  (§2/§5). It is exactly the `action` string passed to `Authorize`.
-- **Role** (`Role` / `ClusterRole`) — a named set of **rules**; each rule grants a set of permissions,
-  computed as `resources × verbs`, optionally narrowed by `resourceNames` (instance grants, §7) and/or
-  a `when` condition (ownership/visibility/tier, §4/§8/§9).
-- **Binding** (`RoleBinding` / `ClusterRoleBinding`) — the single edge that grants a Role's permissions
-  to **Subjects and/or Groups**, at a tier (cluster, or one namespace).
+### 2. Canonical grammar and finite catalog
 
-```
-Subject ─┐                                   ┌─(resources × verbs)
-         ├─(RoleBinding / ClusterRoleBinding)─► Role ─(rules grant)─► Permission (= action)
-Group  ──┘   binds subjects+groups to a role       [± resourceNames, ± when]
-```
+Actions are `<kind>[.<subresource>].<verb>`; the last component is always the
+verb. Canonical camelCase kinds include `namespace`, `repository`,
+`categoryTaxonomy`, `product`, `productVariant`, `collection`, `file`
+and `serviceAccount`. Use the same kind in `ResourceContext.Kind`.
 
-`Authorize(subject, action, resource)` allows iff some Role bound — via a `RoleBinding` in the
-resource's namespace or a `ClusterRoleBinding` — to the subject **or to one of its groups** contains a
-rule whose `(resources, verbs, resourceNames, when)` matches `(action, resource)`, and no rule denies.
-Groups are the indirection: a subject inherits every permission of every role bound to any group it
-belongs to. There is no role→role or group→group nesting (§6).
+The authoritative catalog is `shared/schemas/authorization-actions.json`; generated
+Go/Rust consumers and `make generate TARGET=authz` prevent separate vocabularies.
+Every exact resource/verb pair must be registered. Reserved actions do not
+create endpoints or watches. Wildcards expand over the finite catalog at load;
+they never authorize unknown runtime actions.
 
-*Worked example (scenario):* principal `bob`, member of group `system:group:merchandiser`, in
-namespace `acme-store`. A `RoleBinding` binds the `merchandiser` role to that group; `merchandiser`
-grants `product.*`. So `Authorize(bob, "product.read", {kind: product, namespace: acme-store})` → allow
-through his group, even though `bob` has no direct binding.
+| Action | Policy resource | Verb |
+| --- | --- | --- |
+| `repository.contents.read` | `repository/contents` | `read` |
+| `namespace.status.write` | `namespace/status` | `write` |
+| `product.management.read` | `product/management` | `read` |
+| `product.purge` | `product` | `purge` |
+| `serviceAccount.token.issue` | `serviceAccount/token` | `issue` |
 
-### 1. The frozen contract is preserved
+### 3. Distinct operations require distinct grants
 
-`AuthZProvider.Authorize(ctx, principal, action, res ResourceContext)` and
-`ResourceContext{Kind, Name, OwnerSub, Attrs}` do **not** change. Everything below is expressed in
-terms of the existing `action string` argument and the existing `ResourceContext` fields. The
-vocabulary change is a **v2 action grammar carried under `apiVersion: rbac.authorization.gitstore.dev/v1beta1`**,
-not a signature change.
+Control-plane verbs are `create`, `read`, `list`, `watch`, `update`,
+`delete`. Cataloged domain/subresource verbs include `transfer`, `purge`,
+`status.write`, `contents.read/write`, `token.issue`, `key.rotate` and
+`namespace.system-repository.provision`. Read does not grant list/watch or
+contents access; status writes do not grant final removal.
 
-### 2. Canonical action grammar
+### 4. Ownership is a provider-evaluated fact
 
-Every action string has **at most two dot-segments after `<kind>`, and the last one is always the
-verb** — there is no third, qualifier-shaped segment:
+There are no `.own`/`.any` actions. Scope comes from bindings and instance
+restrictions; ownership comes from `when: [owner]`. The provider matches
+nonempty `OwnerSub` against the trusted subject/groups. Callers must not
+compare owners to select a permission or bypass `Authorize`.
+Concurrency comparisons against an authorized snapshot remain necessary;
+conflicts require reloading and reauthorizing current facts.
 
-```
-<kind>[.<subresource>].<verb>
-```
+### 5. Management and purge are independent capabilities
 
-- `<kind>` is the resource slug (camelCase, singular): `namespace`, `repository`, `categoryTaxonomy`,
-  `product`, `productVariant`, `collection`, `file`, `serviceAccount`.
-- `<subresource>` is an optional named subresource (`status`, `contents`, `token`, `key`,
-  `management` — §5).
-- `<verb>` is a control-plane verb or a subresource-natural verb (§3). There is no qualifier position:
-  what a third `.<qualifier>` segment previously expressed (`read.management`, `delete.complete`) is
-  now either a subresource or its own verb (§5).
+`product.management.read/list` and `productVariant.management.read/list`
+are independently sufficient grants, not a second grant after ordinary
+read/list. No role-name shortcut is allowed. Spec 064 retains the single
+GraphQL endpoint and existing filtering; it does not add the proposed
+Admin/Storefront split, visibility fields or ADR 0012 publication semantics.
 
-This is what makes the grammar unambiguous to parse without a vocabulary lookup: previously, a
-two-token suffix after `<kind>` (`X.T1.T2`) could mean either `(subresource, verb)`
-(`repository.contents.read`) or `(verb, qualifier)` (`product.read.management`) — indistinguishable
-positionally. With qualifiers retired, a two-token suffix means `(subresource, verb)` unconditionally;
-the last segment is always the verb, full stop. The action string itself is unchanged from what
-shipped code already emits (`config/policy.yaml`'s `repository.contents.read`,
-`serviceaccount.token.issue`); only the policy-rule *projection* splits `<kind>.<subresource>` into a
-`/`-joined `resources:` path, exactly as before:
+Every existing completion mutation needs its own purge action:
+`namespace.purge`, `repository.purge`, `categoryTaxonomy.purge`,
+`product.purge`. Delete/status grants are insufficient. Finalizers, UID and
+resource-version guards remain independent requirements.
 
-| Action string                | Policy rule                                                 |
-|------------------------------|-------------------------------------------------------------|
-| `repository.contents.read`   | `{ resources: ["repository/contents"], verbs: ["read"] }`   |
-| `namespace.status.write`     | `{ resources: ["namespace/status"], verbs: ["write"] }`     |
-| `product.management.read`    | `{ resources: ["product/management"], verbs: ["read"] }`    |
-| `product.purge`              | `{ resources: ["product"], verbs: ["purge"] }`              |
-| `serviceAccount.token.issue` | `{ resources: ["serviceAccount/token"], verbs: ["issue"] }` |
+### 6. Two scope tiers; allow-only union
 
-### 3. Verbs
+`ClusterRoleBinding` reaches cluster and namespaced resources. A
+`RoleBinding` requires a namespace and may reference `Role` or
+`ClusterRole`, confined to that namespace. Role definitions have no namespace.
+Cluster-scoped kinds (`namespace`, `serviceAccount`) require cluster bindings;
+scope comes from the catalog, not the presence of a namespace attribute.
 
-**Control-plane verbs (closed set):** `create · read · list · watch · update · delete`. `list` and
-`watch` are first-class and distinct from `read` (a single-object read). Canonical CRUD is retained
-rather than `read`/`write` because the newer domain docs already depend on a richer verb space
-(§below) and `create`/`delete` carry lifecycle meaning `write` cannot.
+A binding matches the structured principal subject or a trusted group. Access
+requires one rule satisfying action, scope, instance and every condition.
+Rules/bindings form an allow-only union; unmatched requests are denied.
+There are no deny entries, role inheritance or nested groups. Separate rules
+cannot contribute separate conditions to construct a grant.
 
-**Subresource-natural verbs:** subresources are not restricted to the control-plane set; they carry
-the verb natural to the subresource — `status.write`, `contents.read`, `contents.write`,
-`token.issue`, `key.rotate`, `management.read`, `management.list` (§5).
+### 7. Instance grants belong to rules
 
-**Hard-delete verbs:** a resource kind may define its own, more destructive verb alongside `delete`
-(e.g. `purge` for product — §5), rather than expressing it as a qualifier on `delete`.
+`resourceNames` restricts a rule to exact names; omitted/empty means all
+instances within binding scope. List/watch requests have no instance name and
+cannot use instance-only grants. Bindings carry structured
+`roleRef: {kind: Role | ClusterRole, name: ...}` and
+`subjects: [{kind: User | Group | ServiceAccount, name: ...}]`.
 
-**Domain verbs (non-CRUD):** the grammar accommodates the workflow/publication domain verbs already
-defined in [doc 037](../implementation/037-custom-commerce-workflows.md) and
-[publication-lifecycle](../products/publication-lifecycle.md) —
-`workflow.definition.manage`, `workflow.release.approve`, `workflow.execution.transition`,
-`workflow.bundle.install`, `workflow.action.<capability>`, `catalogRelease.create`,
-`publication.create`, `publication.read` — and the IAM-administration verb `iam.manage`. These are
-`<kind>.<verb>` (or `<kind>.<subverb>.<verb>`) values under the same grammar; no special case.
+### 8. Structured conditions and denial presentation
 
-**Canonical vocabulary for the seven core resources + `serviceAccount`:**
-
-| Kind               | Control-plane verbs                  | Subresources                                         | Other verbs / conditions                  |
-|--------------------|--------------------------------------|------------------------------------------------------|-------------------------------------------|
-| `namespace`        | create·read·list·watch·update·delete | `status.write`                                       | `create` gated on `attrs.tier` (org/user) |
-| `repository`       | create·read·list·watch·update·delete | `status.write`, `contents.read`, `contents.write`    | —                                         |
-| `categoryTaxonomy` | create·read·list·watch·update·delete | `status.write`                                       | —                                         |
-| `product`          | create·read·list·watch·update·delete | `status.write`, `management.read`, `management.list` | `purge` (hard delete, §5)                 |
-| `productVariant`   | create·read·list·watch·update·delete | `status.write`, `management.read`, `management.list` | —                                         |
-| `collection`       | create·read·list·watch·update·delete | `status.write`                                       | —                                         |
-| `file`             | create·read·list·watch·update·delete | `status.write`                                       | —                                         |
-| `serviceAccount`   | create·read·list·update·delete       | `token.issue`, `key.rotate`                          | —                                         |
-
-`categoryTaxonomy` is the **single** slug; `category.*` is retired.
-
-### 4. `.own`/`.any` are removed; scope and ownership are orthogonal binding-level axes
-
-The `.own`/`.any` suffixes are eliminated. What they conflated splits into two independent axes
-evaluated by the authorizer, never by the caller:
-
-- **Scope** — expressed by *which tier the binding lives in* and, for a single instance, by
-  `resourceNames` on the rule:
-  - **cluster** — a `ClusterRoleBinding`; reaches every namespace (the former `.any`).
-  - **namespace** — a `RoleBinding` in one namespace; reaches only that namespace.
-  - **instance** — a rule carrying `resourceNames`; reaches only the named objects (§7).
-- **Ownership** — a rule condition `when: owner`, which the authorizer evaluates by comparing
-  `{principal.subject} ∪ principal.groups` against `ResourceContext.OwnerSub` (the former `.own`).
-
-So `namespace.delete.own` becomes the action `namespace.delete` granted by a role whose rule has
-`when: owner`; `namespace.delete.any` becomes `namespace.delete` granted by a `ClusterRoleBinding`.
-Verbs stay pure.
-
-### 5. No qualifiers: a `management` subresource, and hard-delete as its own verb
-
-Earlier drafts of this ADR expressed two different things as a third `.<qualifier>` verb segment.
-Neither is actually a qualifier on the base verb, and both are retired in favor of mechanisms the
-grammar already has:
-
-- **The catalog management-scope entitlement is a subresource, not a verb qualifier.** Reading or
-  listing non-public rows is a distinct *view* of the resource — exactly what `contents` already is
-  for `repository`, or `status` for every kind. So `product.read.management` /
-  `product.list.management` become `product.management.read` / `product.management.list`: the
-  `management` subresource, with `read`/`list` as its natural verbs. This preserves independent
-  grantability — a role can hold `product.management.list` without `product.management.read`, exactly
-  as `product.list.management` and `product.read.management` were independently grantable before
-  (needed by the [022 §9](../implementation/022-opa-data-authorization.md) controller case: product
-  counts including unpublished products, without per-product management reads).
-- **`delete.complete` was never a modifier on `delete` — it is a distinct, more destructive verb.** It
-  becomes its own control-plane-adjacent verb, `purge` (e.g. `product.purge`), granted independently
-  of `product.delete`. A rule granting `delete` does not imply `purge`, and vice versa.
-
-Per [doc 022](../implementation/022-opa-data-authorization.md), `PUBLIC` vs `MANAGEMENT`
-(`catalog.visibility` / `DecisionScope`) is an **output of authorization consumed by the resolver**,
-never a policy input. `product.management.read`/`product.management.list` are the entitlements whose
-presence causes the authorizer to *emit* `MANAGEMENT` for that request; a resource never carries a
-"management" flag that policy reads. Modeling the entitlement as a subresource rather than a verb
-qualifier changes nothing about that output contract — it only changes how the grant is spelled.
-
-> **Amended by [ADR 0012](0012-admin-storefront-graphql-endpoints.md) §3.** The grammar is
-> unchanged, but the scope is no longer emitted per request: the endpoint selects which action is
-> checked. The **Storefront API** checks `product.read`/`product.list` (and the `productVariant`
-> equivalents) and reads `PUBLIC` publication snapshots. The **Admin API** checks
-> `product.management.read`/`product.management.list` and reads `MANAGEMENT` current rows. Because
-> the Admin API's `Product` type is guarded by `product.management.read`, every built-in authoring
-> role (for example `merchandiser` in §10) includes the `product/management` subresource, so an
-> author can always read the drafts they create.
-
-### 6. Two scope tiers
-
-Authorization has a **cluster tier** above the existing namespace IAM boundary:
-
-| Tier      | Role kind     | Binding kind         | Reach                                                                                         |
-|-----------|---------------|----------------------|-----------------------------------------------------------------------------------------------|
-| Cluster   | `ClusterRole` | `ClusterRoleBinding` | all namespaces + cluster-scoped resources (`namespace`, `serviceAccount`)                     |
-| Namespace | `Role`        | `RoleBinding`        | one namespace (the IAM boundary of [022 §8](../implementation/022-opa-data-authorization.md)) |
-
-Cluster-scoped resources (`namespace`, `serviceAccount`) can only be governed by the cluster tier.
-Namespaced resources may be governed by either tier. A namespaced `RoleBinding` may reference a
-`ClusterRole` — reuse the permission bundle, confine its reach to one namespace (the binding decides
-the blast radius, the role stays scope-agnostic). Consistent with
-[022 §8.3](../implementation/022-opa-data-authorization.md), there is **no role inheritance and no
-nested groups** in v1beta1; a subject's effective permissions are the flat union of its bound cluster
-and namespace rules, minus explicit denies.
-
-**Scope resolution (evaluator rule).** The evaluator derives the request scope from the resource — no
-namespace attribute means a cluster-scoped kind:
-
-```
-scope := "cluster"  if ResourceContext has no namespace attr  else  Attrs["namespace"]
-
-allow  iff  ∃ binding B, role R:
-  subjectOf(B) ∈ {principal.subject} ∪ principal.groups      # the group edge (see relationship model)
-  AND (B is a ClusterRoleBinding  OR  B.namespace == scope)   # binding scope covers the resource
-  AND R ∈ B.roleRef  AND R has a rule allowing the action     # ± resourceNames / when
-  AND no matching (B,R) denies the action                     # deny wins globally (§11)
-```
-
-Groups are the indirection: membership arrives on `principal.groups`, and a binding to a group grants
-every member. For cluster-scoped kinds only `ClusterRoleBinding`s apply; for namespaced kinds both a
-matching namespaced `RoleBinding` and any `ClusterRoleBinding` apply.
-
-### 7. Instance-level grants live on the rule
-
-A subject granted access to specific instances (e.g. the `catalog` and `spring-sale` repositories, but
-not all repositories) is expressed by `resourceNames` **on the rule**, not on the binding:
+`when` is an AND-list of `owner`, `targetOwnerMember`, or comparisons:
 
 ```yaml
-- resources: ["repository", "repository/contents"]
-  verbs: ["read"]
-  resourceNames: ["catalog", "spring-sale"]   # empty/absent ⇒ all instances of the kind
+when:
+  - {attr: visibility, op: eq, value: public}
 ```
 
-Bindings carry only `roleRef` + `subjects`; `resourceNames` is never duplicated onto the binding.
-Both are **structured** (K8s-faithful): `roleRef: { kind: Role | ClusterRole, name: <role> }` and
-`subjects: [{ kind: User | Group | ServiceAccount, name: <id> }]`. `roleRef.kind` is load-bearing — a
-`RoleBinding` may reference a `ClusterRole` to grant that cluster role's rules *within one namespace*.
-`subjects[].kind` disambiguates the principal type in place of prefix strings; reserved system
-identities are groups — `{ kind: Group, name: "system:masters" }`,
-`{ kind: Group, name: "system:authenticated" }`. This is the rbac-local precursor to the relationship
-tuples a future ReBAC/OpenFGA provider would use.
+Allowed attributes are `namespace`, `tier`, `visibility`. Operators
+`eq`/`neq` require a string `value`; `in`/`notIn` require a bounded
+nonempty string `values` list. Missing/wrong-type facts fail every comparison,
+including negative ones. No arbitrary expression evaluator or per-decision
+external lookup is added.
 
-### 8. Visibility bands are ABAC conditions, fail-closed
+For denied single-resource reads (including contents), a present non-public
+string visibility yields `NOT_FOUND`; absent, public or wrong-type visibility
+yields `FORBIDDEN`. This uses resource facts, never provider reason text.
+Lists/watches preserve existing behavior.
 
-Resource visibility (`private` / `internal` / `public`) is an ABAC condition on the rule, read from
-`ResourceContext.Attrs`:
+### 9. Tier policy and immutable namespace invariants
 
-```yaml
-- resources: ["repository"]
-  verbs: ["read", "contents.read"]
-  when: "attrs.visibility == 'public'"
-```
+Tier grants use `namespace.create` with a structured comparison, not a
+special action. The shipped creator role grants USER; organization creation
+requires a separate grant. USER namespace names equal their User owner's
+normalized username; self-service creation names the caller. Group/SA ownership,
+USER transfer/rename and any tier change are rejected even for cluster-admin
+or masters. GraphQL and Git preflight/apply enforce these invariants.
+Fresh bootstrap creates `default` as ORGANIZATION; no old-row repair is added.
 
-Denial of a read on a non-visible resource **fails closed to `NOT_FOUND`**, not `FORBIDDEN`, to
-preserve the enumeration protection of [022 §13](../implementation/022-opa-data-authorization.md).
-
-For Product and ProductVariant, visibility bands apply to the **Storefront API**'s `product.read`/
-`product.list` checks ([ADR 0012](0012-admin-storefront-graphql-endpoints.md) §3), for example via
-`public-reader`. The Admin API's `management` checks are not band-gated.
-
-### 9. Tier gating is an ABAC condition
-
-Namespace creation gated on tier (`ORGANIZATION` vs `USER`) is `namespace.create` with a rule
-condition on `attrs.tier`, replacing the `namespace.create.organization` action-string variant:
-
-```yaml
-- resources: ["namespace"]
-  verbs: ["create"]
-  when: "attrs.tier == 'USER'"
-```
-
-### 10. Policy document shape (`rbac-local`, dev/eval only)
-
-`clusterRoles` and `roles` are **maps keyed by role name** whose value is a rule-set; a role definition
-carries no namespace of its own — the *binding* that references it decides the namespace of the grant.
-Every element required by this ADR appears below: subresource paths (`repository/contents`,
-`product/status`, `product/management`), the hard-delete verb (`purge`), visibility bands and
-ownership as `when` conditions, instance grants via `resourceNames`, prefixed subjects, and structured
-`roleRef`/`subjects`.
+### 10. Strict v1beta1 policy and built-ins
 
 ```yaml
 apiVersion: rbac.authorization.gitstore.dev/v1beta1
 kind: RbacLocalConfiguration
-
+defaultDeny: true
 clusterRoles:
-  public-reader:                                   # visibility band: public
+  public-reader:
     rules:
-      - resources: ["repository/contents"]         # subresource path
-        verbs: ["read"]
-        when: 'attrs.visibility == "public"'       # ABAC condition (§8)
-  controller:
+      - resources: [repository/contents]
+        verbs: [read]
+        when: [{attr: visibility, op: eq, value: public}]
+  controller-token:
     rules:
-      - resources: ["repository", "product", "categoryTaxonomy", "namespace"]
-        verbs: ["create", "read", "list", "watch"]
-      - resources: ["product/status", "namespace/status", "repository/status"]
-        verbs: ["update"]                          # status subresource ⇒ *.status.write action
-      - resources: ["product/management"]          # management subresource, not a verb qualifier (§5)
-        verbs: ["read", "list"]
-      - resources: ["product"]
-        verbs: ["purge"]                            # hard-delete verb, independent of "delete" (§5)
-
-roles:                                             # namespaced rule-sets; namespace comes from binding
-  merchandiser:
+      - resources: [serviceAccount/token]
+        verbs: [issue]
+        resourceNames: [gitstore-controller-manager]
+roles:
+  catalog-reader:
     rules:
-      - resources: ["product", "productVariant", "collection"]
-        verbs: ["create", "read", "list", "update", "delete"]
-      - resources: ["product/management", "productVariant/management"]  # read own drafts on the Admin API (ADR 0012 §3)
-        verbs: ["read", "list"]
-  internal-reader:
-    rules:
-      - resources: ["repository/contents"]
-        verbs: ["read"]
-        when: 'attrs.visibility == "internal"'     # visibility band: internal
-  catalog-spring-sale-reader:
-    rules:
-      - resources: ["repository/contents"]
-        resourceNames: ["catalog", "spring-sale"]  # instance-level grant (§7)
-        verbs: ["read"]
-  namespace-owner:
-    rules:
-      - resources: ["namespace"]
-        verbs: ["read", "update", "delete"]
-        when: owner                                # ownership condition (§4)
-
+      - resources: [repository/contents]
+        verbs: [read]
+        resourceNames: [catalog]
 clusterRoleBindings:
-  - roleRef: { kind: ClusterRole, name: public-reader }
-    subjects: [ { kind: Group, name: "system:unauthenticated" } ]
-  - roleRef: { kind: ClusterRole, name: controller }
-    subjects: [ { kind: ServiceAccount, name: "system:serviceaccount:controllers:gitstore-controller-manager" } ]
-
+  - roleRef: {kind: ClusterRole, name: public-reader}
+    subjects: [{kind: Group, name: 'system:unauthenticated'}]
+  - roleRef: {kind: ClusterRole, name: controller-token}
+    subjects: [{kind: ServiceAccount, name: gitstore-controller-manager}]
 roleBindings:
   - namespace: acme-store
-    roleRef: { kind: Role, name: internal-reader }
-    subjects: [ { kind: Group, name: "system:authenticated" } ]
-  - namespace: acme-store
-    roleRef: { kind: Role, name: catalog-spring-sale-reader }
-    subjects: [ { kind: User, name: "bob" } ]
-  - namespace: acme-store
-    roleRef: { kind: Role, name: merchandiser }
-    subjects: [ { kind: Group, name: "system:group:merchandiser" } ]
-
-defaultDeny: true
+    roleRef: {kind: Role, name: catalog-reader}
+    subjects: [{kind: Group, name: 'system:group:merchandiser'}]
 ```
 
-> The catalog MANAGEMENT-scope entitlement is the `management` subresource's `read`/`list` verbs — it
-> names the `DecisionScope` it yields (§5). `purge` is the separate hard-delete verb, granted
-> independently of `delete`.
+This illustrative policy is not the full controller role. The complete shipped
+`config/policy.yaml` defines `cluster-admin`, reusable `admin/edit/view`,
+`namespace-owner`, `namespace-creator`, `controller`, instance-only
+`controller-token`, narrow `system:api-internal` and conditional
+`public-reader`. The local admin has a cluster-admin binding, not masters
+membership. The controller receives its actual list/watch/status/provision/purge
+inventory, not broad wildcard or SA-management authority. Its token grant
+never replaces proof for the exact enrolled account.
 
-The `rbac.authorization.gitstore.dev` group is **reserved for the subject↔role↔permission plane
-only**. `RbacLocalConfiguration` is dev/eval-only; production authorization is OPA (022).
+Unknown fields/pairs, duplicate YAML keys, aliases, multiple documents, scalar
+coercion, deny syntax, expression strings and `defaultDeny: false` fail loading.
+Every active local user needs a satisfiable grant. CLI edits validate the whole
+candidate before atomic replacement, preserve idempotence and never broaden
+exact action pairs through resources×verbs grouping.
 
-### 11. Evaluation precedence
+### 11. Evaluation and atomic reload
 
-1. explicit **deny** anywhere wins;
-2. `system:masters` short-circuits to allow;
-3. matching **instance** grant (rule with `resourceNames`);
-4. matching **namespace** binding;
-5. matching **cluster** binding;
-6. otherwise **default deny**.
+Validate the registered action, canonical kind, principal and required transfer
+facts first. Trusted `system:masters` may then allow without policy lookup;
+it is not synthesized from roles and cannot bypass domain/AuthN invariants.
+Otherwise require one matching allow rule; default deny.
 
-Rule conditions (`when: owner`, `attrs.visibility`, `attrs.tier`) are evaluated *within* the matching
-rule; a rule whose condition is false does not contribute an allow.
+Policy loading builds bounded immutable indexes; publication is atomic.
+Concurrent decisions see one complete snapshot, never mixed rules.
+Invalid reload retains the previous configuration. Evaluation performs no
+policy file, network or datastore reads. Limits are 4 MiB, 200 roles,
+1,000 bindings, 2,000 rules and 256 principal groups. Logs omit credentials,
+arbitrary attributes and policy contents. Measured latency/soak acceptance
+remains separate work in #451.
 
-### 12. Subjects, groups, and the reserved prefixes
+### 12. Trusted subjects and cluster ServiceAccounts
 
-A binding subject is the structured `{ kind: User | Group | ServiceAccount, name: <id> }` of §7.
-**Human groups are cluster-scoped names whose reach is decided by where they are bound** (K8s-aligned):
-a `RoleBinding` scopes the *grant* to a namespace but does not make the subject namespaced.
-**ServiceAccount identity is intrinsically namespaced**, and so is its implicit SA group. Membership is
-authoritative in the IdP/UserDir and arrives on `principal.groups`; GitStore persists only bindings
-([022 §8](../implementation/022-opa-data-authorization.md)).
+Human subjects cannot assert reserved system identities. Authentication supplies
+exclusive `system:authenticated` or `system:unauthenticated`; verified SAs
+also receive `system:serviceaccounts`. Human groups use `system:group:<name>`.
+Only configured trusted identity sources may supply privileged groups.
+Explicit internal contexts alone may assert `system:api`; a missing caller
+never promotes a request to that identity.
 
-The reserved name prefixes:
+SAs have globally unique names and immutable UIDs. Binding subjects use the
+plain name; authenticated subject/owner encoding is
+`system:serviceaccount:<name>`. Namespace settings/arguments and old
+namespaced subjects are rejected. Tokens/assertions still require current
+authoritative UID/key, audience, expiry, enabled state and replay checks.
+Delete/recreate cannot revive old enrollment. Name/UID uniqueness and updates
+use atomic backend conditions; projections are never independent AuthN authority.
 
-| Prefix / name                                     | Meaning                                      | Reason                                                                                     |
-|---------------------------------------------------|----------------------------------------------|--------------------------------------------------------------------------------------------|
-| `system:group:<name>`                             | cluster-wide group                           | canonical group identifier                                                                 |
-| `system:serviceaccount:<ns>:<name>`               | service-account username                     | K8s-aligned; namespaced                                                                    |
-| `system:serviceaccounts:<ns>`                     | SA group (all SAs in a namespace)            | correctly namespaced, because SA identity is                                               |
-| `system:authenticated` / `system:unauthenticated` | synthesized by AuthN into `principal.groups` | bind cluster roles to these (`kind: Group`)                                                |
-| `system:masters`                                  | root group                                   | evaluator short-circuits to allow before policy lookup (§11), granted via group membership |
+### 13. Breaking alpha baseline; no compatibility layer
 
-A future namespace-local group, if ever needed, is a namespace-qualified *name*
-(`system:group:<namespace>:<name>`) still bound per scope — deferred until a real use case, never a
-`system:groups:<namespace>` enumeration.
+There are no released deployments requiring old policy, wire or SA schema.
+Reject v1 policy, legacy actions, namespaced SA config and bearer-only internal
+RPCs rather than translating. Replace the undeployed SA baseline directly;
+initialize fresh explicitly owned schemas. Never silently reset existing data
+or bypass migration checksums. Historical actor strings remain audit data,
+not accepted new identities.
 
-### 13. Compatibility shim for legacy suffixes
+API→Git and Git→API requests use signed, expiring, audience/method/body-bound
+envelopes with single-use nonces. Callback replay state is shared atomically
+between APIs; singleton Git persists bounded replay state across non-overlapping
+replacement. Verified receive/ref/commit/repository actor facts reach callbacks,
+which recheck live semantic per-kind policy. Post-receive denial is observable,
+not bypassed. Exactly one active Git service is supported.
 
-Under `v1beta1` the loader recognizes legacy action strings for one deprecation window:
+### 14. Creator, owner and transfer
 
-- `X.<verb>.any` → `X.<verb>` granted at the cluster tier;
-- `X.<verb>.own` → `X.<verb>` with an implicit `when: owner` condition;
-- `category.<verb>` → `categoryTaxonomy.<verb>`;
-- `X.read.management` / `X.read.unpublished` → `X.management.read` (§5);
-- `X.list.management` / `X.list.unpublished` → `X.management.list` (§5);
-- `X.delete.complete` → `X.purge` (§5).
+`CreationActor` is immutable audit provenance. Mutable ownership is encoded
+in `metadata.annotations["rbac.authorization.gitstore.dev/owner"]`; absence
+falls back to CreationActor. `OwnerSub` projects the effective owner.
+Structured owner inputs are normalized as facts; no new OwnerRef column is needed.
 
-This reconciles the "existing action strings do not change" guarantee of
-[022 §17](../implementation/022-opa-data-authorization.md): the *contract* (signature, decision
-semantics) is unchanged; the vocabulary migrates behind the compat shim.
+Each matching transfer rule must satisfy the complete formula:
 
-### 14. Ownership assignment and transfer
+```text
+(currentOwnerMatches OR (clusterBinding AND unconditionalRule))
+AND (targetOwnerMember OR unconditionalRule)
+```
 
-`ResourceContext.OwnerSub` is populated today from `CreationActor` — an **immutable audit fact**
-(who admitted the resource), always the individual caller's `principal.subject`. Nothing lets a
-caller assign a group as owner, and conflating "who created this" with "who owns this" blocks
-ownership from ever moving.
+Its action/scope/name/conditions must also match. Separate rules cannot supply
+separate halves. An unconditional namespaced grant cannot override the current
+owner check. Valid `targetOwnerRef` is required even for masters. Removing an
+owner annotation transfers back to the creator and needs transfer authority;
+changing other authored fields also needs update authority. Domain invariants
+and optimistic concurrency remain independent requirements.
 
-**Split creator from owner.** A resource carries two distinct fields:
-
-- `CreationActor` (unchanged) — immutable, set once at admission, audit/history only.
-- `OwnerRef` — mutable, structured `{ kind: User | Group | ServiceAccount, name: <id> }` (the same
-  shape as a binding subject, §12). `ResourceContext.OwnerSub` becomes a projection of
-  `OwnerRef.name`; the `when: owner` condition (§4) is unchanged — it still compares that name against
-  `{principal.subject} ∪ principal.groups`. Defaults to `{kind: User, name: principal.subject}` at
-  creation when the caller does not specify one, preserving today's behavior exactly.
-
-**Assigning ownership at creation** is an optional `ownerRef` input on the create mutation (e.g.
-`createNamespace(input: { ..., ownerRef: { kind: GROUP, name: "merchandiser" } })`).
-
-**Reassigning ownership after creation** is its own action, not folded into `update` — handing a
-resource to a different group is a materially different blast radius than editing a field. It is a
-domain verb per §3's grammar: `<kind>.transfer` (e.g. `namespace.transfer`), carrying the proposed
-owner in `ResourceContext.Attrs["targetOwnerRef"]`. A rule permits it only when **both** hold:
-
-1. the caller currently satisfies the resource's existing `when: owner` condition (you can only give
-   away what you own) — or holds an unconditional cluster-tier grant of `<kind>.transfer`; and
-2. the caller is a member of the target owner (`attrs.targetOwnerRef.name ∈ principal.groups`, or the
-   target is the caller's own subject) — or the caller's grant is unconditional (an admin reassigning
-   on another owner's behalf).
-
-This prevents a caller giving a resource away to a group they have no standing in, while still letting
-cluster-tier admins perform administrative reassignment.
-
-**Forward-compatibility with ReBAC/Zanzibar providers.** `OwnerRef`/`OwnerSub` is an **ABAC seed
-fact**, not a second source of truth for ownership. A Zanzibar-style provider (OpenFGA) does not read
-`ResourceContext.OwnerSub` per request — it maintains its own `(resource, "owner", subject-or-group)`
-relation tuple, written at admission/transfer time, and evaluates `Authorize` entirely against its
-tuple graph. `OwnerRef` is what a write-time sync hook reads to populate that tuple; splitting it from
-`CreationActor` now is what makes that hook straightforward, since a ReBAC "owner" relation is
-inherently mutable/transferable, exactly like `OwnerRef` and unlike the immutable audit field.
-
-The one real risk to that swap is **not** the field split — it's any call site that compares ownership
-directly (`resource.OwnerRef == principal.Subject`) instead of routing through `Authorize`. That
-reintroduces the `.own`/`.any` pre-computation anti-pattern (§4) under a different name and would need
-duplicating in every future provider. `internal/middleware/security/secure.go` and `graphql.go` (the
-`ns.CreationActor == principal.Subject` checks) already do this today and must be migrated to call
-`Authorize` in the same feature spec that implements this section — not carried forward as a second
-ownership code path once `OwnerRef` exists.
-
-> **Implementation addendum (foundation spec).** The foundation implementation of this section
-> represents the mutable owner as a reserved `metadata.annotations` key
-> (`rbac.authorization.gitstore.dev/owner`, ADR-§12-prefix-encoded) rather than a new structured
-> `OwnerRef` datastore field — annotations already round-trip generically through every git-authored
-> manifest and the existing `Annotations` datastore column, so no schema migration is needed. It
-> also migrates `secure.go`/`graphql.go` to compare against this mutable owner subject via a new
-> `ownerMatchesPrincipal` helper — a real improvement, since ownership can now move — but this is
-> still a Go-level pre-computation, not `Authorize` deciding ownership: neither `rbaclocal` nor
-> `allowall` reads `ResourceContext` at all today. **Full compliance with "must be migrated to call
-> `Authorize`" is deferred to the follow-up §2–§13 vocabulary/policy-engine spec**, which must teach
-> a provider to evaluate `ResourceContext.OwnerSub` directly. Both migrated call sites and the
-> `ownerMatchesPrincipal` helper carry a `TODO(ADR-0010 §14, follow-up vocabulary spec)` comment
-> recording this.
+The former caller-side `ownerMatchesPrincipal` permission path is removed;
+providers consume owner/target facts. CAS retries reload and reauthorize changed
+owners; stale writers cannot overwrite newer owner/status/spec fields.
+Future ReBAC providers may project these facts into relation tuples without
+introducing caller-side permission logic.
 
 ## Consequences
 
-- **Verbs are pure and the authorizer regains its decision.** Callers stop pre-computing ownership;
-  `ResourceContext.OwnerSub` is finally consumed.
-- **One vocabulary** across code, policy, and docs; `category`/`categoryTaxonomy` and the
-  `repository.*` verb sprawl collapse to the canonical table.
-- **Cluster scope is explicit**, not smuggled through `.any`.
-- **The grammar has no qualifier position and is unambiguous to parse without a vocabulary lookup**
-  (§2/§5): the last dot-segment is always the verb. `read.management`/`list.management` became the
-  `management` subresource; `delete.complete` became the independent `purge` verb.
-- **Instance grants and visibility** are expressible in rbac-local today and map cleanly onto a future
-  ReBAC provider and onto OPA Rego.
-- **Migration cost:** the live `config/policy.yaml`, the `rbac-local` loader/evaluator, and every
-  call site that emits `.own`/`.any`/`category.*`/`namespace.create.organization`/
-  `.read.management`/`.list.management`/`.delete.complete` must be updated in the follow-up feature
-  spec. The compat shim bounds the blast radius during rollout. This includes
-  the two live call sites (`secure.go`, `graphql.go`) that pre-compute ownership directly against
-  `CreationActor` instead of calling `Authorize` — these must move to `OwnerRef`/`Authorize` in the
-  same spec (§14).
-- **Ownership becomes assignable and transferable** (§14): the immutable `CreationActor` audit field
-  and the mutable, structured `OwnerRef` are split, so a resource can be owned by a group from
-  creation or reassigned later, gated by membership in the target owner.
-- **Instance grants and visibility** are expressible in rbac-local today and map cleanly onto a future
-  ReBAC provider and onto OPA Rego. `OwnerRef` is deliberately kept as an ABAC seed fact rather than an
-  authority a provider reads directly, so a future Zanzibar/OpenFGA provider can populate its own
-  owner relation tuples from it without `ResourceContext` becoming a second source of truth.
-- **Not addressed here (deferred):** the OPA Rego encoding of tiers/conditions/instance grants, the
-  persisted IAM entities for the cluster tier, the concrete `OwnerRef` datastore migration, and any
-  change to `ResourceContext`'s Go type (none required — `Attrs` carries `visibility`/`tier`/
-  `targetOwnerRef`, `OwnerSub` carries the current owner).
+- One closed vocabulary is shared by policy, API, Git service and tooling.
+- Scope, ownership and instance restrictions are independent provider inputs;
+  missing facts fail closed.
+- Operators update policy/configuration/enrollment together. No mixed-version
+  compatibility promise or automatic data conversion is provided.
+- Production OPA/ReBAC, persisted IAM entities, group-directory sourcing,
+  GraphQL directives and Admin/Storefront splitting remain out of scope.
+- Architectural acceptance does not establish capacity acceptance; #451 retains
+  the sustained-load and deployed replacement/fault requirements.
 
 ## References
 
-- [doc 020 — Pluggable AuthN/AuthZ Architecture](../implementation/020-pluggable_auth_architecture.md)
-- [doc 022 — OPA Data-Aware Authorization](../implementation/022-opa-data-authorization.md)
-- [doc 037 — Custom Commerce Workflows](../implementation/037-custom-commerce-workflows.md)
-- [publication-lifecycle](../products/publication-lifecycle.md)
-- [ADR 0009 — Credential and Secret Material Boundary](0009-credential-secret-boundary.md)
+- [Pluggable AuthN/AuthZ Architecture](../implementation/020-pluggable_auth_architecture.md)
+- [OPA Data-Aware Authorization](../implementation/022-opa-data-authorization.md)
+- [Spec 064](../../specs/064-authz-action-vocabulary/spec.md)
+- [Service boundaries](../../specs/064-authz-action-vocabulary/contracts/service-boundaries.md)
+- [Controller authentication](../runbooks/controller-auth.md)

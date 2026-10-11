@@ -13,19 +13,24 @@ import (
 	"sync"
 	"testing"
 
+	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // memGit is an in-memory Git service: every commit snapshots the tree of
@@ -188,9 +193,57 @@ const (
 type categoryLifecycleEnv struct {
 	store   datastore.Datastore
 	git     *memGit
-	catalog *cataloggrpc.Server
+	catalog *lifecycleCatalogFixture
 	service *Service
 	mut     *mutationResolver
+}
+
+// Domain fixtures model the authenticated transport explicitly. This wrapper
+// must never be registered as a gRPC service; boundary tests use Server directly.
+type lifecycleCatalogFixture struct{ *cataloggrpc.Server }
+
+func newLifecycleCatalogFixture(t *testing.T, deps cataloggrpc.ServerDeps) *lifecycleCatalogFixture {
+	t.Helper()
+	deps.Registry = auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil)
+	deps.ServiceSecret = "lifecycle-fixture-service"
+	srv, err := cataloggrpc.NewServer(deps)
+	require.NoError(t, err)
+	return &lifecycleCatalogFixture{srv}
+}
+
+func lifecycleActor(ctx context.Context, subject string) context.Context {
+	if auth.PrincipalFromContext(ctx) == nil {
+		return auth.ContextWithPrincipal(ctx, &auth.Principal{Subject: subject, AuthMethod: "static-users", Groups: []string{"system:authenticated"}})
+	}
+	return ctx
+}
+
+func (s *lifecycleCatalogFixture) AdmitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	return s.Server.AdmitCommittedManifest(lifecycleActor(ctx, req.ActorSubject), req)
+}
+
+func (s *lifecycleCatalogFixture) ValidateManifest(ctx context.Context, req admission.ManifestValidationRequest) ([]admission.Diagnostic, error) {
+	return s.Server.ValidateManifest(lifecycleActor(ctx, "alice"), req)
+}
+
+func (s *lifecycleCatalogFixture) AdmitResources(ctx context.Context, request *catalogv1.AdmitResourcesRequest) (*catalogv1.AdmitResourcesResponse, error) {
+	req := proto.Clone(request).(*catalogv1.AdmitResourcesRequest)
+	actor := req.GetAuthorization().GetActor()
+	if actor == nil {
+		actor = &catalogv1.CallbackActor{Subject: "pusher", AuthMethod: "static-users", Groups: []string{"system:authenticated"}}
+	}
+	if req.OldCommitSha == "" {
+		req.OldCommitSha = strings.Repeat("0", 40)
+	}
+	if req.RefName == "" {
+		req.RefName = "refs/heads/main"
+	}
+	req.Authorization = &catalogv1.CallbackAuthorization{RepositoryId: req.RepositoryId, ReceiveId: "lifecycle-fixture-receive", Actor: actor, Refs: []*catalogv1.ReceiveRef{{RefName: req.RefName, OldCommitSha: req.OldCommitSha, NewCommitSha: req.NewCommitSha}}}
+	envelope, err := auth.SignRPC("lifecycle-fixture-service", "gitstore-api", catalogv1.CatalogService_AdmitResources_FullMethodName, req)
+	if err != nil {
+		return nil, err
+	}
+	return s.Server.AdmitResources(metadata.NewIncomingContext(ctx, metadata.Pairs(auth.RPCSignatureMetadata, envelope)), req)
 }
 
 // denyTitledPolicy denies categories titled "Denied" after commit.
@@ -216,11 +269,10 @@ func newCategoryLifecycleEnv(t *testing.T) *categoryLifecycleEnv {
 		require.NoError(t, store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: lifecycleNamespace, Name: name, RepositoryID: id}))
 	}
 	git := newMemGit()
-	catalogServer, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
+	catalogServer := newLifecycleCatalogFixture(t, cataloggrpc.ServerDeps{
 		Store: store, GitReader: git, Logger: zap.NewNop(),
 		ExtraValidatingPolicies: []admission.ValidatingAdmissionPolicy{denyTitledPolicy{}},
 	})
-	require.NoError(t, err)
 	service, err := NewService(ServiceDeps{Store: store, GitWriter: git, Logger: zap.NewNop(), CommittedManifestAdmitter: catalogServer})
 	require.NoError(t, err)
 	return &categoryLifecycleEnv{
@@ -447,7 +499,9 @@ func TestUpdateCategoryRejections(t *testing.T) {
 		env := newCategoryLifecycleEnv(t)
 		record := env.pushCategory(t, lifecycleSystemRepoID, "categories/laptops.md", "laptops", "Laptops", "", "")
 		record.SourcePath = ""
-		require.NoError(t, env.store.UpdateCategoryTaxonomy(context.Background(), record))
+		expectedResourceVersion := record.ResourceVersion
+		datastore.AdvanceCategoryTaxonomySystemVersion(record)
+		require.NoError(t, env.store.UpdateCategoryTaxonomy(context.Background(), record, expectedResourceVersion))
 		_, err := env.service.CommitCategoryManifest(context.Background(), categoryInput("laptops", "Laptops 2", ""), "bob", false)
 		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "PROVENANCE_UNAVAILABLE")
 		assert.Zero(t, env.git.commitCount())
@@ -456,7 +510,9 @@ func TestUpdateCategoryRejections(t *testing.T) {
 		env := newCategoryLifecycleEnv(t)
 		record := env.pushCategory(t, lifecycleSystemRepoID, "categories/laptops.md", "laptops", "Laptops", "", "")
 		record.GitRef = "refs/heads/feature"
-		require.NoError(t, env.store.UpdateCategoryTaxonomy(context.Background(), record))
+		expectedResourceVersion := record.ResourceVersion
+		datastore.AdvanceCategoryTaxonomySystemVersion(record)
+		require.NoError(t, env.store.UpdateCategoryTaxonomy(context.Background(), record, expectedResourceVersion))
 		_, err := env.service.CommitCategoryManifest(context.Background(), categoryInput("laptops", "Laptops 2", ""), "bob", false)
 		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "PROVENANCE_UNAVAILABLE")
 		_, _, err = env.service.DeleteCategoryManifest(context.Background(), record.UID, "bob")
@@ -491,8 +547,9 @@ func TestUpdateCategoryRejections(t *testing.T) {
 
 func TestCategoryMutationResolversRenderSharedEnvelope(t *testing.T) {
 	env := newCategoryLifecycleEnv(t)
+	ctx := lifecycleActor(context.Background(), "alice")
 	input := categoryInput("laptops", "Laptops", "laptops")
-	_, err := env.mut.CreateCategory(context.Background(), model.CreateCategoryInput{
+	_, err := env.mut.CreateCategory(ctx, model.CreateCategoryInput{
 		APIVersion: input.APIVersion, Kind: input.Kind, Metadata: input.Metadata, Spec: input.Spec,
 	})
 	var gqlErr *gqlerror.Error
@@ -501,7 +558,7 @@ func TestCategoryMutationResolversRenderSharedEnvelope(t *testing.T) {
 	assert.Equal(t, "PRE_RECEIVE", gqlErr.Extensions["phase"])
 
 	ok := categoryInput("electronics", "Electronics", "")
-	payload, err := env.mut.CreateCategory(context.Background(), model.CreateCategoryInput{
+	payload, err := env.mut.CreateCategory(ctx, model.CreateCategoryInput{
 		APIVersion: ok.APIVersion, Kind: ok.Kind, Metadata: ok.Metadata, Spec: ok.Spec,
 	})
 	require.NoError(t, err)
@@ -543,7 +600,9 @@ func blockingChild(t *testing.T, env *categoryLifecycleEnv, parent *datastore.Ca
 	refs, err := json.Marshal([]catalog.OwnerReference{{APIVersion: categoryAPIVersion, Kind: categoryKind, Name: parent.Name, UID: parent.UID, BlockOwnerDeletion: true}})
 	require.NoError(t, err)
 	child.OwnerReferences = refs
-	require.NoError(t, env.store.UpdateCategoryTaxonomy(context.Background(), child))
+	expectedResourceVersion := child.ResourceVersion
+	datastore.AdvanceCategoryTaxonomySystemVersion(child)
+	require.NoError(t, env.store.UpdateCategoryTaxonomy(context.Background(), child, expectedResourceVersion))
 }
 
 func TestDeleteCategoryChildInAnotherRepositoryDoesNotBlock(t *testing.T) {

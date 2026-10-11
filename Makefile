@@ -31,7 +31,9 @@ CONTROLLER_SECRET_KEY ?= privateKey
 # validateServiceAccountSigningKeySource) — it must be supplied via the
 # GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY env var, never via config.toml.
 API_SERVICEACCOUNT_SIGNING_KEY_PATH ?= $(ROOT)/.gitstore/secrets/api-issuer/privateKey
-CONTROLLER_SERVICEACCOUNT_NAMESPACE ?= controllers
+ifneq ($(origin CONTROLLER_SERVICEACCOUNT_NAMESPACE),undefined)
+$(error CONTROLLER_SERVICEACCOUNT_NAMESPACE is removed; ServiceAccounts are cluster-scoped. Use CONTROLLER_SERVICEACCOUNT_NAME)
+endif
 CONTROLLER_SERVICEACCOUNT_NAME ?= gitstore-controller-manager
 CONTROLLER_SERVICEACCOUNT_KEY_ID ?= controller-key
 # CONTROLLER_SERVICEACCOUNT_UID is intentionally left unset by default: the
@@ -70,9 +72,11 @@ ADMIN_USERNAME ?= admin
 ADMIN_PASSWORD ?=
 BOOTSTRAP_TOKEN ?=
 BOOTSTRAP_TOKEN_CACHE ?= $(ROOT)/.gitstore/bootstrap-token
+# Capture only an operator-supplied namespace before the bootstrap default.
+RBAC_EXPLICIT_NAMESPACE := $(if $(filter undefined default,$(origin NAMESPACE)),,$(NAMESPACE))
 NAMESPACE ?= gitstore-test
 NAMESPACE_DISPLAY_NAME ?= GitStore Test
-NAMESPACE_TIER ?= USER
+NAMESPACE_TIER ?= ORGANIZATION
 REPOSITORY ?= catalog
 DEFAULT_BRANCH ?= main
 SCYLLA_TEST_ADDR ?= 127.0.0.1:9042
@@ -174,8 +178,9 @@ export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CAC
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla ps logs stop down
-.PHONY: build test lint pr-ready check clean bootstrap secret capacity chaos
+.PHONY: build test lint pr-ready check clean bootstrap secret capacity chaos generate _generate-authz _generate-all _check-generated
 .PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-repository-lifecycle _capacity-repository-overflow _capacity-observability _capacity-observability-down
+.PHONY: _capacity-authorization
 .PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
 .PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
 .PHONY: add-user add-role assign-role hash-user-password enroll-controller-serviceaccount
@@ -257,7 +262,6 @@ enroll-controller-serviceaccount: ## Enroll controller-manager's signing key wit
 		--api-url "$(API_URL)" \
 		--admin-username "$(DEV_ADMIN_USERNAME)" \
 		--admin-password "$(DEV_ADMIN_PASSWORD)" \
-		--namespace "$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
 		--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
 		--replace-existing-key \
@@ -275,7 +279,6 @@ _enroll-controller-serviceaccount:
 		--api-url "$(API_URL)" \
 		--admin-username "$(DEV_ADMIN_USERNAME)" \
 		--admin-password "$(DEV_ADMIN_PASSWORD)" \
-		--namespace "$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
 		--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
 		--replace-existing-key \
@@ -304,7 +307,6 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 	fi; \
 	cd "$(CONTROLLER_MANAGER_DIR)" && \
 		GITSTORE_CONTROLLER__CHECKPOINT__DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
-		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$resolved_uid" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
@@ -396,7 +398,6 @@ dev: ## Run local git service and API together in the foreground.
 			--api-url "$(API_URL)" \
 			--admin-username "$(DEV_ADMIN_USERNAME)" \
 			--admin-password "$(DEV_ADMIN_PASSWORD)" \
-			--namespace "$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 			--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
 			--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
 			--replace-existing-key \
@@ -410,7 +411,6 @@ dev: ## Run local git service and API together in the foreground.
 	( set +e; \
 		cd "$(CONTROLLER_MANAGER_DIR)" || { printf 'controller 1\n' > "$$fifo"; exit 0; }; \
 		GITSTORE_CONTROLLER__CHECKPOINT__DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
-		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$resolved_uid" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
@@ -471,6 +471,18 @@ build: ## Build Rust/Go services and the shared secret-material module.
 		( cd "$$dir" && go build -v ./... ) || exit 1; \
 	done
 
+generate: ## Generate committed sources; TARGET=authz or all.
+	@./scripts/run-make-workflow.sh generate "$(TARGET)"
+
+_generate-authz:
+	@cd "$(API_DIR)" && go run ./cmd/gitctl generate authz --root "$(ROOT)"
+
+_generate-all:
+	@cd "$(API_DIR)" && go generate ./...
+
+_check-generated:
+	@cd "$(API_DIR)" && go run ./cmd/gitctl generate authz --root "$(ROOT)" --check
+
 test: ## Run tests; TARGET=all (default), datastore, or secret-integration. Datastore tests use DATASTORE=memdb|scylla.
 ifeq ($(TEST_TARGET),secret-integration)
 	@test "$(SECRET_TEST_OWNED_DEPLOYMENT)" = "1" || { echo "SECRET_TEST_OWNED_DEPLOYMENT=1 is required"; exit 2; }
@@ -495,6 +507,7 @@ else
 	@echo "test TARGET=datastore requires DATASTORE=memdb or DATASTORE=scylla" >&2; exit 2
 endif
 else ifeq ($(TEST_TARGET),all)
+	@$(MAKE) --no-print-directory _check-generated
 	@bash ./scripts/test-secret-config.sh
 	@bash ./scripts/test-secret-capacity-evidence.sh
 	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity' .
@@ -583,6 +596,10 @@ chaos: ## Inject an opt-in container fault and retain structured evidence.
 		CHAOS_EVIDENCE_DIR="$(CHAOS_EVIDENCE_DIR)" \
 		PUMBA_IMAGE="$(PUMBA_IMAGE)" \
 		./scripts/run-chaos.sh "$(CHAOS_PROFILE)"
+
+_capacity-authorization:
+	@cd "$(API_DIR)" && AUTHZ_CAPACITY_RUN=1 MODE="$(MODE)" \
+		go test -count=1 -timeout 75m -v -run '^TestAuthorizationDecisionCapacity$$' ./internal/auth/provider/rbaclocal
 
 _capacity-scylla-soak:
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
@@ -723,7 +740,7 @@ _check-credential-leakage:
 
 _check-credentials: _check-credential-output _check-credential-leakage
 
-_check-all: _check-compose-config _check-licenses _check-credentials
+_check-all: _check-compose-config _check-licenses _check-credentials _check-generated
 
 pr-ready: lint build test _check-licenses _check-credentials ## Run the full PR readiness workflow.
 
@@ -761,26 +778,11 @@ add-user: ## Add a local user to USERS_FILE; requires USERNAME and PASSWORD.
 		--display-name "$${DISPLAY_NAME:-}" \
 		--password-stdin)
 
-add-role: ## Add a role to POLICY_FILE; requires ROLE and ALLOW and/or DENY.
-	@if [ -z "$${ROLE:-}" ] || { [ -z "$${ALLOW:-}" ] && [ -z "$${DENY:-}" ]; }; then \
-		echo "Usage: make add-role ROLE=<role> [ALLOW='action,action'] [DENY='action,action'] [POLICY_FILE=<path>]"; \
-		exit 2; \
-	fi
-	@cd "$(API_DIR)" && go run ./cmd/gitctl rbac role add \
-		--file "$(abspath $(POLICY_FILE))" \
-		--name "$$ROLE" \
-		$${ALLOW:+--allow "$$ALLOW"} \
-		$${DENY:+--deny "$$DENY"}
+add-role: ## Add canonical ALLOW actions to a role; SCOPE=cluster or namespace. DENY is unsupported.
+	@POLICY_FILE="$(abspath $(POLICY_FILE))" RBAC_NAMESPACE="$(RBAC_EXPLICIT_NAMESPACE)" ./scripts/run-make-workflow.sh rbac role-add
 
-assign-role: ## Assign an existing role to a subject in POLICY_FILE.
-	@if [ -z "$${SUBJECT:-}" ] || [ -z "$${ROLE:-}" ]; then \
-		echo "Usage: make assign-role SUBJECT=<subject> ROLE=<role> [POLICY_FILE=<path>]"; \
-		exit 2; \
-	fi
-	@cd "$(API_DIR)" && go run ./cmd/gitctl rbac binding add \
-		--file "$(abspath $(POLICY_FILE))" \
-		--subject "$$SUBJECT" \
-		--role "$$ROLE"
+assign-role: ## Bind ROLE to SUBJECT; typed SUBJECT_KIND/ROLE_KIND and SCOPE selectors, explicit NAMESPACE for namespace bindings.
+	@POLICY_FILE="$(abspath $(POLICY_FILE))" RBAC_NAMESPACE="$(RBAC_EXPLICIT_NAMESPACE)" ./scripts/run-make-workflow.sh rbac binding-add
 
 secret: ## Generate local security material; set TARGET=jwt, grpc-hmac, or signing-key.
 	@./scripts/run-make-workflow.sh secret "$(TARGET)"

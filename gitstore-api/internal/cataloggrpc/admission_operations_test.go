@@ -5,13 +5,44 @@ package cataloggrpc
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOwnerAnnotationRemovalRequiresTransferAuthorization(t *testing.T) {
+	recorder := testutil.NewAllowAllAuthZ()
+	server := &Server{registry: auth.NewProviderRegistry(nil, recorder, nil)}
+	entry := mustParsedEntry(t, "products/widget.md", productDoc("widget", "Widget", ""))
+	existing := &datastore.Product{Namespace: "gitstore", Name: "widget", CreationActor: "alice", Annotations: map[string]string{datastore.OwnerAnnotationKey: "system:group:editors"}}
+	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
+	require.NoError(t, server.authorizeOperation(ctx, entry.identity, admission.OperationUpdate, entry, existing))
+	require.Len(t, recorder.Calls, 2)
+	require.Equal(t, "product.transfer", recorder.Calls[0].Action)
+	require.Equal(t, "system:group:editors", recorder.Calls[0].Resource.OwnerSub)
+	require.Equal(t, map[string]any{"kind": "User", "name": "alice"}, recorder.Calls[0].Resource.Attrs["targetOwnerRef"])
+	require.Equal(t, "product.update", recorder.Calls[1].Action)
+}
+
+func TestOwnerOnlyChangeNeedsTransferWithoutUpdate(t *testing.T) {
+	recorder := testutil.NewAllowAllAuthZ()
+	server := &Server{registry: auth.NewProviderRegistry(nil, recorder, nil)}
+	entry := mustParsedEntry(t, "products/widget.md", productDoc("widget", "Widget", ""))
+	spec, err := json.Marshal(entry.parsed.Product.Spec)
+	require.NoError(t, err)
+	existing := &datastore.Product{APIVersion: entry.identity.APIVersion, Kind: "Product", Namespace: "gitstore", Name: "widget", SourcePath: entry.path, CreationActor: "alice", Spec: spec, Annotations: map[string]string{datastore.OwnerAnnotationKey: "system:group:editors"}}
+	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
+	require.NoError(t, server.authorizeOperation(ctx, entry.identity, admission.OperationUpdate, entry, existing))
+	require.Len(t, recorder.Calls, 1)
+	require.Equal(t, "product.transfer", recorder.Calls[0].Action)
+}
 
 func mustParsedEntry(t *testing.T, path, content string) *parsedEntry {
 	t.Helper()

@@ -16,8 +16,9 @@ grep -q '"serviceaccount-assertion"' "$config_file" || fail "enable serviceaccou
 grep -q '"serviceaccount-jwt"' "$config_file" || fail "enable serviceaccount-jwt"
 grep -q '^\[controller.serviceaccount\]' "$config_file" || fail "use controller.serviceaccount settings"
 grep -q '^key_ref = ' "$config_file" || fail "configure controller.serviceaccount.key_ref"
-grep -A1 '^  serviceaccount:controllers:gitstore-controller-manager:$' "$policy_file" |
-  grep -q '^    - controller$' || fail "bind the controller ServiceAccount to its role"
+# The strict parser/effective-grant tests validate policy semantics. Do not
+# grow a second YAML parser from grep expressions here.
+grep -q '^apiVersion: rbac.authorization.gitstore.dev/v1beta1$' "$policy_file" || fail "use a v1beta1 policy (v1 is rejected)"
 if grep -Eq '^[[:space:]]*(api_token|signing_key)[[:space:]]*=' "$config_file"; then
   fail "shared config must reference isolated identity material, not contain tokens or signing keys"
 fi
@@ -82,5 +83,11 @@ check '
   (.services["credential-bootstrap"].command | tostring | contains("rm -f /run/controller-bootstrap/serviceaccount.env")) and
   (.services["serviceaccount-enrollment"].command | tostring | contains("--replace-existing-key"))
 ' "bootstrap/enrollment dependencies, network and identity replacement must be wired"
+
+check '
+  (.services["serviceaccount-enrollment"].command | index("--namespace") == null) and
+  (.services["serviceaccount-enrollment"].command | index("--name") != null) and
+  ([.services[].environment // {} | keys[] | select(contains("SERVICEACCOUNT__NAMESPACE"))] | length == 0)
+' "enrollment and controller configuration must use cluster-scoped ServiceAccounts"
 
 echo "local Compose configuration is valid for $config_file"

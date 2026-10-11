@@ -6,7 +6,6 @@ package security
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -19,6 +18,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 )
@@ -53,9 +53,18 @@ type datastoreGetter interface {
 	GetProductByName(ctx context.Context, namespace, name string) (*datastore.Product, error)
 }
 
+// Denial presentation is provider-independent. Lists/watches are not filtered,
+// and a reason string can never change a denial into a concealment response.
+func deniedResourceError(action string, resource auth.ResourceContext) *gqlerror.Error {
+	code, message := "FORBIDDEN", "permission denied"
+	if visibility, present := resource.Attrs["visibility"].(string); present && visibility != "public" && strings.HasSuffix(action, ".read") {
+		code, message = "NOT_FOUND", resource.Kind+" not found"
+	}
+	return &gqlerror.Error{Message: message, Extensions: map[string]any{"code": code}}
+}
+
 // authorizeRepositoryTenant is the common repository policy decision used by
-// GraphQL and Git smart-HTTP. Ownership is deliberately derived from the
-// stable principal subject rather than provider-specific roles.
+// GraphQL and Git smart-HTTP. Callers supply facts; policy alone decides ownership.
 func (a *Authorize) authorizeRepositoryTenant(ctx context.Context, principal *auth.Principal, operation string, repository *datastore.Repository, namespaces ...*datastore.Namespace) (string, error) {
 	if a.registry == nil || a.registry.AuthZ() == nil {
 		return "", errors.New("authorization service unavailable")
@@ -67,38 +76,39 @@ func (a *Authorize) authorizeRepositoryTenant(ctx context.Context, principal *au
 		return "", errors.New("repository authorization context is incomplete")
 	}
 
-	scope := "own"
 	attrs := make(map[string]any, len(namespaces))
-	owner := ""
+	if visibility, ok := auth.VisibilityFromSpec(repository.Spec); ok {
+		attrs["visibility"] = visibility
+	}
+	owner := repository.EffectiveOwnerSub()
 	for index, namespace := range namespaces {
 		if namespace == nil {
 			return "", errors.New("repository authorization namespace is missing")
 		}
 		if index == 0 {
-			owner = namespace.EffectiveOwnerSub()
+			if operation == "create" || operation == "list" {
+				owner = namespace.EffectiveOwnerSub()
+			}
 			attrs["namespace"] = namespace.Name
 		} else {
 			attrs["targetNamespace"] = namespace.Name
 			attrs["targetOwnerSub"] = namespace.EffectiveOwnerSub()
 		}
-		// TODO(ADR-0010 §14, follow-up vocabulary spec): this pre-computes
-		// .own/.any in Go against the mutable owner subject; Authorize does
-		// not yet consume ResourceContext.OwnerSub itself (rbaclocal
-		// discards it). See ownerMatchesPrincipal and the ADR-0010 §14
-		// addendum in docs/ADRs/0010-authorization-model.md.
-		if !ownerMatchesPrincipal(namespace.EffectiveOwnerSub(), principal) {
-			scope = "any"
-		}
 	}
-	action := "repository." + operation + "." + scope
-	decision, err := a.registry.AuthZ().Authorize(ctx, principal, action, auth.ResourceContext{
+	action := "repository." + operation
+	definition, found := auth.LookupAction(action)
+	if !found || definition.Kind != "repository" || definition.Reserved {
+		return "", errors.New("unsupported repository operation")
+	}
+	resource := auth.ResourceContext{
 		Kind: "repository", Name: repository.Name, OwnerSub: owner, Attrs: attrs,
-	})
+	}
+	decision, err := a.registry.AuthZ().Authorize(ctx, principal, action, resource)
 	if err != nil {
 		return "", err
 	}
 	if decision.Outcome != auth.OutcomeAllow {
-		return "", fmt.Errorf("permission denied: %s", decision.Reason)
+		return action, deniedResourceError(action, resource)
 	}
 	return action, nil
 }
@@ -116,6 +126,32 @@ type client struct {
 }
 
 type authenticatorFunc func(*gin.Context, auth.AuthRequest, *Authenticate) (context.Context, *auth.Principal, bool)
+
+// AuthenticateWebSocketUpgrade validates credentials supplied by non-browser
+// clients before upgrading. gqlgen closes a rejected connection_init with 1000,
+// which cannot distinguish bad credentials from normal connection shutdown.
+// HTTP 401 provides a definitive, pre-execution recovery signal. Browser clients
+// without upgrade credentials still authenticate through connection_init.
+func (a *Authenticate) AuthenticateWebSocketUpgrade(c *gin.Context) bool {
+	if !strings.EqualFold(c.GetHeader("Upgrade"), "websocket") || c.GetHeader("Authorization") == "" {
+		return true
+	}
+	if a.registry == nil || a.registry.AuthN() == nil {
+		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return false
+	}
+	ctx := c.Request.Context()
+	if token, ok := strings.CutPrefix(c.GetHeader("Authorization"), "Bearer "); ok {
+		ctx = auth.ContextWithRawToken(ctx, token)
+	}
+	principal, decision, err := a.registry.AuthN().Authenticate(ctx, auth.AuthRequest{Header: c.Request.Header, RemoteAddr: c.RemoteIP()})
+	if err != nil || decision.Outcome != auth.OutcomeAllow || principal == nil || principal.AuthMethod == "none" ||
+		(!principal.ExpiresAt.IsZero() && !principal.ExpiresAt.After(time.Now())) {
+		c.AbortWithStatus(http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
 
 // NewAuthenticate creates a new Authenticate middleware.
 // Pass a non-nil prometheus.Registerer to enable auth outcome metrics.
@@ -323,8 +359,8 @@ const approvedRepositoryActionKey = "approvedRepositoryAction"
 // Requires repoIDKey to be set in the gin context (abort 500 if missing).
 // Determines required action from route path (and, for /info/refs, the
 // ?service= query param since that endpoint is shared by both services):
-//   - /git-upload-pack, or /info/refs?service=git-upload-pack   → "repository.read"
-//   - /git-receive-pack, or /info/refs?service=git-receive-pack → "repository.write"
+//   - /git-upload-pack, or /info/refs?service=git-upload-pack   → "repository.contents.read"
+//   - /git-receive-pack, or /info/refs?service=git-receive-pack → "repository.contents.write"
 //
 // Aborts with 401 on an anonymous deny so Git credential helpers can retry,
 // and with 403 when an authenticated principal lacks permission.
@@ -357,39 +393,16 @@ func (a *Authorize) GitHttpAuthorizer(c *gin.Context) {
 	// write to correctly reject anonymous access with a 401 (prompting Git
 	// to retry with credentials) instead of falling through to a deeper
 	// rejection that surfaces as a generic 503.
-	operation := "read"
+	operation := "contents.read"
 	switch {
 	case strings.HasSuffix(c.FullPath(), "/git-receive-pack"):
-		operation = "write"
+		operation = "contents.write"
 	case strings.HasSuffix(c.FullPath(), "/info/refs") && c.Query("service") == "git-receive-pack":
-		operation = "write"
+		operation = "contents.write"
 	}
 
 	if a.store == nil {
-		// Legacy test/embedding callers do not provide a datastore. Preserve the
-		// historical unsuffixed action there; production wiring always supplies a
-		// store and therefore uses the tenant-aware contract below.
-		authorize := a.registry.AuthZ()
-		if authorize == nil {
-			c.Next()
-			return
-		}
-		decision, err := authorize.Authorize(c.Request.Context(), principal, "repository."+operation, auth.ResourceContext{Kind: "repository", Name: repoID})
-		if err != nil {
-			a.logger.Error("authz error", zap.Error(err))
-			c.AbortWithStatus(http.StatusServiceUnavailable)
-			return
-		}
-		if decision.Outcome == auth.OutcomeAllow {
-			c.Next()
-			return
-		}
-		if principal.AuthMethod == "none" {
-			c.Header("WWW-Authenticate", `Basic realm="GitStore"`)
-			c.AbortWithStatus(http.StatusUnauthorized)
-		} else {
-			c.AbortWithStatus(http.StatusForbidden)
-		}
+		c.AbortWithStatus(http.StatusServiceUnavailable)
 		return
 	}
 	repository, err := a.store.GetRepository(c.Request.Context(), repoID)
@@ -407,6 +420,11 @@ func (a *Authorize) GitHttpAuthorizer(c *gin.Context) {
 	action, err := a.authorizeRepositoryTenant(c.Request.Context(), principal, operation, repository, namespace)
 	if err != nil {
 		a.logger.Warn("authz denied", zap.String("action", action), zap.Error(err))
+		var denial *gqlerror.Error
+		if errors.As(err, &denial) && denial.Extensions["code"] == "NOT_FOUND" {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
 		if principal.AuthMethod == "none" {
 			c.Header("WWW-Authenticate", `Basic realm="GitStore"`)
 			c.AbortWithStatus(http.StatusUnauthorized)
@@ -476,7 +494,7 @@ func (a *Authorize) PushContextInserter(c *gin.Context) {
 		Authorization: &gitv1.RequestAuthorization{
 			Actor: &gitv1.AuthContext{
 				Subject: principal.Subject, Issuer: principal.Issuer, AuthMethod: principal.AuthMethod,
-				Roles: principal.Roles, Groups: principal.Groups, Scopes: principal.Scopes,
+				Groups: principal.Groups, Scopes: principal.Scopes, ServiceAccountUid: principal.ServiceAccountUID,
 			},
 			Action: approvedAction, ResourceKind: "repository", ResourceName: repo.Name, RepositoryId: repoID,
 		},

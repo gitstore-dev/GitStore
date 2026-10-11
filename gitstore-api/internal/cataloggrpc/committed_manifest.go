@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	"go.uber.org/zap"
@@ -32,6 +33,10 @@ var ErrCommittedManifestSuperseded = admission.ErrCommittedManifestSuperseded
 // the synchronous counterpart of the post-receive batch path; neither callers
 // nor GraphQL resolvers may write an author-controlled resource directly.
 func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	principal := auth.PrincipalFromContext(ctx)
+	if !auth.ValidTrustedPrincipal(principal) || principal.Subject != req.ActorSubject {
+		return nil, status.Error(codes.Unauthenticated, "committed manifest actor does not match authenticated principal")
+	}
 	result, err := s.admitCommittedManifest(ctx, req)
 	// Constructor dependencies and request shape are not post-commit failures;
 	// attempting repair for either can dereference an unavailable Git reader.
@@ -55,6 +60,9 @@ func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.Commi
 }
 
 func isCommittedAdmissionDenied(err error) bool {
+	if status.Code(err) == codes.PermissionDenied || status.Code(err) == codes.Unauthenticated {
+		return true
+	}
 	var admissionErr *admission.Error
 	if !errors.As(err, &admissionErr) || admissionErr.Code != admission.CodeAdmissionRejected {
 		return false
@@ -80,6 +88,14 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 		return nil, fmt.Errorf("committed admission requires repository, ref, commit, and path")
 	}
 	if req.Operation == admission.OperationDelete {
+		identity := resourceIdentity{Kind: req.Kind, Namespace: req.Namespace, Name: req.Name}
+		existing, err := s.lookupResourceByIdentity(ctx, identity)
+		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+			return nil, err
+		}
+		if err := s.authorizeOperation(ctx, identity, req.Operation, nil, existing); err != nil {
+			return nil, err
+		}
 		if req.Kind == "Namespace" || req.Kind == "Repository" {
 			return s.admitCommittedInfrastructureDeletion(ctx, req)
 		}
@@ -242,8 +258,8 @@ func (s *Server) repairCommittedManifest(ctx context.Context, req admission.Comm
 		}
 		retry.Content = content
 		// The mutation was authorized for req.Operation. Do not turn a failed
-		// create into an update (or vice versa) here: this boundary has no
-		// principal authorizer and must not broaden the caller's authority.
+		// create into an update (or vice versa). Each attempt reloads and
+		// authorizes its snapshot, without broadening the caller's operation.
 		retry.Operation = req.Operation
 		if _, err := s.admitCommittedManifest(ctx, retry); err == nil {
 			return "repaired"
@@ -471,8 +487,8 @@ func (s *Server) validateCommittedOperation(ctx context.Context, entry *parsedEn
 			if !ok {
 				return fmt.Errorf("unsupported tier %q", entry.parsed.Namespace.Spec.Tier)
 			}
-			if namespaceadmission.TierRank(tier) < namespaceadmission.TierRank(resource.Tier) {
-				return namespaceadmission.ErrTierDemotion
+			if decision := namespaceadmission.ValidateIdentity(namespaceadmission.PolicyCheck{Name: entry.identity.Name, Tier: tier, Actor: auth.PrincipalFromContext(ctx).Subject, Annotations: entry.parsed.Namespace.Metadata.Annotations}, resource); decision != nil {
+				return decision
 			}
 		}
 	case *datastore.Repository:
@@ -482,6 +498,12 @@ func (s *Server) validateCommittedOperation(ctx context.Context, entry *parsedEn
 	}
 	if entry.identity.Kind == "Namespace" && namespaceadmission.IsBootstrap(entry.identity.Name) {
 		return namespaceadmission.ErrBootstrapNamespace
+	}
+	if existing == nil && entry.parsed.Namespace != nil {
+		tier, _ := namespaceadmission.TierFromManifest(entry.parsed.Namespace.Spec.Tier)
+		if decision := namespaceadmission.ValidateIdentity(namespaceadmission.PolicyCheck{Name: entry.identity.Name, Tier: tier, Actor: auth.PrincipalFromContext(ctx).Subject, Annotations: entry.parsed.Namespace.Metadata.Annotations}, nil); decision != nil {
+			return decision
+		}
 	}
 	return nil
 }

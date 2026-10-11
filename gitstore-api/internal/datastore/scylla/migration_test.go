@@ -73,7 +73,7 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 		"repositories_by_bucket",
 		"namespace_mappings_by_repository",
 		"service_account_assertion_replays",
-		"service_accounts_by_bucket",
+		"service_accounts_by_cluster_bucket",
 		"category_ancestor_index",
 	} {
 		var tblName string
@@ -242,7 +242,7 @@ func TestRunMigrations_ServiceAccountSchemaMatchesEnvelopeConventions(t *testing
 
 	iter = session.Query(
 		`SELECT column_name, type FROM system_schema.columns WHERE keyspace_name = ? AND table_name = ?`,
-		scyllaKeyspace, "service_accounts_by_namespace",
+		scyllaKeyspace, "service_accounts_by_cluster_name",
 	).Iter()
 	var columnName, columnType string
 	seen := map[string]string{}
@@ -253,7 +253,7 @@ func TestRunMigrations_ServiceAccountSchemaMatchesEnvelopeConventions(t *testing
 
 	for column, wantType := range wantColumnTypes {
 		gotType, ok := seen[column]
-		require.Truef(t, ok, "expected column %q on service_accounts_by_namespace", column)
+		require.Truef(t, ok, "expected column %q on service_accounts_by_cluster_name", column)
 		assert.Equalf(t, wantType, gotType, "column %q type mismatch", column)
 	}
 }

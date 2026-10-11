@@ -31,7 +31,7 @@ func TestCategoryTaxonomyJournalRecordsOnlyCommittedWritesInOrder(t *testing.T) 
 
 	category.Labels["team"] = "b"
 	category.ResourceVersion = "2"
-	require.NoError(t, store.UpdateCategoryTaxonomy(t.Context(), category))
+	require.NoError(t, store.UpdateCategoryTaxonomy(t.Context(), category, "1"))
 
 	var writers sync.WaitGroup
 	failures := make(chan error, 4)
@@ -105,7 +105,7 @@ func TestCategoryTaxonomyJournalSkipsRejectedWrites(t *testing.T) {
 	require.NoError(t, err)
 	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
 	deletion := store.(datastore.CategoryTaxonomyDeletionStore)
-	require.ErrorIs(t, store.UpdateCategoryTaxonomy(t.Context(), journalCategoryFixture("00000000-0000-0000-0000-0000000000c2")), datastore.ErrNotFound)
+	require.ErrorIs(t, store.UpdateCategoryTaxonomy(t.Context(), journalCategoryFixture("00000000-0000-0000-0000-0000000000c2"), "1"), datastore.ErrNotFound)
 	require.ErrorIs(t, store.DeleteCategoryTaxonomy(t.Context(), "00000000-0000-0000-0000-0000000000c2"), datastore.ErrNotFound)
 	_, err = deletion.MarkCategoryTaxonomyDeletion(t.Context(), "test-ns", "shoes", "1", time.Now())
 	require.ErrorIs(t, err, datastore.ErrNotFound)

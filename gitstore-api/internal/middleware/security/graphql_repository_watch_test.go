@@ -41,7 +41,7 @@ func TestRepositoryWatchAuthorizationRunsBeforeResolverForBothEntryPoints(t *tes
 			require.Error(t, err)
 			assert.False(t, called)
 			assert.Equal(t, "repository.watch", authz.Action)
-			assert.Equal(t, "Repository", authz.Resource.Kind)
+			assert.Equal(t, "repository", authz.Resource.Kind)
 			assert.Equal(t, "acme", authz.Resource.Attrs["namespace"])
 		})
 	}

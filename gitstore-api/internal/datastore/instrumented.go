@@ -117,9 +117,9 @@ func (d *InstrumentedDatastore) ListProducts(ctx context.Context, namespace stri
 	return v, err
 }
 
-func (d *InstrumentedDatastore) UpdateProduct(ctx context.Context, p *Product) error {
+func (d *InstrumentedDatastore) UpdateProduct(ctx context.Context, p *Product, expectedResourceVersion string) error {
 	start := time.Now()
-	err := d.next.UpdateProduct(d.withFindingObserver(ctx), p)
+	err := d.next.UpdateProduct(d.withFindingObserver(ctx), p, expectedResourceVersion)
 	d.observe("UpdateProduct", start, err)
 	return err
 }
@@ -255,9 +255,9 @@ func (d *InstrumentedDatastore) ListCategoryTaxonomies(ctx context.Context, name
 	return v, err
 }
 
-func (d *InstrumentedDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error {
+func (d *InstrumentedDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy, expectedResourceVersion string) error {
 	start := time.Now()
-	err := d.next.UpdateCategoryTaxonomy(d.withFindingObserver(ctx), c)
+	err := d.next.UpdateCategoryTaxonomy(d.withFindingObserver(ctx), c, expectedResourceVersion)
 	d.observe("UpdateCategoryTaxonomy", start, err)
 	return err
 }
@@ -320,9 +320,9 @@ func (d *InstrumentedDatastore) ListProductVariantsByProductRef(ctx context.Cont
 	return result, err
 }
 
-func (d *InstrumentedDatastore) UpdateProductVariant(ctx context.Context, v *ProductVariant) error {
+func (d *InstrumentedDatastore) UpdateProductVariant(ctx context.Context, v *ProductVariant, expectedResourceVersion string) error {
 	start := time.Now()
-	err := d.next.UpdateProductVariant(d.withFindingObserver(ctx), v)
+	err := d.next.UpdateProductVariant(d.withFindingObserver(ctx), v, expectedResourceVersion)
 	d.observe("UpdateProductVariant", start, err)
 	return err
 }
@@ -371,9 +371,9 @@ func (d *InstrumentedDatastore) ListCollections(ctx context.Context, namespace s
 	return v, err
 }
 
-func (d *InstrumentedDatastore) UpdateCollection(ctx context.Context, c *Collection) error {
+func (d *InstrumentedDatastore) UpdateCollection(ctx context.Context, c *Collection, expectedResourceVersion string) error {
 	start := time.Now()
-	err := d.next.UpdateCollection(d.withFindingObserver(ctx), c)
+	err := d.next.UpdateCollection(d.withFindingObserver(ctx), c, expectedResourceVersion)
 	d.observe("UpdateCollection", start, err)
 	return err
 }
@@ -694,9 +694,9 @@ func (d *InstrumentedDatastore) GetServiceAccountByUID(ctx context.Context, uid 
 	d.observe("GetServiceAccountByUID", start, err)
 	return v, err
 }
-func (d *InstrumentedDatastore) GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*ServiceAccount, error) {
+func (d *InstrumentedDatastore) GetServiceAccountBySubject(ctx context.Context, name string) (*ServiceAccount, error) {
 	start := time.Now()
-	v, err := d.next.GetServiceAccountBySubject(d.withFindingObserver(ctx), namespace, name)
+	v, err := d.next.GetServiceAccountBySubject(d.withFindingObserver(ctx), name)
 	d.observe("GetServiceAccountBySubject", start, err)
 	return v, err
 }

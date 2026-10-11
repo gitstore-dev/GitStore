@@ -12,8 +12,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -68,7 +66,7 @@ func newServiceAccountAuthHarness(t *testing.T) *serviceAccountAuthHarness {
 }
 
 // createServiceAccount calls the GraphQL mutation with an admin token and returns the UID.
-func (h *serviceAccountAuthHarness) createServiceAccount(namespace, name, publicKeyPEM string) string {
+func (h *serviceAccountAuthHarness) createServiceAccount(name, publicKeyPEM string) string {
 	h.t.Helper()
 
 	mutation := `
@@ -91,8 +89,8 @@ func (h *serviceAccountAuthHarness) createServiceAccount(namespace, name, public
 			"apiVersion": "gitstore.dev/v1alpha1",
 			"kind":       "ServiceAccount",
 			"metadata": map[string]any{
-				"namespace": namespace,
-				"name":      name,
+
+				"name": name,
 			},
 			"publicKeys": []map[string]any{
 				{
@@ -144,11 +142,11 @@ func (h *serviceAccountAuthHarness) createServiceAccount(namespace, name, public
 }
 
 // issueServiceAccountToken calls the issueServiceAccountToken mutation with a signed assertion.
-func (h *serviceAccountAuthHarness) issueServiceAccountToken(namespace, name, uid string, privPEM string) string {
+func (h *serviceAccountAuthHarness) issueServiceAccountToken(name, uid string, privPEM string) string {
 	h.t.Helper()
 
 	// Sign a client assertion with the private key
-	assertion := h.signClientAssertion(namespace, name, uid, privPEM)
+	assertion := h.signClientAssertion(name, uid, privPEM)
 
 	mutation := `
 		mutation IssueServiceAccountToken($input: IssueServiceAccountTokenInput!) {
@@ -168,8 +166,8 @@ func (h *serviceAccountAuthHarness) issueServiceAccountToken(namespace, name, ui
 			"apiVersion": "gitstore.dev/v1alpha1",
 			"kind":       "TokenRequest",
 			"metadata": map[string]any{
-				"namespace": namespace,
-				"name":      name,
+
+				"name": name,
 			},
 			"spec": map[string]any{
 				"audiences":         []string{"gitstore-api"},
@@ -219,11 +217,11 @@ func (h *serviceAccountAuthHarness) issueServiceAccountToken(namespace, name, ui
 }
 
 // signClientAssertion creates a client assertion JWT signed with the private key.
-func (h *serviceAccountAuthHarness) signClientAssertion(namespace, name, uid string, privPEM string) string {
-	return h.signClientAssertionWithKeyID(namespace, name, uid, "key-1", privPEM)
+func (h *serviceAccountAuthHarness) signClientAssertion(name, uid string, privPEM string) string {
+	return h.signClientAssertionWithKeyID(name, uid, "key-1", privPEM)
 }
 
-func (h *serviceAccountAuthHarness) signClientAssertionWithKeyID(namespace, name, uid, keyID, privPEM string) string {
+func (h *serviceAccountAuthHarness) signClientAssertionWithKeyID(name, uid, keyID, privPEM string) string {
 	h.t.Helper()
 
 	block, _ := pem.Decode([]byte(privPEM))
@@ -233,8 +231,8 @@ func (h *serviceAccountAuthHarness) signClientAssertionWithKeyID(namespace, name
 
 	claims := jwt.MapClaims{
 		"typ":    "JWT",
-		"iss":    fmt.Sprintf("serviceaccount:%s:%s", namespace, name),
-		"sub":    fmt.Sprintf("serviceaccount:%s:%s", namespace, name),
+		"iss":    "system:serviceaccount:" + name,
+		"sub":    "system:serviceaccount:" + name,
 		"aud":    "gitstore-api/serviceaccount-token",
 		"iat":    time.Now().Unix(),
 		"exp":    time.Now().Add(60 * time.Second).Unix(),
@@ -294,10 +292,10 @@ func TestServiceAccountAuth_ControllerHasLimitedPrivilege_T022(t *testing.T) {
 	// Create a service account
 	privPEM := generateEd25519PEM(t)
 	pubPEM := extractPublicKeyPEM(t, privPEM)
-	uid := h.createServiceAccount("controllers", "gitstore-controller-manager", pubPEM)
+	uid := h.createServiceAccount("gitstore-controller-manager", pubPEM)
 
 	// Issue an access token
-	accessToken := h.issueServiceAccountToken("controllers", "gitstore-controller-manager", uid, privPEM)
+	accessToken := h.issueServiceAccountToken("gitstore-controller-manager", uid, privPEM)
 
 	// Try to perform an admin-only action with limited service account token
 	// An admin-only action would be something like updating namespace status with
@@ -318,15 +316,11 @@ func TestServiceAccountAuth_ControllerHasLimitedPrivilege_T022(t *testing.T) {
 	result, err := h.queryWithToken(query, accessToken)
 	require.NoError(t, err)
 
-	// The query should succeed (namespaces are readable via the default anonymous access),
-	// but attempting an admin-only mutation should fail with FORBIDDEN.
-	// For this test, we verify that the service account can authenticate but has no admin roles.
-	errors, ok := result["errors"].([]any)
-	if ok && len(errors) > 0 {
-		// Check that it's a permission error, not an auth error
-		errMsg := fmt.Sprintf("%v", errors[0])
-		t.Logf("GraphQL error (expected for limited privilege): %s", errMsg)
-	}
+	// This harness uses namespaceOwnerAuthZ, not the shipped RBAC policy. Pin a
+	// successful authenticated read without mistaking it for anonymous access
+	// or proof of least privilege. The shipped grants are tested separately in
+	// TestAuthorizationBaselineShippedPolicy in the API provider package.
+	require.Empty(t, result["errors"], "authenticated baseline query must succeed")
 
 	// Verify the token is valid (authenticated) by checking it doesn't return
 	// an authentication error (e.g., "unauthenticated").
@@ -351,12 +345,12 @@ func TestServiceAccountAuth_NamespaceReconcilerActions_T022a(t *testing.T) {
 	// Create a service account
 	privPEM := generateEd25519PEM(t)
 	pubPEM := extractPublicKeyPEM(t, privPEM)
-	uid := h.createServiceAccount("controllers", "gitstore-controller-manager", pubPEM)
+	uid := h.createServiceAccount("gitstore-controller-manager", pubPEM)
 
 	// Issue an access token
-	accessToken := h.issueServiceAccountToken("controllers", "gitstore-controller-manager", uid, privPEM)
+	accessToken := h.issueServiceAccountToken("gitstore-controller-manager", uid, privPEM)
 
-	// Verify the service account can read namespaces (repository.create.any, namespace.watch, etc.)
+	// Verify the service account can read namespaces (repository.create, namespace.watch, etc.)
 	query := `query {
 		namespaces(first: 1) {
 			edges {
@@ -385,37 +379,14 @@ func TestServiceAccountAuth_NamespaceReconcilerActions_T022a(t *testing.T) {
 	t.Log("T022a: Service account can read namespaces under controller role")
 }
 
-// TestServiceAccountAuth_RBAClocalHandlesServiceAccountSubjects tests that
-// rbac-local's role_bindings correctly handles serviceaccount:* subject format (T024).
+// TestServiceAccountAuth_ClusterSubjectRoundTrip tests that
+// the authenticated cluster-scoped subject survives an assertion/token round trip.
 func TestServiceAccountAuth_RBAClocalHandlesServiceAccountSubjects(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	// Write a policy with explicit service account binding
-	policyContent := `version: v1
-default_deny: true
-roles:
-  admin:
-    allow:
-      - "*"
-  controller:
-    allow:
-      - "namespace.read"
-      - "repository.create.any"
-      - "namespace.status.write"
-role_bindings:
-  admin:
-    - admin
-  serviceaccount:controllers:gitstore-controller-manager:
-    - controller
-`
-
-	dir := t.TempDir()
-	policyPath := filepath.Join(dir, "policy.yaml")
-	require.NoError(t, os.WriteFile(policyPath, []byte(policyContent), 0600))
-
-	// Create a harness with custom policy
+	// This harness exercises the identity boundary, not the shipped RBAC provider.
 	apiURL := acquireNamespaceContractAPI(t)
 
 	h := &serviceAccountAuthHarness{
@@ -427,10 +398,10 @@ role_bindings:
 	// Create a service account
 	privPEM := generateEd25519PEM(t)
 	pubPEM := extractPublicKeyPEM(t, privPEM)
-	uid := h.createServiceAccount("controllers", "gitstore-controller-manager", pubPEM)
+	uid := h.createServiceAccount("gitstore-controller-manager", pubPEM)
 
 	// Issue a token and verify it works
-	accessToken := h.issueServiceAccountToken("controllers", "gitstore-controller-manager", uid, privPEM)
+	accessToken := h.issueServiceAccountToken("gitstore-controller-manager", uid, privPEM)
 
 	query := `query {
 		namespaces(first: 1) {
@@ -450,9 +421,9 @@ role_bindings:
 	// The query should succeed because the service account subject is bound to the controller role
 	// which includes namespace.read
 	_, ok := result["data"].(map[string]any)
-	require.True(t, ok, "rbac-local should correctly resolve serviceaccount:* subject format")
+	require.True(t, ok, "cluster-scoped ServiceAccount should authenticate")
 
-	t.Log("T024: rbac-local correctly handles serviceaccount:* subject format")
+	t.Log("cluster-scoped ServiceAccount subject authenticated")
 }
 
 func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
@@ -461,10 +432,10 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 	}
 
 	h := newServiceAccountAuthHarness(t)
-	const namespace, name = "controllers", "e2e-controller"
+	const name = "e2e-controller"
 	privateKey := generateEd25519PEM(t)
-	uid := h.createServiceAccount(namespace, name, extractPublicKeyPEM(t, privateKey))
-	accessToken := h.issueServiceAccountToken(namespace, name, uid, privateKey)
+	uid := h.createServiceAccount(name, extractPublicKeyPEM(t, privateKey))
+	accessToken := h.issueServiceAccountToken(name, uid, privateKey)
 
 	authorized, err := h.queryWithToken(`query { namespaces(first: 1) { edges { node { metadata { name } } } } }`, accessToken)
 	require.NoError(t, err)
@@ -477,13 +448,13 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 		"input": map[string]any{
 			"apiVersion": "gitstore.dev/v1beta1",
 			"kind":       "TokenRequest",
-			"metadata":   map[string]any{"namespace": namespace, "name": name},
+			"metadata":   map[string]any{"name": name},
 			"spec":       map[string]any{"audiences": []string{"gitstore-api"}, "expirationSeconds": 3600},
 		},
 	}
 	for _, assertion := range []string{
-		h.signClientAssertion(namespace, "other", uid, privateKey),
-		h.signClientAssertion(namespace, name, "different-uid", privateKey),
+		h.signClientAssertion("other", uid, privateKey),
+		h.signClientAssertion(name, "different-uid", privateKey),
 	} {
 		response := gqlQueryWithURL(t, h.apiURL, assertion, issueMutation, issueInput)
 		require.NotEmpty(t, response.Errors, "incorrect assertion subject or UID must be denied")
@@ -511,7 +482,7 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 	}`
 	rotated := gqlQueryWithURL(t, h.apiURL, h.token, rotateMutation, map[string]any{
 		"input": map[string]any{
-			"metadata": map[string]any{"namespace": namespace, "name": name},
+			"metadata": map[string]any{"name": name},
 			"add": []map[string]any{{
 				"kid":          "key-2",
 				"algorithm":    "Ed25519",
@@ -531,10 +502,10 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rotated.Data, &rotateData))
 	require.Equal(t, []string{"key-2"}, rotateData.RotateServiceAccountKey.ServiceAccount.KeyIDs)
 
-	oldAssertion := h.signClientAssertion(namespace, name, uid, privateKey)
+	oldAssertion := h.signClientAssertion(name, uid, privateKey)
 	require.NotEmpty(t, gqlQueryWithURL(t, h.apiURL, oldAssertion, issueMutation, issueInput).Errors,
 		"an assertion signed by the removed key must be denied")
-	replacementAssertion := h.signClientAssertionWithKeyID(namespace, name, uid, "key-2", replacementPrivateKey)
+	replacementAssertion := h.signClientAssertionWithKeyID(name, uid, "key-2", replacementPrivateKey)
 	require.Empty(t, gqlQueryWithURL(t, h.apiURL, replacementAssertion, issueMutation, issueInput).Errors,
 		"an assertion signed by the replacement key must be accepted")
 
@@ -545,7 +516,7 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 		"input": map[string]any{
 			"apiVersion": "gitstore.dev/v1beta1",
 			"kind":       "ServiceAccount",
-			"metadata":   map[string]any{"namespace": namespace, "name": name},
+			"metadata":   map[string]any{"name": name},
 		},
 	})
 	require.Empty(t, deleted.Errors)
@@ -563,7 +534,7 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 		"input": map[string]any{
 			"apiVersion": "gitstore.dev/v1beta1",
 			"kind":       "ServiceAccount",
-			"metadata":   map[string]any{"namespace": namespace, "name": name},
+			"metadata":   map[string]any{"name": name},
 		},
 	})
 	require.Empty(t, idempotentDelete.Errors, "deleting an absent ServiceAccount must be a no-op")

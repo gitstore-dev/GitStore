@@ -558,7 +558,6 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		accounts := make([]*datastore.ServiceAccount, 5)
 		for i := range accounts {
 			accounts[i] = newServiceAccount()
-			accounts[i].Namespace = "pagination-" + newID()[:8]
 			accounts[i].CreationTimestamp = base.Add(time.Duration(i) * time.Second)
 			accounts[i].UpdateTimestamp = accounts[i].CreationTimestamp
 			require.NoError(t, ds.CreateServiceAccount(ctx, accounts[i]))

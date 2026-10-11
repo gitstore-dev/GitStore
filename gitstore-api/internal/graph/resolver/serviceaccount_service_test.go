@@ -130,7 +130,6 @@ func serviceAccountAdminContext() context.Context {
 	return auth.ContextWithPrincipal(context.Background(), &auth.Principal{
 		Subject:    "admin",
 		AuthMethod: "static-admin",
-		Roles:      []string{"admin"},
 	})
 }
 
@@ -157,20 +156,34 @@ func serviceAccountCreateInput(t *testing.T, namespace, name, keyID string) *mod
 	}
 }
 
+func TestServiceAccountOperationsRejectNamespace(t *testing.T) {
+	h := newServiceAccountResolverHarness(t)
+	ctx := serviceAccountAdminContext()
+	_, err := h.resolver.CreateServiceAccount(ctx, serviceAccountCreateInput(t, "legacy", "manager", "key"))
+	require.ErrorContains(t, err, "cluster-scoped")
+	metadata := &model.ObjectMetaInput{Namespace: "legacy", Name: "manager"}
+	_, err = h.resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{Metadata: metadata})
+	require.ErrorContains(t, err, "cluster-scoped")
+	_, err = h.resolver.DeleteServiceAccount(ctx, &model.DeleteServiceAccountInput{Metadata: metadata})
+	require.ErrorContains(t, err, "cluster-scoped")
+	_, err = h.resolver.IssueServiceAccountToken(ctx, &model.IssueServiceAccountTokenInput{Metadata: metadata, Spec: &model.TokenRequestSpecInput{}})
+	require.ErrorContains(t, err, "cluster-scoped")
+}
+
 func TestCreateServiceAccountValidatesKeysAndDuplicates(t *testing.T) {
 	h := newServiceAccountResolverHarness(t)
 	ctx := serviceAccountAdminContext()
-	input := serviceAccountCreateInput(t, "controllers", "manager", "key-1")
+	input := serviceAccountCreateInput(t, "", "manager", "key-1")
 
 	created, err := h.resolver.CreateServiceAccount(ctx, input)
 	require.NoError(t, err)
 	require.NotNil(t, created)
 	assert.Equal(t, []string{"key-1"}, created.ServiceAccount.KeyIDs)
 	assert.NotEmpty(t, created.ServiceAccount.Metadata.UID)
-	assert.Equal(t, "controllers", created.ServiceAccount.Metadata.Namespace)
+	assert.Empty(t, created.ServiceAccount.Metadata.Namespace)
 	assert.Equal(t, "manager", created.ServiceAccount.Metadata.Name)
 
-	persisted, err := h.store.GetServiceAccountBySubject(ctx, "controllers", "manager")
+	persisted, err := h.store.GetServiceAccountBySubject(ctx, "manager")
 	require.NoError(t, err)
 	assert.Equal(t, "admin", persisted.CreationActor)
 
@@ -178,7 +191,7 @@ func TestCreateServiceAccountValidatesKeysAndDuplicates(t *testing.T) {
 	require.ErrorContains(t, err, "already exists")
 
 	_, err = h.resolver.CreateServiceAccount(ctx, &model.CreateServiceAccountInput{
-		Metadata:   &model.ObjectMetaInput{Namespace: "controllers", Name: "without-key"},
+		Metadata:   &model.ObjectMetaInput{Name: "without-key"},
 		PublicKeys: nil,
 	})
 	require.ErrorContains(t, err, "at least one public key")
@@ -188,11 +201,11 @@ func TestCreateServiceAccountValidatesKeysAndDuplicates(t *testing.T) {
 func TestRotateServiceAccountKeyPreservesOverlapAndRejectsEmptyRotation(t *testing.T) {
 	h := newServiceAccountResolverHarness(t)
 	ctx := serviceAccountAdminContext()
-	created, err := h.resolver.CreateServiceAccount(ctx, serviceAccountCreateInput(t, "controllers", "manager", "old"))
+	created, err := h.resolver.CreateServiceAccount(ctx, serviceAccountCreateInput(t, "", "manager", "old"))
 	require.NoError(t, err)
 
 	overlap, err := h.resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{
-		Metadata: &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
+		Metadata: &model.ObjectMetaInput{Name: "manager"},
 		Add:      []*model.ServiceAccountPublicKeyInput{serviceAccountPublicKeyInput(t, "new")},
 	})
 	require.NoError(t, err)
@@ -200,7 +213,7 @@ func TestRotateServiceAccountKeyPreservesOverlapAndRejectsEmptyRotation(t *testi
 	assert.Equal(t, created.ServiceAccount.Metadata.UID, overlap.ServiceAccount.Metadata.UID)
 
 	rotated, err := h.resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{
-		Metadata:   &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
+		Metadata:   &model.ObjectMetaInput{Name: "manager"},
 		RemoveKids: []string{"old"},
 	})
 	require.NoError(t, err)
@@ -208,11 +221,11 @@ func TestRotateServiceAccountKeyPreservesOverlapAndRejectsEmptyRotation(t *testi
 	assert.Equal(t, created.ServiceAccount.Metadata.UID, rotated.ServiceAccount.Metadata.UID)
 
 	_, err = h.resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{
-		Metadata:   &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
+		Metadata:   &model.ObjectMetaInput{Name: "manager"},
 		RemoveKids: []string{"new"},
 	})
 	require.ErrorIs(t, err, datastore.ErrInvalidArgument)
-	persisted, err := h.store.GetServiceAccountBySubject(ctx, "controllers", "manager")
+	persisted, err := h.store.GetServiceAccountBySubject(ctx, "manager")
 	require.NoError(t, err)
 	require.Len(t, persisted.PublicKeys, 1)
 	assert.Equal(t, "new", persisted.PublicKeys[0].KeyID)
@@ -222,9 +235,9 @@ func TestRotateServiceAccountKeyPreservesOverlapAndRejectsEmptyRotation(t *testi
 func TestDeleteServiceAccountIsIdempotentAndRevokesAuthentication(t *testing.T) {
 	h := newServiceAccountResolverHarness(t)
 	ctx := serviceAccountAdminContext()
-	created, err := h.resolver.CreateServiceAccount(ctx, serviceAccountCreateInput(t, "controllers", "manager", "key-1"))
+	created, err := h.resolver.CreateServiceAccount(ctx, serviceAccountCreateInput(t, "", "manager", "key-1"))
 	require.NoError(t, err)
-	account, err := h.store.GetServiceAccountBySubject(ctx, "controllers", "manager")
+	account, err := h.store.GetServiceAccountBySubject(ctx, "manager")
 	require.NoError(t, err)
 	token, _, err := h.provider.IssueAccessToken(account, "gitstore-api", time.Minute)
 	require.NoError(t, err)
@@ -236,7 +249,7 @@ func TestDeleteServiceAccountIsIdempotentAndRevokesAuthentication(t *testing.T) 
 	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
 
 	deleted, err := h.resolver.DeleteServiceAccount(ctx, &model.DeleteServiceAccountInput{
-		Metadata: &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
+		Metadata: &model.ObjectMetaInput{Name: "manager"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, created.ServiceAccount.Metadata.UID, deleted.ServiceAccount.Metadata.UID)
@@ -248,7 +261,7 @@ func TestDeleteServiceAccountIsIdempotentAndRevokesAuthentication(t *testing.T) 
 	assert.Equal(t, auth.OutcomeDeny, decision.Outcome)
 
 	deleted, err = h.resolver.DeleteServiceAccount(ctx, &model.DeleteServiceAccountInput{
-		Metadata: &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
+		Metadata: &model.ObjectMetaInput{Name: "manager"},
 	})
 	require.NoError(t, err)
 	assert.Nil(t, deleted.ServiceAccount, "deleting an absent account returns a null serviceAccount")
@@ -257,15 +270,15 @@ func TestDeleteServiceAccountIsIdempotentAndRevokesAuthentication(t *testing.T) 
 func TestIssueServiceAccountTokenRequiresMatchingAssertionIdentityAndClampsTTL(t *testing.T) {
 	h := newServiceAccountResolverHarness(t)
 	adminCtx := serviceAccountAdminContext()
-	created, err := h.resolver.CreateServiceAccount(adminCtx, serviceAccountCreateInput(t, "controllers", "manager", "key-1"))
+	created, err := h.resolver.CreateServiceAccount(adminCtx, serviceAccountCreateInput(t, "", "manager", "key-1"))
 	require.NoError(t, err)
 	ttl := int32(7200)
 	input := &model.IssueServiceAccountTokenInput{
-		Metadata: &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
+		Metadata: &model.ObjectMetaInput{Name: "manager"},
 		Spec:     &model.TokenRequestSpecInput{Audiences: []string{"gitstore-api"}, ExpirationSeconds: &ttl},
 	}
 	assertionCtx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
-		Subject:           datastore.ServiceAccountSubject("controllers", "manager"),
+		Subject:           datastore.ServiceAccountSubject("manager"),
 		AuthMethod:        "serviceaccount-assertion",
 		ServiceAccountUID: created.ServiceAccount.Metadata.UID,
 	})
@@ -286,8 +299,8 @@ func TestIssueServiceAccountTokenRequiresMatchingAssertionIdentityAndClampsTTL(t
 	assert.Equal(t, created.ServiceAccount.Metadata.UID, principal.ServiceAccountUID)
 
 	for _, principal := range []*auth.Principal{
-		{Subject: datastore.ServiceAccountSubject("controllers", "other"), AuthMethod: "serviceaccount-assertion", ServiceAccountUID: created.ServiceAccount.Metadata.UID},
-		{Subject: datastore.ServiceAccountSubject("controllers", "manager"), AuthMethod: "serviceaccount-assertion", ServiceAccountUID: "other-uid"},
+		{Subject: datastore.ServiceAccountSubject("other"), AuthMethod: "serviceaccount-assertion", ServiceAccountUID: created.ServiceAccount.Metadata.UID},
+		{Subject: datastore.ServiceAccountSubject("manager"), AuthMethod: "serviceaccount-assertion", ServiceAccountUID: "other-uid"},
 		{Subject: "admin", AuthMethod: "static-admin"},
 	} {
 		_, err := h.resolver.IssueServiceAccountToken(auth.ContextWithPrincipal(context.Background(), principal), input)

@@ -42,13 +42,32 @@ func TestStaticUsersBasicAuthAndUserDir(t *testing.T) {
 	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
 	require.NotNil(t, principal)
 	assert.Equal(t, "alice", principal.Subject)
-	assert.Empty(t, principal.Roles)
+
 	assert.Equal(t, "static-users", principal.AuthMethod)
 	profile, err := p.GetBySubject(context.Background(), "alice")
 	require.NoError(t, err)
 	assert.Equal(t, "Alice", profile.DisplayName)
 	_, err = p.GetBySubject(context.Background(), "nobody")
 	assert.ErrorIs(t, err, ErrUserNotFound)
+}
+
+func TestStaticUsersRejectsReservedIdentities(t *testing.T) {
+	for _, subject := range []string{"system:api", "system:serviceaccount:controller", "system:masters", "serviceaccount:ns:controller", "anon"} {
+		t.Run(subject, func(t *testing.T) {
+			p := testProvider(t)
+			require.NoError(t, os.WriteFile(p.path, []byte("version: v1\nusers:\n  - username: "+subject+"\n    password_hash: unused\n"), 0600))
+			require.ErrorContains(t, p.Reload(), "reserved")
+			_, err := p.GetBySubject(context.Background(), "alice")
+			require.NoError(t, err, "rejected reload must preserve prior users")
+			now := time.Now()
+			token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{Subject: subject, Issuer: p.jwtIssuer, ID: "test-jti", ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour))}).SignedString(p.jwtSecret)
+			require.NoError(t, err)
+			principal, decision, err := p.Authenticate(context.Background(), auth.AuthRequest{Header: http.Header{"Authorization": {"Bearer " + token}}})
+			require.NoError(t, err)
+			require.Equal(t, auth.OutcomeDeny, decision.Outcome)
+			require.Nil(t, principal)
+		})
+	}
 }
 
 func TestStaticUsersBearerRoundTrip(t *testing.T) {
@@ -59,7 +78,7 @@ func TestStaticUsersBearerRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
 	assert.Equal(t, "bob", principal.Subject)
-	assert.Empty(t, principal.Roles)
+
 }
 
 func TestStaticUsersTokenDomainRejectsNewTokenOnLegacyVerifier(t *testing.T) {

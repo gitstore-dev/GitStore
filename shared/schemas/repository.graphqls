@@ -218,7 +218,8 @@ extend type Mutation {
 """Author-controlled metadata shared by declarative resource mutations."""
 input ObjectMetaInput {
   name: String!
-  namespace: String!
+  """Required by namespaced resources; omit for cluster-scoped resources."""
+  namespace: String! = ""
   labels: JSON
   annotations: JSON
 }

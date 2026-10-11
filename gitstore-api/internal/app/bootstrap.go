@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"go.uber.org/zap"
 )
@@ -30,7 +31,7 @@ type bootstrapNamespace struct {
 
 var bootstrapNamespaces = []bootstrapNamespace{
 	{name: "gitstore-system", title: "GitStore System", tier: datastore.NamespaceTierOrganization},
-	{name: "default", title: "Default", tier: datastore.NamespaceTierUser},
+	{name: "default", title: "Default", tier: datastore.NamespaceTierOrganization},
 }
 
 func ensureBootstrapResources(
@@ -116,7 +117,7 @@ func ensureBootstrapRepository(
 		_ = store.DeleteRepository(ctx, repository.UID)
 		return fmt.Errorf("create system repository mapping: %w", err)
 	}
-	if _, err := git.CreateRepository(ctx, repository.UID, repository.StorageClass); err != nil {
+	if _, err := git.CreateRepository(gitclient.ContextForBackingWork(ctx), repository.UID, repository.StorageClass); err != nil {
 		_ = store.DeleteNamespaceMapping(ctx, namespace.Name, bootstrapRepositoryName)
 		_ = store.DeleteRepository(ctx, repository.UID)
 		return fmt.Errorf("provision system repository storage: %w", err)

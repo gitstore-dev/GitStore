@@ -6607,7 +6607,8 @@ extend type Mutation {
 """Author-controlled metadata shared by declarative resource mutations."""
 input ObjectMetaInput {
   name: String!
-  namespace: String!
+  """Required by namespaced resources; omit for cluster-scoped resources."""
+  namespace: String! = ""
   labels: JSON
   annotations: JSON
 }
@@ -6716,19 +6717,27 @@ interface Node {
 }
 
 """
-An object that has a human-readable name. This represents both the Subject and the Delegate:
-- creation_actor
-- update_actor
-- creation_on_behalf_of_actor OR creation_subject
-- update_on_behalf_of_actor OR update_subject
-
-Implemented in
-- User
-- ServiceAccount
+An object that has a human-readable name. This represents both the Subject and the Delegate
 """
+# Auditing (once we support delegation):
+# - creation_actor
+# - update_actor
+# - creation_on_behalf_of_actor OR creation_subject
+# - update_on_behalf_of_actor OR update_subject
+#
+# Implementations include:
+# - User (Staff, Customer)
+# - ServiceAccount
 interface Actor {
   metadata: ObjectMeta!
+  # inspired by product lifecycle
+  # lifecycle.state: ActorLifecycleState!
+  # Does status conflict with .status for Resource types?
   status: ActorStatus!
+  # OpenShift-style envelope
+  # fullName: String ??
+  # identities: [String!]
+  # groups: [String!]
 }
 
 """
@@ -7112,8 +7121,9 @@ input ProductVariantNamespacePath {
 # replacing kubelet attestation with a portable signed client assertion.
 
 """
-A GitStore-issued non-human identity. Implements the Actor interface so it can
-appear anywhere a Subject/Delegate is referenced.
+A cluster-scoped GitStore-issued non-human identity. Its global metadata.name
+and immutable UID identify the account. metadata.namespace is unset on output;
+nonempty metadata.namespace is rejected on every ServiceAccount operation.
 """
 type ServiceAccount implements Actor {
   apiVersion: String!
@@ -7259,20 +7269,20 @@ extend type Mutation {
 
   """
   Create a new ServiceAccount with one or more enrolled public keys.
-  Requires rbac-local action "serviceaccount.create".
+  Requires action "serviceAccount.create"; omit metadata.namespace.
   """
   createServiceAccount(input: CreateServiceAccountInput!): CreateServiceAccountPayload!
 
   """
   Add and/or remove enrolled public keys on an existing ServiceAccount,
   supporting an overlap window during key rotation. Requires rbac-local
-  action "serviceaccount.key.rotate".
+  action "serviceAccount.key.rotate"; omit metadata.namespace.
   """
   rotateServiceAccountKey(input: RotateServiceAccountKeyInput!): RotateServiceAccountKeyPayload!
 
   """
   Delete a ServiceAccount. Idempotent: deleting an already-deleted account
-  is a no-op success. Requires rbac-local action "serviceaccount.delete".
+  is a no-op success. Requires action "serviceAccount.delete"; omit metadata.namespace.
   """
   deleteServiceAccount(input: DeleteServiceAccountInput!): DeleteServiceAccountPayload!
 }

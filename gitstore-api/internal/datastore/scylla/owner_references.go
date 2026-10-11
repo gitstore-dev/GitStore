@@ -292,7 +292,7 @@ func (s *scyllaDatastore) MarkProductTerminating(
 	product.UpdateTimestamp = when
 	product.UpdateActor = "deletion"
 	datastore.AdvanceProductSystemVersion(product)
-	if err := s.UpdateProduct(ctx, product); err != nil {
+	if err := s.UpdateProduct(ctx, product, expectedResourceVersion); err != nil {
 		return nil, err
 	}
 	return product, nil

@@ -446,7 +446,9 @@ type ProductStore interface {
 	GetProduct(ctx context.Context, uid string) (*Product, error)
 	GetProductByName(ctx context.Context, namespace, name string) (*Product, error)
 	ListProducts(ctx context.Context, namespace string, page PageParams) (*PageResult[Product], error)
-	UpdateProduct(ctx context.Context, p *Product) error
+	// UpdateProduct replaces only the authorized snapshot. The expected version
+	// must match the durable row and the replacement must advance it once.
+	UpdateProduct(ctx context.Context, p *Product, expectedResourceVersion string) error
 	// UpdateProductStatus applies a CAS patch to status and optional
 	// controller-managed category owner references, without replacing author fields.
 	UpdateProductStatus(ctx context.Context, namespace, name string, patch ProductStatusPatch) (*Product, error)
@@ -522,7 +524,8 @@ type CategoryTaxonomyStore interface {
 	GetCategoryTaxonomy(ctx context.Context, uid string) (*CategoryTaxonomy, error)
 	GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*CategoryTaxonomy, error)
 	ListCategoryTaxonomies(ctx context.Context, namespace string, page PageParams) (*PageResult[CategoryTaxonomy], error)
-	UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error
+	// UpdateCategoryTaxonomy has the same strict CAS contract as UpdateProduct.
+	UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy, expectedResourceVersion string) error
 	DeleteCategoryTaxonomy(ctx context.Context, uid string) error
 	// UpdateCategoryTaxonomyStatus applies a partial-merge status-only
 	// write, distinct from UpdateCategoryTaxonomy (which replaces the full
@@ -541,7 +544,8 @@ type ProductVariantStore interface {
 	GetProductVariantBySKU(ctx context.Context, namespace, sku string) (*ProductVariant, error)
 	ListProductVariants(ctx context.Context, namespace string, page PageParams) (*PageResult[ProductVariant], error)
 	ListProductVariantsByProductRef(ctx context.Context, namespace, productRefName string) ([]*ProductVariant, error)
-	UpdateProductVariant(ctx context.Context, v *ProductVariant) error
+	// UpdateProductVariant has the same strict CAS contract as UpdateProduct.
+	UpdateProductVariant(ctx context.Context, v *ProductVariant, expectedResourceVersion string) error
 	DeleteProductVariant(ctx context.Context, uid string) error
 	DeleteProductVariantWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 }
@@ -552,7 +556,8 @@ type CollectionStore interface {
 	GetCollection(ctx context.Context, uid string) (*Collection, error)
 	GetCollectionByName(ctx context.Context, namespace, name string) (*Collection, error)
 	ListCollections(ctx context.Context, namespace string, page PageParams) (*PageResult[Collection], error)
-	UpdateCollection(ctx context.Context, c *Collection) error
+	// UpdateCollection has the same strict CAS contract as UpdateProduct.
+	UpdateCollection(ctx context.Context, c *Collection, expectedResourceVersion string) error
 	DeleteCollection(ctx context.Context, uid string) error
 	DeleteCollectionWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 	ListProductsByLabelSelector(ctx context.Context, namespace string, selector catalog.LabelSelector) ([]*Product, error)
@@ -616,7 +621,7 @@ type RepositoryRoutingStore interface {
 type ServiceAccountStore interface {
 	CreateServiceAccount(ctx context.Context, sa *ServiceAccount) error
 	GetServiceAccountByUID(ctx context.Context, uid string) (*ServiceAccount, error)
-	GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*ServiceAccount, error)
+	GetServiceAccountBySubject(ctx context.Context, name string) (*ServiceAccount, error)
 	ListServiceAccounts(ctx context.Context, page PageParams) (*PageResult[ServiceAccount], error)
 	// UpdateServiceAccountKeys adds/removes public keys and advances
 	// Generation; fails with ErrConflict if expectedResourceVersion is stale

@@ -1,5 +1,53 @@
 # Configuration Reference
 
+## Authorization baseline (064)
+
+The shipped policy uses only `rbac.authorization.gitstore.dev/v1beta1`.
+Legacy v1 policies, action aliases, deny rules and namespaced ServiceAccount
+settings are rejected at startup/reload, with no compatibility layer. Controller
+enrollment takes a name, immutable UID and signing-record reference, never a
+namespace. Local, Scylla and capacity Compose enrollment commands use this same
+contract. Use a fresh explicitly owned development keyspace for the replaced
+alpha ServiceAccount baseline; no command silently resets an existing database.
+
+Single-node and clustered Scylla Compose overlays allow five minutes of API
+startup grace for first-boot baseline migrations and distributed CDC schema
+agreement. Dependents start as soon as `/ready` succeeds; the grace period does
+not make a failed readiness check pass. The memdb startup path retains its
+shorter health interval. Copied `gitstore-dev/quickstart` Compose files need the
+same enrollment/configuration and health-grace update.
+
+`make capacity TARGET=api PROFILE=authorization MODE=diagnostic` runs bounded,
+independently sampled evaluator latency at the maximum supported policy sizes.
+This diagnostic does not replace deployed readiness/lifecycle gates; alpha and
+production mode are rejected until reload/heap and zero-I/O evidence are complete.
+
+USER namespaces are personal identities: the name must equal the authenticated
+human creator and effective User owner. Group/ServiceAccount ownership,
+ownership transfer and tier changes are rejected even for cluster administrators.
+Use ORGANIZATION for team namespaces; bootstrap commands default to that tier.
+A push that removes a USER declaration and creates another Namespace declaration
+is rejected as a possible rename; perform unrelated deletion and creation in
+separate pushes. These admission invariants cannot be bypassed by an RBAC grant.
+
+Product, CategoryTaxonomy, Collection and ProductVariant replacements use
+explicit resource-version preconditions on both memdb and Scylla. A concurrent
+owner, status or spec change causes a conflict; admission repair reloads and
+reauthorizes before trying again. Creator and update actors come from the trusted
+request identity. There is no unconditional-update compatibility overload.
+
+Both directions of API/Git RPC use HMAC-SHA256 signed, 60-second, single-use
+request envelopes. The shared key is not a bearer credential. Git retains
+`.rpc-replay-v1` under its data directory across non-overlapping replacement;
+API replicas share atomic replay reservations in their datastore. Full queues,
+storage errors, invalid/expired signatures and replays fail closed. Keep clocks
+synchronized and gRPC isolated: signatures do not encrypt responses. Use
+`grpc_auth.hmac_secret_previous` temporarily on receivers for explicit key
+rotation, then remove it. Old bearer-only peers cannot coexist with this wire.
+
+The copied policy/config/Compose/enrollment examples in `gitstore-dev/quickstart`
+need a matching follow-up update before publishing the new baseline there.
+
 This document is the operator reference for configuring `gitstore-api`, `gitstore-git-service`, and `gitstore-controller-manager`.
 
 Configuration is grouped by owning service: `[git_service]` is owned by `gitstore-git-service`, `[api]` is owned by `gitstore-api`, `[controller]` is owned by `gitstore-controller-manager`, and `[log]`, `[grpc_auth]`, and `[push_limits]` are shared across the services that read them.
@@ -210,25 +258,18 @@ that verifies bearer JWTs via OIDC Discovery + JWKS. It is enabled only when
 | `api.auth.rbac_local.policy_file` | `GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE` | string | `policy.yaml` | No | No | YAML RBAC policy path, used when `authz.provider = "rbac-local"` |
 | `api.auth.userdir.provider` | `GITSTORE_API__AUTH__USERDIR__PROVIDER` | string | `none` | No | No | Active user-directory provider |
 
-#### Upgrading: `purge` grants for deletion completion
+#### Controller deletion-completion grants
 
 The controller-only deletion-completion mutations are authorized with a
 dedicated `purge` action per resource kind: `completeNamespaceDeletion`
 requires `namespace.purge`, `completeRepositoryDeletion` requires
-`repository.purge`, and `completeProductDeletion` requires `product.purge`.
-The shipped development policy grants these to the controller role; production
-deployments with a custom reviewed policy must add the same three grants to
-the role their controller service account is bound to **before** upgrading the
-API, otherwise deletion finalization is denied and affected Namespace,
-Repository, and Product resources remain terminating.
-
-During a rolling upgrade with mixed API versions, keep both the new `*.purge`
-grants and the legacy grants (`namespace.status.write`,
-`repository.status.write`, `product.delete.complete`) on the controller role
-so old and new replicas both authorize the controller. The legacy grants
-become unused once every replica runs the new version and may be dropped in
-the next release; the `*.status.write` grants stay required for the
-`update*Status` mutations and `provisionRepositoryStorage`.
+`repository.purge`, `completeCategoryDeletion` requires `categoryTaxonomy.purge`,
+and `completeProductDeletion` requires `product.purge`. The shipped controller
+ClusterRole grants all four. Custom v1beta1 policies must grant them explicitly;
+status-write permissions do not substitute for purge. Old action aliases and
+mixed old/new policy or wire versions are not supported by this unreleased alpha
+baseline. Keep canonical status-write grants for separate status mutations, and
+`namespace.system-repository.provision` for namespace backing-repository provisioning.
 
 ### Logging
 
@@ -434,7 +475,7 @@ Secrets in the users file and `api.auth.jwt.secret` must remain outside committe
 | `log.level`                      | `GITSTORE_LOG__LEVEL`                         | string | `info`                       | No       | No        | `trace` \| `debug` \| `info` \| `warn` \| `error` |
 | `log.format`                     | `GITSTORE_LOG__FORMAT`                        | string | `json`                       | No       | No        | `json` \| `text`                                  |
 | `grpc_auth.hmac_secret`          | `GITSTORE_GRPC_AUTH__HMAC_SECRET`             | string | —                            | **Yes**  | **Yes**   | HMAC secret shared with `gitstore-api`            |
-| `grpc_auth.hmac_secret_previous` | `GITSTORE_GRPC_AUTH__HMAC_SECRET_PREVIOUS`    | string | (unset)                      | No       | **Yes**   | Previous HMAC secret accepted during rotation; must not be set to an empty string |
+| `grpc_auth.hmac_secret_previous` | `GITSTORE_GRPC_AUTH__HMAC_SECRET_PREVIOUS`    | string | (unset)                      | No       | **Yes**   | Previous RPC signing key accepted by both API and Git during rotation; remove after all callers use the primary key |
 | `push_limits.max_pack_size`      | `GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE`         | IEC size string | `512MiB`             | No       | No        | Platform ceiling for a single push's total pack size |
 | `push_limits.max_file_size`      | `GITSTORE_PUSH_LIMITS__MAX_FILE_SIZE`         | IEC size string | `100MiB`             | No       | No        | Platform ceiling for a single file/blob within a push |
 
@@ -517,7 +558,6 @@ format = "json"
 | `controller.api_uri`                               | `GITSTORE_CONTROLLER__API_URI`                                 | string   | `http://localhost:4000/graphql`     | No               | No        | GraphQL API URI used by reconcilers                                 |
 | `controller.api_client.rate_limit.per_second` | `GITSTORE_CONTROLLER__API_CLIENT__RATE_LIMIT__PER_SECOND` | integer | `40` | No | No | Positive shared request rate across all kinds, queries, mutations and WebSocket upgrades |
 | `controller.api_client.rate_limit.burst` | `GITSTORE_CONTROLLER__API_CLIENT__RATE_LIMIT__BURST` | integer | `10` | No | No | Positive shared request burst; credential renewal uses its separate singleflight budget |
-| `controller.serviceaccount.namespace`              | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE`               | string   | (empty)                             | **Yes**          | No        | Enrolled ServiceAccount namespace                                   |
 | `controller.serviceaccount.name`                   | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME`                    | string   | `gitstore-controller-manager`       | **Yes**          | No        | Enrolled ServiceAccount name                                        |
 | `controller.serviceaccount.uid`                    | `GITSTORE_CONTROLLER__SERVICEACCOUNT__UID`                     | string   | (empty)                             | **Yes**          | No        | Enrolled ServiceAccount UID; prevents identity reuse after deletion |
 | `controller.serviceaccount.key_ref.kind`           | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND`           | string   | (empty)                             | **Yes**          | No        | Must be `SecretRef`                                                 |

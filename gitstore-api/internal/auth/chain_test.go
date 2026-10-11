@@ -6,20 +6,46 @@ package auth_test
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
+
+func TestV1Beta1EffectivePermissionUsesSystemGroupAndSatisfiableConditions(t *testing.T) {
+	for _, tc := range []struct {
+		name, when string
+		want       bool
+	}{
+		{"authenticated-creator", "[{attr: tier, op: eq, value: USER}]", true},
+		{"contradiction", "[{attr: tier, op: eq, value: USER}, {attr: tier, op: neq, value: USER}]", false},
+		{"owner", "[owner]", true},
+		{"impossible-tier", "[{attr: tier, op: eq, value: ALIEN}]", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "policy.yaml")
+			require.NoError(t, os.WriteFile(path, []byte("apiVersion: rbac.authorization.gitstore.dev/v1beta1\nkind: RbacLocalConfiguration\nclusterRoles:\n  creator:\n    rules: [{resources: [namespace], verbs: [create], when: "+tc.when+"}]\nclusterRoleBindings:\n  - roleRef: {kind: ClusterRole, name: creator}\n    subjects: [{kind: Group, name: 'system:authenticated'}]\n"), 0600))
+			provider, err := rbaclocal.New(config.RBACConfig{PolicyFile: path}, zap.NewNop())
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, provider.HasAnyRoleBindingFor([]string{"alice"}))
+		})
+	}
+}
 
 // stubProvider is a test-only AuthNProvider with a fixed Authenticate outcome.
 type stubProvider struct {
-	name    string
-	outcome authpkg.Outcome
-	reason  string
+	name      string
+	outcome   authpkg.Outcome
+	reason    string
+	principal *authpkg.Principal
 }
 
 func (s *stubProvider) Name() string { return s.name }
@@ -29,11 +55,55 @@ func (s *stubProvider) Capabilities() authpkg.Capability { return authpkg.CapAut
 func (s *stubProvider) Authenticate(_ context.Context, _ authpkg.AuthRequest) (*authpkg.Principal, authpkg.Decision, error) {
 	switch s.outcome {
 	case authpkg.OutcomeAllow:
+		if s.principal != nil {
+			return s.principal, authpkg.Allow(s.name, s.reason), nil
+		}
 		return &authpkg.Principal{Subject: s.name, AuthMethod: s.name}, authpkg.Allow(s.name, s.reason), nil
 	case authpkg.OutcomeDeny:
 		return nil, authpkg.Deny(s.name, s.reason), nil
 	default:
 		return nil, authpkg.Challenge(s.name, s.reason), nil
+	}
+}
+
+func TestChain_NormalizesTrustedIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider string
+		principal      authpkg.Principal
+		groups         []string
+		deny           bool
+	}{
+		{"human", "static-users", authpkg.Principal{Subject: "alice", AuthMethod: "basic", Groups: []string{"team", "team", "system:unauthenticated", "system:serviceaccounts"}}, []string{"team", "system:authenticated"}, false},
+		{"anonymous", "anonymous", authpkg.Principal{Subject: "anon", AuthMethod: "none", Groups: []string{"team", "system:masters", "system:authenticated"}}, []string{"system:unauthenticated"}, false},
+		{"account", "serviceaccount-jwt", authpkg.Principal{Subject: "system:serviceaccount:controller", AuthMethod: "serviceaccount-jwt", ServiceAccountUID: "uid", Groups: []string{"operators"}}, []string{"operators", "system:authenticated", "system:serviceaccounts"}, false},
+		{"assertion", "serviceaccount-assertion", authpkg.Principal{Subject: "system:serviceaccount:controller", AuthMethod: "serviceaccount-assertion", ServiceAccountUID: "uid"}, []string{"system:authenticated", "system:serviceaccounts"}, false},
+		{"internal-spoof", "oidc-jwt", authpkg.Principal{Subject: "system:api", AuthMethod: "internal"}, nil, true},
+		{"account-spoof", "oidc-jwt", authpkg.Principal{Subject: "system:serviceaccount:controller", AuthMethod: "serviceaccount-jwt", ServiceAccountUID: "uid"}, nil, true},
+		{"uid-spoof", "static-users", authpkg.Principal{Subject: "alice", AuthMethod: "basic", ServiceAccountUID: "uid"}, nil, true},
+		{"missing-uid", "serviceaccount-jwt", authpkg.Principal{Subject: "system:serviceaccount:controller", AuthMethod: "serviceaccount-jwt"}, nil, true},
+		{"legacy", "serviceaccount-jwt", authpkg.Principal{Subject: "serviceaccount:namespace:controller", AuthMethod: "serviceaccount-jwt", ServiceAccountUID: "uid"}, nil, true},
+		{"reserved", "static-users", authpkg.Principal{Subject: "system:masters", AuthMethod: "basic"}, nil, true},
+		{"anonymous-spoof", "oidc-jwt", authpkg.Principal{Subject: "anon", AuthMethod: "none"}, nil, true},
+		{"overflow", "static-users", authpkg.Principal{Subject: "alice", AuthMethod: "basic", Groups: make([]string, 257)}, nil, true},
+		{"missing-method", "static-users", authpkg.Principal{Subject: "alice"}, nil, true},
+		{"control-subject", "static-users", authpkg.Principal{Subject: "alice\n", AuthMethod: "basic"}, nil, true},
+		{"control-group", "static-users", authpkg.Principal{Subject: "alice", AuthMethod: "basic", Groups: []string{"team\n"}}, nil, true},
+		{"control-uid", "serviceaccount-jwt", authpkg.Principal{Subject: "system:serviceaccount:controller", AuthMethod: "serviceaccount-jwt", ServiceAccountUID: "uid\n"}, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := append([]string(nil), tc.principal.Groups...)
+			chain := authpkg.NewChainedAuthN(&stubProvider{name: tc.provider, outcome: authpkg.OutcomeAllow, principal: &tc.principal})
+			got, decision, err := chain.Authenticate(context.Background(), authpkg.AuthRequest{})
+			require.NoError(t, err)
+			if tc.deny {
+				require.Equal(t, authpkg.OutcomeDeny, decision.Outcome)
+				require.Nil(t, got)
+				return
+			}
+			require.Equal(t, authpkg.OutcomeAllow, decision.Outcome)
+			require.Equal(t, tc.groups, got.Groups)
+			require.Equal(t, original, tc.principal.Groups, "normalization must not mutate provider-owned identity")
+		})
 	}
 }
 

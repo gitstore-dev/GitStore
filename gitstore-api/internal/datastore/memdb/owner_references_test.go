@@ -67,7 +67,7 @@ func TestOwnerReferenceProjection_BlocksChildrenAndPagesProducts(t *testing.T) {
 	require.NoError(t, err)
 	child.OwnerReferences = nil
 	child.ResourceVersion = "2"
-	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, child))
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, child, "1"))
 	hasBlocking, err = owners.HasBlockingOwnerDependents(ctx, scope, parentUID)
 	require.NoError(t, err)
 	assert.False(t, hasBlocking, "updates must replace the old projection atomically")

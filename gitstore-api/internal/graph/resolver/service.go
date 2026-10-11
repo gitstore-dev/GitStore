@@ -650,7 +650,9 @@ func (s *Service) UpdateCollection(ctx context.Context, uid string, input map[st
 	if body, ok := input["body"].(string); ok {
 		c.Body = body
 	}
-	if err := s.store.UpdateCollection(ctx, &c); err != nil {
+	datastore.AdvanceCollectionSystemVersion(&c)
+	c.Generation++
+	if err := s.store.UpdateCollection(ctx, &c, existing.ResourceVersion); err != nil {
 		return nil, fmt.Errorf("failed to update collection: %w", err)
 	}
 	return &c, nil
@@ -674,7 +676,7 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 		s.recordNamespaceGraphQLError("CREATE", namespaceInputName(input.Metadata), err)
 		return nil, err
 	}
-	preflight, err := s.evaluateNamespacePolicy(ctx, resource, admission.OperationCreate)
+	preflight, err := s.evaluateNamespacePolicy(ctx, resource, admission.OperationCreate, callerUsername)
 	if err != nil {
 		s.recordNamespaceGraphQLError("CREATE", resource.Metadata.Name, err)
 		return nil, err
@@ -827,7 +829,7 @@ func (s *Service) UpdateNamespace(ctx context.Context, input model.UpdateNamespa
 		s.recordNamespaceGraphQLError("UPDATE", resource.Metadata.Name, lookupErr)
 		return nil, gqlerror.Errorf("failed to validate Namespace operation")
 	}
-	preflight, err := s.evaluateNamespacePolicy(ctx, resource, admission.OperationUpdate)
+	preflight, err := s.evaluateNamespacePolicy(ctx, resource, admission.OperationUpdate, callerUsername)
 	if err != nil {
 		s.recordNamespaceGraphQLError("UPDATE", resource.Metadata.Name, err)
 		return nil, err
@@ -836,9 +838,9 @@ func (s *Service) UpdateNamespace(ctx context.Context, input model.UpdateNamespa
 }
 
 // TransferNamespaceOwner reassigns a namespace's owner via a git commit that
-// updates the reserved owner annotation (ADR-0010 §14). The two-condition
-// transfer rule is authorized by the caller (GraphQLFieldAuthorizer) against
-// authorized before this method runs; this method only rejects the transfer
+// updates the reserved owner annotation (ADR-0010 §14). The live AuthZ provider
+// evaluates the transfer rule through GraphQLFieldAuthorizer before this method
+// runs; this method only rejects the transfer
 // if the owner changed since that decision. It deliberately does not call
 // guardOwnerAnnotationUnchanged, since changing the owner is exactly what
 // this method exists to do.
@@ -875,7 +877,7 @@ func (s *Service) TransferNamespaceOwner(ctx context.Context, authorized *datast
 	if err != nil {
 		return nil, err
 	}
-	preflight, err := s.evaluateNamespacePolicy(ctx, resource, admission.OperationUpdate)
+	preflight, err := s.evaluateNamespacePolicy(ctx, resource, admission.OperationUpdate, callerUsername)
 	if err != nil {
 		return nil, err
 	}
@@ -886,10 +888,13 @@ func (s *Service) evaluateNamespacePolicy(
 	ctx context.Context,
 	resource *catalog.NamespaceResource,
 	operation admission.Operation,
+	actor string,
 ) (namespaceadmission.Preflight, error) {
 	started := time.Now()
 	tier, _ := namespaceadmission.TierFromManifest(resource.Spec.Tier)
 	decision, preflight, err := s.namespacePolicy.Evaluate(ctx, namespaceadmission.PolicyCheck{
+		Actor:            actor,
+		Annotations:      resource.Metadata.Annotations,
 		Operation:        operation,
 		Name:             resource.Metadata.Name,
 		Tier:             tier,

@@ -15,12 +15,13 @@ pub struct AuthContext {
     /// mechanism used (e.g. "basic", "bearer", "none")
     #[prost(string, tag="3")]
     pub auth_method: ::prost::alloc::string::String,
-    #[prost(string, repeated, tag="4")]
-    pub roles: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, repeated, tag="5")]
     pub groups: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, repeated, tag="6")]
     pub scopes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// verified immutable account identity, never a role
+    #[prost(string, tag="7")]
+    pub service_account_uid: ::prost::alloc::string::String,
 }
 /// RequestAuthorization is the API-approved, non-secret authorization decision
 /// for a single GitService call. Git service validates that the action and scope

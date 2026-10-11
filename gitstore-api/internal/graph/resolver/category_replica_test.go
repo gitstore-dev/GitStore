@@ -24,8 +24,7 @@ import (
 // service. Replicas share no process state.
 func (e *categoryLifecycleEnv) secondReplica(t *testing.T) *Service {
 	t.Helper()
-	catalogServer, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{Store: e.store, GitReader: e.git, Logger: zap.NewNop()})
-	require.NoError(t, err)
+	catalogServer := newLifecycleCatalogFixture(t, cataloggrpc.ServerDeps{Store: e.store, GitReader: e.git, Logger: zap.NewNop()})
 	service, err := NewService(ServiceDeps{Store: e.store, GitWriter: e.git, Logger: zap.NewNop(), CommittedManifestAdmitter: catalogServer})
 	require.NoError(t, err)
 	return service

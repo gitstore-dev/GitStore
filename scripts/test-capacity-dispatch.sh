@@ -19,6 +19,14 @@ assert_dispatch() {
 }
 
 assert_dispatch api readiness '_capacity-k6'
+authz_output="$(CAPACITY_DRY_RUN=1 "${dispatcher}" api authorization diagnostic)"
+[[ "$authz_output" == *"_capacity-authorization"* ]]
+for mode in alpha production; do
+  if CAPACITY_DRY_RUN=1 "${dispatcher}" api authorization "$mode" >/dev/null 2>&1; then
+    echo "incomplete authorization evidence was promoted to $mode" >&2
+    exit 1
+  fi
+done
 assert_dispatch namespace admission 'CAPACITY_PROFILE=namespace-admission'
 assert_dispatch namespace validation '_capacity-namespace-admission'
 assert_dispatch namespace watch '_capacity-namespace-watch'

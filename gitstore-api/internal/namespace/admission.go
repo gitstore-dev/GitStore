@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
@@ -20,6 +21,8 @@ import (
 var (
 	ErrBootstrapNamespace     = errors.New("bootstrap namespace is system-managed")
 	ErrTierDemotion           = errors.New("namespace tier demotion is not allowed")
+	ErrTierImmutable          = errors.New("namespace tier is immutable")
+	ErrUserNamespaceIdentity  = errors.New("USER namespace requires immutable matching human owner and self-service creation")
 	ErrNamespaceTerminating   = errors.New("namespace is terminating")
 	ErrNamespaceAlreadyExists = errors.New("namespace already exists")
 	ErrNamespaceNotFound      = errors.New("namespace not found")
@@ -42,6 +45,8 @@ type PolicyCheck struct {
 	Operation        admission.Operation
 	Name             string
 	Tier             datastore.NamespaceTier
+	Actor            string
+	Annotations      map[string]string
 	CapturePreflight bool
 }
 
@@ -50,6 +55,34 @@ type Preflight struct {
 	Identity        string
 	ResourceVersion string
 	Existing        *datastore.Namespace
+}
+
+// ValidateIdentity enforces domain invariants independently of the AuthZ
+// provider. Call it again with the freshly loaded row on every CAS retry.
+// Actor is the authenticated subject, never a manifest-provided author.
+func ValidateIdentity(check PolicyCheck, existing *datastore.Namespace) *Decision {
+	if existing != nil && check.Tier != existing.Tier {
+		reason := ReasonTierImmutable
+		if TierRank(check.Tier) < TierRank(existing.Tier) {
+			reason = ReasonTierDemotion
+		}
+		return &Decision{Reason: reason, Field: "spec.tier", Message: ErrTierImmutable.Error()}
+	}
+	if check.Tier != datastore.NamespaceTierUser {
+		return nil
+	}
+	creationActor := check.Actor
+	if existing != nil {
+		creationActor = existing.CreationActor
+	}
+	desired := &datastore.Namespace{CreationActor: creationActor, Annotations: check.Annotations}
+	owner := desired.EffectiveOwnerSub()
+	if !auth.ValidExternalUsername(owner) || check.Name != owner ||
+		(existing == nil && check.Actor != owner) ||
+		(existing != nil && (existing.Name != check.Name || existing.EffectiveOwnerSub() != owner)) {
+		return &Decision{Reason: ReasonUserNamespaceIdentity, Field: "metadata.name", Message: ErrUserNamespaceIdentity.Error()}
+	}
+	return nil
 }
 
 type PolicyEvaluator interface {
@@ -86,7 +119,7 @@ func (e *datastorePolicyEvaluator) Evaluate(ctx context.Context, check PolicyChe
 				Message: "namespace not found",
 			}, preflight, nil
 		}
-		return nil, preflight, nil
+		return ValidateIdentity(check, nil), preflight, nil
 	}
 	if err != nil {
 		return nil, Preflight{}, fmt.Errorf("namespace policy lookup: %w", err)
@@ -108,14 +141,7 @@ func (e *datastorePolicyEvaluator) Evaluate(ctx context.Context, check PolicyChe
 			Message: "namespace is terminating",
 		}, preflight, nil
 	}
-	if TierRank(check.Tier) < TierRank(existing.Tier) {
-		return &Decision{
-			Reason:  ReasonTierDemotion,
-			Field:   "spec.tier",
-			Message: "namespace tier demotion is not allowed",
-		}, preflight, nil
-	}
-	return nil, preflight, nil
+	return ValidateIdentity(check, existing), preflight, nil
 }
 
 func IsBootstrap(name string) bool {
@@ -262,8 +288,8 @@ func ApplyManifestOrdered(
 				return nil, false, ErrNamespaceTerminating
 			}
 		}
-		if existing != nil && !createRetry && TierRank(tier) < TierRank(existing.Tier) {
-			return nil, false, ErrTierDemotion
+		if decision := ValidateIdentity(PolicyCheck{Name: name, Tier: tier, Actor: actor, Annotations: resource.Metadata.Annotations}, existing); decision != nil {
+			return nil, false, decision
 		}
 
 		created := existing == nil

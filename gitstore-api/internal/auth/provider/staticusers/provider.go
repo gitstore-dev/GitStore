@@ -169,6 +169,9 @@ func (p *StaticUsersProvider) authenticateBearer(ctx context.Context, token stri
 	if strings.TrimSpace(claims.Subject) == "" || strings.TrimSpace(claims.ID) == "" {
 		return nil, auth.Challenge(p.Name(), "jwt subject and jti are required"), nil
 	}
+	if !auth.ValidExternalUsername(claims.Subject) {
+		return nil, auth.Deny(p.Name(), "reserved or invalid username"), nil
+	}
 	revoked, revokeErr := p.revocations.IsSessionRevoked(ctx, claims.ID)
 	if revokeErr != nil {
 		return nil, auth.Deny(p.Name(), "session revocation state unavailable"), fmt.Errorf("staticusers: check session revocation: %w", revokeErr)

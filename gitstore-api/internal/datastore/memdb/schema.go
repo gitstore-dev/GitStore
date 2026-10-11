@@ -81,7 +81,13 @@ var schema = &memdb.DBSchema{
 				},
 			},
 		},
-		"service_account": resourceTableSchema("service_account", map[string]*memdb.IndexSchema{}),
+		"service_account": {
+			Name: "service_account",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id":   {Name: "id", Unique: true, Indexer: &memdb.UUIDFieldIndex{Field: "UID"}},
+				"name": {Name: "name", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "Name"}},
+			},
+		},
 		"service_account_assertion_replay": {
 			Name: "service_account_assertion_replay",
 			Indexes: map[string]*memdb.IndexSchema{

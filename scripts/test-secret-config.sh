@@ -33,7 +33,7 @@ jq -n --arg config "$CONFIG_FILE" '{
       {source:"issuer",target:"/run/api-issuer"},
       {source:"controller",target:"/run/controller-secrets"},
       {source:"identity",target:"/run/controller-bootstrap"}]},
-    "serviceaccount-enrollment": {command:["--replace-existing-key"], depends_on:{api:{}},
+    "serviceaccount-enrollment": {command:["--name","gitstore-controller-manager","--replace-existing-key"], depends_on:{api:{}},
       networks:{"gitstore-network":null}, volumes:[
       {source:"controller",target:"/run/controller-secrets"},
       {source:"identity",target:"/run/controller-bootstrap"}]}
@@ -62,6 +62,9 @@ reject wrong-config '.services.api.volumes[0].source = "PRIVATE-MARKER"'
 reject wrong-identity '.services["serviceaccount-enrollment"].volumes[1].source = "other"'
 reject duplicate-key-mount '.services.api.volumes += [.services.api.volumes[2]]'
 reject missing-enrollment '.services["controller-manager"].depends_on = {}'
+reject legacy-enrollment-namespace '.services["serviceaccount-enrollment"].command += ["--namespace","controllers"]'
+reject missing-account-name '.services["serviceaccount-enrollment"].command = ["--replace-existing-key"]'
+reject legacy-controller-namespace '.services["controller-manager"].environment = {"GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE":""}'
 cp "$test_dir/valid.json" "$SECRET_CONFIG_FIXTURE"
 cp "$CONFIG_FILE" "$test_dir/private.toml"
 printf '\n[unsafe]\nsigning_key = "PRIVATE-MARKER"\n' >>"$test_dir/private.toml"
@@ -74,3 +77,13 @@ if grep -q 'PRIVATE-MARKER' "$test_dir/output"; then
   exit 1
 fi
 echo "secret configuration isolation checks passed"
+
+# Both Scylla overlays must allow baseline migration/schema agreement before
+# treating a not-yet-listening API as unhealthy. The base memdb grace is short.
+for overlay in compose.scylla.yml compose.scylla.cluster.yml; do
+  awk '/^  api:/{api=1; next} api && /^  [a-zA-Z]/{api=0} api{print}' "$repo_root/$overlay" |
+    grep -q 'start_period: 5m' || {
+      echo "missing first-boot migration health grace: $overlay" >&2
+      exit 1
+    }
+done

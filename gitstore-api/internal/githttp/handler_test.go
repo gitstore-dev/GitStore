@@ -480,7 +480,7 @@ func TestRepoResolverSetsContext(t *testing.T) {
 
 // T023: read-only principal attempting receive-pack is denied 403.
 func TestGitHttpAuthorizerReadOnly(t *testing.T) {
-	readOnlyPrincipal := &auth.Principal{Subject: "reader", AuthMethod: "basic", Roles: []string{"reader"}}
+	readOnlyPrincipal := &auth.Principal{Subject: "reader", AuthMethod: "basic"}
 	stubAuthN := &stubAuthNProviderWithPrincipal{principal: readOnlyPrincipal, decision: auth.Allow("stub", "ok")}
 	stubAuthZ := testutil.NewDenyAllAuthZ(t)
 
@@ -658,9 +658,9 @@ func TestGitHttpAuthorizerAllowAllAnonymousWriteChallengesForCredentials(t *test
 	// actual defense-in-depth invariant rather than a stubbed-out approximation.
 	client := &mockGitClient{
 		infoRefsFunc: func(ctx context.Context, repoID string, service gitv1.Service) ([]byte, gitv1.Service, error) {
-			action := "repository.read.any"
+			action := "repository.contents.read"
 			if service == gitv1.Service_SERVICE_GIT_RECEIVE_PACK {
-				action = "repository.write.any"
+				action = "repository.contents.write"
 			}
 			if _, err := gitclient.RequestAuthorization(ctx, action, repoID); err != nil {
 				return nil, gitv1.Service_SERVICE_UNSPECIFIED, err
@@ -682,7 +682,7 @@ func TestGitHttpAuthorizerAllowAllAnonymousWriteChallengesForCredentials(t *test
 
 // T024: write-capable principal on receive-pack passes through.
 func TestGitHttpAuthorizerWriteAllowed(t *testing.T) {
-	writePrincipal := &auth.Principal{Subject: "writer", AuthMethod: "basic", Roles: []string{"writer"}}
+	writePrincipal := &auth.Principal{Subject: "writer", AuthMethod: "basic"}
 	stubAuthN := &stubAuthNProviderWithPrincipal{principal: writePrincipal, decision: auth.Allow("stub", "ok")}
 	stubAuthZ := testutil.NewAllowAllAuthZ()
 
@@ -808,7 +808,7 @@ func TestReceivePackAttachesPushContext(t *testing.T) {
 		},
 	}
 
-	writePrincipal := &auth.Principal{Subject: "writer", AuthMethod: "basic", Roles: []string{"writer"}}
+	writePrincipal := &auth.Principal{Subject: "writer", AuthMethod: "basic"}
 	stubAuthN := &stubAuthNProviderWithPrincipal{principal: writePrincipal, decision: auth.Allow("stub", "ok")}
 	stubAuthZ := testutil.NewAllowAllAuthZ()
 
@@ -843,7 +843,7 @@ func TestReceivePackAttachesPushContext(t *testing.T) {
 	assert.Equal(t, "writer", pc.Authorization.Actor.Subject)
 	assert.Equal(t, "basic", pc.Authorization.Actor.AuthMethod)
 	assert.Equal(t, repoID, pc.Authorization.RepositoryId)
-	assert.Equal(t, "repository.write.any", pc.Authorization.Action)
+	assert.Equal(t, "repository.contents.write", pc.Authorization.Action)
 	assert.Equal(t, "gitstore", pc.Namespace)
 	assert.Equal(t, "catalog", pc.RepositoryName)
 	assert.Equal(t, int64(52428800), pc.Policy.MaxPackSizeBytes)

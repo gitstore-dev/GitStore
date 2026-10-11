@@ -9,7 +9,16 @@ import (
 	"context"
 
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 )
+
+// ContextForBackingWork identifies API-owned Git persistence work explicitly.
+// It must never be used for Git HTTP or to replace a semantic domain decision.
+// The original context still carries the domain actor for callers; the derived
+// context is used only by the backing RPC and is subject to live system:api policy.
+func ContextForBackingWork(ctx context.Context) context.Context {
+	return auth.ContextWithPrincipal(ctx, &auth.Principal{Subject: "system:api", Issuer: "gitstore-api", AuthMethod: "internal"})
+}
 
 // CommitFileParams holds parameters for a CommitFile RPC call.
 type CommitFileParams struct {
@@ -40,7 +49,7 @@ type CreateTagParams struct {
 // CreateRepository provisions a new repository on the git service.
 // Returns the storage path reported by gitstore-git-service.
 func (c *Client) CreateRepository(ctx context.Context, repositoryID, storageClass string) (string, error) {
-	authorization, err := RequestAuthorization(ctx, "repository.create.any", repositoryID)
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.create", repositoryID)
 	if err != nil {
 		return "", err
 	}
@@ -57,7 +66,7 @@ func (c *Client) CreateRepository(ctx context.Context, repositoryID, storageClas
 
 // DeleteRepository removes a repository from the git service.
 func (c *Client) DeleteRepository(ctx context.Context, repositoryID string) error {
-	authorization, err := RequestAuthorization(ctx, "repository.delete.any", repositoryID)
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.delete", repositoryID)
 	if err != nil {
 		return err
 	}
@@ -76,7 +85,7 @@ func (c *Client) CommitFile(ctx context.Context, p CommitFileParams) (string, er
 
 // CommitFileForRepo writes a single file to an explicitly selected repository.
 func (c *Client) CommitFileForRepo(ctx context.Context, repositoryID string, p CommitFileParams) (string, error) {
-	authorization, err := RequestAuthorization(ctx, "repository.write.any", repositoryID)
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.write", repositoryID)
 	if err != nil {
 		return "", err
 	}
@@ -106,7 +115,7 @@ func (c *Client) DeleteFile(ctx context.Context, p DeleteFileParams) (string, er
 
 // DeleteFileForRepo removes a file from an explicitly selected repository.
 func (c *Client) DeleteFileForRepo(ctx context.Context, repositoryID string, p DeleteFileParams) (string, error) {
-	authorization, err := RequestAuthorization(ctx, "repository.write.any", repositoryID)
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.write", repositoryID)
 	if err != nil {
 		return "", err
 	}
@@ -134,7 +143,7 @@ func (c *Client) DeleteFileForRepo(ctx context.Context, repositoryID string, p D
 // CreateTag creates an annotated tag on HEAD (or the specified commit SHA).
 // Returns the tag object SHA on success.
 func (c *Client) CreateTag(ctx context.Context, p CreateTagParams) (string, error) {
-	authorization, err := RequestAuthorization(ctx, "repository.write.any", c.RepositoryID)
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.write", c.RepositoryID)
 	if err != nil {
 		return "", err
 	}

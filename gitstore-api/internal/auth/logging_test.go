@@ -5,9 +5,14 @@ package auth_test
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,6 +20,46 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+func TestV1Beta1DecisionLogsContainRuleNotSecretFacts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`apiVersion: rbac.authorization.gitstore.dev/v1beta1
+kind: RbacLocalConfiguration
+clusterRoles:
+  owner:
+    rules:
+      - resources: [namespace]
+        verbs: [read]
+        when: [owner]
+clusterRoleBindings:
+  - roleRef: {kind: ClusterRole, name: owner}
+    subjects: [{kind: User, name: alice}]
+`), 0600))
+	inner, err := rbaclocal.New(config.RBACConfig{PolicyFile: path}, zap.NewNop())
+	require.NoError(t, err)
+	core, logs := observer.New(zapcore.InfoLevel)
+	provider := authpkg.NewDecisionLogger(inner, zap.New(core))
+	for _, owner := range []string{"alice", "bob", ""} {
+		d, err := provider.Authorize(t.Context(), &authpkg.Principal{Subject: "alice", AuthMethod: "static-users", Groups: []string{"system:authenticated"}, Claims: map[string]any{"token": "super-secret"}}, "namespace.read", authpkg.ResourceContext{Kind: "namespace", Name: "acme", OwnerSub: owner, Attrs: map[string]any{"assertion": "super-secret"}})
+		require.NoError(t, err)
+		require.NotEmpty(t, d.Reason)
+		if owner == "alice" {
+			for _, field := range []string{"binding=clusterRoleBindings[0]", "role=ClusterRole/owner", "rule=0"} {
+				assert.Contains(t, d.Reason, field)
+			}
+		} else {
+			assert.Equal(t, authpkg.OutcomeDeny, d.Outcome)
+		}
+	}
+	require.Len(t, logs.All(), 3)
+	for _, entry := range logs.All() {
+		fields := entry.ContextMap()
+		assert.NotContains(t, fmt.Sprint(fields), "super-secret")
+		assert.NotContains(t, fields, "claims")
+		assert.NotContains(t, fields, "attrs")
+		assert.NotContains(t, fields, "roles")
+	}
+}
 
 type staticAuthZProvider struct {
 	name     string
@@ -37,8 +82,8 @@ func TestDecisionLogger_EmitsStructuredFieldsAndRequestID(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), middleware.RequestIDKey, "req-123")
 	decision, err := provider.Authorize(ctx, &authpkg.Principal{
-		Subject:    "alice",
-		Roles:      []string{"reader"},
+		Subject: "alice",
+
 		AuthMethod: "test",
 	}, "namespace.read", authpkg.ResourceContext{Kind: "namespace", Name: "demo"})
 	require.NoError(t, err)
@@ -58,12 +103,8 @@ func TestDecisionLogger_EmitsStructuredFieldsAndRequestID(t *testing.T) {
 	assert.Equal(t, "allow", fields["outcome"])
 }
 
-// TestDecisionLogger_ServiceAccountSubjectRendersUnmodified confirms (spec
-// 061 T013) that DecisionLogger requires no code changes to correctly log
-// service-account principals: subject is passed through verbatim from
-// Principal.Subject, so the "serviceaccount:<namespace>:<name>" convention
-// established by datastore.ServiceAccountSubject renders with no
-// truncation, escaping, or reformatting.
+// The logger preserves an authenticated cluster-scoped ServiceAccount subject;
+// identity validation belongs to AuthN, not log presentation.
 func TestDecisionLogger_ServiceAccountSubjectRendersUnmodified(t *testing.T) {
 	core, logs := observer.New(zapcore.InfoLevel)
 	logger := zap.New(core)
@@ -73,14 +114,14 @@ func TestDecisionLogger_ServiceAccountSubjectRendersUnmodified(t *testing.T) {
 	}, logger)
 
 	_, err := provider.Authorize(context.Background(), &authpkg.Principal{
-		Subject:    "serviceaccount:controllers:gitstore-controller-manager",
-		Roles:      nil,
+		Subject: "system:serviceaccount:gitstore-controller-manager",
+
 		AuthMethod: "serviceaccount-jwt",
-	}, "categoryTaxonomy.read", authpkg.ResourceContext{Kind: "categorytaxonomy", Name: "demo"})
+	}, "categoryTaxonomy.read", authpkg.ResourceContext{Kind: "categoryTaxonomy", Name: "demo"})
 	require.NoError(t, err)
 
 	entries := logs.All()
 	require.Len(t, entries, 1)
 	fields := entries[0].ContextMap()
-	assert.Equal(t, "serviceaccount:controllers:gitstore-controller-manager", fields["subject"])
+	assert.Equal(t, "system:serviceaccount:gitstore-controller-manager", fields["subject"])
 }
