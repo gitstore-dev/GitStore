@@ -106,8 +106,8 @@ jobs:
         git config --global user.email "ci@gitstore.dev"
         git config --global user.name "CI"
         git config --global init.defaultBranch main
-        git config --global credential.helper store
-        printf 'protocol=http\nhost=localhost:9000\nusername=admin\npassword=admin123\n\n' | git credential approve
+        # Private repositories hide anonymous reads with 404, not a 401 challenge.
+        git config --global http.http://localhost:9000/.extraHeader "Authorization: Basic $(printf '%s' 'admin:admin123' | base64 -w0)"
         tmpdir=$(mktemp -d)
         git clone http://localhost:9000/gitci/catalog.git "$tmpdir"
         echo "# CI seed" > "$tmpdir/README.md"
@@ -187,8 +187,8 @@ jobs:
           git config --global user.email "ci@gitstore.dev"
           git config --global user.name "CI"
           git config --global init.defaultBranch main
-          git config --global credential.helper store
-          printf 'protocol=http\nhost=localhost:9000\nusername=admin\npassword=admin123\n\n' | git credential approve
+          # Private repositories hide anonymous reads with 404, not a 401 challenge.
+          git config --global http.http://localhost:9000/.extraHeader "Authorization: Basic $(printf '%s' 'admin:admin123' | base64 -w0)"
           tmpdir=$(mktemp -d)
           git clone http://localhost:9000/gitci/catalog.git "$tmpdir"
           echo "# CI seed" > "$tmpdir/README.md"

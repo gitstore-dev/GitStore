@@ -38,13 +38,18 @@ bootstrap_output="$(env -u NAMESPACE_TIER make --no-print-directory -C "${repo_r
 
 # CI's shared gitci namespace is not the admin user's personal namespace.
 ci_bootstrap_count=0
+ci_git_auth_count=0
 while IFS= read -r line; do
   if [[ "${line}" == *"run: make bootstrap "* ]]; then
     [[ "${line}" == *"NAMESPACE_TIER=ORGANIZATION"* ]]
     ci_bootstrap_count=$((ci_bootstrap_count + 1))
   fi
+  if [[ "${line}" == *"git config --global http.http://localhost:9000/.extraHeader"* ]]; then
+    ci_git_auth_count=$((ci_git_auth_count + 1))
+  fi
 done < "${repo_root}/.github/workflows/ci-integration.yml"
 [[ "${ci_bootstrap_count}" -eq 2 ]]
+[[ "${ci_git_auth_count}" -eq 2 ]]
 
 for legacy_namespace in controllers ''; do
   if make --no-print-directory -C "${repo_root}" -n controller CONTROLLER_SERVICEACCOUNT_NAMESPACE="${legacy_namespace}" >/dev/null 2>&1; then

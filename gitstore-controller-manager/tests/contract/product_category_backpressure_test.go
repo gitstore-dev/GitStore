@@ -19,12 +19,15 @@ import (
 // blocks for delay before succeeding, standing in for real status-write
 // latency at scale.
 type slowReconciler struct {
-	delay time.Duration
-	calls atomic.Int64
+	delay   time.Duration
+	calls   atomic.Int64
+	started chan struct{}
 }
 
 func (r *slowReconciler) Reconcile(_ context.Context, _ manager.WorkItemKey) manager.ReconcileResult {
-	r.calls.Add(1)
+	if r.calls.Add(1) == 1 {
+		close(r.started)
+	}
 	time.Sleep(r.delay)
 	return types.ResultOK()
 }
@@ -60,7 +63,7 @@ func TestBackpressure_ProductBurstDoesNotStarveUnrelatedKind(t *testing.T) {
 	// would take ~10s to drain serially — long enough that if the Namespace
 	// queue below shared that capacity, its own dispatch would be delayed by
 	// seconds, not milliseconds.
-	product := &slowReconciler{delay: 50 * time.Millisecond}
+	product := &slowReconciler{delay: 50 * time.Millisecond, started: make(chan struct{})}
 	productCache := cache.New[string]()
 	productCache.MarkSynced()
 	if err := mgr.Register(manager.ReconcilerRegistration{
@@ -108,7 +111,16 @@ func TestBackpressure_ProductBurstDoesNotStarveUnrelatedKind(t *testing.T) {
 		}
 	}
 
-	// Immediately after the burst, enqueue a single Namespace key and time
+	// Establish that Product work is active before measuring the other pool.
+	// The independent Namespace worker may otherwise run first, making the
+	// setup assertion below depend on goroutine scheduling order.
+	select {
+	case <-product.started:
+	case <-ctx.Done():
+		t.Fatal("Product reconciler never started the burst")
+	}
+
+	// With the burst underway, enqueue a single Namespace key and time
 	// how long it takes to dispatch. Its own dedicated worker must pick it
 	// up promptly, not wait behind the Product queue.
 	enqueuedAt := time.Now()
