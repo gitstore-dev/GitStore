@@ -4,7 +4,13 @@
 
 **Branch**: `064-authz-action-vocabulary` | **Date**: 2026-10-10 | **Spec**: [spec.md](spec.md)
 **Input**: `specs/064-authz-action-vocabulary/spec.md`
-**Status**: Planning complete; implementation and runtime gates not executed.
+**Status**: Core implementation and non-capacity verification complete; capacity/deployed acceptance deferred to #451.
+
+**Capacity follow-up (2026-10-11):** At the user's direction, remaining capacity
+harness work, load/soak, deployed replica/replacement and chaos acceptance move
+to [#451](https://github.com/gitstore-dev/GitStore/issues/451#issuecomment-6107662533).
+Local tests and diagnostic timings do not pass those gates. The original
+thresholds and singleton Git restriction remain binding; see tasks.md for IDs.
 
 ## Summary
 

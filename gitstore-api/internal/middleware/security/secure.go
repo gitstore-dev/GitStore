@@ -359,8 +359,8 @@ const approvedRepositoryActionKey = "approvedRepositoryAction"
 // Requires repoIDKey to be set in the gin context (abort 500 if missing).
 // Determines required action from route path (and, for /info/refs, the
 // ?service= query param since that endpoint is shared by both services):
-//   - /git-upload-pack, or /info/refs?service=git-upload-pack   → "repository.read"
-//   - /git-receive-pack, or /info/refs?service=git-receive-pack → "repository.write"
+//   - /git-upload-pack, or /info/refs?service=git-upload-pack   → "repository.contents.read"
+//   - /git-receive-pack, or /info/refs?service=git-receive-pack → "repository.contents.write"
 //
 // Aborts with 401 on an anonymous deny so Git credential helpers can retry,
 // and with 403 when an authenticated principal lacks permission.

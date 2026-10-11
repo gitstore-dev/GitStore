@@ -174,6 +174,58 @@ func TestCallbacksRequireServiceAuthenticationAndBoundActor(t *testing.T) {
 	require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
 }
 
+func TestCallbackSemanticActionsForEveryCatalogKind(t *testing.T) {
+	for _, tc := range []struct {
+		kind, path string
+		content    []byte
+	}{
+		{"product", "products/widget.md", makeProduct("widget")},
+		{"categoryTaxonomy", "categories/widget.md", makeCategoryTaxonomy("widget")},
+		{"collection", "collections/widget.md", []byte(strings.Replace(string(makeProduct("widget")), "kind: Product", "kind: Collection", 1))},
+		{"productVariant", "variants/widget.md", makeProductVariant("widget", "semantic-sku")},
+		{"file", "files/widget.md", makeFile("widget")},
+	} {
+		for _, verb := range []string{"create", "update", "delete"} {
+			t.Run(tc.kind+"/"+verb, func(t *testing.T) {
+				allow := testutil.NewAllowAllAuthZ()
+				registry := auth.NewProviderRegistry(nil, allow, nil)
+				srv := newCatalogServer(t, newTestDatastore(t), nil, func(deps *cataloggrpc.ServerDeps) { deps.Registry = registry })
+				blob := &catalogv1.ResourceBlob{Path: tc.path, Content: tc.content}
+				tree := &catalogv1.ResourceValidationTree{}
+				switch verb {
+				case "create":
+					tree.ProposedBlobs = []*catalogv1.ResourceBlob{blob}
+				case "update":
+					tree.OldBlobs = []*catalogv1.ResourceBlob{blob}
+					tree.ProposedBlobs = []*catalogv1.ResourceBlob{{Path: tc.path, Content: append(append([]byte{}, tc.content...), []byte("\nChanged body\n")...)}}
+				case "delete":
+					tree.OldBlobs = []*catalogv1.ResourceBlob{blob}
+				}
+				req := &catalogv1.ValidateResourcesRequest{RepositoryId: testRepoID, Trees: []*catalogv1.ResourceValidationTree{tree}}
+				req.Authorization = fixtureValidationEnvelope(req.RepositoryId, req.Trees)
+				req.Authorization.Actor.Subject = "alice"
+				response, err := srv.Server.ValidateResources(srv.fixtureContext(t.Context(), req), req)
+				require.NoError(t, err)
+				require.True(t, response.Accepted, "%v", response.Errors)
+				require.Len(t, allow.Calls, 1)
+				require.Equal(t, "alice", allow.Calls[0].Subject)
+				require.Equal(t, tc.kind+"."+verb, allow.Action)
+				require.Equal(t, tc.kind, allow.Resource.Kind)
+				require.Equal(t, "widget", allow.Resource.Name)
+				require.Equal(t, "gitstore", allow.Resource.Attrs["namespace"])
+				if verb == "create" {
+					require.Equal(t, "test", allow.Resource.OwnerSub, "create uses the stored namespace owner")
+				}
+				deny := testutil.NewDenyAllAuthZ(t)
+				registry.Swap(nil, deny, nil)
+				_, err = srv.Server.ValidateResources(srv.fixtureContext(t.Context(), req), req)
+				require.Equal(t, codes.PermissionDenied, grpcstatus.Code(err))
+				require.Equal(t, tc.kind+"."+verb, deny.Action, "live revocation must affect the same signed semantic operation")
+			})
+		}
+	}
+}
+
 func TestSignedCallbackReplaySharedAcrossReplicasAndReplacement(t *testing.T) {
 	store := newTestDatastore(t)
 	first := newCatalogServer(t, store, nil)

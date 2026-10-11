@@ -59,6 +59,31 @@ name-only enrollment and keeps the existing isolated key/UID mounts.
 
 ## Renewal, readiness, and backoff
 
+### Policy reload diagnostics
+
+Validate the replacement with `make check TARGET=config CONFIG_FILE=<path>`
+before installing it. Send SIGHUP to each intended API process to rebuild and
+atomically swap its complete authentication/authorization provider set. A local
+signal does not update another replica, and editing a mounted file alone does
+not prove the running policy changed.
+
+The API's `auth providers reloaded atomically` message confirms publication.
+`rbac-local policy reloaded` carries the candidate `policy_digest`; correlate it
+with the registry success message because construction precedes publication.
+On `auth provider reload failed; previous configuration remains active`, fix the
+candidate and retry: do not restart merely to discard the valid old snapshot.
+Malformed/v1 policy, legacy settings and ineffective local-user grants fail
+validation. Decision logs include provider, request ID, action, canonical kind,
+outcome and reason; rbac-local reasons identify the policy digest and matching
+binding/role/rule or bounded denial category. Compare exact allow/deny probes on
+each replica after success, not just HTTP status or a matching file on disk.
+Do not copy tokens, assertions, private material or arbitrary resource attributes
+into diagnostics. Sustained-load/replacement acceptance is tracked in
+[#451](https://github.com/gitstore-dev/GitStore/issues/451), not established by
+these operator checks.
+
+### Token lifecycle
+
 The controller signs a fresh, 45-second proof-of-possession assertion and
 exchanges it for a short-lived access token. It reuses an access token only
 until 30 seconds before expiry, then renews automatically. Concurrent requests

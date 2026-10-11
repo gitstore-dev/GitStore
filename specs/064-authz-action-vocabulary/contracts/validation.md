@@ -1,5 +1,11 @@
 # Contract: validation and evidence
 
+**Scheduling amendment (2026-10-11):** The user assigned remaining capacity
+implementation and deployed acceptance to
+[#451](https://github.com/gitstore-dev/GitStore/issues/451#issuecomment-6107662533).
+This changes scheduling only, not the thresholds or proof requirements below.
+Keep partial/diagnostic evidence distinct from gate acceptance.
+
 ## Test-first matrix
 
 Before each implementation slice, add the smallest relevant tests and record

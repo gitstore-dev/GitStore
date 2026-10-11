@@ -2,7 +2,7 @@
 
 **Feature Branch**: `064-authz-action-vocabulary`  
 **Created**: 2026-10-05  
-**Status**: Draft  
+**Status**: Implemented; capacity/deployed acceptance deferred to #451 (not Closed)
 **Input**: User description: "let's standardise permission actions and ship the reference implementation in rbac-loca according to ADR-0010"
 
 ## Clarifications

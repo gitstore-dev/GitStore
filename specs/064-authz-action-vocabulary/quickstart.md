@@ -1,10 +1,80 @@
 # Quickstart: implementing and validating spec 064
 
-This is the planned workflow. v1beta1 loading, name-only ServiceAccounts and
-new selector/generation commands are not implemented by the planning step.
-Use an isolated development deployment.
+The core v1beta1, name-only ServiceAccount and signed-RPC implementation is in
+local commit `eff9e28`. Use an isolated development deployment; old policy,
+configuration and namespaced ServiceAccount schemas are not supported.
+
+## Current acceptance scope (2026-10-11)
+
+The user deferred all remaining capacity work to
+[#451](https://github.com/gitstore-dev/GitStore/issues/451#issuecomment-6107662533),
+including unfinished harness instrumentation, sustained load, reload/heap soak,
+and deployed multi-replica replacement/fault evidence. T065–T073 and deployment
+portions of T021/T045/T054/T062 remain unchecked. Local contracts and short
+diagnostics are not substitutes. Neither alpha nor production capacity is
+accepted; `rbac-local` remains development/evaluation-only. Do not close the
+overall specification until the remaining required evidence exists.
+
+The issue handoff records the stopped historical capacity-container name
+collision. Those containers, keyspaces and retained volumes were not changed.
+Project/fixture isolation must be resolved before running destructive cleanup
+or chaos. No compatibility reader or old-fleet rollout is required.
+
+Earlier ledger entries below are chronological checkpoints, not current claims
+that their then-uncommitted files remain uncommitted.
 
 ## Implementation evidence ledger
+
+### Non-capacity completion pass (2026-10-11, after `eff9e28`)
+
+- Added exact allow/deny watch/status recorder coverage and all-five-kind typed/
+  generic WebSocket denial coverage. Unsupported generic status kinds now fail
+  before policy/resolver execution; catalog membership does not expose a backend.
+- Added real shipped-policy GraphQL baseline checks, management-only Product/
+  Variant boundary tests and all-three-owner-kind transfer tests. Field-level
+  policy allowance is not a domain-invariant override: USER identity/transfer
+  validation remains independently enforced in admission/resolvers.
+- A failing namespace boundary regression exposed lowercase stored tier facts
+  (`user` versus `USER`). Reads, node/nodes, deletion and transfer now project
+  the canonical enum spelling; unknown tiers are omitted, not invented.
+- Added signed semantic callback create/update/delete checks for all five
+  catalog kinds, including live policy revocation. Focused middleware and
+  callback suites passed after these changes.
+- Updated ADR 0010 and its index together for the implemented strict allow-only
+  baseline, no shim, cluster SAs and provider-owned authorization. Acceptance
+  date is the flip date under the ADR dating rule; no merge/push is claimed.
+  Operator SIGHUP/digest/rejection diagnostics are in controller-auth.md.
+- Boundary audit details and intentionally unexposed schema paths are recorded
+  in contracts/service-boundaries.md. Deployment portions of T021/T045/T054/T062
+  and T065–T073 remain with #451. T078 stays open; no capacity pass is inferred.
+
+Final local verification after the boundary fixes:
+
+- `make pr-ready` passed (Rust/Go lint, builds and default test suites, license
+  and credential-output/leak checks). Private local log:
+  `/private/tmp/gitstore-064-final-pr-ready.log`.
+- `go test -race ./gitstore-api/internal/middleware/security ./gitstore-api/internal/cataloggrpc ./gitstore-api/internal/auth/... ./gitstore-controller-manager/internal/graphqlclient -count=1`
+  passed; log `/private/tmp/gitstore-064-final-race.log`.
+- `make _check-generated` passed with zero authorization catalog drift;
+  `git diff --check` passed. The neutral fixture expectations were not changed.
+- `make check TARGET=all` passed, including shipped configuration/RBAC, Compose,
+  licenses, credential leakage and catalog generation checks; log
+  `/private/tmp/gitstore-064-final-check.log`.
+- `graphify update .` passed (21,992 nodes / 49,351 edges). Graph artifacts are
+  ignored, with no tracked source diff; its zero-node/nonsemantic-document
+  warnings do not replace source/test verification.
+
+Task ledger: 68/82 complete. The 14 unchecked items retain only the deferred
+capacity/deployed-acceptance work and final acceptance closure. Previous owned
+Scylla contracts and Compose/root-integration results remain recorded below;
+neither they nor this local run are a multi-replica capacity certificate.
+
+The original Compose validation evidence below covers memdb, single-node Scylla,
+three-node Scylla and optional OIDC service wiring on `eff9e28`; the OIDC browser
+login flow was not exercised. Those images predate the final middleware audit
+fixes, which are covered by the final local test/readiness run, not a new image
+deployment. The copied `gitstore-dev/quickstart` policy/config/Compose/enrollment
+files still require a follow-up update outside this repository.
 
 2026-10-11, foundation and provider slices (uncommitted working tree):
 

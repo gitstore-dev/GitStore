@@ -374,7 +374,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			Kind:     "namespace",
 			Name:     ns.Name,
 			OwnerSub: ns.EffectiveOwnerSub(),
-			Attrs:    map[string]any{"tier": string(ns.Tier)},
+			Attrs:    namespaceAuthorizationAttrs(ns),
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
@@ -406,9 +406,11 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			return nil, gqlerror.Errorf("%s", err.Error())
 		}
 		ownerKind, ownerName := datastore.DecodeOwnerSubject(targetOwnerSub)
+		attrs := namespaceAuthorizationAttrs(ns)
+		attrs["targetOwnerRef"] = map[string]any{"kind": string(ownerKind), "name": ownerName}
 		decision, err := authz.Authorize(ctx, principal, "namespace.transfer", auth.ResourceContext{
 			Kind: "namespace", Name: ns.Name, OwnerSub: ns.EffectiveOwnerSub(),
-			Attrs: map[string]any{"targetOwnerRef": map[string]any{"kind": string(ownerKind), "name": ownerName}, "tier": string(ns.Tier)},
+			Attrs: attrs,
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
@@ -602,6 +604,11 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
 		kind, _ := nestedStringArg(fc.Args, "input", "kind")
+		// Match the concrete generic status backends. Catalog membership alone
+		// does not expose an operation (Product has only a typed status mutation).
+		if kind != "Namespace" && kind != "Repository" && kind != "CategoryTaxonomy" && kind != "File" {
+			return nil, &gqlerror.Error{Message: "unsupported status kind", Extensions: map[string]any{"code": "UNSUPPORTED_KIND"}}
+		}
 		name, _ := nestedStringArg(fc.Args, "input", "name")
 		action := lowerCamelFirst(kind) + ".status.write"
 		definition, found := auth.LookupAction(action)
@@ -905,6 +912,21 @@ func isNamespaceQueryField(fc *graphql.FieldContext) bool {
 	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "namespace" || fc.Field.Name == "namespaces")
 }
 
+// Stored tiers use lowercase encoding; authorization facts use the same enum
+// spelling as GraphQL and Git manifests. Unknown tiers remain missing facts.
+func namespaceAuthorizationAttrs(ns *datastore.Namespace) map[string]any {
+	attrs := map[string]any{}
+	if ns != nil {
+		switch ns.Tier {
+		case datastore.NamespaceTierUser:
+			attrs["tier"] = "USER"
+		case datastore.NamespaceTierOrganization:
+			attrs["tier"] = "ORGANIZATION"
+		}
+	}
+	return attrs
+}
+
 // Namespace reads must be checked through every selector, including Node.
 func (a *Authorize) authorizeNamespaceField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) error {
 	if fc == nil {
@@ -915,7 +937,7 @@ func (a *Authorize) authorizeNamespaceField(ctx context.Context, fc *graphql.Fie
 		if ns != nil {
 			resource.Name = ns.Name
 			resource.OwnerSub = ns.EffectiveOwnerSub()
-			resource.Attrs = map[string]any{"tier": string(ns.Tier)}
+			resource.Attrs = namespaceAuthorizationAttrs(ns)
 		}
 		return authorizeCategoryAction(ctx, authz, principal, action, resource)
 	}

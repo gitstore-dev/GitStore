@@ -34,7 +34,59 @@ implementation, including aliases, fragments, nested fields and node/nodes so a
 second route cannot bypass the same operation. This is direct middleware work,
 not introduction of the deferred authorization-directive framework.
 
-### Implementation inventory (T001, 2026-10-11)
+### Verified implementation audit (2026-10-11)
+
+The historical T001 table below records the starting gaps, not the current code.
+The implementation now emits canonical actions/kinds on those implemented routes.
+Local verification is separate from deployed capacity/fault acceptance in
+[#451](https://github.com/gitstore-dev/GitStore/issues/451#issuecomment-6107662533).
+
+- `security/graphql_test.go`: namespace direct/list/node/nodes, catalog/nested
+  reads, stored owner versus namespace-owner creation facts, all four independent
+  purges, real shipped-policy baseline and management-only Product/Variant grants.
+- `graphql_file_status_test.go`: exact allow/deny recorder matrix for all five
+  typed/generic watch kinds, four typed status mutations and four implemented
+  generic status backends. Generic status supports Namespace, Repository,
+  CategoryTaxonomy and File only; Product uses its typed mutation. Unknown or
+  unimplemented generic status kinds fail before policy/resolver execution.
+- `graphql_subscription_transport_test.go`: all five typed and generic watch
+  routes reject through the real WebSocket transport before opening journals.
+  Resolver suites retain missing-journal and unsupported-source fail-closed tests.
+- Stored Namespace tiers are projected as `USER`/`ORGANIZATION`, matching create
+  and Git facts; unknown tiers are omitted. Read/node, delete and transfer no
+  longer leak the lowercase datastore encoding into condition evaluation.
+- Namespace transfer normalizes User/Group/ServiceAccount targets and exercises
+  owner/target-membership/tier conditions through the real field boundary.
+  Missing owner facts deny. The neutral provider suite pins unconditional
+  cluster versus namespaced transfer and split-rule non-composition.
+- `cataloggrpc/server_test.go`: signed service/actor binding, shared replay across
+  server instances/replacement, live revocation, and create/update/delete for all
+  five catalog kinds. Namespace/Repository suites separately cover their admission
+  rules; CAS retry tests reauthorize concurrently changed owners for Repository
+  and all four approved catalog datastore kinds.
+- Git hooks propagate verified actor facts; callbacks recheck live policy.
+  `admit_resources_error` and committed-admission regressions retain observable
+  post-receive denial. These are not a claim of sustained deployed fault recovery.
+- SA provider/store/config/CLI suites retain UID/key/replay proof, uniqueness,
+  stale incarnation and removed-namespace rejection. Controller HTTP/GraphQL/WS
+  rejection tests retain coalesced renewal and no ambiguous mutation replay.
+
+Schema limits: there is no arbitrary nested Namespace lookup relation, separate
+PUBLIC/MANAGEMENT endpoint selector, Collection/Variant watch source, or SA CRUD
+query surface merely because an action appears in the catalog. No new surface is
+invented for those planned abstractions. Product/Variant management grants use
+the existing endpoint and filtering.
+
+The production-source audit found no Principal roles/IsAdmin or caller-side
+owner permission shortcut. Remaining owner comparisons in namespace admission,
+transfer CAS and catalog owner-change detection enforce identity/concurrency or
+select the required transfer operation; they do not decide permission.
+Legacy action text remains only in negative fixtures, historical explanations
+and rejection hints (`legacyHint` suggests replacements but never accepts them).
+Protobuf field 4/name `roles` is reserved. Operational policy/config/Compose
+examples contain no accepted namespaced-SA settings.
+
+### Historical starting inventory (T001, 2026-10-11)
 
 This inventory records source inspection, not passing runtime coverage. Paths
 below are relative to the repository root. The field authorizer must operate
