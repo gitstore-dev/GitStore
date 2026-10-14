@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/big"
 	"net"
 	"strconv"
 	"strings"
@@ -28,6 +27,7 @@ import (
 
 // scyllaDatastore implements datastore.Datastore backed by ScyllaDB.
 type scyllaDatastore struct {
+	catalogQueue                      namespaceCatalogQueue
 	session                           gocqlx.Session
 	keyspace                          string
 	log                               *zap.Logger
@@ -299,6 +299,7 @@ func openSession(cfg config.ScyllaConfig) (*gocql.Session, error) {
 	cluster.Consistency = gocql.Quorum
 	cluster.DisableShardAwarePort = cfg.DisableShardAwarePort
 	cluster.IgnorePeerAddr = cfg.IgnorePeerAddr
+	cluster.QueryObserver = cfg.QueryObserver
 	if at, ok := cfg.AddressTranslator.(gocql.AddressTranslator); ok {
 		cluster.AddressTranslator = at
 	}
@@ -493,7 +494,7 @@ func (s *scyllaDatastore) createProduct(ctx context.Context, p *datastore.Produc
 					return applyErr
 				}
 				if !applied {
-					current, getErr := s.getProductByKey(row.Namespace, row.CreationTimestamp, uid)
+					current, getErr := s.getProductByKey(ctx, row.Namespace, row.CreationTimestamp, uid)
 					if getErr != nil {
 						return getErr
 					}
@@ -538,13 +539,13 @@ func (s *scyllaDatastore) GetProduct(ctx context.Context, uid string) (*datastor
 	// Step 1: uid -> (namespace, creation_timestamp)
 	getUID, names := s.productByUIDTable.Get()
 	var uidRow productUIDRow
-	if err := s.session.Query(getUID, names).BindMap(qb.M{"uid": parsedUID}).GetRelease(&uidRow); err != nil {
+	if err := s.session.Query(getUID, names).WithContext(ctx).BindMap(qb.M{"uid": parsedUID}).GetRelease(&uidRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, uid)
 		}
 		return nil, fmt.Errorf("scylla: get product (uid lookup): %w", err)
 	}
-	product, err := s.getProductByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
+	product, err := s.getProductByKey(ctx, uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "Product", ResourceUID: uid, Projection: "products_by_uid",
@@ -558,13 +559,13 @@ func (s *scyllaDatastore) GetProductByName(ctx context.Context, namespace, name 
 	// Step 1: (namespace, name) -> (uid, creation_timestamp)
 	getName, nameNames := s.productByNameTable.Get()
 	var nameRow productNameRow
-	if err := s.session.Query(getName, nameNames).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&nameRow); err != nil {
+	if err := s.session.Query(getName, nameNames).WithContext(ctx).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&nameRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product %s/%s", datastore.ErrNotFound, namespace, name)
 		}
 		return nil, fmt.Errorf("scylla: get product by name (name lookup): %w", err)
 	}
-	product, err := s.getProductByKey(nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
+	product, err := s.getProductByKey(ctx, nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "Product", ResourceUID: nameRow.UID.String(), Projection: "products_by_name",
@@ -583,14 +584,14 @@ func (s *scyllaDatastore) GetProductByName(ctx context.Context, namespace, name 
 }
 
 // getProductByKey fetches a full product row from products_by_namespace by its complete primary key.
-func (s *scyllaDatastore) getProductByKey(namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.Product, error) {
+func (s *scyllaDatastore) getProductByKey(ctx context.Context, namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.Product, error) {
 	cols := strings.Join(s.productByNamespaceTable.Metadata().Columns, ", ")
 	stmt := fmt.Sprintf(
 		"SELECT %s FROM products_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
 		cols,
 	)
 	var row productRow
-	if err := s.session.Query(stmt, nil).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
+	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product namespace=%s uid=%s", datastore.ErrNotFound, namespace, uid)
 		}
@@ -599,12 +600,12 @@ func (s *scyllaDatastore) getProductByKey(namespace string, createdAt time.Time,
 	return fromProductRow(&row), nil
 }
 
-func (s *scyllaDatastore) ListProducts(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+func (s *scyllaDatastore) ListProducts(ctx context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
 	limit := page.Limit()
 	pq := buildPaginatedSelect(s.productByNamespaceTable, page, "namespace", namespace, productClusterKeys, nil, nil)
 
 	var rows []productRow
-	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list products: %w", err)
 	}
 
@@ -644,7 +645,7 @@ func (s *scyllaDatastore) updateProduct(ctx context.Context, p *datastore.Produc
 	if p.CreationTimestamp.IsZero() {
 		existing, err = s.GetProduct(ctx, p.UID)
 	} else {
-		existing, err = s.getProductByKey(p.Namespace, p.CreationTimestamp, uid)
+		existing, err = s.getProductByKey(ctx, p.Namespace, p.CreationTimestamp, uid)
 	}
 	if err != nil {
 		return err
@@ -878,7 +879,7 @@ func (s *scyllaDatastore) createCategoryTaxonomy(ctx context.Context, c *datasto
 					return applyErr
 				}
 				if !applied {
-					current, getErr := s.getCategoryTaxonomyByKey(row.Namespace, row.CreationTimestamp, uid)
+					current, getErr := s.getCategoryTaxonomyByKey(ctx, row.Namespace, row.CreationTimestamp, uid)
 					if getErr != nil {
 						return getErr
 					}
@@ -915,11 +916,11 @@ func (s *scyllaDatastore) createCategoryTaxonomy(ctx context.Context, c *datasto
 	return nil
 }
 
-func (s *scyllaDatastore) getCategoryTaxonomyByKey(namespace string, creationTimestamp time.Time, uid gocql.UUID) (*datastore.CategoryTaxonomy, error) {
+func (s *scyllaDatastore) getCategoryTaxonomyByKey(ctx context.Context, namespace string, creationTimestamp time.Time, uid gocql.UUID) (*datastore.CategoryTaxonomy, error) {
 	const stmt = "SELECT %s FROM category_taxonomies_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?"
 	cols := strings.Join(s.categoryTaxonomyTable.Metadata().Columns, ", ")
 	var row categoryTaxonomyRow
-	if err := s.session.Query(fmt.Sprintf(stmt, cols), nil).
+	if err := s.session.Query(fmt.Sprintf(stmt, cols), nil).WithContext(ctx).
 		Bind(namespace, creationTimestamp, uid).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrNotFound, namespace, uid)
@@ -937,7 +938,7 @@ func (s *scyllaDatastore) GetCategoryTaxonomy(ctx context.Context, uid string) (
 	// Step 1: uid -> (namespace, creation_timestamp)
 	stmt, names := s.categoryTaxonomyByUIDTable.Get()
 	var uidRow categoryTaxonomyUIDRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{
+	if err := s.session.Query(stmt, names).WithContext(ctx).BindMap(qb.M{
 		"uid": parsedUID,
 	}).GetRelease(&uidRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
@@ -945,7 +946,7 @@ func (s *scyllaDatastore) GetCategoryTaxonomy(ctx context.Context, uid string) (
 		}
 		return nil, fmt.Errorf("scylla: get category_taxonomy by uid: %w", err)
 	}
-	category, err := s.getCategoryTaxonomyByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
+	category, err := s.getCategoryTaxonomyByKey(ctx, uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "CategoryTaxonomy", ResourceUID: uid, Projection: "category_taxonomies_by_uid",
@@ -959,7 +960,7 @@ func (s *scyllaDatastore) GetCategoryTaxonomyByName(ctx context.Context, namespa
 	// Step 1: (namespace, name) -> (uid, creation_timestamp)
 	stmt, names := s.categoryTaxonomyByNameTable.Get()
 	var nameRow categoryTaxonomyNameRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{
+	if err := s.session.Query(stmt, names).WithContext(ctx).BindMap(qb.M{
 		"namespace": namespace,
 		"name":      name,
 	}).GetRelease(&nameRow); err != nil {
@@ -968,7 +969,7 @@ func (s *scyllaDatastore) GetCategoryTaxonomyByName(ctx context.Context, namespa
 		}
 		return nil, fmt.Errorf("scylla: get category_taxonomy by name: %w", err)
 	}
-	category, err := s.getCategoryTaxonomyByKey(namespace, nameRow.CreationTimestamp, nameRow.UID)
+	category, err := s.getCategoryTaxonomyByKey(ctx, namespace, nameRow.CreationTimestamp, nameRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "CategoryTaxonomy", ResourceUID: nameRow.UID.String(), Projection: "category_taxonomies_by_name",
@@ -986,7 +987,7 @@ func (s *scyllaDatastore) GetCategoryTaxonomyByName(ctx context.Context, namespa
 	return category, err
 }
 
-func (s *scyllaDatastore) ListCategoryTaxonomies(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
+func (s *scyllaDatastore) ListCategoryTaxonomies(ctx context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
 	if err := datastore.RejectClosureCursors(page); err != nil {
 		return nil, err
 	}
@@ -994,7 +995,7 @@ func (s *scyllaDatastore) ListCategoryTaxonomies(_ context.Context, namespace st
 	pq := buildPaginatedSelect(s.categoryTaxonomyTable, page, "namespace", namespace, clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}, nil, nil)
 
 	var rows []categoryTaxonomyRow
-	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list category_taxonomies: %w", err)
 	}
 
@@ -1034,7 +1035,7 @@ func (s *scyllaDatastore) updateCategoryTaxonomy(ctx context.Context, c *datasto
 	if c.CreationTimestamp.IsZero() {
 		existing, err = s.GetCategoryTaxonomy(ctx, c.UID)
 	} else {
-		existing, err = s.getCategoryTaxonomyByKey(c.Namespace, c.CreationTimestamp, uid)
+		existing, err = s.getCategoryTaxonomyByKey(ctx, c.Namespace, c.CreationTimestamp, uid)
 	}
 	if err != nil {
 		return err
@@ -1296,7 +1297,7 @@ func (s *scyllaDatastore) createCollection(ctx context.Context, c *datastore.Col
 					return applyErr
 				}
 				if !applied {
-					current, getErr := s.getCollectionByKey(row.Namespace, row.CreationTimestamp, uid)
+					current, getErr := s.getCollectionByKey(ctx, row.Namespace, row.CreationTimestamp, uid)
 					if getErr != nil {
 						return getErr
 					}
@@ -1331,13 +1332,13 @@ func (s *scyllaDatastore) GetCollection(ctx context.Context, uid string) (*datas
 	}
 	getUID, names := s.collectionByUIDTable.Get()
 	var uidRow collectionUIDRow
-	if err := s.session.Query(getUID, names).BindMap(qb.M{"uid": parsedUID}).GetRelease(&uidRow); err != nil {
+	if err := s.session.Query(getUID, names).WithContext(ctx).BindMap(qb.M{"uid": parsedUID}).GetRelease(&uidRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: collection uid %s", datastore.ErrNotFound, uid)
 		}
 		return nil, fmt.Errorf("scylla: get collection (uid lookup): %w", err)
 	}
-	collection, err := s.getCollectionByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
+	collection, err := s.getCollectionByKey(ctx, uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "Collection", ResourceUID: uid, Projection: "collections_by_uid",
@@ -1350,13 +1351,13 @@ func (s *scyllaDatastore) GetCollection(ctx context.Context, uid string) (*datas
 func (s *scyllaDatastore) GetCollectionByName(ctx context.Context, namespace, name string) (*datastore.Collection, error) {
 	getName, nameNames := s.collectionByNameTable.Get()
 	var nameRow collectionNameRow
-	if err := s.session.Query(getName, nameNames).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&nameRow); err != nil {
+	if err := s.session.Query(getName, nameNames).WithContext(ctx).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&nameRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: collection %s/%s", datastore.ErrNotFound, namespace, name)
 		}
 		return nil, fmt.Errorf("scylla: get collection by name: %w", err)
 	}
-	collection, err := s.getCollectionByKey(nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
+	collection, err := s.getCollectionByKey(ctx, nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "Collection", ResourceUID: nameRow.UID.String(), Projection: "collections_by_name",
@@ -1374,14 +1375,14 @@ func (s *scyllaDatastore) GetCollectionByName(ctx context.Context, namespace, na
 	return collection, err
 }
 
-func (s *scyllaDatastore) getCollectionByKey(namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.Collection, error) {
+func (s *scyllaDatastore) getCollectionByKey(ctx context.Context, namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.Collection, error) {
 	cols := strings.Join(s.collectionTable.Metadata().Columns, ", ")
 	stmt := fmt.Sprintf(
 		"SELECT %s FROM collections_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
 		cols,
 	)
 	var row collectionRow
-	if err := s.session.Query(stmt, nil).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
+	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: collection namespace=%s uid=%s", datastore.ErrNotFound, namespace, uid)
 		}
@@ -1390,12 +1391,12 @@ func (s *scyllaDatastore) getCollectionByKey(namespace string, createdAt time.Ti
 	return fromCollectionRow(&row), nil
 }
 
-func (s *scyllaDatastore) ListCollections(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
+func (s *scyllaDatastore) ListCollections(ctx context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
 	limit := page.Limit()
 	pq := buildPaginatedSelect(s.collectionTable, page, "namespace", namespace, collectionClusterKeys, nil, nil)
 
 	var rows []collectionRow
-	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list collections: %w", err)
 	}
 
@@ -1435,7 +1436,7 @@ func (s *scyllaDatastore) updateCollection(ctx context.Context, c *datastore.Col
 	if c.CreationTimestamp.IsZero() {
 		existing, err = s.GetCollection(ctx, c.UID)
 	} else {
-		existing, err = s.getCollectionByKey(c.Namespace, c.CreationTimestamp, uid)
+		existing, err = s.getCollectionByKey(ctx, c.Namespace, c.CreationTimestamp, uid)
 	}
 	if err != nil {
 		return err
@@ -1651,7 +1652,7 @@ func (s *scyllaDatastore) createProductVariant(ctx context.Context, v *datastore
 				return applyErr
 			}
 			if !applied {
-				current, getErr := s.getProductVariantByKey(row.Namespace, row.CreationTimestamp, uid)
+				current, getErr := s.getProductVariantByKey(ctx, row.Namespace, row.CreationTimestamp, uid)
 				if getErr != nil {
 					return getErr
 				}
@@ -1712,13 +1713,13 @@ func (s *scyllaDatastore) GetProductVariant(ctx context.Context, uid string) (*d
 	}
 	stmt, names := s.productVariantByUIDTable.Get()
 	var uidRow productVariantUIDRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"uid": parsedUID}).GetRelease(&uidRow); err != nil {
+	if err := s.session.Query(stmt, names).WithContext(ctx).BindMap(qb.M{"uid": parsedUID}).GetRelease(&uidRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product_variant uid %s", datastore.ErrNotFound, uid)
 		}
 		return nil, fmt.Errorf("scylla: get product_variant (uid lookup): %w", err)
 	}
-	variant, err := s.getProductVariantByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
+	variant, err := s.getProductVariantByKey(ctx, uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "ProductVariant", ResourceUID: uid, Projection: "product_variants_by_uid",
@@ -1731,13 +1732,13 @@ func (s *scyllaDatastore) GetProductVariant(ctx context.Context, uid string) (*d
 func (s *scyllaDatastore) GetProductVariantByName(ctx context.Context, namespace, name string) (*datastore.ProductVariant, error) {
 	stmt, names := s.productVariantByNameTable.Get()
 	var nameRow productVariantNameRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&nameRow); err != nil {
+	if err := s.session.Query(stmt, names).WithContext(ctx).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&nameRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product_variant %s/%s", datastore.ErrNotFound, namespace, name)
 		}
 		return nil, fmt.Errorf("scylla: get product_variant by name: %w", err)
 	}
-	variant, err := s.getProductVariantByKey(nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
+	variant, err := s.getProductVariantByKey(ctx, nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "ProductVariant", ResourceUID: nameRow.UID.String(), Projection: "product_variants_by_name",
@@ -1758,13 +1759,13 @@ func (s *scyllaDatastore) GetProductVariantByName(ctx context.Context, namespace
 func (s *scyllaDatastore) GetProductVariantBySKU(ctx context.Context, namespace, sku string) (*datastore.ProductVariant, error) {
 	stmt, names := s.productVariantBySKUTable.Get()
 	var skuRow productVariantSKURow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"namespace": namespace, "sku": sku}).GetRelease(&skuRow); err != nil {
+	if err := s.session.Query(stmt, names).WithContext(ctx).BindMap(qb.M{"namespace": namespace, "sku": sku}).GetRelease(&skuRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product_variant sku %s/%s", datastore.ErrNotFound, namespace, sku)
 		}
 		return nil, fmt.Errorf("scylla: get product_variant by sku: %w", err)
 	}
-	variant, err := s.getProductVariantByKey(skuRow.Namespace, skuRow.CreationTimestamp, skuRow.UID)
+	variant, err := s.getProductVariantByKey(ctx, skuRow.Namespace, skuRow.CreationTimestamp, skuRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "ProductVariant", ResourceUID: skuRow.UID.String(), Projection: "product_variants_by_sku",
@@ -1782,14 +1783,14 @@ func (s *scyllaDatastore) GetProductVariantBySKU(ctx context.Context, namespace,
 	return variant, err
 }
 
-func (s *scyllaDatastore) getProductVariantByKey(namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.ProductVariant, error) {
+func (s *scyllaDatastore) getProductVariantByKey(ctx context.Context, namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.ProductVariant, error) {
 	cols := strings.Join(s.productVariantByNamespaceTable.Metadata().Columns, ", ")
 	stmt := fmt.Sprintf(
 		"SELECT %s FROM product_variants_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
 		cols,
 	)
 	var row productVariantRow
-	if err := s.session.Query(stmt, nil).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
+	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product_variant namespace=%s uid=%s", datastore.ErrNotFound, namespace, uid)
 		}
@@ -1798,12 +1799,12 @@ func (s *scyllaDatastore) getProductVariantByKey(namespace string, createdAt tim
 	return fromProductVariantRow(&row), nil
 }
 
-func (s *scyllaDatastore) ListProductVariants(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.ProductVariant], error) {
+func (s *scyllaDatastore) ListProductVariants(ctx context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.ProductVariant], error) {
 	limit := page.Limit()
 	pq := buildPaginatedSelect(s.productVariantByNamespaceTable, page, "namespace", namespace, productClusterKeys, nil, nil)
 
 	var rows []productVariantRow
-	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list product_variants: %w", err)
 	}
 
@@ -1830,7 +1831,7 @@ func (s *scyllaDatastore) ListProductVariantsByProductRef(ctx context.Context, n
 	}
 	result := make([]*datastore.ProductVariant, 0, len(refRows))
 	for _, r := range refRows {
-		v, err := s.getProductVariantByKey(r.Namespace, r.CreationTimestamp, r.UID)
+		v, err := s.getProductVariantByKey(ctx, r.Namespace, r.CreationTimestamp, r.UID)
 		if err != nil {
 			if errors.Is(err, datastore.ErrNotFound) {
 				s.reportFinding(ctx, datastore.ProjectionFinding{
@@ -1876,7 +1877,7 @@ func (s *scyllaDatastore) updateProductVariant(ctx context.Context, v *datastore
 	if v.CreationTimestamp.IsZero() {
 		existing, err = s.GetProductVariant(ctx, v.UID)
 	} else {
-		existing, err = s.getProductVariantByKey(v.Namespace, v.CreationTimestamp, uid)
+		existing, err = s.getProductVariantByKey(ctx, v.Namespace, v.CreationTimestamp, uid)
 	}
 	if err != nil {
 		return err
@@ -2095,23 +2096,6 @@ func catalogueStep(operation, resourceKind, uid, projection, lookupKey, action s
 		LookupKey:    lookupKey,
 		Action:       action,
 	}
-}
-
-// File updates already carry a separate expected-version precondition. Keep
-// their existing transition semantics separate from strict catalog replacement.
-func validateResourceVersionTransition(current, desired string) error {
-	if current == "" || desired == "" || current == desired {
-		return nil
-	}
-	currentVersion, currentOK := new(big.Int).SetString(current, 10)
-	desiredVersion, desiredOK := new(big.Int).SetString(desired, 10)
-	if !currentOK || !desiredOK || currentVersion.Sign() < 0 || desiredVersion.Sign() < 1 {
-		return fmt.Errorf("%w: invalid resource version transition %q -> %q", datastore.ErrConflict, current, desired)
-	}
-	if desiredVersion.Cmp(new(big.Int).Add(currentVersion, big.NewInt(1))) != 0 {
-		return fmt.Errorf("%w: stale resource version transition %q -> %q", datastore.ErrConflict, current, desired)
-	}
-	return nil
 }
 
 func (s *scyllaDatastore) insertAuthoritative(ctx context.Context, target *table.Table, row any) (bool, error) {
@@ -2651,9 +2635,12 @@ func (s *scyllaDatastore) UpdateNamespace(ctx context.Context, ns *datastore.Nam
 	if err != nil {
 		return err
 	}
-	if current.ResourceVersion != expectedResourceVersion || current.Name != ns.Name ||
+	if current.Name != ns.Name ||
 		(current.DeletionTimestamp != nil && ns.DeletionTimestamp == nil) {
 		return datastore.ErrConflict
+	}
+	if err := datastore.ValidateCatalogUpdateVersion(current.ResourceVersion, expectedResourceVersion, ns.ResourceVersion); err != nil {
+		return err
 	}
 	ns.Status, err = datastore.MergeInfrastructureStatus(current.Status, ns.Status)
 	if err != nil {
@@ -2736,7 +2723,7 @@ func (s *scyllaDatastore) markNamespaceLifecycle(ctx context.Context, ns *datast
 		row.APIVersion, row.Kind, row.Name, row.Title, row.Tier, row.Generation, row.ResourceVersion, row.Revision,
 		row.CreationTimestamp, row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations, row.OwnerReferences,
 		row.Finalizers, row.DeletionTimestamp, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
-		row.UID, expectedResourceVersion, fence.expectedEpoch(), fence.expectedPending(), nil,
+		row.UID, expectedResourceVersion, fence.epoch(), fence.pending(), nil,
 	).ExecCASRelease()
 	if err != nil {
 		return fmt.Errorf("scylla: mark namespace deletion: %w", err)
@@ -3007,7 +2994,7 @@ func (s *scyllaDatastore) catalogResourceProjection(ctx context.Context, kind, u
 		if err != nil {
 			return nil, err
 		}
-		record.RepositoryID, record.Namespace, record.Name, record.CreationTimestamp = r.RepositoryID, r.Namespace, r.Name, r.CreationTimestamp
+		return fileCatalogProjection(r), nil
 	default:
 		return nil, datastore.ErrInvalidArgument
 	}
@@ -3015,16 +3002,25 @@ func (s *scyllaDatastore) catalogResourceProjection(ctx context.Context, kind, u
 }
 
 func (s *scyllaDatastore) writeCatalogRepositoryIndex(ctx context.Context, record *ProjectionRecord) error {
-	return s.session.Query("INSERT INTO "+repositoryResourcesTable+" (repository_id,shard,kind,uid,namespace,name,creation_timestamp) VALUES (?,?,?,?,?,?,?)", nil).
-		WithContext(ctx).Bind(mustParseUUID(record.RepositoryID), record.Shard, record.Kind, mustParseUUID(record.UID), record.Namespace, record.Name, record.CreationTimestamp).ExecRelease()
+	return datastore.MeasureCatalogMutationPhase(ctx, datastore.CatalogMutationMembershipWrite, func() error {
+		return s.session.Query("INSERT INTO "+repositoryResourcesTable+" (repository_id,shard,kind,uid,namespace,name,creation_timestamp) VALUES (?,?,?,?,?,?,?)", nil).
+			WithContext(ctx).Bind(mustParseUUID(record.RepositoryID), record.Shard, record.Kind, mustParseUUID(record.UID), record.Namespace, record.Name, record.CreationTimestamp).ExecRelease()
+	})
 }
 
 func (s *scyllaDatastore) deleteCatalogRepositoryIndex(ctx context.Context, record *ProjectionRecord) error {
-	return s.session.Query("DELETE FROM "+repositoryResourcesTable+" WHERE repository_id=? AND shard=? AND kind=? AND uid=?", nil).
-		WithContext(ctx).Bind(mustParseUUID(record.RepositoryID), record.Shard, record.Kind, mustParseUUID(record.UID)).ExecRelease()
+	return datastore.MeasureCatalogMutationPhase(ctx, datastore.CatalogMutationMembershipWrite, func() error {
+		return s.session.Query("DELETE FROM "+repositoryResourcesTable+" WHERE repository_id=? AND shard=? AND kind=? AND uid=?", nil).
+			WithContext(ctx).Bind(mustParseUUID(record.RepositoryID), record.Shard, record.Kind, mustParseUUID(record.UID)).ExecRelease()
+	})
 }
 
 func (s *scyllaDatastore) catalogMutation(ctx context.Context, kind, namespace, repositoryID, uid string, deleting bool, operation func() error) error {
+	return s.catalogMutationWithProjection(ctx, kind, namespace, repositoryID, uid, deleting,
+		func() (*ProjectionRecord, error) { return s.catalogResourceProjection(ctx, kind, uid) }, operation)
+}
+
+func (s *scyllaDatastore) catalogMutationWithProjection(ctx context.Context, kind, namespace, repositoryID, uid string, deleting bool, readProjection func() (*ProjectionRecord, error), operation func() error) error {
 	if repositoryID == "" {
 		return operation()
 	}
@@ -3036,15 +3032,25 @@ func (s *scyllaDatastore) catalogMutation(ctx context.Context, kind, namespace, 
 	}
 	return s.withNamespaceCatalogFence(ctx, namespace, deleting, func() error {
 		if !deleting {
-			if err := s.catalogParentsActive(ctx, namespace, repositoryID); err != nil {
+			if err := datastore.MeasureCatalogMutationPhase(ctx, datastore.CatalogMutationParentCheck, func() error {
+				return s.catalogParentsActive(ctx, namespace, repositoryID)
+			}); err != nil {
 				return err
 			}
 		}
-		before, err := s.catalogResourceProjection(ctx, kind, uid)
+		var before *ProjectionRecord
+		err := datastore.MeasureCatalogMutationPhase(ctx, datastore.CatalogMutationReadBefore, func() error {
+			var readErr error
+			before, readErr = readProjection()
+			return readErr
+		})
 		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
 			return err
 		}
 		candidate := &ProjectionRecord{Table: repositoryResourcesTable, Kind: kind, RepositoryID: repositoryID, UID: uid, Namespace: namespace, Shard: categoryProductShard(uid)}
+		if before != nil {
+			candidate.Name, candidate.CreationTimestamp = before.Name, before.CreationTimestamp
+		}
 		if !deleting {
 			// The conservative index entry precedes the authoritative write.
 			// Failure may leave a blocker, never an invisible admitted child.
@@ -3053,12 +3059,22 @@ func (s *scyllaDatastore) catalogMutation(ctx context.Context, kind, namespace, 
 			}
 		}
 		operationErr := operation()
-		current, readErr := s.catalogResourceProjection(ctx, kind, uid)
+		var current *ProjectionRecord
+		readErr := datastore.MeasureCatalogMutationPhase(ctx, datastore.CatalogMutationReadAfter, func() error {
+			var readErr error
+			current, readErr = readProjection()
+			return readErr
+		})
 		if readErr != nil && !errors.Is(readErr, datastore.ErrNotFound) {
 			return errors.Join(operationErr, readErr)
 		}
 		if current != nil && current.RepositoryID == repositoryID {
-			err = s.writeCatalogRepositoryIndex(ctx, current)
+			if deleting || current.Namespace != candidate.Namespace || current.Name != candidate.Name ||
+				!current.CreationTimestamp.Equal(candidate.CreationTimestamp) {
+				err = s.writeCatalogRepositoryIndex(ctx, current)
+			} else {
+				err = nil
+			}
 		} else {
 			err = s.deleteCatalogRepositoryIndex(ctx, candidate)
 		}
@@ -3071,27 +3087,38 @@ func (s *scyllaDatastore) catalogMutation(ctx context.Context, kind, namespace, 
 
 // Callers hold the namespace catalog reservation until the write completes.
 func (s *scyllaDatastore) catalogParentsActive(ctx context.Context, namespace, repositoryID string) error {
-	ns, err := s.GetNamespaceByName(ctx, namespace)
-	if err != nil && (repositoryID != "" || !errors.Is(err, datastore.ErrNotFound)) {
-		return err
-	}
-	if ns != nil && (ns.DeletionTimestamp != nil || datastore.HasDeletionIntent(ns.Status)) {
-		return datastore.ErrNamespaceNotActive
+	scope, _ := ctx.Value(catalogFenceScopeKey{}).(*catalogFenceScope)
+	if !scope.isActiveFor(s, namespace) {
+		ns, err := s.GetNamespaceByName(ctx, namespace)
+		if err != nil && (repositoryID != "" || !errors.Is(err, datastore.ErrNotFound)) {
+			return err
+		}
+		if ns != nil && (ns.DeletionTimestamp != nil || datastore.HasDeletionIntent(ns.Status)) {
+			return datastore.ErrNamespaceNotActive
+		}
 	}
 	if repositoryID == "" {
 		return nil
 	}
-	repository, err := s.GetRepository(ctx, repositoryID)
-	if err != nil {
-		return err
+	check := func(checkCtx context.Context) error {
+		repository, err := s.GetRepository(checkCtx, repositoryID)
+		if err != nil {
+			return err
+		}
+		if repository != nil && (repository.DeletionTimestamp != nil || datastore.HasDeletionIntent(repository.Status)) {
+			return datastore.ErrConflict
+		}
+		if repository == nil || repository.Namespace != namespace {
+			return datastore.ErrConflict
+		}
+		return nil
 	}
-	if repository != nil && (repository.DeletionTimestamp != nil || datastore.HasDeletionIntent(repository.Status)) {
-		return datastore.ErrConflict
+	if scope.isActiveFor(s, namespace) {
+		// The held Namespace reservation excludes parent lifecycle and
+		// ownership transitions until every nested mutation has drained.
+		return scope.checkRepository(ctx, repositoryID, check)
 	}
-	if repository == nil || repository.Namespace != namespace {
-		return datastore.ErrConflict
-	}
-	return nil
+	return check(ctx)
 }
 
 // ── row conversion helpers ────────────────────────────────────────────────────

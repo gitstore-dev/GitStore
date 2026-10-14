@@ -48,8 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    gitstore::init_logging(&cfg.log.level, &cfg.log.format)
+    let telemetry = gitstore::init_observability(&cfg.log, &cfg.observability.otlp)
         .map_err(|e| format!("Failed to initialize logger: {e}"))?;
+    let metrics_handle =
+        gitstore::grpc::metrics::start_metrics(&cfg.git_service.metrics.listen_addr).await?;
 
     info!(
         grpc_port = cfg.git_service.grpc_port,
@@ -137,7 +139,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let grpc_handle = tokio::spawn(async move {
         if let Err(e) = tonic::transport::Server::builder()
-            .add_service(GitServiceServer::new(grpc_service))
+            .trace_fn(|request| gitstore::rpc_span(request.headers(), request.uri().path()))
+            .add_service(gitstore::grpc::metrics::RpcMetricsService::new(
+                GitServiceServer::new(grpc_service),
+            ))
             .serve(grpc_addr)
             .await
         {
@@ -149,6 +154,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Shutting down...");
 
     grpc_handle.abort();
+    if let Some(handle) = metrics_handle {
+        handle.abort();
+    }
+    tokio::task::spawn_blocking(move || telemetry.shutdown()).await??;
 
     Ok(())
 }

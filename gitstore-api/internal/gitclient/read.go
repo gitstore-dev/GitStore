@@ -6,14 +6,132 @@
 package gitclient
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
+	"strings"
 
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
+
+func (c *Client) ReadFilesForRepo(ctx context.Context, repositoryID string, paths []string, commitSHA string) ([][]byte, error) {
+	files, _, err := c.readFileSnapshotsForRepo(ctx, repositoryID, paths, commitSHA, "", "")
+	return files, err
+}
+
+func (c *Client) ReadFilePairForRepo(ctx context.Context, repositoryID string, paths []string, primaryCommit, secondaryCommit string) ([][]byte, [][]byte, error) {
+	if secondaryCommit == "" {
+		return nil, nil, status.Error(codes.InvalidArgument, "snapshot pair requires a second immutable commit ID")
+	}
+	return c.readFileSnapshotsForRepo(ctx, repositoryID, paths, primaryCommit, secondaryCommit, "")
+}
+
+func (c *Client) ReadFilePairAtCurrentRefForRepo(ctx context.Context, repositoryID string, paths []string, primaryCommit, secondaryCommit, refName string) ([][]byte, [][]byte, error) {
+	if secondaryCommit == "" || !strings.HasPrefix(refName, "refs/") {
+		return nil, nil, status.Error(codes.InvalidArgument, "current snapshot pair requires a full ref and second immutable commit ID")
+	}
+	return c.readFileSnapshotsForRepo(ctx, repositoryID, paths, primaryCommit, secondaryCommit, refName)
+}
+
+func (c *Client) readFileSnapshotsForRepo(ctx context.Context, repositoryID string, paths []string, commitSHA, secondaryCommit, refName string) ([][]byte, [][]byte, error) {
+	if len(paths) == 0 || len(paths) > 4 {
+		return nil, nil, status.Error(codes.InvalidArgument, "GetFiles requires one to four paths")
+	}
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		if path == "" || seen[path] {
+			return nil, nil, status.Error(codes.InvalidArgument, "GetFiles paths must be nonempty and distinct")
+		}
+		seen[path] = true
+	}
+	oid, err := hex.DecodeString(commitSHA)
+	if err != nil || len(oid) != 20 {
+		return nil, nil, status.Error(codes.InvalidArgument, "GetFiles requires a full immutable commit ID")
+	}
+	commitSHA = hex.EncodeToString(oid)
+	var secondary *string
+	if secondaryCommit != "" {
+		oid, err := hex.DecodeString(secondaryCommit)
+		if err != nil || len(oid) != 20 {
+			return nil, nil, status.Error(codes.InvalidArgument, "GetFiles requires a full second immutable commit ID")
+		}
+		secondaryCommit = hex.EncodeToString(oid)
+		secondary = &secondaryCommit
+	}
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.read", repositoryID)
+	if err != nil {
+		return nil, nil, err
+	}
+	var currentRef *string
+	if refName != "" {
+		currentRef = &refName
+	}
+	response, err := c.Git.GetFiles(ctx, &gitv1.GetFilesRequest{
+		RepositoryId: repositoryID, Paths: paths, CommitSha: commitSHA, Authorization: authorization,
+		SecondaryCommitSha: secondary,
+		CurrentRef:         currentRef,
+	}, grpc.MaxCallRecvMsgSize(16<<20))
+	if err != nil {
+		return nil, nil, err
+	}
+	if response == nil || response.CommitSha != commitSHA || response.SecondaryCommitSha != secondaryCommit || proto.Size(response) > 16<<20 {
+		return nil, nil, status.Error(codes.Internal, "GetFiles response changed commit or encoded size")
+	}
+	expectedCurrent := ""
+	if currentRef != nil {
+		expectedCurrent = secondaryCommit
+	}
+	if response.CurrentRefCommitSha != expectedCurrent {
+		return nil, nil, status.Error(codes.Internal, "GetFiles response changed current ref receipt")
+	}
+	primary, err := validateFileSnapshots(response.Files, paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	if secondary == nil {
+		if len(response.SecondaryFiles) != 0 {
+			return nil, nil, status.Error(codes.Internal, "GetFiles returned an unrequested secondary snapshot")
+		}
+		return primary, nil, nil
+	}
+	second, err := validateFileSnapshots(response.SecondaryFiles, paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	return primary, second, nil
+}
+
+func validateFileSnapshots(files []*gitv1.FileSnapshot, paths []string) ([][]byte, error) {
+	if len(files) != len(paths) {
+		return nil, status.Error(codes.Internal, "GetFiles response changed cardinality")
+	}
+	results := make([][]byte, len(paths))
+	for i, file := range files {
+		if file == nil || file.Path != paths[i] || file.SizeBytes != uint64(len(file.Content)) || len(file.Content) > 4<<20 {
+			return nil, status.Error(codes.Internal, "GetFiles response changed path or size")
+		}
+		if !file.Found {
+			if len(file.Content) != 0 || file.BlobSha != "" {
+				return nil, status.Error(codes.Internal, "GetFiles missing path contains blob data")
+			}
+			continue
+		}
+		blob, err := hex.DecodeString(file.BlobSha)
+		if err != nil || len(blob) != 20 {
+			return nil, status.Error(codes.Internal, "GetFiles response has invalid blob ID")
+		}
+		results[i] = file.Content
+		if results[i] == nil {
+			results[i] = []byte{}
+		}
+	}
+	return results, nil
+}
 
 // NewClientFromConn wraps an existing connection with the same signed wire as production.
 func NewClientFromConn(conn *grpc.ClientConn, secret string) *Client {
@@ -34,18 +152,85 @@ func (c *Client) ReadFile(ctx context.Context, path, ref string) ([]byte, error)
 // NotFound means a missing path in a readable tree; a missing repository/ref or
 // a non-file entry returns FailedPrecondition, not evidence of path absence.
 func (c *Client) ReadFileForRepo(ctx context.Context, repositoryID, path, ref string) ([]byte, error) {
+	return c.readFileForRepo(ctx, repositoryID, path, ref, "")
+}
+
+// ReadUnchangedFileForRepo proves that no intervening commit changed the path.
+// Both commit arguments are immutable full object IDs.
+func (c *Client) ReadUnchangedFileForRepo(ctx context.Context, repositoryID, path, ref, ancestor string) ([]byte, error) {
+	if ancestor == "" || ref == "" {
+		return nil, fmt.Errorf("unchanged file read requires both commit IDs")
+	}
+	return c.readFileForRepo(ctx, repositoryID, path, ref, ancestor)
+}
+
+// ReadCurrentUnchangedFileForRepo returns an exact-ancestor ref receipt or the
+// unchanged path's current bytes in one signed, repository-locked operation.
+func (c *Client) ReadCurrentUnchangedFileForRepo(ctx context.Context, repositoryID, path, refName, ancestor string) (bool, []byte, error) {
+	oid, err := hex.DecodeString(ancestor)
+	if err != nil || len(oid) != 20 || !strings.HasPrefix(refName, "refs/") {
+		return false, nil, status.Error(codes.InvalidArgument, "current file proof requires a ref and full ancestor commit ID")
+	}
+	ancestor = hex.EncodeToString(oid)
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.read", repositoryID)
+	if err != nil {
+		return false, nil, err
+	}
+	response, err := c.Git.GetFile(ctx, &gitv1.GetFileRequest{
+		RepositoryId: repositoryID, Path: path, Ref: refName,
+		UnchangedSinceCommit: &ancestor, Authorization: authorization,
+		AllowAncestorReceipt: true,
+	})
+	if err != nil {
+		return false, nil, err
+	}
+	if response == nil {
+		return false, nil, status.Error(codes.Internal, "git service returned no current file proof")
+	}
+	current, currentErr := hex.DecodeString(response.RefCommitSha)
+	if currentErr != nil || len(current) != 20 || response.UnchangedSinceCommit != ancestor || response.Path != path {
+		return false, nil, status.Error(codes.Internal, "git service did not prove the current file snapshot")
+	}
+	atAncestor := bytes.Equal(current, oid)
+	if response.AtAncestor {
+		if !atAncestor || len(response.Content) != 0 || response.BlobSha != "" || response.SizeBytes != 0 {
+			return false, nil, status.Error(codes.Internal, "git service returned an invalid ancestor receipt")
+		}
+		return true, nil, nil
+	}
+	if atAncestor {
+		return false, nil, status.Error(codes.Internal, "git service did not return the requested ancestor receipt")
+	}
+	blob, blobErr := hex.DecodeString(response.BlobSha)
+	if blobErr != nil || len(blob) != 20 || response.SizeBytes != uint64(len(response.Content)) {
+		return false, nil, status.Error(codes.Internal, "git service did not prove the current file snapshot")
+	}
+	return false, response.Content, nil
+}
+
+func (c *Client) readFileForRepo(ctx context.Context, repositoryID, path, ref, ancestor string) ([]byte, error) {
 	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.read", repositoryID)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.Git.GetFile(ctx, &gitv1.GetFileRequest{
+	req := &gitv1.GetFileRequest{
 		RepositoryId:  repositoryID,
 		Path:          path,
 		Ref:           ref,
 		Authorization: authorization,
-	})
+	}
+	if ancestor != "" {
+		req.UnchangedSinceCommit = &ancestor
+	}
+	resp, err := c.Git.GetFile(ctx, req)
 	if err != nil {
 		return nil, err
+	}
+	if resp.GetAtAncestor() {
+		return nil, status.Error(codes.Internal, "git service returned an unrequested ancestor receipt")
+	}
+	if ancestor != "" && (resp.UnchangedSinceCommit != ancestor || resp.RefCommitSha != ref) {
+		return nil, fmt.Errorf("git service did not prove unchanged file history")
 	}
 	return resp.Content, nil
 }

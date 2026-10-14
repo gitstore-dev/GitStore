@@ -11,7 +11,7 @@ target="${2:-}"
 usage() {
   cat >&2 <<'EOF'
 usage:
-  make generate TARGET=<authz|all>
+  make generate TARGET=<authz|proto|all>
   make check TARGET=<all|config|compose|licenses|credentials>
   make clean TARGET=<git-data|controller-checkpoints> CONFIRM=1
   make bootstrap TARGET=<all|token|namespace|repository>
@@ -45,6 +45,7 @@ case "${family}/${target}" in
     fi
     ;;
   generate/authz) command=(make --no-print-directory _generate-authz) ;;
+  generate/proto) command=(make --no-print-directory _generate-proto) ;;
   generate/all) command=(make --no-print-directory _generate-all) ;;
   check/all) command=(make --no-print-directory _check-all) ;;
   check/config) command=(make --no-print-directory _check-local-config) ;;

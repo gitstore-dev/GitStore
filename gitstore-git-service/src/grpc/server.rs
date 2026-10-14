@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
+use super::metrics::{start_file_read_phase, FileReadPhase};
 use crate::auth::interceptor::RPCVerifier;
 use crate::git::hooks::{HookPipeline, NoopAdmissionHandler, NoopValidationHandler, RefUpdate};
 use crate::git::repo::{create_repository, delete_repository, fanout_path, list_tags};
@@ -41,6 +42,43 @@ const COMMIT_FILE_MAX_ATTEMPTS: usize = 32;
 const COMMIT_FILE_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const DELETE_RECEIPT_PREFIX: &str = "refs/gitstore/deletions/";
 const DELETE_RECEIPT_HISTORY_LIMIT: usize = 4096;
+
+fn attach_file_read_report<T>(
+    response: &mut Response<T>,
+    durations: [std::time::Duration; 10],
+    history_commits: usize,
+) -> Result<(), Status> {
+    let headers = [
+        "x-gitstore-file-read-authentication-ns",
+        "x-gitstore-file-read-repository-lock-ns",
+        "x-gitstore-file-read-blocking-queue-ns",
+        "x-gitstore-file-read-payload-ns",
+        "x-gitstore-file-read-history-commit-ns",
+        "x-gitstore-file-read-history-tree-ns",
+        "x-gitstore-file-read-repository-open-ns",
+        "x-gitstore-file-read-revision-ns",
+        "x-gitstore-file-read-target-tree-ns",
+        "x-gitstore-file-read-blob-ns",
+    ];
+    for (key, duration) in headers.into_iter().zip(durations) {
+        response.metadata_mut().insert(
+            key,
+            duration
+                .as_nanos()
+                .to_string()
+                .parse()
+                .map_err(|_| Status::internal("failed to encode File read phase duration"))?,
+        );
+    }
+    response.metadata_mut().insert(
+        "x-gitstore-file-read-history-commits",
+        history_commits
+            .to_string()
+            .parse()
+            .map_err(|_| Status::internal("failed to encode File history work"))?,
+    );
+    Ok(())
+}
 
 /// T047: Convert a proto PushContext into a HookContext for the pipeline.
 impl From<&PushContext> for HookContext {
@@ -583,6 +621,74 @@ fn completed_delete_receipt(
     ))
 }
 
+#[derive(Debug, Default)]
+struct FileHistoryProofWork {
+    commits: usize,
+    commit_reads: std::time::Duration,
+    tree_reads: std::time::Duration,
+}
+
+fn verify_unchanged_file_history(
+    repo: &gix::Repository,
+    mut tip: gix::ObjectId,
+    ancestor: gix::ObjectId,
+    path: &str,
+    blob: gix::ObjectId,
+) -> Result<FileHistoryProofWork, Status> {
+    let started = std::time::Instant::now();
+    let mut work = FileHistoryProofWork::default();
+    for _ in 0..=DELETE_RECEIPT_HISTORY_LIMIT {
+        if started.elapsed() >= std::time::Duration::from_secs(1) {
+            return Err(Status::resource_exhausted(
+                "file history proof time budget exhausted",
+            ));
+        }
+        let commit_started = std::time::Instant::now();
+        let commit = repo
+            .find_object(tip)
+            .map_err(|e| Status::internal(e.to_string()))?
+            .try_into_commit()
+            .map_err(|e| Status::internal(e.to_string()))?;
+        let tree = commit
+            .tree_id()
+            .map_err(|e| Status::internal(e.to_string()))?
+            .detach();
+        work.commits += 1;
+        work.commit_reads += commit_started.elapsed();
+        let tree_started = std::time::Instant::now();
+        match find_blob_in_tree(repo, tree, path) {
+            Ok(id) if id == blob => {}
+            Ok(_) => return Err(Status::aborted("file changed since requested commit")),
+            Err(error)
+                if matches!(
+                    error.code(),
+                    tonic::Code::NotFound | tonic::Code::FailedPrecondition
+                ) =>
+            {
+                return Err(Status::aborted(
+                    "file removed or replaced since requested commit",
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+        work.tree_reads += tree_started.elapsed();
+        if tip == ancestor {
+            return Ok(work);
+        }
+        let mut parents = commit.parent_ids();
+        let Some(parent) = parents.next() else {
+            return Err(Status::aborted("requested commit is not in file history"));
+        };
+        if parents.next().is_some() {
+            return Err(Status::aborted("file history proof does not cross merges"));
+        }
+        tip = parent.detach();
+    }
+    Err(Status::aborted(
+        "file history proof commit budget exhausted",
+    ))
+}
+
 /// Reject paths that could escape the repository working directory.
 fn validate_file_path(path: &str) -> Result<(), Status> {
     if std::path::Path::new(path).is_absolute() {
@@ -685,16 +791,33 @@ fn validate_request_authorization(
 
 /// Resolve a ref to a gix commit (returned as ObjectId so it is not bound to repo lifetime).
 /// Annotated tags are peeled to their target commit before conversion.
+/// Full object IDs do not require revision or prefix disambiguation.
 fn resolve_ref_to_commit_id(
     repo: &gix::Repository,
     ref_str: &str,
 ) -> Result<gix::ObjectId, Status> {
-    let id = repo
-        .rev_parse_single(ref_str.as_bytes())
-        .map_err(|e| Status::not_found(format!("ref '{}' not found: {}", ref_str, e)))?;
-    let commit = id
-        .object()
-        .map_err(|e| Status::internal(e.to_string()))?
+    if ref_str.starts_with("refs/") {
+        let mut reference = repo
+            .try_find_reference(ref_str)
+            .map_err(|e| Status::internal(format!("read ref '{ref_str}': {e}")))?
+            .ok_or_else(|| Status::not_found(format!("ref '{ref_str}' not found")))?;
+        let commit = reference
+            .peel_to_commit()
+            .map_err(|e| Status::internal(format!("peel ref '{ref_str}': {e}")))?;
+        return Ok(commit.id().detach());
+    }
+    let object = match gix::ObjectId::from_hex(ref_str.as_bytes()) {
+        Ok(id) if id.kind() == repo.object_hash() => repo
+            .try_find_object(id)
+            .map_err(|e| Status::internal(e.to_string()))?
+            .ok_or_else(|| Status::not_found(format!("ref '{}' not found", ref_str)))?,
+        _ => repo
+            .rev_parse_single(ref_str.as_bytes())
+            .map_err(|e| Status::not_found(format!("ref '{}' not found: {}", ref_str, e)))?
+            .object()
+            .map_err(|e| Status::internal(e.to_string()))?,
+    };
+    let commit = object
         .peel_tags_to_end()
         .map_err(|e| Status::internal(e.to_string()))?
         .try_into_commit()
@@ -826,7 +949,7 @@ impl GitService for GitServiceImpl {
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let guard = lock.write_owned().await;
 
-        tokio::task::spawn_blocking(move || {
+        crate::spawn_blocking(move || {
             let _guard = guard;
             ensure_repository_not_deleted(&repo_path)?;
             if repo_path.exists() {
@@ -885,7 +1008,7 @@ impl GitService for GitServiceImpl {
         let guard = lock.write_owned().await;
         let data_root = Arc::clone(&self.data_root);
 
-        tokio::task::spawn_blocking(move || {
+        crate::spawn_blocking(move || {
             let _guard = guard;
             persist_repository_tombstone(&data_root, &repo_path)
                 .map_err(|e| Status::internal(format!("persist repository tombstone: {e}")))?;
@@ -921,6 +1044,8 @@ impl GitService for GitServiceImpl {
         &self,
         request: Request<GetFileRequest>,
     ) -> Result<Response<GetFileResponse>, Status> {
+        let authentication_started = std::time::Instant::now();
+        let authentication_timer = start_file_read_phase(FileReadPhase::Authentication);
         self.rpc_auth
             .verify(
                 request.metadata(),
@@ -928,28 +1053,92 @@ impl GitService for GitServiceImpl {
                 request.get_ref(),
             )
             .await?;
+        drop(authentication_timer);
+        let authentication_elapsed = authentication_started.elapsed();
         let req = request.into_inner();
         validate_request_authorization(
             req.authorization.as_ref(),
             &req.repository_id,
             &["repository.contents.read"],
         )?;
+        let receipt_ancestor = if req.allow_ancestor_receipt {
+            let ancestor = req.unchanged_since_commit.as_deref().unwrap_or("");
+            if !req.r#ref.starts_with("refs/") || ancestor.len() != 40 || req.path.is_empty() {
+                return Err(Status::invalid_argument(
+                    "ancestor receipt requires a named ref, full ancestor commit ID and path",
+                ));
+            }
+            validate_file_path(&req.path)?;
+            Some(gix::ObjectId::from_hex(ancestor.as_bytes()).map_err(|_| {
+                Status::invalid_argument("ancestor receipt requires a full ancestor commit ID")
+            })?)
+        } else {
+            None
+        };
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)
             .map_err(file_read_target_error)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        let _guard = lock.read().await;
+        let lock_started = std::time::Instant::now();
+        let lock_timer = start_file_read_phase(FileReadPhase::RepositoryLock);
+        let guard = lock.read_owned().await;
+        drop(lock_timer);
+        let lock_elapsed = lock_started.elapsed();
 
-        tokio::task::spawn_blocking(move || {
+        let queue_started = std::time::Instant::now();
+        let queue_timer = start_file_read_phase(FileReadPhase::BlockingQueue);
+        crate::spawn_blocking(move || {
+            let _guard = guard;
+            let queue_elapsed = queue_started.elapsed();
+            queue_timer.observe_duration();
+            let payload_started = std::time::Instant::now();
+            let _payload_timer = start_file_read_phase(FileReadPhase::Payload);
+            let open_started = std::time::Instant::now();
             let repo = gix::open(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
+            let open_elapsed = open_started.elapsed();
 
             let ref_str = if req.r#ref.is_empty() {
                 "HEAD".to_string()
             } else {
                 req.r#ref.clone()
             };
-            let commit_id =
-                resolve_ref_to_commit_id(&repo, &ref_str).map_err(file_read_target_error)?;
+            let revision_started = std::time::Instant::now();
+            let commit_id = resolve_ref_to_commit_id(&repo, &ref_str).map_err(|error| {
+                if req.unchanged_since_commit.is_some()
+                    && error.code() == tonic::Code::NotFound
+                    && (ref_str.starts_with("refs/") || ref_str == "HEAD")
+                {
+                    Status::aborted("unchanged file proof ref no longer exists")
+                } else {
+                    file_read_target_error(error)
+                }
+            })?;
+            if receipt_ancestor == Some(commit_id) {
+                let mut response = Response::new(GetFileResponse {
+                    path: req.path,
+                    unchanged_since_commit: req.unchanged_since_commit.unwrap_or_default(),
+                    ref_commit_sha: commit_id.to_string(),
+                    at_ancestor: true,
+                    ..GetFileResponse::default()
+                });
+                attach_file_read_report(
+                    &mut response,
+                    [
+                        authentication_elapsed,
+                        lock_elapsed,
+                        queue_elapsed,
+                        payload_started.elapsed(),
+                        std::time::Duration::ZERO,
+                        std::time::Duration::ZERO,
+                        open_elapsed,
+                        revision_started.elapsed(),
+                        std::time::Duration::ZERO,
+                        std::time::Duration::ZERO,
+                    ],
+                    1,
+                )?;
+                return Ok(response);
+            }
             let commit = repo
                 .find_object(commit_id)
                 .map_err(|e| Status::internal(e.to_string()))?
@@ -960,26 +1149,257 @@ impl GitService for GitServiceImpl {
                 .tree_id()
                 .map_err(|e| Status::internal(e.to_string()))?
                 .detach();
+            let revision_elapsed = revision_started.elapsed();
 
             // Navigate to the file entry
+            let target_tree_started = std::time::Instant::now();
             let entry_oid = find_blob_in_tree(&repo, tree_id, &req.path)?;
+            let target_tree_elapsed = target_tree_started.elapsed();
 
+            let history_work = if let Some(ancestor) = &req.unchanged_since_commit {
+                let ancestor = gix::ObjectId::from_hex(ancestor.as_bytes()).map_err(|_| {
+                    Status::invalid_argument("unchanged_since_commit must be a full object ID")
+                })?;
+                if commit_id == ancestor {
+                    FileHistoryProofWork {
+                        commits: 1,
+                        ..FileHistoryProofWork::default()
+                    }
+                } else {
+                    verify_unchanged_file_history(&repo, commit_id, ancestor, &req.path, entry_oid)?
+                }
+            } else {
+                FileHistoryProofWork::default()
+            };
+
+            let blob_started = std::time::Instant::now();
             let blob = repo
                 .find_object(entry_oid)
                 .map_err(|e| Status::internal(e.to_string()))?;
             let content = blob.data.clone();
             let size_bytes = content.len() as u64;
             let blob_sha = entry_oid.to_string();
+            let blob_elapsed = blob_started.elapsed();
 
-            Ok(Response::new(GetFileResponse {
+            let mut response = Response::new(GetFileResponse {
                 path: req.path,
                 content,
                 blob_sha,
                 size_bytes,
-            }))
+                unchanged_since_commit: req.unchanged_since_commit.unwrap_or_default(),
+                ref_commit_sha: commit_id.to_string(),
+                at_ancestor: false,
+            });
+            attach_file_read_report(
+                &mut response,
+                [
+                    authentication_elapsed,
+                    lock_elapsed,
+                    queue_elapsed,
+                    payload_started.elapsed(),
+                    history_work.commit_reads,
+                    history_work.tree_reads,
+                    open_elapsed,
+                    revision_elapsed,
+                    target_tree_elapsed,
+                    blob_elapsed,
+                ],
+                history_work.commits,
+            )?;
+            Ok(response)
         })
         .await
         .map_err(|e| Status::internal(format!("task join error: {}", e)))?
+    }
+
+    async fn get_files(
+        &self,
+        request: Request<GetFilesRequest>,
+    ) -> Result<Response<GetFilesResponse>, Status> {
+        let started = std::time::Instant::now();
+        let timer = start_file_read_phase(FileReadPhase::Authentication);
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/GetFiles",
+                request.get_ref(),
+            )
+            .await?;
+        drop(timer);
+        let authentication = started.elapsed();
+        let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.contents.read"],
+        )?;
+        if req.paths.is_empty() || req.paths.len() > 4 {
+            return Err(Status::invalid_argument(
+                "GetFiles requires one to four paths",
+            ));
+        }
+        for (i, path) in req.paths.iter().enumerate() {
+            if path.is_empty() || req.paths[..i].contains(path) {
+                return Err(Status::invalid_argument(
+                    "GetFiles paths must be nonempty and distinct",
+                ));
+            }
+        }
+        let commit_id = gix::ObjectId::from_hex(req.commit_sha.as_bytes()).map_err(|_| {
+            Status::invalid_argument("GetFiles requires a full immutable commit ID")
+        })?;
+        let secondary_commit_id = req
+            .secondary_commit_sha
+            .as_ref()
+            .map(|value| {
+                gix::ObjectId::from_hex(value.as_bytes()).map_err(|_| {
+                    Status::invalid_argument("GetFiles requires a full second immutable commit ID")
+                })
+            })
+            .transpose()?;
+        if let Some(ref_name) = &req.current_ref {
+            if secondary_commit_id.is_none() || !ref_name.starts_with("refs/") {
+                return Err(Status::invalid_argument(
+                    "GetFiles current ref requires a full ref and secondary commit",
+                ));
+            }
+        }
+        let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)
+            .map_err(file_read_target_error)?;
+        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
+        let started = std::time::Instant::now();
+        let timer = start_file_read_phase(FileReadPhase::RepositoryLock);
+        let guard = lock.read_owned().await;
+        drop(timer);
+        let repository_lock = started.elapsed();
+        let queued = std::time::Instant::now();
+        let queue_timer = start_file_read_phase(FileReadPhase::BlockingQueue);
+        crate::spawn_blocking(move || {
+            let _guard = guard;
+            let blocking_queue = queued.elapsed();
+            queue_timer.observe_duration();
+            let payload_started = std::time::Instant::now();
+            let _payload_timer = start_file_read_phase(FileReadPhase::Payload);
+            let opened = std::time::Instant::now();
+            let repo = gix::open(&repo_path)
+                .map_err(|e| Status::internal(format!("failed to open repo: {e}")))?;
+            let repository_open = opened.elapsed();
+            let mut revision = std::time::Duration::ZERO;
+            let mut target_tree = std::time::Duration::ZERO;
+            let mut blob_read = std::time::Duration::ZERO;
+            let mut result = GetFilesResponse {
+                files: Vec::with_capacity(req.paths.len()),
+                commit_sha: commit_id.to_string(),
+                secondary_files: Vec::new(),
+                secondary_commit_sha: secondary_commit_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_default(),
+                current_ref_commit_sha: String::new(),
+            };
+            for (secondary, snapshot_id) in [(false, Some(commit_id)), (true, secondary_commit_id)]
+            {
+                let Some(snapshot_id) = snapshot_id else {
+                    continue;
+                };
+                let resolving = std::time::Instant::now();
+                let commit = repo
+                    .try_find_object(snapshot_id)
+                    .map_err(|e| Status::internal(format!("GetFiles commit read failed: {e}")))?
+                    .ok_or_else(|| Status::failed_precondition("GetFiles commit unavailable"))?
+                    .try_into_commit()
+                    .map_err(|_| Status::failed_precondition("GetFiles target is not a commit"))?;
+                let tree_id = commit
+                    .tree_id()
+                    .map_err(|e| Status::internal(e.to_string()))?
+                    .detach();
+                revision += resolving.elapsed();
+                for path in &req.paths {
+                    let started = std::time::Instant::now();
+                    let entry = find_blob_in_tree(&repo, tree_id, path);
+                    target_tree += started.elapsed();
+                    let file = match entry {
+                        Ok(oid) => {
+                            let started = std::time::Instant::now();
+                            let blob = repo
+                                .find_object(oid)
+                                .map_err(|e| Status::internal(e.to_string()))?;
+                            if blob.data.len() > 4 * 1024 * 1024 {
+                                return Err(Status::resource_exhausted(
+                                    "GetFiles blob exceeds 4 MiB",
+                                ));
+                            }
+                            let file = FileSnapshot {
+                                path: path.clone(),
+                                found: true,
+                                content: blob.data.clone(),
+                                blob_sha: oid.to_string(),
+                                size_bytes: blob.data.len() as u64,
+                            };
+                            blob_read += started.elapsed();
+                            file
+                        }
+                        Err(error) if error.code() == tonic::Code::NotFound => FileSnapshot {
+                            path: path.clone(),
+                            found: false,
+                            content: Vec::new(),
+                            blob_sha: String::new(),
+                            size_bytes: 0,
+                        },
+                        Err(error) => return Err(error),
+                    };
+                    if secondary {
+                        result.secondary_files.push(file);
+                    } else {
+                        result.files.push(file);
+                    }
+                    if prost::Message::encoded_len(&result) > 16 * 1024 * 1024 {
+                        return Err(Status::resource_exhausted(
+                            "GetFiles response exceeds 16 MiB",
+                        ));
+                    }
+                }
+            }
+            if let Some(ref_name) = &req.current_ref {
+                let resolving = std::time::Instant::now();
+                let current = resolve_ref_to_commit_id(&repo, ref_name).map_err(|error| {
+                    if error.code() == tonic::Code::NotFound {
+                        Status::aborted("GetFiles current ref was deleted")
+                    } else {
+                        error
+                    }
+                })?;
+                revision += resolving.elapsed();
+                if Some(current) != secondary_commit_id {
+                    return Err(Status::aborted("GetFiles current ref changed"));
+                }
+                result.current_ref_commit_sha = current.to_string();
+                if prost::Message::encoded_len(&result) > 16 * 1024 * 1024 {
+                    return Err(Status::resource_exhausted(
+                        "GetFiles response exceeds 16 MiB",
+                    ));
+                }
+            }
+            let mut response = Response::new(result);
+            attach_file_read_report(
+                &mut response,
+                [
+                    authentication,
+                    repository_lock,
+                    blocking_queue,
+                    payload_started.elapsed(),
+                    std::time::Duration::ZERO,
+                    std::time::Duration::ZERO,
+                    repository_open,
+                    revision,
+                    target_tree,
+                    blob_read,
+                ],
+                0,
+            )?;
+            Ok(response)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("task join error: {e}")))?
     }
 
     type GetFileStreamStream =
@@ -1009,7 +1429,7 @@ impl GitService for GitServiceImpl {
 
         let (tx, rx) = tokio::sync::mpsc::channel(16);
 
-        tokio::task::spawn_blocking(move || {
+        crate::spawn_blocking(move || {
             let send = |chunk: Result<GetFileStreamResponse, Status>| {
                 let _ = tx.blocking_send(chunk);
             };
@@ -1114,7 +1534,7 @@ impl GitService for GitServiceImpl {
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.read().await;
 
-        tokio::task::spawn_blocking(move || {
+        crate::spawn_blocking(move || {
             let repo = gix::open(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
@@ -1156,9 +1576,10 @@ impl GitService for GitServiceImpl {
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        let _guard = lock.write().await;
+        let guard = lock.write_owned().await;
 
-        tokio::task::spawn_blocking(move || {
+        crate::spawn_blocking(move || {
+            let _guard = guard;
             validate_file_path(&req.path)?;
 
             // The async lock above coordinates this service instance. This
@@ -1329,7 +1750,7 @@ impl GitService for GitServiceImpl {
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let guard = lock.write_owned().await;
 
-        tokio::task::spawn_blocking(move || {
+        crate::spawn_blocking(move || {
             let _guard = guard;
             validate_file_path(&req.path)?;
             if precondition.is_some() {
@@ -1517,9 +1938,10 @@ impl GitService for GitServiceImpl {
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        let _guard = lock.write().await;
+        let guard = lock.write_owned().await;
 
-        tokio::task::spawn_blocking(move || {
+        crate::spawn_blocking(move || {
+            let _guard = guard;
             let repo = gix::open(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
@@ -1597,7 +2019,7 @@ impl GitService for GitServiceImpl {
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.read().await;
 
-        tokio::task::spawn_blocking(move || {
+        crate::spawn_blocking(move || {
             let repo = gix::open(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
@@ -1651,7 +2073,7 @@ impl GitService for GitServiceImpl {
         let _guard = lock.read().await;
         let service_enum = req.service;
 
-        let advertisement = tokio::task::spawn_blocking(move || {
+        let advertisement = crate::spawn_blocking(move || {
             let pack_server = crate::git::pack_server::HttpPackServer::new(repo_path, 0);
             let svc = proto::Service::try_from(service_enum).unwrap_or(proto::Service::Unspecified);
             match svc {
@@ -1730,9 +2152,71 @@ impl GitService for GitServiceImpl {
 
         let repo_path = resolve_repo_path(&self.data_root, &repo_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &repo_id);
-        let _guard = lock.write().await;
+        let guard = lock.write_owned().await;
 
         info!(repo_id = %repo_id, "receive_pack: stream start");
+
+        let guard = if first.shallow_oids.is_empty() {
+            guard
+        } else {
+            let shallow_oids = first.shallow_oids.clone();
+            let repo_path_shallow = repo_path.clone();
+            crate::spawn_blocking(move || {
+                if shallow_oids.len() > 4096 {
+                    return Err(Status::resource_exhausted(
+                        "shallow boundaries exceed 4096 commits",
+                    ));
+                }
+                let repo = gix::open(&repo_path_shallow)
+                    .map_err(|e| Status::internal(format!("open repo for shallow check: {e}")))?;
+                match std::fs::metadata(repo.git_dir().join("shallow")) {
+                    Ok(metadata) if metadata.len() > 0 => {
+                        return Err(Status::failed_precondition(
+                            "shallow server repositories are unsupported",
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(Status::internal(format!("read shallow boundary: {e}")));
+                    }
+                }
+                let mut seen = std::collections::HashSet::new();
+                for value in shallow_oids {
+                    if value.len() != 40
+                        || value
+                            .bytes()
+                            .any(|b| !b.is_ascii_digit() && !(b'a'..=b'f').contains(&b))
+                    {
+                        return Err(Status::invalid_argument(
+                            "shallow commit must be 40 lowercase hex characters",
+                        ));
+                    }
+                    let oid = gix::ObjectId::from_hex(value.as_bytes()).map_err(|e| {
+                        Status::invalid_argument(format!("parse shallow commit: {e}"))
+                    })?;
+                    if oid.is_null() || !seen.insert(oid) {
+                        return Err(Status::invalid_argument(
+                            "shallow commits must be distinct and nonzero",
+                        ));
+                    }
+                    repo.try_find_object(oid)
+                        .map_err(|e| Status::internal(format!("read shallow commit: {e}")))?
+                        .ok_or_else(|| {
+                            Status::failed_precondition(
+                                "client shallow boundary is absent from the live repository",
+                            )
+                        })?
+                        .try_into_commit()
+                        .map_err(|_| Status::invalid_argument("shallow boundary is not a commit"))?
+                        .decode()
+                        .map_err(|e| Status::internal(format!("decode shallow commit: {e}")))?;
+                }
+                Ok::<_, Status>(guard)
+            })
+            .await
+            .map_err(|e| Status::internal(format!("shallow check join: {e}")))??
+        };
 
         let ref_commands = first.ref_commands.clone();
         if ref_commands.iter().any(|command| {
@@ -1811,7 +2295,7 @@ impl GitService for GitServiceImpl {
             let odb = (*repo_for_odb.objects).clone();
 
             // T041: Use a LimitedReader that enforces max_pack_size_bytes.
-            let q = tokio::task::spawn_blocking(move || {
+            let q = crate::spawn_blocking(move || {
                 let reader = crate::git::pack_server::ChannelReader::new(rx);
                 if max_pack_size_bytes > 0 {
                     let limited = crate::git::pack_server::LimitedReader::new(
@@ -1854,7 +2338,7 @@ impl GitService for GitServiceImpl {
                 let pack_path = q.pack_path.clone();
                 let index_path = q.index_path.clone();
                 let limit = max_file_size_bytes as u64;
-                tokio::task::spawn_blocking(move || {
+                crate::spawn_blocking(move || {
                     crate::git::pack_server::check_blob_sizes_in_quarantine_paths(
                         &pack_path,
                         &index_path,
@@ -1880,7 +2364,7 @@ impl GitService for GitServiceImpl {
         // Non-fast-forward validation in blocking context (gix::Repository is !Send).
         let ref_updates_clone = ref_updates.clone();
         let repo_path_nff = repo_path.clone();
-        let (nff_rejected, pipeline_updates) = tokio::task::spawn_blocking(move || {
+        let (nff_rejected, pipeline_updates) = crate::spawn_blocking(move || {
             let repo = gix::open(&repo_path_nff)
                 .map_err(|e| Status::internal(format!("open repo for nff: {}", e)))?;
             let mut rejected = Vec::new();
@@ -1934,7 +2418,9 @@ impl GitService for GitServiceImpl {
         let accepted_updates_for_callbacks = accepted_updates.clone();
         let repo_path_commit = repo_path.clone();
         let hook_ctx_post = hook_ctx.clone();
-        tokio::task::spawn_blocking(move || {
+        let repo_id_commit = repo_id.clone();
+        crate::spawn_blocking(move || {
+            let _guard = guard;
             use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 
             let repo = gix::open(&repo_path_commit)
@@ -1987,42 +2473,38 @@ impl GitService for GitServiceImpl {
                 });
             }
 
-            if ref_edits.is_empty() {
-                return Ok::<(), Status>(());
-            }
+            if !ref_edits.is_empty() {
+                let file_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
+                    std::time::Duration::from_millis(100),
+                );
+                let packed_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
+                    std::time::Duration::from_millis(1000),
+                );
+                // Ref lock files are acquired here — this is the "prepared" state.
+                let txn = repo
+                    .refs
+                    .transaction()
+                    .prepare(ref_edits, file_lock_fail, packed_lock_fail)
+                    .map_err(|e| Status::internal(format!("prepare ref transaction: {}", e)))?;
 
-            let file_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
-                std::time::Duration::from_millis(100),
-            );
-            let packed_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
-                std::time::Duration::from_millis(1000),
-            );
-            // Ref lock files are acquired here — this is the "prepared" state.
-            let txn = repo
-                .refs
-                .transaction()
-                .prepare(ref_edits, file_lock_fail, packed_lock_fail)
-                .map_err(|e| Status::internal(format!("prepare ref transaction: {}", e)))?;
-
-            if let Some(q) = quarantine {
-                crate::git::pack_server::promote_quarantine(&repo, q)
-                    .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
+                if let Some(q) = quarantine {
+                    crate::git::pack_server::promote_quarantine(&repo, q)
+                        .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
+                }
+                txn.commit(None)
+                    .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
             }
-            txn.commit(None)
-                .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
-            Ok(())
+            info!(repo_id = %repo_id_commit, "receive_pack: refs committed");
+            pipeline.run_post_receive(
+                &repo_path_commit,
+                &accepted_updates_for_callbacks,
+                &repo_id_commit,
+                &hook_ctx_post,
+            );
+            Ok::<(), Status>(())
         })
         .await
         .map_err(|e| Status::internal(format!("commit join: {}", e)))??;
-
-        info!(repo_id = %repo_id, "receive_pack: refs committed");
-
-        pipeline.run_post_receive(
-            &repo_path,
-            &accepted_updates_for_callbacks,
-            &repo_id,
-            &hook_ctx_post,
-        );
 
         let report_status = build_report_status(
             &ref_updates,
@@ -2068,9 +2550,11 @@ impl GitService for GitServiceImpl {
         info!(repo_id = %req.repository_id, "upload_pack: start");
 
         let (tx, rx) = tokio::sync::mpsc::channel(16);
+        let max_pack_size = self.push_limits.max_pack_size;
 
-        tokio::task::spawn_blocking(move || {
-            let pack_server = crate::git::pack_server::HttpPackServer::new(repo_path, 0);
+        crate::spawn_blocking(move || {
+            let pack_server =
+                crate::git::pack_server::HttpPackServer::new(repo_path, max_pack_size);
             match pack_server.handle_upload_pack(&req.body) {
                 Ok(pack_bytes) => {
                     const CHUNK_SIZE: usize = 64 * 1024;
@@ -2131,7 +2615,7 @@ impl GitService for GitServiceImpl {
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.read().await;
 
-        tokio::task::spawn_blocking(move || {
+        crate::spawn_blocking(move || {
             let repo = gix::open(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
@@ -2319,32 +2803,33 @@ fn find_blob_in_tree(
         .try_into_tree()
         .map_err(|_| Status::internal("expected a tree object"))?;
 
-    let decoded = tree.decode().map_err(|e| Status::internal(e.to_string()))?;
-
     let mut parts = path.splitn(2, '/');
     let first = parts.next().unwrap_or("");
     let rest = parts.next();
 
-    for entry in &decoded.entries {
-        if entry.filename == gix::bstr::BStr::new(first.as_bytes()) {
-            let oid = gix::ObjectId::from(entry.oid);
-            return match rest {
-                Some(remaining) => find_blob_in_tree(repo, oid, remaining),
-                None => {
-                    use gix::object::tree::EntryKind;
-                    match entry.mode.kind() {
-                        EntryKind::Blob | EntryKind::BlobExecutable => Ok(oid),
-                        _ => Err(Status::failed_precondition(format!(
-                            "'{}' is not a file",
-                            path
-                        ))),
-                    }
-                }
-            };
+    let mut found = None;
+    // Consume the complete tree so a matching prefix cannot hide corrupt trailing entries.
+    for entry in tree.iter() {
+        let entry = entry.map_err(|e| Status::internal(e.to_string()))?;
+        if found.is_none() && entry.filename() == gix::bstr::BStr::new(first.as_bytes()) {
+            found = Some((entry.oid().to_owned(), entry.mode()));
         }
     }
-
-    Err(Status::not_found(format!("file '{}' not found", path)))
+    let (oid, mode) =
+        found.ok_or_else(|| Status::not_found(format!("file '{}' not found", path)))?;
+    match rest {
+        Some(remaining) => find_blob_in_tree(repo, oid, remaining),
+        None => {
+            use gix::object::tree::EntryKind;
+            match mode.kind() {
+                EntryKind::Blob | EntryKind::BlobExecutable => Ok(oid),
+                _ => Err(Status::failed_precondition(format!(
+                    "'{}' is not a file",
+                    path
+                ))),
+            }
+        }
+    }
 }
 
 /// Verify the data_root is accessible at startup.
@@ -2412,15 +2897,23 @@ mod tests {
         data_root: std::path::PathBuf,
         push_limits: PushLimits,
     ) -> proto::git_service_client::GitServiceClient<tonic::transport::Channel> {
+        let svc = make_test_service_with_push_limits(&data_root, push_limits);
+        make_grpc_client_for_service(svc).await
+    }
+
+    async fn make_grpc_client_for_service(
+        svc: GitServiceImpl,
+    ) -> proto::git_service_client::GitServiceClient<tonic::transport::Channel> {
         use proto::git_service_server::GitServiceServer;
 
-        let svc = make_test_service_with_push_limits(&data_root, push_limits);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
         tokio::spawn(async move {
             tonic::transport::Server::builder()
-                .add_service(GitServiceServer::new(svc))
+                .add_service(crate::grpc::metrics::RpcMetricsService::new(
+                    GitServiceServer::new(svc),
+                ))
                 .serve_with_incoming(incoming)
                 .await
                 .unwrap();
@@ -3014,6 +3507,8 @@ mod tests {
                 path: "README.md".to_string(),
                 r#ref: "HEAD".to_string(),
                 authorization: test_authorization(TEST_REPO_A, "repository.contents.read"),
+                unchanged_since_commit: None,
+                allow_ancestor_receipt: false,
             }))
             .await
             .unwrap_err();
@@ -3033,6 +3528,8 @@ mod tests {
                     path: "README.md".to_string(),
                     r#ref: "HEAD".to_string(),
                     authorization: test_authorization(bad_name, "repository.contents.read"),
+                    unchanged_since_commit: None,
+                    allow_ancestor_receipt: false,
                 }))
                 .await
                 .unwrap_err();
@@ -3052,19 +3549,1283 @@ mod tests {
     const TEST_REPO_G: &str = "01960000-0000-7000-8000-000000000023";
 
     #[tokio::test]
+    async fn test_get_files_signed_snapshot_bounds_missing_and_legacy_wire() {
+        let root = TempDir::new().unwrap();
+        repo_with_commit(root.path(), TEST_REPO_D);
+        let repo = gix::open(fanout_path(root.path(), TEST_REPO_D).unwrap()).unwrap();
+        let commit_sha = repo.head_commit().unwrap().id.to_string();
+        let mut client = make_grpc_client(root.path().to_path_buf()).await;
+        let request = |paths: Vec<String>, commit: &str| GetFilesRequest {
+            repository_id: TEST_REPO_D.to_owned(),
+            paths,
+            commit_sha: commit.to_owned(),
+            authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+            secondary_commit_sha: None,
+            current_ref: None,
+        };
+        let message = request(
+            vec!["missing.md".into(), "products/p1.md".into()],
+            &commit_sha,
+        );
+        let signed = signed_test_request(message.clone());
+        let mut replay = Request::new(signed.get_ref().clone());
+        *replay.metadata_mut() = signed.metadata().clone();
+        let response = client.get_files(signed).await.unwrap();
+        for key in [
+            "x-gitstore-file-read-authentication-ns",
+            "x-gitstore-file-read-repository-lock-ns",
+            "x-gitstore-file-read-blocking-queue-ns",
+            "x-gitstore-file-read-payload-ns",
+            "x-gitstore-file-read-repository-open-ns",
+            "x-gitstore-file-read-revision-ns",
+            "x-gitstore-file-read-target-tree-ns",
+            "x-gitstore-file-read-blob-ns",
+        ] {
+            response
+                .metadata()
+                .get(key)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap();
+        }
+        for key in [
+            "x-gitstore-file-read-history-commit-ns",
+            "x-gitstore-file-read-history-tree-ns",
+            "x-gitstore-file-read-history-commits",
+        ] {
+            assert_eq!(response.metadata().get(key).unwrap(), "0");
+        }
+        let result = response.into_inner();
+        assert_eq!(result.commit_sha, commit_sha);
+        assert_eq!(result.files.len(), 2);
+        assert_eq!(result.files[0].path, "missing.md");
+        assert!(!result.files[0].found && result.files[0].content.is_empty());
+        assert_eq!(result.files[1].path, "products/p1.md");
+        assert!(result.files[1].found);
+        assert_eq!(result.files[1].content, b"---\nid: p1\n---\nhello");
+        assert_eq!(
+            client.get_files(replay).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        let mut tampered = signed_test_request(message);
+        tampered.get_mut().paths[0] = "other.md".into();
+        assert_eq!(
+            client.get_files(tampered).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        for (authorization, code) in [
+            (None, tonic::Code::InvalidArgument),
+            (
+                test_authorization(TEST_REPO_D, "repository.contents.write"),
+                tonic::Code::PermissionDenied,
+            ),
+            (
+                test_authorization(TEST_REPO_E, "repository.contents.read"),
+                tonic::Code::PermissionDenied,
+            ),
+        ] {
+            let mut message = request(vec!["products/p1.md".into()], &commit_sha);
+            message.authorization = authorization;
+            assert_eq!(
+                client
+                    .get_files(signed_test_request(message))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                code
+            );
+        }
+        let mut missing_repository = request(vec!["products/p1.md".into()], &commit_sha);
+        missing_repository.repository_id = TEST_REPO_E.into();
+        missing_repository.authorization =
+            test_authorization(TEST_REPO_E, "repository.contents.read");
+        assert_eq!(
+            client
+                .get_files(signed_test_request(missing_repository))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::FailedPrecondition
+        );
+        let missing_commit = "0".repeat(40);
+        let blob_sha = result.files[1].blob_sha.clone();
+        for (paths, commit, code) in [
+            (
+                vec!["products/p1.md".into()],
+                missing_commit.as_str(),
+                tonic::Code::FailedPrecondition,
+            ),
+            (
+                vec!["products/p1.md".into()],
+                blob_sha.as_str(),
+                tonic::Code::FailedPrecondition,
+            ),
+            (
+                Vec::new(),
+                commit_sha.as_str(),
+                tonic::Code::InvalidArgument,
+            ),
+            (
+                (0..5).map(|i| format!("{i}.md")).collect(),
+                commit_sha.as_str(),
+                tonic::Code::InvalidArgument,
+            ),
+            (
+                vec!["products/p1.md".into(); 2],
+                commit_sha.as_str(),
+                tonic::Code::InvalidArgument,
+            ),
+            (
+                vec![String::new()],
+                commit_sha.as_str(),
+                tonic::Code::InvalidArgument,
+            ),
+            (
+                vec!["products/p1.md".into()],
+                "HEAD",
+                tonic::Code::InvalidArgument,
+            ),
+            (
+                vec!["products".into()],
+                commit_sha.as_str(),
+                tonic::Code::FailedPrecondition,
+            ),
+        ] {
+            assert_eq!(
+                client
+                    .get_files(signed_test_request(request(paths, commit)))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                code
+            );
+        }
+        let legacy = client
+            .get_file(signed_test_request(GetFileRequest {
+                repository_id: TEST_REPO_D.to_owned(),
+                path: "products/p1.md".into(),
+                r#ref: commit_sha.clone(),
+                unchanged_since_commit: None,
+                authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+                allow_ancestor_receipt: false,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(legacy.content, result.files[1].content);
+    }
+
+    #[tokio::test]
+    async fn test_get_files_signed_pair_has_independent_immutable_receipts() {
+        let root = TempDir::new().unwrap();
+        repo_with_commit(root.path(), TEST_REPO_D);
+        let repo = gix::open(fanout_path(root.path(), TEST_REPO_D).unwrap()).unwrap();
+        let initial = repo.head_commit().unwrap().id;
+        let old_blob = repo.write_blob(b"old").unwrap().detach();
+        let new_blob = repo.write_blob(b"new").unwrap().detach();
+        let empty_blob = repo.write_blob(b"").unwrap().detach();
+        let signature = gix::actor::SignatureRef {
+            name: "Test".into(),
+            email: "test@example.com".into(),
+            time: "0 +0000",
+        };
+        let old_tree = repo
+            .write_object(&gix::objs::Tree {
+                entries: vec![gix::objs::tree::Entry {
+                    mode: gix::objs::tree::EntryKind::Blob.into(),
+                    filename: "old.md".into(),
+                    oid: old_blob,
+                }],
+            })
+            .unwrap()
+            .detach();
+        let old = repo
+            .commit_as(
+                signature,
+                signature,
+                "refs/heads/main",
+                "old snapshot",
+                old_tree,
+                [initial],
+            )
+            .unwrap()
+            .detach();
+        let new_tree = repo
+            .write_object(&gix::objs::Tree {
+                entries: vec![
+                    gix::objs::tree::Entry {
+                        mode: gix::objs::tree::EntryKind::Blob.into(),
+                        filename: "empty.md".into(),
+                        oid: empty_blob,
+                    },
+                    gix::objs::tree::Entry {
+                        mode: gix::objs::tree::EntryKind::Blob.into(),
+                        filename: "new.md".into(),
+                        oid: new_blob,
+                    },
+                ],
+            })
+            .unwrap()
+            .detach();
+        let new = repo
+            .commit_as(
+                signature,
+                signature,
+                "refs/heads/main",
+                "new snapshot",
+                new_tree,
+                [old],
+            )
+            .unwrap()
+            .detach();
+        let message = GetFilesRequest {
+            repository_id: TEST_REPO_D.into(),
+            paths: vec!["new.md".into(), "old.md".into(), "empty.md".into()],
+            commit_sha: old.to_string(),
+            secondary_commit_sha: Some(new.to_string()),
+            current_ref: None,
+            authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+        };
+        let mut client = make_grpc_client(root.path().to_path_buf()).await;
+        let result = client
+            .get_files(signed_test_request(message.clone()))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(result.commit_sha, old.to_string());
+        assert_eq!(result.secondary_commit_sha, new.to_string());
+        for files in [&result.files, &result.secondary_files] {
+            assert_eq!(
+                files.iter().map(|file| &file.path).collect::<Vec<_>>(),
+                message.paths.iter().collect::<Vec<_>>()
+            );
+        }
+        assert!(!result.files[0].found);
+        assert_eq!(result.files[1].content, b"old");
+        assert!(!result.files[2].found);
+        assert_eq!(result.secondary_files[0].content, b"new");
+        assert!(!result.secondary_files[1].found);
+        assert!(result.secondary_files[2].found && result.secondary_files[2].content.is_empty());
+        assert!(result.current_ref_commit_sha.is_empty());
+        let mut current_request = message.clone();
+        current_request.current_ref = Some("refs/heads/main".into());
+        let current_result = client
+            .get_files(signed_test_request(current_request.clone()))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(current_result.current_ref_commit_sha, new.to_string());
+        assert_eq!(current_result.files, result.files);
+        assert_eq!(current_result.secondary_files, result.secondary_files);
+        let mut tampered_ref = signed_test_request(current_request.clone());
+        tampered_ref.get_mut().current_ref = Some("refs/heads/other".into());
+        assert_eq!(
+            client.get_files(tampered_ref).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        for ref_name in ["", "HEAD", "refs/heads/missing"] {
+            let mut invalid = current_request.clone();
+            invalid.current_ref = Some(ref_name.into());
+            assert_eq!(
+                client
+                    .get_files(signed_test_request(invalid))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                if ref_name.starts_with("refs/") {
+                    tonic::Code::Aborted
+                } else {
+                    tonic::Code::InvalidArgument
+                }
+            );
+        }
+        let mut no_secondary = current_request.clone();
+        no_secondary.secondary_commit_sha = None;
+        assert_eq!(
+            client
+                .get_files(signed_test_request(no_secondary))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+        let mut stale = current_request.clone();
+        stale.secondary_commit_sha = Some(old.to_string());
+        assert_eq!(
+            client
+                .get_files(signed_test_request(stale))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Aborted
+        );
+        repo.find_reference("refs/heads/main")
+            .unwrap()
+            .delete()
+            .unwrap();
+        assert_eq!(
+            client
+                .get_files(signed_test_request(current_request))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Aborted
+        );
+        let mut tampered = signed_test_request(message.clone());
+        tampered.get_mut().secondary_commit_sha = Some(old.to_string());
+        assert_eq!(
+            client.get_files(tampered).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        for (secondary, code) in [
+            ("HEAD".to_string(), tonic::Code::InvalidArgument),
+            (String::new(), tonic::Code::InvalidArgument),
+            ("0".repeat(40), tonic::Code::FailedPrecondition),
+            (old_blob.to_string(), tonic::Code::FailedPrecondition),
+        ] {
+            let mut request = message.clone();
+            request.secondary_commit_sha = Some(secondary);
+            assert_eq!(
+                client
+                    .get_files(signed_test_request(request))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                code
+            );
+        }
+        let new_id = new.to_string();
+        let loose = fanout_path(root.path(), TEST_REPO_D)
+            .unwrap()
+            .join("objects")
+            .join(&new_id[..2])
+            .join(&new_id[2..]);
+        std::fs::remove_file(&loose).unwrap();
+        std::fs::write(&loose, b"corrupt compressed commit").unwrap();
+        assert_eq!(
+            client
+                .get_files(signed_test_request(message))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Internal
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_files_enforces_actual_blob_and_encoded_response_bounds() {
+        const MIB: usize = 1024 * 1024;
+        for length in [4 * MIB - 2048, 4 * MIB, 4 * MIB + 1] {
+            let root = TempDir::new().unwrap();
+            repo_with_commit(root.path(), TEST_REPO_G);
+            let repo = gix::open(fanout_path(root.path(), TEST_REPO_G).unwrap()).unwrap();
+            let parent = repo.head_commit().unwrap().id;
+            let blob = repo.write_blob(vec![b'x'; length]).unwrap().detach();
+            let tree = repo
+                .write_object(&gix::objs::Tree {
+                    entries: (0..4)
+                        .map(|i| gix::objs::tree::Entry {
+                            mode: gix::objs::tree::EntryKind::Blob.into(),
+                            filename: format!("{i}.md").into(),
+                            oid: blob,
+                        })
+                        .collect(),
+                })
+                .unwrap()
+                .detach();
+            let signature = gix::actor::SignatureRef {
+                name: "Test".into(),
+                email: "test@example.com".into(),
+                time: "0 +0000",
+            };
+            let commit = repo
+                .commit_as(
+                    signature,
+                    signature,
+                    "refs/heads/main",
+                    "bounded snapshot",
+                    tree,
+                    [parent],
+                )
+                .unwrap()
+                .detach();
+            let mut client = make_grpc_client(root.path().to_path_buf())
+                .await
+                .max_decoding_message_size(16 * MIB);
+            let response = client
+                .get_files(signed_test_request(GetFilesRequest {
+                    repository_id: TEST_REPO_G.to_owned(),
+                    paths: (0..4).map(|i| format!("{i}.md")).collect(),
+                    commit_sha: commit.to_string(),
+                    authorization: test_authorization(TEST_REPO_G, "repository.contents.read"),
+                    secondary_commit_sha: None,
+                    current_ref: None,
+                }))
+                .await;
+            if length < 4 * MIB {
+                let result = response.unwrap().into_inner();
+                assert_eq!(result.files.len(), 4);
+                assert!(result
+                    .files
+                    .iter()
+                    .all(|file| file.found && file.content.len() == length));
+                let encoded = prost::Message::encoded_len(&result);
+                assert!(encoded <= 16 * MIB && encoded > 16 * MIB - 10000);
+            } else {
+                let error = response.unwrap_err();
+                assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+                assert!(error.message().contains(if length == 4 * MIB {
+                    "response exceeds 16 MiB"
+                } else {
+                    "blob exceeds 4 MiB"
+                }));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_files_pair_shares_exact_encoded_response_ceiling() {
+        const MIB: usize = 1024 * 1024;
+        let base = 4 * MIB - 2048;
+        let sample = FileSnapshot {
+            path: "0.md".into(),
+            found: true,
+            content: vec![b'x'; base],
+            blob_sha: "a".repeat(40),
+            size_bytes: base as u64,
+        };
+        let sample_response = GetFilesResponse {
+            files: vec![
+                sample.clone(),
+                FileSnapshot {
+                    path: "1.md".into(),
+                    ..sample.clone()
+                },
+            ],
+            secondary_files: vec![
+                sample.clone(),
+                FileSnapshot {
+                    path: "1.md".into(),
+                    ..sample
+                },
+            ],
+            commit_sha: "a".repeat(40),
+            secondary_commit_sha: "b".repeat(40),
+            current_ref_commit_sha: String::new(),
+        };
+        let remaining = 16 * MIB - prost::Message::encoded_len(&sample_response);
+        assert_eq!(remaining % 4, 0);
+        let exact_length = base + remaining / 4;
+        drop(sample_response);
+        for length in [exact_length, exact_length + 1, 4 * MIB + 1] {
+            let root = TempDir::new().unwrap();
+            repo_with_commit(root.path(), TEST_REPO_G);
+            let repo = gix::open(fanout_path(root.path(), TEST_REPO_G).unwrap()).unwrap();
+            let parent = repo.head_commit().unwrap().id;
+            let blob = repo.write_blob(vec![b'x'; length]).unwrap().detach();
+            let tree = repo
+                .write_object(&gix::objs::Tree {
+                    entries: (0..2)
+                        .map(|i| gix::objs::tree::Entry {
+                            mode: gix::objs::tree::EntryKind::Blob.into(),
+                            filename: format!("{i}.md").into(),
+                            oid: blob,
+                        })
+                        .collect(),
+                })
+                .unwrap()
+                .detach();
+            let signature = gix::actor::SignatureRef {
+                name: "Test".into(),
+                email: "test@example.com".into(),
+                time: "0 +0000",
+            };
+            let commit = repo
+                .commit_as(
+                    signature,
+                    signature,
+                    "refs/heads/main",
+                    "paired ceiling",
+                    tree,
+                    [parent],
+                )
+                .unwrap()
+                .detach();
+            let message = GetFilesRequest {
+                repository_id: TEST_REPO_G.into(),
+                paths: vec!["0.md".into(), "1.md".into()],
+                commit_sha: commit.to_string(),
+                secondary_commit_sha: Some(commit.to_string()),
+                current_ref: None,
+                authorization: test_authorization(TEST_REPO_G, "repository.contents.read"),
+            };
+            let mut client = make_grpc_client(root.path().to_path_buf())
+                .await
+                .max_decoding_message_size(16 * MIB);
+            let response = client.get_files(signed_test_request(message.clone())).await;
+            if length == exact_length {
+                let result = response.unwrap().into_inner();
+                assert_eq!(prost::Message::encoded_len(&result), 16 * MIB);
+                assert_eq!(result.files.len(), 2);
+                assert_eq!(result.secondary_files.len(), 2);
+                let mut with_receipt = message.clone();
+                with_receipt.current_ref = Some("refs/heads/main".into());
+                assert_eq!(
+                    client
+                        .get_files(signed_test_request(with_receipt))
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    tonic::Code::ResourceExhausted,
+                    "the current-ref receipt must fit the same encoded ceiling"
+                );
+            } else {
+                let error = response.unwrap_err();
+                assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+                assert!(error.message().contains(if length > 4 * MIB {
+                    "blob exceeds 4 MiB"
+                } else {
+                    "response exceeds 16 MiB"
+                }));
+                if length <= 4 * MIB {
+                    let ordinary = GetFilesRequest {
+                        secondary_commit_sha: None,
+                        ..message
+                    };
+                    assert!(client
+                        .get_files(signed_test_request(ordinary))
+                        .await
+                        .is_ok());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_files_current_ref_waits_for_writer_and_rejects_supersession() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            for delete in [false, true] {
+                let root = TempDir::new().unwrap();
+                repo_with_commit(root.path(), TEST_REPO_D);
+                let repo = gix::open(fanout_path(root.path(), TEST_REPO_D).unwrap()).unwrap();
+                let commit = repo.head_commit().unwrap().id().detach();
+                let service = make_test_service(root.path());
+                let lock = get_or_insert_lock(&service.repo_locks, TEST_REPO_D);
+                let writer = lock.write().await;
+                let request = signed_test_request(GetFilesRequest {
+                    repository_id: TEST_REPO_D.into(),
+                    paths: vec!["products/p1.md".into(), "missing.md".into()],
+                    commit_sha: commit.to_string(),
+                    secondary_commit_sha: Some(commit.to_string()),
+                    current_ref: Some("refs/heads/main".into()),
+                    authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+                });
+                let envelope = request
+                    .metadata()
+                    .get(crate::auth::interceptor::SIGNATURE_HEADER)
+                    .unwrap()
+                    .to_str()
+                    .unwrap();
+                let fields: Vec<_> = envelope.split(':').collect();
+                let nonce_path = root
+                    .path()
+                    .join(".rpc-replay-v1")
+                    .join(format!("{}-{}", fields[1], fields[2]));
+                let mut reader = Box::pin(service.get_files(request));
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    std::future::poll_fn(|cx| {
+                        assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                        if nonce_path.exists() {
+                            std::task::Poll::Ready(())
+                        } else {
+                            cx.waker().wake_by_ref();
+                            std::task::Poll::Pending
+                        }
+                    })
+                    .await;
+                })
+                .await
+                .unwrap();
+                if delete {
+                    repo.find_reference("refs/heads/main")
+                        .unwrap()
+                        .delete()
+                        .unwrap();
+                } else {
+                    let signature = gix::actor::SignatureRef {
+                        name: "Test".into(),
+                        email: "test@example.com".into(),
+                        time: "0 +0000",
+                    };
+                    repo.commit_as(
+                        signature,
+                        signature,
+                        "refs/heads/main",
+                        "concurrent replacement",
+                        repo.head_commit().unwrap().tree_id().unwrap().detach(),
+                        [commit],
+                    )
+                    .unwrap();
+                }
+                drop(writer);
+                let error = reader.await.unwrap_err();
+                assert_eq!(error.code(), tonic::Code::Aborted);
+            }
+        });
+    }
+
+    #[test]
+    fn test_get_files_pair_cancellation_retains_queued_blocking_read_guard() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let root = TempDir::new().unwrap();
+            repo_with_commit(root.path(), TEST_REPO_D);
+            let commit = gix::open(fanout_path(root.path(), TEST_REPO_D).unwrap())
+                .unwrap()
+                .head_commit()
+                .unwrap()
+                .id
+                .to_string();
+            let service = Arc::new(make_test_service(root.path()));
+            let lock = get_or_insert_lock(&service.repo_locks, TEST_REPO_D);
+            let writer = lock.write().await;
+            let request = signed_test_request(GetFilesRequest {
+                repository_id: TEST_REPO_D.into(),
+                paths: vec!["products/p1.md".into(), "missing.md".into()],
+                commit_sha: commit.clone(),
+                secondary_commit_sha: Some(commit),
+                current_ref: Some("refs/heads/main".into()),
+                authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+            });
+            let envelope = request
+                .metadata()
+                .get(crate::auth::interceptor::SIGNATURE_HEADER)
+                .unwrap()
+                .to_str()
+                .unwrap();
+            let fields: Vec<_> = envelope.split(':').collect();
+            let nonce_path = root
+                .path()
+                .join(".rpc-replay-v1")
+                .join(format!("{}-{}", fields[1], fields[2]));
+            let mut reader = Box::pin(service.get_files(request));
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while !nonce_path.exists() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let (release, receive) = std::sync::mpsc::channel::<()>();
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let blocker = crate::spawn_blocking(move || {
+                let _ = started.send(());
+                let _ = receive.recv();
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(5), ready)
+                .await
+                .unwrap()
+                .unwrap();
+            drop(writer);
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            drop(reader);
+            let retained = lock.try_write().is_err();
+            drop(release);
+            blocker.await.unwrap();
+            let writer = tokio::time::timeout(std::time::Duration::from_secs(5), lock.write())
+                .await
+                .unwrap();
+            drop(writer);
+            assert!(
+                retained,
+                "cancelled caller released a queued snapshot job's read guard"
+            );
+        });
+    }
+
+    #[tokio::test]
     async fn test_get_file_happy_path() {
         let dir = TempDir::new().unwrap();
         repo_with_commit(dir.path(), TEST_REPO_D);
 
+        let phases = [
+            "authentication",
+            "repository_lock",
+            "blocking_queue",
+            "payload",
+        ];
+        let counts = phases.map(|phase| {
+            super::super::metrics::file_read_phase_seconds()
+                .with_label_values(&[phase])
+                .get_sample_count()
+        });
         let svc = make_test_service(dir.path());
         let req = signed_test_request(GetFileRequest {
             repository_id: TEST_REPO_D.to_string(),
             path: "products/p1.md".to_string(),
             r#ref: "HEAD".to_string(),
             authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+            unchanged_since_commit: None,
+            allow_ancestor_receipt: false,
         });
         let resp = svc.get_file(req).await.unwrap();
+        for key in [
+            "x-gitstore-file-read-authentication-ns",
+            "x-gitstore-file-read-repository-lock-ns",
+            "x-gitstore-file-read-blocking-queue-ns",
+            "x-gitstore-file-read-payload-ns",
+            "x-gitstore-file-read-repository-open-ns",
+            "x-gitstore-file-read-revision-ns",
+            "x-gitstore-file-read-target-tree-ns",
+            "x-gitstore-file-read-blob-ns",
+        ] {
+            let duration = resp.metadata().get(key).unwrap().to_str().unwrap();
+            assert!(duration.parse::<u64>().unwrap() > 0);
+        }
+        for key in [
+            "x-gitstore-file-read-history-commit-ns",
+            "x-gitstore-file-read-history-tree-ns",
+            "x-gitstore-file-read-history-commits",
+        ] {
+            assert_eq!(resp.metadata().get(key).unwrap(), "0");
+        }
         assert_eq!(resp.into_inner().content, b"---\nid: p1\n---\nhello");
+        for (phase, before) in phases.into_iter().zip(counts) {
+            assert!(
+                super::super::metrics::file_read_phase_seconds()
+                    .with_label_values(&[phase])
+                    .get_sample_count()
+                    > before,
+                "GetFile must record its {phase} phase"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_file_unchanged_history_proof() {
+        let dir = TempDir::new().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_D);
+        let repo = gix::open(fanout_path(dir.path(), TEST_REPO_D).unwrap()).unwrap();
+        let original = resolve_ref_to_commit_id(&repo, "HEAD").unwrap();
+        let svc = make_test_service(dir.path());
+        let content = b"---\nid: p1\n---\nhello";
+        let write = |path: &str, body: &[u8]| {
+            signed_test_request(CommitFileRequest {
+                repository_id: TEST_REPO_D.to_string(),
+                path: path.to_string(),
+                content: body.to_vec(),
+                commit_message: "proof fixture".to_string(),
+                author_name: "test".to_string(),
+                author_email: "test@example.com".to_string(),
+                authorization: test_authorization(TEST_REPO_D, "repository.contents.write"),
+            })
+        };
+        svc.commit_file(write("products/other.md", b"unrelated"))
+            .await
+            .unwrap();
+        let read = |ancestor: String| {
+            signed_test_request(GetFileRequest {
+                repository_id: TEST_REPO_D.to_string(),
+                path: "products/p1.md".to_string(),
+                r#ref: "HEAD".to_string(),
+                authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+                unchanged_since_commit: Some(ancestor),
+                allow_ancestor_receipt: false,
+            })
+        };
+        let response = svc.get_file(read(original.to_string())).await.unwrap();
+        assert_eq!(
+            response
+                .metadata()
+                .get("x-gitstore-file-read-history-commits")
+                .unwrap(),
+            "2"
+        );
+        for key in [
+            "x-gitstore-file-read-history-commit-ns",
+            "x-gitstore-file-read-history-tree-ns",
+        ] {
+            assert!(
+                response
+                    .metadata()
+                    .get(key)
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+                    > 0
+            );
+        }
+        let result = response.into_inner();
+        assert_eq!(result.content, content);
+        assert_eq!(result.unchanged_since_commit, original.to_string());
+        assert_ne!(result.ref_commit_sha, original.to_string());
+        svc.commit_file(write("products/p1.md", b"newer writer"))
+            .await
+            .unwrap();
+        assert_eq!(
+            svc.get_file(read(original.to_string()))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Aborted
+        );
+        svc.commit_file(write("products/p1.md", content))
+            .await
+            .unwrap();
+        assert_eq!(
+            svc.get_file(read(original.to_string()))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Aborted,
+            "restoring identical bytes must not revive an older writer's audit"
+        );
+        assert_eq!(
+            svc.get_file(read("not-an-object-id".to_string()))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+    }
+
+    #[tokio::test]
+    async fn test_current_file_proof_signed_wire_and_ref_errors() {
+        let root = TempDir::new().unwrap();
+        repo_with_commit(root.path(), TEST_REPO_D);
+        let path = fanout_path(root.path(), TEST_REPO_D).unwrap();
+        let repo = gix::open(&path).unwrap();
+        let ancestor = repo.head_commit().unwrap().id.to_string();
+        let mut client = make_grpc_client(root.path().to_path_buf()).await;
+        let request = |reference: &str, repository: &str| {
+            signed_test_request(GetFileRequest {
+                repository_id: repository.into(),
+                path: "products/p1.md".into(),
+                r#ref: reference.into(),
+                authorization: test_authorization(repository, "repository.contents.read"),
+                unchanged_since_commit: Some(ancestor.clone()),
+                allow_ancestor_receipt: false,
+            })
+        };
+        let first = client
+            .get_file(request("refs/heads/main", TEST_REPO_D))
+            .await
+            .unwrap();
+        for header in [
+            "x-gitstore-file-read-history-commit-ns",
+            "x-gitstore-file-read-history-tree-ns",
+        ] {
+            assert_eq!(first.metadata().get(header).unwrap().to_str().unwrap(), "0");
+        }
+        assert_eq!(
+            first
+                .metadata()
+                .get("x-gitstore-file-read-history-commits")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "1"
+        );
+        let first = first.into_inner();
+        assert_eq!(first.ref_commit_sha, ancestor);
+        assert_eq!(first.unchanged_since_commit, ancestor);
+        client
+            .commit_file(signed_test_request(CommitFileRequest {
+                repository_id: TEST_REPO_D.into(),
+                path: "products/other.md".into(),
+                content: b"other path".to_vec(),
+                commit_message: "disjoint commit".into(),
+                author_name: "Test".into(),
+                author_email: "test@example.com".into(),
+                authorization: test_authorization(TEST_REPO_D, "repository.contents.write"),
+            }))
+            .await
+            .unwrap();
+        let advanced = client
+            .get_file(request("refs/heads/main", TEST_REPO_D))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_ne!(advanced.ref_commit_sha, ancestor);
+        assert_eq!(advanced.content, first.content);
+        assert_eq!(advanced.unchanged_since_commit, ancestor);
+        assert_eq!(
+            client
+                .get_file(request("refs/heads/missing", TEST_REPO_D))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Aborted
+        );
+        assert_eq!(
+            client
+                .get_file(request("refs/heads/main", TEST_REPO_E))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::FailedPrecondition
+        );
+        std::fs::write(path.join("refs/heads/main"), b"invalid reference\n").unwrap();
+        assert_eq!(
+            client
+                .get_file(request("refs/heads/main", TEST_REPO_D))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Internal,
+            "corrupt ref storage cannot be treated as superseded work"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_current_file_ancestor_receipt_signed_and_bounded_history() {
+        let root = TempDir::new().unwrap();
+        repo_with_commit(root.path(), TEST_REPO_D);
+        let path = fanout_path(root.path(), TEST_REPO_D).unwrap();
+        let repo = gix::open(&path).unwrap();
+        let ancestor = repo.head_commit().unwrap().id.to_string();
+        let mut client = make_grpc_client(root.path().to_path_buf()).await;
+        let request = |file: &str| GetFileRequest {
+            repository_id: TEST_REPO_D.into(),
+            path: file.into(),
+            r#ref: "refs/heads/main".into(),
+            authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+            unchanged_since_commit: Some(ancestor.clone()),
+            allow_ancestor_receipt: true,
+        };
+        let receipt = client
+            .get_file(signed_test_request(request("products/p1.md")))
+            .await
+            .unwrap();
+        for header in [
+            "x-gitstore-file-read-history-commit-ns",
+            "x-gitstore-file-read-history-tree-ns",
+            "x-gitstore-file-read-target-tree-ns",
+            "x-gitstore-file-read-blob-ns",
+        ] {
+            assert_eq!(
+                receipt.metadata().get(header).unwrap().to_str().unwrap(),
+                "0"
+            );
+        }
+        let receipt = receipt.into_inner();
+        assert!(receipt.at_ancestor);
+        assert_eq!(receipt.ref_commit_sha, ancestor);
+        assert_eq!(receipt.unchanged_since_commit, ancestor);
+        assert_eq!(receipt.path, "products/p1.md");
+        assert!(receipt.content.is_empty());
+        assert!(receipt.blob_sha.is_empty());
+        assert_eq!(receipt.size_bytes, 0);
+        assert!(
+            client
+                .get_file(signed_test_request(request("products/missing.md")))
+                .await
+                .unwrap()
+                .into_inner()
+                .at_ancestor,
+            "a ref-identity receipt does not claim that the path exists"
+        );
+
+        let mut ordinary = request("products/p1.md");
+        ordinary.allow_ancestor_receipt = false;
+        let ordinary = client
+            .get_file(signed_test_request(ordinary))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!ordinary.at_ancestor);
+        assert!(!ordinary.content.is_empty());
+        let mut tampered = signed_test_request(request("products/p1.md"));
+        tampered.get_mut().allow_ancestor_receipt = false;
+        assert_eq!(
+            client.get_file(tampered).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        for mut invalid in [
+            GetFileRequest {
+                unchanged_since_commit: None,
+                ..request("products/p1.md")
+            },
+            GetFileRequest {
+                r#ref: "HEAD".into(),
+                ..request("products/p1.md")
+            },
+            GetFileRequest {
+                unchanged_since_commit: Some("bad".into()),
+                ..request("products/p1.md")
+            },
+            request(""),
+            request("../outside"),
+        ] {
+            invalid.allow_ancestor_receipt = true;
+            assert_eq!(
+                client
+                    .get_file(signed_test_request(invalid))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::InvalidArgument
+            );
+        }
+        let mut denied = request("products/p1.md");
+        denied.authorization = test_authorization(TEST_REPO_D, "repository.contents.write");
+        assert_eq!(
+            client
+                .get_file(signed_test_request(denied))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+        let write = |file: &str, content: Vec<u8>| {
+            signed_test_request(CommitFileRequest {
+                repository_id: TEST_REPO_D.into(),
+                path: file.into(),
+                content,
+                commit_message: "receipt history".into(),
+                author_name: "Test".into(),
+                author_email: "test@example.com".into(),
+                authorization: test_authorization(TEST_REPO_D, "repository.contents.write"),
+            })
+        };
+        client
+            .commit_file(write("products/other.md", b"unrelated".to_vec()))
+            .await
+            .unwrap();
+        let advanced = client
+            .get_file(signed_test_request(request("products/p1.md")))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!advanced.at_ancestor);
+        assert_ne!(advanced.ref_commit_sha, ancestor);
+        assert_eq!(advanced.content, ordinary.content);
+        client
+            .commit_file(write("products/p1.md", b"changed".to_vec()))
+            .await
+            .unwrap();
+        client
+            .commit_file(write("products/p1.md", ordinary.content))
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .get_file(signed_test_request(request("products/p1.md")))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Aborted
+        );
+        let mut missing = request("products/p1.md");
+        missing.r#ref = "refs/heads/missing".into();
+        assert_eq!(
+            client
+                .get_file(signed_test_request(missing))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Aborted
+        );
+        std::fs::write(path.join("refs/heads/main"), b"invalid reference\n").unwrap();
+        assert_eq!(
+            client
+                .get_file(signed_test_request(request("products/p1.md")))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Internal
+        );
+    }
+
+    #[test]
+    fn test_file_lookup_rejects_corrupt_trailing_tree_entries() {
+        use gix::objs::Write;
+
+        let dir = TempDir::new().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_D);
+        let repo = gix::open(fanout_path(dir.path(), TEST_REPO_D).unwrap()).unwrap();
+        let original = resolve_ref_to_commit_id(&repo, "HEAD").unwrap();
+        let tree = repo
+            .find_object(original)
+            .unwrap()
+            .try_into_commit()
+            .unwrap()
+            .tree()
+            .unwrap();
+        let mut data = tree.data.clone();
+        data.extend_from_slice(b"malformed trailing entry");
+        let corrupt = repo
+            .objects
+            .write_buf(gix::objs::Kind::Tree, &data)
+            .unwrap();
+        for path in ["products/p1.md", "products/missing.md", "missing.md"] {
+            assert_eq!(
+                find_blob_in_tree(&repo, corrupt, path).unwrap_err().code(),
+                tonic::Code::Internal,
+                "a matching or missing prefix must not hide malformed trailing tree data"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "native history read diagnostic, not an acceptance gate"]
+    fn test_file_history_wide_tree_diagnostic() {
+        let dir = TempDir::new().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_D);
+        let repo = gix::open(fanout_path(dir.path(), TEST_REPO_D).unwrap()).unwrap();
+        let original = resolve_ref_to_commit_id(&repo, "HEAD").unwrap();
+        let tree = repo
+            .find_object(original)
+            .unwrap()
+            .try_into_commit()
+            .unwrap()
+            .tree()
+            .unwrap();
+        let decoded = tree.decode().unwrap();
+        let products = decoded
+            .entries
+            .iter()
+            .find(|entry| entry.filename == "products")
+            .unwrap()
+            .oid
+            .to_owned();
+        let blob = find_blob_in_tree(&repo, tree.id, "products/p1.md").unwrap();
+        let mut entries: Vec<_> = (0..5_000)
+            .map(|index| gix::objs::tree::Entry {
+                mode: gix::objs::tree::EntryKind::Blob.into(),
+                filename: format!("fixture-{index:05}").into(),
+                oid: blob,
+            })
+            .collect();
+        entries.push(gix::objs::tree::Entry {
+            mode: gix::objs::tree::EntryKind::Tree.into(),
+            filename: "products".into(),
+            oid: products,
+        });
+        let sig = gix::actor::Signature {
+            name: "test".into(),
+            email: "test@example.com".into(),
+            time: gix::date::Time::now_local_or_utc(),
+        };
+        let mut time_buf = gix::date::parse::TimeBuf::default();
+        let sig_ref = sig.to_ref(&mut time_buf);
+        let mut tip = original;
+        for index in 0..96 {
+            entries[0].oid = repo
+                .write_blob(format!("unrelated {index}"))
+                .unwrap()
+                .detach();
+            let tree = repo
+                .write_object(&gix::objs::Tree {
+                    entries: entries.clone(),
+                })
+                .unwrap()
+                .detach();
+            tip = repo
+                .commit_as(
+                    sig_ref,
+                    sig_ref,
+                    "refs/heads/wide-diagnostic",
+                    format!("unrelated {index}"),
+                    tree,
+                    [tip],
+                )
+                .unwrap()
+                .detach();
+        }
+        for round in 0..5 {
+            let started = std::time::Instant::now();
+            let work = verify_unchanged_file_history(&repo, tip, original, "products/p1.md", blob)
+                .unwrap();
+            assert_eq!(work.commits, 97);
+            println!(
+                "history_wide_tree round={round} commits=97 entries=5001 elapsed_us={} commit_us={} tree_us={}",
+                started.elapsed().as_micros(),
+                work.commit_reads.as_micros(),
+                work.tree_reads.as_micros()
+            );
+        }
+    }
+
+    #[test]
+    fn test_unchanged_history_rejects_unrelated_merges_and_exhausted_walks() {
+        let dir = TempDir::new().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_D);
+        let repo = gix::open(fanout_path(dir.path(), TEST_REPO_D).unwrap()).unwrap();
+        let original = resolve_ref_to_commit_id(&repo, "HEAD").unwrap();
+        let tree = repo
+            .find_object(original)
+            .unwrap()
+            .try_into_commit()
+            .unwrap()
+            .tree_id()
+            .unwrap()
+            .detach();
+        let blob = find_blob_in_tree(&repo, tree, "products/p1.md").unwrap();
+        let sig = gix::actor::Signature {
+            name: "test".into(),
+            email: "test@example.com".into(),
+            time: gix::date::Time::now_local_or_utc(),
+        };
+        let mut time_buf = gix::date::parse::TimeBuf::default();
+        let sig_ref = sig.to_ref(&mut time_buf);
+        let make_commit = |parents: Vec<gix::ObjectId>, message: &str| {
+            repo.commit_as(
+                sig_ref,
+                sig_ref,
+                format!("refs/heads/proof-{}", message.replace(' ', "-")),
+                message,
+                tree,
+                parents,
+            )
+            .unwrap()
+            .detach()
+        };
+        let unrelated = make_commit(vec![], "unrelated root");
+        assert_eq!(
+            verify_unchanged_file_history(&repo, unrelated, original, "products/p1.md", blob)
+                .unwrap_err()
+                .code(),
+            tonic::Code::Aborted
+        );
+        let merge = make_commit(vec![original, unrelated], "merge");
+        assert_eq!(
+            verify_unchanged_file_history(&repo, merge, original, "products/p1.md", blob)
+                .unwrap_err()
+                .code(),
+            tonic::Code::Aborted
+        );
+        let mut tip = original;
+        for n in 0..=DELETE_RECEIPT_HISTORY_LIMIT {
+            tip = make_commit(vec![tip], &format!("disjoint {n}"));
+        }
+        let error = verify_unchanged_file_history(&repo, tip, original, "products/p1.md", blob)
+            .unwrap_err();
+        assert!(matches!(
+            error.code(),
+            tonic::Code::Aborted | tonic::Code::ResourceExhausted
+        ));
     }
 
     #[tokio::test]
@@ -3078,6 +4839,8 @@ mod tests {
             path: "products/p1.md".to_string(),
             r#ref: "nonexistent-branch".to_string(),
             authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+            unchanged_since_commit: None,
+            allow_ancestor_receipt: false,
         });
         let err = svc.get_file(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
@@ -3094,9 +4857,78 @@ mod tests {
             path: "products/nonexistent.md".to_string(),
             r#ref: "HEAD".to_string(),
             authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+            unchanged_since_commit: None,
+            allow_ancestor_receipt: false,
         });
         let err = svc.get_file(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[test]
+    fn test_full_object_id_resolution_preserves_refs_tags_and_storage_errors() {
+        let dir = TempDir::new().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_D);
+        let path = fanout_path(dir.path(), TEST_REPO_D).unwrap();
+        let repo = gix::open(&path).unwrap();
+        let commit = resolve_ref_to_commit_id(&repo, "HEAD").unwrap();
+        let hex = commit.to_string();
+        let tag = repo.rev_parse_single("refs/tags/v1.0.0").unwrap().detach();
+        for reference in [
+            hex.as_str(),
+            &hex.to_uppercase(),
+            &hex[..7],
+            "HEAD",
+            "refs/heads/main",
+            "v1.0.0",
+            &tag.to_string(),
+        ] {
+            assert_eq!(resolve_ref_to_commit_id(&repo, reference).unwrap(), commit);
+        }
+        assert_eq!(
+            resolve_ref_to_commit_id(&repo, &"0".repeat(40))
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+        let blob = repo.write_blob(b"not a commit").unwrap().detach();
+        assert_eq!(
+            resolve_ref_to_commit_id(&repo, &blob.to_string())
+                .unwrap_err()
+                .code(),
+            tonic::Code::Internal
+        );
+        let tree = repo.find_commit(commit).unwrap().tree().unwrap().id;
+        assert_eq!(
+            resolve_ref_to_commit_id(&repo, &tree.to_string())
+                .unwrap_err()
+                .code(),
+            tonic::Code::Internal
+        );
+        let hash_named_tag = format!("refs/tags/{hex}");
+        repo.reference(
+            hash_named_tag.as_str(),
+            blob,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "full object IDs remain immutable targets",
+        )
+        .unwrap();
+        assert_eq!(resolve_ref_to_commit_id(&repo, &hex).unwrap(), commit);
+        assert_eq!(
+            resolve_ref_to_commit_id(&repo, &hash_named_tag)
+                .unwrap_err()
+                .code(),
+            tonic::Code::Internal,
+            "qualified hash-looking refs must still resolve as refs"
+        );
+        let object_path = path.join("objects").join(&hex[..2]).join(&hex[2..]);
+        std::fs::remove_file(&object_path).unwrap();
+        std::fs::write(object_path, b"unreadable compressed commit").unwrap();
+        let repo = gix::open(path).unwrap();
+        assert_eq!(
+            resolve_ref_to_commit_id(&repo, &hex).unwrap_err().code(),
+            tonic::Code::Internal,
+            "corrupt storage must not become a missing ref or a cached success"
+        );
     }
 
     #[tokio::test]
@@ -3121,6 +4953,12 @@ mod tests {
             ),
             (
                 TEST_REPO_D,
+                "0000000000000000000000000000000000000000",
+                "products/p1.md",
+                tonic::Code::FailedPrecondition,
+            ),
+            (
+                TEST_REPO_D,
                 "HEAD",
                 "products/missing.md",
                 tonic::Code::NotFound,
@@ -3138,6 +4976,8 @@ mod tests {
                     path: path.to_string(),
                     r#ref: reference.to_string(),
                     authorization: test_authorization(repository_id, "repository.contents.read"),
+                    unchanged_since_commit: None,
+                    allow_ancestor_receipt: false,
                 }))
                 .await
                 .unwrap_err();
@@ -3277,6 +5117,73 @@ mod tests {
         drop(owner);
         assert!(path.exists());
         acquire_repository_commit_lock(&path, std::time::Duration::from_millis(10)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_commit_file_cancellation_retains_writer_until_publication_finishes() {
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_E);
+        let repo_path = fanout_path(dir.path(), TEST_REPO_E).unwrap();
+        let marker = acquire_repository_commit_lock(
+            &repo_path.join("gitstore-commit.lock"),
+            std::time::Duration::from_millis(10),
+        )
+        .unwrap();
+        let svc = Arc::new(make_test_service(dir.path()));
+        let lock = get_or_insert_lock(&svc.repo_locks, TEST_REPO_E);
+        let writer = tokio::spawn(async move {
+            svc.commit_file(signed_test_request(CommitFileRequest {
+                repository_id: TEST_REPO_E.into(),
+                path: "products/cancelled.md".into(),
+                content: b"committed despite caller cancellation".to_vec(),
+                commit_message: "cancelled caller".into(),
+                author_name: "Tester".into(),
+                author_email: "test@example.com".into(),
+                authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
+            }))
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while lock.try_read().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        writer.abort();
+        assert!(writer.await.unwrap_err().is_cancelled());
+        let retained = lock.try_write().is_err();
+        drop(marker);
+        let guard = tokio::time::timeout(std::time::Duration::from_secs(5), lock.write())
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let repo = gix::open(&repo_path).unwrap();
+                if let Ok(commit) = repo.head_commit() {
+                    let tree = commit.tree_id().unwrap().detach();
+                    if find_blob_in_tree(&repo, tree, "products/cancelled.md").is_ok() {
+                        break;
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let repo = gix::open(&repo_path).unwrap();
+        let commit = repo.head_commit().unwrap();
+        let tree = commit.tree_id().unwrap().detach();
+        let blob = find_blob_in_tree(&repo, tree, "products/cancelled.md").unwrap();
+        assert_eq!(
+            repo.find_object(blob).unwrap().data,
+            b"committed despite caller cancellation"
+        );
+        drop(guard);
+        assert!(
+            retained,
+            "cancelled caller released a live publication's writer"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -3994,6 +5901,72 @@ mod tests {
     const TEST_REPO_H: &str = "01960000-0000-7000-8000-000000000030";
     const TEST_REPO_I: &str = "01960000-0000-7000-8000-000000000031";
 
+    #[tokio::test]
+    async fn test_upload_pack_shallow_uses_configured_platform_bound() {
+        use tokio_stream::StreamExt;
+
+        let root = TempDir::new().unwrap();
+        repo_with_commit(root.path(), TEST_REPO_H);
+        let repo = gix::open(fanout_path(root.path(), TEST_REPO_H).unwrap()).unwrap();
+        let parent = repo.head_commit().unwrap();
+        let sig = gix::actor::SignatureRef {
+            name: "Test".into(),
+            email: "test@example.com".into(),
+            time: "0 +0000",
+        };
+        let tip = repo
+            .commit_as(
+                sig,
+                sig,
+                "refs/heads/main",
+                "shallow tip",
+                parent.tree_id().unwrap().detach(),
+                [parent.id],
+            )
+            .unwrap()
+            .detach();
+        let want = format!("want {tip} side-band-64k shallow\n");
+        let mut body = format!("{:04x}{want}", want.len() + 4).into_bytes();
+        body.extend_from_slice(b"000ddeepen 1\n00000009done\n");
+        let request = || {
+            signed_test_request(UploadPackRequest {
+                repository_id: TEST_REPO_H.to_owned(),
+                body: body.clone(),
+                authorization: test_authorization(TEST_REPO_H, "repository.contents.read"),
+            })
+        };
+        let mut client =
+            make_grpc_client_with_push_limits(root.path().to_path_buf(), PushLimits::default())
+                .await;
+        let mut stream = client.upload_pack(request()).await.unwrap().into_inner();
+        let mut response = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            response.extend_from_slice(&chunk.unwrap().data);
+        }
+        let boundary = format!("shallow {tip}\n");
+        let expected = format!("{:04x}{boundary}00000008NAK\n", boundary.len() + 4);
+        assert!(response.starts_with(expected.as_bytes()));
+        assert!(response.len() > expected.len() + 4);
+
+        for (ceiling, expected_error) in [
+            (1, "shallow traversal exceeds configured pack size"),
+            (20, "shallow pack exceeds configured pack size"),
+        ] {
+            let mut client = make_grpc_client_with_push_limits(
+                root.path().to_path_buf(),
+                PushLimits {
+                    max_pack_size: ceiling,
+                    ..PushLimits::default()
+                },
+            )
+            .await;
+            let mut stream = client.upload_pack(request()).await.unwrap().into_inner();
+            let error = stream.next().await.unwrap().unwrap_err();
+            assert_eq!(error.code(), tonic::Code::Internal);
+            assert!(error.message().contains(expected_error));
+        }
+    }
+
     /// Spawn an in-process tonic gRPC server and return a connected client.
     /// The server is bound to a random OS-assigned port.
     async fn make_grpc_client(
@@ -4007,7 +5980,9 @@ mod tests {
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
         tokio::spawn(async move {
             tonic::transport::Server::builder()
-                .add_service(GitServiceServer::new(svc))
+                .add_service(crate::grpc::metrics::RpcMetricsService::new(
+                    GitServiceServer::new(svc),
+                ))
                 .serve_with_incoming(incoming)
                 .await
                 .unwrap();
@@ -4032,6 +6007,7 @@ mod tests {
             pack_data: vec![],
             is_last: true,
             push_context: None,
+            shallow_oids: vec![],
         }
     }
 
@@ -4052,6 +6028,7 @@ mod tests {
             pack_data: vec![],
             is_last: true,
             push_context: Some(push_ctx),
+            shallow_oids: vec![],
         }
     }
 
@@ -4065,6 +6042,322 @@ mod tests {
             policy: None,
             authorization: test_authorization(repo_id, "repository.contents.write"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_receive_pack_shallow_boundaries_are_signed_bounded_and_live_commits() {
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_H);
+        let repo_path = fanout_path(dir.path(), TEST_REPO_H).unwrap();
+        let (old_oid, blob_oid) = {
+            let repo = gix::open(&repo_path).unwrap();
+            (
+                repo.head_id().unwrap().to_string(),
+                repo.write_blob(b"not a commit").unwrap().to_string(),
+            )
+        };
+        let mut client = make_grpc_client(dir.path().into()).await;
+        for (boundaries, expected) in [
+            (vec!["0".repeat(40)], tonic::Code::InvalidArgument),
+            (vec!["a".repeat(39)], tonic::Code::InvalidArgument),
+            (vec!["A".repeat(40)], tonic::Code::InvalidArgument),
+            (vec!["x".repeat(40)], tonic::Code::InvalidArgument),
+            (
+                vec![old_oid.clone(), old_oid.clone()],
+                tonic::Code::InvalidArgument,
+            ),
+            (vec!["a".repeat(40)], tonic::Code::FailedPrecondition),
+            (vec![blob_oid], tonic::Code::InvalidArgument),
+            (vec![old_oid.clone(); 4097], tonic::Code::ResourceExhausted),
+        ] {
+            let mut chunk = delete_ref_cmd_with_ctx(
+                TEST_REPO_H,
+                "refs/heads/main",
+                &old_oid,
+                minimal_push_ctx(TEST_REPO_H),
+            );
+            chunk.shallow_oids = boundaries;
+            let error = client
+                .receive_pack(signed_test_stream(vec![chunk]))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), expected);
+            assert_eq!(
+                gix::open(&repo_path)
+                    .unwrap()
+                    .head_id()
+                    .unwrap()
+                    .to_string(),
+                old_oid
+            );
+        }
+        let mut chunk = delete_ref_cmd_with_ctx(
+            TEST_REPO_H,
+            "refs/heads/main",
+            &old_oid,
+            minimal_push_ctx(TEST_REPO_H),
+        );
+        let signed = signed_test_request(chunk.clone());
+        chunk.shallow_oids = vec![old_oid.clone()];
+        let mut forged = Request::new(tokio_stream::iter(vec![chunk.clone()]));
+        *forged.metadata_mut() = signed.metadata().clone();
+        assert_eq!(
+            client.receive_pack(forged).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        assert_eq!(
+            gix::open(&repo_path)
+                .unwrap()
+                .head_id()
+                .unwrap()
+                .to_string(),
+            old_oid
+        );
+
+        let shallow_path = repo_path.join("shallow");
+        std::fs::write(&shallow_path, format!("{old_oid}\n")).unwrap();
+        assert_eq!(
+            client
+                .receive_pack(signed_test_stream(vec![chunk.clone()]))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::FailedPrecondition,
+        );
+        std::fs::remove_file(&shallow_path).unwrap();
+        let report = client
+            .receive_pack(signed_test_stream(vec![chunk]))
+            .await
+            .unwrap()
+            .into_inner()
+            .report_status;
+        assert!(String::from_utf8_lossy(&report).contains("ok refs/heads/main"));
+        assert!(gix::open(&repo_path)
+            .unwrap()
+            .try_find_reference("refs/heads/main")
+            .unwrap()
+            .is_none());
+        assert!(!shallow_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_receive_pack_shallow_increment_preserves_complete_history() {
+        let dir = TempDir::new().unwrap();
+        let target_path = fanout_path(dir.path(), TEST_REPO_I).unwrap();
+        std::fs::create_dir_all(target_path.parent().unwrap()).unwrap();
+        gix::init_bare(&target_path).unwrap();
+        let source = TempDir::new().unwrap();
+        bare_repo_with_main(source.path(), TEST_REPO_H);
+        let (old_oid, seed_pack, new_oid, increment_pack) = {
+            let repo = gix::open(fanout_path(source.path(), TEST_REPO_H).unwrap()).unwrap();
+            let old = repo.head_id().unwrap().detach();
+            let seed = build_pack_bytes_from_repo(&repo, old);
+            let sig = gix::actor::Signature {
+                name: "test".into(),
+                email: "test@example.com".into(),
+                time: gix::date::Time::now_local_or_utc(),
+            };
+            let blob = repo
+                .write_blob(b"shallow client increment")
+                .unwrap()
+                .detach();
+            let tree = repo
+                .edit_tree(repo.find_commit(old).unwrap().tree_id().unwrap().detach())
+                .unwrap()
+                .upsert("README.md", gix::object::tree::EntryKind::Blob, blob)
+                .unwrap()
+                .write()
+                .unwrap()
+                .detach();
+            let mut time_buf = gix::date::parse::TimeBuf::default();
+            let sig = sig.to_ref(&mut time_buf);
+            let new = repo
+                .commit_as(sig, sig, "HEAD", "increment", tree, [old])
+                .unwrap()
+                .detach();
+            let pack = crate::git::pack_server::build_pack_for_wants(
+                &repo,
+                &[new.to_string()],
+                &[old.to_string()],
+            )
+            .unwrap();
+            (old.to_string(), seed, new.to_string(), pack)
+        };
+        let mut client = make_grpc_client(dir.path().into()).await;
+        let seed = ReceivePackRequest {
+            repository_id: TEST_REPO_I.into(),
+            ref_commands: vec![RefCommand {
+                old_oid: "0".repeat(40),
+                new_oid: old_oid.clone(),
+                ref_name: "refs/heads/main".into(),
+            }],
+            pack_data: seed_pack,
+            is_last: true,
+            push_context: Some(minimal_push_ctx(TEST_REPO_I)),
+            shallow_oids: vec![],
+        };
+        let report = client
+            .receive_pack(signed_test_stream(vec![seed]))
+            .await
+            .unwrap()
+            .into_inner()
+            .report_status;
+        assert!(String::from_utf8_lossy(&report).contains("ok refs/heads/main"));
+        let mut increment = ReceivePackRequest {
+            repository_id: TEST_REPO_I.into(),
+            ref_commands: vec![RefCommand {
+                old_oid: old_oid.clone(),
+                new_oid: new_oid.clone(),
+                ref_name: "refs/heads/main".into(),
+            }],
+            pack_data: increment_pack,
+            is_last: true,
+            push_context: Some(minimal_push_ctx(TEST_REPO_I)),
+            shallow_oids: vec![new_oid.clone()],
+        };
+        assert_eq!(
+            client
+                .receive_pack(signed_test_stream(vec![increment.clone()]))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::FailedPrecondition,
+            "a boundary found only in quarantine must not be imported",
+        );
+        {
+            let repo = gix::open(&target_path).unwrap();
+            assert_eq!(
+                repo.find_reference("refs/heads/main")
+                    .unwrap()
+                    .id()
+                    .to_string(),
+                old_oid
+            );
+            assert!(repo
+                .try_find_object(gix::ObjectId::from_hex(new_oid.as_bytes()).unwrap())
+                .unwrap()
+                .is_none());
+        }
+        increment.shallow_oids = vec![old_oid.clone()];
+        let report = client
+            .receive_pack(signed_test_stream(vec![increment]))
+            .await
+            .unwrap()
+            .into_inner()
+            .report_status;
+        assert!(String::from_utf8_lossy(&report).contains("ok refs/heads/main"));
+        let repo = gix::open(&target_path).unwrap();
+        assert_eq!(
+            repo.find_reference("refs/heads/main")
+                .unwrap()
+                .id()
+                .to_string(),
+            new_oid
+        );
+        let commit = repo
+            .find_commit(gix::ObjectId::from_hex(new_oid.as_bytes()).unwrap())
+            .unwrap();
+        assert_eq!(commit.parent_ids().next().unwrap().to_string(), old_oid);
+        assert!(repo
+            .find_commit(gix::ObjectId::from_hex(old_oid.as_bytes()).unwrap())
+            .unwrap()
+            .parent_ids()
+            .next()
+            .is_none());
+        assert!(!target_path.join("shallow").exists());
+    }
+
+    #[tokio::test]
+    async fn test_receive_pack_dispatches_once_after_publication_and_not_on_commit_failure() {
+        use crate::git::hooks::{AdmissionDecision, AdmissionHandler};
+
+        struct CaptureAdmission(tokio::sync::mpsc::Sender<(String, Vec<RefUpdate>, bool)>);
+
+        #[async_trait::async_trait]
+        impl AdmissionHandler for CaptureAdmission {
+            async fn admit(
+                &self,
+                phase: &str,
+                updates: &[RefUpdate],
+                repository_id: &str,
+                git_dir: &Path,
+                hook_ctx: &HookContext,
+            ) -> anyhow::Result<AdmissionDecision> {
+                assert_eq!(phase, "post-receive");
+                assert_eq!(hook_ctx.repository_id, repository_id);
+                let absent = {
+                    let repo = gix::open(git_dir)?;
+                    repo.try_find_reference(&updates[0].ref_name)?.is_none()
+                };
+                self.0
+                    .send((repository_id.into(), updates.to_vec(), absent))
+                    .await?;
+                Ok(AdmissionDecision::Accept)
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+        let svc = GitServiceImpl::with_pipeline(
+            dir.path().into(),
+            Arc::new(HookPipeline::new(
+                std::time::Duration::from_secs(10),
+                Arc::new(NoopValidationHandler),
+                Arc::new(CaptureAdmission(sender)),
+            )),
+            PushLimits::default(),
+            RPCVerifier::new("fixture-key", None, dir.path()).unwrap(),
+        );
+        let mut client = make_grpc_client_for_service(svc).await;
+        for repo_id in [TEST_REPO_A, TEST_REPO_B] {
+            bare_repo_with_main(dir.path(), repo_id);
+            let repo_path = fanout_path(dir.path(), repo_id).unwrap();
+            let old_oid = gix::open(&repo_path)
+                .unwrap()
+                .head_id()
+                .unwrap()
+                .to_string();
+            let lock_path = repo_path.join("refs/heads/main.lock");
+            if repo_id == TEST_REPO_B {
+                std::fs::write(&lock_path, b"held by test").unwrap();
+            }
+            let update = delete_ref_cmd_with_ctx(
+                repo_id,
+                "refs/heads/main",
+                &old_oid,
+                minimal_push_ctx(repo_id),
+            );
+            let result = client
+                .receive_pack(signed_test_stream(vec![update.clone()]))
+                .await;
+            if repo_id == TEST_REPO_A {
+                let report = result.unwrap().into_inner().report_status;
+                assert!(String::from_utf8_lossy(&report).contains("ok refs/heads/main"));
+                let (actual_repo, updates, absent) =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert_eq!(actual_repo, repo_id);
+                assert!(absent, "callback preceded ref publication");
+                assert_eq!(updates.len(), 1);
+                assert_eq!(updates[0].old_oid, old_oid);
+                assert_eq!(updates[0].new_oid, update.ref_commands[0].new_oid);
+            } else {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::Internal);
+                std::fs::remove_file(lock_path).unwrap();
+                assert_eq!(
+                    gix::open(repo_path).unwrap().head_id().unwrap().to_string(),
+                    old_oid
+                );
+            }
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(30), receiver.recv())
+                .await
+                .is_err(),
+            "duplicate or failed-publication callback"
+        );
     }
 
     /// Build a full pack file containing all objects reachable from `tip_oid` in `src_repo`.
@@ -4121,6 +6414,7 @@ mod tests {
             pack_data: vec![],
             is_last: true,
             push_context: Some(ctx),
+            shallow_oids: vec![],
         };
         let result = client.receive_pack(signed_test_stream(vec![chunk])).await;
         let status = result.unwrap_err();
@@ -4163,6 +6457,7 @@ mod tests {
             pack_data: b"PACK\x00\x00\x00\x02".to_vec(), // 8 bytes > 1 byte limit
             is_last: true,
             push_context: Some(ctx),
+            shallow_oids: vec![],
         };
 
         let result = client.receive_pack(signed_test_stream(vec![chunk])).await;
@@ -4218,6 +6513,7 @@ mod tests {
             pack_data: pack_bytes,
             is_last: true,
             push_context: Some(ctx),
+            shallow_oids: vec![],
         };
 
         let result = client.receive_pack(signed_test_stream(vec![chunk])).await;
@@ -4305,6 +6601,7 @@ mod tests {
             pack_data: b"PACK\x00\x00\x00\x02".to_vec(), // 8 bytes > 1-byte ceiling
             is_last: true,
             push_context: Some(ctx),
+            shallow_oids: vec![],
         };
 
         let result = client.receive_pack(signed_test_stream(vec![chunk])).await;
@@ -4350,6 +6647,7 @@ mod tests {
             pack_data: b"PACK\x00\x00\x00\x02".to_vec(), // 8 bytes > 1-byte ceiling
             is_last: true,
             push_context: Some(ctx),
+            shallow_oids: vec![],
         };
 
         let result = client.receive_pack(signed_test_stream(vec![chunk])).await;

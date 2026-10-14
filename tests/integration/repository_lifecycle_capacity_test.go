@@ -31,6 +31,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -69,6 +70,7 @@ type repositoryCapacityConfig struct {
 	postLoadStabilization       time.Duration
 	mode                        capacityMode
 	skipReplacement             bool
+	workload                    string
 }
 
 type repositoryCapacityEvent struct {
@@ -77,7 +79,10 @@ type repositoryCapacityEvent struct {
 	ResourceVersion string `json:"resourceVersion"`
 	Repository      *struct {
 		Metadata struct {
-			Annotations map[string]any `json:"annotations"`
+			Annotations     map[string]any `json:"annotations"`
+			Generation      int64          `json:"generation"`
+			ResourceVersion string         `json:"resourceVersion"`
+			Revision        string         `json:"revision"`
 		} `json:"metadata"`
 	} `json:"repository"`
 }
@@ -91,9 +96,20 @@ type repositoryCapacitySubscriber struct {
 }
 
 type repositoryCapacityLoadResult struct {
-	produced, admitted, failed, backpressured int64
-	acknowledged                              *capacityBitset
-	maxSequence                               int
+	produced, admitted, failed, backpressured                      int64
+	acknowledged                                                   *capacityBitset
+	maxSequence                                                    int
+	attempts, retries                                              int64
+	missedSchedules                                                int64
+	attemptErrors                                                  map[string]int64
+	drainTimedOut                                                  bool
+	queueLatencies, lockLatencies, requestLatencies, httpLatencies []time.Duration
+}
+
+type repositoryCapacityAttemptObservation struct {
+	attempts, retries int64
+	errors            map[string]int64
+	httpLatencies     []time.Duration
 }
 
 func runRepositoryLifecycleCapacity(t *testing.T) {
@@ -121,6 +137,10 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		repositoryControllerIdentity(t, client, cfg.controllerB),
 		"controller endpoints resolve to the same process instance",
 	)
+	if cfg.workload != "" {
+		runRepositoryWorkloadDiagnostic(t, client, cfg)
+		return
+	}
 
 	var dataset secretCapacityDatasetObservations
 	var secretFaultDriver *secretCapacityFaultDriver
@@ -238,6 +258,8 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	}
 	require.Zero(t, load.failed, "Repository mutations failed under load")
 	require.Zero(t, load.backpressured, "bounded mutation queue shed load")
+	require.Zero(t, load.missedSchedules, "Repository offered schedule fell behind")
+	require.False(t, load.drainTimedOut, "Repository backlog did not drain within its bounded deadline")
 	require.Equal(t, load.produced, load.admitted, "all offered Repository transitions must be admitted")
 	recovery := <-replacementDone
 	require.NoError(t, recovery.err)
@@ -315,6 +337,289 @@ func validateSecretCapacityAvailability(value string) error {
 	}
 }
 
+func validateRepositoryCapacityWorkload(workload string, mode capacityMode, secretScenario bool) error {
+	if workload == "" {
+		return nil
+	}
+	if mode != capacityModeDiagnostic || secretScenario {
+		return errors.New("REPOSITORY_CAPACITY_WORKLOAD comparisons require diagnostic mode and no full secret scenario")
+	}
+	switch workload {
+	case "repository", "file", "combined":
+		return nil
+	default:
+		return errors.New("REPOSITORY_CAPACITY_WORKLOAD must be repository, file or combined")
+	}
+}
+
+func TestRepositoryCapacityWorkloadSelection(t *testing.T) {
+	for _, mode := range []capacityMode{capacityModeDiagnostic, capacityModeAlpha, capacityModeProduction} {
+		require.NoError(t, validateRepositoryCapacityWorkload("", mode, false))
+		require.NoError(t, validateRepositoryCapacityWorkload("", mode, true))
+		for _, workload := range []string{"repository", "file", "combined"} {
+			if mode == capacityModeDiagnostic {
+				require.NoError(t, validateRepositoryCapacityWorkload(workload, mode, false))
+			} else {
+				require.Error(t, validateRepositoryCapacityWorkload(workload, mode, false))
+			}
+			require.Error(t, validateRepositoryCapacityWorkload(workload, mode, true))
+		}
+	}
+	require.Error(t, validateRepositoryCapacityWorkload("unknown", capacityModeDiagnostic, false))
+}
+
+func runRepositoryWorkloadDiagnostic(t *testing.T, client *http.Client, cfg repositoryCapacityConfig) {
+	t.Helper()
+	root, fixtureRunID, err := secretCapacityFixturePath()
+	require.NoError(t, err)
+	fixture, err := readSecretCapacityOwnedFixture(root, fixtureRunID)
+	require.NoError(t, err)
+	require.NoError(t, validateSecretCapacityOwnedMounts(t.Context(), root, fixture.Project))
+	lockPath := filepath.Join(root, "active-run")
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	require.NoError(t, err, "refuse concurrent diagnostics/faults against the owned fixture")
+	require.NoError(t, lock.Close())
+	t.Cleanup(func() { require.NoError(t, os.Remove(lockPath)) })
+	for i, endpoint := range []string{cfg.apiA, cfg.apiB, cfg.controllerA, cfg.controllerB} {
+		service, port := []string{"api-a", "api-b", "controller-manager-a", "controller-manager-b"}[i], "4000"
+		if i >= 2 {
+			port = "5001"
+		}
+		container, err := secretCapacityServiceContainer(t.Context(), fixture.Project, service)
+		require.NoError(t, err)
+		body, err := secretCapacityOwnedMetrics(t.Context(), container, port)
+		require.NoError(t, err)
+		internal, err := parseCapacityMetrics(body)
+		require.NoError(t, err)
+		external := mustRepositoryCapacityMetrics(t, client, endpoint)
+		require.NotEmpty(t, internal.instanceID)
+		require.Equal(t, internal.instanceID, external.instanceID, "diagnostic endpoint must identify the owned service")
+	}
+	waitForSecretCapacityControllerRecovery(t, client, cfg)
+	ensureRepositoryCapacityNamespace(t, cfg)
+	runID := strconv.FormatInt(time.Now().UnixNano(), 36)
+	poolPrefix := "rcp-" + runID + "-"
+	createRepositoryCapacityPool(t, client, cfg, poolPrefix)
+	// Seed identical File/status work even in Repository-only comparisons.
+	workload := prepareSecretCapacityFileWorkload(t, cfg, poolPrefix, runID)
+	waitForSecretCapacityControllerRecovery(t, client, cfg)
+	metrics := repositoryCapacityMetricSamples(t, client, cfg)
+	_ = stabilizeRepositoryCapacityBaseline(t, client, cfg, metrics)
+	before := captureSecretCapacityResources(t, cfg, "before")
+	profiles, err := startRepositoryCapacityProfiles(t.Context(), fixture.Project, cfg.mode, cfg.duration)
+	require.NoError(t, err)
+	var fileLoad <-chan secretCapacityFileLoadResult
+	started := time.Now()
+	if cfg.workload != "repository" {
+		fileLoad = startSecretCapacityFileLoad(t, workload, cfg.duration, cfg.mode)
+	}
+	var repositoryLoad repositoryCapacityLoadResult
+	if cfg.workload != "file" {
+		maxTransitions := int(cfg.duration/cfg.transitionInterval) +
+			(int(cfg.duration/cfg.burstInterval)+2)*cfg.burstSize + 128
+		repositoryLoad = runRepositoryCapacityLoad(t, client, cfg, poolPrefix, "rcl-"+runID+"-", maxTransitions)
+	}
+	var fileResult secretCapacityFileLoadResult
+	if fileLoad != nil {
+		fileResult = <-fileLoad
+	}
+	end := captureSecretCapacityResources(t, cfg, "load-end")
+	require.NoError(t, <-profiles, "live profiling failed; diagnostic evidence is incomplete")
+	post := repositoryCapacityMetricSamples(t, client, cfg)
+	_ = stabilizeRepositoryCapacityMemory(t, client, cfg, post)
+	stabilized := captureSecretCapacityResources(t, cfg, "stabilized")
+	latency := func(values []time.Duration) secretCapacityLatency {
+		if len(values) == 0 {
+			return secretCapacityLatency{}
+		}
+		return secretCapacityLatency{int64(len(values)), percentileDuration(values, .95), percentileDuration(values, .99)}
+	}
+	if repositoryLoad.attemptErrors == nil {
+		repositoryLoad.attemptErrors = map[string]int64{}
+	}
+	require.NoError(t, writeSecretCapacityComponent(os.Getenv("CAPACITY_EVIDENCE_DIR"), "workload-comparison.json", struct {
+		SchemaVersion             int                              `json:"schemaVersion"`
+		Component                 string                           `json:"component"`
+		RunID                     string                           `json:"runID"`
+		Mode                      capacityMode                     `json:"mode"`
+		Workload                  string                           `json:"workload"`
+		FixturePrefix             string                           `json:"fixturePrefix"`
+		Repositories              int                              `json:"repositories"`
+		Files                     int                              `json:"files"`
+		Duration                  time.Duration                    `json:"duration"`
+		Elapsed                   time.Duration                    `json:"elapsed"`
+		RepositoryOffered         int64                            `json:"repositoryOffered"`
+		RepositoryAcknowledged    int64                            `json:"repositoryAcknowledged"`
+		RepositoryFailed          int64                            `json:"repositoryFailed"`
+		RepositoryDropped         int64                            `json:"repositoryDropped"`
+		RepositoryMissedSchedules int64                            `json:"repositoryMissedSchedules"`
+		RepositoryHTTPAttempts    int64                            `json:"repositoryHTTPAttempts"`
+		RepositoryHTTPRetries     int64                            `json:"repositoryHTTPRetries"`
+		RepositoryDrainTimedOut   bool                             `json:"repositoryDrainTimedOut"`
+		RepositoryAttemptErrors   map[string]int64                 `json:"repositoryAttemptErrors"`
+		RepositoryStages          map[string]secretCapacityLatency `json:"repositoryStages"`
+		Before                    []secretCapacityResourceSnapshot `json:"before"`
+		LoadEnd                   []secretCapacityResourceSnapshot `json:"loadEnd"`
+		Stabilized                []secretCapacityResourceSnapshot `json:"stabilized"`
+	}{
+		SchemaVersion: 1, Component: "repository-workload-comparison/v1", RunID: fixtureRunID,
+		Mode: cfg.mode, Workload: cfg.workload, FixturePrefix: poolPrefix,
+		Repositories: cfg.resourcePool, Files: len(workload.ids), Duration: cfg.duration, Elapsed: time.Since(started),
+		RepositoryOffered: repositoryLoad.produced, RepositoryAcknowledged: repositoryLoad.admitted,
+		RepositoryFailed: repositoryLoad.failed, RepositoryDropped: repositoryLoad.backpressured,
+		RepositoryMissedSchedules: repositoryLoad.missedSchedules,
+		RepositoryHTTPAttempts:    repositoryLoad.attempts, RepositoryHTTPRetries: repositoryLoad.retries,
+		RepositoryDrainTimedOut: repositoryLoad.drainTimedOut,
+		RepositoryAttemptErrors: repositoryLoad.attemptErrors,
+		RepositoryStages: map[string]secretCapacityLatency{
+			"queue_wait": latency(repositoryLoad.queueLatencies), "resource_lock": latency(repositoryLoad.lockLatencies),
+			"mutation": latency(repositoryLoad.requestLatencies), "http_attempt": latency(repositoryLoad.httpLatencies),
+		},
+		Before: before, LoadEnd: end, Stabilized: stabilized,
+	}))
+	require.NoError(t, validateSecretCapacityOwnedMounts(t.Context(), root, fixture.Project))
+	if fileLoad != nil {
+		assertSecretCapacityFileLoad(t, fileResult)
+	}
+	if cfg.workload != "file" {
+		require.Positive(t, repositoryLoad.produced)
+		require.Zero(t, repositoryLoad.missedSchedules)
+		require.False(t, repositoryLoad.drainTimedOut)
+		require.Zero(t, repositoryLoad.failed)
+		require.Zero(t, repositoryLoad.backpressured)
+		require.Equal(t, repositoryLoad.produced, repositoryLoad.admitted)
+	}
+}
+
+func startRepositoryCapacityProfiles(ctx context.Context, project string, mode capacityMode, duration time.Duration) (<-chan error, error) {
+	done := make(chan error, 1)
+	flag := os.Getenv("CAPACITY_PROFILING")
+	if flag == "" || flag == "none" {
+		done <- nil
+		return done, nil
+	}
+	if flag != "go" || mode != capacityModeDiagnostic {
+		return nil, errors.New("CAPACITY_PROFILING=go is supported only for owned diagnostic workloads")
+	}
+	seconds := 30
+	if raw := os.Getenv("CAPACITY_PROFILE_SECONDS"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > 60 {
+			return nil, errors.New("CAPACITY_PROFILE_SECONDS must be 1..60")
+		}
+		seconds = value
+	}
+	if duration < time.Duration(seconds+10)*time.Second {
+		return nil, errors.New("offered load must exceed the full profiling capture window")
+	}
+	port := os.Getenv("CAPACITY_API_PROFILE_PORT")
+	if port == "" {
+		port = "6060"
+	}
+	value, err := strconv.Atoi(port)
+	if err != nil || value < 1 || value > 65535 {
+		return nil, errors.New("CAPACITY_API_PROFILE_PORT must be a valid port")
+	}
+	root := os.Getenv("CAPACITY_EVIDENCE_DIR")
+	if root == "" {
+		return nil, errors.New("profiling requires an evidence directory")
+	}
+	directory := filepath.Join(root, "profiles")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return nil, err
+	}
+	var containers [2]string
+	for i, service := range []string{"api-a", "api-b"} {
+		container, err := secretCapacityServiceContainer(ctx, project, service)
+		if err != nil {
+			return nil, err
+		}
+		containers[i] = container
+	}
+	go func() {
+		captureCtx, cancel := context.WithTimeout(ctx, time.Duration(seconds+30)*time.Second)
+		defer cancel()
+		results := make(chan error, 2)
+		for i, container := range containers {
+			go func(i int, container string) {
+				for _, profile := range []struct{ name, path string }{
+					{"cpu.pprof", "profile?seconds=" + strconv.Itoa(seconds)},
+					{"heap.pprof", "heap"}, {"allocs.pprof", "allocs"},
+					{"block.pprof", "block"}, {"mutex.pprof", "mutex"},
+					{"goroutine.pprof", "goroutine"}, {"execution.trace", "trace?seconds=3"},
+				} {
+					body, err := secretCapacityOwnedCommandOutput(captureCtx, &secretCapacityGitOutput{limit: 32 << 20},
+						"docker", "exec", container, "wget", "-qO-",
+						"http://127.0.0.1:"+port+"/debug/pprof/"+profile.path)
+					if err == nil && (len(body) < 16 ||
+						(strings.HasSuffix(profile.name, ".pprof") && (body[0] != 0x1f || body[1] != 0x8b))) {
+						err = errors.New("profile response is not a binary capture")
+					}
+					if err == nil {
+						err = os.WriteFile(filepath.Join(directory, fmt.Sprintf("api-%c-%s", 'a'+i, profile.name)), body, 0600)
+					}
+					clear(body)
+					if err != nil {
+						results <- fmt.Errorf("capture api-%c %s: %w", 'a'+i, profile.name, err)
+						return
+					}
+				}
+				results <- nil
+			}(i, container)
+		}
+		result := errors.Join(<-results, <-results)
+		manifestErr := writeSecretCapacityComponent(root, "profiling.json", struct {
+			SchemaVersion int    `json:"schemaVersion"`
+			Kind          string `json:"kind"`
+			Seconds       int    `json:"cpuSeconds"`
+			Replicas      int    `json:"replicas"`
+			MaximumBytes  int    `json:"maximumBytesPerCapture"`
+			Passed        bool   `json:"passed"`
+		}{1, "owned-go-live-diagnostic", seconds, 2, 32 << 20, result == nil})
+		done <- errors.Join(result, manifestErr)
+	}()
+	return done, nil
+}
+
+func TestRepositoryCapacityProfileValidation(t *testing.T) {
+	for _, test := range []struct {
+		name, flag, seconds, port, evidence string
+		mode                                capacityMode
+		duration                            time.Duration
+		expected                            string
+	}{
+		{"unsupported", "perf", "", "", "", capacityModeDiagnostic, time.Minute, "supported only"},
+		{"alpha", "go", "", "", "", capacityModeAlpha, time.Minute, "supported only"},
+		{"production", "go", "", "", "", capacityModeProduction, time.Minute, "supported only"},
+		{"zero", "go", "0", "", "", capacityModeDiagnostic, time.Minute, "1..60"},
+		{"excess", "go", "61", "", "", capacityModeDiagnostic, time.Minute, "1..60"},
+		{"invalid", "go", "invalid", "", "", capacityModeDiagnostic, time.Minute, "1..60"},
+		{"short", "go", "30", "", "", capacityModeDiagnostic, time.Second, "capture window"},
+		{"port-zero", "go", "1", "0", "", capacityModeDiagnostic, time.Minute, "valid port"},
+		{"port-excess", "go", "1", "65536", "", capacityModeDiagnostic, time.Minute, "valid port"},
+		{"port-invalid", "go", "1", "invalid", "", capacityModeDiagnostic, time.Minute, "valid port"},
+		{"no-evidence", "go", "1", "6060", "", capacityModeDiagnostic, time.Minute, "evidence directory"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("CAPACITY_PROFILING", test.flag)
+			t.Setenv("CAPACITY_PROFILE_SECONDS", test.seconds)
+			t.Setenv("CAPACITY_API_PROFILE_PORT", test.port)
+			t.Setenv("CAPACITY_EVIDENCE_DIR", test.evidence)
+			done, err := startRepositoryCapacityProfiles(context.Background(), "must-not-access-docker", test.mode, test.duration)
+			require.ErrorContains(t, err, test.expected)
+			require.Nil(t, done)
+		})
+	}
+	for _, flag := range []string{"", "none"} {
+		t.Run("disabled-"+flag, func(t *testing.T) {
+			t.Setenv("CAPACITY_PROFILING", flag)
+			done, err := startRepositoryCapacityProfiles(context.Background(), "must-not-access-docker", capacityModeProduction, 0)
+			require.NoError(t, err)
+			require.NoError(t, <-done)
+		})
+	}
+}
+
 func TestSecretCapacityScenarioFlag(t *testing.T) {
 	for _, value := range []string{"", "0", "1"} {
 		require.NoError(t, validateSecretCapacityAvailability(value))
@@ -374,6 +679,7 @@ func loadRepositoryCapacityConfig(t *testing.T) repositoryCapacityConfig {
 		baselineStabilization:    capacityEnvDuration(t, "REPOSITORY_CAPACITY_BASELINE_STABILIZATION", 5*time.Minute),
 		postLoadStabilization:    capacityEnvDuration(t, "REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION", 10*time.Minute),
 		mode:                     mode, skipReplacement: os.Getenv("REPOSITORY_CAPACITY_SKIP_REPLACEMENT") == "1",
+		workload: os.Getenv("REPOSITORY_CAPACITY_WORKLOAD"),
 	}
 }
 
@@ -409,6 +715,13 @@ func repositoryCapacityMetricSamples(t *testing.T, client *http.Client, cfg repo
 }
 
 func validateRepositoryCapacityScale(cfg repositoryCapacityConfig) error {
+	if err := validateRepositoryCapacityWorkload(cfg.workload, cfg.mode, secretCapacityRequested()); err != nil {
+		return err
+	}
+	if cfg.workload != "" && (!cfg.skipReplacement || cfg.resourcePool < 32 || cfg.resourcePool > 1000 || cfg.duration < time.Second || cfg.duration > time.Hour ||
+		cfg.mutationWorkers < 1 || cfg.mutationWorkers > 32 || cfg.burstSize < 1 || cfg.burstSize > 100) {
+		return errors.New("workload comparisons require explicit skipped replacement, 32..1000 repositories, duration 1s..1h and bounded workers/bursts")
+	}
 	for key, value := range map[string]string{"REPOSITORY_API_A": cfg.apiA, "REPOSITORY_API_B": cfg.apiB, "REPOSITORY_CONTROLLER_A": cfg.controllerA, "REPOSITORY_CONTROLLER_B": cfg.controllerB, "REPOSITORY_TOKEN": cfg.token} {
 		if value == "" {
 			return fmt.Errorf("%s is required", key)
@@ -581,10 +894,236 @@ func repositoryCapacityToken(t *testing.T) string {
 func ensureRepositoryCapacityNamespace(t *testing.T, cfg repositoryCapacityConfig) {
 	t.Helper()
 	response := gqlQueryWithURL(t, cfg.apiA, cfg.token, `query($name: String!) { namespace(by: {name: $name}) { metadata { name } } }`, map[string]any{"name": cfg.namespace})
-	if len(response.Errors) == 0 && strings.Contains(string(response.Data), `"name":"`+cfg.namespace+`"`) {
-		return
+	missing, err := repositoryCapacityNamespaceMissing(response, cfg.namespace)
+	require.NoError(t, err)
+	if missing {
+		createNamespaceThrough(t, cfg.apiA, cfg.token, cfg.namespace)
 	}
-	createNamespaceThrough(t, cfg.apiA, cfg.token, cfg.namespace)
+	client := &http.Client{Timeout: 5 * time.Second}
+	defer client.CloseIdleConnections()
+	require.NoError(t, waitRepositoryCapacityNamespaceReady(t.Context(), client, cfg))
+}
+
+func repositoryCapacityNamespaceMissing(response gqlResponse, name string) (bool, error) {
+	invalid := errors.New("capacity: Namespace fixture lookup failed")
+	if len(response.Errors) != 0 {
+		if len(response.Errors) != 1 {
+			return false, invalid
+		}
+		var failure struct {
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
+			Path []string `json:"path"`
+		}
+		if json.Unmarshal(response.Errors[0], &failure) != nil || failure.Extensions.Code != "NOT_FOUND" ||
+			len(failure.Path) != 1 || failure.Path[0] != "namespace" {
+			return false, invalid
+		}
+		return true, nil
+	}
+	var data map[string]json.RawMessage
+	if json.Unmarshal(response.Data, &data) != nil {
+		return false, invalid
+	}
+	raw, found := data["namespace"]
+	if !found {
+		return false, invalid
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return true, nil
+	}
+	var current struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+	}
+	if json.Unmarshal(raw, &current) != nil || current.Metadata.Name != name {
+		return false, invalid
+	}
+	return false, nil
+}
+
+func waitRepositoryCapacityNamespaceReady(ctx context.Context, client *http.Client, cfg repositoryCapacityConfig) error {
+	return waitRepositoryCapacityResourceReady(ctx, client, cfg, "Namespace", cfg.namespace)
+}
+
+func waitRepositoryCapacityResourceReady(ctx context.Context, client *http.Client, cfg repositoryCapacityConfig, kind, name string) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	query := `query($name:String!){resource:namespace(by:{name:$name}){
+		metadata{name generation}
+		status{observedGeneration conditions{type status observedGeneration}}
+	}}`
+	provisioned := "SystemRepoReady"
+	variables := map[string]any{"name": name}
+	switch kind {
+	case "Namespace":
+	case "Repository":
+		query = `query($name:String!,$namespace:String!){resource:repository(by:{namespacePath:{namespace:$namespace,name:$name}}){
+			metadata{name generation}
+			status{observedGeneration conditions{type status observedGeneration}}
+		}}`
+		provisioned = "StorageProvisioned"
+		variables["namespace"] = cfg.namespace
+	default:
+		return errors.New("capacity: unsupported fixture readiness kind")
+	}
+	for {
+		allReady := true
+		for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+			var data map[string]json.RawMessage
+			if err := secretCapacityGraphQL(ctx, client, strings.TrimRight(endpoint, "/"), cfg.token, query, variables, &data); err != nil {
+				return err
+			}
+			raw, found := data["resource"]
+			if !found {
+				return errors.New("capacity: fixture readiness field is missing")
+			}
+			if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+				allReady = false
+				continue
+			}
+			var current struct {
+				Metadata *struct {
+					Name       string `json:"name"`
+					Generation *int   `json:"generation"`
+				} `json:"metadata"`
+				Status *struct {
+					ObservedGeneration *int `json:"observedGeneration"`
+					Conditions         *[]struct {
+						Type               string `json:"type"`
+						Status             string `json:"status"`
+						ObservedGeneration int    `json:"observedGeneration"`
+					} `json:"conditions"`
+				} `json:"status"`
+			}
+			if json.Unmarshal(raw, &current) != nil || current.Metadata == nil || current.Metadata.Name != name ||
+				current.Metadata.Generation == nil || *current.Metadata.Generation < 1 || current.Status == nil ||
+				current.Status.ObservedGeneration == nil || current.Status.Conditions == nil {
+				return errors.New("capacity: malformed fixture readiness observation")
+			}
+			ready := map[string]bool{}
+			for _, condition := range *current.Status.Conditions {
+				state := strings.ToUpper(condition.Status)
+				if condition.Type == "" || (state != "TRUE" && state != "FALSE" && state != "UNKNOWN") {
+					return errors.New("capacity: malformed fixture readiness condition")
+				}
+				if _, duplicate := ready[condition.Type]; duplicate {
+					return errors.New("capacity: duplicate fixture readiness condition")
+				}
+				if condition.Type == "DeletionPending" && strings.EqualFold(condition.Status, "true") {
+					return errors.New("capacity: fixture resource has deletion intent")
+				}
+				ready[condition.Type] = strings.EqualFold(condition.Status, "true") && condition.ObservedGeneration == *current.Metadata.Generation
+			}
+			if *current.Status.ObservedGeneration != *current.Metadata.Generation || !ready["Ready"] ||
+				!ready["AdmissionAccepted"] || !ready[provisioned] {
+				allReady = false
+			}
+		}
+		if allReady {
+			return nil
+		}
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("capacity: %s fixture provisioning deadline: %w", kind, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func TestRepositoryCapacityNamespaceLookupRequiresExactAbsence(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		response         string
+		missing, invalid bool
+	}{
+		{`{"data":{"namespace":{"metadata":{"name":"fixture"}}}}`, false, false},
+		{`{"data":{"namespace":null}}`, true, false},
+		{`{"data":null,"errors":[{"path":["namespace"],"extensions":{"code":"NOT_FOUND"}}]}`, true, false},
+		{`{"errors":[{"path":["namespace"],"extensions":{"code":"FORBIDDEN"}}]}`, false, true},
+		{`{"errors":[{"path":["repository"],"extensions":{"code":"NOT_FOUND"}}]}`, false, true},
+		{`{"errors":[{"path":["namespace"],"extensions":{"code":"NOT_FOUND"}},{"extensions":{"code":"INTERNAL"}}]}`, false, true},
+		{`{"data":{}}`, false, true},
+		{`{"data":{"namespace":{"metadata":{"name":"another"}}}}`, false, true},
+	} {
+		var response gqlResponse
+		require.NoError(t, json.Unmarshal([]byte(tc.response), &response))
+		missing, err := repositoryCapacityNamespaceMissing(response, "fixture")
+		require.Equal(t, tc.missing, missing, tc.response)
+		if tc.invalid {
+			require.Error(t, err, tc.response)
+		} else {
+			require.NoError(t, err, tc.response)
+		}
+	}
+}
+
+func TestRepositoryCapacityResourcesWaitForBothReplicaReadiness(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"Namespace", "Repository"} {
+		t.Run(kind, func(t *testing.T) {
+			ready := `{"data":{"resource":{"metadata":{"name":"fixture","generation":1},"status":{"observedGeneration":1,"conditions":[
+		{"type":"AdmissionAccepted","status":"TRUE","observedGeneration":1},
+		{"type":"SystemRepoReady","status":"TRUE","observedGeneration":1},
+		{"type":"Ready","status":"TRUE","observedGeneration":1}]}}}}`
+			if kind == "Repository" {
+				ready = strings.ReplaceAll(ready, "SystemRepoReady", "StorageProvisioned")
+			}
+			var callsA, callsB atomic.Int64
+			serverA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				callsA.Add(1)
+				_, _ = io.WriteString(w, ready)
+			}))
+			defer serverA.Close()
+			serverB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if callsB.Add(1) == 1 {
+					_, _ = io.WriteString(w, `{"data":{"resource":null}}`)
+					return
+				}
+				_, _ = io.WriteString(w, ready)
+			}))
+			defer serverB.Close()
+			cfg := repositoryCapacityConfig{apiA: serverA.URL, apiB: serverB.URL, namespace: "fixture", token: "private-token"}
+			require.NoError(t, waitRepositoryCapacityResourceReady(t.Context(), serverA.Client(), cfg, kind, "fixture"))
+			require.Equal(t, int64(2), callsA.Load())
+			require.Equal(t, int64(2), callsB.Load())
+		})
+	}
+}
+
+func TestRepositoryCapacityNamespaceReadinessFailsOnOperationErrors(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, response string
+		status         int
+	}{
+		{"quota", `private response secret`, http.StatusTooManyRequests},
+		{"operation", `{"errors":[{"message":"private response secret"}]}`, http.StatusOK},
+		{"malformed", `{`, http.StatusOK},
+		{"missing-field", `{"data":{}}`, http.StatusOK},
+		{"missing-status", `{"data":{"resource":{"metadata":{"name":"fixture","generation":1}}}}`, http.StatusOK},
+		{"wrong-namespace", `{"data":{"resource":{"metadata":{"name":"another","generation":1},"status":{"observedGeneration":1,"conditions":[]}}}}`, http.StatusOK},
+		{"terminating", `{"data":{"resource":{"metadata":{"name":"fixture","generation":1},"status":{"observedGeneration":1,"conditions":[{"type":"DeletionPending","status":"TRUE","observedGeneration":1}]}}}}`, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.response)
+			}))
+			defer server.Close()
+			cfg := repositoryCapacityConfig{apiA: server.URL, apiB: server.URL, namespace: "fixture", token: "private-token"}
+			err := waitRepositoryCapacityNamespaceReady(t.Context(), server.Client(), cfg)
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "private")
+			require.Equal(t, int64(1), calls.Load())
+		})
+	}
 }
 
 func createRepositoryCapacityPool(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, prefix string) {
@@ -596,6 +1135,12 @@ func createRepositoryCapacityPool(t *testing.T, client *http.Client, cfg reposit
 		}
 		err := repositoryCapacityMutation(context.Background(), client, endpoint, cfg.token, true, cfg.namespace, prefix+strconv.Itoa(i), "seed", 0, "")
 		require.NoError(t, err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	for i := 1; i <= cfg.resourcePool; i++ {
+		require.NoError(t, waitRepositoryCapacityResourceReady(ctx, client, cfg, "Repository", prefix+strconv.Itoa(i)),
+			"verify pool storage provisioning on both replicas before File authoring")
 	}
 }
 
@@ -643,24 +1188,57 @@ func runRepositoryCapacityBatch(t *testing.T, client *http.Client, cfg repositor
 
 func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, poolPrefix, eventPrefix string, maxTransitions int) repositoryCapacityLoadResult {
 	t.Helper()
+	require.Positive(t, cfg.duration)
+	require.Positive(t, cfg.transitionInterval)
+	require.Positive(t, cfg.burstInterval)
+	expected := int64(cfg.duration/cfg.transitionInterval) + int64(cfg.duration/cfg.burstInterval)*int64(cfg.burstSize)
+	require.Positive(t, expected)
+	require.LessOrEqual(t, expected, int64(100_000))
+	require.GreaterOrEqual(t, int64(maxTransitions), expected)
 	result := repositoryCapacityLoadResult{acknowledged: newCapacityBitset(maxTransitions + 1)}
-	jobs := make(chan int, repositoryCapacityQueueDepth(cfg.mutationWorkers, cfg.burstSize))
+	type job struct {
+		sequence  int
+		offeredAt time.Time
+	}
+	jobs := make(chan job, repositoryCapacityQueueDepth(cfg.mutationWorkers, cfg.burstSize))
+	workCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	locks := make([]sync.Mutex, cfg.resourcePool)
+	var observations sync.Mutex
+	result.attemptErrors = map[string]int64{}
 	var wg sync.WaitGroup
 	var produced, admitted, failed, backpressured atomic.Int64
 	for worker := 0; worker < cfg.mutationWorkers; worker++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for sequence := range jobs {
+			for item := range jobs {
+				sequence := item.sequence
+				queueWait := time.Since(item.offeredAt)
 				index := (sequence - 1) % cfg.resourcePool
+				lockStarted := time.Now()
 				locks[index].Lock()
+				lockWait := time.Since(lockStarted)
 				endpoint := cfg.apiA
 				if sequence%2 == 0 {
 					endpoint = cfg.apiB
 				}
-				err := repositoryCapacityMutation(context.Background(), client, endpoint, cfg.token, false, cfg.namespace, poolPrefix+strconv.Itoa(index+1), eventPrefix, sequence, "")
+				attempts := &repositoryCapacityAttemptObservation{errors: map[string]int64{}}
+				requestStarted := time.Now()
+				err := repositoryCapacityMutationObserved(workCtx, client, endpoint, cfg.token, false, cfg.namespace, poolPrefix+strconv.Itoa(index+1), eventPrefix, sequence, "", attempts)
+				requestLatency := time.Since(requestStarted)
 				locks[index].Unlock()
+				observations.Lock()
+				result.attempts += attempts.attempts
+				result.retries += attempts.retries
+				for class, count := range attempts.errors {
+					result.attemptErrors[class] += count
+				}
+				result.queueLatencies = append(result.queueLatencies, queueWait)
+				result.lockLatencies = append(result.lockLatencies, lockWait)
+				result.requestLatencies = append(result.requestLatencies, requestLatency)
+				result.httpLatencies = append(result.httpLatencies, attempts.httpLatencies...)
+				observations.Unlock()
 				if err != nil {
 					failed.Add(1)
 					continue
@@ -671,34 +1249,70 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 		}()
 	}
 	started := time.Now()
-	ticker := time.NewTicker(cfg.transitionInterval)
-	burst := time.NewTicker(cfg.burstInterval)
 	sequence := 0
-	enqueue := func() {
+	enqueue := func(offeredAt time.Time, interval time.Duration) {
 		sequence++
 		produced.Add(1)
+		if time.Since(offeredAt) >= interval {
+			result.missedSchedules++
+		}
 		select {
-		case jobs <- sequence:
+		case jobs <- job{sequence, offeredAt}:
 		default:
 			backpressured.Add(1)
 		}
 	}
-	for time.Since(started) < cfg.duration {
+	transition, burst := cfg.transitionInterval, cfg.burstInterval
+	for transition <= cfg.duration || burst <= cfg.duration {
+		next := min(transition, burst)
+		timer := time.NewTimer(max(time.Duration(0), time.Until(started.Add(next))))
 		select {
-		case <-ticker.C:
-			enqueue()
-		case <-burst.C:
+		case <-workCtx.Done():
+			timer.Stop()
+			transition, burst = cfg.duration+1, cfg.duration+1
+			continue
+		case <-timer.C:
+		}
+		if transition == next {
+			enqueue(started.Add(next), cfg.transitionInterval)
+			transition += cfg.transitionInterval
+		}
+		if burst == next {
 			for i := 0; i < cfg.burstSize; i++ {
-				enqueue()
+				enqueue(started.Add(next), cfg.burstInterval)
 			}
+			burst += cfg.burstInterval
 		}
 	}
-	ticker.Stop()
-	burst.Stop()
 	close(jobs)
-	wg.Wait()
+	drained := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(drained)
+	}()
+	drain := time.NewTimer(30 * time.Second)
+	select {
+	case <-drained:
+		drain.Stop()
+	case <-drain.C:
+		result.drainTimedOut = true
+		cancel()
+		<-drained
+	}
 	result.produced, result.admitted, result.failed, result.backpressured = produced.Load(), admitted.Load(), failed.Load(), backpressured.Load()
 	result.maxSequence = sequence
+	t.Logf("Repository load: scheduled=%d acknowledged=%d failed=%d dropped=%d missed=%d drainTimedOut=%t HTTPAttempts=%d retries=%d attemptErrors=%v",
+		result.produced, result.admitted, result.failed, result.backpressured, result.missedSchedules, result.drainTimedOut, result.attempts, result.retries, result.attemptErrors)
+	for stage, values := range map[string][]time.Duration{
+		"queue_wait": result.queueLatencies, "resource_lock": result.lockLatencies,
+		"mutation": result.requestLatencies, "http_attempt": result.httpLatencies,
+	} {
+		if len(values) != 0 {
+			t.Logf("Repository stage %s: samples=%d p95=%s p99=%s", stage, len(values), percentileDuration(values, .95), percentileDuration(values, .99))
+		}
+	}
+	require.Equal(t, expected, result.produced, "every scheduled Repository offer must be counted")
+	require.Equal(t, result.produced, result.admitted+result.failed+result.backpressured)
 	return result
 }
 
@@ -714,9 +1328,17 @@ func TestRepositoryCapacityQueueDepthIncludesOneFullBurst(t *testing.T) {
 }
 
 func repositoryCapacityMutation(ctx context.Context, client *http.Client, endpoint, token string, create bool, namespace, name, prefix string, sequence int, padding string) error {
-	query := `mutation($input: UpdateRepositoryInput!) { updateRepository(input: $input) { repository { metadata { name resourceVersion } } } }`
+	return repositoryCapacityMutationObserved(ctx, client, endpoint, token, create, namespace, name, prefix, sequence, padding, nil)
+}
+
+func repositoryCapacityMutationObserved(ctx context.Context, client *http.Client, endpoint, token string, create bool, namespace, name, prefix string, sequence int, padding string, observed *repositoryCapacityAttemptObservation) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	query := `mutation($input: UpdateRepositoryInput!) { updateRepository(input: $input) { repository { metadata { name resourceVersion annotations } } } }`
+	operation := "updateRepository"
 	if create {
-		query = `mutation($input: CreateRepositoryInput!) { createRepository(input: $input) { repository { metadata { name resourceVersion } } } }`
+		query = `mutation($input: CreateRepositoryInput!) { createRepository(input: $input) { repository { metadata { name resourceVersion annotations } } } }`
+		operation = "createRepository"
 	}
 	annotations := map[string]any{}
 	if sequence > 0 {
@@ -735,36 +1357,288 @@ func repositoryCapacityMutation(ctx context.Context, client *http.Client, endpoi
 	if err != nil {
 		return err
 	}
-	deadline := time.Now().Add(30 * time.Second)
 	for {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(endpoint, "/")+"/graphql", bytes.NewReader(payload))
 		if reqErr != nil {
-			return reqErr
+			return errors.New("capacity: invalid Repository request endpoint")
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
+		attemptStarted := time.Now()
+		if observed != nil {
+			observed.attempts++
+		}
 		response, doErr := client.Do(req)
+		class := "transport"
+		retryAfter := 100 * time.Millisecond
 		if doErr == nil {
-			contents, readErr := io.ReadAll(response.Body)
+			contents, readErr := io.ReadAll(io.LimitReader(response.Body, 8*1024*1024+1))
 			response.Body.Close()
-			if readErr == nil && response.StatusCode == http.StatusOK {
-				var result struct {
-					Errors []json.RawMessage `json:"errors"`
+			if readErr != nil || len(contents) > 8*1024*1024 {
+				class = "response"
+			} else if response.StatusCode != http.StatusOK {
+				switch response.StatusCode {
+				case http.StatusTooManyRequests:
+					class = "quota"
+				case http.StatusUnauthorized, http.StatusForbidden:
+					class = "authentication"
+				case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+					class = "transport"
+				default:
+					class = "operation"
 				}
-				if json.Unmarshal(contents, &result) == nil && len(result.Errors) == 0 {
+				if delay := capacityRetryAfter(response.Header.Get("Retry-After"), time.Now()); delay > 0 {
+					retryAfter = delay
+				}
+			} else {
+				class = repositoryCapacityResponseClass(contents, operation, name, annotations)
+				if class == "" {
+					if observed != nil {
+						observed.httpLatencies = append(observed.httpLatencies, time.Since(attemptStarted))
+					}
 					return nil
 				}
-				doErr = fmt.Errorf("GraphQL errors: %s", result.Errors)
-			} else if readErr != nil {
-				doErr = readErr
+			}
+			doErr = fmt.Errorf("capacity: Repository mutation failed (%s)", class)
+		} else {
+			if ctx.Err() != nil {
+				doErr = ctx.Err()
+				class = secretCapacityFailureClass(doErr)
 			} else {
-				doErr = fmt.Errorf("HTTP %s: %s", response.Status, contents)
+				doErr = errors.New("capacity: Repository transport failed")
 			}
 		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
+		if observed != nil {
+			observed.httpLatencies = append(observed.httpLatencies, time.Since(attemptStarted))
+			observed.errors[class]++
+		}
+		if (class != "conflict" && class != "quota" && class != "transport") || ctx.Err() != nil {
 			return doErr
 		}
-		time.Sleep(100 * time.Millisecond)
+		timer := time.NewTimer(retryAfter)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+			if observed != nil {
+				observed.retries++
+			}
+		}
+	}
+}
+
+func repositoryCapacityResponseClass(contents []byte, operation, name string, annotations map[string]any) string {
+	var envelope gqlResponse
+	if json.Unmarshal(contents, &envelope) != nil {
+		return "response"
+	}
+	if len(envelope.Errors) != 0 {
+		for _, raw := range envelope.Errors {
+			var failure struct {
+				Extensions struct {
+					Code        string `json:"code"`
+					Diagnostics []struct {
+						Reason string `json:"reason"`
+					} `json:"diagnostics"`
+				} `json:"extensions"`
+			}
+			if json.Unmarshal(raw, &failure) != nil || failure.Extensions.Code != "CONFLICT" {
+				return "operation"
+			}
+			for _, diagnostic := range failure.Extensions.Diagnostics {
+				if diagnostic.Reason == "SUPERSEDED" {
+					return "superseded"
+				}
+				if diagnostic.Reason != "RESOURCE_VERSION_CONFLICT" {
+					return "operation"
+				}
+			}
+		}
+		return "conflict"
+	}
+	var data map[string]*struct {
+		Repository *struct {
+			Metadata struct {
+				Name            string         `json:"name"`
+				ResourceVersion string         `json:"resourceVersion"`
+				Annotations     map[string]any `json:"annotations"`
+			} `json:"metadata"`
+		} `json:"repository"`
+	}
+	if json.Unmarshal(envelope.Data, &data) != nil || data[operation] == nil || data[operation].Repository == nil {
+		return "response"
+	}
+	metadata := data[operation].Repository.Metadata
+	if metadata.Name != name || metadata.ResourceVersion == "" {
+		return "response"
+	}
+	for key, value := range annotations {
+		actual, actualString := metadata.Annotations[key].(string)
+		expected, expectedString := value.(string)
+		if !actualString || !expectedString || actual != expected {
+			return "response"
+		}
+	}
+	return ""
+}
+
+func TestRepositoryCapacityResponseRequiresConfirmedMutation(t *testing.T) {
+	t.Parallel()
+	annotations := map[string]any{"capacity.gitstore.dev/sequence": "run-1"}
+	for _, tc := range []struct {
+		name, response, class string
+	}{
+		{"confirmed", `{"data":{"updateRepository":{"repository":{"metadata":{"name":"catalog","resourceVersion":"2","annotations":{"capacity.gitstore.dev/sequence":"run-1"}}}}}}`, ""},
+		{"empty", `{}`, "response"},
+		{"malformed", `{`, "response"},
+		{"null-data", `{"data":null}`, "response"},
+		{"null-payload", `{"data":{"updateRepository":null}}`, "response"},
+		{"null-repository", `{"data":{"updateRepository":{"repository":null}}}`, "response"},
+		{"wrong-operation", `{"data":{"createRepository":{"repository":{"metadata":{"name":"catalog","resourceVersion":"2"}}}}}`, "response"},
+		{"wrong-name", `{"data":{"updateRepository":{"repository":{"metadata":{"name":"another","resourceVersion":"2"}}}}}`, "response"},
+		{"missing-version", `{"data":{"updateRepository":{"repository":{"metadata":{"name":"catalog"}}}}}`, "response"},
+		{"wrong-sequence", `{"data":{"updateRepository":{"repository":{"metadata":{"name":"catalog","resourceVersion":"2","annotations":{"capacity.gitstore.dev/sequence":"run-2"}}}}}}`, "response"},
+		{"nonscalar-sequence", `{"data":{"updateRepository":{"repository":{"metadata":{"name":"catalog","resourceVersion":"2","annotations":{"capacity.gitstore.dev/sequence":["run-1"]}}}}}}`, "response"},
+		{"conflict", `{"errors":[{"extensions":{"code":"CONFLICT"}}]}`, "conflict"},
+		{"superseded", `{"errors":[{"extensions":{"code":"CONFLICT","diagnostics":[{"reason":"SUPERSEDED"}]}}]}`, "superseded"},
+		{"mixed-errors", `{"errors":[{"extensions":{"code":"CONFLICT"}},{"extensions":{"code":"FORBIDDEN"}}]}`, "operation"},
+		{"unknown-error", `{"errors":[{"message":"private provider details"}]}`, "operation"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.class, repositoryCapacityResponseClass([]byte(tc.response), "updateRepository", "catalog", annotations))
+		})
+	}
+}
+
+func repositoryCapacityConfirmTestMutation(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Variables struct {
+			Input struct {
+				Metadata map[string]any `json:"metadata"`
+			} `json:"input"`
+		} `json:"variables"`
+	}
+	if json.NewDecoder(r.Body).Decode(&payload) != nil {
+		http.Error(w, "malformed test request", http.StatusBadRequest)
+		return
+	}
+	payload.Variables.Input.Metadata["resourceVersion"] = "2"
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+		"updateRepository": map[string]any{"repository": map[string]any{"metadata": payload.Variables.Input.Metadata}},
+	}})
+}
+
+func TestRepositoryCapacityMutationRetriesOnlyTransientFailures(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		retries    bool
+	}{
+		{"quota", "private response secret", http.StatusTooManyRequests, true},
+		{"transport", "private response secret", http.StatusBadGateway, true},
+		{"conflict", `{"errors":[{"extensions":{"code":"CONFLICT"}}]}`, http.StatusOK, true},
+		{"authentication", "private response secret", http.StatusUnauthorized, false},
+		{"forbidden", "private response secret", http.StatusForbidden, false},
+		{"invalid-operation", "private response secret", http.StatusBadRequest, false},
+		{"malformed", "{private response secret", http.StatusOK, false},
+		{"empty-success", `{}`, http.StatusOK, false},
+		{"policy-rejection", `{"errors":[{"message":"private response secret","extensions":{"code":"ADMISSION_REJECTED"}}]}`, http.StatusOK, false},
+		{"superseded", `{"errors":[{"extensions":{"code":"CONFLICT","diagnostics":[{"reason":"SUPERSEDED"}]}}]}`, http.StatusOK, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
+					w.WriteHeader(tc.status)
+					_, _ = io.WriteString(w, tc.body)
+					return
+				}
+				repositoryCapacityConfirmTestMutation(w, r)
+			}))
+			defer server.Close()
+			observed := &repositoryCapacityAttemptObservation{errors: map[string]int64{}}
+			err := repositoryCapacityMutationObserved(t.Context(), server.Client(), server.URL, "private-token", false, "namespace", "catalog", "run-", 1, "", observed)
+			if tc.retries {
+				require.NoError(t, err)
+				require.Equal(t, int64(2), calls.Load())
+				require.Equal(t, int64(1), observed.retries)
+			} else {
+				require.Error(t, err)
+				require.NotContains(t, err.Error(), "private")
+				require.Equal(t, int64(1), calls.Load())
+				require.Zero(t, observed.retries)
+			}
+			require.Equal(t, calls.Load(), observed.attempts)
+			require.Len(t, observed.httpLatencies, int(observed.attempts))
+			var failures int64
+			for _, count := range observed.errors {
+				failures += count
+			}
+			require.Equal(t, int64(1), failures)
+		})
+	}
+}
+
+func TestRepositoryCapacityMutationCancellationInterruptsRetryDelay(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	observed := &repositoryCapacityAttemptObservation{errors: map[string]int64{}}
+	started := time.Now()
+	err := repositoryCapacityMutationObserved(ctx, server.Client(), server.URL, "private-token", false, "namespace", "catalog", "run-", 1, "", observed)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), time.Second)
+	require.Equal(t, int64(1), calls.Load())
+	require.Equal(t, int64(1), observed.errors["quota"])
+	require.Zero(t, observed.retries)
+}
+
+func TestRepositoryCapacityLoadCountsEveryScheduledOffer(t *testing.T) {
+	t.Parallel()
+	for _, slow := range []bool{false, true} {
+		t.Run(strconv.FormatBool(slow), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if slow {
+					time.Sleep(120 * time.Millisecond)
+				}
+				repositoryCapacityConfirmTestMutation(w, r)
+			}))
+			defer server.Close()
+			cfg := repositoryCapacityConfig{
+				apiA: server.URL, apiB: server.URL, token: "private-token", namespace: "namespace",
+				resourcePool: 1, mutationWorkers: 1, burstSize: 2, duration: 200 * time.Millisecond,
+				transitionInterval: 50 * time.Millisecond, burstInterval: 100 * time.Millisecond,
+			}
+			if slow {
+				cfg.transitionInterval = time.Millisecond
+			}
+			expected := int(cfg.duration/cfg.transitionInterval) + int(cfg.duration/cfg.burstInterval)*cfg.burstSize
+			result := runRepositoryCapacityLoad(t, server.Client(), cfg, "catalog", "run-", expected)
+			require.Equal(t, int64(expected), result.produced)
+			require.Equal(t, result.produced, result.admitted+result.failed+result.backpressured)
+			require.Zero(t, result.failed)
+			require.Equal(t, result.admitted, result.attempts)
+			require.Zero(t, result.retries)
+			require.Empty(t, result.attemptErrors)
+			require.Len(t, result.queueLatencies, int(result.admitted))
+			require.Len(t, result.lockLatencies, int(result.admitted))
+			require.Len(t, result.requestLatencies, int(result.admitted))
+			require.Len(t, result.httpLatencies, int(result.attempts))
+			if slow {
+				require.Positive(t, result.backpressured)
+			} else {
+				require.Zero(t, result.backpressured)
+			}
+		})
 	}
 }
 
@@ -837,7 +1711,7 @@ func TestDialRepositoryCapacityWatchRetriesTransientHandshake(t *testing.T) {
 	require.NoError(t, conn.Close())
 }
 
-func dialRepositoryCapacityWatchSelection(endpoint string, cfg repositoryCapacityConfig, cursor, selection string) (*websocket.Conn, error) {
+func dialRepositoryCapacityWatchSelection(endpoint string, cfg repositoryCapacityConfig, cursor, selection string, selectors ...map[string]any) (*websocket.Conn, error) {
 	wsURL := strings.Replace(strings.TrimSuffix(endpoint, "/"), "http", "ws", 1) + "/graphql"
 	header := http.Header{"Authorization": []string{"Bearer " + cfg.token}}
 	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}, HandshakeTimeout: 10 * time.Second}
@@ -854,8 +1728,12 @@ func dialRepositoryCapacityWatchSelection(endpoint string, cfg repositoryCapacit
 		conn.Close()
 		return nil, fmt.Errorf("repository watch connection acknowledgement: %v %v", ack, err)
 	}
-	query := fmt.Sprintf(`subscription($namespace: String!, $cursor: String) { watchRepositories(namespace: $namespace, resourceVersion: $cursor) { %s } }`, selection)
-	err = conn.WriteJSON(map[string]any{"id": "repository-capacity", "type": "subscribe", "payload": map[string]any{"query": query, "variables": map[string]any{"namespace": cfg.namespace, "cursor": cursor}}})
+	var selector map[string]any
+	if len(selectors) != 0 {
+		selector = selectors[0]
+	}
+	query := fmt.Sprintf(`subscription($namespace: String!, $cursor: String, $selector: LabelSelectorInput) { watchRepositories(namespace: $namespace, resourceVersion: $cursor, selector: $selector) { %s } }`, selection)
+	err = conn.WriteJSON(map[string]any{"id": "repository-capacity", "type": "subscribe", "payload": map[string]any{"query": query, "variables": map[string]any{"namespace": cfg.namespace, "cursor": cursor, "selector": selector}}})
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -1347,14 +2225,20 @@ type secretCapacityPushBatch struct {
 }
 
 type secretCapacityPushResult struct {
-	gitAttempted, acknowledged         bool
-	files, bytes                       int
-	referenceLatencies                 []time.Duration
-	ackLatency                         time.Duration
-	resolutionLatency                  time.Duration
-	resolutionFailed, projectionFailed bool
-	projectionChecks                   int64
-	err                                error
+	gitAttempted, acknowledged                         bool
+	files, bytes                                       int
+	referenceLatencies                                 []time.Duration
+	ackLatency                                         time.Duration
+	resolutionLatency                                  time.Duration
+	resolutionFailed, projectionFailed                 bool
+	projectionChecks                                   int64
+	projectionErr                                      error
+	err                                                error
+	localGitLatency, gitHTTPLatency, projectionLatency time.Duration
+	projectionReadLatency                              time.Duration
+	projectionReadPeakLatency                          time.Duration
+	projectionPolls                                    int64
+	failureStage                                       string
 }
 
 type secretCapacityPushMeasurements struct {
@@ -1365,6 +2249,39 @@ type secretCapacityPushMeasurements struct {
 	pushLatencies, referenceLatencies                                                      []time.Duration
 	resolutionLatencies                                                                    []time.Duration
 	localHealthyFailures, projectionLoss, crossReplicaChecks, typedFiles                   int64
+	queueLatencies, localGitLatencies, gitHTTPLatencies, projectionLatencies               []time.Duration
+	projectionReadLatencies                                                                []time.Duration
+	projectionReadPeakLatencies                                                            []time.Duration
+	projectionPolls                                                                        int64
+	failureClasses                                                                         map[string]int64
+	clockMaximumDrift                                                                      time.Duration
+	timelines                                                                              []secretCapacityPushTimeline
+}
+
+const secretCapacityTimelineLimit = 2048
+
+type secretCapacityPushTimeline struct {
+	Sequence             int64         `json:"sequence"`
+	Burst                int           `json:"burst"`
+	Worker               int           `json:"worker"`
+	OfferedAt            time.Time     `json:"offeredAt"`
+	QueueWait            time.Duration `json:"queueWait"`
+	ACK                  time.Duration `json:"ack"`
+	WorkerOccupied       time.Duration `json:"workerOccupied"`
+	LocalGit             time.Duration `json:"localGit"`
+	GitHTTP              time.Duration `json:"gitHTTP"`
+	ProjectionVisibility time.Duration `json:"projectionVisibility"`
+	ProjectionRead       time.Duration `json:"projectionRead"`
+	ProjectionReadPeak   time.Duration `json:"projectionReadPeak"`
+	ProjectionPolls      int64         `json:"projectionPolls"`
+	Acknowledged         bool          `json:"acknowledged"`
+	ProjectionFailed     bool          `json:"projectionFailed"`
+}
+
+func (m *secretCapacityPushMeasurements) recordTimeline(row secretCapacityPushTimeline) {
+	if row.Sequence > 0 && row.Sequence <= secretCapacityTimelineLimit && len(m.timelines) < secretCapacityTimelineLimit {
+		m.timelines = append(m.timelines, row)
+	}
 }
 
 func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
@@ -1388,10 +2305,12 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
 	defer cancel()
 	queue := make(chan secretCapacityPushBatch, cfg.queueLimit)
 	type completion struct {
-		batch  secretCapacityPushBatch
-		result secretCapacityPushResult
-		at     time.Time
-		active int
+		batch     secretCapacityPushBatch
+		result    secretCapacityPushResult
+		at        time.Time
+		active    int
+		worker    int
+		queueWait time.Duration
 	}
 	results := make(chan completion, cfg.workers)
 	var workers sync.WaitGroup
@@ -1402,6 +2321,7 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
 		go func(worker int) {
 			defer workers.Done()
 			for batch := range queue {
+				queueWait := time.Since(batch.offeredAt)
 				activity.Lock()
 				active++
 				concurrency := active
@@ -1411,20 +2331,65 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
 				activity.Lock()
 				active--
 				activity.Unlock()
-				results <- completion{batch, result, at, concurrency}
+				results <- completion{batch: batch, result: result, at: at, active: concurrency, worker: worker, queueWait: queueWait}
 			}
 		}(worker)
 	}
 	// Only the collector writes completed-operation observations. Schedule
 	// observations below are merged after both sides have stopped.
 	var completed secretCapacityPushMeasurements
+	completed.timelines = make([]secretCapacityPushTimeline, 0, min(secretCapacityTimelineLimit, int(sustainedCount)+burstCount*cfg.burstSize))
+	completed.failureClasses = map[string]int64{}
 	burstCompleted := make([]time.Time, burstCount)
 	collected := make(chan struct{})
 	go func() {
 		defer close(collected)
 		for item := range results {
 			r := item.result
+			completed.recordTimeline(secretCapacityPushTimeline{
+				Sequence: item.batch.sequence, Burst: item.batch.burst, Worker: item.worker,
+				OfferedAt: item.batch.offeredAt.UTC(), QueueWait: item.queueWait, ACK: r.ackLatency,
+				WorkerOccupied: item.at.Sub(item.batch.offeredAt) - item.queueWait,
+				LocalGit:       r.localGitLatency, GitHTTP: r.gitHTTPLatency,
+				ProjectionVisibility: r.projectionLatency, ProjectionRead: r.projectionReadLatency,
+				ProjectionReadPeak: r.projectionReadPeakLatency, ProjectionPolls: r.projectionPolls,
+				Acknowledged: r.acknowledged, ProjectionFailed: r.projectionFailed,
+			})
 			completed.completed++
+			completed.queueLatencies = append(completed.queueLatencies, item.queueWait)
+			if r.localGitLatency > 0 {
+				completed.localGitLatencies = append(completed.localGitLatencies, r.localGitLatency)
+			}
+			if r.gitHTTPLatency > 0 {
+				completed.gitHTTPLatencies = append(completed.gitHTTPLatencies, r.gitHTTPLatency)
+			}
+			if r.projectionLatency > 0 {
+				completed.projectionLatencies = append(completed.projectionLatencies, r.projectionLatency)
+			}
+			if r.projectionReadLatency > 0 {
+				completed.projectionReadLatencies = append(completed.projectionReadLatencies, r.projectionReadLatency)
+			}
+			if r.projectionReadPeakLatency > 0 {
+				completed.projectionReadPeakLatencies = append(completed.projectionReadPeakLatencies, r.projectionReadPeakLatency)
+			}
+			completed.projectionPolls += r.projectionPolls
+			if r.err != nil || !r.acknowledged {
+				stage := r.failureStage
+				if stage != "local_git" && stage != "git_http" {
+					stage = "unclassified"
+				}
+				completed.failureClasses[stage+"/"+secretCapacityFailureClass(r.err)]++
+			}
+			if r.projectionFailed {
+				class := secretCapacityFailureClass(r.projectionErr)
+				if class == "unclassified" {
+					class = "verification"
+				}
+				completed.failureClasses["projection/"+class]++
+			}
+			if r.resolutionFailed {
+				completed.failureClasses["credential_resolution/provider"]++
+			}
 			completed.workersPeak = max(completed.workersPeak, item.active)
 			completed.maxFiles = max(completed.maxFiles, r.files)
 			completed.maxBytes = max(completed.maxBytes, r.bytes)
@@ -1459,6 +2424,13 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
 		}
 	}()
 	start := time.Now()
+	observeClock := func(now time.Time) {
+		drift := now.Round(0).Sub(start.Round(0)) - now.Sub(start)
+		if drift < 0 {
+			drift = -drift
+		}
+		measured.clockMaximumDrift = max(measured.clockMaximumDrift, drift)
+	}
 	var sequence, sustained, burstOffer int64
 	burstLast := make([]time.Time, burstCount)
 	offer := func(at time.Duration, burst int) bool {
@@ -1470,6 +2442,7 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
 		case <-timer.C:
 		}
 		now := time.Now()
+		observeClock(now)
 		sequence++
 		if now.Sub(start.Add(at)) > cfg.interval {
 			measured.missedSchedules++
@@ -1529,12 +2502,19 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
 	drainTimer.Stop()
 	close(results)
 	<-collected
+	observeClock(time.Now())
 	measured.completed, measured.gitPushes, measured.acknowledged, measured.failed =
 		completed.completed, completed.gitPushes, completed.acknowledged, completed.failed
 	measured.workersPeak, measured.maxFiles, measured.maxBytes = completed.workersPeak, completed.maxFiles, completed.maxBytes
 	measured.pushLatencies, measured.referenceLatencies = completed.pushLatencies, completed.referenceLatencies
 	measured.resolutionLatencies, measured.localHealthyFailures = completed.resolutionLatencies, completed.localHealthyFailures
 	measured.projectionLoss, measured.crossReplicaChecks, measured.typedFiles = completed.projectionLoss, completed.crossReplicaChecks, completed.typedFiles
+	measured.queueLatencies, measured.localGitLatencies = completed.queueLatencies, completed.localGitLatencies
+	measured.gitHTTPLatencies, measured.projectionLatencies = completed.gitHTTPLatencies, completed.projectionLatencies
+	measured.projectionReadLatencies, measured.projectionPolls = completed.projectionReadLatencies, completed.projectionPolls
+	measured.projectionReadPeakLatencies = completed.projectionReadPeakLatencies
+	measured.failureClasses = completed.failureClasses
+	measured.timelines = completed.timelines
 	slowBurst := false
 	for i := range measured.bursts {
 		if !burstCompleted[i].IsZero() {
@@ -1550,7 +2530,8 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
 	unhealthyResolution := len(measured.resolutionLatencies) > 0 &&
 		float64(measured.localHealthyFailures)/float64(len(measured.resolutionLatencies)) >= .001
 	if measured.dropped > 0 || unhealthy || unhealthyResolution || measured.projectionLoss > 0 ||
-		measured.gitPushes != measured.completed || measured.missedSchedules > 0 || slowBurst || workCtx.Err() != nil {
+		measured.gitPushes != measured.completed || measured.missedSchedules > 0 || slowBurst || workCtx.Err() != nil ||
+		measured.clockMaximumDrift > time.Second {
 		return measured, errors.New("secret capacity: dropped, failed, late or undrained push workload")
 	}
 	return measured, nil
@@ -1571,6 +2552,7 @@ func secretCapacityFileName(runID string, file int) string {
 type secretCapacityGitWorker struct {
 	directory, namespace, runID, token string
 	files                              []int
+	tracked                            bool
 }
 
 func newSecretCapacityGitWorker(ctx context.Context, directory, remote, namespace, runID, token string, worker int) (*secretCapacityGitWorker, error) {
@@ -1593,17 +2575,27 @@ func newSecretCapacityGitWorker(ctx context.Context, directory, remote, namespac
 			return nil, err
 		}
 	}
-	return &secretCapacityGitWorker{directory, namespace, runID, token, secretCapacityWorkerFiles(worker)}, nil
+	return &secretCapacityGitWorker{
+		directory: directory, namespace: namespace, runID: runID, token: token,
+		files: secretCapacityWorkerFiles(worker),
+	}, nil
 }
 
-func (worker *secretCapacityGitWorker) push(ctx context.Context, batch secretCapacityPushBatch) secretCapacityPushResult {
-	var result secretCapacityPushResult
+func (worker *secretCapacityGitWorker) push(ctx context.Context, batch secretCapacityPushBatch) (result secretCapacityPushResult) {
+	localStarted := time.Now()
+	result.failureStage = "local_git"
+	defer func() {
+		if !result.gitAttempted {
+			result.localGitLatency = time.Since(localStarted)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := os.MkdirAll(filepath.Join(worker.directory, "files"), 0700); err != nil {
 		result.err = errors.New("secret capacity: cannot create File directory")
 		return result
 	}
+	paths := make([]string, 0, len(worker.files))
 	for _, file := range worker.files {
 		ref := secretmaterial.CredentialsRef{
 			Kind: "CredentialsRef", Type: "aws-access-key/v1",
@@ -1617,6 +2609,7 @@ func (worker *secretCapacityGitWorker) push(ctx context.Context, batch secretCap
 			return result
 		}
 		name := secretCapacityFileName(worker.runID, file)
+		paths = append(paths, filepath.Join("files", name+".md"))
 		data := []byte(fmt.Sprintf(`---
 apiVersion: storage.gitstore.dev/v1beta1
 kind: File
@@ -1653,21 +2646,28 @@ Capacity metadata only; no payload operation is requested.
 			return result
 		}
 	}
-	for _, args := range [][]string{
-		{"add", "--", "files"},
-		{"commit", "--quiet", "-m", fmt.Sprintf("capacity File batch %d", batch.sequence)},
-	} {
-		if _, err := secretCapacityGit(ctx, worker.directory, "", args...); err != nil {
+	if !worker.tracked {
+		if _, err := secretCapacityGit(ctx, worker.directory, "", append([]string{"add", "--"}, paths...)...); err != nil {
 			result.err = err
 			return result
 		}
 	}
+	args := append([]string{"commit", "--quiet", "--only", "-m", fmt.Sprintf("capacity File batch %d", batch.sequence), "--"}, paths...)
+	if _, err := secretCapacityGit(ctx, worker.directory, "", args...); err != nil {
+		result.err = err
+		return result
+	}
+	worker.tracked = true
 	result.gitAttempted = true
+	result.localGitLatency = time.Since(localStarted)
+	result.failureStage = "git_http"
 	start := batch.offeredAt
 	if start.IsZero() {
 		start = time.Now()
 	}
+	httpStarted := time.Now()
 	_, result.err = secretCapacityGit(ctx, worker.directory, worker.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+	result.gitHTTPLatency = time.Since(httpStarted)
 	result.ackLatency = time.Since(start)
 	result.acknowledged = result.err == nil
 	return result
@@ -1676,11 +2676,16 @@ Capacity metadata only; no payload operation is requested.
 type secretCapacityGitOutput struct {
 	buffer   bytes.Buffer
 	overflow bool
+	limit    int
 }
 
 func (output *secretCapacityGitOutput) Write(data []byte) (int, error) {
 	size := len(data)
-	remaining := 128*1024 - output.buffer.Len()
+	limit := output.limit
+	if limit == 0 {
+		limit = 128 * 1024
+	}
+	remaining := limit - output.buffer.Len()
 	if size > remaining {
 		output.overflow = true
 		data = data[:remaining]
@@ -1689,11 +2694,84 @@ func (output *secretCapacityGitOutput) Write(data []byte) (int, error) {
 	return size, nil
 }
 
+type secretCapacityGitError struct {
+	class string
+	cause error
+}
+
+func (err *secretCapacityGitError) Error() string {
+	return "secret capacity: Git command failed (" + err.class + ")"
+}
+
+func (err *secretCapacityGitError) Unwrap() error { return err.cause }
+
+func secretCapacityFailureClass(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "deadline"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "cancelled"
+	}
+	var gitErr *secretCapacityGitError
+	if errors.As(err, &gitErr) {
+		return gitErr.class
+	}
+	var statusErr *capacityHTTPStatusError
+	if errors.As(err, &statusErr) {
+		switch statusErr.status {
+		case http.StatusTooManyRequests:
+			return "quota"
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return "authentication"
+		default:
+			return "transport"
+		}
+	}
+	return "unclassified"
+}
+
+func classifySecretCapacityGitFailure(output []byte, overflow bool) string {
+	if overflow {
+		return "output_limit"
+	}
+	text := strings.ToLower(string(output))
+	for _, classification := range []struct {
+		class   string
+		markers []string
+	}{
+		{"non_fast_forward", []string{"non-fast-forward", "(fetch first)"}},
+		{"quota", []string{"returned error: 429", "http 429", "quota exceeded", "rate limit exceeded"}},
+		{"authentication", []string{"authentication failed", "returned error: 401", "returned error: 403", "http 401", "http 403"}},
+		{"rejection", []string{"[remote rejected]", "pre-receive hook declined"}},
+		{"transport", []string{"could not resolve host", "failed to connect", "connection reset", "rpc failed", "returned error: 502", "returned error: 503", "returned error: 504"}},
+	} {
+		for _, marker := range classification.markers {
+			if strings.Contains(text, marker) {
+				return classification.class
+			}
+		}
+	}
+	return "command_failure"
+}
+
 func secretCapacityGit(ctx context.Context, directory, token string, args ...string) ([]byte, error) {
+	return secretCapacityGitInspect(ctx, directory, token, nil, args...)
+}
+
+func secretCapacityGitInspect(ctx context.Context, directory, token string, inspect func([]byte), args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = directory
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	command.WaitDelay = time.Second
 	for _, variable := range os.Environ() {
 		if !strings.HasPrefix(variable, "GIT_") {
 			command.Env = append(command.Env, variable)
@@ -1712,8 +2790,11 @@ func secretCapacityGit(ctx context.Context, directory, token string, args ...str
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
+	if inspect != nil && !output.overflow {
+		inspect(output.buffer.Bytes())
+	}
 	if err != nil || output.overflow {
-		return nil, errors.New("secret capacity: Git command failed or exceeded output bounds")
+		return nil, &secretCapacityGitError{class: classifySecretCapacityGitFailure(output.buffer.Bytes(), output.overflow), cause: err}
 	}
 	return output.buffer.Bytes(), nil
 }
@@ -1756,6 +2837,26 @@ type secretCapacityFileProjection struct {
 const secretCapacityFileSelection = `id metadata { name namespace annotations }
 	spec { contentType type source { type uri credentialsRef { kind type secretRef { kind name key namespace } } } }`
 
+var errSecretCapacityFilePending = errors.New("secret capacity: seeded File projection not yet visible")
+
+func secretCapacityWaitForFileIDs(ctx context.Context, endpoint, token, namespace, runID string) (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		ids, err := secretCapacityReadFileIDs(ctx, endpoint, token, namespace, runID)
+		if !errors.Is(err, errSecretCapacityFilePending) {
+			return ids, err
+		}
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("secret capacity: seeded File visibility deadline: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
 func secretCapacityReadFileIDs(ctx context.Context, endpoint, token, namespace, runID string) (map[string]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -1778,9 +2879,12 @@ func secretCapacityReadFileIDs(ctx context.Context, endpoint, token, namespace, 
 			return nil, fmt.Errorf("secret capacity: File pool lookup batch %d: %w", offset/10, err)
 		}
 		for index := range 10 {
-			file := data[fmt.Sprintf("file%d", index)]
+			file, exists := data[fmt.Sprintf("file%d", index)]
+			if !exists {
+				return nil, errors.New("secret capacity: File lookup omitted a requested response field")
+			}
 			if file == nil {
-				return nil, fmt.Errorf("secret capacity: File pool lookup missing projection at index %d", offset+index)
+				return nil, fmt.Errorf("%w at index %d", errSecretCapacityFilePending, offset+index)
 			}
 			name := secretCapacityFileName(runID, offset+index)
 			if err := validateSecretCapacityFile(*file, namespace, name, 0); err != nil {
@@ -1892,6 +2996,9 @@ func secretCapacityVerifyFileBatch(ctx context.Context, client *http.Client, end
 			err := secretCapacityGraphQL(ctx, client, endpoint, token,
 				`query($ids:[ID!]!) { nodes(ids:$ids) { ... on File { `+secretCapacityFileSelection+` } } }`,
 				map[string]any{"ids": idsForBatch}, &data)
+			if err != nil {
+				return err
+			}
 			valid := err == nil && len(data.Nodes) == len(worker.files)
 			if valid {
 				for i, file := range data.Nodes {
@@ -2171,9 +3278,9 @@ func prepareSecretCapacityFileWorkload(t *testing.T, cfg repositoryCapacityConfi
 		require.True(t, seed.acknowledged)
 		workload.workers = append(workload.workers, worker)
 	}
-	workload.ids, err = secretCapacityReadFileIDs(t.Context(), cfg.apiA, cfg.token, cfg.namespace, runID)
+	workload.ids, err = secretCapacityWaitForFileIDs(t.Context(), cfg.apiA, cfg.token, cfg.namespace, runID)
 	require.NoError(t, err)
-	peerIDs, err := secretCapacityReadFileIDs(t.Context(), cfg.apiB, cfg.token, cfg.namespace, runID)
+	peerIDs, err := secretCapacityWaitForFileIDs(t.Context(), cfg.apiB, cfg.token, cfg.namespace, runID)
 	require.NoError(t, err)
 	require.Equal(t, workload.ids, peerIDs, "both APIs must project identical File identities before load")
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -2193,11 +3300,198 @@ type secretCapacityFileLoadResult struct {
 	err          error
 }
 
+type secretCapacityProjectionRequest struct {
+	ctx    context.Context
+	worker *secretCapacityGitWorker
+	batch  secretCapacityPushBatch
+	reply  chan error
+	timing *secretCapacityProjectionTiming
+}
+
+type secretCapacityProjectionTiming struct {
+	readNanos atomic.Int64
+	peakNanos atomic.Int64
+	polls     atomic.Int64
+}
+
+func runSecretCapacityProjectionVerifier(ctx context.Context, client *http.Client, endpoints []string, token string,
+	ids map[string]string, requests <-chan secretCapacityProjectionRequest,
+) {
+	pending := make([]secretCapacityProjectionRequest, 0, 32)
+	finish := func(err error) {
+		for _, request := range pending {
+			request.reply <- err
+		}
+		pending = pending[:0]
+	}
+	enqueue := func(request secretCapacityProjectionRequest) {
+		if err := request.ctx.Err(); err != nil {
+			request.reply <- err
+			return
+		}
+		if request.worker == nil || len(request.worker.files) == 0 {
+			request.reply <- errors.New("secret capacity: projection verification requires a nonempty File batch")
+			return
+		}
+		if len(pending) == 32 {
+			request.reply <- errors.New("secret capacity: projection verification queue exhausted")
+			return
+		}
+		pending = append(pending, request)
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			finish(ctx.Err())
+			return
+		case request, open := <-requests:
+			if !open {
+				finish(errors.New("secret capacity: projection verification request channel closed"))
+				return
+			}
+			enqueue(request)
+		case <-ticker.C:
+			active := pending[:0]
+			for _, request := range pending {
+				if err := request.ctx.Err(); err != nil {
+					request.reply <- err
+				} else {
+					active = append(active, request)
+				}
+			}
+			pending = active
+		drain:
+			for range 32 {
+				select {
+				case request, open := <-requests:
+					if !open {
+						finish(errors.New("secret capacity: projection verification request channel closed"))
+						return
+					}
+					enqueue(request)
+				default:
+					break drain
+				}
+			}
+			if len(pending) == 0 {
+				continue
+			}
+			if len(endpoints) != 2 || endpoints[0] == endpoints[1] || token == "" {
+				finish(errors.New("secret capacity: File verification requires two API endpoints and authorized credentials"))
+				continue
+			}
+			selected := make([]string, 0, 100)
+			seen := make(map[string]bool)
+			var selectionErr error
+			for _, request := range pending {
+				for _, file := range request.worker.files {
+					id := ids[secretCapacityFileName(request.worker.runID, file)]
+					if id == "" {
+						selectionErr = errors.New("secret capacity: File ID is missing from the established pool")
+					} else if !seen[id] {
+						seen[id] = true
+						selected = append(selected, id)
+					}
+				}
+			}
+			if selectionErr != nil {
+				finish(selectionErr)
+				continue
+			}
+			if len(selected) == 0 || len(selected) > 250 {
+				finish(errors.New("secret capacity: projection verification batch exceeds ID bounds"))
+				continue
+			}
+			replicas := make([]map[string]*secretCapacityFileProjection, 2)
+			readErrors := make([]error, 2)
+			readStarted := time.Now()
+			var reads sync.WaitGroup
+			for index, endpoint := range endpoints {
+				reads.Go(func() {
+					var data struct {
+						Nodes []*secretCapacityFileProjection `json:"nodes"`
+					}
+					readErrors[index] = secretCapacityGraphQL(ctx, client, endpoint, token,
+						`query($ids:[ID!]!) { nodes(ids:$ids) { ... on File { `+secretCapacityFileSelection+` } } }`,
+						map[string]any{"ids": selected}, &data)
+					if readErrors[index] != nil {
+						return
+					}
+					if len(data.Nodes) != len(selected) {
+						readErrors[index] = errors.New("secret capacity: projection verification response has incorrect cardinality")
+						return
+					}
+					projected := make(map[string]*secretCapacityFileProjection, len(selected))
+					for i, node := range data.Nodes {
+						if node != nil {
+							if node.ID != selected[i] {
+								readErrors[index] = errors.New("secret capacity: projection verification response changed File identity")
+								return
+							}
+							projected[node.ID] = node
+						}
+					}
+					replicas[index] = projected
+				})
+			}
+			reads.Wait()
+			readElapsed := time.Since(readStarted)
+			for _, request := range pending {
+				if request.timing != nil {
+					request.timing.readNanos.Add(int64(readElapsed))
+					request.timing.peakNanos.Store(max(request.timing.peakNanos.Load(), int64(readElapsed)))
+					request.timing.polls.Add(1)
+				}
+			}
+			if readErr := errors.Join(readErrors...); readErr != nil {
+				finish(readErr)
+				continue
+			}
+			active = pending[:0]
+			for _, request := range pending {
+				if err := request.ctx.Err(); err != nil {
+					request.reply <- err
+					continue
+				}
+				verified := true
+				for _, file := range request.worker.files {
+					name := secretCapacityFileName(request.worker.runID, file)
+					for _, replica := range replicas {
+						node := replica[ids[name]]
+						if node == nil || validateSecretCapacityFile(*node, request.worker.namespace, name, request.batch.sequence) != nil {
+							verified = false
+						}
+					}
+				}
+				if verified {
+					request.reply <- nil
+				} else {
+					active = append(active, request)
+				}
+			}
+			pending = active
+		}
+	}
+}
+
 func (workload *secretCapacityFileWorkload) run(ctx context.Context, duration time.Duration) secretCapacityFileLoadResult {
 	client := &http.Client{Timeout: 5 * time.Second}
 	defer client.CloseIdleConnections()
 	cfg := secretCapacityProductionLoadConfig()
 	cfg.duration = duration
+	verificationCtx, stopVerification := context.WithCancel(ctx)
+	requests := make(chan secretCapacityProjectionRequest, cfg.workers)
+	verificationDone := make(chan struct{})
+	go func() {
+		defer close(verificationDone)
+		runSecretCapacityProjectionVerifier(verificationCtx, client, workload.endpoints, workload.token, workload.ids, requests)
+	}()
+	defer func() {
+		stopVerification()
+		<-verificationDone
+	}()
 	measurements, err := runSecretCapacityPushes(ctx, cfg, func(ctx context.Context, index int, batch secretCapacityPushBatch) secretCapacityPushResult {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -2206,8 +3500,26 @@ func (workload *secretCapacityFileWorkload) run(ctx context.Context, duration ti
 		result := worker.push(ctx, batch)
 		result.resolutionLatency, result.resolutionFailed = resolution, resolutionErr != nil
 		if result.acknowledged {
-			projectionErr := secretCapacityVerifyFileBatch(ctx, client, workload.endpoints, workload.token, worker, workload.ids, batch)
+			projectionStarted := time.Now()
+			timing := &secretCapacityProjectionTiming{}
+			request := secretCapacityProjectionRequest{ctx: ctx, worker: worker, batch: batch, reply: make(chan error, 1), timing: timing}
+			var projectionErr error
+			select {
+			case requests <- request:
+				select {
+				case projectionErr = <-request.reply:
+				case <-ctx.Done():
+					projectionErr = ctx.Err()
+				}
+			case <-ctx.Done():
+				projectionErr = ctx.Err()
+			}
+			result.projectionLatency = time.Since(projectionStarted)
+			result.projectionReadLatency = time.Duration(timing.readNanos.Load())
+			result.projectionReadPeakLatency = time.Duration(timing.peakNanos.Load())
+			result.projectionPolls = timing.polls.Load()
 			result.projectionFailed = projectionErr != nil
+			result.projectionErr = projectionErr
 			if projectionErr == nil {
 				result.projectionChecks = int64(len(workload.endpoints))
 			}
@@ -2328,6 +3640,10 @@ func writeSecretCapacityFileObservations(directory, runID string, mode capacityM
 		return errors.New("secret capacity: component observations require an absolute evidence directory and run ID")
 	}
 	m := result.measurements
+	totalOffered := m.sustainedOffered
+	for _, burst := range m.bursts {
+		totalOffered += burst.Offered
+	}
 	latency := func(values []time.Duration) secretCapacityLatency {
 		if len(values) == 0 {
 			return secretCapacityLatency{}
@@ -2341,51 +3657,74 @@ func writeSecretCapacityFileObservations(directory, runID string, mode capacityM
 		GitPushes: m.gitPushes, Acknowledged: m.acknowledged, Failed: m.failed, Dropped: m.dropped,
 		TypedFiles: m.typedFiles, QueuePeak: m.queuePeak, WorkersPeak: m.workersPeak,
 		MaxFiles: m.maxFiles, MaxBytes: m.maxBytes, ProjectionLoss: m.projectionLoss,
-		CrossReplicaChecks: m.crossReplicaChecks, LocalHealthyFailures: m.localHealthyFailures,
+		CrossReplicaChecks: m.crossReplicaChecks, LocalHealthyFailures: m.localHealthyFailures, ProjectionPolls: m.projectionPolls,
 		Bursts: m.bursts, Reference: latency(m.referenceLatencies), Resolution: latency(m.resolutionLatencies), Push: latency(m.pushLatencies),
 		RuntimeCallers: proof.callers, ProviderPeak: proof.peak, ProviderCalls: proof.providerCalls, AcceptedCalls: proof.acceptedCalls,
 		SaturationDenied: proof.saturationDenied, DeadlineDenied: proof.deadlineDenied, NamespaceDenied: proof.namespaceDenied,
 		BindingDenied: proof.bindingDenied, UnsupportedDenied: proof.unsupportedDenied,
+		Stages: map[string]secretCapacityLatency{
+			"queue_wait": latency(m.queueLatencies), "local_git": latency(m.localGitLatencies),
+			"git_http": latency(m.gitHTTPLatencies), "projection_visibility": latency(m.projectionLatencies),
+			"projection_read":      latency(m.projectionReadLatencies),
+			"projection_read_peak": latency(m.projectionReadPeakLatencies),
+		},
+		FailureClasses:   m.failureClasses,
+		ScheduledOffered: totalOffered, QueueAdmitted: totalOffered - m.dropped, ExecutionAttempts: m.completed,
+		ClockMaximumDrift: m.clockMaximumDrift,
+		Timelines:         m.timelines,
+		TimelineLimit:     secretCapacityTimelineLimit,
+	}
+	if observations.FailureClasses == nil {
+		observations.FailureClasses = map[string]int64{}
 	}
 	return writeSecretCapacityComponent(directory, "file-workload.json", observations)
 }
 
 type secretCapacityFileObservations struct {
-	SchemaVersion        int                   `json:"schemaVersion"`
-	RunID                string                `json:"runID"`
-	Component            string                `json:"component"`
-	Mode                 capacityMode          `json:"mode"`
-	WorkloadCompleted    bool                  `json:"workloadCompleted"`
-	NominalDuration      time.Duration         `json:"nominalDuration"`
-	OfferedDuration      time.Duration         `json:"offeredDuration"`
-	SustainedOffered     int64                 `json:"sustainedOffered"`
-	MissedSchedules      int64                 `json:"missedSchedules"`
-	Completed            int64                 `json:"completed"`
-	GitPushes            int64                 `json:"gitPushes"`
-	Acknowledged         int64                 `json:"acknowledged"`
-	Failed               int64                 `json:"failed"`
-	Dropped              int64                 `json:"dropped"`
-	TypedFiles           int64                 `json:"typedFiles"`
-	QueuePeak            int                   `json:"queuePeak"`
-	WorkersPeak          int                   `json:"workersPeak"`
-	MaxFiles             int                   `json:"maxFilesPerPush"`
-	MaxBytes             int                   `json:"maxBytesPerPush"`
-	ProjectionLoss       int64                 `json:"projectionLoss"`
-	CrossReplicaChecks   int64                 `json:"crossReplicaChecks"`
-	LocalHealthyFailures int64                 `json:"localHealthyFailures"`
-	Bursts               []secretCapacityBurst `json:"bursts"`
-	Reference            secretCapacityLatency `json:"reference"`
-	Resolution           secretCapacityLatency `json:"resolution"`
-	Push                 secretCapacityLatency `json:"push"`
-	RuntimeCallers       int                   `json:"runtimeCallers"`
-	ProviderPeak         int                   `json:"providerPeak"`
-	ProviderCalls        int64                 `json:"providerCalls"`
-	AcceptedCalls        int64                 `json:"acceptedCalls"`
-	SaturationDenied     int64                 `json:"saturationDenied"`
-	DeadlineDenied       int64                 `json:"deadlineDenied"`
-	NamespaceDenied      int64                 `json:"namespaceDenied"`
-	BindingDenied        int64                 `json:"bindingDenied"`
-	UnsupportedDenied    int64                 `json:"unsupportedDenied"`
+	Timelines            []secretCapacityPushTimeline     `json:"timelines"`
+	TimelineLimit        int                              `json:"timelineLimit"`
+	ClockMaximumDrift    time.Duration                    `json:"clockMaximumDrift"`
+	ScheduledOffered     int64                            `json:"scheduledOffered"`
+	QueueAdmitted        int64                            `json:"queueAdmitted"`
+	ExecutionAttempts    int64                            `json:"executionAttempts"`
+	Stages               map[string]secretCapacityLatency `json:"stages"`
+	FailureClasses       map[string]int64                 `json:"failureClasses"`
+	SchemaVersion        int                              `json:"schemaVersion"`
+	RunID                string                           `json:"runID"`
+	Component            string                           `json:"component"`
+	Mode                 capacityMode                     `json:"mode"`
+	WorkloadCompleted    bool                             `json:"workloadCompleted"`
+	NominalDuration      time.Duration                    `json:"nominalDuration"`
+	OfferedDuration      time.Duration                    `json:"offeredDuration"`
+	SustainedOffered     int64                            `json:"sustainedOffered"`
+	MissedSchedules      int64                            `json:"missedSchedules"`
+	Completed            int64                            `json:"completed"`
+	GitPushes            int64                            `json:"gitPushes"`
+	Acknowledged         int64                            `json:"acknowledged"`
+	Failed               int64                            `json:"failed"`
+	Dropped              int64                            `json:"dropped"`
+	TypedFiles           int64                            `json:"typedFiles"`
+	QueuePeak            int                              `json:"queuePeak"`
+	WorkersPeak          int                              `json:"workersPeak"`
+	MaxFiles             int                              `json:"maxFilesPerPush"`
+	MaxBytes             int                              `json:"maxBytesPerPush"`
+	ProjectionLoss       int64                            `json:"projectionLoss"`
+	ProjectionPolls      int64                            `json:"projectionPolls"`
+	CrossReplicaChecks   int64                            `json:"crossReplicaChecks"`
+	LocalHealthyFailures int64                            `json:"localHealthyFailures"`
+	Bursts               []secretCapacityBurst            `json:"bursts"`
+	Reference            secretCapacityLatency            `json:"reference"`
+	Resolution           secretCapacityLatency            `json:"resolution"`
+	Push                 secretCapacityLatency            `json:"push"`
+	RuntimeCallers       int                              `json:"runtimeCallers"`
+	ProviderPeak         int                              `json:"providerPeak"`
+	ProviderCalls        int64                            `json:"providerCalls"`
+	AcceptedCalls        int64                            `json:"acceptedCalls"`
+	SaturationDenied     int64                            `json:"saturationDenied"`
+	DeadlineDenied       int64                            `json:"deadlineDenied"`
+	NamespaceDenied      int64                            `json:"namespaceDenied"`
+	BindingDenied        int64                            `json:"bindingDenied"`
+	UnsupportedDenied    int64                            `json:"unsupportedDenied"`
 }
 
 func writeSecretCapacityComponent(directory, name string, observations any) error {
@@ -2735,9 +4074,8 @@ type secretCapacityLogs struct {
 }
 
 func (logs *secretCapacityLogs) capture(ctx context.Context, samples []secretCapacityResourceSnapshot) error {
-	names := []string{"gitstore-capacity-api-a", "gitstore-capacity-api-b",
-		"gitstore-capacity-controller-manager-a", "gitstore-capacity-controller-manager-b", "gitstore-capacity-git-service"}
-	if len(samples) != len(names) || logs.stopped {
+	services := []string{"api-a", "api-b", "controller-manager-a", "controller-manager-b", "capacity-git-service"}
+	if len(samples) != len(services) || logs.stopped {
 		return errors.New("secret capacity: invalid log capture scope")
 	}
 	for i, sample := range samples {
@@ -2748,8 +4086,13 @@ func (logs *secretCapacityLogs) capture(ctx context.Context, samples []secretCap
 			return errors.New("secret capacity: unexpected process incarnation in log capture")
 		}
 		commandCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		name, err := secretCapacityServiceContainer(commandCtx, os.Getenv("REPOSITORY_CAPACITY_PROJECT"), services[i])
+		if err != nil {
+			cancel()
+			return err
+		}
 		inspection, err := secretCapacityOwnedCommand(commandCtx, "docker", "inspect", "--format",
-			"{{.Id}} {{.State.StartedAt}} {{.State.Running}}", names[i])
+			"{{.Id}} {{.State.StartedAt}} {{.State.Running}}", name)
 		if err != nil {
 			cancel()
 			return err
@@ -2873,7 +4216,10 @@ func secretCapacityCPUSetSize(value string) (int, error) {
 func sampleSecretCapacityGit(ctx context.Context) (secretCapacityResourceSnapshot, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	const name = "gitstore-capacity-git-service"
+	name, err := secretCapacityServiceContainer(ctx, os.Getenv("REPOSITORY_CAPACITY_PROJECT"), "capacity-git-service")
+	if err != nil {
+		return secretCapacityResourceSnapshot{}, nil, err
+	}
 	before, err := secretCapacityOwnedCommand(ctx, "docker", "inspect", "--format",
 		"{{.Id}} {{.State.StartedAt}} {{.State.Running}}", name)
 	if err != nil {

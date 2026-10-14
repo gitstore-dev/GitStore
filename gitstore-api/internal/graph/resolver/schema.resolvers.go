@@ -48,19 +48,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 
 // Nodes is the resolver for the nodes field.
 func (r *queryResolver) Nodes(ctx context.Context, ids []string) ([]model.Node, error) {
-	nodes := make([]model.Node, len(ids))
-	for i, id := range ids {
-		kind, rawID, err := DecodeNodeID(id)
-		if err != nil {
-			continue
-		}
-		node, err := r.resolveNode(ctx, kind, rawID)
-		if err != nil {
-			return nil, err
-		}
-		nodes[i] = node
-	}
-	return nodes, nil
+	return r.resolveNodes(ctx, ids)
 }
 
 // WatchResources is the resolver for the watchResources field.

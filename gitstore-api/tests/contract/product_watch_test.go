@@ -112,9 +112,25 @@ func (g *stubGitReader) ListFiles(_ context.Context, _, _, _ string) ([]string, 
 func (g *stubGitReader) ReadFile(_ context.Context, _, _, _ string) ([]byte, error) {
 	return g.blob, nil
 }
+func (g *stubGitReader) ReadFiles(_ context.Context, _ string, paths []string, _ string) ([][]byte, error) {
+	results := make([][]byte, len(paths))
+	for i := range results {
+		results[i] = g.blob
+	}
+	return results, nil
+}
 
 func (g *stubGitReader) ResolveRef(_ context.Context, _, _ string) (string, error) {
 	return "", nil
+}
+
+func (g *stubGitReader) ReadFilePair(ctx context.Context, repositoryID string, paths []string, primaryCommit, secondaryCommit, refName string) ([][]byte, [][]byte, error) {
+	first, err := g.ReadFiles(ctx, repositoryID, paths, primaryCommit)
+	if err != nil {
+		return nil, nil, err
+	}
+	second, err := g.ReadFiles(ctx, repositoryID, paths, secondaryCommit)
+	return first, second, err
 }
 
 // treeStubGitReader serves a different file tree per commit ref, for
@@ -137,9 +153,25 @@ func (g *treeStubGitReader) ListFiles(_ context.Context, _, _, ref string) ([]st
 func (g *treeStubGitReader) ReadFile(_ context.Context, _, path, ref string) ([]byte, error) {
 	return g.trees[ref][path], nil
 }
+func (g *treeStubGitReader) ReadFiles(_ context.Context, _ string, paths []string, commitSHA string) ([][]byte, error) {
+	results := make([][]byte, len(paths))
+	for i, path := range paths {
+		results[i] = g.trees[commitSHA][path]
+	}
+	return results, nil
+}
 
 func (g *treeStubGitReader) ResolveRef(_ context.Context, _, _ string) (string, error) {
 	return *g.current, nil
+}
+
+func (g *treeStubGitReader) ReadFilePair(ctx context.Context, repositoryID string, paths []string, primaryCommit, secondaryCommit, refName string) ([][]byte, [][]byte, error) {
+	first, err := g.ReadFiles(ctx, repositoryID, paths, primaryCommit)
+	if err != nil {
+		return nil, nil, err
+	}
+	second, err := g.ReadFiles(ctx, repositoryID, paths, secondaryCommit)
+	return first, second, err
 }
 
 // T007: admitting a product with a categoryRef via the gRPC admission path

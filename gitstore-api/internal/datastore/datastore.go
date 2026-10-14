@@ -423,15 +423,26 @@ func ApplyCategoryTaxonomyStatusPatch(c *CategoryTaxonomy, patch CategoryTaxonom
 	return nil
 }
 
+const FileSnapshotBatchLimit = 250
+const FileNameSnapshotBatchLimit = 4
+
 // FileStore persists File resources.
 type FileStore interface {
 	// File operations
 	CreateFile(ctx context.Context, f *File) error
 	GetFile(ctx context.Context, uid string) (*File, error)
+	// GetFileSnapshots preserves input positions, including duplicates and nil
+	// for absent IDs. Infrastructure errors fail the entire bounded read.
+	GetFileSnapshots(ctx context.Context, uids []string) ([]*File, error)
+	// GetFileSnapshotsByName reads at most FileNameSnapshotBatchLimit names in
+	// one namespace, preserving positions, duplicates and nil for absent rows.
+	// Lookup projections never substitute for authoritative resource data.
+	GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*File, error)
 	GetFileByName(ctx context.Context, namespace, name string) (*File, error)
 	ListFiles(ctx context.Context, namespace string, page PageParams) (*PageResult[File], error)
 	// UpdateFile replaces a File only when expectedResourceVersion still
-	// matches the durable row, returning ErrConflict otherwise.
+	// matches the durable row and the replacement advances it exactly once.
+	// Invalid, stale, skipped and same-version replacements return ErrConflict.
 	UpdateFile(ctx context.Context, f *File, expectedResourceVersion string) error
 	DeleteFile(ctx context.Context, uid string) error
 	DeleteFileWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
@@ -641,6 +652,22 @@ type ServiceAccountStore interface {
 // Closer releases backend resources.
 type Closer interface {
 	Close() error
+}
+
+// CatalogMutationBatcher reuses a parent fence across a bounded batch.
+// Only child creates and updates may share it, not parent lifecycle or deletion.
+// The callback must finish all mutations before returning. This is not an
+// atomic transaction: individual resource CAS and projection errors still apply.
+type CatalogMutationBatcher interface {
+	WithCatalogMutationBatch(context.Context, string, func(context.Context) error) error
+}
+
+// FileMutationBatcher may coalesce at most four callbacks, each containing at
+// most four File creates/updates, under one parent fence. Each callback retains
+// its own context and result. Repositories and File names must be disjoint
+// across callbacks; lifecycle writes are barriers.
+type FileMutationBatcher interface {
+	WithFileMutationBatch(ctx context.Context, namespace, repositoryID string, names []string, operation func(context.Context) error) error
 }
 
 // Datastore is the aggregate persistence contract used only for backend

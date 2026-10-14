@@ -105,25 +105,30 @@ type Reconciler struct {
 	lastStorageVerification storageVerificationCache
 }
 
-// Eviction only causes an earlier storage recheck; it never trusts an
+// Verification is UID-bound. Eviction only causes an earlier recheck; it never trusts an
 // unverified repository or persists a verification across process replacement.
 type storageVerificationCache struct {
 	mu      sync.Mutex
-	entries map[types.WorkItemKey]time.Time
+	entries map[types.WorkItemKey]storageVerification
 }
 
-func (c *storageVerificationCache) Load(key types.WorkItemKey) (time.Time, bool) {
+type storageVerification struct {
+	uid string
+	at  time.Time
+}
+
+func (c *storageVerificationCache) Load(key types.WorkItemKey, uid string) (time.Time, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	value, exists := c.entries[key]
-	return value, exists
+	return value.at, exists && value.uid == uid
 }
 
-func (c *storageVerificationCache) Store(key types.WorkItemKey, value time.Time) {
+func (c *storageVerificationCache) Store(key types.WorkItemKey, uid string, value time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.entries == nil {
-		c.entries = make(map[types.WorkItemKey]time.Time)
+		c.entries = make(map[types.WorkItemKey]storageVerification)
 	}
 	if _, exists := c.entries[key]; !exists && len(c.entries) >= 4096 {
 		for evicted := range c.entries {
@@ -131,7 +136,7 @@ func (c *storageVerificationCache) Store(key types.WorkItemKey, value time.Time)
 			break
 		}
 	}
-	c.entries[key] = value
+	c.entries[key] = storageVerification{uid: uid, at: value}
 }
 
 // NewReconciler returns a Repository reconciler.
@@ -174,7 +179,7 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 	var resolvedJSON json.RawMessage
 	var provisionErr error
 	switch {
-	case admitted && storageProvisionedCurrent(current) && !r.storageVerificationDue(key):
+	case admitted && storageProvisionedCurrent(current) && !r.storageVerificationDue(key, current.UID):
 		// Storage was already provisioned for this generation and verified
 		// recently: re-invoking EnsureStorage on every reconcile (including
 		// the one triggered by this reconciler's own prior status write)
@@ -187,7 +192,7 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 		resolved, err := r.storageClient.EnsureStorage(ctx, current.Namespace, current.Name)
 		provisionErr = err
 		if err == nil {
-			r.lastStorageVerification.Store(key, time.Now())
+			r.lastStorageVerification.Store(key, current.UID, time.Now())
 			resolvedJSON, err = json.Marshal(resolved)
 			if err != nil {
 				return types.ResultTransient(fmt.Errorf("repository: marshal resolved status: %w", err))
@@ -267,8 +272,8 @@ func storageProvisionedCurrent(current Repository) bool {
 // storageVerificationDue reports whether it has been long enough since this
 // process last actually called EnsureStorage for key that the cached
 // StorageProvisioned condition should no longer be trusted on its own.
-func (r *Reconciler) storageVerificationDue(key types.WorkItemKey) bool {
-	last, ok := r.lastStorageVerification.Load(key)
+func (r *Reconciler) storageVerificationDue(key types.WorkItemKey, uid string) bool {
+	last, ok := r.lastStorageVerification.Load(key, uid)
 	if !ok {
 		return true
 	}

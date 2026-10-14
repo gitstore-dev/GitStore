@@ -7,10 +7,14 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
+	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -38,11 +42,41 @@ func signedContext(ctx context.Context, secret, method string, request any) (con
 	return metadata.NewOutgoingContext(ctx, md), nil
 }
 func (c signedConn) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
-	ctx, err := signedContext(ctx, c.secret, method, args)
-	if err != nil {
-		return err
+	attempts := 1
+	switch method {
+	case gitv1.GitService_GetFile_FullMethodName, gitv1.GitService_GetFiles_FullMethodName, gitv1.GitService_ListFiles_FullMethodName,
+		gitv1.GitService_InfoRefs_FullMethodName, gitv1.GitService_ListTags_FullMethodName,
+		gitv1.GitService_GetLatestTag_FullMethodName:
+		attempts = 4
 	}
-	return c.ClientConnInterface.Invoke(ctx, method, args, reply, opts...)
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return status.FromContextError(err).Err()
+		}
+		if attempt > 0 {
+			message, ok := reply.(proto.Message)
+			if !ok {
+				return errors.New("protobuf RPC response required")
+			}
+			proto.Reset(message)
+		}
+		signed, err := signedContext(ctx, c.secret, method, args)
+		if err != nil {
+			return err
+		}
+		err = c.ClientConnInterface.Invoke(signed, method, args, reply, opts...)
+		if status.Code(err) != codes.Unavailable || attempt+1 == attempts {
+			return err
+		}
+		// A new logical read attempt must carry a new single-use nonce.
+		timer := time.NewTimer((25 * time.Millisecond) << attempt)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return status.FromContextError(ctx.Err()).Err()
+		case <-timer.C:
+		}
+	}
 }
 func (c signedConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	return &signedStream{ctx: ctx, conn: c, desc: desc, method: method, opts: opts}, nil

@@ -9,6 +9,8 @@ project="${2:?Compose project is required}"
 revision="${3:?Git revision is required}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export CAPACITY_GIT_REVISION="${revision}"
+export COMPOSE_PROJECT_NAME="${project}"
+export REPOSITORY_CAPACITY_PROJECT="${project}"
 export CONFIG_FILE="${CONFIG_FILE:-${repo_root}/config/config.toml}"
 export SCYLLA_CLUSTER_SMP="${SCYLLA_CLUSTER_SMP:-1}"
 export SCYLLA_CLUSTER_MEMORY_LIMIT="${SCYLLA_CLUSTER_MEMORY_LIMIT:-1536m}"
@@ -24,6 +26,7 @@ done
 
 # Remove and recreate only API B. A stop/start retains the container identity
 # and is therefore insufficient evidence for a rolling replacement.
+"${repo_root}/scripts/repository-capacity-stack.sh" verify-owned
 "${compose[@]}" stop api-b
 "${compose[@]}" rm -f api-b
 "${compose[@]}" up -d --no-deps api-b

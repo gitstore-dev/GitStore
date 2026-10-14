@@ -22,15 +22,20 @@ import (
 )
 
 type sequencerStore struct {
-	mu       sync.Mutex
-	names    []string
-	events   []datastore.ResourceWatchEvent
-	sequence uint64
+	mu        sync.Mutex
+	names     []string
+	events    []datastore.ResourceWatchEvent
+	sequence  uint64
+	failAfter int
+	appendErr error
 }
 
 func (s *sequencerStore) Append(_ context.Context, _ datastore.NamespaceWatchLease, event datastore.NamespaceWatchEvent, _ time.Duration) (datastore.NamespaceWatchEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.appendErr != nil && len(s.events) == s.failAfter {
+		return datastore.NamespaceWatchEvent{}, s.appendErr
+	}
 	s.sequence++
 	event.Sequence = s.sequence
 	s.names = append(s.names, event.Name)
@@ -180,6 +185,7 @@ func TestRetainUnpublishedCDCRequestsClearsDiscardedBackingSlots(t *testing.T) {
 		pending[index] = namespaceCDCSequenceRequest{
 			streamID:     fmt.Sprintf("stream-%d", index),
 			change:       watchjournal.Change{After: json.RawMessage(`{"retained":true}`)},
+			changes:      []watchjournal.Change{{After: json.RawMessage(`{"retained":"batch"}`)}},
 			markProgress: func(context.Context) error { return nil },
 		}
 	}
@@ -192,8 +198,84 @@ func TestRetainUnpublishedCDCRequestsClearsDiscardedBackingSlots(t *testing.T) {
 	for _, discarded := range backing[1:] {
 		require.Empty(t, discarded.streamID)
 		require.Nil(t, discarded.change.After)
+		require.Nil(t, discarded.changes)
 		require.Nil(t, discarded.markProgress)
 	}
+}
+
+func TestCatalogCDCRejectsMalformedOrUnboundedFramesBeforeProgress(t *testing.T) {
+	consumer := &catalogCDCConsumer{kind: "File"}
+	for _, change := range []scyllacdc.Change{
+		{PreImage: []*scyllacdc.ChangeRow{nil}},
+		{PostImage: []*scyllacdc.ChangeRow{{}}},
+		{PostImage: make([]*scyllacdc.ChangeRow, catalogCDCMaxRowsPerChange+1)},
+	} {
+		require.ErrorIs(t, consumer.Consume(t.Context(), change), datastore.ErrNamespaceWatchDiscontinuity)
+	}
+}
+
+func TestCatalogCDCSequencerPublishesWholeFrameBeforeCheckpoint(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.ResourceWatchLease{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"file-stream"})
+	require.NoError(t, sequencer.Register(ctx, "file-stream"))
+	checkpointed := make(chan struct{}, 1)
+	request := namespaceCDCSequenceRequest{
+		streamID: "file-stream", cdcTime: gocql.TimeUUID(),
+		markProgress: func(context.Context) error {
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			assert.Len(t, store.events, 4, "no source checkpoint may hide unpublished rows at the same CDC position")
+			checkpointed <- struct{}{}
+			return nil
+		},
+	}
+	for i := range 4 {
+		request.changes = append(request.changes, watchjournal.Change{
+			Kind: "File", Namespace: "shop", Name: fmt.Sprintf("file-%d", i),
+			DeduplicationKey: fmt.Sprintf("frame:file-%d", i),
+			After:            json.RawMessage(fmt.Sprintf(`{"UID":"uid-%d","Name":"file-%d","Labels":{"team":"catalog"}}`, i, i)),
+			At:               request.cdcTime.Time().UTC(),
+		})
+	}
+	require.NoError(t, sequencer.Submit(ctx, request))
+	require.NoError(t, sequencer.Unregister("file-stream"))
+	<-checkpointed
+	store.mu.Lock()
+	require.Equal(t, []string{"file-0", "file-1", "file-2", "file-3"}, store.names)
+	store.mu.Unlock()
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestCatalogCDCSequencerDoesNotCheckpointPartialFrame(t *testing.T) {
+	sentinel := errors.New("journal append failed after one frame row")
+	store := &sequencerStore{failAfter: 1, appendErr: sentinel}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.ResourceWatchLease{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"file-stream"})
+	require.NoError(t, sequencer.Register(ctx, "file-stream"))
+	checkpointed := false
+	request := sequenceTestRequest("file-stream", "frame", gocql.TimeUUID(), make(chan string, 1))
+	request.markProgress = func(context.Context) error { checkpointed = true; return nil }
+	for i := range 4 {
+		change := request.change
+		change.Kind, change.Name, change.DeduplicationKey = "File", fmt.Sprintf("file-%d", i), fmt.Sprintf("frame:%d", i)
+		request.changes = append(request.changes, change)
+	}
+	require.NoError(t, sequencer.Submit(ctx, request))
+	require.ErrorIs(t, <-done, sentinel)
+	require.False(t, checkpointed, "every unpublished frame row must remain replayable")
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	require.Equal(t, []string{"file-0"}, store.names)
 }
 
 func TestNamespaceCDCSequencerDoesNotCheckpointWhenFrontierPersistenceFails(t *testing.T) {
@@ -699,14 +781,16 @@ func TestNamespaceCDCDeletionSuppressesUncommittedCreateRollback(t *testing.T) {
 	assert.False(t, ready)
 }
 
-func TestNamespaceCDCMissingLegacyAdditionFailsClosed(t *testing.T) {
-	ready, err := namespaceCDCMissingAdditionReady(true)
-	require.ErrorContains(t, err, "legacy Namespace addition commit state is ambiguous")
-	assert.False(t, ready)
-
-	ready, err = namespaceCDCMissingAdditionReady(false)
-	require.NoError(t, err)
-	assert.False(t, ready)
+func TestNamespaceCDCRejectsMissingCommitMarkerBeforeProgress(t *testing.T) {
+	for _, change := range []scyllacdc.Change{
+		{PreImage: []*scyllacdc.ChangeRow{{}}},
+		{PostImage: []*scyllacdc.ChangeRow{{}}},
+	} {
+		// No sequencer or reporter: rejection must precede progress or publication.
+		err := (&namespaceCDCConsumer{}).Consume(context.Background(), change)
+		require.ErrorIs(t, err, datastore.ErrNamespaceWatchDiscontinuity)
+		require.ErrorContains(t, err, "boolean watch commit marker")
+	}
 }
 
 func TestNamespaceCDCCommitMarkerTransitions(t *testing.T) {
@@ -716,8 +800,8 @@ func TestNamespaceCDCCommitMarkerTransitions(t *testing.T) {
 		"the staged authoritative insert advances progress without publishing")
 	assert.Equal(t, namespaceCDCPromotedAddition, namespaceCDCDispositionFor(namespace, false, namespace, true),
 		"the projection commit marker is the public ADDED transition")
-	assert.Equal(t, namespaceCDCRegular, namespaceCDCDispositionFor(nil, false, namespace, true),
-		"legacy direct additions retain the projection-readiness gate")
+	assert.Equal(t, namespaceCDCInvalidAddition, namespaceCDCDispositionFor(nil, false, namespace, true),
+		"direct committed inserts cannot bypass the staged commit-marker protocol")
 	assert.Equal(t, namespaceCDCRegular, namespaceCDCDispositionFor(namespace, true, namespace, true),
 		"ordinary committed updates remain MODIFIED transitions")
 	assert.Equal(t, namespaceCDCRegular, namespaceCDCDispositionFor(namespace, false, nil, false),

@@ -240,6 +240,30 @@ pub mod git_service_client {
                 .insert(GrpcMethod::new("gitstore.git.v1.GitService", "GetFile"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn get_files(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetFilesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetFilesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/GetFiles",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("gitstore.git.v1.GitService", "GetFiles"));
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn get_file_stream(
             &mut self,
             request: impl tonic::IntoRequest<super::GetFileStreamRequest>,
@@ -465,6 +489,13 @@ pub mod git_service_server {
             &self,
             request: tonic::Request<super::GetFileRequest>,
         ) -> std::result::Result<tonic::Response<super::GetFileResponse>, tonic::Status>;
+        async fn get_files(
+            &self,
+            request: tonic::Request<super::GetFilesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetFilesResponse>,
+            tonic::Status,
+        >;
         /// Server streaming response type for the GetFileStream method.
         type GetFileStreamStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::GetFileStreamResponse, tonic::Status>,
@@ -855,6 +886,51 @@ pub mod git_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetFileSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/GetFiles" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetFilesSvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::UnaryService<super::GetFilesRequest>
+                    for GetFilesSvc<T> {
+                        type Response = super::GetFilesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetFilesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::get_files(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetFilesSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

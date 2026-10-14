@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/prometheus/client_golang/prometheus"
@@ -29,10 +30,11 @@ const (
 
 // HealthResponse represents the health check response
 type HealthResponse struct {
-	Status    Status           `json:"status"`
-	Version   string           `json:"version,omitempty"`
-	Timestamp time.Time        `json:"timestamp"`
-	Checks    map[string]Check `json:"checks,omitempty"`
+	Status    Status                    `json:"status"`
+	Version   string                    `json:"version,omitempty"`
+	Timestamp time.Time                 `json:"timestamp"`
+	Checks    map[string]Check          `json:"checks,omitempty"`
+	Auth      *auth.ProviderDiagnostics `json:"auth,omitempty"`
 }
 
 // Check represents an individual health check
@@ -50,6 +52,7 @@ type Handler struct {
 	clock              apiruntime.Clock
 	resourceWatchReady func(context.Context) error
 	metricsHandler     http.Handler
+	authDiagnostics    func() auth.ProviderDiagnostics
 }
 
 // HandlerDeps contains dependencies for Handler.
@@ -60,6 +63,7 @@ type HandlerDeps struct {
 	Clock              apiruntime.Clock
 	ResourceWatchReady func(context.Context) error
 	InstanceID         string
+	AuthDiagnostics    func() auth.ProviderDiagnostics
 }
 
 // NewHandler creates a new health check handler
@@ -92,6 +96,7 @@ func NewHandler(deps HandlerDeps) *Handler {
 		clock:              clock,
 		resourceWatchReady: deps.ResourceWatchReady,
 		metricsHandler:     metricsHandler,
+		authDiagnostics:    deps.AuthDiagnostics,
 	}
 }
 
@@ -134,6 +139,10 @@ func (h *Handler) Ready(c *gin.Context) {
 		Version:   h.version,
 		Timestamp: h.clock.Now(),
 		Checks:    checks,
+	}
+	if h.authDiagnostics != nil {
+		diagnostics := h.authDiagnostics()
+		response.Auth = &diagnostics
 	}
 
 	c.Header("Content-Type", "application/json")

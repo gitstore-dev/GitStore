@@ -8,7 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
+	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -75,30 +79,10 @@ func (f namespaceRepositoryFence) hasDeletionIntent() bool {
 }
 
 func (f namespaceRepositoryFence) epoch() int64 {
-	if f.RepositoryCreationEpoch == nil {
-		return 0
-	}
 	return *f.RepositoryCreationEpoch
 }
 
 func (f namespaceRepositoryFence) pending() int64 {
-	if f.PendingRepositoryCreations == nil {
-		return 0
-	}
-	return *f.PendingRepositoryCreations
-}
-
-func (f namespaceRepositoryFence) expectedEpoch() any {
-	if f.RepositoryCreationEpoch == nil {
-		return nil
-	}
-	return *f.RepositoryCreationEpoch
-}
-
-func (f namespaceRepositoryFence) expectedPending() any {
-	if f.PendingRepositoryCreations == nil {
-		return nil
-	}
 	return *f.PendingRepositoryCreations
 }
 
@@ -139,16 +123,18 @@ func executeNamespaceRepositoryReservation(
 	step datastore.MutationStep,
 	successDescription string,
 ) error {
-	if err := reserve(); err != nil {
+	if err := datastore.MeasureNamespaceFencePhase(ctx, datastore.NamespaceFenceReserve, reserve); err != nil {
 		return err
 	}
-	operationErr := operation()
+	operationErr := datastore.MeasureNamespaceFencePhase(ctx, datastore.NamespaceFenceMutation, operation)
 	if errors.Is(operationErr, datastore.ErrRepairRequired) {
 		return operationErr
 	}
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceRepositoryReleaseTimeout)
 	defer cancel()
-	releaseErr := release(releaseCtx)
+	releaseErr := datastore.MeasureNamespaceFencePhase(releaseCtx, datastore.NamespaceFenceRelease, func() error {
+		return release(releaseCtx)
+	})
 	if releaseErr == nil {
 		return operationErr
 	}
@@ -201,6 +187,9 @@ func (s *scyllaDatastore) loadNamespaceRepositoryFence(ctx context.Context, name
 		}
 		return namespaceRepositoryFence{}, fmt.Errorf("scylla: load namespace repository fence: %w", err)
 	}
+	if fence.RepositoryCreationEpoch == nil || fence.PendingRepositoryCreations == nil {
+		return namespaceRepositoryFence{}, fmt.Errorf("%w: namespace uid %s has an uninitialized repository fence", datastore.ErrRepairRequired, namespaceUID)
+	}
 	return fence, nil
 }
 
@@ -222,8 +211,8 @@ func (s *scyllaDatastore) reserveNamespaceRepository(ctx context.Context, namesp
 			fence.epoch()+1,
 			fence.pending()+1,
 			uid,
-			fence.expectedEpoch(),
-			fence.expectedPending(),
+			fence.epoch(),
+			fence.pending(),
 			nil,
 			fence.Status,
 		).ExecCASRelease()
@@ -240,7 +229,7 @@ func (s *scyllaDatastore) reserveNamespaceRepository(ctx context.Context, namesp
 // Catalog and repository lifecycle writes share an exclusive reservation of
 // the existing Namespace child fence. No expiry can release an in-flight
 // writer: ambiguous outcomes retain the reservation for projection repair.
-func (s *scyllaDatastore) reserveNamespaceCatalog(ctx context.Context, namespaceUID string, allowTerminating bool) error {
+func (s *scyllaDatastore) reserveNamespaceCatalog(ctx context.Context, namespaceUID string, allowTerminating bool) (int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, namespaceCatalogReservationTimeout)
 	defer cancel()
 	uid := mustParseUUID(namespaceUID)
@@ -248,28 +237,28 @@ func (s *scyllaDatastore) reserveNamespaceCatalog(ctx context.Context, namespace
 	for {
 		fence, err := s.loadNamespaceRepositoryFence(ctx, namespaceUID)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if !allowTerminating && (fence.DeletionTimestamp != nil || fence.hasDeletionIntent()) {
-			return datastore.ErrNamespaceNotActive
+			return 0, datastore.ErrNamespaceNotActive
 		}
 		if fence.pending() == 0 {
 			applied, err := s.session.Query(
 				"UPDATE namespaces_by_uid SET repository_creation_epoch=?, pending_repository_creations=? WHERE uid=? "+
 					"IF repository_creation_epoch=? AND pending_repository_creations=? AND deletion_timestamp=? AND status=?", nil,
-			).WithContext(ctx).Bind(fence.epoch()+1, int64(1), uid, fence.expectedEpoch(), fence.expectedPending(), fence.DeletionTimestamp, fence.Status).ExecCASRelease()
+			).WithContext(ctx).Bind(fence.epoch()+1, int64(1), uid, fence.epoch(), fence.pending(), fence.DeletionTimestamp, fence.Status).ExecCASRelease()
 			if err != nil {
-				return err
+				return 0, err
 			}
 			if applied {
-				return nil
+				return fence.epoch() + 1, nil
 			}
 		}
-		timer := time.NewTimer(delay)
+		timer := time.NewTimer(namespaceCatalogRetryDelay(delay))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return 0, ctx.Err()
 		case <-timer.C:
 		}
 		if delay < 100*time.Millisecond {
@@ -278,18 +267,503 @@ func (s *scyllaDatastore) reserveNamespaceCatalog(ctx context.Context, namespace
 	}
 }
 
-func (s *scyllaDatastore) withNamespaceCatalogFence(ctx context.Context, namespace string, allowTerminating bool, operation func() error) error {
-	ns, err := s.GetNamespaceByName(ctx, namespace)
+func namespaceCatalogRetryDelay(backoff time.Duration) time.Duration {
+	return time.Millisecond + time.Duration(rand.Int64N(int64(backoff-time.Millisecond)))
+}
+
+type catalogFenceScopeKey struct{}
+
+const namespaceCatalogMaxQueuedWrites = 256
+
+type namespaceCatalogQueueEntry struct {
+	waiters []chan struct{}
+	files   map[chan struct{}]*fileMutationRequest
+}
+
+type fileMutationRequest struct {
+	ctx          context.Context
+	repositoryID string
+	names        []string
+	operation    func(context.Context) error
+	ready, done  chan struct{}
+	finish       func()
+	selected     bool
+	err          error
+}
+
+type namespaceCatalogQueue struct {
+	mu      sync.Mutex
+	entries map[string]*namespaceCatalogQueueEntry
+	count   int
+}
+
+func (q *namespaceCatalogQueue) acquire(ctx context.Context, uid string) (func(), error) {
+	ready, finish, err := q.enqueue(ctx, uid, nil)
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case <-ready:
+		return finish, nil
+	case <-ctx.Done():
+		finish()
+		return nil, ctx.Err()
+	}
+}
+
+func (q *namespaceCatalogQueue) enqueue(ctx context.Context, uid string, file *fileMutationRequest) (chan struct{}, func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	q.mu.Lock()
+	if q.count == namespaceCatalogMaxQueuedWrites {
+		q.mu.Unlock()
+		return nil, nil, errors.New("scylla: namespace catalog write queue exhausted")
+	}
+	if q.entries == nil {
+		q.entries = make(map[string]*namespaceCatalogQueueEntry)
+	}
+	entry := q.entries[uid]
+	if entry == nil {
+		entry = &namespaceCatalogQueueEntry{}
+		q.entries[uid] = entry
+	}
+	ready := make(chan struct{})
+	entry.waiters = append(entry.waiters, ready)
+	if file != nil {
+		if entry.files == nil {
+			entry.files = make(map[chan struct{}]*fileMutationRequest)
+		}
+		entry.files[ready] = file
+	}
+	if len(entry.waiters) == 1 {
+		close(ready)
+	}
+	q.count++
+	finish := func() {
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		q.removeLocked(uid, entry, ready)
+	}
+	if file != nil {
+		file.ready, file.finish = ready, finish
+	}
+	q.mu.Unlock()
+	return ready, finish, nil
+}
+
+func (q *namespaceCatalogQueue) removeLocked(uid string, entry *namespaceCatalogQueueEntry, ready chan struct{}) {
+	index := slices.Index(entry.waiters, ready)
+	copy(entry.waiters[index:], entry.waiters[index+1:])
+	entry.waiters[len(entry.waiters)-1] = nil
+	entry.waiters = entry.waiters[:len(entry.waiters)-1]
+	delete(entry.files, ready)
+	q.count--
+	if len(entry.waiters) == 0 {
+		delete(q.entries, uid)
+	} else if index == 0 {
+		close(entry.waiters[0])
+	}
+}
+
+func (q *namespaceCatalogQueue) cancelFile(uid string, request *fileMutationRequest) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if request.selected {
+		return false
+	}
+	q.removeLocked(uid, q.entries[uid], request.ready)
+	return true
+}
+
+func (q *namespaceCatalogQueue) selectFiles(uid string, request *fileMutationRequest) []*fileMutationRequest {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if request.selected {
+		return nil
+	}
+	entry := q.entries[uid]
+	group := make([]*fileMutationRequest, 0, 4)
+	for _, ready := range entry.waiters {
+		file := entry.files[ready]
+		if file == nil || len(group) == 4 {
+			break
+		}
+		file.selected = true
+		group = append(group, file)
+		if file != request {
+			close(ready)
+		}
+	}
+	return group
+}
+
+func (q *namespaceCatalogQueue) extendFiles(uid string, group []*fileMutationRequest) []*fileMutationRequest {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	entry := q.entries[uid]
+	for _, ready := range entry.waiters[len(group):] {
+		file := entry.files[ready]
+		if file == nil || len(group) == 4 {
+			break
+		}
+		file.selected = true
+		group = append(group, file)
+		close(ready)
+	}
+	return group
+}
+
+func (s *scyllaDatastore) WithFileMutationBatch(ctx context.Context, namespace, repositoryID string, names []string, operation func(context.Context) error) error {
+	if repositoryID == "" || len(names) == 0 || len(names) > 4 || operation == nil {
+		return fmt.Errorf("%w: File batch requires repository, one to four names and operation", datastore.ErrInvalidArgument)
+	}
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		if name == "" || seen[name] {
+			return fmt.Errorf("%w: File batch names must be nonempty and distinct", datastore.ErrInvalidArgument)
+		}
+		seen[name] = true
+	}
+	if scope, ok := ctx.Value(catalogFenceScopeKey{}).(*catalogFenceScope); ok &&
+		scope.store == s && scope.namespace == namespace && scope.active.Load() {
+		return operation(ctx)
+	}
+	var ns *datastore.Namespace
+	err := datastore.MeasureNamespaceFencePhase(ctx, datastore.NamespaceFenceLookup, func() error {
+		var lookupErr error
+		ns, lookupErr = s.GetNamespaceByName(ctx, namespace)
+		return lookupErr
+	})
 	if err != nil {
 		return err
 	}
+	return s.runQueuedFileMutation(ctx, ns.UID, repositoryID, slices.Clone(names), operation, func(group []*fileMutationRequest) []*fileMutationRequest {
+		var scope *catalogFenceScope
+		return runFileMutationGroup(group, func(groupCtx context.Context, apply func() error) error {
+			scope = &catalogFenceScope{store: s, namespace: namespace}
+			scope.active.Store(true)
+			defer scope.close()
+			for _, request := range group {
+				request.ctx = context.WithValue(request.ctx, catalogFenceScopeKey{}, scope)
+			}
+			var epoch int64
+			return executeNamespaceRepositoryReservation(groupCtx,
+				func() error {
+					var err error
+					epoch, err = s.reserveNamespaceCatalog(groupCtx, ns.UID, false)
+					return err
+				},
+				func(releaseCtx context.Context) error { return s.releaseNamespaceCatalog(releaseCtx, ns.UID, epoch) },
+				apply,
+				datastore.MutationStep{Operation: "catalog_lifecycle", ResourceKind: "Namespace", ResourceUID: ns.UID,
+					Projection: "namespaces_by_uid.pending_repository_creations", LookupKey: namespace},
+				"File mutation cohort committed",
+			)
+		}, func(group []*fileMutationRequest) []*fileMutationRequest {
+			previous := len(group)
+			group = s.catalogQueue.extendFiles(ns.UID, group)
+			for _, request := range group[previous:] {
+				request.ctx = context.WithValue(request.ctx, catalogFenceScopeKey{}, scope)
+			}
+			return group
+		})
+	})
+}
+
+func (s *scyllaDatastore) runQueuedFileMutation(ctx context.Context, namespaceUID, repositoryID string, names []string, operation func(context.Context) error, execute func([]*fileMutationRequest) []*fileMutationRequest) error {
+	request := &fileMutationRequest{ctx: ctx, repositoryID: repositoryID, names: names, operation: operation, done: make(chan struct{})}
+	waitCtx, cancel := context.WithTimeout(ctx, namespaceCatalogReservationTimeout)
+	defer cancel()
+	err := datastore.MeasureNamespaceFencePhase(waitCtx, datastore.NamespaceFenceQueue, func() error {
+		var queueErr error
+		_, _, queueErr = s.catalogQueue.enqueue(waitCtx, namespaceUID, request)
+		if queueErr != nil {
+			return queueErr
+		}
+		select {
+		case <-request.ready:
+			return nil
+		case <-waitCtx.Done():
+			return waitCtx.Err()
+		}
+	})
+	if err != nil {
+		if request.ready == nil || s.catalogQueue.cancelFile(namespaceUID, request) {
+			return err
+		}
+		<-request.done
+		return request.err
+	}
+	group := s.catalogQueue.selectFiles(namespaceUID, request)
+	if len(group) > 0 {
+		group = execute(group)
+		// Remove followers before the leader so only the next untouched waiter
+		// is woken, and no lifecycle barrier can overtake an active cohort.
+		for i := len(group) - 1; i >= 0; i-- {
+			group[i].finish()
+		}
+		for _, file := range group {
+			close(file.done)
+		}
+	}
+	<-request.done
+	return request.err
+}
+
+func runFileMutationGroup(group []*fileMutationRequest, fenced func(context.Context, func() error) error,
+	extend func([]*fileMutationRequest) []*fileMutationRequest,
+) []*fileMutationRequest {
+	groupCtx, cancel := context.WithCancel(context.WithoutCancel(group[0].ctx))
+	defer cancel()
+	var liveMu sync.Mutex
+	live := len(group)
+	stops := make([]func() bool, 0, 4)
+	watch := func(request *fileMutationRequest) {
+		stop := context.AfterFunc(request.ctx, func() {
+			liveMu.Lock()
+			defer liveMu.Unlock()
+			live--
+			if live == 0 {
+				cancel()
+			}
+		})
+		stops = append(stops, stop)
+	}
+	for _, request := range group {
+		watch(request)
+	}
+	defer func() {
+		for _, stop := range stops {
+			stop()
+		}
+	}()
+	ran := false
+	groupErr := fenced(groupCtx, func() error {
+		ran = true
+		if extend != nil {
+			liveMu.Lock()
+			if live > 0 {
+				previous := len(group)
+				group = extend(group)
+				live += len(group) - previous
+				for _, request := range group[previous:] {
+					watch(request)
+				}
+			}
+			liveMu.Unlock()
+		}
+		finished := make([]chan struct{}, len(group))
+		for i := range finished {
+			finished[i] = make(chan struct{})
+		}
+		var workers sync.WaitGroup
+		for i, request := range group {
+			workers.Go(func() {
+				defer close(finished[i])
+				for j := 0; j < i; j++ {
+					if !fileMutationRequestsOverlap(request, group[j]) {
+						continue
+					}
+					select {
+					case <-finished[j]:
+						if errors.Is(group[j].err, datastore.ErrRepairRequired) {
+							request.err = group[j].err
+							return
+						}
+					case <-request.ctx.Done():
+						request.err = request.ctx.Err()
+						return
+					}
+				}
+				if err := request.ctx.Err(); err != nil {
+					request.err = err
+					return
+				}
+				request.err = request.operation(request.ctx)
+			})
+		}
+		workers.Wait()
+		errs := make([]error, len(group))
+		for i, request := range group {
+			errs[i] = request.err
+		}
+		return errors.Join(errs...)
+	})
+	if !ran || errors.Is(groupErr, datastore.ErrRepairRequired) {
+		for _, request := range group {
+			request.err = errors.Join(request.err, groupErr)
+		}
+	}
+	return group
+}
+
+func fileMutationRequestsOverlap(first, second *fileMutationRequest) bool {
+	for _, name := range first.names {
+		if slices.Contains(second.names, name) {
+			return true
+		}
+	}
+	return false
+}
+
+type catalogFenceScope struct {
+	store     *scyllaDatastore
+	namespace string
+	active    atomic.Bool
+	parentMu  sync.Mutex
+	parents   map[string]*catalogRepositoryCheck
+	casMu     sync.Mutex
+	fileCAS   *fileCASWriter
+}
+
+func (scope *catalogFenceScope) updateFileCAS(ctx context.Context, uid gocql.UUID, values []any) error {
+	scope.casMu.Lock()
+	if !scope.active.Load() {
+		scope.casMu.Unlock()
+		return scope.store.executeFileCAS(&fileCASRequest{ctx: ctx, uid: uid, values: values})
+	}
+	if scope.fileCAS == nil {
+		scope.fileCAS = newFileCASWriter(scope.store.executeFileCAS, scope.store.executeFileCASBatch)
+	}
+	writer := scope.fileCAS
+	scope.casMu.Unlock()
+	return writer.submit(ctx, uid, values)
+}
+
+func (scope *catalogFenceScope) close() {
+	scope.active.Store(false)
+	scope.casMu.Lock()
+	defer scope.casMu.Unlock()
+	if scope.fileCAS != nil {
+		scope.fileCAS.close()
+	}
+}
+
+type catalogRepositoryCheck struct {
+	ready   chan struct{}
+	checked bool
+}
+
+const catalogFenceMaxCheckedRepositories = 4
+
+func (scope *catalogFenceScope) isActiveFor(store *scyllaDatastore, namespace string) bool {
+	return scope != nil && scope.store == store && scope.namespace == namespace && scope.active.Load()
+}
+
+func (scope *catalogFenceScope) checkRepository(ctx context.Context, uid string, check func(context.Context) error) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !scope.active.Load() {
+			return check(ctx)
+		}
+		scope.parentMu.Lock()
+		if pending := scope.parents[uid]; pending != nil {
+			if pending.checked {
+				scope.parentMu.Unlock()
+				return nil
+			}
+			ready := pending.ready
+			scope.parentMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ready:
+				continue
+			}
+		}
+		if len(scope.parents) == catalogFenceMaxCheckedRepositories {
+			scope.parentMu.Unlock()
+			return check(ctx)
+		}
+		if scope.parents == nil {
+			scope.parents = make(map[string]*catalogRepositoryCheck)
+		}
+		pending := &catalogRepositoryCheck{ready: make(chan struct{})}
+		scope.parents[uid] = pending
+		scope.parentMu.Unlock()
+		err := check(ctx)
+		scope.parentMu.Lock()
+		if err != nil {
+			delete(scope.parents, uid)
+		} else {
+			pending.checked = true
+		}
+		close(pending.ready)
+		scope.parentMu.Unlock()
+		return err
+	}
+}
+
+func (s *scyllaDatastore) WithCatalogMutationBatch(ctx context.Context, namespace string, operation func(context.Context) error) error {
+	return s.withNamespaceCatalogFence(ctx, namespace, false, func() error {
+		scope := &catalogFenceScope{store: s, namespace: namespace}
+		scope.active.Store(true)
+		defer scope.close()
+		return operation(context.WithValue(ctx, catalogFenceScopeKey{}, scope))
+	})
+}
+
+func (s *scyllaDatastore) withNamespaceCatalogFence(ctx context.Context, namespace string, allowTerminating bool, operation func() error) error {
+	if scope, _ := ctx.Value(catalogFenceScopeKey{}).(*catalogFenceScope); scope.isActiveFor(s, namespace) {
+		if allowTerminating {
+			return fmt.Errorf("%w: lifecycle writes cannot share an active catalog admission batch", datastore.ErrInvalidArgument)
+		}
+		return operation()
+	}
+	var ns *datastore.Namespace
+	err := datastore.MeasureNamespaceFencePhase(ctx, datastore.NamespaceFenceLookup, func() error {
+		var lookupErr error
+		ns, lookupErr = s.GetNamespaceByName(ctx, namespace)
+		return lookupErr
+	})
+	if err != nil {
+		return err
+	}
+	acquireCtx, cancel := context.WithTimeout(ctx, namespaceCatalogReservationTimeout)
+	defer cancel()
+	var releaseLocal func()
+	err = datastore.MeasureNamespaceFencePhase(acquireCtx, datastore.NamespaceFenceQueue, func() error {
+		var queueErr error
+		releaseLocal, queueErr = s.catalogQueue.acquire(acquireCtx, ns.UID)
+		return queueErr
+	})
+	if err != nil {
+		return err
+	}
+	defer releaseLocal()
+	var epoch int64
 	return executeNamespaceRepositoryReservation(ctx,
-		func() error { return s.reserveNamespaceCatalog(ctx, ns.UID, allowTerminating) },
-		func(releaseCtx context.Context) error { return s.releaseNamespaceRepository(releaseCtx, ns.UID) },
+		func() error {
+			var err error
+			epoch, err = s.reserveNamespaceCatalog(acquireCtx, ns.UID, allowTerminating)
+			return err
+		},
+		func(releaseCtx context.Context) error { return s.releaseNamespaceCatalog(releaseCtx, ns.UID, epoch) },
 		operation,
 		datastore.MutationStep{Operation: "catalog_lifecycle", ResourceKind: "Namespace", ResourceUID: ns.UID, Projection: "namespaces_by_uid.pending_repository_creations", LookupKey: namespace},
 		"catalog lifecycle mutation committed",
 	)
+}
+
+func (s *scyllaDatastore) releaseNamespaceCatalog(ctx context.Context, namespaceUID string, epoch int64) error {
+	// A retry could hide an applied release behind a later not-applied result.
+	applied, err := s.session.Query(
+		"UPDATE namespaces_by_uid SET pending_repository_creations=? WHERE uid=? "+
+			"IF repository_creation_epoch=? AND pending_repository_creations=?",
+		nil,
+	).WithContext(ctx).Idempotent(false).RetryPolicy(&gocql.SimpleRetryPolicy{}).Bind(
+		int64(0), mustParseUUID(namespaceUID), epoch, int64(1),
+	).ExecCASRelease()
+	if err != nil {
+		return fmt.Errorf("scylla: release namespace catalog reservation: %w", err)
+	}
+	if applied {
+		return nil
+	}
+	return s.releaseNamespaceRepository(ctx, namespaceUID)
 }
 
 func (s *scyllaDatastore) releaseNamespaceRepository(ctx context.Context, namespaceUID string) error {
@@ -312,8 +786,8 @@ func (s *scyllaDatastore) releaseNamespaceRepository(ctx context.Context, namesp
 		).WithContext(ctx).Bind(
 			fence.pending()-1,
 			uid,
-			fence.expectedEpoch(),
-			fence.expectedPending(),
+			fence.epoch(),
+			fence.pending(),
 		).ExecCASRelease()
 		if err != nil {
 			return fmt.Errorf("scylla: release namespace repository reservation: %w", err)
@@ -647,6 +1121,13 @@ func (s *scyllaDatastore) UpdateRepository(ctx context.Context, repository *data
 	if repository.Namespace != existing.Namespace && (existing.DeletionTimestamp != nil || datastore.HasDeletionIntent(existing.Status)) {
 		return datastore.ErrConflict
 	}
+	// Active same-path updates cannot remove membership or start deletion.
+	// Their row CAS still rejects a concurrent lifecycle transition.
+	if repository.Namespace == existing.Namespace && repository.Name == existing.Name &&
+		existing.DeletionTimestamp == nil && !datastore.HasDeletionIntent(existing.Status) &&
+		repository.DeletionTimestamp == nil && !datastore.HasDeletionIntent(repository.Status) {
+		return s.updateRepository(ctx, repository, expectedResourceVersion)
+	}
 	return s.withNamespaceCatalogFence(ctx, existing.Namespace, true, func() error {
 		return s.updateRepository(ctx, repository, expectedResourceVersion)
 	})
@@ -660,9 +1141,11 @@ func (s *scyllaDatastore) updateRepository(ctx context.Context, repository *data
 	if err != nil {
 		return err
 	}
-	if existing.ResourceVersion != expectedResourceVersion ||
-		(existing.DeletionTimestamp != nil && repository.DeletionTimestamp == nil) {
+	if existing.DeletionTimestamp != nil && repository.DeletionTimestamp == nil {
 		return datastore.ErrConflict
+	}
+	if err := datastore.ValidateCatalogUpdateVersion(existing.ResourceVersion, expectedResourceVersion, repository.ResourceVersion); err != nil {
+		return err
 	}
 	repository.Status, err = datastore.MergeInfrastructureStatus(existing.Status, repository.Status)
 	if err != nil {

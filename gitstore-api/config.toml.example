@@ -10,6 +10,9 @@ grpc_port = 6000
 per_second = 50
 burst = 100
 
+[api.profiling]
+listen_addr = ""
+
 [api.git_service]
 uri = "dns:///localhost:50051"
 
@@ -47,6 +50,10 @@ max_file_size = "100MiB"
 [log]
 level = "info"
 format = "json"
+
+[observability.otlp]
+endpoint = ""
+trace_sample_ratio = 0.05
 
 # Optional Scylla configuration when api.datastore.backend = "scylla"
 # [api.datastore.scylla]

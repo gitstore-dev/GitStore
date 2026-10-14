@@ -12,6 +12,19 @@ phase="${5:-preflight}"
 
 case "${phase}" in
   preflight|postflight) ;;
+  source-state)
+    (
+      cd "$(dirname "${BASH_SOURCE[0]}")/.."
+      {
+        git status --porcelain=v1
+        git diff --binary HEAD
+        while IFS= read -r -d '' untracked; do
+          shasum -a 256 "${untracked}"
+        done < <(git ls-files --others --exclude-standard -z)
+      } | shasum -a 256 | awk '{print $1}'
+    )
+    exit 0
+    ;;
   *) echo "capacity evidence phase must be preflight or postflight" >&2; exit 2 ;;
 esac
 
@@ -38,6 +51,169 @@ case "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" in
     exit 2
     ;;
 esac
+
+if [[ "${target}/${profile}" == api/authorization && "${phase}" == postflight ]]; then
+  artifacts=(authorization-latency-1.json authorization-latency-8.json authorization-latency-32.json authorization-reload.json authorization-evaluator-audit.json)
+  for artifact in "${artifacts[@]}"; do
+    path="${evidence_dir}/${artifact}"
+    [[ -f "${path}" && ! -L "${path}" && "$(wc -c <"${path}")" -le 1048576 ]] || {
+      echo "authorization evidence requires a regular bounded ${artifact}" >&2
+      exit 2
+    }
+  done
+  declared_environment='{}'
+  if [[ "${mode}" != diagnostic ]]; then
+    [[ -f "${evidence_dir}/environment.json" && ! -L "${evidence_dir}/environment.json" ]] || {
+      echo "authorization acceptance requires its declared runtime environment" >&2
+      exit 2
+    }
+    declared_environment="$(jq -c . "${evidence_dir}/environment.json")"
+  fi
+  jq -e -n --arg mode "${mode}" \
+    --argjson environment "${declared_environment}" \
+    --slurpfile one "${evidence_dir}/authorization-latency-1.json" \
+    --slurpfile eight "${evidence_dir}/authorization-latency-8.json" \
+    --slurpfile thirtytwo "${evidence_dir}/authorization-latency-32.json" \
+    --slurpfile reload "${evidence_dir}/authorization-reload.json" \
+    --slurpfile audit "${evidence_dir}/authorization-evaluator-audit.json" '
+      def integer: type == "number" and . >= 0 and floor == .;
+      def digest: type == "string" and test("^[0-9a-f]{64}$");
+      def histogram:
+        (.samples | integer) and .samples > 0 and
+        (.calls | integer) and .calls >= .samples and
+        (.maxNanoseconds | integer) and .maxNanoseconds > 0 and
+        (.bucketsUpperMicroseconds | length) == 2001 and
+        all(.bucketsUpperMicroseconds[]; integer) and
+        (.bucketsUpperMicroseconds | add) == .samples and
+        (if $mode == "diagnostic" then true else
+          .samples >= 1000 and
+          # Bucket 999 has the conservative upper bound of 1ms, so exclude it.
+          (.bucketsUpperMicroseconds[0:999] | add) >= ((.samples * 0.99) | ceil)
+        end);
+      [$one[0], $eight[0], $thirtytwo[0]] as $latencies |
+      ($one | length) == 1 and ($eight | length) == 1 and ($thirtytwo | length) == 1 and
+      ($reload | length) == 1 and ($audit | length) == 1 and
+      [$latencies[].concurrency] == [1,8,32] and
+      ([$latencies[].policyDigest] | unique | length) == 1 and
+      ([$latencies[].runtime] | unique | length) == 1 and
+      ([$latencies[].architecture] | unique | length) == 1 and
+      all($latencies[];
+        .schemaVersion == 1 and (.policyDigest | digest) and
+        .policyDimensions == {roles:200,bindings:1000,rules:2000,groups:50} and
+        .cases == ["early-allow","last-allow","no-binding","overlapping-deny","owner-transfer","missing-attribute"] and
+        .sampleProbability == "1/64" and .invalidOutcomes == 0 and
+        (.runtime | type == "string" and length > 0) and
+        (.os | type == "string" and length > 0) and
+        (.architecture | type == "string" and length > 0) and
+        (.logicalCPUs | integer) and .logicalCPUs > 0 and
+        (.gomaxprocs | integer) and .gomaxprocs > 0 and
+        (.histograms | length) == 6 and all(.histograms[]; histogram) and
+        (.warmupSeconds | type == "number") and .warmupSeconds > 0 and
+        (.measurementSeconds | type == "number") and .measurementSeconds > 0 and
+        ($mode == "diagnostic" or
+          (.warmupSeconds >= 60 and .measurementSeconds >= 600 and
+           .runtime == $environment.runtime and .architecture == $environment.architecture and
+           .logicalCPUs == $environment.host.logicalCPUs))) and
+      ($reload[0] |
+        .schemaVersion == 1 and .concurrency == 32 and
+        (.oldDigest | digest) and (.newDigest | digest) and .oldDigest != .newDigest and
+        .oldDigest == $latencies[0].policyDigest and
+        (.decisions | integer) and .decisions > 0 and .invalidOutcomes == 0 and
+        (.reloads | integer) and .reloads > 0 and (.reloads % 2) == 0 and
+        (.rejectedReloads | integer) and .rejectedReloads == (.reloads * 3) and
+        (.beforeHeapBytes | integer) and .beforeHeapBytes > 0 and
+        (.afterHeapBytes | integer) and .afterHeapBytes > 0 and
+        (.durationSeconds | type == "number") and .durationSeconds > 0 and
+        ($mode == "diagnostic" or
+          (.durationSeconds >= 1800 and .reloads >= 60 and .afterHeapBytes <= (.beforeHeapBytes * 1.1)))) and
+      ($audit[0] |
+        .schemaVersion == 1 and .passed == true and .root == "Authorize" and
+        .allowedClockRead == "time.Now" and
+        .forbiddenDependencies == ["policy-file","datastore-client","network-client"] and
+        (.functions | index("Authorize")) != null and
+        (.functions | index("loadPolicy")) == null and
+        (.calls | type == "array" and length > 0))
+    ' >/dev/null || {
+      echo "authorization evidence failed duration, case, accounting, latency, snapshot, heap or dependency checks" >&2
+      exit 1
+    }
+  jq -n --arg target "${target}" --arg profile "${profile}" --arg mode "${mode}" \
+    '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,passed:true,scope:"evaluator-only"}' \
+    >"${evidence_file}"
+  exit 0
+fi
+
+if [[ "${target}/${profile}" == api/readiness && "${phase}" == postflight &&
+      ("${mode}" != diagnostic || -n "${CAPACITY_TOKEN_FILE:-}${CAPACITY_TOKEN:-}" ||
+       -e "${evidence_dir}/authorization-probes.json" || -L "${evidence_dir}/authorization-probes.json") ]]; then
+  path="${evidence_dir}/authorization-probes.json"
+  [[ -f "${path}" && ! -L "${path}" && "$(wc -c <"${path}")" -le 1048576 ]] || {
+    echo "API readiness requires regular bounded authorization-probes.json evidence" >&2
+    exit 2
+  }
+  preflight='{}'
+  if [[ "${mode}" != diagnostic ]]; then
+    [[ -f "${evidence_dir}/preflight-environment.json" && ! -L "${evidence_dir}/preflight-environment.json" ]] || {
+      echo "API readiness acceptance requires verified preflight replica identities" >&2
+      exit 2
+    }
+    preflight="$(jq -c . "${evidence_dir}/preflight-environment.json")"
+  fi
+  jq -e --arg mode "${mode}" --arg run "${CAPACITY_RUN_ID:-}" --argjson preflight "${preflight}" '
+    def integer: type == "number" and floor == .;
+    def digest: type == "string" and test("^[0-9a-f]{64}$");
+    def snapshot:
+      keys == ["authn","authz","catalogDigest","policy","userdir"] and
+      (.catalogDigest | digest) and
+      (.authn | type == "array" and length > 0 and length <= 5 and (unique | length) == length) and
+      all(.authn[]; . == "static-users" or . == "anonymous" or . == "oidc-jwt" or
+        . == "serviceaccount-assertion" or . == "serviceaccount-jwt") and
+      (.authz | type == "string" and length > 0 and length <= 64) and
+      (.userdir | type == "string" and length > 0 and length <= 64) and
+      (.policy |
+        keys == ["apiVersion","bindings","digest","loaded","roles","rules"] and .loaded == true and
+        (.apiVersion | type == "string" and length > 0 and length <= 128) and
+        (.digest | digest) and (.roles | integer) and .roles >= 0 and .roles <= 200 and
+        (.bindings | integer) and .bindings >= 0 and .bindings <= 1000 and
+        (.rules | integer) and .rules >= 0 and .rules <= 2000);
+    keys == ["component","denialCode","deniedIdentity","droppedIterations","duration","maxVUs","measurementSeconds","mismatches",
+      "mode","passed","preAllocatedVUs","rate","replicas","runID","schemaVersion"] and
+    .schemaVersion == 1 and .component == "api-readiness-authorization" and
+    .mode == $mode and .runID == $run and .passed == true and
+    (.deniedIdentity == "anonymous" or .deniedIdentity == "credential") and
+    (.denialCode == "FORBIDDEN" or .denialCode == "UNAUTHENTICATED") and
+    .mismatches == 0 and .droppedIterations == 0 and (.measurementSeconds | type == "number" and . > 0) and
+    (.replicas | type == "array" and length > 0) and
+    ([.replicas[].endpoint] | unique | length) == (.replicas | length) and
+    ([.replicas[].auth] | unique | length) == 1 and
+    all(.replicas[];
+      keys == ["allowed","attempts","auth","denied","endpoint","readiness"] and
+      (.endpoint | type == "string" and test("^https?://[^@\\s,?#]+$")) and
+      (.auth | snapshot) and
+      (.attempts | integer) and .attempts > 0 and
+      .allowed == .attempts and .denied == .attempts and
+      (.readiness |
+        keys == ["httpFailureRate","p95Milliseconds","p99Milliseconds"] and
+        (.p95Milliseconds | type == "number" and . >= 0 and . < 1000) and
+        (.p99Milliseconds | type == "number" and . >= 0 and . < 3000) and
+        (.httpFailureRate | type == "number" and . >= 0 and . < 0.001))) and
+    ($mode == "diagnostic" or
+      (.rate == 10 and .preAllocatedVUs == 10 and .maxVUs == 100 and .measurementSeconds >= 600 and
+       (.replicas | length) >= 2 and all(.replicas[]; .attempts >= 6000) and
+       $preflight.passed == true and $preflight.mode == $mode and
+       ([.replicas[].endpoint] | sort) == ([$preflight.topology.liveReplicas[].endpoint] | sort) and
+       all(.replicas[]; . as $replica |
+         any($preflight.topology.liveReplicas[]; .endpoint == $replica.endpoint and .auth == $replica.auth)) and
+       ([$preflight.topology.liveReplicas[].instanceID] | unique | length) == (.replicas | length)))
+  ' "${path}" >/dev/null || {
+    echo "API readiness authorization evidence failed exact outcomes, sampling, snapshot, replica or duration checks" >&2
+    exit 1
+  }
+  jq -n --arg target "${target}" --arg profile "${profile}" --arg mode "${mode}" \
+    '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,passed:true,scope:"readiness-and-baseline-authorization"}' \
+    >"${evidence_file}"
+  exit 0
+fi
 
 if [[ "${mode}" == "diagnostic" ]]; then
   jq -n --arg target "${target}" --arg profile "${profile}" --arg mode "${mode}" \
@@ -257,6 +433,12 @@ validate_scylla_deployment() {
 }
 
 case "${target}/${profile}" in
+  api/authorization)
+    jq -e '.schemaVersion == 1' "${config}" >/dev/null || {
+      echo "authorization evidence requires a versioned configuration manifest" >&2
+      exit 2
+    }
+    ;;
   namespace/validation)
     jq -e '.schemaVersion == 1 and .services.api.replicas == 2' "${config}" >/dev/null || {
       echo "namespace/validation evidence requires a config manifest declaring its two in-process API replicas" >&2

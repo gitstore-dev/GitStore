@@ -4,6 +4,24 @@
 
 A specific resource repeatedly fails reconciliation. Either it exhausted its retry budget (transient failures past `MaxAttempts`) or failed with an unrecoverable error (`TerminalFailure`), and the controller manager has quarantined it rather than retrying forever.
 
+Shared API transport failures, truncated connections and HTTP 502/503/504 use a
+different path: reconciliation remains pending with a bounded retry deadline,
+without exhausting the resource's poison budget. The client applies a shared
+one-second cooldown and does not automatically replay a mutation whose outcome
+may be ambiguous. Recovery re-executes the normal idempotent reconciler.
+Authentication/authorization denials, invalid client configuration, malformed
+responses and ordinary resource failures do not acquire this exemption.
+Earlier quarantines are retained; resolving an outage does not silently clear
+them.
+
+`gitstore_controller_dependency_deferrals_total{kind,dependency}` distinguishes
+shared API outages (`api`), credential outages (`credentials`) and throttling
+(`rate_limit`). It counts deferral attempts, not unique resources, successful
+storage writes or completed reconciliation. Correlate a counter increase with
+pending work, zero new quarantine and subsequent reconciliation success; a
+healthy endpoint alone does not prove outage deferral or recovery. Compare
+counters only within the same controller process identity.
+
 ## Diagnostic Steps
 
 1. Check whether the affected kind has any quarantined items, and how many:

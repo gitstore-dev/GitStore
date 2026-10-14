@@ -153,7 +153,7 @@ func (s *Service) GetProducts(ctx context.Context, namespace string, params data
 func (s *Service) GetProductByUID(ctx context.Context, uid string) (*datastore.Product, error) {
 	p, err := s.store.GetProduct(ctx, uid)
 	if err != nil {
-		return nil, fmt.Errorf("product not found: %s", uid)
+		return nil, fmt.Errorf("product not found: %s: %w", uid, err)
 	}
 	return p, nil
 }
@@ -415,7 +415,7 @@ func (s *Service) GetCategoryTaxonomies(ctx context.Context, namespace string, p
 func (s *Service) GetCategoryTaxonomyByUID(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error) {
 	c, err := s.store.GetCategoryTaxonomy(ctx, uid)
 	if err != nil {
-		return nil, fmt.Errorf("category not found: %s", uid)
+		return nil, fmt.Errorf("category not found: %s: %w", uid, err)
 	}
 	return c, nil
 }
@@ -595,7 +595,7 @@ func (s *Service) GetCollections(ctx context.Context, namespace string, params d
 func (s *Service) GetCollectionByUID(ctx context.Context, uid string) (*datastore.Collection, error) {
 	c, err := s.store.GetCollection(ctx, uid)
 	if err != nil {
-		return nil, fmt.Errorf("collection not found: %s", uid)
+		return nil, fmt.Errorf("collection not found: %s: %w", uid, err)
 	}
 	return c, nil
 }
@@ -749,7 +749,7 @@ func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind
 		CommitSHA: sha, RefName: "refs/heads/main", Path: path, Content: manifest, Operation: op,
 	})
 	if err != nil {
-		return nil, gqlerror.Errorf("Repository admission failed: %v", err)
+		return nil, admissionMutationGraphQLError(committedAdmissionError(err, sha, "repository"))
 	}
 	return result, nil
 }
@@ -1396,9 +1396,9 @@ func (s *Service) GetNamespaceByID(ctx context.Context, id string) (*datastore.N
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
 			s.logger.Debug("namespace not found", zap.String("id", id))
-			return nil, gqlerror.Errorf("namespace with id %q not found", id)
+			return nil, &gqlerror.Error{Message: fmt.Sprintf("namespace with id %q not found", id), Err: err}
 		}
-		return nil, gqlerror.Errorf("failed to retrieve namespace")
+		return nil, &gqlerror.Error{Message: "failed to retrieve namespace", Err: err}
 	}
 	return ns, nil
 }
@@ -1788,9 +1788,9 @@ func (s *Service) GetRepository(ctx context.Context, id string) (*datastore.Repo
 	r, err := s.store.GetRepository(ctx, id)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, gqlerror.Errorf("repository not found")
+			return nil, &gqlerror.Error{Message: "repository not found", Err: err}
 		}
-		return nil, gqlerror.Errorf("failed to retrieve repository")
+		return nil, &gqlerror.Error{Message: "failed to retrieve repository", Err: err}
 	}
 	datastore.NormalizeRepositoryContract(r)
 	return r, nil

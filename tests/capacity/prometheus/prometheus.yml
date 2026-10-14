@@ -10,3 +10,6 @@ scrape_configs:
     file_sd_configs:
       - files:
           - /etc/prometheus/targets.json
+  - job_name: gitstore-observability-capacity
+    static_configs:
+      - targets: ["capacity-otel-collector:8888", "capacity-tempo:3200", "capacity-loki:3100"]

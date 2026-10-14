@@ -56,7 +56,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Namespace: "gitstore",
 			Subsystem: "namespace",
 			Name:      "admission_stage_duration_seconds",
-			Help:      "Namespace GraphQL admission latency at bounded internal stages.",
+			Help:      "Namespace-scoped GraphQL and catalog admission latency at bounded internal stages.",
 			Buckets:   capacityLatencyBuckets,
 		}, []string{"stage"}),
 	}

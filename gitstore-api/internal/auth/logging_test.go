@@ -39,6 +39,15 @@ clusterRoleBindings:
 	require.NoError(t, err)
 	core, logs := observer.New(zapcore.InfoLevel)
 	provider := authpkg.NewDecisionLogger(inner, zap.New(core))
+	registry := authpkg.NewProviderRegistry(authpkg.NewChainedAuthN(), provider, nil)
+	diagnostics := registry.Diagnostics()
+	require.NotNil(t, diagnostics.Policy, "the deployed logging wrapper must preserve optional snapshot metadata")
+	require.True(t, diagnostics.Policy.Loaded)
+	require.Len(t, diagnostics.Policy.Digest, 64)
+	require.Equal(t, 1, diagnostics.Policy.Roles)
+	require.NoError(t, os.Remove(path))
+	require.Equal(t, diagnostics, registry.Diagnostics(), "diagnostics must not reread the policy file")
+	require.Empty(t, logs.All(), "collecting metadata must not emit a synthetic authorization decision")
 	for _, owner := range []string{"alice", "bob", ""} {
 		d, err := provider.Authorize(t.Context(), &authpkg.Principal{Subject: "alice", AuthMethod: "static-users", Groups: []string{"system:authenticated"}, Claims: map[string]any{"token": "super-secret"}}, "namespace.read", authpkg.ResourceContext{Kind: "namespace", Name: "acme", OwnerSub: owner, Attrs: map[string]any{"assertion": "super-secret"}})
 		require.NoError(t, err)
@@ -79,6 +88,8 @@ func TestDecisionLogger_EmitsStructuredFieldsAndRequestID(t *testing.T) {
 		name:     "rbac-local",
 		decision: authpkg.Allow("rbac-local", "allowed by policy"),
 	}, logger)
+	registry := authpkg.NewProviderRegistry(authpkg.NewChainedAuthN(), provider, nil)
+	require.Nil(t, registry.Diagnostics().Policy, "unsupported wrapped providers must not invent a snapshot")
 
 	ctx := context.WithValue(context.Background(), middleware.RequestIDKey, "req-123")
 	decision, err := provider.Authorize(ctx, &authpkg.Principal{

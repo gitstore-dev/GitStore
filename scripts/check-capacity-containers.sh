@@ -25,7 +25,7 @@ for target in "${targets[@]}"; do
 done
 
 snapshot() {
-  local output_file="$1"
+  local output_file="$1" host_before host_after container_seconds clock_passed
   docker inspect "${targets[@]}" | jq '[.[] |
     (((.Config.Entrypoint // []) + (.Config.Cmd // [])) | map(tostring) | join(" ")) as $command |
     {
@@ -41,6 +41,33 @@ snapshot() {
       state:{running:.State.Running, oomKilled:.State.OOMKilled, startedAt:.State.StartedAt}
     }
   ] | sort_by(.name)' >"${output_file}"
+  for target in "${targets[@]}"; do
+    host_before="$(date -u +%s)"
+    container_seconds="$(docker exec "${target}" date -u +%s)" || {
+      echo "cannot inspect datastore clock through ${target}" >&2
+      exit 1
+    }
+    host_after="$(date -u +%s)"
+    [[ "${container_seconds}" =~ ^[0-9]+$ ]] || {
+      echo "datastore clock through ${target} did not return epoch seconds" >&2
+      exit 1
+    }
+    clock_passed=false
+    # One second accounts only for the precision of date, not tolerated drift.
+    if (( host_after >= host_before && host_after - host_before <= 1 &&
+          container_seconds >= host_before - 1 && container_seconds <= host_after + 1 )); then
+      clock_passed=true
+    fi
+    jq --arg name "${target}" --argjson before "${host_before}" --argjson after "${host_after}" \
+      --argjson node "${container_seconds}" --argjson passed "${clock_passed}" \
+      'map(if .name == $name then . + {clock:{hostBeforeEpochSeconds:$before,hostAfterEpochSeconds:$after,containerEpochSeconds:$node,passed:$passed}} else . end)' \
+      "${output_file}" >"${output_file}.tmp"
+    mv "${output_file}.tmp" "${output_file}"
+    if [[ "${clock_passed}" != true ]]; then
+      echo "datastore/host clock disagreement or uncertain clock sample through ${target}; timestamps invalidate CDC and LWW evidence" >&2
+      exit 1
+    fi
+  done
   if (( expected_count > 0 )); then
     for target in "${targets[@]}"; do
       membership="$(docker exec "${target}" nodetool status 2>/dev/null)" || {
@@ -60,6 +87,7 @@ snapshot() {
     ([.[].name] | unique | length) == length and
     all(.[];
       .state.running and (.state.oomKilled | not) and
+      .clock.passed and
       ($expected_memory == 0 or .memoryLimitBytes == $expected_memory) and
       ($expected_smp == 0 or .smpPerNode == $expected_smp) and
       ($expected_count == 0 or .scyllaLiveNodes == $expected_count)

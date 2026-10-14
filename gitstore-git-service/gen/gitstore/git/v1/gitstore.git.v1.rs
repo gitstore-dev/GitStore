@@ -115,6 +115,12 @@ pub struct ReceivePackRequest {
     /// this chunk's repository_id field (FR-011).
     #[prost(message, optional, tag="4")]
     pub push_context: ::core::option::Option<PushContext>,
+    /// Client shallow boundaries, first chunk only, covered by the request signature.
+    /// At most 4096 distinct, nonzero SHA-1 commit IDs. Each must already exist as a
+    /// commit in the complete live repository before staging; importing a shallow
+    /// repository or changing the server's shallow boundary is unsupported.
+    #[prost(string, repeated, tag="5")]
+    pub shallow_oids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// RefCommand represents one ref-update instruction from a git push.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -200,6 +206,16 @@ pub struct GetFileRequest {
     pub path: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub r#ref: ::prost::alloc::string::String,
+    /// If set, require an unchanged file along at most 4096 single-parent
+    /// commits from ref back to this full commit ID. Changed/restored paths,
+    /// merges, unrelated history and exhausted bounds return ABORTED.
+    #[prost(string, optional, tag="3")]
+    pub unchanged_since_commit: ::core::option::Option<::prost::alloc::string::String>,
+    /// For a named ref, allow a ref-identity receipt instead of a file read when
+    /// its resolved tip equals unchanged_since_commit. Otherwise require the
+    /// complete unchanged-path proof and content. The signed request binds this.
+    #[prost(bool, tag="4")]
+    pub allow_ancestor_receipt: bool,
     #[prost(message, optional, tag="14")]
     pub authorization: ::core::option::Option<RequestAuthorization>,
 }
@@ -213,6 +229,63 @@ pub struct GetFileResponse {
     pub blob_sha: ::prost::alloc::string::String,
     #[prost(uint64, tag="4")]
     pub size_bytes: u64,
+    /// Proof fields are populated only after a guarded read succeeds.
+    #[prost(string, tag="5")]
+    pub unchanged_since_commit: ::prost::alloc::string::String,
+    #[prost(string, tag="6")]
+    pub ref_commit_sha: ::prost::alloc::string::String,
+    /// Only with allow_ancestor_receipt and exact ancestor/tip equality. Confirms
+    /// ref identity, not file existence; content/blob_sha/size_bytes are empty.
+    #[prost(bool, tag="7")]
+    pub at_ancestor: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetFilesRequest {
+    #[prost(string, tag="15")]
+    pub repository_id: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag="1")]
+    pub paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag="2")]
+    pub commit_sha: ::prost::alloc::string::String,
+    /// Optional second immutable snapshot, covered by the request signature.
+    /// Both snapshots share the same ordered paths and 16 MiB total reply limit.
+    #[prost(string, optional, tag="3")]
+    pub secondary_commit_sha: ::core::option::Option<::prost::alloc::string::String>,
+    /// If present, resolve this full ref after both snapshots under the same
+    /// repository read guard. Aborted means it no longer targets the secondary
+    /// commit (including deletion); no partial snapshots are returned.
+    #[prost(string, optional, tag="4")]
+    pub current_ref: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FileSnapshot {
+    #[prost(string, tag="1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(bool, tag="2")]
+    pub found: bool,
+    #[prost(bytes="vec", tag="3")]
+    pub content: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="4")]
+    pub blob_sha: ::prost::alloc::string::String,
+    #[prost(uint64, tag="5")]
+    pub size_bytes: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetFilesResponse {
+    /// Results preserve the request's exact order and cardinality.
+    #[prost(message, repeated, tag="1")]
+    pub files: ::prost::alloc::vec::Vec<FileSnapshot>,
+    #[prost(string, tag="2")]
+    pub commit_sha: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub secondary_files: ::prost::alloc::vec::Vec<FileSnapshot>,
+    #[prost(string, tag="4")]
+    pub secondary_commit_sha: ::prost::alloc::string::String,
+    /// Present only for a successful current_ref precondition.
+    #[prost(string, tag="5")]
+    pub current_ref_commit_sha: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetFileStreamRequest {

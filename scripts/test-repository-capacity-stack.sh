@@ -12,6 +12,13 @@ mkdir -p "${test_dir}/bin"
 cat >"${test_dir}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${REPOSITORY_CAPACITY_DOCKER_LOG}"
+case "$*" in
+  "ps -aq --filter label=com.docker.compose.project="*) printf '%s' "${TEST_CAPACITY_EXISTING_CONTAINER:-}" ;;
+  "volume ls -q --filter label=com.docker.compose.project="*) printf '%s' "${TEST_CAPACITY_EXISTING_VOLUME:-}" ;;
+  "inspect --format "*)
+    printf '%s' "${TEST_CAPACITY_INSPECT_LABELS:-{}}"
+    ;;
+esac
 EOF
 chmod +x "${test_dir}/bin/docker"
 
@@ -46,18 +53,78 @@ PATH="${test_dir}/bin:${PATH}" \
 grep -q -- '-p capacity-test --profile capacity-stack' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'compose.capacity.yml config' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 
+for existing in container volume; do
+  : >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
+  if PATH="${test_dir}/bin:${PATH}" \
+    TEST_CAPACITY_EXISTING_CONTAINER="$([[ "${existing}" == container ]] && printf foreign || true)" \
+    TEST_CAPACITY_EXISTING_VOLUME="$([[ "${existing}" == volume ]] && printf retained || true)" \
+    REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/refused-${existing}" REPOSITORY_CAPACITY_PROJECT=capacity-test \
+    "${repo_root}/scripts/repository-capacity-stack.sh" local-alpha >"${test_dir}/ownership.log" 2>&1; then
+    echo "managed stack reused existing project ${existing} data" >&2
+    exit 1
+  fi
+  if grep -Eq '(^| )(up|stop|down|rm|logs)( |$)' "${REPOSITORY_CAPACITY_DOCKER_LOG}"; then
+    echo "failed ownership preflight modified or captured an unowned stack" >&2
+    exit 1
+  fi
+done
+
+for setting in 'CAPACITY_SCYLLA_KEYSPACE=bad;name' 'CAPACITY_API_A_PORT=65536' 'CAPACITY_API_B_PORT=4000'; do
+  if env PATH="${test_dir}/bin:${PATH}" "${setting}" \
+    "${repo_root}/scripts/repository-capacity-stack.sh" config >"${test_dir}/invalid.log" 2>&1; then
+    echo "managed stack accepted invalid keyspace/port setting" >&2
+    exit 1
+  fi
+done
+
 : >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
 touch "${test_dir}/replace"
-PATH="${test_dir}/bin:${PATH}" \
+mkdir -p "${test_dir}/watcher-state"
+jq -n '{schemaVersion:1,project:"capacity-test",runID:"owned-run",revision:"0123456789abcdef0123456789abcdef01234567",keyspace:"gitstore",ports:[4000,4001,9000,9001,6000,6001,5001,5002]}' \
+  >"${test_dir}/watcher-state/owned-stack.json"
+PATH="${test_dir}/bin:${PATH}" CAPACITY_RUN_ID=owned-run \
+  REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/watcher-state" \
   "${repo_root}/scripts/watch-repository-capacity-replacement.sh" \
   "${test_dir}/replace" capacity-test 0123456789abcdef0123456789abcdef01234567
 
-[[ "$(wc -l <"${REPOSITORY_CAPACITY_DOCKER_LOG}" | tr -d ' ')" == 3 ]]
+[[ "$(wc -l <"${REPOSITORY_CAPACITY_DOCKER_LOG}" | tr -d ' ')" == 4 ]]
 grep -q -- 'stop api-b$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'rm -f api-b$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'up -d --no-deps api-b$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 if grep -Eq '(api-a|controller-manager)' "${REPOSITORY_CAPACITY_DOCKER_LOG}"; then
   echo "replacement watcher touched a non-target service" >&2
+  exit 1
+fi
+
+for run in missing foreign-run; do
+  : >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
+  state="${test_dir}/watcher-state"
+  [[ "${run}" != missing ]] || state="${test_dir}/missing-state"
+  if PATH="${test_dir}/bin:${PATH}" CAPACITY_RUN_ID="${run}" \
+    REPOSITORY_CAPACITY_PROJECT=capacity-test REPOSITORY_CAPACITY_STATE_DIR="${state}" \
+    CAPACITY_GIT_REVISION=0123456789abcdef0123456789abcdef01234567 \
+    "${repo_root}/scripts/repository-capacity-stack.sh" down >"${test_dir}/manifest.log" 2>&1; then
+    echo "shutdown accepted a missing or mismatched ownership manifest" >&2
+    exit 1
+  fi
+  [[ ! -s "${REPOSITORY_CAPACITY_DOCKER_LOG}" ]] || {
+    echo "ownership mismatch reached Docker lifecycle operations" >&2
+    exit 1
+  }
+done
+
+: >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
+if PATH="${test_dir}/bin:${PATH}" CAPACITY_RUN_ID=owned-run \
+  REPOSITORY_CAPACITY_PROJECT=capacity-test REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/watcher-state" \
+  CAPACITY_GIT_REVISION=0123456789abcdef0123456789abcdef01234567 \
+  TEST_CAPACITY_EXISTING_CONTAINER=abcdef123456 \
+  TEST_CAPACITY_INSPECT_LABELS='{"com.docker.compose.project":"capacity-test","dev.gitstore.capacity.run":"foreign-run"}' \
+  "${repo_root}/scripts/repository-capacity-stack.sh" down >"${test_dir}/foreign-label.log" 2>&1; then
+  echo "shutdown accepted a foreign-run project container" >&2
+  exit 1
+fi
+if grep -Eq '(^| )(stop|down|rm)( |$)' "${REPOSITORY_CAPACITY_DOCKER_LOG}"; then
+  echo "foreign-run container reached a destructive lifecycle action" >&2
   exit 1
 fi
 
@@ -83,9 +150,12 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
       -f "${repo_root}/compose.scylla.cluster.yml" \
       -f "${repo_root}/compose.capacity.yml" config --format json >"${rendered}"
   jq -e '
-    .services["scylla-1"].container_name == "gitstore-capacity-scylla-1" and
-    .services["scylla-2"].container_name == "gitstore-capacity-scylla-2" and
-    .services["scylla-3"].container_name == "gitstore-capacity-scylla-3" and
+    .services["scylla-1"].container_name == "capacity-render-test-scylla-1" and
+    .services["api-a"].labels["dev.gitstore.capacity.run"] != null and
+    (.services["api-b"].labels == .services["api-a"].labels) and
+    (.services["controller-manager-b"].labels == .services["api-a"].labels) and
+    .services["scylla-2"].container_name == "capacity-render-test-scylla-2" and
+    .services["scylla-3"].container_name == "capacity-render-test-scylla-3" and
     ((.services["scylla-1"].ports // []) | length) == 0 and
     .services["api-b"].depends_on["api-a"].condition == "service_healthy" and
     .services["api-b"].depends_on["capacity-credential-bootstrap"].condition == "service_completed_successfully" and
@@ -96,6 +166,27 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     ((.services["capacity-serviceaccount-enrollment"].ports // []) | length) == 0 and
     (.services["api-a"].depends_on["api-b"] == null)
   ' "${rendered}" >/dev/null
+
+  CAPACITY_SCYLLA_KEYSPACE=capacity_owned CAPACITY_API_A_PORT=14000 CAPACITY_API_B_PORT=14001 \
+    CAPACITY_GIT_HTTP_A_PORT=19000 CAPACITY_GIT_HTTP_B_PORT=19001 \
+    CAPACITY_CATALOG_A_PORT=16000 CAPACITY_CATALOG_B_PORT=16001 \
+    CAPACITY_CONTROLLER_A_PORT=15001 CAPACITY_CONTROLLER_B_PORT=15002 \
+    POLICY_FILE="${test_dir}/policy.yaml" USERS_FILE="${test_dir}/users.yaml" \
+    docker compose -p another-capacity --profile capacity-stack \
+      -f "${repo_root}/compose.yml" -f "${repo_root}/compose.scylla.cluster.yml" \
+      -f "${repo_root}/compose.capacity.yml" config --format json >"${test_dir}/custom-compose.json"
+  jq -e --arg root "${test_dir}" '
+    .services["api-a"].container_name == "another-capacity-api-a" and
+    .services["api-b"].container_name == "another-capacity-api-b" and
+    .services["api-a"].ports[0].published == "14000" and
+    .services["api-b"].ports[0].published == "14001" and
+    .services["controller-manager-a"].ports[0].published == "15001" and
+    .services["controller-manager-b"].ports[0].published == "15002" and
+    .services["api-a"].environment.GITSTORE_API__DATASTORE__SCYLLA__KEYSPACE == "capacity_owned" and
+    (.services["scylla-init"].command[-1] | contains("EXISTS capacity_owned ")) and
+    ([.services["api-a"].volumes[] | select(.target == "/etc/gitstore/policy.yaml")][0].source == ($root + "/policy.yaml")) and
+    ([.services["api-b"].volumes[] | select(.target == "/etc/gitstore/users.yaml")][0].source == ($root + "/users.yaml"))
+  ' "${test_dir}/custom-compose.json" >/dev/null
 
   secret_rendered="${test_dir}/compose-secret.json"
   REPOSITORY_CAPACITY_SECRET_SCENARIO=1 \
@@ -177,7 +268,12 @@ fi
 grep -q -- 'up -d --build api-a api-b controller-manager-a controller-manager-b$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'ps --all$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'logs --no-color$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
-grep -q -- 'down -v --remove-orphans$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
+grep -q -- 'stop api-a api-b controller-manager-a controller-manager-b capacity-git-service scylla-1 scylla-2 scylla-3$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
+if grep -Eq '(^| )(down|--remove-orphans|-v)( |$)' "${REPOSITORY_CAPACITY_DOCKER_LOG}"; then
+  echo "failed stack cleanup destroyed retained volumes or touched orphan services" >&2
+  exit 1
+fi
+[[ -f "${test_dir}/failed-state/token" ]]
 [[ -f "${test_dir}/failed-state/compose-failure-ps.log" ]]
 [[ -f "${test_dir}/failed-state/compose-failure.log" ]]
 

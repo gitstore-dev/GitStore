@@ -12,6 +12,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,9 +26,11 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // mockGitClient is a test double for GitClient.
@@ -83,6 +87,246 @@ func TestNewMuxRequiresDatastore(t *testing.T) {
 		NewMux(SmartHttpDeps{GitClient: &mockGitClient{}, Logger: zap.NewNop(),
 			Ids: apiruntime.NewSequenceIDGenerator(), Registry: newTestRegistry(t)})
 	})
+}
+
+func TestGitHTTPPhaseTimingAccounting(t *testing.T) {
+	start := time.Now()
+	timing := gitHTTPTiming{last: start}
+	timing.advance(gitHTTPResolution, start.Add(time.Millisecond))
+	timing.advance(gitHTTPAuthorization, start.Add(3*time.Millisecond))
+	timing.advance(gitHTTPPushContext, start.Add(6*time.Millisecond))
+	timing.advance(gitHTTPHandler, start.Add(10*time.Millisecond))
+	timing.advance(gitHTTPHandler, start.Add(15*time.Millisecond))
+	require.Equal(t, [gitHTTPPhaseCount]time.Duration{
+		time.Millisecond, 2 * time.Millisecond, 3 * time.Millisecond,
+		4 * time.Millisecond, 5 * time.Millisecond,
+	}, timing.durations)
+}
+
+func TestGitHTTPStageMetricsOnlyRecordAttemptedWork(t *testing.T) {
+	for _, tc := range []struct {
+		name, outcome string
+		status        int
+		phases        []gitHTTPPhase
+	}{
+		{"advertisement", "success", 200, []gitHTTPPhase{gitHTTPAuthentication, gitHTTPResolution, gitHTTPAuthorization, gitHTTPHandler}},
+		{"receive", "success", 200, []gitHTTPPhase{gitHTTPAuthentication, gitHTTPResolution, gitHTTPAuthorization, gitHTTPPushContext, gitHTTPHandler}},
+		{"authentication denied", "client_error", 401, []gitHTTPPhase{gitHTTPAuthentication}},
+		{"resolution failed", "client_error", 404, []gitHTTPPhase{gitHTTPAuthentication, gitHTTPResolution}},
+		{"authorization failed", "server_error", 500, []gitHTTPPhase{gitHTTPAuthentication, gitHTTPResolution, gitHTTPAuthorization}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := prometheus.NewRegistry()
+			metrics := newGitHTTPStageMetrics(reg)
+			timing := gitHTTPTiming{}
+			var total time.Duration
+			for _, phase := range tc.phases {
+				timing.attempted[phase] = true
+				timing.durations[phase] = time.Duration(phase+1) * time.Millisecond
+				total += timing.durations[phase]
+			}
+			timing.observe(metrics, "info_refs", tc.status, total)
+			families, err := reg.Gather()
+			require.NoError(t, err)
+			require.Len(t, families, 1)
+			require.Equal(t, "gitstore_git_http_stage_duration_seconds", families[0].GetName())
+			require.Len(t, families[0].Metric, len(tc.phases)+1)
+			var phaseSum float64
+			for _, metric := range families[0].Metric {
+				labels := map[string]string{}
+				for _, label := range metric.Label {
+					labels[label.GetName()] = label.GetValue()
+				}
+				require.Len(t, labels, 3)
+				require.Equal(t, "info_refs", labels["operation"])
+				require.Equal(t, tc.outcome, labels["outcome"])
+				require.EqualValues(t, 1, metric.Histogram.GetSampleCount())
+				if labels["phase"] == "total" {
+					require.Equal(t, total.Seconds(), metric.Histogram.GetSampleSum())
+				} else {
+					phaseSum += metric.Histogram.GetSampleSum()
+				}
+			}
+			require.InDelta(t, total.Seconds(), phaseSum, 1e-12)
+		})
+	}
+}
+
+func TestGitHTTPRequestTimingBoundaries(t *testing.T) {
+	const delay = 5 * time.Millisecond
+	for _, tc := range []struct {
+		name, operation, delayedPhase             string
+		method, path                              string
+		status                                    int
+		namespaceReads, repositoryReads, mappings int
+	}{
+		{"authentication", "info_refs", "authentication_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 200, 2, 1, 1},
+		{"resolution", "info_refs", "resolution_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 200, 2, 1, 1},
+		{"authorization", "info_refs", "authorization_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 200, 2, 1, 1},
+		{"push context", "receive_pack", "push_context_ms", http.MethodPost, "/gitstore/catalog/git-receive-pack", 200, 2, 2, 1},
+		{"receive", "receive_pack", "handler_ms", http.MethodPost, "/gitstore/catalog/git-receive-pack", 200, 2, 2, 1},
+		{"upload", "upload_pack", "handler_ms", http.MethodPost, "/gitstore/catalog/git-upload-pack", 200, 2, 1, 1},
+		{"handler failure", "info_refs", "handler_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 503, 2, 1, 1},
+		{"resolution failure", "info_refs", "resolution_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 404, 1, 0, 0},
+		{"authentication denied", "info_refs", "authentication_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 401, 0, 0, 0},
+		{"authorization denied", "info_refs", "authorization_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 403, 2, 1, 1},
+		{"push context failure", "receive_pack", "push_context_ms", http.MethodPost, "/gitstore/catalog/git-receive-pack", 503, 2, 2, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			core, logs := observer.New(zap.InfoLevel)
+			var namespaceReads, repositoryReads, mappings int
+			store := newTestStore().(*testutil.StubStore)
+			namespaceRead := store.GetNamespaceByNameFunc
+			store.GetNamespaceByNameFunc = func(ctx context.Context, name string) (*datastore.Namespace, error) {
+				namespaceReads++
+				if namespaceReads == 1 && tc.delayedPhase == "resolution_ms" {
+					time.Sleep(delay)
+				}
+				if tc.name == "resolution failure" {
+					return nil, datastore.ErrNotFound
+				}
+				return namespaceRead(ctx, name)
+			}
+			repositoryRead := store.GetRepositoryFunc
+			store.GetRepositoryFunc = func(ctx context.Context, id string) (*datastore.Repository, error) {
+				repositoryReads++
+				if (repositoryReads == 1 && tc.delayedPhase == "authorization_ms") ||
+					(repositoryReads == 2 && tc.delayedPhase == "push_context_ms") {
+					time.Sleep(delay)
+				}
+				if tc.name == "push context failure" && repositoryReads == 2 {
+					return nil, errors.New("private-storage-error")
+				}
+				return repositoryRead(ctx, id)
+			}
+			mappingRead := store.LookupRepositoryFunc
+			store.LookupRepositoryFunc = func(ctx context.Context, namespace, name string) (*datastore.NamespaceMapping, error) {
+				mappings++
+				return mappingRead(ctx, namespace, name)
+			}
+			authN := &stubAuthNProviderWithPrincipal{
+				principal: &auth.Principal{Subject: "test-writer", AuthMethod: "basic"},
+				decision:  auth.Allow("test-authn", "authenticated fixture"),
+			}
+			if tc.delayedPhase == "authentication_ms" {
+				authN.delay = delay
+			}
+			if tc.name == "authentication denied" {
+				authN.decision = auth.Deny("test-authn", "denied fixture")
+			}
+			var authZ auth.AuthZProvider = testutil.NewAllowAllAuthZ()
+			if tc.name == "authorization denied" {
+				authZ = testutil.NewDenyAllAuthZ(t)
+			}
+			client := &mockGitClient{
+				infoRefsFunc: func(_ context.Context, _ string, svc gitv1.Service) ([]byte, gitv1.Service, error) {
+					if tc.delayedPhase == "handler_ms" {
+						time.Sleep(delay)
+					}
+					if tc.name == "handler failure" {
+						return nil, svc, errors.New("private-backend-error")
+					}
+					return []byte("0000"), svc, nil
+				},
+				receivePackFunc: func(_ context.Context, _ string, _ io.Reader) ([]byte, error) {
+					if tc.delayedPhase == "handler_ms" {
+						time.Sleep(delay)
+					}
+					return []byte("0000"), nil
+				},
+				uploadPackFunc: func(_ context.Context, _ string, _ []byte) (io.Reader, error) {
+					time.Sleep(delay)
+					return strings.NewReader("private-response"), nil
+				},
+			}
+			router := NewMux(SmartHttpDeps{
+				GitClient: client, Store: store, Logger: zap.New(core),
+				Ids:      apiruntime.NewSequenceIDGenerator(),
+				Registry: auth.NewProviderRegistry(auth.NewChainedAuthN(authN), authZ, nil),
+			})
+			separator := "?"
+			if strings.Contains(tc.path, "?") {
+				separator = "&"
+			}
+			req := httptest.NewRequest(tc.method, tc.path+separator+"private=secret-marker", strings.NewReader("private-body"))
+			req.SetBasicAuth("test-writer", "private-password")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			require.Equal(t, tc.status, w.Code)
+			require.Equal(t, tc.namespaceReads, namespaceReads)
+			require.Equal(t, tc.repositoryReads, repositoryReads)
+			require.Equal(t, tc.mappings, mappings)
+			entries := logs.FilterMessage("git_http_request_timing").All()
+			require.Len(t, entries, 1)
+			fields := entries[0].ContextMap()
+			require.Len(t, fields, 8)
+			require.Equal(t, tc.operation, fields["operation"])
+			require.Equal(t, int64(tc.status), fields["status"])
+			require.GreaterOrEqual(t, fields[tc.delayedPhase].(float64), float64(delay)/float64(time.Millisecond))
+			var total float64
+			for _, phase := range []string{"authentication_ms", "resolution_ms", "authorization_ms", "push_context_ms", "handler_ms"} {
+				duration := fields[phase].(float64)
+				require.GreaterOrEqual(t, duration, float64(0))
+				total += duration
+			}
+			require.InDelta(t, total, fields["total_ms"], 0.000001)
+			if tc.operation != "receive_pack" {
+				require.Zero(t, fields["push_context_ms"])
+			}
+			switch tc.name {
+			case "authentication denied":
+				require.Zero(t, fields["resolution_ms"])
+				fallthrough
+			case "resolution failure":
+				require.Zero(t, fields["authorization_ms"])
+				fallthrough
+			case "authorization denied", "push context failure":
+				require.Zero(t, fields["handler_ms"])
+			}
+		})
+	}
+}
+
+func TestGitHTTPRequestTimingConcurrentCancellation(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	var receives atomic.Int64
+	client := &mockGitClient{
+		receivePackFunc: func(ctx context.Context, _ string, _ io.Reader) ([]byte, error) {
+			receives.Add(1)
+			return nil, ctx.Err()
+		},
+	}
+	router := NewMux(SmartHttpDeps{
+		GitClient: client, Store: newTestStore(), Logger: zap.New(core),
+		Ids: apiruntime.NewSequenceIDGenerator(), Registry: newTestRegistry(t),
+	})
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Go(func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-receive-pack", strings.NewReader("private-body")).WithContext(ctx)
+			req.SetBasicAuth("test-writer", "private-password")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+		})
+	}
+	wg.Wait()
+	require.EqualValues(t, 32, receives.Load())
+	entries := logs.FilterMessage("git_http_request_timing").All()
+	require.Len(t, entries, 32)
+	for _, entry := range entries {
+		fields := entry.ContextMap()
+		require.Len(t, fields, 8)
+		require.Equal(t, "receive_pack", fields["operation"])
+		require.EqualValues(t, http.StatusServiceUnavailable, fields["status"])
+		var total float64
+		for _, phase := range []string{"authentication_ms", "resolution_ms", "authorization_ms", "push_context_ms", "handler_ms"} {
+			total += fields[phase].(float64)
+		}
+		require.InDelta(t, total, fields["total_ms"], 0.000001)
+	}
 }
 
 func (m *mockGitClient) InfoRefs(ctx context.Context, repoID string, service gitv1.Service) ([]byte, gitv1.Service, error) {
@@ -758,6 +1002,7 @@ func TestGitHttpAuthorizerMissingContext(t *testing.T) {
 type stubAuthNProviderWithPrincipal struct {
 	principal *auth.Principal
 	decision  auth.Decision
+	delay     time.Duration
 }
 
 func (s *stubAuthNProviderWithPrincipal) Name() string { return "stub-authn" }
@@ -765,6 +1010,7 @@ func (s *stubAuthNProviderWithPrincipal) Capabilities() auth.Capability {
 	return auth.CapAuthenticate
 }
 func (s *stubAuthNProviderWithPrincipal) Authenticate(_ context.Context, _ auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
+	time.Sleep(s.delay)
 	return s.principal, s.decision, nil
 }
 func (s *stubAuthNProviderWithPrincipal) RevokeSession(_ context.Context, _ string, _ time.Time) error {

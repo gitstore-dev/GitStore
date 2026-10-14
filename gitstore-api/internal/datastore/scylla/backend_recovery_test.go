@@ -9,16 +9,371 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gocql/gocql"
 	"github.com/google/uuid"
 	"github.com/scylladb/gocqlx/v3/migrate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFileCASWriterBatchesReadyRowsAndPreservesIndependentConflicts(t *testing.T) {
+	ambiguous := errors.New("conditional batch outcome unknown")
+	for _, tc := range []struct {
+		name    string
+		applied bool
+		err     error
+		singles int64
+	}{
+		{"applied", true, nil, 1},
+		{"definite conflict", false, nil, 4},
+		{"ambiguous failure", false, ambiguous, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			started, release := make(chan struct{}), make(chan struct{})
+			var singles, batches atomic.Int64
+			writer := newFileCASWriter(func(request *fileCASRequest) error {
+				singles.Add(1)
+				if request.uid[15] == 1 {
+					close(started)
+					<-release
+				}
+				if request.uid[15] == 3 {
+					return datastore.ErrConflict
+				}
+				return nil
+			}, func(ctx context.Context, group []*fileCASRequest) (bool, error) {
+				batches.Add(1)
+				assert.NoError(t, ctx.Err())
+				assert.Len(t, group, 3)
+				for i, request := range group {
+					assert.Equal(t, byte(i+2), request.uid[15])
+				}
+				return tc.applied, tc.err
+			})
+			t.Cleanup(func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+				writer.close()
+			})
+			done := make([]chan error, 4)
+			for i := range done {
+				done[i] = make(chan error, 1)
+			}
+			go func() { done[0] <- writer.submit(t.Context(), gocql.UUID{15: 1}, nil) }()
+			<-started
+			for i := 1; i < len(done); i++ {
+				go func() { done[i] <- writer.submit(t.Context(), gocql.UUID{15: byte(i + 1)}, nil) }()
+				require.Eventually(t, func() bool { return len(writer.requests) == i }, time.Second, time.Millisecond)
+			}
+			close(release)
+			for i, result := range done {
+				err := <-result
+				switch {
+				case i == 0:
+					require.NoError(t, err)
+				case tc.err != nil:
+					require.ErrorIs(t, err, tc.err)
+				case !tc.applied && i == 2:
+					require.ErrorIs(t, err, datastore.ErrConflict)
+				default:
+					require.NoError(t, err)
+				}
+			}
+			writer.close()
+			require.Equal(t, tc.singles, singles.Load())
+			require.EqualValues(t, 1, batches.Load())
+			require.ErrorContains(t, writer.submit(t.Context(), gocql.UUID{15: 5}, nil), "closed")
+		})
+	}
+}
+
+func TestFileCASWriterNeverBatchesRepeatedUIDs(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	writer := newFileCASWriter(func(request *fileCASRequest) error {
+		if request.uid[15] == 1 {
+			close(started)
+			<-release
+		}
+		return nil
+	}, func(_ context.Context, group []*fileCASRequest) (bool, error) {
+		seen := make(map[gocql.UUID]bool)
+		for _, request := range group {
+			assert.False(t, seen[request.uid], "one row cannot have conflicting conditions inside a batch")
+			seen[request.uid] = true
+		}
+		assert.LessOrEqual(t, len(group), 4)
+		return true, nil
+	})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		writer.close()
+	})
+	done := make(chan error, 5)
+	go func() { done <- writer.submit(t.Context(), gocql.UUID{15: 1}, nil) }()
+	<-started
+	for i, id := range []byte{2, 2, 3, 4} {
+		go func() { done <- writer.submit(t.Context(), gocql.UUID{15: id}, nil) }()
+		require.Eventually(t, func() bool { return len(writer.requests) == i+1 }, time.Second, time.Millisecond)
+	}
+	close(release)
+	for range 5 {
+		require.NoError(t, <-done)
+	}
+	writer.close()
+}
+
+func TestFileCASWriterRetainsBoundAndDrainsDuringClose(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	writer := newFileCASWriter(func(request *fileCASRequest) error {
+		if request.uid[15] == 1 {
+			close(started)
+			<-release
+		}
+		return nil
+	}, func(_ context.Context, group []*fileCASRequest) (bool, error) {
+		assert.Len(t, group, 16, "already accepted small rows should share one physical CAS")
+		return true, nil
+	})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		writer.close()
+	})
+	done := make(chan error, 17)
+	go func() { done <- writer.submit(t.Context(), gocql.UUID{15: 1}, nil) }()
+	<-started
+	for i := range 16 {
+		go func() { done <- writer.submit(t.Context(), gocql.UUID{15: byte(i + 2)}, nil) }()
+	}
+	require.Eventually(t, func() bool { return len(writer.requests) == 16 }, time.Second, time.Millisecond)
+	require.ErrorContains(t, writer.submit(t.Context(), gocql.UUID{15: 20}, nil), "queue exhausted")
+	closed := make(chan struct{})
+	go func() { writer.close(); close(closed) }()
+	require.Eventually(t, func() bool {
+		writer.mu.Lock()
+		defer writer.mu.Unlock()
+		return writer.closed
+	}, time.Second, time.Millisecond)
+	select {
+	case <-closed:
+		t.Fatal("writer closed before its accepted physical writes drained")
+	default:
+	}
+	close(release)
+	for range 17 {
+		require.NoError(t, <-done)
+	}
+	<-closed
+}
+
+func TestFileCASWriterKeepsLargeValuesInFourRowBatches(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var batches atomic.Int64
+	writer := newFileCASWriter(func(request *fileCASRequest) error {
+		if request.uid[15] == 1 {
+			close(started)
+			<-release
+		}
+		return nil
+	}, func(_ context.Context, group []*fileCASRequest) (bool, error) {
+		batches.Add(1)
+		assert.Len(t, group, 4)
+		return true, nil
+	})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		writer.close()
+	})
+	done := make(chan error, 17)
+	go func() { done <- writer.submit(t.Context(), gocql.UUID{15: 1}, nil) }()
+	<-started
+	values := []any{strings.Repeat("x", fileCASBatchPayloadLimit)}
+	for i := range 16 {
+		go func() { done <- writer.submit(t.Context(), gocql.UUID{15: byte(i + 2)}, values) }()
+	}
+	require.Eventually(t, func() bool { return len(writer.requests) == 16 }, time.Second, time.Millisecond)
+	close(release)
+	for range 17 {
+		require.NoError(t, <-done)
+	}
+	writer.close()
+	require.EqualValues(t, 4, batches.Load())
+}
+
+func TestFileCASWriterBatchCancellationKeepsLivePeers(t *testing.T) {
+	for _, cancelAll := range []bool{false, true} {
+		t.Run(fmt.Sprintf("all-%t", cancelAll), func(t *testing.T) {
+			started, release := make(chan struct{}), make(chan struct{})
+			firstCtx, cancelFirst := context.WithCancel(t.Context())
+			peerCtx, cancelPeer := context.WithCancel(t.Context())
+			defer cancelFirst()
+			defer cancelPeer()
+			writer := newFileCASWriter(func(*fileCASRequest) error {
+				close(started)
+				<-release
+				return nil
+			}, func(ctx context.Context, group []*fileCASRequest) (bool, error) {
+				assert.Len(t, group, 2)
+				cancelFirst()
+				if cancelAll {
+					cancelPeer()
+					select {
+					case <-ctx.Done():
+					case <-time.After(time.Second):
+						return false, errors.New("all-canceled conditional batch remained active")
+					}
+					return false, ctx.Err()
+				}
+				assert.NoError(t, ctx.Err(), "one caller cannot cancel a live peer's physical batch")
+				return true, nil
+			})
+			t.Cleanup(func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+				writer.close()
+			})
+			done := make([]chan error, 3)
+			for i := range done {
+				done[i] = make(chan error, 1)
+			}
+			go func() { done[0] <- writer.submit(t.Context(), gocql.UUID{15: 1}, nil) }()
+			<-started
+			go func() { done[1] <- writer.submit(firstCtx, gocql.UUID{15: 2}, nil) }()
+			require.Eventually(t, func() bool { return len(writer.requests) == 1 }, time.Second, time.Millisecond)
+			go func() { done[2] <- writer.submit(peerCtx, gocql.UUID{15: 3}, nil) }()
+			require.Eventually(t, func() bool { return len(writer.requests) == 2 }, time.Second, time.Millisecond)
+			close(release)
+			require.NoError(t, <-done[0])
+			for _, result := range done[1:] {
+				if cancelAll {
+					require.ErrorIs(t, <-result, context.Canceled)
+				} else {
+					require.NoError(t, <-result)
+				}
+			}
+			writer.close()
+		})
+	}
+}
+
+func TestFileCASWriterSkipsCanceledQueuedRows(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var writes atomic.Int64
+	writer := newFileCASWriter(func(request *fileCASRequest) error {
+		writes.Add(1)
+		assert.NotEqual(t, byte(2), request.uid[15], "an already-canceled queued row must not reach physical execution")
+		if request.uid[15] == 1 {
+			close(started)
+			<-release
+		}
+		return nil
+	}, func(context.Context, []*fileCASRequest) (bool, error) {
+		t.Error("one live queued peer must use its independent single CAS")
+		return false, errors.New("unexpected physical batch")
+	})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		writer.close()
+	})
+	done := make([]chan error, 3)
+	for i := range done {
+		done[i] = make(chan error, 1)
+	}
+	go func() { done[0] <- writer.submit(t.Context(), gocql.UUID{15: 1}, nil) }()
+	<-started
+	canceled, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() { done[1] <- writer.submit(canceled, gocql.UUID{15: 2}, nil) }()
+	require.Eventually(t, func() bool { return len(writer.requests) == 1 }, time.Second, time.Millisecond)
+	go func() { done[2] <- writer.submit(t.Context(), gocql.UUID{15: 3}, nil) }()
+	require.Eventually(t, func() bool { return len(writer.requests) == 2 }, time.Second, time.Millisecond)
+	cancel()
+	close(release)
+	require.NoError(t, <-done[0])
+	require.ErrorIs(t, <-done[1], context.Canceled)
+	require.NoError(t, <-done[2])
+	writer.close()
+	require.EqualValues(t, 2, writes.Load())
+}
+
+func TestFileUpdateBindingsPreserveChangesAndNormalization(t *testing.T) {
+	now := time.Now().UTC()
+	deleted := now.Add(time.Hour)
+	previous := toFileRow(&datastore.File{
+		UID: uuid.NewString(), Namespace: "namespace", Name: "file",
+		APIVersion: "v1beta1", Kind: "File", Generation: 1, ResourceVersion: "1",
+		CreationTimestamp: now, Revision: "revision", CreationActor: "creator",
+		UpdateTimestamp: now, UpdateActor: "updater", Labels: map[string]string{"key": "value"},
+		Annotations: map[string]string{"key": "value"}, OwnerReferences: json.RawMessage(`[]`),
+		Finalizers: []string{"finalizer"}, DeletionTimestamp: &deleted, RepositoryID: uuid.NewString(),
+		SourcePath: "path", GitCommitSHA: "commit", GitRef: "ref", Spec: json.RawMessage(`{}`),
+		Body: "body", Status: json.RawMessage(`{}`),
+	})
+	same := *previous
+	same.Labels = map[string]string{"key": "value"}
+	same.Annotations = map[string]string{"key": "value"}
+	same.Finalizers = []string{"finalizer"}
+	sameDeleted := deleted
+	same.DeletionTimestamp = &sameDeleted
+	sameRepository := *previous.RepositoryID
+	same.RepositoryID = &sameRepository
+	values := fileUpdateValues(&same, previous)
+	require.Len(t, values, 21)
+	for i, value := range values {
+		switch i {
+		case 4:
+			require.Equal(t, same.ResourceVersion, value)
+		default:
+			require.Equal(t, gocql.UnsetValue, value, "unchanged column %d", i)
+		}
+	}
+	cleared := &fileRow{Namespace: previous.Namespace, UID: previous.UID, CreationTimestamp: previous.CreationTimestamp}
+	values = fileUpdateValues(cleared, previous)
+	for i, value := range values {
+		require.NotEqual(t, gocql.UnsetValue, value, "changed/cleared column %d", i)
+	}
+	require.Equal(t, "", values[0])
+	require.EqualValues(t, 0, values[3])
+	require.Equal(t, map[string]string(nil), values[9])
+	require.Equal(t, []string(nil), values[12])
+	require.Equal(t, (*time.Time)(nil), values[13])
+	require.Equal(t, (*gocql.UUID)(nil), values[14])
+	require.Equal(t, "", values[19])
+	empty := fileUpdateValues(cleared, cleared)
+	for _, i := range []int{4, 11, 18, 20} {
+		require.Equal(t, "", empty[i], "logical absence must retain explicit normalization for column %d", i)
+	}
+	require.Equal(t, "value", previous.Labels["key"], "binding preparation must not mutate snapshots")
+	require.Equal(t, []string{"finalizer"}, previous.Finalizers)
+}
 
 func TestMigrationHistoryRequiresEveryCompletedUnchangedFile(t *testing.T) {
 	data := []byte("-- comment;\nCREATE TABLE test (id text PRIMARY KEY);\n")

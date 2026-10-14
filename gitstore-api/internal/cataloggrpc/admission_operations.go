@@ -198,10 +198,42 @@ func (s *Server) authorizeOperations(ctx context.Context, operations []resourceA
 	if removedUser && createdNamespace {
 		return status.Error(codes.PermissionDenied, "USER namespace rename is forbidden; delete and unrelated creation require separate pushes")
 	}
-	for _, op := range operations {
-		existing, err := s.lookupResourceByIdentity(ctx, op.identity)
-		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+	batchFiles := len(operations) > 1 && len(operations) <= datastore.FileNameSnapshotBatchLimit
+	var names []string
+	namespace := ""
+	if batchFiles {
+		namespace = operations[0].identity.Namespace
+		names = make([]string, 0, len(operations))
+		for _, op := range operations {
+			batchFiles = batchFiles && op.identity.Kind == "File" && namespace != "" && op.identity.Namespace == namespace
+			names = append(names, op.identity.Name)
+		}
+	}
+	var files []*datastore.File
+	if batchFiles {
+		var err error
+		files, err = s.store.GetFileSnapshotsByName(ctx, namespace, names)
+		if err != nil || ctx.Err() != nil || len(files) != len(operations) {
 			return status.Error(codes.Unavailable, "resource authorization facts unavailable")
+		}
+		for i, file := range files {
+			if file != nil && (file.Namespace != namespace || file.Name != names[i] || file.UID == "") {
+				return status.Error(codes.Unavailable, "resource authorization facts unavailable")
+			}
+		}
+	}
+	for i, op := range operations {
+		var existing any
+		if batchFiles {
+			if files[i] != nil {
+				existing = files[i]
+			}
+		} else {
+			var err error
+			existing, err = s.lookupResourceByIdentity(ctx, op.identity)
+			if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+				return status.Error(codes.Unavailable, "resource authorization facts unavailable")
+			}
 		}
 		if err := s.authorizeOperation(ctx, op.identity, op.operation, op.newEntry, existing); err != nil {
 			return err
@@ -227,6 +259,7 @@ type parsedEntry struct {
 	body        []byte
 	identity    resourceIdentity
 	contentHash string
+	sourceHash  [sha256.Size]byte
 }
 
 type resourceAdmissionOperation struct {
@@ -309,7 +342,7 @@ type comparableResource struct {
 	Body        string            `json:"body,omitempty"`
 }
 
-func newParsedEntry(path string, parsed *validate.ParsedResource, body []byte, defaultNamespace string) (*parsedEntry, bool, error) {
+func newParsedEntry(path string, parsed *validate.ParsedResource, body []byte, defaultNamespace string, content []byte) (*parsedEntry, bool, error) {
 	cmp, ok := comparableForParsed(parsed, body, defaultNamespace)
 	if !ok {
 		return nil, false, nil
@@ -330,6 +363,7 @@ func newParsedEntry(path string, parsed *validate.ParsedResource, body []byte, d
 		body:        body,
 		identity:    identity,
 		contentHash: contentHash,
+		sourceHash:  sha256.Sum256(content),
 	}, true, nil
 }
 
@@ -460,7 +494,10 @@ func deriveResourceAdmissionOperations(oldEntries, newEntries []*parsedEntry, ch
 		}
 		pathChanged := oldEntry.path != newEntry.path
 		contentChanged := oldEntry.contentHash != newEntry.contentHash
-		if (pathChanged || contentChanged) && pathSelected(oldEntry, newEntry) {
+		// Parsed equality is not Git provenance equality. Explicit deltas also
+		// replay admission at the current tip without rewriting unrelated files.
+		provenanceChanged := oldEntry.sourceHash != newEntry.sourceHash || pathFilterEnabled
+		if (pathChanged || contentChanged || provenanceChanged) && pathSelected(oldEntry, newEntry) {
 			ops = append(ops, resourceAdmissionOperation{
 				operation:      admission.OperationUpdate,
 				identity:       newEntry.identity,

@@ -655,17 +655,122 @@ type secretCapacityFaultDriver struct {
 }
 
 func secretCapacityOwnedCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return secretCapacityOwnedCommandOutput(ctx, &secretCapacityGitOutput{}, name, args...)
+}
+
+func secretCapacityOwnedMetrics(ctx context.Context, container, port string) ([]byte, error) {
+	return secretCapacityOwnedCommandOutput(ctx, &secretCapacityGitOutput{limit: 8 * 1024 * 1024},
+		"docker", "exec", container, "wget", "-qO-", "http://127.0.0.1:"+port+"/metrics")
+}
+
+func secretCapacityOwnedCommandOutput(ctx context.Context, output *secretCapacityGitOutput, name string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, args...)
-	var output secretCapacityGitOutput
-	command.Stdout, command.Stderr = &output, &output
-	if err := command.Run(); err != nil || output.overflow {
+	command.Stdout, command.Stderr = output, output
+	err := command.Run()
+	if err != nil || output.overflow {
 		clear(output.buffer.Bytes())
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, errors.New("secret capacity: owned deployment command failed")
+		if err != nil {
+			var exit *exec.ExitError
+			if errors.As(err, &exit) {
+				return nil, fmt.Errorf("secret capacity: owned deployment command failed (exit %d)", exit.ExitCode())
+			}
+			return nil, errors.New("secret capacity: owned deployment command failed (start)")
+		}
+		return nil, errors.New("secret capacity: owned deployment command exceeded output limit")
 	}
 	return output.buffer.Bytes(), nil
+}
+
+var secretCapacityComposeIdentity = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+var secretCapacityContainerID = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
+
+func secretCapacityServiceContainer(ctx context.Context, project, service string) (string, error) {
+	if !secretCapacityComposeIdentity.MatchString(project) || !secretCapacityComposeIdentity.MatchString(service) {
+		return "", errors.New("secret capacity: invalid owned project or service")
+	}
+	args := []string{"ps",
+		"--filter", "label=com.docker.compose.project=" + project,
+		"--filter", "label=com.docker.compose.service=" + service}
+	if manifestPath := os.Getenv("REPOSITORY_CAPACITY_OWNERSHIP_FILE"); manifestPath != "" {
+		info, err := os.Lstat(manifestPath)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<10 {
+			return "", errors.New("secret capacity: invalid owned-stack manifest")
+		}
+		body, err := os.ReadFile(manifestPath)
+		if err != nil {
+			return "", errors.New("secret capacity: cannot read owned-stack manifest")
+		}
+		var manifest struct {
+			SchemaVersion int    `json:"schemaVersion"`
+			Project       string `json:"project"`
+			RunID         string `json:"runID"`
+		}
+		if err := json.Unmarshal(body, &manifest); err != nil || manifest.SchemaVersion != 1 ||
+			manifest.Project != project || manifest.RunID == "" || manifest.RunID != os.Getenv("CAPACITY_RUN_ID") {
+			return "", errors.New("secret capacity: owned-stack manifest mismatch")
+		}
+		args = append(args, "--filter", "label=dev.gitstore.capacity.run="+manifest.RunID)
+	}
+	args = append(args, "--format", "{{.ID}}")
+	body, err := secretCapacityOwnedCommand(ctx, "docker", args...)
+	if err != nil {
+		return "", err
+	}
+	ids := strings.Fields(string(body))
+	if len(ids) != 1 || !secretCapacityContainerID.MatchString(ids[0]) {
+		return "", errors.New("secret capacity: owned service must have exactly one running container")
+	}
+	return ids[0], nil
+}
+
+func TestSecretCapacityServiceContainer(t *testing.T) {
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(`#!/bin/sh
+printf '%s\n' "$*" > "$TEST_DOCKER_ARGUMENTS"
+printf '%s' "$TEST_DOCKER_IDS"
+exit "${TEST_DOCKER_STATUS:-0}"
+`), 0700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	arguments := filepath.Join(t.TempDir(), "arguments")
+	t.Setenv("TEST_DOCKER_ARGUMENTS", arguments)
+	t.Setenv("TEST_DOCKER_IDS", "abcdef123456\n")
+	id, err := secretCapacityServiceContainer(t.Context(), "owned-project", "api-a")
+	require.NoError(t, err)
+	require.Equal(t, "abcdef123456", id)
+	args, err := os.ReadFile(arguments)
+	require.NoError(t, err)
+	require.Contains(t, string(args), "--filter label=com.docker.compose.project=owned-project")
+	require.Contains(t, string(args), "--filter label=com.docker.compose.service=api-a")
+	require.NotContains(t, string(args), "--all")
+	manifestPath := filepath.Join(t.TempDir(), "owned-stack.json")
+	t.Setenv("REPOSITORY_CAPACITY_OWNERSHIP_FILE", manifestPath)
+	t.Setenv("CAPACITY_RUN_ID", "owned-run")
+	_, err = secretCapacityServiceContainer(t.Context(), "owned-project", "api-a")
+	require.ErrorContains(t, err, "invalid owned-stack manifest")
+	require.NoError(t, os.WriteFile(manifestPath, []byte(`{"schemaVersion":1,"project":"owned-project","runID":"foreign-run"}`), 0600))
+	_, err = secretCapacityServiceContainer(t.Context(), "owned-project", "api-a")
+	require.ErrorContains(t, err, "manifest mismatch")
+	require.NoError(t, os.WriteFile(manifestPath, []byte(`{"schemaVersion":1,"project":"owned-project","runID":"owned-run"}`), 0600))
+	_, err = secretCapacityServiceContainer(t.Context(), "owned-project", "api-a")
+	require.NoError(t, err)
+	args, err = os.ReadFile(arguments)
+	require.NoError(t, err)
+	require.Contains(t, string(args), "--filter label=dev.gitstore.capacity.run=owned-run")
+	for _, output := range []string{"", "abcdef123456\n123456abcdef\n", "foreign-name", "not-a-container-id"} {
+		t.Setenv("TEST_DOCKER_IDS", output)
+		_, err := secretCapacityServiceContainer(t.Context(), "owned-project", "api-a")
+		require.Error(t, err)
+	}
+	t.Setenv("TEST_DOCKER_STATUS", "1")
+	_, err = secretCapacityServiceContainer(t.Context(), "owned-project", "api-a")
+	require.Error(t, err)
+	for _, project := range []string{"", "bad project", "-foreign", "bad\nproject"} {
+		_, err := secretCapacityServiceContainer(t.Context(), project, "api-a")
+		require.ErrorContains(t, err, "invalid owned project")
+	}
 }
 
 type secretCapacityOwnedMount struct {
@@ -767,9 +872,12 @@ func validateSecretCapacityOwnedMounts(ctx context.Context, root, project string
 	if err := validateSecretCapacityGitTopology(string(topology)); err != nil {
 		return err
 	}
-	names := []string{"gitstore-capacity-controller-manager-a", "gitstore-capacity-controller-manager-b",
-		"gitstore-capacity-api-a", "gitstore-capacity-api-b", "gitstore-capacity-git-service"}
-	for i, name := range names {
+	services := []string{"controller-manager-a", "controller-manager-b", "api-a", "api-b", "capacity-git-service"}
+	for i, service := range services {
+		name, err := secretCapacityServiceContainer(ctx, project, service)
+		if err != nil {
+			return err
+		}
 		body, err := secretCapacityOwnedCommand(ctx, "docker", "inspect", "--format",
 			`{"project":{{json (index .Config.Labels "com.docker.compose.project")}},"running":{{json .State.Running}},"mounts":{{json .Mounts}}}`, name)
 		if err != nil {
@@ -798,7 +906,7 @@ func validateSecretCapacityGitTopology(topology string) error {
 			return errors.New("secret capacity: malformed owned project topology")
 		}
 		if strings.HasSuffix(fields[1], "git-service") {
-			if fields[0] != "gitstore-capacity-git-service" || fields[1] != "capacity-git-service" {
+			if fields[1] != "capacity-git-service" {
 				return errors.New("secret capacity: an additional Git service is active in the owned deployment")
 			}
 			gitProcesses++
@@ -811,7 +919,7 @@ func validateSecretCapacityGitTopology(topology string) error {
 }
 
 func TestSecretCapacityOwnedGitTopology(t *testing.T) {
-	valid := "gitstore-capacity-git-service capacity-git-service\napi api-a\n"
+	valid := "isolated-project-capacity-git-service capacity-git-service\napi api-a\n"
 	require.NoError(t, validateSecretCapacityGitTopology(valid))
 	for _, invalid := range []string{"", "api api-a", valid + valid, valid + "other git-service\n", valid + "other capacity-git-service\n"} {
 		require.Error(t, validateSecretCapacityGitTopology(invalid))
@@ -1139,8 +1247,12 @@ func (driver *secretCapacityFaultDriver) run(ctx context.Context, started time.T
 	}
 	restartCtx, cancel := context.WithDeadline(ctx, restarted.Add(time.Minute))
 	defer cancel()
+	restartTarget, err := secretCapacityServiceContainer(restartCtx, driver.fixture.Project, "controller-manager-a")
+	if err != nil {
+		return observation, err
+	}
 	_, err = secretCapacityOwnedCommand(restartCtx, "make", "-C", repoRoot, "--no-print-directory", "chaos",
-		"CHAOS_PROFILE=controller-restart", "CHAOS_TARGET=gitstore-capacity-controller-manager-a", "CHAOS_CONFIRM=1",
+		"CHAOS_PROFILE=controller-restart", "CHAOS_TARGET="+restartTarget, "CHAOS_CONFIRM=1",
 		"CHAOS_RUN_ID="+driver.fixture.RunID, "CHAOS_EVIDENCE_DIR="+filepath.Join(driver.evidence, "secret", "chaos"))
 	if err != nil {
 		return observation, err
@@ -1194,8 +1306,10 @@ func prepareSecretCapacityFaultDriver(t *testing.T, cfg repositoryCapacityConfig
 	driver := &secretCapacityFaultDriver{fixture: fixture, root: root, evidence: evidence, client: client, cfg: cfg}
 	samples, err := driver.samples(ctx)
 	require.NoError(t, err)
-	for i, name := range []string{"gitstore-capacity-controller-manager-a", "gitstore-capacity-controller-manager-b"} {
-		body, err := secretCapacityOwnedCommand(ctx, "docker", "exec", name, "wget", "-qO-", "http://127.0.0.1:5001/metrics")
+	for i, service := range []string{"controller-manager-a", "controller-manager-b"} {
+		name, err := secretCapacityServiceContainer(ctx, fixture.Project, service)
+		require.NoError(t, err)
+		body, err := secretCapacityOwnedMetrics(ctx, name, "5001")
 		require.NoError(t, err)
 		internal, err := parseSecretCapacityControllerMetrics(body)
 		require.NoError(t, err)
@@ -1252,25 +1366,26 @@ type secretCapacityKindHealth struct {
 }
 
 type secretCapacityControllerSample struct {
-	ID                string                              `json:"id"`
-	ObservedAt        time.Time                           `json:"observedAt"`
-	CredentialReady   bool                                `json:"credentialReady"`
-	Healthy           bool                                `json:"healthy"`
-	Ready             bool                                `json:"ready"`
-	Kinds             map[string]secretCapacityKindHealth `json:"kinds"`
-	FreshTokens       int64                               `json:"freshTokens"`
-	FailedExchanges   int64                               `json:"failedExchanges"`
-	CanceledExchanges int64                               `json:"canceledExchanges"`
-	DeadlineExchanges int64                               `json:"deadlineExchanges"`
-	ExchangeInflight  int64                               `json:"exchangeInflight"`
-	ExchangePeak      int64                               `json:"exchangePeak"`
-	MaxRetry          time.Duration                       `json:"maxRetry"`
-	Reconciliations   int64                               `json:"reconciliations"`
-	RecordNotFound    int64                               `json:"recordNotFound"`
-	CPUSeconds        float64                             `json:"cpuSeconds"`
-	RSS               int64                               `json:"rss"`
-	Goroutines        int64                               `json:"goroutines"`
-	GOMAXPROCS        int64                               `json:"gomaxprocs"`
+	ID                  string                              `json:"id"`
+	ObservedAt          time.Time                           `json:"observedAt"`
+	CredentialReady     bool                                `json:"credentialReady"`
+	Healthy             bool                                `json:"healthy"`
+	Ready               bool                                `json:"ready"`
+	Kinds               map[string]secretCapacityKindHealth `json:"kinds"`
+	FreshTokens         int64                               `json:"freshTokens"`
+	FailedExchanges     int64                               `json:"failedExchanges"`
+	CanceledExchanges   int64                               `json:"canceledExchanges"`
+	DeadlineExchanges   int64                               `json:"deadlineExchanges"`
+	ExchangeInflight    int64                               `json:"exchangeInflight"`
+	ExchangePeak        int64                               `json:"exchangePeak"`
+	MaxRetry            time.Duration                       `json:"maxRetry"`
+	Reconciliations     int64                               `json:"reconciliations"`
+	DependencyDeferrals map[string]map[string]int64         `json:"dependencyDeferrals"`
+	RecordNotFound      int64                               `json:"recordNotFound"`
+	CPUSeconds          float64                             `json:"cpuSeconds"`
+	RSS                 int64                               `json:"rss"`
+	Goroutines          int64                               `json:"goroutines"`
+	GOMAXPROCS          int64                               `json:"gomaxprocs"`
 }
 
 var secretCapacityControllerID = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
@@ -1294,6 +1409,7 @@ func parseSecretCapacityControllerMetrics(body []byte) (secretCapacityController
 		"gitstore_controller_credential_exchange_peak_inflight": dto.MetricType_GAUGE,
 		"gitstore_controller_credential_retry_max_seconds":      dto.MetricType_GAUGE,
 		"gitstore_controller_reconcile_total":                   dto.MetricType_COUNTER,
+		"gitstore_controller_dependency_deferrals_total":        dto.MetricType_COUNTER,
 		"gitstore_secret_resolution_total":                      dto.MetricType_COUNTER,
 		"process_cpu_seconds_total":                             dto.MetricType_COUNTER,
 		"process_resident_memory_bytes":                         dto.MetricType_GAUGE,
@@ -1303,8 +1419,8 @@ func parseSecretCapacityControllerMetrics(body []byte) (secretCapacityController
 	for name, want := range types {
 		family := families[name]
 		if family == nil {
-			if name == "gitstore_controller_reconcile_total" {
-				continue // CounterVec children do not exist until the first reconciliation.
+			if name == "gitstore_controller_reconcile_total" || name == "gitstore_controller_dependency_deferrals_total" {
+				continue // CounterVec children do not exist until their first observation.
 			}
 			return sample, invalid
 		}
@@ -1312,7 +1428,8 @@ func parseSecretCapacityControllerMetrics(body []byte) (secretCapacityController
 			return sample, invalid
 		}
 		if name != "gitstore_controller_process_instance_info" && name != "gitstore_controller_credential_exchange_total" &&
-			name != "gitstore_controller_reconcile_total" && name != "gitstore_secret_resolution_total" &&
+			name != "gitstore_controller_reconcile_total" && name != "gitstore_controller_dependency_deferrals_total" &&
+			name != "gitstore_secret_resolution_total" &&
 			(len(family.Metric) != 1 || len(family.Metric[0].Label) != 0) {
 			return sample, invalid
 		}
@@ -1403,6 +1520,31 @@ func parseSecretCapacityControllerMetrics(body []byte) (secretCapacityController
 	sample.MaxRetry = time.Duration(math.Ceil(retry * float64(time.Second)))
 	sample.Reconciliations = integer("gitstore_controller_reconcile_total",
 		map[string]string{"kind": "Repository", "result": "success"}, true)
+	sample.DependencyDeferrals = make(map[string]map[string]int64)
+	for _, metric := range families["gitstore_controller_dependency_deferrals_total"].GetMetric() {
+		if len(metric.Label) != 2 {
+			return secretCapacityControllerSample{}, invalid
+		}
+		labels := make(map[string]string, 2)
+		for _, label := range metric.Label {
+			labels[label.GetName()] = label.GetValue()
+		}
+		kind, dependency := labels["kind"], labels["dependency"]
+		switch kind {
+		case "Namespace", "Repository", "Product", "CategoryTaxonomy":
+		default:
+			return secretCapacityControllerSample{}, invalid
+		}
+		switch dependency {
+		case "api", "credentials", "rate_limit":
+		default:
+			return secretCapacityControllerSample{}, invalid
+		}
+		if sample.DependencyDeferrals[kind] == nil {
+			sample.DependencyDeferrals[kind] = make(map[string]int64)
+		}
+		sample.DependencyDeferrals[kind][dependency] = integer("gitstore_controller_dependency_deferrals_total", labels, false)
+	}
 	providerLabels := map[string]string{
 		"consumer": "controller-manager", "purpose": "identity", "tier": "bootstrap", "provider": "file", "reason": "success",
 	}
@@ -1515,6 +1657,14 @@ func sampleSecretCapacityController(ctx context.Context, client *http.Client, en
 }
 
 func secretCapacityControllerCountersAdvance(before, after secretCapacityControllerSample) bool {
+	for kind, dependencies := range before.DependencyDeferrals {
+		for dependency, count := range dependencies {
+			next, observed := after.DependencyDeferrals[kind][dependency]
+			if !observed || next < count {
+				return false
+			}
+		}
+	}
 	return after.FreshTokens >= before.FreshTokens && after.FailedExchanges >= before.FailedExchanges &&
 		after.CanceledExchanges >= before.CanceledExchanges && after.DeadlineExchanges >= before.DeadlineExchanges &&
 		after.Reconciliations >= before.Reconciliations && after.RecordNotFound >= before.RecordNotFound &&
@@ -1571,6 +1721,40 @@ go_sched_gomaxprocs_threads 2
 `, id, tokens, reconciles)
 }
 
+func TestSecretCapacityControllerDependencyDeferralsAreStrict(t *testing.T) {
+	base := secretCapacityControllerMetricsFixture(secretCapacityControllerTestID, 2, 3)
+	deferrals := `# TYPE gitstore_controller_dependency_deferrals_total counter
+gitstore_controller_dependency_deferrals_total{kind="Namespace",dependency="api"} 7
+gitstore_controller_dependency_deferrals_total{kind="Namespace",dependency="credentials"} 3
+gitstore_controller_dependency_deferrals_total{kind="Repository",dependency="api"} 2
+gitstore_controller_dependency_deferrals_total{kind="Repository",dependency="rate_limit"} 4
+`
+	sample, err := parseSecretCapacityControllerMetrics([]byte(base + deferrals))
+	require.NoError(t, err)
+	require.Equal(t, map[string]map[string]int64{
+		"Namespace":  {"api": 7, "credentials": 3},
+		"Repository": {"api": 2, "rate_limit": 4},
+	}, sample.DependencyDeferrals)
+	for name, body := range map[string]string{
+		"wrong type":         strings.Replace(deferrals, "total counter", "total gauge", 1),
+		"fractional count":   strings.Replace(deferrals, `dependency="api"} 7`, `dependency="api"} 7.5`, 1),
+		"negative count":     strings.Replace(deferrals, `dependency="api"} 7`, `dependency="api"} -1`, 1),
+		"nonfinite count":    strings.Replace(deferrals, `dependency="api"} 7`, `dependency="api"} NaN`, 1),
+		"imprecise count":    strings.Replace(deferrals, `dependency="api"} 7`, `dependency="api"} 9007199254740992`, 1),
+		"unknown dependency": strings.Replace(deferrals, `dependency="api"`, `dependency="unclassified"`, 1),
+		"unknown kind":       strings.Replace(deferrals, `kind="Namespace"`, `kind="UnregisteredKind"`, 1),
+		"extra label":        strings.Replace(deferrals, `kind="Namespace"`, `kind="Namespace",name="sensitive-marker"`, 1),
+		"missing label":      strings.Replace(deferrals, `kind="Namespace",`, "", 1),
+		"duplicate series":   deferrals + `gitstore_controller_dependency_deferrals_total{dependency="api",kind="Namespace"} 8` + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseSecretCapacityControllerMetrics([]byte(base + body))
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "sensitive-marker")
+		})
+	}
+}
+
 func TestSecretCapacityControllerMetricsAreStrict(t *testing.T) {
 	valid := secretCapacityControllerMetricsFixture(secretCapacityControllerTestID, 2, 3)
 	sample, err := parseSecretCapacityControllerMetrics([]byte(valid))
@@ -1579,6 +1763,7 @@ func TestSecretCapacityControllerMetricsAreStrict(t *testing.T) {
 	require.EqualValues(t, 2, sample.FreshTokens)
 	require.EqualValues(t, 3, sample.Reconciliations, "other resource kinds cannot prove Repository progress")
 	require.Zero(t, sample.RecordNotFound, "unobserved lazy failure series starts at zero")
+	require.Empty(t, sample.DependencyDeferrals, "no observed series cannot prove dependency deferral")
 	require.Equal(t, 10.25, sample.CPUSeconds)
 	require.EqualValues(t, 10485760, sample.RSS)
 	require.EqualValues(t, 12, sample.Goroutines)
@@ -1683,6 +1868,7 @@ func TestSecretCapacityControllerProgressRequiresFreshAuthentication(t *testing.
 	before, err := parseSecretCapacityControllerMetrics([]byte(secretCapacityControllerMetricsFixture(secretCapacityControllerTestID, 2, 3)))
 	require.NoError(t, err)
 	before.ObservedAt = time.Now()
+	before.DependencyDeferrals = map[string]map[string]int64{"Repository": {"api": 7}}
 	after := before
 	after.ObservedAt = before.ObservedAt.Add(time.Second)
 	after.CredentialReady, after.Healthy, after.Ready = true, true, true
@@ -1702,9 +1888,15 @@ func TestSecretCapacityControllerProgressRequiresFreshAuthentication(t *testing.
 	for name, change := range map[string]func(*secretCapacityControllerSample){
 		"unexpected replacement": func(s *secretCapacityControllerSample) { s.ID = "controller-instance-000002" },
 		"counter reset":          func(s *secretCapacityControllerSample) { s.FreshTokens = 1 },
-		"retry overflow":         func(s *secretCapacityControllerSample) { s.MaxRetry = 30*time.Second + time.Nanosecond },
-		"concurrent exchanges":   func(s *secretCapacityControllerSample) { s.ExchangePeak = 2 },
-		"backward time":          func(s *secretCapacityControllerSample) { s.ObservedAt = before.ObservedAt },
+		"deferral counter reset": func(s *secretCapacityControllerSample) {
+			s.DependencyDeferrals = map[string]map[string]int64{"Repository": {"api": 6}}
+		},
+		"deferral series disappeared": func(s *secretCapacityControllerSample) {
+			s.DependencyDeferrals = map[string]map[string]int64{}
+		},
+		"retry overflow":       func(s *secretCapacityControllerSample) { s.MaxRetry = 30*time.Second + time.Nanosecond },
+		"concurrent exchanges": func(s *secretCapacityControllerSample) { s.ExchangePeak = 2 },
+		"backward time":        func(s *secretCapacityControllerSample) { s.ObservedAt = before.ObservedAt },
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := after
@@ -1796,7 +1988,9 @@ func TestSecretCapacityRetainsPerKindRecoveryEvidence(t *testing.T) {
 	body = strings.Replace(body, `"pages":0`, `"pages":25`, 1)
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/metrics" {
-			_, _ = fmt.Fprint(w, secretCapacityControllerMetricsFixture(secretCapacityControllerTestID, 2, 3))
+			_, _ = fmt.Fprint(w, secretCapacityControllerMetricsFixture(secretCapacityControllerTestID, 2, 3)+
+				"# TYPE gitstore_controller_dependency_deferrals_total counter\n"+
+				"gitstore_controller_dependency_deferrals_total{kind=\"Repository\",dependency=\"api\"} 9\n")
 			return
 		}
 		_, _ = fmt.Fprint(w, body)
@@ -1807,6 +2001,7 @@ func TestSecretCapacityRetainsPerKindRecoveryEvidence(t *testing.T) {
 	require.True(t, sample.Healthy)
 	require.False(t, sample.Ready)
 	require.True(t, sample.Kinds["Repository"].Recovering)
+	require.EqualValues(t, 9, sample.DependencyDeferrals["Repository"]["api"])
 	require.EqualValues(t, 25, sample.Kinds["Repository"].Recovery.Pages)
 	root := t.TempDir()
 	require.NoError(t, writeSecretCapacityComponent(root, "recovery.json", sample))
@@ -1815,6 +2010,7 @@ func TestSecretCapacityRetainsPerKindRecoveryEvidence(t *testing.T) {
 	var restored secretCapacityControllerSample
 	require.NoError(t, decodeSecretCapacityJSON(saved, &restored))
 	require.Equal(t, sample.Kinds, restored.Kinds)
+	require.Equal(t, sample.DependencyDeferrals, restored.DependencyDeferrals)
 }
 
 func TestSecretCapacityOwnedFixtureRecordsAndAssertions(t *testing.T) {

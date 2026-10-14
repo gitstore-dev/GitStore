@@ -91,7 +91,7 @@ export default function () {
         apiVersion: 'gitstore.dev/v1beta1',
         kind: 'Namespace',
         metadata: { name },
-        spec: { title: name, tier: 'USER' },
+        spec: { title: name, tier: 'ORGANIZATION' },
       },
     }, { operation: 'createNamespace', traffic, replica: endpoint === apiA ? 'a' : 'b' });
     if (result.response.status >= 200 && result.response.status < 300 &&

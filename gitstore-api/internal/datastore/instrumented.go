@@ -11,6 +11,10 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -36,8 +40,9 @@ func NewInstrumentedDatastoreWithRegistry(next Datastore, backend string, log *z
 	return &InstrumentedDatastore{next: next, backend: backend, log: log, metrics: newMetrics(reg)}
 }
 
-func (d *InstrumentedDatastore) observe(op string, start time.Time, err error) {
+func (d *InstrumentedDatastore) observe(ctx context.Context, op string, start time.Time, err error) {
 	elapsed := time.Since(start)
+	d.traceOperation(ctx, op, start, err)
 	d.metrics.duration.WithLabelValues(op, d.backend).Observe(elapsed.Seconds())
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -64,6 +69,24 @@ func (d *InstrumentedDatastore) observe(op string, start time.Time, err error) {
 	}
 }
 
+func (d *InstrumentedDatastore) traceOperation(ctx context.Context, operation string, start time.Time, err error) {
+	if !trace.SpanFromContext(ctx).IsRecording() {
+		return
+	}
+	_, span := otel.Tracer("gitstore/datastore").Start(ctx, "datastore."+operation,
+		trace.WithTimestamp(start),
+		trace.WithAttributes(attribute.String("db.system.name", d.backend)))
+	outcome := "success"
+	if errors.Is(err, ErrNotFound) {
+		outcome = "absent"
+	} else if err != nil {
+		outcome = "error"
+		span.SetStatus(codes.Error, "datastore operation failed")
+	}
+	span.SetAttributes(attribute.String("outcome", outcome))
+	span.End()
+}
+
 func (d *InstrumentedDatastore) observeFinding(finding ProjectionFinding) {
 	d.metrics.findings.WithLabelValues(
 		finding.Operation,
@@ -84,7 +107,84 @@ func (d *InstrumentedDatastore) observeFinding(finding ProjectionFinding) {
 }
 
 func (d *InstrumentedDatastore) withFindingObserver(ctx context.Context) context.Context {
+	fenceObserver := namespaceFenceObserver(d.observeNamespaceFencePhase)
+	mutationObserver := catalogMutationObserver(d.observeCatalogMutationPhase)
+	if trace.SpanFromContext(ctx).IsRecording() {
+		parent := ctx
+		fenceObserver = func(phase NamespaceFencePhase, start time.Time, err error) {
+			d.observeNamespaceFencePhase(phase, start, err)
+			if int(phase) < len(namespaceFenceMetricOperations) {
+				d.traceOperation(parent, namespaceFenceMetricOperations[phase], start, err)
+			}
+		}
+		mutationObserver = func(phase CatalogMutationPhase, start time.Time, err error) {
+			d.observeCatalogMutationPhase(phase, start, err)
+			if int(phase) < len(catalogMutationMetricOperations) {
+				d.traceOperation(parent, catalogMutationMetricOperations[phase], start, err)
+			}
+		}
+	}
+	ctx = context.WithValue(ctx, namespaceFenceObserverKey{}, fenceObserver)
+	ctx = context.WithValue(ctx, catalogMutationObserverKey{}, mutationObserver)
 	return WithProjectionFindingObserver(ctx, d.observeFinding)
+}
+
+var catalogMutationMetricOperations = [...]string{
+	"CatalogParentCheck", "CatalogProjectionReadBefore", "CatalogMembershipWrite", "CatalogProjectionReadAfter",
+	"FileUIDLocatorRead", "FileAuthoritativeCAS", "FileOwnerReferenceSync",
+	"FileConditionalBatch2", "FileConditionalBatch3", "FileConditionalBatch4",
+	"FileConditionalBatch5", "FileConditionalBatch6", "FileConditionalBatch7", "FileConditionalBatch8",
+	"FileConditionalBatch9", "FileConditionalBatch10", "FileConditionalBatch11", "FileConditionalBatch12",
+	"FileConditionalBatch13", "FileConditionalBatch14", "FileConditionalBatch15", "FileConditionalBatch16",
+}
+
+var namespaceFenceMetricOperations = [...]string{"NamespaceFenceLookup", "NamespaceFenceQueue", "NamespaceFenceReserve", "NamespaceFenceMutation", "NamespaceFenceRelease"}
+
+func (d *InstrumentedDatastore) observeCatalogMutationPhase(phase CatalogMutationPhase, start time.Time, err error) {
+	if int(phase) >= len(catalogMutationMetricOperations) {
+		d.log.Error("invalid catalog mutation metric phase", zap.Uint8("phase", uint8(phase)))
+		return
+	}
+	operation := catalogMutationMetricOperations[phase]
+	d.metrics.duration.WithLabelValues(operation, d.backend).Observe(time.Since(start).Seconds())
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		d.metrics.errors.WithLabelValues(operation, d.backend).Inc()
+	}
+}
+
+func (d *InstrumentedDatastore) observeNamespaceFencePhase(phase NamespaceFencePhase, start time.Time, err error) {
+	if int(phase) >= len(namespaceFenceMetricOperations) {
+		d.log.Error("invalid namespace fence metric phase", zap.Uint8("phase", uint8(phase)))
+		return
+	}
+	operation := namespaceFenceMetricOperations[phase]
+	d.metrics.duration.WithLabelValues(operation, d.backend).Observe(time.Since(start).Seconds())
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		d.metrics.errors.WithLabelValues(operation, d.backend).Inc()
+	}
+}
+
+func (d *InstrumentedDatastore) WithCatalogMutationBatch(ctx context.Context, namespace string, operation func(context.Context) error) error {
+	start := time.Now()
+	var err error
+	if batcher, ok := d.next.(CatalogMutationBatcher); ok {
+		err = batcher.WithCatalogMutationBatch(d.withFindingObserver(ctx), namespace, operation)
+	} else {
+		err = operation(d.withFindingObserver(ctx))
+	}
+	d.observe(ctx, "CatalogMutationBatch", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) WithFileMutationBatch(ctx context.Context, namespace, repositoryID string, names []string, operation func(context.Context) error) error {
+	batcher, ok := d.next.(FileMutationBatcher)
+	if !ok {
+		return d.WithCatalogMutationBatch(ctx, namespace, operation)
+	}
+	start := time.Now()
+	err := batcher.WithFileMutationBatch(d.withFindingObserver(ctx), namespace, repositoryID, names, operation)
+	d.observe(ctx, "CatalogMutationBatch", start, err)
+	return err
 }
 
 // ── Product ────────────────────────────────────────────────────────────────
@@ -92,56 +192,56 @@ func (d *InstrumentedDatastore) withFindingObserver(ctx context.Context) context
 func (d *InstrumentedDatastore) CreateProduct(ctx context.Context, p *Product) error {
 	start := time.Now()
 	err := d.next.CreateProduct(d.withFindingObserver(ctx), p)
-	d.observe("CreateProduct", start, err)
+	d.observe(ctx, "CreateProduct", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) GetProduct(ctx context.Context, id string) (*Product, error) {
 	start := time.Now()
 	v, err := d.next.GetProduct(d.withFindingObserver(ctx), id)
-	d.observe("GetProduct", start, err)
+	d.observe(ctx, "GetProduct", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) GetProductByName(ctx context.Context, namespace, name string) (*Product, error) {
 	start := time.Now()
 	v, err := d.next.GetProductByName(d.withFindingObserver(ctx), namespace, name)
-	d.observe("GetProductByName", start, err)
+	d.observe(ctx, "GetProductByName", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) ListProducts(ctx context.Context, namespace string, params PageParams) (*PageResult[Product], error) {
 	start := time.Now()
 	v, err := d.next.ListProducts(d.withFindingObserver(ctx), namespace, params)
-	d.observe("ListProducts", start, err)
+	d.observe(ctx, "ListProducts", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) UpdateProduct(ctx context.Context, p *Product, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.UpdateProduct(d.withFindingObserver(ctx), p, expectedResourceVersion)
-	d.observe("UpdateProduct", start, err)
+	d.observe(ctx, "UpdateProduct", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) UpdateProductStatus(ctx context.Context, namespace, name string, patch ProductStatusPatch) (*Product, error) {
 	start := time.Now()
 	p, err := d.next.UpdateProductStatus(d.withFindingObserver(ctx), namespace, name, patch)
-	d.observe("UpdateProductStatus", start, err)
+	d.observe(ctx, "UpdateProductStatus", start, err)
 	return p, err
 }
 
 func (d *InstrumentedDatastore) DeleteProduct(ctx context.Context, id string) error {
 	start := time.Now()
 	err := d.next.DeleteProduct(d.withFindingObserver(ctx), id)
-	d.observe("DeleteProduct", start, err)
+	d.observe(ctx, "DeleteProduct", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) DeleteProductWithResourceVersion(ctx context.Context, id, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.DeleteProductWithResourceVersion(d.withFindingObserver(ctx), id, expectedResourceVersion)
-	d.observe("DeleteProductWithResourceVersion", start, err)
+	d.observe(ctx, "DeleteProductWithResourceVersion", start, err)
 	return err
 }
 
@@ -155,11 +255,11 @@ func (d *InstrumentedDatastore) MarkProductTerminating(ctx context.Context, uid,
 	lifecycle, ok := d.next.(ProductLifecycleStore)
 	if !ok {
 		err := fmt.Errorf("product lifecycle datastore is unavailable")
-		d.observe("MarkProductTerminating", start, err)
+		d.observe(ctx, "MarkProductTerminating", start, err)
 		return nil, err
 	}
 	product, err := lifecycle.MarkProductTerminating(d.withFindingObserver(ctx), uid, expectedResourceVersion, finalizer, deletionTimestamp)
-	d.observe("MarkProductTerminating", start, err)
+	d.observe(ctx, "MarkProductTerminating", start, err)
 	return product, err
 }
 
@@ -168,60 +268,72 @@ func (d *InstrumentedDatastore) CompleteProductDeletion(ctx context.Context, uid
 	lifecycle, ok := d.next.(ProductLifecycleStore)
 	if !ok {
 		err := fmt.Errorf("product lifecycle datastore is unavailable")
-		d.observe("CompleteProductDeletion", start, err)
+		d.observe(ctx, "CompleteProductDeletion", start, err)
 		return err
 	}
 	err := lifecycle.CompleteProductDeletion(d.withFindingObserver(ctx), uid, expectedResourceVersion)
-	d.observe("CompleteProductDeletion", start, err)
+	d.observe(ctx, "CompleteProductDeletion", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) CreateFile(ctx context.Context, f *File) error {
 	start := time.Now()
 	err := d.next.CreateFile(d.withFindingObserver(ctx), f)
-	d.observe("CreateFile", start, err)
+	d.observe(ctx, "CreateFile", start, err)
 	return err
 }
 func (d *InstrumentedDatastore) GetFile(ctx context.Context, id string) (*File, error) {
 	start := time.Now()
 	v, err := d.next.GetFile(d.withFindingObserver(ctx), id)
-	d.observe("GetFile", start, err)
+	d.observe(ctx, "GetFile", start, err)
 	return v, err
+}
+func (d *InstrumentedDatastore) GetFileSnapshots(ctx context.Context, ids []string) ([]*File, error) {
+	start := time.Now()
+	files, err := d.next.GetFileSnapshots(d.withFindingObserver(ctx), ids)
+	d.observe(ctx, "GetFileSnapshots", start, err)
+	return files, err
 }
 func (d *InstrumentedDatastore) GetFileByName(ctx context.Context, namespace, name string) (*File, error) {
 	start := time.Now()
 	v, err := d.next.GetFileByName(d.withFindingObserver(ctx), namespace, name)
-	d.observe("GetFileByName", start, err)
+	d.observe(ctx, "GetFileByName", start, err)
 	return v, err
+}
+func (d *InstrumentedDatastore) GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*File, error) {
+	start := time.Now()
+	files, err := d.next.GetFileSnapshotsByName(d.withFindingObserver(ctx), namespace, names)
+	d.observe(ctx, "GetFileSnapshotsByName", start, err)
+	return files, err
 }
 func (d *InstrumentedDatastore) ListFiles(ctx context.Context, namespace string, p PageParams) (*PageResult[File], error) {
 	start := time.Now()
 	v, err := d.next.ListFiles(d.withFindingObserver(ctx), namespace, p)
-	d.observe("ListFiles", start, err)
+	d.observe(ctx, "ListFiles", start, err)
 	return v, err
 }
 func (d *InstrumentedDatastore) UpdateFile(ctx context.Context, f *File, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.UpdateFile(d.withFindingObserver(ctx), f, expectedResourceVersion)
-	d.observe("UpdateFile", start, err)
+	d.observe(ctx, "UpdateFile", start, err)
 	return err
 }
 func (d *InstrumentedDatastore) DeleteFile(ctx context.Context, id string) error {
 	start := time.Now()
 	err := d.next.DeleteFile(d.withFindingObserver(ctx), id)
-	d.observe("DeleteFile", start, err)
+	d.observe(ctx, "DeleteFile", start, err)
 	return err
 }
 func (d *InstrumentedDatastore) DeleteFileWithResourceVersion(ctx context.Context, id, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.DeleteFileWithResourceVersion(d.withFindingObserver(ctx), id, expectedResourceVersion)
-	d.observe("DeleteFileWithResourceVersion", start, err)
+	d.observe(ctx, "DeleteFileWithResourceVersion", start, err)
 	return err
 }
 func (d *InstrumentedDatastore) UpdateFileStatus(ctx context.Context, namespace, name string, p FileStatusPatch) (*File, error) {
 	start := time.Now()
 	v, err := d.next.UpdateFileStatus(d.withFindingObserver(ctx), namespace, name, p)
-	d.observe("UpdateFileStatus", start, err)
+	d.observe(ctx, "UpdateFileStatus", start, err)
 	return v, err
 }
 
@@ -230,49 +342,49 @@ func (d *InstrumentedDatastore) UpdateFileStatus(ctx context.Context, namespace,
 func (d *InstrumentedDatastore) CreateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error {
 	start := time.Now()
 	err := d.next.CreateCategoryTaxonomy(d.withFindingObserver(ctx), c)
-	d.observe("CreateCategoryTaxonomy", start, err)
+	d.observe(ctx, "CreateCategoryTaxonomy", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) GetCategoryTaxonomy(ctx context.Context, uid string) (*CategoryTaxonomy, error) {
 	start := time.Now()
 	v, err := d.next.GetCategoryTaxonomy(d.withFindingObserver(ctx), uid)
-	d.observe("GetCategoryTaxonomy", start, err)
+	d.observe(ctx, "GetCategoryTaxonomy", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*CategoryTaxonomy, error) {
 	start := time.Now()
 	v, err := d.next.GetCategoryTaxonomyByName(d.withFindingObserver(ctx), namespace, name)
-	d.observe("GetCategoryTaxonomyByName", start, err)
+	d.observe(ctx, "GetCategoryTaxonomyByName", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) ListCategoryTaxonomies(ctx context.Context, namespace string, params PageParams) (*PageResult[CategoryTaxonomy], error) {
 	start := time.Now()
 	v, err := d.next.ListCategoryTaxonomies(d.withFindingObserver(ctx), namespace, params)
-	d.observe("ListCategoryTaxonomies", start, err)
+	d.observe(ctx, "ListCategoryTaxonomies", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.UpdateCategoryTaxonomy(d.withFindingObserver(ctx), c, expectedResourceVersion)
-	d.observe("UpdateCategoryTaxonomy", start, err)
+	d.observe(ctx, "UpdateCategoryTaxonomy", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) UpdateCategoryTaxonomyStatus(ctx context.Context, namespace, name string, patch CategoryTaxonomyStatusPatch) (*CategoryTaxonomy, error) {
 	start := time.Now()
 	c, err := d.next.UpdateCategoryTaxonomyStatus(d.withFindingObserver(ctx), namespace, name, patch)
-	d.observe("UpdateCategoryTaxonomyStatus", start, err)
+	d.observe(ctx, "UpdateCategoryTaxonomyStatus", start, err)
 	return c, err
 }
 
 func (d *InstrumentedDatastore) DeleteCategoryTaxonomy(ctx context.Context, uid string) error {
 	start := time.Now()
 	err := d.next.DeleteCategoryTaxonomy(d.withFindingObserver(ctx), uid)
-	d.observe("DeleteCategoryTaxonomy", start, err)
+	d.observe(ctx, "DeleteCategoryTaxonomy", start, err)
 	return err
 }
 
@@ -281,63 +393,63 @@ func (d *InstrumentedDatastore) DeleteCategoryTaxonomy(ctx context.Context, uid 
 func (d *InstrumentedDatastore) CreateProductVariant(ctx context.Context, v *ProductVariant) error {
 	start := time.Now()
 	err := d.next.CreateProductVariant(d.withFindingObserver(ctx), v)
-	d.observe("CreateProductVariant", start, err)
+	d.observe(ctx, "CreateProductVariant", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) GetProductVariant(ctx context.Context, uid string) (*ProductVariant, error) {
 	start := time.Now()
 	result, err := d.next.GetProductVariant(d.withFindingObserver(ctx), uid)
-	d.observe("GetProductVariant", start, err)
+	d.observe(ctx, "GetProductVariant", start, err)
 	return result, err
 }
 
 func (d *InstrumentedDatastore) GetProductVariantByName(ctx context.Context, namespace, name string) (*ProductVariant, error) {
 	start := time.Now()
 	result, err := d.next.GetProductVariantByName(d.withFindingObserver(ctx), namespace, name)
-	d.observe("GetProductVariantByName", start, err)
+	d.observe(ctx, "GetProductVariantByName", start, err)
 	return result, err
 }
 
 func (d *InstrumentedDatastore) GetProductVariantBySKU(ctx context.Context, namespace, sku string) (*ProductVariant, error) {
 	start := time.Now()
 	result, err := d.next.GetProductVariantBySKU(d.withFindingObserver(ctx), namespace, sku)
-	d.observe("GetProductVariantBySKU", start, err)
+	d.observe(ctx, "GetProductVariantBySKU", start, err)
 	return result, err
 }
 
 func (d *InstrumentedDatastore) ListProductVariants(ctx context.Context, namespace string, params PageParams) (*PageResult[ProductVariant], error) {
 	start := time.Now()
 	result, err := d.next.ListProductVariants(d.withFindingObserver(ctx), namespace, params)
-	d.observe("ListProductVariants", start, err)
+	d.observe(ctx, "ListProductVariants", start, err)
 	return result, err
 }
 
 func (d *InstrumentedDatastore) ListProductVariantsByProductRef(ctx context.Context, namespace, productRefName string) ([]*ProductVariant, error) {
 	start := time.Now()
 	result, err := d.next.ListProductVariantsByProductRef(d.withFindingObserver(ctx), namespace, productRefName)
-	d.observe("ListProductVariantsByProductRef", start, err)
+	d.observe(ctx, "ListProductVariantsByProductRef", start, err)
 	return result, err
 }
 
 func (d *InstrumentedDatastore) UpdateProductVariant(ctx context.Context, v *ProductVariant, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.UpdateProductVariant(d.withFindingObserver(ctx), v, expectedResourceVersion)
-	d.observe("UpdateProductVariant", start, err)
+	d.observe(ctx, "UpdateProductVariant", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) DeleteProductVariant(ctx context.Context, uid string) error {
 	start := time.Now()
 	err := d.next.DeleteProductVariant(d.withFindingObserver(ctx), uid)
-	d.observe("DeleteProductVariant", start, err)
+	d.observe(ctx, "DeleteProductVariant", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) DeleteProductVariantWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.DeleteProductVariantWithResourceVersion(d.withFindingObserver(ctx), uid, expectedResourceVersion)
-	d.observe("DeleteProductVariantWithResourceVersion", start, err)
+	d.observe(ctx, "DeleteProductVariantWithResourceVersion", start, err)
 	return err
 }
 
@@ -346,56 +458,56 @@ func (d *InstrumentedDatastore) DeleteProductVariantWithResourceVersion(ctx cont
 func (d *InstrumentedDatastore) CreateCollection(ctx context.Context, c *Collection) error {
 	start := time.Now()
 	err := d.next.CreateCollection(d.withFindingObserver(ctx), c)
-	d.observe("CreateCollection", start, err)
+	d.observe(ctx, "CreateCollection", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) GetCollection(ctx context.Context, uid string) (*Collection, error) {
 	start := time.Now()
 	v, err := d.next.GetCollection(d.withFindingObserver(ctx), uid)
-	d.observe("GetCollection", start, err)
+	d.observe(ctx, "GetCollection", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) GetCollectionByName(ctx context.Context, namespace, name string) (*Collection, error) {
 	start := time.Now()
 	v, err := d.next.GetCollectionByName(d.withFindingObserver(ctx), namespace, name)
-	d.observe("GetCollectionByName", start, err)
+	d.observe(ctx, "GetCollectionByName", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) ListCollections(ctx context.Context, namespace string, params PageParams) (*PageResult[Collection], error) {
 	start := time.Now()
 	v, err := d.next.ListCollections(d.withFindingObserver(ctx), namespace, params)
-	d.observe("ListCollections", start, err)
+	d.observe(ctx, "ListCollections", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) UpdateCollection(ctx context.Context, c *Collection, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.UpdateCollection(d.withFindingObserver(ctx), c, expectedResourceVersion)
-	d.observe("UpdateCollection", start, err)
+	d.observe(ctx, "UpdateCollection", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) DeleteCollection(ctx context.Context, uid string) error {
 	start := time.Now()
 	err := d.next.DeleteCollection(d.withFindingObserver(ctx), uid)
-	d.observe("DeleteCollection", start, err)
+	d.observe(ctx, "DeleteCollection", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) DeleteCollectionWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.DeleteCollectionWithResourceVersion(d.withFindingObserver(ctx), uid, expectedResourceVersion)
-	d.observe("DeleteCollectionWithResourceVersion", start, err)
+	d.observe(ctx, "DeleteCollectionWithResourceVersion", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) ListProductsByLabelSelector(ctx context.Context, namespace string, selector catalog.LabelSelector) ([]*Product, error) {
 	start := time.Now()
 	v, err := d.next.ListProductsByLabelSelector(d.withFindingObserver(ctx), namespace, selector)
-	d.observe("ListProductsByLabelSelector", start, err)
+	d.observe(ctx, "ListProductsByLabelSelector", start, err)
 	return v, err
 }
 
@@ -404,63 +516,63 @@ func (d *InstrumentedDatastore) ListProductsByLabelSelector(ctx context.Context,
 func (d *InstrumentedDatastore) CreateNamespace(ctx context.Context, ns *Namespace) error {
 	start := time.Now()
 	err := d.next.CreateNamespace(d.withFindingObserver(ctx), ns)
-	d.observe("CreateNamespace", start, err)
+	d.observe(ctx, "CreateNamespace", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) GetNamespace(ctx context.Context, id string) (*Namespace, error) {
 	start := time.Now()
 	v, err := d.next.GetNamespace(d.withFindingObserver(ctx), id)
-	d.observe("GetNamespace", start, err)
+	d.observe(ctx, "GetNamespace", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) GetNamespaceByName(ctx context.Context, name string) (*Namespace, error) {
 	start := time.Now()
 	v, err := d.next.GetNamespaceByName(d.withFindingObserver(ctx), name)
-	d.observe("GetNamespaceByName", start, err)
+	d.observe(ctx, "GetNamespaceByName", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) ListNamespaces(ctx context.Context, params PageParams) (*PageResult[Namespace], error) {
 	start := time.Now()
 	v, err := d.next.ListNamespaces(d.withFindingObserver(ctx), params)
-	d.observe("ListNamespaces", start, err)
+	d.observe(ctx, "ListNamespaces", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) UpdateNamespace(ctx context.Context, ns *Namespace, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.UpdateNamespace(d.withFindingObserver(ctx), ns, expectedResourceVersion)
-	d.observe("UpdateNamespace", start, err)
+	d.observe(ctx, "UpdateNamespace", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) MarkNamespaceDeletion(ctx context.Context, ns *Namespace, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.MarkNamespaceDeletion(d.withFindingObserver(ctx), ns, expectedResourceVersion)
-	d.observe("MarkNamespaceDeletion", start, err)
+	d.observe(ctx, "MarkNamespaceDeletion", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) DeleteNamespace(ctx context.Context, id string) error {
 	start := time.Now()
 	err := d.next.DeleteNamespace(d.withFindingObserver(ctx), id)
-	d.observe("DeleteNamespace", start, err)
+	d.observe(ctx, "DeleteNamespace", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) DeleteNamespaceWithResourceVersion(ctx context.Context, id, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.DeleteNamespaceWithResourceVersion(d.withFindingObserver(ctx), id, expectedResourceVersion)
-	d.observe("DeleteNamespaceWithResourceVersion", start, err)
+	d.observe(ctx, "DeleteNamespaceWithResourceVersion", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) HasRepositories(ctx context.Context, namespaceID string) (bool, error) {
 	start := time.Now()
 	v, err := d.next.HasRepositories(d.withFindingObserver(ctx), namespaceID)
-	d.observe("HasRepositories", start, err)
+	d.observe(ctx, "HasRepositories", start, err)
 	return v, err
 }
 
@@ -469,28 +581,28 @@ func (d *InstrumentedDatastore) HasRepositories(ctx context.Context, namespaceID
 func (d *InstrumentedDatastore) CreateRepository(ctx context.Context, r *Repository) error {
 	start := time.Now()
 	err := d.next.CreateRepository(d.withFindingObserver(ctx), r)
-	d.observe("CreateRepository", start, err)
+	d.observe(ctx, "CreateRepository", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) CreateRepositoryInActiveNamespace(ctx context.Context, r *Repository) error {
 	start := time.Now()
 	err := d.next.CreateRepositoryInActiveNamespace(d.withFindingObserver(ctx), r)
-	d.observe("CreateRepositoryInActiveNamespace", start, err)
+	d.observe(ctx, "CreateRepositoryInActiveNamespace", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) GetRepository(ctx context.Context, id string) (*Repository, error) {
 	start := time.Now()
 	v, err := d.next.GetRepository(d.withFindingObserver(ctx), id)
-	d.observe("GetRepository", start, err)
+	d.observe(ctx, "GetRepository", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) ListRepositoriesByNamespace(ctx context.Context, namespaceID string, params PageParams) (*PageResult[Repository], error) {
 	start := time.Now()
 	v, err := d.next.ListRepositoriesByNamespace(d.withFindingObserver(ctx), namespaceID, params)
-	d.observe("ListRepositoriesByNamespace", start, err)
+	d.observe(ctx, "ListRepositoriesByNamespace", start, err)
 	return v, err
 }
 
@@ -499,32 +611,32 @@ func (d *InstrumentedDatastore) ListRepositories(ctx context.Context, params Pag
 	lister, ok := d.next.(GlobalRepositoryLister)
 	if !ok {
 		err := fmt.Errorf("%w: backend does not support global repository listing", ErrInvalidArgument)
-		d.observe("ListRepositories", start, err)
+		d.observe(ctx, "ListRepositories", start, err)
 		return nil, err
 	}
 	v, err := lister.ListRepositories(d.withFindingObserver(ctx), params)
-	d.observe("ListRepositories", start, err)
+	d.observe(ctx, "ListRepositories", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) UpdateRepository(ctx context.Context, r *Repository, expectedResourceVersion string) error {
 	start := time.Now()
 	err := d.next.UpdateRepository(d.withFindingObserver(ctx), r, expectedResourceVersion)
-	d.observe("UpdateRepository", start, err)
+	d.observe(ctx, "UpdateRepository", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) DeleteRepository(ctx context.Context, id string) error {
 	start := time.Now()
 	err := d.next.DeleteRepository(d.withFindingObserver(ctx), id)
-	d.observe("DeleteRepository", start, err)
+	d.observe(ctx, "DeleteRepository", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) HasCatalogResources(ctx context.Context, repoID string) (bool, error) {
 	start := time.Now()
 	v, err := d.next.HasCatalogResources(d.withFindingObserver(ctx), repoID)
-	d.observe("HasCatalogResources", start, err)
+	d.observe(ctx, "HasCatalogResources", start, err)
 	return v, err
 }
 
@@ -535,7 +647,7 @@ func (d *InstrumentedDatastore) CompleteRepositoryDeletion(ctx context.Context, 
 		return ErrInvalidArgument
 	}
 	err := store.CompleteRepositoryDeletion(d.withFindingObserver(ctx), uid, expectedResourceVersion)
-	d.observe("CompleteRepositoryDeletion", start, err)
+	d.observe(ctx, "CompleteRepositoryDeletion", start, err)
 	return err
 }
 
@@ -544,21 +656,21 @@ func (d *InstrumentedDatastore) CompleteRepositoryDeletion(ctx context.Context, 
 func (d *InstrumentedDatastore) CreateNamespaceMapping(ctx context.Context, m *NamespaceMapping) error {
 	start := time.Now()
 	err := d.next.CreateNamespaceMapping(d.withFindingObserver(ctx), m)
-	d.observe("CreateNamespaceMapping", start, err)
+	d.observe(ctx, "CreateNamespaceMapping", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) LookupRepository(ctx context.Context, namespaceID, name string) (*NamespaceMapping, error) {
 	start := time.Now()
 	v, err := d.next.LookupRepository(d.withFindingObserver(ctx), namespaceID, name)
-	d.observe("LookupRepository", start, err)
+	d.observe(ctx, "LookupRepository", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) LookupNamespaceByRepoID(ctx context.Context, repoID string) (*NamespaceMapping, error) {
 	start := time.Now()
 	v, err := d.next.LookupNamespaceByRepoID(d.withFindingObserver(ctx), repoID)
-	d.observe("LookupNamespaceByRepoID", start, err)
+	d.observe(ctx, "LookupNamespaceByRepoID", start, err)
 	return v, err
 }
 
@@ -567,25 +679,25 @@ func (d *InstrumentedDatastore) LookupNamespaceByRepositoryID(ctx context.Contex
 	lookup, ok := d.next.(RepositoryNamespaceLookup)
 	if !ok {
 		err := fmt.Errorf("%w: backend does not support canonical repository namespace lookup", ErrInvalidArgument)
-		d.observe("LookupNamespaceByRepositoryID", start, err)
+		d.observe(ctx, "LookupNamespaceByRepositoryID", start, err)
 		return nil, err
 	}
 	v, err := lookup.LookupNamespaceByRepositoryID(d.withFindingObserver(ctx), repositoryID)
-	d.observe("LookupNamespaceByRepositoryID", start, err)
+	d.observe(ctx, "LookupNamespaceByRepositoryID", start, err)
 	return v, err
 }
 
 func (d *InstrumentedDatastore) RenameRepository(ctx context.Context, namespaceID, oldName, newName string) error {
 	start := time.Now()
 	err := d.next.RenameRepository(d.withFindingObserver(ctx), namespaceID, oldName, newName)
-	d.observe("RenameRepository", start, err)
+	d.observe(ctx, "RenameRepository", start, err)
 	return err
 }
 
 func (d *InstrumentedDatastore) DeleteNamespaceMapping(ctx context.Context, namespaceID, name string) error {
 	start := time.Now()
 	err := d.next.DeleteNamespaceMapping(d.withFindingObserver(ctx), namespaceID, name)
-	d.observe("DeleteNamespaceMapping", start, err)
+	d.observe(ctx, "DeleteNamespaceMapping", start, err)
 	return err
 }
 
@@ -603,11 +715,11 @@ func (d *InstrumentedDatastore) HasBlockingOwnerDependents(ctx context.Context, 
 	owners, ok := d.next.(OwnerReferenceStore)
 	if !ok {
 		err := fmt.Errorf("%w: backend does not support owner-reference queries", ErrInvalidArgument)
-		d.observe("HasBlockingOwnerDependents", start, err)
+		d.observe(ctx, "HasBlockingOwnerDependents", start, err)
 		return false, err
 	}
 	v, err := owners.HasBlockingOwnerDependents(d.withFindingObserver(ctx), scope, ownerUID)
-	d.observe("HasBlockingOwnerDependents", start, err)
+	d.observe(ctx, "HasBlockingOwnerDependents", start, err)
 	return v, err
 }
 
@@ -616,11 +728,11 @@ func (d *InstrumentedDatastore) ListBlockingOwnerDependents(ctx context.Context,
 	owners, ok := d.next.(OwnerReferenceStore)
 	if !ok {
 		err := fmt.Errorf("%w: backend does not support owner-reference queries", ErrInvalidArgument)
-		d.observe("ListBlockingOwnerDependents", start, err)
+		d.observe(ctx, "ListBlockingOwnerDependents", start, err)
 		return OwnerDependentPage{}, err
 	}
 	v, err := owners.ListBlockingOwnerDependents(d.withFindingObserver(ctx), scope, ownerUID, after, limit)
-	d.observe("ListBlockingOwnerDependents", start, err)
+	d.observe(ctx, "ListBlockingOwnerDependents", start, err)
 	return v, err
 }
 
@@ -629,11 +741,11 @@ func (d *InstrumentedDatastore) ListNonBlockingProductOwnerDependents(ctx contex
 	owners, ok := d.next.(OwnerReferenceStore)
 	if !ok {
 		err := fmt.Errorf("%w: backend does not support owner-reference queries", ErrInvalidArgument)
-		d.observe("ListNonBlockingProductOwnerDependents", start, err)
+		d.observe(ctx, "ListNonBlockingProductOwnerDependents", start, err)
 		return OwnerDependentPage{}, err
 	}
 	v, err := owners.ListNonBlockingProductOwnerDependents(d.withFindingObserver(ctx), scope, ownerUID, after, limit)
-	d.observe("ListNonBlockingProductOwnerDependents", start, err)
+	d.observe(ctx, "ListNonBlockingProductOwnerDependents", start, err)
 	return v, err
 }
 
@@ -644,11 +756,11 @@ func (d *InstrumentedDatastore) ListCategoryDescendants(ctx context.Context, q C
 	index, ok := d.next.(CategoryAncestorIndex)
 	if !ok {
 		err := fmt.Errorf("%w: backend does not support category ancestor index queries", ErrInvalidArgument)
-		d.observe("ListCategoryDescendants", start, err)
+		d.observe(ctx, "ListCategoryDescendants", start, err)
 		return nil, err
 	}
 	v, err := index.ListCategoryDescendants(d.withFindingObserver(ctx), q)
-	d.observe("ListCategoryDescendants", start, err)
+	d.observe(ctx, "ListCategoryDescendants", start, err)
 	return v, err
 }
 
@@ -659,11 +771,11 @@ func (d *InstrumentedDatastore) MarkCategoryTaxonomyDeletion(ctx context.Context
 	lifecycle, ok := d.next.(CategoryTaxonomyDeletionStore)
 	if !ok {
 		err := fmt.Errorf("%w: backend does not support category taxonomy deletion lifecycle", ErrInvalidArgument)
-		d.observe("MarkCategoryTaxonomyDeletion", start, err)
+		d.observe(ctx, "MarkCategoryTaxonomyDeletion", start, err)
 		return nil, err
 	}
 	v, err := lifecycle.MarkCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion, at)
-	d.observe("MarkCategoryTaxonomyDeletion", start, err)
+	d.observe(ctx, "MarkCategoryTaxonomyDeletion", start, err)
 	return v, err
 }
 
@@ -672,11 +784,11 @@ func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Con
 	lifecycle, ok := d.next.(CategoryTaxonomyDeletionStore)
 	if !ok {
 		err := fmt.Errorf("%w: backend does not support category taxonomy deletion lifecycle", ErrInvalidArgument)
-		d.observe("CompleteCategoryTaxonomyDeletion", start, err)
+		d.observe(ctx, "CompleteCategoryTaxonomyDeletion", start, err)
 		return nil, err
 	}
 	v, err := lifecycle.CompleteCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion, expectedUID)
-	d.observe("CompleteCategoryTaxonomyDeletion", start, err)
+	d.observe(ctx, "CompleteCategoryTaxonomyDeletion", start, err)
 	return v, err
 }
 
@@ -685,49 +797,49 @@ func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Con
 func (d *InstrumentedDatastore) CreateServiceAccount(ctx context.Context, sa *ServiceAccount) error {
 	start := time.Now()
 	err := d.next.CreateServiceAccount(d.withFindingObserver(ctx), sa)
-	d.observe("CreateServiceAccount", start, err)
+	d.observe(ctx, "CreateServiceAccount", start, err)
 	return err
 }
 func (d *InstrumentedDatastore) GetServiceAccountByUID(ctx context.Context, uid string) (*ServiceAccount, error) {
 	start := time.Now()
 	v, err := d.next.GetServiceAccountByUID(d.withFindingObserver(ctx), uid)
-	d.observe("GetServiceAccountByUID", start, err)
+	d.observe(ctx, "GetServiceAccountByUID", start, err)
 	return v, err
 }
 func (d *InstrumentedDatastore) GetServiceAccountBySubject(ctx context.Context, name string) (*ServiceAccount, error) {
 	start := time.Now()
 	v, err := d.next.GetServiceAccountBySubject(d.withFindingObserver(ctx), name)
-	d.observe("GetServiceAccountBySubject", start, err)
+	d.observe(ctx, "GetServiceAccountBySubject", start, err)
 	return v, err
 }
 func (d *InstrumentedDatastore) ListServiceAccounts(ctx context.Context, page PageParams) (*PageResult[ServiceAccount], error) {
 	start := time.Now()
 	v, err := d.next.ListServiceAccounts(d.withFindingObserver(ctx), page)
-	d.observe("ListServiceAccounts", start, err)
+	d.observe(ctx, "ListServiceAccounts", start, err)
 	return v, err
 }
 func (d *InstrumentedDatastore) UpdateServiceAccountKeys(ctx context.Context, uid string, add []ServiceAccountPublicKey, removeKeyIDs []string, expectedResourceVersion string) (*ServiceAccount, error) {
 	start := time.Now()
 	v, err := d.next.UpdateServiceAccountKeys(d.withFindingObserver(ctx), uid, add, removeKeyIDs, expectedResourceVersion)
-	d.observe("UpdateServiceAccountKeys", start, err)
+	d.observe(ctx, "UpdateServiceAccountKeys", start, err)
 	return v, err
 }
 func (d *InstrumentedDatastore) SetServiceAccountDisabled(ctx context.Context, uid string, disabled bool) error {
 	start := time.Now()
 	err := d.next.SetServiceAccountDisabled(d.withFindingObserver(ctx), uid, disabled)
-	d.observe("SetServiceAccountDisabled", start, err)
+	d.observe(ctx, "SetServiceAccountDisabled", start, err)
 	return err
 }
 func (d *InstrumentedDatastore) DeleteServiceAccount(ctx context.Context, uid string) error {
 	start := time.Now()
 	err := d.next.DeleteServiceAccount(d.withFindingObserver(ctx), uid)
-	d.observe("DeleteServiceAccount", start, err)
+	d.observe(ctx, "DeleteServiceAccount", start, err)
 	return err
 }
 func (d *InstrumentedDatastore) TryConsumeServiceAccountAssertion(ctx context.Context, jtiDigest string, expiresAt time.Time) (bool, error) {
 	start := time.Now()
 	v, err := d.next.TryConsumeServiceAccountAssertion(d.withFindingObserver(ctx), jtiDigest, expiresAt)
-	d.observe("TryConsumeServiceAccountAssertion", start, err)
+	d.observe(ctx, "TryConsumeServiceAccountAssertion", start, err)
 	return v, err
 }
 

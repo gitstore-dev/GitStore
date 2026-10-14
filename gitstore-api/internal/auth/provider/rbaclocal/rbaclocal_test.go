@@ -7,10 +7,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/format"
+	"go/parser"
+	"go/token"
 	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -352,11 +357,23 @@ func TestV1Beta1ReloadRetainsSnapshotAndConcurrentDecisions(t *testing.T) {
 	deny, err := yaml.Marshal(fixture.Policies["empty"])
 	require.NoError(t, err)
 	p := newRBACProvider(t, string(allow))
+	emptySnapshot, available := newRBACProvider(t, string(deny)).AuthorizationSnapshot()
+	require.True(t, available)
+	beforeReload, available := p.AuthorizationSnapshot()
+	require.True(t, available)
+	require.True(t, beforeReload.Loaded)
+	require.Len(t, beforeReload.Digest, 64)
+	require.Positive(t, beforeReload.Roles)
+	require.Positive(t, beforeReload.Bindings)
+	require.Positive(t, beforeReload.Rules)
 	principal := &authpkg.Principal{Subject: "reader", AuthMethod: "static-users", Groups: []string{"system:authenticated"}}
 	resource := authpkg.ResourceContext{Kind: "product", Name: "p"}
 	for _, invalid := range []string{"version: v1\nroles: {}", strings.Repeat("x", 4*1024*1024+1), "not: [valid"} {
 		require.NoError(t, os.WriteFile(p.path, []byte(invalid), 0600))
 		require.Error(t, p.Reload())
+		snapshot, available := p.AuthorizationSnapshot()
+		require.True(t, available)
+		require.Equal(t, beforeReload, snapshot, "invalid reload must retain diagnostic identity and counts")
 		d, err := p.Authorize(t.Context(), principal, "product.read", resource)
 		require.NoError(t, err)
 		require.Equal(t, authpkg.OutcomeAllow, d.Outcome)
@@ -369,6 +386,13 @@ func TestV1Beta1ReloadRetainsSnapshotAndConcurrentDecisions(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Contains(t, []authpkg.Outcome{authpkg.OutcomeAllow, authpkg.OutcomeDeny}, d.Outcome)
 				assert.NotEmpty(t, d.Reason)
+				snapshot, available := p.AuthorizationSnapshot()
+				assert.True(t, available)
+				if snapshot.Digest == beforeReload.Digest {
+					assert.Equal(t, beforeReload, snapshot)
+				} else {
+					assert.Equal(t, emptySnapshot, snapshot)
+				}
 			}
 		})
 	}
@@ -455,6 +479,151 @@ clusterRoleBindings:
 		require.NoError(t, err)
 		assert.Equal(t, authpkg.OutcomeDeny, d.Outcome)
 	}
+}
+
+func TestPreparedConditionAttributesPreserveComparisonSemantics(t *testing.T) {
+	for _, attribute := range []string{"namespace", "tier", "visibility"} {
+		for _, op := range []string{"eq", "neq", "in", "notIn"} {
+			t.Run(attribute+"/"+op, func(t *testing.T) {
+				operand := "matching"
+				condition := compiledCondition{
+					Condition: Condition{Attr: attribute, Op: op, Value: &operand},
+					values:    stringSet([]string{operand, "", strings.Repeat("x", 256)}),
+				}
+				for _, input := range []any{nil, true, 12, "", "matching", "different", strings.Repeat("x", 256), strings.Repeat("x", 257), string([]byte{0xff})} {
+					value, valid := input.(string)
+					want := false
+					if valid && len(value) <= 256 {
+						switch op {
+						case "eq":
+							want = value == operand
+						case "neq":
+							want = value != operand
+						case "in":
+							_, want = condition.values[value]
+						case "notIn":
+							_, present := condition.values[value]
+							want = !present
+						}
+					}
+					attrs := map[string]any{attribute: input}
+					prepared := readConditionValues(attrs)
+					require.Equal(t, want, conditionMatches(&condition, &prepared, false, false), "input=%#v", input)
+					for _, token := range []string{"owner", "targetOwnerMember"} {
+						c := compiledCondition{Condition: Condition{Token: token}}
+						require.False(t, conditionMatches(&c, &prepared, false, false))
+						require.True(t, conditionMatches(&c, &prepared, true, true))
+						require.Equal(t, token == "owner", conditionMatches(&c, &prepared, true, false))
+						require.Equal(t, token == "targetOwnerMember", conditionMatches(&c, &prepared, false, true))
+					}
+				}
+				prepared := readConditionValues(nil)
+				require.False(t, conditionMatches(&condition, &prepared, true, true))
+			})
+		}
+	}
+}
+
+func TestPreparedConditionAttributesRemainRequestScoped(t *testing.T) {
+	operand := "public"
+	condition := compiledCondition{Condition: Condition{Attr: "visibility", Op: "eq", Value: &operand}}
+	attrs := map[string]any{"visibility": operand}
+	first := readConditionValues(attrs)
+	attrs["visibility"] = "private"
+	second := readConditionValues(attrs)
+	require.True(t, conditionMatches(&condition, &first, false, false))
+	require.False(t, conditionMatches(&condition, &second, false, false))
+	condition.Attr = "unregistered"
+	require.False(t, conditionMatches(&condition, &first, false, false))
+}
+
+func TestRoleDeduplicationPreservesFirstMatchingBinding(t *testing.T) {
+	p, cases := authorizationCapacityFixture(t)
+	snapshot := p.snapshot.Load()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			want := authpkg.OutcomeDeny
+			wantReason := ""
+			for i := range snapshot.bindings {
+				single := *snapshot
+				single.bySubject = make(map[SubjectRef]bindingSet, len(snapshot.bySubject))
+				for subject, candidates := range snapshot.bySubject {
+					var selected bindingSet
+					selected[i/64] = candidates[i/64] & (uint64(1) << (i % 64))
+					single.bySubject[subject] = selected
+				}
+				provider := &RBACLocalProvider{}
+				provider.snapshot.Store(&single)
+				decision, err := provider.Authorize(t.Context(), tc.principal, tc.action, tc.resource)
+				require.NoError(t, err)
+				if decision.Outcome == authpkg.OutcomeAllow {
+					want, wantReason = decision.Outcome, decision.Reason
+					break
+				}
+			}
+			decision, err := p.Authorize(t.Context(), tc.principal, tc.action, tc.resource)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, want)
+			require.Equal(t, want, decision.Outcome)
+			if want == authpkg.OutcomeAllow {
+				require.Equal(t, wantReason, decision.Reason)
+			}
+		})
+	}
+}
+
+func TestRoleDeduplicationDoesNotConsumeMismatchedScope(t *testing.T) {
+	p := newRBACProvider(t, `apiVersion: rbac.authorization.gitstore.dev/v1beta1
+kind: RbacLocalConfiguration
+clusterRoles:
+  shared:
+    rules: [{resources: [repository], verbs: [read]}]
+roleBindings:
+  - namespace: wrong
+    roleRef: {kind: ClusterRole, name: shared}
+    subjects: [{kind: User, name: alice}]
+  - namespace: correct
+    roleRef: {kind: ClusterRole, name: shared}
+    subjects: [{kind: User, name: alice}]
+  - namespace: correct
+    roleRef: {kind: ClusterRole, name: shared}
+    subjects: [{kind: User, name: alice}]
+`)
+	principal := &authpkg.Principal{Subject: "alice", AuthMethod: "static-users"}
+	decision, err := p.Authorize(t.Context(), principal, "repository.read",
+		authpkg.ResourceContext{Kind: "repository", Attrs: map[string]any{"namespace": "correct"}})
+	require.NoError(t, err)
+	require.Equal(t, authpkg.OutcomeAllow, decision.Outcome)
+	require.Contains(t, decision.Reason, "binding=roleBindings[1]")
+}
+
+func TestRoleDeduplicationPreservesClusterTransferProvenance(t *testing.T) {
+	p := newRBACProvider(t, `apiVersion: rbac.authorization.gitstore.dev/v1beta1
+kind: RbacLocalConfiguration
+clusterRoles:
+  shared:
+    rules: [{resources: [repository], verbs: [transfer]}]
+clusterRoleBindings:
+  - roleRef: {kind: ClusterRole, name: shared}
+    subjects: [{kind: User, name: alice}]
+roleBindings:
+  - namespace: correct
+    roleRef: {kind: ClusterRole, name: shared}
+    subjects: [{kind: User, name: alice}]
+`)
+	snapshot := *p.snapshot.Load()
+	snapshot.bindings = slices.Clone(snapshot.bindings)
+	snapshot.bindings[0], snapshot.bindings[1] = snapshot.bindings[1], snapshot.bindings[0]
+	p.snapshot.Store(&snapshot)
+	decision, err := p.Authorize(t.Context(), &authpkg.Principal{Subject: "alice", AuthMethod: "static-users"},
+		"repository.transfer", authpkg.ResourceContext{
+			Kind: "repository", OwnerSub: "other", Attrs: map[string]any{
+				"namespace": "correct", "targetOwnerRef": map[string]any{"kind": "User", "name": "bob"},
+			},
+		})
+	require.NoError(t, err)
+	require.Equal(t, authpkg.OutcomeAllow, decision.Outcome)
+	require.Contains(t, decision.Reason, "binding=clusterRoleBindings[0]")
 }
 
 // authorizationCapacityFixture exercises the maximum supported policy, including
@@ -685,12 +854,306 @@ func TestAuthorizationDecisionCapacity(t *testing.T) {
 					require.Less(t, histogram.quantile(.99), time.Millisecond)
 				}
 			}
+
 			t.Logf("elapsed=%s decisionsPerSecond=%.1f allocatedBytesPerDecision=%.1f allocationsPerDecision=%.1f", elapsed, float64(calls)/elapsed.Seconds(), float64(after.TotalAlloc-before.TotalAlloc)/float64(calls), float64(after.Mallocs-before.Mallocs)/float64(calls))
 			if directory := os.Getenv("CAPACITY_EVIDENCE_DIR"); directory != "" {
-				data, err := json.MarshalIndent(map[string]any{"concurrency": concurrency, "policyDigest": p.snapshot.Load().digest, "warmupSeconds": warmup.Seconds(), "measurementSeconds": elapsed.Seconds(), "histograms": histograms}, "", "  ")
+				names := make([]string, len(cases))
+				for index, tc := range cases {
+					names[index] = tc.name
+				}
+				data, err := json.MarshalIndent(map[string]any{
+					"schemaVersion": 1, "concurrency": concurrency, "policyDigest": p.snapshot.Load().digest,
+					"warmupSeconds": warmup.Seconds(), "measurementSeconds": elapsed.Seconds(),
+					"histograms": histograms, "cases": names, "invalidOutcomes": 0,
+					"policyDimensions": map[string]int{"roles": 200, "bindings": 1000, "rules": 2000, "groups": 50},
+					"runtime":          runtime.Version(), "os": runtime.GOOS, "architecture": runtime.GOARCH,
+					"logicalCPUs": runtime.NumCPU(), "gomaxprocs": runtime.GOMAXPROCS(0),
+					"sampleProbability": "1/64",
+				}, "", "  ")
 				require.NoError(t, err)
 				require.NoError(t, os.WriteFile(filepath.Join(directory, fmt.Sprintf("authorization-latency-%d.json", concurrency)), data, 0600))
 			}
 		})
+	}
+}
+
+type authorizationReloadEvidence struct {
+	SchemaVersion   int     `json:"schemaVersion"`
+	Concurrency     int     `json:"concurrency"`
+	DurationSeconds float64 `json:"durationSeconds"`
+	Decisions       uint64  `json:"decisions"`
+	Reloads         int     `json:"reloads"`
+	RejectedReloads int     `json:"rejectedReloads"`
+	InvalidOutcomes uint64  `json:"invalidOutcomes"`
+	BeforeHeapBytes uint64  `json:"beforeHeapBytes"`
+	AfterHeapBytes  uint64  `json:"afterHeapBytes"`
+	OldDigest       string  `json:"oldDigest"`
+	NewDigest       string  `json:"newDigest"`
+}
+
+func soakAuthorizationReloads(t *testing.T, duration time.Duration, concurrency int) authorizationReloadEvidence {
+	t.Helper()
+	p, cases := authorizationCapacityFixture(t)
+	original, err := os.ReadFile(p.path)
+	require.NoError(t, err)
+	alternate := []byte(strings.Replace(string(original), "value: last", "value: alternate", 1))
+	require.NotEqual(t, original, alternate)
+	oldSnapshot := p.snapshot.Load()
+	write := func(document []byte) {
+		t.Helper()
+		temp, err := os.CreateTemp(filepath.Dir(p.path), "reload-*.yaml")
+		require.NoError(t, err)
+		defer os.Remove(temp.Name())
+		defer temp.Close()
+		require.NoError(t, temp.Chmod(0600))
+		_, err = temp.Write(document)
+		require.NoError(t, err)
+		require.NoError(t, temp.Close())
+		require.NoError(t, os.Rename(temp.Name(), p.path))
+	}
+	write(alternate)
+	require.NoError(t, p.Reload())
+	newSnapshot := p.snapshot.Load()
+	require.NotEqual(t, oldSnapshot.digest, newSnapshot.digest)
+	write(original)
+	require.NoError(t, p.Reload())
+	// Hold one old snapshot throughout publication and compare its semantics.
+	retained := &RBACLocalProvider{}
+	retained.snapshot.Store(oldSnapshot)
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	evidence := authorizationReloadEvidence{
+		SchemaVersion: 1, Concurrency: concurrency,
+		OldDigest: oldSnapshot.digest, NewDigest: newSnapshot.digest, BeforeHeapBytes: before.HeapAlloc,
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var decisions, invalid atomic.Uint64
+	var ready, done sync.WaitGroup
+	defer func() {
+		cancel()
+		done.Wait()
+	}()
+	ready.Add(concurrency)
+	done.Add(concurrency)
+	start := make(chan struct{})
+	for worker := range concurrency {
+		go func() {
+			defer done.Done()
+			ready.Done()
+			<-start
+			index := worker % len(cases)
+			for ctx.Err() == nil {
+				tc := cases[index]
+				decision, err := p.Authorize(ctx, tc.principal, tc.action, tc.resource)
+				want := tc.want
+				switch {
+				case strings.Contains(decision.Reason, "policy="+oldSnapshot.digest):
+				case strings.Contains(decision.Reason, "policy="+newSnapshot.digest):
+					if tc.name == "last-allow" || tc.name == "owner-transfer" {
+						want = authpkg.OutcomeDeny
+					}
+				default:
+					invalid.Add(1)
+				}
+				if err != nil || decision.Outcome != want {
+					invalid.Add(1)
+				}
+				retainedDecision, retainedErr := retained.Authorize(ctx, tc.principal, tc.action, tc.resource)
+				if retainedErr != nil || retainedDecision.Outcome != tc.want {
+					invalid.Add(1)
+				}
+				decisions.Add(1)
+				index = (index + 1) % len(cases)
+			}
+		}()
+	}
+	ready.Wait()
+	started := time.Now()
+	timer := time.AfterFunc(duration, cancel)
+	defer timer.Stop()
+	close(start)
+	for ctx.Err() == nil {
+		for _, document := range [][]byte{alternate, original} {
+			write(document)
+			require.NoError(t, p.Reload())
+			evidence.Reloads++
+			current := p.snapshot.Load()
+			for _, rejected := range [][]byte{
+				[]byte("apiVersion: rbac.authorization.gitstore.dev/v1\n"),
+				[]byte("clusterRoles: [invalid]\n"),
+				[]byte(strings.Repeat("x", MaxPolicyBytes+1)),
+			} {
+				write(rejected)
+				require.Error(t, p.Reload())
+				require.Same(t, current, p.snapshot.Load(), "rejected reload must retain the current immutable snapshot")
+				evidence.RejectedReloads++
+			}
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
+		}
+	}
+	cancel()
+	done.Wait()
+	evidence.DurationSeconds = time.Since(started).Seconds()
+	evidence.Decisions = decisions.Load()
+	evidence.InvalidOutcomes = invalid.Load()
+	write(original)
+	require.NoError(t, p.Reload())
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(original)
+	runtime.KeepAlive(alternate)
+	runtime.KeepAlive(oldSnapshot)
+	runtime.KeepAlive(newSnapshot)
+	runtime.KeepAlive(retained)
+	evidence.AfterHeapBytes = after.HeapAlloc
+	require.Zero(t, evidence.InvalidOutcomes, "concurrent decisions must match one complete policy snapshot")
+	require.Positive(t, evidence.Decisions)
+	require.Positive(t, evidence.Reloads)
+	return evidence
+}
+
+func TestAuthorizationConcurrentReloadSnapshots(t *testing.T) {
+	soakAuthorizationReloads(t, 100*time.Millisecond, 2)
+}
+
+func auditAuthorizationEvaluator(t *testing.T) map[string]any {
+	t.Helper()
+	files := map[string][]string{
+		"":           {"provider.go", "policy.go"},
+		"auth.":      {"../../types.go", "../../actions_generated.go"},
+		"datastore.": {"../../../datastore/ownership.go"},
+	}
+	fset := token.NewFileSet()
+	functions := map[string]*ast.FuncDecl{}
+	for prefix, paths := range files {
+		for _, path := range paths {
+			file, err := parser.ParseFile(fset, path, nil, 0)
+			require.NoError(t, err)
+			for _, declaration := range file.Decls {
+				if function, ok := declaration.(*ast.FuncDecl); ok {
+					functions[prefix+function.Name.Name] = function
+				}
+			}
+		}
+	}
+	pure := map[string]bool{
+		"len": true, "append": true, "uint64": true,
+		"p.snapshot.Load": true,
+		"fmt.Sprintf":     true, "bits.TrailingZeros64": true, "slices.Contains": true,
+		"strings.HasPrefix": true, "strings.TrimPrefix": true, "strings.ContainsAny": true,
+		"strings.TrimSpace": true, "utf8.ValidString": true,
+		"time.Now": true,
+	}
+	visited := map[string]bool{}
+	calls := map[string]bool{}
+	var visit func(string)
+	visit = func(name string) {
+		if visited[name] {
+			return
+		}
+		visited[name] = true
+		function, ok := functions[name]
+		require.True(t, ok, "unreviewed evaluator function %s", name)
+		if !ok {
+			return
+		}
+		closures := map[string]bool{}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			assignment, ok := node.(*ast.AssignStmt)
+			if ok && len(assignment.Lhs) == 1 && len(assignment.Rhs) == 1 {
+				if identifier, ok := assignment.Lhs[0].(*ast.Ident); ok {
+					_, closures[identifier.Name] = assignment.Rhs[0].(*ast.FuncLit)
+				}
+			}
+			return true
+		})
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			var target strings.Builder
+			require.NoError(t, format.Node(&target, fset, call.Fun))
+			callee := target.String()
+			calls[callee] = true
+			if callee == "p.Name" {
+				callee = "Name"
+			}
+			if pure[callee] || closures[callee] {
+				return true
+			}
+			if _, ok := functions[callee]; ok {
+				visit(callee)
+			} else {
+				t.Errorf("unreviewed evaluator call %s at %s; I/O and indirect clients are forbidden", callee, fset.Position(call.Pos()))
+			}
+			return true
+		})
+	}
+	visit("Authorize")
+	require.True(t, visited["auth.LookupAction"])
+	require.True(t, visited["auth.Allow"])
+	require.True(t, visited["auth.Deny"])
+	require.True(t, visited["datastore.EncodeOwnerSubject"])
+	require.False(t, visited["loadPolicy"], "policy reads belong to reload, never evaluation")
+	functionNames := make([]string, 0, len(visited))
+	for name := range visited {
+		functionNames = append(functionNames, name)
+	}
+	callNames := make([]string, 0, len(calls))
+	for name := range calls {
+		callNames = append(callNames, name)
+	}
+	slices.Sort(functionNames)
+	slices.Sort(callNames)
+	return map[string]any{
+		"schemaVersion": 1, "root": "Authorize", "passed": !t.Failed(),
+		"functions": functionNames, "calls": callNames,
+		"allowedClockRead":      "time.Now",
+		"forbiddenDependencies": []string{"policy-file", "datastore-client", "network-client"},
+	}
+}
+
+func TestAuthorizationEvaluatorPureCallGraph(t *testing.T) {
+	evidence := auditAuthorizationEvaluator(t)
+	if os.Getenv("AUTHZ_CAPACITY_RUN") == "1" {
+		if directory := os.Getenv("CAPACITY_EVIDENCE_DIR"); directory != "" {
+			data, err := json.MarshalIndent(evidence, "", "  ")
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(directory, "authorization-evaluator-audit.json"), data, 0600))
+		}
+	}
+}
+
+func TestAuthorizationReloadCapacity(t *testing.T) {
+	if os.Getenv("AUTHZ_CAPACITY_RUN") != "1" {
+		t.Skip("authorization reload capacity requires explicit opt-in")
+	}
+	duration := 30 * time.Minute
+	if raw := os.Getenv("AUTHZ_CAPACITY_RELOAD_DURATION"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		require.NoError(t, err)
+		require.Positive(t, parsed)
+		if os.Getenv("MODE") != "diagnostic" {
+			require.GreaterOrEqual(t, parsed, duration, "acceptance reload soak cannot be shortened")
+		}
+		duration = parsed
+	}
+	evidence := soakAuthorizationReloads(t, duration, 32)
+	if directory := os.Getenv("CAPACITY_EVIDENCE_DIR"); directory != "" {
+		data, err := json.MarshalIndent(evidence, "", "  ")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(directory, "authorization-reload.json"), data, 0600))
+	}
+	if os.Getenv("MODE") != "diagnostic" {
+		require.GreaterOrEqual(t, evidence.DurationSeconds, (30 * time.Minute).Seconds())
+		require.GreaterOrEqual(t, evidence.Reloads, 60)
+		require.LessOrEqual(t, evidence.AfterHeapBytes, evidence.BeforeHeapBytes+evidence.BeforeHeapBytes/10,
+			"post-GC retained heap must remain within 10%%")
 	}
 }

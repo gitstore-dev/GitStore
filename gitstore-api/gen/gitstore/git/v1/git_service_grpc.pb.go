@@ -55,6 +55,7 @@ const (
 	GitService_ReceivePack_FullMethodName      = "/gitstore.git.v1.GitService/ReceivePack"
 	GitService_UploadPack_FullMethodName       = "/gitstore.git.v1.GitService/UploadPack"
 	GitService_GetFile_FullMethodName          = "/gitstore.git.v1.GitService/GetFile"
+	GitService_GetFiles_FullMethodName         = "/gitstore.git.v1.GitService/GetFiles"
 	GitService_GetFileStream_FullMethodName    = "/gitstore.git.v1.GitService/GetFileStream"
 	GitService_ListFiles_FullMethodName        = "/gitstore.git.v1.GitService/ListFiles"
 	GitService_CommitFile_FullMethodName       = "/gitstore.git.v1.GitService/CommitFile"
@@ -91,6 +92,11 @@ type GitServiceClient interface {
 	UploadPack(ctx context.Context, in *UploadPackRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[UploadPackResponse], error)
 	// GetFile returns the raw bytes of a single file at the given ref.
 	GetFile(ctx context.Context, in *GetFileRequest, opts ...grpc.CallOption) (*GetFileResponse, error)
+	// GetFiles reads one to four distinct paths from a single immutable commit.
+	// Missing paths are explicit results; repository/ref and non-file errors fail
+	// the request. Each blob is bounded to 4 MiB and the complete encoded
+	// response is bounded to 16 MiB.
+	GetFiles(ctx context.Context, in *GetFilesRequest, opts ...grpc.CallOption) (*GetFilesResponse, error)
 	// GetFileStream returns a file as a stream of byte chunks.
 	GetFileStream(ctx context.Context, in *GetFileStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetFileStreamResponse], error)
 	// ListFiles enumerates file paths under an optional prefix at the given ref.
@@ -181,6 +187,16 @@ func (c *gitServiceClient) GetFile(ctx context.Context, in *GetFileRequest, opts
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetFileResponse)
 	err := c.cc.Invoke(ctx, GitService_GetFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gitServiceClient) GetFiles(ctx context.Context, in *GetFilesRequest, opts ...grpc.CallOption) (*GetFilesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFilesResponse)
+	err := c.cc.Invoke(ctx, GitService_GetFiles_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -293,6 +309,11 @@ type GitServiceServer interface {
 	UploadPack(*UploadPackRequest, grpc.ServerStreamingServer[UploadPackResponse]) error
 	// GetFile returns the raw bytes of a single file at the given ref.
 	GetFile(context.Context, *GetFileRequest) (*GetFileResponse, error)
+	// GetFiles reads one to four distinct paths from a single immutable commit.
+	// Missing paths are explicit results; repository/ref and non-file errors fail
+	// the request. Each blob is bounded to 4 MiB and the complete encoded
+	// response is bounded to 16 MiB.
+	GetFiles(context.Context, *GetFilesRequest) (*GetFilesResponse, error)
 	// GetFileStream returns a file as a stream of byte chunks.
 	GetFileStream(*GetFileStreamRequest, grpc.ServerStreamingServer[GetFileStreamResponse]) error
 	// ListFiles enumerates file paths under an optional prefix at the given ref.
@@ -334,6 +355,9 @@ func (UnimplementedGitServiceServer) UploadPack(*UploadPackRequest, grpc.ServerS
 }
 func (UnimplementedGitServiceServer) GetFile(context.Context, *GetFileRequest) (*GetFileResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetFile not implemented")
+}
+func (UnimplementedGitServiceServer) GetFiles(context.Context, *GetFilesRequest) (*GetFilesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetFiles not implemented")
 }
 func (UnimplementedGitServiceServer) GetFileStream(*GetFileStreamRequest, grpc.ServerStreamingServer[GetFileStreamResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method GetFileStream not implemented")
@@ -463,6 +487,24 @@ func _GitService_GetFile_Handler(srv interface{}, ctx context.Context, dec func(
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GitServiceServer).GetFile(ctx, req.(*GetFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GitService_GetFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFilesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GitServiceServer).GetFiles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GitService_GetFiles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GitServiceServer).GetFiles(ctx, req.(*GetFilesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -608,6 +650,10 @@ var GitService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetFile",
 			Handler:    _GitService_GetFile_Handler,
+		},
+		{
+			MethodName: "GetFiles",
+			Handler:    _GitService_GetFiles_Handler,
 		},
 		{
 			MethodName: "ListFiles",

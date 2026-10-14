@@ -3,7 +3,8 @@
 
 use async_trait::async_trait;
 use regex::Regex;
-use tracing::error;
+use std::time::Instant;
+use tracing::{error, info};
 
 use super::{AdmissionDecision, AdmissionHandler, HookContext, RefUpdate};
 use crate::git::tree_diff::{collect_diff_paths_from_trees, collect_paths_from_tree, get_tree_id};
@@ -69,6 +70,7 @@ impl AdmissionHandler for AdmissionControlHandler {
         );
         // Open the repository once for all matching updates so we don't pay
         // a gix::open (config read + ODB setup) per ref update in a multi-ref push.
+        let open_started = Instant::now();
         let repo = if git_dir.as_os_str().is_empty() {
             None
         } else {
@@ -80,6 +82,7 @@ impl AdmissionHandler for AdmissionControlHandler {
                 }
             }
         };
+        let repository_open_us = open_started.elapsed().as_micros() as u64;
 
         for update in updates {
             if !self.branch_pattern.is_match(&update.ref_name) {
@@ -94,36 +97,52 @@ impl AdmissionHandler for AdmissionControlHandler {
             let repository_id = repository_id.to_string();
             let authorization = Some(hook_ctx.callback_authorization(vec![update.into()]));
             let service_token = self.service_token.clone();
+            let diff_started = Instant::now();
             let changed_paths = repo
                 .as_ref()
                 .map(|r| compute_changed_paths_in_repo(r, &update.old_oid, &update.new_oid))
                 .unwrap_or_default();
+            let diff_us = diff_started.elapsed().as_micros() as u64;
+            let callback_enqueued = Instant::now();
 
-            tokio::spawn(async move {
-                let req = AdmitResourcesRequest {
-                    repository_id,
-                    ref_name: ref_name.clone(),
-                    old_commit_sha,
-                    new_commit_sha,
-                    changed_paths,
-                    authorization,
-                };
-                let result = match crate::auth::interceptor::callback_request(
-                    req,
-                    &service_token,
-                    "/gitstore.catalog.v1.CatalogService/AdmitResources",
-                ) {
-                    Ok(request) => client.admit_resources(request).await,
-                    Err(error) => Err(error),
-                };
-                if let Err(e) = result {
-                    error!(
-                        ref_name = %ref_name,
-                        error = %e,
-                        "admit_resources_error"
+            tokio::spawn(tracing::Instrument::instrument(
+                async move {
+                    let dispatch_us = callback_enqueued.elapsed().as_micros() as u64;
+                    let callback_started = Instant::now();
+                    let req = AdmitResourcesRequest {
+                        repository_id,
+                        ref_name: ref_name.clone(),
+                        old_commit_sha,
+                        new_commit_sha,
+                        changed_paths,
+                        authorization,
+                    };
+                    let result = match crate::auth::interceptor::callback_request(
+                        req,
+                        &service_token,
+                        "/gitstore.catalog.v1.CatalogService/AdmitResources",
+                    ) {
+                        Ok(request) => client.admit_resources(request).await,
+                        Err(error) => Err(error),
+                    };
+                    info!(
+                        dispatch_us,
+                        repository_open_us,
+                        diff_us,
+                        callback_us = callback_started.elapsed().as_micros() as u64,
+                        success = result.is_ok(),
+                        "post_receive_admission_timing"
                     );
-                }
-            });
+                    if let Err(e) = result {
+                        error!(
+                            ref_name = %ref_name,
+                            error = %e,
+                            "admit_resources_error"
+                        );
+                    }
+                },
+                crate::work_span("git.catalog.admission"),
+            ));
         }
 
         Ok(AdmissionDecision::Accept)
@@ -253,6 +272,7 @@ mod tests {
     struct MockCatalogService {
         admit_call_count: Arc<AtomicU32>,
         actor_subject: Arc<Mutex<String>>,
+        delay: Duration,
     }
 
     #[tonic::async_trait]
@@ -271,6 +291,7 @@ mod tests {
             &self,
             req: Request<AdmitResourcesRequest>,
         ) -> Result<Response<AdmitResourcesResponse>, Status> {
+            tokio::time::sleep(self.delay).await;
             self.admit_call_count.fetch_add(1, Ordering::SeqCst);
             *self.actor_subject.lock().unwrap() = req
                 .into_inner()
@@ -301,11 +322,20 @@ mod tests {
         admit_count: Arc<AtomicU32>,
         actor_subject: Arc<Mutex<String>>,
     ) -> String {
+        start_mock_server_with_delay(admit_count, actor_subject, Duration::ZERO).await
+    }
+
+    async fn start_mock_server_with_delay(
+        admit_count: Arc<AtomicU32>,
+        actor_subject: Arc<Mutex<String>>,
+        delay: Duration,
+    ) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let svc = MockCatalogService {
             admit_call_count: admit_count,
             actor_subject,
+            delay,
         };
         tokio::spawn(async move {
             Server::builder()
@@ -361,6 +391,73 @@ mod tests {
             1,
             "expected one AdmitResources call"
         );
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_callback_timing_includes_rpc_without_resource_labels() {
+        let count = Arc::new(AtomicU32::new(0));
+        let addr = start_mock_server_with_delay(
+            count.clone(),
+            Arc::new(Mutex::new(String::new())),
+            Duration::from_millis(50),
+        )
+        .await;
+        let handler = AdmissionControlHandler::connect(&addr, "refs/heads/main".to_string())
+            .await
+            .unwrap()
+            .with_service_token("timing-fixture-secret");
+        let result = handler
+            .admit(
+                "post-receive",
+                &[make_update("refs/heads/main", false)],
+                "timing-fixture-repository",
+                std::path::Path::new(""),
+                &make_hook_context("timing-fixture-actor"),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, AdmissionDecision::Accept));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while count.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        logs_assert(|lines| {
+            let samples: Vec<_> = lines
+                .iter()
+                .filter(|line| line.contains("post_receive_admission_timing"))
+                .collect();
+            if samples.len() != 1 {
+                return Err(format!("expected one timing sample, got {}", samples.len()));
+            }
+            let line = samples[0];
+            for field in [
+                "dispatch_us",
+                "repository_open_us",
+                "diff_us",
+                "callback_us",
+            ] {
+                let expression = Regex::new(&format!(r"{}\s*=\s*(\d+)", field)).unwrap();
+                let captures = expression
+                    .captures(line)
+                    .ok_or_else(|| format!("missing numeric {field}"))?;
+                let duration: u64 = captures[1].parse().unwrap();
+                if field == "callback_us" && duration < 50_000 {
+                    return Err("RPC delay was not included in callback timing".into());
+                }
+            }
+            if !line.contains("success=true")
+                || line.contains("timing-fixture")
+                || line.contains("ref_name")
+                || line.contains("changed_paths")
+            {
+                return Err("timing sample has an invalid outcome or resource labels".into());
+            }
+            Ok(())
+        });
     }
 
     #[tokio::test]
@@ -422,6 +519,7 @@ mod tests {
 
     // T019c: gRPC transport error → error logged, Accept returned (fire-and-forget)
     #[tokio::test]
+    #[tracing_test::traced_test]
     async fn test_transport_error_returns_accept() {
         let handler =
             AdmissionControlHandler::connect("http://127.0.0.1:1", "refs/heads/main".to_string())
@@ -442,6 +540,27 @@ mod tests {
             .unwrap();
         // Must always return Accept — errors are fire-and-forget
         assert!(matches!(result, AdmissionDecision::Accept));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !logs_contain("post_receive_admission_timing") {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        logs_assert(|lines| {
+            let samples: Vec<_> = lines
+                .iter()
+                .filter(|line| line.contains("post_receive_admission_timing"))
+                .collect();
+            if samples.len() != 1
+                || !samples[0].contains("success=false")
+                || samples[0].contains("ref_name")
+                || samples[0].contains("repo-1")
+            {
+                return Err("failed callback requires one bounded failure timing sample".into());
+            }
+            Ok(())
+        });
     }
 
     // T019d: old_oid all-zeros (new branch) matching pattern triggers admission

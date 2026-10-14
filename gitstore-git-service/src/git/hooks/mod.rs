@@ -330,24 +330,31 @@ impl HookPipeline {
         let repository_id = repository_id.to_string();
         let git_dir_owned = git_dir.to_path_buf();
         let hook_ctx_owned = hook_ctx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handler
-                .admit(
-                    "post-receive",
-                    &updates_owned,
-                    &repository_id,
-                    &git_dir_owned,
-                    &hook_ctx_owned,
-                )
-                .await
-            {
-                error!(
-                    phase = "post-receive",
-                    reason = %e,
-                    "admission_handler_error"
+        tokio::spawn(tracing::Instrument::instrument(
+            async move {
+                info!(
+                    dispatch_us = start.elapsed().as_micros() as u64,
+                    "post_receive_dispatch_timing"
                 );
-            }
-        });
+                if let Err(e) = handler
+                    .admit(
+                        "post-receive",
+                        &updates_owned,
+                        &repository_id,
+                        &git_dir_owned,
+                        &hook_ctx_owned,
+                    )
+                    .await
+                {
+                    error!(
+                        phase = "post-receive",
+                        reason = %e,
+                        "admission_handler_error"
+                    );
+                }
+            },
+            crate::work_span("git.post_receive"),
+        ));
 
         let duration_ms = start.elapsed().as_millis() as u64;
         info!(
@@ -854,6 +861,42 @@ mod tests {
             old_oid: "0".repeat(40),
             new_oid: "a".repeat(40),
         }
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_post_receive_dispatch_timing_includes_runtime_queue() {
+        make_pipeline().run_post_receive(
+            Path::new(""),
+            &[make_update("refs/heads/main")],
+            "dispatch-fixture-repository",
+            &HookContext::default(),
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        tokio::task::yield_now().await;
+        logs_assert(|lines| {
+            let samples: Vec<_> = lines
+                .iter()
+                .filter(|line| line.contains("post_receive_dispatch_timing dispatch_us="))
+                .collect();
+            if samples.len() != 1 {
+                return Err(format!(
+                    "expected one dispatch sample, got {}",
+                    samples.len()
+                ));
+            }
+            let expression = regex::Regex::new(r"dispatch_us\s*=\s*(\d+)").unwrap();
+            let captures = expression
+                .captures(samples[0])
+                .ok_or("missing numeric dispatch timing")?;
+            let duration: u64 = captures[1].parse().unwrap();
+            if duration < 50_000 || samples[0].contains("dispatch-fixture-repository") {
+                return Err(
+                    "dispatch timing omitted queue delay or contains resource identity".into(),
+                );
+            }
+            Ok(())
+        });
     }
 
     #[tokio::test]

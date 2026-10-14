@@ -15,7 +15,7 @@ usage: make capacity TARGET=<target> PROFILE=<profile> MODE=<mode>
 
 valid target/profile combinations:
   api/readiness
-  api/authorization (diagnostic only until reload-soak evidence is implemented)
+  api/authorization (evaluator only; separate deployed readiness/lifecycle gates)
   namespace/admission
   namespace/validation
   namespace/watch
@@ -40,10 +40,6 @@ case "${target}/${profile}" in
     command=(make --no-print-directory _capacity-k6 CAPACITY_PROFILE=api-readiness "MODE=${mode}")
     ;;
   api/authorization)
-    [[ "${mode}" == diagnostic ]] || {
-      echo 'authorization sampling is diagnostic until reload-soak and zero-I/O acceptance evidence are complete' >&2
-      exit 2
-    }
     runner_kind=go-test
     command=(make --no-print-directory _capacity-authorization "MODE=${mode}")
     ;;
@@ -111,6 +107,19 @@ if [[ "${target}/${profile}" == "repository/lifecycle" ]]; then
   export NAMESPACE_WATCH_OVERFLOW_TRANSITIONS="${REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS:-}"
 fi
 
+if [[ -n "${REPOSITORY_CAPACITY_WORKLOAD:-}" ]]; then
+  case "${REPOSITORY_CAPACITY_WORKLOAD}" in
+    repository|file|combined) ;;
+    *) echo "REPOSITORY_CAPACITY_WORKLOAD must be repository, file or combined" >&2; exit 2 ;;
+  esac
+  if [[ "${target}/${profile}" != repository/lifecycle || "${mode}" != diagnostic ||
+        "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]]; then
+    echo "REPOSITORY_CAPACITY_WORKLOAD comparisons require repository/lifecycle diagnostic mode without the full secret scenario" >&2
+    exit 2
+  fi
+  command+=("REPOSITORY_CAPACITY_WORKLOAD=${REPOSITORY_CAPACITY_WORKLOAD}")
+fi
+
 export CAPACITY_TARGET="${target}"
 export CAPACITY_SCENARIO="${profile}"
 
@@ -122,6 +131,13 @@ if [[ "${CAPACITY_DRY_RUN:-0}" == "1" ]]; then
 fi
 
 cd "${repo_root}"
+if [[ -n "${REPOSITORY_CAPACITY_WORKLOAD:-}" ]]; then
+  [[ "${REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT:-0}" == 1 &&
+     -r "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR:-}/owned-fixture.json" ]] || {
+    echo "workload diagnostics require a provisioned explicitly owned deployment" >&2
+    exit 2
+  }
+fi
 if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == "1" ]]; then
   [[ "${CHAOS_CONFIRM:-0}" == 1 && "${REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT:-0}" == 1 &&
      -r "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR:-}/owned-fixture.json" ]] || {
@@ -136,16 +152,33 @@ mkdir -p "${evidence_dir}"
 export CAPACITY_RUN_ID="${run_id}"
 
 observability="${CAPACITY_OBSERVABILITY:-none}"
+export CAPACITY_OBSERVABILITY="${observability}"
+case "${CAPACITY_OBSERVABILITY_KEEP:-0}" in 0|1) ;; *) echo "CAPACITY_OBSERVABILITY_KEEP must be 0 or 1" >&2; exit 2 ;; esac
 case "${observability}" in
   none) ;;
-  prometheus)
+  prometheus|full)
     export CAPACITY_PROMETHEUS_TARGETS_FILE="${evidence_dir}/prometheus/targets.json"
     make --no-print-directory _capacity-observability
     export CAPACITY_PROMETHEUS_URL="${CAPACITY_PROMETHEUS_URL:-http://127.0.0.1:${CAPACITY_PROMETHEUS_PORT:-9090}}"
-    trap 'make --no-print-directory _capacity-observability-down' EXIT
+    if [[ "${CAPACITY_OBSERVABILITY_KEEP:-0}" != 1 ]]; then
+      trap 'make --no-print-directory _capacity-observability-down' EXIT
+    fi
+    readiness_urls=("${CAPACITY_PROMETHEUS_URL}/-/ready")
+    if [[ "${observability}" == full ]]; then
+      readiness_urls+=("http://127.0.0.1:${CAPACITY_OTEL_HEALTH_PORT:-13133}/"
+        "http://127.0.0.1:${CAPACITY_TEMPO_PORT:-3200}/ready" "http://127.0.0.1:${CAPACITY_LOKI_PORT:-3100}/ready")
+    fi
+    for url in "${readiness_urls[@]}"; do
+      ready=0
+      for attempt in {1..90}; do
+        if curl -fsS --max-time 2 "${url}" >/dev/null 2>&1; then ready=1; break; fi
+        sleep 1
+      done
+      (( ready == 1 )) || { echo "capacity observability endpoint failed readiness: ${url}" >&2; exit 1; }
+    done
     ;;
   *)
-    echo "CAPACITY_OBSERVABILITY must be none or prometheus" >&2
+    echo "CAPACITY_OBSERVABILITY must be none, prometheus or full" >&2
     exit 2
     ;;
 esac
@@ -177,13 +210,7 @@ if [[ "${CAPACITY_TEST_FORCE_DIRTY:-0}" == "1" || -n "$(git status --porcelain=v
   worktree_dirty=true
 fi
 capacity_source_state_sha256() {
-  {
-    git status --porcelain=v1
-    git diff --binary HEAD
-    while IFS= read -r -d '' untracked; do
-      shasum -a 256 "${untracked}"
-    done < <(git ls-files --others --exclude-standard -z)
-  } | shasum -a 256 | awk '{print $1}'
+  "${repo_root}/scripts/validate-capacity-evidence.sh" "${evidence_dir}" "${target}" "${profile}" "${mode}" source-state
 }
 source_state_sha256="$(capacity_source_state_sha256)"
 jq -n \
@@ -230,15 +257,17 @@ fi
 verifier_status=${preflight_status}
 if (( preflight_status == 0 && container_check_status == 0 )); then
   set +e
-  CAPACITY_EVIDENCE_DIR="${evidence_dir}" "${command[@]}" 2>&1 | tee "${evidence_dir}/verifier.log"
+  # Recursive make inherits command-line variables ahead of environment values.
+  CAPACITY_EVIDENCE_DIR="${evidence_dir}" "${command[@]}" "CAPACITY_EVIDENCE_DIR=${evidence_dir}" 2>&1 | tee "${evidence_dir}/verifier.log"
   verifier_status=${PIPESTATUS[0]}
   set -e
 fi
 
 postflight_status=0
 if (( preflight_status == 0 && container_check_status == 0 && verifier_status == 0 )) &&
-  [[ "${mode}" != "diagnostic" ]] &&
-  [[ "${target}/${profile}" == "namespace/watch" || "${target}/${profile}" == "namespace/recovery" || "${target}/${profile}" == "repository/lifecycle" ]]; then
+  { [[ "${target}/${profile}" == api/authorization ]] ||
+    { [[ "${mode}" != diagnostic ]] &&
+      [[ "${target}/${profile}" == namespace/watch || "${target}/${profile}" == namespace/recovery || "${target}/${profile}" == repository/lifecycle ]]; }; }; then
   set +e
   "${repo_root}/scripts/validate-capacity-evidence.sh" "${evidence_dir}" "${target}" "${profile}" "${mode}" postflight \
     2>&1 | tee "${evidence_dir}/postflight.log"
@@ -282,8 +311,8 @@ source_state_unchanged=false
 if [[ "$(git rev-parse HEAD)" == "${git_revision}" &&
       "$(capacity_source_state_sha256)" == "${source_state_sha256}" ]]; then
   source_state_unchanged=true
-elif [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]]; then
-  echo "secret capacity verifier source changed during the run" >&2
+elif [[ "${mode}" != diagnostic || "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]]; then
+  echo "capacity verifier source changed during the run" >&2
   source_status=2
   status=2
 fi
@@ -294,7 +323,7 @@ jq --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson verifier_exit_code "${verifier_status}" --argjson datastore_exit_code "${container_check_status}" \
   --argjson postflight_exit_code "${postflight_status}" \
   --argjson prometheus_exit_code "${prometheus_status}" \
-  '. + {completedAt:$completed_at,exitCode:$exit_code,sourceStateExitCode:$source_exit_code,sourceStateUnchanged:$source_state_unchanged,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:(.mode != "diagnostic" and ((.target == "namespace" and (.profile == "watch" or .profile == "recovery")) or (.target == "repository" and .profile == "lifecycle"))),postflightExitCode:$postflight_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic" and .worktreeDirty == false)}' \
+  '. + {completedAt:$completed_at,exitCode:$exit_code,sourceStateExitCode:$source_exit_code,sourceStateUnchanged:$source_state_unchanged,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:((.target == "api" and .profile == "authorization") or (.mode != "diagnostic" and ((.target == "namespace" and (.profile == "watch" or .profile == "recovery")) or (.target == "repository" and .profile == "lifecycle")))),postflightExitCode:$postflight_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic" and .worktreeDirty == false and $source_state_unchanged)}' \
   "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]] && (( status == 0 )); then

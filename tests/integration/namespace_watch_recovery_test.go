@@ -35,15 +35,20 @@ func TestNamespaceWatchRecoveryProbe(t *testing.T) {
 	name := uniqueName("watch-recovery")
 	createNamespaceThrough(t, apiB, token, name)
 	resumed := openNamespaceWatch(t, apiB, token, cursor)
-	event := readNamespaceWatchTransition(t, resumed)
+	event := readNamespaceWatchTransition(t, resumed, name)
 	require.Equal(t, name, event.Name)
 	require.NotEqual(t, cursor, event.ResourceVersion)
 	cursor = event.ResourceVersion
 	_ = resumed.Close()
 
 	t.Run("forced epoch expiry", func(t *testing.T) {
-		expired := openNamespaceWatch(t, apiA, token, "nwv1:00000000-0000-4000-8000-000000000001:0")
+		expired := openNamespaceWatch(t, apiA, token, "rwv1:00000000-0000-4000-8000-000000000001:0")
 		requireNamespaceWatchWireError(t, expired, "WATCH_EXPIRED", "EPOCH_MISMATCH")
+	})
+
+	t.Run("legacy cursor rejected", func(t *testing.T) {
+		expired := openNamespaceWatch(t, apiA, token, "nwv1:00000000-0000-4000-8000-000000000001:0")
+		requireNamespaceWatchWireError(t, expired, "WATCH_EXPIRED", "INCOMPATIBLE_CURSOR")
 	})
 
 	t.Run("rolling replacement and lease handoff", func(t *testing.T) {
@@ -90,7 +95,7 @@ func TestNamespaceWatchRecoveryProbe(t *testing.T) {
 			peer = apiB
 		}
 		createNamespaceThrough(t, peer, token, name)
-		event := readNamespaceWatchTransition(t, watch)
+		event := readNamespaceWatchTransition(t, watch, name)
 		require.Equal(t, name, event.Name)
 	})
 

@@ -103,6 +103,30 @@ func TestAdmitCommittedManifest_CategoryTaxonomyDenialIsPostReceiveRejection(t *
 	assert.Contains(t, string(stored.Spec), "Electronics")
 }
 
+func TestAdmitCommittedManifestRefFailurePreservesCause(t *testing.T) {
+	for _, failure := range []error{context.Canceled, context.DeadlineExceeded, errors.New("ref IO failure")} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			store := newTestDatastore(t)
+			srv := newCatalogServer(t, store, &mockGitReader{
+				resolveRefFunc: func(context.Context, string, string) (string, error) {
+					return "", failure
+				},
+				readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
+					t.Fatal("unresolved ref must not enter content repair")
+					return nil, nil
+				},
+			})
+			result, err := admitCommittedCategory(t, srv, strings.Repeat("b", 40),
+				categoryManifestTitled("electronics", "Electronics"), admission.OperationCreate)
+			require.Nil(t, result)
+			require.ErrorIs(t, err, failure)
+			require.NotErrorIs(t, err, admission.ErrCommittedManifestSuperseded)
+			_, err = store.GetCategoryTaxonomyByName(t.Context(), "gitstore", "electronics")
+			require.ErrorIs(t, err, datastore.ErrNotFound)
+		})
+	}
+}
+
 func TestAdmitCommittedManifest_RepairsCurrentTipAfterWriteFailureButPreservesError(t *testing.T) {
 	base := newTestDatastore(t)
 	store := &failCategoryCreateOnceStore{Datastore: base}

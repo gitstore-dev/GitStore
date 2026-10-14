@@ -82,4 +82,5 @@ var (
 	ErrConflict               = errors.New("optimistic concurrency conflict")
 	ErrRateLimited            = errors.New("remote API rate limited request")
 	ErrCredentialsUnavailable = errors.New("controller credentials unavailable")
+	ErrAPIUnavailable         = errors.New("controller API dependency unavailable")
 )

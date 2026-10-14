@@ -49,8 +49,10 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
 	"github.com/google/uuid"
+	grpcprom "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vektah/gqlparser/v2/ast"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -196,7 +198,14 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	store := datastore.NewInstrumentedDatastore(rawStore, cfg.Api.Datastore.Backend, log)
 	ids := apiruntime.UUIDGenerator{}
 
-	gitClient, err := gitclient.NewClientWithAddr(cfg.Api.GitService.Uri, cfg.GrpcAuth.HmacSecret)
+	tracingEnabled := cfg.Observability.OTLP.Endpoint != ""
+	var clientOptions []grpc.DialOption
+	var serverOptions []grpc.ServerOption
+	if tracingEnabled {
+		clientOptions = append(clientOptions, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+		serverOptions = append(serverOptions, grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	}
+	gitClient, err := gitclient.NewClientWithAddr(cfg.Api.GitService.Uri, cfg.GrpcAuth.HmacSecret, clientOptions...)
 	if err != nil {
 		_ = store.Close()
 		return nil, fmt.Errorf("connect git-service: %w", err)
@@ -268,7 +277,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, err
 	}
 
-	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch, instanceID)
+	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch, instanceID, registry)
 	var graphQlHandler http.Handler = router
 
 	httpServer := &http.Server{
@@ -285,6 +294,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		Logger:    log,
 		Ids:       ids,
 		Registry:  registry,
+		Tracing:   tracingEnabled,
 	})
 	gitHttpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Api.GitPort),
@@ -300,8 +310,13 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("listen on catalog gRPC port %d: %w", cfg.Api.GrpcPort, err)
 	}
-	grpcServer := grpc.NewServer()
-	catalogv1.RegisterCatalogServiceServer(grpcServer, catalogServer)
+	grpcServer, err := newCatalogGRPCServer(catalogServer, prometheus.DefaultRegisterer, serverOptions...)
+	if err != nil {
+		_ = grpcListener.Close()
+		_ = gitClient.Close()
+		_ = store.Close()
+		return nil, err
+	}
 
 	return &Server{
 		cfg:              cfg,
@@ -316,6 +331,20 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		providerShutdown: providerShutdowns,
 		namespaceWatch:   namespaceWatch,
 	}, nil
+}
+
+func newCatalogGRPCServer(handler catalogv1.CatalogServiceServer, registerer prometheus.Registerer, options ...grpc.ServerOption) (*grpc.Server, error) {
+	metrics := grpcprom.NewServerMetrics()
+	metrics.EnableHandlingTimeHistogram()
+	if err := prometheus.WrapRegistererWithPrefix("gitstore_catalog_", registerer).Register(metrics); err != nil {
+		return nil, fmt.Errorf("register catalog gRPC metrics: %w", err)
+	}
+	opts := []grpc.ServerOption{grpc.UnaryInterceptor(metrics.UnaryServerInterceptor())}
+	opts = append(opts, options...)
+	server := grpc.NewServer(opts...)
+	catalogv1.RegisterCatalogServiceServer(server, handler)
+	metrics.InitializeMetrics(server)
+	return server, nil
 }
 
 // GraphQLHandlerDeps are the dependencies for NewGraphQLHandler.
@@ -508,7 +537,7 @@ func playgroundHandler(c *gin.Context) {
 	h.ServeHTTP(c.Writer, c.Request)
 }
 
-func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock, namespaceWatch *namespaceWatchRuntime, instanceID string) *gin.Engine {
+func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock, namespaceWatch *namespaceWatchRuntime, instanceID string, registry *auth.ProviderRegistry) *gin.Engine {
 	var resourceWatchReady func(context.Context) error
 	if namespaceWatch != nil {
 		resourceWatchReady = func(ctx context.Context) error {
@@ -522,6 +551,7 @@ func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logge
 		Clock:              clock,
 		ResourceWatchReady: resourceWatchReady,
 		InstanceID:         instanceID,
+		AuthDiagnostics:    registry.Diagnostics,
 	})
 
 	router.GET("/health", healthHandler.Health)

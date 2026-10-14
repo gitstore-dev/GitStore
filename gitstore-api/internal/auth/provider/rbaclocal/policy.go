@@ -22,6 +22,7 @@ import (
 const PolicyAPIVersion = "rbac.authorization.gitstore.dev/v1beta1"
 const MaxPolicyBytes = 4 * 1024 * 1024
 const MaxPrincipalGroups = 256
+const maxPolicyRoles = 200
 const maxPolicyBindings = 1000
 const maxPolicyRules = 2000
 
@@ -235,7 +236,7 @@ func validatePolicy(p *Policy) error {
 	if p.DefaultDeny != nil && !*p.DefaultDeny {
 		return errors.New("defaultDeny:false is not supported; policy is allow-only with default deny")
 	}
-	if len(p.ClusterRoles)+len(p.Roles) > 200 {
+	if len(p.ClusterRoles)+len(p.Roles) > maxPolicyRoles {
 		return errors.New("policy exceeds 200 roles")
 	}
 	if len(p.ClusterRoleBindings)+len(p.RoleBindings) > maxPolicyBindings {

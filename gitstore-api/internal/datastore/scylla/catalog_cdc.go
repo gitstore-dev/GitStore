@@ -4,6 +4,7 @@
 package scylla
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -143,34 +144,95 @@ type catalogCDCConsumer struct {
 }
 
 func (c *catalogCDCConsumer) Consume(ctx context.Context, change scyllacdc.Change) error {
-	// Every catalog table shares the namespace/name envelope columns.
-	before := catalogCDCRow(change.PreImage)
-	after := catalogCDCRow(change.PostImage)
-	beforeJSON, err := c.payload(change.PreImage)
+	changes, err := c.changes(change)
 	if err != nil {
 		return err
 	}
-	afterJSON, err := c.payload(change.PostImage)
-	if err != nil {
-		return err
-	}
-	name, namespace := "", ""
-	if after != nil {
-		name, namespace = after.Name, after.Namespace
-	} else if before != nil {
-		name, namespace = before.Name, before.Namespace
-	}
+	// Checkpoint the source position only after every row in its frame publishes.
 	err = c.sequencer.Submit(ctx, namespaceCDCSequenceRequest{cdcTime: change.Time, streamID: c.streamID,
+		changes: changes, progressOnly: len(changes) == 0,
 		markProgress: func(markCtx context.Context) error {
 			return c.reporter.MarkProgress(markCtx, scyllacdc.Progress{LastProcessedRecordTime: change.Time})
 		},
-		change: watchjournal.Change{Kind: c.kind, Namespace: namespace, StreamID: c.streamID, Position: change.Time.Bytes(), DeduplicationKey: c.streamID + ":" + change.Time.String(), Name: name, Before: beforeJSON, After: afterJSON, At: change.Time.Time().UTC()},
 	})
 	if err == nil && c.onReady != nil {
 		c.onReady()
 	}
 	return err
 }
+
+const catalogCDCMaxRowsPerChange = 16
+
+func (c *catalogCDCConsumer) changes(change scyllacdc.Change) ([]watchjournal.Change, error) {
+	if len(change.PreImage) > catalogCDCMaxRowsPerChange || len(change.PostImage) > catalogCDCMaxRowsPerChange {
+		return nil, fmt.Errorf("%w: %s CDC frame exceeds %d row images", datastore.ErrNamespaceWatchDiscontinuity, c.kind, catalogCDCMaxRowsPerChange)
+	}
+	type image struct {
+		before, after *scyllacdc.ChangeRow
+		envelope      *productRow
+	}
+	images := make(map[gocql.UUID]*image)
+	for side, rows := range [][]*scyllacdc.ChangeRow{change.PreImage, change.PostImage} {
+		for _, row := range rows {
+			envelope := catalogCDCRow([]*scyllacdc.ChangeRow{row})
+			if envelope == nil || envelope.UID == (gocql.UUID{}) || envelope.Namespace == "" {
+				return nil, fmt.Errorf("%w: %s CDC image has no authoritative identity", datastore.ErrNamespaceWatchDiscontinuity, c.kind)
+			}
+			pair := images[envelope.UID]
+			if pair == nil {
+				if len(images) == catalogCDCMaxRowsPerChange {
+					return nil, fmt.Errorf("%w: %s CDC frame exceeds %d resources", datastore.ErrNamespaceWatchDiscontinuity, c.kind, catalogCDCMaxRowsPerChange)
+				}
+				pair = &image{envelope: envelope}
+				images[envelope.UID] = pair
+			}
+			if pair.envelope.Namespace != envelope.Namespace || !pair.envelope.CreationTimestamp.Equal(envelope.CreationTimestamp) {
+				return nil, fmt.Errorf("%w: %s CDC images disagree on immutable key", datastore.ErrNamespaceWatchDiscontinuity, c.kind)
+			}
+			if side == 0 {
+				if pair.before != nil {
+					return nil, fmt.Errorf("%w: %s CDC frame repeats a preimage", datastore.ErrNamespaceWatchDiscontinuity, c.kind)
+				}
+				pair.before = row
+			} else {
+				if pair.after != nil {
+					return nil, fmt.Errorf("%w: %s CDC frame repeats a postimage", datastore.ErrNamespaceWatchDiscontinuity, c.kind)
+				}
+				pair.after, pair.envelope = row, envelope
+			}
+		}
+	}
+	ids := slices.Collect(maps.Keys(images))
+	slices.SortFunc(ids, func(a, b gocql.UUID) int { return bytes.Compare(a[:], b[:]) })
+	changes := make([]watchjournal.Change, 0, len(ids))
+	for _, uid := range ids {
+		pair := images[uid]
+		var before, after json.RawMessage
+		var err error
+		if pair.before != nil {
+			before, err = c.payload([]*scyllacdc.ChangeRow{pair.before})
+			if err != nil {
+				return nil, err
+			}
+		}
+		if pair.after != nil {
+			after, err = c.payload([]*scyllacdc.ChangeRow{pair.after})
+			if err != nil {
+				return nil, err
+			}
+		}
+		key := c.streamID + ":" + change.Time.String()
+		if len(ids) > 1 {
+			key += ":" + uid.String()
+		}
+		changes = append(changes, watchjournal.Change{
+			Kind: c.kind, Namespace: pair.envelope.Namespace, StreamID: c.streamID, Position: change.Time.Bytes(),
+			DeduplicationKey: key, Name: pair.envelope.Name, Before: before, After: after, At: change.Time.Time().UTC(),
+		})
+	}
+	return changes, nil
+}
+
 func (c *catalogCDCConsumer) Empty(ctx context.Context, ackTime gocql.UUID) error {
 	err := c.sequencer.Submit(ctx, namespaceCDCSequenceRequest{cdcTime: ackTime, streamID: c.streamID, progressOnly: true,
 		markProgress: func(markCtx context.Context) error {

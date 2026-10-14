@@ -50,7 +50,7 @@ need a matching follow-up update before publishing the new baseline there.
 
 This document is the operator reference for configuring `gitstore-api`, `gitstore-git-service`, and `gitstore-controller-manager`.
 
-Configuration is grouped by owning service: `[git_service]` is owned by `gitstore-git-service`, `[api]` is owned by `gitstore-api`, `[controller]` is owned by `gitstore-controller-manager`, and `[log]`, `[grpc_auth]`, and `[push_limits]` are shared across the services that read them.
+Configuration is grouped by owning service: `[git_service]` is owned by `gitstore-git-service`, `[api]` is owned by `gitstore-api`, `[controller]` is owned by `gitstore-controller-manager`, and `[log]`, `[observability]`, `[grpc_auth]`, and `[push_limits]` are shared across the services that read them.
 
 ---
 
@@ -277,6 +277,76 @@ baseline. Keep canonical status-write grants for separate status mutations, and
 |--------------|------------------------|--------|---------|----------|-----------|-----------------------------------------|
 | `log.level`  | `GITSTORE_LOG__LEVEL`  | string | `info`  | No       | No        | `debug` \| `info` \| `warn` \| `error` |
 | `log.format` | `GITSTORE_LOG__FORMAT` | string | `json`  | No       | No        | `json` \| `text`                       |
+
+### Telemetry and API profiling
+
+| Key | Env Var | Type | Default | Description |
+|-----|---------|------|---------|-------------|
+| `observability.otlp.endpoint` | `GITSTORE_OBSERVABILITY__OTLP__ENDPOINT` | string | empty | OTLP HTTP collector base URL; empty disables telemetry export |
+| `observability.otlp.trace_sample_ratio` | `GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO` | number | `0.05` | Parent-based trace sampling ratio, from `0` through `1` |
+| `api.profiling.listen_addr` | `GITSTORE_API__PROFILING__LISTEN_ADDR` | string | empty | Separate loopback-only profiler listener; empty disables profiling |
+| `git_service.metrics.listen_addr` | `GITSTORE_GIT_SERVICE__METRICS__LISTEN_ADDR` | string | empty | Optional native Prometheus listener; literal IP and nonzero port required |
+
+These settings use the same file/overlay/environment precedence as other
+GitStore settings. API telemetry initialization and HTTP/gRPC instrumentation
+receive the resolved configuration; `OTEL_EXPORTER_OTLP_ENDPOINT`,
+`OTEL_TRACES_SAMPLER` and `GITSTORE_CAPACITY_PROFILE_ADDR` are not alternative
+GitStore configuration keys. Service identity is fixed by the emitting service.
+The shared telemetry keys are also loaded and validated by the Git service;
+configuring them alone does not establish a complete distributed tracing rollout.
+Prometheus remains the native metrics endpoint. API telemetry also exports
+OTel gRPC metrics on that endpoint, with a 2,048-series per-instrument
+cardinality bound. Both core telemetry exporters expose
+`gitstore_telemetry_records_total{signal,stage}` for admitted, exported, failed
+and truncated records. Admitted minus exported includes live queued work;
+subtract failed exports and wait for bounded flush/drain before interpreting
+the remaining difference as queue loss. Export success means exporter success,
+not proof of downstream storage; retain collector rejection/failure evidence.
+Both cap string log bodies at 4 KiB without splitting UTF-8. Rust attribute-value
+bounds are not equivalent to the API's limits.
+The copied configuration templates in `gitstore-dev/quickstart` need the same
+new telemetry/profiling keys before exposing this configuration there.
+
+An endpoint must be an HTTP(S) URL without credentials, query or fragment.
+Use an explicitly owned local collector for capacity diagnostics. Trace/log
+batch queues and export timeouts are bounded; enabling export does not weaken
+authentication or authorize collector access to GitStore resources.
+
+For API profiling, use a literal loopback address with an explicit nonzero
+port, for example `127.0.0.1:6060` or `[::1]:6060`. Hostnames and wildcard
+binds are rejected. Profiles are not served on the public API/Git listeners:
+retrieve them inside the owned container. CPU captures require `seconds=1..60`;
+execution traces require `seconds=1..5`. Heap, allocation, block, mutex and
+goroutine endpoints return binary profiles only, with one capture at a time.
+Profiled capacity runs are diagnostics, not unprofiled acceptance evidence.
+
+`CAPACITY_OBSERVABILITY=full make capacity ...` reuses `compose.capacity.yml`
+to start Prometheus, an OTLP HTTP collector, Tempo and Loki. Their host ports
+bind only to loopback. Named volumes retain histories after container removal;
+`CAPACITY_OBSERVABILITY_KEEP=1` keeps collectors available for subsequent
+queries. No Docker socket is mounted and vendor usage reporting is disabled.
+Configure the emitting capacity API/Git processes through
+`CAPACITY_OTLP_ENDPOINT=http://capacity-otel-collector:4318` and, when needed,
+`CAPACITY_API_PROFILE_ADDR=127.0.0.1:6060` and
+`CAPACITY_GIT_METRICS_ADDR=0.0.0.0:50052` before their controlled replacement.
+Starting collectors does not silently reconfigure or restart core services.
+
+Add `CAPACITY_PROMETHEUS_GIT_TARGETS=capacity-git-service:50052` for native
+Git metrics. Native gRPC completion counters retain final status, including
+stream trailers and transport cancellation; their duration histograms are
+grouped by method. Full exports require increments during the current run,
+not merely an old nonzero counter. An expected `AlreadyExists` provisioning
+response is distinct from a lost workload operation.
+On an owned Repository workload diagnostic, `CAPACITY_PROFILING=go`
+captures both APIs' CPU, heap/allocation, block/mutex, goroutine and execution
+profiles during offered load. CPU capture defaults to 30 seconds and is bounded
+to 60; each binary artifact is bounded to 32 MiB. Profile files are private
+diagnostic material and can contain runtime data; do not publish them raw.
+Full observation exports bounded trace details, selected phase logs, raw
+collector/store histories, Go runtime/GC series and native Git metrics.
+Trace-detail lookups are restricted to current-run storage blocks. Tempo uses
+a 256 MiB Go memory limit within its fixed 384 MiB container ceiling.
+Missing or bound-exceeding exports fail explicitly rather than appearing complete.
 
 ### Shared gRPC authentication
 

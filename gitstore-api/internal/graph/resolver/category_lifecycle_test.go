@@ -4,6 +4,7 @@
 package resolver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,7 @@ type memGit struct {
 	seq      int
 	heads    map[string]string
 	trees    map[string]map[string][]byte // commit -> path -> content
+	parents  map[string]string
 	commits  []gitclient.CommitFileParams
 	deletes  []gitclient.DeleteFileParams
 	receipts map[string]string
@@ -50,13 +52,14 @@ type memGit struct {
 }
 
 func newMemGit() *memGit {
-	return &memGit{heads: map[string]string{}, trees: map[string]map[string][]byte{}, receipts: map[string]string{}}
+	return &memGit{heads: map[string]string{}, trees: map[string]map[string][]byte{}, parents: map[string]string{}, receipts: map[string]string{}}
 }
 
 func (g *memGit) write(repositoryID, path string, content []byte) string {
 	g.mu.Lock()
 	g.seq++
 	sha := fmt.Sprintf("%040x", g.seq)
+	g.parents[sha] = g.heads[repositoryID]
 	tree := map[string][]byte{}
 	for p, c := range g.trees[g.heads[repositoryID]] {
 		tree[p] = c
@@ -137,6 +140,7 @@ func (g *memGit) DeleteFileForRepo(_ context.Context, repositoryID string, p git
 	g.deletes = append(g.deletes, p)
 	g.seq++
 	sha := fmt.Sprintf("%040x", g.seq)
+	g.parents[sha] = g.heads[repositoryID]
 	tree := map[string][]byte{}
 	for path, content := range g.trees[g.heads[repositoryID]] {
 		if path != p.Path {
@@ -174,8 +178,59 @@ func (g *memGit) ListFiles(_ context.Context, repositoryID, prefix, ref string) 
 func (g *memGit) ReadFile(ctx context.Context, repositoryID, path, ref string) ([]byte, error) {
 	return g.ReadFileForRepo(ctx, repositoryID, path, ref)
 }
+func (g *memGit) ReadCurrentUnchangedFile(ctx context.Context, repositoryID, path, refName, ancestor string) (bool, []byte, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return false, nil, err
+	}
+	current := g.resolve(repositoryID, refName)
+	if current == ancestor {
+		return true, nil, nil
+	}
+	content, present := g.trees[current][path]
+	if !present {
+		return false, nil, status.Error(codes.NotFound, "fixture file not found")
+	}
+	for commit := current; commit != ""; commit = g.parents[commit] {
+		if err := ctx.Err(); err != nil {
+			return false, nil, err
+		}
+		other, present := g.trees[commit][path]
+		if !present || !bytes.Equal(content, other) {
+			return false, nil, status.Error(codes.Aborted, "fixture path changed in history")
+		}
+		if commit == ancestor {
+			return false, append([]byte(nil), content...), nil
+		}
+	}
+	return false, nil, status.Error(codes.Aborted, "fixture ancestor is not reachable")
+}
+func (g *memGit) ReadFiles(ctx context.Context, repositoryID string, paths []string, commitSHA string) ([][]byte, error) {
+	results := make([][]byte, len(paths))
+	for i, path := range paths {
+		content, err := g.ReadFile(ctx, repositoryID, path, commitSHA)
+		if status.Code(err) == codes.NotFound {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		results[i] = content
+	}
+	return results, nil
+}
 func (g *memGit) ResolveRef(ctx context.Context, repositoryID, ref string) (string, error) {
 	return g.ResolveRefForRepo(ctx, repositoryID, ref)
+}
+
+func (g *memGit) ReadFilePair(ctx context.Context, repositoryID string, paths []string, primaryCommit, secondaryCommit, refName string) ([][]byte, [][]byte, error) {
+	first, err := g.ReadFiles(ctx, repositoryID, paths, primaryCommit)
+	if err != nil {
+		return nil, nil, err
+	}
+	second, err := g.ReadFiles(ctx, repositoryID, paths, secondaryCommit)
+	return first, second, err
 }
 
 func (g *memGit) commitCount() int {

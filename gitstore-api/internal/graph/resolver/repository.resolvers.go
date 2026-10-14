@@ -12,6 +12,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
@@ -216,6 +217,17 @@ func (r *mutationResolver) CompleteRepositoryDeletion(ctx context.Context, input
 
 // Repository is the resolver for the repository field.
 func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (*model.Repository, error) {
+	if repo, ns, ok := security.AuthorizedRepositoryRead(ctx, by); ok {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		r.logger.Info("lookup repository", zap.String("repo_id", repo.UID))
+		result, err := datastoreRepositoryToModelStrict(repo, ns, r.storageDataDir)
+		if err != nil {
+			return nil, gqlerror.Errorf("failed to hydrate repository: %v", err)
+		}
+		return result, nil
+	}
 	if by.ID != nil {
 		repoID, err := decodeNodeIDAs(nodeKindRepository, *by.ID)
 		if err != nil {

@@ -600,7 +600,9 @@ func TestMemdb_UpdateRepository(t *testing.T) {
 	require.NoError(t, ds.CreateRepository(ctx, r))
 
 	r.Name = "renamed"
-	require.NoError(t, ds.UpdateRepository(ctx, r, r.ResourceVersion))
+	expected := r.ResourceVersion
+	datastore.AdvanceRepositorySystemVersion(r)
+	require.NoError(t, ds.UpdateRepository(ctx, r, expected))
 
 	got, err := ds.GetRepository(ctx, repoID1)
 	require.NoError(t, err)

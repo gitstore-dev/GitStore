@@ -99,13 +99,23 @@ identity_json='[]'
 for index in "${!api_endpoints[@]}"; do
   endpoint="${api_endpoints[$index]}"
   container="${api_containers[$index]}"
-  [[ "${endpoint}" =~ ^https?://[^[:space:],]+$ ]] || { echo "invalid live API endpoint: ${endpoint}" >&2; exit 2; }
+  [[ "${endpoint}" =~ ^https?://[^@[:space:],?#]+$ ]] || { echo "invalid live API endpoint" >&2; exit 2; }
   curl -fsS --max-time 5 "${endpoint%/}/health" >/dev/null || {
     echo "live API endpoint failed health probe: ${endpoint}" >&2
     exit 1
   }
-  curl -fsS --max-time 5 "${endpoint%/}/ready" >/dev/null || {
+  ready_body="$(curl -fsS --max-time 5 "${endpoint%/}/ready")" || {
     echo "live API endpoint failed readiness probe: ${endpoint}" >&2
+    exit 1
+  }
+  ready_auth="$(jq -ce '
+    .auth | {authn,authz,userdir,catalogDigest,
+      policy:(.policy | {loaded,apiVersion,digest,roles,bindings,rules})} |
+    select(.policy.loaded == true and
+      (.catalogDigest | type == "string" and test("^[0-9a-f]{64}$")) and
+      (.policy.digest | type == "string" and test("^[0-9a-f]{64}$")))
+  ' <<<"${ready_body}" 2>/dev/null)" || {
+    echo "live API readiness lacks a loaded policy and compiled catalog fingerprint" >&2
     exit 1
   }
   metrics="$(curl -fsS --max-time 5 "${endpoint%/}/metrics")" || {
@@ -135,8 +145,13 @@ for index in "${!api_endpoints[@]}"; do
   container_id="$(jq -r --arg name "${container}" '.[] | select(.name == $name) | .id' <<<"${container_json}")"
   identity_json="$(jq -c --arg endpoint "${endpoint%/}" --arg process_start "${process_start}" \
     --arg instance_id "${instance_id}" --arg container "${container}" --arg container_id "${container_id}" \
-    '. + [{endpoint:$endpoint,instanceID:$instance_id,container:$container,containerID:$container_id,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${identity_json}")"
+    --argjson auth "${ready_auth}" \
+    '. + [{endpoint:$endpoint,instanceID:$instance_id,container:$container,containerID:$container_id,processStartTimeSeconds:($process_start|tonumber),auth:$auth}]' <<<"${identity_json}")"
 done
+[[ "$(jq '[.[].auth] | unique | length' <<<"${identity_json}")" == 1 ]] || {
+  echo "API replicas have different active provider, policy or compiled catalog identities" >&2
+  exit 1
+}
 [[ "$(jq '[.[].instanceID] | unique | length' <<<"${identity_json}")" == "${config_replicas}" ]] || {
   echo "CAPACITY_API_ENDPOINTS must identify distinct live API process instances" >&2
   exit 1

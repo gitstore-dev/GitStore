@@ -16,6 +16,9 @@ timeout = "10s"
 [git_service.admission]
 branch_pattern = "^refs/heads/main$"
 
+[git_service.metrics]
+listen_addr = ""
+
 [grpc_auth]
 hmac_secret = "replace-with-shared-hmac-secret"
 
@@ -26,3 +29,7 @@ max_file_size = "100MiB"
 [log]
 level = "info"
 format = "json"
+
+[observability.otlp]
+endpoint = ""
+trace_sample_ratio = 0.05

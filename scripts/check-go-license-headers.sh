@@ -122,6 +122,16 @@ check_file() {
   local status="$1"
   local file="$2"
 
+  # This pinned upstream copy retains its original Apache-2.0 attribution.
+  if [[ "$file" == shared/scylla-cdc-go/*.go ]]; then
+    [[ -r shared/scylla-cdc-go/LICENSE.txt ]] &&
+      grep -q 'Apache License' shared/scylla-cdc-go/LICENSE.txt || {
+        echo "[FAIL] $file: missing upstream Apache license" >&2
+        failures=$((failures + 1))
+      }
+    return
+  fi
+
   # In --staged mode read the blob from the index so staged content is checked,
   # not the working-tree file (which may differ from what will be committed).
   local content
@@ -194,4 +204,3 @@ if (( failures > 0 )); then
 fi
 
 echo "Go license header check passed ($checked file(s) checked)."
-

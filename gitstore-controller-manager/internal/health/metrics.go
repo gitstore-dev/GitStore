@@ -59,6 +59,11 @@ var (
 		Help: "Total reconcile attempts per kind and result.",
 	}, []string{"kind", "result"})
 
+	DependencyDeferrals = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "gitstore_controller_dependency_deferrals_total",
+		Help: "Reconciliation deferral attempts for shared dependencies; not unique items or durable acknowledgements.",
+	}, []string{"kind", "dependency"})
+
 	CheckpointLastWriteTimestamp = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "gitstore_controller_checkpoint_last_write_timestamp_seconds",
 		Help: "Unix timestamp of the last successful checkpoint write per kind.",

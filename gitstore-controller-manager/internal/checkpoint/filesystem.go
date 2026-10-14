@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1285,11 +1286,29 @@ func (s *DiskStore) IndexCount(ctx context.Context, index string) (uint64, error
 }
 
 type diskFanout struct {
-	Generation uint64
-	After      string
+	Generation     uint64
+	After          string
+	Interval       time.Duration
+	Count          uint64
+	Counted        bool
+	NextPageAt     time.Time
+	RepeatInterval time.Duration
 }
 
 func (s *DiskStore) RequestFanout(ctx context.Context, index string) error {
+	return s.requestFanout(ctx, index, 0)
+}
+
+// RequestResync spreads a periodic sweep over its configured interval.
+// Counting and pacing cursors are durable; watch and dependency work stays immediate.
+func (s *DiskStore) RequestResync(ctx context.Context, interval time.Duration) error {
+	if interval <= 0 {
+		return errors.New("checkpoint: resync interval must be positive")
+	}
+	return s.requestFanout(ctx, "*", interval)
+}
+
+func (s *DiskStore) requestFanout(ctx context.Context, index string, interval time.Duration) error {
 	if index == "" || len(index) > 1024 {
 		return errors.New("checkpoint: invalid fanout index")
 	}
@@ -1302,11 +1321,35 @@ func (s *DiskStore) RequestFanout(ctx context.Context, index string) error {
 			return err
 		}
 		if exists {
+			if interval > 0 {
+				data, err := s.db.Get(key, nil)
+				if err != nil {
+					return err
+				}
+				var task diskFanout
+				if err := json.Unmarshal(data, &task); err != nil {
+					return fmt.Errorf("checkpoint: invalid fanout task: %w", err)
+				}
+				if task.Interval > 0 && task.RepeatInterval != interval {
+					task.RepeatInterval = interval
+					data, err = json.Marshal(task)
+					if err != nil {
+						return err
+					}
+					batch := newDiskBatch()
+					batch.Put(key, data)
+					return s.write(ctx, batch)
+				}
+			}
 			return ctx.Err()
 		}
 	}
 	batch := newDiskBatch()
-	batch.Put(key, []byte(`{}`))
+	data, err := json.Marshal(diskFanout{Interval: interval})
+	if err != nil {
+		return err
+	}
+	batch.Put(key, data)
 	return s.write(ctx, batch)
 }
 
@@ -1327,33 +1370,89 @@ func (s *DiskStore) ProcessFanout(ctx context.Context) (bool, error) {
 	if err != nil || active == 0 {
 		return false, errors.Join(err, errors.New("checkpoint: no active disk snapshot"))
 	}
-	tasks, err := s.scan(ctx, []byte("fanout/"), "", 1)
+	tasks, err := s.scan(ctx, []byte("fanout/"), "", 2)
 	if err != nil || len(tasks) == 0 {
 		return false, err
 	}
-	index, err := base64.RawURLEncoding.DecodeString(string(tasks[0][0]))
-	if err != nil {
-		return false, fmt.Errorf("checkpoint: invalid fanout index: %w", err)
-	}
+	now := time.Now()
+	var index []byte
 	var task diskFanout
-	if err := json.Unmarshal(tasks[0][1], &task); err != nil {
-		return false, fmt.Errorf("checkpoint: invalid fanout task: %w", err)
+	var taskKey []byte
+	for _, pending := range tasks {
+		index, err = base64.RawURLEncoding.DecodeString(string(pending[0]))
+		if err != nil {
+			return false, fmt.Errorf("checkpoint: invalid fanout index: %w", err)
+		}
+		task = diskFanout{}
+		if err := json.Unmarshal(pending[1], &task); err != nil {
+			return false, fmt.Errorf("checkpoint: invalid fanout task: %w", err)
+		}
+		if task.Interval < 0 || task.RepeatInterval < 0 || task.Count > math.MaxInt64 ||
+			(task.Interval > 0 && (string(index) != "*" || (task.Counted && (task.Count == 0 || task.NextPageAt.IsZero())))) ||
+			(task.Interval == 0 && (task.Count != 0 || task.Counted || !task.NextPageAt.IsZero() || task.RepeatInterval != 0)) {
+			return false, errors.New("checkpoint: invalid resync task")
+		}
+		if task.Generation == active && task.Interval > 0 && now.Before(task.NextPageAt) {
+			continue
+		}
+		taskKey = append([]byte("fanout/"), pending[0]...)
+		break
+	}
+	if taskKey == nil {
+		return false, nil
 	}
 	if task.Generation != active {
-		task = diskFanout{Generation: active}
+		task = diskFanout{Generation: active, Interval: task.Interval, RepeatInterval: task.RepeatInterval}
 	}
 	prefix := diskIndexPrefix(active, string(index))
 	if string(index) == "*" {
 		prefix = diskPrefix(active, "d/")
 	}
-	page, err := s.scan(ctx, prefix, task.After, DiskPageItems)
+	limit := DiskPageItems
+	if task.Interval > 0 && task.Counted {
+		if task.Count == 0 {
+			return false, errors.New("checkpoint: empty paced resync task")
+		}
+		ticks := uint64(max(1, task.Interval/(100*time.Millisecond)))
+		limit = int(min(uint64(DiskPageItems), max(uint64(1), task.Count/ticks)))
+	}
+	page, err := s.scan(ctx, prefix, task.After, limit)
 	if err != nil {
 		return false, err
 	}
 	batch := newDiskBatch()
-	taskKey := append([]byte("fanout/"), tasks[0][0]...)
+	if task.Interval > 0 && !task.Counted {
+		task.Count += uint64(len(page))
+		if task.Count > math.MaxInt64 {
+			return false, errors.New("checkpoint: resync count overflow")
+		}
+		if len(page) == 0 {
+			if task.Count == 0 {
+				batch.Delete(taskKey)
+				return true, s.write(ctx, batch)
+			}
+			task.Counted, task.After, task.NextPageAt = true, "", now
+		} else {
+			task.After = string(page[len(page)-1][0])
+		}
+		data, err := json.Marshal(task)
+		if err != nil {
+			return false, err
+		}
+		batch.Put(taskKey, data)
+		return true, s.write(ctx, batch)
+	}
 	if len(page) == 0 {
-		batch.Delete(taskKey)
+		if task.RepeatInterval > 0 {
+			// A tick arriving before sweep completion must not lose an entire period.
+			data, err := json.Marshal(diskFanout{Generation: active, Interval: task.RepeatInterval})
+			if err != nil {
+				return false, err
+			}
+			batch.Put(taskKey, data)
+		} else {
+			batch.Delete(taskKey)
+		}
 		return true, s.write(ctx, batch)
 	}
 	token, err := s.number("sequence")
@@ -1384,6 +1483,15 @@ func (s *DiskStore) ProcessFanout(ctx context.Context) (bool, error) {
 		}
 	}
 	task.After = string(page[len(page)-1][0])
+	if task.Interval > 0 {
+		// Poll granularity may consume one tick's budget, never a downtime backlog.
+		start := task.NextPageAt
+		if floor := now.Add(-100 * time.Millisecond); start.Before(floor) {
+			start = floor
+		}
+		gap := max(time.Nanosecond, task.Interval/time.Duration(task.Count)*time.Duration(len(page)))
+		task.NextPageAt = start.Add(gap)
+	}
 	data, err := json.Marshal(task)
 	if err != nil {
 		return false, err

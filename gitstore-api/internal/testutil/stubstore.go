@@ -6,6 +6,8 @@ package testutil
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
@@ -16,6 +18,7 @@ import (
 // githttp and security middleware tests have override hooks; all other methods
 // are no-ops that satisfy the full datastore.Datastore interface.
 type StubStore struct {
+	GetFileSnapshotsByNameFunc    func(context.Context, string, []string) ([]*datastore.File, error)
 	GetFileByNameFunc             func(context.Context, string, string) (*datastore.File, error)
 	GetProductVariantFunc         func(context.Context, string) (*datastore.ProductVariant, error)
 	GetProductVariantByNameFunc   func(context.Context, string, string) (*datastore.ProductVariant, error)
@@ -37,11 +40,88 @@ func (s *StubStore) CreateFile(_ context.Context, _ *datastore.File) error { ret
 func (s *StubStore) GetFile(_ context.Context, _ string) (*datastore.File, error) {
 	return nil, datastore.ErrNotFound
 }
+func (s *StubStore) GetFileSnapshots(ctx context.Context, ids []string) ([]*datastore.File, error) {
+	return ReadFileSnapshots(ctx, ids, s.GetFile)
+}
+
+// ReadFileSnapshots preserves point-read fixtures under the bounded batch contract.
+func ReadFileSnapshots(ctx context.Context, ids []string, read func(context.Context, string) (*datastore.File, error)) ([]*datastore.File, error) {
+	if len(ids) > datastore.FileSnapshotBatchLimit {
+		return nil, datastore.ErrInvalidArgument
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	files := make([]*datastore.File, len(ids))
+	errs := make([]error, len(ids))
+	slots := make(chan struct{}, 8)
+	var workers sync.WaitGroup
+	for i, id := range ids {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			workers.Wait()
+			return nil, ctx.Err()
+		}
+		workers.Go(func() {
+			defer func() { <-slots }()
+			if err := ctx.Err(); err != nil {
+				errs[i] = err
+				return
+			}
+			file, err := read(ctx, id)
+			if errors.Is(err, datastore.ErrNotFound) {
+				return
+			}
+			if err == nil && file == nil {
+				err = errors.New("file snapshot lookup returned no record")
+			}
+			files[i], errs[i] = file, err
+		})
+	}
+	workers.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
 func (s *StubStore) GetFileByName(ctx context.Context, namespace, name string) (*datastore.File, error) {
 	if s.GetFileByNameFunc != nil {
 		return s.GetFileByNameFunc(ctx, namespace, name)
 	}
 	return nil, datastore.ErrNotFound
+}
+func (s *StubStore) GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*datastore.File, error) {
+	if s.GetFileSnapshotsByNameFunc != nil {
+		return s.GetFileSnapshotsByNameFunc(ctx, namespace, names)
+	}
+	if namespace == "" || len(names) > datastore.FileNameSnapshotBatchLimit {
+		return nil, datastore.ErrInvalidArgument
+	}
+	files := make([]*datastore.File, len(names))
+	for i, name := range names {
+		if name == "" {
+			return nil, datastore.ErrInvalidArgument
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		file, err := s.GetFileByName(ctx, namespace, name)
+		if errors.Is(err, datastore.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		files[i] = file
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 func (s *StubStore) ListFiles(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
 	return &datastore.PageResult[datastore.File]{}, nil

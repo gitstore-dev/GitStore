@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -183,7 +184,7 @@ func TestReconcileSkipsStorageProvisioningWhenRecentlyVerified(t *testing.T) {
 	key := repositoryKey("acme", "catalog")
 	// Simulate having already verified storage recently (e.g. the previous
 	// reconcile): storageVerificationDue must not fire again immediately.
-	r.lastStorageVerification.Store(key, time.Now())
+	r.lastStorageVerification.Store(key, current.UID, time.Now())
 
 	result := r.Reconcile(context.Background(), key)
 	if _, ok := result.(types.Success); !ok {
@@ -222,6 +223,75 @@ func TestReconcileRevalidatesStorageWhenNeverVerifiedByThisProcess(t *testing.T)
 	}
 }
 
+func TestReconcileReplacementCannotBorrowPreviousUIDVerification(t *testing.T) {
+	for _, provisionErr := range []error{nil, errors.New("storage unavailable")} {
+		t.Run(fmt.Sprint(provisionErr), func(t *testing.T) {
+			current, resolvedJSON := repositoryFixtureAlreadyProvisioned(t)
+			current.UID = "replacement"
+			var resolved ResolvedStorage
+			if err := json.Unmarshal(resolvedJSON, &resolved); err != nil {
+				t.Fatal(err)
+			}
+			storage := &fakeStorageClient{resolved: resolved, err: provisionErr}
+			r := NewReconciler(seedRepositoryCache(t, current), &fakeStatusClient{}, storage, &fakeCompletionClient{})
+			key := repositoryKey(current.Namespace, current.Name)
+			r.lastStorageVerification.Store(key, "retired", time.Now())
+			result := r.Reconcile(t.Context(), key)
+			if len(storage.calls) != 1 {
+				t.Fatalf("replacement borrowed another UID's verification: calls=%v", storage.calls)
+			}
+			_, verified := r.lastStorageVerification.Load(key, current.UID)
+			if provisionErr != nil {
+				if _, ok := result.(types.TransientFailure); !ok || verified {
+					t.Fatalf("failed replacement verification returned %T, verified=%v", result, verified)
+				}
+			} else if _, ok := result.(types.Success); !ok || !verified {
+				t.Fatalf("successful replacement verification returned %T, verified=%v", result, verified)
+			}
+			r.Reconcile(t.Context(), key)
+			want := 1
+			if provisionErr != nil {
+				want = 2
+			}
+			if len(storage.calls) != want {
+				t.Fatalf("subsequent replacement verification calls=%d, want %d", len(storage.calls), want)
+			}
+		})
+	}
+}
+
+func TestStorageVerificationCacheKeepsBoundAndReplacesUIDInPlace(t *testing.T) {
+	var c storageVerificationCache
+	for i := range 4097 {
+		key := repositoryKey("acme", fmt.Sprint(i))
+		c.Store(key, "first", time.Now())
+		if len(c.entries) > 4096 {
+			t.Fatalf("verification cache exceeded its bound: %d", len(c.entries))
+		}
+	}
+	key := repositoryKey("acme", "4096")
+	c.Store(key, "replacement", time.Now())
+	if len(c.entries) != 4096 {
+		t.Fatalf("UID replacement changed the cache cardinality: %d", len(c.entries))
+	}
+	if _, ok := c.Load(key, "first"); ok {
+		t.Fatal("a retired UID borrowed the replacement's verification")
+	}
+	if _, ok := c.Load(key, "replacement"); !ok {
+		t.Fatal("replacement verification was not retained")
+	}
+	for i := range 4097 {
+		key := repositoryKey("acme", fmt.Sprint(i))
+		if _, retained := c.entries[key]; !retained {
+			if _, verified := c.Load(key, "first"); verified {
+				t.Fatal("eviction retained a trusted verification")
+			}
+			return
+		}
+	}
+	t.Fatal("bounded cache did not evict an entry")
+}
+
 func TestReconcileRevalidatesStorageAfterRevalidationWindowElapses(t *testing.T) {
 	current, resolvedJSON := repositoryFixtureAlreadyProvisioned(t)
 	var gotResolved ResolvedStorage
@@ -232,7 +302,7 @@ func TestReconcileRevalidatesStorageAfterRevalidationWindowElapses(t *testing.T)
 	statuses := &fakeStatusClient{}
 	r := NewReconciler(seedRepositoryCache(t, current), statuses, storage, &fakeCompletionClient{})
 	key := repositoryKey("acme", "catalog")
-	r.lastStorageVerification.Store(key, time.Now().Add(-storageRevalidationInterval-time.Second))
+	r.lastStorageVerification.Store(key, current.UID, time.Now().Add(-storageRevalidationInterval-time.Second))
 
 	result := r.Reconcile(context.Background(), key)
 	if _, ok := result.(types.Success); !ok {

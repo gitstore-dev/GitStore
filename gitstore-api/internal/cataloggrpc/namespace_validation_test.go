@@ -6,6 +6,7 @@ package cataloggrpc_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
+	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,6 +26,16 @@ type namespacePolicySpy struct {
 	calls       []namespaceadmission.PolicyCheck
 	decision    *namespaceadmission.Decision
 	evaluateErr error
+}
+
+type validationParsingCounter struct {
+	cataloggrpc.ResourceParser
+	calls int
+}
+
+func (p *validationParsingCounter) ParseResource(reader io.Reader) (*validate.ParsedResource, []byte, error) {
+	p.calls++
+	return p.ResourceParser.ParseResource(reader)
 }
 
 func (s *namespacePolicySpy) Evaluate(_ context.Context, check namespaceadmission.PolicyCheck) (*namespaceadmission.Decision, namespaceadmission.Preflight, error) {
@@ -162,7 +174,10 @@ spec:
 
 func TestValidateResourcesNonNamespaceKindsNeverInvokeNamespacePolicy(t *testing.T) {
 	spy := &namespacePolicySpy{}
-	srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil, withNamespacePolicySpy(spy))
+	parser := &validationParsingCounter{ResourceParser: validate.NewParser()}
+	srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil, withNamespacePolicySpy(spy), func(deps *cataloggrpc.ServerDeps) {
+		deps.Parser = parser
+	})
 
 	resp, err := srv.ValidateResources(context.Background(), namespaceValidationRequest(nil, []*catalogv1.ResourceBlob{{
 		Path:    "products/widget.md",
@@ -172,6 +187,59 @@ func TestValidateResourcesNonNamespaceKindsNeverInvokeNamespacePolicy(t *testing
 	require.NoError(t, err)
 	assert.True(t, resp.Accepted)
 	assert.Empty(t, spy.calls)
+	require.Equal(t, 4, parser.calls, "one immutable parse plus mandatory structural, deletion and semantic parsing")
+}
+
+func TestValidateResourcesDuplicateNamespaceIdentityRetainsPathImmutability(t *testing.T) {
+	spy := &namespacePolicySpy{}
+	srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil, withNamespacePolicySpy(spy))
+	response, err := srv.ValidateResources(t.Context(), namespaceValidationRequest(
+		[]*catalogv1.ResourceBlob{
+			namespaceBlob("namespaces/first.md", "first", "ORGANIZATION"),
+			namespaceBlob("namespaces/second.md", "second", "ORGANIZATION"),
+		},
+		[]*catalogv1.ResourceBlob{
+			namespaceBlob("namespaces/first.md", "first", "ORGANIZATION"),
+			namespaceBlob("namespaces/second.md", "first", "ORGANIZATION"),
+		},
+	))
+	require.NoError(t, err)
+	require.False(t, response.Accepted)
+	require.Contains(t, validationConstraints(response), "metadata.name:immutable")
+	require.Empty(t, spy.calls)
+	immutableFound, duplicateFound := false, false
+	for _, failure := range response.Errors {
+		immutableFound = immutableFound || (failure.FilePath == "namespaces/second.md" && failure.Constraint == "immutable")
+		duplicateFound = duplicateFound || strings.Contains(failure.Message, "duplicate resource identity")
+	}
+	require.True(t, immutableFound)
+	require.True(t, duplicateFound)
+}
+
+func TestValidateResourcesNamespacePresenceIncludesUnchangedResourcesAcrossTrees(t *testing.T) {
+	for _, namespaceFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint(namespaceFirst), func(t *testing.T) {
+			spy := &namespacePolicySpy{}
+			srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil, withNamespacePolicySpy(spy))
+			namespace := namespaceBlob("namespaces/other.md", "other", "ORGANIZATION")
+			namespaceTree := &catalogv1.ResourceValidationTree{
+				OldBlobs: []*catalogv1.ResourceBlob{namespace}, ProposedBlobs: []*catalogv1.ResourceBlob{namespace},
+			}
+			productTree := &catalogv1.ResourceValidationTree{ProposedBlobs: []*catalogv1.ResourceBlob{{
+				Path: "products/widget.md", Content: []byte(validProduct),
+			}}}
+			trees := []*catalogv1.ResourceValidationTree{productTree, namespaceTree}
+			if namespaceFirst {
+				trees[0], trees[1] = trees[1], trees[0]
+			}
+			response, err := srv.ValidateResources(t.Context(), &catalogv1.ValidateResourcesRequest{RepositoryId: testRepoID, Trees: trees})
+			require.NoError(t, err)
+			require.True(t, response.Accepted)
+			require.Len(t, spy.calls, 1, "unchanged Namespace entries still require current policy evaluation")
+			require.Equal(t, admission.OperationUpdate, spy.calls[0].Operation)
+			require.Equal(t, "other", spy.calls[0].Name)
+		})
+	}
 }
 
 func TestValidateResourcesNamespaceIdentifierRulesMatchGraphQL(t *testing.T) {
@@ -387,6 +455,7 @@ func TestValidateResourcesNamespacePolicyMatrix(t *testing.T) {
 				require.NoError(t, err)
 				expected := namespace.ResourceVersion
 				namespace.Tier = datastore.NamespaceTierOrganization
+				datastore.AdvanceNamespaceSpecVersion(namespace)
 				require.NoError(t, store.UpdateNamespace(context.Background(), namespace, expected))
 			},
 			old:        []*catalogv1.ResourceBlob{namespaceBlob("namespaces/other.md", "other", "ORGANIZATION")},
@@ -401,6 +470,7 @@ func TestValidateResourcesNamespacePolicyMatrix(t *testing.T) {
 				expected := namespace.ResourceVersion
 				deletedAt := time.Now().UTC()
 				namespace.DeletionTimestamp = &deletedAt
+				datastore.AdvanceNamespaceSystemVersion(namespace)
 				require.NoError(t, store.UpdateNamespace(context.Background(), namespace, expected))
 			},
 			old:        []*catalogv1.ResourceBlob{namespaceBlob("namespaces/other.md", "other", "ORGANIZATION")},

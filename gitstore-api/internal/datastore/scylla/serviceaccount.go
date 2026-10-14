@@ -250,7 +250,7 @@ func (s *scyllaDatastore) ListServiceAccounts(ctx context.Context, page datastor
 		}
 		for {
 			queries++
-			if queries > 256 {
+			if queries > projectionListQueryBudget {
 				return nil, fmt.Errorf("ServiceAccount listing exceeds query budget; repair stale projections")
 			}
 			pq := buildPaginatedSelect(s.serviceAccountByBucketTable, bucketPage, "bucket", bucket, serviceAccountClusterKeys, nil, nil)
@@ -260,7 +260,7 @@ func (s *scyllaDatastore) ListServiceAccounts(ctx context.Context, page datastor
 			}
 			for _, idx := range rows {
 				lookups++
-				if lookups > 4096 {
+				if lookups > projectionListLookupBudget {
 					return nil, fmt.Errorf("ServiceAccount listing exceeds lookup budget; repair stale projections")
 				}
 				sa, err := s.GetServiceAccountByUID(ctx, idx.UID.String())

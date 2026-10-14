@@ -35,7 +35,9 @@ func TestRepositoryDeniedReadConcealsOnlyPresentNonpublicVisibility(t *testing.T
 			repo, err := h.store.GetRepository(t.Context(), h.repository.UID)
 			require.NoError(t, err)
 			repo.Spec = json.RawMessage(tc.spec)
-			require.NoError(t, h.store.UpdateRepository(t.Context(), repo, repo.ResourceVersion))
+			expected := repo.ResourceVersion
+			datastore.AdvanceRepositorySpecVersion(repo)
+			require.NoError(t, h.store.UpdateRepository(t.Context(), repo, expected))
 			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
 			err = h.authorizeField(ctx, "Query", "repository", map[string]any{"by": model.RepositoryBy{ID: &h.repositoryNodeID}})
 			var gqlErr *gqlerror.Error

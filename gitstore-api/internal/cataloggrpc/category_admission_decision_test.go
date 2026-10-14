@@ -40,6 +40,37 @@ type failingCategoryWriteStore struct {
 	datastore.Datastore
 }
 
+type failingCategoryLookupStore struct {
+	datastore.Datastore
+	failure error
+}
+
+func (s failingCategoryLookupStore) GetCategoryTaxonomyByName(context.Context, string, string) (*datastore.CategoryTaxonomy, error) {
+	return nil, s.failure
+}
+
+func TestCategorySiblingOperationLookupPreservesFailure(t *testing.T) {
+	for _, failure := range []error{context.Canceled, context.DeadlineExceeded, errors.New("category lookup IO failure")} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			base, err := memdb.New()
+			require.NoError(t, err)
+			srv := newDecisionServer(t, failingCategoryLookupStore{Datastore: base, failure: failure})
+			content := []byte(categoryManifest("electronics", "Electronics"))
+			parsed, body, err := validate.NewParser().ParseResource(bytes.NewReader(content))
+			require.NoError(t, err)
+			entry, accepted, err := newParsedEntry("categories/electronics.md", parsed, body, "gitstore", content)
+			require.NoError(t, err)
+			require.True(t, accepted)
+			decisions, err := srv.admitParsedEntries(t.Context(), []*parsedEntry{entry},
+				AdmissionContext{Namespace: "gitstore"}, nil)
+			require.ErrorIs(t, err, failure)
+			require.Nil(t, decisions, "an unreadable sibling cannot enter admission as a create")
+			_, err = base.GetCategoryTaxonomyByName(t.Context(), "gitstore", "electronics")
+			require.ErrorIs(t, err, datastore.ErrNotFound)
+		})
+	}
+}
+
 func (failingCategoryWriteStore) CreateCategoryTaxonomy(context.Context, *datastore.CategoryTaxonomy) error {
 	return errors.New("store unavailable")
 }

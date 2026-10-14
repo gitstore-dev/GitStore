@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +56,74 @@ func TestGraphQLAuthenticatorValidBearerInjectsPrincipal(t *testing.T) {
 	require.NotNil(t, principal)
 	assert.Equal(t, "admin", principal.Subject)
 	assert.Equal(t, "static-users", principal.AuthMethod)
+}
+
+func TestRepositoryNodeAbsenceDoesNotReachResolverOrHideOtherFailures(t *testing.T) {
+	const uid = "01960000-0000-7000-8000-000000000140"
+	id := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Repository/" + uid))
+	for _, mode := range []string{"missing", "storage", "parent", "denied", "existing", "typed", "typed-storage", "typed-parent", "typed-denied", "typed-existing"} {
+		t.Run(mode, func(t *testing.T) {
+			outcome := strings.TrimPrefix(mode, "typed-")
+			reads := 0
+			store := &testutil.StubStore{
+				GetRepositoryFunc: func(context.Context, string) (*datastore.Repository, error) {
+					reads++
+					switch outcome {
+					case "missing", "typed":
+						return nil, datastore.ErrNotFound
+					case "storage":
+						return nil, errors.New("storage unavailable")
+					}
+					return &datastore.Repository{UID: uid, Name: "catalog", Namespace: "acme"}, nil
+				},
+				GetNamespaceByNameFunc: func(context.Context, string) (*datastore.Namespace, error) {
+					if outcome == "parent" {
+						return nil, datastore.ErrNotFound
+					}
+					return &datastore.Namespace{Name: "acme"}, nil
+				},
+			}
+			var provider auth.AuthZProvider = testutil.NewAllowAllAuthZ()
+			if outcome == "denied" {
+				provider = testutil.NewDenyAllAuthZ(t)
+			}
+			middleware := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, provider, nil), store, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "reader", AuthMethod: "bearer"})
+			field := "node"
+			args := map[string]any{"id": id}
+			if mode == "typed" || strings.HasPrefix(mode, "typed-") {
+				field, args = "repository", map[string]any{"by": model.RepositoryBy{ID: &id}}
+			}
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+				Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: field}}, Args: args,
+			})
+			called := false
+			value, err := middleware.GraphQLFieldAuthorizer(ctx, func(next context.Context) (any, error) {
+				called = true
+				_, _, reused := AuthorizedRepositoryRead(next, model.RepositoryBy{ID: &id})
+				require.Equal(t, field == "repository", reused)
+				return "resolved", nil
+			})
+			require.Equal(t, 1, reads)
+			if mode == "missing" {
+				require.NoError(t, err)
+				require.Nil(t, value)
+				require.False(t, called, "an absent UID must not be reread without authorization")
+			} else if outcome == "existing" {
+				require.NoError(t, err)
+				require.True(t, called)
+				require.Equal(t, "resolved", value)
+			} else {
+				require.Error(t, err)
+				require.False(t, called)
+				if mode == "typed" || outcome == "parent" {
+					var notFound *gqlerror.Error
+					require.ErrorAs(t, err, &notFound)
+					require.Equal(t, "NOT_FOUND", notFound.Extensions["code"])
+				}
+			}
+		})
+	}
 }
 
 func TestCatalogBoundariesUseStoredOwnersAndNamespaceOwnerForCreate(t *testing.T) {

@@ -136,22 +136,14 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 
 	var mu sync.Mutex
 	current := b
-	blockFirstBListing := true
-	olderListingStarted := make(chan struct{})
+	blockFirstBRead := true
+	olderReadStarted := make(chan struct{})
 	releaseOlder := make(chan struct{})
 	git := &mockGitReader{
 		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
 			mu.Lock()
-			block := ref == b && blockFirstBListing
-			if block {
-				blockFirstBListing = false
-			}
 			tree := files[ref]
 			mu.Unlock()
-			if block {
-				close(olderListingStarted)
-				<-releaseOlder
-			}
 			paths := make([]string, 0, len(tree))
 			for filePath := range tree {
 				paths = append(paths, filePath)
@@ -161,8 +153,16 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 		},
 		readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
 			mu.Lock()
+			block := ref == b && blockFirstBRead
+			if block {
+				blockFirstBRead = false
+			}
 			content := files[ref][path]
 			mu.Unlock()
+			if block {
+				close(olderReadStarted)
+				<-releaseOlder
+			}
 			return content, nil
 		},
 		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
@@ -186,7 +186,7 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 	}()
 
 	select {
-	case <-olderListingStarted:
+	case <-olderReadStarted:
 	case <-time.After(time.Second):
 		t.Fatal("older admission did not verify and begin loading its commit")
 	}

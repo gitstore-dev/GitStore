@@ -117,6 +117,12 @@ service GitService {
   // GetFile returns the raw bytes of a single file at the given ref.
   rpc GetFile(GetFileRequest) returns (GetFileResponse);
 
+  // GetFiles reads one to four distinct paths from a single immutable commit.
+  // Missing paths are explicit results; repository/ref and non-file errors fail
+  // the request. Each blob is bounded to 4 MiB and the complete encoded
+  // response is bounded to 16 MiB.
+  rpc GetFiles(GetFilesRequest) returns (GetFilesResponse);
+
   // GetFileStream returns a file as a stream of byte chunks.
   rpc GetFileStream(GetFileStreamRequest) returns (stream GetFileStreamResponse);
 
@@ -192,6 +198,12 @@ message ReceivePackRequest {
   // git-service MUST reject the stream if push_context.repository_id !=
   // this chunk's repository_id field (FR-011).
   PushContext push_context = 4;
+
+  // Client shallow boundaries, first chunk only, covered by the request signature.
+  // At most 4096 distinct, nonzero SHA-1 commit IDs. Each must already exist as a
+  // commit in the complete live repository before staging; importing a shallow
+  // repository or changing the server's shallow boundary is unsupported.
+  repeated string shallow_oids = 5;
 }
 
 // RefCommand represents one ref-update instruction from a git push.
@@ -254,6 +266,14 @@ message GetFileRequest {
   string repository_id = 15;
   string path = 1;
   string ref  = 2;
+  // If set, require an unchanged file along at most 4096 single-parent
+  // commits from ref back to this full commit ID. Changed/restored paths,
+  // merges, unrelated history and exhausted bounds return ABORTED.
+  optional string unchanged_since_commit = 3;
+  // For a named ref, allow a ref-identity receipt instead of a file read when
+  // its resolved tip equals unchanged_since_commit. Otherwise require the
+  // complete unchanged-path proof and content. The signed request binds this.
+  bool allow_ancestor_receipt = 4;
   RequestAuthorization authorization = 14;
 }
 
@@ -262,6 +282,44 @@ message GetFileResponse {
   bytes  content    = 2;
   string blob_sha   = 3;
   uint64 size_bytes = 4;
+  // Proof fields are populated only after a guarded read succeeds.
+  string unchanged_since_commit = 5;
+  string ref_commit_sha = 6;
+  // Only with allow_ancestor_receipt and exact ancestor/tip equality. Confirms
+  // ref identity, not file existence; content/blob_sha/size_bytes are empty.
+  bool at_ancestor = 7;
+}
+
+message GetFilesRequest {
+  string repository_id = 15;
+  repeated string paths = 1;
+  string commit_sha = 2;
+  // Optional second immutable snapshot, covered by the request signature.
+  // Both snapshots share the same ordered paths and 16 MiB total reply limit.
+  optional string secondary_commit_sha = 3;
+  // If present, resolve this full ref after both snapshots under the same
+  // repository read guard. Aborted means it no longer targets the secondary
+  // commit (including deletion); no partial snapshots are returned.
+  optional string current_ref = 4;
+  RequestAuthorization authorization = 14;
+}
+
+message FileSnapshot {
+  string path = 1;
+  bool found = 2;
+  bytes content = 3;
+  string blob_sha = 4;
+  uint64 size_bytes = 5;
+}
+
+message GetFilesResponse {
+  // Results preserve the request's exact order and cardinality.
+  repeated FileSnapshot files = 1;
+  string commit_sha = 2;
+  repeated FileSnapshot secondary_files = 3;
+  string secondary_commit_sha = 4;
+  // Present only for a successful current_ref precondition.
+  string current_ref_commit_sha = 5;
 }
 
 message GetFileStreamRequest {

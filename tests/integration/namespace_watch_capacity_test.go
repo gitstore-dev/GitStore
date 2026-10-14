@@ -1310,6 +1310,51 @@ func confirmCapacityNamespaceExistsContext(ctx context.Context, cfg capacityConf
 	return false
 }
 
+func TestCapacityNamespaceMutationsPreserveOrganizationTier(t *testing.T) {
+	tiers := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Query     string `json:"query"`
+			Variables struct {
+				Input struct {
+					Metadata struct {
+						Name string `json:"name"`
+					} `json:"metadata"`
+					Spec struct {
+						Title string `json:"title"`
+						Tier  string `json:"tier"`
+					} `json:"spec"`
+				} `json:"input"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode capacity Namespace request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		input := request.Variables.Input
+		tiers <- input.Spec.Tier
+		operation := "createNamespace"
+		if strings.Contains(request.Query, "UpdateNamespaceInput") {
+			operation = "updateNamespace"
+		}
+		assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{operation: map[string]any{
+				"namespace": map[string]any{
+					"metadata": map[string]any{"name": input.Metadata.Name},
+					"spec":     map[string]any{"title": input.Spec.Title},
+				},
+			}},
+		}))
+	}))
+	defer server.Close()
+
+	require.NoError(t, createCapacityNamespaceContext(t.Context(), server.Client(), server.URL, "test-token", "capacity-owned"))
+	require.Equal(t, "ORGANIZATION", <-tiers, "generated names cannot create identity-bound USER namespaces")
+	require.NoError(t, updateCapacityNamespaceContext(t.Context(), server.Client(), server.URL, "test-token", "capacity-owned", "Updated", time.Now().UTC()))
+	require.Equal(t, "ORGANIZATION", <-tiers, "workload updates must not attempt a tier demotion")
+}
+
 func createCapacityNamespace(client *http.Client, apiURL, token, name string) error {
 	return createCapacityNamespaceContext(context.Background(), client, apiURL, token, name)
 }
@@ -1320,7 +1365,7 @@ func createCapacityNamespaceContext(ctx context.Context, client *http.Client, ap
 		Variables: map[string]any{"input": map[string]any{
 			"apiVersion": "gitstore.dev/v1beta1", "kind": "Namespace",
 			"metadata": map[string]any{"name": name},
-			"spec":     map[string]any{"title": name, "tier": "USER"},
+			"spec":     map[string]any{"title": name, "tier": "ORGANIZATION"},
 		}},
 	})
 	if err != nil {
@@ -1375,7 +1420,7 @@ func updateCapacityNamespaceContext(ctx context.Context, client *http.Client, ap
 				"name":        name,
 				"annotations": map[string]any{capacitySentAtAnnotation: sentAt.Format(time.RFC3339Nano)},
 			},
-			"spec": map[string]any{"title": title, "tier": "USER"},
+			"spec": map[string]any{"title": title, "tier": "ORGANIZATION"},
 		}},
 	})
 	if err != nil {

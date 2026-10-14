@@ -8,7 +8,9 @@ package scylla_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,8 +19,10 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gocql/gocql"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type namespaceCDCTestRunner interface {
@@ -325,10 +329,16 @@ func TestNamespaceWatchBoundsAdvanceAfterTTLExpiry(t *testing.T) {
 			require.NotContains(t, boundsErr.Error(), "concurrent update")
 		}
 	}
-	bounds, err := journal.Bounds(ctx)
-	require.NoError(t, err)
-	require.Equal(t, last.Sequence+1, bounds.Oldest)
-	require.Equal(t, last.Sequence, bounds.HighWater)
+	var bounds datastore.NamespaceWatchBounds
+	require.Eventually(t, func() bool {
+		var boundsErr error
+		bounds, boundsErr = journal.Bounds(ctx)
+		if boundsErr != nil {
+			require.ErrorContains(t, boundsErr, "retention reconciliation is incomplete")
+			return false
+		}
+		return bounds.Oldest == last.Sequence+1 && bounds.HighWater == last.Sequence
+	}, 10*time.Second, 100*time.Millisecond, "bounded retention scans must converge across the remaining expired buckets")
 
 	second, err := journal.Append(ctx, lease, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark}, time.Minute)
 	require.NoError(t, err)
@@ -594,7 +604,17 @@ func TestProductCDCReaderMaterializesTerminationEvent(t *testing.T) {
 }
 
 func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *testing.T) {
-	store := newTestStore(t)
+	type batchKey struct{}
+	var firstCAS sync.Once
+	cfg := testScyllaConfig(t)
+	cfg.QueryObserver = namespaceReservationObserver(func(ctx context.Context, query gocql.ObservedQuery) {
+		if ctx.Value(batchKey{}) == true && query.Err == nil && strings.HasPrefix(query.Statement, "UPDATE files_by_namespace SET name=") {
+			firstCAS.Do(func() { time.Sleep(50 * time.Millisecond) })
+		}
+	})
+	store, err := scylla.New(cfg, zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	peer := newTestStore(t)
 	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
 	peerJournal := peer.(datastore.ResourceWatchCapable).ResourceWatchJournal()
@@ -632,7 +652,9 @@ func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *tes
 					t.Fatal("catalog CDC worker did not stop")
 				}
 			}
-			require.NoError(t, journal.ReleaseLease(t.Context(), lease))
+			releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
+			defer releaseCancel()
+			require.NoError(t, journal.ReleaseLease(releaseCtx, lease))
 		}
 		t.Cleanup(stop)
 		for range 2 {
@@ -651,9 +673,11 @@ func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *tes
 	bounds, err := peerJournal.Bounds(t.Context())
 	require.NoError(t, err)
 	cursor := datastore.ResourceWatchCursor{Epoch: bounds.Epoch, Sequence: bounds.HighWater}
-	file := &datastore.File{UID: newID(), Namespace: "cdc-files", Name: "hero-" + newID()[:8],
+	file := &datastore.File{UID: newID(), Namespace: "cdc-files-" + newID()[:8], Name: "hero-" + newID()[:8],
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "1", Generation: 1,
 		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond), RepositoryID: newID(),
+		CreationActor: "creator", Revision: "main@original", SourcePath: "hero.json", GitRef: "main",
+		Annotations: map[string]string{"kept": "value"}, Body: "original",
 		Labels: map[string]string{"team": "media"}, Spec: json.RawMessage(`{"contentType":"image/jpeg","source":{"type":"s3","uri":"s3://fixture"}}`)}
 	next := func(eventType datastore.ResourceWatchEventType, version string) datastore.ResourceWatchEvent {
 		var found datastore.ResourceWatchEvent
@@ -673,6 +697,16 @@ func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *tes
 					}
 					require.Equal(t, file.UID, observed.UID)
 					require.Equal(t, file.RepositoryID, observed.RepositoryID)
+					require.Equal(t, file.Namespace, observed.Namespace)
+					require.Equal(t, file.APIVersion, observed.APIVersion)
+					require.Equal(t, file.Generation, observed.Generation)
+					require.Equal(t, file.CreationTimestamp, observed.CreationTimestamp)
+					require.Equal(t, file.CreationActor, observed.CreationActor)
+					require.Equal(t, file.Revision, observed.Revision)
+					require.Equal(t, file.SourcePath, observed.SourcePath)
+					require.Equal(t, file.GitRef, observed.GitRef)
+					require.Equal(t, file.Annotations, observed.Annotations)
+					require.Equal(t, file.Body, observed.Body)
 					require.JSONEq(t, string(file.Spec), string(observed.Spec))
 				}
 				found = event
@@ -691,20 +725,88 @@ func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *tes
 	require.NoError(t, store.CreateFile(t.Context(), file))
 	added := next(datastore.ResourceWatchAdded, "1")
 	require.Equal(t, file.Labels, added.SelectorLabels)
+	files := []*datastore.File{file}
+	for i := range 15 {
+		another := *file
+		another.UID, another.Name = newID(), fmt.Sprintf("batch-%d-%s", i, newID()[:8])
+		require.NoError(t, store.CreateFile(t.Context(), &another))
+		files = append(files, &another)
+	}
 	stop()
 
-	file.ResourceVersion = "2"
-	file.Labels = map[string]string{"team": "catalog"}
-	require.NoError(t, store.UpdateFile(t.Context(), file, "1"), "write while no materializer is running")
+	batchCursor := cursor
+	registry := prometheus.NewRegistry()
+	batcher := datastore.NewInstrumentedDatastoreWithRegistry(store, "scylla", zap.NewNop(), registry).(datastore.CatalogMutationBatcher)
+	require.NoError(t, batcher.WithCatalogMutationBatch(context.WithValue(t.Context(), batchKey{}, true), file.Namespace, func(ctx context.Context) error {
+		var writes sync.WaitGroup
+		failures := make([]error, len(files))
+		for i, file := range files {
+			file.ResourceVersion = "2"
+			file.Labels = map[string]string{"team": "catalog"}
+			writes.Go(func() { failures[i] = store.UpdateFile(ctx, file, "1") })
+		}
+		writes.Wait()
+		return errors.Join(failures...)
+	}), "physical conditional batches commit while no materializer is running")
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	var batchCount uint64
+	for _, family := range families {
+		if family.GetName() != "gitstore_datastore_operation_duration_seconds" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "operation" && strings.HasPrefix(label.GetValue(), "FileConditionalBatch") {
+					batchCount += metric.GetHistogram().GetSampleCount()
+				}
+			}
+		}
+	}
+	require.Positive(t, batchCount, "CDC replay must include actual full-binding physical batches")
 	lease = acquire("file-cdc-integration-b")
 	stopPeer := start(peer, lease)
 	modified := next(datastore.ResourceWatchModified, "2")
 	require.Equal(t, "media", modified.PreviousSelectorLabels["team"])
 	require.Equal(t, "catalog", modified.SelectorLabels["team"])
-	_, err = peer.UpdateFileStatus(t.Context(), file.Namespace, file.Name, datastore.FileStatusPatch{ResourceVersion: "2"})
+	expected := make(map[string]*datastore.File)
+	for _, file := range files {
+		expected[file.UID] = file
+	}
+	seen := make(map[string]bool)
+	require.Eventually(t, func() bool {
+		events, err := peerJournal.ReadAfter(t.Context(), batchCursor, 256)
+		require.NoError(t, err)
+		for _, event := range events {
+			batchCursor.Sequence = event.Sequence
+			if event.Kind != "File" || event.Type != datastore.ResourceWatchModified {
+				continue
+			}
+			var observed datastore.File
+			require.NoError(t, json.Unmarshal(event.Payload, &observed))
+			file := expected[observed.UID]
+			if file == nil || observed.ResourceVersion != "2" {
+				continue
+			}
+			payload, err := json.Marshal(file)
+			require.NoError(t, err)
+			require.JSONEq(t, string(payload), string(event.Payload), "batch CDC postimage must preserve the full independent envelope")
+			require.Equal(t, "media", event.PreviousSelectorLabels["team"])
+			require.Equal(t, "catalog", event.SelectorLabels["team"])
+			require.False(t, seen[file.UID], "materializer replacement must not duplicate a batched row event")
+			seen[file.UID] = true
+		}
+		return len(seen) == len(expected)
+	}, 75*time.Second, 100*time.Millisecond, "all committed batch rows must replay with complete pre/postimages")
+	file.ResourceVersion, file.Body = "3", "updated"
+	require.NoError(t, store.UpdateFile(t.Context(), file, "2"))
+	bodyModified := next(datastore.ResourceWatchModified, "3")
+	require.Equal(t, "catalog", bodyModified.PreviousSelectorLabels["team"])
+	require.Equal(t, "catalog", bodyModified.SelectorLabels["team"], "unchanged columns must remain in full CDC images")
+	_, err = peer.UpdateFileStatus(t.Context(), file.Namespace, file.Name, datastore.FileStatusPatch{ResourceVersion: "3"})
 	require.NoError(t, err)
-	next(datastore.ResourceWatchModified, "3")
-	require.NoError(t, store.DeleteFileWithResourceVersion(t.Context(), file.UID, "3"))
+	next(datastore.ResourceWatchModified, "4")
+	require.NoError(t, store.DeleteFileWithResourceVersion(t.Context(), file.UID, "4"))
 	deleted := next(datastore.ResourceWatchDeleted, "")
 	require.Empty(t, deleted.Payload)
 	require.Equal(t, "catalog", deleted.SelectorLabels["team"])

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +21,56 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+type diagnosticAuthorizer struct {
+	name     string
+	snapshot authpkg.AuthorizationSnapshot
+}
+
+func (p diagnosticAuthorizer) Name() string { return p.name }
+func (p diagnosticAuthorizer) AuthorizationSnapshot() (authpkg.AuthorizationSnapshot, bool) {
+	return p.snapshot, true
+}
+func (p diagnosticAuthorizer) Authorize(context.Context, *authpkg.Principal, string, authpkg.ResourceContext) (authpkg.Decision, error) {
+	return authpkg.Deny(p.name, "unused"), nil
+}
+
+func TestRegistryDiagnosticsStayCoherentAcrossConcurrentSwaps(t *testing.T) {
+	first := diagnosticAuthorizer{"first", authpkg.AuthorizationSnapshot{Loaded: true, Digest: strings.Repeat("a", 64), Roles: 1}}
+	second := diagnosticAuthorizer{"second", authpkg.AuthorizationSnapshot{Loaded: true, Digest: strings.Repeat("b", 64), Roles: 2}}
+	firstChain := authpkg.NewChainedAuthN(&stubProvider{name: "static-users"}, &stubProvider{name: "static-users"})
+	secondChain := authpkg.NewChainedAuthN(&stubProvider{name: "oidc-jwt"})
+	registry := authpkg.NewProviderRegistry(firstChain, first, nil)
+	before := registry.Diagnostics()
+	require.Equal(t, []string{"static-users"}, before.AuthN)
+	require.Len(t, before.CatalogDigest, 64)
+	before.AuthN[0] = "changed"
+	before.Policy.Digest = "changed"
+	require.Equal(t, "static-users", registry.Diagnostics().AuthN[0])
+	require.Equal(t, first.snapshot.Digest, registry.Diagnostics().Policy.Digest)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 500 {
+				d := registry.Diagnostics()
+				want, provider := first.snapshot, "static-users"
+				if d.AuthZ == "second" {
+					want, provider = second.snapshot, "oidc-jwt"
+				} else {
+					assert.Equal(t, "first", d.AuthZ)
+				}
+				assert.Equal(t, []string{provider}, d.AuthN)
+				assert.Equal(t, want, *d.Policy, "provider and snapshot metadata must belong to one registry state")
+				assert.Equal(t, before.CatalogDigest, d.CatalogDigest)
+			}
+		})
+	}
+	for range 500 {
+		registry.Swap(secondChain, second, nil)
+		registry.Swap(firstChain, first, nil)
+	}
+	wg.Wait()
+}
 
 func TestV1Beta1EffectivePermissionUsesSystemGroupAndSatisfiableConditions(t *testing.T) {
 	for _, tc := range []struct {

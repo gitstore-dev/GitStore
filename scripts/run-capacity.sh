@@ -13,6 +13,21 @@ if [[ -n "${CAPACITY_TOKEN_FILE:-}" ]]; then
   CAPACITY_TOKEN="$(<"${CAPACITY_TOKEN_FILE}")"
   export CAPACITY_TOKEN
 fi
+if [[ -n "${CAPACITY_DENIED_TOKEN_FILE:-}" ]]; then
+  [[ -r "${CAPACITY_DENIED_TOKEN_FILE}" ]] || { echo "CAPACITY_DENIED_TOKEN_FILE is not readable" >&2; exit 2; }
+  CAPACITY_DENIED_TOKEN="$(<"${CAPACITY_DENIED_TOKEN_FILE}")"
+  [[ -n "${CAPACITY_DENIED_TOKEN}" ]] || { echo "CAPACITY_DENIED_TOKEN_FILE is empty" >&2; exit 2; }
+  export CAPACITY_DENIED_TOKEN
+fi
+if [[ -n "${K6_HTTP_DEBUG:-}" ]]; then
+  echo "capacity runs reject K6_HTTP_DEBUG because it can expose credentials" >&2
+  exit 2
+fi
+if [[ -n "${K6_NEW_MACHINE_READABLE_SUMMARY:-}" && "${K6_NEW_MACHINE_READABLE_SUMMARY}" != false ]]; then
+  echo "capacity verifiers require the legacy k6 summary schema" >&2
+  exit 2
+fi
+export K6_NEW_MACHINE_READABLE_SUMMARY=false
 profile="${1:-${CAPACITY_PROFILE:-}}"
 mode="${MODE:-diagnostic}"
 case "${mode}" in
@@ -58,6 +73,7 @@ for manifest_kind in config environment; do
 done
 
 metadata="${evidence_dir}/metadata.json"
+source_state_sha256="$("${repo_root}/scripts/validate-capacity-evidence.sh" "${evidence_dir}" "${target}" "${scenario}" "${mode}" source-state)"
 git_dirty=false
 if [[ "${CAPACITY_TEST_FORCE_DIRTY:-0}" == "1" || -n "$(git -C "${repo_root}" status --porcelain --untracked-files=normal)" ]]; then
   git_dirty=true
@@ -71,11 +87,12 @@ jq -n \
   --arg run_id "${run_id}" \
   --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg git_revision "$(git -C "${repo_root}" rev-parse HEAD)" \
+  --arg source_state_sha256 "${source_state_sha256}" \
   --argjson git_dirty "${git_dirty}" \
   --arg k6_image "${k6_image}" \
   --arg config_digest "$(if [[ -f "${evidence_dir}/config.json" ]]; then shasum -a 256 "${evidence_dir}/config.json" | awk '{print $1}'; fi)" \
   --arg environment_digest "$(if [[ -f "${evidence_dir}/environment.json" ]]; then shasum -a 256 "${evidence_dir}/environment.json" | awk '{print $1}'; fi)" \
-  '{schemaVersion:($schema_version|tonumber), target:$target, scenario:$scenario, profile:$profile, mode:$mode, evidenceClass:$mode, productionTargets:{visibilityP95Seconds:1,visibilityP99Seconds:3}, runId:$run_id, startedAt:$started_at, gitRevision:$git_revision, gitDirty:$git_dirty, loadGenerator:{name:"k6", image:$k6_image}} + (if $config_digest == "" then {} else {configDigest:$config_digest} end) + (if $environment_digest == "" then {} else {environmentDigest:$environment_digest} end)' \
+  '{schemaVersion:($schema_version|tonumber), target:$target, scenario:$scenario, profile:$profile, mode:$mode, evidenceClass:$mode, productionTargets:{visibilityP95Seconds:1,visibilityP99Seconds:3}, runId:$run_id, startedAt:$started_at, gitRevision:$git_revision,sourceStateSha256:$source_state_sha256,gitDirty:$git_dirty, loadGenerator:{name:"k6", image:$k6_image}} + (if $config_digest == "" then {} else {configDigest:$config_digest} end) + (if $environment_digest == "" then {} else {environmentDigest:$environment_digest} end)' \
   >"${metadata}"
 
 if [[ "${mode}" != "diagnostic" && "${git_dirty}" == "true" ]]; then
@@ -89,7 +106,9 @@ if [[ "${mode}" != "diagnostic" && "${git_dirty}" == "true" ]]; then
 fi
 
 export CAPACITY_EVIDENCE_DIR="${evidence_dir}"
+export CAPACITY_SUMMARY_DIR="${evidence_dir}"
 export CAPACITY_RUN_ID="${run_id}"
+export CAPACITY_MODE="${mode}"
 
 container_check_status=0
 if [[ -n "${CAPACITY_DATASTORE_CONTAINERS:-}" ]]; then
@@ -130,10 +149,10 @@ fi
 
 set +e
 if [[ -n "${K6_BIN:-}" ]]; then
-  "${K6_BIN}" run --summary-export "${evidence_dir}/summary.json" "${script}" 2>&1 | tee "${evidence_dir}/k6.log"
+  "${K6_BIN}" run --summary-trend-stats 'avg,min,med,max,p(90),p(95),p(99),count' --summary-export "${evidence_dir}/summary.json" "${script}" 2>&1 | tee "${evidence_dir}/k6.log"
   status=${PIPESTATUS[0]}
 elif command -v k6 >/dev/null 2>&1; then
-  k6 run --summary-export "${evidence_dir}/summary.json" "${script}" 2>&1 | tee "${evidence_dir}/k6.log"
+  k6 run --summary-trend-stats 'avg,min,med,max,p(90),p(95),p(99),count' --summary-export "${evidence_dir}/summary.json" "${script}" 2>&1 | tee "${evidence_dir}/k6.log"
   status=${PIPESTATUS[0]}
 else
   docker_args=(run --rm --network "${CAPACITY_DOCKER_NETWORK:-host}" -v "${repo_root}:/workspace:ro" -v "${evidence_dir}:/evidence" -w /workspace)
@@ -145,7 +164,8 @@ else
       CAPACITY_*|PRODUCT_CAPACITY_*|K6_*) docker_args+=(-e "${name}") ;;
     esac
   done < <(env)
-  docker "${docker_args[@]}" "${k6_image}" run --summary-export /evidence/summary.json "/workspace/tests/capacity/profiles/${profile}.js" 2>&1 | tee "${evidence_dir}/k6.log"
+  docker_args+=(-e CAPACITY_SUMMARY_DIR=/evidence)
+  docker "${docker_args[@]}" "${k6_image}" run --summary-trend-stats 'avg,min,med,max,p(90),p(95),p(99),count' --summary-export /evidence/summary.json "/workspace/tests/capacity/profiles/${profile}.js" 2>&1 | tee "${evidence_dir}/k6.log"
   status=${PIPESTATUS[0]}
 fi
 set -e
@@ -175,15 +195,21 @@ if [[ -n "${chaos_pid}" ]]; then
 fi
 
 verifier="${repo_root}/tests/capacity/verifiers/${profile}.sh"
+verifier_args=("${evidence_dir}")
 verifier_required=false
-if [[ "${profile}" != "api-readiness" && "${mode}" != "diagnostic" ]]; then
+if [[ "${mode}" != "diagnostic" ]]; then
+  verifier_required=true
+fi
+if [[ "${profile}" == api-readiness && ("${mode}" != diagnostic || -n "${CAPACITY_TOKEN:-}") ]]; then
+  verifier="${repo_root}/scripts/validate-capacity-evidence.sh"
+  verifier_args+=("api" "readiness" "${mode}" "postflight")
   verifier_required=true
 fi
 
 verifier_status=0
 if [[ -x "${verifier}" ]]; then
   set +e
-  "${verifier}" "${evidence_dir}" 2>&1 | tee "${evidence_dir}/verifier.log"
+  "${verifier}" "${verifier_args[@]}" 2>&1 | tee "${evidence_dir}/verifier.log"
   verifier_status=${PIPESTATUS[0]}
   set -e
 elif [[ "${verifier_required}" == "true" ]]; then
@@ -212,6 +238,13 @@ fi
 if (( status == 0 && prometheus_status != 0 )); then
   status=${prometheus_status}
 fi
+completed_source_state_sha256="$("${repo_root}/scripts/validate-capacity-evidence.sh" "${evidence_dir}" "${target}" "${scenario}" "${mode}" source-state)"
+source_state_status=0
+if [[ "${completed_source_state_sha256}" != "${source_state_sha256}" ]]; then
+  echo "capacity source state changed during the run; evidence cannot pass" | tee "${evidence_dir}/source-state.log" >&2
+  source_state_status=2
+  if (( status == 0 )); then status=2; fi
+fi
 
 jq \
   --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -221,7 +254,9 @@ jq \
   --argjson datastore_exit_code "${container_check_status}" \
   --argjson prometheus_exit_code "${prometheus_status}" \
   --argjson verifier_required "${verifier_required}" \
-  '. + {completedAt:$completed_at, exitCode:$exit_code, sourceStateExitCode:0, chaosExitCode:$chaos_exit_code, verifierRequired:$verifier_required, verifierExitCode:$verifier_exit_code, datastoreVerifierExitCode:$datastore_exit_code, prometheusExitCode:$prometheus_exit_code, passed:($exit_code == 0 and .mode != "diagnostic" and .gitDirty == false)}' \
+  --arg completed_source_state_sha256 "${completed_source_state_sha256}" \
+  --argjson source_state_exit_code "${source_state_status}" \
+  '. + {completedAt:$completed_at, exitCode:$exit_code, sourceStateExitCode:$source_state_exit_code,completedSourceStateSha256:$completed_source_state_sha256,sourceStateUnchanged:($source_state_exit_code == 0),chaosExitCode:$chaos_exit_code, verifierRequired:$verifier_required, verifierExitCode:$verifier_exit_code, datastoreVerifierExitCode:$datastore_exit_code, prometheusExitCode:$prometheus_exit_code, passed:($exit_code == 0 and .mode != "diagnostic" and .gitDirty == false and $source_state_exit_code == 0)}' \
   "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 

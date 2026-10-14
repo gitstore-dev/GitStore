@@ -6,6 +6,7 @@ package datastore_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,6 +19,211 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+type batchForwardingStore struct {
+	datastore.Datastore
+	namespace string
+	calls     int
+	phases    []datastore.NamespaceFencePhase
+}
+
+func TestInstrumentedDatastoreFileSnapshotsMetricsAndErrors(t *testing.T) {
+	for _, failure := range []error{nil, errors.New("snapshot storage unavailable"), context.Canceled} {
+		for _, operation := range []string{"GetFileSnapshots", "GetFileSnapshotsByName"} {
+			t.Run(operation+"/"+fmt.Sprint(failure), func(t *testing.T) {
+				wrapped, logs, registry := newTestInstrumented(t, &stubDatastore{getProductErr: failure})
+				read := func() ([]*datastore.File, error) {
+					if operation == "GetFileSnapshotsByName" {
+						return wrapped.GetFileSnapshotsByName(t.Context(), "private-namespace", []string{"private-uid", "private-uid"})
+					}
+					return wrapped.GetFileSnapshots(t.Context(), []string{"private-uid", "private-uid"})
+				}
+				files, err := read()
+				require.Equal(t, failure, err)
+				require.Len(t, files, 2)
+				require.EqualValues(t, 1, histogramObservationCount(t, registry, operation, "test-backend"))
+				if failure != nil {
+					require.EqualValues(t, 1, counterValue(t, registry, operation, "test-backend"))
+					require.NotZero(t, logs.Len())
+				}
+				families, err := registry.Gather()
+				require.NoError(t, err)
+				for _, family := range families {
+					for _, metric := range family.Metric {
+						for _, label := range metric.Label {
+							require.NotContains(t, label.GetValue(), "private-uid")
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+type fileBatchForwardingStore struct {
+	batchForwardingStore
+	repositoryID string
+	names        []string
+}
+
+func (s *fileBatchForwardingStore) WithFileMutationBatch(ctx context.Context, namespace, repositoryID string, names []string, operation func(context.Context) error) error {
+	s.repositoryID, s.names = repositoryID, names
+	return s.WithCatalogMutationBatch(ctx, namespace, operation)
+}
+
+func TestInstrumentedDatastoreForwardsFileCohortsAndFallback(t *testing.T) {
+	sentinel := errors.New("independent File callback failed")
+	for _, fileCohorts := range []bool{false, true} {
+		t.Run(fmt.Sprint(fileCohorts), func(t *testing.T) {
+			base := &batchForwardingStore{}
+			var backend datastore.Datastore = base
+			fileBackend := &fileBatchForwardingStore{}
+			if fileCohorts {
+				backend = fileBackend
+				base = &fileBackend.batchForwardingStore
+			}
+			wrapped, _, registry := newTestInstrumented(t, backend)
+			err := wrapped.(datastore.FileMutationBatcher).WithFileMutationBatch(t.Context(), "private-namespace",
+				"private-repository", []string{"private-file"}, func(context.Context) error { return sentinel })
+			require.ErrorIs(t, err, sentinel)
+			require.Equal(t, 1, base.calls)
+			require.Equal(t, "private-namespace", base.namespace)
+			if fileCohorts {
+				require.Equal(t, "private-repository", fileBackend.repositoryID)
+				require.Equal(t, []string{"private-file"}, fileBackend.names)
+			}
+			require.EqualValues(t, 1, histogramObservationCount(t, registry, "CatalogMutationBatch", "test-backend"))
+			families, err := registry.Gather()
+			require.NoError(t, err)
+			for _, family := range families {
+				for _, metric := range family.Metric {
+					for _, label := range metric.Label {
+						require.NotContains(t, label.GetValue(), "private-")
+					}
+				}
+			}
+		})
+	}
+}
+
+func (s *batchForwardingStore) WithCatalogMutationBatch(ctx context.Context, namespace string, operation func(context.Context) error) error {
+	s.namespace, s.calls = namespace, s.calls+1
+	for _, phase := range s.phases {
+		if err := datastore.MeasureNamespaceFencePhase(ctx, phase, func() error { return nil }); err != nil {
+			return err
+		}
+	}
+	return operation(ctx)
+}
+
+func TestInstrumentedDatastoreNamespaceFencePhasesAreBounded(t *testing.T) {
+	phases := []datastore.NamespaceFencePhase{
+		datastore.NamespaceFenceLookup, datastore.NamespaceFenceQueue, datastore.NamespaceFenceReserve,
+		datastore.NamespaceFenceMutation, datastore.NamespaceFenceRelease, 255,
+	}
+	store := &batchForwardingStore{phases: phases}
+	wrapped, logs, registry := newTestInstrumented(t, store)
+	sentinel := errors.New("phase failure")
+	err := wrapped.(datastore.CatalogMutationBatcher).WithCatalogMutationBatch(t.Context(), "private-namespace", func(ctx context.Context) error {
+		return datastore.MeasureNamespaceFencePhase(ctx, datastore.NamespaceFenceMutation, func() error { return sentinel })
+	})
+	require.ErrorIs(t, err, sentinel)
+	for _, operation := range []string{"NamespaceFenceLookup", "NamespaceFenceQueue", "NamespaceFenceReserve", "NamespaceFenceRelease"} {
+		require.EqualValues(t, 1, histogramObservationCount(t, registry, operation, "test-backend"))
+	}
+	require.EqualValues(t, 2, histogramObservationCount(t, registry, "NamespaceFenceMutation", "test-backend"))
+	require.EqualValues(t, 1, counterValue(t, registry, "NamespaceFenceMutation", "test-backend"))
+	require.Equal(t, 1, logs.FilterMessage("invalid namespace fence metric phase").Len())
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				require.NotContains(t, label.GetValue(), "private-namespace")
+				require.NotContains(t, label.GetValue(), "255")
+			}
+		}
+	}
+	calls := 0
+	require.ErrorIs(t, datastore.MeasureNamespaceFencePhase(t.Context(), datastore.NamespaceFenceReserve, func() error {
+		calls++
+		return sentinel
+	}), sentinel)
+	require.Equal(t, 1, calls, "an uninstrumented backend must still execute and preserve failures")
+}
+
+func TestInstrumentedDatastoreCatalogMutationPhasesAreBounded(t *testing.T) {
+	wrapped, logs, registry := newTestInstrumented(t, &batchForwardingStore{})
+	phases := []datastore.CatalogMutationPhase{
+		datastore.CatalogMutationParentCheck, datastore.CatalogMutationReadBefore,
+		datastore.CatalogMutationMembershipWrite, datastore.CatalogMutationReadAfter,
+		datastore.FileMutationLocatorRead, datastore.FileMutationAuthoritativeCAS,
+		datastore.FileMutationOwnerReferenceSync,
+		datastore.FileMutationConditionalBatch2, datastore.FileMutationConditionalBatch3,
+		datastore.FileMutationConditionalBatch4,
+	}
+	sentinel := errors.New("mutation phase failure")
+	require.NoError(t, wrapped.(datastore.CatalogMutationBatcher).WithCatalogMutationBatch(t.Context(),
+		"private-namespace", func(ctx context.Context) error {
+			for _, phase := range phases {
+				for _, failure := range []error{nil, sentinel, datastore.ErrNotFound, context.Canceled} {
+					require.Equal(t, failure, datastore.MeasureCatalogMutationPhase(ctx, phase,
+						func() error { return failure }))
+				}
+			}
+			return datastore.MeasureCatalogMutationPhase(ctx, 255, func() error { return nil })
+		}))
+	for _, operation := range []string{
+		"CatalogParentCheck", "CatalogProjectionReadBefore", "CatalogMembershipWrite", "CatalogProjectionReadAfter",
+		"FileUIDLocatorRead", "FileAuthoritativeCAS", "FileOwnerReferenceSync",
+		"FileConditionalBatch2", "FileConditionalBatch3", "FileConditionalBatch4",
+	} {
+		require.EqualValues(t, 4, histogramObservationCount(t, registry, operation, "test-backend"))
+		require.EqualValues(t, 2, counterValue(t, registry, operation, "test-backend"))
+	}
+	require.Equal(t, 1, logs.FilterMessage("invalid catalog mutation metric phase").Len())
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				require.NotContains(t, label.GetValue(), "private-namespace")
+				require.NotContains(t, label.GetValue(), "255")
+			}
+		}
+	}
+	calls := 0
+	require.ErrorIs(t, datastore.MeasureCatalogMutationPhase(t.Context(), datastore.FileMutationAuthoritativeCAS,
+		func() error { calls++; return sentinel }), sentinel)
+	require.Equal(t, 1, calls)
+}
+
+func TestInstrumentedDatastoreForwardsCatalogBatchAndErrors(t *testing.T) {
+	backend := &batchForwardingStore{}
+	wrapped := datastore.NewInstrumentedDatastoreWithRegistry(backend, "scylla", zap.NewNop(), prometheus.NewRegistry())
+	batcher := wrapped.(datastore.CatalogMutationBatcher)
+	sentinel := errors.New("batch mutation failed")
+	calls := 0
+	err := batcher.WithCatalogMutationBatch(t.Context(), "acme", func(ctx context.Context) error {
+		require.NotNil(t, ctx)
+		calls++
+		return sentinel
+	})
+	require.ErrorIs(t, err, sentinel)
+	require.Equal(t, "acme", backend.namespace)
+	require.Equal(t, 1, backend.calls)
+	require.Equal(t, 1, calls)
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	wrapped = datastore.NewInstrumentedDatastoreWithRegistry(store, "memdb", zap.NewNop(), prometheus.NewRegistry())
+	err = wrapped.(datastore.CatalogMutationBatcher).WithCatalogMutationBatch(t.Context(), "acme", func(context.Context) error {
+		calls++
+		return sentinel
+	})
+	require.ErrorIs(t, err, sentinel)
+	require.Equal(t, 2, calls, "a backend without a parent fence retains individual mutation semantics")
+}
 
 func TestInstrumentedDatastoreForwardsRepositoryCompletion(t *testing.T) {
 	store, err := memdb.New()
@@ -66,6 +272,12 @@ func (s *stubDatastore) CreateFile(_ context.Context, _ *datastore.File) error {
 }
 func (s *stubDatastore) GetFile(_ context.Context, _ string) (*datastore.File, error) {
 	return nil, s.getProductErr
+}
+func (s *stubDatastore) GetFileSnapshots(_ context.Context, ids []string) ([]*datastore.File, error) {
+	return make([]*datastore.File, len(ids)), s.getProductErr
+}
+func (s *stubDatastore) GetFileSnapshotsByName(_ context.Context, _ string, names []string) ([]*datastore.File, error) {
+	return make([]*datastore.File, len(names)), s.getProductErr
 }
 func (s *stubDatastore) GetFileByName(_ context.Context, _, _ string) (*datastore.File, error) {
 	return nil, s.getProductErr

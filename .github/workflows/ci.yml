@@ -139,6 +139,10 @@ jobs:
     - name: Run tests
       run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
+    - name: Verify patched CDC reader shutdown
+      working-directory: ./shared/scylla-cdc-go
+      run: go test -race -count=100 ./...
+
     - name: Verify enrollment output secrecy
       working-directory: .
       run: ./scripts/check-enroll-serviceaccount-output.sh

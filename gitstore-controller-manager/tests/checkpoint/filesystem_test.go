@@ -6,6 +6,7 @@ package checkpoint_test
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -285,6 +286,297 @@ func TestDiskStorePeriodicFanoutPreservesSweepProgress(t *testing.T) {
 	_, err = s.ProcessFanout(t.Context())
 	require.NoError(t, err)
 	require.EqualValues(t, 300-checkpoint.DiskPageItems, s.Counts().Pending)
+}
+
+func TestDiskStorePacedResyncPersistsEligibilityAndAllowsImmediateWork(t *testing.T) {
+	dir := t.TempDir()
+	s, err := checkpoint.OpenDiskStore(dir, "Product")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	gen, err := s.BeginSnapshot(t.Context())
+	require.NoError(t, err)
+	items := []checkpoint.DiskItem{
+		diskFixture("Product", "a", "1", "group"),
+		diskFixture("Product", "b", "1", "group"),
+		diskFixture("Product", "c", "1", "group"),
+		diskFixture("Product", "d", "1", "other"),
+	}
+	require.NoError(t, s.PutSnapshotPage(t.Context(), gen, items))
+	require.NoError(t, s.FinishSnapshot(t.Context(), gen, "snapshot"))
+	pending, err := s.Pending(t.Context(), "", checkpoint.DiskPageItems)
+	require.NoError(t, err)
+	for _, item := range pending {
+		ack, err := s.Acknowledge(t.Context(), item.Key, item.Token)
+		require.NoError(t, err)
+		require.True(t, ack)
+	}
+	require.Error(t, s.RequestResync(t.Context(), 0))
+	require.Error(t, s.RequestResync(t.Context(), -time.Second))
+	require.NoError(t, s.RequestResync(t.Context(), time.Hour))
+	for range 2 {
+		progressed, err := s.ProcessFanout(t.Context())
+		require.NoError(t, err)
+		require.True(t, progressed)
+		require.Zero(t, s.Counts().Pending, "the bounded counting pass enqueued work")
+	}
+	progressed, err := s.ProcessFanout(t.Context())
+	require.NoError(t, err)
+	require.True(t, progressed)
+	require.EqualValues(t, 1, s.Counts().Pending, "a periodic sweep burst-enqueued every resource")
+	_, _, oldToken, err := s.Read(t.Context(), items[0].Key)
+	require.NoError(t, err)
+	require.Positive(t, oldToken)
+	_, err = s.DeferWork(t.Context(), items[0].Key, oldToken, 0, "invalid configuration", 3)
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+	s, err = checkpoint.OpenDiskStore(dir, "Product")
+	require.NoError(t, err)
+	require.NoError(t, s.RequestResync(t.Context(), time.Hour))
+	progressed, err = s.ProcessFanout(t.Context())
+	require.NoError(t, err)
+	require.False(t, progressed, "reopen or a repeated request reset persisted sweep eligibility")
+	require.Equal(t, checkpoint.DiskCounts{Pending: 1, Poison: 1}, s.Counts())
+	require.NoError(t, s.RequestFanout(t.Context(), "group"))
+	progressed, err = s.ProcessFanout(t.Context())
+	require.NoError(t, err)
+	require.True(t, progressed, "a waiting periodic sweep blocked dependency fanout")
+	require.EqualValues(t, 3, s.Counts().Pending)
+	require.NoError(t, s.Enqueue(t.Context(), items[3].Key))
+	ready, err := s.Ready(t.Context(), checkpoint.DiskPageItems)
+	require.NoError(t, err)
+	require.Len(t, ready, 4)
+	ack, err := s.Acknowledge(t.Context(), items[0].Key, oldToken)
+	require.NoError(t, err)
+	require.False(t, ack, "an old sweep acknowledgement cleared newer dependency work")
+	gen, err = s.BeginSnapshot(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, s.PutSnapshotPage(t.Context(), gen, items))
+	require.NoError(t, s.FinishSnapshot(t.Context(), gen, "replacement"))
+	pending, err = s.Pending(t.Context(), "", checkpoint.DiskPageItems)
+	require.NoError(t, err)
+	for _, item := range pending {
+		ack, err := s.Acknowledge(t.Context(), item.Key, item.Token)
+		require.NoError(t, err)
+		require.True(t, ack)
+	}
+	for range 3 {
+		progressed, err = s.ProcessFanout(t.Context())
+		require.NoError(t, err)
+		require.True(t, progressed, "generation replacement did not restart a waiting resync")
+	}
+	require.EqualValues(t, 1, s.Counts().Pending)
+	_, found, token, err := s.Read(t.Context(), items[0].Key)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Positive(t, token, "the replacement sweep skipped keys before its previous cursor")
+}
+
+func TestDiskStorePacedResyncCoversEveryKeyWithoutOverwritingRetry(t *testing.T) {
+	dir := t.TempDir()
+	s, err := checkpoint.OpenDiskStore(dir, "Product")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	gen, err := s.BeginSnapshot(t.Context())
+	require.NoError(t, err)
+	items := []checkpoint.DiskItem{
+		diskFixture("Product", "a", "1", "group"),
+		diskFixture("Product", "b", "1", "group"),
+		diskFixture("Product", "c", "1", "group"),
+	}
+	require.NoError(t, s.PutSnapshotPage(t.Context(), gen, items))
+	require.NoError(t, s.FinishSnapshot(t.Context(), gen, "snapshot"))
+	for i, item := range items {
+		_, _, token, err := s.Read(t.Context(), item.Key)
+		require.NoError(t, err)
+		if i == 0 {
+			deferred, err := s.DeferWork(t.Context(), item.Key, token, time.Hour, "", 2)
+			require.NoError(t, err)
+			require.True(t, deferred)
+		} else {
+			ack, err := s.Acknowledge(t.Context(), item.Key, token)
+			require.NoError(t, err)
+			require.True(t, ack)
+		}
+	}
+	before, err := s.Pending(t.Context(), "", checkpoint.DiskPageItems)
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	require.NoError(t, s.RequestResync(t.Context(), time.Hour))
+	for range 2 {
+		_, err := s.ProcessFanout(t.Context())
+		require.NoError(t, err)
+	}
+	require.NoError(t, s.RequestResync(t.Context(), time.Hour))
+	key := []byte("fanout/" + base64.RawURLEncoding.EncodeToString([]byte("*")))
+	var lastCursor string
+	for i := range len(items) + 1 {
+		require.NoError(t, s.Close())
+		raw, err := leveldb.OpenFile(filepath.Join(dir, "Product.disk-v2"), nil)
+		require.NoError(t, err)
+		data, err := raw.Get(key, nil)
+		require.NoError(t, err)
+		var task struct {
+			Generation     uint64
+			After          string
+			Interval       time.Duration
+			Count          uint64
+			Counted        bool
+			NextPageAt     time.Time
+			RepeatInterval time.Duration
+		}
+		require.NoError(t, json.Unmarshal(data, &task))
+		require.EqualValues(t, len(items), task.Count)
+		require.True(t, task.Counted)
+		if i > 0 {
+			require.Greater(t, task.After, lastCursor)
+		}
+		lastCursor = task.After
+		// An expired durable deadline models replacement after an extended outage.
+		task.NextPageAt = time.Unix(0, 0)
+		data, err = json.Marshal(task)
+		require.NoError(t, err)
+		require.NoError(t, raw.Put(key, data, nil))
+		require.NoError(t, raw.Close())
+		s, err = checkpoint.OpenDiskStore(dir, "Product")
+		require.NoError(t, err)
+		progressed, err := s.ProcessFanout(t.Context())
+		require.NoError(t, err)
+		require.True(t, progressed)
+		if i < len(items) {
+			progressed, err = s.ProcessFanout(t.Context())
+			require.NoError(t, err)
+			require.False(t, progressed, "expired eligibility caused a catch-up burst")
+		}
+	}
+	after, err := s.Pending(t.Context(), "", checkpoint.DiskPageItems)
+	require.NoError(t, err)
+	require.Len(t, after, len(items))
+	require.Equal(t, before[0], after[0], "a periodic sweep overrode a pending retry")
+	ready, err := s.Ready(t.Context(), checkpoint.DiskPageItems)
+	require.NoError(t, err)
+	require.Len(t, ready, 2)
+	require.Equal(t, items[1].Key, ready[0].Key)
+	require.Equal(t, items[2].Key, ready[1].Key)
+	oldToken := ready[1].Token
+	require.NoError(t, s.Enqueue(t.Context(), items[2].Key))
+	ready, err = s.Ready(t.Context(), checkpoint.DiskPageItems)
+	require.NoError(t, err)
+	require.Len(t, ready, 2)
+	require.Equal(t, items[2].Key, ready[0].Key, "foreground work waited behind a periodic sweep")
+	ack, err := s.Acknowledge(t.Context(), items[2].Key, oldToken)
+	require.NoError(t, err)
+	require.False(t, ack, "a stale periodic token cleared a newer foreground event")
+	progressed, err := s.ProcessFanout(t.Context())
+	require.NoError(t, err)
+	require.True(t, progressed, "a ticker request arriving during the previous sweep was lost")
+	require.EqualValues(t, len(items), s.Counts().Pending, "the next counting pass enqueued new work")
+}
+
+func TestDiskStorePacedResyncCountsBoundedPagesAndSizesItsBudget(t *testing.T) {
+	for _, tc := range []struct {
+		interval time.Duration
+		queued   int
+	}{
+		{time.Hour, 1},
+		{100 * time.Millisecond, checkpoint.DiskPageItems},
+	} {
+		t.Run(tc.interval.String(), func(t *testing.T) {
+			s, err := checkpoint.OpenDiskStore(t.TempDir(), "Product")
+			require.NoError(t, err)
+			defer s.Close()
+			gen, err := s.BeginSnapshot(t.Context())
+			require.NoError(t, err)
+			for start := 0; start < 300; start += checkpoint.DiskPageItems {
+				var page []checkpoint.DiskItem
+				for i := start; i < min(300, start+checkpoint.DiskPageItems); i++ {
+					page = append(page, diskFixture("Product", fmt.Sprintf("%03d", i), "1", "group"))
+				}
+				require.NoError(t, s.PutSnapshotPage(t.Context(), gen, page))
+			}
+			require.NoError(t, s.FinishSnapshot(t.Context(), gen, "snapshot"))
+			for _, after := range []string{"", "shop\x00255"} {
+				page, err := s.Pending(t.Context(), after, checkpoint.DiskPageItems)
+				require.NoError(t, err)
+				for _, item := range page {
+					ack, err := s.Acknowledge(t.Context(), item.Key, item.Token)
+					require.NoError(t, err)
+					require.True(t, ack)
+				}
+			}
+			require.Zero(t, s.Counts().Pending)
+			require.NoError(t, s.RequestResync(t.Context(), tc.interval))
+			for range 3 {
+				progressed, err := s.ProcessFanout(t.Context())
+				require.NoError(t, err)
+				require.True(t, progressed)
+				require.Zero(t, s.Counts().Pending, "the counting pass escaped its page bound")
+			}
+			progressed, err := s.ProcessFanout(t.Context())
+			require.NoError(t, err)
+			require.True(t, progressed)
+			require.EqualValues(t, tc.queued, s.Counts().Pending)
+		})
+	}
+}
+
+func TestDiskStorePacedResyncRejectsInvalidDurableMetadata(t *testing.T) {
+	for _, data := range []string{
+		`{`,
+		`{"Interval":-1}`,
+		`{"Interval":9223372036854775808}`,
+		`{"Interval":1,"Count":9223372036854775808}`,
+		`{"Interval":1,"Counted":true}`,
+		`{"Interval":1,"Counted":true,"Count":1}`,
+		`{"Count":1}`,
+	} {
+		t.Run(data, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := checkpoint.OpenDiskStore(dir, "Product")
+			require.NoError(t, err)
+			gen, err := s.BeginSnapshot(t.Context())
+			require.NoError(t, err)
+			require.NoError(t, s.FinishSnapshot(t.Context(), gen, "snapshot"))
+			require.NoError(t, s.Close())
+			raw, err := leveldb.OpenFile(filepath.Join(dir, "Product.disk-v2"), nil)
+			require.NoError(t, err)
+			key := []byte("fanout/" + base64.RawURLEncoding.EncodeToString([]byte("*")))
+			require.NoError(t, raw.Put(key, []byte(data), nil))
+			require.NoError(t, raw.Close())
+			s, err = checkpoint.OpenDiskStore(dir, "Product")
+			require.NoError(t, err)
+			defer s.Close()
+			progressed, err := s.ProcessFanout(t.Context())
+			require.Error(t, err)
+			require.False(t, progressed)
+			require.Zero(t, s.Counts().Pending)
+		})
+	}
+}
+
+func TestDiskStorePacedResyncEmptyAndCancelled(t *testing.T) {
+	s, err := checkpoint.OpenDiskStore(t.TempDir(), "Product")
+	require.NoError(t, err)
+	defer s.Close()
+	gen, err := s.BeginSnapshot(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, s.FinishSnapshot(t.Context(), gen, "empty"))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, s.RequestResync(ctx, time.Minute), context.Canceled)
+	require.NoError(t, s.RequestResync(t.Context(), time.Minute))
+	progressed, err := s.ProcessFanout(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, progressed)
+	progressed, err = s.ProcessFanout(t.Context())
+	require.NoError(t, err)
+	require.True(t, progressed)
+	progressed, err = s.ProcessFanout(t.Context())
+	require.NoError(t, err)
+	require.False(t, progressed)
+	require.Zero(t, s.Counts().Pending)
+	require.NoError(t, s.Close())
+	_, err = s.ProcessFanout(t.Context())
+	require.Error(t, err)
 }
 
 func TestDiskStoreGarbageCollectionResumesAfterInterruptedPage(t *testing.T) {

@@ -34,6 +34,7 @@ type pushHelper struct {
 	t         *testing.T
 	workDir   string
 	remoteURL string
+	token     string
 }
 
 // newPushHelper creates a temp git working directory and clones the catalog repo.
@@ -48,20 +49,24 @@ func newPushHelper(t *testing.T) *pushHelper {
 
 func newPushHelperForRepo(t *testing.T, namespace, repository string) *pushHelper {
 	t.Helper()
+	return newPushHelperForRepoWithToken(t, namespace, repository, integrationAdminToken(t))
+}
+
+func newPushHelperForRepoWithToken(t *testing.T, namespace, repository, token string) *pushHelper {
+	t.Helper()
 
 	workDir := t.TempDir()
 	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
-
-	// Try a lightweight reachability check before cloning.
-	checkCmd := exec.Command("git", "ls-remote", remoteURL)
-	if err := checkCmd.Run(); err != nil {
-		t.Fatalf("PREREQUISITE: gitstore-git-service catalog repo unreachable at %s: %v — is docker compose up?", remoteURL, err)
+	if _, err := secretCapacityGit(t.Context(), "", token, "ls-remote", remoteURL); err != nil {
+		t.Fatalf("PREREQUISITE: Git repository unreachable at %s: %v", remoteURL, err)
 	}
-
-	cloneCmd := exec.Command("git", "clone", remoteURL, workDir)
-	cloneCmd.Dir = os.TempDir()
-	if out, err := cloneCmd.CombinedOutput(); err != nil {
-		t.Fatalf("PREREQUISITE: could not clone catalog repo: %v\n%s", err, out)
+	cloneArgs := []string{"clone"}
+	if os.Getenv("REPOSITORY_LIFECYCLE_CAPACITY_RUN") == "1" {
+		cloneArgs = append(cloneArgs, "--no-tags", "--depth=1")
+	}
+	cloneArgs = append(cloneArgs, "--", remoteURL, workDir)
+	if _, err := secretCapacityGit(t.Context(), os.TempDir(), token, cloneArgs...); err != nil {
+		t.Fatalf("PREREQUISITE: Git clone failed: %v", err)
 	}
 
 	// Configure git identity and ensure the default branch is "main"
@@ -70,7 +75,7 @@ func newPushHelperForRepo(t *testing.T, namespace, repository string) *pushHelpe
 	run(t, workDir, "git", "config", "user.name", "Integration Test")
 	run(t, workDir, "git", "symbolic-ref", "HEAD", "refs/heads/main")
 
-	return &pushHelper{t: t, workDir: workDir, remoteURL: remoteURL}
+	return &pushHelper{t: t, workDir: workDir, remoteURL: remoteURL, token: token}
 }
 
 // commitProduct writes a product markdown file and commits it.
@@ -137,6 +142,10 @@ func (h *pushHelper) commitRepository(filename, content string) {
 // push executes git push and returns (stdout+stderr, error).
 func (h *pushHelper) push() (string, error) {
 	h.t.Helper()
+	if h.token != "" {
+		out, err := secretCapacityGit(h.t.Context(), h.workDir, h.token, "push", "origin", "main")
+		return string(out), err
+	}
 	cmd := exec.Command("git", "push", "origin", "main")
 	cmd.Dir = h.workDir
 	out, err := cmd.CombinedOutput()
@@ -147,6 +156,10 @@ func (h *pushHelper) push() (string, error) {
 func (h *pushHelper) pushTag(tag string) (string, error) {
 	h.t.Helper()
 	run(h.t, h.workDir, "git", "tag", "-a", tag, "-m", fmt.Sprintf("integration test tag %s", tag))
+	if h.token != "" {
+		out, err := secretCapacityGit(h.t.Context(), h.workDir, h.token, "push", "origin", tag)
+		return string(out), err
+	}
 	cmd := exec.Command("git", "push", "origin", tag)
 	cmd.Dir = h.workDir
 	out, err := cmd.CombinedOutput()

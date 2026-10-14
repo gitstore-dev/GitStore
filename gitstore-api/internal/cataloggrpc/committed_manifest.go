@@ -111,13 +111,6 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 
 	content := append([]byte(nil), req.Content...)
 	commitSHA := req.CommitSHA
-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
-	if !ok {
-		return nil, ErrCommittedManifestSuperseded
-	}
-	if current != req.CommitSHA {
-		return nil, ErrCommittedManifestSuperseded
-	}
 
 	parsed, body, err := s.parser.ParseResource(bytes.NewReader(content))
 	if err != nil || parsed == nil {
@@ -126,12 +119,25 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 		}
 		return nil, fmt.Errorf("parse committed manifest: %w", err)
 	}
-	entry, accepted, err := newParsedEntry(req.Path, parsed, body, req.Namespace)
+	entry, accepted, err := newParsedEntry(req.Path, parsed, body, req.Namespace, content)
 	if err != nil {
 		return nil, fmt.Errorf("committed manifest identity: %w", err)
 	}
 	if !accepted {
 		return nil, fmt.Errorf("committed manifest has no supported resource")
+	}
+	isCurrent := func(ctx context.Context) (bool, error) {
+		if entry.identity.Kind == "Repository" {
+			return s.isCommittedRepositoryCurrent(ctx, req)
+		}
+		return s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	}
+	current, err := isCurrent(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !current {
+		return nil, ErrCommittedManifestSuperseded
 	}
 	if err := s.validateCommittedAuthoringTarget(ctx, req.RepositoryID, entry); err != nil {
 		return nil, err
@@ -147,14 +153,15 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 	now := s.clock.Now().UTC()
 	superseded := false
 	admCtx := AdmissionContext{
-		RepositoryID: req.RepositoryID,
-		Namespace:    req.Namespace,
-		ActorSubject: actor,
-		CommitSHA:    commitSHA,
-		RefName:      req.RefName,
-		Revision:     strings.TrimPrefix(req.RefName, "refs/heads/") + "@sha1:" + commitSHA,
-		Now:          now,
-		superseded:   &superseded,
+		RepositoryID:      req.RepositoryID,
+		Namespace:         req.Namespace,
+		ActorSubject:      actor,
+		CommitSHA:         commitSHA,
+		RefName:           req.RefName,
+		Revision:          strings.TrimPrefix(req.RefName, "refs/heads/") + "@sha1:" + commitSHA,
+		Now:               now,
+		superseded:        &superseded,
+		repositoryCurrent: isCurrent,
 	}
 	ops := map[string]resourceAdmissionOperation{entry.identity.key(): {
 		operation: req.Operation,
@@ -165,7 +172,11 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 	if err != nil {
 		return nil, err
 	}
-	if admCtx.wasSuperseded() || !s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, commitSHA) {
+	current, err = isCurrent(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if admCtx.wasSuperseded() || !current {
 		return nil, ErrCommittedManifestSuperseded
 	}
 	result := &admission.CommittedManifestResult{Kind: entry.identity.Kind, Namespace: entry.identity.Namespace, Name: entry.identity.Name, CommitSHA: commitSHA}
@@ -210,6 +221,30 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 	return result, nil
 }
 
+func (s *Server) isRepositoryAdmissionCurrent(ctx context.Context, admCtx AdmissionContext) (bool, error) {
+	if admCtx.repositoryCurrent != nil {
+		return admCtx.repositoryCurrent(ctx)
+	}
+	return s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA)
+}
+
+func (s *Server) isCommittedRepositoryCurrent(ctx context.Context, req admission.CommittedManifestRequest) (bool, error) {
+	reader, ok := s.git.(interface {
+		ReadCurrentUnchangedFile(context.Context, string, string, string, string) (bool, []byte, error)
+	})
+	if !ok {
+		return false, fmt.Errorf("git reader cannot prove current unchanged Repository history")
+	}
+	atAncestor, content, err := reader.ReadCurrentUnchangedFile(ctx, req.RepositoryID, req.Path, req.RefName, req.CommitSHA)
+	if err != nil {
+		if status.Code(err) == codes.Aborted || status.Code(err) == codes.NotFound {
+			return false, nil
+		}
+		return false, fmt.Errorf("prove committed Repository history: %w", err)
+	}
+	return atAncestor || bytes.Equal(content, req.Content), nil
+}
+
 // repairCommittedManifest retries only while this caller's commit remains the
 // ref tip.  It reads the authoritative tree again and derives the operation
 // from the current projection, preventing a stale caller from admitting a
@@ -219,7 +254,10 @@ func (s *Server) repairCommittedManifest(ctx context.Context, req admission.Comm
 		if ctx.Err() != nil {
 			return "budget_exhausted"
 		}
-		current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+		current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+		if err != nil {
+			return "read_failed"
+		}
 		if !ok || current != req.CommitSHA {
 			return "superseded"
 		}
@@ -242,7 +280,7 @@ func (s *Server) repairCommittedManifest(ctx context.Context, req admission.Comm
 		if err != nil || parsed == nil {
 			return "invalid_content"
 		}
-		entry, accepted, err := newParsedEntry(req.Path, parsed, body, req.Namespace)
+		entry, accepted, err := newParsedEntry(req.Path, parsed, body, req.Namespace, content)
 		if err != nil || !accepted {
 			return "identity_mismatch"
 		}
@@ -252,7 +290,7 @@ func (s *Server) repairCommittedManifest(ctx context.Context, req admission.Comm
 		if originalErr != nil || original == nil {
 			return "identity_mismatch"
 		}
-		originalEntry, originalAccepted, identityErr := newParsedEntry(req.Path, original, originalBody, req.Namespace)
+		originalEntry, originalAccepted, identityErr := newParsedEntry(req.Path, original, originalBody, req.Namespace, req.Content)
 		if identityErr != nil || !originalAccepted || originalEntry.identity != entry.identity {
 			return "identity_mismatch"
 		}
@@ -334,7 +372,10 @@ func errorText(err error) string {
 }
 
 func (s *Server) admitCommittedInfrastructureDeletion(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	if err != nil {
+		return nil, err
+	}
 	if !ok || current != req.CommitSHA {
 		return nil, ErrCommittedManifestSuperseded
 	}
@@ -385,7 +426,10 @@ func (s *Server) admitCommittedProductDeletion(ctx context.Context, req admissio
 	if req.Kind != "Product" || req.Name == "" {
 		return nil, fmt.Errorf("committed deletion requires a Product identity")
 	}
-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	if err != nil {
+		return nil, err
+	}
 	if !ok || current != req.CommitSHA {
 		return nil, ErrCommittedManifestSuperseded
 	}
@@ -413,7 +457,10 @@ func (s *Server) admitCommittedCategoryDeletion(ctx context.Context, req admissi
 	if req.Name == "" {
 		return nil, fmt.Errorf("committed deletion requires a CategoryTaxonomy name")
 	}
-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	if err != nil {
+		return nil, err
+	}
 	if !ok || current != req.CommitSHA {
 		return nil, ErrCommittedManifestSuperseded
 	}

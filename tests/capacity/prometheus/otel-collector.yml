@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 GitStore contributors
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 128
+    spike_limit_mib: 32
+  batch:
+    timeout: 1s
+    send_batch_size: 256
+    send_batch_max_size: 512
+exporters:
+  otlphttp/traces:
+    endpoint: http://capacity-tempo:4318
+    timeout: 3s
+    sending_queue:
+      queue_size: 128
+      num_consumers: 2
+    retry_on_failure:
+      max_elapsed_time: 30s
+  otlphttp/logs:
+    endpoint: http://capacity-loki:3100/otlp
+    timeout: 3s
+    sending_queue:
+      queue_size: 128
+      num_consumers: 2
+    retry_on_failure:
+      max_elapsed_time: 30s
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+service:
+  extensions: [health_check]
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/traces]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/logs]

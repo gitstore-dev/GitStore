@@ -8,11 +8,276 @@ make capacity TARGET=api PROFILE=readiness MODE=diagnostic \
   CAPACITY_BASE_URL=http://localhost:4000
 ```
 
-Valid target/profile pairs are `api/readiness`, `namespace/admission`,
+Valid target/profile pairs are `api/readiness`, `api/authorization`, `namespace/admission`,
 `namespace/validation`, `namespace/watch`, `namespace/recovery`,
 `repository/lifecycle`, and `scylla/soak`. Admission is deployed k6 load; validation is the in-process
 two-replica soak. `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
 The dispatcher is the only public capacity entry point.
+
+## Local telemetry and live profiling
+
+`CAPACITY_OBSERVABILITY=full` extends the existing Prometheus selector with an
+OTLP HTTP collector, Tempo and Loki in `compose.capacity.yml`. Core processes
+must already have their typed telemetry configuration enabled; collector startup
+does not restart or reconfigure them. On the capacity network, use
+`CAPACITY_OTLP_ENDPOINT=http://capacity-otel-collector:4318` and optionally
+`CAPACITY_GIT_METRICS_ADDR=0.0.0.0:50052` before controlled process replacement.
+Set `CAPACITY_PROMETHEUS_GIT_TARGETS=capacity-git-service:50052` to scrape native
+RPC, read, blocking-job and Tokio queue/task metrics. Trace sampling defaults to
+0.05; `CAPACITY_TRACE_SAMPLE_RATIO` changes the existing typed sampling setting.
+Native RPC completion metrics use fixed method/status labels, retain streaming
+frames and trailers, and finish on final status or transport cancellation.
+Full native exports require counter and histogram increments during the run;
+historical positive values alone cannot prove live instrumentation. Exports
+include method latency and completion/non-OK status queries. `AlreadyExists`
+is an expected provisioning result, not evidence of lost workload.
+Cancellation does not mean an owned blocking job has drained; retain its
+separate active/pending observations.
+
+File workers seed their exact assigned paths once, then use one path-scoped
+Git commit command for local preparation. Unoffered staged paths are excluded.
+Preparation remains inside offered-to-ACK and worker-occupation measurements;
+real authenticated pushes and verification through both APIs are unchanged.
+
+Collectors expose loopback-only host ports and have fixed memory/CPU, ingestion,
+queue and retention bounds. `CAPACITY_OBSERVABILITY_KEEP=1` keeps them running
+for later queries; cleanup otherwise removes their containers but retains named
+data volumes. Tempo's Go memory limit reserves headroom inside its unchanged
+384 MiB container limit. Full exports include native/collector histories, bounded
+trace details restricted to current-run storage blocks, and selected phase logs.
+Missing stores/targets, empty results, failed
+requests and export-limit truncation explicitly fail collection. Failed artifacts
+remain diagnostic evidence, not a successful capacity gate.
+Collection allows 15 seconds for SDK/collector batches and idle-trace indexing
+after the workload; this settling interval is not offered load or a latency sample.
+
+For an owned Repository workload diagnostic, enable the API loopback profiler
+with `CAPACITY_API_PROFILE_ADDR=127.0.0.1:6060`, then run with
+`CAPACITY_PROFILING=go CAPACITY_PROFILE_SECONDS=30`. Captures begin at actual
+offered load after fixture preparation/stabilization and cover both verified API
+containers. The harness captures CPU, heap, allocations, block/mutex, goroutines
+and execution trace, with bounded durations and 32 MiB per artifact. Capture
+failures invalidate the diagnostic. Profiles are private binary runtime material;
+do not publish them raw. Profiling/sampling overhead makes these diagnostic
+runs unsuitable for unprofiled acceptance.
+
+API and Git telemetry accounting distinguishes admitted, exported, failed and
+truncated records. Both bound exported string log bodies to 4096 UTF-8 bytes.
+The live admitted/exported difference includes pending batches; only interpret
+loss after bounded flush/drain, subtracting records counted as failed exports.
+Native Rust attribute-value bounds are not equivalent to the API's attribute
+limits; do not infer complete payload-bound parity from the log-body limit.
+Exports retain API process start times and native Git telemetry counters.
+Account for process replacement and counter resets; raw final-minus-initial
+counter values can be negative or misleading around a rolling replacement.
+Preserve collector refused/send-failed
+series alongside traces. Native Rust runtime observations are not native CPU
+samples: record `perf`/symbols/permissions availability explicitly and never
+silently elevate privileges. See [configuration](../../docs/configuration.md#telemetry-and-api-profiling)
+for typed settings and listener restrictions.
+
+## Authorization evaluator diagnostics
+
+`make capacity TARGET=api PROFILE=authorization MODE=diagnostic` runs the
+maximum policy fixture (200 roles, 1,000 bindings, 2,000 rules and 50 overlapping
+groups). It samples each named allow/deny case independently at concurrency
+1, 8 and 32, with 60 seconds of warm-up and 10 minutes of measurement each.
+The subsequent 30-minute reload soak uses 32 decision workers, alternates two
+valid policies and rejects malformed, legacy-version and oversized policies.
+Decisions must match a complete published snapshot; a retained old snapshot
+must remain unchanged. Retained heap is measured after GC with the same
+retained policy inputs and snapshots on both sides.
+
+Evidence includes named latency histograms and runtime/policy dimensions,
+reload counts, semantic errors and heap measurements, and an evaluator
+call-graph audit that rejects unreviewed function calls and file/datastore/network
+dependencies. The audit explicitly permits the existing decision timestamp
+clock read; it is a source dependency proof, not a syscall trace.
+`AUTHZ_CAPACITY_WARMUP`, `AUTHZ_CAPACITY_DURATION` and
+`AUTHZ_CAPACITY_RELOAD_DURATION` may shorten diagnostics only.
+Diagnostic success never establishes acceptance. Alpha/production require a
+clean unchanged verifier revision and runtime/configuration manifests. Every
+case needs at least 1,000 samples and p99 below 1ms; shortened durations,
+missing artifacts, inconsistent digests, incomplete reload accounting and
+post-GC heap above 110% fail the gate. The environment manifest runtime,
+architecture and CPU count must match the observed evaluator process.
+Evaluator measurements do not replace deployed readiness, replica semantics
+or lifecycle gates.
+
+## Common resource and evidence contract
+
+Every profile uses the same accounting stages: scheduled offer, queue admission,
+execution attempt, authoritative acknowledgement, and per-replica projection
+visibility. Report these separately; stage failures can overlap and must not be
+summed as distinct failed jobs. A successful command, empty error log, page-size
+limit or fixed shard count is not capacity evidence.
+
+The File component records queue wait, local manifest/commit preparation, Git
+HTTP push and per-batch projection visibility as separate sampled latency
+stages. Git HTTP includes server admission; it does not isolate admission time.
+Its scheduled offers, queue admissions and execution attempts are explicit
+counters. Fixed failure classes distinguish local Git, non-fast-forward,
+authentication, quota, remote rejection, transport, deadline and output-limit
+failures without retaining response bodies, credentials or command output.
+Projection and credential-resolution failures remain separate overlapping
+observations, not additional failed jobs.
+
+Live File projection checks share a bounded verifier rather than independently
+polling from every push worker. At most 32 batches wait at once; every 100 ms it
+combines their distinct File IDs into one `nodes` query per API, capped at 250
+IDs. The two replica queries run concurrently, and verification waits for both
+responses. Every File still has to match its own acknowledged sequence and identity
+on both replicas within the original request deadline. Missing peer data stays
+pending; HTTP quota, authorization, malformed response and identity errors fail
+explicitly. This changes neither ingress quotas nor visibility thresholds.
+
+`projection_read` records each push's cumulative time in those two-replica
+read rounds; `projection_read_peak` records its slowest individual round.
+Each stage has one sample per acknowledged push. Peak-read percentiles must
+not exceed the corresponding cumulative-read percentiles. Neither stage is
+disjoint from projection visibility, so do not add their latencies together or
+interpret cumulative read time as one HTTP request's latency.
+
+File evidence also retains matched `timelines` for the first 2,048 scheduled
+offers, with the bound declared as `timelineLimit`. Each row identifies its
+sequence, burst, worker and offer time, and records queue wait, offered-to-ACK
+time, worker occupancy and the same push's preparation, HTTP and verification
+times. Worker occupancy excludes queue wait but includes complete two-replica
+verification; ACK excludes its own later verification. Use matched rows to
+investigate publisher occupancy rather than subtracting unrelated percentiles.
+These rows are a bounded prefix, not complete production-run timing evidence.
+
+Repository observations separate scheduled offers, acknowledgements, failures,
+queue drops, HTTP attempts and retries. Latency stages distinguish queue wait,
+the per-resource client lock, the complete mutation (including retry delays),
+and each HTTP attempt. The scheduler accounts for every declared interval
+through the nominal end, catches up rather than losing ticker notifications,
+and records offers delayed by at least one interval. A 30-second drain deadline
+cancels remaining requests and fails the run. Only transient HTTP transport,
+quota and version-conflict outcomes retry within the existing request deadline;
+malformed or unconfirmed success payloads, authorization/policy failures and
+superseded commits fail explicitly. Initial Namespace provisioning waits for
+current-generation admission, system-repository and ready conditions on both
+API replicas rather than retrying arbitrary Repository creation failures.
+The created Repository pool must then expose current-generation admission,
+storage-provisioned and ready conditions on both replicas before File authoring.
+
+For controlled workload comparisons, use the existing lifecycle dispatcher:
+
+```bash
+make capacity TARGET=repository PROFILE=lifecycle MODE=diagnostic \
+  REPOSITORY_CAPACITY_WORKLOAD=file \
+  REPOSITORY_CAPACITY_SKIP_REPLACEMENT=1 \
+  REPOSITORY_CAPACITY_DURATION=2m
+```
+
+Set the selector to `repository`, `file` or `combined`. All three seed the
+same Repository/File pools and initial controller work before stabilization,
+then run only the selected offered load. They require a provisioned owned
+deployment, run-matched private fixture directory and the existing endpoint,
+token and Git URL settings. The runner matches endpoint process identities
+against the owned containers and refuses concurrent runs against that fixture.
+Keep the full secret-scenario flag off: comparisons do not execute its scheduled
+faults, dataset acceptance, replay or replacement gates, and cannot produce
+alpha/production acceptance. They retain component File evidence and five-process
+before/load-end/stabilized resource samples in `workload-comparison.json`.
+Run comparisons on equally provisioned fresh fixtures; the seed counts do not
+establish the cardinality of an existing deployment.
+
+Owned diagnostic stack lifecycle is also available through this command family:
+`make capacity TARGET=repository PROFILE=lifecycle MODE=diagnostic
+CAPACITY_STACK_ACTION=up` (or `wait`, `token`, `verify-owned`, `down`, `config`).
+`resume` only completes a verified owned secret startup interrupted before
+private fixture provisioning; it does not overwrite existing fixture records.
+Keep the project, state directory, run ID, private fixture and port/keyspace
+settings consistent across actions. Startup refuses existing project data;
+shutdown verifies ownership and retains volumes. Provisioning the existing
+secret fixtures requires its explicit confirmation settings; selecting a
+diagnostic workload does not itself authorize scheduled faults.
+
+The common correctness matrix covers Namespace, Repository, Product,
+ProductVariant, CategoryTaxonomy, Collection, File and ServiceAccount wherever
+each kind supports an operation. Equivalent operations must agree on UID-bound
+incarnation checks, atomic expected-resource-version updates, generation changes,
+status/finalizer preservation, authorization outcomes, projection readiness and
+repair. Cluster scope, Git authoring and supported controller operations remain
+intentional kind-specific differences. Do not add unsupported operations solely
+to make the matrix rectangular.
+
+Record resolved fixture cardinality, workload mix, payload bytes, rates, queue
+and worker bounds, warm/cold status, policy/fixture digests, runtime allocation,
+image revision and distinct process identities before load. Expected denial
+probes pass only on their exact declared outcome; transport or unrelated domain
+errors are not expected denials. Missing observations, unsampled cases, unfinished
+faults, dropped/late/undrained work and lost acknowledged projections cannot pass.
+Keep diagnostic evidence distinct from alpha/production acceptance.
+
+API readiness now runs the unchanged health/readiness bounds independently on
+every `CAPACITY_API_ENDPOINTS` entry. Alpha/production use 10 iterations/s per
+API for at least 10 minutes with 10 preallocated / 100 maximum VUs per API.
+Supply `CAPACITY_TOKEN_FILE` for an identity allowed to list Namespaces. Each
+iteration performs one bounded Namespace list with that credential and one
+expected denial, requiring the exact response shape/error class. The denied
+identity is anonymous unless `CAPACITY_DENIED_TOKEN_FILE` selects a separate
+valid, unprivileged identity; `CAPACITY_DENIAL_CODE` defaults to `FORBIDDEN`.
+Expected denials are measured separately from readiness HTTP failures.
+Both APIs must expose matching loaded policy/provider/catalog metadata, unchanged
+throughout the run. The existing shared evidence validator checks the sanitized
+`authorization-probes.json`, every replica's complete allow/deny accounting,
+duration and verified preflight identity. Missing or unsampled probes cannot
+pass a gate. A diagnostic without a token still runs health/readiness only and
+does not prove authorization. These baseline probes do not substitute for the
+full domain, ownership, ServiceAccount or fault matrix.
+The runner rejects HTTP debug logging and incompatible k6 summary settings
+instead of risking credential disclosure or unverifiable evidence.
+Domain verifiers read the flat metrics written by native k6 `--summary-export`:
+counters expose `count`, rates expose `value`, and trends expose percentile keys.
+The runner explicitly exports p95, p99 and trend sample counts on every k6 path.
+The Namespace admission verifier requires sampled check and failure-rate
+observations and one visibility sample per admitted Namespace; missing metrics
+cannot be treated as successful checks.
+Namespace admission and watch workloads create generated `ORGANIZATION`
+namespaces and preserve that tier during updates. `USER` namespaces are bound
+to a human's identity and cannot serve as a pool of generated workload names.
+
+Scylla query evidence must cover real datastore access paths, partition and
+clustering restrictions, shard merging and hydration, read/write amplification,
+tombstones, and projection repair under sparse, hot/skewed and churning fixtures.
+Inspect actual partitions rather than interpreting an empty
+`system.large_partitions` report as proof of small partitions. Preserve the
+250-row connection maximum and existing workload-specific latency limits.
+Record approved projection-specific ceilings before declaring acceptance.
+
+The managed capacity stack uses project-scoped container names. Existing
+container names are not proof of ownership or disposable data: inspect writable
+layers, mounts and keyspaces before cleanup. Retain run volumes and keyspaces
+when stopping a stack; deleting identified unused data requires explicit
+approval. No legacy compatibility or old-binary rollout is part of these
+actively developed alpha workloads.
+
+Managed startup writes a private `owned-stack.json` containing project, run,
+revision, keyspace and host ports before creating services. Each container carries
+the same run label. Wait, token, alpha, replacement and shutdown actions verify
+the manifest; lifecycle actions reject any container carrying a different run.
+Keep the original state directory and settings for later lifecycle calls.
+The manifest and volumes are retained after shutdown; a fresh run needs a fresh
+state directory and project. A missing manifest is not permission to operate on
+similarly named containers.
+
+Scylla soak page checks now call the real datastore: global and namespace
+Repository pages include bucket reads and authoritative hydration; Product pages
+read their authoritative namespace table. Forward/backward windows must agree.
+Per-page query evidence reports attempts, returned driver rows, retries, tables
+and latency without bound values. These are not SSTable/tombstone counters or
+partition-size proof, and small regression fixtures do not certify capacity.
+
+Datastore container snapshots capture host/container epoch seconds before
+and after load. They reject clock disagreement outside the one-second precision
+of `date`, backward host time, or samples taking longer than one second.
+This is a conservative environment validity guard: skew can invalidate CDC
+timestamps and last-write-wins results. It does not alter clocks or establish
+an application latency guarantee. Correct the environment before rerunning;
+do not treat skewed-run failures as clean query-performance evidence.
 
 Spec 063's `REPOSITORY_CAPACITY_SECRET_SCENARIO=1` selects the connected File-push,
 owned-record fault, resource and evidence collector. It requires explicit
@@ -146,6 +411,12 @@ replacement logs, process-identified Go metrics and singleton Git cgroup-v2 CPU/
 proc RSS counters. CPU accounting splits at replacement; both RSS segments use
 the original warmed baseline. Source revision/state must remain unchanged through
 finalization. Secret artifacts cannot enter the old Repository-only path.
+
+Internal owned-container metrics probes retain the same 8 MiB response bound as
+HTTP metrics scrapes, separately from the 128 KiB Git/other command-output bound.
+Overflow fails explicitly before a truncated payload can establish process
+identity. Command failures report sanitized exit/start categories without
+including arguments or captured output; caller cancellation remains distinct.
 
 For an explicitly owned deployment, use the existing stack lifecycle with the
 scenario flag and `CHAOS_CONFIRM=1`. It stages per-controller read-only provider/
@@ -395,6 +666,15 @@ range samples for controller identity, credentials, reconciliation, recovery,
 stall, queue and resource metrics to `prometheus/controller-series.json`,
 including on a failed gate, before the ephemeral scraper is removed. Missing
 controller history fails export rather than generating zero-valued evidence.
+
+Controller snapshots also retain per-kind
+`gitstore_controller_dependency_deferrals_total` counters, separated into
+`api`, `credentials` and `rate_limit` causes. These are deferral attempts, not
+unique pending items or durable acknowledgements. An API-outage recovery claim
+needs actual deferrals, zero new quarantine and subsequent successful work;
+endpoint readiness alone is insufficient. Compare counter changes only within
+the same recorded process identity, and retain restart boundaries in the time
+series. An absent lazy counter series provides no positive deferral evidence.
 
 Secret-scenario setup waits up to ten minutes for healthy, authenticated
 controllers to finish list/watch recovery before collecting the baseline.

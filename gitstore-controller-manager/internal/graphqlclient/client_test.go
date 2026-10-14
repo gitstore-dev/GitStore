@@ -90,6 +90,99 @@ func TestClientAuthenticationRetryIsBounded(t *testing.T) {
 	require.EqualValues(t, 2, calls.Load())
 }
 
+func TestAPIOutagesAreClassifiedWithoutMutationReplay(t *testing.T) {
+	for _, status := range []int{http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout,
+		http.StatusInternalServerError, http.StatusUnauthorized, http.StatusForbidden, http.StatusBadRequest} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, "private-response-marker")
+			}))
+			defer server.Close()
+			client := graphqlclient.New(server.URL, graphqlclient.NewStaticToken("test-token"))
+			err := client.Mutate(t.Context(), "mutation { update }", nil, nil)
+			require.Error(t, err)
+			unavailable := status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+			require.Equal(t, unavailable, errors.Is(err, types.ErrAPIUnavailable))
+			require.EqualValues(t, 1, calls.Load(), "outages must not automatically replay ambiguous mutations")
+			if unavailable {
+				require.NotContains(t, err.Error(), "private-response-marker")
+				ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+				defer cancel()
+				require.ErrorIs(t, client.Query(ctx, "query { node { id } }", nil, nil), context.DeadlineExceeded)
+				require.EqualValues(t, 1, calls.Load(), "shared outage cooldown must bound follow-up work")
+			}
+		})
+	}
+}
+
+func TestAPITransportOutageAndCancellationClassification(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		connection, _, err := w.(http.Hijacker).Hijack()
+		require.NoError(t, err)
+		require.NoError(t, connection.Close())
+	}))
+	defer server.Close()
+	client := graphqlclient.New(server.URL, graphqlclient.NewStaticToken("test-token"))
+	require.ErrorIs(t, client.Mutate(t.Context(), "mutation { update }", nil, nil), types.ErrAPIUnavailable)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := client.Query(ctx, "query { node { id } }", nil, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotErrorIs(t, err, types.ErrAPIUnavailable)
+
+	server.Close()
+	client = graphqlclient.New(server.URL, graphqlclient.NewStaticToken("test-token"))
+	err = client.Query(t.Context(), "query { node { id } }", nil, nil)
+	require.ErrorIs(t, err, types.ErrAPIUnavailable)
+	var networkError *net.OpError
+	require.ErrorAs(t, err, &networkError, "transport cause must survive classification")
+
+	client = graphqlclient.New("unsupported://invalid", graphqlclient.NewStaticToken("test-token"))
+	err = client.Query(t.Context(), "query { node { id } }", nil, nil)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, types.ErrAPIUnavailable, "invalid client configuration must not defer forever")
+
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("untrusted TLS certificate must fail before the request reaches the API")
+	}))
+	defer tlsServer.Close()
+	client = graphqlclient.New(tlsServer.URL, graphqlclient.NewStaticToken("test-token"))
+	err = client.Query(t.Context(), "query { node { id } }", nil, nil)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, types.ErrAPIUnavailable, "invalid TLS trust configuration must not defer forever")
+}
+
+func TestAPIResponseTransportFailureIsNotMalformedJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		truncated bool
+	}{
+		{"invalid-json", `{"data": broken}`, false},
+		{"incomplete-json", `{"data":`, false},
+		{"empty-json", "", false},
+		{"truncated-transport", `{"data":`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.truncated {
+					w.Header().Set("Content-Length", "100")
+				}
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			client := graphqlclient.New(server.URL, graphqlclient.NewStaticToken("test-token"))
+			err := client.Query(t.Context(), "query { node { id } }", nil, nil)
+			require.Error(t, err)
+			require.Equal(t, tc.truncated, errors.Is(err, types.ErrAPIUnavailable),
+				"only the HTTP reader's transport failure, not a JSON decoder EOF, is dependency unavailability")
+		})
+	}
+}
+
 func TestClientWebsocketRejectInvalidatesForReconnect(t *testing.T) {
 	for _, code := range []int{4401, 4403} {
 		t.Run(fmt.Sprint(code), func(t *testing.T) {

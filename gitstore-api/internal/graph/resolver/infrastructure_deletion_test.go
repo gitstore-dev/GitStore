@@ -14,6 +14,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -51,6 +52,43 @@ func TestRepositoryDeletionRemovesAuthoringManifest(t *testing.T) {
 }
 
 type infrastructureAdmitFunc func(context.Context, admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error)
+
+func TestRepositoryCommittedMutationPreservesAdmissionEnvelope(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		failure error
+		code    admission.Code
+		reason  string
+	}{
+		{"version-conflict", admission.NewError(admission.CodeConflict, "RESOURCE_VERSION_CONFLICT", "snapshot changed"), admission.CodeConflict, "RESOURCE_VERSION_CONFLICT"},
+		{"superseded", admission.ErrCommittedManifestSuperseded, admission.CodeConflict, "SUPERSEDED"},
+		{"rejection", admission.NewError(admission.CodeFailedPrecondition, "REPOSITORY_TERMINATING", "deletion pending"), admission.CodeFailedPrecondition, "REPOSITORY_TERMINATING"},
+		{"unexpected-admission-failure", errors.New("admission unavailable"), admission.CodeAdmissionRejected, "ADMISSION_FAILED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newCategoryLifecycleEnv(t)
+			e.service.committedAdmitter = infrastructureAdmitFunc(func(context.Context, admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+				return nil, tc.failure
+			})
+			_, err := e.service.CommitRepositoryManifest(t.Context(), repositoryAPIVersion, repositoryKind,
+				&model.ObjectMetaInput{Name: "envelope", Namespace: lifecycleNamespace}, &model.RepositorySpecInput{}, "alice", true)
+			var graphErr *gqlerror.Error
+			require.ErrorAs(t, err, &graphErr)
+			require.Equal(t, string(tc.code), graphErr.Extensions["code"])
+			diagnostics, ok := graphErr.Extensions["diagnostics"].([]map[string]any)
+			require.True(t, ok)
+			require.Len(t, diagnostics, 1)
+			require.Equal(t, tc.reason, diagnostics[0]["reason"])
+			if tc.code == admission.CodeAdmissionRejected {
+				require.Equal(t, string(admission.PhasePostReceive), graphErr.Extensions["phase"])
+				require.NotEmpty(t, graphErr.Extensions["commit"])
+			} else {
+				require.NotContains(t, graphErr.Extensions, "phase")
+				require.NotContains(t, graphErr.Extensions, "commit")
+			}
+		})
+	}
+}
 
 func (f infrastructureAdmitFunc) AdmitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
 	return f(ctx, req)

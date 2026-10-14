@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -14,6 +15,129 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFileSnapshotsPreservePositionsFreshnessAndIsolation(t *testing.T) {
+	store, err := New()
+	require.NoError(t, err)
+	defer store.Close()
+	first := &datastore.File{
+		UID: "00000000-0000-0000-0000-000000000151", Namespace: "first", Name: "file",
+		ResourceVersion: "1", Labels: map[string]string{"original": "value"},
+		Spec: []byte(`{"value":1}`), Finalizers: []string{"original"},
+	}
+	second := &datastore.File{UID: "00000000-0000-0000-0000-000000000152", Namespace: "second", Name: "file", ResourceVersion: "1"}
+	require.NoError(t, store.CreateFile(t.Context(), first))
+	require.NoError(t, store.CreateFile(t.Context(), second))
+	ids := []string{second.UID, first.UID, "absent", first.UID}
+	files, err := store.GetFileSnapshots(t.Context(), ids)
+	require.NoError(t, err)
+	require.Len(t, files, len(ids))
+	require.Equal(t, second.UID, files[0].UID)
+	require.Nil(t, files[2])
+	files[1].Labels["original"] = "changed"
+	files[1].Spec[0] = '!'
+	files[1].Finalizers[0] = "changed"
+	require.Equal(t, "value", files[3].Labels["original"])
+	require.JSONEq(t, `{"value":1}`, string(files[3].Spec))
+	require.Equal(t, []string{"original"}, files[3].Finalizers)
+	first.ResourceVersion = "2"
+	first.Body = "fresh"
+	require.NoError(t, store.UpdateFile(t.Context(), first, "1"))
+	files, err = store.GetFileSnapshots(t.Context(), ids)
+	require.NoError(t, err)
+	require.Equal(t, "fresh", files[1].Body)
+	require.Equal(t, "2", files[3].ResourceVersion)
+	require.NoError(t, store.DeleteFile(t.Context(), first.UID))
+	first.UID = "00000000-0000-0000-0000-000000000153"
+	require.NoError(t, store.CreateFile(t.Context(), first))
+	files, err = store.GetFileSnapshots(t.Context(), append(ids, first.UID))
+	require.NoError(t, err)
+	require.Nil(t, files[1])
+	require.Nil(t, files[3])
+	require.Equal(t, first.UID, files[4].UID)
+}
+
+func TestFileSnapshotsBoundAndCancellation(t *testing.T) {
+	store, err := New()
+	require.NoError(t, err)
+	defer store.Close()
+	ids := make([]string, datastore.FileSnapshotBatchLimit)
+	for i := range ids {
+		file := &datastore.File{UID: fmt.Sprintf("00000000-0000-0000-0000-%012d", i), Namespace: "bound", Name: fmt.Sprint(i)}
+		require.NoError(t, store.CreateFile(t.Context(), file))
+		ids[i] = file.UID
+	}
+	files, err := store.GetFileSnapshots(t.Context(), ids)
+	require.NoError(t, err)
+	require.Len(t, files, datastore.FileSnapshotBatchLimit)
+	for i, file := range files {
+		require.Equal(t, ids[i], file.UID)
+	}
+	files, err = store.GetFileSnapshots(t.Context(), append(ids, "extra"))
+	require.ErrorIs(t, err, datastore.ErrInvalidArgument)
+	require.Nil(t, files)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	files, err = store.GetFileSnapshots(ctx, ids)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, files)
+}
+
+func TestFileNameSnapshotsPreserveBoundsFreshnessAndIsolation(t *testing.T) {
+	store, err := New()
+	require.NoError(t, err)
+	defer store.Close()
+	first := &datastore.File{
+		UID: "00000000-0000-0000-0000-000000000161", Namespace: "first", Name: "file",
+		ResourceVersion: "1", Labels: map[string]string{"original": "value"},
+		Spec: []byte(`{"value":1}`), Finalizers: []string{"original"},
+	}
+	second := &datastore.File{UID: "00000000-0000-0000-0000-000000000162", Namespace: "second", Name: "file"}
+	require.NoError(t, store.CreateFile(t.Context(), first))
+	require.NoError(t, store.CreateFile(t.Context(), second))
+	names := []string{"absent", first.Name, first.Name, "other"}
+	files, err := store.GetFileSnapshotsByName(t.Context(), first.Namespace, names)
+	require.NoError(t, err)
+	require.Len(t, files, datastore.FileNameSnapshotBatchLimit)
+	require.Nil(t, files[0])
+	require.Nil(t, files[3])
+	require.Equal(t, first.UID, files[1].UID)
+	files[1].Labels["original"], files[1].Spec[0], files[1].Finalizers[0] = "changed", '!', "changed"
+	require.Equal(t, "value", files[2].Labels["original"])
+	require.JSONEq(t, `{"value":1}`, string(files[2].Spec))
+	require.Equal(t, []string{"original"}, files[2].Finalizers)
+	first.ResourceVersion, first.Body = "2", "fresh"
+	require.NoError(t, store.UpdateFile(t.Context(), first, "1"))
+	files, err = store.GetFileSnapshotsByName(t.Context(), first.Namespace, names)
+	require.NoError(t, err)
+	require.Equal(t, "fresh", files[1].Body)
+	require.NoError(t, store.DeleteFile(t.Context(), first.UID))
+	first.UID = "00000000-0000-0000-0000-000000000163"
+	require.NoError(t, store.CreateFile(t.Context(), first))
+	files, err = store.GetFileSnapshotsByName(t.Context(), first.Namespace, names)
+	require.NoError(t, err)
+	require.Equal(t, first.UID, files[1].UID)
+	require.Equal(t, first.UID, files[2].UID)
+	files, err = store.GetFileSnapshotsByName(t.Context(), second.Namespace, []string{second.Name})
+	require.NoError(t, err)
+	require.Equal(t, second.UID, files[0].UID)
+	for _, input := range []struct {
+		namespace string
+		names     []string
+	}{{first.Namespace, append(names, "extra")}, {"", names}, {first.Namespace, []string{""}}} {
+		files, err = store.GetFileSnapshotsByName(t.Context(), input.namespace, input.names)
+		require.ErrorIs(t, err, datastore.ErrInvalidArgument)
+		require.Nil(t, files)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	files, err = store.GetFileSnapshotsByName(ctx, first.Namespace, names)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, files)
+	files, err = store.GetFileSnapshotsByName(t.Context(), first.Namespace, nil)
+	require.NoError(t, err)
+	require.Empty(t, files)
+}
 
 func TestFileCRUD(t *testing.T) {
 	store, err := New()
@@ -135,7 +259,7 @@ func TestFileJournalRecordsOnlyCommittedWritesInVersionOrder(t *testing.T) {
 		ResourceVersion: "1", Labels: map[string]string{"team": "a"}}
 	require.NoError(t, store.CreateFile(t.Context(), file))
 	require.ErrorIs(t, store.CreateFile(t.Context(), file), datastore.ErrAlreadyExists)
-	require.NoError(t, store.UpdateFile(t.Context(), file, "1"), "no-op must not emit a duplicate")
+	require.ErrorIs(t, store.UpdateFile(t.Context(), file, "1"), datastore.ErrConflict, "same-version replacement must not emit a duplicate")
 	file.Labels["team"] = "b"
 	file.ResourceVersion = "2"
 	require.NoError(t, store.UpdateFile(t.Context(), file, "1"))

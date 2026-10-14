@@ -27,6 +27,13 @@ func NewDecisionLogger(inner AuthZProvider, logger *zap.Logger) *DecisionLogger 
 // Name delegates to the wrapped provider.
 func (d *DecisionLogger) Name() string { return d.inner.Name() }
 
+func (d *DecisionLogger) AuthorizationSnapshot() (AuthorizationSnapshot, bool) {
+	if provider, ok := d.inner.(AuthorizationSnapshotProvider); ok {
+		return provider.AuthorizationSnapshot()
+	}
+	return AuthorizationSnapshot{}, false
+}
+
 // Authorize calls the wrapped provider and logs the decision.
 func (d *DecisionLogger) Authorize(ctx context.Context, p *Principal, action string, res ResourceContext) (Decision, error) {
 	start := time.Now()

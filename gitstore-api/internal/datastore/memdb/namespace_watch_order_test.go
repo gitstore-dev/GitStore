@@ -117,9 +117,7 @@ func TestRepositoryMutationsPublishCommittedResourceWatchEvents(t *testing.T) {
 	afterRejectedWrite, err := journal.ReadAfter(ctx, datastore.ResourceWatchCursor{}, 10)
 	require.NoError(t, err)
 	require.Len(t, afterRejectedWrite, len(beforeRejectedWrite), "rejected optimistic write must not publish")
-	// A repeated persisted value is an explicit no-op: it cannot manufacture a
-	// synthetic lifecycle event merely because an API caller retried it.
-	require.NoError(t, store.UpdateRepository(ctx, repository, "4"))
+	require.ErrorIs(t, store.UpdateRepository(ctx, repository, "4"), datastore.ErrConflict)
 	afterNoopWrite, err := journal.ReadAfter(ctx, datastore.ResourceWatchCursor{}, 10)
 	require.NoError(t, err)
 	require.Len(t, afterNoopWrite, len(beforeRejectedWrite), "no-op write must not publish")

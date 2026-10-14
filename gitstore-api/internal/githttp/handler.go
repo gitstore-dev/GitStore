@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
@@ -18,6 +19,11 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -34,16 +40,152 @@ type SmartHttpDeps struct {
 	Logger    *zap.Logger
 	Ids       apiruntime.IDGenerator
 	Registry  *auth.ProviderRegistry
+	Tracing   bool
 }
 
 // handler holds the dependencies for Git smart HTTP request handlers.
 type handler struct {
-	git GitClient
-	log *zap.Logger
+	git     GitClient
+	log     *zap.Logger
+	metrics *prometheus.HistogramVec
+	tracer  trace.Tracer
 }
 
 func newHandler(git GitClient, log *zap.Logger) *handler {
-	return &handler{git: git, log: log}
+	return &handler{git: git, log: log, metrics: defaultGitHTTPStageMetrics}
+}
+
+type gitHTTPPhase uint8
+
+const (
+	gitHTTPAuthentication gitHTTPPhase = iota
+	gitHTTPResolution
+	gitHTTPAuthorization
+	gitHTTPPushContext
+	gitHTTPHandler
+	gitHTTPPhaseCount
+)
+
+const gitHTTPTimingKey = "gitHTTPRequestTiming"
+
+var defaultGitHTTPStageMetrics = newGitHTTPStageMetrics(prometheus.DefaultRegisterer)
+
+func newGitHTTPStageMetrics(reg prometheus.Registerer) *prometheus.HistogramVec {
+	metrics := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "gitstore",
+		Subsystem: "git_http",
+		Name:      "stage_duration_seconds",
+		Help:      "Git smart HTTP latency at attempted middleware boundaries and complete requests.",
+		Buckets:   []float64{.001, .005, .01, .025, .05, .1, .25, .5, .75, 1, 1.5, 2, 3, 5, 10, 30},
+	}, []string{"operation", "phase", "outcome"})
+	reg.MustRegister(metrics)
+	return metrics
+}
+
+type gitHTTPTiming struct {
+	phase     gitHTTPPhase
+	last      time.Time
+	durations [gitHTTPPhaseCount]time.Duration
+	attempted [gitHTTPPhaseCount]bool
+	root      trace.Span
+	active    trace.Span
+	tracer    trace.Tracer
+}
+
+func (t *gitHTTPTiming) advance(phase gitHTTPPhase, now time.Time) {
+	t.durations[t.phase] += now.Sub(t.last)
+	t.phase = phase
+	t.last = now
+	t.attempted[phase] = true
+}
+
+func (t *gitHTTPTiming) observe(metrics *prometheus.HistogramVec, operation string, status int, total time.Duration) {
+	outcome := "success"
+	if status >= 500 {
+		outcome = "server_error"
+	} else if status >= 400 {
+		outcome = "client_error"
+	}
+	phases := [gitHTTPPhaseCount]string{"authentication", "resolution", "authorization", "push_context", "handler"}
+	for phase, name := range phases {
+		if t.attempted[phase] {
+			metrics.WithLabelValues(operation, name, outcome).Observe(t.durations[phase].Seconds())
+		}
+	}
+	metrics.WithLabelValues(operation, "total", outcome).Observe(total.Seconds())
+}
+
+func gitHTTPTimedStage(phase gitHTTPPhase, next gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		timing := c.MustGet(gitHTTPTimingKey).(*gitHTTPTiming)
+		now := time.Now()
+		timing.advance(phase, now)
+		if timing.tracer != nil {
+			timing.active.End(trace.WithTimestamp(now))
+			phases := [gitHTTPPhaseCount]string{"authentication", "resolution", "authorization", "push_context", "handler"}
+			ctx := trace.ContextWithSpan(c.Request.Context(), timing.root)
+			ctx, span := timing.tracer.Start(ctx, "git.http."+phases[phase], trace.WithTimestamp(now))
+			timing.active = span
+			c.Request = c.Request.WithContext(ctx)
+		}
+		next(c)
+	}
+}
+
+func (h *handler) requestTiming(c *gin.Context) {
+	start := time.Now()
+	timing := &gitHTTPTiming{phase: gitHTTPAuthentication, last: start}
+	timing.attempted[gitHTTPAuthentication] = true
+	operation := gitHTTPOperation(c.FullPath())
+	if h.tracer != nil {
+		ctx := propagation.TraceContext{}.Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
+		ctx, timing.root = h.tracer.Start(ctx, "git.http."+operation,
+			trace.WithSpanKind(trace.SpanKindServer), trace.WithTimestamp(start),
+			trace.WithAttributes(attribute.String("git.operation", operation)))
+		ctx, timing.active = h.tracer.Start(ctx, "git.http.authentication", trace.WithTimestamp(start))
+		timing.tracer = h.tracer
+		c.Request = c.Request.WithContext(ctx)
+	}
+	c.Set(gitHTTPTimingKey, timing)
+	c.Next()
+	end := time.Now()
+	timing.advance(timing.phase, end)
+
+	log := h.log
+	if timing.root != nil {
+		timing.active.End(trace.WithTimestamp(end))
+		timing.root.SetAttributes(attribute.Int("http.response.status_code", c.Writer.Status()))
+		if c.Writer.Status() >= 400 {
+			timing.root.SetStatus(codes.Error, "HTTP request failed")
+		}
+		log = log.With(zap.String("trace_id", timing.root.SpanContext().TraceID().String()),
+			zap.String("span_id", timing.root.SpanContext().SpanID().String()))
+		defer timing.root.End(trace.WithTimestamp(end))
+	}
+	timing.observe(h.metrics, operation, c.Writer.Status(), end.Sub(start))
+	log.Info("git_http_request_timing",
+		zap.String("operation", operation),
+		zap.Int("status", c.Writer.Status()),
+		zap.Float64("authentication_ms", float64(timing.durations[gitHTTPAuthentication])/float64(time.Millisecond)),
+		zap.Float64("resolution_ms", float64(timing.durations[gitHTTPResolution])/float64(time.Millisecond)),
+		zap.Float64("authorization_ms", float64(timing.durations[gitHTTPAuthorization])/float64(time.Millisecond)),
+		zap.Float64("push_context_ms", float64(timing.durations[gitHTTPPushContext])/float64(time.Millisecond)),
+		zap.Float64("handler_ms", float64(timing.durations[gitHTTPHandler])/float64(time.Millisecond)),
+		zap.Float64("total_ms", float64(end.Sub(start))/float64(time.Millisecond)),
+	)
+}
+
+func gitHTTPOperation(path string) string {
+	switch path {
+	case "/:namespace/:repo/info/refs":
+		return "info_refs"
+	case "/:namespace/:repo/git-upload-pack":
+		return "upload_pack"
+	case "/:namespace/:repo/git-receive-pack":
+		return "receive_pack"
+	default:
+		return "other"
+	}
 }
 
 // gitPktLineError writes a Git pkt-line ERR response, logging any write failure.
@@ -163,6 +305,9 @@ func NewMux(deps SmartHttpDeps) http.Handler {
 		panic("githttp: datastore is required")
 	}
 	h := newHandler(deps.GitClient, deps.Logger)
+	if deps.Tracing {
+		h.tracer = otel.Tracer("gitstore/githttp")
+	}
 	r := gin.New()
 
 	requestIdMiddleware := middleware.NewRequestId(deps.Ids)
@@ -171,14 +316,18 @@ func NewMux(deps SmartHttpDeps) http.Handler {
 	authorizeMiddleware := security.NewAuthorizeWithStore(deps.Registry, deps.Store, deps.Logger)
 
 	r.Use(requestIdMiddleware.RequestIdInserter)
+	r.Use(h.requestTiming)
 	r.Use(authenticateMiddleware.BasicAuthenticator)
 
-	r.Use(RepoResolver(deps.Store, deps.Logger))
-	r.Use(authorizeMiddleware.GitHttpAuthorizer)
+	r.Use(gitHTTPTimedStage(gitHTTPResolution, RepoResolver(deps.Store, deps.Logger)))
+	r.Use(gitHTTPTimedStage(gitHTTPAuthorization, authorizeMiddleware.GitHttpAuthorizer))
 
-	r.GET("/:namespace/:repo/info/refs", h.infoRefsHandler)
-	r.POST("/:namespace/:repo/git-upload-pack", h.uploadPackHandler)
-	r.POST("/:namespace/:repo/git-receive-pack", authorizeMiddleware.PushContextInserter, h.receivePackHandler)
+	r.GET("/:namespace/:repo/info/refs", gitHTTPTimedStage(gitHTTPHandler, h.infoRefsHandler))
+	r.POST("/:namespace/:repo/git-upload-pack", gitHTTPTimedStage(gitHTTPHandler, h.uploadPackHandler))
+	r.POST("/:namespace/:repo/git-receive-pack",
+		gitHTTPTimedStage(gitHTTPPushContext, authorizeMiddleware.PushContextInserter),
+		gitHTTPTimedStage(gitHTTPHandler, h.receivePackHandler),
+	)
 
 	return r
 }

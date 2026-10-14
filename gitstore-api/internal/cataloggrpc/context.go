@@ -25,25 +25,30 @@ func validationRefs(trees []*catalogv1.ResourceValidationTree) []*catalogv1.Rece
 	return refs
 }
 
-func (s *Server) authorizeValidationTrees(ctx context.Context, repositoryID string, trees []*catalogv1.ResourceValidationTree) error {
+func (s *Server) authorizeValidationTrees(ctx context.Context, repositoryID string, trees []*catalogv1.ResourceValidationTree) (hasNamespaces bool, err error) {
 	namespace, err := s.resolveNamespaceIdentifier(ctx, repositoryID)
 	if err != nil {
-		return status.Error(codes.Unavailable, "repository authorization facts unavailable")
+		return false, status.Error(codes.Unavailable, "repository authorization facts unavailable")
 	}
 	for _, tree := range trees {
 		oldEntries, err := s.parseDeletionTreeEntries(tree.GetOldBlobs(), namespace)
 		if err != nil {
-			return status.Error(codes.InvalidArgument, "invalid old resource tree")
+			return false, status.Error(codes.InvalidArgument, "invalid old resource tree")
 		}
 		newEntries, err := s.parseDeletionTreeEntries(tree.GetProposedBlobs(), namespace)
 		if err != nil {
-			return status.Error(codes.InvalidArgument, "invalid proposed resource tree")
+			return false, status.Error(codes.InvalidArgument, "invalid proposed resource tree")
+		}
+		for _, entries := range [][]*parsedEntry{oldEntries, newEntries} {
+			for _, entry := range entries {
+				hasNamespaces = hasNamespaces || entry.parsed.Namespace != nil
+			}
 		}
 		if err := s.authorizeOperations(ctx, deriveResourceAdmissionOperations(oldEntries, newEntries, nil)); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return hasNamespaces, nil
 }
 
 // The service credential authenticates transport, not a cached grant. Every
@@ -109,14 +114,15 @@ func (s *Server) authenticateCallback(ctx context.Context, method string, reques
 // phase. It is populated once per AdmitResources call from a single DB lookup
 // (repository → namespace) and threaded through all per-resource admit helpers.
 type AdmissionContext struct {
-	RepositoryID string
-	Namespace    string    // resolved namespace identifier
-	ActorSubject string    // authenticated principal that performed the push
-	CommitSHA    string    // full SHA of the accepted push commit
-	RefName      string    // fully-qualified ref, e.g. "refs/heads/main"
-	Revision     string    // human revision label, e.g. "main@sha1:abc123"
-	Now          time.Time // admission timestamp, set once for the entire push
-	superseded   *bool
+	RepositoryID      string
+	Namespace         string    // resolved namespace identifier
+	ActorSubject      string    // authenticated principal that performed the push
+	CommitSHA         string    // full SHA of the accepted push commit
+	RefName           string    // fully-qualified ref, e.g. "refs/heads/main"
+	Revision          string    // human revision label, e.g. "main@sha1:abc123"
+	Now               time.Time // admission timestamp, set once for the entire push
+	superseded        *bool
+	repositoryCurrent func(context.Context) (bool, error)
 }
 
 func (c AdmissionContext) markSuperseded() {

@@ -7,14 +7,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/99designs/gqlgen/graphql"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/ast"
 	"go.uber.org/zap"
 )
 
@@ -116,6 +123,7 @@ func TestFileNodesObserveSharedDatastoreUpdatesAcrossResolvers(t *testing.T) {
 	require.NoError(t, err)
 	version := file.ResourceVersion
 	file.Annotations = map[string]string{"sequence": "1"}
+	datastore.AdvanceFileSystemVersion(file)
 	require.NoError(t, store.UpdateFile(t.Context(), file, version))
 	id := mustEncodeNodeID(nodeKindFile, globalIDTestFileUID)
 	for _, root := range []*Resolver{first, second} {
@@ -133,8 +141,120 @@ func TestFileNodesObserveSharedDatastoreUpdatesAcrossResolvers(t *testing.T) {
 
 type globalIDFileFailureStore struct{ datastore.Datastore }
 
+type globalIDCountedFileStore struct {
+	datastore.Datastore
+	reads atomic.Int64
+}
+
+func (s *globalIDCountedFileStore) GetFile(ctx context.Context, uid string) (*datastore.File, error) {
+	s.reads.Add(1)
+	return s.Datastore.GetFile(ctx, uid)
+}
+
+func (s *globalIDCountedFileStore) GetFileSnapshots(ctx context.Context, ids []string) ([]*datastore.File, error) {
+	return testutil.ReadFileSnapshots(ctx, ids, s.GetFile)
+}
+
+func TestFileNodeResolverReturnsExactAuthorizedFieldSnapshot(t *testing.T) {
+	for _, field := range []string{"node", "nodes"} {
+		t.Run(field, func(t *testing.T) {
+			store, root := newGlobalIDTestResolver(t)
+			seedGlobalIDTestData(t, t.Context(), store)
+			counted := &globalIDCountedFileStore{Datastore: store}
+			root.store = counted
+			query := &queryResolver{Resolver: root}
+			authz := testutil.NewAllowAllAuthZ()
+			mw := security.NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), counted, zap.NewNop())
+			id := mustEncodeNodeID(nodeKindFile, globalIDTestFileUID)
+			ctx := graphql.WithFieldContext(t.Context(), &graphql.FieldContext{
+				Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: field}},
+				Args: map[string]any{"id": id, "ids": []string{id, id}},
+			})
+			_, err := mw.GraphQLFieldAuthorizer(ctx, func(authorizedCtx context.Context) (any, error) {
+				current, err := store.GetFile(t.Context(), globalIDTestFileUID)
+				require.NoError(t, err)
+				expected := current.ResourceVersion
+				current.Annotations = map[string]string{"sequence": "changed-after-authorization"}
+				current.CreationActor = "different-owner"
+				datastore.AdvanceFileSystemVersion(current)
+				require.NoError(t, store.UpdateFile(t.Context(), current, expected))
+				var nodes []model.Node
+				if field == "node" {
+					node, err := query.Node(authorizedCtx, id)
+					require.NoError(t, err)
+					nodes = []model.Node{node}
+				} else {
+					nodes, err = query.Nodes(authorizedCtx, []string{id, id})
+					require.NoError(t, err)
+					require.Len(t, nodes, 2)
+				}
+				for _, node := range nodes {
+					file, ok := node.(*model.File)
+					require.True(t, ok)
+					require.NotEqual(t, "changed-after-authorization", file.Metadata.Annotations["sequence"])
+				}
+				return nil, nil
+			})
+			require.NoError(t, err)
+			wantReads := int64(1)
+			if field == "nodes" {
+				wantReads = 2
+			}
+			require.Equal(t, wantReads, counted.reads.Load(), "hydration must not refetch an authorized File")
+			_, err = mw.GraphQLFieldAuthorizer(ctx, func(freshCtx context.Context) (any, error) {
+				node, err := query.Node(freshCtx, id)
+				require.NoError(t, err)
+				require.Equal(t, "changed-after-authorization", node.(*model.File).Metadata.Annotations["sequence"])
+				return nil, nil
+			})
+			require.NoError(t, err)
+			require.Equal(t, 2*wantReads, counted.reads.Load(), "another field must perform fresh authorization reads")
+			require.Equal(t, "different-owner", authz.Resource.OwnerSub)
+		})
+	}
+}
+
+func TestFileNodeMissingSnapshotDoesNotExposeLaterUnapprovedCreate(t *testing.T) {
+	store, root := newGlobalIDTestResolver(t)
+	counted := &globalIDCountedFileStore{Datastore: store}
+	root.store = counted
+	query := &queryResolver{Resolver: root}
+	authz := testutil.NewAllowAllAuthZ()
+	mw := security.NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), counted, zap.NewNop())
+	id := mustEncodeNodeID(nodeKindFile, globalIDTestFileUID)
+	ctx := graphql.WithFieldContext(t.Context(), &graphql.FieldContext{
+		Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: "node"}},
+		Args: map[string]any{"id": id},
+	})
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(authorizedCtx context.Context) (any, error) {
+		require.NoError(t, store.CreateFile(t.Context(), &datastore.File{
+			UID: globalIDTestFileUID, Namespace: "private", Name: "late-file", CreationActor: "other-owner",
+		}))
+		node, err := query.Node(authorizedCtx, id)
+		require.NoError(t, err)
+		require.Nil(t, node)
+		return nil, nil
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, counted.reads.Load())
+	require.Empty(t, authz.Calls, "missing rows must not become authorized by a later lookup")
+	_, err = mw.GraphQLFieldAuthorizer(ctx, func(freshCtx context.Context) (any, error) {
+		node, err := query.Node(freshCtx, id)
+		require.NoError(t, err)
+		require.NotNil(t, node)
+		return nil, nil
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, counted.reads.Load())
+	require.Equal(t, "other-owner", authz.Resource.OwnerSub)
+}
+
 func (globalIDFileFailureStore) GetFile(context.Context, string) (*datastore.File, error) {
 	return nil, errors.New("file storage unavailable")
+}
+
+func (s globalIDFileFailureStore) GetFileSnapshots(ctx context.Context, ids []string) ([]*datastore.File, error) {
+	return testutil.ReadFileSnapshots(ctx, ids, s.GetFile)
 }
 
 func TestFileNodeStorageErrorsAreNotReportedAsMissing(t *testing.T) {
@@ -143,9 +263,224 @@ func TestFileNodeStorageErrorsAreNotReportedAsMissing(t *testing.T) {
 	query := &queryResolver{Resolver: root}
 	id := mustEncodeNodeID(nodeKindFile, globalIDTestFileUID)
 	_, err := query.Node(t.Context(), id)
-	require.ErrorContains(t, err, "retrieve File: file storage unavailable")
+	require.ErrorContains(t, err, "retrieve File")
+	require.NotContains(t, err.Error(), "file storage unavailable")
 	_, err = query.Nodes(t.Context(), []string{id})
-	require.ErrorContains(t, err, "retrieve File: file storage unavailable")
+	require.ErrorContains(t, err, "retrieve File")
+	require.NotContains(t, err.Error(), "file storage unavailable")
+}
+
+type globalIDPointFailureStore struct {
+	datastore.Datastore
+	err  error
+	repo *datastore.Repository
+}
+
+func (s globalIDPointFailureStore) GetFile(context.Context, string) (*datastore.File, error) {
+	return nil, s.err
+}
+func (s globalIDPointFailureStore) GetFileSnapshots(ctx context.Context, ids []string) ([]*datastore.File, error) {
+	return testutil.ReadFileSnapshots(ctx, ids, s.GetFile)
+}
+func (s globalIDPointFailureStore) GetProduct(context.Context, string) (*datastore.Product, error) {
+	return nil, s.err
+}
+func (s globalIDPointFailureStore) GetProductVariant(context.Context, string) (*datastore.ProductVariant, error) {
+	return nil, s.err
+}
+func (s globalIDPointFailureStore) GetCategoryTaxonomy(context.Context, string) (*datastore.CategoryTaxonomy, error) {
+	return nil, s.err
+}
+func (s globalIDPointFailureStore) GetCollection(context.Context, string) (*datastore.Collection, error) {
+	return nil, s.err
+}
+func (s globalIDPointFailureStore) GetNamespace(context.Context, string) (*datastore.Namespace, error) {
+	return nil, s.err
+}
+func (s globalIDPointFailureStore) GetRepository(context.Context, string) (*datastore.Repository, error) {
+	if s.repo != nil {
+		return s.repo, nil
+	}
+	return nil, s.err
+}
+
+func TestNodeReadsDistinguishAbsenceFromInfrastructureFailure(t *testing.T) {
+	for kind := range supportedNodeKinds {
+		for _, failure := range []error{
+			datastore.ErrNotFound,
+			fmt.Errorf("wrapped absence: %w", datastore.ErrNotFound),
+			errors.New("private storage failure detail"),
+			context.Canceled,
+			context.DeadlineExceeded,
+		} {
+			t.Run(kind+"/"+failure.Error(), func(t *testing.T) {
+				store, root := newGlobalIDTestResolver(t)
+				failed := globalIDPointFailureStore{Datastore: store, err: failure}
+				root.store, root.service.store = failed, failed
+				query := &queryResolver{Resolver: root}
+				id := mustEncodeNodeID(kind, globalIDTestProductUID)
+				node, err := query.Node(t.Context(), id)
+				require.Nil(t, node)
+				if errors.Is(failure, datastore.ErrNotFound) {
+					require.NoError(t, err)
+				} else {
+					require.ErrorIs(t, err, failure)
+					require.NotContains(t, err.Error(), "private storage failure detail")
+					encoded, marshalErr := json.Marshal(err)
+					require.NoError(t, marshalErr)
+					require.Contains(t, string(encoded), `"message":"retrieve `+kind+`"`)
+					require.NotContains(t, string(encoded), "private storage failure detail")
+				}
+				nodes, err := query.Nodes(t.Context(), []string{id, id})
+				if errors.Is(failure, datastore.ErrNotFound) {
+					require.NoError(t, err)
+					require.Equal(t, []model.Node{nil, nil}, nodes)
+				} else {
+					require.ErrorIs(t, err, failure)
+					require.Nil(t, nodes, "an infrastructure failure returned a success-shaped partial result")
+				}
+			})
+		}
+	}
+}
+
+func TestRepositoryNodeOwnerLookupDoesNotHideInfrastructureFailure(t *testing.T) {
+	for _, failure := range []error{datastore.ErrNotFound, errors.New("private owner lookup failure")} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			store, root := newGlobalIDTestResolver(t)
+			failed := globalIDPointFailureStore{
+				Datastore: store,
+				err:       failure,
+				repo:      &datastore.Repository{ID: globalIDTestRepositoryID, NamespaceID: globalIDTestNamespaceID},
+			}
+			root.store, root.service.store = failed, failed
+			id := mustEncodeNodeID(nodeKindRepository, globalIDTestRepositoryID)
+			query := &queryResolver{Resolver: root}
+			node, err := query.Node(t.Context(), id)
+			require.Nil(t, node)
+			nodes, pluralErr := query.Nodes(t.Context(), []string{id, id})
+			if errors.Is(failure, datastore.ErrNotFound) {
+				require.NoError(t, err)
+				require.NoError(t, pluralErr)
+				require.Equal(t, []model.Node{nil, nil}, nodes)
+			} else {
+				require.ErrorIs(t, err, failure)
+				require.ErrorIs(t, pluralErr, failure)
+				require.NotContains(t, err.Error(), "private owner lookup failure")
+				require.Nil(t, nodes)
+			}
+		})
+	}
+}
+
+type globalIDBlockingFileStore struct {
+	datastore.Datastore
+	started chan string
+	release <-chan struct{}
+	active  atomic.Int64
+}
+
+func (s *globalIDBlockingFileStore) GetFile(ctx context.Context, uid string) (*datastore.File, error) {
+	s.active.Add(1)
+	defer s.active.Add(-1)
+	s.started <- uid
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.release:
+		return &datastore.File{UID: uid, Namespace: "test-store", Name: uid}, nil
+	}
+}
+
+func (s *globalIDBlockingFileStore) GetFileSnapshots(ctx context.Context, ids []string) ([]*datastore.File, error) {
+	return testutil.ReadFileSnapshots(ctx, ids, s.GetFile)
+}
+
+func TestQueryNodesBoundsConcurrentHydrationAndPreservesPositions(t *testing.T) {
+	store, root := newGlobalIDTestResolver(t)
+	release := make(chan struct{})
+	blocked := &globalIDBlockingFileStore{Datastore: store, started: make(chan string, 100), release: release}
+	root.store = blocked
+	ids := make([]string, 100)
+	for i := range ids {
+		ids[i] = mustEncodeNodeID(nodeKindFile, fmt.Sprintf("00000000-0000-0000-0000-%012d", i))
+	}
+	type result struct {
+		nodes []model.Node
+		err   error
+	}
+	done := make(chan result, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		nodes, err := (&queryResolver{Resolver: root}).Nodes(ctx, ids)
+		done <- result{nodes, err}
+	}()
+	for range nodeFetchFanout {
+		select {
+		case <-blocked.started:
+		case <-time.After(time.Second):
+			t.Fatal("node hydration did not fill the bounded worker pool")
+		}
+	}
+	require.EqualValues(t, nodeFetchFanout, blocked.active.Load())
+	select {
+	case <-blocked.started:
+		t.Fatal("node hydration exceeded eight active reads")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.Len(t, got.nodes, len(ids))
+		for i, node := range got.nodes {
+			require.Equal(t, ids[i], node.GetID())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("node hydration did not finish")
+	}
+	require.Zero(t, blocked.active.Load())
+}
+
+func TestQueryNodesCancellationDrainsReadsAndStopsScheduling(t *testing.T) {
+	store, root := newGlobalIDTestResolver(t)
+	blocked := &globalIDBlockingFileStore{Datastore: store, started: make(chan string, 100)}
+	root.store = blocked
+	ids := make([]string, 100)
+	for i := range ids {
+		ids[i] = mustEncodeNodeID(nodeKindFile, globalIDTestFileUID)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		nodes, err := (&queryResolver{Resolver: root}).Nodes(ctx, ids)
+		if nodes != nil {
+			done <- errors.New("canceled node query returned partial success")
+			return
+		}
+		done <- err
+	}()
+	for range nodeFetchFanout {
+		select {
+		case <-blocked.started:
+		case <-time.After(time.Second):
+			t.Fatal("node hydration did not start")
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("canceled node query retained active reads")
+	}
+	require.Zero(t, blocked.active.Load())
+	require.Empty(t, blocked.started, "cancellation must not schedule the remaining IDs")
+	_, err := (&queryResolver{Resolver: root}).Nodes(ctx, ids)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, blocked.started)
 }
 
 func TestLookupQueriesAcceptGlobalIDs(t *testing.T) {

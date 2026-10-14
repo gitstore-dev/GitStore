@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,7 +49,7 @@ func runRepositoryLifecyclePushAdmissionReadIdentity(t *testing.T) {
 	// target here would exercise (and correctly fail) the authoring-target
 	// guard instead of the production admission path this probe is intended to
 	// verify.
-	h := newPushHelperForRepo(t, namespace, "gitstore-system")
+	h := newPushHelperForRepoWithToken(t, namespace, "gitstore-system", token)
 	h.commitRepository(name+".md", validRepositoryFixture(name, namespace))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("push Repository manifest: %v\n%s", err, out)
@@ -83,6 +85,136 @@ func TestRepositoryLifecycle_DualControllerRegistrationAndReconcile(t *testing.T
 	runRepositoryLifecycleDualControllerRegistrationAndReconcile(t)
 }
 
+func TestRepositoryWatchMetadataGenerationAndSelectorReplay(t *testing.T) {
+	cfg := repositoryCapacityConfig{
+		apiA:        strings.TrimSuffix(os.Getenv("REPOSITORY_API_A"), "/"),
+		apiB:        strings.TrimSuffix(os.Getenv("REPOSITORY_API_B"), "/"),
+		controllerA: strings.TrimSuffix(os.Getenv("REPOSITORY_CONTROLLER_A"), "/"),
+		controllerB: strings.TrimSuffix(os.Getenv("REPOSITORY_CONTROLLER_B"), "/"),
+		namespace:   uniqueName("repository-watch-metadata"),
+	}
+	if cfg.apiA == "" || cfg.apiB == "" || cfg.controllerA == "" || cfg.controllerB == "" {
+		t.Skip("set two REPOSITORY_API endpoints, two REPOSITORY_CONTROLLER endpoints, and REPOSITORY_TOKEN or REPOSITORY_TOKEN_FILE for the deployed probe")
+	}
+	require.NotEqual(t, cfg.apiA, cfg.apiB)
+	require.NotEqual(t, cfg.controllerA, cfg.controllerB)
+	cfg.token = repositoryCapacityToken(t)
+	client := &http.Client{Timeout: 10 * time.Second}
+	beforeA := requireRepositoryController(t, client, cfg.controllerA)
+	beforeB := requireRepositoryController(t, client, cfg.controllerB)
+	require.NotEqual(t, repositoryControllerIdentity(t, client, cfg.controllerA), repositoryControllerIdentity(t, client, cfg.controllerB))
+	createNamespaceThrough(t, cfg.apiA, cfg.token, cfg.namespace)
+	require.NoError(t, waitRepositoryCapacityNamespaceReady(t.Context(), client, cfg))
+	name := uniqueName("metadata-replay")
+	selector := map[string]any{"matchLabels": map[string]any{"watch-metadata-run": name, "selected": "yes"}}
+	const selection = `type name resourceVersion repository { metadata { generation resourceVersion revision annotations } }`
+	open := func(endpoint, cursor string) *websocket.Conn {
+		t.Helper()
+		conn, err := dialRepositoryCapacityWatchSelection(endpoint, cfg, cursor, selection, selector)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		return conn
+	}
+	watchA := open(cfg.apiA, "__repository_watch_bootstrap__")
+	require.NoError(t, watchA.SetReadDeadline(time.Now().Add(10*time.Second)))
+	bookmark, err := readRepositoryCapacityEvent(watchA)
+	require.NoError(t, err)
+	require.Equal(t, "BOOKMARK", bookmark.Type)
+	update := func(endpoint, phase string, create, selected bool) (string, string) {
+		t.Helper()
+		labels := map[string]any{"watch-metadata-run": name}
+		if selected {
+			labels["selected"] = "yes"
+		}
+		operation, inputType := "updateRepository", "UpdateRepositoryInput"
+		if create {
+			operation, inputType = "createRepository", "CreateRepositoryInput"
+		}
+		query := fmt.Sprintf(`mutation($input: %s!) { result: %s(input: $input) { repository { metadata { generation resourceVersion revision } } } }`, inputType, operation)
+		response := gqlQueryWithURL(t, endpoint, cfg.token, query, map[string]any{"input": map[string]any{
+			"metadata": map[string]any{
+				"name": name, "namespace": cfg.namespace, "labels": labels,
+				"annotations": map[string]any{"watch-metadata-phase": phase},
+			},
+			"spec": map[string]any{"defaultBranch": "main", "visibility": "PRIVATE", "storageClass": "standard"},
+		}})
+		require.Empty(t, response.Errors, namespaceContractErrors(response.Errors))
+		var result struct {
+			Result repositoryCapacityEvent `json:"result"`
+		}
+		require.NoError(t, json.Unmarshal(response.Data, &result))
+		require.NotNil(t, result.Result.Repository)
+		metadata := result.Result.Repository.Metadata
+		require.EqualValues(t, 1, metadata.Generation, "metadata-only authoring must not advance generation")
+		require.NotEmpty(t, metadata.ResourceVersion)
+		require.NotEmpty(t, metadata.Revision)
+		return metadata.ResourceVersion, metadata.Revision
+	}
+	read := func(conn *websocket.Conn, eventType, revision string) repositoryCapacityEvent {
+		t.Helper()
+		for range 100 {
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
+			event, readErr := readRepositoryCapacityEvent(conn)
+			require.NoError(t, readErr)
+			if event.Name != name || event.Type != eventType {
+				continue
+			}
+			require.NotEmpty(t, event.ResourceVersion)
+			if eventType == "DELETED" {
+				require.Nil(t, event.Repository, "typed selector exits have no resource payload")
+				return event
+			}
+			require.NotNil(t, event.Repository)
+			if event.Repository.Metadata.Revision != revision {
+				continue
+			}
+			require.EqualValues(t, 1, event.Repository.Metadata.Generation)
+			require.NotEmpty(t, event.Repository.Metadata.ResourceVersion)
+			return event
+		}
+		t.Fatal("Repository watch did not expose the required transition")
+		return repositoryCapacityEvent{}
+	}
+	update(cfg.apiB, "created", true, false)
+	require.NoError(t, waitRepositoryCapacityResourceReady(t.Context(), client, cfg, "Repository", name))
+	enteredVersion, enteredRevision := update(cfg.apiA, "entered", false, true)
+	entered := read(watchA, "ADDED", enteredRevision)
+	require.NoError(t, watchA.Close())
+	modifiedVersion, modifiedRevision := update(cfg.apiB, "modified", false, true)
+	exitedVersion, _ := update(cfg.apiA, "exited", false, false)
+	require.NotEqual(t, enteredVersion, modifiedVersion)
+	require.NotEqual(t, modifiedVersion, exitedVersion)
+	watchB := open(cfg.apiB, entered.ResourceVersion)
+	modified := read(watchB, "MODIFIED", modifiedRevision)
+	exited := read(watchB, "DELETED", "")
+	require.NotEqual(t, entered.ResourceVersion, modified.ResourceVersion)
+	require.NotEqual(t, modified.ResourceVersion, exited.ResourceVersion)
+	_, reenteredRevision := update(cfg.apiB, "reentered", false, true)
+	read(watchB, "ADDED", reenteredRevision)
+
+	h := newPushHelperForRepoWithToken(t, cfg.namespace, "gitstore-system", cfg.token)
+	content, err := os.ReadFile(filepath.Join(h.workDir, "repositories", name+".md"))
+	require.NoError(t, err)
+	// A YAML comment changes Git provenance without changing parsed metadata,
+	// specification or body.
+	provenanceOnly := strings.Replace(string(content), "---\n", "---\n# provenance-only rewrite\n", 1)
+	require.NotEqual(t, string(content), provenanceOnly)
+	h.commitRepository(name+".md", provenanceOnly)
+	revision, err := secretCapacityGit(t.Context(), h.workDir, cfg.token, "rev-parse", "HEAD")
+	require.NoError(t, err)
+	if output, pushErr := h.push(); pushErr != nil {
+		t.Fatalf("push provenance-only Repository rewrite: %v\n%s", pushErr, output)
+	}
+	provenance := read(watchB, "MODIFIED", "main@sha1:"+strings.TrimSpace(string(revision)))
+	require.Equal(t, "reentered", provenance.Repository.Metadata.Annotations["watch-metadata-phase"])
+	require.NotEqual(t, reenteredRevision, provenance.Repository.Metadata.Revision)
+	require.NoError(t, waitRepositoryCapacityResourceReady(t.Context(), client, cfg, "Repository", name))
+	waitForRepositoryControllerAdvance(t, client, cfg.controllerA, beforeA)
+	waitForRepositoryControllerAdvance(t, client, cfg.controllerB, beforeB)
+	require.Empty(t, repositoryControllerPoison(t, client, cfg.controllerA))
+	require.Empty(t, repositoryControllerPoison(t, client, cfg.controllerB))
+}
+
 func runRepositoryLifecycleDualControllerRegistrationAndReconcile(t *testing.T) {
 	t.Helper()
 	controllerA := strings.TrimSuffix(os.Getenv("REPOSITORY_CONTROLLER_A"), "/")
@@ -103,13 +235,13 @@ func runRepositoryLifecycleDualControllerRegistrationAndReconcile(t *testing.T) 
 
 	namespace := getEnv("NAMESPACE", "gitstore-test")
 	name := uniqueName("repository-dual-controller")
-	h := newPushHelperForRepo(t, namespace, "gitstore-system")
+	token := namespaceContractBootstrapToken(t, apiURL)
+	h := newPushHelperForRepoWithToken(t, namespace, "gitstore-system", token)
 	h.commitRepository(name+".md", validRepositoryFixture(name, namespace))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("push Repository manifest: %v\n%s", err, out)
 	}
 
-	token := namespaceContractBootstrapToken(t, apiURL)
 	waitForRepositoryReady(t, token, namespace, name)
 	waitForRepositoryControllerAdvance(t, client, controllerA, beforeA)
 	waitForRepositoryControllerAdvance(t, client, controllerB, beforeB)
@@ -207,29 +339,44 @@ func waitForRepositoryReady(t *testing.T, token, namespace, name string) {
 	for {
 		response := gqlQueryWithURL(t, apiURL, token, `query($namespace: String!, $name: String!) {
 			repository(by: {namespacePath: {namespace: $namespace, name: $name}}) {
-				status { conditions { type status } }
+				metadata { generation }
+				status { observedGeneration conditions { type status observedGeneration } }
 			}
 		}`, map[string]any{"namespace": namespace, "name": name})
+		if len(response.Errors) > 0 && repositoryNotFoundResponse(response.Errors) && time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
 		require.Empty(t, response.Errors, "repository readiness GraphQL errors: %s", response.Errors)
 		var data struct {
 			Repository *struct {
+				Metadata struct {
+					Generation int `json:"generation"`
+				} `json:"metadata"`
 				Status struct {
-					Conditions []struct {
-						Type   string `json:"type"`
-						Status string `json:"status"`
+					ObservedGeneration int `json:"observedGeneration"`
+					Conditions         []struct {
+						Type               string `json:"type"`
+						Status             string `json:"status"`
+						ObservedGeneration int    `json:"observedGeneration"`
 					} `json:"conditions"`
 				} `json:"status"`
 			} `json:"repository"`
 		}
 		require.NoError(t, json.Unmarshal(response.Data, &data))
-		if data.Repository != nil {
+		if data.Repository != nil && data.Repository.Metadata.Generation > 0 && data.Repository.Status.ObservedGeneration == data.Repository.Metadata.Generation {
 			ready := false
 			storage := false
+			accepted := false
 			for _, condition := range data.Repository.Status.Conditions {
+				if condition.ObservedGeneration != data.Repository.Metadata.Generation {
+					continue
+				}
 				ready = ready || condition.Type == "Ready" && condition.Status == "TRUE"
 				storage = storage || condition.Type == "StorageProvisioned" && condition.Status == "TRUE"
+				accepted = accepted || condition.Type == "AdmissionAccepted" && condition.Status == "TRUE"
 			}
-			if ready && storage {
+			if ready && storage && accepted {
 				return
 			}
 		}

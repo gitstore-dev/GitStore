@@ -6,6 +6,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/netip"
+	"net/url"
 	"os"
 	"reflect"
 	"regexp"
@@ -13,9 +15,10 @@ import (
 	"strings"
 	"time"
 
-	units "github.com/docker/go-units"
+	"github.com/docker/go-units"
 	"github.com/go-playground/validator/v10"
 	"github.com/go-viper/mapstructure/v2"
+	"github.com/gocql/gocql"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -23,14 +26,54 @@ import (
 )
 
 // Config holds the complete application configuration, grouped by owning
-// service. gitstore-api owns everything under [api]; [log], [grpc_auth] and
-// [push_limits] are shared with gitstore-git-service (and, for log, every
-// service reading this file).
+// service. gitstore-api owns everything under [api]; [log], [observability],
+// [grpc_auth] and [push_limits] are shared service settings.
 type Config struct {
-	Api        ApiConfig        `mapstructure:"api"`
-	GrpcAuth   GrpcAuthConfig   `mapstructure:"grpc_auth"`
-	PushLimits PushLimitsConfig `mapstructure:"push_limits"`
-	Log        LogConfig        `mapstructure:"log"`
+	Api           ApiConfig           `mapstructure:"api"`
+	GrpcAuth      GrpcAuthConfig      `mapstructure:"grpc_auth"`
+	PushLimits    PushLimitsConfig    `mapstructure:"push_limits"`
+	Log           LogConfig           `mapstructure:"log"`
+	Observability ObservabilityConfig `mapstructure:"observability"`
+}
+
+type ObservabilityConfig struct {
+	OTLP OTLPConfig `mapstructure:"otlp"`
+}
+
+type OTLPConfig struct {
+	Endpoint         string  `mapstructure:"endpoint"`
+	TraceSampleRatio float64 `mapstructure:"trace_sample_ratio" validate:"gte=0,lte=1"`
+}
+
+func (c OTLPConfig) Validate() error {
+	if !(c.TraceSampleRatio >= 0 && c.TraceSampleRatio <= 1) {
+		return errors.New("observability.otlp.trace_sample_ratio must be between zero and one")
+	}
+	if c.Endpoint == "" {
+		return nil
+	}
+	endpoint, err := url.Parse(c.Endpoint)
+	if err != nil || len(c.Endpoint) > 256 || endpoint == nil ||
+		(endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Hostname() == "" ||
+		endpoint.User != nil || endpoint.ForceQuery || endpoint.RawQuery != "" || strings.Contains(c.Endpoint, "#") {
+		return errors.New("observability.otlp.endpoint must be an HTTP(S) URL without credentials, query or fragment")
+	}
+	return nil
+}
+
+type ProfilingConfig struct {
+	ListenAddr string `mapstructure:"listen_addr"`
+}
+
+func (c ProfilingConfig) Validate() error {
+	if c.ListenAddr == "" {
+		return nil
+	}
+	address, err := netip.ParseAddrPort(c.ListenAddr)
+	if err != nil || !address.Addr().IsLoopback() || address.Port() == 0 {
+		return errors.New("api.profiling.listen_addr must contain an explicit loopback host and port")
+	}
+	return nil
 }
 
 // ApiConfig holds HTTP API server settings and everything gitstore-api owns.
@@ -44,6 +87,7 @@ type ApiConfig struct {
 	Auth       AuthConfig               `mapstructure:"auth"`
 	Datastore  DatastoreConfig          `mapstructure:"datastore"`
 	Watch      WatchConfig              `mapstructure:"watch"`
+	Profiling  ProfilingConfig          `mapstructure:"profiling"`
 }
 
 // RateLimitConfig is the sustained per-client-IP request rate allowed on
@@ -272,6 +316,8 @@ type ScyllaConfig struct {
 	// AddressTranslator is an optional runtime-only field (not populated from config files).
 	// Set it when Scylla runs behind a NAT (e.g. Docker) to redirect peer addresses.
 	AddressTranslator interface{} `mapstructure:"-"`
+	// QueryObserver is runtime-only instrumentation; configuration cannot enable it.
+	QueryObserver gocql.QueryObserver `mapstructure:"-"`
 }
 
 // legacyKey names a removed or renamed configuration path that must fail
@@ -382,6 +428,9 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("api.git_service.uri", "dns:///localhost:50051")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
+	v.SetDefault("observability.otlp.endpoint", "")
+	v.SetDefault("observability.otlp.trace_sample_ratio", 0.05)
+	v.SetDefault("api.profiling.listen_addr", "")
 	v.SetDefault("grpc_auth.hmac_secret", "")
 	v.SetDefault("grpc_auth.hmac_secret_previous", "")
 	v.SetDefault("push_limits.max_pack_size", "512MiB")
@@ -519,6 +568,12 @@ func checkLegacyKeys(v *viper.Viper) error {
 
 // validateConfig runs all struct validations and returns a combined error.
 func validateConfig(cfg *Config) error {
+	if err := cfg.Observability.OTLP.Validate(); err != nil {
+		return err
+	}
+	if err := cfg.Api.Profiling.Validate(); err != nil {
+		return err
+	}
 	validate := validator.New()
 	if err := validate.Struct(cfg); err != nil {
 		var ve validator.ValidationErrors

@@ -102,12 +102,17 @@ var integrationAdminTokens sync.Map // map[string]string, keyed by GraphQL base 
 
 func gqlQuery(t *testing.T, query string, vars map[string]any) gqlResponse {
 	t.Helper()
+	return gqlQueryWithURL(t, apiURL, integrationAdminToken(t), query, vars)
+}
+
+func integrationAdminToken(t *testing.T) string {
+	t.Helper()
 	token, ok := integrationAdminTokens.Load(apiURL)
 	if !ok {
 		issued := namespaceContractBootstrapToken(t, apiURL)
 		token, _ = integrationAdminTokens.LoadOrStore(apiURL, issued)
 	}
-	return gqlQueryWithURL(t, apiURL, token.(string), query, vars)
+	return token.(string)
 }
 
 // uniqueName returns a timestamped product name to avoid collisions between runs.

@@ -32,6 +32,7 @@ assert_dispatch secret jwt _secret-jwt
 assert_dispatch secret grpc-hmac _secret-grpc-hmac
 assert_dispatch secret signing-key _secret-signing-key
 assert_dispatch generate authz _generate-authz
+assert_dispatch generate proto _generate-proto
 assert_dispatch generate all _generate-all
 
 bootstrap_output="$(env -u NAMESPACE_TIER make --no-print-directory -C "${repo_root}" -np bootstrap TARGET=namespace | sed -n '/^NAMESPACE_TIER /p')"
@@ -173,6 +174,17 @@ scylla_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=datas
 secret_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=secret-integration)"
 [[ "${secret_tests}" == *"SECRET_TEST_OWNED_DEPLOYMENT=1 is required"* &&
    "${secret_tests}" == *"TestSecretBootstrapRotationDeployed"* ]]
+[[ "${secret_tests}" != *'SECRET_TEST_NAMESPACE="'* ]]
+for legacy_namespace in controllers ''; do
+  if make --no-print-directory -C "${repo_root}" test TARGET=secret-integration \
+    SECRET_TEST_OWNED_DEPLOYMENT=1 SECRET_TEST_API_A=http://api-a \
+    SECRET_TEST_API_B=http://api-b SECRET_TEST_TOKEN_FILE=/test-owned/token \
+    SECRET_TEST_NAMESPACE="${legacy_namespace}" >"${test_dir}/legacy-secret-namespace.log" 2>&1; then
+    echo "secret integration accepted removed SECRET_TEST_NAMESPACE" >&2
+    exit 1
+  fi
+  grep -q 'SECRET_TEST_NAMESPACE is removed' "${test_dir}/legacy-secret-namespace.log"
+done
 pr_ready="$(make --no-print-directory -C "${repo_root}" -n pr-ready TARGET=datastore)"
 [[ "${pr_ready}" == *"cargo test"* && "${pr_ready}" == *"test-secret-config.sh"* ]]
 for invalid in unknown api capacity ""; do

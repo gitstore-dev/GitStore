@@ -57,6 +57,15 @@ Old v1 policies and namespaced token subjects are rejected; there is no
 translation or dual-format period. The shipped Compose enrollment job uses
 name-only enrollment and keeps the existing isolated key/UID mounts.
 
+For deployed credential validation, use `make test TARGET=secret-integration`
+with `SECRET_TEST_OWNED_DEPLOYMENT=1`, two distinct `SECRET_TEST_API_A` and
+`SECRET_TEST_API_B` endpoints, and a private `SECRET_TEST_TOKEN_FILE`.
+Both test APIs must clamp ServiceAccount tokens to 60 seconds. The probe starts
+its own controllers and enrolls and retires only its generated keys on the
+selected `SECRET_TEST_SERVICEACCOUNT` (default `gitstore-controller-manager`).
+`SECRET_TEST_NAMESPACE` is rejected before building or starting a controller,
+even when explicitly empty. Never run this probe against an operator deployment.
+
 ## Renewal, readiness, and backoff
 
 ### Policy reload diagnostics
@@ -70,6 +79,14 @@ not prove the running policy changed.
 The API's `auth providers reloaded atomically` message confirms publication.
 `rbac-local policy reloaded` carries the candidate `policy_digest`; correlate it
 with the registry success message because construction precedes publication.
+The API's `/ready` response also exposes an `auth` object containing the active
+provider names, a fingerprint of the compiled action catalog, and optional policy
+snapshot metadata. For `rbac-local`, `policy.loaded` must be true; `policy.digest`
+and the role, binding and rule counts come from one immutable active snapshot.
+An unsupported provider omits policy metadata rather than inventing a fingerprint.
+Compare these fields on each replica before and after reload or replacement.
+They contain no policy rules, subjects, credentials or private material, and
+collecting them performs no policy-file, datastore or network reads.
 On `auth provider reload failed; previous configuration remains active`, fix the
 candidate and retry: do not restart merely to discard the valid old snapshot.
 Malformed/v1 policy, legacy settings and ineffective local-user grants fail

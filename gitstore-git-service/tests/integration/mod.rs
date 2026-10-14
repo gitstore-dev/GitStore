@@ -130,6 +130,8 @@ async fn test_create_commit_list_delete() {
             path: "README.md".to_string(),
             r#ref: String::new(),
             authorization: test_authorization(INT_REPO_1, "repository.contents.read"),
+            unchanged_since_commit: None,
+            allow_ancestor_receipt: false,
         }))
         .await
         .expect_err("expected FAILED_PRECONDITION after repository deletion");

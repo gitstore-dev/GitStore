@@ -64,7 +64,6 @@ func (s *scyllaDatastore) RunNamespaceCDC(ctx context.Context, materializer *wat
 	}()
 	factory := &namespaceCDCConsumerFactory{
 		sequencer:     sequencer,
-		additionReady: s.namespaceCDCAdditionReady,
 		deletionReady: s.namespaceCDCDeletionReady,
 	}
 	reader, err := scyllacdc.NewReader(runCtx, &scyllacdc.ReaderConfig{
@@ -112,7 +111,6 @@ func (l zapCDCLogger) Printf(format string, values ...interface{}) {
 
 type namespaceCDCConsumerFactory struct {
 	sequencer     *namespaceCDCSequencer
-	additionReady func(context.Context, *datastore.Namespace, bool) (bool, error)
 	deletionReady func(context.Context, *datastore.Namespace, bool) (bool, error)
 }
 
@@ -131,7 +129,6 @@ func (f *namespaceCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, 
 		sequencer:     f.sequencer,
 		streamID:      streamID,
 		reporter:      input.ProgressReporter,
-		additionReady: f.additionReady,
 		deletionReady: f.deletionReady,
 	}, nil
 }
@@ -146,14 +143,22 @@ type namespaceCDCConsumer struct {
 	sequencer     *namespaceCDCSequencer
 	streamID      string
 	reporter      *scyllacdc.ProgressReporter
-	additionReady func(context.Context, *datastore.Namespace, bool) (bool, error)
 	deletionReady func(context.Context, *datastore.Namespace, bool) (bool, error)
 }
 
 func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Change) error {
-	before, beforeCommitted, _ := namespaceCDCPostimage(change.PreImage)
-	after, afterCommitted, afterLegacy := namespaceCDCPostimage(change.PostImage)
+	before, beforeCommitted, err := namespaceCDCPostimage(change.PreImage)
+	if err != nil {
+		return err
+	}
+	after, afterCommitted, err := namespaceCDCPostimage(change.PostImage)
+	if err != nil {
+		return err
+	}
 	disposition := namespaceCDCDispositionFor(before, beforeCommitted, after, afterCommitted)
+	if disposition == namespaceCDCInvalidAddition {
+		return fmt.Errorf("%w: Namespace CDC addition lacks its staged commit-marker transition", datastore.ErrNamespaceWatchDiscontinuity)
+	}
 	if disposition == namespaceCDCPromotedAddition {
 		// The false -> true commit-marker update is the durable proof that the
 		// listing projection was committed. Present it to the materializer as
@@ -194,10 +199,6 @@ func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Cha
 	}
 	if disposition == namespaceCDCSuppress {
 		request.shouldPublish = func(context.Context) (bool, error) { return false, nil }
-	} else if before == nil && after != nil && disposition != namespaceCDCPromotedAddition && c.additionReady != nil {
-		request.shouldPublish = func(publishCtx context.Context) (bool, error) {
-			return c.additionReady(publishCtx, after, afterLegacy)
-		}
 	} else if before != nil && after == nil && c.deletionReady != nil {
 		request.shouldPublish = func(publishCtx context.Context) (bool, error) {
 			return c.deletionReady(publishCtx, before, beforeCommitted)
@@ -212,6 +213,7 @@ const (
 	namespaceCDCRegular namespaceCDCDisposition = iota
 	namespaceCDCSuppress
 	namespaceCDCPromotedAddition
+	namespaceCDCInvalidAddition
 )
 
 // namespaceCDCDispositionFor turns the private creation commit marker into a
@@ -222,6 +224,9 @@ const (
 func namespaceCDCDispositionFor(before *datastore.Namespace, beforeCommitted bool, after *datastore.Namespace, afterCommitted bool) namespaceCDCDisposition {
 	if after != nil && !afterCommitted {
 		return namespaceCDCSuppress
+	}
+	if before == nil && after != nil {
+		return namespaceCDCInvalidAddition
 	}
 	if before != nil && !beforeCommitted && after != nil {
 		return namespaceCDCPromotedAddition
@@ -249,6 +254,7 @@ func (c *namespaceCDCConsumer) Empty(ctx context.Context, ackTime gocql.UUID) er
 
 type namespaceCDCSequenceRequest struct {
 	change        watchjournal.Change
+	changes       []watchjournal.Change
 	cdcTime       gocql.UUID
 	streamID      string
 	progressOnly  bool
@@ -319,6 +325,9 @@ func (s *namespaceCDCSequencer) Submit(ctx context.Context, request namespaceCDC
 	if s == nil || s.materializer == nil || request.markProgress == nil {
 		return fmt.Errorf("namespace CDC sequencer is not configured")
 	}
+	if len(request.changes) > catalogCDCMaxRowsPerChange {
+		return fmt.Errorf("%w: CDC frame exceeds %d resources", datastore.ErrNamespaceWatchDiscontinuity, catalogCDCMaxRowsPerChange)
+	}
 	return s.send(ctx, namespaceCDCSequenceMessage{kind: namespaceCDCEnqueue, streamID: request.streamID, request: request})
 }
 
@@ -367,6 +376,7 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 	active := make(map[string]int)
 	watermarks := make(map[string]gocql.UUID)
 	pending := make([]namespaceCDCSequenceRequest, 0, 256)
+	pendingRecords := 0
 	var arrivalNumber uint64
 	publishedThrough := s.publishedThrough
 	hasPublished := s.hasPublished
@@ -455,7 +465,8 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 					return err
 				}
 				pending = append(pending, message.request)
-				if len(pending) > namespaceCDCPendingLimit {
+				pendingRecords += max(1, len(message.request.changes))
+				if pendingRecords > namespaceCDCPendingLimit {
 					err := fmt.Errorf("namespace CDC sequencer exceeded %d pending records", namespaceCDCPendingLimit)
 					message.result <- err
 					return err
@@ -500,7 +511,11 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 				return err
 			}
 			if publish && !request.progressOnly {
-				changes = append(changes, request.change)
+				if len(request.changes) > 0 {
+					changes = append(changes, request.changes...)
+				} else {
+					changes = append(changes, request.change)
+				}
 				batchFrontier = request.cdcTime
 				batchHasPublished = true
 			}
@@ -542,6 +557,9 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 			}
 			publishedThrough = batchFrontier
 			hasPublished = batchHasPublished
+			for _, request := range pending[:published] {
+				pendingRecords -= max(1, len(request.changes))
+			}
 			pending = retainUnpublishedCDCRequests(pending, published)
 		}
 	}
@@ -555,75 +573,6 @@ func retainUnpublishedCDCRequests(pending []namespaceCDCSequenceRequest, publish
 	// not remain retained at the leader's peak pending capacity.
 	clear(pending[remaining:])
 	return pending[:remaining]
-}
-
-// namespaceCDCAdditionReady protects direct additions from an older binary
-// that does not participate in the false -> true commit-marker protocol. New
-// binaries publish the marker promotion itself as ADDED, since that write is
-// already ordered after the durable list projection. For a legacy direct
-// addition, a missing authoritative row denotes a rolled-back create and a
-// still-present row without its projection is retried from durable progress.
-func (s *scyllaDatastore) namespaceCDCAdditionReady(ctx context.Context, namespace *datastore.Namespace, legacy bool) (bool, error) {
-	if namespace == nil {
-		return false, nil
-	}
-	uid, err := gocql.ParseUUID(namespace.UID)
-	if err != nil {
-		return false, fmt.Errorf("parse Namespace CDC addition uid: %w", err)
-	}
-	exists, committed, err := s.namespaceWatchCommitState(ctx, uid)
-	if err != nil {
-		return false, err
-	}
-	if !exists {
-		return namespaceCDCMissingAdditionReady(legacy)
-	}
-	if !committed {
-		return false, fmt.Errorf("namespace CDC creation is not committed")
-	}
-	var indexRow struct {
-		UID gocql.UUID `db:"uid"`
-	}
-	err = s.session.Query(
-		"SELECT uid FROM namespaces_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?",
-		nil,
-	).WithContext(ctx).Bind(namespaceBucket(namespace.CreationTimestamp), namespace.CreationTimestamp, uid).GetRelease(&indexRow)
-	if err == nil {
-		return true, nil
-	}
-	if !errors.Is(err, gocql.ErrNotFound) {
-		return false, fmt.Errorf("read Namespace CDC listing projection: %w", err)
-	}
-	return false, fmt.Errorf("namespace CDC listing projection is not committed")
-}
-
-func namespaceCDCMissingAdditionReady(legacy bool) (bool, error) {
-	if legacy {
-		// Before watch_committed existed, a missing row could mean either a
-		// successfully created Namespace that was quickly deleted or a failed
-		// create that rolled back. Publishing or suppressing ADDED would each
-		// invent one of those histories. Mixed-version rollout keeps the
-		// materializer gated; fail closed if that rule is violated.
-		return false, fmt.Errorf("legacy Namespace addition commit state is ambiguous after authoritative deletion")
-	}
-	return false, nil
-}
-
-func (s *scyllaDatastore) namespaceWatchCommitState(ctx context.Context, uid gocql.UUID) (bool, bool, error) {
-	var row struct {
-		Committed *bool `db:"watch_committed"`
-	}
-	err := s.session.Query("SELECT watch_committed FROM namespaces_by_uid WHERE uid=?", nil).
-		WithContext(ctx).Bind(uid).GetRelease(&row)
-	if errors.Is(err, gocql.ErrNotFound) {
-		return false, false, nil
-	}
-	if err != nil {
-		return false, false, fmt.Errorf("read Namespace CDC commit marker: %w", err)
-	}
-	// A null marker denotes a Namespace created by a pre-050 binary before the
-	// additive migration; those rows were already fully projected.
-	return true, row.Committed == nil || *row.Committed, nil
 }
 
 // namespaceCDCDeletionReady prevents a DELETED event from crossing the public
@@ -688,11 +637,15 @@ func namespaceCDCFrontier(active map[string]int, watermarks map[string]gocql.UUI
 	return frontier, true
 }
 
-func namespaceCDCPostimage(rows []*scyllacdc.ChangeRow) (*datastore.Namespace, bool, bool) {
+func namespaceCDCPostimage(rows []*scyllacdc.ChangeRow) (*datastore.Namespace, bool, error) {
 	if len(rows) == 0 || rows[0] == nil {
-		return nil, false, false
+		return nil, false, nil
 	}
 	row := rows[0]
+	committed := optionalCDCBool(row, "watch_committed")
+	if committed == nil {
+		return nil, false, fmt.Errorf("%w: Namespace CDC row lacks a boolean watch commit marker", datastore.ErrNamespaceWatchDiscontinuity)
+	}
 	scyllaRow := &namespaceRow{}
 	assignCDC(row, "api_version", &scyllaRow.APIVersion)
 	assignCDC(row, "kind", &scyllaRow.Kind)
@@ -718,9 +671,8 @@ func namespaceCDCPostimage(rows []*scyllacdc.ChangeRow) (*datastore.Namespace, b
 	assignCDC(row, "spec", &scyllaRow.Spec)
 	assignCDC(row, "body", &scyllaRow.Body)
 	assignCDC(row, "status", &scyllaRow.Status)
-	scyllaRow.WatchCommitted = optionalCDCBool(row, "watch_committed")
-	committed := scyllaRow.WatchCommitted == nil || *scyllaRow.WatchCommitted
-	return fromNamespaceRow(scyllaRow), committed, scyllaRow.WatchCommitted == nil
+	scyllaRow.WatchCommitted = committed
+	return fromNamespaceRow(scyllaRow), *committed, nil
 }
 
 func optionalCDCBool(row *scyllacdc.ChangeRow, column string) *bool {

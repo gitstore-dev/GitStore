@@ -17,6 +17,9 @@ timeout = "10s"
 [git_service.admission]
 branch_pattern = "^refs/heads/main$"
 
+[git_service.metrics]
+listen_addr = ""
+
 [api]
 port = 4000
 git_port = 9000
@@ -25,6 +28,9 @@ grpc_port = 6000
 [api.rate_limit]
 per_second = 50
 burst = 100
+
+[api.profiling]
+listen_addr = ""
 
 [api.git_service]
 uri = "dns:///git-service:50051"
@@ -115,3 +121,7 @@ max_file_size = "100MiB"
 [log]
 level = "info"
 format = "json"
+
+[observability.otlp]
+endpoint = ""
+trace_sample_ratio = 0.05

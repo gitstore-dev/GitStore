@@ -168,6 +168,20 @@ File IDs returned by `file` also resolve through `node` and `nodes`, with the
 same `file.read` authorization. Batch results retain input order, including
 duplicate IDs and null entries for missing resources. File datastore failures
 are reported as GraphQL errors, not successful missing-resource responses.
+The same absence/failure distinction applies to every supported Node kind,
+including Repository owner-namespace lookups: genuine absence remains null,
+while infrastructure failures and cancellation return errors. Error messages
+do not expose underlying datastore details. A failed batch does not return a
+success-shaped partial result. ServiceAccount implements Actor, not Node, and
+is queried through its identity-specific operations.
+Batch hydration uses at most eight concurrent resource reads per request.
+Cancellation stops scheduling new reads and cancels in-flight File lookups.
+File authorization checks use the record loaded by UID, including its owner,
+instead of fetching it again by name; every policy decision completes before
+the batch resolver is allowed to return protected data. The resolver returns
+those exact authorized File records without a second lookup. These snapshots,
+including missing results, apply only to that root field, never another field
+or request; a later request performs fresh authorization and storage reads.
 
 ```graphql
 query GetNodes($ids: [ID!]!) {

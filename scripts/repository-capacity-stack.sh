@@ -27,10 +27,44 @@ token_file="${REPOSITORY_TOKEN_FILE:-${state_dir}/token}"
 trigger_file="${REPOSITORY_REPLACEMENT_TRIGGER_FILE:-${state_dir}/replace-api-b}"
 revision="${CAPACITY_GIT_REVISION:-$(git -C "${repo_root}" rev-parse HEAD)}"
 project="${REPOSITORY_CAPACITY_PROJECT:-gitstore-repository-capacity}"
+[[ "${project}" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || {
+  echo "REPOSITORY_CAPACITY_PROJECT must be a lowercase Compose project name" >&2
+  exit 2
+}
+export REPOSITORY_CAPACITY_PROJECT="${project}"
+export COMPOSE_PROJECT_NAME="${project}"
+export CAPACITY_SCYLLA_KEYSPACE="${CAPACITY_SCYLLA_KEYSPACE:-gitstore}"
+[[ "${CAPACITY_SCYLLA_KEYSPACE}" =~ ^[a-z][a-z0-9_]{0,47}$ ]] || {
+  echo "CAPACITY_SCYLLA_KEYSPACE must be a lowercase unquoted CQL identifier" >&2
+  exit 2
+}
+port_variables=(CAPACITY_API_A_PORT CAPACITY_API_B_PORT CAPACITY_GIT_HTTP_A_PORT CAPACITY_GIT_HTTP_B_PORT
+  CAPACITY_CATALOG_A_PORT CAPACITY_CATALOG_B_PORT CAPACITY_CONTROLLER_A_PORT CAPACITY_CONTROLLER_B_PORT)
+port_defaults=(4000 4001 9000 9001 6000 6001 5001 5002)
+ports=()
+for index in "${!port_variables[@]}"; do
+  variable="${port_variables[$index]}"
+  port="${!variable:-${port_defaults[$index]}}"
+  [[ "${port}" =~ ^[1-9][0-9]{0,4}$ ]] && (( port <= 65535 )) || {
+    echo "${variable} must be a TCP port between 1 and 65535" >&2
+    exit 2
+  }
+  for previous in "${ports[@]}"; do
+    [[ "${port}" != "${previous}" ]] || { echo "capacity ports must be distinct" >&2; exit 2; }
+  done
+  ports+=("${port}")
+  export "${variable}=${port}"
+done
+api_a="http://127.0.0.1:${CAPACITY_API_A_PORT}"
+api_b="http://127.0.0.1:${CAPACITY_API_B_PORT}"
+controller_a="http://127.0.0.1:${CAPACITY_CONTROLLER_A_PORT}"
+controller_b="http://127.0.0.1:${CAPACITY_CONTROLLER_B_PORT}"
 replacement_watcher="${REPOSITORY_CAPACITY_REPLACEMENT_WATCHER:-${repo_root}/scripts/watch-repository-capacity-replacement.sh}"
 capacity_runner="${REPOSITORY_CAPACITY_RUNNER:-${repo_root}/scripts/run-capacity-target.sh}"
 watcher_pid=""
 owned_stack_started=0
+ownership_file="${REPOSITORY_CAPACITY_OWNERSHIP_FILE:-${state_dir}/owned-stack.json}"
+export REPOSITORY_CAPACITY_OWNERSHIP_FILE="${ownership_file}"
 
 compose=(docker compose -p "${project}" --profile capacity-stack
   -f "${repo_root}/compose.yml"
@@ -41,11 +75,18 @@ export CAPACITY_GIT_REVISION="${revision}"
 # The nested dispatcher uses this identity for its evidence directory. Keep it
 # in the parent harness too, so the post-k6 Git/watch probe appends to that
 # same immutable run directory rather than a sibling with an empty name.
+if [[ -z "${CAPACITY_RUN_ID:-}" && -f "${ownership_file}" && ! -L "${ownership_file}" &&
+      "${action}" =~ ^(wait|token|alpha|down|verify-owned|resume)$ ]]; then
+  CAPACITY_RUN_ID="$(jq -er '.runID' "${ownership_file}")"
+fi
 export CAPACITY_RUN_ID="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+[[ "${CAPACITY_RUN_ID}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$ ]] || {
+  echo "CAPACITY_RUN_ID must be a bounded identifier" >&2
+  exit 2
+}
 if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]]; then
   export REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR="${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR:-${state_dir}/secret-fixtures/${CAPACITY_RUN_ID}}"
   export REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT=1
-  export REPOSITORY_CAPACITY_PROJECT="${project}"
   export CAPACITY_CONTROLLER_A_CONFIG_FILE="${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}/controller-a/config.toml"
   export CAPACITY_CONTROLLER_B_CONFIG_FILE="${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}/controller-b/config.toml"
   export CAPACITY_CONTROLLER_A_SECRET_SOURCE="${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}/controller-a/provider"
@@ -70,11 +111,11 @@ wait_http() {
 }
 
 wait_stack() {
-  wait_http http://127.0.0.1:4000/ready "API A readiness"
-  wait_http http://127.0.0.1:4001/ready "API B readiness"
-  wait_http http://127.0.0.1:5001/health "controller A health"
-  wait_http http://127.0.0.1:5002/health "controller B health"
-  for endpoint in http://127.0.0.1:5001 http://127.0.0.1:5002; do
+  wait_http "${api_a}/ready" "API A readiness"
+  wait_http "${api_b}/ready" "API B readiness"
+  wait_http "${controller_a}/health" "controller A health"
+  wait_http "${controller_b}/health" "controller B health"
+  for endpoint in "${controller_a}" "${controller_b}"; do
     health="$(curl -fsS --max-time 2 "${endpoint}/health")"
     jq -e --arg kind "${controller_kind}" '.credentialReady == true and .kinds[$kind].registered == true' <<<"${health}" >/dev/null || {
       echo "${controller_kind} controller is not ready at ${endpoint}" >&2
@@ -96,7 +137,7 @@ controller_instance_id() {
 
 validate_controllers_post_run() {
   local endpoint health identity_a identity_b
-  for endpoint in http://127.0.0.1:5001 http://127.0.0.1:5002; do
+  for endpoint in "${controller_a}" "${controller_b}"; do
     # curl -f makes this an explicit HTTP 200 requirement, not merely a JSON
     # parse of an unhealthy response body.
     health="$(curl -fsS --max-time 5 "${endpoint}/health")"
@@ -105,8 +146,8 @@ validate_controllers_post_run() {
       return 1
     }
   done
-  identity_a="$(controller_instance_id http://127.0.0.1:5001)"
-  identity_b="$(controller_instance_id http://127.0.0.1:5002)"
+  identity_a="$(controller_instance_id "${controller_a}")"
+  identity_b="$(controller_instance_id "${controller_b}")"
   [[ "${identity_a}" != "${identity_b}" ]] || {
     echo "post-run controller endpoints resolve to the same process identity" >&2
     return 1
@@ -131,9 +172,10 @@ capture_local_stack_failure() {
 cleanup_local_stack() {
   local status="${1:-0}"
   cleanup_replacement_watcher
-  if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 && "${owned_stack_started}" != 1 ]]; then
+  if [[ "${owned_stack_started}" != 1 ]]; then
     return "${status}"
   fi
+  verify_owned_stack || return 1
   if (( status != 0 )); then
     capture_local_stack_failure
   fi
@@ -144,8 +186,11 @@ cleanup_local_stack() {
         status=1
       }
   fi
-  "${compose[@]}" down -v --remove-orphans || true
-  rm -f "${trigger_file}" "${token_file}"
+  "${compose[@]}" stop api-a api-b controller-manager-a controller-manager-b capacity-git-service scylla-1 scylla-2 scylla-3 || {
+    echo "owned capacity stack shutdown failed; volumes and evidence retained" >&2
+    status=1
+  }
+  rm -f "${trigger_file}"
   return "${status}"
 }
 
@@ -161,7 +206,7 @@ bootstrap_token() {
   local query payload response token
   query='mutation Login($username: String!, $password: String!) { login(input: { username: $username, password: $password }) { token { accessToken } } }'
   payload="$(jq -n --arg query "${query}" --arg username "${ADMIN_USERNAME:-admin}" --arg password "${ADMIN_PASSWORD:-admin123}" '{query:$query,variables:{username:$username,password:$password}}')"
-  response="$(curl -fsS --max-time 10 -H 'Content-Type: application/json' --data "${payload}" http://127.0.0.1:4000/graphql)"
+  response="$(curl -fsS --max-time 10 -H 'Content-Type: application/json' --data "${payload}" "${api_a}/graphql")"
   token="$(jq -er 'if ((.errors // []) | length) == 0 then .data.login.token.accessToken else empty end' <<<"${response}")" || {
     jq -r '.errors[]?.message' <<<"${response}" >&2
     return 1
@@ -227,30 +272,31 @@ run_alpha() {
   CAPACITY_API_BUILD=release \
   CAPACITY_CONTROLLER_BUILD=release \
   CAPACITY_GIT_SERVICE_BUILD=release \
-  CAPACITY_API_ENDPOINTS=http://127.0.0.1:4000,http://127.0.0.1:4001 \
-  CAPACITY_API_CONTAINERS=gitstore-capacity-api-a,gitstore-capacity-api-b \
-  CAPACITY_GIT_SERVICE_CONTAINER=gitstore-capacity-git-service \
+  CAPACITY_API_ENDPOINTS="${api_a},${api_b}" \
+  CAPACITY_API_CONTAINERS="${project}-api-a,${project}-api-b" \
+  CAPACITY_GIT_SERVICE_CONTAINER="${project}-capacity-git-service" \
   CAPACITY_SCYLLA_NODES=3 \
   CAPACITY_SCYLLA_SMP="${SCYLLA_CLUSTER_SMP}" \
   CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE="${REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES:-1610612736}" \
   CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated \
-  CAPACITY_DATASTORE_CONTAINERS=gitstore-capacity-scylla-1,gitstore-capacity-scylla-2,gitstore-capacity-scylla-3 \
+  CAPACITY_DATASTORE_CONTAINERS="${project}-scylla-1,${project}-scylla-2,${project}-scylla-3" \
   CAPACITY_CONFIG_MANIFEST="${state_dir}/config-manifest.json" \
   CAPACITY_ENVIRONMENT_MANIFEST="${state_dir}/environment-manifest.json" \
-  CAPACITY_API_A=http://127.0.0.1:4000 \
-  CAPACITY_API_B=http://127.0.0.1:4001 \
+  CAPACITY_API_A="${api_a}" \
+  CAPACITY_API_B="${api_b}" \
   PRODUCT_CAPACITY_API_A=http://api-a:4000/graphql \
   PRODUCT_CAPACITY_API_B=http://api-b:4000/graphql \
   CAPACITY_DOCKER_NETWORK="${project}_gitstore-network" \
-  CAPACITY_CONTROLLER_A=http://127.0.0.1:5001 \
-  CAPACITY_CONTROLLER_B=http://127.0.0.1:5002 \
+  CAPACITY_CONTROLLER_A="${controller_a}" \
+  CAPACITY_CONTROLLER_B="${controller_b}" \
   CAPACITY_TOKEN_FILE="${token_file}" \
-  REPOSITORY_API_A=http://127.0.0.1:4000 \
-  REPOSITORY_API_B=http://127.0.0.1:4001 \
-  REPOSITORY_OVERFLOW_API=http://127.0.0.1:4000 \
-  REPOSITORY_CONTROLLER_A=http://127.0.0.1:5001 \
-  REPOSITORY_CONTROLLER_B=http://127.0.0.1:5002 \
-  REPOSITORY_API_REPLACEMENT=http://127.0.0.1:4001 \
+  REPOSITORY_API_A="${api_a}" \
+  REPOSITORY_API_B="${api_b}" \
+  REPOSITORY_OVERFLOW_API="${api_a}" \
+  REPOSITORY_CONTROLLER_A="${controller_a}" \
+  REPOSITORY_CONTROLLER_B="${controller_b}" \
+  REPOSITORY_API_REPLACEMENT="${api_b}" \
+  REPOSITORY_GIT_URL="http://127.0.0.1:${CAPACITY_GIT_HTTP_A_PORT}" \
   REPOSITORY_REPLACEMENT_TRIGGER_FILE="${trigger_file}" \
   REPOSITORY_TOKEN_FILE="${token_file}" \
   REPOSITORY_CAPACITY_DURATION="${REPOSITORY_CAPACITY_DURATION:-${duration}}" \
@@ -272,12 +318,12 @@ run_alpha() {
     product_evidence_dir="${CAPACITY_EVIDENCE_DIR:-${repo_root}/.gitstore/capacity}/product/lifecycle/alpha/${CAPACITY_RUN_ID}"
     mkdir -p "${product_evidence_dir}"
     set +e
-    PRODUCT_WATCH_API_A=http://127.0.0.1:4000 \
-    PRODUCT_WATCH_API_B=http://127.0.0.1:4001 \
-    PRODUCT_WATCH_API_REPLACEMENT=http://127.0.0.1:4001 \
+    PRODUCT_WATCH_API_A="${api_a}" \
+    PRODUCT_WATCH_API_B="${api_b}" \
+    PRODUCT_WATCH_API_REPLACEMENT="${api_b}" \
     PRODUCT_WATCH_REPLACEMENT_TRIGGER_FILE="${trigger_file}" \
     PRODUCT_WATCH_TOKEN_FILE="${token_file}" \
-    PRODUCT_CAPACITY_GIT_URL=http://127.0.0.1:9000 \
+    PRODUCT_CAPACITY_GIT_URL="http://127.0.0.1:${CAPACITY_GIT_HTTP_A_PORT}" \
     PRODUCT_CAPACITY_NAMESPACE=default \
     PRODUCT_CAPACITY_REPOSITORY=gitstore-system \
     go -C "${repo_root}/tests/integration" test -count=1 -run '^TestProduct(Watch|CapacityGitPushParity)' . \
@@ -312,9 +358,60 @@ secret_fixtures() {
   (
     cd "${repo_root}/tests/integration"
     REPOSITORY_CAPACITY_SECRET_FIXTURE_ACTION="$1" \
-      REPOSITORY_TOKEN_FILE="${token_file}" REPOSITORY_API_A=http://127.0.0.1:4000 \
+      REPOSITORY_TOKEN_FILE="${token_file}" REPOSITORY_API_A="${api_a}" \
       GOWORK=off go test -count=1 -run '^TestSecretCapacityFixtureProvision$' .
   )
+}
+
+finish_secret_startup() {
+  wait_http "${api_a}/ready" "API A readiness"
+  wait_http "${api_b}/ready" "API B readiness"
+  local enrollment_id enrollment_status
+  enrollment_id="$("${compose[@]}" ps --all --quiet capacity-serviceaccount-enrollment)"
+  [[ "${enrollment_id}" =~ ^[a-f0-9]{12,64}$ ]] || {
+    echo "owned enrollment must identify exactly one container" >&2
+    return 1
+  }
+  # Compose wait omits already-exited one-shot services in some releases.
+  enrollment_status="$(docker wait "${enrollment_id}")"
+  [[ "${enrollment_status}" == 0 ]] || {
+    echo "owned enrollment did not complete successfully" >&2
+    return 1
+  }
+  bootstrap_token
+  secret_fixtures provision
+  local build_args=(--build)
+  if [[ -n "${CAPACITY_CONTROLLER_IMAGE:-}" ]]; then
+    build_args=()
+  fi
+  "${compose[@]}" up -d "${build_args[@]}" --no-deps controller-manager-a controller-manager-b
+}
+
+verify_owned_stack() {
+  [[ -f "${ownership_file}" && ! -L "${ownership_file}" ]] || {
+    echo "capacity ownership manifest is missing or not a regular file" >&2
+    return 2
+  }
+  jq -e --arg project "${project}" --arg run "${CAPACITY_RUN_ID}" --arg revision "${revision}" \
+    --arg keyspace "${CAPACITY_SCYLLA_KEYSPACE}" --argjson ports "$(printf '%s\n' "${ports[@]}" | jq -s .)" '
+      .schemaVersion == 1 and .project == $project and .runID == $run and
+      .revision == $revision and .keyspace == $keyspace and .ports == $ports
+    ' "${ownership_file}" >/dev/null || {
+      echo "capacity ownership manifest does not match the requested deployment" >&2
+      return 2
+    }
+  local ids id labels
+  ids="$(docker ps -aq --filter "label=com.docker.compose.project=${project}")"
+  for id in ${ids}; do
+    [[ "${id}" =~ ^[a-f0-9]{12,64}$ ]] || { echo "invalid project container ID" >&2; return 2; }
+    labels="$(docker inspect --format '{{json .Config.Labels}}' "${id}")"
+    jq -e --arg project "${project}" --arg run "${CAPACITY_RUN_ID}" '
+      .["com.docker.compose.project"] == $project and .["dev.gitstore.capacity.run"] == $run
+    ' <<<"${labels}" >/dev/null || {
+      echo "capacity container ownership mismatch; refusing lifecycle action" >&2
+      return 2
+    }
+  done
 }
 
 start_owned_stack() {
@@ -322,16 +419,36 @@ start_owned_stack() {
   if [[ -n "${CAPACITY_API_IMAGE:-}${CAPACITY_GIT_SERVICE_IMAGE:-}${CAPACITY_CONTROLLER_IMAGE:-}" ]]; then
     build_args=()
   fi
+  [[ -z "$(docker ps -aq --filter "label=com.docker.compose.project=${project}")" ]] || {
+    echo "refusing to reuse existing capacity project containers; inspect their data first" >&2
+    return 2
+  }
+  [[ -z "$(docker volume ls -q --filter "label=com.docker.compose.project=${project}")" ]] || {
+    echo "refusing to reuse existing capacity project volumes; inspect their data first" >&2
+    return 2
+  }
+  for port in "${ports[@]}"; do
+    if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+      echo "capacity TCP port ${port} is already in use" >&2
+      return 2
+    fi
+  done
+  [[ ! -e "${ownership_file}" && ! -L "${ownership_file}" ]] || {
+    echo "refusing to overwrite an existing capacity ownership manifest" >&2
+    return 2
+  }
+  mkdir -p "$(dirname "${ownership_file}")"
+  (umask 077
+    jq -n --arg project "${project}" --arg run "${CAPACITY_RUN_ID}" --arg revision "${revision}" \
+      --arg keyspace "${CAPACITY_SCYLLA_KEYSPACE}" --argjson ports "$(printf '%s\n' "${ports[@]}" | jq -s .)" \
+      '{schemaVersion:1,project:$project,runID:$run,revision:$revision,keyspace:$keyspace,ports:$ports}' >"${ownership_file}")
   if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" != 1 ]]; then
+    owned_stack_started=1
     "${compose[@]}" up -d "${build_args[@]}" api-a api-b controller-manager-a controller-manager-b
     return
   fi
   [[ "${CHAOS_CONFIRM:-0}" == 1 ]] || {
     echo "secret capacity requires explicit CHAOS_CONFIRM=1 for its owned controller restart" >&2
-    return 2
-  }
-  [[ -z "$(docker ps -aq --filter 'name=^/gitstore-capacity-')" ]] || {
-    echo "refusing to replace existing capacity containers with an owned secret stack" >&2
     return 2
   }
   [[ ! -e "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}" && ! -L "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}" ]] || {
@@ -341,12 +458,7 @@ start_owned_stack() {
   owned_stack_started=1
   mkdir -p "$(dirname "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}")"
   "${compose[@]}" up -d "${build_args[@]}" api-a api-b capacity-serviceaccount-enrollment
-  wait_http http://127.0.0.1:4000/ready "API A readiness"
-  wait_http http://127.0.0.1:4001/ready "API B readiness"
-  "${compose[@]}" wait capacity-serviceaccount-enrollment
-  bootstrap_token
-  secret_fixtures provision
-  "${compose[@]}" up -d "${build_args[@]}" --no-deps controller-manager-a controller-manager-b
+  finish_secret_startup
 }
 
 run_local_alpha() {
@@ -369,17 +481,28 @@ case "${action}" in
     rm -f "${trigger_file}"
     start_owned_stack
     ;;
-  wait) wait_stack ;;
-  token) wait_stack; bootstrap_token ;;
-  alpha) run_alpha ;;
+  verify-owned) verify_owned_stack ;;
+  resume)
+    verify_owned_stack
+    [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 &&
+       ! -e "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}" && ! -L "${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR}" ]] || {
+      echo "resume requires an owned secret startup interrupted before private fixture provisioning" >&2
+      exit 2
+    }
+    finish_secret_startup
+    ;;
+  wait) verify_owned_stack; wait_stack ;;
+  token) verify_owned_stack; wait_stack; bootstrap_token ;;
+  alpha) verify_owned_stack; run_alpha ;;
   local-alpha) run_local_alpha ;;
   down)
-    "${compose[@]}" down -v --remove-orphans
-    rm -f "${trigger_file}" "${token_file}"
+    verify_owned_stack
+    "${compose[@]}" stop api-a api-b controller-manager-a controller-manager-b capacity-git-service scylla-1 scylla-2 scylla-3
+    rm -f "${trigger_file}"
     ;;
   config) "${compose[@]}" config ;;
   *)
-    echo "usage: $0 <up|wait|token|alpha|local-alpha|down|config>" >&2
+    echo "usage: $0 <up|resume|wait|token|alpha|local-alpha|down|verify-owned|config>" >&2
     exit 2
     ;;
 esac

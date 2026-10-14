@@ -4,6 +4,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,6 +29,9 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__GIT_SERVICE__URI",
 		"GITSTORE_LOG__LEVEL",
 		"GITSTORE_LOG__FORMAT",
+		"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT",
+		"GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO",
+		"GITSTORE_API__PROFILING__LISTEN_ADDR",
 		"GITSTORE_GRPC_AUTH__HMAC_SECRET",
 		"GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE",
 		"GITSTORE_PUSH_LIMITS__MAX_FILE_SIZE",
@@ -111,6 +115,88 @@ func setRequiredAuth(t *testing.T) {
 }
 
 // T005: layered loading tests
+
+func TestLoad_ObservabilitySources(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://ignored.example:4318")
+	t.Setenv("GITSTORE_CAPACITY_PROFILE_ADDR", "127.0.0.1:9999")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Observability.OTLP.Endpoint)
+	assert.Equal(t, 0.05, cfg.Observability.OTLP.TraceSampleRatio)
+	assert.Empty(t, cfg.Api.Profiling.ListenAddr)
+
+	base := filepath.Join(t.TempDir(), "base.toml")
+	require.NoError(t, os.WriteFile(base, []byte(`
+[observability.otlp]
+endpoint = "http://collector:4318"
+trace_sample_ratio = 0.1
+[api.profiling]
+listen_addr = "127.0.0.1:6060"
+`), 0o600))
+	overlay := filepath.Join(t.TempDir(), "overlay.toml")
+	require.NoError(t, os.WriteFile(overlay, []byte(`
+[observability.otlp]
+trace_sample_ratio = 0.25
+`), 0o600))
+	cfg, err = LoadFromFiles([]string{base, overlay})
+	require.NoError(t, err)
+	assert.Equal(t, "http://collector:4318", cfg.Observability.OTLP.Endpoint)
+	assert.Equal(t, 0.25, cfg.Observability.OTLP.TraceSampleRatio)
+	assert.Equal(t, "127.0.0.1:6060", cfg.Api.Profiling.ListenAddr)
+
+	t.Setenv("GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://local-collector:4318")
+	t.Setenv("GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "0")
+	t.Setenv("GITSTORE_API__PROFILING__LISTEN_ADDR", "[::1]:6061")
+	cfg, err = LoadFromFiles([]string{base, overlay})
+	require.NoError(t, err)
+	assert.Equal(t, "http://local-collector:4318", cfg.Observability.OTLP.Endpoint)
+	assert.Zero(t, cfg.Observability.OTLP.TraceSampleRatio)
+	assert.Equal(t, "[::1]:6061", cfg.Api.Profiling.ListenAddr)
+}
+
+func TestLoad_RejectsInvalidObservability(t *testing.T) {
+	for _, tc := range []struct{ key, value string }{
+		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "grpc://collector:4317"},
+		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://user:sensitive-value@collector:4318"},
+		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://collector:4318?token=sensitive-value"},
+		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://collector:4318#sensitive-value"},
+		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://collector:4318?"},
+		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://collector:4318#"},
+		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://:4318"},
+		{"GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "-0.1"},
+		{"GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "1.1"},
+		{"GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "NaN"},
+		{"GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "+Inf"},
+		{"GITSTORE_API__PROFILING__LISTEN_ADDR", "0.0.0.0:6060"},
+		{"GITSTORE_API__PROFILING__LISTEN_ADDR", "localhost:6060"},
+		{"GITSTORE_API__PROFILING__LISTEN_ADDR", "127.0.0.1:0"},
+		{"GITSTORE_API__PROFILING__LISTEN_ADDR", "[::]:6060"},
+		{"GITSTORE_API__PROFILING__LISTEN_ADDR", "127.0.0.1:65536"},
+	} {
+		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
+			restore := clearEnv(t)
+			defer restore()
+			setRequiredAuth(t)
+			t.Setenv(tc.key, tc.value)
+			_, err := Load()
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "sensitive-value")
+		})
+	}
+}
+
+func TestOTLPConfigValidation(t *testing.T) {
+	for _, ratio := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), -1, 1.01} {
+		require.Error(t, (OTLPConfig{TraceSampleRatio: ratio}).Validate())
+	}
+	for _, ratio := range []float64{0, 0.05, 1} {
+		require.NoError(t, (OTLPConfig{Endpoint: "https://collector:4318/otlp", TraceSampleRatio: ratio}).Validate())
+	}
+}
 
 func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	restore := clearEnv(t)

@@ -472,7 +472,8 @@ func (m *Manager) scheduleRequeue(ctx context.Context, ks *kindState, key WorkIt
 	})
 }
 
-func (m *Manager) requeueUnavailable(ctx context.Context, ks *kindState, key WorkItemKey, delay time.Duration, reason string, log *zap.Logger) {
+func (m *Manager) requeueUnavailable(ctx context.Context, ks *kindState, key WorkItemKey, delay time.Duration, dependency, reason string, log *zap.Logger) {
+	health.DependencyDeferrals.WithLabelValues(key.Kind, dependency).Inc()
 	log.Warn(reason+"; deferring without quarantine", zap.Duration("backoff", delay))
 	if ks.reg.Disk != nil {
 		m.scheduleRequeue(ctx, ks, key, delay)
@@ -512,11 +513,15 @@ func (m *Manager) handleTransient(
 		return
 	}
 	if errors.Is(r.Err, types.ErrRateLimited) {
-		m.requeueUnavailable(ctx, ks, key, max(time.Second, r.BackoffHint), "API throttled reconciliation", log)
+		m.requeueUnavailable(ctx, ks, key, max(time.Second, r.BackoffHint), "rate_limit", "API throttled reconciliation", log)
 		return
 	}
 	if errors.Is(r.Err, types.ErrCredentialsUnavailable) {
-		m.requeueUnavailable(ctx, ks, key, max(time.Second, r.BackoffHint), "credentials unavailable for reconciliation", log)
+		m.requeueUnavailable(ctx, ks, key, max(time.Second, r.BackoffHint), "credentials", "credentials unavailable for reconciliation", log)
+		return
+	}
+	if errors.Is(r.Err, types.ErrAPIUnavailable) {
+		m.requeueUnavailable(ctx, ks, key, max(time.Second, r.BackoffHint), "api", "API unavailable for reconciliation", log.With(zap.Error(r.Err)))
 		return
 	}
 	if r.BackoffHint > 0 {
@@ -546,7 +551,8 @@ func (m *Manager) handleTransient(
 		_ = m.logPanic(log, key, inner)
 		switch iv := inner.(type) {
 		case types.TransientFailure:
-			if errors.Is(iv.Err, types.ErrRateLimited) || errors.Is(iv.Err, types.ErrCredentialsUnavailable) || errors.Is(iv.Err, checkpoint.ErrSnapshotInProgress) {
+			if errors.Is(iv.Err, types.ErrRateLimited) || errors.Is(iv.Err, types.ErrCredentialsUnavailable) ||
+				errors.Is(iv.Err, types.ErrAPIUnavailable) || errors.Is(iv.Err, checkpoint.ErrSnapshotInProgress) {
 				return backoff.Permanent(iv.Err)
 			}
 			return iv.Err
@@ -570,11 +576,15 @@ func (m *Manager) handleTransient(
 		return
 	}
 	if errors.Is(lastErr, types.ErrRateLimited) {
-		m.requeueUnavailable(ctx, ks, key, time.Second, "API throttled reconciliation", log)
+		m.requeueUnavailable(ctx, ks, key, time.Second, "rate_limit", "API throttled reconciliation", log)
 		return
 	}
 	if errors.Is(lastErr, types.ErrCredentialsUnavailable) {
-		m.requeueUnavailable(ctx, ks, key, time.Second, "credentials unavailable for reconciliation", log)
+		m.requeueUnavailable(ctx, ks, key, time.Second, "credentials", "credentials unavailable for reconciliation", log)
+		return
+	}
+	if errors.Is(lastErr, types.ErrAPIUnavailable) {
+		m.requeueUnavailable(ctx, ks, key, time.Second, "api", "API unavailable for reconciliation", log.With(zap.Error(lastErr)))
 		return
 	}
 	var deferred *requeueDuringRetryError
@@ -758,7 +768,7 @@ func (m *Manager) runDiskMaintenance(ctx context.Context, ks *kindState) {
 		}
 		select {
 		case <-resync:
-			if err := ks.reg.Disk.RequestFanout(ctx, "*"); err != nil {
+			if err := ks.reg.Disk.RequestResync(ctx, ks.reg.ResyncInterval); err != nil {
 				m.storageError(ks, err)
 			}
 		default:

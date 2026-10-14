@@ -8,7 +8,11 @@ package gitclient_test
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"strings"
 	"testing"
+	"time"
 
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
@@ -17,16 +21,78 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // writeStub implements only the write RPCs.
 type writeStub struct {
 	gitv1.UnimplementedGitServiceServer
 
-	commitFileFunc func(*gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error)
-	deleteFileFunc func(*gitv1.DeleteFileRequest) (*gitv1.DeleteFileResponse, error)
-	createTagFunc  func(*gitv1.CreateTagRequest) (*gitv1.CreateTagResponse, error)
+	commitFileFunc  func(*gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error)
+	deleteFileFunc  func(*gitv1.DeleteFileRequest) (*gitv1.DeleteFileResponse, error)
+	createTagFunc   func(*gitv1.CreateTagRequest) (*gitv1.CreateTagResponse, error)
+	receivePackFunc func(gitv1.GitService_ReceivePackServer) error
+}
+
+func (s *writeStub) ReceivePack(stream gitv1.GitService_ReceivePackServer) error {
+	if s.receivePackFunc != nil {
+		return s.receivePackFunc(stream)
+	}
+	return status.Error(codes.Unimplemented, "not set up")
+}
+
+func TestReceivePackSignsShallowBoundariesOnlyOnFirstChunk(t *testing.T) {
+	for _, pack := range []string{"", "PACK" + strings.Repeat("x", 128*1024)} {
+		t.Run(fmt.Sprintf("pack bytes %d", len(pack)), func(t *testing.T) {
+			oid := strings.Repeat("a", 40)
+			calls := 0
+			c := startBufconn(t, &writeStub{receivePackFunc: func(stream gitv1.GitService_ReceivePackServer) error {
+				first, err := stream.Recv()
+				require.NoError(t, err)
+				require.Equal(t, []string{oid}, first.ShallowOids)
+				md, _ := metadata.FromIncomingContext(stream.Context())
+				_, _, err = auth.VerifyRPC("fixture-key", "gitstore-git", gitv1.GitService_ReceivePack_FullMethodName,
+					md.Get(auth.RPCSignatureMetadata)[0], first, time.Now())
+				require.NoError(t, err)
+				tampered := proto.Clone(first).(*gitv1.ReceivePackRequest)
+				tampered.ShallowOids = []string{strings.Repeat("b", 40)}
+				_, _, err = auth.VerifyRPC("fixture-key", "gitstore-git", gitv1.GitService_ReceivePack_FullMethodName,
+					md.Get(auth.RPCSignatureMetadata)[0], tampered, time.Now())
+				require.Error(t, err)
+				actual := string(first.PackData)
+				calls++
+				for {
+					chunk, err := stream.Recv()
+					if err == io.EOF {
+						break
+					}
+					require.NoError(t, err)
+					require.Empty(t, chunk.ShallowOids)
+					require.Empty(t, chunk.RepositoryId)
+					require.Empty(t, chunk.RefCommands)
+					require.Nil(t, chunk.PushContext)
+					actual += string(chunk.PackData)
+				}
+				require.Equal(t, pack, actual)
+				return stream.SendAndClose(&gitv1.ReceivePackResponse{ReportStatus: []byte("report")})
+			}})
+			ctx := gitclient.ContextForBackingWork(t.Context())
+			authorization, err := gitclient.RequestAuthorization(ctx, auth.ActionRepositoryContentsWrite, c.RepositoryID)
+			require.NoError(t, err)
+			original := &gitv1.PushContext{RepositoryId: c.RepositoryID, Authorization: authorization}
+			snapshot := proto.Clone(original)
+			ctx = gitclient.ContextWithPushContext(ctx, original)
+			packet := func(data string) string { return fmt.Sprintf("%04x%s", len(data)+4, data) }
+			body := packet("shallow "+oid+"\n") + packet(oid+" "+strings.Repeat("0", 40)+" refs/heads/main\x00report-status\n") + "0000" + pack
+			report, err := c.ReceivePack(ctx, c.RepositoryID, strings.NewReader(body))
+			require.NoError(t, err)
+			require.Equal(t, []byte("report"), report)
+			require.Equal(t, 1, calls)
+			require.True(t, proto.Equal(original, snapshot), "receive must not mutate shared authorization")
+		})
+	}
 }
 
 func (s *writeStub) CommitFile(_ context.Context, req *gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error) {

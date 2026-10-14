@@ -3,7 +3,79 @@
 
 package datastore
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"context"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+type NamespaceFencePhase uint8
+
+const (
+	NamespaceFenceLookup NamespaceFencePhase = iota
+	NamespaceFenceQueue
+	NamespaceFenceReserve
+	NamespaceFenceMutation
+	NamespaceFenceRelease
+)
+
+type namespaceFenceObserverKey struct{}
+type namespaceFenceObserver func(NamespaceFencePhase, time.Time, error)
+
+type CatalogMutationPhase uint8
+
+const (
+	CatalogMutationParentCheck CatalogMutationPhase = iota
+	CatalogMutationReadBefore
+	CatalogMutationMembershipWrite
+	CatalogMutationReadAfter
+	FileMutationLocatorRead
+	FileMutationAuthoritativeCAS
+	FileMutationOwnerReferenceSync
+	FileMutationConditionalBatch2
+	FileMutationConditionalBatch3
+	FileMutationConditionalBatch4
+	FileMutationConditionalBatch5
+	FileMutationConditionalBatch6
+	FileMutationConditionalBatch7
+	FileMutationConditionalBatch8
+	FileMutationConditionalBatch9
+	FileMutationConditionalBatch10
+	FileMutationConditionalBatch11
+	FileMutationConditionalBatch12
+	FileMutationConditionalBatch13
+	FileMutationConditionalBatch14
+	FileMutationConditionalBatch15
+	FileMutationConditionalBatch16
+)
+
+type catalogMutationObserverKey struct{}
+type catalogMutationObserver func(CatalogMutationPhase, time.Time, error)
+
+func MeasureCatalogMutationPhase(ctx context.Context, phase CatalogMutationPhase, operation func() error) error {
+	observer, ok := ctx.Value(catalogMutationObserverKey{}).(catalogMutationObserver)
+	if !ok {
+		return operation()
+	}
+	start := time.Now()
+	err := operation()
+	observer(phase, start, err)
+	return err
+}
+
+// MeasureNamespaceFencePhase reports only work actually attempted; retained
+// repair fences therefore have no release sample.
+func MeasureNamespaceFencePhase(ctx context.Context, phase NamespaceFencePhase, operation func() error) error {
+	observer, ok := ctx.Value(namespaceFenceObserverKey{}).(namespaceFenceObserver)
+	if !ok {
+		return operation()
+	}
+	start := time.Now()
+	err := operation()
+	observer(phase, start, err)
+	return err
+}
 
 type datastoreMetrics struct {
 	duration             *prometheus.HistogramVec

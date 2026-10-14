@@ -9,7 +9,8 @@ CONTROLLER_MANAGER_DIR := $(ROOT)/gitstore-controller-manager
 GIT_SERVICE_DIR := $(ROOT)/gitstore-git-service
 OIDC_BRIDGE_DIR := $(ROOT)/gitstore-oidc-bridge
 SECRET_MATERIAL_DIR := $(ROOT)/shared/secretmaterial
-GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR)
+CDC_DIR := $(ROOT)/shared/scylla-cdc-go
+GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR) $(CDC_DIR)
 
 API_ENV_FILE ?= $(API_DIR)/.env
 CONFIG_FILE ?= ./config/config.toml
@@ -149,6 +150,8 @@ CAPACITY_RUN_ID ?=
 CAPACITY_EVIDENCE_DIR ?= $(ROOT)/.gitstore/capacity
 CAPACITY_ENV_FILE ?=
 CAPACITY_TOKEN_FILE ?=
+CAPACITY_DENIED_TOKEN_FILE ?=
+CAPACITY_DENIAL_CODE ?= FORBIDDEN
 CAPACITY_CONFIG_MANIFEST ?=
 CAPACITY_ENVIRONMENT_MANIFEST ?=
 CAPACITY_PROMETHEUS_URL ?=
@@ -156,6 +159,17 @@ CAPACITY_PROMETHEUS_PORT ?= 9090
 CAPACITY_PROMETHEUS_RETENTION ?= 24h
 CAPACITY_PROMETHEUS_TARGETS ?= host.docker.internal:4000,host.docker.internal:4001
 CAPACITY_PROMETHEUS_CONTROLLER_TARGETS ?=
+CAPACITY_PROMETHEUS_GIT_TARGETS ?=
+CAPACITY_OBSERVABILITY_KEEP ?= 0
+CAPACITY_PROFILING ?= none
+CAPACITY_PROFILE_SECONDS ?= 30
+CAPACITY_API_PROFILE_PORT ?= 6060
+export CAPACITY_PROFILING CAPACITY_PROFILE_SECONDS CAPACITY_API_PROFILE_PORT
+CAPACITY_OTLP_PORT ?= 4318
+CAPACITY_OTEL_HEALTH_PORT ?= 13133
+CAPACITY_TEMPO_PORT ?= 3200
+CAPACITY_LOKI_PORT ?= 3100
+export CAPACITY_PROMETHEUS_GIT_TARGETS CAPACITY_OBSERVABILITY_KEEP CAPACITY_OTLP_PORT CAPACITY_OTEL_HEALTH_PORT CAPACITY_TEMPO_PORT CAPACITY_LOKI_PORT
 export CAPACITY_PROMETHEUS_CONTROLLER_TARGETS
 CAPACITY_PROMETHEUS_TARGETS_FILE ?=
 CAPACITY_OBSERVABILITY ?= none
@@ -181,7 +195,7 @@ export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CAC
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla ps logs stop down
-.PHONY: build test lint pr-ready check clean bootstrap secret capacity chaos generate _generate-authz _generate-all _check-generated
+.PHONY: build test lint pr-ready check clean bootstrap secret capacity chaos generate _generate-authz _generate-proto _generate-all _check-generated
 .PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-repository-lifecycle _capacity-repository-overflow _capacity-observability _capacity-observability-down
 .PHONY: _capacity-authorization
 .PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
@@ -220,7 +234,8 @@ help: ## Show available targets and common variables.
 	@printf "  NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL=%s\n" "$(NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL)"
 	@printf "  NAMESPACE_WATCH_CAPACITY_BASELINE_STABILIZATION=%s NAMESPACE_WATCH_CAPACITY_POST_LOAD_STABILIZATION=%s\n" "$(NAMESPACE_WATCH_CAPACITY_BASELINE_STABILIZATION)" "$(NAMESPACE_WATCH_CAPACITY_POST_LOAD_STABILIZATION)"
 	@printf "  TARGET=%s PROFILE=<scenario> MODE=%s  Capacity subsystem, scenario, and evidence class\n" "$(TARGET)" "$(MODE)"
-	@printf "  CAPACITY_OBSERVABILITY=%s  Optional capacity metrics collector: none or prometheus\n" "$(CAPACITY_OBSERVABILITY)"
+	@printf "  CAPACITY_OBSERVABILITY=%s  Local observation stack: none, prometheus, or full (OTLP/Tempo/Loki)\n" "$(CAPACITY_OBSERVABILITY)"
+	@printf "  CAPACITY_OBSERVABILITY_KEEP=1  Keep collectors running after evidence export\n"
 	@printf "  CAPACITY_PROMETHEUS_URL=<url> Export phase queries into the evidence bundle\n"
 	@printf "  CAPACITY_PROMETHEUS_TARGETS=%s  Scrape endpoints reachable from Prometheus\n" "$(CAPACITY_PROMETHEUS_TARGETS)"
 	@printf "  CAPACITY_PROMETHEUS_CONTROLLER_TARGETS=%s  Optional controller endpoints for retained time series\n" "$(CAPACITY_PROMETHEUS_CONTROLLER_TARGETS)"
@@ -456,13 +471,17 @@ build: ## Build Rust/Go services and the shared secret-material module.
 		( cd "$$dir" && go build -v ./... ) || exit 1; \
 	done
 
-generate: ## Generate committed sources; TARGET=authz or all.
+generate: ## Generate committed sources; TARGET=authz, proto or all.
 	@./scripts/run-make-workflow.sh generate "$(TARGET)"
 
 _generate-authz:
 	@cd "$(API_DIR)" && go run ./cmd/gitctl generate authz --root "$(ROOT)"
 
-_generate-all:
+_generate-proto:
+	@buf generate --template buf.gen.go.yaml
+	@buf generate --template buf.gen.rust.yaml
+
+_generate-all: _generate-proto
 	@cd "$(API_DIR)" && go generate ./...
 
 _check-generated:
@@ -472,6 +491,7 @@ test: ## Run tests; TARGET=all (default), datastore, or secret-integration. Data
 ifeq ($(TEST_TARGET),secret-integration)
 	@test "$(SECRET_TEST_OWNED_DEPLOYMENT)" = "1" || { echo "SECRET_TEST_OWNED_DEPLOYMENT=1 is required"; exit 2; }
 	@test -n "$(SECRET_TEST_API_A)" -a -n "$(SECRET_TEST_API_B)" -a -n "$(SECRET_TEST_TOKEN_FILE)" || { echo "SECRET_TEST_API_A, SECRET_TEST_API_B and SECRET_TEST_TOKEN_FILE are required"; exit 2; }
+	@test "$(origin SECRET_TEST_NAMESPACE)" = "undefined" || { echo "SECRET_TEST_NAMESPACE is removed; use SECRET_TEST_SERVICEACCOUNT"; exit 2; }
 	@binary=$$(mktemp "$${TMPDIR:-/tmp}/gitstore-secret-controller.XXXXXX"); \
 		trap 'rm -f "$$binary"' EXIT INT TERM; \
 		(cd "$(CONTROLLER_MANAGER_DIR)" && GOWORK=off go build -o "$$binary" ./cmd/controller) && \
@@ -479,7 +499,7 @@ ifeq ($(TEST_TARGET),secret-integration)
 		SECRET_TEST_RUN=1 SECRET_TEST_OWNED_DEPLOYMENT=1 \
 		SECRET_TEST_CONTROLLER_BINARY="$$binary" SECRET_TEST_API_A="$(SECRET_TEST_API_A)" \
 		SECRET_TEST_API_B="$(SECRET_TEST_API_B)" SECRET_TEST_TOKEN_FILE="$(abspath $(SECRET_TEST_TOKEN_FILE))" \
-		SECRET_TEST_NAMESPACE="$(SECRET_TEST_NAMESPACE)" SECRET_TEST_SERVICEACCOUNT="$(SECRET_TEST_SERVICEACCOUNT)" \
+		SECRET_TEST_SERVICEACCOUNT="$(SECRET_TEST_SERVICEACCOUNT)" \
 		GOWORK=off go test -v -count=1 -timeout 10m -run '^TestSecretBootstrapRotationDeployed$$' .
 
 else ifeq ($(TEST_TARGET),datastore)
@@ -510,7 +530,14 @@ else
 endif
 
 capacity: ## Run a capacity scenario; set TARGET, PROFILE, and MODE.
-ifeq ($(TARGET)/$(PROFILE)/$(MODE),repository/lifecycle/alpha)
+ifneq ($(strip $(CAPACITY_STACK_ACTION)),)
+	@test "$(TARGET)/$(PROFILE)/$(MODE)" = "repository/lifecycle/diagnostic" || { echo "CAPACITY_STACK_ACTION requires repository/lifecycle diagnostic mode" >&2; exit 2; }
+	@case "$(CAPACITY_STACK_ACTION)" in up|resume|wait|token|verify-owned|down|config) ;; *) echo "invalid CAPACITY_STACK_ACTION" >&2; exit 2 ;; esac
+	@REPOSITORY_CAPACITY_PROJECT="$(REPOSITORY_CAPACITY_PROJECT)" \
+		REPOSITORY_CAPACITY_STATE_DIR="$(REPOSITORY_CAPACITY_STATE_DIR)" \
+		CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" \
+		./scripts/repository-capacity-stack.sh "$(CAPACITY_STACK_ACTION)"
+else ifeq ($(TARGET)/$(PROFILE)/$(MODE),repository/lifecycle/alpha)
 	@REPOSITORY_CAPACITY_PROJECT="$(REPOSITORY_CAPACITY_PROJECT)" \
 		REPOSITORY_CAPACITY_STATE_DIR="$(REPOSITORY_CAPACITY_STATE_DIR)" \
 		SCYLLA_CLUSTER_SMP=1 \
@@ -544,13 +571,13 @@ endif
 
 _capacity-observability:
 	@test -n "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" || { echo "CAPACITY_PROMETHEUS_TARGETS_FILE is required"; exit 2; }
-	@./scripts/write-capacity-prometheus-targets.sh "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" "$(CAPACITY_PROMETHEUS_TARGETS)" "$(CAPACITY_PROMETHEUS_CONTROLLER_TARGETS)"
+	@./scripts/write-capacity-prometheus-targets.sh "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" "$(CAPACITY_PROMETHEUS_TARGETS)" "$(CAPACITY_PROMETHEUS_CONTROLLER_TARGETS)" "$(CAPACITY_PROMETHEUS_GIT_TARGETS)"
 	@CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" CAPACITY_PROMETHEUS_TARGETS_FILE="$(CAPACITY_PROMETHEUS_TARGETS_FILE)" \
-		docker compose --profile capacity -f compose.yml -f compose.capacity.yml up -d capacity-prometheus
+		docker compose --profile capacity -f compose.yml -f compose.capacity.yml up -d capacity-prometheus $(if $(filter full,$(CAPACITY_OBSERVABILITY)),capacity-otel-collector capacity-tempo capacity-loki)
 
 _capacity-observability-down:
 	@CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" CAPACITY_PROMETHEUS_TARGETS_FILE="$(CAPACITY_PROMETHEUS_TARGETS_FILE)" \
-		docker compose --profile capacity -f compose.yml -f compose.capacity.yml rm -sf capacity-prometheus
+		docker compose --profile capacity -f compose.yml -f compose.capacity.yml rm -sf capacity-prometheus $(if $(filter full,$(CAPACITY_OBSERVABILITY)),capacity-otel-collector capacity-tempo capacity-loki)
 
 _capacity-k6:
 	@CAPACITY_PROFILE="$(CAPACITY_PROFILE)" \
@@ -560,6 +587,8 @@ _capacity-k6:
 		CAPACITY_EVIDENCE_DIR="$(CAPACITY_EVIDENCE_DIR)" \
 		CAPACITY_ENV_FILE="$(CAPACITY_ENV_FILE)" \
 		CAPACITY_TOKEN_FILE="$(CAPACITY_TOKEN_FILE)" \
+		CAPACITY_DENIED_TOKEN_FILE="$(CAPACITY_DENIED_TOKEN_FILE)" \
+		CAPACITY_DENIAL_CODE="$(CAPACITY_DENIAL_CODE)" \
 		CAPACITY_CONFIG_MANIFEST="$(CAPACITY_CONFIG_MANIFEST)" \
 		CAPACITY_ENVIRONMENT_MANIFEST="$(CAPACITY_ENVIRONMENT_MANIFEST)" \
 		PRODUCT_CAPACITY_API_A="$${PRODUCT_CAPACITY_API_A}" \
@@ -584,7 +613,7 @@ chaos: ## Inject an opt-in container fault and retain structured evidence.
 
 _capacity-authorization:
 	@cd "$(API_DIR)" && AUTHZ_CAPACITY_RUN=1 MODE="$(MODE)" \
-		go test -count=1 -timeout 75m -v -run '^TestAuthorizationDecisionCapacity$$' ./internal/auth/provider/rbaclocal
+		go test -count=1 -timeout 75m -v -run '^TestAuthorization((Decision|Reload)Capacity|EvaluatorPureCallGraph)$$' ./internal/auth/provider/rbaclocal
 
 _capacity-scylla-soak:
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
@@ -641,6 +670,7 @@ _capacity-namespace-recovery:
 
 _capacity-repository-lifecycle:
 	@cd "$(ROOT)/tests/integration" && \
+		REPOSITORY_CAPACITY_WORKLOAD="$(REPOSITORY_CAPACITY_WORKLOAD)" \
 		REPOSITORY_CAPACITY_SECRET_SCENARIO="$(REPOSITORY_CAPACITY_SECRET_SCENARIO)" \
 		REPOSITORY_API_A="$(REPOSITORY_API_A)" \
 		REPOSITORY_API_B="$(REPOSITORY_API_B)" \

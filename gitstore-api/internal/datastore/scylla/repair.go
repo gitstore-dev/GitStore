@@ -1031,18 +1031,10 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 			}
 		}
 	}
-	// Resolve Product category paths after all categories have been scanned.
-	// Older API replicas persisted only the directly resolved category name in
-	// Product status.  Expand that legacy form through the authoritative
-	// category path before deriving ancestor memberships for a rolling upgrade.
-	type categoryResolution struct {
-		uid  string
-		path []string
-	}
-	categories := make(map[string]categoryResolution)
+	categories := make(map[string]string)
 	for _, resource := range snapshot.Authoritative {
 		if resource.Kind == "CategoryTaxonomy" {
-			categories[resource.Namespace+"\x00"+resource.Name] = categoryResolution{uid: resource.UID, path: resource.ResolvedPath}
+			categories[resource.Namespace+"\x00"+resource.Name] = resource.UID
 		}
 	}
 	for i := range snapshot.Authoritative {
@@ -1050,14 +1042,9 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		if resource.Kind != "Product" || len(resource.ResolvedPath) == 0 {
 			continue
 		}
-		if len(resource.ResolvedPath) == 1 {
-			if category, ok := categories[resource.Namespace+"\x00"+resource.ResolvedPath[0]]; ok && len(category.path) > 0 {
-				resource.ResolvedPath = append([]string(nil), category.path...)
-			}
-		}
 		for _, name := range resource.ResolvedPath {
-			if category, ok := categories[resource.Namespace+"\x00"+name]; ok && category.uid != "" {
-				resource.CategoryUIDs = append(resource.CategoryUIDs, category.uid)
+			if uid, ok := categories[resource.Namespace+"\x00"+name]; ok && uid != "" {
+				resource.CategoryUIDs = append(resource.CategoryUIDs, uid)
 			}
 		}
 	}

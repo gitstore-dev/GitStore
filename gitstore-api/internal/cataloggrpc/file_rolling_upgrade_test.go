@@ -198,7 +198,7 @@ func TestAdmitResources_FileContentTypeImmutabilityEnforcedAgainstLegacyShapeSpe
 		RepositoryId:  testRepoID, OldCommitSha: commitOld, NewCommitSha: commitNew,
 		RefName: "refs/heads/main", ChangedPaths: []string{"files/hero.md"},
 	})
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "File contentType is immutable")
 
 	unchanged, err := store.GetFileByName(context.Background(), "gitstore", "hero")
 	require.NoError(t, err)

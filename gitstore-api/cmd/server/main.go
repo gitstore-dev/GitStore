@@ -46,6 +46,30 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = log.Sync() }()
+	log, shutdownTelemetry, err := app.InitTelemetry(context.Background(), cfg.Observability.OTLP, log)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Failed to initialize telemetry: %v\n", err)
+		os.Exit(1)
+	}
+	logger.Log = log
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(ctx); err != nil {
+			log.Error("telemetry shutdown failed", zap.Error(err))
+		}
+	}()
+	shutdownProfiler, err := app.StartCapacityProfiler(cfg.Api.Profiling, log)
+	if err != nil {
+		log.Fatal("Failed to initialize capacity profiler", zap.Error(err))
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownProfiler(ctx); err != nil {
+			log.Error("capacity profiler shutdown failed", zap.Error(err))
+		}
+	}()
 
 	log.Info("Starting GitStore GraphQL API",
 		zap.Int("port", cfg.Api.Port),

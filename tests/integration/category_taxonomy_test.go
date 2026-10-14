@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -456,9 +455,7 @@ spec:
 	assert.Equal(t, newParent, data.UpdateCategory.Category.Spec.ParentRef.Name)
 
 	// The commit lands at the originating repository's categories/<name>.md.
-	pull := exec.Command("git", "pull", "--ff-only", "origin", "main")
-	pull.Dir = push.workDir
-	if out, err := pull.CombinedOutput(); err != nil {
+	if out, err := secretCapacityGit(t.Context(), push.workDir, push.token, "pull", "--ff-only", "origin", "main"); err != nil {
 		t.Fatalf("git pull %s/%s: %v\n%s", ns, repoName, err, out)
 	}
 	raw, err := os.ReadFile(filepath.Join(push.workDir, "categories", laptops+".md"))
@@ -666,22 +663,23 @@ spec:
 ---
 `, name, name, target, targetNS)
 	}
-	pushOutput := func(target string) string {
+	const want = "spec.parentRef.namespace must be empty or the category's own namespace"
+	assertPushRejected := func(target string) {
 		name := uniqueName("cross")
 		p := newPushHelperForRepo(t, ns, getEnv("REPOSITORY", "catalog"))
 		p.commitCategory(name+".md", crossRef(name, otherNS, target))
-		out, err := p.push()
-		require.Error(t, err, "cross-namespace parentRef must be rejected:\n%s", out)
-		return out
+		inspected := false
+		_, err := secretCapacityGitInspect(t.Context(), p.workDir, p.token, func(output []byte) {
+			inspected = true
+			text := strings.ToLower(string(output))
+			assert.True(t, strings.Contains(string(output), want), "expected the cross-namespace validation diagnostic")
+			assert.False(t, strings.Contains(text, "not found"), "Git rejection disclosed lookup state")
+			assert.False(t, strings.Contains(text, "does not exist"), "Git rejection disclosed lookup state")
+		}, "push", "origin", "main")
+		require.Error(t, err, "cross-namespace parentRef must be rejected")
+		require.Equal(t, "rejection", secretCapacityFailureClass(err))
+		require.True(t, inspected, "complete rejection output must be inspected without retaining it")
 	}
-
-	const want = "spec.parentRef.namespace must be empty or the category's own namespace"
-	existingOut := pushOutput(known)
-	missingOut := pushOutput(uniqueName("absent"))
-	for _, out := range []string{existingOut, missingOut} {
-		assert.Contains(t, out, want)
-		lower := strings.ToLower(out)
-		assert.NotContains(t, lower, "not found")
-		assert.NotContains(t, lower, "does not exist")
-	}
+	assertPushRejected(known)
+	assertPushRejected(uniqueName("absent"))
 }

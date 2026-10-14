@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCategoryProductIndex_ReplacesAncestorMembership(t *testing.T) {
@@ -37,4 +38,36 @@ func TestCategoryProductIndex_ReplacesAncestorMembership(t *testing.T) {
 	if err != nil || len(page.Items) != 0 {
 		t.Fatalf("stale root membership = %#v, %v", page, err)
 	}
+}
+
+func TestCategoryProductIndex_StaleWritersCannotRestoreMembership(t *testing.T) {
+	ds, err := New()
+	require.NoError(t, err)
+	index := ds.(datastore.CategoryProductIndex)
+	ctx := t.Context()
+	product := &datastore.Product{
+		UID: "00000000-0000-0000-0000-000000000001", Namespace: "shop",
+		Name: "p", CreationTimestamp: time.Now(), ResourceVersion: "1",
+	}
+	require.NoError(t, ds.CreateProduct(ctx, product))
+	require.NoError(t, index.ReplaceCategoryProductMembership(ctx, product, []string{"old"}))
+	current := *product
+	datastore.AdvanceProductSystemVersion(&current)
+	require.NoError(t, ds.UpdateProduct(ctx, &current, product.ResourceVersion))
+	require.NoError(t, index.ReplaceCategoryProductMembership(ctx, &current, []string{"current"}))
+	require.NoError(t, index.ReplaceCategoryProductMembership(ctx, product, []string{"old"}))
+	old, err := index.ListCategoryProducts(ctx, "shop", "old", datastore.PageParams{First: 1})
+	require.NoError(t, err)
+	require.Empty(t, old.Items, "an obsolete writer must not restore the old category")
+	page, err := index.ListCategoryProducts(ctx, "shop", "current", datastore.PageParams{First: 1})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1, "an obsolete writer must not remove current membership")
+
+	require.NoError(t, ds.DeleteProduct(ctx, product.UID))
+	require.NoError(t, index.ReplaceCategoryProductMembership(ctx, &current, []string{"current"}))
+	store := ds.(*memdbDatastore)
+	store.categoryProductsMu.RLock()
+	defer store.categoryProductsMu.RUnlock()
+	require.Empty(t, store.productCategories[product.UID], "a deleted UID cannot regain projection entries")
+	require.Empty(t, store.categoryProducts[categoryProductKey("shop", "current")])
 }

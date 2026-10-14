@@ -93,11 +93,105 @@ func newNamespace(tier datastore.NamespaceTier) *datastore.Namespace {
 	}
 }
 
+func runVersionCASContract(t *testing.T, update func(string, string) error, read func() (string, int64, error)) {
+	t.Helper()
+	for _, desired := range []string{"", "0", "1", "3", "invalid"} {
+		require.ErrorIs(t, update("1", desired), datastore.ErrConflict, "replacement must consume exactly one version")
+		version, generation, err := read()
+		require.NoError(t, err)
+		require.Equal(t, "1", version, "failed CAS must leave the authoritative version unchanged")
+		require.Equal(t, int64(7), generation)
+	}
+	require.ErrorIs(t, update("", "2"), datastore.ErrConflict, "empty expected version is not a wildcard")
+	require.NoError(t, update("1", "2"))
+	require.ErrorIs(t, update("1", "2"), datastore.ErrConflict)
+	start := make(chan struct{})
+	results := make(chan error, 8)
+	for range 8 {
+		go func() {
+			<-start
+			results <- update("2", "3")
+		}()
+	}
+	close(start)
+	winners := 0
+	for range 8 {
+		err := <-results
+		if err == nil {
+			winners++
+		} else {
+			require.ErrorIs(t, err, datastore.ErrConflict)
+		}
+	}
+	require.Equal(t, 1, winners, "only one writer may consume the expected snapshot")
+	version, generation, err := read()
+	require.NoError(t, err)
+	require.Equal(t, "3", version)
+	require.Equal(t, int64(7), generation, "the datastore must not infer authored generation from resourceVersion")
+}
+
 // RunContractSuite runs the full contract suite against any Datastore implementation.
 // Callers should pass a freshly initialised, empty store.
 func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	t.Helper()
 	ctx := context.Background()
+
+	t.Run("File/VersionCAS", func(t *testing.T) {
+		original := &datastore.File{UID: newID(), Namespace: "cas-ns", Name: "file-" + newID()[:8],
+			ResourceVersion: "1", Generation: 7, CreationTimestamp: time.Now(), Body: "original"}
+		require.NoError(t, ds.CreateFile(ctx, original))
+		runVersionCASContract(t,
+			func(expected, desired string) error {
+				next := *original
+				next.ResourceVersion, next.Body = desired, "updated"
+				return ds.UpdateFile(ctx, &next, expected)
+			},
+			func() (string, int64, error) {
+				got, err := ds.GetFile(ctx, original.UID)
+				if err != nil {
+					return "", 0, err
+				}
+				return got.ResourceVersion, got.Generation, nil
+			})
+	})
+	t.Run("Namespace/VersionCAS", func(t *testing.T) {
+		original := newNamespace(datastore.NamespaceTierOrganization)
+		original.ResourceVersion, original.Generation = "1", 7
+		require.NoError(t, ds.CreateNamespace(ctx, original))
+		runVersionCASContract(t,
+			func(expected, desired string) error {
+				next := *original
+				next.ResourceVersion, next.Title = desired, "updated"
+				return ds.UpdateNamespace(ctx, &next, expected)
+			},
+			func() (string, int64, error) {
+				got, err := ds.GetNamespace(ctx, original.UID)
+				if err != nil {
+					return "", 0, err
+				}
+				return got.ResourceVersion, got.Generation, nil
+			})
+	})
+	t.Run("Repository/VersionCAS", func(t *testing.T) {
+		namespace := newNamespace(datastore.NamespaceTierOrganization)
+		require.NoError(t, ds.CreateNamespace(ctx, namespace))
+		original := &datastore.Repository{UID: newID(), Namespace: namespace.Name, Name: "repo-" + newID()[:8],
+			ResourceVersion: "1", Generation: 7, CreationTimestamp: time.Now(), Body: "original"}
+		require.NoError(t, ds.CreateRepository(ctx, original))
+		runVersionCASContract(t,
+			func(expected, desired string) error {
+				next := *original
+				next.ResourceVersion, next.Body = desired, "updated"
+				return ds.UpdateRepository(ctx, &next, expected)
+			},
+			func() (string, int64, error) {
+				got, err := ds.GetRepository(ctx, original.UID)
+				if err != nil {
+					return "", 0, err
+				}
+				return got.ResourceVersion, got.Generation, nil
+			})
+	})
 
 	t.Run("Product/OwnerCAS", func(t *testing.T) {
 		original := &datastore.Product{UID: newID(), Namespace: "cas-ns", Name: "cas-" + newID()[:8], ResourceVersion: "1", CreationTimestamp: time.Now(), Annotations: map[string]string{"gitstore.dev/owner": "alice"}, Body: "original"}
@@ -133,6 +227,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 				results <- ds.UpdateProduct(ctx, &contender, "2")
 			}()
 		}
+
 		close(start)
 		winners := 0
 		for range 8 {

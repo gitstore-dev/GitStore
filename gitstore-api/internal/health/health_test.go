@@ -5,6 +5,7 @@ package health_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -12,11 +13,32 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/health"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReadyIncludesOnlyBoundedAuthSnapshotMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	registry := auth.NewProviderRegistry(auth.NewChainedAuthN(), nil, nil)
+	h := health.NewHandler(health.HandlerDeps{
+		Store: &testutil.StubStore{}, AuthDiagnostics: registry.Diagnostics,
+	})
+	router := gin.New()
+	router.GET("/ready", h.Ready)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	var response health.HealthResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.NotNil(t, response.Auth)
+	require.Len(t, response.Auth.CatalogDigest, 64)
+	require.Empty(t, response.Auth.AuthN)
+	require.Nil(t, response.Auth.Policy, "unsupported snapshot metadata must not invent a policy digest")
+	require.NotContains(t, w.Body.String(), "policyFile")
+}
 
 // T014: GET /metrics returns 200 and content-type text/plain (Prometheus exposition format).
 func TestMetricsEndpoint(t *testing.T) {

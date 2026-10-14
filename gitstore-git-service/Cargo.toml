@@ -29,6 +29,13 @@ sha2 = "0.11.0"
 getrandom = "0.4.3"
 bytesize = { version = "2.7.0", features = ["serde"] }
 humantime = "2.1"
+opentelemetry = "0.33.1"
+opentelemetry_sdk = "0.33.1"
+tracing-opentelemetry = "0.34.0"
+opentelemetry-appender-tracing = "0.33.1"
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace", "logs", "reqwest-rustls"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+http-body = "1"
 
 [dev-dependencies]
 tracing-test = "0.2"

@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestRepositoryLifecycleSchemaContract(t *testing.T) {
@@ -234,7 +236,10 @@ func TestRepositoryMutationRejectsEnvelopeMismatchAndBootstrapBeforeGitCommit(t 
 	require.ErrorContains(t, err, "system-managed")
 }
 
-type repositoryLifecycleGitReader struct{ current *string }
+type repositoryLifecycleGitReader struct {
+	current *string
+	writer  *repositoryLifecycleWriter
+}
 
 func (*repositoryLifecycleGitReader) ListFiles(context.Context, string, string, string) ([]string, error) {
 	return nil, nil
@@ -242,8 +247,31 @@ func (*repositoryLifecycleGitReader) ListFiles(context.Context, string, string, 
 func (*repositoryLifecycleGitReader) ReadFile(context.Context, string, string, string) ([]byte, error) {
 	return nil, nil
 }
+func (*repositoryLifecycleGitReader) ReadFiles(_ context.Context, _ string, paths []string, _ string) ([][]byte, error) {
+	return make([][]byte, len(paths)), nil
+}
 func (r *repositoryLifecycleGitReader) ResolveRef(context.Context, string, string) (string, error) {
 	return *r.current, nil
+}
+func (r *repositoryLifecycleGitReader) ReadCurrentUnchangedFile(_ context.Context, _, path, _ string, ancestor string) (bool, []byte, error) {
+	if *r.current != ancestor {
+		return false, nil, status.Error(codes.Aborted, "fixture history changed")
+	}
+	for i := len(r.writer.commits) - 1; i >= 0; i-- {
+		if r.writer.commits[i].Path == path {
+			return false, r.writer.commits[i].Content, nil
+		}
+	}
+	return false, nil, status.Error(codes.NotFound, "fixture path not found")
+}
+
+func (r *repositoryLifecycleGitReader) ReadFilePair(ctx context.Context, repositoryID string, paths []string, primaryCommit, secondaryCommit, refName string) ([][]byte, [][]byte, error) {
+	first, err := r.ReadFiles(ctx, repositoryID, paths, primaryCommit)
+	if err != nil {
+		return nil, nil, err
+	}
+	second, err := r.ReadFiles(ctx, repositoryID, paths, secondaryCommit)
+	return first, second, err
 }
 
 func TestRepositoryLifecycleResolverUsesRealCatalogAdmissionForStatusAndVersions(t *testing.T) {
@@ -256,8 +284,8 @@ func TestRepositoryLifecycleResolverUsesRealCatalogAdmissionForStatusAndVersions
 	require.NoError(t, store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "acme", Name: SystemRepositoryName, RepositoryID: systemRepositoryID}))
 	first, second := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	current := first
-	admitter := newLifecycleCatalogFixture(t, cataloggrpc.ServerDeps{Store: store, GitReader: &repositoryLifecycleGitReader{current: &current}, Logger: zap.NewNop()})
 	writer := &repositoryLifecycleWriter{sha: first}
+	admitter := newLifecycleCatalogFixture(t, cataloggrpc.ServerDeps{Store: store, GitReader: &repositoryLifecycleGitReader{current: &current, writer: writer}, Logger: zap.NewNop()})
 	service, err := NewService(ServiceDeps{Store: store, GitWriter: writer, Logger: zap.NewNop(), CommittedManifestAdmitter: admitter})
 	require.NoError(t, err)
 	mutation := &mutationResolver{Resolver: &Resolver{service: service, logger: zap.NewNop(), storageDataDir: "/data"}}

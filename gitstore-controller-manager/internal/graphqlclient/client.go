@@ -13,8 +13,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -238,7 +240,7 @@ func (c *Client) doAttempt(ctx context.Context, doc string, vars map[string]any,
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("graphqlclient: request failed: %w", err)
+		return c.requestError(ctx, "request failed", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
@@ -261,11 +263,19 @@ func (c *Client) doAttempt(ctx context.Context, doc string, vars map[string]any,
 			c.recordThrottle()
 			return fmt.Errorf("%w: HTTP status %d", types.ErrRateLimited, resp.StatusCode)
 		}
+		if resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout {
+			c.recordThrottle()
+			return fmt.Errorf("%w: HTTP status %d", types.ErrAPIUnavailable, resp.StatusCode)
+		}
 		return fmt.Errorf("graphqlclient: unexpected HTTP status %d: %s", resp.StatusCode, body)
 	}
 
 	var gr gqlResponse
-	if err := json.NewDecoder(resp.Body).Decode(&gr); err != nil {
+	reader := &responseTransportReader{Reader: resp.Body}
+	if err := json.NewDecoder(reader).Decode(&gr); err != nil {
+		if reader.err != nil {
+			return c.requestError(ctx, "read response", reader.err)
+		}
 		return fmt.Errorf("graphqlclient: decode response: %w", err)
 	}
 	if len(gr.Errors) > 0 {
@@ -284,6 +294,30 @@ func (c *Client) doAttempt(ctx context.Context, doc string, vars map[string]any,
 		}
 	}
 	return nil
+}
+
+type responseTransportReader struct {
+	io.Reader
+	err error
+}
+
+func (r *responseTransportReader) Read(data []byte) (int, error) {
+	n, err := r.Reader.Read(data)
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.err = err
+	}
+	return n, err
+}
+
+func (c *Client) requestError(ctx context.Context, operation string, err error) error {
+	var networkError *net.OpError
+	var dnsError *net.DNSError
+	if ctx.Err() == nil && (errors.As(err, &networkError) || errors.As(err, &dnsError) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+		c.recordThrottle()
+		return fmt.Errorf("graphqlclient: %s: %w: %w", operation, types.ErrAPIUnavailable, err)
+	}
+	return fmt.Errorf("graphqlclient: %s: %w", operation, err)
 }
 
 // Subscription is an open graphql-transport-ws subscription stream, mirroring

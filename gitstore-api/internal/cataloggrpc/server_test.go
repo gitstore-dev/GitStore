@@ -7,11 +7,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,9 +25,11 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -580,31 +585,34 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 	a := strings.Repeat("a", 40)
 	b := strings.Repeat("b", 40)
 	path := "namespaces/race-store.md"
+	peerPath := "namespaces/race-peer.md"
 	seedNamespaceForReplicaRace(t, store, "race-store", "Initial Revision", initial, path)
+	seedNamespaceForReplicaRace(t, store, "race-peer", "Initial Revision", initial, peerPath)
 	files := map[string]map[string][]byte{
-		initial: {path: namespaceManifest("race-store", "Initial Revision", "ORGANIZATION")},
-		a:       {path: namespaceManifest("race-store", "Older Revision", "ORGANIZATION")},
-		b:       {path: namespaceManifest("race-store", "Newer Revision", "ORGANIZATION")},
+		initial: {
+			path:     namespaceManifest("race-store", "Initial Revision", "ORGANIZATION"),
+			peerPath: namespaceManifest("race-peer", "Initial Revision", "ORGANIZATION"),
+		},
+		a: {
+			path:     namespaceManifest("race-store", "Older Revision", "ORGANIZATION"),
+			peerPath: namespaceManifest("race-peer", "Older Revision", "ORGANIZATION"),
+		},
+		b: {
+			path:     namespaceManifest("race-store", "Newer Revision", "ORGANIZATION"),
+			peerPath: namespaceManifest("race-peer", "Newer Revision", "ORGANIZATION"),
+		},
 	}
 
 	var mu sync.Mutex
 	current := a
-	blockFirstAListing := true
-	olderListingStarted := make(chan struct{})
+	blockFirstARead := true
+	olderReadStarted := make(chan struct{})
 	releaseOlder := make(chan struct{})
 	git := &mockGitReader{
 		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
 			mu.Lock()
-			block := ref == a && blockFirstAListing
-			if block {
-				blockFirstAListing = false
-			}
 			tree := files[ref]
 			mu.Unlock()
-			if block {
-				close(olderListingStarted)
-				<-releaseOlder
-			}
 			paths := make([]string, 0, len(tree))
 			for filePath := range tree {
 				paths = append(paths, filePath)
@@ -614,8 +622,16 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 		},
 		readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
 			mu.Lock()
+			block := ref == a && blockFirstARead
+			if block {
+				blockFirstARead = false
+			}
 			content := files[ref][path]
 			mu.Unlock()
+			if block {
+				close(olderReadStarted)
+				<-releaseOlder
+			}
 			return content, nil
 		},
 		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
@@ -635,13 +651,13 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 			NewCommitSha:  a,
 
 			RefName:      "refs/heads/main",
-			ChangedPaths: []string{path},
+			ChangedPaths: []string{path, peerPath},
 		})
 		olderDone <- err
 	}()
 
 	select {
-	case <-olderListingStarted:
+	case <-olderReadStarted:
 	case <-time.After(time.Second):
 		t.Fatal("older admission did not verify and begin loading its commit")
 	}
@@ -656,7 +672,7 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 		NewCommitSha:  b,
 
 		RefName:      "refs/heads/main",
-		ChangedPaths: []string{path},
+		ChangedPaths: []string{path, peerPath},
 	})
 	require.NoError(t, err)
 
@@ -673,6 +689,11 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 	assert.Equal(t, "Newer Revision", namespace.Title)
 	assert.Equal(t, b, namespace.GitCommitSHA)
 	assert.Equal(t, "main@sha1:"+b, namespace.Revision)
+	peer, err := store.GetNamespaceByName(t.Context(), "race-peer")
+	require.NoError(t, err)
+	assert.Equal(t, "Newer Revision", peer.Title)
+	assert.Equal(t, b, peer.GitCommitSHA)
+	assert.Equal(t, "main@sha1:"+b, peer.Revision)
 }
 
 func TestAdmitResources_NamespaceBootstrapNameRejected(t *testing.T) {
@@ -847,9 +868,12 @@ func TestValidateResources_EmptyBlobs_Accepted(t *testing.T) {
 
 // mockGitReader is a test double for the GitReader interface used by AdmitResources.
 type mockGitReader struct {
-	listFilesFunc  func(ctx context.Context, repositoryID, prefix, ref string) ([]string, error)
-	readFileFunc   func(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
-	resolveRefFunc func(ctx context.Context, repositoryID, ref string) (string, error)
+	listFilesFunc                func(ctx context.Context, repositoryID, prefix, ref string) ([]string, error)
+	readFileFunc                 func(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
+	readFilesFunc                func(context.Context, string, []string, string) ([][]byte, error)
+	readFilePairFunc             func(context.Context, string, []string, string, string, string) ([][]byte, [][]byte, error)
+	resolveRefFunc               func(ctx context.Context, repositoryID, ref string) (string, error)
+	readCurrentUnchangedFileFunc func(context.Context, string, string, string, string) ([]byte, error)
 }
 
 func (m *mockGitReader) ListFiles(ctx context.Context, repositoryID, prefix, ref string) ([]string, error) {
@@ -860,11 +884,65 @@ func (m *mockGitReader) ReadFile(ctx context.Context, repositoryID, path, ref st
 	return m.readFileFunc(ctx, repositoryID, path, ref)
 }
 
+func (m *mockGitReader) ReadFiles(ctx context.Context, repositoryID string, paths []string, commitSHA string) ([][]byte, error) {
+	if m.readFilesFunc != nil {
+		return m.readFilesFunc(ctx, repositoryID, paths, commitSHA)
+	}
+	results := make([][]byte, len(paths))
+	for i, path := range paths {
+		content, err := m.ReadFile(ctx, repositoryID, path, commitSHA)
+		if grpcstatus.Code(err) == codes.NotFound {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		results[i] = append([]byte{}, content...)
+	}
+	return results, nil
+}
+
+func (m *mockGitReader) ReadFilePair(ctx context.Context, repositoryID string, paths []string, primaryCommit, secondaryCommit, refName string) ([][]byte, [][]byte, error) {
+	if m.readFilePairFunc != nil {
+		return m.readFilePairFunc(ctx, repositoryID, paths, primaryCommit, secondaryCommit, refName)
+	}
+	first, err := m.ReadFiles(ctx, repositoryID, paths, primaryCommit)
+	if err != nil {
+		return nil, nil, err
+	}
+	second, err := m.ReadFiles(ctx, repositoryID, paths, secondaryCommit)
+	if err == nil && refName != "" {
+		current, refErr := m.ResolveRef(ctx, repositoryID, refName)
+		if refErr != nil {
+			return nil, nil, refErr
+		}
+		if current != secondaryCommit {
+			return nil, nil, grpcstatus.Error(codes.Aborted, "snapshot ref changed")
+		}
+	}
+	return first, second, err
+}
+
 func (m *mockGitReader) ResolveRef(ctx context.Context, repositoryID, ref string) (string, error) {
 	if m.resolveRefFunc != nil {
 		return m.resolveRefFunc(ctx, repositoryID, ref)
 	}
 	return "", nil
+}
+
+func (m *mockGitReader) ReadCurrentUnchangedFile(ctx context.Context, repositoryID, path, refName, ancestor string) (bool, []byte, error) {
+	if m.readCurrentUnchangedFileFunc != nil {
+		content, err := m.readCurrentUnchangedFileFunc(ctx, repositoryID, path, refName, ancestor)
+		return false, content, err
+	}
+	current, err := m.ResolveRef(ctx, repositoryID, refName)
+	if err != nil {
+		return false, nil, err
+	}
+	if current != ancestor {
+		return false, nil, grpcstatus.Error(codes.Aborted, "fixture cannot prove unchanged history")
+	}
+	return true, nil, nil
 }
 
 // makeProduct builds a valid product blob for a given name.
@@ -924,6 +1002,80 @@ func TestValidateAndAdmitResources_File(t *testing.T) {
 	require.Equal(t, catalog.ConditionReady, status.Conditions[1].Type)
 }
 
+func TestCatalogAdmissionStagesPreserveSuccessAndFailure(t *testing.T) {
+	for _, scenario := range []string{"success", "unsigned", "read-failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			registry := prometheus.NewRegistry()
+			metrics := namespaceadmission.NewMetrics(registry)
+			store := newTestDatastore(t)
+			commit := strings.Repeat("a", 40)
+			var refCalls atomic.Uint64
+			git := &mockGitReader{
+				resolveRefFunc: func(context.Context, string, string) (string, error) {
+					refCalls.Add(1)
+					return commit, nil
+				},
+				readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
+					time.Sleep(time.Millisecond)
+					if scenario == "read-failure" {
+						return nil, grpcstatus.Error(codes.Unavailable, "fixture read unavailable")
+					}
+					return makeFile("hero"), nil
+				},
+			}
+			srv := newCatalogServer(t, store, git, func(deps *cataloggrpc.ServerDeps) {
+				deps.NamespaceMetrics = metrics
+			})
+			req := &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, RefName: "refs/heads/main", NewCommitSha: commit,
+				ChangedPaths: []string{"files/hero.md"},
+			}
+			expected := map[string]uint64{"catalog_callback_auth": 1}
+			switch scenario {
+			case "unsigned":
+				_, err := srv.Server.AdmitResources(t.Context(), req)
+				require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
+			default:
+				_, err := srv.AdmitResources(t.Context(), req)
+				expected["catalog_namespace_lookup"] = 1
+				expected["catalog_resolve_ref"] = refCalls.Load()
+				expected["catalog_snapshot_read"] = 2
+				if scenario == "success" {
+					require.NoError(t, err)
+					expected["catalog_apply"] = 1
+					file, err := store.GetFileByName(t.Context(), "gitstore", "hero")
+					require.NoError(t, err)
+					require.Equal(t, "hero", file.Name)
+					require.Equal(t, "Alt text", file.Body)
+				} else {
+					require.Equal(t, codes.Unavailable, grpcstatus.Code(err))
+					_, err = store.GetFileByName(t.Context(), "gitstore", "hero")
+					require.ErrorIs(t, err, datastore.ErrNotFound)
+				}
+			}
+			families, err := registry.Gather()
+			require.NoError(t, err)
+			observed := make(map[string]uint64)
+			for _, family := range families {
+				if family.GetName() != "gitstore_namespace_admission_stage_duration_seconds" {
+					continue
+				}
+				for _, metric := range family.Metric {
+					require.Len(t, metric.Label, 1)
+					require.Equal(t, "stage", metric.Label[0].GetName())
+					stage := metric.Label[0].GetValue()
+					observed[stage] = metric.GetHistogram().GetSampleCount()
+					require.Positive(t, metric.GetHistogram().GetSampleSum(), stage)
+					if stage == "catalog_snapshot_read" {
+						require.GreaterOrEqual(t, metric.GetHistogram().GetSampleSum(), time.Millisecond.Seconds())
+					}
+				}
+			}
+			require.Equal(t, expected, observed)
+		})
+	}
+}
+
 func TestValidateResources_FileDuplicateIdentityRejected(t *testing.T) {
 	srv := newCatalogServer(t, newTestDatastore(t), nil)
 	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/hero\n---\n")
@@ -955,6 +1107,204 @@ func TestValidateResources_FileAggregatesVariantAndCredentialsErrors(t *testing.
 	assert.Contains(t, strings.Join(messages, "\n"), "variants[0].name")
 }
 
+type fileMutationBatchStore struct {
+	datastore.Datastore
+	batches     int
+	writes      atomic.Int64
+	batchError  error
+	failure     error
+	beforeBatch func(context.Context) error
+}
+
+type fileCohortStore struct {
+	*fileMutationBatchStore
+	repositoryID string
+	names        []string
+}
+
+func (s *fileCohortStore) WithFileMutationBatch(ctx context.Context, namespace, repositoryID string, names []string, operation func(context.Context) error) error {
+	s.repositoryID, s.names = repositoryID, names
+	return s.WithCatalogMutationBatch(ctx, namespace, operation)
+}
+
+func TestAdmitResources_FileCohortsReceiveOnlyBoundedFileCallbacks(t *testing.T) {
+	for _, count := range []int{1, 2, 4, 5} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			store := &fileCohortStore{fileMutationBatchStore: &fileMutationBatchStore{Datastore: newTestDatastore(t)}}
+			current := strings.Repeat("a", 40)
+			tree := make(map[string][]byte)
+			for i := range count {
+				name := fmt.Sprintf("cohort-file-%d", i)
+				tree["files/"+name+".md"] = makeFile(name)
+			}
+			git := newTreeGitReader(&current, map[string]map[string][]byte{current: tree})
+			srv := newCatalogServer(t, store, git)
+			_, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, NewCommitSha: current, RefName: "refs/heads/main",
+			})
+			require.NoError(t, err)
+			require.EqualValues(t, count, store.writes.Load())
+			if count <= 4 {
+				require.Equal(t, 1, store.batches)
+				require.Equal(t, testRepoID, store.repositoryID)
+				require.Len(t, store.names, count)
+			} else {
+				require.Zero(t, store.batches)
+			}
+		})
+	}
+}
+
+func (s *fileMutationBatchStore) WithCatalogMutationBatch(ctx context.Context, namespace string, operation func(context.Context) error) error {
+	s.batches++
+	if s.beforeBatch != nil {
+		if err := s.beforeBatch(ctx); err != nil {
+			return err
+		}
+	}
+	s.batchError = operation(ctx)
+	return s.batchError
+}
+
+func (s *fileMutationBatchStore) CreateFile(ctx context.Context, file *datastore.File) error {
+	s.writes.Add(1)
+	if s.failure != nil {
+		return s.failure
+	}
+	return s.Datastore.CreateFile(ctx, file)
+}
+
+func TestAdmitResources_FileMutationBatchesRemainBounded(t *testing.T) {
+	for _, count := range []int{1, 2, 4, 5} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			store := &fileMutationBatchStore{Datastore: newTestDatastore(t)}
+			current := strings.Repeat("a", 40)
+			tree := make(map[string][]byte)
+			for i := range count {
+				name := fmt.Sprintf("batch-file-%d", i)
+				tree["files/"+name+".md"] = makeFile(name)
+			}
+			git := newTreeGitReader(&current, map[string]map[string][]byte{current: tree})
+			srv := newCatalogServer(t, store, git)
+			_, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, NewCommitSha: current, RefName: "refs/heads/main",
+			})
+			require.NoError(t, err)
+			require.EqualValues(t, count, store.writes.Load())
+			if count == 2 || count == 4 {
+				require.Equal(t, 1, store.batches)
+			} else {
+				require.Zero(t, store.batches, "single and larger callbacks retain individual fencing")
+			}
+		})
+	}
+}
+
+func TestAdmitResources_FileMutationErrorsReachBatchBoundary(t *testing.T) {
+	failure := datastore.NewRepairRequiredError(datastore.MutationStep{Operation: "create_file", ResourceKind: "File"},
+		errors.New("interrupted File membership write"), nil)
+	store := &fileMutationBatchStore{Datastore: newTestDatastore(t), failure: failure}
+	current := strings.Repeat("a", 40)
+	git := newTreeGitReader(&current, map[string]map[string][]byte{current: {
+		"files/first.md": makeFile("first"), "files/second.md": makeFile("second"),
+	}})
+	srv := newCatalogServer(t, store, git)
+	_, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, NewCommitSha: current, RefName: "refs/heads/main",
+	})
+	require.Error(t, err, "post-receive File failures must not produce a successful admission response")
+	require.Equal(t, 1, store.batches)
+	require.EqualValues(t, 2, store.writes.Load(), "all independent writes must finish before deciding the batch outcome")
+	require.ErrorIs(t, store.batchError, datastore.ErrRepairRequired, "the parent fence must retain ambiguous writes")
+}
+
+func TestAdmitResources_FileBatchPreflightPreservesCASAndFreshNoops(t *testing.T) {
+	for _, tc := range []struct {
+		sameCommit, revoke, cohort bool
+	}{{false, false, false}, {true, false, false}, {false, true, false}, {true, true, false},
+		{false, false, true}, {true, false, true}, {false, true, true}, {true, true, true}} {
+		t.Run(fmt.Sprintf("same-commit=%t/revoke=%t/cohort=%t", tc.sameCommit, tc.revoke, tc.cohort), func(t *testing.T) {
+			base := newTestDatastore(t)
+			older, current := strings.Repeat("a", 40), strings.Repeat("b", 40)
+			oldTree := map[string][]byte{
+				"files/first.md": makeFileWithBody("first", "prior body"), "files/second.md": makeFileWithBody("second", "prior body"),
+			}
+			newTree := map[string][]byte{
+				"files/first.md": makeFileWithBody("first", "desired body"), "files/second.md": makeFileWithBody("second", "desired body"),
+			}
+			store := &fileMutationBatchStore{Datastore: base}
+			var backend datastore.Datastore = store
+			if tc.cohort {
+				backend = &fileCohortStore{fileMutationBatchStore: store}
+			}
+			head := older
+			if tc.sameCommit {
+				head = current
+			}
+			git := newTreeGitReader(&head, map[string]map[string][]byte{older: oldTree, current: newTree})
+			allow := testutil.NewAllowAllAuthZ()
+			deny := testutil.NewDenyAllAuthZ(t)
+			registry := auth.NewProviderRegistry(nil, allow, nil)
+			srv := newCatalogServer(t, backend, git, func(deps *cataloggrpc.ServerDeps) {
+				deps.Registry = registry
+			})
+			_, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, NewCommitSha: head, RefName: "refs/heads/main",
+			})
+			require.NoError(t, err)
+			winner, err := base.GetFileByName(t.Context(), "gitstore", "first")
+			require.NoError(t, err)
+			originalVersion := winner.ResourceVersion
+			store.beforeBatch = func(ctx context.Context) error {
+				fresh, err := base.GetFile(ctx, winner.UID)
+				if err != nil {
+					return err
+				}
+				expected := fresh.ResourceVersion
+				fresh.Annotations = map[string]string{
+					"concurrent-writer":          "must-not-remain",
+					datastore.OwnerAnnotationKey: "new-owner",
+				}
+				datastore.AdvanceFileSystemVersion(fresh)
+				if err := base.UpdateFile(ctx, fresh, expected); err != nil {
+					return err
+				}
+				if tc.revoke {
+					registry.Swap(nil, deny, nil)
+				}
+				return nil
+			}
+			head = current
+			_, err = srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, OldCommitSha: older, NewCommitSha: current, RefName: "refs/heads/main",
+				ChangedPaths: []string{"files/first.md", "files/second.md"},
+			})
+			if tc.revoke {
+				require.Equal(t, codes.PermissionDenied, grpcstatus.Code(err))
+				unchanged, readErr := base.GetFile(t.Context(), winner.UID)
+				require.NoError(t, readErr)
+				require.Equal(t, "2", unchanged.ResourceVersion)
+				require.Equal(t, "new-owner", unchanged.Annotations[datastore.OwnerAnnotationKey])
+				require.NotEmpty(t, deny.Calls, "preflight cannot retain an earlier allow after policy replacement")
+				return
+			}
+			require.NoError(t, err)
+			admitted, err := base.GetFile(t.Context(), winner.UID)
+			require.NoError(t, err)
+			require.Empty(t, admitted.Annotations, "a stale preflight cannot make a concurrent change disappear behind a no-op")
+			require.NotEqual(t, originalVersion, admitted.ResourceVersion)
+			require.Equal(t, "3", admitted.ResourceVersion, "the concurrent update and admission must each consume a version")
+			require.Equal(t, current, admitted.GitCommitSHA)
+			require.Equal(t, winner.UID, admitted.UID)
+			freshOwnerChecked := false
+			for _, call := range allow.Calls {
+				freshOwnerChecked = freshOwnerChecked || call.Resource.Name == "first" && call.Resource.OwnerSub == "new-owner"
+			}
+			require.True(t, freshOwnerChecked, "concurrent ownership must be reauthorized before admission overwrites it")
+		})
+	}
+}
+
 func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
 	store := newTestDatastore(t)
 	a, b, c := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)
@@ -975,7 +1325,7 @@ func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
 		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
 		RepositoryId:  testRepoID, OldCommitSha: a, NewCommitSha: b, RefName: "refs/heads/main",
 	})
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "File contentType is immutable")
 	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
 	require.NoError(t, err)
 	assert.Contains(t, string(file.Spec), `"ContentType":"image/jpeg"`)
@@ -3201,8 +3551,10 @@ func TestAdmitResourcesChangedPathsFastPath(t *testing.T) {
 	b := strings.Repeat("b", 40)
 
 	readCalls := make(map[string]int)
+	listCalls := 0
 	git := &mockGitReader{
 		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			listCalls++
 			return []string{"products/widget.md", "products/other.md"}, nil
 		},
 		readFileFunc: func(_ context.Context, _, path, _ string) ([]byte, error) {
@@ -3219,6 +3571,7 @@ func TestAdmitResourcesChangedPathsFastPath(t *testing.T) {
 	admitDelta(t, srv, zero, a)
 	// Clear recorded calls; now do a delta push with changed_paths.
 	readCalls = make(map[string]int)
+	listCalls = 0
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
@@ -3232,6 +3585,431 @@ func TestAdmitResourcesChangedPathsFastPath(t *testing.T) {
 
 	assert.Equal(t, 2, readCalls["products/widget.md"], "widget.md must be read for old and new commit")
 	assert.Zero(t, readCalls["products/other.md"], "other.md must NOT be read when not in changed_paths")
+	assert.Zero(t, listCalls, "exact changed paths must not enumerate the repository tree")
+}
+
+func TestAdmitResourcesChangedPathsReadFailuresAreNotAbsence(t *testing.T) {
+	oldCommit, newCommit := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	for _, tc := range []struct {
+		name string
+		ref  string
+		err  error
+		code codes.Code
+	}{
+		{"old unavailable", oldCommit, grpcstatus.Error(codes.Unavailable, "storage unavailable"), codes.Unavailable},
+		{"new unavailable", newCommit, grpcstatus.Error(codes.Unavailable, "storage unavailable"), codes.Unavailable},
+		{"missing old ref", oldCommit, grpcstatus.Error(codes.FailedPrecondition, "ref unreadable"), codes.FailedPrecondition},
+		{"denied", newCommit, grpcstatus.Error(codes.PermissionDenied, "read denied"), codes.PermissionDenied},
+		{"cancelled", newCommit, context.Canceled, codes.Canceled},
+		{"deadline", newCommit, context.DeadlineExceeded, codes.DeadlineExceeded},
+		{"unclassified IO", newCommit, errors.New("storage IO failure"), codes.Internal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestDatastore(t)
+			git := &mockGitReader{
+				listFilesFunc: func(context.Context, string, string, string) ([]string, error) {
+					t.Fatal("changed-path admission must not enumerate the tree")
+					return nil, nil
+				},
+				readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
+					if path == "files/z-unreadable.md" && ref == tc.ref {
+						return nil, tc.err
+					}
+					if ref == oldCommit {
+						return nil, grpcstatus.Error(codes.NotFound, "new path absent from old tree")
+					}
+					return makeFile("loaded-before-failure"), nil
+				},
+			}
+			srv := newCatalogServer(t, store, git)
+			_, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, OldCommitSha: oldCommit, NewCommitSha: newCommit,
+				RefName: "refs/heads/main", ChangedPaths: []string{"files/a-loaded.md", "files/z-unreadable.md"},
+			})
+			require.Equal(t, tc.code, grpcstatus.Code(err))
+			_, err = store.GetFileByName(t.Context(), "gitstore", "loaded-before-failure")
+			require.ErrorIs(t, err, datastore.ErrNotFound, "partially loaded manifests must not be admitted")
+		})
+	}
+}
+
+func TestAdmitResourcesRefFailuresAreNotStaleSuccess(t *testing.T) {
+	for _, failure := range []struct {
+		name string
+		err  error
+		code codes.Code
+	}{
+		{"unavailable", grpcstatus.Error(codes.Unavailable, "storage unavailable"), codes.Unavailable},
+		{"denied", grpcstatus.Error(codes.PermissionDenied, "ref denied"), codes.PermissionDenied},
+		{"canceled", context.Canceled, codes.Canceled},
+		{"deadline", context.DeadlineExceeded, codes.DeadlineExceeded},
+		{"IO", errors.New("ref IO failure"), codes.Internal},
+	} {
+		for _, failedCheck := range []int32{1, 2, 3} {
+			t.Run(fmt.Sprintf("%s/check-%d", failure.name, failedCheck), func(t *testing.T) {
+				store := newTestDatastore(t)
+				commit := strings.Repeat("b", 40)
+				for replica := range 2 {
+					name := fmt.Sprintf("ref-failure-%d", replica)
+					var checks atomic.Int32
+					git := &mockGitReader{
+						resolveRefFunc: func(context.Context, string, string) (string, error) {
+							if checks.Add(1) == failedCheck {
+								return "", failure.err
+							}
+							return commit, nil
+						},
+						readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
+							return makeFile(name), nil
+						},
+					}
+					srv := newCatalogServer(t, store, git)
+					response, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+						RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
+						ChangedPaths: []string{"files/" + name + ".md"},
+					})
+					require.Nil(t, response)
+					require.Equal(t, failure.code, grpcstatus.Code(err))
+					require.Equal(t, failedCheck, checks.Load(), "an infrastructure error must not become a stale retry")
+					_, lookupErr := store.GetFileByName(t.Context(), "gitstore", name)
+					if failedCheck < 3 {
+						require.ErrorIs(t, lookupErr, datastore.ErrNotFound)
+					} else {
+						require.NoError(t, lookupErr, "post-write failure must not undo an acknowledged datastore write")
+					}
+				}
+			})
+		}
+	}
+}
+
+type admissionOwnershipFailureStore struct {
+	datastore.Datastore
+	repositoryFailure bool
+	failure           error
+}
+
+func (s *admissionOwnershipFailureStore) GetRepository(ctx context.Context, id string) (*datastore.Repository, error) {
+	if s.repositoryFailure {
+		return nil, s.failure
+	}
+	return s.Datastore.GetRepository(ctx, id)
+}
+
+func (s *admissionOwnershipFailureStore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
+	if !s.repositoryFailure {
+		return nil, s.failure
+	}
+	return s.Datastore.GetNamespaceByName(ctx, name)
+}
+
+func TestAdmitResourcesUnavailableOwnershipIsNotSuccess(t *testing.T) {
+	for _, repositoryFailure := range []bool{false, true} {
+		for _, failure := range []struct {
+			name string
+			err  error
+			code codes.Code
+		}{
+			{"absent", datastore.ErrNotFound, codes.NotFound},
+			{"nil record", nil, codes.NotFound},
+			{"IO", errors.New("ownership IO failure"), codes.Internal},
+			{"canceled", context.Canceled, codes.Canceled},
+			{"deadline", context.DeadlineExceeded, codes.DeadlineExceeded},
+		} {
+			t.Run(fmt.Sprintf("%t/%s", repositoryFailure, failure.name), func(t *testing.T) {
+				store := &admissionOwnershipFailureStore{
+					Datastore: newTestDatastore(t), repositoryFailure: repositoryFailure, failure: failure.err,
+				}
+				git := &mockGitReader{resolveRefFunc: func(context.Context, string, string) (string, error) {
+					t.Fatal("ownership resolution must succeed before reading Git")
+					return "", nil
+				}}
+				srv := newCatalogServer(t, store, git)
+				response, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+					RepositoryId: testRepoID, NewCommitSha: strings.Repeat("b", 40), RefName: "refs/heads/main",
+				})
+				require.Nil(t, response)
+				require.Equal(t, failure.code, grpcstatus.Code(err))
+			})
+		}
+	}
+}
+
+func TestAdmitResourcesMissingGitIsNotSuccess(t *testing.T) {
+	srv := newCatalogServer(t, newTestDatastore(t), nil)
+	response, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, NewCommitSha: strings.Repeat("b", 40), RefName: "refs/heads/main",
+	})
+	require.Nil(t, response)
+	require.Equal(t, codes.FailedPrecondition, grpcstatus.Code(err))
+}
+
+func TestAdmitResourcesNamespaceRefFailureIsNotSupersession(t *testing.T) {
+	for _, failedCheck := range []int32{3, 4} {
+		t.Run(fmt.Sprintf("check-%d", failedCheck), func(t *testing.T) {
+			store := newTestDatastore(t)
+			commit := strings.Repeat("b", 40)
+			var checks atomic.Int32
+			srv := newCatalogServer(t, store, &mockGitReader{
+				resolveRefFunc: func(context.Context, string, string) (string, error) {
+					if checks.Add(1) == failedCheck {
+						return "", grpcstatus.Error(codes.Unavailable, "Namespace authoring ref unavailable")
+					}
+					return commit, nil
+				},
+				readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
+					return namespaceManifest("ref-failure", "Ref Failure", "ORGANIZATION"), nil
+				},
+			})
+			response, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
+				ChangedPaths: []string{"namespaces/ref-failure.md"},
+			})
+			require.Nil(t, response)
+			require.Equal(t, codes.Unavailable, grpcstatus.Code(err))
+			require.Equal(t, failedCheck, checks.Load())
+			_, err = store.GetNamespaceByName(t.Context(), "ref-failure")
+			require.ErrorIs(t, err, datastore.ErrNotFound)
+		})
+	}
+}
+
+type admissionWriteFailureStore struct {
+	datastore.Datastore
+	failFileCreate bool
+	failFileUpdate bool
+	namespaceError error
+}
+
+func (s *admissionWriteFailureStore) CreateFile(ctx context.Context, file *datastore.File) error {
+	if s.failFileCreate {
+		return datastore.ErrAlreadyExists
+	}
+	return s.Datastore.CreateFile(ctx, file)
+}
+
+func (s *admissionWriteFailureStore) UpdateFile(ctx context.Context, file *datastore.File, expectedResourceVersion string) error {
+	if s.failFileUpdate {
+		return datastore.ErrConflict
+	}
+	return s.Datastore.UpdateFile(ctx, file, expectedResourceVersion)
+}
+
+func (s *admissionWriteFailureStore) CreateNamespace(ctx context.Context, namespace *datastore.Namespace) error {
+	if s.namespaceError != nil {
+		return s.namespaceError
+	}
+	return s.Datastore.CreateNamespace(ctx, namespace)
+}
+
+func TestAdmitResourcesFileConflictRefFailureIsNotSupersession(t *testing.T) {
+	for _, update := range []bool{false, true} {
+		t.Run(fmt.Sprintf("update-%t", update), func(t *testing.T) {
+			base := newTestDatastore(t)
+			commit := strings.Repeat("b", 40)
+			content := makeFile("ref-conflict")
+			if update {
+				seed := newCatalogServer(t, base, &mockGitReader{
+					readFileFunc: func(context.Context, string, string, string) ([]byte, error) { return content, nil },
+				})
+				_, err := seed.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+					RepositoryId: testRepoID, NewCommitSha: strings.Repeat("a", 40),
+					ChangedPaths: []string{"files/ref-conflict.md"},
+				})
+				require.NoError(t, err)
+			}
+			store := &admissionWriteFailureStore{Datastore: base, failFileCreate: !update, failFileUpdate: update}
+			var checks atomic.Int32
+			srv := newCatalogServer(t, store, &mockGitReader{
+				resolveRefFunc: func(context.Context, string, string) (string, error) {
+					if checks.Add(1) == 3 {
+						return "", grpcstatus.Error(codes.Unavailable, "conflict retry ref unavailable")
+					}
+					return commit, nil
+				},
+				readFileFunc: func(context.Context, string, string, string) ([]byte, error) { return content, nil },
+			})
+			response, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, NewCommitSha: commit, ChangedPaths: []string{"files/ref-conflict.md"},
+			})
+			require.Nil(t, response)
+			require.Equal(t, codes.Unavailable, grpcstatus.Code(err))
+			require.Equal(t, int32(3), checks.Load())
+			stored, lookupErr := base.GetFileByName(t.Context(), "gitstore", "ref-conflict")
+			if update {
+				require.NoError(t, lookupErr)
+				require.Equal(t, strings.Repeat("a", 40), stored.GitCommitSHA)
+			} else {
+				require.ErrorIs(t, lookupErr, datastore.ErrNotFound)
+			}
+		})
+	}
+}
+
+func TestAdmitResourcesNamespaceWriteFailureIsNotSuccess(t *testing.T) {
+	store := &admissionWriteFailureStore{Datastore: newTestDatastore(t), namespaceError: errors.New("Namespace write IO failure")}
+	srv := newCatalogServer(t, store, &mockGitReader{
+		readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
+			return namespaceManifest("write-failure", "Write Failure", "ORGANIZATION"), nil
+		},
+	})
+	response, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, NewCommitSha: strings.Repeat("b", 40),
+		ChangedPaths: []string{"namespaces/write-failure.md"},
+	})
+	require.Nil(t, response)
+	require.Equal(t, codes.Internal, grpcstatus.Code(err))
+	_, err = store.Datastore.GetNamespaceByName(t.Context(), "write-failure")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestAdmitResourcesChangedPathsAbsentAndDuplicatePaths(t *testing.T) {
+	store := newTestDatastore(t)
+	oldCommit, newCommit := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	reads := map[string]int{}
+	var readsMu sync.Mutex
+	git := &mockGitReader{
+		resolveRefFunc: func(context.Context, string, string) (string, error) {
+			return newCommit, nil
+		},
+		listFilesFunc: func(context.Context, string, string, string) ([]string, error) {
+			t.Fatal("changed-path admission must not enumerate the tree")
+			return nil, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
+			readsMu.Lock()
+			reads[ref+":"+path]++
+			readsMu.Unlock()
+			if path == "files/absent.md" || ref == oldCommit {
+				return nil, grpcstatus.Error(codes.NotFound, "path absent")
+			}
+			return makeFile("delta-file"), nil
+		},
+	}
+	srv := newCatalogServer(t, store, git)
+	paths := []string{"files/present.md", "files/absent.md", "files/present.md"}
+	_, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, OldCommitSha: oldCommit, NewCommitSha: newCommit,
+		RefName: "refs/heads/main", ChangedPaths: paths,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"files/present.md", "files/absent.md", "files/present.md"}, paths, "caller order must remain intact")
+	require.Len(t, reads, 4)
+	for _, count := range reads {
+		require.Equal(t, 1, count)
+	}
+	_, err = store.GetFileByName(t.Context(), "gitstore", "delta-file")
+	require.NoError(t, err)
+}
+
+func TestAdmitResourcesSnapshotRefReceiptRetainsFreshnessBoundaries(t *testing.T) {
+	oldCommit, newCommit := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	for _, scenario := range []string{"current pair", "single path", "new branch", "stale pair", "deleted during pair", "pair failure", "final ref failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			store := newTestDatastore(t)
+			refReads, pairReads := 0, 0
+			git := &mockGitReader{
+				resolveRefFunc: func(_ context.Context, repo, ref string) (string, error) {
+					refReads++
+					require.Equal(t, testRepoID, repo)
+					require.Equal(t, "refs/heads/main", ref)
+					if scenario == "deleted during pair" && pairReads > 0 {
+						return "", grpcstatus.Error(codes.NotFound, "ref deleted")
+					}
+					if scenario == "final ref failure" && pairReads > 0 {
+						return "", grpcstatus.Error(codes.Unavailable, "ref unavailable")
+					}
+					return newCommit, nil
+				},
+				readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
+					if ref == oldCommit {
+						return nil, grpcstatus.Error(codes.NotFound, "old path absent")
+					}
+					return makeFile(strings.TrimSuffix(strings.TrimPrefix(path, "files/"), ".md")), nil
+				},
+				readFilePairFunc: func(_ context.Context, _ string, paths []string, old, current, ref string) ([][]byte, [][]byte, error) {
+					pairReads++
+					require.Equal(t, oldCommit, old)
+					require.Equal(t, newCommit, current)
+					require.Equal(t, "refs/heads/main", ref)
+					if scenario == "stale pair" || scenario == "deleted during pair" {
+						return nil, nil, grpcstatus.Error(codes.Aborted, "ref superseded")
+					}
+					if scenario == "pair failure" {
+						return nil, nil, grpcstatus.Error(codes.Unavailable, "read failed")
+					}
+					first, second := make([][]byte, len(paths)), make([][]byte, len(paths))
+					for i, path := range paths {
+						second[i] = makeFile(strings.TrimSuffix(strings.TrimPrefix(path, "files/"), ".md"))
+					}
+					return first, second, nil
+				},
+			}
+			paths := []string{"files/receipt-a.md", "files/receipt-b.md"}
+			previous := oldCommit
+			if scenario == "single path" {
+				paths = paths[:1]
+			}
+			if scenario == "new branch" {
+				previous = strings.Repeat("0", 40)
+			}
+			srv := newCatalogServer(t, store, git)
+			_, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, OldCommitSha: previous, NewCommitSha: newCommit,
+				RefName: "refs/heads/main", ChangedPaths: paths,
+			})
+			switch scenario {
+			case "pair failure", "final ref failure":
+				require.Equal(t, codes.Unavailable, grpcstatus.Code(err))
+			default:
+				require.NoError(t, err)
+			}
+			switch scenario {
+			case "current pair", "final ref failure":
+				require.Equal(t, 1, pairReads)
+				require.Equal(t, 2, refReads, "initial and final ref checks are mandatory")
+			case "single path", "new branch":
+				require.Zero(t, pairReads)
+				require.Equal(t, 3, refReads, "unpaired reads retain the middle recheck")
+			case "stale pair":
+				require.Equal(t, namespaceadmission.AdmissionWriteAttempts, pairReads)
+			case "deleted during pair":
+				require.Equal(t, 1, pairReads)
+				require.Equal(t, 2, refReads)
+			}
+			if scenario == "stale pair" || scenario == "deleted during pair" || scenario == "pair failure" {
+				_, err := store.GetFileByName(t.Context(), "gitstore", "receipt-a")
+				require.ErrorIs(t, err, datastore.ErrNotFound, "a failed receipt must not apply snapshots")
+			}
+		})
+	}
+}
+
+func TestAdmitResourcesFullTreeReadFailuresAreNotEmptyAdmission(t *testing.T) {
+	for _, listFailure := range []bool{true, false} {
+		t.Run(strconv.FormatBool(listFailure), func(t *testing.T) {
+			git := &mockGitReader{
+				listFilesFunc: func(context.Context, string, string, string) ([]string, error) {
+					if listFailure {
+						return nil, grpcstatus.Error(codes.Unavailable, "tree unavailable")
+					}
+					return []string{"files/missing.md"}, nil
+				},
+				readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
+					return nil, grpcstatus.Error(codes.NotFound, "listed path missing")
+				},
+			}
+			srv := newCatalogServer(t, newTestDatastore(t), git)
+			_, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, NewCommitSha: strings.Repeat("a", 40), RefName: "refs/heads/main",
+			})
+			if listFailure {
+				require.Equal(t, codes.Unavailable, grpcstatus.Code(err))
+			} else {
+				require.Equal(t, codes.NotFound, grpcstatus.Code(err))
+			}
+		})
+	}
 }
 
 // T017: on Update, the OldObject passed to the admission chain is the stored resource.

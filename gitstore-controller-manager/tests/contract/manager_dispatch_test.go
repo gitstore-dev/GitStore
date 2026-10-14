@@ -6,6 +6,7 @@ package contract_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,12 +69,16 @@ func TestManagerThrottlingNeverConsumesPoisonBudgetOrAcknowledgesUnfinishedWork(
 		maxAttempts int
 		firstError  error
 		second      types.ReconcileResult
+		dependency  string
+		deferrals   float64
 	}{
-		{"initial-throttle", 1, types.ErrRateLimited, types.ResultTransient(types.ErrRateLimited)},
-		{"throttle-during-retry", 2, errors.New("temporary error"), types.ResultTransient(types.ErrRateLimited)},
-		{"initial-credential-outage", 1, types.ErrCredentialsUnavailable, types.ResultTransient(types.ErrCredentialsUnavailable)},
-		{"credential-outage-during-retry", 2, errors.New("temporary error"), types.ResultTransient(types.ErrCredentialsUnavailable)},
-		{"requeue-during-retry", 2, errors.New("temporary error"), types.ResultAfter(20 * time.Millisecond)},
+		{"initial-throttle", 1, types.ErrRateLimited, types.ResultTransient(types.ErrRateLimited), "rate_limit", 2},
+		{"throttle-during-retry", 2, errors.New("temporary error"), types.ResultTransient(types.ErrRateLimited), "rate_limit", 1},
+		{"initial-credential-outage", 1, types.ErrCredentialsUnavailable, types.ResultTransient(types.ErrCredentialsUnavailable), "credentials", 2},
+		{"credential-outage-during-retry", 2, errors.New("temporary error"), types.ResultTransient(types.ErrCredentialsUnavailable), "credentials", 1},
+		{"initial-API-outage", 1, fmt.Errorf("DNS failure: %w", types.ErrAPIUnavailable), types.ResultTransient(types.ErrAPIUnavailable), "api", 2},
+		{"API-outage-during-retry", 2, errors.New("temporary error"), types.ResultTransient(types.ErrAPIUnavailable), "api", 1},
+		{"requeue-during-retry", 2, errors.New("temporary error"), types.ResultAfter(20 * time.Millisecond), "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
@@ -91,6 +96,10 @@ func TestManagerThrottlingNeverConsumesPoisonBudgetOrAcknowledgesUnfinishedWork(
 			}}
 			mgr := manager.New()
 			key := types.WorkItemKey{Kind: "ThrottleTest", Namespace: "ns", Name: tc.name}
+			before := make(map[string]float64)
+			for _, dependency := range []string{"api", "credentials", "rate_limit"} {
+				before[dependency] = testutil.ToFloat64(health.DependencyDeferrals.WithLabelValues(key.Kind, dependency))
+			}
 			require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
 				Kind: key.Kind, Reconciler: r, Cache: newSyncedCache(),
 				MaxAttempts: tc.maxAttempts, InitialInterval: time.Millisecond, MaxInterval: time.Millisecond,
@@ -114,6 +123,13 @@ func TestManagerThrottlingNeverConsumesPoisonBudgetOrAcknowledgesUnfinishedWork(
 			case <-done:
 			case <-time.After(time.Second):
 				t.Fatal("manager shutdown did not cancel bounded work")
+			}
+			for dependency, baseline := range before {
+				want := float64(0)
+				if dependency == tc.dependency {
+					want = tc.deferrals
+				}
+				require.Equal(t, want, testutil.ToFloat64(health.DependencyDeferrals.WithLabelValues(key.Kind, dependency))-baseline)
 			}
 		})
 	}

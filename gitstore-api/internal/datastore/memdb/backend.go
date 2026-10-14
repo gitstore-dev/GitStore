@@ -206,6 +206,22 @@ func (m *memdbDatastore) ReplaceCategoryProductMembership(_ context.Context, pro
 	}
 	m.categoryProductsMu.Lock()
 	defer m.categoryProductsMu.Unlock()
+	txn := m.db.Txn(true)
+	defer txn.Abort()
+	raw, err := txn.First("product", "id", product.UID)
+	if err != nil {
+		return fmt.Errorf("memdb: read product category membership fence: %w", err)
+	}
+	if raw == nil {
+		categoryUIDs = nil
+	} else {
+		current := raw.(*datastore.Product)
+		if current.ResourceVersion != product.ResourceVersion {
+			// A newer authoritative write must not be undone by an old projection retry.
+			return nil
+		}
+		product = current
+	}
 	for _, key := range m.productCategories[product.UID] {
 		if members := m.categoryProducts[key]; members != nil {
 			delete(members, product.UID)
@@ -231,7 +247,11 @@ func (m *memdbDatastore) ReplaceCategoryProductMembership(_ context.Context, pro
 		m.categoryProducts[key][product.UID] = struct{}{}
 		keys = append(keys, key)
 	}
-	m.productCategories[product.UID] = keys
+	if len(keys) == 0 {
+		delete(m.productCategories, product.UID)
+	} else {
+		m.productCategories[product.UID] = keys
+	}
 	return nil
 }
 
@@ -348,6 +368,37 @@ func (m *memdbDatastore) GetFile(_ context.Context, uid string) (*datastore.File
 	return cloneFile(raw.(*datastore.File)), nil
 }
 
+func (m *memdbDatastore) GetFileSnapshots(ctx context.Context, uids []string) ([]*datastore.File, error) {
+	if len(uids) > datastore.FileSnapshotBatchLimit {
+		return nil, fmt.Errorf("%w: File snapshots exceed %d IDs", datastore.ErrInvalidArgument, datastore.FileSnapshotBatchLimit)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	files := make([]*datastore.File, len(uids))
+	for i, uid := range uids {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if len(uid) != 36 || uuid.Validate(uid) != nil {
+			continue
+		}
+		raw, err := txn.First("file", "id", uid)
+		if err != nil {
+			return nil, err
+		}
+		if raw != nil {
+			files[i] = cloneFile(raw.(*datastore.File))
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
 func (m *memdbDatastore) GetFileByName(_ context.Context, namespace, name string) (*datastore.File, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
@@ -356,6 +407,37 @@ func (m *memdbDatastore) GetFileByName(_ context.Context, namespace, name string
 		return nil, notFoundOrErr(err)
 	}
 	return cloneFile(raw.(*datastore.File)), nil
+}
+
+func (m *memdbDatastore) GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*datastore.File, error) {
+	if namespace == "" || len(names) > datastore.FileNameSnapshotBatchLimit {
+		return nil, datastore.ErrInvalidArgument
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	files := make([]*datastore.File, len(names))
+	for i, name := range names {
+		if name == "" {
+			return nil, datastore.ErrInvalidArgument
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		raw, err := txn.First("file", "name_namespace", namespace, name)
+		if err != nil {
+			return nil, err
+		}
+		if raw != nil {
+			files[i] = cloneFile(raw.(*datastore.File))
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 func (m *memdbDatastore) ListFiles(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
@@ -389,14 +471,14 @@ func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File, expect
 		txn.Abort()
 		return fmt.Errorf("%w: file uid %s", datastore.ErrNotFound, f.UID)
 	}
-	if raw.(*datastore.File).ResourceVersion != expectedResourceVersion {
-		txn.Abort()
-		return fmt.Errorf("%w: file uid %s", datastore.ErrConflict, f.UID)
-	}
 	previous := raw.(*datastore.File)
-	if reflect.DeepEqual(previous, f) {
+	if previous.Namespace != f.Namespace || previous.Name != f.Name {
 		txn.Abort()
-		return nil
+		return datastore.ErrConflict
+	}
+	if err := datastore.ValidateCatalogUpdateVersion(previous.ResourceVersion, expectedResourceVersion, f.ResourceVersion); err != nil {
+		txn.Abort()
+		return err
 	}
 	if raw, _ := txn.First("file", "name_namespace", f.Namespace, f.Name); raw != nil && raw.(*datastore.File).UID != f.UID {
 		txn.Abort()
@@ -713,7 +795,9 @@ func (m *memdbDatastore) deleteProduct(uid, expectedResourceVersion string, chec
 	txn.Commit()
 	// Removal is intentionally idempotent; a retry after a partially completed
 	// API mutation cannot leave a deleted Product visible in a category.
-	_ = m.ReplaceCategoryProductMembership(context.Background(), raw.(*datastore.Product), nil)
+	if err := m.ReplaceCategoryProductMembership(context.Background(), raw.(*datastore.Product), nil); err != nil {
+		return fmt.Errorf("memdb: clean deleted product category memberships: %w", err)
+	}
 	m.recordCommittedProduct(datastore.ResourceWatchDeleted, raw.(*datastore.Product), nil)
 	return nil
 }
@@ -1330,9 +1414,9 @@ func (m *memdbDatastore) UpdateNamespace(_ context.Context, ns *datastore.Namesp
 		return err
 	}
 	ns.Status = status
-	if current.ResourceVersion != expectedResourceVersion {
+	if err := datastore.ValidateCatalogUpdateVersion(current.ResourceVersion, expectedResourceVersion, ns.ResourceVersion); err != nil {
 		txn.Abort()
-		return datastore.ErrConflict
+		return err
 	}
 	if raw, _ := txn.First("namespaces", "name", ns.Name); raw != nil && raw.(*datastore.Namespace).UID != ns.UID {
 		txn.Abort()
@@ -1617,9 +1701,9 @@ func (m *memdbDatastore) UpdateRepository(_ context.Context, r *datastore.Reposi
 		return err
 	}
 	r.Status = status
-	if current.ResourceVersion != expectedResourceVersion {
+	if err := datastore.ValidateCatalogUpdateVersion(current.ResourceVersion, expectedResourceVersion, r.ResourceVersion); err != nil {
 		txn.Abort()
-		return datastore.ErrConflict
+		return err
 	}
 	if raw, _ := txn.First("repository", "name_namespace", r.Namespace, r.Name); raw != nil && raw.(*datastore.Repository).UID != r.UID {
 		txn.Abort()

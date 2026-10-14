@@ -3,10 +3,11 @@
 
 import http from 'k6/http';
 
-export function graphql(url, token, query, variables, tags = {}) {
+export function graphql(url, token, query, variables, tags = {}, params = {}) {
   const response = http.post(url, JSON.stringify({ query, variables }), {
+    ...params,
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       'Content-Type': 'application/json',
     },
     tags,

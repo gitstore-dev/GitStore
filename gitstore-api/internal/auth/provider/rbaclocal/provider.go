@@ -23,13 +23,22 @@ type compiledCondition struct {
 	Condition
 	values map[string]struct{}
 }
+type conditionValue struct {
+	value string
+	valid bool
+}
+type conditionValues struct {
+	namespace, tier, visibility conditionValue
+}
 type compiledRule struct {
-	id         int
 	index      int
 	names      map[string]struct{}
 	conditions []compiledCondition
 }
-type compiledRole struct{ byAction map[string][]*compiledRule }
+type compiledRole struct {
+	id       int
+	byAction map[string][]*compiledRule
+}
 type compiledBinding struct {
 	id         int
 	diagnostic string
@@ -43,6 +52,7 @@ type compiledPolicy struct {
 	bySubject map[SubjectRef]bindingSet
 	bindings  []*compiledBinding
 	ruleCount int
+	roleCount int
 }
 
 // Bounds match policy validation. Bitsets make overlapping group bindings a
@@ -74,6 +84,17 @@ func New(cfg config.RBACConfig, logger *zap.Logger) (*RBACLocalProvider, error) 
 	return p, nil
 }
 func (p *RBACLocalProvider) Name() string { return "rbac-local" }
+
+func (p *RBACLocalProvider) AuthorizationSnapshot() (auth.AuthorizationSnapshot, bool) {
+	snapshot := p.snapshot.Load()
+	if snapshot == nil {
+		return auth.AuthorizationSnapshot{APIVersion: PolicyAPIVersion}, true
+	}
+	return auth.AuthorizationSnapshot{
+		Loaded: true, APIVersion: PolicyAPIVersion, Digest: snapshot.digest,
+		Roles: snapshot.roleCount, Bindings: len(snapshot.bindings), Rules: snapshot.ruleCount,
+	}, true
+}
 
 func (p *RBACLocalProvider) Reload() error {
 	p.reloadMu.Lock()
@@ -116,7 +137,10 @@ func (p *RBACLocalProvider) SetActiveUsers(users []*auth.UserProfile) error {
 }
 
 func compilePolicy(policy *Policy) *compiledPolicy {
-	snapshot := &compiledPolicy{digest: policy.digest, bySubject: map[SubjectRef]bindingSet{}}
+	snapshot := &compiledPolicy{
+		digest: policy.digest, bySubject: map[SubjectRef]bindingSet{},
+		roleCount: len(policy.ClusterRoles) + len(policy.Roles),
+	}
 	roles := map[RoleRef]*compiledRole{}
 	for _, tier := range []struct {
 		kind  string
@@ -128,9 +152,9 @@ func compilePolicy(policy *Policy) *compiledPolicy {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			role := &compiledRole{byAction: map[string][]*compiledRule{}}
+			role := &compiledRole{id: len(roles), byAction: map[string][]*compiledRule{}}
 			for i, rule := range tier.roles[name].Rules {
-				compiled := &compiledRule{id: snapshot.ruleCount, index: i, names: stringSet(rule.ResourceNames)}
+				compiled := &compiledRule{index: i, names: stringSet(rule.ResourceNames)}
 				snapshot.ruleCount++
 				for _, condition := range rule.When {
 					compiled.conditions = append(compiled.conditions, compiledCondition{Condition: condition, values: stringSet(condition.Values)})
@@ -245,35 +269,37 @@ func (p *RBACLocalProvider) Authorize(_ context.Context, principal *auth.Princip
 			candidates[word] |= matches
 		}
 	}
-	namespace, _ := resource.Attrs["namespace"].(string)
+	attributes := readConditionValues(resource.Attrs)
+	namespace := attributes.namespace.value
 	owner := ownerMatches(resource.OwnerSub, principal)
 	member := ownerMatches(target, principal)
-	var visited [(maxPolicyRules*2 + 63) / 64]uint64 // cluster/namespaced provenance
+	var visited [(maxPolicyRoles*2 + 63) / 64]uint64 // cluster/namespaced provenance
 	reason := "no matching binding"
 	for word, matches := range candidates {
 		for matches != 0 {
 			bit := bits.TrailingZeros64(matches)
 			matches &= matches - 1
 			binding := snapshot.bindings[word*64+bit]
-			if len(binding.role.byAction[action]) == 0 {
+			rules := binding.role.byAction[action]
+			if len(rules) == 0 {
 				continue
 			}
 			if !binding.cluster && (definition.Scope != "namespace" || namespace == "" || namespace != binding.namespace) {
 				reason = "binding scope mismatch"
 				continue
 			}
-			for _, rule := range binding.role.byAction[action] {
-				// Preserve cluster provenance: its transfer override differs from a
-				// namespaced binding of the exact same compiled rule.
-				key := rule.id * 2
-				if binding.cluster {
-					key++
-				}
-				mask := uint64(1) << (key % 64)
-				if visited[key/64]&mask != 0 {
-					continue
-				}
-				visited[key/64] |= mask
+			// All rule inputs are fixed for this request after binding scope
+			// checks. Cluster transfer overrides require separate provenance.
+			key := binding.role.id * 2
+			if binding.cluster {
+				key++
+			}
+			mask := uint64(1) << (key % 64)
+			if visited[key/64]&mask != 0 {
+				continue
+			}
+			visited[key/64] |= mask
+			for _, rule := range rules {
 				if len(rule.names) > 0 {
 					if _, ok := rule.names[resource.Name]; !ok || resource.Name == "" {
 						reason = "instance mismatch"
@@ -281,8 +307,8 @@ func (p *RBACLocalProvider) Authorize(_ context.Context, principal *auth.Princip
 					}
 				}
 				matched := true
-				for _, condition := range rule.conditions {
-					if !conditionMatches(condition, resource, owner, member) {
+				for i := range rule.conditions {
+					if !conditionMatches(&rule.conditions[i], &attributes, owner, member) {
 						matched = false
 						reason = "condition missing or false"
 						break
@@ -343,17 +369,36 @@ func targetOwner(value any) (string, bool) {
 		return "", false
 	}
 }
-func conditionMatches(c compiledCondition, r auth.ResourceContext, owner, member bool) bool {
+func readConditionValues(attrs map[string]any) conditionValues {
+	read := func(attribute string) conditionValue {
+		value, ok := attrs[attribute].(string)
+		return conditionValue{value: value, valid: ok && len(value) <= 256}
+	}
+	return conditionValues{namespace: read("namespace"), tier: read("tier"), visibility: read("visibility")}
+}
+
+func conditionMatches(c *compiledCondition, attributes *conditionValues, owner, member bool) bool {
 	if c.Token == "owner" {
 		return owner
 	}
 	if c.Token == "targetOwnerMember" {
 		return member
 	}
-	value, ok := r.Attrs[c.Attr].(string)
-	if !ok || len(value) > 256 {
+	var attribute conditionValue
+	switch c.Attr {
+	case "namespace":
+		attribute = attributes.namespace
+	case "tier":
+		attribute = attributes.tier
+	case "visibility":
+		attribute = attributes.visibility
+	default:
 		return false
 	}
+	if !attribute.valid {
+		return false
+	}
+	value := attribute.value
 	switch c.Op {
 	case "eq":
 		return value == *c.Value
@@ -430,9 +475,11 @@ func (p *RBACLocalProvider) hasEffectivePermission(principal *auth.Principal) bo
 							match := false
 							for _, value := range choices {
 								attrs[attribute] = value
+								attributes := readConditionValues(attrs)
 								satisfies := true
-								for _, c := range rule.conditions {
-									if c.Attr == attribute && !conditionMatches(c, auth.ResourceContext{Attrs: attrs}, true, true) {
+								for i := range rule.conditions {
+									c := &rule.conditions[i]
+									if c.Attr == attribute && !conditionMatches(c, &attributes, true, true) {
 										satisfies = false
 										break
 									}

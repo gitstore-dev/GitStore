@@ -5,6 +5,7 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
@@ -30,6 +31,62 @@ type ProviderRegistry struct {
 	authnChain *ChainedAuthN
 	authz      AuthZProvider
 	userdir    UserDirProvider
+}
+
+// AuthorizationSnapshot contains bounded, non-secret metadata from one immutable
+// policy snapshot. Providers implementing it must not perform I/O.
+type AuthorizationSnapshot struct {
+	Loaded     bool   `json:"loaded"`
+	APIVersion string `json:"apiVersion"`
+	Digest     string `json:"digest"`
+	Roles      int    `json:"roles"`
+	Bindings   int    `json:"bindings"`
+	Rules      int    `json:"rules"`
+}
+
+// AuthorizationSnapshotProvider preserves optional metadata through decorators;
+// false means the wrapped provider does not support snapshot diagnostics.
+type AuthorizationSnapshotProvider interface {
+	AuthorizationSnapshot() (AuthorizationSnapshot, bool)
+}
+
+type ProviderDiagnostics struct {
+	AuthN         []string               `json:"authn"`
+	AuthZ         string                 `json:"authz"`
+	UserDir       string                 `json:"userdir"`
+	CatalogDigest string                 `json:"catalogDigest"`
+	Policy        *AuthorizationSnapshot `json:"policy,omitempty"`
+}
+
+// Hash the compiled, canonically ordered tuples rather than a deployment file.
+var authorizationCatalogDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprint(authorizationActions))))
+
+func (r *ProviderRegistry) Diagnostics() ProviderDiagnostics {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := ProviderDiagnostics{CatalogDigest: authorizationCatalogDigest, AuthN: []string{}}
+	if r.authnChain != nil {
+		seen := make(map[string]bool)
+		for _, provider := range r.authnChain.providers {
+			name := provider.Name()
+			if !seen[name] {
+				result.AuthN = append(result.AuthN, name)
+				seen[name] = true
+			}
+		}
+	}
+	if r.authz != nil {
+		result.AuthZ = r.authz.Name()
+		if provider, ok := r.authz.(AuthorizationSnapshotProvider); ok {
+			if snapshot, available := provider.AuthorizationSnapshot(); available {
+				result.Policy = &snapshot
+			}
+		}
+	}
+	if r.userdir != nil {
+		result.UserDir = r.userdir.Name()
+	}
+	return result
 }
 
 // EffectivePermissionChecker is an optional local-policy validation capability;

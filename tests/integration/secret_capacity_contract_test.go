@@ -32,6 +32,60 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSecretCapacityGitCancellationDrainsDescendants(t *testing.T) {
+	bin := t.TempDir()
+	heartbeat := filepath.Join(bin, "heartbeat")
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(`#!/bin/sh
+(
+  i=0
+  while [ "$i" -lt 30 ]; do
+    printf '.' >> "$TEST_GIT_HEARTBEAT"
+    printf '.'
+    sleep 0.1
+    i=$((i + 1))
+  done
+) &
+wait
+`), 0700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TEST_GIT_HEARTBEAT", heartbeat)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := secretCapacityGit(ctx, bin, "", "clone")
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(heartbeat); err == nil {
+			break
+		} else {
+			require.ErrorIs(t, err, os.ErrNotExist)
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("Git fixture exited before starting descendants: %v", err)
+		default:
+		}
+		require.True(t, time.Now().Before(deadline), "Git descendant did not start")
+		time.Sleep(10 * time.Millisecond)
+	}
+	started := time.Now()
+	cancel()
+	err := <-done
+	elapsed := time.Since(started)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Less(t, elapsed, time.Second, "Git descendants must not retain output pipes after cancellation")
+	before, err := os.ReadFile(heartbeat)
+	require.NoError(t, err)
+	require.NotEmpty(t, before)
+	time.Sleep(250 * time.Millisecond)
+	after, err := os.ReadFile(heartbeat)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "cancelled Git descendants must not continue owned work")
+}
+
 func TestSecretCapacityDockerDesktopMounts(t *testing.T) {
 	bin := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(`#!/bin/sh
@@ -1309,6 +1363,8 @@ func TestSecretCapacityPushScheduling(t *testing.T) {
 	require.Zero(t, result.failed)
 	require.Len(t, result.bursts, 2)
 	require.Len(t, result.pushLatencies, 40)
+	require.Len(t, result.queueLatencies, 40)
+	require.Empty(t, result.failureClasses)
 	require.GreaterOrEqual(t, result.offeredDuration, cfg.duration)
 	require.LessOrEqual(t, peak.Load(), int64(32))
 	for _, burst := range result.bursts {
@@ -1338,6 +1394,57 @@ func TestSecretCapacityPushQueueDoesNotHideDrops(t *testing.T) {
 	require.Equal(t, result.sustainedOffered+result.bursts[0].Offered, result.completed+result.dropped)
 }
 
+func TestSecretCapacityPushMatchedTimelines(t *testing.T) {
+	cfg := secretCapacityLoadConfig{
+		duration: 20 * time.Millisecond, interval: 10 * time.Millisecond,
+		burstInterval: 20 * time.Millisecond, burstSize: 1, burstWindow: time.Millisecond,
+		workers: 1, queueLimit: 8, drainTimeout: time.Second,
+	}
+	measured, err := runSecretCapacityPushes(t.Context(), cfg, func(_ context.Context, _ int, batch secretCapacityPushBatch) secretCapacityPushResult {
+		localStarted := time.Now()
+		time.Sleep(2 * time.Millisecond)
+		localGit := time.Since(localStarted)
+		ack := time.Since(batch.offeredAt)
+		projectionStarted := time.Now()
+		time.Sleep(5 * time.Millisecond)
+		return secretCapacityPushResult{
+			gitAttempted: true, acknowledged: true, ackLatency: ack,
+			localGitLatency: localGit, projectionLatency: time.Since(projectionStarted),
+			projectionPolls: 1, projectionChecks: 2,
+		}
+	})
+	require.NoError(t, err)
+	require.Len(t, measured.timelines, 3)
+	seen := make(map[int64]bool)
+	for _, item := range measured.timelines {
+		require.False(t, seen[item.Sequence])
+		seen[item.Sequence] = true
+		require.Equal(t, 0, item.Worker)
+		require.False(t, item.OfferedAt.IsZero())
+		require.True(t, item.Acknowledged)
+		require.False(t, item.ProjectionFailed)
+		require.GreaterOrEqual(t, item.ACK, item.QueueWait+item.LocalGit)
+		require.GreaterOrEqual(t, item.QueueWait+item.WorkerOccupied, item.ACK+item.ProjectionVisibility)
+		require.GreaterOrEqual(t, item.ProjectionVisibility, 5*time.Millisecond)
+		require.EqualValues(t, 1, item.ProjectionPolls)
+	}
+}
+
+func TestSecretCapacityPushTimelineBound(t *testing.T) {
+	var measured secretCapacityPushMeasurements
+	for sequence := secretCapacityTimelineLimit + 100; sequence > 0; sequence-- {
+		measured.recordTimeline(secretCapacityPushTimeline{Sequence: int64(sequence)})
+	}
+	require.Len(t, measured.timelines, secretCapacityTimelineLimit)
+	seen := make(map[int64]bool)
+	for _, item := range measured.timelines {
+		require.Greater(t, item.Sequence, int64(0))
+		require.LessOrEqual(t, item.Sequence, int64(secretCapacityTimelineLimit))
+		require.False(t, seen[item.Sequence])
+		seen[item.Sequence] = true
+	}
+}
+
 func TestSecretCapacityPushCancellationDrainsWorkers(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	var entered sync.Once
@@ -1363,10 +1470,20 @@ func TestSecretCapacityGitPushesRealFileCommits(t *testing.T) {
 	worker, err := newSecretCapacityGitWorker(t.Context(), filepath.Join(root, "work"), remote, "capacity-test", "fixture", "", 0)
 	require.NoError(t, err)
 	for sequence := int64(1); sequence <= 2; sequence++ {
+		if sequence == 2 {
+			for _, path := range []string{"unrelated.md", "files/unoffered.md"} {
+				require.NoError(t, os.WriteFile(filepath.Join(worker.directory, path), []byte("not offered"), 0600))
+			}
+			_, err := secretCapacityGit(t.Context(), worker.directory, "", "add", "--", "unrelated.md", "files/unoffered.md")
+			require.NoError(t, err)
+		}
 		result := worker.push(t.Context(), secretCapacityPushBatch{sequence: sequence})
 		require.NoError(t, result.err)
 		require.True(t, result.gitAttempted)
 		require.True(t, result.acknowledged)
+		require.True(t, worker.tracked)
+		require.Positive(t, result.localGitLatency)
+		require.Positive(t, result.gitHTTPLatency)
 		require.Len(t, result.referenceLatencies, len(secretCapacityWorkerFiles(0)))
 		for _, file := range secretCapacityWorkerFiles(0) {
 			data, err := secretCapacityGit(t.Context(), root, "", "--git-dir="+remote, "show",
@@ -1375,7 +1492,17 @@ func TestSecretCapacityGitPushesRealFileCommits(t *testing.T) {
 			require.Contains(t, string(data), "kind: CredentialsRef")
 			require.Contains(t, string(data), fmt.Sprintf("secret-capacity.gitstore.dev/sequence: \"%d\"", sequence))
 		}
+		paths, err := secretCapacityGit(t.Context(), root, "", "--git-dir="+remote, "ls-tree", "-r", "--name-only", "main")
+		require.NoError(t, err)
+		expected := make([]string, 0, len(worker.files))
+		for _, file := range worker.files {
+			expected = append(expected, "files/"+secretCapacityFileName("fixture", file)+".md")
+		}
+		require.ElementsMatch(t, expected, strings.Fields(string(paths)), "each push commits only its offered File paths")
 	}
+	staged, err := secretCapacityGit(t.Context(), worker.directory, "", "diff", "--cached", "--name-only")
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"unrelated.md", "files/unoffered.md"}, strings.Fields(string(staged)))
 	config, err := os.ReadFile(filepath.Join(root, "work", ".git", "config"))
 	require.NoError(t, err)
 	require.NotContains(t, string(config), "Authorization")
@@ -1389,6 +1516,36 @@ func TestSecretCapacityGitFailureNeverEchoesOutput(t *testing.T) {
 	require.False(t, errors.Is(err, context.Canceled))
 }
 
+func TestSecretCapacityGitInspectChecksFailureWithoutReturningOutput(t *testing.T) {
+	inspected := false
+	output, err := secretCapacityGitInspect(t.Context(), t.TempDir(), "", func(data []byte) {
+		inspected = true
+		require.True(t, bytes.Contains(data, []byte("not-a-command-secret-marker")))
+	}, "not-a-command-secret-marker")
+	require.Error(t, err)
+	require.True(t, inspected)
+	require.Empty(t, output)
+	require.NotContains(t, err.Error(), "secret-marker")
+}
+
+func TestSecretCapacityGitInspectRejectsTruncatedOutput(t *testing.T) {
+	root := t.TempDir()
+	_, err := secretCapacityGit(t.Context(), root, "", "init", "--initial-branch=main")
+	require.NoError(t, err)
+	file := filepath.Join(root, "large-output")
+	require.NoError(t, os.WriteFile(file, bytes.Repeat([]byte("x"), 256*1024), 0600))
+	oid, err := secretCapacityGit(t.Context(), root, "", "hash-object", "-w", file)
+	require.NoError(t, err)
+	inspected := false
+	output, err := secretCapacityGitInspect(t.Context(), root, "", func([]byte) {
+		inspected = true
+	}, "cat-file", "-p", strings.TrimSpace(string(oid)))
+	require.Error(t, err)
+	require.Equal(t, "output_limit", secretCapacityFailureClass(err))
+	require.False(t, inspected, "truncated output cannot establish a complete diagnostic contract")
+	require.Empty(t, output)
+}
+
 func TestSecretCapacityGitOutputIsBounded(t *testing.T) {
 	var output secretCapacityGitOutput
 	n, err := io.Copy(&output, strings.NewReader(strings.Repeat("x", 256*1024)))
@@ -1396,6 +1553,144 @@ func TestSecretCapacityGitOutputIsBounded(t *testing.T) {
 	require.EqualValues(t, 256*1024, n)
 	require.True(t, output.overflow)
 	require.Equal(t, 128*1024, output.buffer.Len())
+}
+
+func TestSecretCapacityOwnedOutputLimitsAndSanitizedFailures(t *testing.T) {
+	marker := "private-owned-command-output-marker"
+	root := t.TempDir()
+	path := filepath.Join(root, "metrics")
+	contents := []byte(strings.Repeat("# metrics sample\n", 10*1024))
+	require.Greater(t, len(contents), 128*1024)
+	require.NoError(t, os.WriteFile(path, contents, 0600))
+	body, err := secretCapacityOwnedCommand(t.Context(), "cat", path)
+	require.ErrorContains(t, err, "exceeded output limit")
+	require.Nil(t, body, "truncated output cannot establish an owned process identity")
+	body, err = secretCapacityOwnedCommandOutput(t.Context(), &secretCapacityGitOutput{limit: 8 * 1024 * 1024}, "cat", path)
+	require.NoError(t, err)
+	require.Equal(t, contents, body, "metrics probes must retain their complete bounded payload")
+	output := &secretCapacityGitOutput{limit: 32}
+	body, err = secretCapacityOwnedCommandOutput(t.Context(), output, "cat", path)
+	require.ErrorContains(t, err, "exceeded output limit")
+	require.Nil(t, body)
+	require.Equal(t, 32, output.buffer.Len())
+	require.Equal(t, make([]byte, 32), output.buffer.Bytes(), "failed output must be cleared")
+	body, err = secretCapacityOwnedCommand(t.Context(), "sh", "-c", "printf '"+marker+"'; exit 19")
+	require.ErrorContains(t, err, "exit 19")
+	require.NotContains(t, err.Error(), marker)
+	require.Nil(t, body)
+	body, err = secretCapacityOwnedCommand(t.Context(), filepath.Join(root, marker))
+	require.ErrorContains(t, err, "(start)")
+	require.NotContains(t, err.Error(), marker)
+	require.Nil(t, body)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	body, err = secretCapacityOwnedCommand(ctx, "cat", path)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, body)
+}
+
+func TestSecretCapacityOwnedMetricsPreservesItsSeparateBound(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "metrics")
+	contents := []byte(strings.Repeat("# metrics sample\n", 10*1024))
+	require.NoError(t, os.WriteFile(path, contents, 0600))
+	docker := "#!/bin/sh\n" +
+		"[ \"$1\" = exec ] && [ \"$2\" = owned ] && [ \"$3\" = wget ] && [ \"$4\" = '-qO-' ] || exit 21\n" +
+		"case \"$5\" in http://127.0.0.1:4000/metrics|http://127.0.0.1:5001/metrics) ;; *) exit 22 ;; esac\n" +
+		"exec cat \"$METRICS_FIXTURE\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "docker"), []byte(docker), 0700))
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("METRICS_FIXTURE", path)
+	for _, port := range []string{"4000", "5001"} {
+		body, err := secretCapacityOwnedMetrics(t.Context(), "owned", port)
+		require.NoError(t, err)
+		require.Equal(t, contents, body)
+	}
+	require.NoError(t, os.WriteFile(path, bytes.Repeat([]byte("x"), 8*1024*1024+1), 0600))
+	body, err := secretCapacityOwnedMetrics(t.Context(), "owned", "4000")
+	require.ErrorContains(t, err, "exceeded output limit")
+	require.Nil(t, body, "oversized metrics cannot become a truncated successful identity proof")
+}
+
+func TestSecretCapacityGitFailuresHaveSanitizedClasses(t *testing.T) {
+	marker := "private-token-response-marker"
+	for _, tc := range []struct {
+		output, class string
+	}{
+		{"! [rejected] main -> main (non-fast-forward)", "non_fast_forward"},
+		{"! [rejected] main -> main (fetch first)", "non_fast_forward"},
+		{"fatal: the requested URL returned error: 429", "quota"},
+		{"fatal: Authentication failed", "authentication"},
+		{"! [remote rejected] main -> main (pre-receive hook declined)", "rejection"},
+		{"fatal: Could not resolve host", "transport"},
+		{"error: RPC failed; HTTP 503", "transport"},
+		{"fatal: unrecognized failure", "command_failure"},
+	} {
+		t.Run(tc.class+"/"+tc.output, func(t *testing.T) {
+			class := classifySecretCapacityGitFailure([]byte(tc.output+" "+marker), false)
+			require.Equal(t, tc.class, class)
+			err := &secretCapacityGitError{class: class, cause: errors.New(marker)}
+			require.Equal(t, tc.class, secretCapacityFailureClass(err))
+			require.NotContains(t, err.Error(), marker)
+			require.NotContains(t, err.Error(), tc.output)
+		})
+	}
+	require.Equal(t, "output_limit", classifySecretCapacityGitFailure([]byte(marker), true))
+	require.Equal(t, "deadline", secretCapacityFailureClass(context.DeadlineExceeded))
+	require.Equal(t, "cancelled", secretCapacityFailureClass(context.Canceled))
+	require.Equal(t, "unclassified", secretCapacityFailureClass(errors.New(marker)))
+}
+
+func TestSecretCapacityPushStagesAccountForOverlappingFailures(t *testing.T) {
+	cfg := secretCapacityLoadConfig{
+		duration: 40 * time.Millisecond, interval: 10 * time.Millisecond,
+		burstInterval: 40 * time.Millisecond, burstSize: 1, burstWindow: time.Millisecond,
+		workers: 1, queueLimit: 8, drainTimeout: time.Second,
+	}
+	measurements, err := runSecretCapacityPushes(t.Context(), cfg, func(context.Context, int, secretCapacityPushBatch) secretCapacityPushResult {
+		return secretCapacityPushResult{
+			gitAttempted: true, acknowledged: false, err: &secretCapacityGitError{class: "quota"},
+			failureStage: "git_http", projectionFailed: true, resolutionFailed: true,
+			localGitLatency: time.Millisecond, gitHTTPLatency: 2 * time.Millisecond, projectionLatency: 3 * time.Millisecond,
+			projectionReadLatency: time.Millisecond, projectionPolls: 1,
+			projectionReadPeakLatency: time.Millisecond,
+		}
+	})
+	require.Error(t, err)
+	require.EqualValues(t, 5, measurements.completed)
+	require.Equal(t, measurements.completed, measurements.failed)
+	require.Equal(t, measurements.completed, measurements.failureClasses["git_http/quota"])
+	require.Equal(t, measurements.completed, measurements.failureClasses["projection/verification"])
+	require.Equal(t, measurements.completed, measurements.failureClasses["credential_resolution/provider"])
+	require.Len(t, measurements.queueLatencies, 5)
+	require.Len(t, measurements.localGitLatencies, 5)
+	require.Len(t, measurements.gitHTTPLatencies, 5)
+	require.Len(t, measurements.projectionLatencies, 5)
+	require.Len(t, measurements.projectionReadLatencies, 5)
+	require.Len(t, measurements.projectionReadPeakLatencies, 5)
+	require.EqualValues(t, 5, measurements.projectionPolls)
+	root := t.TempDir()
+	require.NoError(t, writeSecretCapacityFileObservations(root, "stages", capacityModeDiagnostic, cfg.duration,
+		secretCapacityRuntimeProof{}, secretCapacityFileLoadResult{measurements: measurements, err: err}))
+	data, readErr := os.ReadFile(filepath.Join(root, "secret", "file-workload.json"))
+	require.NoError(t, readErr)
+	var evidence secretCapacityFileObservations
+	require.NoError(t, json.Unmarshal(data, &evidence))
+	require.EqualValues(t, 5, evidence.ScheduledOffered)
+	require.Equal(t, evidence.ScheduledOffered, evidence.QueueAdmitted+evidence.Dropped)
+	require.Equal(t, evidence.QueueAdmitted, evidence.ExecutionAttempts)
+	require.Len(t, evidence.Stages, 6)
+	require.EqualValues(t, 5, evidence.ProjectionPolls)
+	require.Equal(t, secretCapacityTimelineLimit, evidence.TimelineLimit)
+	require.Len(t, evidence.Timelines, len(measurements.timelines))
+	for i, expected := range measurements.timelines {
+		expected.OfferedAt = expected.OfferedAt.Round(0).UTC()
+		require.Equal(t, expected, evidence.Timelines[i])
+	}
+	for _, stage := range evidence.Stages {
+		require.EqualValues(t, 5, stage.Samples)
+	}
+	require.EqualValues(t, 5, evidence.Failed, "stage counters overlap and must not inflate failed jobs")
 }
 
 func TestSecretCapacityProjectionReadsNullableGraphQLFields(t *testing.T) {
@@ -1416,7 +1711,7 @@ func TestSecretCapacityProjectionReadsNullableGraphQLFields(t *testing.T) {
 
 func TestSecretCapacityFilePoolReadsPersistedStateWithoutWatchHistory(t *testing.T) {
 	var reads atomic.Int64
-	var missing, duplicate, wrongNamespace atomic.Bool
+	var missing, duplicate, wrongNamespace, delayed atomic.Bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reads.Add(1)
 		require.Equal(t, http.MethodPost, r.Method)
@@ -1444,7 +1739,7 @@ func TestSecretCapacityFilePoolReadsPersistedStateWithoutWatchHistory(t *testing
 							"secretRef": map[string]any{"kind": "SecretRef", "name": "capacity-media"}}}},
 			}
 		}
-		if missing.Load() {
+		if missing.Load() || delayed.Swap(false) {
 			data["file0"] = nil
 		}
 		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
@@ -1465,6 +1760,15 @@ func TestSecretCapacityFilePoolReadsPersistedStateWithoutWatchHistory(t *testing
 		require.Error(t, err)
 		flag.Store(false)
 	}
+	delayed.Store(true)
+	ready, err := secretCapacityWaitForFileIDs(t.Context(), b.URL, "test-token", "ns", "fixture")
+	require.NoError(t, err)
+	require.Equal(t, first, ready, "seed visibility may converge before the unchanged 30-second deadline")
+	missing.Store(true)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	_, err = secretCapacityWaitForFileIDs(ctx, b.URL, "test-token", "ns", "fixture")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestSecretCapacityFilePoolErrorsAreClassifiedAndRedacted(t *testing.T) {
@@ -1477,7 +1781,7 @@ func TestSecretCapacityFilePoolErrorsAreClassifiedAndRedacted(t *testing.T) {
 		{"GraphQL", 200, `{"errors":[{"message":"private-response-marker"}]}`, "operation errors"},
 		{"malformed", 200, "private-response-marker", "malformed GraphQL response"},
 		{"null data", 200, `{"data":null}`, "missing or malformed GraphQL data"},
-		{"missing File", 200, `{"data":{}}`, "missing projection"},
+		{"missing File field", 200, `{"data":{}}`, "omitted a requested response field"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1489,6 +1793,8 @@ func TestSecretCapacityFilePoolErrorsAreClassifiedAndRedacted(t *testing.T) {
 			require.ErrorContains(t, err, tc.expected)
 			require.NotContains(t, err.Error(), "private-response-marker")
 			require.NotContains(t, err.Error(), "private-token")
+			_, err = secretCapacityWaitForFileIDs(t.Context(), server.URL, "private-token", "ns", "fixture")
+			require.ErrorContains(t, err, tc.expected, "seed waiting must not retry transport, GraphQL or malformed responses")
 		})
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -1618,6 +1924,508 @@ func TestSecretCapacityVerifiesEveryFileThroughBothAPIs(t *testing.T) {
 		"an acknowledged batch missing from one replica must not pass")
 }
 
+func TestSecretCapacityProjectionSurfacesOperationErrors(t *testing.T) {
+	worker := &secretCapacityGitWorker{namespace: "ns", runID: "fixture", files: []int{0}}
+	ids := map[string]string{secretCapacityFileName("fixture", 0): "file-id"}
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, "private-response-marker")
+	}))
+	defer server.Close()
+	err := secretCapacityVerifyFileBatch(t.Context(), server.Client(), []string{server.URL, "http://unused.internal"},
+		"test-token", worker, ids, secretCapacityPushBatch{sequence: 1})
+	var status *capacityHTTPStatusError
+	require.ErrorAs(t, err, &status)
+	require.Equal(t, http.StatusTooManyRequests, status.status)
+	require.Equal(t, "quota", secretCapacityFailureClass(err))
+	require.EqualValues(t, 1, requests.Load(), "operation errors must not masquerade as pending projections")
+	require.NotContains(t, err.Error(), "private-response-marker")
+}
+
+func secretCapacityProjectionTestNode(worker *secretCapacityGitWorker, file int, sequence int64) map[string]any {
+	name := secretCapacityFileName(worker.runID, file)
+	return map[string]any{
+		"id": fmt.Sprintf("file-%d", file),
+		"metadata": map[string]any{"name": name, "namespace": worker.namespace,
+			"annotations": map[string]string{"secret-capacity.gitstore.dev/sequence": strconv.FormatInt(sequence, 10)}},
+		"spec": map[string]any{"contentType": "image/jpeg", "type": "gitstore.dev/media",
+			"source": map[string]any{"type": "s3", "uri": "s3://capacity-fixture/" + name + ".jpg",
+				"credentialsRef": map[string]any{"kind": "CredentialsRef", "type": "aws-access-key/v1",
+					"secretRef": map[string]any{"kind": "SecretRef", "name": "capacity-media", "key": nil, "namespace": nil}}}},
+	}
+}
+
+func TestSecretCapacityProjectionVerifierBatchesBothReplicas(t *testing.T) {
+	ids := make(map[string]string)
+	nodes := make(map[string]map[string]any)
+	requests := make(chan secretCapacityProjectionRequest, 32)
+	var replies []chan error
+	var timings []*secretCapacityProjectionTiming
+	for index := range 32 {
+		worker := &secretCapacityGitWorker{namespace: "ns", runID: "fixture", files: secretCapacityWorkerFiles(index)}
+		for _, file := range worker.files {
+			node := secretCapacityProjectionTestNode(worker, file, 1)
+			id := node["id"].(string)
+			ids[secretCapacityFileName(worker.runID, file)] = id
+			nodes[id] = node
+		}
+		reply := make(chan error, 1)
+		replies = append(replies, reply)
+		timing := &secretCapacityProjectionTiming{}
+		timings = append(timings, timing)
+		requests <- secretCapacityProjectionRequest{ctx: t.Context(), worker: worker, batch: secretCapacityPushBatch{sequence: 1}, reply: reply, timing: timing}
+	}
+	var readsA, readsB atomic.Int64
+	handler := func(reads *atomic.Int64) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			reads.Add(1)
+			var request struct {
+				Variables struct {
+					IDs []string `json:"ids"`
+				} `json:"variables"`
+			}
+			if json.NewDecoder(r.Body).Decode(&request) != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if len(request.Variables.IDs) != 100 {
+				t.Errorf("batched verifier selected %d IDs, want 100", len(request.Variables.IDs))
+			}
+			result := make([]map[string]any, 0, len(request.Variables.IDs))
+			for _, id := range request.Variables.IDs {
+				result = append(result, nodes[id])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": result}})
+		}
+	}
+	a, b := httptest.NewServer(handler(&readsA)), httptest.NewServer(handler(&readsB))
+	defer a.Close()
+	defer b.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runSecretCapacityProjectionVerifier(ctx, a.Client(), []string{a.URL, b.URL}, "test-token", ids, requests)
+	}()
+	defer func() { cancel(); <-done }()
+	for _, reply := range replies {
+		select {
+		case err := <-reply:
+			require.NoError(t, err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("batched verifier did not finish")
+		}
+	}
+	require.EqualValues(t, 1, readsA.Load())
+	require.EqualValues(t, 1, readsB.Load())
+	for _, timing := range timings {
+		require.EqualValues(t, 1, timing.polls.Load())
+		require.Positive(t, timing.readNanos.Load())
+		require.Equal(t, timing.readNanos.Load(), timing.peakNanos.Load())
+		require.Equal(t, timings[0].readNanos.Load(), timing.readNanos.Load())
+	}
+}
+
+func TestSecretCapacityProjectionVerifierRecordsPeakAcrossPollingRounds(t *testing.T) {
+	worker := &secretCapacityGitWorker{namespace: "ns", runID: "fixture", files: secretCapacityWorkerFiles(0)}
+	ids := make(map[string]string)
+	for _, file := range worker.files {
+		ids[secretCapacityFileName(worker.runID, file)] = fmt.Sprintf("file-%d", file)
+	}
+	var readsA, readsB atomic.Int64
+	handler := func(reads *atomic.Int64) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			sequence := int64(1)
+			if reads.Add(1) == 1 {
+				sequence = 0
+			}
+			nodes := make([]map[string]any, 0, len(worker.files))
+			for _, file := range worker.files {
+				nodes = append(nodes, secretCapacityProjectionTestNode(worker, file, sequence))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": nodes}})
+		}
+	}
+	a, b := httptest.NewServer(handler(&readsA)), httptest.NewServer(handler(&readsB))
+	defer a.Close()
+	defer b.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	requests := make(chan secretCapacityProjectionRequest, 1)
+	reply := make(chan error, 1)
+	timing := &secretCapacityProjectionTiming{}
+	requests <- secretCapacityProjectionRequest{
+		ctx: ctx, worker: worker, batch: secretCapacityPushBatch{sequence: 1}, reply: reply, timing: timing,
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runSecretCapacityProjectionVerifier(ctx, a.Client(), []string{a.URL, b.URL}, "test-token", ids, requests)
+	}()
+	defer func() { cancel(); <-done }()
+	select {
+	case err := <-reply:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("verifier did not finish two polling rounds")
+	}
+	require.EqualValues(t, 2, timing.polls.Load())
+	require.EqualValues(t, 2, readsA.Load())
+	require.EqualValues(t, 2, readsB.Load())
+	require.Positive(t, timing.peakNanos.Load())
+	require.Less(t, timing.peakNanos.Load(), timing.readNanos.Load())
+}
+
+func TestSecretCapacityProjectionVerifierDrainsArrivalsDuringSlowRead(t *testing.T) {
+	ids := make(map[string]string)
+	nodes := make(map[string]map[string]any)
+	requests := make(chan secretCapacityProjectionRequest, 32)
+	replies := make([]chan error, 32)
+	workers := make([]*secretCapacityGitWorker, 32)
+	for i := range 32 {
+		workers[i] = &secretCapacityGitWorker{namespace: "ns", runID: "fixture", files: []int{i}}
+		ids[secretCapacityFileName("fixture", i)] = fmt.Sprintf("file-%d", i)
+		nodes[fmt.Sprintf("file-%d", i)] = secretCapacityProjectionTestNode(workers[i], i, 1)
+		replies[i] = make(chan error, 1)
+	}
+	requests <- secretCapacityProjectionRequest{ctx: t.Context(), worker: workers[0], batch: secretCapacityPushBatch{sequence: 1}, reply: replies[0]}
+	firstRead := make(chan struct{})
+	release := make(chan struct{})
+	var reads atomic.Int64
+	var selectedCounts []int
+	var countsMu sync.Mutex
+	handler := func(slow bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			var request struct {
+				Variables struct {
+					IDs []string `json:"ids"`
+				} `json:"variables"`
+			}
+			if json.NewDecoder(r.Body).Decode(&request) != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if slow {
+				countsMu.Lock()
+				selectedCounts = append(selectedCounts, len(request.Variables.IDs))
+				countsMu.Unlock()
+				if reads.Add(1) == 1 {
+					close(firstRead)
+					select {
+					case <-release:
+					case <-r.Context().Done():
+						return
+					}
+				}
+			}
+			result := make([]map[string]any, 0, len(request.Variables.IDs))
+			for _, id := range request.Variables.IDs {
+				result = append(result, nodes[id])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": result}})
+		}
+	}
+	a, b := httptest.NewServer(handler(true)), httptest.NewServer(handler(false))
+	defer a.Close()
+	defer b.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runSecretCapacityProjectionVerifier(ctx, a.Client(), []string{a.URL, b.URL}, "test-token", ids, requests)
+	}()
+	defer func() { cancel(); <-done }()
+	select {
+	case <-firstRead:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial projection read did not start")
+	}
+	for i := 1; i < 32; i++ {
+		requests <- secretCapacityProjectionRequest{ctx: t.Context(), worker: workers[i], batch: secretCapacityPushBatch{sequence: 1}, reply: replies[i]}
+	}
+	time.Sleep(120 * time.Millisecond)
+	close(release)
+	for _, reply := range replies {
+		select {
+		case err := <-reply:
+			require.NoError(t, err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("projection arrival did not finish")
+		}
+	}
+	countsMu.Lock()
+	defer countsMu.Unlock()
+	require.Equal(t, []int{1, 31}, selectedCounts, "an overdue poll must drain pending arrivals before reading again")
+}
+
+func TestSecretCapacityProjectionVerifierReadsBothReplicasConcurrently(t *testing.T) {
+	worker := &secretCapacityGitWorker{namespace: "ns", runID: "fixture", files: []int{0}}
+	ids := map[string]string{secretCapacityFileName("fixture", 0): "file-0"}
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"nodes": []map[string]any{secretCapacityProjectionTestNode(worker, 0, 1)},
+		}})
+	})
+	a, b := httptest.NewServer(handler), httptest.NewServer(handler)
+	defer a.Close()
+	defer b.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	requests := make(chan secretCapacityProjectionRequest, 1)
+	reply := make(chan error, 1)
+	requests <- secretCapacityProjectionRequest{ctx: ctx, worker: worker, batch: secretCapacityPushBatch{sequence: 1}, reply: reply}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runSecretCapacityProjectionVerifier(ctx, a.Client(), []string{a.URL, b.URL}, "test-token", ids, requests)
+	}()
+	defer func() { cancel(); <-done }()
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("both replica reads must start without waiting for the other response")
+		}
+	}
+	select {
+	case err := <-reply:
+		t.Fatalf("verification finished before both replicas responded: %v", err)
+	default:
+	}
+	close(release)
+	select {
+	case err := <-reply:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("replica reads did not complete")
+	}
+}
+
+func TestSecretCapacityProjectionVerifierFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "quota", status: http.StatusTooManyRequests},
+		{name: "authentication", status: http.StatusUnauthorized},
+		{name: "operation error", body: `{"errors":[{"message":"denied"}],"data":null}`},
+		{name: "incorrect cardinality", body: `{"data":{"nodes":[]}}`},
+		{name: "changed identity", body: `{"data":{"nodes":[{"id":"wrong-id"}]}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.status != 0 {
+					w.WriteHeader(tc.status)
+				}
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.status != 0 {
+					w.WriteHeader(tc.status)
+				}
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer peer.Close()
+			worker := &secretCapacityGitWorker{namespace: "ns", runID: "fixture", files: []int{0}}
+			ids := map[string]string{secretCapacityFileName(worker.runID, 0): "file-0"}
+			requests := make(chan secretCapacityProjectionRequest, 1)
+			reply := make(chan error, 1)
+			requests <- secretCapacityProjectionRequest{ctx: t.Context(), worker: worker, batch: secretCapacityPushBatch{sequence: 1}, reply: reply}
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				runSecretCapacityProjectionVerifier(ctx, server.Client(), []string{server.URL, peer.URL}, "test-token", ids, requests)
+			}()
+			defer func() { cancel(); <-done }()
+			select {
+			case err := <-reply:
+				require.Error(t, err)
+				if tc.status != 0 {
+					var status *capacityHTTPStatusError
+					require.ErrorAs(t, err, &status)
+					require.Equal(t, tc.status, status.status)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("failed projection read was not surfaced")
+			}
+		})
+	}
+}
+
+func TestSecretCapacityProjectionVerifierMissingPeerNeverPasses(t *testing.T) {
+	worker := &secretCapacityGitWorker{namespace: "ns", runID: "fixture", files: []int{0}}
+	ids := map[string]string{secretCapacityFileName(worker.runID, 0): "file-0"}
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []map[string]any{secretCapacityProjectionTestNode(worker, 0, 1)}}})
+	}))
+	defer a.Close()
+	var peerReads atomic.Int64
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		peerReads.Add(1)
+		_, _ = io.WriteString(w, `{"data":{"nodes":[null]}}`)
+	}))
+	defer b.Close()
+	requestCtx, stopRequest := context.WithTimeout(t.Context(), 350*time.Millisecond)
+	defer stopRequest()
+	requests := make(chan secretCapacityProjectionRequest, 1)
+	reply := make(chan error, 1)
+	requests <- secretCapacityProjectionRequest{ctx: requestCtx, worker: worker, batch: secretCapacityPushBatch{sequence: 1}, reply: reply}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runSecretCapacityProjectionVerifier(ctx, a.Client(), []string{a.URL, b.URL}, "test-token", ids, requests)
+	}()
+	defer func() { cancel(); <-done }()
+	select {
+	case err := <-reply:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(2 * time.Second):
+		t.Fatal("missing peer was not rejected by caller deadline")
+	}
+	require.Greater(t, peerReads.Load(), int64(0))
+}
+
+func TestSecretCapacityProjectionVerifierEnforcesExactIDBound(t *testing.T) {
+	for _, count := range []int{250, 251} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			worker := &secretCapacityGitWorker{namespace: "ns", runID: "fixture"}
+			ids := make(map[string]string)
+			nodes := make([]map[string]any, 0, count)
+			for file := range count {
+				worker.files = append(worker.files, file)
+				ids[secretCapacityFileName(worker.runID, file)] = fmt.Sprintf("file-%d", file)
+				nodes = append(nodes, secretCapacityProjectionTestNode(worker, file, 1))
+			}
+			var reads atomic.Int64
+			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				reads.Add(1)
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": nodes}})
+			})
+			a, b := httptest.NewServer(handler), httptest.NewServer(handler)
+			defer a.Close()
+			defer b.Close()
+			ctx, cancel := context.WithCancel(t.Context())
+			requests := make(chan secretCapacityProjectionRequest, 1)
+			reply := make(chan error, 1)
+			requests <- secretCapacityProjectionRequest{ctx: t.Context(), worker: worker, batch: secretCapacityPushBatch{sequence: 1}, reply: reply}
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				runSecretCapacityProjectionVerifier(ctx, a.Client(), []string{a.URL, b.URL}, "test-token", ids, requests)
+			}()
+			defer func() { cancel(); <-done }()
+			select {
+			case err := <-reply:
+				if count == 250 {
+					require.NoError(t, err)
+					require.EqualValues(t, 2, reads.Load())
+				} else {
+					require.ErrorContains(t, err, "ID bounds")
+					require.Zero(t, reads.Load())
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("projection ID bound was not evaluated")
+			}
+		})
+	}
+}
+
+func validateSecretCapacityFileStages(workload secretCapacityFileObservations) error {
+	invalid := errors.New("secret capacity: inconsistent File stage accounting")
+	if workload.TimelineLimit != secretCapacityTimelineLimit || len(workload.Timelines) > secretCapacityTimelineLimit {
+		return invalid
+	}
+	timelineSequences := make(map[int64]bool, len(workload.Timelines))
+	for _, row := range workload.Timelines {
+		if row.Sequence <= 0 || row.Sequence > secretCapacityTimelineLimit || timelineSequences[row.Sequence] ||
+			row.Worker < 0 || row.Worker >= 32 || row.OfferedAt.IsZero() ||
+			row.QueueWait < 0 || row.ACK < 0 || row.WorkerOccupied < 0 ||
+			row.LocalGit < 0 || row.GitHTTP < 0 || row.ProjectionVisibility < 0 ||
+			row.ProjectionRead < 0 || row.ProjectionReadPeak < 0 || row.ProjectionPolls < 0 ||
+			row.ProjectionReadPeak > row.ProjectionRead {
+			return invalid
+		}
+		timelineSequences[row.Sequence] = true
+	}
+	offered := workload.SustainedOffered
+	for _, burst := range workload.Bursts {
+		if burst.Offered < 0 || burst.Offered > 100 {
+			return invalid
+		}
+		offered += burst.Offered
+	}
+	if offered <= 0 || offered > 100_000 || workload.Dropped < 0 || workload.ClockMaximumDrift < 0 || workload.ClockMaximumDrift > time.Second ||
+		workload.QueueAdmitted < 0 || workload.ExecutionAttempts < 0 ||
+		workload.ScheduledOffered != offered || workload.QueueAdmitted != offered-workload.Dropped ||
+		workload.ExecutionAttempts != workload.Completed || workload.ExecutionAttempts != workload.QueueAdmitted ||
+		workload.GitPushes < 0 || workload.GitPushes > workload.Completed ||
+		workload.Acknowledged < 0 || workload.Failed < 0 ||
+		workload.Acknowledged+workload.Failed != workload.Completed || len(workload.Stages) != 6 ||
+		workload.ProjectionPolls < workload.Acknowledged {
+		return invalid
+	}
+	for name, samples := range map[string]int64{
+		"queue_wait": workload.Completed, "local_git": workload.Completed,
+		"git_http": workload.GitPushes, "projection_visibility": workload.Acknowledged,
+		"projection_read":      workload.Acknowledged,
+		"projection_read_peak": workload.Acknowledged,
+	} {
+		stage, exists := workload.Stages[name]
+		if !exists || stage.Samples != samples || stage.P95 <= 0 || stage.P99 < stage.P95 {
+			return invalid
+		}
+	}
+	peak, cumulative := workload.Stages["projection_read_peak"], workload.Stages["projection_read"]
+	if peak.P95 > cumulative.P95 || peak.P99 > cumulative.P99 {
+		return invalid
+	}
+	var pushFailures, projectionFailures int64
+	for name, count := range workload.FailureClasses {
+		if count <= 0 {
+			return invalid
+		}
+		switch name {
+		case "credential_resolution/provider":
+			if count != workload.LocalHealthyFailures {
+				return invalid
+			}
+		default:
+			parts := strings.Split(name, "/")
+			if len(parts) != 2 || (parts[0] != "local_git" && parts[0] != "git_http" && parts[0] != "unclassified" && parts[0] != "projection") {
+				return invalid
+			}
+			switch parts[1] {
+			case "deadline", "cancelled", "unclassified", "non_fast_forward", "quota", "authentication", "rejection", "transport", "command_failure", "output_limit", "verification":
+			default:
+				return invalid
+			}
+			if parts[0] == "projection" {
+				projectionFailures += count
+			} else {
+				pushFailures += count
+			}
+		}
+	}
+	if pushFailures != workload.Failed ||
+		projectionFailures != workload.ProjectionLoss ||
+		workload.FailureClasses["credential_resolution/provider"] != workload.LocalHealthyFailures {
+		return invalid
+	}
+	return nil
+}
+
 func assembleSecretCapacityEvidence(directory, runID string, mode capacityMode) (secretCapacityEvidence, error) {
 	var evidence secretCapacityEvidence
 	root, err := os.OpenRoot(directory)
@@ -1647,6 +2455,9 @@ func assembleSecretCapacityEvidence(directory, runID string, mode capacityMode) 
 		if err := read(name, destination); err != nil {
 			return evidence, err
 		}
+	}
+	if err := validateSecretCapacityFileStages(workload); err != nil {
+		return evidence, err
 	}
 	if workload.SchemaVersion != 1 || dataset.SchemaVersion != 1 || resources.SchemaVersion != 1 || faults.SchemaVersion != 1 ||
 		workload.Component != "secret-file-workload/v1" || dataset.Component != "secret-dataset/v1" ||
@@ -1889,6 +2700,7 @@ func secretCapacityComponentFixture(t *testing.T, root string) (secretCapacityFi
 	e := secretCapacityEvidenceFixture()
 	const runID = "test-run"
 	w := secretCapacityFileObservations{
+		Timelines: []secretCapacityPushTimeline{}, TimelineLimit: secretCapacityTimelineLimit,
 		SchemaVersion: 1, Component: "secret-file-workload/v1", RunID: runID, Mode: e.Mode, WorkloadCompleted: true,
 		NominalDuration: e.Duration, OfferedDuration: e.OfferedDuration, SustainedOffered: e.SustainedOffered,
 		Completed: e.GitPushes, GitPushes: e.GitPushes, Acknowledged: e.Acknowledged, Failed: e.Failed, Dropped: e.Dropped,
@@ -1896,6 +2708,17 @@ func secretCapacityComponentFixture(t *testing.T, root string) (secretCapacityFi
 		CrossReplicaChecks: 2 * e.Acknowledged, Bursts: e.Bursts, Reference: e.Reference, Resolution: e.Resolution, Push: e.Push,
 		RuntimeCallers: 32, ProviderPeak: 16, ProviderCalls: 16, AcceptedCalls: 16, SaturationDenied: 16, DeadlineDenied: 1,
 		NamespaceDenied: 1, BindingDenied: 1, UnsupportedDenied: 1,
+		ScheduledOffered: e.GitPushes, QueueAdmitted: e.GitPushes, ExecutionAttempts: e.GitPushes,
+		Stages: map[string]secretCapacityLatency{
+			"queue_wait":            {Samples: e.GitPushes, P95: time.Millisecond, P99: time.Millisecond},
+			"local_git":             {Samples: e.GitPushes, P95: time.Millisecond, P99: time.Millisecond},
+			"git_http":              {Samples: e.GitPushes, P95: time.Millisecond, P99: time.Millisecond},
+			"projection_visibility": {Samples: e.Acknowledged, P95: time.Millisecond, P99: time.Millisecond},
+			"projection_read":       {Samples: e.Acknowledged, P95: time.Millisecond, P99: time.Millisecond},
+			"projection_read_peak":  {Samples: e.Acknowledged, P95: time.Millisecond, P99: time.Millisecond},
+		},
+		ProjectionPolls: e.Acknowledged,
+		FailureClasses:  map[string]int64{},
 	}
 	start := time.Now().Add(-2 * time.Hour)
 	d := secretCapacityDatasetObservations{SchemaVersion: 1, Component: "secret-dataset/v1", RunID: runID, Mode: e.Mode,
@@ -1919,7 +2742,8 @@ func secretCapacityComponentFixture(t *testing.T, root string) (secretCapacityFi
 	}
 	for i, p := range e.Controllers {
 		before := secretCapacityControllerSample{ID: p.ID, ObservedAt: start, FreshTokens: 1, Reconciliations: 1,
-			Ready: true, Healthy: true, CredentialReady: true, Kinds: map[string]secretCapacityKindHealth{}}
+			Ready: true, Healthy: true, CredentialReady: true, Kinds: map[string]secretCapacityKindHealth{},
+			DependencyDeferrals: map[string]map[string]int64{}}
 		after := before
 		after.FreshTokens, after.Reconciliations, after.ExchangePeak, after.MaxRetry = 121, 121, 1, 30*time.Second
 		after.ObservedAt = start.Add(time.Hour)
@@ -1932,8 +2756,8 @@ func secretCapacityComponentFixture(t *testing.T, root string) (secretCapacityFi
 		OutageAt: e.OutageAt, OutageElapsed: e.OutageElapsed, ExpiredUnready: true, ClassifiedFailures: 1, Recovery: []time.Duration{time.Minute, time.Minute},
 		RotationAt: e.RotationAt, OverlapRenewals: []int64{1, 1}, RetiredKeyDenied: 2, WrongSubjectDenied: 2, AuthorizedIssuance: 4,
 		RestartAt: e.RestartAt, RestartTargetID: e.RestartTargetID, RestartConfirmed: true, ReplacementRecovery: time.Minute,
-		RestartBefore: secretCapacityControllerSample{ID: e.RestartTargetID, FreshTokens: 90, Reconciliations: 90, ExchangePeak: 1, Kinds: map[string]secretCapacityKindHealth{}},
-		Replacement:   secretCapacityControllerSample{ID: e.ReplacementID, FreshTokens: 1, Reconciliations: 1, Kinds: map[string]secretCapacityKindHealth{}}}
+		RestartBefore: secretCapacityControllerSample{ID: e.RestartTargetID, FreshTokens: 90, Reconciliations: 90, ExchangePeak: 1, Kinds: map[string]secretCapacityKindHealth{}, DependencyDeferrals: map[string]map[string]int64{}},
+		Replacement:   secretCapacityControllerSample{ID: e.ReplacementID, FreshTokens: 1, Reconciliations: 1, Kinds: map[string]secretCapacityKindHealth{}, DependencyDeferrals: map[string]map[string]int64{}}}
 	for name, value := range map[string]any{"file-workload.json": w, "dataset.json": d, "resources.json": r, "faults.json": f} {
 		require.NoError(t, writeSecretCapacityComponent(root, name, value))
 	}
@@ -1986,6 +2810,104 @@ func TestSecretCapacityRejectsMixedOrIncompleteComponents(t *testing.T) {
 			}
 			_, err := assembleSecretCapacityEvidence(root, "test-run", capacityModeProduction)
 			require.Error(t, err)
+		})
+	}
+}
+
+func TestSecretCapacityFileStageEvidenceRejectsIncompleteAccounting(t *testing.T) {
+	for _, fault := range []string{"scheduled", "admitted", "attempts", "missing stage", "missing projection read", "missing projection peak", "projection polls", "samples", "projection read samples", "projection peak samples", "projection peak p95", "projection peak p99", "percentiles", "failure counter", "private class", "projection counter", "clock jump"} {
+		t.Run(fault, func(t *testing.T) {
+			workload, _, _, _ := secretCapacityComponentFixture(t, t.TempDir())
+			require.NoError(t, validateSecretCapacityFileStages(workload))
+			switch fault {
+			case "scheduled":
+				workload.ScheduledOffered++
+			case "admitted":
+				workload.QueueAdmitted--
+			case "attempts":
+				workload.ExecutionAttempts--
+			case "missing stage":
+				delete(workload.Stages, "git_http")
+			case "missing projection read":
+				delete(workload.Stages, "projection_read")
+			case "missing projection peak":
+				delete(workload.Stages, "projection_read_peak")
+			case "projection polls":
+				workload.ProjectionPolls--
+			case "samples":
+				stage := workload.Stages["queue_wait"]
+				stage.Samples--
+				workload.Stages["queue_wait"] = stage
+			case "projection read samples":
+				stage := workload.Stages["projection_read"]
+				stage.Samples--
+				workload.Stages["projection_read"] = stage
+			case "projection peak samples":
+				stage := workload.Stages["projection_read_peak"]
+				stage.Samples--
+				workload.Stages["projection_read_peak"] = stage
+			case "projection peak p95":
+				stage := workload.Stages["projection_read_peak"]
+				stage.P95 = workload.Stages["projection_read"].P95 + time.Nanosecond
+				stage.P99 = stage.P95
+				workload.Stages["projection_read_peak"] = stage
+			case "projection peak p99":
+				stage := workload.Stages["projection_read_peak"]
+				stage.P99 = workload.Stages["projection_read"].P99 + time.Nanosecond
+				workload.Stages["projection_read_peak"] = stage
+			case "percentiles":
+				stage := workload.Stages["local_git"]
+				stage.P99 = stage.P95 - 1
+				workload.Stages["local_git"] = stage
+			case "failure counter":
+				workload.FailureClasses["git_http/quota"] = 1
+			case "private class":
+				workload.FailureClasses["git_http/private-response-marker"] = 1
+			case "projection counter":
+				workload.ProjectionLoss = 1
+			case "clock jump":
+				workload.ClockMaximumDrift = time.Second + 1
+			}
+			require.Error(t, validateSecretCapacityFileStages(workload))
+		})
+	}
+}
+
+func TestSecretCapacityFileTimelineEvidenceBounds(t *testing.T) {
+	base, _, _, _ := secretCapacityComponentFixture(t, t.TempDir())
+	row := secretCapacityPushTimeline{
+		Sequence: 1, Burst: -1, OfferedAt: time.Now().UTC(),
+		QueueWait: time.Millisecond, ACK: 2 * time.Millisecond, WorkerOccupied: 3 * time.Millisecond,
+		ProjectionVisibility: time.Millisecond, ProjectionRead: time.Millisecond,
+		ProjectionReadPeak: time.Millisecond, ProjectionPolls: 1, Acknowledged: true,
+	}
+	base.Timelines = []secretCapacityPushTimeline{row}
+	require.NoError(t, validateSecretCapacityFileStages(base))
+	for _, fault := range []string{"limit", "oversized", "duplicate", "worker", "sequence", "timestamp", "occupancy", "ack", "peak"} {
+		t.Run(fault, func(t *testing.T) {
+			workload := base
+			workload.Timelines = []secretCapacityPushTimeline{row}
+			switch fault {
+			case "limit":
+				workload.TimelineLimit++
+			case "oversized":
+				workload.Timelines = make([]secretCapacityPushTimeline, secretCapacityTimelineLimit+1)
+			case "duplicate":
+				workload.Timelines = append(workload.Timelines, row)
+			case "worker":
+				workload.Timelines[0].Worker = 32
+			case "sequence":
+				workload.Timelines[0].Sequence = secretCapacityTimelineLimit + 1
+			case "timestamp":
+				workload.Timelines[0].OfferedAt = time.Time{}
+			case "occupancy":
+				workload.Timelines[0].WorkerOccupied = -1
+			case "ack":
+				workload.Timelines[0].ACK = -1
+			case "peak":
+				workload.Timelines[0].ProjectionReadPeak++
+			}
+			require.Error(t, validateSecretCapacityFileStages(workload))
 		})
 	}
 }
