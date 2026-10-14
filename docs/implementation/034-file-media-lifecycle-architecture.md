@@ -1,68 +1,112 @@
 # File and Media Resource Lifecycle: Architecture Decision Document
 
-**Status**: 🟡️ Proposed (not yet implemented)  
-**Date**: 2026-08-09  
-**Audience**: GitStore API, controller-manager, and catalog authors.  
-**Feeds**: ADR-0008 (finalize), GH#79, GH#127, GH#192, GH#194, GH#195, GH#244, GH#283, GH#304, GH#316.
+**Status**: 🟡 Architecture synthesis; implementation state updated 2026-10-14
+**Original design date**: 2026-08-09
+**Audience**: GitStore API, controller-manager, and catalog authors.
+**Feeds**: ADR-0008, specs 051/056/063/064, ADR-0015, GH#127, GH#283, GH#304, GH#316, GH#378.
 
-This document reconciles GH#79 (File resource shape), GH#127 (LFS/S3 storage
-initiative), GH#244 (CategoryTaxonomy controller's File-reference condition),
-GH#283 (storefront media resolution), GH#304 (admin media library), and
-GH#316 (MediaAsset contract) into one architecture, and states exactly what
-must be built, in what order, to stop CategoryTaxonomy (and every other
-catalog resource) from reporting file references as permanently `Unknown`.
+This document records the File/media architecture and its evolution. The
+original August proposal below was written before the File resource shipped and
+before the current admission, secret, authorization, and cost contracts. The
+current-direction summary and section status labels supersede older
+recommendations and phase tables wherever they conflict. This document is not
+an implementation claim; use the linked specs and ADRs for normative behavior.
 
 ---
 
-## 1. Executive recommendation
+## 1. Current direction
 
-Build a **dedicated File controller** (design **A** from the research
-brief) that is the single writer of `File.status`, backed by:
+- **File already exists as a namespaced Git-backed resource.** Spec 051
+  delivered its manifest contract, datastore record, admission, read query,
+  and durable watch. It is not accurate to describe File as nonexistent or
+  GH#79 as open.
+- **Payload phase 1 is deliberately narrow:** retrieve the declared source
+  blob and put it in configured object storage. Accept `spec.processing` as
+  desired-state data but ignore it. Do not launch format transformations in
+  this phase.
+- **Storage/output shape is not the client presentation shape.** Do not put
+  HTML `src`/`srcset` into the File manifest. GH#283 owns the storefront URL
+  contract; storefront, admin, and mobile adapters can map resolved asset and
+  rendition metadata to their native image-source APIs.
+- **Spec 056 is the draft follow-on** for File reference ownership/deletion
+  safety and production source access/verification, including renewable AWS
+  and Backblaze B2 access. It supersedes the old blocking-delete and
+  permanent-`Unknown` assumptions here.
+- **Spec 063 defines the secret-material boundary and typed references.** Its
+  implementation wires the controller bootstrap identity and reusable
+  runtime resolver, but explicitly defers File as a runtime consumer. Spec 056
+  owns that integration and renewable File source access. No secret bytes or
+  bearer URLs belong in Git, status, durable controller state, or logs.
+- **Resource scope is explicit.** Spec 064 implements Cluster vs Namespaced
+  RBAC resources and scope-aware bindings (deployed capacity acceptance is
+  still tracked separately). File is namespaced; ServiceAccounts are
+  cluster-scoped and name-only. Cluster-scoped registrations/configuration
+  follow the `gitstore-system/gitstore-system` admission convention and
+  cluster-level authorization; a File namespace cannot install or select an
+  arbitrary processor.
+- **Lifecycle diagnostics follow ADR-0015.** Standard API error codes are
+  `ADMISSION_REJECTED`, `ALREADY_EXISTS`, `NOT_FOUND`, `CONFLICT`,
+  `FAILED_PRECONDITION`, `BAD_USER_INPUT`, and `FORBIDDEN`. Structured
+  diagnostics use `code`/`diagnostics`, with `phase` for admission rejection
+  and `commit` where applicable. Spec 057 partially implements this API
+  envelope for Namespace and CategoryTaxonomy. Git receive-pack still returns
+  its rejection as `ng <ref> <reason>`; ADR-0015 does not promise GraphQL
+  codes or source positions in that text. File-specific mutations do not yet
+  exist.
+- **ADR-0015 defines the extension seam.** Extension authors can register
+  asynchronous event subscriptions and lifecycle gates. For example, a
+  malware scanner can consume committed payload events and provide signed
+  external-attestation evidence that a File `Ready` gate evaluates. Payload
+  facts do not block Git push admission, and untrusted scanners do not run
+  synchronously in receive-pack.
+- **GraphQL cost directives remain proposed** in doc 038. New File queries,
+  connections, and nested media fields should receive declared `@cost` and
+  `@listSize` weights when that proposal is implemented; costs must reflect
+  bounded pages and reconciliation work.
 
-- **File as a first-class Git-backed resource** (manifest in Git, hydrated
-  record + status in the datastore, exactly like `CategoryTaxonomy` today) —
-  not a CRD, not an API-side lazy hydration hack.
-- **A provider-neutral storage abstraction** with two initial backends:
-  Git LFS (small-to-medium, versioned, catalog-owned assets) and
-  S3-compatible object storage (generated/high-churn/large assets),
-  selected per-`File` via `spec.source.type`, matching the policy already
-  documented in `../resource-storage/lfs-object-storage.md`. This is not an
-  either/or between GH#79 and GH#127 — GH#79 defines the manifest that
-  points at whichever backend GH#127 provisions.
-- **A reverse-reference index** (`fileRef → [ObjectReference]`) maintained
-  by `gitstore-api` at admission time (not scanned per-event), so the File
-  controller can enqueue affected dependents in O(references) instead of
-  O(all resources).
-- **`MediaAsset` deferred**, but its seam (`spec.fileRef` on a sibling
-  resource, not a File wrapper) preserved from day one so it can be added
-  without a breaking change to `File`.
+This document's original option studies remain useful background. The current
+delivery order and acceptance criteria are the feature specs, especially 051,
+056, 063, and 064.
 
-This directly satisfies the decision standard: once File exists as a
-queryable, watchable resource with controller-owned status, the
-CategoryTaxonomy reconciler (`gitstore-controller-manager/internal/categorytaxonomy/fileref.go`)
-changes from "always emit `Unknown`, no lookup possible" to "look up File
-status via cache, emit `True`/`False` deterministically" — a small, local
-diff, because the generic `ListWatcher[T]`/`StatusClient`/`Cache[T]` plumbing
-already exists and needs no changes (see §2).
+## 2. Implemented baseline and remaining work
 
-## 2. Verified current-state architecture and exact blocking gaps
+The implementation table and issue graph that follow are the original
+2026-08-09 research snapshot; their negative File-implementation claims are
+superseded. Current state: spec 051 delivered File's manifest, datastore,
+admission, `file(by)` query, and durable `watchFiles`. There is
+no File list connection or File-specific create/update/delete mutation in the
+current GraphQL schema, and no source-materialization reconciler in the
+controller-manager. The initial payload phase is to retrieve the source blob,
+write it to configured object storage, and ignore `spec.processing`.
 
-Verified by direct source inspection (`gitstore-api`, `gitstore-controller-manager`,
-graphify graph traversal) — not by re-reading the ADRs alone.
-
-| Component | State | Evidence |
+| Area | Current state | Source of truth |
 |---|---|---|
-| `File` GraphQL type / `createFile`/`updateFile`/`deleteFile`/`getFile`/`listFiles` | **Not implemented** | No `.graphqls` schema file defines `File` or any File mutation/query anywhere under `gitstore-api/internal/graph`. |
-| `File` Go struct / datastore table | **Not implemented** | `gitstore-api/internal/datastore/entities.go` defines `Namespace`, `Product`, `CategoryTaxonomy`, `Collection`, `ProductVariant`, `Repository`, `NamespaceMapping` — no `File`. Only `FileReference` exists (`gitstore-api/internal/catalog/product.go:67-71`), a `{Name, Kind, Optional}` *pointer* struct embedded in `MediaDefinition`, not a File record. |
-| `File` in `gitstore-api/internal/cataloggrpc/` | **Not implemented** | No File references in that package. |
-| `ResolvedFileDefinition{Name, URL, ContentType}` (`gitstore-api/internal/catalog/status.go:87-91`) | **Shape exists, never populated** in a production path | The only place `ResolvedFileDefinition{...}` is constructed in the whole tree is a unit-test fixture (`product_test.go:182`). `DatastoreProductToGraphQL` round-trips `status.resolved` verbatim from the stored JSON blob; it performs no File lookup. |
-| `CategoryTaxonomyStatus.Resolved` (`ResolvedCategoryTaxonomy`, `status.go:121-131`) | **Has no `Media` field at all** | Unlike `ResolvedProductDefinition.Media []ResolvedFileDefinition`, `ResolvedCategoryTaxonomy` only has `Depth`, `Path`, `Ancestors`, `ChildCount`, `ProductCount` — there is currently no place to put resolved category media even if a File existed. This is a schema gap, not just a resolution gap. |
-| CategoryTaxonomy controller's fileRef handling | **Implemented, intentionally hardcoded** | `gitstore-controller-manager/internal/categorytaxonomy/fileref.go:12-35`, `computeFileRefCondition`: for every `optional: false` media entry, unconditionally emits `FileRefConfirmed=Unknown, Reason=FileNotQueryable` — no GraphQL/datastore query is attempted, by design, per `specs/039-category-taxonomy-reconciler/research.md` R5 ("No datastore or GraphQL query for `File` existence is attempted"). |
-| File controller/reconciler | **Not implemented** | `gitstore-controller-manager/internal/` has exactly one resource-kind package: `categorytaxonomy`. No `file` package. |
-| Generic watch/status/cache plumbing (`listwatch.ListWatcher[T]`, `status.StatusClient`, `cache.CacheAccessor[T]`, `types.Reconciler`) | **Implemented and reusable as-is** | `listwatch/listwatcher.go` interfaces are unparameterized-by-kind generics; `CategoryTaxonomyListWatcher` (spec 040) is the *first* concrete instance, not a hardwired dependency. A `FileListWatcher` needs zero interface changes — only a File GraphQL query/subscription on the `gitstore-api` side and a new reconciler package. |
-| Product/ProductVariant/Collection reconcilers | **Do not exist at all** | Only CategoryTaxonomy has a controller package today. These ADRs (0004/0005/0007) all defer `MediaResolved` to "Phase 2, GH#244" but there is no reconciler loop to even attempt it — CategoryTaxonomy is *ahead* of the others by having an explicit (if degenerate) condition. |
+| File manifest and status contract | Implemented by spec 051; admission currently sets `AdmissionAccepted=True` and optimistic `Ready=True`. | [spec 051](../../specs/051-file-resource-contract/spec.md) |
+| File read/watch | `file(by)` and durable `watchFiles` are present. | `shared/schemas/file.graphqls`, `file.resolvers.go`, catalog CDC source |
+| File list and File-specific write mutations | Not exposed in current File GraphQL schema. Git-backed manifest admission is the authoring path. | `shared/schemas/file.graphqls` |
+| Payload processing | Initial controller phase retrieves source blob into configured object storage; `spec.processing` is ignored. Transformation execution is a later design. | Current design direction; future implementation spec |
+| Renewable source access, source verification, reference safety | Draft scope in spec 056, built on secret-material boundary from spec 063. | [spec 056](../../specs/056-file-reference-safety/spec.md), [spec 063](../../specs/063-implement-secret-adrs/spec.md) |
+| Mutation diagnostics | ADR-0015 defines standard codes and diagnostics; spec 057 partly implements the envelope for Namespace and CategoryTaxonomy. | [ADR 0015](../ADRs/0015-resource-lifecycle-hooks.md), [spec 057 contract](../../specs/057-categorytaxonomy-path-freshness/contracts/admission-diagnostics.md) |
+| Resource scope and authorization | Spec 064 implements Cluster vs Namespaced RBAC resources and bindings; File is namespaced and ServiceAccounts are cluster-scoped/name-only. Deployed capacity acceptance remains deferred. | [spec 064](../../specs/064-authz-action-vocabulary/spec.md) |
+| GraphQL cost directives | Proposed in doc 038, not implemented. Annotate future File list/nested fields when adopted. | [doc 038](038-graphql-cost-and-rate-limits.md) |
 
-**The blocking gap, precisely stated**: it is not that CategoryTaxonomy's
+**Historical snapshot (2026-08-09; superseded by the current-state table
+above).** The component inventory and blocking-gap statement below describe
+the pre-spec-051 state and must not be used to assess current implementation.
+
+| Component                                                                                                                             | State                                                  | Evidence                                                                                                                                                                                                                                                                                                                                                                                                       |
+|---------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `File` GraphQL type / `createFile`/`updateFile`/`deleteFile`/`file`/`files`                                                           | **Not implemented**                                    | No `.graphqls` schema file defines `File` or any File mutation/query anywhere under `gitstore-api/internal/graph`.                                                                                                                                                                                                                                                                                             |
+| `File` Go struct / datastore table                                                                                                    | **Not implemented**                                    | `gitstore-api/internal/datastore/entities.go` defines `Namespace`, `Product`, `CategoryTaxonomy`, `Collection`, `ProductVariant`, `Repository`, `NamespaceMapping` — no `File`. Only `FileReference` exists (`gitstore-api/internal/catalog/product.go:67-71`), a `{Name, Kind, Optional}` *pointer* struct embedded in `MediaDefinition`, not a File record.                                                  |
+| `File` in `gitstore-api/internal/cataloggrpc/`                                                                                        | **Not implemented**                                    | No File references in that package.                                                                                                                                                                                                                                                                                                                                                                            |
+| `ResolvedFileDefinition{Name, URL, ContentType}` (`gitstore-api/internal/catalog/status.go:87-91`)                                    | **Shape exists, never populated** in a production path | The only place `ResolvedFileDefinition{...}` is constructed in the whole tree is a unit-test fixture (`product_test.go:182`). `DatastoreProductToGraphQL` round-trips `status.resolved` verbatim from the stored JSON blob; it performs no File lookup.                                                                                                                                                        |
+| `CategoryTaxonomyStatus.Resolved` (`ResolvedCategoryTaxonomy`, `status.go:121-131`)                                                   | **Has no `Media` field at all**                        | Unlike `ResolvedProductDefinition.Media []ResolvedFileDefinition`, `ResolvedCategoryTaxonomy` only has `Depth`, `Path`, `Ancestors`, `ChildCount`, `ProductCount` — there is currently no place to put resolved category media even if a File existed. This is a schema gap, not just a resolution gap.                                                                                                        |
+| CategoryTaxonomy controller's fileRef handling                                                                                        | **Implemented, intentionally hardcoded**               | `gitstore-controller-manager/internal/categorytaxonomy/fileref.go:12-35`, `computeFileRefCondition`: for every `optional: false` media entry, unconditionally emits `FileRefConfirmed=Unknown, Reason=FileNotQueryable` — no GraphQL/datastore query is attempted, by design, per `specs/039-category-taxonomy-reconciler/research.md` R5 ("No datastore or GraphQL query for `File` existence is attempted"). |
+| File controller/reconciler                                                                                                            | **Not implemented**                                    | `gitstore-controller-manager/internal/` has exactly one resource-kind package: `categorytaxonomy`. No `file` package.                                                                                                                                                                                                                                                                                          |
+| Generic watch/status/cache plumbing (`listwatch.ListWatcher[T]`, `status.StatusClient`, `cache.CacheAccessor[T]`, `types.Reconciler`) | **Implemented and reusable as-is**                     | `listwatch/listwatcher.go` interfaces are unparameterized-by-kind generics; `CategoryTaxonomyListWatcher` (spec 040) is the *first* concrete instance, not a hardwired dependency. A `FileListWatcher` needs zero interface changes — only a File GraphQL query/subscription on the `gitstore-api` side and a new reconciler package.                                                                          |
+| Product/ProductVariant/Collection reconcilers                                                                                         | **Do not exist at all**                                | Only CategoryTaxonomy has a controller package today. These ADRs (0004/0005/0007) all defer `MediaResolved` to "Phase 2, GH#244" but there is no reconciler loop to even attempt it — CategoryTaxonomy is *ahead* of the others by having an explicit (if degenerate) condition.                                                                                                                               |
+
+**Historical blocking-gap statement (superseded):** it is not that CategoryTaxonomy's
 controller has a bug. It is that **File does not exist as a resource
 anywhere in the system** — no schema, no table, no GraphQL surface, no
 reconciler. `computeFileRefCondition` is a correct implementation of "we
@@ -70,33 +114,30 @@ have nothing to query," not a broken implementation of "we forgot to
 query." Fixing this requires building File from the ground up, not patching
 the CategoryTaxonomy controller.
 
-### GH issue graph (verified via `gh issue view`)
+### Issue lineage (GitHub state checked 2026-10-14)
 
 ```mermaid
 flowchart TD
-    I40["#40 Catalog Frontmatter"] --> I79["#79 File frontmatter"]
+    I40["#40 Catalog Frontmatter · open"] --> I79["#79 File frontmatter · closed"]
     I79 --> I192["#192 File resource contract"]
-    I192 --> I194["#194 File lifecycle status"]
-    I192 --> I195["#195 File tests and docs"]
+    I192 --> I194["#194 File lifecycle status · closed"]
+    I192 --> I195["#195 File tests and docs · closed"]
     I79 --> I316["#316 MediaAsset contract"]
 
-    I82["#82 CategoryTaxonomy"] --> I244["#244 File-reference conditions"]
+    I82["#82 CategoryTaxonomy · closed"] --> I244["#244 File-reference conditions · closed"]
     I268["#268 Storefront"] --> I283["#283 Storefront-ready File URLs"]
     I287["#287 Admin"] --> I304["#304 Media library File operations"]
 
-    I127["#127 Git LFS and S3 storage"] -. binary transport .-> I79
+    I127["#127 Git LFS and S3 storage · open"] -. binary transport .-> I79
     I125["#125 ListFiles blob sizes"] -. git source support .-> I79
 ```
 
-**Key correction to the original research framing**: GH#244, not GH#79, is
-the load-bearing issue for "why is CategoryTaxonomy reporting `Unknown`."
-GH#79 only defines the File document shape (and explicitly excludes runtime
-URL resolution from its own scope). GH#244's acceptance criteria literally
-say "missing required File references are surfaced as a status condition
-(not a push rejection)" — which is exactly what `fileref.go` does today,
-using `Unknown` as a placeholder for "cannot check yet." GH#244 cannot be
-closed correctly until File is queryable; it is currently only partially
-satisfiable.
+The source-resolution initiative now continues through open #283 (storefront
+URLs), #304 (admin File operations), #316 (MediaAsset), and #378 (File
+reference safety); #127 remains open for LFS/object storage. Issues #79,
+#192, #194, #195, #244, and #82 are closed. The graph above is historical
+lineage, not a claim that all linked work remains open or is blocked on File
+being queryable.
 
 ## 3. File/Media terminology and ownership model
 
@@ -104,23 +145,25 @@ Confirmed as the right split — do not merge these, per `docs/ADRs/0008-file-li
 and `../resource-storage/git-backed.md` ("Do not model `MediaAsset` as a wrapper
 around `File`"):
 
-| Resource | Owns | Lifecycle driver | Exists today? |
+| Resource | Owns | Lifecycle driver | Current state |
 |---|---|---|---|
-| **`File`** | Technical source manifest: `contentType`, `source.{type,uri,checksum,credentialsRef}`, `processing`, resolved variants, status. | Storage/binary lifecycle (upload, checksum, processing). One `File` = one binary identity. | No — build first. |
-| **`MediaAsset`** | Catalog-facing semantic layer: `fileRef`, `role`, `altTextRef`, `focalPoint`, ordering. | Presentation lifecycle (a marketer changes alt text without touching the binary). | No — GH#316, correctly deferred. |
-| **Inline `spec.media[*].fileRef`** on Product/ProductVariant/CategoryTaxonomy/Collection | A typed pointer (`{name, kind, optional}`) to a `File` (today) or a `MediaAsset` (later). | Catalog resource's own lifecycle. | Yes — `FileReference` struct exists; it's the reference, not the referent. |
+| **`File`** | Namespaced technical source manifest: `contentType`, source reference, typed credentials reference, accepted processing hints, status, and future resolved payload metadata. One File represents one source asset. | Source access and managed object-storage materialization; later processing is a separate phase. | Manifest contract, datastore, admission, query and watch implemented; runtime controller remains future work. |
+| **`MediaAsset`** | Catalog-facing semantic layer: `fileRef`, `role`, `altTextRef`, `focalPoint`, ordering. | Presentation lifecycle, independent of the binary source. | Open issue #316; not implemented. |
+| **Inline `spec.media[*].fileRef`** on Product/ProductVariant/CategoryTaxonomy/Collection | Typed same-namespace reference (`kind`, `name`, optionality) to a File. | Consumer resource reconciliation. | Present on catalog resources; spec 056 defines safe resolution/deletion behavior. |
 
 **Is `MediaAsset` necessary for the first useful implementation?** No.
-`fileRef` today points directly at `File`. This is sufficient to unblock
-Ready/Unknown resolution for all four catalog resources. `MediaAsset` adds a
+`fileRef` today points directly at `File`. This is the reference shape for the
+four catalog resource kinds; spec 056 defines resolution/deletion behavior,
+but the File source controller and all dependent reconcilers are not thereby
+implemented. `MediaAsset` adds a
 second reference hop (`spec.media[*].fileRef` → `MediaAsset` → `File`) that
 is valuable once multiple catalog resources need to share presentation
 metadata (e.g., the same hero image with different alt text per product),
 but is not required to answer "does this file exist and is it ready."
-**Recommendation: ship File + direct `fileRef`→File first (this document);
-MediaAsset is a strictly additive Phase 2 (GH#316), changing `fileRef.kind`
-from `File` to `MediaAsset` is a config change, not a breaking schema
-change, because `fileRef.kind` is already a field today.**
+**Current direction:** keep File as the technical source and keep MediaAsset
+as a separate semantic resource if/when #316 is implemented. File refs are
+non-blocking on deletion under spec 056; a future MediaAsset reference must
+preserve explicit kind, namespace, and UID identity semantics.
 
 ## 4. Resource dependency graph
 
@@ -139,11 +182,24 @@ flowchart TB
 ```
 
 No circular dependency: File never references a catalog resource (confirmed
-in ADR-0008 §"Dependency graph position"). This one-way edge is what makes a
-reverse-reference index tractable — File is always the "many" side being
-pointed at, never the pointer.
+in ADR-0008 §"Dependency graph position"). Spec 056 uses the existing indexed
+owner-reference relation for resolved dependents; unresolved authored refs
+remain a separate bounded recovery case.
 
 ## 5. Storage and controller option comparison
+
+The tables in this section are design exploration, not a declaration that all
+listed source types, URL forms, upload modes, or providers are implemented or
+accepted for production. The current File schema permits source types `git`,
+`lfs`, `s3`, and `gcs`. Spec 056's production acceptance scope is narrower and
+explicitly includes AWS S3 workload/role credentials, rotating B2 S3-compatible
+application keys, and B2 Native token renewal. Because B2 Native is not a
+current File source enum, its representation must be resolved in the spec/plan
+before implementation; this document does not silently extend the schema.
+
+For the first payload-materialization phase, the invariant is simpler than the
+provider comparison: retrieve the declared source blob and write those bytes
+to configured object storage. This phase ignores `spec.processing`.
 
 ### Storage backend comparison
 
@@ -151,31 +207,29 @@ pointed at, never the pointer.
 |---|---|---|---|---|---|---|---|
 | **Git LFS pointer** | Multi-GB (LFS-server-limited); pointer is <1KB, always | None on primary repo (pointer only); LFS store grows separately | Yes — `oid` is `sha256:<hash>`, content-addressed by construction (verified: git-lfs.com, git-lfs spec) | Server-dependent (most LFS servers support resumable PUT) | Not standard; LFS uses its own auth handshake | Needs an LFS server (can run `git-lfs-test-server` or a Git host with LFS in Compose) | Use for **catalog-owned, versioned, low-churn** assets (product hero shots checked in with the catalog repo) |
 | **S3-compatible object storage** | Multi-TB via multipart (AWS: switch to multipart ≥100MB — verified, AWS mpuoverview) | Zero | Only if the app computes/stores a content hash itself; S3 has no built-in CAS | Yes — multipart upload never expires until completed/aborted; failed parts retransmit individually (verified, AWS) | Yes — presigned URLs are **bearer tokens** inheriting the signer's IAM permissions, no further identity check (verified, AWS docs ×2) | MinIO (AIStor-compatible, supports full multipart lifecycle: Create/UploadPart/UploadPartCopy/ListParts/Complete/Abort — verified, MinIO docs) runs cleanly in Compose | Use for **generated, high-churn, PII-bearing, or CDN-fronted** assets (renditions, customer uploads, invoices) |
-| **External URL only** | N/A (no ingestion) | None | None | N/A | N/A | Trivial | Insufficient alone: no checksum, no lifecycle, no revocation. Acceptable as `spec.source.type: url` for read-only external references, but MUST go through SSRF-safe admission (§10). |
-| **Direct Git blob (small file)** | A few hundred KB before repo bloat matters | Grows repo history permanently; clone time degrades | None | No | No | Trivial | Not recommended even for small files — `docs/ADRs/0008-file-lifecycle.md` explicitly rejects this ("Rejected. Git is not suited for large binary payloads... noisy repository history"). |
-| **Hybrid (provider abstraction)** | Backend-dependent | Backend-dependent | Backend-dependent, unified via File's own `checksum` field as the canonical CAS key regardless of backend | Backend-dependent | Backend-dependent | Both LFS and MinIO available locally | **Recommended.** `File.spec.source.type ∈ {git, lfs, s3, gcs, b2, url}` (already drafted in `../resource-storage/lfs-object-storage.md`) with a Go `SourceResolver` interface per type. |
+| **External URL only** | N/A (no ingestion) | None | None | N/A | N/A | Trivial | Not in the current v1beta1 source-type enum; any future URL source needs a separate SSRF, lifecycle, and access-control contract. |
+| **Git repository blob as source** | Repository and Git-service bounded | Increases Git history when binary bytes are committed directly | Git object identity; application checksum remains separate | No source-level resumability implied | No | Existing Git service | May be a declared ingress source; the materializer copies it to managed object storage. This does not make the Git tree the managed serving/output store. |
+| **Provider abstraction** | Backend-dependent | Backend-dependent | Backend-dependent; do not assume `checksum` automatically provides cross-provider CAS | Backend-dependent | Backend-dependent | Operator-configured object storage | A useful implementation seam for spec 056's selected providers; do not infer support for every source in the old `{git,lfs,s3,gcs,b2,url}` sketch. |
 
-**Reconciling GH#79 and GH#127**: they are not competing proposals. GH#79's
-`File` manifest is the control-plane record; GH#127's LFS/S3 work is one
-possible implementation of `spec.source`'s resolution behind that record.
-**Decision: support both via the provider abstraction, ship S3-compatible
-(MinIO in dev) first** because it is simpler to make resumable/signed/CDN-
-ready without depending on an LFS server, and matches GH#127's own scoping
-("does not change the current catalog guidance that normal catalog media
-remains external URLs" — i.e., LFS is additive, not blocking).
+GH#79's File manifest is the control-plane record. GH#127 tracks storage work,
+but this document does not choose a universal upload protocol or provider
+matrix. Operator configuration selects the managed object-store destination;
+spec 056 defines the source access and production evidence required for its
+selected AWS/B2 paths. Payload ownership and public delivery remain separate
+contracts.
 
 ### Controller architecture comparison
 
 | Option | Verdict |
 |---|---|
-| **A. Dedicated File controller** | **Recommended.** Matches Kubernetes' own controller-per-resource-kind precedent (verified, kubernetes.io/concepts/architecture/controller — "many narrow, single-purpose controllers" rather than one monolith). Owns File.status exclusively; catalog controllers only *read* File status via cache, never resolve sources themselves. |
-| B. Shared "media controller" for all consumers | Rejected as primary — conflates File resolution with catalog-specific Ready semantics (e.g., CategoryTaxonomy's `Unknown`-vs-`False` distinction is CategoryTaxonomy's own business logic, not File's). |
-| C. Each catalog controller resolves its own File references | Rejected — exactly the duplication the decision standard forbids. Also multiplies checksum/processing retry logic four ways once Product/ProductVariant/Collection controllers exist. |
-| D. API-side synchronous lazy hydration at resolver time | Rejected as primary — makes GraphQL read latency depend on object-storage/checksum work, and gives no async retry/backoff model for slow or failing sources. May still be used as a **read-time cache-fill fallback** (§8) but must not be the system of record for status. |
+| **A. Dedicated File controller** | **Recommended target**, not implemented. It owns File source/payload status and durable work; dependent controllers consume File lifecycle state and never fetch external source bytes themselves. |
+| B. Shared "media controller" for all consumers | Not selected as the primary owner: source materialization belongs to File, while each dependent's readiness remains that resource's lifecycle concern. |
+| C. Each catalog controller resolves external File sources | Not selected; consumers should not duplicate provider access, credentials, or byte verification. They may reconcile their own File references. |
+| D. API-side synchronous lazy hydration at resolver time | Rejected as primary — makes GraphQL read latency depend on external storage and cannot provide durable retry, lifecycle status, or deletion/reference recovery. API reads must not become the source-materialization worker. |
 
 ## 6. Recommended File and Media resource contracts
 
-### `File` (builds on ADR-0008, closes its Phase-2-deferred items)
+### `File` (implemented manifest contract plus later runtime work)
 
 ```yaml
 apiVersion: storage.gitstore.dev/v1beta1
@@ -187,7 +241,7 @@ spec:
   contentType: image/jpeg        # author-writable; IMMUTABLE after first AdmissionAccepted
   type: gitstore.dev/media        # author-writable
   source:
-    type: s3                     # author-writable; changing type or uri triggers re-verification
+    type: s3                     # current v1beta1 source type
     uri: s3://acme-assets/products/macbook-pro-hero.jpg
     checksum:
       algorithm: sha256           # author-writable; changing triggers re-verification
@@ -198,24 +252,27 @@ spec:
       secretRef:
         kind: SecretRef           # same-namespace only (ADR-0001)
         name: s3-catalog-assets
-  processing:                     # author-writable; changing triggers reprocessing
+  processing:                     # accepted by spec 051; ignored by initial payload phase
     image:
       variants:
-        - width: 800
-          format: webp
+        - name: thumbnail
 status:                           # controller-managed, never author-writable
   observedGeneration: 3
   conditions:
     - {type: AdmissionAccepted, status: "True"}
-    - {type: SourceResolved,    status: "True",  reason: ChecksumVerified}
-    - {type: ProcessingComplete,status: "True"}
-    - {type: Ready,             status: "True"}
-    - {type: Terminating,       status: "False"}
-  resolvedVariants:
-    - {name: original, url: "https://cdn.example.com/.../hero.jpg", contentType: image/jpeg, width: 3000, height: 2000, checksum: sha256:...}
-    - {name: thumbnail-webp, url: "...", contentType: image/webp, width: 800}
-  objectStorageLocation: {bucket: acme-assets, key: products/macbook-pro-hero.jpg, provider: s3}
+    - {type: Ready,             status: "True"} # current spec 051 admission baseline only
+  resolved:                       # shape is system-managed; runtime values are future work
+    resolvedVariants: []
 ```
+
+This is a schema-shaped example. Under spec 051, admission sets
+`AdmissionAccepted=True` and `Ready=True`; `SourceResolved` and
+`ProcessingComplete` are absent until controller work populates them. The
+admission-time `Ready=True` is optimistic and must not be presented as proof
+that the source is accessible or copied to managed storage. The current
+`FileVariantRequest` requires only a `name`; width/format/codec/LOD options
+need a separately reviewed schema and processor-capability contract. Initial
+payload materialization ignores this block entirely.
 
 **Immutability rules** (author-controlled fields marked immutable are
 rejected at admission if changed post-creation, forcing a new `File` name
@@ -230,10 +287,11 @@ identity out from under existing references"):
   allowed at all): allow them, because "replace this hero image" is a
   legitimate authoring action, and rejecting it would force spurious
   File renames that break every `fileRef` pointing at the old name.
-- `spec.processing` — mutable; triggers reprocessing only (not
-  re-verification of source checksum).
+- `spec.processing` — mutable desired state. The initial payload phase ignores
+  it; a later processor contract must define when a change triggers work.
 
-**Validation/admission behavior** (extends ADR-0008's table):
+**Target validation/admission behavior** (extends ADR-0008's table; this is
+not a claim that every rule is implemented on every File path):
 
 | Input | Behavior |
 |---|---|
@@ -241,9 +299,9 @@ identity out from under existing references"):
 | Unsupported `content Type` | Pre-receive rejection against an admission-configured allowlist (not a hardcoded list — namespaces may need different allowlists). |
 | Checksum mismatch (post-fetch) | Controller sets `SourceResolved=False, reason=ChecksumMismatch`; does not retry the same checksum indefinitely — enters the poison/quarantine backoff class (§11). |
 | Missing object at source URI | Controller sets `SourceResolved=False, reason=SourceNotFound`; retries with exponential backoff (transient — object may not have propagated yet). |
-| Unsupported processing option | Admission-time rejection if the option is structurally unknown; controller-time `ProcessingComplete=False, reason=UnsupportedVariant` if the option is structurally valid but the processor can't satisfy it (e.g., requested format unsupported for content type). |
+| Processing options | The current schema accepts named image variant requests only. The initial payload phase ignores them; capability checks, unsupported-option diagnostics, and processor scheduling require a later processing contract. |
 | Cross-namespace `credentialsRef` | Rejected at admission (ADR-0001 same-namespace rule — no exception for File). |
-| Unsafe/private-network URL (`source.type: url`) | Rejected at admission via **allowlist**, not denylist (§10). |
+| Source type | The current v1beta1 schema permits `git`, `lfs`, `s3`, or `gcs`; any additional provider/type requires an explicit schema and security decision. |
 | Duplicate `metadata.name` | Standard resource-identity conflict — rejected like any other Git-backed resource. |
 | Source replacement (URI/checksum change) | Allowed; re-triggers verification (see immutability rules above). |
 | Stale/conflicting update | Standard `resourceVersion` optimistic-concurrency rejection. |
@@ -267,7 +325,7 @@ Category/Collection.
 
 ## 7. Upload, processing, resolution, and deletion sequences
 
-### 7a. Manifest-first creation + out-of-band upload (Phase 1, matches ADR-0008 today)
+### 7a. Initial payload materialization (processing ignored)
 
 ```mermaid
 sequenceDiagram
@@ -277,102 +335,117 @@ sequenceDiagram
     participant Admission as Admission pipeline
     participant FileController as File controller
     participant StatusAPI as File status API
-    participant Storage as Object storage
-    participant Processor as Processing pipeline
+    participant Source as Declared source
+    participant Storage as Managed object storage
 
-    Author->>Git: Push files/hero.md<br/>(kind: File, source URI not present yet)
+    Author->>Git: Push files/hero.md<br/>(kind: File, source URI)
     Git->>Admission: Run pre-receive validation
-    Admission->>Admission: Validate envelope, content type,<br/>source type, and non-empty source URI
+    Admission->>Admission: Validate File envelope and schema
     Admission-->>Git: Accepted
     Git->>Admission: Run post-receive admission
-    Admission->>Admission: Set AdmissionAccepted=True<br/>and owner reference to Repository
+    Admission->>Admission: Persist File and AdmissionAccepted condition
     Admission->>FileController: Enqueue File
-    FileController->>Storage: GET s3://.../hero.jpg
-    Storage-->>FileController: 404 Not Found
-    FileController->>StatusAPI: Write SourceResolved=False<br/>reason=SourceNotFound (transient)
-
-    Author->>Storage: Upload binary out of band<br/>using existing credentials
-    Note over FileController,Storage: Next backoff retry or watch-triggered recheck
-    FileController->>Storage: GET s3://.../hero.jpg
-    Storage-->>FileController: Binary payload
-    FileController->>FileController: Verify checksum<br/>Set SourceResolved=True
-    FileController->>Processor: Generate image variants
-    Processor-->>FileController: Processing complete
-    FileController->>StatusAPI: Write SourceResolved=True,<br/>ProcessingComplete=True, and Ready=True
+    FileController->>Source: Read declared source blob
+    Source-->>FileController: Source bytes
+    FileController->>Storage: Write source bytes to managed object key
+    Storage-->>FileController: Object identity and metadata
+    FileController->>StatusAPI: Record non-secret object identity and lifecycle state
+    Note over FileController: spec.processing is accepted but not inspected or executed
 ```
 
-### 7b. Signed-URL upload (Phase 2, `requestFileUpload`/`completeFileUpload`)
+### 7b. Later transformation extension (proposal; not phase 1)
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Client
-    participant API as gitstore-api
-    participant Storage as Object storage
-    participant Git as Git service
-    participant Admission as Admission pipeline
+The current v1beta1 File schema supports only `processing.image.variants`,
+where each request has a `name`. It is accepted desired state but ignored by
+the initial source-to-object-store materializer. A later feature may evolve
+this into typed outputs such as:
 
-    Client->>API: requestFileUpload(name, namespace,<br/>contentType, sizeHint)
-    API->>API: Authorize caller and validate namespace
-    API->>Storage: Create presigned PUT or multipart upload<br/>for one object key, short TTL, one action
-    Storage-->>API: Upload target and optional upload ID
-    API-->>Client: uploadURL, uploadId?, expiresAt
-
-    Client->>Storage: PUT binary or upload multipart sequence
-    Storage-->>Client: Upload accepted
-    Client->>API: completeFileUpload(name, namespace, uploadId?)
-    API->>Storage: Verify object exists and read payload metadata
-    Storage-->>API: Object metadata and checksum input
-    API->>API: Compute or verify checksum server-side
-    API->>Git: Auto-commit files/{name}.md
-    Git->>Admission: Run File admission
-    Admission-->>API: Continue from SourceResolved lifecycle in 7a
-    API-->>Client: File upload completed
+```yaml
+spec:
+  processing:
+    outputs:
+      - name: thumbnail
+        image:
+          width: 320
+          format: webp
+      - name: preview
+        video:
+          width: 720
+          codec: h264
+      - name: web
+        model3d:
+          format: glb
+          lod: 2
 ```
 
-Multipart switch-over at ~100MB (AWS threshold, verified) — below that,
-single presigned PUT; above, presigned multipart (Create/UploadPart/Complete).
-`tus` is a viable alternative for **self-hosted, S3-independent** local dev
-if MinIO is judged too heavy for a given deployment target — not required
-for v1, worth a follow-up ADR only if local dev friction with MinIO proves
-real.
+This is a future contract sketch, not a schema accepted by the current API.
+The evolution needs explicit validation, versioning/compatibility, output
+identity, status, and object-retention rules before it triggers work.
+
+The proposed processor model is operator-installed, digest-pinned OCI images,
+launched by the controller-manager as bounded Kubernetes Jobs—not in-process
+WASI plugins. A cluster-scoped `MediaProcessor` registration would describe
+the image, supported capabilities, and resource/time/concurrency limits; it
+would be admitted and authorized at cluster scope (using the `gitstore-system`
+registration convention). A File namespace cannot install or select arbitrary
+processor code. The controller watches the operator-managed registry and
+launches a Job for matching work, with the worker writing outputs to configured
+object storage.
+
+Keep two decisions separate: **is the requested output supported by the
+operator policy/registered capabilities?** is an API admission question; **is
+there a healthy, runnable worker now?** is a controller status, backpressure,
+and durable-retry question. Temporary worker absence or capacity exhaustion
+must not retroactively invalidate an admitted manifest. Admission rejects
+unsupported requests; the controller reports and retries temporarily
+unrunnable approved work. Operator resource budgets govern transformation
+spend; the proposed GraphQL `@cost`/`@listSize` directives govern API query
+work and are a separate mechanism.
+
+Signed upload APIs are likewise excluded from the initial payload phase and
+need their own authorization and payload-ownership contract. Storefront
+delivery URLs and frontend `src`/`srcset` equivalents are tracked separately
+by GH#283; status must not expose bearer URLs.
 
 ### 7c. Deletion
 
-```mermaid
-flowchart TD
-    Delete["deleteFile(name, namespace)"] --> Refs["Check reverse-reference index"]
-    Refs --> HasRefs{"Any File references?"}
-    HasRefs -->|yes| Reject["Reject with FailedPrecondition"]
-    HasRefs -->|no| Finalizer["Add foreground-deletion finalizer and deletionTimestamp"]
-    Finalizer --> Cleanup["File controller cancels processing and removes derived artifact pointers"]
-    Cleanup --> RemoveFinalizer["Remove finalizer"]
-    RemoveFinalizer --> DeleteRecord["Hard-delete datastore record"]
-    DeleteRecord --> Retain["Retain binary payload; purgeFilePayload is separate and auditable"]
-```
+Deletion does not wait for or reject catalog references. Spec 056 defines
+durable, bounded decoupling by File UID: previously resolved required
+references become unavailable with a distinct deleted-File reason; optional
+references are omitted; authored references remain unchanged. A same-name
+replacement does not silently rebind the old UID. File-owned source work is
+cancelled or fenced, and external source/object payloads are not automatically
+deleted. See [spec 056](../../specs/056-file-reference-safety/spec.md).
 
 ## 8. Controller topology
+
+This is a future target, not the current deployment topology. The API currently
+has File manifest admission, a namespaced `file(namespace, name)` query, and a
+durable watch; the controller-manager does not yet have a File reconciler. The
+first payload-materialization phase should remain narrow: read the declared
+source blob and write it to configured object storage, without interpreting
+`spec.processing` or launching transformation workers.
 
 ```mermaid
 flowchart TB
     subgraph API["gitstore-api"]
-        FileAPI["File GraphQL and datastore surface<br/>create, update, delete, get, list, status"]
+        FileAPI["Current: File admission, file(namespace,name), watchFiles"]
     end
     subgraph CM["gitstore-controller-manager"]
-        FileController["File reconciler<br/>resolve source, verify checksum, run processing"]
+        FileController["Future File reconciler<br/>copy source blob to object storage"]
     end
     FileAPI -->|"list and watch"| FileController
     FileController -->|"resourceVersion-guarded status write"| FileAPI
-    FileController --> FileStatus["File status conditions and resolved variants"]
-    FileStatus --> Index["Reverse-reference lookup and dependent enqueue"]
+    FileController --> FileStatus["File source/payload status"]
+    FileStatus --> Index["Owner-reference reverse lookup and durable dependent work"]
     Index --> Category["CategoryTaxonomy reconciler<br/>exists today"]
     Index --> Product["Product reconciler<br/>future"]
     Index --> Variant["ProductVariant reconciler<br/>future"]
     Index --> Collection["Collection reconciler<br/>future"]
 ```
-\* Product/ProductVariant/Collection reconcilers don't exist yet
-(confirmed in §2) — this document's File controller is a prerequisite for
-them, not a replacement.
+\* Product, ProductVariant, and Collection reconcilers remain future work.
+The File reference contract and reverse lookup are specified in spec 056;
+they are not implemented merely by this architecture document.
 
 **Why File-controller-reads-only for dependents**: this is what makes
 "CategoryTaxonomy determines File usability without direct Git or
@@ -400,7 +473,15 @@ dependency per CLAUDE.md) with distinct retry classes:
 controller reads `GITSTORE_FILE__S3_ENDPOINT` the same way the API reads its
 other backend endpoints today.
 
-## 9. Reverse-reference index and event fan-out
+> **Historical proposal:** Sections 9–17 below preserve design exploration
+> from the original 2026-08 architecture draft. They are not normative where
+> they conflict with the current direction in §1–2, ADR-0008, or specs 051,
+> 056, 063, and 064. In particular, use spec 056's owner-reference-based
+> reverse lookup, non-blocking deletion, source-access requirements, and
+> durable recovery semantics; do not implement the old name-keyed index,
+> deletion veto, upload API, or processing pipeline from these sections.
+
+## 9. Historical reverse-reference proposal (superseded)
 
 **Recommendation: maintain an explicit reverse-reference index in the
 datastore**, keyed `(namespace, File.name) → []ObjectReference`, written by
@@ -442,7 +523,7 @@ current File status from its cache and recomputes its own condition. This
 avoids the File controller needing to know each dependent kind's Ready
 semantics.
 
-## 10. Status-condition and resolved-media semantics
+## 10. Historical status-condition proposal (superseded)
 
 | File state | Dependent condition (required ref) | Dependent condition (optional ref) |
 |---|---|---|
@@ -493,23 +574,23 @@ currently has no `Media` field (§2), implementing this requires adding
 `Media []ResolvedFileDefinition` to it — an additive, non-breaking field
 add, mirroring `ResolvedProductDefinition.Media`.
 
-## 11. GraphQL, datastore, and watch contracts
+## 11. Historical GraphQL, datastore, and watch proposal (superseded)
 
 - **File as a built-in GraphQL type**, not a generic CRD. Rationale: File
   is core-scope per `../resource-storage/git-backed.md`'s own classification
   table, and needs first-class mutations (`requestFileUpload` in particular)
   that a generic CRD surface would have to special-case anyway.
-- **Mutations**: `createFile`, `updateFile`, `deleteFile` (Phase 1, manifest
+- **Mutations**: `createFile`, `updateFile`, `deleteFile`, `completeFileDeletion` (Phase 1, manifest
   only) + `requestFileUpload`, `completeFileUpload`, `retryFileProcessing`,
   `purgeFilePayload` (Phase 2). `requestFileDownload` is **not** needed as a
   mutation — resolved URLs are already exposed via `status.resolvedVariants`
   reads; a separate download-negotiation mutation would duplicate that.
-- **Queries**: `getFile`, `listFiles` (namespace-scoped, cursor-paginated
+- **Queries**: `file`, `files` (namespace-scoped, cursor-paginated
   per Relay connection spec — cursors are opaque, forward-only pagination
   sufficient for v1, verified via relay.dev/graphql/connections.htm).
 - **Watch/subscription**: reuses the existing `graphql-transport-ws`
   transport already wired in `gitstore-api/internal/app/server.go` (spec
-  040) — add a `fileWatch`/`fileEvents` subscription following the same
+  040) — add a `watchFiles`/`FileWatchEvent` subscription following the same
   resourceVersion-resumable, at-least-once contract as the existing
   CategoryTaxonomy watch. On cursor expiration (aged-out resourceVersion),
   the server returns the equivalent of HTTP 410 semantics and the client
@@ -525,7 +606,7 @@ add, mirroring `ResolvedProductDefinition.Media`.
   of `ObjectReference`) backed directly by the index in §9 — useful for
   admin/debugging and for `deleteFile`'s own precondition check.
 
-## 12. Security and threat model
+## 12. Historical security and threat model (retain as review input)
 
 | Threat                                                      | Mitigation                                                                                                                                                                                                                                                                                                                                                                      |
 |-------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -540,7 +621,7 @@ add, mirroring `ResolvedProductDefinition.Media`.
 | Authorization for upload/download/processing/purge          | Each mutation checks the caller's namespace-scoped RBAC action (`file.create`, `file.upload`, `file.purge`, etc.) via the existing `AuthZProvider` — `purgeFilePayload` specifically should require a distinct, higher-privilege action than `deleteFile`.                                                                                                                      |
 | Audit events                                                | Every `requestFileUpload`/`completeFileUpload`/`purgeFilePayload` call should emit an audit log entry (who, when, which object key) — object storage operations are the one place GitStore's Git-history audit trail doesn't naturally cover.                                                                                                                                   |
 
-## 13. Performance and scaling model
+## 13. Historical performance and scaling model (retain as review input)
 
 - **Reverse-reference index** (§9) is the load-bearing scalability
   decision — without it, "millions of Files, many dependents per File"
@@ -568,7 +649,7 @@ add, mirroring `ResolvedProductDefinition.Media`.
   pattern, not edge-triggered, matching Kubernetes' own controller design
   philosophy (verified).
 
-## 14. Migration plan from "File not queryable"
+## 14. Historical migration plan (superseded)
 
 1. **Phase 0** (this document + ADR-0008 revision): finalize File contract,
    ratify provider abstraction, close open questions in §18.
@@ -597,7 +678,7 @@ binary," not a schema rollback, because no existing behavior is removed
 until Phase 4 changes `fileref.go`'s hardcoded `Unknown` emission (and that
 change itself is a one-file diff, trivially revertible).
 
-## 15. Required tests (mapped to phases above)
+## 15. Historical test plan (superseded by current specs)
 
 - File manifest validation (malformed URI, bad contentType, missing checksum) — Phase 1.
 - Upload lifecycle (signed URL issue → PUT → complete → checksum verify) — Phase 3.
@@ -615,7 +696,7 @@ change itself is a one-file diff, trivially revertible).
 - Controller restart mid-backlog resumes from last-acked resourceVersion without reprocessing already-Ready Files — Phase 2.
 - Namespace isolation: cross-namespace `fileRef` rejected at admission; reverse-reference index never crosses namespaces — Phase 1.
 
-## 16. Documentation and runbook updates
+## 16. Historical documentation checklist
 
 - Revise `docs/ADRs/0008-file-lifecycle.md` from "Proposed" to reflect the
   phased plan in §14 once Phase 1 ships (it currently describes only the
@@ -630,7 +711,7 @@ change itself is a one-file diff, trivially revertible).
 - Update `../resource-storage/lfs-object-storage.md` with the finalized
   `SourceResolver` provider list once implemented.
 
-## 17. Open questions and explicit non-goals
+## 17. Historical open questions and non-goals
 
 **Open questions:**
 - Does an existing object at a presigned PUT target get silently
