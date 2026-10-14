@@ -4,7 +4,10 @@ extend type Query {
   """
   Read one persisted File by namespace and name. This does not subscribe to events.
   """
+  # file(by: FileBy!): File
   file(namespace: String!, name: String!): File
+
+  # files(namespace: String!, first: Int, after: String, last: Int, before: String): FileConnection!
 }
 
 extend type Subscription {
@@ -20,6 +23,22 @@ extend type Subscription {
     resourceVersion: String
   ): FileWatchEvent!
 }
+
+# extend type Mutation {
+#  createFile(input: CreateFileInput!): CreateFilePayload!
+#
+#  updateFile(input: UpdateFileInput!): UpdateFilePayload!
+#
+#  deleteFile(input: DeleteFileInput!): DeleteFilePayload!
+#
+#  completeFileDeletion(input: CompleteFileDeletionInput!): CompleteFileDeletionPayload!
+#
+#  completeFileUpload(input: CompleteFileUploadInput!): CompleteFileUploadPayload!
+#
+#  updateFileStatus(input: UpdateFileStatusInput!): UpdateFileStatusPayload!
+#
+#  requestFileUpload(input: RequestFileUploadInput!): RequestFileUploadPayload!
+#}
 
 type FileWatchEvent {
   type: WatchEventType!
@@ -90,11 +109,32 @@ type FileStatus {
   resolved: ResolvedFileDefinition
 }
 
+type ResolvedFileVariant {
+  name: String!
+  url: String
+}
+
 extend type ResolvedFileDefinition {
   resolvedVariants: [ResolvedFileVariant!]!
 }
 
-type ResolvedFileVariant {
+"""
+Selector for looking up a file by exactly one unique key.
+"""
+input FileBy @oneOf {
+  """Look up by globally unique Relay ID."""
+  id: ID
+
+  """
+  Look up by namespace + file name.
+  """
+  namespacePath: FileNamespacePath
+}
+
+"""
+Composite selector: namespace + file name.
+"""
+input FileNamespacePath {
+  namespace: String!
   name: String!
-  url: String
 }
