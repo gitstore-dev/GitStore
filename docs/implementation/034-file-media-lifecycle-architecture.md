@@ -145,11 +145,11 @@ Confirmed as the right split — do not merge these, per `docs/ADRs/0008-file-li
 and `../resource-storage/git-backed.md` ("Do not model `MediaAsset` as a wrapper
 around `File`"):
 
-| Resource | Owns | Lifecycle driver | Current state |
-|---|---|---|---|
-| **`File`** | Namespaced technical source manifest: `contentType`, source reference, typed credentials reference, accepted processing hints, status, and future resolved payload metadata. One File represents one source asset. | Source access and managed object-storage materialization; later processing is a separate phase. | Manifest contract, datastore, admission, query and watch implemented; runtime controller remains future work. |
-| **`MediaAsset`** | Catalog-facing semantic layer: `fileRef`, `role`, `altTextRef`, `focalPoint`, ordering. | Presentation lifecycle, independent of the binary source. | Open issue #316; not implemented. |
-| **Inline `spec.media[*].fileRef`** on Product/ProductVariant/CategoryTaxonomy/Collection | Typed same-namespace reference (`kind`, `name`, optionality) to a File. | Consumer resource reconciliation. | Present on catalog resources; spec 056 defines safe resolution/deletion behavior. |
+| Resource                                                                                 | Owns                                                                                                                                                                                                               | Lifecycle driver                                                                                | Current state                                                                                                 |
+|------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+| **`File`**                                                                               | Namespaced technical source manifest: `contentType`, source reference, typed credentials reference, accepted processing hints, status, and future resolved payload metadata. One File represents one source asset. | Source access and managed object-storage materialization; later processing is a separate phase. | Manifest contract, datastore, admission, query and watch implemented; runtime controller remains future work. |
+| **`MediaAsset`**                                                                         | Catalog-facing semantic layer: `fileRef`, `role`, `altTextRef`, `focalPoint`, ordering.                                                                                                                            | Presentation lifecycle, independent of the binary source.                                       | Open issue #316; not implemented.                                                                             |
+| **Inline `spec.media[*].fileRef`** on Product/ProductVariant/CategoryTaxonomy/Collection | Typed same-namespace reference (`kind`, `name`, optionality) to a File.                                                                                                                                            | Consumer resource reconciliation.                                                               | Present on catalog resources; spec 056 defines safe resolution/deletion behavior.                             |
 
 **Is `MediaAsset` necessary for the first useful implementation?** No.
 `fileRef` today points directly at `File`. This is the reference shape for the
@@ -203,13 +203,13 @@ to configured object storage. This phase ignores `spec.processing`.
 
 ### Storage backend comparison
 
-| Option | Max practical size | Git impact | Dedup/CAS | Resumable | Signed URLs | Local/Compose dev | Recommendation |
-|---|---|---|---|---|---|---|---|
-| **Git LFS pointer** | Multi-GB (LFS-server-limited); pointer is <1KB, always | None on primary repo (pointer only); LFS store grows separately | Yes — `oid` is `sha256:<hash>`, content-addressed by construction (verified: git-lfs.com, git-lfs spec) | Server-dependent (most LFS servers support resumable PUT) | Not standard; LFS uses its own auth handshake | Needs an LFS server (can run `git-lfs-test-server` or a Git host with LFS in Compose) | Use for **catalog-owned, versioned, low-churn** assets (product hero shots checked in with the catalog repo) |
-| **S3-compatible object storage** | Multi-TB via multipart (AWS: switch to multipart ≥100MB — verified, AWS mpuoverview) | Zero | Only if the app computes/stores a content hash itself; S3 has no built-in CAS | Yes — multipart upload never expires until completed/aborted; failed parts retransmit individually (verified, AWS) | Yes — presigned URLs are **bearer tokens** inheriting the signer's IAM permissions, no further identity check (verified, AWS docs ×2) | MinIO (AIStor-compatible, supports full multipart lifecycle: Create/UploadPart/UploadPartCopy/ListParts/Complete/Abort — verified, MinIO docs) runs cleanly in Compose | Use for **generated, high-churn, PII-bearing, or CDN-fronted** assets (renditions, customer uploads, invoices) |
-| **External URL only** | N/A (no ingestion) | None | None | N/A | N/A | Trivial | Not in the current v1beta1 source-type enum; any future URL source needs a separate SSRF, lifecycle, and access-control contract. |
-| **Git repository blob as source** | Repository and Git-service bounded | Increases Git history when binary bytes are committed directly | Git object identity; application checksum remains separate | No source-level resumability implied | No | Existing Git service | May be a declared ingress source; the materializer copies it to managed object storage. This does not make the Git tree the managed serving/output store. |
-| **Provider abstraction** | Backend-dependent | Backend-dependent | Backend-dependent; do not assume `checksum` automatically provides cross-provider CAS | Backend-dependent | Backend-dependent | Operator-configured object storage | A useful implementation seam for spec 056's selected providers; do not infer support for every source in the old `{git,lfs,s3,gcs,b2,url}` sketch. |
+| Option                            | Max practical size                                                                   | Git impact                                                      | Dedup/CAS                                                                                               | Resumable                                                                                                          | Signed URLs                                                                                                                           | Local/Compose dev                                                                                                                                                      | Recommendation                                                                                                                                            |
+|-----------------------------------|--------------------------------------------------------------------------------------|-----------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Git LFS pointer**               | Multi-GB (LFS-server-limited); pointer is <1KB, always                               | None on primary repo (pointer only); LFS store grows separately | Yes — `oid` is `sha256:<hash>`, content-addressed by construction (verified: git-lfs.com, git-lfs spec) | Server-dependent (most LFS servers support resumable PUT)                                                          | Not standard; LFS uses its own auth handshake                                                                                         | Needs an LFS server (can run `git-lfs-test-server` or a Git host with LFS in Compose)                                                                                  | Use for **catalog-owned, versioned, low-churn** assets (product hero shots checked in with the catalog repo)                                              |
+| **S3-compatible object storage**  | Multi-TB via multipart (AWS: switch to multipart ≥100MB — verified, AWS mpuoverview) | Zero                                                            | Only if the app computes/stores a content hash itself; S3 has no built-in CAS                           | Yes — multipart upload never expires until completed/aborted; failed parts retransmit individually (verified, AWS) | Yes — presigned URLs are **bearer tokens** inheriting the signer's IAM permissions, no further identity check (verified, AWS docs ×2) | MinIO (AIStor-compatible, supports full multipart lifecycle: Create/UploadPart/UploadPartCopy/ListParts/Complete/Abort — verified, MinIO docs) runs cleanly in Compose | Use for **generated, high-churn, PII-bearing, or CDN-fronted** assets (renditions, customer uploads, invoices)                                            |
+| **External URL only**             | N/A (no ingestion)                                                                   | None                                                            | None                                                                                                    | N/A                                                                                                                | N/A                                                                                                                                   | Trivial                                                                                                                                                                | Not in the current v1beta1 source-type enum; any future URL source needs a separate SSRF, lifecycle, and access-control contract.                         |
+| **Git repository blob as source** | Repository and Git-service bounded                                                   | Increases Git history when binary bytes are committed directly  | Git object identity; application checksum remains separate                                              | No source-level resumability implied                                                                               | No                                                                                                                                    | Existing Git service                                                                                                                                                   | May be a declared ingress source; the materializer copies it to managed object storage. This does not make the Git tree the managed serving/output store. |
+| **Provider abstraction**          | Backend-dependent                                                                    | Backend-dependent                                               | Backend-dependent; do not assume `checksum` automatically provides cross-provider CAS                   | Backend-dependent                                                                                                  | Backend-dependent                                                                                                                     | Operator-configured object storage                                                                                                                                     | A useful implementation seam for spec 056's selected providers; do not infer support for every source in the old `{git,lfs,s3,gcs,b2,url}` sketch.        |
 
 GH#79's File manifest is the control-plane record. GH#127 tracks storage work,
 but this document does not choose a universal upload protocol or provider
@@ -229,7 +229,7 @@ contracts.
 
 ## 6. Recommended File and Media resource contracts
 
-### `File` (implemented manifest contract plus later runtime work)
+### `File` (implemented v1beta1 contract; processing envelope is not final)
 
 ```yaml
 apiVersion: storage.gitstore.dev/v1beta1
@@ -270,9 +270,11 @@ This is a schema-shaped example. Under spec 051, admission sets
 `ProcessingComplete` are absent until controller work populates them. The
 admission-time `Ready=True` is optimistic and must not be presented as proof
 that the source is accessible or copied to managed storage. The current
-`FileVariantRequest` requires only a `name`; width/format/codec/LOD options
-need a separately reviewed schema and processor-capability contract. Initial
-payload materialization ignores this block entirely.
+v1beta1 `FileVariantRequest` requires only a `name`; it is a deliberately
+minimal contract, not the final media-processing envelope. The forward shape
+for typed image, video, and 3D outputs, profile selection, and asynchronous
+jobs is recorded in §7b. Initial payload materialization ignores processing
+requests entirely.
 
 **Immutability rules** (author-controlled fields marked immutable are
 rejected at admission if changed post-creation, forcing a new `File` name
@@ -293,18 +295,18 @@ identity out from under existing references"):
 **Target validation/admission behavior** (extends ADR-0008's table; this is
 not a claim that every rule is implemented on every File path):
 
-| Input | Behavior |
-|---|---|
-| Malformed source URI | Pre-receive rejection (structural: must parse as a URI for the declared `source.type`'s scheme). |
-| Unsupported `content Type` | Pre-receive rejection against an admission-configured allowlist (not a hardcoded list — namespaces may need different allowlists). |
-| Checksum mismatch (post-fetch) | Controller sets `SourceResolved=False, reason=ChecksumMismatch`; does not retry the same checksum indefinitely — enters the poison/quarantine backoff class (§11). |
-| Missing object at source URI | Controller sets `SourceResolved=False, reason=SourceNotFound`; retries with exponential backoff (transient — object may not have propagated yet). |
-| Processing options | The current schema accepts named image variant requests only. The initial payload phase ignores them; capability checks, unsupported-option diagnostics, and processor scheduling require a later processing contract. |
-| Cross-namespace `credentialsRef` | Rejected at admission (ADR-0001 same-namespace rule — no exception for File). |
-| Source type | The current v1beta1 schema permits `git`, `lfs`, `s3`, or `gcs`; any additional provider/type requires an explicit schema and security decision. |
-| Duplicate `metadata.name` | Standard resource-identity conflict — rejected like any other Git-backed resource. |
-| Source replacement (URI/checksum change) | Allowed; re-triggers verification (see immutability rules above). |
-| Stale/conflicting update | Standard `resourceVersion` optimistic-concurrency rejection. |
+| Input                                    | Behavior                                                                                                                                                                                                               |
+|------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Malformed source URI                     | Pre-receive rejection (structural: must parse as a URI for the declared `source.type`'s scheme).                                                                                                                       |
+| Unsupported `content Type`               | Pre-receive rejection against an admission-configured allowlist (not a hardcoded list — namespaces may need different allowlists).                                                                                     |
+| Checksum mismatch (post-fetch)           | Controller sets `SourceResolved=False, reason=ChecksumMismatch`; does not retry the same checksum indefinitely — enters the poison/quarantine backoff class (§11).                                                     |
+| Missing object at source URI             | Controller sets `SourceResolved=False, reason=SourceNotFound`; retries with exponential backoff (transient — object may not have propagated yet).                                                                      |
+| Processing options                       | The current schema accepts named image variant requests only. The initial payload phase ignores them; capability checks, unsupported-option diagnostics, and processor scheduling require a later processing contract. |
+| Cross-namespace `credentialsRef`         | Rejected at admission (ADR-0001 same-namespace rule — no exception for File).                                                                                                                                          |
+| Source type                              | The current v1beta1 schema permits `git`, `lfs`, `s3`, or `gcs`; any additional provider/type requires an explicit schema and security decision.                                                                       |
+| Duplicate `metadata.name`                | Standard resource-identity conflict — rejected like any other Git-backed resource.                                                                                                                                     |
+| Source replacement (URI/checksum change) | Allowed; re-triggers verification (see immutability rules above).                                                                                                                                                      |
+| Stale/conflicting update                 | Standard `resourceVersion` optimistic-concurrency rejection.                                                                                                                                                           |
 
 ### `MediaAsset` (deferred; contract sketch only, per GH#316)
 
@@ -353,16 +355,19 @@ sequenceDiagram
     Note over FileController: spec.processing is accepted but not inspected or executed
 ```
 
-### 7b. Later transformation extension (proposal; not phase 1)
+### 7b. Forward media-processing envelope and worker resources
 
-The current v1beta1 File schema supports only `processing.image.variants`,
-where each request has a `name`. It is accepted desired state but ignored by
-the initial source-to-object-store materializer. A later feature may evolve
-this into typed outputs such as:
+The manifest envelope is **not final**. Spec 051's `processing.image.variants`
+is only the deliberately minimal v1beta1 baseline; it must not be mistaken for
+the long-term File shape. Define the cross-media envelope before implementing
+processing, then phase in execution separately. The proposed File shape is:
 
 ```yaml
 spec:
   processing:
+    profileRef:
+      kind: MediaProcessingProfile
+      name: storefront-standard
     outputs:
       - name: thumbnail
         image:
@@ -378,36 +383,133 @@ spec:
           lod: 2
 ```
 
-This is a future contract sketch, not a schema accepted by the current API.
-The evolution needs explicit validation, versioning/compatibility, output
-identity, status, and object-retention rules before it triggers work.
+This is a proposed forward contract, not accepted by the current API. `outputs`
+expresses desired representations, not which executable creates them. Each
+entry has a stable name and exactly one typed media-kind body (`image`,
+`video`, or `model3d`); validation is media-specific, and output names are
+unique within the File. `profileRef` selects an approved processing policy,
+not an image or a permission grant. File manifests must never carry arbitrary
+OCI image names, command lines, credentials, or processor-specific escape
+hatches. The migration from the existing `variants` field to this envelope
+needs an explicit version/compatibility plan before schema changes.
 
-The proposed processor model is operator-installed, digest-pinned OCI images,
-launched by the controller-manager as bounded Kubernetes Jobs—not in-process
-WASI plugins. A cluster-scoped `MediaProcessor` registration would describe
-the image, supported capabilities, and resource/time/concurrency limits; it
-would be admitted and authorized at cluster scope (using the `gitstore-system`
-registration convention). A File namespace cannot install or select arbitrary
-processor code. The controller watches the operator-managed registry and
-launches a Job for matching work, with the worker writing outputs to configured
-object storage.
+The related resource model is:
 
-Keep two decisions separate: **is the requested output supported by the
-operator policy/registered capabilities?** is an API admission question; **is
-there a healthy, runnable worker now?** is a controller status, backpressure,
-and durable-retry question. Temporary worker absence or capacity exhaustion
-must not retroactively invalidate an admitted manifest. Admission rejects
-unsupported requests; the controller reports and retries temporarily
-unrunnable approved work. Operator resource budgets govern transformation
-spend; the proposed GraphQL `@cost`/`@listSize` directives govern API query
-work and are a separate mechanism.
+- **Cluster-scoped `MediaProcessor`**: operator-installed, digest-pinned OCI
+  image plus declared capabilities (media kinds, formats/codecs, dimensions or
+  LOD bounds) and bounded CPU, memory, timeout, and concurrency. Admission and
+  RBAC use cluster scope and the `gitstore-system/gitstore-system` registration
+  convention. This is registration of executable capability, not tenant-owned
+  configuration.
+  
+  ```yaml
+  kind: MediaProcessor
+  metadata:
+    name: image-standard
+  spec:
+    image: registry.gitstore.dev/media/image-standard@sha256:...
+    capabilities:
+    - kind: image
+      formats: [jpeg, png, webp, avif]
+      maxWidth: 4096
+      maxHeight: 4096
+    resources:
+      cpu: "2"
+      memory: "2Gi"
+      timeoutSeconds: 60
+      maxConcurrentJobs: 8
+  ```
+- **`MediaProcessingProfile`**: non-executable policy/preset that constrains
+  allowed output requests, defaults, and cost/resource ceilings. Its exact
+  scope and ownership (cluster defaults versus namespaced profiles) remain a
+  decision for the feature spec. Namespaced authors may only use profiles and
+  capabilities authorized for their namespace; profiles cannot grant more
+  than the cluster's installed processors or operator budget.
+  
+  ```yaml
+  kind: MediaProcessingProfile
+  metadata:
+    name: storefront-standard
+  spec:
+    allowedProcessors: [image-standard, video-baseline]
+    allowedOutputs:
+      image:
+        formats: [jpeg, webp, avif]
+        maxWidth: 2048
+      video:
+        codecs: [h264]
+        maxWidth: 1280
+    limits:
+      maxOutputsPerFile: 8
+      maxTotalPixelsPerFile: 30000000
+  ```
+- **Namespaced `MediaProcessingJob`**: controller-managed durable work record
+  for a File UID, observed generation, profile revision, and requested output
+  set. It carries lifecycle/status and retry state, but no secret material or
+  bearer URL. The controller-manager creates a bounded Kubernetes Job to run
+  the registered OCI image; completion records output object identities and
+  conditions on the GitStore job/File resources. File deletion or generation
+  change fences stale work. Namespace quotas and authorization bound tenants'
+  processing consumption.
 
-Signed upload APIs are likewise excluded from the initial payload phase and
-need their own authorization and payload-ownership contract. Storefront
-delivery URLs and frontend `src`/`srcset` equivalents are tracked separately
-by GH#283; status must not expose bearer URLs.
+The controller-manager watches the cluster processor registry and creates
+namespaced work only after API admission has established that the request is
+supported by policy. Keep the decisions distinct: **supported by policy?** is
+an API admission decision; **currently runnable?** is controller status,
+backpressure, and durable retry. Missing capacity or a temporarily unavailable
+worker must not retroactively reject an admitted request. Unsupported format,
+codec, or media-kind requests are rejected using ADR-0015 diagnostics.
+Transformation resource budgets are separate from doc 038's proposed GraphQL
+`@cost`/`@listSize` query budgets.
 
-### 7c. Deletion
+### 7c. Future client upload flow (not implemented)
+
+Keep an upload-session sequence in the architecture: it gives web, admin, and
+mobile clients one control-plane workflow while transferring bytes directly to
+object storage rather than proxying them through the API or Git service. The
+preferred first option is a provider-native multipart session behind a
+provider-neutral response. The API can choose single PUT versus multipart based on size
+and provider capability, while clients use one transfer adapter.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Admin/storefront/mobile client
+    participant API as gitstore-api
+    participant Store as Object storage (staging)
+    participant Git as Git service/admission
+    participant CM as controller-manager
+
+    Client->>API: requestFileUpload(namespace, name, contentType, size, checksum, idempotencyKey)
+    API->>API: Authenticate, authorize file.upload, validate bounds and target identity
+    API->>Store: Create scoped staging upload session
+    Store-->>API: Multipart upload ID and short-lived per-part URLs
+    API-->>Client: UploadSession(id, part plan, expiry, required headers)
+    loop Each part (retry only failed parts)
+        Client->>Store: PUT bytes directly to signed part URL
+        Store-->>Client: Part receipt / ETag
+    end
+    Client->>API: completeFileUpload(sessionId, part receipts, checksum)
+    API->>Store: Complete upload#59; verify object, size, and checksum
+    Store-->>API: Verified staged object metadata
+    API->>Git: Commit File manifest referencing staged source through normal admission
+    Git-->>API: Commit/admission result
+    API-->>Client: File identity, commit, and pending lifecycle state
+    API->>CM: Durable File observation
+    CM->>Store: Materialize/promote bytes to managed object key
+    CM->>API: Record non-secret object identity and lifecycle status
+```
+
+Upload sessions must be idempotent, short-lived, object-key scoped, size- and
+part-bounded, and auditable. Signed part URLs are bearer credentials: return
+them only to the authorized caller and never persist them in Git, status,
+checkpoints, logs, or metrics. If completion or Git admission fails, staging
+objects expire through bounded cleanup; do not silently create a Ready File.
+The future mutation names do not imply that File-specific upload mutations
+exist today. Storefront delivery URLs and `src`/`srcset` mapping remain GH#283
+work and must not be confused with upload URLs.
+
+### 7d. Deletion
 
 Deletion does not wait for or reject catalog references. Spec 056 defines
 durable, bounded decoupling by File UID: previously resolved required
@@ -439,7 +541,7 @@ flowchart TB
     FileController --> FileStatus["File source/payload status"]
     FileStatus --> Index["Owner-reference reverse lookup and durable dependent work"]
     Index --> Category["CategoryTaxonomy reconciler<br/>exists today"]
-    Index --> Product["Product reconciler<br/>future"]
+    Index --> Product["Product reconciler<br/>exists today"]
     Index --> Variant["ProductVariant reconciler<br/>future"]
     Index --> Collection["Collection reconciler<br/>future"]
 ```
