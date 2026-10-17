@@ -1493,6 +1493,37 @@ does not establish repeatability or a causal regression, but it provides no ACK
 improvement to promote. Keep end-to-end acceptance separate from a better
 internal phase measurement.
 
+Follow-up retained-trace analysis resolved all members of eight selected File
+cohorts using their exact trace/span links. These are purposive examples, not a
+latency distribution or a census of the operations ahead of each queued request.
+For the longest worker-occupied offer in each explicit burst:
+
+| Existing-storage check | Burst | Cohort members | Mutation wall time | Time with an observed database request outstanding |
+| --- | --- | ---: | ---: | ---: |
+| Exclusive | First | 4 | 62.581ms | 61.689ms |
+| Exclusive | Second | 4 | 83.239ms | 82.012ms |
+| Shared | First | 4 | 106.988ms | 105.361ms |
+| Shared | Second | 4 | 55.288ms | 54.202ms |
+
+The outstanding intervals are the union of both `scylla.query` and
+`scylla.batch` attempts, counting overlapping requests once. Omitting batch
+attempts would incorrectly leave 16-34ms of the shared-check burst mutations
+unaccounted for. Each of those two cohorts updated thirteen Files through one
+conditional update followed by one twelve-update conditional batch. In the
+second burst, those conditional operations took 23.4ms and 19.4ms respectively;
+the later updates waited locally behind the first operation. This identifies
+serial request work, not a demonstrated benefit from adding a gathering delay,
+increasing cohort size or issuing more concurrent writes.
+
+Repository membership writes remain conservative deletion blockers and must
+precede authoritative child writes; do not remove them as redundant traffic.
+Likewise, a client request's lifetime includes driver and response scheduling,
+transport and database work. These examples do not distinguish server execution
+from client scheduling, establish CPU saturation, or determine whether 32
+workers are overprovisioned or underprovisioned. No further load or configuration
+change was needed to collect these retained traces, and the 2s ACK gate remains
+unmet.
+
 Plural File node reads hydrate at most 250 IDs per backend call. UID locators
 use at most eight concurrent queries containing at most sixteen distinct partition keys each;
 the API never sends a 250-key cross-partition `IN` query. This reduces repeated
