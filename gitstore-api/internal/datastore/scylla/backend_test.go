@@ -1871,20 +1871,22 @@ func TestScylla_FileCohortCoalescesFreshProjectionReads(t *testing.T) {
 				waveCtx := context.WithValue(batchCtx, waveKey{}, wave+1)
 				results := make(chan error, len(files))
 				var workers sync.WaitGroup
-				for _, file := range files {
-					workers.Go(func() {
-						desired := *file
-						desired.ResourceVersion = fmt.Sprint(wave + 2)
-						desired.RepositoryID = repositories[wave].UID
-						results <- store.UpdateFile(waveCtx, &desired, fmt.Sprint(wave+1))
-					})
+				update := func(file *datastore.File) {
+					desired := *file
+					desired.ResourceVersion = fmt.Sprint(wave + 2)
+					desired.RepositoryID = repositories[wave].UID
+					results <- store.UpdateFile(waveCtx, &desired, fmt.Sprint(wave+1))
 				}
+				workers.Go(func() { update(files[0]) })
 				select {
 				case <-started[wave]:
 				case <-ctx.Done():
 					release(wave)
 					workers.Wait()
 					return ctx.Err()
+				}
+				for _, file := range files[1:] {
+					workers.Go(func() { update(file) })
 				}
 				ready := assert.Eventually(t, func() bool {
 					return scylla.QueuedFileProjectionReadsForTest(waveCtx) == len(files)-1
@@ -4543,6 +4545,127 @@ func TestScylla_FileConditionalBatchesPreserveEnvelopesAndIndependentConflicts(t
 	testFileConditionalBatches(t, false)
 }
 
+func TestScylla_FilePreparedUpdatesUseOneBoundedConditionalBatch(t *testing.T) {
+	for _, outcome := range []string{"applied", "stale", "canceled"} {
+		t.Run(outcome, func(t *testing.T) {
+			const count = 12
+			type updateKey struct{}
+			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+			defer cancel()
+			var memberships atomic.Int64
+			prepared := make(chan struct{})
+			var cancelOne context.CancelFunc
+			cfg := testScyllaConfig(t)
+			cfg.QueryObserver = namespaceReservationObserver(func(ctx context.Context, query gocql.ObservedQuery) {
+				if ctx.Value(updateKey{}) != true || query.Err != nil ||
+					!strings.HasPrefix(query.Statement, "INSERT INTO resources_by_repository ") {
+					return
+				}
+				if memberships.Add(1) == count {
+					if outcome == "canceled" {
+						cancelOne()
+					}
+					close(prepared)
+				}
+				select {
+				case <-prepared:
+				case <-ctx.Done():
+				}
+			})
+			store, err := scylla.New(cfg, zap.NewNop())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			peer := newTestStore(t)
+			ns := &datastore.Namespace{UID: newID(), Name: "prepared-files-" + newID()[:8]}
+			require.NoError(t, store.CreateNamespace(ctx, ns))
+			repo := &datastore.Repository{UID: newID(), Namespace: ns.Name, Name: "catalog"}
+			require.NoError(t, store.CreateRepositoryInActiveNamespace(ctx, repo))
+			files := make([]*datastore.File, count)
+			for i := range files {
+				files[i] = &datastore.File{
+					UID: newID(), Namespace: ns.Name, Name: fmt.Sprintf("file-%d", i),
+					RepositoryID: repo.UID, Generation: 1, ResourceVersion: "1", Body: "old",
+				}
+				require.NoError(t, store.CreateFile(ctx, files[i]))
+				files[i].Body = "updated"
+				files[i].Generation++
+				datastore.AdvanceFileSystemVersion(files[i])
+			}
+			registry := prometheus.NewRegistry()
+			batcher := datastore.NewInstrumentedDatastoreWithRegistry(store, "scylla", zap.NewNop(), registry).(datastore.CatalogMutationBatcher)
+			results := make([]error, count)
+			err = batcher.WithCatalogMutationBatch(context.WithValue(ctx, updateKey{}, true), ns.Name, func(batchCtx context.Context) error {
+				canceled, cancelRow := context.WithCancel(batchCtx)
+				cancelOne = cancelRow
+				defer cancelRow()
+				var writes sync.WaitGroup
+				for i, file := range files {
+					writes.Go(func() {
+						writeCtx, expected := batchCtx, "1"
+						if i == count-1 {
+							if outcome == "stale" {
+								expected = "stale"
+							} else if outcome == "canceled" {
+								writeCtx = canceled
+							}
+						}
+						results[i] = store.UpdateFile(writeCtx, file, expected)
+					})
+				}
+				writes.Wait()
+				return errors.Join(results...)
+			})
+			expectedRows := count
+			switch outcome {
+			case "stale":
+				require.ErrorIs(t, err, datastore.ErrConflict)
+				expectedRows--
+			case "canceled":
+				require.ErrorIs(t, err, context.Canceled)
+				expectedRows--
+			default:
+				require.NoError(t, err)
+			}
+			require.EqualValues(t, count, memberships.Load(), "every conservative membership write precedes the authoritative batch")
+			for i, file := range files {
+				current, err := peer.GetFile(ctx, file.UID)
+				require.NoError(t, err)
+				if i == count-1 && outcome != "applied" {
+					require.Error(t, results[i])
+					require.Equal(t, "old", current.Body)
+					require.Equal(t, "1", current.ResourceVersion)
+				} else {
+					require.NoError(t, results[i])
+					require.Equal(t, file.Body, current.Body)
+					require.Equal(t, file.ResourceVersion, current.ResourceVersion)
+					require.Equal(t, file.Generation, current.Generation)
+				}
+			}
+			families, err := registry.Gather()
+			require.NoError(t, err)
+			counts := make(map[string]uint64)
+			for _, family := range families {
+				if family.GetName() != "gitstore_datastore_operation_duration_seconds" {
+					continue
+				}
+				for _, metric := range family.GetMetric() {
+					for _, label := range metric.GetLabel() {
+						if label.GetName() == "operation" {
+							counts[label.GetValue()] += metric.GetHistogram().GetSampleCount()
+						}
+					}
+				}
+			}
+			require.Zero(t, counts["FileConditionalSingle"], "already-preparing rows must not create an initial single-row exchange")
+			require.EqualValues(t, 1, counts[fmt.Sprintf("FileConditionalBatch%d", expectedRows)], "one bounded physical batch contains every live, version-valid row")
+			require.EqualValues(t, expectedRows, counts["FileConditionalQueue"])
+			blocked, err := peer.HasCatalogResources(ctx, repo.UID)
+			require.NoError(t, err)
+			require.True(t, blocked)
+		})
+	}
+}
+
 func TestScylla_FileConditionalServerTraceRoundTrip(t *testing.T) {
 	testFileConditionalBatches(t, true)
 }
@@ -5070,11 +5193,11 @@ func TestScylla_CatalogReleaseFailureRetainsReservation(t *testing.T) {
 	require.EqualValues(t, 1, pending, "unconfirmed releases remain blocked for explicit repair")
 }
 
-func TestScylla_CatalogParentChecksReadOnlyFreshLifecycleFields(t *testing.T) {
+func TestScylla_CatalogParentChecksReadFreshLifecycleFields(t *testing.T) {
 	type checkKey struct{}
 	peer := newTestStore(t)
 	ctx := t.Context()
-	namespace := &datastore.Namespace{UID: newID(), Name: "narrow-parent-" + newID()[:8]}
+	namespace := &datastore.Namespace{UID: newID(), Name: "fresh-parent-" + newID()[:8]}
 	require.NoError(t, peer.CreateNamespace(ctx, namespace))
 	repository := &datastore.Repository{
 		UID: newID(), Namespace: namespace.Name, Name: "catalog",
@@ -5092,7 +5215,8 @@ func TestScylla_CatalogParentChecksReadOnlyFreshLifecycleFields(t *testing.T) {
 			return
 		}
 		reads.Add(1)
-		assert.Equal(t, "SELECT namespace, deletion_timestamp, status FROM repositories_by_uid WHERE uid=?", query.Statement)
+		assert.Contains(t, query.Statement, "WHERE uid=?")
+		assert.NotContains(t, query.Statement, "ALLOW FILTERING")
 		assert.Equal(t, []any{uid}, query.Values)
 	})
 	store, err := scylla.New(cfg, zap.NewNop())

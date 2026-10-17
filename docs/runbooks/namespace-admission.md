@@ -1673,15 +1673,15 @@ include client, transport and server work; uncovered time is not a CPU profile.
 This closes the linked File holders, not all preceding Repository/lifecycle
 holders or the complete burst critical path.
 
-Catalog parent checks select only the Repository's current Namespace, deletion
-timestamp and status from its authoritative UID row. They do not hydrate its
-body, spec or unrelated metadata. Status remains necessary to reject deletion
-intent and malformed lifecycle state. Only the existing bounded, active
+Catalog parent checks read the Repository's current Namespace and lifecycle
+state from its authoritative UID row. Status remains necessary to reject
+deletion intent and malformed state. Only the existing bounded, active
 Namespace reservation can reuse a successful check; failures, a different
 Namespace and a closed reservation retain fresh validation. Ordinary Repository
-reads still return complete envelopes. This reduces the parent-read payload;
-it is not evidence of a passing acknowledgement latency or a reason to omit
-the fresh File projection readback after a mutation.
+reads still return complete envelopes, and File mutations retain fresh
+projection readback. The separate narrow-parent-read change was reverted after
+the non-winning comparison below, keeping the conditional-combining candidate
+isolated from that earlier experiment.
 
 A fixed-order, unprofiled diagnostic comparison did not demonstrate a benefit
 from the narrow parent read. With the same committed driver, 1,400 File and
@@ -1693,6 +1693,28 @@ failures. The candidate exceeded the prospectively declared regression limits,
 so the original control APIs were restored. One ordered pair does not establish
 statistical causality, but it does not justify retaining this deployment or
 claiming an ACK improvement. Do not repeat the pair to seek a favorable result.
+
+The retained File-holder traces also expose an avoidable physical-write boundary:
+all 53 linked cohorts started with a single-row conditional exchange, and 52
+still had already-started File updates preparing their writes. Forty-nine
+cohorts used two conditional exchanges and four used three. Within an active
+reservation, conditional combining now waits for those already-running
+preparations to enqueue or finish, rather than immediately sending the first
+row alone. It does not wait for future arrivals or use a batching timer.
+Submission and preparation completion are synchronized so the last prepared
+row cannot be stranded in a separate exchange.
+
+The existing four-callback cohort, 16-row queue/batch bound, payload policy
+and oversized-value four-row fallback remain unchanged. Duplicate UIDs force
+separate conditions. Cancellation and close unblock accepted rows, and a
+preparation that fails without submitting cannot stall its peers. Standalone
+ready writes still execute immediately. Conservative membership writes,
+fresh authoritative snapshots, fresh projection readback and independent
+conflict handling remain mandatory. A three-replica regression verifies that
+12 prepared updates use one physical conditional batch, with no initial single;
+stale or canceled rows retire their preparations while the other 11 still
+converge. This verifies the reduced exchange count, not an ACK latency gain.
+The new combining change has not yet passed the original-workload capacity gate.
 
 For the running Scylla engine revision, native duration is foreground elapsed
 time measured with a steady clock, not CPU time. Execution tracing begins

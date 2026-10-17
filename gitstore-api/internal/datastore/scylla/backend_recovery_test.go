@@ -336,6 +336,263 @@ func TestFileProjectionReaderBoundsCloseAndQueuedCancellation(t *testing.T) {
 	})
 }
 
+func TestFileCASWriterCoalescesRunningPreparationsWithoutTimer(t *testing.T) {
+	for _, prepared := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prepared-%t", prepared), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const count = 12
+				var singles, batches atomic.Int64
+				writer := newFileCASWriter(func(*fileCASRequest) error {
+					singles.Add(1)
+					time.Sleep(20 * time.Millisecond)
+					return nil
+				}, func(_ context.Context, group []*fileCASRequest) (bool, error) {
+					batches.Add(1)
+					expected := count - 1
+					if prepared {
+						expected = count
+					}
+					assert.Len(t, group, expected)
+					time.Sleep(20 * time.Millisecond)
+					return true, nil
+				})
+				contexts := make([]context.Context, count)
+				finishes := make([]func(), 0, count)
+				t.Cleanup(func() {
+					for _, finish := range finishes {
+						finish()
+					}
+					writer.close()
+				})
+				for i := range contexts {
+					contexts[i] = t.Context()
+					if prepared {
+						ctx, finish, err := writer.prepare(contexts[i])
+						require.NoError(t, err)
+						contexts[i] = ctx
+						finishes = append(finishes, finish)
+					}
+				}
+				done := make(chan error, count)
+				started := time.Now()
+				go func() { done <- writer.submit(contexts[0], gocql.UUID{15: 1}, nil) }()
+				synctest.Wait()
+				if prepared {
+					require.Zero(t, singles.Load(), "already-running preparation must join before the first physical CAS")
+				} else {
+					require.EqualValues(t, 1, singles.Load())
+				}
+				time.Sleep(7 * time.Millisecond)
+				for i := 1; i < count; i++ {
+					go func() { done <- writer.submit(contexts[i], gocql.UUID{15: byte(i + 1)}, nil) }()
+				}
+				for range count {
+					require.NoError(t, <-done)
+				}
+				require.EqualValues(t, 1, batches.Load())
+				if prepared {
+					require.Zero(t, singles.Load())
+					require.Equal(t, 27*time.Millisecond, time.Since(started), "only preparation plus one physical exchange, without a batching timer")
+				} else {
+					require.EqualValues(t, 1, singles.Load())
+					require.Equal(t, 40*time.Millisecond, time.Since(started), "the initial single serializes a second physical exchange")
+				}
+			})
+		})
+	}
+}
+
+func TestFileCASWriterPreparationPreservesSoloLatencyAndPayloadBound(t *testing.T) {
+	for _, count := range []int{1, 8} {
+		t.Run(fmt.Sprintf("rows-%d", count), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var singles, batches atomic.Int64
+				writer := newFileCASWriter(func(*fileCASRequest) error {
+					singles.Add(1)
+					return nil
+				}, func(_ context.Context, group []*fileCASRequest) (bool, error) {
+					batches.Add(1)
+					assert.Len(t, group, 4, "large values retain the existing four-row fallback")
+					return true, nil
+				})
+				contexts, finishes := make([]context.Context, count), make([]func(), 0, count)
+				t.Cleanup(func() {
+					for _, finish := range finishes {
+						finish()
+					}
+					writer.close()
+				})
+				for i := range contexts {
+					ctx, finish, err := writer.prepare(t.Context())
+					require.NoError(t, err)
+					contexts[i] = ctx
+					finishes = append(finishes, finish)
+				}
+				done := make(chan error, count)
+				values := []any{strings.Repeat("x", fileCASBatchPayloadLimit)}
+				started := time.Now()
+				for i := range contexts {
+					go func() { done <- writer.submit(contexts[i], gocql.UUID{15: byte(i + 1)}, values) }()
+				}
+				for range contexts {
+					require.NoError(t, <-done)
+				}
+				if count == 1 {
+					require.EqualValues(t, 1, singles.Load())
+					require.Zero(t, batches.Load())
+				} else {
+					require.Zero(t, singles.Load())
+					require.EqualValues(t, 2, batches.Load())
+				}
+				require.Zero(t, time.Since(started), "ready writes never wait for a batching deadline")
+			})
+		})
+	}
+}
+
+func TestFileCASWriterPreparationCompletionAndCloseUnblockAcceptedRows(t *testing.T) {
+	for _, closing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("closing-%t", closing), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var singles atomic.Int64
+				writer := newFileCASWriter(func(*fileCASRequest) error {
+					singles.Add(1)
+					return nil
+				}, func(context.Context, []*fileCASRequest) (bool, error) {
+					return false, errors.New("unexpected batch")
+				})
+				ctx, finish, err := writer.prepare(t.Context())
+				require.NoError(t, err)
+				_, abandon, err := writer.prepare(t.Context())
+				require.NoError(t, err)
+				t.Cleanup(func() { finish(); abandon(); writer.close() })
+				done := make(chan error, 1)
+				go func() { done <- writer.submit(ctx, gocql.UUID{15: 1}, nil) }()
+				synctest.Wait()
+				require.Zero(t, singles.Load())
+				if closing {
+					writer.close()
+				} else {
+					abandon()
+					abandon()
+				}
+				require.NoError(t, <-done)
+				require.EqualValues(t, 1, singles.Load())
+				finish()
+				abandon()
+				writer.mu.Lock()
+				remaining := writer.preparing
+				writer.mu.Unlock()
+				require.Zero(t, remaining, "completion and deferred cleanup must retire each producer exactly once")
+				writer.close()
+				_, _, err = writer.prepare(t.Context())
+				require.ErrorContains(t, err, "closed")
+			})
+		})
+	}
+}
+
+func TestFileCASWriterPreparationCancellationDoesNotWaitForPeer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var singles atomic.Int64
+		writer := newFileCASWriter(func(*fileCASRequest) error {
+			singles.Add(1)
+			return nil
+		}, func(context.Context, []*fileCASRequest) (bool, error) {
+			return false, errors.New("unexpected batch")
+		})
+		canceled, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		ctx, finish, err := writer.prepare(canceled)
+		require.NoError(t, err)
+		_, peer, err := writer.prepare(t.Context())
+		require.NoError(t, err)
+		t.Cleanup(func() { finish(); peer(); writer.close() })
+		done := make(chan error, 1)
+		go func() { done <- writer.submit(ctx, gocql.UUID{15: 1}, nil) }()
+		synctest.Wait()
+		require.Zero(t, singles.Load())
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled, "a canceled accepted row must drain while another producer is still preparing")
+		require.Zero(t, singles.Load(), "cancellation during preparation must not execute a physical write")
+		_, _, err = writer.prepare(canceled)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+}
+
+func TestFileCASWriterPreparationCannotExceedBatchBound(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var batches atomic.Int64
+		writer := newFileCASWriter(func(*fileCASRequest) error {
+			return errors.New("unexpected single")
+		}, func(_ context.Context, group []*fileCASRequest) (bool, error) {
+			batches.Add(1)
+			assert.Len(t, group, 16)
+			return true, nil
+		})
+		contexts, finishes := make([]context.Context, 17), make([]func(), 0, 17)
+		t.Cleanup(func() {
+			for _, finish := range finishes {
+				finish()
+			}
+			writer.close()
+		})
+		for i := range contexts {
+			ctx, finish, err := writer.prepare(t.Context())
+			require.NoError(t, err)
+			contexts[i] = ctx
+			finishes = append(finishes, finish)
+		}
+		done := make(chan error, 16)
+		for i := range 16 {
+			go func() { done <- writer.submit(contexts[i], gocql.UUID{15: byte(i + 1)}, nil) }()
+		}
+		for range 16 {
+			require.NoError(t, <-done)
+		}
+		require.EqualValues(t, 1, batches.Load(), "a full batch must execute without waiting for additional producers")
+	})
+}
+
+func TestFileCASWriterPreparationKeepsDuplicateUIDsIndependent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var singles, batches atomic.Int64
+		writer := newFileCASWriter(func(*fileCASRequest) error {
+			singles.Add(1)
+			return nil
+		}, func(_ context.Context, group []*fileCASRequest) (bool, error) {
+			batches.Add(1)
+			assert.Len(t, group, 2)
+			assert.NotEqual(t, group[0].uid, group[1].uid)
+			return true, nil
+		})
+		contexts, finishes := make([]context.Context, 3), make([]func(), 0, 3)
+		t.Cleanup(func() {
+			for _, finish := range finishes {
+				finish()
+			}
+			writer.close()
+		})
+		for i := range contexts {
+			ctx, finish, err := writer.prepare(t.Context())
+			require.NoError(t, err)
+			contexts[i] = ctx
+			finishes = append(finishes, finish)
+		}
+		done := make(chan error, 3)
+		go func() { done <- writer.submit(contexts[0], gocql.UUID{15: 1}, nil) }()
+		go func() { done <- writer.submit(contexts[1], gocql.UUID{15: 1}, nil) }()
+		synctest.Wait()
+		require.EqualValues(t, 1, singles.Load(), "a repeated UID must force an independent condition, not wait behind a batch it cannot join")
+		require.NoError(t, <-done)
+		go func() { done <- writer.submit(contexts[2], gocql.UUID{15: 2}, nil) }()
+		for range 2 {
+			require.NoError(t, <-done)
+		}
+		require.EqualValues(t, 1, batches.Load())
+	})
+}
+
 func TestFileCASWriterReportsAcceptedQueueUntilExecutionOrCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		registry := prometheus.NewRegistry()

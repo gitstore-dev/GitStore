@@ -739,17 +739,23 @@ func (scope *catalogFenceScope) readFileProjection(ctx context.Context, key file
 	return reader.submit(ctx, key)
 }
 
-func (scope *catalogFenceScope) updateFileCAS(ctx context.Context, uid gocql.UUID, values []any) error {
+func (scope *catalogFenceScope) fileConditionalWriter() *fileCASWriter {
 	scope.casMu.Lock()
+	defer scope.casMu.Unlock()
 	if !scope.active.Load() {
-		scope.casMu.Unlock()
-		return scope.store.executeFileCAS(&fileCASRequest{ctx: ctx, uid: uid, values: values})
+		return nil
 	}
 	if scope.fileCAS == nil {
 		scope.fileCAS = newFileCASWriter(scope.store.executeFileCAS, scope.store.executeFileCASBatch)
 	}
-	writer := scope.fileCAS
-	scope.casMu.Unlock()
+	return scope.fileCAS
+}
+
+func (scope *catalogFenceScope) updateFileCAS(ctx context.Context, uid gocql.UUID, values []any) error {
+	writer := scope.fileConditionalWriter()
+	if writer == nil {
+		return scope.store.executeFileCAS(&fileCASRequest{ctx: ctx, uid: uid, values: values})
+	}
 	return writer.submit(ctx, uid, values)
 }
 
