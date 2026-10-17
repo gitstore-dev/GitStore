@@ -163,29 +163,8 @@ func (s *scyllaDatastore) GetFileSnapshots(ctx context.Context, uids []string) (
 		}
 		return nil
 	}
-	run := func(count int, read func(int) error) error {
-		errs := make([]error, count)
-		var next atomic.Int64
-		var workers sync.WaitGroup
-		for range min(8, count) {
-			workers.Go(func() {
-				for {
-					i := int(next.Add(1) - 1)
-					if i >= count || ctx.Err() != nil {
-						return
-					}
-					errs[i] = read(i)
-				}
-			})
-		}
-		workers.Wait()
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return errors.Join(errs...)
-	}
 	batches := make([][]fileIndexRow, (len(keys)+fileSnapshotReadBatchLimit-1)/fileSnapshotReadBatchLimit)
-	err := run(len(batches), func(batch int) error {
+	readLocator := func(batch int) (string, []fileIndexRow, error) {
 		start := batch * fileSnapshotReadBatchLimit
 		end := min(start+fileSnapshotReadBatchLimit, len(keys))
 		args := make([]any, end-start)
@@ -196,53 +175,93 @@ func (s *scyllaDatastore) GetFileSnapshots(ctx context.Context, uids []string) (
 		stmt := "SELECT " + strings.Join(s.fileByUIDTable.Metadata().Columns, ", ") +
 			" FROM files_by_uid WHERE uid IN (" + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + ")"
 		if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&batches[batch]); err != nil {
-			return err
+			return "", nil, err
 		}
 		fullNamespaceBatch := len(batches[batch]) == fileSnapshotReadBatchLimit
 		for _, index := range batches[batch] {
 			if index.Namespace == "" || !expected[index.UID] {
-				return fmt.Errorf("%w: invalid File UID locator", datastore.ErrRepairRequired)
+				return "", nil, fmt.Errorf("%w: invalid File UID locator", datastore.ErrRepairRequired)
 			}
 			delete(expected, index.UID)
 			if index.Namespace != batches[batch][0].Namespace {
 				fullNamespaceBatch = false
 			}
 		}
-		// Full single-Namespace batches cannot merge with later locators.
-		// Read them now without increasing query counts or the worker ceiling.
 		if fullNamespaceBatch {
-			if err := readSnapshots(batches[batch][0].Namespace, batches[batch]); err != nil {
-				return err
-			}
+			indices := batches[batch]
 			batches[batch] = nil
+			return indices[0].Namespace, indices, nil
 		}
-		return nil
-	})
-	if err != nil {
+		return "", nil, nil
+	}
+	locatorErrors, fullErrors := make([]error, len(batches)), make([]error, len(batches))
+	var authoritativeBatches [][]fileIndexRow
+	var authoritativeErrors []error
+	var nextLocator, nextAuthoritative atomic.Int64
+	var grouped sync.Once
+	var locators, workers sync.WaitGroup
+	locators.Add(len(batches))
+	for range min(8, len(keys)) {
+		workers.Go(func() {
+			for {
+				batch := int(nextLocator.Add(1) - 1)
+				if batch >= len(batches) {
+					break
+				}
+				if err := ctx.Err(); err != nil {
+					locatorErrors[batch] = err
+					locators.Done()
+					continue
+				}
+				namespace, indices, err := readLocator(batch)
+				locatorErrors[batch] = err
+				// Publish locators before any unrelated authoritative read can block.
+				locators.Done()
+				if err == nil && len(indices) != 0 {
+					fullErrors[batch] = readSnapshots(namespace, indices)
+				}
+			}
+			locators.Wait()
+			if ctx.Err() != nil {
+				return
+			}
+			grouped.Do(func() {
+				if errors.Join(locatorErrors...) != nil {
+					return
+				}
+				groups := make(map[string][]fileIndexRow)
+				order := make([]string, 0)
+				for _, indices := range batches {
+					for _, index := range indices {
+						if _, seen := groups[index.Namespace]; !seen {
+							order = append(order, index.Namespace)
+						}
+						groups[index.Namespace] = append(groups[index.Namespace], index)
+					}
+				}
+				for _, namespace := range order {
+					indices := groups[namespace]
+					for start := 0; start < len(indices); start += fileSnapshotReadBatchLimit {
+						authoritativeBatches = append(authoritativeBatches, indices[start:min(start+fileSnapshotReadBatchLimit, len(indices))])
+					}
+				}
+				authoritativeErrors = make([]error, len(authoritativeBatches))
+			})
+			for ctx.Err() == nil {
+				i := int(nextAuthoritative.Add(1) - 1)
+				if i >= len(authoritativeBatches) {
+					return
+				}
+				indices := authoritativeBatches[i]
+				authoritativeErrors[i] = readSnapshots(indices[0].Namespace, indices)
+			}
+		})
+	}
+	workers.Wait()
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	groups := make(map[string][]fileIndexRow)
-	order := make([]string, 0)
-	for _, indices := range batches {
-		for _, index := range indices {
-			if _, seen := groups[index.Namespace]; !seen {
-				order = append(order, index.Namespace)
-			}
-			groups[index.Namespace] = append(groups[index.Namespace], index)
-		}
-	}
-	var authoritativeBatches [][]fileIndexRow
-	for _, namespace := range order {
-		indices := groups[namespace]
-		for start := 0; start < len(indices); start += fileSnapshotReadBatchLimit {
-			authoritativeBatches = append(authoritativeBatches, indices[start:min(start+fileSnapshotReadBatchLimit, len(indices))])
-		}
-	}
-	err = run(len(authoritativeBatches), func(i int) error {
-		indices := authoritativeBatches[i]
-		return readSnapshots(indices[0].Namespace, indices)
-	})
-	if err != nil {
+	if err := errors.Join(errors.Join(locatorErrors...), errors.Join(fullErrors...), errors.Join(authoritativeErrors...)); err != nil {
 		return nil, err
 	}
 	return results, nil

@@ -1991,8 +1991,12 @@ func TestScylla_FileSnapshotsOverlapBoundedLocatorBatches(t *testing.T) {
 func TestScylla_FileSnapshotsOverlapBoundedAuthoritativeBatches(t *testing.T) {
 	type readKey struct{}
 	firstWave, release, canceledRead := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	partialFullWave, partialReady, partialRelease := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	mixedReady, mixedRelease := make(chan struct{}), make(chan struct{})
 	var cancelOnce sync.Once
 	var locators, authoritative, active, peak atomic.Int64
+	var partialFullReads, partialReads atomic.Int64
+	var mixedReads atomic.Int64
 	var invalidQuery atomic.Bool
 	cfg := testScyllaConfig(t)
 	cfg.QueryObserver = namespaceReservationObserver(func(ctx context.Context, query gocql.ObservedQuery) {
@@ -2027,6 +2031,38 @@ func TestScylla_FileSnapshotsOverlapBoundedAuthoritativeBatches(t *testing.T) {
 		}
 		if query.Err != nil {
 			invalidQuery.Store(true)
+		}
+		if mode == "mixed" {
+			if len(query.Values) != 17 {
+				invalidQuery.Store(true)
+			}
+			if mixedReads.Add(1) == 2 {
+				close(mixedReady)
+			}
+			select {
+			case <-mixedRelease:
+			case <-ctx.Done():
+			}
+			return
+		}
+		if mode == "partial" {
+			if len(query.Values) == 5 {
+				if partialReads.Add(1) == 1 {
+					close(partialReady)
+				}
+			} else {
+				if len(query.Values) != 33 {
+					invalidQuery.Store(true)
+				}
+				if partialFullReads.Add(1) == 3 {
+					close(partialFullWave)
+				}
+				select {
+				case <-partialRelease:
+				case <-ctx.Done():
+				}
+			}
+			return
 		}
 		if authoritative.Add(1) == 8 {
 			close(firstWave)
@@ -2093,6 +2129,61 @@ func TestScylla_FileSnapshotsOverlapBoundedAuthoritativeBatches(t *testing.T) {
 	}
 	result.files[0].Annotations["sequence"] = "changed"
 	require.Equal(t, "1", result.files[17].Annotations["sequence"])
+
+	partialCtx, cancelPartial := context.WithTimeout(context.WithValue(t.Context(), readKey{}, "partial"), 5*time.Second)
+	defer cancelPartial()
+	go func() {
+		files, err := store.GetFileSnapshots(partialCtx, uids[20:70])
+		completed <- readResult{files, err}
+	}()
+	select {
+	case <-partialFullWave:
+	case <-partialCtx.Done():
+	}
+	partialStarted := false
+	select {
+	case <-partialReady:
+		partialStarted = true
+	case <-time.After(time.Second):
+	}
+	close(partialRelease)
+	result = <-completed
+	require.NoError(t, result.err)
+	require.True(t, partialStarted, "partial reads must not wait for unrelated authoritative batches after all locators finish")
+	require.EqualValues(t, 3, partialFullReads.Load())
+	require.EqualValues(t, 1, partialReads.Load(), "fifty same-Namespace keys retain four authoritative queries")
+	require.Len(t, result.files, 50)
+	for i, file := range result.files {
+		require.NotNil(t, file)
+		require.Equal(t, uids[20+i], file.UID)
+	}
+	require.Zero(t, active.Load())
+
+	mixedUIDs := append([]string{}, uids[20:28]...)
+	mixedUIDs = append(mixedUIDs, uids[200:208]...)
+	mixedCtx, cancelMixed := context.WithTimeout(context.WithValue(t.Context(), readKey{}, "mixed"), 5*time.Second)
+	defer cancelMixed()
+	go func() {
+		files, err := store.GetFileSnapshots(mixedCtx, mixedUIDs)
+		completed <- readResult{files, err}
+	}()
+	mixedStarted := false
+	select {
+	case <-mixedReady:
+		mixedStarted = true
+	case <-time.After(time.Second):
+	}
+	close(mixedRelease)
+	result = <-completed
+	require.NoError(t, result.err)
+	require.True(t, mixedStarted, "one locator batch must not serialize independent mixed-Namespace authoritative reads")
+	require.EqualValues(t, 2, mixedReads.Load())
+	require.Len(t, result.files, len(mixedUIDs))
+	for i, file := range result.files {
+		require.NotNil(t, file)
+		require.Equal(t, mixedUIDs[i], file.UID)
+	}
+	require.Zero(t, active.Load())
 
 	peer := newTestStore(t)
 	file, err := peer.GetFile(t.Context(), uids[0])

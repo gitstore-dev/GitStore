@@ -702,8 +702,10 @@ exact authoritative row reads use at most sixteen keys per physical query.
 Locator and authoritative batches from all Namespaces share one eight-reader
 ceiling; there is no nested per-Namespace pool. Full, single-Namespace locator
 batches start their authoritative reads without waiting for unrelated locator
-batches. Partial and mixed-Namespace batches are regrouped to preserve query
-packing, without extra readers or authoritative queries. Cancellation joins those readers and
+batches. Partial and mixed-Namespace batches are regrouped as soon as all
+locators finish, without waiting for unrelated authoritative reads to finish.
+The same workers preserve query packing without extra readers or authoritative
+queries. Cancellation joins those readers and
 returns an error without exposing partial snapshots. The four-name snapshot
 path retains its two physical reads. Neither path scans partitions or retains
 authoritative facts across reservations.
