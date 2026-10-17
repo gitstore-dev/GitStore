@@ -163,6 +163,15 @@ replacement trigger through outage observation, health/readiness and complete
 metrics from a new process instance. Recovery does not renew the deadline.
 Cancellation also stops pending replacement delays and in-flight observations.
 
+Generation-preserving Namespace and Repository watch probes match API-authored
+selector entry, modification and reentry to the mutation's acknowledged
+`metadata.resourceVersion`, not the opaque journal cursor. An older authoring
+event or a later status event cannot substitute for that exact postimage, even
+when generation, annotations and Git revision match. Git-only provenance probes
+match the pushed commit and require the resource version to change; selector
+exits retain their null payload. These checks establish watch delivery, not
+reconciliation of that specific version by a controller.
+
 Credential acquisition failures are shared dependency failures, not evidence
 that an individual resource is invalid. The HTTP/WebSocket client shares a
 cancellable cooldown before retrying acquisition, and the manager defers

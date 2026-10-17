@@ -164,47 +164,26 @@ func runRepositoryWatchMetadataGenerationAndSelectorReplay(t *testing.T, cfg rep
 		require.NotEmpty(t, metadata.Revision)
 		return metadata.ResourceVersion, metadata.Revision
 	}
-	read := func(conn *websocket.Conn, eventType, revision string) repositoryCapacityEvent {
-		t.Helper()
-		for range 100 {
-			require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
-			event, readErr := readRepositoryCapacityEvent(conn)
-			require.NoError(t, readErr)
-			if event.Name != name || event.Type != eventType {
-				continue
-			}
-			require.NotEmpty(t, event.ResourceVersion)
-			if eventType == "DELETED" {
-				require.Nil(t, event.Repository, "typed selector exits have no resource payload")
-				return event
-			}
-			require.NotNil(t, event.Repository)
-			if event.Repository.Metadata.Revision != revision {
-				continue
-			}
-			require.EqualValues(t, 1, event.Repository.Metadata.Generation)
-			require.NotEmpty(t, event.Repository.Metadata.ResourceVersion)
-			return event
-		}
-		t.Fatal("Repository watch did not expose the required transition")
-		return repositoryCapacityEvent{}
+	read := func(conn *websocket.Conn, eventType, revision, version string) repositoryCapacityEvent {
+		return readRepositoryWatchMetadataPhase(t, conn, name, eventType, revision, version)
 	}
 	update(cfg.apiB, "created", true, false)
 	require.NoError(t, waitRepositoryCapacityResourceReady(t.Context(), client, cfg, "Repository", name))
 	enteredVersion, enteredRevision := update(cfg.apiA, "entered", false, true)
-	entered := read(watchA, "ADDED", enteredRevision)
+	entered := read(watchA, "ADDED", enteredRevision, enteredVersion)
 	require.NoError(t, watchA.Close())
 	modifiedVersion, modifiedRevision := update(cfg.apiB, "modified", false, true)
 	exitedVersion, _ := update(cfg.apiA, "exited", false, false)
 	require.NotEqual(t, enteredVersion, modifiedVersion)
 	require.NotEqual(t, modifiedVersion, exitedVersion)
 	watchB := open(cfg.apiB, entered.ResourceVersion)
-	modified := read(watchB, "MODIFIED", modifiedRevision)
-	exited := read(watchB, "DELETED", "")
+	modified := read(watchB, "MODIFIED", modifiedRevision, modifiedVersion)
+	exited := read(watchB, "DELETED", "", "")
 	require.NotEqual(t, entered.ResourceVersion, modified.ResourceVersion)
 	require.NotEqual(t, modified.ResourceVersion, exited.ResourceVersion)
-	_, reenteredRevision := update(cfg.apiB, "reentered", false, true)
-	read(watchB, "ADDED", reenteredRevision)
+	reenteredVersion, reenteredRevision := update(cfg.apiB, "reentered", false, true)
+	require.NotEqual(t, exitedVersion, reenteredVersion)
+	reentered := read(watchB, "ADDED", reenteredRevision, reenteredVersion)
 
 	h := newPushHelperForRepoWithToken(t, cfg.namespace, "gitstore-system", cfg.token)
 	content, err := os.ReadFile(filepath.Join(h.workDir, "repositories", name+".md"))
@@ -215,7 +194,9 @@ func runRepositoryWatchMetadataGenerationAndSelectorReplay(t *testing.T, cfg rep
 	require.NotEqual(t, string(content), provenanceOnly)
 	h.commitRepository(name+".md", provenanceOnly)
 	revision := pushWatchMetadataProvenance(t, h)
-	provenance := read(watchB, "MODIFIED", revision)
+	provenance := read(watchB, "MODIFIED", revision, "")
+	require.NotEqual(t, reentered.ResourceVersion, provenance.ResourceVersion)
+	require.NotEqual(t, reenteredVersion, provenance.Repository.Metadata.ResourceVersion, "Git-only provenance must advance the resource version")
 	require.Equal(t, "reentered", provenance.Repository.Metadata.Annotations["watch-metadata-phase"])
 	require.NotEqual(t, reenteredRevision, provenance.Repository.Metadata.Revision)
 	require.NoError(t, waitRepositoryCapacityResourceReady(t.Context(), client, cfg, "Repository", name))
@@ -224,6 +205,35 @@ func runRepositoryWatchMetadataGenerationAndSelectorReplay(t *testing.T, cfg rep
 	require.Empty(t, repositoryControllerPoison(t, client, cfg.controllerA))
 	require.Empty(t, repositoryControllerPoison(t, client, cfg.controllerB))
 	return cfg
+}
+
+func readRepositoryWatchMetadataPhase(t *testing.T, conn *websocket.Conn, name, eventType, revision, version string) repositoryCapacityEvent {
+	t.Helper()
+	for range 100 {
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
+		event, readErr := readRepositoryCapacityEvent(conn)
+		require.NoError(t, readErr)
+		if event.Name != name || event.Type != eventType {
+			continue
+		}
+		require.NotEmpty(t, event.ResourceVersion)
+		if eventType == "DELETED" {
+			require.Nil(t, event.Repository, "typed selector exits have no resource payload")
+			return event
+		}
+		require.NotNil(t, event.Repository)
+		if version != "" && event.Repository.Metadata.ResourceVersion != version {
+			continue
+		}
+		if event.Repository.Metadata.Revision != revision {
+			continue
+		}
+		require.EqualValues(t, 1, event.Repository.Metadata.Generation)
+		require.NotEmpty(t, event.Repository.Metadata.ResourceVersion)
+		return event
+	}
+	t.Fatal("Repository watch did not expose the required transition")
+	return repositoryCapacityEvent{}
 }
 
 func runRepositoryLifecycleDualControllerRegistrationAndReconcile(t *testing.T) {

@@ -100,52 +100,24 @@ func runNamespaceWatchMetadataGenerationAndSelectorReplay(t *testing.T, apiA, ap
 		require.NotEmpty(t, result.Update.Namespace.Metadata.ResourceVersion)
 		return result.Update.Namespace.Metadata.ResourceVersion
 	}
-	readPhase := func(conn *websocket.Conn, eventType, phase, revision string) namespaceWatchWireEvent {
-		t.Helper()
-		for range 100 {
-			event := readNamespaceWatchTransition(t, conn, name)
-			if event.Name != name || event.Type != eventType {
-				continue
-			}
-			if eventType == "DELETED" {
-				require.Empty(t, event.Namespace, "selector exits retain the typed watch's payload-free deletion contract")
-				return event
-			}
-			metadata, ok := event.Namespace["metadata"].(map[string]any)
-			require.True(t, ok)
-			if revision != "" && metadata["revision"] != revision {
-				t.Logf("metadata watch provenance mismatch resource_version=%s revision=%v expected=%s",
-					event.ResourceVersion, metadata["revision"], revision)
-				continue
-			}
-			if phase != "" {
-				annotations, ok := metadata["annotations"].(map[string]any)
-				require.True(t, ok)
-				if annotations["watch-metadata-phase"] != phase {
-					continue
-				}
-			}
-			require.Equal(t, float64(1), metadata["generation"])
-			require.NotEmpty(t, metadata["resourceVersion"])
-			return event
-		}
-		t.Fatal("metadata watch did not expose the required transition")
-		return namespaceWatchWireEvent{}
+	readPhase := func(conn *websocket.Conn, eventType, phase, revision, version string) namespaceWatchWireEvent {
+		return readNamespaceWatchMetadataPhase(t, conn, name, eventType, phase, revision, version)
 	}
 	enteredVersion := update(apiA, "entered", true)
-	entered := readPhase(watchA, "ADDED", "entered", "")
+	entered := readPhase(watchA, "ADDED", "entered", "", enteredVersion)
 	require.NoError(t, watchA.Close())
 	modifiedVersion := update(apiB, "modified", true)
 	exitedVersion := update(apiA, "exited", false)
 	require.NotEqual(t, enteredVersion, modifiedVersion)
 	require.NotEqual(t, modifiedVersion, exitedVersion)
 	watchB := openNamespaceWatch(t, apiB, token, entered.ResourceVersion, selector)
-	modified := readPhase(watchB, "MODIFIED", "modified", "")
-	exited := readPhase(watchB, "DELETED", "", "")
+	modified := readPhase(watchB, "MODIFIED", "modified", "", modifiedVersion)
+	exited := readPhase(watchB, "DELETED", "", "", "")
 	require.NotEqual(t, entered.ResourceVersion, modified.ResourceVersion)
 	require.NotEqual(t, modified.ResourceVersion, exited.ResourceVersion)
-	update(apiB, "provenance", true)
-	reentered := readPhase(watchB, "ADDED", "provenance", "")
+	reenteredVersion := update(apiB, "provenance", true)
+	require.NotEqual(t, exitedVersion, reenteredVersion)
+	reentered := readPhase(watchB, "ADDED", "provenance", "", reenteredVersion)
 	h := newPushHelperForRepoWithToken(t, "gitstore-system", "gitstore-system", token, "namespaces/"+name+".md")
 	content, err := os.ReadFile(filepath.Join(h.workDir, "namespaces", name+".md"))
 	require.NoError(t, err)
@@ -153,8 +125,131 @@ func runNamespaceWatchMetadataGenerationAndSelectorReplay(t *testing.T, apiA, ap
 	require.NotEqual(t, string(content), provenanceOnly)
 	h.commitNamespace(name+".md", provenanceOnly)
 	revision := pushWatchMetadataProvenance(t, h)
-	provenance := readPhase(watchB, "MODIFIED", "provenance", revision)
+	provenance := readPhase(watchB, "MODIFIED", "provenance", revision, "")
 	require.NotEqual(t, reentered.ResourceVersion, provenance.ResourceVersion)
+	metadata, ok := provenance.Namespace["metadata"].(map[string]any)
+	require.True(t, ok)
+	require.NotEqual(t, reenteredVersion, metadata["resourceVersion"], "Git-only provenance must advance the resource version")
+}
+
+func readNamespaceWatchMetadataPhase(t *testing.T, conn *websocket.Conn, name, eventType, phase, revision, version string) namespaceWatchWireEvent {
+	t.Helper()
+	for range 100 {
+		event := readNamespaceWatchTransition(t, conn, name)
+		if event.Name != name || event.Type != eventType {
+			continue
+		}
+		if eventType == "DELETED" {
+			require.Empty(t, event.Namespace, "selector exits retain the typed watch's payload-free deletion contract")
+			return event
+		}
+		metadata, ok := event.Namespace["metadata"].(map[string]any)
+		require.True(t, ok)
+		if version != "" && metadata["resourceVersion"] != version {
+			continue
+		}
+		if revision != "" && metadata["revision"] != revision {
+			t.Logf("metadata watch provenance mismatch resource_version=%s revision=%v expected=%s",
+				event.ResourceVersion, metadata["revision"], revision)
+			continue
+		}
+		if phase != "" {
+			annotations, ok := metadata["annotations"].(map[string]any)
+			require.True(t, ok)
+			if annotations["watch-metadata-phase"] != phase {
+				continue
+			}
+		}
+		require.Equal(t, float64(1), metadata["generation"])
+		require.NotEmpty(t, metadata["resourceVersion"])
+		return event
+	}
+	t.Fatal("metadata watch did not expose the required transition")
+	return namespaceWatchWireEvent{}
+}
+
+func TestWatchMetadataPhaseRequiresAcknowledgedVersion(t *testing.T) {
+	for _, kind := range []string{"Namespace", "Repository"} {
+		t.Run(kind, func(t *testing.T) {
+			for _, eventType := range []string{"ADDED", "MODIFIED"} {
+				for _, noiseVersion := range []string{"older-authoring-version", "later-status-version"} {
+					t.Run(eventType+"/"+noiseVersion, func(t *testing.T) {
+						testWatchMetadataPhase(t, kind, eventType, "acknowledged-version", noiseVersion, "expected-revision")
+					})
+				}
+			}
+			t.Run("provenance-without-mutation-version", func(t *testing.T) {
+				testWatchMetadataPhase(t, kind, "MODIFIED", "", "older-version", "older-revision")
+			})
+			t.Run("payload-free-selector-exit", func(t *testing.T) {
+				testWatchMetadataPhase(t, kind, "DELETED", "", "", "")
+			})
+		})
+	}
+}
+
+func testWatchMetadataPhase(t *testing.T, kind, eventType, expectedVersion, noiseVersion, noiseRevision string) {
+	t.Helper()
+	field, resource := "watchNamespaces", "namespace"
+	if kind == "Repository" {
+		field, resource = "watchRepositories", "repository"
+	}
+	event := func(name, eventType, cursor, version, revision string) map[string]any {
+		result := map[string]any{"name": name, "type": eventType, "resourceVersion": cursor}
+		if eventType == "ADDED" || eventType == "MODIFIED" {
+			result[resource] = map[string]any{"metadata": map[string]any{
+				"name": name, "generation": 1, "resourceVersion": version, "revision": revision,
+				"annotations": map[string]any{"watch-metadata-phase": "expected-phase"},
+			}}
+		}
+		return result
+	}
+	version := expectedVersion
+	if version == "" {
+		version = "provenance-version"
+	}
+	events := []map[string]any{
+		event("", "BOOKMARK", "bookmark-cursor", "", ""),
+		event("unrelated-resource", eventType, "unrelated-cursor", version, "expected-revision"),
+	}
+	if eventType != "DELETED" {
+		events = append(events, event("probe", eventType, "noise-cursor", noiseVersion, noiseRevision))
+	}
+	events = append(events, event("probe", eventType, "expected-cursor", version, "expected-revision"))
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if !assert.NoError(t, err) {
+			return
+		}
+		defer conn.Close()
+		for _, event := range events {
+			if !assert.NoError(t, conn.WriteJSON(map[string]any{
+				"type": "next", "payload": map[string]any{"data": map[string]any{field: event}},
+			})) {
+				return
+			}
+		}
+	}))
+	t.Cleanup(server.Close)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	if kind == "Namespace" {
+		got := readNamespaceWatchMetadataPhase(t, conn, "probe", eventType, "expected-phase", "expected-revision", expectedVersion)
+		require.Equal(t, "expected-cursor", got.ResourceVersion, "a different postimage cannot prove delivery of the acknowledged mutation")
+		if eventType != "DELETED" {
+			metadata, ok := got.Namespace["metadata"].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, version, metadata["resourceVersion"])
+		}
+	} else {
+		got := readRepositoryWatchMetadataPhase(t, conn, "probe", eventType, "expected-revision", expectedVersion)
+		require.Equal(t, "expected-cursor", got.ResourceVersion, "a different postimage cannot prove delivery of the acknowledged mutation")
+		if eventType != "DELETED" {
+			require.Equal(t, version, got.Repository.Metadata.ResourceVersion)
+		}
+	}
 }
 
 func watchMetadataRetryable(errors []json.RawMessage) bool {
