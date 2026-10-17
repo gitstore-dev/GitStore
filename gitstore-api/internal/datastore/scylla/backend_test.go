@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"reflect"
 	"strconv"
@@ -29,6 +31,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/gocql/gocql"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -4537,6 +4540,15 @@ func (observe namespaceReservationObserver) ObserveQuery(ctx context.Context, qu
 }
 
 func TestScylla_FileConditionalBatchesPreserveEnvelopesAndIndependentConflicts(t *testing.T) {
+	testFileConditionalBatches(t, false)
+}
+
+func TestScylla_FileConditionalServerTraceRoundTrip(t *testing.T) {
+	testFileConditionalBatches(t, true)
+}
+
+func testFileConditionalBatches(t *testing.T, nativeTrace bool) {
+	t.Helper()
 	raw := newRawSession(t)
 	var replication map[string]string
 	require.NoError(t, raw.Query("SELECT replication FROM system_schema.keyspaces WHERE keyspace_name=?", scyllaKeyspace).Scan(&replication))
@@ -4623,6 +4635,10 @@ func TestScylla_FileConditionalBatchesPreserveEnvelopesAndIndependentConflicts(t
 			resume := func() { resumed.Do(func() { close(release) }) }
 			t.Cleanup(resume)
 			var results [count]error
+			if nativeTrace {
+				finishCapture := startFileNativeTraceCapture(t, ctx)
+				defer finishCapture()
+			}
 			err = batcher.WithCatalogMutationBatch(context.WithValue(ctx, updateKey{}, true), ns.Name, func(batchCtx context.Context) error {
 				var writes sync.WaitGroup
 				writes.Go(func() { results[0] = store.UpdateFile(batchCtx, desired[0], "1") })
@@ -4738,6 +4754,7 @@ func TestScylla_FileConditionalBatchesPreserveEnvelopesAndIndependentConflicts(t
 			}
 			require.Positive(t, queriesTraced)
 			require.Positive(t, batchesTraced, "the real ExecuteBatch path must reach the batch observer")
+			requireFileNativeTraceSessions(t, recorder.Ended(), raw, nativeTrace)
 			require.Greater(t, maximumBatch, 4, "the proof must exercise larger same-partition physical batches")
 			require.LessOrEqual(t, maximumBatch, count)
 			require.EqualValues(t, count, rows, "row attempts remain individually measurable")
@@ -4753,6 +4770,132 @@ func TestScylla_FileConditionalBatchesPreserveEnvelopesAndIndependentConflicts(t
 			require.NoError(t, err)
 			require.True(t, blocked)
 		})
+	}
+}
+
+func startFileNativeTraceCapture(t *testing.T, ctx context.Context) func() {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := listener.Addr().String()
+	require.NoError(t, listener.Close())
+	shutdown, err := observability.StartCapacityProfiler(observability.ProfilingConfig{URI: "http://" + address}, zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		stop, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		require.NoError(t, shutdown(stop))
+	})
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/debug/pprof/trace?seconds=5&sample_limit=64", nil)
+	require.NoError(t, err)
+	result := make(chan error, 1)
+	go func() {
+		response, err := (&http.Client{Timeout: 8 * time.Second}).Do(request)
+		if err != nil {
+			result <- err
+			return
+		}
+		count, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, (32<<20)+1))
+		err = errors.Join(readErr, response.Body.Close())
+		if response.StatusCode != http.StatusOK || count == 0 || count > 32<<20 {
+			err = errors.Join(err, fmt.Errorf("runtime capture status=%d bytes=%d", response.StatusCode, count))
+		}
+		result <- err
+	}()
+	// Claim one test-only slot to acknowledge budget activation, not merely trace startup.
+	require.Eventually(t, func() bool { return observability.TakeRuntimeTraceSample(ctx) }, time.Second, time.Millisecond)
+	var once sync.Once
+	finish := func() {
+		once.Do(func() { require.NoError(t, <-result) })
+	}
+	t.Cleanup(finish)
+	return finish
+}
+
+func requireFileNativeTraceSessions(t *testing.T, spans []sdktrace.ReadOnlySpan, session *gocql.Session, enabled bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	requested, singles, batches, preparations := 0, 0, 0, 0
+	seen := make(map[gocql.UUID]bool)
+	for _, span := range spans {
+		sampled := false
+		for _, attr := range span.Attributes() {
+			switch attr.Key {
+			case "gitstore.db.server_trace.requested":
+				sampled = attr.Value.AsBool()
+			case "gitstore.db.server_trace.invalid", "gitstore.db.server_trace.overflow":
+				require.False(t, attr.Value.AsBool())
+			}
+		}
+		ids, executionKind := 0, ""
+		for _, event := range span.Events() {
+			if event.Name != "scylla.server_trace" {
+				continue
+			}
+			require.True(t, enabled)
+			require.True(t, sampled)
+			require.Equal(t, "scylla.exchange", span.Name())
+			var id gocql.UUID
+			for _, attr := range event.Attributes {
+				if attr.Key == "db.cassandra.trace_id" {
+					var err error
+					id, err = gocql.ParseUUID(attr.Value.AsString())
+					require.NoError(t, err)
+				}
+			}
+			require.NotEqual(t, gocql.UUID{}, id)
+			require.False(t, seen[id], "native sessions must join exactly one physical exchange")
+			seen[id] = true
+			ids++
+			duration, coordinator, request := requireCapacityServerTraceSession(t, ctx, session, id)
+			t.Logf("Native File session: exchange=%s id=%s coordinator=%s duration_us=%d request=%q",
+				span.SpanContext().SpanID(), id, coordinator, duration, request)
+			switch {
+			case request == "Preparing CQL3 query":
+				preparations++
+			case strings.HasPrefix(request, "Execute CQL3 prepared query"):
+				require.Empty(t, executionKind, "this fixture performs one native execution per exchange")
+				executionKind = "scylla.query"
+			case request == "Execute batch of CQL3 queries":
+				require.Empty(t, executionKind, "this fixture performs one native execution per exchange")
+				executionKind = "scylla.batch"
+			default:
+				t.Fatalf("unrecognized native session request %q", request)
+			}
+		}
+		if !sampled {
+			continue
+		}
+		requested++
+		require.Positive(t, ids, "every sampled physical exchange must return its native session")
+		require.LessOrEqual(t, ids, 4)
+		require.NotEmpty(t, executionKind, "preparation alone cannot establish the mutation's server timing")
+		attempts := 0
+		for _, child := range spans {
+			if child.Parent().SpanID() == span.SpanContext().SpanID() {
+				switch child.Name() {
+				case "scylla.query":
+					singles++
+					attempts++
+					require.Equal(t, executionKind, child.Name())
+				case "scylla.batch":
+					batches++
+					attempts++
+					require.Equal(t, executionKind, child.Name())
+				}
+			}
+		}
+		require.Equal(t, 1, attempts)
+	}
+	if enabled {
+		require.Positive(t, singles, "production single-write hook must return completed server sessions")
+		require.Positive(t, batches, "production batch hook must return completed server sessions")
+		require.LessOrEqual(t, requested, 63, "one of 64 budget slots belongs to the activation probe")
+		t.Logf("Native File trace round-trip: %d exchanges, %d sessions, %d single attempts, %d batch attempts, %d preparations",
+			requested, len(seen), singles, batches, preparations)
+	} else {
+		require.Zero(t, requested, "ordinary integration writes must leave native tracing disabled")
 	}
 }
 

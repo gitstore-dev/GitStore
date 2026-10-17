@@ -1670,22 +1670,29 @@ func traceCapacityRoutingRequest(t *testing.T, ctx context.Context, session *goc
 	require.False(t, invalid)
 	require.NotEqual(t, gocql.UUID{}, id)
 	t.Logf("Native server trace requested: id=%s", id)
+	duration, coordinator, request := requireCapacityServerTraceSession(t, ctx, session, id)
+	t.Logf("diagnostic-only native server trace: id=%s server_coordinator=%s server_duration_us=%d caller=%s driver=%s stream=%s request=%q",
+		id, coordinator, duration, elapsed, driver, stream, request)
+}
+
+func requireCapacityServerTraceSession(t *testing.T, ctx context.Context, session *gocql.Session, id gocql.UUID) (int64, net.IP, string) {
+	t.Helper()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		var duration int64
 		var coordinator net.IP
-		err := session.Query("SELECT duration,coordinator FROM system_traces.sessions WHERE session_id=?", id).
-			WithContext(ctx).Scan(&duration, &coordinator)
+		var request string
+		err := session.Query("SELECT duration,coordinator,request FROM system_traces.sessions WHERE session_id=?", id).
+			WithContext(ctx).Scan(&duration, &coordinator, &request)
 		if err != nil && !errors.Is(err, gocql.ErrNotFound) {
 			require.NoError(t, err)
 		}
 		require.GreaterOrEqual(t, duration, int64(0))
 		if err == nil && duration > 0 {
 			require.NotEmpty(t, coordinator)
-			t.Logf("diagnostic-only native server trace: id=%s server_coordinator=%s server_duration_us=%d caller=%s driver=%s stream=%s",
-				id, coordinator, duration, elapsed, driver, stream)
-			return
+			require.NotEmpty(t, request)
+			return duration, coordinator, request
 		}
 		select {
 		case <-ctx.Done():

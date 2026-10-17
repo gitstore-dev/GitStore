@@ -1586,6 +1586,16 @@ censored results cannot establish a server duration. Server tracing itself adds
 work, so these measurements remain diagnostic and cannot demonstrate an
 unprofiled ACK improvement.
 
+The native integration regression verifies the production single-write and
+batch hooks, including independent conflict fallback, in a disposable RF3
+keyspace. It checks that every sampled exchange returns a completed execution
+session and that ordinary writes leave native tracing disabled. A cold exchange
+can also return a separate PREPARE session: inspect the exact session's `request`
+field and keep preparation distinct from prepared-query or batch execution.
+Neither an arbitrary returned ID nor preparation alone establishes mutation
+execution time. These isolated checks are not deployed-load, routing or
+failover evidence.
+
 Plural File node reads hydrate at most 250 IDs per backend call. UID locators
 use at most eight concurrent queries containing at most sixteen distinct partition keys each;
 the API never sends a 250-key cross-partition `IN` query. This reduces repeated

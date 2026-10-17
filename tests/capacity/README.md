@@ -132,7 +132,14 @@ Missing IDs, invalid IDs, overflow and
 boundary-censored samples must remain explicit diagnostic failures or exclusions,
 not invented server durations. The admission path never queries trace tables.
 Read acknowledged sessions and events separately after the workload, with
-bounded exact-ID reads. Native tracing adds server work; do not use these runs
+bounded exact-ID reads. Inspect each session's `request` field: returned IDs can
+include PREPARE as well as prepared-query or batch execution. Keep them separate;
+do not assign preparation duration to the mutation or sum overlapping session
+durations as elapsed time. The native datastore regression verifies completed
+execution sessions from both File write hooks and their independent conflict
+fallback, with ordinary writes still native-disabled. Its disposable RF3
+fixtures are not combined-load or failover evidence.
+Native tracing adds server work; do not use these runs
 as an optimization comparison or capacity acceptance, or publish raw query
 parameters from server traces.
 
