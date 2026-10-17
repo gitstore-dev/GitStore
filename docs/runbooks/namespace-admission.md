@@ -1093,6 +1093,15 @@ It is neither raw socket timing nor an independent server/Paxos duration.
 Prepare traffic and incomplete responses must not be collapsed into one
 wire interval.
 
+Sampled bulk File reads use the same bounded exchange tracing for UID and name
+locators and authoritative rows. The fixed `db.collection.name` values
+`files_by_uid`, `files_by_name` and `files_by_namespace` distinguish these
+stages without exporting query text, bound values or resource identities.
+Query attempts retain their exact exchange parent, so stream offsets can be
+correlated with the corresponding read rather than a concurrent mutation.
+Tracing does not add database queries or change the existing input, query-key
+or reader limits.
+
 During a Go execution capture, the existing SDK task for a sampled
 `scylla.exchange` carries its exact OTLP trace and span IDs. A complete task
 with both annotations can identify its caller goroutine and scheduling

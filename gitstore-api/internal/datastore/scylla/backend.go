@@ -372,13 +372,14 @@ func (s *cqlExchangeStream) StreamAbandoned(gocql.ObservedStream) {
 	s.exchange.mu.Unlock()
 }
 
-func startCQLExchange(ctx context.Context, tracer trace.Tracer) (context.Context, func(error)) {
+func startCQLExchange(ctx context.Context, tracer trace.Tracer, attrs ...attribute.KeyValue) (context.Context, func(error)) {
 	parent := trace.SpanFromContext(ctx)
 	if !parent.IsRecording() || !parent.SpanContext().IsSampled() {
 		return ctx, func(error) {}
 	}
 	start := time.Now()
-	ctx, span := tracer.Start(ctx, "scylla.exchange", trace.WithSpanKind(trace.SpanKindClient), trace.WithTimestamp(start))
+	ctx, span := tracer.Start(ctx, "scylla.exchange", trace.WithSpanKind(trace.SpanKindClient), trace.WithTimestamp(start),
+		trace.WithAttributes(attrs...))
 	observability.AnnotateRuntimeSpan(ctx)
 	exchange := &cqlExchangeTrace{}
 	return context.WithValue(ctx, cqlExchangeKey{}, exchange), func(err error) {

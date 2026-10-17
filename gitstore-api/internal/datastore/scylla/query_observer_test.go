@@ -180,7 +180,7 @@ func TestCQLExchangeStreamTimingsHaveExactAttemptParent(t *testing.T) {
 	tracer := provider.Tracer("test")
 	ctx, parent := tracer.Start(context.Background(), "parent")
 	defer parent.End()
-	queryCtx, finish := startCQLExchange(ctx, tracer)
+	queryCtx, finish := startCQLExchange(ctx, tracer, attribute.String("db.collection.name", "files_by_uid"))
 	observer := cqlTraceObserver{tracer: tracer}
 	stream := observer.StreamContext(queryCtx)
 	require.NotNil(t, stream)
@@ -207,6 +207,7 @@ func TestCQLExchangeStreamTimingsHaveExactAttemptParent(t *testing.T) {
 		require.NotContains(t, item.Value.Emit(), "private-")
 	}
 	require.EqualValues(t, 1, attrs["gitstore.db.stream.reserved"].AsInt64())
+	require.Equal(t, "files_by_uid", attrs["db.collection.name"].AsString())
 	require.EqualValues(t, 1, attrs["gitstore.db.stream.started"].AsInt64())
 	require.EqualValues(t, 1, attrs["gitstore.db.stream.completed"].AsInt64())
 	require.Zero(t, attrs["gitstore.db.stream.abandoned"].AsInt64())

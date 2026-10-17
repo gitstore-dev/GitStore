@@ -19,6 +19,7 @@ import (
 	"github.com/gocql/gocql"
 	"github.com/scylladb/gocqlx/v3/qb"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type fileRow struct {
@@ -174,7 +175,11 @@ func (s *scyllaDatastore) GetFileSnapshots(ctx context.Context, uids []string) (
 		}
 		stmt := "SELECT " + strings.Join(s.fileByUIDTable.Metadata().Columns, ", ") +
 			" FROM files_by_uid WHERE uid IN (" + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + ")"
-		if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&batches[batch]); err != nil {
+		queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"),
+			attribute.String("db.collection.name", "files_by_uid"))
+		err := s.session.Query(stmt, nil).WithContext(queryCtx).Bind(args...).SelectRelease(&batches[batch])
+		finish(err)
+		if err != nil {
 			return "", nil, err
 		}
 		fullNamespaceBatch := len(batches[batch]) == fileSnapshotReadBatchLimit
@@ -279,7 +284,11 @@ func (s *scyllaDatastore) getFileSnapshotRows(ctx context.Context, namespace str
 		" FROM files_by_namespace WHERE namespace=? AND (creation_timestamp,uid) IN (" +
 		strings.TrimSuffix(strings.Repeat("(?,?),", len(indices)), ",") + ")"
 	var rows []fileRow
-	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&rows); err != nil {
+	queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"),
+		attribute.String("db.collection.name", "files_by_namespace"))
+	err := s.session.Query(stmt, nil).WithContext(queryCtx).Bind(args...).SelectRelease(&rows)
+	finish(err)
+	if err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
@@ -327,7 +336,11 @@ func (s *scyllaDatastore) GetFileSnapshotsByName(ctx context.Context, namespace 
 		" FROM files_by_name WHERE namespace=? AND name IN (" +
 		strings.TrimSuffix(strings.Repeat("?,", len(args)-1), ",") + ")"
 	var indices []fileIndexRow
-	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&indices); err != nil {
+	queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"),
+		attribute.String("db.collection.name", "files_by_name"))
+	err := s.session.Query(stmt, nil).WithContext(queryCtx).Bind(args...).SelectRelease(&indices)
+	finish(err)
+	if err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {

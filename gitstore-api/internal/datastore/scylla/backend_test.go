@@ -1184,6 +1184,14 @@ func TestScylla_FileRoundTripAndIndexedLookup(t *testing.T) {
 }
 
 func TestScylla_FilePointReadsPreserveAuthoritativeReadback(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		require.NoError(t, provider.Shutdown(context.Background()))
+	})
 	first, second := newTestStores(t)
 	readers := []datastore.Datastore{first, second}
 	readFiles := func(store datastore.Datastore, uids []string) []*datastore.File {
@@ -1214,6 +1222,54 @@ func TestScylla_FilePointReadsPreserveAuthoritativeReadback(t *testing.T) {
 		require.NoError(t, first.CreateFile(t.Context(), files[i]))
 	}
 	uids := []string{files[6].UID, "invalid", files[3].UID, newID(), files[0].UID, files[3].UID, files[1].UID, files[5].UID}
+	for _, locator := range []string{"files_by_uid", "files_by_name"} {
+		t.Run(locator, func(t *testing.T) {
+			ctx, parent := provider.Tracer("test").Start(t.Context(), "file_snapshot_read")
+			var snapshots []*datastore.File
+			var err error
+			if locator == "files_by_uid" {
+				snapshots, err = second.GetFileSnapshots(ctx, []string{files[0].UID})
+			} else {
+				snapshots, err = second.GetFileSnapshotsByName(ctx, files[0].Namespace, []string{files[0].Name})
+			}
+			parent.End()
+			require.NoError(t, err)
+			require.Len(t, snapshots, 1)
+			require.Equal(t, files[0].UID, snapshots[0].UID)
+			collections := make(map[string]int)
+			exchanges := make(map[string]bool)
+			var attempts []sdktrace.ReadOnlySpan
+			for _, span := range recorder.Ended() {
+				if span.SpanContext().TraceID() != parent.SpanContext().TraceID() {
+					continue
+				}
+				if span.Name() == "scylla.query" {
+					attempts = append(attempts, span)
+				}
+				if span.Name() != "scylla.exchange" {
+					continue
+				}
+				require.Equal(t, parent.SpanContext().SpanID(), span.Parent().SpanID())
+				exchanges[span.SpanContext().SpanID().String()] = true
+				for _, attr := range span.Attributes() {
+					if attr.Key == "db.collection.name" {
+						collections[attr.Value.AsString()]++
+					}
+					if attr.Key == "gitstore.db.stream.completed" {
+						require.Positive(t, attr.Value.AsInt64())
+					}
+					if attr.Key == "gitstore.db.stream.overflow" {
+						require.Zero(t, attr.Value.AsInt64())
+					}
+				}
+			}
+			require.Equal(t, map[string]int{locator: 1, "files_by_namespace": 1}, collections)
+			require.Len(t, attempts, 2, "tracing must not add CQL queries")
+			for _, attempt := range attempts {
+				require.True(t, exchanges[attempt.Parent().SpanID().String()], "each attempt must belong to its exact read exchange")
+			}
+		})
+	}
 	for _, reader := range readers {
 		snapshots := readFiles(reader, uids)
 		bulk, err := reader.GetFileSnapshots(t.Context(), uids)
