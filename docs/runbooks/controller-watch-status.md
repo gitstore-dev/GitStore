@@ -151,7 +151,8 @@ Managed capacity startup polls both controllers within the existing startup
 timeout until `ready` and `credentialReady` are true and the selected kind is
 registered. Post-run validation applies the same checks to both replicas.
 Missing, false or non-boolean readiness cannot pass merely because the health
-endpoint returns HTTP 200.
+endpoint returns HTTP 200. A failed post-run check also marks the canonical
+run metadata as failed, even when the preceding load phase passed.
 
 Credential acquisition failures are shared dependency failures, not evidence
 that an individual resource is invalid. The HTTP/WebSocket client shares a

@@ -302,6 +302,9 @@ fi
 cat >"${test_dir}/bin/healthy-capacity-runner" <<'EOF'
 #!/usr/bin/env bash
 until [[ -r "${REPOSITORY_CAPACITY_WATCHER_READY_FILE}" ]]; do sleep 0.01; done
+metadata_dir="${CAPACITY_EVIDENCE_DIR}/repository/lifecycle/alpha/${CAPACITY_RUN_ID}"
+mkdir -p "${metadata_dir}"
+printf '%s\n' '{"passed":true}' >"${metadata_dir}/metadata.json"
 touch "${TEST_CAPACITY_HEALTH_DIR}/after"
 EOF
 chmod +x "${test_dir}/bin/healthy-capacity-runner"
@@ -335,12 +338,20 @@ for port in 5001 5002; do
         REPOSITORY_CAPACITY_WATCHER_PID_FILE="${health_dir}/watcher.pid" \
         REPOSITORY_CAPACITY_WATCHER_READY_FILE="${health_dir}/watcher.ready" \
         REPOSITORY_CAPACITY_WATCHER_STOP_FILE="${health_dir}/watcher.stopped" \
+        CAPACITY_EVIDENCE_DIR="${health_dir}/evidence" \
         TEST_CAPACITY_HEALTH_DIR="${health_dir}" \
         "${repo_root}/scripts/repository-capacity-stack.sh" "${action}" >"${health_dir}/result.log" 2>&1; then
         echo "managed stack accepted ${readiness} readiness on controller port ${port} ${phase} load" >&2
         exit 1
       fi
       grep -q 'readiness' "${health_dir}/result.log"
+      if [[ "${phase}" == after ]]; then
+        jq -e '.passed == false' \
+          "${health_dir}/evidence/repository/lifecycle/alpha/owned-run/metadata.json" >/dev/null || {
+          echo "post-run readiness failure left successful metadata on controller port ${port}" >&2
+          exit 1
+        }
+      fi
     done
   done
 done
@@ -363,10 +374,13 @@ PATH="${test_dir}/bin:${PATH}" CAPACITY_RUN_ID=owned-run \
   REPOSITORY_CAPACITY_WATCHER_PID_FILE="${health_dir}/watcher.pid" \
   REPOSITORY_CAPACITY_WATCHER_READY_FILE="${health_dir}/watcher.ready" \
   REPOSITORY_CAPACITY_WATCHER_STOP_FILE="${health_dir}/watcher.stopped" \
+  CAPACITY_EVIDENCE_DIR="${health_dir}/evidence" \
   TEST_CAPACITY_HEALTH_DIR="${health_dir}" \
   "${repo_root}/scripts/repository-capacity-stack.sh" alpha >"${health_dir}/result.log" 2>&1
 [[ -f "${health_dir}/seen-5001" && -f "${health_dir}/seen-5002" &&
    -f "${health_dir}/after" && -f "${health_dir}/watcher.stopped" ]]
+jq -e '.passed == true' \
+  "${health_dir}/evidence/repository/lifecycle/alpha/owned-run/metadata.json" >/dev/null
 
 alpha_recipe="$(make --no-print-directory -C "${repo_root}" -n capacity TARGET=repository PROFILE=lifecycle MODE=alpha)"
 grep -q 'repository-capacity-stack.sh local-alpha' <<<"${alpha_recipe}"

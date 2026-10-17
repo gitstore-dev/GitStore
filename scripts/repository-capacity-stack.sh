@@ -345,7 +345,15 @@ run_alpha() {
       "${product_evidence_dir}/product-integration.json" >/dev/null || return 1
     (( product_probe_status == 0 )) || return "${product_probe_status}"
   fi
-  validate_controllers_post_run
+  if ! validate_controllers_post_run; then
+    local metadata_file
+    metadata_file="${CAPACITY_EVIDENCE_DIR:-${repo_root}/.gitstore/capacity}/${capacity_target}/${capacity_profile}/alpha/${CAPACITY_RUN_ID}/metadata.json"
+    if [[ -r "${metadata_file}" ]]; then
+      jq '.passed = false' "${metadata_file}" >"${metadata_file}.tmp"
+      mv "${metadata_file}.tmp" "${metadata_file}"
+    fi
+    return 1
+  fi
   cleanup_replacement_watcher
   trap - EXIT INT TERM
 }
