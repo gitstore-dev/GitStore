@@ -1470,6 +1470,16 @@ general revision-prefix disambiguation. Named refs and annotated tags still
 resolve normally. Missing targets, non-commit targets and unreadable object
 storage retain their error behavior; the fast path adds no cross-request cache.
 
+Provisioning retries for existing storage return `AlreadyExists`; RPC histogram
+completion counts therefore do not count newly created repositories. These
+checks still verify the signed request, authorization, durable replay record
+and deletion tombstone. They use the retained shared lifecycle gate without
+excluding immutable readers. Actual creation rechecks absence and the tombstone
+under the exclusive lifecycle and publication gates; deletion retains those
+exclusive gates too. No cross-request existence cache or skipped storage check
+is introduced. Compare read-lock wait with provisioning traffic before attributing
+that wait to object decoding or repository opening.
+
 Plural File node reads hydrate at most 250 IDs per backend call. UID locators
 use at most eight concurrent queries containing at most sixteen distinct partition keys each;
 the API never sends a 250-key cross-partition `IN` query. This reduces repeated

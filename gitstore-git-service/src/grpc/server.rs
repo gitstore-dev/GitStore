@@ -1002,6 +1002,25 @@ impl GitService for GitServiceImpl {
         )?;
         let repo_path = fanout_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
+        // A duplicate check publishes nothing. Exclude lifecycle writers, not
+        // immutable readers; absent storage is rechecked under both write gates.
+        let existing_guard = Arc::clone(&lock).read_owned().await;
+        let (repo_path, req) = crate::spawn_blocking(move || {
+            let _guard = existing_guard;
+            ensure_repository_not_deleted(&repo_path)?;
+            if repo_path
+                .try_exists()
+                .map_err(|e| Status::internal(format!("inspect repository: {e}")))?
+            {
+                return Err(Status::already_exists(format!(
+                    "repository '{}' already exists",
+                    req.repository_id
+                )));
+            }
+            Ok((repo_path, req))
+        })
+        .await
+        .map_err(|e| Status::internal(format!("task join error: {e}")))??;
         let guard = lock.write_owned().await;
         let snapshot = get_or_insert_snapshot_lock(&self.repo_locks, &req.repository_id);
         let snapshot_guard = snapshot.write_owned().await;
@@ -3492,6 +3511,131 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), tonic::Code::AlreadyExists);
+    }
+
+    #[tokio::test]
+    async fn test_create_existing_repository_does_not_exclude_readers() {
+        let dir = TempDir::new().unwrap();
+        let svc = make_test_service(dir.path());
+        svc.create_repository(make_create_req(TEST_REPO_A))
+            .await
+            .unwrap();
+        let operation = get_or_insert_lock(&svc.repo_locks, TEST_REPO_A);
+        let snapshot = get_or_insert_snapshot_lock(&svc.repo_locks, TEST_REPO_A);
+        let _operation_reader = operation.read().await;
+        let _snapshot_reader = snapshot.read().await;
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            svc.create_repository(make_create_req(TEST_REPO_A)),
+        )
+        .await
+        .expect("an existing repository check must coexist with immutable readers")
+        .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::AlreadyExists);
+    }
+
+    #[tokio::test]
+    async fn test_create_existing_repository_still_waits_for_lifecycle_writer() {
+        let dir = TempDir::new().unwrap();
+        let svc = make_test_service(dir.path());
+        svc.create_repository(make_create_req(TEST_REPO_A))
+            .await
+            .unwrap();
+        let operation = get_or_insert_lock(&svc.repo_locks, TEST_REPO_A);
+        let writer = operation.write().await;
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            svc.create_repository(make_create_req(TEST_REPO_A)),
+        )
+        .await
+        .is_err());
+        drop(writer);
+        svc.delete_repository(signed_test_request(DeleteRepositoryRequest {
+            repository_id: TEST_REPO_A.into(),
+            authorization: test_authorization(TEST_REPO_A, "repository.delete"),
+        }))
+        .await
+        .unwrap();
+        assert_eq!(
+            svc.create_repository(make_create_req(TEST_REPO_A))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::FailedPrecondition,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_existing_repository_requires_signature_and_authorization() {
+        let dir = TempDir::new().unwrap();
+        let svc = make_test_service(dir.path());
+        svc.create_repository(make_create_req(TEST_REPO_A))
+            .await
+            .unwrap();
+        let mut unsigned = make_create_req(TEST_REPO_A);
+        unsigned
+            .metadata_mut()
+            .remove(crate::auth::interceptor::SIGNATURE_HEADER);
+        assert_eq!(
+            svc.create_repository(unsigned).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated,
+        );
+        let unauthorized = signed_test_request(CreateRepositoryRequest {
+            repository_id: TEST_REPO_A.into(),
+            authorization: test_authorization(TEST_REPO_A, "repository.contents.read"),
+            ..Default::default()
+        });
+        assert_eq!(
+            svc.create_repository(unauthorized)
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_existing_repository_consumes_signed_nonce() {
+        let dir = TempDir::new().unwrap();
+        let svc = make_test_service(dir.path());
+        svc.create_repository(make_create_req(TEST_REPO_A))
+            .await
+            .unwrap();
+        let request = make_create_req(TEST_REPO_A);
+        let mut replay = Request::new(request.get_ref().clone());
+        *replay.metadata_mut() = request.metadata().clone();
+        assert_eq!(
+            svc.create_repository(request).await.unwrap_err().code(),
+            tonic::Code::AlreadyExists,
+        );
+        assert_eq!(
+            svc.create_repository(replay).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_repository_creates_have_one_winner() {
+        let dir = TempDir::new().unwrap();
+        let svc = Arc::new(make_test_service(dir.path()));
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..16 {
+            let svc = Arc::clone(&svc);
+            tasks.spawn(async move { svc.create_repository(make_create_req(TEST_REPO_A)).await });
+        }
+        let mut created = 0;
+        let mut existing = 0;
+        while let Some(result) = tasks.join_next().await {
+            match result.unwrap() {
+                Ok(_) => created += 1,
+                Err(error) => {
+                    assert_eq!(error.code(), tonic::Code::AlreadyExists);
+                    existing += 1;
+                }
+            }
+        }
+        assert_eq!((created, existing), (1, 15));
     }
 
     #[tokio::test]
