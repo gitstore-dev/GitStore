@@ -1480,6 +1480,19 @@ exclusive gates too. No cross-request existence cache or skipped storage check
 is introduced. Compare read-lock wait with provisioning traffic before attributing
 that wait to object decoding or repository opening.
 
+A matched, unprofiled mixed-load diagnostic compared the exclusive and shared
+existing-storage checks with 1,400 File offers, 1,400 Repository offers and the
+same 32 File / 20 Repository workers. Both completed every ACK and all 2,800
+attached two-API checks without failures, drops, missed schedules or projection
+loss. Queue-inclusive File ACK p95 was 2.988s with the exclusive check and 3.088s
+with the shared check: neither met the unchanged 2s target. Across equal
+260-second exports and 5,738 reported reads per arm, aggregate read-lock wait
+fell from 87.254s to 53.534s. Those windows also contain preparation and background
+work, and the durations are request wall time, not CPU time. This single pair
+does not establish repeatability or a causal regression, but it provides no ACK
+improvement to promote. Keep end-to-end acceptance separate from a better
+internal phase measurement.
+
 Plural File node reads hydrate at most 250 IDs per backend call. UID locators
 use at most eight concurrent queries containing at most sixteen distinct partition keys each;
 the API never sends a 250-key cross-partition `IN` query. This reduces repeated
