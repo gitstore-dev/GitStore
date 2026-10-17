@@ -1469,6 +1469,21 @@ time and amplification before changing production packing. Optional
 traces, for one- and sixteen-key reads. Isolated locator timings and these two
 server traces do not identify the cause of a mixed-workload tail.
 
+The same diagnostic includes a read-coalescing comparison for locator reads and
+exact Namespace tuple reads with a verified 2 KiB body. It holds sixteen-key
+packing, the eight-reader maximum, consistency and fixture identities constant,
+comparing separate sessions with the driver's default 200-microsecond write
+coalescing and with coalescing disabled. Six counterbalanced rounds retain all
+64 read-wave durations per case, exact query/row counts and completed streams.
+Each sixty-four-key wave uses four physical queries; its sample percentiles are
+not individual-query or mixed-workload acknowledgement percentiles.
+The API datastore disables this client-side flush timer for latency-sensitive
+admission reads and writes. This does not change query packing, conditional
+write semantics, consistency, deadlines or retry behavior. It may increase
+socket write frequency, so evaluate CPU, allocation, queue and database load
+alongside acknowledgement latency in the original combined workload; the
+isolated comparison alone does not establish capacity acceptance.
+
 Seeded File discovery retries only explicit `NOT_FOUND` errors with a
 `FILE_NOT_FOUND` failure diagnostic at a requested alias whose value is null.
 Other GraphQL failures, malformed responses and mismatched projections fail

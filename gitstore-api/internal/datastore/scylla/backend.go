@@ -303,6 +303,8 @@ func openSession(cfg config.ScyllaConfig) (*gocql.Session, error) {
 	cluster := gocql.NewCluster(parsedHosts...)
 	cluster.Keyspace = cfg.Keyspace
 	cluster.Consistency = gocql.Quorum
+	// Admission reads should not wait for a client-side write flush timer.
+	cluster.WriteCoalesceWaitTime = 0
 	cluster.DisableShardAwarePort = cfg.DisableShardAwarePort
 	cluster.IgnorePeerAddr = cfg.IgnorePeerAddr
 	observer := cqlTraceObserver{tracer: otel.Tracer("gitstore/datastore/scylla"), next: cfg.QueryObserver}

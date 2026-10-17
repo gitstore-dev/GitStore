@@ -1079,12 +1079,13 @@ func TestScylla_FileLocatorQueryTopology(t *testing.T) {
 	require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{UID: newID(), Name: namespace}))
 	uids := make([]gocql.UUID, fixtureSize)
 	created := time.Now().UTC().Truncate(time.Millisecond)
+	body := strings.Repeat("bounded read coalescing fixture ", 64)
 	for i := range uids {
 		uids[i] = gocql.TimeUUID()
 		require.NoError(t, store.CreateFile(t.Context(), &datastore.File{
 			UID: uids[i].String(), Namespace: namespace, Name: fmt.Sprintf("locator-%d", i),
 			Kind: "File", APIVersion: "storage.gitstore.dev/v1beta1",
-			ResourceVersion: "1", CreationTimestamp: created,
+			ResourceVersion: "1", CreationTimestamp: created, Body: body,
 		}))
 	}
 	host, rawPort, err := net.SplitHostPort(scyllaAddr)
@@ -1092,33 +1093,63 @@ func TestScylla_FileLocatorQueryTopology(t *testing.T) {
 	port, err := strconv.Atoi(rawPort)
 	require.NoError(t, err)
 	evidence := &capacityRoutingEvidence{hosts: make(map[string]int)}
-	cluster := gocql.NewCluster(host)
-	cluster.Port, cluster.Keyspace = port, scyllaKeyspace
-	cluster.Consistency = gocql.Quorum
-	cluster.Timeout = 5 * time.Second
-	cluster.DisableShardAwarePort, cluster.IgnorePeerAddr = true, true
-	cluster.AddressTranslator = contactPointTranslator(host, port)
-	cluster.QueryObserver, cluster.StreamObserver = evidence, evidence
-	session, err := cluster.CreateSession()
-	require.NoError(t, err)
+	newSession := func(uncoalesced bool) *gocql.Session {
+		cluster := gocql.NewCluster(host)
+		cluster.Port, cluster.Keyspace = port, scyllaKeyspace
+		cluster.Consistency = gocql.Quorum
+		cluster.Timeout = 5 * time.Second
+		cluster.DisableShardAwarePort, cluster.IgnorePeerAddr = true, true
+		cluster.AddressTranslator = contactPointTranslator(host, port)
+		cluster.QueryObserver, cluster.StreamObserver = evidence, evidence
+		if uncoalesced {
+			cluster.WriteCoalesceWaitTime = 0
+		}
+		t.Logf("File read diagnostic session: uncoalesced=%t write_coalesce_wait=%s", uncoalesced, cluster.WriteCoalesceWaitTime)
+		session, err := cluster.CreateSession()
+		require.NoError(t, err)
+		return session
+	}
+	session := newSession(false)
 	defer session.Close()
 
-	read := func(ctx context.Context, keys []gocql.UUID, tracer gocql.Tracer) error {
-		args := make([]any, len(keys))
+	read := func(ctx context.Context, session *gocql.Session, table string, keys []gocql.UUID, tracer gocql.Tracer) error {
+		args := make([]any, 0, 1+2*len(keys))
 		expected := make(map[gocql.UUID]bool, len(keys))
-		for i, uid := range keys {
-			args[i], expected[uid] = uid, true
+		columns := "uid, namespace, creation_timestamp"
+		if table == "files_by_namespace" {
+			columns += ", body"
 		}
-		statement := "SELECT uid, namespace, creation_timestamp FROM files_by_uid WHERE uid IN (" +
-			strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",") + ")"
+		statement := "SELECT " + columns + " FROM " + table
+		if table == "files_by_uid" {
+			statement += " WHERE uid IN (" + strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",") + ")"
+			for _, uid := range keys {
+				args = append(args, uid)
+			}
+		} else {
+			statement += " WHERE namespace=? AND (creation_timestamp,uid) IN (" +
+				strings.TrimSuffix(strings.Repeat("(?,?),", len(keys)), ",") + ")"
+			args = append(args, namespace)
+			for _, uid := range keys {
+				args = append(args, created, uid)
+			}
+		}
+		for _, uid := range keys {
+			expected[uid] = true
+		}
 		iter := session.Query(statement, args...).WithContext(ctx).Trace(tracer).Iter()
 		var uid gocql.UUID
 		var actualNamespace string
 		var actualCreated time.Time
+		var actualBody string
+		dest := []any{&uid, &actualNamespace, &actualCreated}
+		if table == "files_by_namespace" {
+			dest = append(dest, &actualBody)
+		}
 		var identityErr error
-		for iter.Scan(&uid, &actualNamespace, &actualCreated) {
-			if !expected[uid] || actualNamespace != namespace || !actualCreated.Equal(created) {
-				identityErr = errors.New("invalid File UID locator readback")
+		for iter.Scan(dest...) {
+			if !expected[uid] || actualNamespace != namespace || !actualCreated.Equal(created) ||
+				(table == "files_by_namespace" && actualBody != body) {
+				identityErr = errors.New("invalid File read diagnostic identity")
 			}
 			delete(expected, uid)
 		}
@@ -1126,11 +1157,11 @@ func TestScylla_FileLocatorQueryTopology(t *testing.T) {
 			return err
 		}
 		if len(expected) != 0 {
-			return errors.New("missing File UID locator readback")
+			return errors.New("missing File read diagnostic identity")
 		}
 		return nil
 	}
-	execute := func(ctx context.Context, keys, batchSize int) error {
+	execute := func(ctx context.Context, session *gocql.Session, table string, keys, batchSize int) error {
 		batches := (keys + batchSize - 1) / batchSize
 		errs := make([]error, batches)
 		var next atomic.Int64
@@ -1139,7 +1170,7 @@ func TestScylla_FileLocatorQueryTopology(t *testing.T) {
 			workers.Go(func() {
 				for batch := int(next.Add(1) - 1); batch < batches; batch = int(next.Add(1) - 1) {
 					start := batch * batchSize
-					errs[batch] = read(ctx, uids[start:min(start+batchSize, keys)], nil)
+					errs[batch] = read(ctx, session, table, uids[start:min(start+batchSize, keys)], nil)
 				}
 			})
 		}
@@ -1149,7 +1180,7 @@ func TestScylla_FileLocatorQueryTopology(t *testing.T) {
 	for _, keys := range []int{8, 16, fixtureSize} {
 		batchSizes := []int{1, 4, 8, 16}
 		for _, batchSize := range batchSizes {
-			require.NoError(t, execute(t.Context(), keys, batchSize))
+			require.NoError(t, execute(t.Context(), session, "files_by_uid", keys, batchSize))
 		}
 		for round := range rounds {
 			for offset := range batchSizes {
@@ -1162,7 +1193,7 @@ func TestScylla_FileLocatorQueryTopology(t *testing.T) {
 				evidence.mu.Unlock()
 				ctx, cancel := context.WithTimeout(context.WithValue(t.Context(), capacityRoutingKey{}, evidence), 5*time.Second)
 				start := time.Now()
-				err := execute(ctx, keys, batchSize)
+				err := execute(ctx, session, "files_by_uid", keys, batchSize)
 				elapsed := time.Since(start)
 				cancel()
 				require.NoError(t, err)
@@ -1187,10 +1218,70 @@ func TestScylla_FileLocatorQueryTopology(t *testing.T) {
 	if os.Getenv("GITSTORE_TEST_SCYLLA_SERVER_TRACE") == "1" {
 		for _, keys := range []int{1, 16} {
 			traceCapacityRoutingRequest(t, t.Context(), session, evidence, func(ctx context.Context, tracer gocql.Tracer) (bool, error) {
-				return true, read(ctx, uids[:keys], tracer)
+				return true, read(ctx, session, "files_by_uid", uids[:keys], tracer)
 			})
 		}
 	}
+	t.Run("read-coalescing", func(t *testing.T) {
+		const batchSize, samplesPerCase = 16, 64
+		uncoalesced := newSession(true)
+		defer uncoalesced.Close()
+		sessions := []*gocql.Session{session, uncoalesced}
+		modes := []string{"default", "uncoalesced"}
+		tables := []string{"files_by_uid", "files_by_namespace"}
+		for _, table := range tables {
+			for _, session := range sessions {
+				for range 8 {
+					require.NoError(t, execute(t.Context(), session, table, fixtureSize, batchSize))
+				}
+			}
+		}
+		for round := range rounds {
+			for tableOffset := range tables {
+				table := tables[(tableOffset+round)%len(tables)]
+				for modeOffset := range modes {
+					mode := (modeOffset + round) % len(modes)
+					evidence.mu.Lock()
+					driverBefore, streamBefore := evidence.driverDuration, evidence.streamDuration
+					requestsBefore := evidence.requests
+					startsBefore, finishesBefore := evidence.streamStarts, evidence.streamFinishes
+					abandonedBefore, retriesBefore := evidence.streamAbandoned, evidence.attempts
+					evidence.mu.Unlock()
+					ctx, cancel := context.WithTimeout(context.WithValue(t.Context(), capacityRoutingKey{}, evidence), 30*time.Second)
+					t.Cleanup(cancel)
+					durations := make([]time.Duration, samplesPerCase)
+					var total time.Duration
+					for i := range durations {
+						start := time.Now()
+						err := execute(ctx, sessions[mode], table, fixtureSize, batchSize)
+						durations[i] = time.Since(start)
+						total += durations[i]
+						require.NoError(t, err)
+					}
+					cancel()
+					evidence.streams.Wait()
+					evidence.mu.Lock()
+					driver, stream := evidence.driverDuration-driverBefore, evidence.streamDuration-streamBefore
+					requests := evidence.requests - requestsBefore
+					starts, finishes := evidence.streamStarts-startsBefore, evidence.streamFinishes-finishesBefore
+					abandoned, retries := evidence.streamAbandoned-abandonedBefore, evidence.attempts-retriesBefore
+					evidence.mu.Unlock()
+					queries := samplesPerCase * ((fixtureSize + batchSize - 1) / batchSize)
+					require.Equal(t, queries, requests)
+					require.Equal(t, queries, starts)
+					require.Equal(t, starts, finishes)
+					require.Zero(t, abandoned)
+					require.Zero(t, retries)
+					sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+					t.Logf("diagnostic-only File read coalescing: RF=%d round=%d table=%s mode=%s keys=%d batch=%d max_readers=%d samples=%d queries=%d rows=%d mean=%s p50=%s p95=%s p99=%s max=%s driver_total=%s streams=%d stream_total=%s latencies=%v",
+						scyllaReplicationFactor, round, table, modes[mode], fixtureSize, batchSize, readers,
+						samplesPerCase, queries, samplesPerCase*fixtureSize, total/samplesPerCase,
+						durations[(samplesPerCase*50+99)/100-1], durations[(samplesPerCase*95+99)/100-1],
+						durations[(samplesPerCase*99+99)/100-1], durations[len(durations)-1], driver, starts, stream, durations)
+				}
+			}
+		}
+	})
 }
 
 func TestScylla_FileUpdateWriteAmplification(t *testing.T) {
