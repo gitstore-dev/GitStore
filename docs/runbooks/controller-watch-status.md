@@ -171,6 +171,9 @@ when generation, annotations and Git revision match. Git-only provenance probes
 match the pushed commit and require the resource version to change; selector
 exits retain their null payload. These checks establish watch delivery, not
 reconciliation of that specific version by a controller.
+Provenance-only clones fetch the latest commit without tags and check out only
+the target manifest, including outside capacity runs; they do not need the
+deployment's full Git history.
 
 Credential acquisition failures are shared dependency failures, not evidence
 that an individual resource is invalid. The HTTP/WebSocket client shares a

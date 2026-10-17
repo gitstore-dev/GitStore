@@ -74,7 +74,7 @@ func newPushHelperForRemoteWithToken(t *testing.T, remoteURL, token string, prov
 		t.Fatalf("PREREQUISITE: Git repository unreachable at %s: %v", remoteURL, err)
 	}
 	cloneArgs := []string{"clone"}
-	if os.Getenv("REPOSITORY_LIFECYCLE_CAPACITY_RUN") == "1" || os.Getenv("NAMESPACE_WATCH_CAPACITY_RUN") == "1" {
+	if len(provenancePaths) != 0 || os.Getenv("REPOSITORY_LIFECYCLE_CAPACITY_RUN") == "1" || os.Getenv("NAMESPACE_WATCH_CAPACITY_RUN") == "1" {
 		cloneArgs = append(cloneArgs, "--no-tags", "--depth=1")
 	}
 	if len(provenancePaths) != 0 {
@@ -342,7 +342,8 @@ func TestWatchMetadataProvenanceRebasesOnlyConcurrentAuthoring(t *testing.T) {
 }
 
 func TestWatchMetadataProvenancePathOnlyPreparation(t *testing.T) {
-	t.Setenv("NAMESPACE_WATCH_CAPACITY_RUN", "1")
+	t.Setenv("NAMESPACE_WATCH_CAPACITY_RUN", "")
+	t.Setenv("REPOSITORY_LIFECYCLE_CAPACITY_RUN", "")
 	const manifest = "---\nkind: Namespace\nmetadata:\n  name: probe\nspec:\n  title: Probe\n---\n"
 	const rewrite = "---\n# provenance-only rewrite\nkind: Namespace\nmetadata:\n  name: probe\nspec:\n  title: Probe\n---\n"
 	for _, scenario := range []string{"unrelated authoring", "manifest edited", "manifest deleted", "extra local change"} {
