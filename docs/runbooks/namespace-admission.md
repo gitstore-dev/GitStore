@@ -1537,13 +1537,27 @@ trace at the first burst. All 33 fully captured, exactly linked File conditional
 operations spent at most 2.877% of their lifetime Runnable and at least 96.62%
 waiting for the driver's response. Blocking stacks independently identify the
 production File conditional writer. This rejects caller-goroutine scheduling
-dominance for that captured population, not connection-reader scheduling,
-transport or server delays. The capture also contains boundary-censored
-exchanges, which are excluded rather than assigned invented state durations.
-No exact request-to-connection-reader join was available, so external-I/O
-attribution remains unresolved. The profiled run completed all offers and
-attached checks but had ACK p95 3.895s; it neither clears the 2s gate nor supplies
-a valid improvement comparison against the unprofiled pair.
+dominance for that captured population. The capture also contains
+boundary-censored exchanges, which are excluded rather than assigned invented
+state durations. The profiled run completed all offers and attached checks but
+had ACK p95 3.895s; it neither clears the 2s gate nor supplies a valid improvement
+comparison against the unprofiled pair.
+
+Further analysis of that same capture links every one of the 33 response
+waits to its exact delivering connection-reader goroutine. The caller's
+Waiting-to-Runnable event identifies the sender, with a `Conn.recv` stack at
+the response-channel send after the frame read. In 32 operations, the caller
+was waiting while that reader was in a socket-read wait for at least 80% of
+the operation's lifetime, satisfying the diagnostic's predefined external-wait
+criterion. The remaining operation spent 77.13% in that overlap and 6.931ms
+(21.88%) with its reader Runnable; reader scheduling is not universally absent.
+This required no additional load, instrumentation or configuration changes.
+The connection multiplexes responses, so reader work and waits can include
+other streams. These are API-runtime socket waits, not independently measured
+wire-arrival timestamps or pure database execution. Running is not proof of
+continuous OS CPU execution, and overlapping reader intervals must not be
+summed across requests. Transport, host/VM effects and server work remain
+unseparated; this observation does not justify a production tuning change.
 
 Plural File node reads hydrate at most 250 IDs per backend call. UID locators
 use at most eight concurrent queries containing at most sixteen distinct partition keys each;
