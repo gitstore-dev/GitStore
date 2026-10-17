@@ -1109,6 +1109,15 @@ transitions without matching unrelated operations by timestamps. Exclude
 boundary-crossing tasks and annotations without a nonzero task ID. Caller
 scheduling is not the same population as connection-reader scheduling or
 remote server execution.
+The `otel.trace_id` and `otel.span_id` annotations use hexadecimal IDs;
+normalize base64-encoded binary IDs in retained OTLP JSON before comparing
+them. Inspect blocked stacks and the goroutines that wake the caller, not
+only its runnable delay. A wait in the driver's `writeCoalescer.writeContext`
+is client-side write completion; the subsequent `Conn.exec` response wait
+still includes reader, network and server work. Neither is independently
+server execution time. Check exact stop-the-world overlap rather than
+attributing a query to a process-wide GC summary, and do not interpret the
+runtime's `Running` state as continuous on-CPU execution.
 
 File updates retain the same expected-resource-version CAS and immutable
 authoritative key, but send CQL `UNSET` for unchanged columns from the fresh
@@ -1377,6 +1386,23 @@ elapsed duration and retained bytes. Check those boundaries and the binary
 trace before attributing a burst; they are not exact sample timestamps.
 Capture failures invalidate the diagnostic, and profiler overhead prevents
 using its latency results as unprofiled acceptance.
+
+With `EVIDENCE_DIR` set to the closed diagnostic's evidence directory, inspect
+the retained captures locally:
+
+```bash
+go tool trace -http=127.0.0.1:8089 "$EVIDENCE_DIR/profiles/api-a-execution.trace"
+go tool pprof -http=127.0.0.1:8088 "$EVIDENCE_DIR/profiles/api-a-cpu.pprof"
+```
+
+Use the execution viewer's user tasks to find `scylla.exchange` and its trace
+and span annotations; repeat with `api-b` for the peer API. The viewers read
+retained files and do not require a running profiling listener. A trace that
+covers all burst offers may still end before their queued work completes.
+The subsequent CPU capture is a different time window, not a CPU profile of
+that initial execution trace. Block and mutex profiles aggregate overlapping
+goroutine waits, so their totals must not be treated as wall-clock latency.
+
 The fixed modes `content` and `history_proof` distinguish ordinary blob reads
 from reads that also prove the path was unchanged across bounded commit
 history. No path, commit, ref or Repository identifier becomes a metric label.
