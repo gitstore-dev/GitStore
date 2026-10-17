@@ -19,6 +19,26 @@ assert_dispatch() {
 }
 
 assert_dispatch api readiness '_capacity-k6'
+for workload in file combined; do
+  client_output="$(REPOSITORY_CAPACITY_CLIENT_TIMING=1 REPOSITORY_CAPACITY_WORKLOAD="${workload}" \
+    CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle diagnostic)"
+  [[ "${client_output}" == *"REPOSITORY_CAPACITY_CLIENT_TIMING=1"* ]]
+done
+for value in 1 true 2; do
+  for arguments in 'repository lifecycle diagnostic' 'repository lifecycle alpha' \
+    'repository lifecycle production' 'api readiness diagnostic'; do
+    if REPOSITORY_CAPACITY_CLIENT_TIMING="${value}" CAPACITY_DRY_RUN=1 \
+      "${dispatcher}" ${arguments} >/dev/null 2>&1; then
+      echo "invalid client timing scope unexpectedly passed: ${value} ${arguments}" >&2
+      exit 1
+    fi
+  done
+done
+if REPOSITORY_CAPACITY_CLIENT_TIMING=1 REPOSITORY_CAPACITY_WORKLOAD=repository CAPACITY_DRY_RUN=1 \
+  "${dispatcher}" repository lifecycle diagnostic >/dev/null 2>&1; then
+  echo "client timing unexpectedly accepted a Repository-only comparison" >&2
+  exit 1
+fi
 for workload in repository file combined; do
   workload_output="$(REPOSITORY_CAPACITY_WORKLOAD="${workload}" CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle diagnostic)"
   [[ "${workload_output}" == *"REPOSITORY_CAPACITY_WORKLOAD=${workload}"* ]]

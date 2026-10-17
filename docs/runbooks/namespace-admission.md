@@ -811,6 +811,30 @@ spans or reciprocal server links to each original Git push.
 Read counters and retained trace records are captured together, including
 when a worker's deadline interrupts an outstanding round.
 The offered rates, queue, deadlines and acceptance gates are unchanged.
+For client-side attribution, add `REPOSITORY_CAPACITY_CLIENT_TIMING=1` to an
+explicitly diagnostic File/combined comparison. It defaults off and is rejected
+for Repository-only comparisons, full lifecycle scenarios and alpha/production.
+The existing bounded timelines then include `clientGit` records for each local
+`add`/`commit` and authenticated `push`: host `startedAt`, command `wall`,
+`userCPU` and `systemCPU` (including children accounted by the operating system),
+and the main Git Trace2 start/exit timestamps. HTTP pushes additionally retain
+the remote-curl helper's command-name and exit timestamps as
+`remoteHTTPStartedAt`/`remoteHTTPExitedAt`. These delimit helper execution,
+not just network time; the helper includes packing, protocol and server waits.
+Compare these timestamps with the correlated server HTTP spans to localize
+gaps. Do not call wall-minus-CPU time disk or network time: scheduling and
+other waits can contribute, and child CPU can overlap.
+
+Trace2 events are consumed in memory, with a 16 KiB line bound and 128 KiB
+trace budget per command. Only fixed command classes, timestamps, durations
+and bounded failure classes enter evidence; raw events, argv, paths and
+configuration do not. Ordinary output retains its separate 128 KiB bound.
+Unsupported, malformed, truncated or incomplete traces invalidate the diagnostic
+without changing whether the Git command itself was acknowledged. At most
+three commands per push and the existing 2,048 timeline prefix are retained.
+Trace2 and CPU accounting add overhead, so compare against an uninstrumented
+control rather than treating this diagnostic as an acceptance result.
+
 Its
 `projection_visibility` stage includes verifier scheduling and polling as well
 as reads. `projection_read` reports the cumulative wall time of completed

@@ -851,6 +851,22 @@ Ordinary runs do not inject a parent or export trace IDs. This links instrumente
 Git HTTP/admission/native RPC telemetry, not client queue/provider spans or shared
 projection batches. Verify matching retained traces, logs and exemplars in the
 deployment; sampled propagation alone does not prove a three-signal join.
+Add `REPOSITORY_CAPACITY_CLIENT_TIMING=1` only to diagnostic File/combined
+comparisons to retain `clientTiming: true` and up to three `clientGit` command
+records per existing timeline. These include host command start/wall time,
+user/system CPU (including OS-accounted children), Git Trace2 start/exit, and
+remote-curl helper command-name/exit timestamps when HTTP is used. Helper time
+includes client, protocol and server work; it is not pure network time.
+Raw Trace2 is filtered in memory, never written to disk or returned as command
+output: argv, paths, configuration and arbitrary event fields are not exported.
+The parser bounds lines to 16 KiB and total trace data to 128 KiB per command;
+ordinary command output retains its independent existing limit. Incomplete or
+over-limit tracing explicitly fails the diagnostic without reclassifying an
+actual Git ACK as a rejected push. Worker count, arrival schedule, queue,
+deadlines and attached verification are unchanged. The default is `0`; invalid
+values, Repository-only, full scenarios and alpha/production are rejected.
+Capture overhead is part of the measured time: use an uninstrumented control,
+and combine with `REPOSITORY_CAPACITY_TRACE_CORRELATION=1` for server joins.
 The Category Product oracle records classified transport interruptions separately
 and retries its reads only within the existing convergence deadline. It does not
 count those attempts as verified membership windows or suppress failed HTTP

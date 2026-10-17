@@ -120,6 +120,20 @@ if [[ -n "${REPOSITORY_CAPACITY_WORKLOAD:-}" ]]; then
   command+=("REPOSITORY_CAPACITY_WORKLOAD=${REPOSITORY_CAPACITY_WORKLOAD}")
 fi
 
+case "${REPOSITORY_CAPACITY_CLIENT_TIMING:-0}" in
+  0) ;;
+  1)
+    if [[ "${target}/${profile}" != repository/lifecycle || "${mode}" != diagnostic ||
+          ( "${REPOSITORY_CAPACITY_WORKLOAD:-}" != file && "${REPOSITORY_CAPACITY_WORKLOAD:-}" != combined ) ||
+          "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" != 0 ]]; then
+      echo "REPOSITORY_CAPACITY_CLIENT_TIMING=1 requires a diagnostic File/combined comparison" >&2
+      exit 2
+    fi
+    command+=("REPOSITORY_CAPACITY_CLIENT_TIMING=1")
+    ;;
+  *) echo "REPOSITORY_CAPACITY_CLIENT_TIMING must be 0 or 1" >&2; exit 2 ;;
+esac
+
 export CAPACITY_TARGET="${target}"
 export CAPACITY_SCENARIO="${profile}"
 
