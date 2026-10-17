@@ -1596,6 +1596,49 @@ Neither an arbitrary returned ID nor preparation alone establishes mutation
 execution time. These isolated checks are not deployed-load, routing or
 failover evidence.
 
+A subsequent 120-second combined diagnostic completed all 1,400 File and 1,400
+Repository offers and all 2,800 attached two-API checks, without failures,
+dropped offers, missed schedules or projection loss. Queue-inclusive File ACK
+p95 was 3.350s: the unchanged 2s gate still fails, and this profiled observation
+does not demonstrate an unprofiled improvement.
+
+The capture joined 28 complete File conditionals, fourteen singles and fourteen
+batches, to 28 completed native executions and one separate PREPARE session.
+There were no missing SDK joins or native sessions. Recorded execution covered
+at least 80% of the client exchange in 23 operations; the median individual
+fraction was 90.97%. However, every sampled conditional came from API A.
+The predefined requirement for both APIs was not met, so the formal result is
+**inconclusive**, not server-scope dominance. Do not relax that requirement
+after seeing the data or automatically repeat the workload. These exchanges
+lasted 8.25–135.19ms, not the complete queue-inclusive ACK lifetime; their scope
+fractions cannot explain the entire ACK tail.
+
+For the running Scylla engine revision, native duration is foreground elapsed
+time measured with a steady clock, not CPU time. Execution tracing begins
+inside request processing and stops before subsequent response queuing/writing.
+Preparation, earlier request handling, later response work, driver work,
+host/VM scheduling and diagnostic tracing overhead can contribute to the
+client-minus-execution residual. Inter-node work inside the recorded execution
+can contribute to native duration too. See the pinned
+[trace-state definition](https://github.com/scylladb/scylladb/blob/678ab80fc38b/tracing/trace_state.hh),
+[foreground completion](https://github.com/scylladb/scylladb/blob/678ab80fc38b/tracing/trace_state.cc)
+and [transport processing](https://github.com/scylladb/scylladb/blob/678ab80fc38b/transport/server.cc).
+Do not label the residual pure network latency.
+
+During that offered window, each API and Scylla container supplied 120 distinct
+interface samples, with maximum adjacent gap below 1.092s. Independent
+per-instance, per-direction peaks were API RX 10.09 MB/s and TX 2.87 MB/s,
+and Scylla RX 4.28 MB/s and TX 8.92 MB/s. No interface errors/drops or cgroup
+throttling increments were recorded. These modest sampled rates do not
+establish a virtual-link ceiling or exclude subsecond bursts and host/VM stalls.
+Whole-command TCP counters, including preparation and settling, nevertheless
+recorded 254/101 retransmitted segments for the two APIs and 293/231/295 for
+the three Scylla nodes, with zero TCP timeout increments. Loss-probe and
+duplicate-ACK counters also increased; retransmission counts alone do not
+establish packet loss. These are namespace-wide, not CQL-flow or offered-window
+measurements. Attribute transport behavior to actual flows before blaming it
+for ACK latency, increasing bandwidth or changing worker counts.
+
 Plural File node reads hydrate at most 250 IDs per backend call. UID locators
 use at most eight concurrent queries containing at most sixteen distinct partition keys each;
 the API never sends a 250-key cross-partition `IN` query. This reduces repeated
