@@ -1883,8 +1883,16 @@ func coordinateCapacityReplacement(client *http.Client, cfg capacityConfig, reso
 }
 
 func endpointReady(client *http.Client, endpoint string) bool {
+	return endpointReadyContext(context.Background(), client, endpoint)
+}
+
+func endpointReadyContext(ctx context.Context, client *http.Client, endpoint string) bool {
 	for _, path := range []string{"/health", "/ready"} {
-		response, err := client.Get(endpoint + path)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+path, nil)
+		if err != nil {
+			return false
+		}
+		response, err := client.Do(request)
 		if err != nil {
 			return false
 		}
@@ -2068,11 +2076,11 @@ func TestSameCapacityProcessAllowsFractionalCollectorJitter(t *testing.T) {
 }
 
 func fetchCapacityMetrics(client *http.Client, endpoint string) (capacityProcessMetrics, error) {
-	return fetchCapacityMetricsObserved(client, endpoint, nil)
+	return fetchCapacityMetricsObserved(context.Background(), client, endpoint, nil)
 }
 
-func fetchCapacityMetricsObserved(client *http.Client, endpoint string, observe func([]byte) error) (capacityProcessMetrics, error) {
-	request, err := http.NewRequest(http.MethodGet, endpoint+"/metrics", nil)
+func fetchCapacityMetricsObserved(ctx context.Context, client *http.Client, endpoint string, observe func([]byte) error) (capacityProcessMetrics, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/metrics", nil)
 	if err != nil {
 		return capacityProcessMetrics{}, err
 	}

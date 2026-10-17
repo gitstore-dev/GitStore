@@ -729,6 +729,14 @@ replacement with cursor-resumed recovery. Configure it with the
 `REPOSITORY_CAPACITY_*` variables shown by `make help`. Diagnostic mode permits
 smaller experiments but never produces passing gate evidence.
 
+The Repository replacement probe uses one 30-second budget from writing the
+replacement trigger through observing the outage, successful health/readiness
+checks, and complete metrics from a changed process instance. It does not
+restart that budget when recovery begins. Requests, response-body reads and
+polling honor cancellation; canceling the scheduled replacement before its
+trigger also prevents it from starting. A ready endpoint with unchanged or
+missing process identity cannot pass.
+
 The managed alpha topology contains two APIs, one singleton Git service, two
 active-active controllers, and three Scylla nodes. The shared Git volume is not
 sharded or replicated, so this is not a Git-service HA test. Controllers do

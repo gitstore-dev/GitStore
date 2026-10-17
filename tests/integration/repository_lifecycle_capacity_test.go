@@ -282,7 +282,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	if cfg.skipReplacement {
 		replacementDone <- capacityRecoveryResult{}
 	} else {
-		go func() { replacementDone <- runRepositoryCapacityReplacement(cfg, client, soakStarted) }()
+		go func() { replacementDone <- runRepositoryCapacityReplacement(t.Context(), cfg, client, soakStarted) }()
 	}
 	var load repositoryCapacityLoadResult
 	runCapacityMetadataUnderLoad(t, cfg.duration, func(loadTest *testing.T, progress *atomic.Int64) {
@@ -2544,49 +2544,241 @@ func waitRepositoryCapacitySubscribers(t *testing.T, subscribers []*repositoryCa
 	t.Fatal("Repository subscribers did not observe every acknowledged transition before the recovery deadline")
 }
 
-func runRepositoryCapacityReplacement(cfg repositoryCapacityConfig, client *http.Client, soakStarted time.Time) capacityRecoveryResult {
-	time.Sleep(cfg.replacementDelay)
+func TestRepositoryCapacityReplacementRejectsExpiredObservation(t *testing.T) {
+	for _, blocked := range []string{"/health", "/ready", "/metrics", "metrics-body"} {
+		t.Run(blocked, func(t *testing.T) {
+			trigger := filepath.Join(t.TempDir(), "replace")
+			ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+			defer cancel()
+			var outageProbes atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, err := os.Stat(trigger)
+				replacing := err == nil
+				if r.URL.Path == "/health" && replacing && outageProbes.Add(1) <= 2 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				if replacing && (r.URL.Path == blocked || blocked == "metrics-body" && r.URL.Path == "/metrics") {
+					if blocked == "metrics-body" {
+						_, _ = io.WriteString(w, "# partially delivered metrics\n")
+						w.(http.Flusher).Flush()
+					}
+					timer := time.NewTimer(750 * time.Millisecond)
+					defer timer.Stop()
+					select {
+					case <-r.Context().Done():
+						return
+					case <-timer.C:
+					}
+				}
+				switch r.URL.Path {
+				case "/health", "/ready":
+				case "/metrics":
+					identity, start := "api-before", 1
+					if replacing {
+						identity, start = "api-after", 2
+					}
+					fmt.Fprintf(w, "gitstore_api_process_instance_info{instance_id=%q} 1\n"+
+						"process_cpu_seconds_total 1\nprocess_resident_memory_bytes 100\n"+
+						"process_start_time_seconds %d\ngo_sched_gomaxprocs_threads 2\ngo_goroutines 4\n", identity, start)
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+			client := &http.Client{Timeout: 5 * time.Second}
+			defer client.CloseIdleConnections()
+			cfg := repositoryCapacityConfig{apiA: server.URL, replacement: server.URL, trigger: trigger}
+			result := runRepositoryCapacityReplacement(ctx, cfg, client, time.Now())
+			require.FileExists(t, trigger)
+			require.ErrorIs(t, result.err, context.DeadlineExceeded, "late observations must not turn an expired replacement into a pass")
+			require.Empty(t, result.afterStart.instanceID)
+		})
+	}
+}
+
+func TestRepositoryCapacityReplacementRequiresNewReadyProcess(t *testing.T) {
+	for _, target := range []string{"api_a", "api_b"} {
+		for _, outcome := range []string{"replaced", "no-outage", "same-identity", "missing-identity", "invalid-metrics"} {
+			t.Run(target+"/"+outcome, func(t *testing.T) {
+				trigger := filepath.Join(t.TempDir(), "replace")
+				var outageProbes atomic.Int32
+				var metricsDeadline time.Time
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					_, err := os.Stat(trigger)
+					replacing := err == nil
+					if replacing && r.URL.Path == "/health" && outcome != "no-outage" && outageProbes.Add(1) == 1 {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
+					switch r.URL.Path {
+					case "/health", "/ready":
+					case "/metrics":
+						if replacing {
+							http.Redirect(w, r, "/replacement-metrics", http.StatusTemporaryRedirect)
+							return
+						}
+						fallthrough
+					case "/replacement-metrics":
+						identity, start := "api-before", 1
+						if replacing {
+							identity, start = "api-after", 2
+							switch outcome {
+							case "same-identity":
+								identity = "api-before"
+							case "missing-identity":
+								identity = ""
+							case "invalid-metrics":
+								_, _ = io.WriteString(w, "not process metrics\n")
+								return
+							}
+						}
+						if identity != "" {
+							fmt.Fprintf(w, "gitstore_api_process_instance_info{instance_id=%q} 1\n", identity)
+						}
+						fmt.Fprintf(w, "process_cpu_seconds_total 1\nprocess_resident_memory_bytes 100\n"+
+							"process_start_time_seconds %d\ngo_sched_gomaxprocs_threads 2\ngo_goroutines 4\n", start)
+					default:
+						w.WriteHeader(http.StatusNotFound)
+					}
+				}))
+				defer server.Close()
+				client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(r *http.Request, _ []*http.Request) error {
+					metricsDeadline, _ = r.Context().Deadline()
+					return nil
+				}}
+				defer client.CloseIdleConnections()
+				cfg := repositoryCapacityConfig{apiA: server.URL, replacement: server.URL, trigger: trigger}
+				if target == "api_b" {
+					cfg.apiA, cfg.apiB = "http://unused-peer.invalid", server.URL
+				}
+				ctx := t.Context()
+				if outcome != "replaced" {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
+					defer cancel()
+				}
+				started := time.Now()
+				result := runRepositoryCapacityReplacement(ctx, cfg, client, started)
+				require.FileExists(t, trigger)
+				if outcome != "replaced" {
+					require.ErrorIs(t, result.err, context.DeadlineExceeded)
+					require.Empty(t, result.afterStart.instanceID)
+					return
+				}
+				require.NoError(t, result.err)
+				require.Equal(t, target, result.label)
+				require.Equal(t, "api-before", result.beforeStop.instanceID)
+				require.Equal(t, "api-after", result.afterStart.instanceID)
+				require.Positive(t, result.duration)
+				require.LessOrEqual(t, result.duration, 30*time.Second)
+				expectedDeadline := started.Add(result.beforeStopAt).Add(30 * time.Second)
+				if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(expectedDeadline) {
+					expectedDeadline = parentDeadline
+				}
+				require.WithinDuration(t, expectedDeadline, metricsDeadline, time.Nanosecond,
+					"the request must use the original 30s trigger deadline, not a renewed recovery window")
+			})
+		}
+	}
+}
+
+func TestRepositoryCapacityReplacementCancellationBeforeTrigger(t *testing.T) {
+	for _, delay := range []time.Duration{0, time.Hour} {
+		t.Run(delay.String(), func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			trigger := filepath.Join(t.TempDir(), "replace")
+			cfg := repositoryCapacityConfig{replacement: server.URL, trigger: trigger, replacementDelay: delay}
+			result := runRepositoryCapacityReplacement(ctx, cfg, server.Client(), time.Now())
+			require.ErrorIs(t, result.err, context.Canceled)
+			require.NoFileExists(t, trigger)
+			require.Zero(t, requests.Load(), "canceled replacement must not read or trigger a deployment")
+		})
+	}
+}
+
+func TestRepositoryCapacityReplacementRejectsUnidentifiedBaseline(t *testing.T) {
+	trigger := filepath.Join(t.TempDir(), "replace")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "process_cpu_seconds_total 1\nprocess_resident_memory_bytes 100\n"+
+			"process_start_time_seconds 1\ngo_sched_gomaxprocs_threads 2\n")
+	}))
+	defer server.Close()
+	result := runRepositoryCapacityReplacement(t.Context(), repositoryCapacityConfig{
+		replacement: server.URL, trigger: trigger,
+	}, server.Client(), time.Now())
+	require.ErrorContains(t, result.err, "process identity is absent")
+	require.NoFileExists(t, trigger)
+}
+
+func runRepositoryCapacityReplacement(ctx context.Context, cfg repositoryCapacityConfig, client *http.Client, soakStarted time.Time) capacityRecoveryResult {
+	delay := time.NewTimer(cfg.replacementDelay)
+	defer delay.Stop()
+	select {
+	case <-ctx.Done():
+		return capacityRecoveryResult{err: ctx.Err()}
+	case <-delay.C:
+	}
 	label := "api_b"
 	if cfg.replacement == cfg.apiA {
 		label = "api_a"
 	}
-	before, err := repositoryCapacityAPIIdentityValue(client, cfg.replacement)
+	beforeStop, err := fetchCapacityMetricsObserved(ctx, client, cfg.replacement, nil)
 	if err != nil {
 		return capacityRecoveryResult{err: err}
 	}
-	beforeStop, err := fetchCapacityMetrics(client, cfg.replacement)
-	if err != nil {
-		return capacityRecoveryResult{err: err}
+	if beforeStop.instanceID == "" {
+		return capacityRecoveryResult{err: errors.New("replacement API process identity is absent before trigger")}
 	}
-	result := capacityRecoveryResult{label: label, beforeStop: beforeStop, beforeStopAt: time.Since(soakStarted)}
+	started := time.Now()
+	ctx, cancel := context.WithDeadline(ctx, started.Add(30*time.Second))
+	defer cancel()
+	result := capacityRecoveryResult{label: label, beforeStop: beforeStop, beforeStopAt: started.Sub(soakStarted)}
+	if err := ctx.Err(); err != nil {
+		result.err = err
+		return result
+	}
 	if err := os.WriteFile(cfg.trigger, []byte("replace repository capacity replica\n"), 0o600); err != nil {
 		result.err = err
 		return result
 	}
 	probe := &http.Client{Timeout: 500 * time.Millisecond}
-	outageDeadline := time.Now().Add(30 * time.Second)
-	for endpointReady(probe, cfg.replacement) && time.Now().Before(outageDeadline) {
-		time.Sleep(100 * time.Millisecond)
-	}
-	if endpointReady(probe, cfg.replacement) {
-		result.err = errors.New("replacement did not produce an observed API outage")
-		return result
-	}
-	recoveryDeadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(recoveryDeadline) {
-		if endpointReady(probe, cfg.replacement) {
-			after, identityErr := repositoryCapacityAPIIdentityValue(client, cfg.replacement)
-			if identityErr == nil && after != before {
-				result.afterStart, result.err = fetchCapacityMetrics(client, cfg.replacement)
+	defer probe.CloseIdleConnections()
+	outageObserved := false
+	var lastMetricsErr error
+	for {
+		ready := endpointReadyContext(ctx, probe, cfg.replacement)
+		if !ready && ctx.Err() == nil {
+			outageObserved = true
+		}
+		if outageObserved && ready {
+			after, metricsErr := fetchCapacityMetricsObserved(ctx, client, cfg.replacement, nil)
+			lastMetricsErr = metricsErr
+			if metricsErr == nil && after.instanceID != "" && after.instanceID != beforeStop.instanceID && ctx.Err() == nil {
+				result.afterStart = after
 				result.afterStartAt = time.Since(soakStarted)
 				result.duration = result.afterStartAt - result.beforeStopAt
+				if result.duration > 30*time.Second {
+					result.err = errors.New("replacement API observation exceeded 30s")
+				}
 				return result
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			result.err = fmt.Errorf("replacement API did not expose an outage and a new ready process within 30s: %w", errors.Join(ctx.Err(), lastMetricsErr))
+			return result
+		case <-timer.C:
+		}
 	}
-	result.err = errors.New("replacement API did not return with a new process identity within 30s")
-	return result
 }
 
 func runRepositoryCapacityOverflow(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, poolPrefix, eventPrefix string) {
@@ -6106,7 +6298,7 @@ func captureSecretCapacityResources(t *testing.T, cfg repositoryCapacityConfig, 
 	var result []secretCapacityResourceSnapshot
 	for i, endpoint := range []string{cfg.apiA, cfg.apiB, cfg.controllerA, cfg.controllerB} {
 		var body []byte
-		metrics, err := fetchCapacityMetricsObserved(client, endpoint, func(data []byte) error {
+		metrics, err := fetchCapacityMetricsObserved(t.Context(), client, endpoint, func(data []byte) error {
 			if !secretCapacityScanBlock(data, nil) {
 				return errors.New("secret capacity: process metrics exposed credential material")
 			}

@@ -154,6 +154,11 @@ Missing, false or non-boolean readiness cannot pass merely because the health
 endpoint returns HTTP 200. A failed post-run check also marks the canonical
 run metadata as failed, even when the preceding load phase passed.
 
+Repository capacity API replacement has one 30-second budget from the
+replacement trigger through outage observation, health/readiness and complete
+metrics from a new process instance. Recovery does not renew the deadline.
+Cancellation also stops pending replacement delays and in-flight observations.
+
 Credential acquisition failures are shared dependency failures, not evidence
 that an individual resource is invalid. The HTTP/WebSocket client shares a
 cancellable cooldown before retrying acquisition, and the manager defers
