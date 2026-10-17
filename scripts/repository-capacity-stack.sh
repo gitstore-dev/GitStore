@@ -22,6 +22,7 @@ esac
 capacity_target="${CAPACITY_STACK_TARGET:-repository}"
 capacity_profile="${CAPACITY_STACK_PROFILE:-lifecycle}"
 controller_kind="${CAPACITY_STACK_CONTROLLER_KIND:-${capacity_target^}}"
+controller_readiness_filter='.ready == true and .credentialReady == true and .kinds[$kind].registered == true'
 state_dir="${REPOSITORY_CAPACITY_STATE_DIR:-${repo_root}/.gitstore/repository-capacity}"
 token_file="${REPOSITORY_TOKEN_FILE:-${state_dir}/token}"
 trigger_file="${REPOSITORY_REPLACEMENT_TRIGGER_FILE:-${state_dir}/replace-api-b}"
@@ -101,7 +102,9 @@ export GITSTORE_BOOTSTRAP_ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
 
 wait_http() {
   local url="$1" label="$2" deadline=$((SECONDS + ${REPOSITORY_CAPACITY_WAIT_SECONDS:-300}))
-  until curl -fsS --max-time 2 "${url}" >/dev/null 2>&1; do
+  local response condition="${3:-}"
+  until response="$(curl -fsS --max-time 2 "${url}" 2>/dev/null)" &&
+    { [[ -z "${condition}" ]] || jq -e --arg kind "${controller_kind}" "${condition}" <<<"${response}" >/dev/null 2>&1; }; do
     if (( SECONDS >= deadline )); then
       echo "timed out waiting for ${label}: ${url}" >&2
       return 1
@@ -113,15 +116,8 @@ wait_http() {
 wait_stack() {
   wait_http "${api_a}/ready" "API A readiness"
   wait_http "${api_b}/ready" "API B readiness"
-  wait_http "${controller_a}/health" "controller A health"
-  wait_http "${controller_b}/health" "controller B health"
-  for endpoint in "${controller_a}" "${controller_b}"; do
-    health="$(curl -fsS --max-time 2 "${endpoint}/health")"
-    jq -e --arg kind "${controller_kind}" '.credentialReady == true and .kinds[$kind].registered == true' <<<"${health}" >/dev/null || {
-      echo "${controller_kind} controller is not ready at ${endpoint}" >&2
-      return 1
-    }
-  done
+  wait_http "${controller_a}/health" "controller A readiness" "${controller_readiness_filter}"
+  wait_http "${controller_b}/health" "controller B readiness" "${controller_readiness_filter}"
 }
 
 controller_instance_id() {
@@ -141,8 +137,8 @@ validate_controllers_post_run() {
     # curl -f makes this an explicit HTTP 200 requirement, not merely a JSON
     # parse of an unhealthy response body.
     health="$(curl -fsS --max-time 5 "${endpoint}/health")"
-    jq -e --arg kind "${controller_kind}" '.credentialReady == true and .kinds[$kind].registered == true' <<<"${health}" >/dev/null || {
-      echo "${controller_kind} controller failed post-run registration validation at ${endpoint}" >&2
+    jq -e --arg kind "${controller_kind}" "${controller_readiness_filter}" <<<"${health}" >/dev/null || {
+      echo "${controller_kind} controller failed post-run readiness validation at ${endpoint}" >&2
       return 1
     }
   done

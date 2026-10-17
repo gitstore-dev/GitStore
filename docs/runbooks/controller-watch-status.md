@@ -147,6 +147,12 @@ not that the pending reconciliation backlog is empty; also inspect queue depth
 and its drain rate. Load and final acceptance require readiness.
 No retry is counted as successful reconciliation.
 
+Managed capacity startup polls both controllers within the existing startup
+timeout until `ready` and `credentialReady` are true and the selected kind is
+registered. Post-run validation applies the same checks to both replicas.
+Missing, false or non-boolean readiness cannot pass merely because the health
+endpoint returns HTTP 200.
+
 Credential acquisition failures are shared dependency failures, not evidence
 that an individual resource is invalid. The HTTP/WebSocket client shares a
 cancellable cooldown before retrying acquisition, and the manager defers
