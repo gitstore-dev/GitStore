@@ -1683,6 +1683,17 @@ reads still return complete envelopes. This reduces the parent-read payload;
 it is not evidence of a passing acknowledgement latency or a reason to omit
 the fresh File projection readback after a mutation.
 
+A fixed-order, unprofiled diagnostic comparison did not demonstrate a benefit
+from the narrow parent read. With the same committed driver, 1,400 File and
+1,400 Repository offers, 32 File workers, 20 Repository workers and attached
+two-API checks, queue-inclusive File ACK p95 was 2.858s for the control and
+3.341s for the candidate; p99 was 3.533s and 4.061s. Both observations missed
+the unchanged 2s p95 gate. All offers completed without mutation or projection
+failures. The candidate exceeded the prospectively declared regression limits,
+so the original control APIs were restored. One ordered pair does not establish
+statistical causality, but it does not justify retaining this deployment or
+claiming an ACK improvement. Do not repeat the pair to seek a favorable result.
+
 For the running Scylla engine revision, native duration is foreground elapsed
 time measured with a steady clock, not CPU time. Execution tracing begins
 inside request processing and stops before subsequent response queuing/writing.
