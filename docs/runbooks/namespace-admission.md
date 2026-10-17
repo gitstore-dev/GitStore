@@ -1613,6 +1613,54 @@ after seeing the data or automatically repeat the workload. These exchanges
 lasted 8.25–135.19ms, not the complete queue-inclusive ACK lifetime; their scope
 fractions cannot explain the entire ACK tail.
 
+Full client timelines sharpen that distinction. Across all 1,400 File offers,
+queue wait p95 was 2.716s, local Git p95 0.151s and Git HTTP p95 0.685s.
+These percentiles must not be added: they describe different ranked requests.
+Partition each individual ACK into its recorded stages and retain any
+unassigned remainder. Of 198 ACKs above 2s, the median individual queue fraction
+was 79.14%; 136 offers spent more than 2s in the worker queue alone. These
+are observed partitions, not a prediction that queue wait would remain fixed
+after service work becomes faster.
+
+All 25 sampled File push traces were joined, without selecting the longest.
+Twenty-three belong to the first burst and two to sustained offers; none
+cover the second burst or an ACK exceeding 2s. Exact span ancestry places all
+28 native-traced conditionals in asynchronous post-receive admission.
+Their duration is not a synchronous Git ACK component. However, a File worker
+remains occupied until its subsequent two-API projection verification finishes,
+so delayed admission or verification can delay later offers indirectly.
+Reconstructing all 1,400 client worker timelines puts the last burst offer's
+worker start about 4.345s after each burst began. During these two queue windows,
+mean occupied workers were 30.97 and 31.06 of 32. Post-ACK work accounted for
+42.95% and 40.08% of occupied worker time, respectively; most of the remainder
+was pre-ACK work. These are concurrency-weighted elapsed intervals, not CPU
+utilization or a claim that a particular worker count is optimal. Recorded
+wall-clock drift was bounded by 1.128ms, so reconstructed cross-row boundaries
+are approximate.
+Keep this distinction when selecting an optimization: trace the work holding
+workers during burst recovery rather than treating native query duration as
+the complete ACK bottleneck. Do not detach verification, add workers or weaken
+the offered workload to obtain a passing latency.
+
+Projection reads carry separate trace IDs; do not merge them into push trace
+critical paths. Database interval unions are calculated separately for each
+API instance clock and synchronous/asynchronous phase. Never add overlapping
+parent/child or parallel query durations as wall time. With client tracing
+disabled, the Git HTTP spans have an absent client parent; their retained
+descendants do not invent a complete client Git breakdown.
+
+The separate retained SDK traces for all 198 ACKs above 2s cover both bursts
+and sustained offers, not just native-sampled operations. Every trace contains
+the expected Git discovery, receive-pack and asynchronous admission paths.
+Within that cohort, the Namespace fence queue spans have median 0.346s and
+p95 0.577s; asynchronous admission spans have median 0.726s and p95 1.002s.
+Physical database-visit interval unions inside asynchronous admission have
+median 0.145s and p95 0.300s. These scopes overlap and their percentiles must
+not be added or subtracted to invent a residual. They identify admission
+queueing as a concrete investigation target for post-ACK worker occupancy;
+they do not establish that changing a fence will improve the ACK gate.
+Preserve Namespace deletion, concurrent-replica and mutation-fencing guarantees.
+
 For the running Scylla engine revision, native duration is foreground elapsed
 time measured with a steady clock, not CPU time. Execution tracing begins
 inside request processing and stops before subsequent response queuing/writing.
@@ -1620,6 +1668,7 @@ Preparation, earlier request handling, later response work, driver work,
 host/VM scheduling and diagnostic tracing overhead can contribute to the
 client-minus-execution residual. Inter-node work inside the recorded execution
 can contribute to native duration too. See the pinned
+[elapsed-clock definition](https://github.com/scylladb/scylladb/blob/678ab80fc38b/tracing/tracing.hh),
 [trace-state definition](https://github.com/scylladb/scylladb/blob/678ab80fc38b/tracing/trace_state.hh),
 [foreground completion](https://github.com/scylladb/scylladb/blob/678ab80fc38b/tracing/trace_state.cc)
 and [transport processing](https://github.com/scylladb/scylladb/blob/678ab80fc38b/transport/server.cc).
@@ -1638,6 +1687,22 @@ duplicate-ACK counters also increased; retransmission counts alone do not
 establish packet loss. These are namespace-wide, not CQL-flow or offered-window
 measurements. Attribute transport behavior to actual flows before blaming it
 for ACK latency, increasing bandwidth or changing worker counts.
+
+Scylla exposes Prometheus metrics at port 9180 (`/metrics`), independently of
+application OpenTelemetry export. The owned diagnostic scraper captures all
+three database nodes. Relevant families include `scylla_reactor_utilization`,
+`scylla_reactor_stalls_*`, `scylla_scheduler_queue_length`,
+`scylla_scheduler_waittime_ms`, `scylla_io_queue_*`,
+`scylla_storage_proxy_coordinator_cas_*` and `scylla_cdc_*`.
+Preserve instance, shard and scheduling-group labels where available: a node
+average can hide a busy shard or a starved scheduling group. Counters require
+rates or deltas; consult metric help/type before interpreting other values.
+Native query tracing is a separate CQL facility, stored in
+`system_traces.sessions` and `system_traces.events`, not automatically exported
+as OpenTelemetry spans. Correlate its returned session ID with the sampled
+driver exchange. Keep sampling bounded because tracing adds work; do not
+enable unrestricted probabilistic tracing or change tracing settings during
+a frozen workload. See [Scylla's tracing guide](https://docs.scylladb.com/manual/branch-2026.1/using-scylla/tracing.md).
 
 Plural File node reads hydrate at most 250 IDs per backend call. UID locators
 use at most eight concurrent queries containing at most sixteen distinct partition keys each;
