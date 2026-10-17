@@ -1524,6 +1524,27 @@ workers are overprovisioned or underprovisioned. No further load or configuratio
 change was needed to collect these retained traces, and the 2s ACK gate remains
 unmet.
 
+For the two shared-check burst examples, exact workload trace IDs on the same
+API instance identify preceding File-cohort service covering 474.417ms of a
+475.934ms queue wait and 733.488ms of a 734.681ms queue wait. Their reserve,
+mutation and release phases account for almost all of those intervals; local
+handoff gaps do not explain the long waits in these examples. This is still a
+bounded retained search, not an exhaustive population census.
+
+A subsequent scheduling-only diagnostic kept the original offers, workers,
+attached checks and deployed processes, capturing three seconds of Go execution
+trace at the first burst. All 33 fully captured, exactly linked File conditional
+operations spent at most 2.877% of their lifetime Runnable and at least 96.62%
+waiting for the driver's response. Blocking stacks independently identify the
+production File conditional writer. This rejects caller-goroutine scheduling
+dominance for that captured population, not connection-reader scheduling,
+transport or server delays. The capture also contains boundary-censored
+exchanges, which are excluded rather than assigned invented state durations.
+No exact request-to-connection-reader join was available, so external-I/O
+attribution remains unresolved. The profiled run completed all offers and
+attached checks but had ACK p95 3.895s; it neither clears the 2s gate nor supplies
+a valid improvement comparison against the unprofiled pair.
+
 Plural File node reads hydrate at most 250 IDs per backend call. UID locators
 use at most eight concurrent queries containing at most sixteen distinct partition keys each;
 the API never sends a 250-key cross-partition `IN` query. This reduces repeated
