@@ -173,8 +173,6 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	identityA := repositoryCapacityAPIIdentity(t, client, cfg.apiA)
 	identityB := repositoryCapacityAPIIdentity(t, client, cfg.apiB)
 	require.NotEqual(t, identityA, identityB, "API endpoints resolve to the same process instance")
-	controllerBeforeA := requireRepositoryController(t, client, cfg.controllerA)
-	controllerBeforeB := requireRepositoryController(t, client, cfg.controllerB)
 	require.NotEqual(t,
 		repositoryControllerIdentity(t, client, cfg.controllerA),
 		repositoryControllerIdentity(t, client, cfg.controllerB),
@@ -192,6 +190,8 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		dataset = prepareSecretCapacityDataset(t, cfg)
 		waitForSecretCapacityControllerRecovery(t, client, cfg)
 	}
+	controllerBeforeA := requireRepositoryController(t, client, cfg.controllerA)
+	controllerBeforeB := requireRepositoryController(t, client, cfg.controllerB)
 	ensureRepositoryCapacityNamespace(t, cfg)
 	runID := strconv.FormatInt(time.Now().UnixNano(), 36)
 	poolPrefix := "rcp-" + runID + "-"

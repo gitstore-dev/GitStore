@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -410,11 +411,66 @@ func requireRepositoryController(t *testing.T, client *http.Client, endpoint str
 			Registered bool `json:"registered"`
 		} `json:"kinds"`
 		CredentialReady bool `json:"credentialReady"`
+		Ready           bool `json:"ready"`
 	}
 	require.NoError(t, json.Unmarshal(contents, &health))
+	require.True(t, health.Ready, "%s controller is not ready", endpoint)
 	require.True(t, health.CredentialReady, "%s credential source is not ready", endpoint)
 	require.True(t, health.Kinds["Repository"].Registered, "%s has no Repository registration", endpoint)
 	return repositoryControllerSuccessMetric(t, client, endpoint)
+}
+
+func TestRepositoryControllerReadiness(t *testing.T) {
+	if endpoint := os.Getenv("TEST_REPOSITORY_CONTROLLER_ENDPOINT"); endpoint != "" {
+		client := &http.Client{Timeout: time.Second}
+		defer client.CloseIdleConnections()
+		if os.Getenv("TEST_REPOSITORY_CONTROLLER_PHASE") == "progress" {
+			waitForRepositoryControllerAdvance(t, client, endpoint, 0)
+		} else {
+			requireRepositoryController(t, client, endpoint)
+		}
+		return
+	}
+	for _, phase := range []string{"initial", "progress"} {
+		for _, tc := range []struct {
+			name, body, wantError string
+			status                int
+		}{
+			{"recovering", `{"ready":false,"credentialReady":true,"kinds":{"Repository":{"registered":true}}}`, "controller is not ready", http.StatusOK},
+			{"missing", `{"credentialReady":true,"kinds":{"Repository":{"registered":true}}}`, "controller is not ready", http.StatusOK},
+			{"non-boolean", `{"ready":"true","credentialReady":true,"kinds":{"Repository":{"registered":true}}}`, "cannot unmarshal string", http.StatusOK},
+			{"credentials", `{"ready":true,"credentialReady":false,"kinds":{"Repository":{"registered":true}}}`, "credential source is not ready", http.StatusOK},
+			{"registration", `{"ready":true,"credentialReady":true,"kinds":{"Repository":{"registered":false}}}`, "has no Repository registration", http.StatusOK},
+			{"http-status", `{"ready":true,"credentialReady":true,"kinds":{"Repository":{"registered":true}}}`, "Not equal", http.StatusServiceUnavailable},
+			{"malformed", `not json`, "invalid character", http.StatusOK},
+			{"healthy", `{"ready":true,"credentialReady":true,"kinds":{"Repository":{"registered":true}}}`, "", http.StatusOK},
+		} {
+			t.Run(phase+"/"+tc.name, func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/health":
+						w.WriteHeader(tc.status)
+						_, _ = io.WriteString(w, tc.body)
+					case "/metrics":
+						_, _ = io.WriteString(w, "gitstore_controller_reconcile_total{kind=\"Repository\",result=\"success\"} 2\n")
+					default:
+						w.WriteHeader(http.StatusNotFound)
+					}
+				}))
+				defer server.Close()
+				command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestRepositoryControllerReadiness$", "-test.timeout=5s")
+				command.Env = append(os.Environ(), "TEST_REPOSITORY_CONTROLLER_ENDPOINT="+server.URL, "TEST_REPOSITORY_CONTROLLER_PHASE="+phase)
+				output, err := command.CombinedOutput()
+				if tc.wantError == "" {
+					require.NoError(t, err, "%s", output)
+				} else {
+					require.Error(t, err, "invalid controller passed the %s gate: %s", phase, output)
+					require.Contains(t, string(output), tc.wantError)
+					require.NotContains(t, string(output), "test timed out")
+				}
+			})
+		}
+	}
 }
 
 func repositoryControllerSuccessMetric(t *testing.T, client *http.Client, endpoint string) float64 {
@@ -474,6 +530,7 @@ func waitForRepositoryControllerAdvance(t *testing.T, client *http.Client, endpo
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		if repositoryControllerSuccessMetric(t, client, endpoint) > before {
+			requireRepositoryController(t, client, endpoint)
 			return
 		}
 		if time.Now().After(deadline) {

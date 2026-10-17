@@ -153,6 +153,10 @@ registered. Post-run validation applies the same checks to both replicas.
 Missing, false or non-boolean readiness cannot pass merely because the health
 endpoint returns HTTP 200. A failed post-run check also marks the canonical
 run metadata as failed, even when the preceding load phase passed.
+The integration verifier applies the same readiness requirements to both
+controllers before authoring and when accepting reconciliation progress,
+including externally managed deployments. The connected secret scenario
+retains its existing bounded recovery wait before the initial readiness check.
 
 Repository capacity API replacement has one 30-second budget from the
 replacement trigger through outage observation, health/readiness and complete
