@@ -341,6 +341,44 @@ type cqlTraceObserver struct {
 
 type cqlExchangeKey struct{}
 
+type cqlServerTrace struct {
+	span      trace.Span
+	callbacks atomic.Int32
+}
+
+func sampleCQLServerTrace(ctx context.Context) gocql.Tracer {
+	if !observability.TakeRuntimeTraceSample(ctx) {
+		return nil
+	}
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(attribute.Bool("gitstore.db.server_trace.requested", true))
+	return &cqlServerTrace{span: span}
+}
+
+func (s *cqlServerTrace) Trace(id []byte) {
+	sequence := s.callbacks.Add(1)
+	if sequence > 4 {
+		if sequence == 5 {
+			s.span.SetAttributes(attribute.Bool("gitstore.db.server_trace.overflow", true))
+		}
+		return
+	}
+	if len(id) != 16 {
+		s.span.SetAttributes(attribute.Bool("gitstore.db.server_trace.invalid", true))
+		return
+	}
+	var traceID gocql.UUID
+	copy(traceID[:], id)
+	if traceID == (gocql.UUID{}) {
+		s.span.SetAttributes(attribute.Bool("gitstore.db.server_trace.invalid", true))
+		return
+	}
+	s.span.AddEvent("scylla.server_trace", trace.WithAttributes(
+		attribute.String("db.cassandra.trace_id", traceID.String()),
+		attribute.Int("gitstore.db.server_trace.sequence", int(sequence)),
+	))
+}
+
 type cqlExchangeTrace struct {
 	mu       sync.Mutex
 	streams  [4]cqlExchangeStream

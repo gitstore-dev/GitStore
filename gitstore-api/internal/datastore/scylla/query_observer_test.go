@@ -6,11 +6,16 @@ package scylla
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/gocql/gocql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,12 +24,117 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
 )
 
 type cqlQueryObserverFunc func(context.Context, gocql.ObservedQuery)
 
 func (f cqlQueryObserverFunc) ObserveQuery(ctx context.Context, query gocql.ObservedQuery) {
 	f(ctx, query)
+}
+
+func TestCQLServerTraceDisabledDoesNotAllocate(t *testing.T) {
+	ctx := context.Background()
+	require.Equal(t, float64(0), testing.AllocsPerRun(100, func() {
+		require.Nil(t, sampleCQLServerTrace(ctx))
+	}))
+}
+
+func TestCQLServerTraceSamplingRequiresExplicitActiveProfiler(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := listener.Addr().String()
+	require.NoError(t, listener.Close())
+	shutdown, err := observability.StartCapacityProfiler(
+		observability.ProfilingConfig{URI: "http://" + address}, zap.NewNop(),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		require.NoError(t, shutdown(ctx))
+	})
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+	ctx, span := provider.Tracer("test").Start(t.Context(), "exchange")
+	defer span.End()
+	require.Nil(t, sampleCQLServerTrace(ctx))
+	completed := make(chan error, 1)
+	go func() {
+		client := &http.Client{Timeout: 3 * time.Second}
+		response, err := client.Get("http://" + address + "/debug/pprof/trace?seconds=1&sample_limit=2")
+		if err == nil {
+			var size int64
+			size, err = io.Copy(io.Discard, io.LimitReader(response.Body, 16<<20))
+			err = errors.Join(err, response.Body.Close())
+			if err == nil && (response.StatusCode != http.StatusOK || size < 16) {
+				err = fmt.Errorf("execution capture status=%d bytes=%d", response.StatusCode, size)
+			}
+		}
+		completed <- err
+	}()
+	var first gocql.Tracer
+	require.Eventually(t, func() bool {
+		first = sampleCQLServerTrace(ctx)
+		return first != nil
+	}, time.Second, time.Millisecond)
+	second := sampleCQLServerTrace(ctx)
+	require.NotNil(t, second)
+	require.Nil(t, sampleCQLServerTrace(ctx), "exhausted budget must not trace further requests")
+	id := gocql.TimeUUID()
+	first.Trace(id[:])
+	second.Trace(id[:])
+	select {
+	case err := <-completed:
+		require.NoError(t, err)
+	case <-time.After(4 * time.Second):
+		t.Fatal("bounded execution capture did not finish")
+	}
+	require.Nil(t, sampleCQLServerTrace(ctx), "completed capture must not sample future requests")
+	span.End()
+	require.Len(t, recorder.Ended(), 1)
+	got := recorder.Ended()[0]
+	require.Len(t, got.Events(), 2)
+	require.Contains(t, got.Attributes(), attribute.Bool("gitstore.db.server_trace.requested", true))
+}
+
+func TestCQLServerTraceIDsAreBoundedAndDoNotExposeInvalidBytes(t *testing.T) {
+	for _, invalid := range [][]byte{nil, []byte("private-detail"), make([]byte, 16)} {
+		recorder := tracetest.NewSpanRecorder()
+		provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+		_, span := provider.Tracer("test").Start(t.Context(), "exchange")
+		tracer := &cqlServerTrace{span: span}
+		tracer.Trace(invalid)
+		span.End()
+		require.NoError(t, provider.Shutdown(t.Context()))
+		require.Len(t, recorder.Ended(), 1)
+		got := recorder.Ended()[0]
+		require.Empty(t, got.Events())
+		require.Contains(t, got.Attributes(), attribute.Bool("gitstore.db.server_trace.invalid", true))
+		for _, attr := range got.Attributes() {
+			require.NotContains(t, attr.Value.Emit(), "private")
+		}
+	}
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+	_, span := provider.Tracer("test").Start(t.Context(), "exchange")
+	tracer := &cqlServerTrace{span: span}
+	id := gocql.TimeUUID()
+	var callbacks sync.WaitGroup
+	for range 128 {
+		callbacks.Go(func() { tracer.Trace(id[:]) })
+	}
+	callbacks.Wait()
+	span.End()
+	got := recorder.Ended()[0]
+	require.Len(t, got.Events(), 4)
+	require.Contains(t, got.Attributes(), attribute.Bool("gitstore.db.server_trace.overflow", true))
+	for _, event := range got.Events() {
+		require.Equal(t, "scylla.server_trace", event.Name)
+		require.Contains(t, event.Attributes, attribute.String("db.cassandra.trace_id", id.String()))
+	}
 }
 
 func TestCQLAttemptTracing(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	runtimetrace "runtime/trace"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/trace"
@@ -21,6 +22,25 @@ import (
 )
 
 var capacityProfileCapture sync.Mutex
+var runtimeTraceSamples atomic.Int64
+
+// TakeRuntimeTraceSample claims one explicitly requested diagnostic sample
+// during this process's loopback execution capture, never during ordinary work.
+func TakeRuntimeTraceSample(ctx context.Context) bool {
+	if runtimeTraceSamples.Load() == 0 || !runtimetrace.IsEnabled() {
+		return false
+	}
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() || !span.SpanContext().IsSampled() {
+		return false
+	}
+	for remaining := runtimeTraceSamples.Load(); remaining > 0; remaining = runtimeTraceSamples.Load() {
+		if runtimeTraceSamples.CompareAndSwap(remaining, remaining-1) {
+			return true
+		}
+	}
+	return false
+}
 
 // AnnotateRuntimeSpan links the SDK's current runtime task to a sampled,
 // recording span without creating another task or changing its lifetime.
@@ -108,12 +128,43 @@ func capacityProfileHandler() http.Handler {
 			http.Error(w, "trace duration must be 1..5 seconds", http.StatusBadRequest)
 			return
 		}
+		samples := 0
+		if values, present := r.URL.Query()["sample_limit"]; present {
+			if len(values) != 1 {
+				http.Error(w, "sample_limit must be one integer in 0..64", http.StatusBadRequest)
+				return
+			}
+			samples, err = strconv.Atoi(values[0])
+			if err != nil || samples < 0 || samples > 64 {
+				http.Error(w, "sample_limit must be one integer in 0..64", http.StatusBadRequest)
+				return
+			}
+		}
 		if !capacityProfileCapture.TryLock() {
 			http.Error(w, "profile capture already active", http.StatusConflict)
 			return
 		}
 		defer capacityProfileCapture.Unlock()
-		pprof.Trace(w, r)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", `attachment; filename="trace"`)
+		if err := runtimetrace.Start(w); err != nil {
+			w.Header().Del("Content-Type")
+			w.Header().Del("Content-Disposition")
+			http.Error(w, fmt.Sprintf("start execution trace: %v", err), http.StatusInternalServerError)
+			return
+		}
+		runtimeTraceSamples.Store(int64(samples))
+		runtimetrace.Log(r.Context(), "gitstore.runtime.sample_limit", strconv.Itoa(samples))
+		defer func() {
+			runtimeTraceSamples.Store(0)
+			runtimetrace.Stop()
+		}()
+		timer := time.NewTimer(time.Duration(seconds) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-r.Context().Done():
+		case <-timer.C:
+		}
 	})
 	for _, profile := range []string{"heap", "allocs", "block", "mutex", "goroutine"} {
 		handler := pprof.Handler(profile)

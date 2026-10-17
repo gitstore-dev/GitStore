@@ -1131,7 +1131,11 @@ func (s *scyllaDatastore) executeFileCAS(request *fileCASRequest) error {
 	return datastore.MeasureCatalogMutationPhase(request.ctx, datastore.FileMutationConditionalSingle, func() (err error) {
 		ctx, finish := startCQLExchange(request.ctx, otel.Tracer("gitstore/datastore/scylla"))
 		defer func() { finish(err) }()
-		applied, err := s.session.Query(fileUpdateStatement, nil).WithContext(ctx).Bind(request.values...).ExecCASRelease()
+		query := s.session.Query(fileUpdateStatement, nil).WithContext(ctx).Bind(request.values...)
+		if tracer := sampleCQLServerTrace(ctx); tracer != nil {
+			query.Trace(tracer)
+		}
+		applied, err := query.ExecCASRelease()
 		if err != nil {
 			return err
 		}
@@ -1149,6 +1153,9 @@ func (s *scyllaDatastore) executeFileCASBatch(ctx context.Context, group []*file
 		queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"))
 		defer func() { finish(err) }()
 		batch := s.session.Batch(gocql.LoggedBatch).WithContext(queryCtx).RetryPolicy(&gocql.SimpleRetryPolicy{})
+		if tracer := sampleCQLServerTrace(queryCtx); tracer != nil {
+			batch.Trace(tracer)
+		}
 		for _, request := range group {
 			batch.Query(fileUpdateStatement, request.values...)
 		}

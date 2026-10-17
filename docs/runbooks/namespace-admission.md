@@ -1559,6 +1559,20 @@ continuous OS CPU execution, and overlapping reader intervals must not be
 summed across requests. Transport, host/VM effects and server work remain
 unseparated; this observation does not justify a production tuning change.
 
+For a subsequent owned diagnostic, explicit native tracing can pair a File
+conditional exchange with its own server trace rather than an unrelated
+histogram or isolated query. Add `CAPACITY_PROFILE_NATIVE_SAMPLES=16` to the
+existing Go profiling capacity command. Its default is zero, and each API
+execution capture can claim at most 64 samples. Only sampled File conditional
+exchanges consume the budget; ordinary requests and captures without
+`sample_limit` do not enable native tracing. The selected exchange marks its
+request and records returned native trace IDs in bounded `scylla.server_trace`
+events. Fetch those exact `system_traces` sessions separately after the run;
+no trace-table reads are added to admission. Missing, invalid, overflowing or
+censored results cannot establish a server duration. Server tracing itself adds
+work, so these measurements remain diagnostic and cannot demonstrate an
+unprofiled ACK improvement.
+
 Plural File node reads hydrate at most 250 IDs per backend call. UID locators
 use at most eight concurrent queries containing at most sixteen distinct partition keys each;
 the API never sends a 250-key cross-partition `IN` query. This reduces repeated

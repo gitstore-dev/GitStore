@@ -114,6 +114,28 @@ failures invalidate the diagnostic. Profiles are private binary runtime material
 do not publish them raw. Profiling/sampling overhead makes these diagnostic
 runs unsuitable for unprofiled acceptance.
 
+Add `CAPACITY_PROFILE_NATIVE_SAMPLES=16` to explicitly request native Scylla
+server tracing for at most sixteen sampled File conditional exchanges per API
+during its execution capture. The default is zero; values outside 0..64,
+disabled profiling and non-diagnostic modes are rejected. The manifest records
+the per-API maximum, not a claim that all samples completed. The loopback trace
+request passes `sample_limit`; ordinary execution traces do not request server
+tracing. Each selected `scylla.exchange` records
+`gitstore.db.server_trace.requested=true`; its bounded `scylla.server_trace`
+events retain at most four returned `db.cassandra.trace_id` values per exchange,
+identifying native `system_traces` sessions with existing retries unchanged.
+The execution trace must acknowledge the exact sample budget once; missing or
+mismatched acknowledgement rejects an older or incompatible API instead of
+silently accepting an ignored query parameter. Budget decoding is included in
+the capture's manifest duration.
+Missing IDs, invalid IDs, overflow and
+boundary-censored samples must remain explicit diagnostic failures or exclusions,
+not invented server durations. The admission path never queries trace tables.
+Read acknowledged sessions and events separately after the workload, with
+bounded exact-ID reads. Native tracing adds server work; do not use these runs
+as an optimization comparison or capacity acceptance, or publish raw query
+parameters from server traces.
+
 API, controller and Git telemetry accounting distinguishes admitted, exported, failed and
 truncated records. All bound exported string log bodies to 4096 UTF-8 bytes.
 The live admitted/exported difference includes pending batches; only interpret

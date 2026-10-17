@@ -16,6 +16,8 @@ import (
 	"runtime"
 	runtimetrace "runtime/trace"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -88,7 +90,50 @@ func TestRuntimeSpanDisabledDoesNotAllocate(t *testing.T) {
 	ctx := context.Background()
 	require.Equal(t, float64(0), testing.AllocsPerRun(100, func() {
 		AnnotateRuntimeSpan(ctx)
+		require.False(t, TakeRuntimeTraceSample(ctx))
 	}))
+}
+
+func TestRuntimeTraceSamplesAreExplicitBoundedAndRecorded(t *testing.T) {
+	require.False(t, TakeRuntimeTraceSample(context.Background()))
+	require.NoError(t, runtimetrace.Start(io.Discard))
+	t.Cleanup(runtimetrace.Stop)
+	runtimeTraceSamples.Store(64)
+	t.Cleanup(func() { runtimeTraceSamples.Store(0) })
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+	ctx, span := provider.Tracer("test").Start(t.Context(), "sample")
+	defer span.End()
+	for _, ignored := range []context.Context{
+		context.Background(), trace.ContextWithRemoteSpanContext(t.Context(), span.SpanContext()),
+	} {
+		require.False(t, TakeRuntimeTraceSample(ignored))
+	}
+	unsampled := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.NeverSample()))
+	t.Cleanup(func() { require.NoError(t, unsampled.Shutdown(context.Background())) })
+	ignored, ignoredSpan := unsampled.Tracer("test").Start(t.Context(), "unsampled")
+	require.False(t, TakeRuntimeTraceSample(ignored))
+	ignoredSpan.End()
+	require.EqualValues(t, 64, runtimeTraceSamples.Load())
+	var claimed atomic.Int32
+	var workers sync.WaitGroup
+	for range 128 {
+		workers.Go(func() {
+			if TakeRuntimeTraceSample(ctx) {
+				claimed.Add(1)
+			}
+		})
+	}
+	workers.Wait()
+	require.EqualValues(t, 64, claimed.Load())
+	require.Zero(t, runtimeTraceSamples.Load())
+	require.False(t, TakeRuntimeTraceSample(ctx))
+	span.End()
+	runtimeTraceSamples.Store(1)
+	require.False(t, TakeRuntimeTraceSample(ctx), "ended spans must not consume diagnostic samples")
+	require.EqualValues(t, 1, runtimeTraceSamples.Load())
+	runtimetrace.Stop()
+	require.False(t, TakeRuntimeTraceSample(context.Background()))
 }
 
 func BenchmarkRuntimeSpanDisabled(b *testing.B) {
@@ -187,6 +232,11 @@ func TestCapacityProfilesAreBoundedAndBinary(t *testing.T) {
 		"/debug/pprof/profile?seconds=61", "/debug/pprof/trace?seconds=6",
 		"/debug/pprof/trace?seconds=-1", "/debug/pprof/heap?debug=1",
 		"/debug/pprof/goroutine?debug=2", "/debug/pprof/block?seconds=1",
+		"/debug/pprof/trace?seconds=1&sample_limit=65",
+		"/debug/pprof/trace?seconds=1&sample_limit=-1",
+		"/debug/pprof/trace?seconds=1&sample_limit=",
+		"/debug/pprof/trace?seconds=1&sample_limit=x",
+		"/debug/pprof/trace?seconds=1&sample_limit=1&sample_limit=2",
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
@@ -232,7 +282,7 @@ func TestCapacityProfileCancellationAndExclusion(t *testing.T) {
 	defer peer.Close()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/debug/pprof/trace?seconds=3", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/debug/pprof/trace?seconds=3&sample_limit=2", nil)
 	require.NoError(t, err)
 	completed := make(chan error, 1)
 	go func() {
@@ -265,6 +315,9 @@ func TestCapacityProfileCancellationAndExclusion(t *testing.T) {
 		defer response.Body.Close()
 		return response.StatusCode == http.StatusConflict
 	}, time.Second, 10*time.Millisecond, "exclusion must be process-wide, even across handlers")
+	require.Eventually(t, func() bool {
+		return runtimeTraceSamples.Load() == 2
+	}, time.Second, time.Millisecond, "budget must activate after trace start, not merely after capture lock")
 	cancel()
 	select {
 	case <-completed:
@@ -279,4 +332,46 @@ func TestCapacityProfileCancellationAndExclusion(t *testing.T) {
 		defer response.Body.Close()
 		return response.StatusCode == http.StatusOK
 	}, time.Second, 10*time.Millisecond)
+	require.Zero(t, runtimeTraceSamples.Load(), "cancellation must revoke unused diagnostic samples")
+}
+
+func TestCapacityTraceStartFailureDoesNotActivateSamples(t *testing.T) {
+	require.NoError(t, runtimetrace.Start(io.Discard))
+	defer runtimetrace.Stop()
+	response := httptest.NewRecorder()
+	capacityProfileHandler().ServeHTTP(response, httptest.NewRequest(
+		http.MethodGet, "/debug/pprof/trace?seconds=1&sample_limit=64", nil,
+	))
+	require.Equal(t, http.StatusInternalServerError, response.Code)
+	require.Contains(t, response.Body.String(), "start execution trace")
+	require.Zero(t, runtimeTraceSamples.Load())
+	require.False(t, TakeRuntimeTraceSample(t.Context()))
+}
+
+func TestCapacityTraceRecordsAcceptedSampleBudget(t *testing.T) {
+	for _, samples := range []string{"", "2"} {
+		t.Run("samples-"+samples, func(t *testing.T) {
+			path := "/debug/pprof/trace?seconds=1"
+			if samples != "" {
+				path += "&sample_limit=" + samples
+			}
+			response := httptest.NewRecorder()
+			capacityProfileHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			require.Equal(t, http.StatusOK, response.Code)
+			require.Greater(t, response.Body.Len(), 16)
+			require.Less(t, response.Body.Len(), 8<<20)
+			file := t.TempDir() + "/capture.trace"
+			require.NoError(t, os.WriteFile(file, response.Body.Bytes(), 0600))
+			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+			defer cancel()
+			parsed, err := exec.CommandContext(ctx, "go", "tool", "trace", "-d=parsed", file).CombinedOutput()
+			require.NoError(t, err, "%s", parsed)
+			if samples == "" {
+				samples = "0"
+			}
+			require.Equal(t, 1, strings.Count(string(parsed), `Category="gitstore.runtime.sample_limit"`))
+			require.Contains(t, string(parsed), `Category="gitstore.runtime.sample_limit" Message="`+samples+`"`)
+			require.Zero(t, runtimeTraceSamples.Load())
+		})
+	}
 }

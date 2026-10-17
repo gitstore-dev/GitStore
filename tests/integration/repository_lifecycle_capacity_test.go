@@ -671,10 +671,59 @@ type repositoryCapacityProfileCapture struct {
 	Failed      bool          `json:"failed"`
 }
 
+func verifyRepositoryCapacityProfileSamples(ctx context.Context, path string, samples int) error {
+	decodeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	command := exec.CommandContext(decodeCtx, "go", "tool", "trace", "-d=parsed", path)
+	command.WaitDelay = time.Second
+	command.Stderr = &secretCapacityGitOutput{limit: 4096}
+	output, err := command.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("open runtime trace decoder: %w", err)
+	}
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("start runtime trace decoder: %w", err)
+	}
+	markers, matching := 0, 0
+	scanner := bufio.NewScanner(output)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, ` Category="gitstore.runtime.sample_limit" `) {
+			markers++
+			if strings.HasSuffix(line, ` Message="`+strconv.Itoa(samples)+`"`) {
+				matching++
+			}
+		}
+	}
+	scanErr := scanner.Err()
+	if scanErr != nil {
+		cancel()
+		_ = output.Close()
+	}
+	if err := errors.Join(scanErr, command.Wait()); err != nil {
+		return fmt.Errorf("decode runtime trace sample budget: %w", err)
+	}
+	if markers != 1 || matching != 1 {
+		return fmt.Errorf("runtime trace did not acknowledge sample_limit=%d exactly once (markers=%d matching=%d)", samples, markers, matching)
+	}
+	return nil
+}
+
 func startRepositoryCapacityProfiles(ctx context.Context, project string, mode capacityMode, duration time.Duration) (<-chan error, error) {
 	done := make(chan error, 1)
 	flag := os.Getenv("CAPACITY_PROFILING")
+	nativeSamples := 0
+	if raw := os.Getenv("CAPACITY_PROFILE_NATIVE_SAMPLES"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 || value > 64 {
+			return nil, errors.New("CAPACITY_PROFILE_NATIVE_SAMPLES must be 0..64")
+		}
+		nativeSamples = value
+	}
 	if flag == "" || flag == "none" {
+		if nativeSamples != 0 {
+			return nil, errors.New("native trace samples require CAPACITY_PROFILING=go")
+		}
 		done <- nil
 		return done, nil
 	}
@@ -721,10 +770,14 @@ func startRepositoryCapacityProfiles(ctx context.Context, project string, mode c
 		defer cancel()
 		results := make(chan error, 2)
 		var captures [2][]repositoryCapacityProfileCapture
+		tracePath := "trace?seconds=3"
+		if nativeSamples > 0 {
+			tracePath += "&sample_limit=" + strconv.Itoa(nativeSamples)
+		}
 		for i, container := range containers {
 			go func(i int, container string) {
 				for _, profile := range []struct{ name, path string }{
-					{"execution.trace", "trace?seconds=3"},
+					{"execution.trace", tracePath},
 					{"cpu.pprof", "profile?seconds=" + strconv.Itoa(seconds)},
 					{"heap.pprof", "heap"}, {"allocs.pprof", "allocs"},
 					{"block.pprof", "block"}, {"mutex.pprof", "mutex"},
@@ -739,7 +792,11 @@ func startRepositoryCapacityProfiles(ctx context.Context, project string, mode c
 						err = errors.New("profile response is not a binary capture")
 					}
 					if err == nil {
-						err = os.WriteFile(filepath.Join(directory, fmt.Sprintf("api-%c-%s", 'a'+i, profile.name)), body, 0600)
+						path := filepath.Join(directory, fmt.Sprintf("api-%c-%s", 'a'+i, profile.name))
+						err = os.WriteFile(path, body, 0600)
+						if err == nil && nativeSamples > 0 && profile.name == "execution.trace" {
+							err = verifyRepositoryCapacityProfileSamples(captureCtx, path, nativeSamples)
+						}
 					}
 					completed := time.Now()
 					captures[i] = append(captures[i], repositoryCapacityProfileCapture{
@@ -763,18 +820,29 @@ func startRepositoryCapacityProfiles(ctx context.Context, project string, mode c
 			Replicas      int                                   `json:"replicas"`
 			MaximumBytes  int                                   `json:"maximumBytesPerCapture"`
 			Passed        bool                                  `json:"passed"`
+			NativeSamples int                                   `json:"maximumNativeTraceSamplesPerAPI"`
 			Captures      [2][]repositoryCapacityProfileCapture `json:"captures"`
-		}{1, "owned-go-live-diagnostic", seconds, 2, 32 << 20, result == nil, captures})
+		}{1, "owned-go-live-diagnostic", seconds, 2, 32 << 20, result == nil, nativeSamples, captures})
 		done <- errors.Join(result, manifestErr)
 	}()
 	return done, nil
 }
 
 func TestRepositoryCapacityProfilesCaptureBurstFirstAndReportEveryAttempt(t *testing.T) {
-	for _, failTrace := range []bool{false, true} {
-		t.Run(fmt.Sprintf("fail-trace=%t", failTrace), func(t *testing.T) {
+	for _, test := range []struct {
+		failTrace bool
+		samples   string
+	}{{false, ""}, {true, ""}, {false, "2"}, {true, "2"}} {
+		failTrace := test.failTrace
+		t.Run(fmt.Sprintf("fail-trace=%t/samples=%s", failTrace, test.samples), func(t *testing.T) {
 			bin, root := t.TempDir(), t.TempDir()
 			log := filepath.Join(bin, "captures")
+			if test.samples != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(bin, "go"), []byte(`#!/bin/sh
+if [ "$1" != tool ] || [ "$2" != trace ] || [ "$3" != -d=parsed ]; then exit 94; fi
+printf 'M=1 P=0 G=1 Log Time=1 Task=0 Category="gitstore.runtime.sample_limit" Message="2"\n'
+`), 0700))
+			}
 			require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(`#!/bin/sh
 if [ "$1" = ps ]; then
   case "$*" in
@@ -789,7 +857,7 @@ if [ "$1" != exec ] || [ "$3" != wget ] || [ "$4" != -qO- ]; then
 fi
 printf '%s %s\n' "$2" "$5" >> "$TEST_PROFILE_COMMAND_LOG"
 case "$5" in
-  http://127.0.0.1:6060/debug/pprof/trace?seconds=3)
+  http://127.0.0.1:6060/debug/pprof/trace?seconds=3*)
     if [ "$TEST_PROFILE_FAIL_TRACE" = true ] && [ "$2" = bbbbbbbbbbbb ]; then
       exit 42
     fi
@@ -807,6 +875,7 @@ esac
 			t.Setenv("REPOSITORY_CAPACITY_OWNERSHIP_FILE", "")
 			t.Setenv("CAPACITY_PROFILING", "go")
 			t.Setenv("CAPACITY_PROFILE_SECONDS", "1")
+			t.Setenv("CAPACITY_PROFILE_NATIVE_SAMPLES", test.samples)
 			t.Setenv("CAPACITY_API_PROFILE_PORT", "6060")
 			t.Setenv("CAPACITY_EVIDENCE_DIR", root)
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -833,15 +902,20 @@ esac
 			}
 			for _, id := range []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb"} {
 				require.NotEmpty(t, commands[id])
-				require.Equal(t, "http://127.0.0.1:6060/debug/pprof/trace?seconds=3", commands[id][0],
+				traceURL := "http://127.0.0.1:6060/debug/pprof/trace?seconds=3"
+				if test.samples != "" {
+					traceURL += "&sample_limit=" + test.samples
+				}
+				require.Equal(t, traceURL, commands[id][0],
 					"execution tracing must capture first-burst scheduling, not a window after CPU profiling")
 			}
 			var manifest struct {
-				Seconds      int  `json:"cpuSeconds"`
-				Replicas     int  `json:"replicas"`
-				MaximumBytes int  `json:"maximumBytesPerCapture"`
-				Passed       bool `json:"passed"`
-				Captures     [2][]struct {
+				Seconds       int  `json:"cpuSeconds"`
+				Replicas      int  `json:"replicas"`
+				MaximumBytes  int  `json:"maximumBytesPerCapture"`
+				Passed        bool `json:"passed"`
+				NativeSamples int  `json:"maximumNativeTraceSamplesPerAPI"`
+				Captures      [2][]struct {
 					Profile     string        `json:"profile"`
 					StartedAt   time.Time     `json:"startedAt"`
 					CompletedAt time.Time     `json:"completedAt"`
@@ -857,6 +931,12 @@ esac
 			require.Equal(t, 1, manifest.Seconds)
 			require.Equal(t, 2, manifest.Replicas)
 			require.Equal(t, 32<<20, manifest.MaximumBytes)
+			wantSamples := 0
+			if test.samples != "" {
+				wantSamples, err = strconv.Atoi(test.samples)
+				require.NoError(t, err)
+			}
+			require.Equal(t, wantSamples, manifest.NativeSamples)
 			profiles := []string{"execution.trace", "cpu.pprof", "heap.pprof", "allocs.pprof", "block.pprof", "mutex.pprof", "goroutine.pprof"}
 			for replica, captures := range manifest.Captures {
 				count := len(profiles)
@@ -893,7 +973,47 @@ esac
 	}
 }
 
+func TestRepositoryCapacityProfileSampleAcknowledgement(t *testing.T) {
+	for _, test := range []struct {
+		name, output string
+		exit         int
+		passed       bool
+	}{
+		{"accepted", `M=1 P=0 G=1 Log Time=1 Task=0 Category="gitstore.runtime.sample_limit" Message="2"`, 0, true},
+		{"old-api", "no sample acknowledgement", 0, false},
+		{"wrong-budget", `M=1 P=0 G=1 Log Time=1 Task=0 Category="gitstore.runtime.sample_limit" Message="1"`, 0, false},
+		{"duplicate", "M=1 Log Time=1 Task=0 Category=\"gitstore.runtime.sample_limit\" Message=\"2\"\nM=1 Log Time=2 Task=0 Category=\"gitstore.runtime.sample_limit\" Message=\"2\"", 0, false},
+		{"decode-failure", "", 1, false},
+		{"oversized-line", strings.Repeat("x", 128<<10), 0, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bin := t.TempDir()
+			body := fmt.Sprintf("#!/bin/sh\ncat <<'TRACE_MARKER'\n%s\nTRACE_MARKER\nexit %d\n", test.output, test.exit)
+			require.NoError(t, os.WriteFile(filepath.Join(bin, "go"), []byte(body), 0700))
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			err := verifyRepositoryCapacityProfileSamples(ctx, "test.trace", 2)
+			if test.passed {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
 func TestRepositoryCapacityProfileValidation(t *testing.T) {
+	t.Setenv("CAPACITY_PROFILE_NATIVE_SAMPLES", "")
+	for _, samples := range []string{"-1", "65", "invalid", "1"} {
+		t.Run("native-samples-"+samples, func(t *testing.T) {
+			t.Setenv("CAPACITY_PROFILE_NATIVE_SAMPLES", samples)
+			t.Setenv("CAPACITY_PROFILING", "none")
+			done, err := startRepositoryCapacityProfiles(t.Context(), "must-not-access-docker", capacityModeDiagnostic, time.Minute)
+			require.Error(t, err)
+			require.Nil(t, done)
+		})
+	}
 	for _, test := range []struct {
 		name, flag, seconds, port, evidence string
 		mode                                capacityMode
