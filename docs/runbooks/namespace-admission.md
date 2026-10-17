@@ -825,10 +825,20 @@ Compare these timestamps with the correlated server HTTP spans to localize
 gaps. Do not call wall-minus-CPU time disk or network time: scheduling and
 other waits can contribute, and child CPU can overlap.
 
+New captures additionally include `resourceUsage`: `minorFaults`, `majorFaults`,
+`voluntaryContextSwitches` and `involuntaryContextSwitches`, taken from the same
+OS process-exit accounting without an additional sampling process. Accounted
+children are included; older evidence can omit this object. Zero counters are
+explicit, while missing accounting invalidates the diagnostic without changing
+the actual Git ACK. Minor faults do not necessarily involve disk I/O, and
+context-switch counts alone cannot separate CPU contention from other waits.
+Compare them with host/VM CPU and pressure observations rather than interpreting
+them as per-command disk latency or an optimal worker-count measurement.
+
 Trace2 events are consumed in memory, with a 16 KiB line bound and 128 KiB
-trace budget per command. Only fixed command classes, timestamps, durations
-and bounded failure classes enter evidence; raw events, argv, paths and
-configuration do not. Ordinary output retains its separate 128 KiB bound.
+trace budget per command. Only fixed command classes, timestamps, durations,
+bounded resource counters and failure classes enter evidence; raw events, argv,
+paths and configuration do not. Ordinary output retains its separate 128 KiB bound.
 Unsupported, malformed, truncated or incomplete traces invalidate the diagnostic
 without changing whether the Git command itself was acknowledged. At most
 three commands per push and the existing 2,048 timeline prefix are retained.

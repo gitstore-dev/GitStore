@@ -1687,6 +1687,11 @@ func TestSecretCapacityGitClientTiming(t *testing.T) {
 			require.True(t, timing.RemoteHTTPStartedAt.IsZero(), "local transport is not an HTTP helper")
 			require.GreaterOrEqual(t, timing.UserCPU, time.Duration(0))
 			require.GreaterOrEqual(t, timing.SystemCPU, time.Duration(0))
+			require.NotNil(t, timing.ResourceUsage)
+			require.GreaterOrEqual(t, timing.ResourceUsage.MinorFaults, int64(0))
+			require.GreaterOrEqual(t, timing.ResourceUsage.MajorFaults, int64(0))
+			require.GreaterOrEqual(t, timing.ResourceUsage.VoluntaryContextSwitches, int64(0))
+			require.GreaterOrEqual(t, timing.ResourceUsage.InvoluntaryContextSwitches, int64(0))
 		}
 		require.Equal(t, expected, commands)
 	}
@@ -1706,6 +1711,7 @@ func TestSecretCapacityGitClientTimingHTTPFailure(t *testing.T) {
 	require.NotContains(t, err.Error(), "private-")
 	require.Len(t, timings, 1)
 	require.NoError(t, validateSecretCapacityGitTiming(timings[0]))
+	require.NotNil(t, timings[0].ResourceUsage)
 	require.Equal(t, "other", timings[0].Command)
 	require.False(t, timings[0].RemoteHTTPStartedAt.IsZero())
 	require.GreaterOrEqual(t, timings[0].RemoteHTTPExitedAt.Sub(timings[0].RemoteHTTPStartedAt), 40*time.Millisecond)
@@ -1843,17 +1849,21 @@ func TestSecretCapacityClientTimingFailurePreservesACKs(t *testing.T) {
 		burstInterval: 40 * time.Millisecond, burstSize: 1, burstWindow: time.Millisecond,
 		workers: 1, queueLimit: 8, drainTimeout: time.Second,
 	}
-	measured, err := runSecretCapacityPushes(t.Context(), cfg, func(context.Context, int, secretCapacityPushBatch) secretCapacityPushResult {
-		return secretCapacityPushResult{
-			gitAttempted: true, acknowledged: true, ackLatency: time.Millisecond,
-			clientGit: []secretCapacityGitTiming{{Command: "push", Failure: "trace_limit"}},
-		}
-	})
-	require.NoError(t, err)
-	require.True(t, measured.clientTimingFailed, "capture failure must survive collector merging")
-	require.Equal(t, measured.completed, measured.acknowledged)
-	require.Zero(t, measured.failed, "diagnostic capture must not invent rejected pushes")
-	require.Empty(t, measured.failureClasses)
+	for _, failure := range []string{"trace_limit", "process_usage"} {
+		t.Run(failure, func(t *testing.T) {
+			measured, err := runSecretCapacityPushes(t.Context(), cfg, func(context.Context, int, secretCapacityPushBatch) secretCapacityPushResult {
+				return secretCapacityPushResult{
+					gitAttempted: true, acknowledged: true, ackLatency: time.Millisecond,
+					clientGit: []secretCapacityGitTiming{{Command: "push", Failure: failure}},
+				}
+			})
+			require.NoError(t, err)
+			require.True(t, measured.clientTimingFailed, "capture failure must survive collector merging")
+			require.Equal(t, measured.completed, measured.acknowledged)
+			require.Zero(t, measured.failed, "diagnostic capture must not invent rejected pushes")
+			require.Empty(t, measured.failureClasses)
+		})
+	}
 }
 
 func TestSecretCapacityGitInspectChecksFailureWithoutReturningOutput(t *testing.T) {
@@ -3794,8 +3804,36 @@ func TestSecretCapacityClientTimingEvidence(t *testing.T) {
 	}
 	base.Timelines = []secretCapacityPushTimeline{row}
 	require.NoError(t, validateSecretCapacityFileStages(base))
+	t.Run("legacy resource counters absent", func(t *testing.T) {
+		body, err := json.Marshal(command)
+		require.NoError(t, err)
+		require.NotContains(t, string(body), "resourceUsage")
+		var decoded secretCapacityGitTiming
+		require.NoError(t, json.Unmarshal(body, &decoded))
+		require.Nil(t, decoded.ResourceUsage)
+		require.NoError(t, validateSecretCapacityGitTiming(decoded))
+	})
+	t.Run("resource counters round trip", func(t *testing.T) {
+		withUsage := command
+		withUsage.ResourceUsage = &secretCapacityGitResourceUsage{
+			MinorFaults: 123, MajorFaults: 4, VoluntaryContextSwitches: 56, InvoluntaryContextSwitches: 7,
+		}
+		body, err := json.Marshal(withUsage)
+		require.NoError(t, err)
+		var decoded secretCapacityGitTiming
+		require.NoError(t, json.Unmarshal(body, &decoded))
+		require.Equal(t, withUsage.ResourceUsage, decoded.ResourceUsage)
+		require.NoError(t, validateSecretCapacityGitTiming(decoded))
+		zero := command
+		zero.ResourceUsage = &secretCapacityGitResourceUsage{}
+		body, err = json.Marshal(zero)
+		require.NoError(t, err)
+		require.Contains(t, string(body), `"resourceUsage":{"minorFaults":0,"majorFaults":0,"voluntaryContextSwitches":0,"involuntaryContextSwitches":0}`)
+		require.NoError(t, validateSecretCapacityGitTiming(zero))
+	})
 	for _, fault := range []string{"undeclared", "production", "missing", "commands", "incomplete",
-		"negative cpu", "worker bounds", "http bounds", "http missing exit", "private class", "overflow"} {
+		"negative cpu", "minor faults", "major faults", "voluntary switches", "involuntary switches",
+		"worker bounds", "http bounds", "http missing exit", "private class", "overflow"} {
 		t.Run(fault, func(t *testing.T) {
 			workload := base
 			workload.Timelines = []secretCapacityPushTimeline{row}
@@ -3814,6 +3852,14 @@ func TestSecretCapacityClientTimingEvidence(t *testing.T) {
 				timing.TraceExitedAt = time.Time{}
 			case "negative cpu":
 				timing.UserCPU = -time.Nanosecond
+			case "minor faults":
+				timing.ResourceUsage = &secretCapacityGitResourceUsage{MinorFaults: -1}
+			case "major faults":
+				timing.ResourceUsage = &secretCapacityGitResourceUsage{MajorFaults: -1}
+			case "voluntary switches":
+				timing.ResourceUsage = &secretCapacityGitResourceUsage{VoluntaryContextSwitches: -1}
+			case "involuntary switches":
+				timing.ResourceUsage = &secretCapacityGitResourceUsage{InvoluntaryContextSwitches: -1}
 			case "worker bounds":
 				timing.StartedAt = start.Add(-time.Second)
 				timing.TraceStartedAt = timing.StartedAt

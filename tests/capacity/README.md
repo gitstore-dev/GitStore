@@ -857,6 +857,14 @@ records per existing timeline. These include host command start/wall time,
 user/system CPU (including OS-accounted children), Git Trace2 start/exit, and
 remote-curl helper command-name/exit timestamps when HTTP is used. Helper time
 includes client, protocol and server work; it is not pure network time.
+New captures also retain a fixed `resourceUsage` object from the existing
+process-exit accounting: `minorFaults`, `majorFaults`,
+`voluntaryContextSwitches` and `involuntaryContextSwitches`, including children
+accounted by the operating system. These counters require no additional
+sampling process. Zero counts are explicit; older evidence may omit the object.
+Minor faults do not imply disk reads, and neither fault nor context-switch
+counts prove which resource caused a wait. Missing process accounting fails
+the diagnostic without changing the Git command's actual ACK.
 Raw Trace2 is filtered in memory, never written to disk or returned as command
 output: argv, paths, configuration and arbitrary event fields are not exported.
 The parser bounds lines to 16 KiB and total trace data to 128 KiB per command;

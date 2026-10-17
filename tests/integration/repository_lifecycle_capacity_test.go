@@ -4594,17 +4594,25 @@ type secretCapacityTraceKey struct{}
 
 type secretCapacityGitTimingKey struct{}
 
+type secretCapacityGitResourceUsage struct {
+	MinorFaults                int64 `json:"minorFaults"`
+	MajorFaults                int64 `json:"majorFaults"`
+	VoluntaryContextSwitches   int64 `json:"voluntaryContextSwitches"`
+	InvoluntaryContextSwitches int64 `json:"involuntaryContextSwitches"`
+}
+
 type secretCapacityGitTiming struct {
-	Command             string        `json:"command"`
-	StartedAt           time.Time     `json:"startedAt"`
-	Wall                time.Duration `json:"wall"`
-	UserCPU             time.Duration `json:"userCPU"`
-	SystemCPU           time.Duration `json:"systemCPU"`
-	TraceStartedAt      time.Time     `json:"traceStartedAt"`
-	TraceExitedAt       time.Time     `json:"traceExitedAt"`
-	RemoteHTTPStartedAt time.Time     `json:"remoteHTTPStartedAt,omitzero"`
-	RemoteHTTPExitedAt  time.Time     `json:"remoteHTTPExitedAt,omitzero"`
-	Failure             string        `json:"failure,omitempty"`
+	Command             string                          `json:"command"`
+	StartedAt           time.Time                       `json:"startedAt"`
+	Wall                time.Duration                   `json:"wall"`
+	UserCPU             time.Duration                   `json:"userCPU"`
+	SystemCPU           time.Duration                   `json:"systemCPU"`
+	ResourceUsage       *secretCapacityGitResourceUsage `json:"resourceUsage,omitempty"`
+	TraceStartedAt      time.Time                       `json:"traceStartedAt"`
+	TraceExitedAt       time.Time                       `json:"traceExitedAt"`
+	RemoteHTTPStartedAt time.Time                       `json:"remoteHTTPStartedAt,omitzero"`
+	RemoteHTTPExitedAt  time.Time                       `json:"remoteHTTPExitedAt,omitzero"`
+	Failure             string                          `json:"failure,omitempty"`
 }
 
 func validateRepositoryCapacityClientTiming(value, workload string, mode capacityMode) error {
@@ -4628,6 +4636,10 @@ func validateSecretCapacityGitTiming(timing secretCapacityGitTiming) error {
 		timing.TraceExitedAt.After(timing.StartedAt.Add(timing.Wall)) ||
 		timing.RemoteHTTPStartedAt.IsZero() != timing.RemoteHTTPExitedAt.IsZero() {
 		return errors.New("secret capacity: incomplete client Git timing")
+	}
+	if usage := timing.ResourceUsage; usage != nil && (usage.MinorFaults < 0 || usage.MajorFaults < 0 ||
+		usage.VoluntaryContextSwitches < 0 || usage.InvoluntaryContextSwitches < 0) {
+		return errors.New("secret capacity: invalid client Git resource usage")
 	}
 	if !timing.RemoteHTTPStartedAt.IsZero() && (timing.RemoteHTTPStartedAt.Before(timing.TraceStartedAt) ||
 		timing.RemoteHTTPExitedAt.Before(timing.RemoteHTTPStartedAt) || timing.RemoteHTTPExitedAt.After(timing.TraceExitedAt)) {
@@ -4826,6 +4838,14 @@ func secretCapacityGitInspect(ctx context.Context, directory, token string, insp
 		}
 		if command.ProcessState != nil {
 			trace.timing.UserCPU, trace.timing.SystemCPU = command.ProcessState.UserTime(), command.ProcessState.SystemTime()
+			if usage, ok := command.ProcessState.SysUsage().(*syscall.Rusage); ok && usage != nil {
+				trace.timing.ResourceUsage = &secretCapacityGitResourceUsage{
+					MinorFaults: usage.Minflt, MajorFaults: usage.Majflt,
+					VoluntaryContextSwitches: usage.Nvcsw, InvoluntaryContextSwitches: usage.Nivcsw,
+				}
+			} else {
+				trace.fail("process_usage")
+			}
 		} else {
 			trace.fail("process_start")
 		}
