@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -83,7 +84,8 @@ func NewHandler(mgr ManagerStats, version string, credentialReadiness ...Credent
 
 // NewMetricsHandler returns an http.Handler for GET /metrics (Prometheus scrape).
 func NewMetricsHandler(mgr ManagerStats) http.Handler {
-	metrics := promhttp.Handler()
+	metrics := promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer,
+		promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{EnableOpenMetrics: true}))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mgr.KindStats()
 		metrics.ServeHTTP(w, r)

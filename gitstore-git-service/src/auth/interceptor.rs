@@ -114,6 +114,7 @@ struct ReplayState {
     pending: HashSet<String>,
     high_water: u64,
     durable_high_water: u64,
+    maintenance_in_progress: bool,
 }
 
 #[derive(Default)]
@@ -159,19 +160,32 @@ impl ReplayDirectoryDurability {
             drop(state);
             let started = Instant::now();
             let outcome = persist();
-            tracing::info!(
-                requests = ready.len(),
-                duration_ms = started.elapsed().as_secs_f64() * 1000.0,
-                success = outcome.is_ok(),
-                "RPC replay directory barrier timing"
-            );
+            let duration = started.elapsed();
+            let publishing = Instant::now();
             state = self.state.lock().map_err(|_| unavailable())?;
-            for ticket in ready {
-                state.outcomes.insert(ticket, outcome.clone());
+            for &covered in &ready {
+                state.outcomes.insert(covered, outcome.clone());
             }
             state.syncing = false;
             state.in_flight = 0;
             self.changed.notify_all();
+            drop(state);
+            record_rpc_verification_phase(
+                RPCVerificationPhase::DirectoryPublish,
+                publishing.elapsed().as_secs_f64(),
+            );
+            let reporting = Instant::now();
+            tracing::info!(
+                requests = ready.len(),
+                duration_ms = duration.as_secs_f64() * 1000.0,
+                success = outcome.is_ok(),
+                "RPC replay directory barrier timing"
+            );
+            record_rpc_verification_phase(
+                RPCVerificationPhase::DirectoryReport,
+                reporting.elapsed().as_secs_f64(),
+            );
+            state = self.state.lock().map_err(|_| unavailable())?;
         }
     }
 }
@@ -194,6 +208,7 @@ impl ReplayState {
             pending: HashSet::new(),
             high_water,
             durable_high_water: high_water,
+            maintenance_in_progress: false,
         };
         for entry in fs::read_dir(&state.directory)
             .map_err(|_| Status::unavailable("RPC replay storage unavailable"))?
@@ -225,6 +240,7 @@ impl ReplayState {
         }
         Ok(state)
     }
+    #[cfg(test)]
     fn sync_directory(&self) -> Result<(), Status> {
         Self::sync_directory_at(&self.directory)
     }
@@ -233,52 +249,19 @@ impl ReplayState {
             .and_then(|f| f.sync_all())
             .map_err(|_| Status::unavailable("RPC replay durability failed"))
     }
+    fn persist_clock_at(directory: &Path, now: u64) -> Result<(), Status> {
+        fs::write(directory.join("clock.tmp"), now.to_string())
+            .map_err(|_| Status::unavailable("RPC replay clock unavailable"))?;
+        File::open(directory.join("clock.tmp"))
+            .and_then(|f| f.sync_all())
+            .map_err(|_| Status::unavailable("RPC replay clock durability failed"))?;
+        fs::rename(directory.join("clock.tmp"), directory.join("clock"))
+            .map_err(|_| Status::unavailable("RPC replay clock unavailable"))?;
+        Self::sync_directory_at(directory)
+    }
     fn reserve(&mut self, now: u64, expiry: u64, nonce: &str) -> Result<File, Status> {
         if now < self.high_water {
             return Err(Status::unavailable("RPC clock moved backwards"));
-        }
-        // Persist a high-water mark BEFORE deleting expired records. Otherwise
-        // a wall-clock rollback after restart could resurrect spent envelopes.
-        if self
-            .entries
-            .first()
-            .is_some_and(|(expires, _)| *expires <= now)
-            && now.saturating_sub(self.durable_high_water) >= REPLAY_CLEANUP_CLOCK_INTERVAL_MS
-        {
-            fs::write(self.directory.join("clock.tmp"), now.to_string())
-                .map_err(|_| Status::unavailable("RPC replay clock unavailable"))?;
-            File::open(self.directory.join("clock.tmp"))
-                .and_then(|f| f.sync_all())
-                .map_err(|_| Status::unavailable("RPC replay clock durability failed"))?;
-            fs::rename(
-                self.directory.join("clock.tmp"),
-                self.directory.join("clock"),
-            )
-            .map_err(|_| Status::unavailable("RPC replay clock unavailable"))?;
-            self.sync_directory()?;
-            self.high_water = now;
-            self.durable_high_water = now;
-        }
-        if self
-            .entries
-            .first()
-            .is_some_and(|(expires, _)| *expires <= self.durable_high_water)
-        {
-            // Bound cleanup work on each request; saturation is fail-closed.
-            let expired: Vec<_> = self
-                .entries
-                .iter()
-                .take_while(|(expires, _)| *expires <= self.durable_high_water)
-                .take(256)
-                .filter(|(_, nonce)| !self.pending.contains(nonce))
-                .cloned()
-                .collect();
-            for (expires, nonce) in expired {
-                fs::remove_file(self.directory.join(format!("{expires}-{nonce}")))
-                    .map_err(|_| Status::unavailable("RPC replay cleanup failed"))?;
-                self.nonces.remove(&nonce);
-                self.entries.remove(&(expires, nonce));
-            }
         }
         if self.nonces.contains(nonce) {
             return Err(Status::unauthenticated("RPC replay rejected"));
@@ -343,38 +326,57 @@ impl RPCVerifier {
         message: &T,
     ) -> Result<(), Status> {
         let started = Instant::now();
-        let permit = match self.verification_slots.clone().try_acquire_owned() {
-            Ok(permit) => permit,
-            Err(_) => {
-                let _waiting = self
-                    .verification_waiters
-                    .clone()
-                    .try_acquire_owned()
-                    .map_err(|_| Status::resource_exhausted("RPC verification queue exhausted"))?;
-                let bytes = u32::try_from(message.encoded_len()).map_err(|_| {
-                    Status::resource_exhausted("RPC verification request exceeds queue byte budget")
-                })?;
-                let _waiting_bytes = self
-                    .verification_wait_bytes
-                    .clone()
-                    .try_acquire_many_owned(bytes.max(1))
-                    .map_err(|_| {
-                        Status::resource_exhausted("RPC verification queue byte budget exhausted")
+        let capacity_timer =
+            crate::grpc::metrics::start_rpc_verification_phase(RPCVerificationPhase::CapacityWait);
+        let permit = async {
+            match self.verification_slots.clone().try_acquire_owned() {
+                Ok(permit) => Ok(permit),
+                Err(_) => {
+                    let _waiting = self
+                        .verification_waiters
+                        .clone()
+                        .try_acquire_owned()
+                        .map_err(|_| {
+                            Status::resource_exhausted("RPC verification queue exhausted")
+                        })?;
+                    let bytes = u32::try_from(message.encoded_len()).map_err(|_| {
+                        Status::resource_exhausted(
+                            "RPC verification request exceeds queue byte budget",
+                        )
                     })?;
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(1),
-                    self.verification_slots.clone().acquire_owned(),
-                )
-                .await
-                .map_err(|_| Status::resource_exhausted("RPC verification wait budget exhausted"))?
-                .map_err(|_| Status::unavailable("RPC verification unavailable"))?
+                    let _waiting_bytes = self
+                        .verification_wait_bytes
+                        .clone()
+                        .try_acquire_many_owned(bytes.max(1))
+                        .map_err(|_| {
+                            Status::resource_exhausted(
+                                "RPC verification queue byte budget exhausted",
+                            )
+                        })?;
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(1),
+                        self.verification_slots.clone().acquire_owned(),
+                    )
+                    .await
+                    .map_err(|_| {
+                        Status::resource_exhausted("RPC verification wait budget exhausted")
+                    })?
+                    .map_err(|_| Status::unavailable("RPC verification unavailable"))
+                }
             }
-        };
+        }
+        .await;
         let capacity_wait_ms = started.elapsed().as_secs_f64() * 1000.0;
-        record_rpc_verification_phase(
-            RPCVerificationPhase::CapacityWait,
-            capacity_wait_ms / 1000.0,
-        );
+        drop(capacity_timer);
+        if let Err(error) = &permit {
+            tracing::info!(
+                capacity_wait_ms,
+                error_code = error.code() as i32,
+                error = error.message(),
+                "RPC verification capacity timing"
+            );
+        }
+        let permit = permit?;
         let verifier = self.clone();
         let metadata = metadata.clone();
         let method = method.to_owned();
@@ -420,6 +422,22 @@ impl RPCVerifier {
         body: &[u8],
         at: Option<u64>,
     ) -> Result<(), Status> {
+        self.verify_bytes_with_clock_persistence(
+            metadata,
+            method,
+            body,
+            || at.map_or_else(now_millis, Ok),
+            ReplayState::persist_clock_at,
+        )
+    }
+    fn verify_bytes_with_clock_persistence(
+        &self,
+        metadata: &MetadataMap,
+        method: &str,
+        body: &[u8],
+        clock: impl Fn() -> Result<u64, Status>,
+        persist_clock: impl FnOnce(&Path, u64) -> Result<(), Status>,
+    ) -> Result<(), Status> {
         // Read the clock inside the serialized reservation. Concurrent calls
         // may arrive out of order; that is not a wall-clock rollback.
         let waiting = Instant::now();
@@ -433,10 +451,7 @@ impl RPCVerifier {
             replay_lock_wait_ms / 1000.0,
         );
         let checking = Instant::now();
-        let now = match at {
-            Some(now) => now,
-            None => now_millis()?,
-        };
+        let mut now = clock()?;
         let invalid = || Status::unauthenticated("invalid signed RPC envelope");
         if metadata.contains_key("authorization") {
             return Err(invalid());
@@ -484,6 +499,95 @@ impl RPCVerifier {
             envelope_check_ms / 1000.0,
         );
         let reserving = Instant::now();
+        if now < replay.high_water {
+            return Err(Status::unavailable("RPC clock moved backwards"));
+        }
+        let mut replay_clock_ms = 0.0;
+        let mut replay_cleanup_ms = 0.0;
+        let mut replay_cleanup_records = 0;
+        if !replay.maintenance_in_progress {
+            let checkpoint = replay
+                .entries
+                .first()
+                .is_some_and(|(expires, _)| *expires <= now)
+                && now.saturating_sub(replay.durable_high_water)
+                    >= REPLAY_CLEANUP_CLOCK_INTERVAL_MS;
+            let floor = if checkpoint {
+                now
+            } else {
+                replay.durable_high_water
+            };
+            let expired: Vec<_> = replay
+                .entries
+                .iter()
+                .take_while(|(expires, _)| *expires <= floor)
+                .take(256)
+                .filter(|(_, nonce)| !replay.pending.contains(nonce))
+                .cloned()
+                .collect();
+            if checkpoint || !expired.is_empty() {
+                let directory = replay.directory.clone();
+                replay.maintenance_in_progress = true;
+                drop(replay);
+                // One admitted verifier performs bounded maintenance. Peers can
+                // persist fresh nonces, but no old record is forgotten before
+                // its clock floor and unlink have both completed.
+                let maintenance = (|| {
+                    if checkpoint {
+                        let started = Instant::now();
+                        let result = persist_clock(&directory, now);
+                        replay_clock_ms = started.elapsed().as_secs_f64() * 1000.0;
+                        record_rpc_verification_phase(
+                            RPCVerificationPhase::ReplayClock,
+                            replay_clock_ms / 1000.0,
+                        );
+                        result?;
+                        let mut replay = self
+                            .replay
+                            .lock()
+                            .map_err(|_| Status::unavailable("RPC replay state unavailable"))?;
+                        replay.high_water = replay.high_water.max(now);
+                        replay.durable_high_water = now;
+                    }
+                    if !expired.is_empty() {
+                        let started = Instant::now();
+                        let result = (|| {
+                            for (expires, nonce) in expired {
+                                fs::remove_file(directory.join(format!("{expires}-{nonce}")))
+                                    .map_err(|_| {
+                                        Status::unavailable("RPC replay cleanup failed")
+                                    })?;
+                                let mut replay = self.replay.lock().map_err(|_| {
+                                    Status::unavailable("RPC replay state unavailable")
+                                })?;
+                                replay.nonces.remove(&nonce);
+                                replay.entries.remove(&(expires, nonce));
+                                replay_cleanup_records += 1;
+                            }
+                            Ok::<_, Status>(())
+                        })();
+                        replay_cleanup_ms = started.elapsed().as_secs_f64() * 1000.0;
+                        record_rpc_verification_phase(
+                            RPCVerificationPhase::ReplayCleanup,
+                            replay_cleanup_ms / 1000.0,
+                        );
+                        result?;
+                    }
+                    Ok::<_, Status>(())
+                })();
+                replay = self
+                    .replay
+                    .lock()
+                    .map_err(|_| Status::unavailable("RPC replay state unavailable"))?;
+                replay.maintenance_in_progress = false;
+                maintenance?;
+                // Peers may have advanced the clock during maintenance.
+                now = clock()?;
+                if issued > now.saturating_add(5_000) || expiry <= now {
+                    return Err(invalid());
+                }
+            }
+        }
         let file = replay.reserve(now, expiry, parts[2])?;
         let directory = replay.directory.clone();
         let replay_reserve_ms = reserving.elapsed().as_secs_f64() * 1000.0;
@@ -540,6 +644,9 @@ impl RPCVerifier {
             replay_lock_wait_ms,
             envelope_check_ms,
             replay_reserve_ms,
+            replay_clock_ms,
+            replay_cleanup_ms,
+            replay_cleanup_records,
             replay_persist_ms,
             replay_inode_ms,
             replay_directory_ms,
@@ -555,6 +662,348 @@ impl RPCVerifier {
 mod tests {
     use super::*;
     use crate::grpc::server::proto::CreateRepositoryRequest;
+
+    #[test]
+    fn clock_checkpoint_does_not_block_peer_durability_or_lower_the_clock_floor() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        struct Release(Option<mpsc::Sender<()>>);
+        impl Drop for Release {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+        for (failed, persisted, raced) in [
+            (false, true, false),
+            (true, false, false),
+            (true, true, false),
+            (false, true, true),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
+            let method = "/gitstore.git.v1.GitService/CreateRepository";
+            let base = 1_700_000_000_000;
+            let checkpoint = base + 60_001;
+            let clock = AtomicU64::new(checkpoint);
+            let requests: Vec<_> = [base, checkpoint, checkpoint + 1]
+                .into_iter()
+                .enumerate()
+                .map(|(nonce, issued)| {
+                    signed_at(
+                        CreateRepositoryRequest::default(),
+                        "key",
+                        "gitstore-git",
+                        method,
+                        issued,
+                        &format!("{nonce:032x}"),
+                    )
+                    .unwrap()
+                })
+                .collect();
+            verifier
+                .verify_at(requests[0].metadata(), method, requests[0].get_ref(), base)
+                .unwrap();
+            let (entered, entry) = mpsc::channel();
+            let (release, wait) = mpsc::channel();
+            let wait = Mutex::new(wait);
+            let (finished, result) = mpsc::channel();
+            std::thread::scope(|scope| {
+                let owner = scope.spawn(|| {
+                    verifier.verify_bytes_with_clock_persistence(
+                        requests[1].metadata(),
+                        method,
+                        &requests[1].get_ref().encode_to_vec(),
+                        || Ok(clock.load(Ordering::SeqCst)),
+                        |directory, now| {
+                            entered.send(now).unwrap();
+                            wait.lock().unwrap().recv().unwrap();
+                            if persisted {
+                                ReplayState::persist_clock_at(directory, now)?;
+                            }
+                            if failed {
+                                Err(Status::unavailable("injected clock persistence failure"))
+                            } else {
+                                Ok(())
+                            }
+                        },
+                    )
+                });
+                let mut release = Release(Some(release));
+                assert_eq!(
+                    entry.recv_timeout(Duration::from_secs(5)).unwrap(),
+                    checkpoint
+                );
+                clock.store(checkpoint + 1, Ordering::SeqCst);
+                scope.spawn(|| {
+                    finished
+                        .send(verifier.verify_at(
+                            requests[2].metadata(),
+                            method,
+                            requests[2].get_ref(),
+                            checkpoint + 1,
+                        ))
+                        .unwrap();
+                });
+                result
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("a peer must finish while the clock checkpoint is blocked")
+                    .unwrap();
+                if raced {
+                    verifier
+                        .verify_at(
+                            requests[1].metadata(),
+                            method,
+                            requests[1].get_ref(),
+                            checkpoint + 1,
+                        )
+                        .unwrap();
+                }
+                {
+                    let replay = verifier.replay.lock().unwrap();
+                    assert_eq!(replay.high_water, checkpoint + 1);
+                    assert_eq!(replay.durable_high_water, 0);
+                    assert!(replay.nonces.contains(&format!("{:032x}", 0)));
+                    assert!(replay
+                        .directory
+                        .join(format!("{}-{:032x}", base + 60_000, 0))
+                        .exists());
+                    assert!(replay.pending.is_empty());
+                }
+                release.0.take().unwrap().send(()).unwrap();
+                let outcome = owner.join().unwrap();
+                if failed {
+                    assert_eq!(outcome.unwrap_err().code(), tonic::Code::Unavailable);
+                    let replay = verifier.replay.lock().unwrap();
+                    assert_eq!(replay.durable_high_water, 0);
+                    assert!(replay.nonces.contains(&format!("{:032x}", 0)));
+                    assert!(!replay.nonces.contains(&format!("{:032x}", 1)));
+                } else {
+                    if raced {
+                        assert_eq!(outcome.unwrap_err().code(), tonic::Code::Unauthenticated);
+                    } else {
+                        outcome.unwrap();
+                    }
+                    let replay = verifier.replay.lock().unwrap();
+                    assert_eq!(replay.durable_high_water, checkpoint);
+                    assert_eq!(replay.high_water, checkpoint + 1);
+                    assert!(!replay.nonces.contains(&format!("{:032x}", 0)));
+                }
+            });
+            if failed {
+                verifier
+                    .verify_at(
+                        requests[1].metadata(),
+                        method,
+                        requests[1].get_ref(),
+                        checkpoint + 1,
+                    )
+                    .unwrap();
+            }
+            drop(verifier);
+            let replacement = RPCVerifier::new("key", None, root.path()).unwrap();
+            for request in &requests[1..] {
+                assert_eq!(
+                    replacement
+                        .verify_at(
+                            request.metadata(),
+                            method,
+                            request.get_ref(),
+                            checkpoint + 1,
+                        )
+                        .unwrap_err()
+                        .code(),
+                    tonic::Code::Unauthenticated
+                );
+            }
+            assert_eq!(
+                replacement
+                    .verify_at(requests[0].metadata(), method, requests[0].get_ref(), base)
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::Unavailable
+            );
+        }
+    }
+
+    #[test]
+    fn envelope_expiring_during_clock_checkpoint_is_not_reserved() {
+        use std::cell::Cell;
+
+        let root = tempfile::tempdir().unwrap();
+        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
+        let method = "/gitstore.git.v1.GitService/CreateRepository";
+        let base = 1_700_000_000_000;
+        for (index, issued) in [base, base + 60_001].into_iter().enumerate() {
+            let nonce = format!("{index:032x}");
+            let request = signed_at(
+                CreateRepositoryRequest::default(),
+                "key",
+                "gitstore-git",
+                method,
+                issued,
+                &nonce,
+            )
+            .unwrap();
+            if index == 0 {
+                verifier
+                    .verify_at(request.metadata(), method, request.get_ref(), issued)
+                    .unwrap();
+                continue;
+            }
+            let clock = Cell::new(issued);
+            let outcome = verifier.verify_bytes_with_clock_persistence(
+                request.metadata(),
+                method,
+                &request.get_ref().encode_to_vec(),
+                || Ok(clock.get()),
+                |directory, now| {
+                    ReplayState::persist_clock_at(directory, now)?;
+                    clock.set(issued + 60_000);
+                    Ok(())
+                },
+            );
+            assert_eq!(outcome.unwrap_err().code(), tonic::Code::Unauthenticated);
+            let replay = verifier.replay.lock().unwrap();
+            assert!(!replay.nonces.contains(&nonce));
+            assert!(replay.pending.is_empty());
+            assert!(!replay
+                .directory
+                .join(format!("{}-{nonce}", issued + 60_000))
+                .exists());
+        }
+    }
+
+    #[test]
+    fn maintenance_preserves_the_cleanup_bound_and_pending_records() {
+        use std::cell::Cell;
+
+        let root = tempfile::tempdir().unwrap();
+        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
+        let base = 1_700_000_000_000;
+        {
+            let mut replay = verifier.replay.lock().unwrap();
+            for nonce in 0..257 {
+                let nonce = format!("{nonce:032x}");
+                replay
+                    .reserve(base, base + 1, &nonce)
+                    .unwrap()
+                    .sync_all()
+                    .unwrap();
+                if nonce != format!("{:032x}", 0) {
+                    assert!(replay.pending.remove(&nonce));
+                }
+            }
+            replay.sync_directory().unwrap();
+        }
+        let method = "/gitstore.git.v1.GitService/CreateRepository";
+        let checkpoints = Cell::new(0);
+        for (offset, nonce) in [(2, "f".repeat(32)), (3, "e".repeat(32))] {
+            let request = signed_at(
+                CreateRepositoryRequest::default(),
+                "key",
+                "gitstore-git",
+                method,
+                base + offset,
+                &nonce,
+            )
+            .unwrap();
+            verifier
+                .verify_bytes_with_clock_persistence(
+                    request.metadata(),
+                    method,
+                    &request.get_ref().encode_to_vec(),
+                    || Ok(base + offset),
+                    |directory, now| {
+                        checkpoints.set(checkpoints.get() + 1);
+                        ReplayState::persist_clock_at(directory, now)
+                    },
+                )
+                .unwrap();
+            let mut replay = verifier.replay.lock().unwrap();
+            assert!(!replay.maintenance_in_progress);
+            assert_eq!(checkpoints.get(), 1);
+            assert_eq!(replay.durable_high_water, base + 2);
+            if offset == 2 {
+                assert_eq!(replay.entries.len(), 3);
+                for remaining in [0, 256] {
+                    let nonce = format!("{remaining:032x}");
+                    assert!(replay.nonces.contains(&nonce));
+                    assert!(replay
+                        .directory
+                        .join(format!("{}-{nonce}", base + 1))
+                        .exists());
+                }
+                assert!(replay.pending.remove(&format!("{:032x}", 0)));
+            } else {
+                assert_eq!(replay.entries.len(), 2);
+                assert!(replay.entries.iter().all(|(expiry, _)| *expiry > base + 2));
+            }
+        }
+    }
+
+    #[test]
+    fn partial_cleanup_failure_retains_unremoved_nonces_and_allows_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
+        let base = 1_700_000_000_000;
+        let broken;
+        {
+            let mut replay = verifier.replay.lock().unwrap();
+            for nonce in 0..3 {
+                let nonce = format!("{nonce:032x}");
+                replay
+                    .reserve(base, base + 1, &nonce)
+                    .unwrap()
+                    .sync_all()
+                    .unwrap();
+                assert!(replay.pending.remove(&nonce));
+            }
+            replay.sync_directory().unwrap();
+            broken = replay.directory.join(format!("{}-{:032x}", base + 1, 2));
+        }
+        fs::remove_file(&broken).unwrap();
+        fs::create_dir(&broken).unwrap();
+        let method = "/gitstore.git.v1.GitService/CreateRepository";
+        let request = signed_at(
+            CreateRepositoryRequest::default(),
+            "key",
+            "gitstore-git",
+            method,
+            base + 2,
+            &"f".repeat(32),
+        )
+        .unwrap();
+        assert_eq!(
+            verifier
+                .verify_at(request.metadata(), method, request.get_ref(), base + 2)
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unavailable
+        );
+        {
+            let replay = verifier.replay.lock().unwrap();
+            assert!(!replay.maintenance_in_progress);
+            assert_eq!(replay.durable_high_water, base + 2);
+            assert_eq!(replay.entries.len(), 1);
+            assert!(replay.nonces.contains(&format!("{:032x}", 2)));
+            assert!(replay.pending.is_empty());
+        }
+        fs::remove_dir(&broken).unwrap();
+        File::create(&broken).unwrap().sync_all().unwrap();
+        verifier
+            .verify_at(request.metadata(), method, request.get_ref(), base + 3)
+            .unwrap();
+        let replay = verifier.replay.lock().unwrap();
+        assert!(!replay.maintenance_in_progress);
+        assert_eq!(replay.entries.len(), 1);
+        assert!(replay.nonces.contains(&"f".repeat(32)));
+        assert!(!broken.exists());
+        assert!(replay.pending.is_empty());
+    }
 
     #[test]
     fn coalesced_replay_persistence_survives_replacement_for_all_distinct_nonces() {
@@ -599,6 +1048,81 @@ mod tests {
                     .code(),
                 tonic::Code::Unauthenticated
             );
+        }
+    }
+
+    #[test]
+    fn directory_barrier_reporting_cannot_block_later_durability() {
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::Duration;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        struct PausedReporting {
+            entered: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for PausedReporting {
+            fn on_event(
+                &self,
+                event: &tracing::Event<'_>,
+                _: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                if event.metadata().fields().field("requests").is_some() {
+                    self.entered.send(()).unwrap();
+                    self.release
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(5))
+                        .unwrap();
+                }
+            }
+        }
+        for failed in [false, true] {
+            let durability = Arc::new(ReplayDirectoryDurability::default());
+            let (entered, reporting) = mpsc::channel();
+            let (release, resumed) = mpsc::channel();
+            let (completed, completion) = mpsc::channel();
+            thread::scope(|scope| {
+                let first = durability.clone();
+                let owner = scope.spawn(move || {
+                    let subscriber = tracing_subscriber::registry().with(PausedReporting {
+                        entered,
+                        release: Mutex::new(resumed),
+                    });
+                    tracing::subscriber::with_default(subscriber, || {
+                        first.sync(|| {
+                            if failed {
+                                Err(Status::unavailable("injected directory durability failure"))
+                            } else {
+                                Ok(())
+                            }
+                        })
+                    })
+                });
+                reporting.recv_timeout(Duration::from_secs(5)).unwrap();
+                let peer = scope.spawn(|| {
+                    completed.send(durability.sync(|| Ok(()))).unwrap();
+                });
+                let while_reporting = completion.recv_timeout(Duration::from_secs(1));
+                release.send(()).unwrap();
+                let owner_result = owner.join().unwrap();
+                peer.join().unwrap();
+                assert!(
+                    while_reporting.is_ok(),
+                    "a completed directory barrier must release the shared gate before reporting"
+                );
+                assert!(while_reporting.unwrap().is_ok());
+                if failed {
+                    assert_eq!(owner_result.unwrap_err().code(), tonic::Code::Unavailable);
+                } else {
+                    assert!(owner_result.is_ok());
+                }
+            });
+            let state = durability.state.lock().unwrap();
+            assert!(state.pending.is_empty() && state.outcomes.is_empty());
+            assert!(!state.syncing);
+            assert_eq!(state.in_flight, 0);
         }
     }
 
@@ -727,41 +1251,50 @@ mod tests {
     fn cleanup_reuses_only_a_durable_clock_floor_without_relaxing_rollback_checks() {
         let root = tempfile::tempdir().unwrap();
         let now = 1_700_000_000_000;
-        let mut state = ReplayState::open(root.path().join("replay")).unwrap();
+        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
+        let method = "/gitstore.git.v1.GitService/CreateRepository";
+        let reserve = |at: u64, expiry: u64, nonce: &str| {
+            let message = CreateRepositoryRequest::default();
+            let digest = hex(&Sha256::digest(message.encode_to_vec()));
+            let payload = format!("{at}:{expiry}:{nonce}:{digest}");
+            let signature = hex(&mac("key", "gitstore-git", method, &payload)
+                .finalize()
+                .into_bytes());
+            let mut request = Request::new(message);
+            request.metadata_mut().insert(
+                SIGNATURE_HEADER,
+                format!("{payload}:{signature}").parse().unwrap(),
+            );
+            verifier.verify_at(request.metadata(), method, request.get_ref(), at)
+        };
         let a = "a".repeat(32);
         let b = "b".repeat(32);
         for (at, expiry, nonce) in [(now, now + 1, &a), (now + 2, now + 3, &b)] {
-            let file = state.reserve(at, expiry, nonce).unwrap();
-            file.sync_all().unwrap();
-            state.sync_directory().unwrap();
-            assert!(state.pending.remove(nonce));
+            reserve(at, expiry, nonce).unwrap();
         }
+        let state = verifier.replay.lock().unwrap();
         assert_eq!(state.durable_high_water, now + 2);
         assert!(!state.nonces.contains(&a));
-        let file = state
-            .reserve(now + 4, now + 60_000, &"c".repeat(32))
-            .unwrap();
-        file.sync_all().unwrap();
-        state.sync_directory().unwrap();
-        assert!(state.pending.remove(&"c".repeat(32)));
+        drop(state);
+        reserve(now + 4, now + 60_000, &"c".repeat(32)).unwrap();
+        let state = verifier.replay.lock().unwrap();
+        assert!(state.pending.is_empty());
         assert_eq!(state.durable_high_water, now + 2);
         assert!(state.nonces.contains(&b));
+        drop(state);
         assert_eq!(
-            state
-                .reserve(now + 3, now + 60_000, &"d".repeat(32))
+            reserve(now + 3, now + 60_000, &"d".repeat(32))
                 .unwrap_err()
                 .code(),
             tonic::Code::Unavailable
         );
-        let replacement = ReplayState::open(state.directory.clone()).unwrap();
+        let replacement =
+            ReplayState::open(verifier.replay.lock().unwrap().directory.clone()).unwrap();
         assert!(replacement.nonces.contains(&b));
         assert_eq!(replacement.high_water, now + 2);
-        let file = state
-            .reserve(now + 252, now + 60_000, &"e".repeat(32))
-            .unwrap();
-        file.sync_all().unwrap();
-        state.sync_directory().unwrap();
-        assert!(state.pending.remove(&"e".repeat(32)));
+        reserve(now + 252, now + 60_000, &"e".repeat(32)).unwrap();
+        let state = verifier.replay.lock().unwrap();
+        assert!(state.pending.is_empty());
         assert_eq!(state.durable_high_water, now + 252);
         assert!(!state.nonces.contains(&b));
     }
@@ -1035,6 +1568,82 @@ mod tests {
                 .unwrap_err()
                 .code(),
             tonic::Code::ResourceExhausted
+        );
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn verification_timeout_reports_capacity_without_consuming_the_request() {
+        let measurements = || {
+            prometheus::gather()
+                .into_iter()
+                .find(|family| family.name() == "gitstore_git_rpc_verification_phase_seconds")
+                .and_then(|family| {
+                    family
+                        .get_metric()
+                        .iter()
+                        .find(|metric| {
+                            metric.get_label().iter().any(|label| {
+                                label.name() == "phase" && label.value() == "capacity_wait"
+                            })
+                        })
+                        .map(|metric| {
+                            let histogram = metric.get_histogram();
+                            (histogram.get_sample_count(), histogram.get_sample_sum())
+                        })
+                })
+                .unwrap_or_default()
+        };
+        let root = tempfile::tempdir().unwrap();
+        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
+        let method = "/gitstore.git.v1.GitService/CreateRepository";
+        let request = sign_request(
+            CreateRepositoryRequest::default(),
+            "key",
+            "gitstore-git",
+            method,
+        )
+        .unwrap();
+        let permit = verifier.verification_slots.acquire_many(32).await.unwrap();
+        let before = measurements();
+        let started = Instant::now();
+        let error = verifier
+            .verify(request.metadata(), method, request.get_ref())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+        assert_eq!(error.message(), "RPC verification wait budget exhausted");
+        assert!(started.elapsed() >= std::time::Duration::from_secs(1));
+        let after = measurements();
+        assert!(after.0 > before.0);
+        assert!(after.1 - before.1 >= 1.0);
+        assert!(logs_contain("RPC verification capacity timing"));
+        assert!(logs_contain("capacity_wait_ms="));
+        assert!(logs_contain("error_code=8"));
+        assert!(logs_contain("RPC verification wait budget exhausted"));
+        assert!(!logs_contain(SIGNATURE_HEADER));
+        assert!(verifier.replay.lock().unwrap().nonces.is_empty());
+        assert_eq!(
+            verifier.verification_waiters.available_permits(),
+            VERIFICATION_WAITERS as usize
+        );
+        assert_eq!(
+            verifier.verification_wait_bytes.available_permits(),
+            VERIFICATION_WAIT_BYTES as usize
+        );
+        drop(permit);
+        assert_eq!(verifier.verification_slots.available_permits(), 32);
+        verifier
+            .verify(request.metadata(), method, request.get_ref())
+            .await
+            .unwrap();
+        assert_eq!(
+            verifier
+                .verify(request.metadata(), method, request.get_ref())
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unauthenticated
         );
     }
 

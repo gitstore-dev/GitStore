@@ -6,7 +6,10 @@ pub mod category_taxonomy_deletion_handler;
 pub mod validation_handler;
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -27,8 +30,8 @@ pub struct RefUpdate {
 }
 
 /// Typed actor and policy context propagated through the hook pipeline.
-/// Derived from the `PushContext` proto on the first gRPC chunk; immutable for
-/// the lifetime of the push. Every pipeline stage receives a reference to this.
+/// Actor facts are derived from `PushContext` and remain immutable. Validation
+/// stages additionally share a receive-local completion receipt.
 #[derive(Clone, Debug, Default)]
 pub struct HookContext {
     /// Stable repository UUID from the API-supplied PushContext.
@@ -46,6 +49,7 @@ pub struct HookContext {
     pub max_file_size_bytes: i64,
     /// Opaque audit tag from the datastore record.
     pub config_resource_version: String,
+    pub resource_deletion_validation_complete: Arc<AtomicBool>,
 }
 
 impl HookContext {
@@ -185,6 +189,9 @@ impl ValidationHandler for ChainedValidationHandler {
         blobs: &[ResourceBlob],
         hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
+        hook_ctx
+            .resource_deletion_validation_complete
+            .store(false, Ordering::Relaxed);
         for handler in &self.handlers {
             match handler.validate(blobs, hook_ctx).await? {
                 AdmissionDecision::Accept => {}
@@ -201,6 +208,9 @@ impl ValidationHandler for ChainedValidationHandler {
         quarantine_dir: Option<&Path>,
         hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
+        hook_ctx
+            .resource_deletion_validation_complete
+            .store(false, Ordering::Relaxed);
         for handler in &self.handlers {
             match handler
                 .validate_receive(git_dir, updates, quarantine_dir, hook_ctx)
@@ -294,6 +304,9 @@ impl HookPipeline {
         quarantine_dir: Option<&Path>,
         hook_ctx: &HookContext,
     ) -> Result<Vec<usize>, HookRejection> {
+        if updates.is_empty() {
+            return Ok(Vec::new());
+        }
         let decision = self
             .run_schema_validation(git_dir, updates, quarantine_dir, hook_ctx)
             .await;
@@ -323,6 +336,9 @@ impl HookPipeline {
         repository_id: &str,
         hook_ctx: &HookContext,
     ) {
+        if updates.is_empty() {
+            return;
+        }
         let start = Instant::now();
 
         let handler = Arc::clone(&self.admission_handler);
@@ -861,6 +877,30 @@ mod tests {
             old_oid: "0".repeat(40),
             new_oid: "a".repeat(40),
         }
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_empty_updates_skip_pre_receive_phase() {
+        let accepted = make_pipeline()
+            .run(Path::new(""), &[], None, &HookContext::default())
+            .await
+            .unwrap();
+        assert!(accepted.is_empty());
+        assert!(!logs_contain("hook_phase_complete"));
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn test_empty_updates_skip_post_receive_without_runtime() {
+        make_pipeline().run_post_receive(
+            Path::new(""),
+            &[],
+            "empty-push-repository",
+            &HookContext::default(),
+        );
+        assert!(!logs_contain("post_receive_dispatch_timing"));
+        assert!(!logs_contain("hook_phase_complete"));
     }
 
     #[tokio::test]

@@ -8,6 +8,7 @@ output="${1:?output file is required}"
 targets_csv="${2:?comma-separated Prometheus targets are required}"
 controller_targets_csv="${3:-}"
 git_targets_csv="${4:-}"
+scylla_targets_csv="${5:-}"
 IFS=',' read -r -a targets <<<"${targets_csv}"
 validation_targets=("${targets[@]}")
 if [[ -n "${controller_targets_csv}" ]]; then
@@ -20,6 +21,11 @@ if [[ -n "${git_targets_csv}" ]]; then
   IFS=',' read -r -a git_targets <<<"${git_targets_csv}"
   validation_targets+=("${git_targets[@]}")
 fi
+if [[ -n "${scylla_targets_csv}" ]]; then
+  [[ "${scylla_targets_csv}" != *, ]] || { echo "empty Scylla scrape target" >&2; exit 2; }
+  IFS=',' read -r -a scylla_targets <<<"${scylla_targets_csv}"
+  validation_targets+=("${scylla_targets[@]}")
+fi
 (( ${#targets[@]} > 0 )) || { echo "at least one Prometheus target is required" >&2; exit 2; }
 
 for target in "${validation_targets[@]}"; do
@@ -30,10 +36,11 @@ for target in "${validation_targets[@]}"; do
 done
 
 mkdir -p "$(dirname "${output}")"
-printf '%s\n' "${targets[@]}" | jq -Rsc --arg controllers "${controller_targets_csv}" --arg git "${git_targets_csv}" '
+printf '%s\n' "${targets[@]}" | jq -Rsc --arg controllers "${controller_targets_csv}" --arg git "${git_targets_csv}" --arg scylla "${scylla_targets_csv}" '
   split("\n") | map(select(length > 0)) |
   [{targets:.,labels:{job:"gitstore-api-capacity"}}] +
   (if $controllers == "" then [] else
     [{targets:($controllers | split(",")),labels:{job:"gitstore-controller-capacity"}}] end) +
-  (if $git == "" then [] else [{targets:($git | split(",")),labels:{job:"gitstore-git-capacity"}}] end)
+  (if $git == "" then [] else [{targets:($git | split(",")),labels:{job:"gitstore-git-capacity"}}] end) +
+  (if $scylla == "" then [] else [{targets:($scylla | split(",")),labels:{job:"gitstore-scylla-capacity"}}] end)
 ' >"${output}"

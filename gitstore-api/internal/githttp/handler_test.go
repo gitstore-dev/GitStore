@@ -5,8 +5,11 @@ package githttp
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,12 +29,155 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
+	logpb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+	"google.golang.org/protobuf/proto"
 )
+
+func TestGitHTTPTimingLogAndNativeExemplarsShareServerSpan(t *testing.T) {
+	previousTraces, previousLogs, previousMetrics := otel.GetTracerProvider(), otel.GetLoggerProvider(), otel.GetMeterProvider()
+	previousPropagation, previousErrors := otel.GetTextMapPropagator(), otel.GetErrorHandler()
+	previousStageMetrics := defaultGitHTTPStageMetrics
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previousTraces)
+		otel.SetLoggerProvider(previousLogs)
+		otel.SetMeterProvider(previousMetrics)
+		otel.SetTextMapPropagator(previousPropagation)
+		otel.SetErrorHandler(previousErrors)
+		defaultGitHTTPStageMetrics = previousStageMetrics
+	})
+	for _, tc := range []struct {
+		name             string
+		tracing, sampled bool
+	}{
+		{name: "sampled", tracing: true, sampled: true},
+		{name: "unsampled", tracing: true},
+		{name: "disabled", sampled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var traces tracepb.ExportTraceServiceRequest
+			var logs logpb.ExportLogsServiceRequest
+			collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+				require.NoError(t, err)
+				mu.Lock()
+				defer mu.Unlock()
+				switch r.URL.Path {
+				case "/v1/traces":
+					var batch tracepb.ExportTraceServiceRequest
+					require.NoError(t, proto.Unmarshal(body, &batch))
+					traces.ResourceSpans = append(traces.ResourceSpans, batch.ResourceSpans...)
+				case "/v1/logs":
+					var batch logpb.ExportLogsServiceRequest
+					require.NoError(t, proto.Unmarshal(body, &batch))
+					logs.ResourceLogs = append(logs.ResourceLogs, batch.ResourceLogs...)
+				default:
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/x-protobuf")
+			}))
+			defer collector.Close()
+			core, local := observer.New(zap.InfoLevel)
+			logger, shutdown, err := observability.InitTelemetry(t.Context(),
+				observability.OTLPConfig{URI: collector.URL, TraceSampleRatio: 0}, observability.APIService, "test", zap.New(core))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = shutdown(context.Background()) })
+			registry := prometheus.NewRegistry()
+			defaultGitHTTPStageMetrics = newGitHTTPStageMetrics(registry)
+			mux := NewMux(SmartHttpDeps{
+				GitClient: &mockGitClient{infoRefsFunc: func(_ context.Context, _ string, service gitv1.Service) ([]byte, gitv1.Service, error) {
+					return []byte("0000"), service, nil
+				}},
+				Logger: logger, Store: newTestStore(), Ids: apiruntime.NewSequenceIDGenerator(),
+				Registry: newTestRegistry(t), Tracing: tc.tracing,
+			})
+			request := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-upload-pack", nil)
+			flags := trace.TraceFlags(0)
+			if tc.sampled {
+				flags = trace.FlagsSampled
+			}
+			remote := trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}, TraceFlags: flags, Remote: true,
+			})
+			observability.Inject(trace.ContextWithRemoteSpanContext(t.Context(), remote), request.Header)
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, request)
+			require.Equal(t, http.StatusOK, response.Code)
+			require.NoError(t, shutdown(t.Context()))
+			require.Equal(t, 1, local.FilterMessage("git_http_request_timing").Len(), "existing Info timing logs remain enabled")
+			fields := local.FilterMessage("git_http_request_timing").All()[0].ContextMap()
+			mu.Lock()
+			defer mu.Unlock()
+			foundLog := false
+			for _, resource := range logs.ResourceLogs {
+				for _, scope := range resource.ScopeLogs {
+					for _, record := range scope.LogRecords {
+						if record.Body.GetStringValue() != "git_http_request_timing" {
+							continue
+						}
+						foundLog = true
+						if tc.tracing {
+							require.Equal(t, fields["trace_id"], hex.EncodeToString(record.TraceId))
+							require.Equal(t, fields["span_id"], hex.EncodeToString(record.SpanId))
+						} else {
+							require.Empty(t, record.TraceId)
+							require.Empty(t, record.SpanId)
+						}
+						allowed := map[string]bool{"operation": true, "status": true, "authentication_ms": true,
+							"resolution_ms": true, "authorization_ms": true, "push_context_ms": true, "handler_ms": true, "total_ms": true}
+						for _, attribute := range record.Attributes {
+							require.True(t, allowed[attribute.Key], "only fixed operational fields, never trace IDs as ordinary attributes")
+						}
+						require.Len(t, record.Attributes, len(allowed))
+					}
+				}
+			}
+			require.True(t, foundLog)
+			serverFound := false
+			for _, resource := range traces.ResourceSpans {
+				for _, scope := range resource.ScopeSpans {
+					for _, span := range scope.Spans {
+						if span.Name == "git.http.info_refs" {
+							serverFound = true
+							require.Equal(t, fields["span_id"], hex.EncodeToString(span.SpanId))
+							parentID := remote.SpanID()
+							require.Equal(t, parentID[:], span.ParentSpanId)
+						}
+					}
+				}
+			}
+			require.Equal(t, tc.tracing && tc.sampled, serverFound)
+			scrape := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+			scrape.Header.Set("Accept", "application/openmetrics-text; version=1.0.0")
+			metrics := httptest.NewRecorder()
+			promhttp.HandlerFor(registry, promhttp.HandlerOpts{EnableOpenMetrics: true}).ServeHTTP(metrics, scrape)
+			require.Equal(t, tc.tracing && tc.sampled, strings.Contains(metrics.Body.String(), `trace_id="`))
+			if tc.tracing && tc.sampled {
+				require.Contains(t, metrics.Body.String(), `span_id="`+fields["span_id"].(string)+`"`)
+				require.Contains(t, metrics.Body.String(), `trace_id="`+fields["trace_id"].(string)+`"`)
+			}
+			families, err := registry.Gather()
+			require.NoError(t, err)
+			for _, family := range families {
+				for _, series := range family.Metric {
+					require.Len(t, series.Label, 3)
+					require.EqualValues(t, 1, series.Histogram.GetSampleCount())
+				}
+			}
+		})
+	}
+}
 
 // mockGitClient is a test double for GitClient.
 type mockGitClient struct {
@@ -152,6 +298,267 @@ func TestGitHTTPStageMetricsOnlyRecordAttemptedWork(t *testing.T) {
 	}
 }
 
+func TestRepoResolverLeavesNamespaceValidationToAuthorization(t *testing.T) {
+	var namespaceReads int
+	store := &testutil.StubStore{
+		GetNamespaceByNameFunc: func(context.Context, string) (*datastore.Namespace, error) {
+			namespaceReads++
+			return nil, errors.New("namespace facts belong to authorization")
+		},
+		LookupRepositoryFunc: func(_ context.Context, namespace, name string) (*datastore.NamespaceMapping, error) {
+			require.Equal(t, "gitstore", namespace)
+			require.Equal(t, "catalog", name)
+			return &datastore.NamespaceMapping{RepositoryID: "repository-uid"}, nil
+		},
+	}
+	router := gin.New()
+	router.GET("/:namespace/:repo", RepoResolver(store, zap.NewNop()), func(c *gin.Context) {
+		require.Equal(t, "repository-uid", c.MustGet(repoIDKey))
+		c.Status(http.StatusOK)
+	})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/gitstore/catalog.git", nil))
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Zero(t, namespaceReads, "resolving a path must not duplicate the authorizer's current Namespace read")
+}
+
+func TestGitHTTPRequestNamespaceAndRepositoryFactsStayFresh(t *testing.T) {
+	for _, route := range []struct {
+		method, path, action string
+	}{
+		{http.MethodGet, "/gitstore/catalog.git/info/refs?service=git-upload-pack", auth.ActionRepositoryContentsRead},
+		{http.MethodGet, "/gitstore/catalog.git/info/refs?service=git-receive-pack", auth.ActionRepositoryContentsWrite},
+		{http.MethodPost, "/gitstore/catalog.git/git-upload-pack", auth.ActionRepositoryContentsRead},
+		{http.MethodPost, "/gitstore/catalog.git/git-receive-pack", auth.ActionRepositoryContentsWrite},
+	} {
+		for _, state := range []struct {
+			name                         string
+			status, namespaceReads       int
+			repositoryReads, policyCalls int
+		}{
+			{"current owner", http.StatusOK, 1, 1, 1},
+			{"denied", http.StatusForbidden, 1, 1, 1},
+			{"namespace missing", http.StatusNotFound, 1, 1, 0},
+			{"namespace wrapped missing", http.StatusNotFound, 1, 1, 0},
+			{"namespace nil", http.StatusNotFound, 1, 1, 0},
+			{"namespace storage failure", http.StatusInternalServerError, 1, 1, 0},
+			{"namespace canceled", http.StatusInternalServerError, 1, 1, 0},
+			{"repository storage failure", http.StatusInternalServerError, 1, 1, 0},
+			{"repository error and namespace missing", http.StatusInternalServerError, 1, 1, 0},
+			{"repository moved", http.StatusNotFound, 1, 1, 0},
+			{"repository moved and namespace failure", http.StatusNotFound, 1, 1, 0},
+			{"repository renamed", http.StatusNotFound, 1, 1, 0},
+		} {
+			t.Run(route.path+"/"+state.name, func(t *testing.T) {
+				store := newTestStore().(*testutil.StubStore)
+				repository := &datastore.Repository{
+					UID: "test-repo-id", Name: "catalog", Namespace: "gitstore", CreationActor: "old-owner",
+				}
+				resolve := store.LookupRepositoryFunc
+				var mappings, namespaceReads, repositoryReads, dispatches int
+				store.LookupRepositoryFunc = func(ctx context.Context, namespace, name string) (*datastore.NamespaceMapping, error) {
+					mappings++
+					mapping, err := resolve(ctx, namespace, name)
+					repository.CreationActor = "current-owner"
+					switch state.name {
+					case "repository moved", "repository moved and namespace failure":
+						repository.Namespace = "private-destination"
+					case "repository renamed":
+						repository.Name = "private-new-name"
+					}
+					return mapping, err
+				}
+				store.GetRepositoryFunc = func(_ context.Context, id string) (*datastore.Repository, error) {
+					repositoryReads++
+					require.Equal(t, repository.UID, id)
+					if state.name == "repository storage failure" || state.name == "repository error and namespace missing" {
+						return nil, errors.New("private-repository-failure")
+					}
+					return repository, nil
+				}
+				store.GetNamespaceByNameFunc = func(_ context.Context, name string) (*datastore.Namespace, error) {
+					namespaceReads++
+					require.Equal(t, "gitstore", name)
+					switch state.name {
+					case "namespace missing", "repository error and namespace missing":
+						return nil, datastore.ErrNotFound
+					case "namespace wrapped missing":
+						return nil, fmt.Errorf("lookup: %w", datastore.ErrNotFound)
+					case "namespace nil":
+						return nil, nil
+					case "namespace storage failure", "repository moved and namespace failure":
+						return nil, errors.New("private-storage-error")
+					case "namespace canceled":
+						return nil, context.Canceled
+					}
+					return &datastore.Namespace{UID: "current-namespace", Name: name}, nil
+				}
+				provider := testutil.NewAllowAllAuthZ()
+				if state.name == "denied" {
+					provider = testutil.NewDenyAllAuthZ(t)
+				}
+				registry := auth.NewProviderRegistry(
+					auth.NewChainedAuthN(&stubAuthNProviderWithPrincipal{
+						principal: &auth.Principal{Subject: "current-owner", AuthMethod: "basic"},
+						decision:  auth.Allow("test-authn", "authenticated"),
+					}), provider, nil,
+				)
+				client := &mockGitClient{
+					infoRefsFunc: func(_ context.Context, _ string, service gitv1.Service) ([]byte, gitv1.Service, error) {
+						dispatches++
+						return []byte("0000"), service, nil
+					},
+					uploadPackFunc: func(context.Context, string, []byte) (io.Reader, error) {
+						dispatches++
+						return strings.NewReader("0000"), nil
+					},
+					receivePackFunc: func(context.Context, string, io.Reader) ([]byte, error) {
+						dispatches++
+						return []byte("0000"), nil
+					},
+				}
+				router := NewMux(SmartHttpDeps{
+					GitClient: client, Store: store, Logger: zap.NewNop(),
+					Ids: apiruntime.NewSequenceIDGenerator(), Registry: registry,
+				})
+				request := httptest.NewRequest(route.method, route.path, strings.NewReader("0000"))
+				request.SetBasicAuth("current-owner", "private-password")
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, request)
+				require.Equal(t, state.status, response.Code)
+				require.Equal(t, 1, mappings)
+				require.Equal(t, state.namespaceReads, namespaceReads)
+				wantRepositoryReads := state.repositoryReads
+				if state.status == http.StatusOK && strings.HasSuffix(route.path, "/git-receive-pack") {
+					wantRepositoryReads++
+				}
+				require.Equal(t, wantRepositoryReads, repositoryReads)
+				require.Len(t, provider.Calls, state.policyCalls)
+				if state.policyCalls != 0 {
+					require.Equal(t, route.action, provider.Action)
+					require.Equal(t, "current-owner", provider.Resource.OwnerSub)
+					require.Equal(t, "gitstore", provider.Resource.Attrs["namespace"])
+				}
+				if state.status == http.StatusOK {
+					require.Equal(t, 1, dispatches)
+				} else {
+					require.Zero(t, dispatches, "missing or changed facts must fail before native dispatch")
+				}
+				require.NotContains(t, response.Body.String(), "private-")
+			})
+		}
+	}
+}
+
+func TestGitHTTPRequestAuthorizationOverlapsFreshReads(t *testing.T) {
+	for _, route := range []struct{ method, path string }{
+		{http.MethodGet, "/gitstore/catalog.git/info/refs?service=git-upload-pack"},
+		{http.MethodGet, "/gitstore/catalog.git/info/refs?service=git-receive-pack"},
+		{http.MethodPost, "/gitstore/catalog.git/git-upload-pack"},
+		{http.MethodPost, "/gitstore/catalog.git/git-receive-pack"},
+	} {
+		t.Run(route.path, func(t *testing.T) {
+			store := newTestStore().(*testutil.StubStore)
+			repositoryRead, namespaceRead := store.GetRepositoryFunc, store.GetNamespaceByNameFunc
+			repositoryStarted, namespaceStarted := make(chan struct{}), make(chan struct{})
+			var repositoryOnce sync.Once
+			store.GetRepositoryFunc = func(ctx context.Context, id string) (*datastore.Repository, error) {
+				repositoryOnce.Do(func() { close(repositoryStarted) })
+				select {
+				case <-namespaceStarted:
+					return repositoryRead(ctx, id)
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			store.GetNamespaceByNameFunc = func(ctx context.Context, name string) (*datastore.Namespace, error) {
+				close(namespaceStarted)
+				select {
+				case <-repositoryStarted:
+					return namespaceRead(ctx, name)
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			router := NewMux(SmartHttpDeps{
+				GitClient: &mockGitClient{
+					infoRefsFunc: func(_ context.Context, _ string, service gitv1.Service) ([]byte, gitv1.Service, error) {
+						return []byte("0000"), service, nil
+					},
+					uploadPackFunc: func(context.Context, string, []byte) (io.Reader, error) {
+						return strings.NewReader("0000"), nil
+					},
+					receivePackFunc: func(context.Context, string, io.Reader) ([]byte, error) {
+						return []byte("0000"), nil
+					},
+				}, Store: store, Logger: zap.NewNop(),
+				Ids: apiruntime.NewSequenceIDGenerator(), Registry: newTestRegistry(t),
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			request := httptest.NewRequest(route.method, route.path, strings.NewReader("0000")).WithContext(ctx)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			require.Equal(t, http.StatusOK, response.Code, "both authorization reads must start before either needs to finish")
+		})
+	}
+}
+
+func TestGitHTTPRequestAuthorizationJoinsNamespaceReadOnRepositoryFailure(t *testing.T) {
+	store := newTestStore().(*testutil.StubStore)
+	namespaceStarted, namespaceFinished := make(chan struct{}), make(chan struct{})
+	repositoryFinished, requestFinished := make(chan struct{}), make(chan struct{})
+	store.GetRepositoryFunc = func(ctx context.Context, _ string) (*datastore.Repository, error) {
+		select {
+		case <-namespaceStarted:
+		case <-ctx.Done():
+		}
+		close(repositoryFinished)
+		return nil, errors.New("private-repository-failure")
+	}
+	store.GetNamespaceByNameFunc = func(ctx context.Context, _ string) (*datastore.Namespace, error) {
+		close(namespaceStarted)
+		defer close(namespaceFinished)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	router := NewMux(SmartHttpDeps{
+		GitClient: &mockGitClient{}, Store: store, Logger: zap.NewNop(),
+		Ids: apiruntime.NewSequenceIDGenerator(), Registry: newTestRegistry(t),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	request := httptest.NewRequest(http.MethodGet, "/gitstore/catalog.git/info/refs?service=git-upload-pack", nil).WithContext(ctx)
+	response := httptest.NewRecorder()
+	go func() {
+		defer close(requestFinished)
+		router.ServeHTTP(response, request)
+	}()
+	select {
+	case <-repositoryFinished:
+	case <-ctx.Done():
+		t.Fatal("repository read did not finish while the Namespace read was active")
+	}
+	select {
+	case <-requestFinished:
+		t.Fatal("authorization returned with a Namespace read still running")
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case <-requestFinished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("authorization did not finish after cancellation")
+	}
+	select {
+	case <-namespaceFinished:
+	default:
+		t.Fatal("authorization did not join its Namespace read")
+	}
+	require.Equal(t, http.StatusInternalServerError, response.Code)
+	require.NotContains(t, response.Body.String(), "private-")
+}
+
 func TestGitHTTPRequestTimingBoundaries(t *testing.T) {
 	const delay = 5 * time.Millisecond
 	for _, tc := range []struct {
@@ -160,17 +567,17 @@ func TestGitHTTPRequestTimingBoundaries(t *testing.T) {
 		status                                    int
 		namespaceReads, repositoryReads, mappings int
 	}{
-		{"authentication", "info_refs", "authentication_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 200, 2, 1, 1},
-		{"resolution", "info_refs", "resolution_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 200, 2, 1, 1},
-		{"authorization", "info_refs", "authorization_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 200, 2, 1, 1},
-		{"push context", "receive_pack", "push_context_ms", http.MethodPost, "/gitstore/catalog/git-receive-pack", 200, 2, 2, 1},
-		{"receive", "receive_pack", "handler_ms", http.MethodPost, "/gitstore/catalog/git-receive-pack", 200, 2, 2, 1},
-		{"upload", "upload_pack", "handler_ms", http.MethodPost, "/gitstore/catalog/git-upload-pack", 200, 2, 1, 1},
-		{"handler failure", "info_refs", "handler_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 503, 2, 1, 1},
-		{"resolution failure", "info_refs", "resolution_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 404, 1, 0, 0},
+		{"authentication", "info_refs", "authentication_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 200, 1, 1, 1},
+		{"resolution", "info_refs", "resolution_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 200, 1, 1, 1},
+		{"authorization", "info_refs", "authorization_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 200, 1, 1, 1},
+		{"push context", "receive_pack", "push_context_ms", http.MethodPost, "/gitstore/catalog/git-receive-pack", 200, 1, 2, 1},
+		{"receive", "receive_pack", "handler_ms", http.MethodPost, "/gitstore/catalog/git-receive-pack", 200, 1, 2, 1},
+		{"upload", "upload_pack", "handler_ms", http.MethodPost, "/gitstore/catalog/git-upload-pack", 200, 1, 1, 1},
+		{"handler failure", "info_refs", "handler_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 503, 1, 1, 1},
+		{"resolution failure", "info_refs", "resolution_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 404, 0, 0, 1},
 		{"authentication denied", "info_refs", "authentication_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 401, 0, 0, 0},
-		{"authorization denied", "info_refs", "authorization_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 403, 2, 1, 1},
-		{"push context failure", "receive_pack", "push_context_ms", http.MethodPost, "/gitstore/catalog/git-receive-pack", 503, 2, 2, 1},
+		{"authorization denied", "info_refs", "authorization_ms", http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", 403, 1, 1, 1},
+		{"push context failure", "receive_pack", "push_context_ms", http.MethodPost, "/gitstore/catalog/git-receive-pack", 503, 1, 2, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			core, logs := observer.New(zap.InfoLevel)
@@ -179,12 +586,6 @@ func TestGitHTTPRequestTimingBoundaries(t *testing.T) {
 			namespaceRead := store.GetNamespaceByNameFunc
 			store.GetNamespaceByNameFunc = func(ctx context.Context, name string) (*datastore.Namespace, error) {
 				namespaceReads++
-				if namespaceReads == 1 && tc.delayedPhase == "resolution_ms" {
-					time.Sleep(delay)
-				}
-				if tc.name == "resolution failure" {
-					return nil, datastore.ErrNotFound
-				}
 				return namespaceRead(ctx, name)
 			}
 			repositoryRead := store.GetRepositoryFunc
@@ -202,6 +603,12 @@ func TestGitHTTPRequestTimingBoundaries(t *testing.T) {
 			mappingRead := store.LookupRepositoryFunc
 			store.LookupRepositoryFunc = func(ctx context.Context, namespace, name string) (*datastore.NamespaceMapping, error) {
 				mappings++
+				if tc.delayedPhase == "resolution_ms" {
+					time.Sleep(delay)
+				}
+				if tc.name == "resolution failure" {
+					return nil, datastore.ErrNotFound
+				}
 				return mappingRead(ctx, namespace, name)
 			}
 			authN := &stubAuthNProviderWithPrincipal{
@@ -451,6 +858,7 @@ func TestUploadPackHandler_StreamsResponse(t *testing.T) {
 			return io.MultiReader(bytes.NewReader(chunk1), bytes.NewReader(chunk2)), nil
 		},
 	}
+
 	registry := newTestRegistry(t)
 
 	router := NewMux(SmartHttpDeps{
@@ -481,6 +889,60 @@ func TestUploadPackHandler_StreamsResponse(t *testing.T) {
 	respBody, _ := io.ReadAll(resp.Body)
 	if !bytes.Contains(respBody, chunk1) || !bytes.Contains(respBody, chunk2) {
 		t.Errorf("expected both chunks in response, got: %q", respBody)
+	}
+}
+
+func TestUploadPackHandler_DecodesBoundedNegotiation(t *testing.T) {
+	const limit = 1 << 20
+	packet := []byte("0011want abc123\n0000")
+	compress := func(body []byte) []byte {
+		var buffer bytes.Buffer
+		writer := gzip.NewWriter(&buffer)
+		_, err := writer.Write(body)
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
+		return buffer.Bytes()
+	}
+	for _, tc := range []struct {
+		name, encoding string
+		body, want     []byte
+		status         int
+	}{
+		{"plain", "", packet, packet, http.StatusOK},
+		{"identity", "identity", packet, packet, http.StatusOK},
+		{"gzip", "gzip", compress(packet), packet, http.StatusOK},
+		{"gzip_case", "GZip", compress(packet), packet, http.StatusOK},
+		{"malformed", "gzip", []byte("not gzip"), nil, http.StatusBadRequest},
+		{"truncated", "gzip", compress(packet)[:10], nil, http.StatusBadRequest},
+		{"unsupported", "br", packet, nil, http.StatusUnsupportedMediaType},
+		{"chained", "gzip, gzip", compress(packet), nil, http.StatusUnsupportedMediaType},
+		{"expanded_limit", "gzip", compress(bytes.Repeat([]byte("x"), limit+1)), nil, http.StatusRequestEntityTooLarge},
+		{"encoded_limit", "", bytes.Repeat([]byte("x"), limit+1), nil, http.StatusRequestEntityTooLarge},
+		{"exact_limit", "gzip", compress(bytes.Repeat([]byte("x"), limit)), bytes.Repeat([]byte("x"), limit), http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			client := &mockGitClient{uploadPackFunc: func(_ context.Context, _ string, body []byte) (io.Reader, error) {
+				calls++
+				require.Equal(t, tc.want, body)
+				return strings.NewReader("0008NAK\n"), nil
+			}}
+			router := NewMux(SmartHttpDeps{
+				GitClient: client, Store: newTestStore(), Logger: zap.NewNop(),
+				Ids: apiruntime.NewSequenceIDGenerator(), Registry: newTestRegistry(t),
+			})
+			req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-upload-pack", bytes.NewReader(tc.body))
+			req.SetBasicAuth("test-writer", "test-password")
+			req.Header.Set("Content-Encoding", tc.encoding)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			require.Equal(t, tc.status, response.Code)
+			if tc.status == http.StatusOK {
+				require.Equal(t, 1, calls)
+			} else {
+				require.Zero(t, calls, "invalid input must not reach the signed Git RPC")
+			}
+		})
 	}
 }
 
@@ -1038,7 +1500,7 @@ func TestReceivePackAttachesPushContext(t *testing.T) {
 		GetRepositoryFunc: func(_ context.Context, _ string) (*datastore.Repository, error) {
 			return &datastore.Repository{
 				UID:              repoID,
-				Namespace:        nsID,
+				Namespace:        "gitstore",
 				Name:             "catalog",
 				MaxPackSizeBytes: 52428800,
 				MaxFileSizeBytes: 10485760,

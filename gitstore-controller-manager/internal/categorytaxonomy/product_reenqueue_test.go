@@ -4,11 +4,39 @@
 package categorytaxonomy
 
 import (
+	"encoding/json"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestCategoryReenqueueHandler_PathCascadeAndCounts(t *testing.T) {
+	index := NewProductCategoryIndex()
+	key := types.WorkItemKey{Kind: "Product", Namespace: "acme", Name: "widget"}
+	index.Add("acme", "leaf", key)
+	index.Add("other", "leaf", types.WorkItemKey{Kind: "Product", Namespace: "other", Name: "foreign"})
+	var enqueued []types.WorkItemKey
+	handler := NewCategoryReenqueueHandler(index, func(k types.WorkItemKey) { enqueued = append(enqueued, k) })
+	before := CategoryTaxonomy{Namespace: "acme", Name: "leaf", UID: "leaf-id", Generation: 1,
+		Status: status.ResourceStatus{Resolved: json.RawMessage(`{"path":["root","leaf"],"productCount":1}`)}}
+	current := before
+	current.Status.Resolved = json.RawMessage(`{"path":["anchor","root","leaf"],"productCount":1}`)
+	handler.OnUpdate(types.WorkItemKey{}, before, current)
+	assert.Equal(t, []types.WorkItemKey{key}, enqueued, "a same-generation path cascade must wake only referencing Products")
+	enqueued = nil
+	before = current
+	current.Status.Resolved = json.RawMessage(`{"path":["anchor","root","leaf"],"productCount":2}`)
+	handler.OnUpdate(types.WorkItemKey{}, before, current)
+	assert.Empty(t, enqueued, "count-only updates must not fan out over Products")
+	current.Status.Resolved = json.RawMessage(`{"path":42}`)
+	handler.OnUpdate(types.WorkItemKey{}, before, current)
+	assert.Equal(t, []types.WorkItemKey{key}, enqueued, "invalid paths must reach reconciliation errors")
+	enqueued = nil
+	handler.OnDelete(types.WorkItemKey{}, before)
+	assert.Equal(t, []types.WorkItemKey{key}, enqueued)
+}
 
 // TestCategoryReenqueueHandler_OnAddEnqueuesMatchingProducts covers T026's
 // OnAdd case: a newly-created CategoryTaxonomy re-enqueues every Product key

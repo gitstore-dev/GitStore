@@ -20,11 +20,23 @@ The dispatcher is the only public capacity entry point.
 OTLP HTTP collector, Tempo and Loki in `compose.capacity.yml`. Core processes
 must already have their typed telemetry configuration enabled; collector startup
 does not restart or reconfigure them. On the capacity network, use
-`CAPACITY_OTLP_ENDPOINT=http://capacity-otel-collector:4318` and optionally
-`CAPACITY_GIT_METRICS_ADDR=0.0.0.0:50052` before controlled process replacement.
+`CAPACITY_OTLP_URI=http://capacity-otel-collector:4318` and optionally
+`CAPACITY_GIT_METRICS_URI=http://0.0.0.0:50052` before controlled process replacement.
 Set `CAPACITY_PROMETHEUS_GIT_TARGETS=capacity-git-service:50052` to scrape native
 RPC, read, blocking-job and Tokio queue/task metrics. Trace sampling defaults to
 0.05; `CAPACITY_TRACE_SAMPLE_RATIO` changes the existing typed sampling setting.
+The existing capacity Compose configuration passes both settings to both Go API
+and controller replicas. Both Go services share bounded telemetry implementation;
+controller reconciliation attempts, HTTP requests and WebSocket dials produce
+spans and propagate trace context without tracing entire watch lifetimes.
+Local Compose controllers read the same shared configuration file as the APIs.
+Replacing older processes is still required: source tests and collector startup
+do not establish a rollout or capacity acceptance.
+Set `CAPACITY_PROMETHEUS_URL` to reuse an already running scraper: the dispatcher
+checks its readiness and exports evidence without creating or removing managed
+observability services. In `full` mode the configured Collector, Tempo and Loki
+health endpoints must also already be available. Without an explicit URL, the
+dispatcher manages its own services; `CAPACITY_OBSERVABILITY_KEEP=1` retains them.
 Native RPC completion metrics use fixed method/status labels, retain streaming
 frames and trailers, and finish on final status or transport cancellation.
 Full native exports require counter and histogram increments during the run;
@@ -33,6 +45,32 @@ include method latency and completion/non-OK status queries. `AlreadyExists`
 is an expected provisioning result, not evidence of lost workload.
 Cancellation does not mean an owned blocking job has drained; retain its
 separate active/pending observations.
+
+Native API/controller duration histograms and Git RPC histograms attach
+`trace_id`/`span_id` exemplars only when the recording context has a valid,
+sampled span. These IDs are exemplar metadata, never ordinary metric labels.
+Metrics listeners negotiate OpenMetrics for capable scrapers while preserving
+classic Prometheus responses for legacy clients. Prometheus explicitly enables
+exemplar storage, bounded to 10,000 retained exemplars; this is a sampled
+diagnostic index, not a complete event history. Git retains at most one exemplar
+per fixed RPC method and latency bucket.
+
+Meaningful request/reconciliation completion logs use native OTLP trace/span
+fields. Startup and other out-of-span records legitimately have no trace;
+string attributes named `trace_id` are not a substitute for native context.
+An asynchronous reconciliation can start a new trace instead of keeping a
+watch or resource lifetime span open. Verify actual parent relationships for
+the operation being measured rather than assuming every event belongs to one
+deployment-wide trace.
+
+The collector accepts OTLP/HTTP metrics at `/v1/metrics` on port 4318 and
+exposes them to Prometheus on internal port 8889 under the
+`gitstore-otlp-metrics-capacity` scrape job. Port 8888 remains the collector's
+own telemetry surface. Existing Go/Rust metrics continue to be scraped directly;
+this additional pipeline does not migrate application exporters or duplicate
+their existing metrics. Inactive OTLP series expire from the exporter after
+five minutes; Prometheus retains its existing storage policy. No additional
+host port is published.
 
 File workers seed their exact assigned paths once, then use one path-scoped
 Git commit command for local preparation. Unoffered staged paths are excluded.
@@ -45,6 +83,15 @@ for later queries; cleanup otherwise removes their containers but retains named
 data volumes. Tempo's Go memory limit reserves headroom inside its unchanged
 384 MiB container limit. Full exports include native/collector histories, bounded
 trace details restricted to current-run storage blocks, and selected phase logs.
+They also retain current-run histogram exemplars in `prometheus/exemplars.json`
+and native trace/span-correlated records in `telemetry/correlated-logs.json`.
+At most 32 unique exemplar-linked traces are selected, preferring trace IDs
+represented in more scrape jobs, and fetched even when absent from the search
+index. Each trace detail is bounded to 2 MiB, all details to 128 MiB, and each
+log export to fewer than 10,000 records and 64 MiB. Exemplar export is bounded
+to 10,000 samples and 64 MiB. An exemplar links a sampled observation to a
+trace; establishing an end-to-end operation additionally requires checking its
+stored spans, parent chain and service-specific logs.
 Missing stores/targets, empty results, failed
 requests and export-limit truncation explicitly fail collection. Failed artifacts
 remain diagnostic evidence, not a successful capacity gate.
@@ -52,17 +99,23 @@ Collection allows 15 seconds for SDK/collector batches and idle-trace indexing
 after the workload; this settling interval is not offered load or a latency sample.
 
 For an owned Repository workload diagnostic, enable the API loopback profiler
-with `CAPACITY_API_PROFILE_ADDR=127.0.0.1:6060`, then run with
+with `CAPACITY_API_PROFILE_URI=http://127.0.0.1:6060`, then run with
 `CAPACITY_PROFILING=go CAPACITY_PROFILE_SECONDS=30`. Captures begin at actual
 offered load after fixture preparation/stabilization and cover both verified API
-containers. The harness captures CPU, heap, allocations, block/mutex, goroutines
-and execution trace, with bounded durations and 32 MiB per artifact. Capture
+containers. Each replica first captures a three-second execution trace, then
+the configured CPU profile, heap, allocations, block/mutex and goroutines.
+CPU profiling therefore starts after the trace, not at the start of offered load.
+The profiling manifest retains each attempted capture's UTC start/end, elapsed
+duration, byte count and failure flag in API order. These times enclose command
+startup, capture and file writing, not exact sample boundaries; use the binary
+capture when locating individual runtime events. Durations remain bounded,
+with 32 MiB per artifact. Capture
 failures invalidate the diagnostic. Profiles are private binary runtime material;
 do not publish them raw. Profiling/sampling overhead makes these diagnostic
 runs unsuitable for unprofiled acceptance.
 
-API and Git telemetry accounting distinguishes admitted, exported, failed and
-truncated records. Both bound exported string log bodies to 4096 UTF-8 bytes.
+API, controller and Git telemetry accounting distinguishes admitted, exported, failed and
+truncated records. All bound exported string log bodies to 4096 UTF-8 bytes.
 The live admitted/exported difference includes pending batches; only interpret
 loss after bounded flush/drain, subtracting records counted as failed exports.
 Native Rust attribute-value bounds are not equivalent to the API's attribute
@@ -204,6 +257,27 @@ repair. Cluster scope, Git authoring and supported controller operations remain
 intentional kind-specific differences. Do not add unsupported operations solely
 to make the matrix rectangular.
 
+The current capability inventory is explicit about those differences:
+
+| Kind | Scope | Git-authored / Node | Durable watch | Status patch | Managed controller |
+|---|---|---|---|---|---|
+| Namespace | Cluster | Yes / Yes | Yes | Yes | Yes |
+| Repository | Namespace | Yes / Yes | Yes | Yes | Yes |
+| Product | Namespace | Yes / Yes | Yes | Yes | Yes |
+| ProductVariant | Namespace | Yes / Yes | No | No | No |
+| CategoryTaxonomy | Namespace | Yes / Yes | Yes | Yes | Yes |
+| Collection | Namespace | Yes / Yes | No | No | No |
+| File | Namespace | Yes / Yes | Yes | Yes | No |
+| ServiceAccount | Cluster | No / No (Actor) | No | No | No |
+
+The backend-neutral suite applies the same version/generation and competing-writer
+contract to all seven full-envelope update operations. ServiceAccount has a
+separate public-key CAS contract: key changes advance generation, while a system
+disable preserves it and the enrolled keys. Unsupported watches must fail closed;
+an unwatched or unreconciled kind is not exempt from identity, ownership, CAS or
+repository-membership correctness. This inventory describes implemented surfaces,
+not proof that their sustained-load and replacement acceptance gates have passed.
+
 Record resolved fixture cardinality, workload mix, payload bytes, rates, queue
 and worker bounds, warm/cold status, policy/fixture digests, runtime allocation,
 image revision and distinct process identities before load. Expected denial
@@ -233,9 +307,52 @@ instead of risking credential disclosure or unverifiable evidence.
 Domain verifiers read the flat metrics written by native k6 `--summary-export`:
 counters expose `count`, rates expose `value`, and trends expose percentile keys.
 The runner explicitly exports p95, p99 and trend sample counts on every k6 path.
-The Namespace admission verifier requires sampled check and failure-rate
-observations and one visibility sample per admitted Namespace; missing metrics
-cannot be treated as successful checks.
+Absent counters are not zero observations. Category setup explicitly initializes
+zero-outcome counters; its verifier requires sampled create, update and filtered
+read trends, complete own-commit accounting, zero dropped iterations and the
+unchanged latency bounds. Category audits fail on malformed or duplicate
+identities, non-advancing cursors or exhaustion of the 5,000-page budget rather
+than returning a truncated set. Product deletion-race evidence must record the
+declared idempotent outcome on both replicas, not one successful peer alongside
+a transport or GraphQL failure. Product peer reads must identify the UID
+acknowledged by creation, not merely a same-name resource. Every offered
+Product iteration must finish admission and deletion-race checks, with all six
+checks sampled and zero dropped iterations.
+Category mutation and conflict confirmations validate the expected name, title
+and commit revision. Batch seeds require a response for every request and
+cannot trust payloads from HTTP failures. Convergence probes require successful,
+error-free reads of the requested category and a well-formed path; a valid
+zero-millisecond convergence is not a timeout. Filtered reads reject malformed
+or duplicate identities and missing pagination metadata. The shared GraphQL
+predicates accept omitted or empty error arrays and retry only uniformly
+classified error envelopes, without treating error-message text as a code.
+The Namespace admission verifier balances every offered iteration against its
+GraphQL failure-rate outcome and requires successful outcomes to equal
+admissions. It requires sampled checks, native HTTP failure observations, zero
+dropped iterations and one visibility sample per admitted Namespace; missing
+metrics, incomplete check counts or thrown requests cannot become success-shaped
+evidence. It also requires each declared sustained and burst scenario to offer
+its full planned count, with consistent aggregate counts and zero missed
+schedules. Planned counts use exact nanosecond arithmetic over k6's effective
+normalized duration, preserving compound and fractional selectors; a fractional
+last interval is a planned offer. Native scenario progress measures lateness.
+Offers after the load window fail; at most one exclusive-endpoint stop-timer
+callback per scenario is separately counted without issuing HTTP work.
+Missing burst metrics or a balanced but incomplete execution segment fail.
+Native SDK checks cover complete compound-duration/two-burst delivery,
+fractional count rounding, a clean partial segment and an undersized-VU
+overload using a private two-port HTTP fixture. They are not GitStore API,
+replica-correctness or sustained deployed-capacity evidence.
+Conflict and visibility confirmations require an HTTP 2xx,
+error-free GraphQL data envelope
+and a nonempty Namespace ID; partial data alongside errors is not confirmation.
+Visibility reads must return the same ID acknowledged by the mutation or
+confirmed conflict, not merely a resource with the same name on each replica.
+Only uniformly classified `CONFLICT` errors trigger conflict confirmation.
+The summary must be one JSON object in a readable, non-symlink regular file
+of at most 1 MiB. The existing inclusive visibility bounds remain p95 <= 1s and
+p99 <= 3s. Offer/outcome balance does not prove the complete declared sustained
+and burst schedules.
 Namespace admission and watch workloads create generated `ORGANIZATION`
 namespaces and preserve that tier during updates. `USER` namespaces are bound
 to a human's identity and cannot serve as a pool of generated workload names.
@@ -247,6 +364,17 @@ Inspect actual partitions rather than interpreting an empty
 `system.large_partitions` report as proof of small partitions. Preserve the
 250-row connection maximum and existing workload-specific latency limits.
 Record approved projection-specific ceilings before declaring acceptance.
+
+The five-kind Repository membership regression also places 2,560 raw projection
+rows in the last shard, removes all but the final ProductVariant, then removes
+that survivor. The actual datastore method must return nonempty/nonempty/empty
+with exactly 32 fully restricted membership queries plus one readiness read,
+without filtering or retry amplification. It logs whole-operation latency and
+fetched driver rows, not physical work. Raw placement isolates the query path;
+the preceding per-kind cases exercise authoritative creates and deletes.
+The operator runbook records a separate RF3 SSTable/trace diagnostic in which
+returning one survivor processed 2,559 dead rows per participating replica.
+Neither diagnostic approves worst-case storage or production capacity.
 
 The managed capacity stack uses project-scoped container names. Existing
 container names are not proof of ownership or disposable data: inspect writable
@@ -271,6 +399,54 @@ Per-page query evidence reports attempts, returned driver rows, retries, tables
 and latency without bound values. These are not SSTable/tombstone counters or
 partition-size proof, and small regression fixtures do not certify capacity.
 
+The isolated native Category.products regression adds acknowledged sparse
+(one Product), dense (256 Products, eight per shard) and skewed (65 Products
+in one shard) fixtures. Both datastore clients enumerate every forward and
+backward window at page sizes 7 and the existing 100-row datastore cap, including
+equal-timestamp UID ties, status-only category moves, same-name/new-UID
+replacement, stale membership retries and the empty state after deletion.
+An independent in-memory oracle retains the acknowledged UID, name, creation
+time, resource version, generation and status for every expected member.
+Query observations require all 32 exact shard partitions, one bounded read per
+shard for clean membership, a readiness-marker read, and UID/canonical hydration
+for exactly the page plus its live lookahead. Projection rows, hydrated records,
+total attempts and elapsed time are retained separately; driver errors,
+filtering, retries or unexpected amplification fail the regression.
+The two clients share a translated coordinator on the isolated RF3 test
+keyspace. This does not prove live API concurrency, independent coordinators,
+rack-failure availability, sustained churn, partition-size ceilings or the
+production workload. The public connection maximum is unchanged.
+The native work-limit matrix adds one acknowledged live member and 4,097
+corrupt hot-partition rows, covering missing UIDs and valid UIDs with stale
+creation keys. Both clients test forward/backward reads at limits 1 and 100.
+Exhaustion must return projection unreadiness with no page, even after a live
+member was hydrated. The existing ceilings are exactly 256 shard-projection
+fetches and 4,096 UID hydration attempts, not a 256-total-CQL-query limit:
+authoritative hydration can require both UID and canonical reads.
+The observer asserts every partition restriction, fetch bound, hydration,
+physical attempt and fetched-row count with no filtering or retries.
+An unrelated category remains readable while the corrupt partition is present.
+After targeted fixture correction and same-version membership replay, both
+clients must recover exact membership and page flags. The original readiness
+marker and owned rows are restored or cleaned up. These limits and diagnostic
+fixtures do not establish approved storage ceilings or deployed capacity.
+The duplicate-membership regression places the same acknowledged live UID and
+creation key in two shards. Both clients must reject forward/backward reads
+with projection unreadiness and no page, rather than treating the duplicate
+lookahead as another member or next-page evidence. It requires exactly 32 shard
+fetches, two UID/canonical hydrations, one marker read, 37 physical attempts and
+seven fetched rows, without filtering, retries or unbounded reads. Removing
+only the wrong-shard fixture row and replaying membership must restore the
+exact one-member pages and flags. Duplicate tracking is bounded by the live
+page and lookahead, not by stale candidates; the coupled work-limit matrix
+still reaches and verifies both original exhaustion boundaries.
+The coupled readiness matrix first warms both clients, then clears or removes
+the durable rollout marker. Both must immediately fail closed rather than use
+cached readiness. A real marker-read schema fault in the generated test
+keyspace must remain an explicit storage error with no page; restoring the
+schema and marker must restore reads. Cancellation retains its cause and never
+returns a partial page.
+
 Datastore container snapshots capture host/container epoch seconds before
 and after load. They reject clock disagreement outside the one-second precision
 of `date`, backward host time, or samples taking longer than one second.
@@ -279,15 +455,17 @@ timestamps and last-write-wins results. It does not alter clocks or establish
 an application latency guarantee. Correct the environment before rerunning;
 do not treat skewed-run failures as clean query-performance evidence.
 
-Spec 063's `REPOSITORY_CAPACITY_SECRET_SCENARIO=1` selects the connected File-push,
+`REPOSITORY_CAPACITY_SECRET_SCENARIO=1` selects the connected File-push,
 owned-record fault, resource and evidence collector. It requires explicit
 `CHAOS_CONFIRM=1`, provisioned test-owned fixtures and an acknowledged Product
 manifest before running; the old Repository-only workload cannot establish
 secret-scenario acceptance. The full deployed capacity run has not been certified.
-`make test TARGET=secret-integration` provides separate functional bootstrap/rotation
-acceptance, not capacity certification. See the
-[rotation runbook](../../docs/runbooks/secret-material-rotation.md) and
-[capacity contract](../../specs/063-implement-secret-adrs/contracts/capacity-and-rollout.md).
+`make test TARGET=secret-integration` provides separate functional bootstrap/rotation,
+global account uniqueness, shared assertion replay, same-name account incarnation
+and peer-token checks, not capacity certification. Its unique test-created account
+must remain unbound; positive token exchanges use the existing controller identity
+with a temporary test-generated key. See the
+[rotation runbook](../../docs/runbooks/secret-material-rotation.md).
 The secret topology retains exactly one active Git service in every mode;
 repository sharding and multi-Git operation are not supported.
 
@@ -588,6 +766,10 @@ set `CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE` to the corresponding byte value.
 
 ## Adding a profile
 
+The Docker k6 backend runs as the invoking host UID/GID so it can write
+host-owned evidence without making the directory world-writable. Its workspace
+mount remains read-only.
+
 1. Add `profiles/<name>.js`; import reusable helpers from `lib/`.
 2. Use an arrival-rate executor for a throughput contract. Treat
    `dropped_iterations` as a failing threshold unless the specification
@@ -614,13 +796,97 @@ To inject a reviewed fault during load, configure the integrated runner:
 make capacity TARGET=namespace PROFILE=admission MODE=production \
   CAPACITY_CHAOS_PROFILE=api-restart \
   CAPACITY_CHAOS_TARGET=gitstore-capacity-api-a \
-  CAPACITY_CHAOS_DELAY=30m \
+  CAPACITY_CHAOS_DELAY=5m \
   CAPACITY_CHAOS_CONFIRM=1
 ```
 
-The overall run fails if k6 thresholds, fault injection, or the domain verifier
-fails. Pumba's successful exit means only that the fault was injected; recovery
-is always a verifier responsibility.
+The overall run fails if workload thresholds, fault injection, or the domain verifier
+fails. Pumba's successful exit means only that the fault was injected. API and
+controller restart profiles also require bounded readiness recovery inside the
+exact target container, with unchanged executable, container/image, allocations,
+mounts and declared identity snapshot. API recovery retains the 30-second budget;
+the controller restart profile retains its declared 60-second budget.
+`CAPACITY_CHAOS_READINESS_URL` overrides the standard internal port using only a
+credential-free loopback `/ready` or `/health` URL. The resulting readiness proof
+does not replace peer semantics, watch/reconciliation recovery or domain checks.
+Repository workload comparisons with `controller-restart` also write
+`secret/controllers-before-load.json` and `secret/controllers-after-load.json`.
+Their gate requires exactly one new process identity with a fresh credential
+and resumed reconciliation, while the retained peer stays ready, advances its
+reconciliation counter and preserves monotonic counters. A retained peer need
+not renew an unexpired credential. Both samples retain the existing bounded
+credential-exchange and retry checks; readiness alone cannot satisfy this gate.
+The File projection verifier continues polling both replicas after classified
+transport interruptions only during explicitly configured chaos or the managed
+secret-fault scenario, within each push's original 30-second context. No write
+is retried and no deadline, read fanout, queue, batch or polling bound increases.
+Ordinary runs still fail immediately on read errors. During faults, connection,
+client-timeout, interrupted-body and HTTP 502/503/504 failures may use the next
+existing polling round; quotas, declared server backoff, authorization/domain
+errors, malformed data, cardinality and identity errors still fail immediately.
+Mixed peer errors are all checked, so one transient failure cannot hide a
+permanent error from the other replica. Each new round reads both replicas
+afresh; interrupted reads never count as verified membership or peer checks.
+`projectionInterruptedRounds` records per-push polling rounds interrupted by
+these failures, not unique physical HTTP request counts. Failed attempts remain
+in the existing read timing/poll measurements and native HTTP telemetry.
+Permanent outage still fails at the original deadline.
+For opt-in per-push server telemetry correlation, add
+`REPOSITORY_CAPACITY_TRACE_CORRELATION=1` to a File/combined comparison or the
+full secret scenario. The default is `0`; other values and Repository-only use
+are rejected. Each File push receives a fresh sampled W3C trace parent through
+Git's command-scoped environment, alongside the existing bearer header, never
+through argv or repository configuration. `secret/file-workload.json` records
+`traceCorrelation: true` and each bounded timeline's lowercase nonzero
+`traceID`; missing, invalid, duplicate or undeclared IDs fail evidence validation.
+Ordinary runs do not inject a parent or export trace IDs. This links instrumented
+Git HTTP/admission/native RPC telemetry, not client queue/provider spans or shared
+projection batches. Verify matching retained traces, logs and exemplars in the
+deployment; sampled propagation alone does not prove a three-signal join.
+The Category Product oracle records classified transport interruptions separately
+and retries its reads only within the existing convergence deadline. It does not
+count those attempts as verified membership windows or suppress failed HTTP
+metrics. Authorization/domain denials, malformed acknowledgements and mismatched
+identities still fail immediately; no rate, latency or missed-schedule gate is
+relaxed for a fault run.
+The delay is relative to the sustained scenario's native start, not runner
+startup or fixture seeding. Readiness, Namespace admission and Category hierarchy
+publish a run-bound load window from their first scheduled callback. The Go
+Repository lifecycle runner publishes the same declaration immediately before
+starting its sustained Repository/File producers, after fixture setup and
+baseline stabilization. This also covers its explicitly diagnostic workload
+comparisons, without treating those comparisons as lifecycle acceptance. The runner
+waits for this event and rejects missing, malformed, mismatched or expired
+windows. Both injection timestamps and any required readiness recovery completion
+must be inside that window. Recovery after load ends fails even if the separate
+30- or 60-second recovery budget was met. Delays accept
+nonnegative seconds, minutes or hours up to two hours. The Product lifecycle
+smoke profile has no sustained window and cannot schedule integrated chaos.
+Set `COMPOSE_PROJECT_NAME` to the explicitly owned project's name to verify the
+target's Compose label, including project-scoped container names that do not
+start with `gitstore-`. A mismatched project is rejected without injection.
+Structured k6 console messages are retained in `k6.log`; the accepted declaration
+is retained in `chaos-load-window.json`. Go declarations are retained in
+`verifier.log`. Both runners use the same scheduler and recovery verifier, and
+record `chaosExitCode` separately from workload/domain failures. A configured
+fault that never reaches the load window fails instead of being silently skipped;
+an unstarted delayed injector is cancelled when the workload exits. The other
+Go capacity profiles reject integrated chaos until they publish a sustained
+window. External integrated chaos cannot overlap the complete secret scenario's
+existing managed fault schedule. Timing evidence does not replace
+restart/recovery, peer readiness or domain-correctness verification.
+
+For an owned invalid-policy fault, select
+`CAPACITY_CHAOS_PROFILE=api-invalid-policy-reload` and set
+`CAPACITY_CHAOS_POLICY_DIR` to the target's private policy directory. Provision
+the exact-container ownership marker and read-only directory mount described in
+[`../chaos/README.md`](../chaos/README.md#invalid-policy-reload) first. This action
+requires native rejection, unchanged active authorization metadata, restored
+policy/publication and unchanged process/settings; it does not restart the API
+or count as maximum-policy soak evidence. The same load-window and unchanged
+30-second recovery constraints apply, including during Go-based Repository
+lifecycle load. Keep that runner's independent API replacement enabled for
+acceptance; an added restart or invalid-policy fault does not substitute for it.
 
 A harness exit code alone is not a production capacity pass. Evidence is stored
 under `.gitstore/capacity/<target>/<profile>/<mode>/<run-id>/` and must also
@@ -650,6 +916,162 @@ replay size, and duration remain independent acceptance dimensions.
 Alpha and production watch evidence enforces at least 60 minutes, 1,000
 subscribers, 10,000 replay events, 100 transitions per burst, and a burst
 interval shorter than the run. Smaller experiments must use diagnostic mode.
+The native Namespace watch and full Repository lifecycle runners additionally
+exercise metadata-only authoring, selector entry/exit/reentry, peer durable
+replay and a real provenance-only Git push during the sustained mutation workload.
+Generation must remain unchanged while resource versions and provenance advance.
+Each completed probe records its wall-clock interval and sustained mutation
+acknowledgements before/after; idle periods and post-schedule drain cannot count.
+Cycles repeat after a one-minute pause while another full one-minute probe
+budget remains. A short diagnostic must still leave enough time for its first
+probe to finish under acknowledged load; it is not production acceptance.
+Set `GIT_URL` to the reachable singleton Git endpoint for Namespace watch runs;
+Repository lifecycle continues to use `REPOSITORY_GIT_URL`. Provenance pushes
+retry only non-fast-forward races, refreshing the current tree at depth one and
+rebasing only the single probe comment commit without force within a 30-second,
+eight-attempt bound. Other Git failures remain fatal.
+Metadata mutations use the existing transient GraphQL classification with a
+30-second total deadline and explicit retry records. Every returned error must
+qualify; a concurrent conflict cannot mask a companion authorization/domain
+denial, and only a successful response with validated metadata acknowledges a
+phase. Transport or malformed-response failures are not success fallbacks.
+The narrower
+`REPOSITORY_CAPACITY_WORKLOAD` diagnostic comparisons do not exercise these
+metadata probes or substitute for the full lifecycle gate. Controller counter
+advances during Repository probes are aggregate progress, not attribution of
+each metadata transition to a particular reconciliation.
+Repository load alternates the requested default branch by each resource's
+pool round, not global offer parity (which repeats the same branch for an
+even-sized pool). Acknowledgements must include positive generation, the exact
+requested default branch, resource version and original sequence annotations.
+Offered rates, bounded queues, retries, bursts and visibility thresholds are
+unchanged; older even-pool diagnostics do not prove repeated spec changes.
+Each full Repository lifecycle probe cycle also exercises mutation and raw-push
+deletion, authoring-manifest removal, both-API disappearance, same-name recreation
+and stale-UID completion rejection. It reuses the cycle's owned Namespace,
+separate from the native mutation pool's authoring ref. Deletion records its own
+acknowledgement span and requires fresh acknowledgements during initiation and
+completion of each deletion mode: progress during metadata or fixture creation
+alone cannot prove deletion under load. The complete cycle must finish inside
+the original scheduling window.
+Rejecting stale completion must leave the replacement visible with its new UID
+on both APIs. Separate fresh ordinary Repositories receive Product, ProductVariant,
+Collection, File and CategoryTaxonomy manifests through real Git pushes,
+one kind per Repository. Fresh UIDs prevent stale membership from an earlier
+kind masking a later blocker. Each admitted child must independently block Repository
+deletion on both APIs without terminating the Repository or child, removing
+the committed manifest or touching its physical storage. The Variant has a
+deliberately unresolved Product reference, verified on both APIs, so a
+co-resident Product cannot mask Variant membership. The File uses an owned
+repository-relative Git source with a real committed asset, not external
+credentials or an unsupported source type. Explicit Git deletion must remove
+each child projection on both APIs and its manifest before the next kind is
+created. Each emptied Repository must complete deletion and physical cleanup
+before the next fixture. Each under-load blocker/cleanup interval requires fresh
+workload acknowledgements; per-kind empty-Repository completion verifies membership drain.
+With `REPOSITORY_CAPACITY_VERIFY_FINALIZERS=1`, the same five-kind fixtures also
+exercise terminating catalog blockers held by `capacity.gitstore.dev/held-finalizer`.
+This requires physical-storage verification, an explicitly owned Compose project
+and `CAPACITY_SCYLLA_KEYSPACE` matching both API containers. The harness uses
+bounded, exact-UID/Repository/name/resource-version CQL compare-and-set updates
+on only its freshly created `repo-catalog-*` records; no public metadata-write
+API or author-writable finalizer is introduced. Both APIs must reject parent
+deletion twice while preserving the terminating child, committed manifest,
+parent identity and physical storage, with fresh offered-work acknowledgements
+during the held interval. Fixture cleanup requires the same termination timestamp
+and sole test finalizer, advances resource version without changing generation,
+and restores only the simulated metadata before ordinary real-Git child deletion.
+Concurrent version changes are retried at most eight times; uncertain command
+outcomes remain failures. Alpha/production require these fixtures and default them
+on; diagnostics default them off and explicitly report the missing coverage.
+This simulates an interrupted, finalizer-held child state. It does not establish
+real child-deletion initiation, worst-case storage ceilings or full production
+acceptance. The same flag also enables the separate real parent-finalizer probes
+described below.
+The tagged datastore suite separately verifies unrelated Namespace and System
+Repository finalizers through actual completion Services and two Scylla sessions.
+Neither completion entry point may remove storage while the blocker is present;
+explicit owner removal must allow cleanup. This native regression uses modeled
+Git transport and is not sustained-load or running-API finalizer evidence.
+The same five-kind Git probe separately uses a fresh Namespace and System
+Repository per kind, with no ordinary Repository to mask catalog membership.
+Both APIs must reject Namespace deletion with `FAILED_PRECONDITION` and
+`NAMESPACE_NOT_EMPTY`, preserve Namespace finalizers and child/System Repository
+identity and nontermination, and retain the committed manifest and storage.
+Explicit child removal must precede Namespace/System Repository completion
+and physical cleanup, with fresh acknowledgements during each complete interval.
+The next repeated composite cycle reserves at least its previous measured
+duration (with the existing one-minute floor), while retaining one-minute
+pacing, unchanged offered-load windows and strict no-drain overlap checks.
+The same cycle also creates an owned Namespace with an ordinary Repository and
+requires both APIs to reject Namespace deletion without terminating either
+resource. After explicit ordinary-Repository removal, a Product or CategoryTaxonomy in the system
+Repository must independently block Namespace deletion on both APIs without
+terminating the Namespace, system Repository or catalog child. Each kind is tested
+independently, and its committed manifest must remain present. Explicit catalog deletion must remove its manifest
+and projection on both APIs while fresh workload acknowledgements continue.
+Same-name recreation must assign a new UID; stale catalog completion
+on either API must preserve the replacement and its manifest. Namespace,
+Repository, Product and CategoryTaxonomy completion without the required ID
+must fail schema validation on both APIs without affecting replacements. After catalog
+cleanup, active controllers must remove the empty system Repository and Namespace within the existing 60-second
+completion bound. Same-name recreation must assign new Namespace and system
+Repository IDs; stale Namespace completion on either API must preserve both.
+Each empty-Namespace completion requires fresh workload acknowledgements, and
+the recreated fixture is deleted through the normal controller path.
+With finalizer verification enabled, an unrelated marker first holds real
+ordinary-Repository termination. Both APIs must continue rejecting Namespace
+deletion without cascading, and explicit Repository completion must reach the
+unrelated-finalizer rejection while storage remains present. The initial
+Namespace completion is then held by an unrelated Namespace finalizer; neither
+completion entry point may even terminate its empty system Repository. After
+same-name recreation, a marker on the system Repository instead holds real
+controller-initiated Repository termination and Namespace completion.
+Each held interval requires fresh offered-work acknowledgements, repeated
+completion rejection on both APIs, stable identities/generations and preserved
+physical storage. Only the owning marker is added or removed through UID,
+version, name and creation-time CAS; release requires real termination, preserves
+every other finalizer and never rewrites deletion timestamps, intents or status.
+The existing controller completion deadline and physical cleanup checks remain
+unchanged. These real parent probes do not convert catalog simulations into
+real catalog-child deletion-initiation evidence.
+The finalizer-enabled Namespace probe also races a single ordinary-Repository
+creation against Namespace deletion in both API directions, without retrying
+either actor. It validates the actual acknowledgements rather than requiring a
+particular scheduling winner: both operations must never be acknowledged.
+An acknowledged child retains its cross-replica projection, committed manifest
+and physical storage and blocks Namespace deletion until explicit child cleanup.
+A deletion winner rejects the child without leaving a visible projection.
+Two contention rejections are permitted only for explicit conflicts.
+The held Namespace marker keeps the real parent incarnation and system storage
+inspectable; every race is cleaned up through normal controller completion
+before same-name recreation. Separate termination-first attempts on both APIs
+check child rejection after the parent is already terminating. Rejected API
+authoring may have committed a manifest before admission; it is not counted as
+an acknowledged child, and the owned system storage must disappear during the
+subsequent normal Namespace cleanup. Fresh workload acknowledgements are required
+through every race; no load or completion deadline is relaxed.
+Repository evidence retains the existing bounded Namespace and Product deletion
+outcome/rejection counters in `prometheus/api-series.json`, alongside controller
+progress. The datastore quantile/error export includes repository/catalog
+emptiness checks, creation/deletion for all five catalog kinds,
+Product/CategoryTaxonomy termination and UID-bound Repository/Namespace/catalog completion. These aggregate
+measurements do not certify per-shard partition size, tombstone cost or physical
+storage cleanup; those remain separate acceptance obligations.
+`REPOSITORY_CAPACITY_VERIFY_STORAGE=1` enables read-only inspection of the
+explicitly owned `REPOSITORY_CAPACITY_PROJECT` singleton Git container.
+The probe derives the physical path from the Repository Relay UID and owned
+writable data-volume fanout, observes a real directory before deletion,
+then requires its absence and the retained zero-byte UID tombstone afterwards.
+It also checks that recreation/stale completion leaves the replacement directory
+intact and the old directory absent, including Namespace system repositories.
+The container identity/start time must remain unchanged across inspection.
+Alpha/production require this check and default it on; diagnostics default it
+off and explicitly report the missing physical-storage coverage. No storage
+files, images, volumes, receipts or tombstones are modified by inspection.
+The API's configuration-derived `status.resolved.storagePath` is not used as
+physical existence evidence: inspection takes its data root from the actual
+owned Git mount, not the API process's path namespace.
 The dispatcher writes those configurable scrape targets into the evidence
 bundle and gives every run an ephemeral Prometheus TSDB. The exporter derives
 its default PromQL lookback from the recorded run start time plus a small
@@ -666,6 +1088,32 @@ range samples for controller identity, credentials, reconciliation, recovery,
 stall, queue and resource metrics to `prometheus/controller-series.json`,
 including on a failed gate, before the ephemeral scraper is removed. Missing
 controller history fails export rather than generating zero-valued evidence.
+
+For Scylla-backed investigations, pass
+`CAPACITY_PROMETHEUS_SCYLLA_TARGETS=scylla-1:9180,scylla-2:9180,scylla-3:9180`
+using addresses reachable from the scraper. The separate
+`gitstore-scylla-capacity` job retains five-second server CAS histograms,
+contention/timeouts, coordinator read/write latency, per-shard reactor
+utilization, scheduler runtime/wait counters and transport pressure in
+`prometheus/scylla-series.json`. Every configured node must have an up sample,
+CAS write-count history and utilization history; missing or non-finite evidence
+fails export. Down samples during deliberate faults remain in the history.
+Values retain the server's native units and labels, including scheduling groups;
+these are not per-resource or per-request timings. Compare the same run window
+with API driver spans before attributing client latency to server execution.
+An external Prometheus must already scrape these endpoints under that job.
+
+For `category/hierarchy`, the same exporter retains both APIs' five-second
+mutation, datastore, shared watch and Go process histories. Queried observations
+include mutation p95/p99 and outcomes, Product/membership operation p95/p99,
+samples and errors (including category listing/descendant operations), and shared
+watch phase p95 estimates. Histories also retain ancestor-index writes/repair
+signals and datastore projection/compensation counters. Membership replacement
+and connection reads pass through application instrumentation; these histograms
+measure whole datastore operations, not physical CQL attempts or hydrated rows.
+Watch phase estimates cover the shared journal, not Category-only delivery.
+Use the configured controller targets to retain reconciliation and recovery
+alongside the API series. Missing configured replica histories fail export.
 
 Controller snapshots also retain per-kind
 `gitstore_controller_dependency_deferrals_total` counters, separated into
@@ -697,6 +1145,11 @@ a default.
 
 ## Included profiles
 
+Shared k6 integer settings require exact, nonnegative decimal safe integers
+meeting the setting's minimum. Leading zeros remain valid; suffixes, fractional
+or exponential notation, negative values and unsafe integers are rejected rather
+than truncated. An unset or empty setting retains its existing fallback.
+
 - `api-readiness` is a non-mutating runner smoke test.
 - `namespace-admission` drives unique Namespace creates at a fixed arrival
   rate, alternates across two replicas, and fails on dropped iterations,
@@ -707,7 +1160,7 @@ a default.
   authoritative for replay, duplicates, cursor recovery, and replacement.
 
 - `category-hierarchy` (`make capacity TARGET=category PROFILE=hierarchy
-  MODE=<mode>`, spec 057) seeds a deterministic fan-out subtree of
+  MODE=<mode>`) seeds a deterministic fan-out subtree of
   `CAPACITY_CATEGORY_SUBTREE_SIZE` (default and alpha/production minimum 10,000)
   descendants under one root, then sustains `createCategory`/`updateCategory`
   at `CAPACITY_RATE` (default and minimum 20/s, one namespace,
@@ -720,11 +1173,72 @@ a default.
   during the cascade. Other knobs: `CAPACITY_CATEGORY_FANOUT`,
   `CAPACITY_CATEGORY_DURATION_SECONDS` (min 300 for gates),
   `CAPACITY_CATEGORY_READ_RATE`, `CAPACITY_CATEGORY_CONVERGENCE_TIMEOUT_SECONDS`.
-  - **SC-009**: teardown waits for the cascade, walks every category's
+  - **Complete offered load**: the native summary retains declared mutation/read
+    rates, duration and planned counts, plus offered, completed, failed and
+    missed-schedule counters. Each plan is exactly `rate * durationSeconds`;
+    acceptance requires every planned offer and outcome, zero failed reads,
+    zero dropped or missed schedules, and one filtered-page latency sample per
+    completed read. An offer at least one arrival interval late is missed; an
+    offer at or after the declared endpoint fails before starting a request.
+    Thrown requests leave an incomplete offer that cannot pass verification.
+    The load window is the mutation scenario's actual start plus its declared
+    duration, not setup or teardown/cascade time. Alpha and production retain
+    the minimum 20 mutations/s for 300 seconds and the existing latency limits
+    and VU bounds. Schedule identity uses k6's single-process scenario index;
+    segmented/distributed k6 runs are not supported by this accounting.
+    k6 can race its stop timer and invoke the single exclusive-endpoint index.
+    That callback sends no request and is recorded separately in
+    `category_mutation_endpoint_callbacks` or
+    `category_filtered_read_endpoint_callbacks` (at most one each); it cannot
+    replace a missing planned offer. Early endpoint callbacks, indices beyond
+    the endpoint, or late callbacks for planned offers still fail.
+  - **Product membership workload**: setup acknowledges one Product at the
+    final leaf, `CAPACITY_CATEGORY_PRODUCT_SPREAD` (default 64) spread over
+    subtree categories, and `CAPACITY_CATEGORY_PRODUCT_SKEW` (default 256)
+    directly under the anchor. A separate empty root checks false membership.
+    One worker updates these owned Products at
+    `CAPACITY_CATEGORY_PRODUCT_RATE` (default 1/s), alternating API replicas;
+    every odd update also changes the category reference. Typed conflicts
+    have bounded retries, and every acknowledgement must retain the original
+    UID/creation time, advance generation once, and carry its own unique commit.
+    After setup, every update, and the root move, an independent acknowledged
+    ledger checks the leaf, subtree root, anchor and empty root on both APIs
+    in both pagination directions. Windows are ordered by nanosecond creation
+    time and raw UID, not by the observed pages. Checks include exact identities,
+    specifications, generations, current Ready conditions, resolved category
+    UIDs/paths, cursor boundaries and page flags. Teardown reconstructs all
+    intended updates from its separate setup-data copy rather than trusting
+    the worker's mutable state or returned membership.
+    Verification requires the complete `rate * durationSeconds` update plan,
+    exactly half (rounded down) reassignments, zero failed/missed offers,
+    and 16 successful connection checks per oracle pass. Slow reconciliation
+    and oracle reads can make the single worker miss its declared rate; that
+    fails rather than reducing the requested workload.
+    Each oracle HTTP request is capped by the remaining convergence deadline;
+    the Product scenario has a 30-second maximum drain with no extra executor
+    grace period. Exhaustion leaves explicit failure or incomplete evidence.
+    `category_product_page_ms` and `category_product_convergence_ms` report
+    sampled latency without adding an unapproved latency threshold.
+    Independent reads are paired across the two API replicas, with at most
+    two requests per batch. Each forward/backward window retains its own
+    sequential continuation cursor and page budget. An incomplete poll
+    validates its current pair before stopping, then retries within the same
+    absolute deadline; no response received after it can be accepted.
+    A successful poll still requires
+    all 16 connections and confirmation of the unchanged root phase.
+    `category_product_oracle_attempts` counts polls;
+    `category_product_oracle_attempt_ms` measures each poll, and
+    `category_product_oracle_verification_ms` measures complete successful
+    checks separately from the entire convergence wait.
+    `category_product_expected_max_shard_members.max` is the peak *analytically
+    expected* live membership in an FNV-1a shard, not measured partition bytes,
+    physical Scylla read amplification, tombstones or an approved storage ceiling.
+    The final gauge value may be zero because the empty root is checked last.
+  - **Path/filter consistency**: teardown waits for the cascade, walks every category's
     `status.resolved.path`, and compares the walk with seven filtered result
     sets (including `maxDepth`, `includeSelf` and an unknown root) fully paged
     on each API replica; any missing or extra name fails.
-  - **SC-007**: each pool record (a created category or a seed updated once) is
+  - **Acknowledged revision provenance**: each pool record (a created category or a seed updated once) is
     touched by exactly one mutation. Each acknowledged payload must carry its own
     name and title and a `metadata.revision` of the form `<branch>@sha1:<commit>` (40-64 hex commit); at teardown
     the commits extracted from the stored revisions of all pool records must be pairwise distinct. This
@@ -733,16 +1247,39 @@ a default.
     (`TestCapacityGitPushDriver` in `tests/integration/capacity_push_driver_test.go`,
     enabled with `CAPACITY_PUSH_DRIVER=1`; see the file header for its
     `CAPACITY_PUSH_*` settings) pushes commits to the same `gitstore-system`
-    repository for the duration of the load and writes `{"repository":"gitstore-system","pushes":N,"failures":0,
-    "firstPushMs":<epoch ms>,"lastPushMs":<epoch ms>}`. Pass its path as
+    repository for the duration of the load. Set `CAPACITY_PUSH_NAMESPACE` to
+    the profile's namespace and give both producers the same `CAPACITY_RUN_ID`.
+    The verifier consumes the driver's complete document, including `kind`,
+    `namespace`, `runId`, `offered`, `pushes`, `failures`, `dropped`, `retries`,
+    worker/interval bounds, latency statistics and first/last acknowledgement
+    timestamps. The driver uses absolute monotonic offer times rather than
+    counting delivered ticker events. Its `scheduled` count is the ceiling of
+    `durationNs / intervalNs`, including the initial offer at time zero and
+    excluding the duration endpoint. All scheduled offers must be completed,
+    with zero failures, drops or `missedSchedules` (offers at least one interval
+    late). Nanosecond duration/interval fields preserve fractional-millisecond
+    settings; `intervalMs` remains a display value. `offeredDurationNs` must
+    cover the declared window without extending it by an interval.
+    Cancellation is explicit, and accepted jobs drain before evidence is
+    written; a 30-second drain expiry cancels the jobs, waits for their cleanup,
+    and records `drainTimedOut`. Drain timing includes that cleanup, and the
+    verifier rejects canceled, over-bound or incomplete runs. Acknowledgement
+    latency includes schedule lateness and worker execution.
+    Retries count jobs that retried, not individual HTTP attempts. Pass its path as
     `CAPACITY_CATEGORY_PUSH_EVIDENCE`; alpha/production require it and the
     verifier requires the push window to cover at least half of the load window.
   - **Faults**: reuse `tests/chaos/profiles/controller-restart.json` and
     `api-restart.json` via `CAPACITY_CHAOS_PROFILE` (one per run) with
     `CAPACITY_CHAOS_DELAY` set inside the load window (for example, the delay
-    that lands in the cascade). After recovery run `gitctl scylla-projection-audit`
+    that lands in the cascade). The delay starts at the actual scenario window,
+    after all Category and Product setup oracles finish. After recovery run `gitctl scylla-projection-audit`
     and pass the output as `CAPACITY_CATEGORY_AUDIT_FILE`; alpha/production
-    require zero `findings`.
+    require explicit empty `findings` and `actions`, with no pending namespace
+    fence or ServiceAccount enrollment repairs. The CLI's explicit null empty
+    slices remain valid; omitted fields are not a successful audit. Push and
+    audit inputs must each be a single regular JSON document of at most 1 MiB,
+    with only their declared non-secret fields. Acceptance also requires at
+    least 10,000 acknowledged descendants.
 
 Alpha and production modes refuse to run unless evidence
 declares at least two API replicas, three Scylla nodes with at least two shards

@@ -169,7 +169,7 @@ func (m *memdbDatastore) ListNonBlockingProductOwnerDependents(_ context.Context
 	return page, nil
 }
 
-func (m *memdbDatastore) MarkCategoryTaxonomyDeletion(_ context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*datastore.CategoryTaxonomy, error) {
+func (m *memdbDatastore) MarkCategoryTaxonomyDeletion(_ context.Context, namespace, name, expectedResourceVersion, expectedUID string, at time.Time) (*datastore.CategoryTaxonomy, error) {
 	m.categoryMutationMu.Lock()
 	defer m.categoryMutationMu.Unlock()
 	txn := m.db.Txn(true)
@@ -179,6 +179,10 @@ func (m *memdbDatastore) MarkCategoryTaxonomyDeletion(_ context.Context, namespa
 		return nil, fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrNotFound, namespace, name)
 	}
 	category := cloneCategoryTaxonomy(raw.(*datastore.CategoryTaxonomy))
+	if expectedUID == "" || category.UID != expectedUID {
+		txn.Abort()
+		return nil, datastore.ErrConflict
+	}
 	if category.DeletionTimestamp != nil {
 		txn.Abort()
 		return category, nil

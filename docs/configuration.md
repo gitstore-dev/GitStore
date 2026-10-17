@@ -278,47 +278,140 @@ baseline. Keep canonical status-write grants for separate status mutations, and
 | `log.level`  | `GITSTORE_LOG__LEVEL`  | string | `info`  | No       | No        | `debug` \| `info` \| `warn` \| `error` |
 | `log.format` | `GITSTORE_LOG__FORMAT` | string | `json`  | No       | No        | `json` \| `text`                       |
 
-### Telemetry and API profiling
+### Telemetry and Go service profiling
 
 | Key | Env Var | Type | Default | Description |
 |-----|---------|------|---------|-------------|
-| `observability.otlp.endpoint` | `GITSTORE_OBSERVABILITY__OTLP__ENDPOINT` | string | empty | OTLP HTTP collector base URL; empty disables telemetry export |
+| `observability.otlp.uri` | `GITSTORE_OBSERVABILITY__OTLP__URI` | string | empty | OTLP HTTP(S) collector base URI; empty disables telemetry export |
 | `observability.otlp.trace_sample_ratio` | `GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO` | number | `0.05` | Parent-based trace sampling ratio, from `0` through `1` |
-| `api.profiling.listen_addr` | `GITSTORE_API__PROFILING__LISTEN_ADDR` | string | empty | Separate loopback-only profiler listener; empty disables profiling |
-| `git_service.metrics.listen_addr` | `GITSTORE_GIT_SERVICE__METRICS__LISTEN_ADDR` | string | empty | Optional native Prometheus listener; literal IP and nonzero port required |
+| `api.profiling.uri` | `GITSTORE_API__PROFILING__URI` | string | empty | Separate plain-HTTP loopback-only profiler URI; empty disables profiling |
+| `controller.profiling.uri` | `GITSTORE_CONTROLLER__PROFILING__URI` | string | empty | Controller's separate plain-HTTP loopback-only profiler URI; empty disables profiling |
+| `git_service.metrics.uri` | `GITSTORE_GIT_SERVICE__METRICS__URI` | string | empty | Optional plain-HTTP native Prometheus URI; literal IP and nonzero port required |
 
 These settings use the same file/overlay/environment precedence as other
-GitStore settings. API telemetry initialization and HTTP/gRPC instrumentation
+GitStore settings. API and controller-manager share Go telemetry configuration,
+SDK lifecycle, log export, Prometheus reader and profiler implementation. Their initialization
+and HTTP/gRPC instrumentation
 receive the resolved configuration; `OTEL_EXPORTER_OTLP_ENDPOINT`,
 `OTEL_TRACES_SAMPLER` and `GITSTORE_CAPACITY_PROFILE_ADDR` are not alternative
 GitStore configuration keys. Service identity is fixed by the emitting service.
 The shared telemetry keys are also loaded and validated by the Git service;
 configuring them alone does not establish a complete distributed tracing rollout.
-Prometheus remains the native metrics endpoint. API telemetry also exports
-OTel gRPC metrics on that endpoint, with a 2,048-series per-instrument
-cardinality bound. Both core telemetry exporters expose
+The Go service identities are `gitstore-api` and `gitstore-controller-manager`;
+neither can be changed through SDK environment variables. Controller spans cover
+individual reconciliation attempts, API HTTP requests and WebSocket dials.
+Trace context propagates to the API; subscriptions do not retain live spans
+throughout their watch lifetimes. API GraphQL POST spans link the caller to
+downstream work without wrapping response writers or changing authentication.
+At Info level, sampled controller reconciliation attempts and finite GraphQL POST
+handlers emit completion logs with native OTLP trace/span IDs. Successful/requeue
+controller completions remain Debug when unsampled; failures retain Warn.
+Unsampled GraphQL requests add no completion log. Existing Git HTTP timing logs
+retain their local fields and now carry native
+OTLP trace/span IDs and fixed timing fields when tracing is enabled. These IDs
+come from the actual span context, not ordinary string attributes.
+Trace attributes exclude resource identifiers, documents, credentials and raw
+errors. OTLP logs export only selected operational fields; local logs keep their
+existing fields and redaction. Go SDK shutdown has a five-second deadline and
+reports flush failures; it does not wait indefinitely for an unavailable collector.
+Prometheus remains the native metrics endpoint. Both Go `/metrics` handlers
+negotiate OpenMetrics when requested and preserve legacy text scrapes. Sampled,
+valid span contexts attach `trace_id` and `span_id` as bounded histogram exemplars,
+never ordinary metric labels. Native duration coverage includes controller
+reconcile attempts (`gitstore_controller_reconcile_duration_seconds`), GraphQL
+POST handlers (`gitstore_api_graphql_http_request_duration_seconds`), Git HTTP
+phases/total (`gitstore_git_http_stage_duration_seconds`) and instrumented
+datastore operations, namespace-fence and catalog-mutation phases
+(`gitstore_datastore_operation_duration_seconds`). Existing native metric names
+and labels are unchanged. Datastore exemplars identify the operation/phase span
+when recording;
+Git HTTP timing exemplars and logs identify the request's server span.
+Shared Go telemetry also exports OTel gRPC metrics on that endpoint, with a
+2,048-series per-instrument cardinality bound and SDK trace-based exemplars.
+Native exemplar helpers require sampled context independently of SDK metric
+exemplar-filter environment settings. Prometheus must negotiate an exemplar-capable
+scrape format and enable exemplar storage; plain text scrapes cannot carry these
+exemplars. Export or scrape success alone does not prove stored, queryable correlation.
+
+All three core services use a random 128-bit, lowercase hexadecimal
+`service.instance.id` resource attribute generated once per process. It changes
+on process replacement even when the hostname or PID is reused. API and
+controller traces, logs and SDK metrics share that identity through the common
+Go telemetry setup; provider reinitialization in the same process preserves it.
+`host.name` separately identifies the host, not the process. Service name and
+version are unchanged. This telemetry identity is not an authentication principal
+or a configurable deployment identity; native metric exemplars join to it
+through their trace/span IDs rather than adding a new native metric label.
+Enabled Go telemetry fails initialization if identity generation fails, before
+installing any signal providers. Disabled telemetry does not require an identity.
+
+Sampling is parent-based: sampled remote parents are honored even at a zero root
+sampling ratio; unsampled parents do not generate exemplars. Startup and other
+no-context logs legitimately lack trace/span IDs. Queue dispatch, retry attempts,
+CDC processing and subsequent watch events do not inherit one continuous original
+request trace. Asynchronous work may start a new root; watch lifetimes are not
+held open as spans. Existing exemplars can remain in histogram buckets after later
+unsampled observations; retention is bounded by the histogram's buckets, not the
+number of requests. Correlation therefore covers the instrumented sampled work,
+not every log or metric.
+
+All three core telemetry exporters expose
 `gitstore_telemetry_records_total{signal,stage}` for admitted, exported, failed
 and truncated records. Admitted minus exported includes live queued work;
 subtract failed exports and wait for bounded flush/drain before interpreting
 the remaining difference as queue loss. Export success means exporter success,
 not proof of downstream storage; retain collector rejection/failure evidence.
-Both cap string log bodies at 4 KiB without splitting UTF-8. Rust attribute-value
+All cap string log bodies at 4 KiB without splitting UTF-8. Rust attribute-value
 bounds are not equivalent to the API's limits.
 The copied configuration templates in `gitstore-dev/quickstart` need the same
-new telemetry/profiling keys before exposing this configuration there.
+new telemetry/profiling keys and controller support before exposing this configuration there.
 
-An endpoint must be an HTTP(S) URL without credentials, query or fragment.
+The OTLP URI must use HTTP(S), without credentials, query or fragment.
+Collector base paths are supported, for example `https://collector/otlp`.
+The obsolete GitStore `endpoint` and `listen_addr` keys are rejected with their
+replacement names, including environment overrides. Collector/vendor YAML
+retains its upstream-defined `endpoint` keys.
 Use an explicitly owned local collector for capacity diagnostics. Trace/log
 batch queues and export timeouts are bounded; enabling export does not weaken
 authentication or authorize collector access to GitStore resources.
 
-For API profiling, use a literal loopback address with an explicit nonzero
-port, for example `127.0.0.1:6060` or `[::1]:6060`. Hostnames and wildcard
-binds are rejected. Profiles are not served on the public API/Git listeners:
+For API or controller profiling, use a plain-HTTP URI with a literal loopback address and an
+explicit nonzero port, for example `http://127.0.0.1:6060` or
+`http://[::1]:6060`. Hostnames and wildcard binds are rejected. Native Git metrics
+use the same URI form but may bind non-loopback literal IPs, for example
+`http://0.0.0.0:50052`. Both listeners reject HTTPS, credentials, base paths,
+queries and fragments; an optional trailing slash is allowed. Their routes
+remain `/debug/pprof/...` and `/metrics`. Profiles are not served on public API,
+Git or controller health/metrics listeners:
 retrieve them inside the owned container. CPU captures require `seconds=1..60`;
 execution traces require `seconds=1..5`. Heap, allocation, block, mutex and
 goroutine endpoints return binary profiles only, with one capture at a time.
 Profiled capacity runs are diagnostics, not unprofiled acceptance evidence.
+Both Go profilers are disabled by default and shut down with their owning
+process. For native services sharing one host, select different ports, for
+example API `6060` and controller `6061`:
+
+```toml
+[controller.profiling]
+uri = "http://127.0.0.1:6061"
+```
+
+The same setting can be supplied through
+`GITSTORE_CONTROLLER__PROFILING__URI`. Inside a container, loopback refers to
+that container; retrieve the profile there rather than exposing its listener.
+The listener serves captures on request, not a continuous archive. Save a
+profile and open it with `go tool pprof -http=127.0.0.1:8088 controller-cpu.pprof`;
+execution traces use `go tool trace`. The Rust Git service has no equivalent
+profiling listener.
+
+During an execution capture, the Go telemetry SDK creates runtime tasks for
+recording spans. Sampled File CAS exchange tasks also carry bounded
+`otel.trace_id` and `otel.span_id` annotations from the shared observability
+library. Match both IDs and a complete, nonzero runtime task to correlate
+caller scheduling with the exact distributed exchange. A span or task crossing
+the capture boundary may not be joinable. These annotations do not create an
+additional task, retain request data or change sampling; no annotations are
+emitted when execution tracing is inactive.
 
 `CAPACITY_OBSERVABILITY=full make capacity ...` reuses `compose.capacity.yml`
 to start Prometheus, an OTLP HTTP collector, Tempo and Loki. Their host ports
@@ -326,9 +419,9 @@ bind only to loopback. Named volumes retain histories after container removal;
 `CAPACITY_OBSERVABILITY_KEEP=1` keeps collectors available for subsequent
 queries. No Docker socket is mounted and vendor usage reporting is disabled.
 Configure the emitting capacity API/Git processes through
-`CAPACITY_OTLP_ENDPOINT=http://capacity-otel-collector:4318` and, when needed,
-`CAPACITY_API_PROFILE_ADDR=127.0.0.1:6060` and
-`CAPACITY_GIT_METRICS_ADDR=0.0.0.0:50052` before their controlled replacement.
+`CAPACITY_OTLP_URI=http://capacity-otel-collector:4318` and, when needed,
+`CAPACITY_API_PROFILE_URI=http://127.0.0.1:6060` and
+`CAPACITY_GIT_METRICS_URI=http://0.0.0.0:50052` before their controlled replacement.
 Starting collectors does not silently reconfigure or restart core services.
 
 Add `CAPACITY_PROMETHEUS_GIT_TARGETS=capacity-git-service:50052` for native

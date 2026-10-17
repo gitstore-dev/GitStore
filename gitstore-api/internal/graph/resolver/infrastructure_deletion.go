@@ -230,6 +230,16 @@ func (s *Service) finalizeNamespaceSystemRepository(ctx context.Context, ns *dat
 	if repo.Name != SystemRepositoryName || repo.Namespace != ns.Name {
 		return fmt.Errorf("system repository identity mismatch")
 	}
+	// Check the parent after capturing the Repository UID; later replacement
+	// can invalidate its CAS but cannot redirect it to another incarnation.
+	parent, err := s.store.GetNamespaceByName(ctx, ns.Name)
+	if err != nil {
+		return err
+	}
+	if parent.UID != ns.UID || parent.ResourceVersion != ns.ResourceVersion ||
+		parent.DeletionTimestamp == nil || !containsString(parent.Finalizers, datastore.NamespaceForegroundDeletionFinalizer) {
+		return datastore.ErrConflict
+	}
 	if repo.DeletionTimestamp == nil {
 		expected := repo.ResourceVersion
 		now := s.clock.Now().UTC()

@@ -15,6 +15,10 @@ processors:
     send_batch_size: 256
     send_batch_max_size: 512
 exporters:
+  prometheus/metrics:
+    endpoint: 0.0.0.0:8889
+    metric_expiration: 5m
+    enable_open_metrics: true
   otlphttp/traces:
     endpoint: http://capacity-tempo:4318
     timeout: 3s
@@ -22,6 +26,8 @@ exporters:
       queue_size: 128
       num_consumers: 2
     retry_on_failure:
+      initial_interval: 250ms
+      max_interval: 1s
       max_elapsed_time: 30s
   otlphttp/logs:
     endpoint: http://capacity-loki:3100/otlp
@@ -45,6 +51,10 @@ service:
                 host: 0.0.0.0
                 port: 8888
   pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus/metrics]
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch]

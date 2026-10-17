@@ -9,9 +9,12 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,9 +26,11 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
@@ -33,10 +38,294 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/gitstore-dev/gitstore/secretmaterial"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+	logpb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+	"google.golang.org/protobuf/proto"
 )
+
+type telemetryReconcileFunc func(context.Context, types.WorkItemKey) types.ReconcileResult
+
+func (f telemetryReconcileFunc) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
+	return f(ctx, key)
+}
+
+func restoreTelemetry(t *testing.T) {
+	t.Helper()
+	traces, logs, metrics := otel.GetTracerProvider(), otel.GetLoggerProvider(), otel.GetMeterProvider()
+	propagator, handler := otel.GetTextMapPropagator(), otel.GetErrorHandler()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(traces)
+		otel.SetLoggerProvider(logs)
+		otel.SetMeterProvider(metrics)
+		otel.SetTextMapPropagator(propagator)
+		otel.SetErrorHandler(handler)
+	})
+}
+
+func telemetryAttribute(attrs []*commonpb.KeyValue, key string) string {
+	for _, attr := range attrs {
+		if attr.Key == key {
+			return attr.Value.GetStringValue()
+		}
+	}
+	return ""
+}
+
+func TestControllerProfilerStartupFailureAndCleanup(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	address := listener.Addr().String()
+	cfg := &config.Config{Log: config.LogConfig{Level: "error", Format: "json"}}
+	cfg.Controller.Profiling.URI = "http://" + address
+	require.ErrorContains(t, run(cfg), "initialize capacity profiler", "an occupied profiler port must fail startup explicitly")
+	cfg.Controller.Profiling.URI = ""
+	require.ErrorContains(t, run(cfg), "build credential source", "disabled profiling must not interfere with startup")
+	require.NoError(t, listener.Close())
+	cfg.Controller.Profiling.URI = "http://" + address
+	require.ErrorContains(t, run(cfg), "build credential source", "the profiler must start before credentials are constructed")
+	rebound, err := net.Listen("tcp", address)
+	require.NoError(t, err, "a later startup failure must shut down the profiler and release its listener")
+	require.NoError(t, rebound.Close())
+}
+
+func TestControllerProfilerIsNotOnPublicMux(t *testing.T) {
+	handler := buildMux(manager.New())
+	for _, path := range []string{"/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/profile?seconds=1"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusNotFound, response.Code, path)
+	}
+}
+
+func TestControllerTelemetryStartupReconcileClientDelivery(t *testing.T) {
+	restoreTelemetry(t)
+	var mu sync.Mutex
+	var spans tracepb.ExportTraceServiceRequest
+	var logs logpb.ExportLogsServiceRequest
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		require.NoError(t, err)
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/v1/traces":
+			var batch tracepb.ExportTraceServiceRequest
+			require.NoError(t, proto.Unmarshal(body, &batch))
+			spans.ResourceSpans = append(spans.ResourceSpans, batch.ResourceSpans...)
+		case "/v1/logs":
+			var batch logpb.ExportLogsServiceRequest
+			require.NoError(t, proto.Unmarshal(body, &batch))
+			logs.ResourceLogs = append(logs.ResourceLogs, batch.ResourceLogs...)
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-protobuf")
+	}))
+	defer collector.Close()
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "test-uid")
+	t.Setenv("GITSTORE_OBSERVABILITY__OTLP__URI", collector.URL)
+	t.Setenv("GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "1")
+	cfg, err := config.LoadFrom("../../../config/config.toml")
+	require.NoError(t, err)
+	core, local := observer.New(zap.InfoLevel)
+	log, shutdown, err := initTelemetry(t.Context(), cfg, zap.New(core))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = shutdown(context.Background()) })
+	propagated := make(chan trace.SpanContext, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := propagation.TraceContext{}.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		propagated <- trace.SpanContextFromContext(ctx)
+		require.Empty(t, r.Header.Get("Baggage"))
+		_, _ = io.WriteString(w, `{"data":{"ok":true}}`)
+	}))
+	defer server.Close()
+	client := graphqlclient.New(server.URL, graphqlclient.NewStaticToken("private-credential"))
+	mgr := manager.New().WithLogger(log)
+	c := cache.New[string]()
+	c.MarkSynced()
+	called := make(chan struct{}, 1)
+	reconciler := telemetryReconcileFunc(func(ctx context.Context, _ types.WorkItemKey) types.ReconcileResult {
+		require.True(t, trace.SpanFromContext(ctx).IsRecording())
+		require.NoError(t, client.Query(ctx, "query { privateResource }", map[string]any{"private": "body"}, nil))
+		called <- struct{}{}
+		return types.ResultOK()
+	})
+	require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+		Kind: "Namespace", Reconciler: reconciler, Cache: c, WorkerCount: 1,
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stopped := make(chan error, 1)
+	go func() { stopped <- mgr.Start(ctx) }()
+	before := testutil.ToFloat64(health.ReconcileTotal.WithLabelValues("Namespace", "success"))
+	require.NoError(t, mgr.Enqueue(types.WorkItemKey{Kind: "Namespace", Namespace: "private-ns", Name: "private-name"}))
+	select {
+	case <-called:
+	case <-time.After(3 * time.Second):
+		t.Fatal("reconcile not dispatched")
+	}
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(health.ReconcileTotal.WithLabelValues("Namespace", "success")) == before+1
+	}, time.Second, time.Millisecond)
+	cancel()
+	require.NoError(t, <-stopped)
+	require.NoError(t, shutdown(t.Context()))
+	remote := <-propagated
+	mu.Lock()
+	defer mu.Unlock()
+	var reconcileID, clientParent, clientID, traceID []byte
+	for _, resource := range spans.ResourceSpans {
+		require.Equal(t, observability.ControllerService, telemetryAttribute(resource.Resource.Attributes, "service.name"))
+		for _, scope := range resource.ScopeSpans {
+			for _, span := range scope.Spans {
+				require.NotContains(t, span.String(), "private")
+				switch span.Name {
+				case "controller.reconcile":
+					reconcileID, traceID = span.SpanId, span.TraceId
+					require.Equal(t, "success", telemetryAttribute(span.Attributes, "reconcile.result"))
+				case "api.request":
+					clientParent, clientID = span.ParentSpanId, span.SpanId
+				}
+			}
+		}
+	}
+	require.NotEmpty(t, reconcileID)
+	require.NotEmpty(t, clientID)
+	require.Equal(t, reconcileID, clientParent)
+	remoteID, remoteTrace := remote.SpanID(), remote.TraceID()
+	require.Equal(t, clientID, remoteID[:])
+	require.Equal(t, traceID, remoteTrace[:])
+	linked := false
+	for _, resource := range logs.ResourceLogs {
+		require.Equal(t, observability.ControllerService, telemetryAttribute(resource.Resource.Attributes, "service.name"))
+		for _, scope := range resource.ScopeLogs {
+			for _, record := range scope.LogRecords {
+				require.NotContains(t, record.String(), "private")
+				if record.Body.GetStringValue() == "reconcile attempt completed" {
+					linked = true
+					require.Equal(t, reconcileID, record.SpanId)
+					require.Equal(t, traceID, record.TraceId)
+					require.Equal(t, "success", telemetryAttribute(record.Attributes, "result"))
+				}
+			}
+		}
+	}
+	require.True(t, linked)
+	require.Equal(t, 1, local.FilterMessage("reconcile attempt completed").Len())
+	metricsHandler := health.NewMetricsHandler(mgr)
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.Header.Set("Accept", "application/openmetrics-text; version=1.0.0")
+	metrics := httptest.NewRecorder()
+	metricsHandler.ServeHTTP(metrics, request)
+	require.Contains(t, metrics.Header().Get("Content-Type"), "application/openmetrics-text")
+	exemplarFound := false
+	for _, line := range strings.Split(metrics.Body.String(), "\n") {
+		if strings.HasPrefix(line, "gitstore_controller_reconcile_duration_seconds_bucket{") &&
+			strings.Contains(line, `span_id="`+hex.EncodeToString(reconcileID)+`"`) {
+			require.Contains(t, line, `trace_id="`+hex.EncodeToString(traceID)+`"`)
+			require.Contains(t, line, `kind="Namespace"`)
+			require.Contains(t, line, `result="success"`)
+			exemplarFound = true
+		}
+	}
+	require.True(t, exemplarFound, "the actual reconcile completion log and native metric must identify the same span")
+	legacy := httptest.NewRecorder()
+	metricsHandler.ServeHTTP(legacy, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	require.Contains(t, legacy.Header().Get("Content-Type"), "text/plain")
+	require.NotContains(t, legacy.Body.String(), "trace_id")
+}
+
+func TestControllerTelemetryDisabledInvalidAndStartupFailure(t *testing.T) {
+	restoreTelemetry(t)
+	cfg := &config.Config{}
+	log := zap.NewNop()
+	before := otel.GetTracerProvider()
+	resolved, shutdown, err := initTelemetry(t.Context(), cfg, log)
+	require.NoError(t, err)
+	require.Same(t, log, resolved)
+	require.Same(t, before, otel.GetTracerProvider())
+	require.NoError(t, shutdown(t.Context()))
+	cfg.Observability.OTLP.URI = "http://user:private@collector"
+	_, _, err = initTelemetry(t.Context(), cfg, log)
+	require.Error(t, err)
+	require.Same(t, before, otel.GetTracerProvider())
+
+	var delivered atomic.Int64
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		delivered.Add(1)
+		w.Header().Set("Content-Type", "application/x-protobuf")
+	}))
+	defer collector.Close()
+	cfg.Log.Level, cfg.Log.Format = "info", "json"
+	cfg.Observability.OTLP.URI = collector.URL
+	require.ErrorContains(t, run(cfg), "build credential source")
+	require.Positive(t, delivered.Load(), "startup errors must drain telemetry instead of bypassing defers via Fatal")
+}
+
+func TestCategoryPathRelatedWorkSurvivesRestartWithoutCountFanout(t *testing.T) {
+	dir := t.TempDir()
+	store, err := checkpoint.OpenDiskStore(dir, "CategoryTaxonomy")
+	require.NoError(t, err)
+	category := categorytaxonomy.CategoryTaxonomy{
+		UID: "leaf-id", Namespace: "shop", Name: "leaf", Generation: 1, ResourceVersion: "1",
+		Status: status.ResourceStatus{Resolved: json.RawMessage(`{"path":["root","leaf"],"productCount":1}`)},
+	}
+	relatedKey := types.WorkItemKey{Kind: "ProductCategory", Namespace: "shop", Name: "leaf"}
+	item := func() checkpoint.DiskItem {
+		value, err := json.Marshal(category)
+		require.NoError(t, err)
+		version, err := categorytaxonomy.ProductRelationVersion(category)
+		require.NoError(t, err)
+		return checkpoint.DiskItem{
+			Key:     types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: "shop", Name: "leaf"},
+			Version: category.ResourceVersion, Value: value, Related: []types.WorkItemKey{relatedKey},
+			RelatedVersion: version,
+		}
+	}
+	generation, err := store.BeginSnapshot(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, store.PutSnapshotPage(t.Context(), generation, []checkpoint.DiskItem{item()}))
+	require.NoError(t, store.FinishSnapshot(t.Context(), generation, "cursor-1"))
+	pending, err := store.RelatedPending(t.Context(), "", 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	ok, err := store.AcknowledgeRelated(t.Context(), pending[0].Key, pending[0].Token)
+	require.NoError(t, err)
+	require.True(t, ok)
+	category.ResourceVersion = "2"
+	category.Status.Resolved = json.RawMessage(`{"path":["anchor","root","leaf"],"productCount":1}`)
+	require.NoError(t, store.Apply(t.Context(), item(), false, false, "cursor-2"))
+	require.NoError(t, store.Close())
+	store, err = checkpoint.OpenDiskStore(dir, "CategoryTaxonomy")
+	require.NoError(t, err)
+	defer store.Close()
+	pending, err = store.RelatedPending(t.Context(), "", 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.Equal(t, relatedKey, pending[0].Key)
+	ok, err = store.AcknowledgeRelated(t.Context(), pending[0].Key, pending[0].Token)
+	require.NoError(t, err)
+	require.True(t, ok)
+	category.ResourceVersion = "3"
+	category.Status.Resolved = json.RawMessage(`{"path":["anchor","root","leaf"],"productCount":2}`)
+	require.NoError(t, store.Apply(t.Context(), item(), false, false, "cursor-3"))
+	pending, err = store.RelatedPending(t.Context(), "", 10)
+	require.NoError(t, err)
+	require.Empty(t, pending, "a count-only status event must not fan out to referencing Products")
+}
 
 func TestProductionRegistrationUsesDiskForEveryKind(t *testing.T) {
 	dir := t.TempDir()

@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -70,7 +71,13 @@ type repositoryCapacityConfig struct {
 	postLoadStabilization       time.Duration
 	mode                        capacityMode
 	skipReplacement             bool
+	verifyStorage               bool
+	verifyFinalizers            bool
+	keyspace                    string
+	project                     string
 	workload                    string
+	traceCorrelation            string
+	acknowledgements            *atomic.Int64
 }
 
 type repositoryCapacityEvent struct {
@@ -102,6 +109,8 @@ type repositoryCapacityLoadResult struct {
 	attempts, retries                                              int64
 	missedSchedules                                                int64
 	attemptErrors                                                  map[string]int64
+	failures                                                       []repositoryCapacityAttemptFailure
+	omittedFailures                                                int64
 	drainTimedOut                                                  bool
 	queueLatencies, lockLatencies, requestLatencies, httpLatencies []time.Duration
 }
@@ -110,7 +119,33 @@ type repositoryCapacityAttemptObservation struct {
 	attempts, retries int64
 	errors            map[string]int64
 	httpLatencies     []time.Duration
+	traceCorrelation  bool
+	failures          []repositoryCapacityAttemptFailure
+	omittedFailures   int64
 }
+
+type repositoryCapacityAttemptFailure struct {
+	Sequence       int                                  `json:"sequence"`
+	EndpointIndex  int                                  `json:"endpointIndex"`
+	Attempt        int64                                `json:"attempt"`
+	TraceID        string                               `json:"traceID,omitempty"`
+	HTTPStatus     int                                  `json:"httpStatus"`
+	Class          string                               `json:"class"`
+	MutationFailed bool                                 `json:"mutationFailed"`
+	Errors         []repositoryCapacityOperationFailure `json:"errors"`
+	Truncated      bool                                 `json:"truncated"`
+}
+
+type repositoryCapacityOperationFailure struct {
+	Code         string   `json:"code"`
+	Reasons      []string `json:"reasons"`
+	MessageClass string   `json:"messageClass"`
+}
+
+const (
+	repositoryCapacityAttemptFailureLimit = 16
+	repositoryCapacityLoadFailureLimit    = 256
+)
 
 func runRepositoryLifecycleCapacity(t *testing.T) {
 	t.Helper()
@@ -120,6 +155,14 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	}
 	cfg := loadRepositoryCapacityConfig(t)
 	require.NoError(t, validateRepositoryCapacityScale(cfg))
+	if !cfg.verifyStorage {
+		t.Log("diagnostic scope: physical Git removal/tombstones are not inspected")
+	}
+	if !cfg.verifyFinalizers {
+		t.Log("diagnostic scope: terminating catalog resources held by unrelated finalizers are not exercised")
+	} else {
+		t.Logf("catalog finalizer fixtures: project=%s keyspace=%s bounded_uid_and_resource_version_cas=true", cfg.project, cfg.keyspace)
+	}
 
 	client := &http.Client{Timeout: 20 * time.Second}
 	require.NotEqual(t, cfg.apiA, cfg.apiB, "API endpoints must identify distinct replicas")
@@ -226,6 +269,9 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		require.NoError(t, secretLogs.capture(t.Context(), secretResourcesBefore))
 	}
 	soakStarted := time.Now()
+	if os.Getenv("CAPACITY_CHAOS_PROFILE") != "" {
+		require.NoError(t, writeRepositoryCapacityLoadWindow(os.Stdout, os.Getenv("CAPACITY_RUN_ID"), soakStarted, cfg.duration))
+	}
 	var fileLoad <-chan secretCapacityFileLoadResult
 	var secretFaults <-chan secretCapacityFaultResult
 	if fileWorkload != nil {
@@ -238,7 +284,28 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	} else {
 		go func() { replacementDone <- runRepositoryCapacityReplacement(cfg, client, soakStarted) }()
 	}
-	load := runRepositoryCapacityLoad(t, client, cfg, poolPrefix, livePrefix, maxTransitions)
+	var load repositoryCapacityLoadResult
+	runCapacityMetadataUnderLoad(t, cfg.duration, func(loadTest *testing.T, progress *atomic.Int64) {
+		loadCfg := cfg
+		loadCfg.acknowledgements = progress
+		load = runRepositoryCapacityLoad(loadTest, client, loadCfg, poolPrefix, livePrefix, maxTransitions)
+	}, func(probeTest *testing.T, progress *atomic.Int64) {
+		probeCfg := runRepositoryWatchMetadataGenerationAndSelectorReplay(probeTest, cfg)
+		probeCfg.acknowledgements = progress
+		started, before := time.Now(), progress.Load()
+		passed := probeTest.Run("deletion_reincarnation", func(t *testing.T) {
+			assertRepositoryCapacityDeletionParity(t, client, probeCfg, uniqueName("under-load-deletion"))
+		})
+		completed, after := time.Now(), progress.Load()
+		probeTest.Logf("deletion_under_load passed=%t started_at=%s completed_at=%s acknowledged_before=%d acknowledged_after=%d",
+			passed, started.UTC().Format(time.RFC3339Nano), completed.UTC().Format(time.RFC3339Nano), before, after)
+		require.True(probeTest, passed, "Repository deletion/reincarnation probe failed")
+		require.Positive(probeTest, before)
+		require.Greater(probeTest, after, before, "deletion itself requires acknowledged sustained mutations")
+		require.True(probeTest, probeTest.Run("namespace_deletion", func(t *testing.T) {
+			assertNamespaceCapacityDeletionLifecycle(t, client, probeCfg)
+		}))
+	})
 	if fileLoad != nil {
 		result := <-fileLoad
 		assertSecretCapacityFileLoad(t, result)
@@ -337,6 +404,60 @@ func validateSecretCapacityAvailability(value string) error {
 	}
 }
 
+func writeRepositoryCapacityLoadWindow(output io.Writer, runID string, started time.Time, duration time.Duration) error {
+	const maxSafeInteger = 1<<53 - 1
+	start, end := started.UnixMilli(), started.Add(duration).UnixMilli()
+	if strings.TrimSpace(runID) == "" || duration <= 0 || start <= 0 ||
+		end <= start || start > maxSafeInteger || end > maxSafeInteger {
+		return errors.New("capacity chaos requires an exact run-bound positive load window")
+	}
+	window, err := json.Marshal(struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		RunID         string `json:"runId"`
+		StartMS       int64  `json:"startMs"`
+		EndMS         int64  `json:"endMs"`
+	}{1, runID, start, end})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(output, "CAPACITY_LOAD_WINDOW %s\n", window)
+	return err
+}
+
+func TestRepositoryCapacityLoadWindow(t *testing.T) {
+	started := time.UnixMilli(1700000000123)
+	var output bytes.Buffer
+	require.NoError(t, writeRepositoryCapacityLoadWindow(&output, "owned-run", started, time.Minute))
+	require.Equal(t, "CAPACITY_LOAD_WINDOW "+`{"schemaVersion":1,"runId":"owned-run","startMs":1700000000123,"endMs":1700000060123}`+"\n", output.String())
+	for _, test := range []struct {
+		name     string
+		runID    string
+		started  time.Time
+		duration time.Duration
+	}{
+		{"missing_run", "", started, time.Minute},
+		{"blank_run", " ", started, time.Minute},
+		{"zero_duration", "run", started, 0},
+		{"negative_duration", "run", started, -time.Minute},
+		{"sub_millisecond", "run", started, time.Nanosecond},
+		{"nonpositive_start", "run", time.UnixMilli(0), time.Minute},
+		{"unsafe_integer_end", "run", time.UnixMilli(1<<53 - 2), time.Minute},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			require.Error(t, writeRepositoryCapacityLoadWindow(&output, test.runID, test.started, test.duration))
+			require.Empty(t, output.String())
+		})
+	}
+	require.ErrorIs(t, writeRepositoryCapacityLoadWindow(repositoryCapacityWindowErrorWriter{}, "run", started, time.Minute), io.ErrClosedPipe)
+}
+
+type repositoryCapacityWindowErrorWriter struct{}
+
+func (repositoryCapacityWindowErrorWriter) Write([]byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
+
 func validateRepositoryCapacityWorkload(workload string, mode capacityMode, secretScenario bool) error {
 	if workload == "" {
 		return nil
@@ -406,10 +527,18 @@ func runRepositoryWorkloadDiagnostic(t *testing.T, client *http.Client, cfg repo
 	metrics := repositoryCapacityMetricSamples(t, client, cfg)
 	_ = stabilizeRepositoryCapacityBaseline(t, client, cfg, metrics)
 	before := captureSecretCapacityResources(t, cfg, "before")
+	var controllersBefore [2]secretCapacityControllerSample
+	controllerRestart := os.Getenv("CAPACITY_CHAOS_PROFILE") == "controller-restart"
+	if controllerRestart {
+		controllersBefore = recordSecretCapacityControllers(t, client, cfg, "controllers-before-load.json")
+	}
 	profiles, err := startRepositoryCapacityProfiles(t.Context(), fixture.Project, cfg.mode, cfg.duration)
 	require.NoError(t, err)
 	var fileLoad <-chan secretCapacityFileLoadResult
 	started := time.Now()
+	if os.Getenv("CAPACITY_CHAOS_PROFILE") != "" {
+		require.NoError(t, writeRepositoryCapacityLoadWindow(os.Stdout, os.Getenv("CAPACITY_RUN_ID"), started, cfg.duration))
+	}
 	if cfg.workload != "repository" {
 		fileLoad = startSecretCapacityFileLoad(t, workload, cfg.duration, cfg.mode)
 	}
@@ -424,6 +553,11 @@ func runRepositoryWorkloadDiagnostic(t *testing.T, client *http.Client, cfg repo
 		fileResult = <-fileLoad
 	}
 	end := captureSecretCapacityResources(t, cfg, "load-end")
+	if controllerRestart {
+		controllersAfter := recordSecretCapacityControllers(t, client, cfg, "controllers-after-load.json")
+		require.NoError(t, validateRepositoryCapacityControllerRestart(controllersBefore, controllersAfter),
+			"controller restart must reacquire credentials and resume reconciliation while its peer advances")
+	}
 	require.NoError(t, <-profiles, "live profiling failed; diagnostic evidence is incomplete")
 	post := repositoryCapacityMetricSamples(t, client, cfg)
 	_ = stabilizeRepositoryCapacityMemory(t, client, cfg, post)
@@ -437,30 +571,35 @@ func runRepositoryWorkloadDiagnostic(t *testing.T, client *http.Client, cfg repo
 	if repositoryLoad.attemptErrors == nil {
 		repositoryLoad.attemptErrors = map[string]int64{}
 	}
+	if repositoryLoad.failures == nil {
+		repositoryLoad.failures = []repositoryCapacityAttemptFailure{}
+	}
 	require.NoError(t, writeSecretCapacityComponent(os.Getenv("CAPACITY_EVIDENCE_DIR"), "workload-comparison.json", struct {
-		SchemaVersion             int                              `json:"schemaVersion"`
-		Component                 string                           `json:"component"`
-		RunID                     string                           `json:"runID"`
-		Mode                      capacityMode                     `json:"mode"`
-		Workload                  string                           `json:"workload"`
-		FixturePrefix             string                           `json:"fixturePrefix"`
-		Repositories              int                              `json:"repositories"`
-		Files                     int                              `json:"files"`
-		Duration                  time.Duration                    `json:"duration"`
-		Elapsed                   time.Duration                    `json:"elapsed"`
-		RepositoryOffered         int64                            `json:"repositoryOffered"`
-		RepositoryAcknowledged    int64                            `json:"repositoryAcknowledged"`
-		RepositoryFailed          int64                            `json:"repositoryFailed"`
-		RepositoryDropped         int64                            `json:"repositoryDropped"`
-		RepositoryMissedSchedules int64                            `json:"repositoryMissedSchedules"`
-		RepositoryHTTPAttempts    int64                            `json:"repositoryHTTPAttempts"`
-		RepositoryHTTPRetries     int64                            `json:"repositoryHTTPRetries"`
-		RepositoryDrainTimedOut   bool                             `json:"repositoryDrainTimedOut"`
-		RepositoryAttemptErrors   map[string]int64                 `json:"repositoryAttemptErrors"`
-		RepositoryStages          map[string]secretCapacityLatency `json:"repositoryStages"`
-		Before                    []secretCapacityResourceSnapshot `json:"before"`
-		LoadEnd                   []secretCapacityResourceSnapshot `json:"loadEnd"`
-		Stabilized                []secretCapacityResourceSnapshot `json:"stabilized"`
+		SchemaVersion             int                                `json:"schemaVersion"`
+		Component                 string                             `json:"component"`
+		RunID                     string                             `json:"runID"`
+		Mode                      capacityMode                       `json:"mode"`
+		Workload                  string                             `json:"workload"`
+		FixturePrefix             string                             `json:"fixturePrefix"`
+		Repositories              int                                `json:"repositories"`
+		Files                     int                                `json:"files"`
+		Duration                  time.Duration                      `json:"duration"`
+		Elapsed                   time.Duration                      `json:"elapsed"`
+		RepositoryOffered         int64                              `json:"repositoryOffered"`
+		RepositoryAcknowledged    int64                              `json:"repositoryAcknowledged"`
+		RepositoryFailed          int64                              `json:"repositoryFailed"`
+		RepositoryDropped         int64                              `json:"repositoryDropped"`
+		RepositoryMissedSchedules int64                              `json:"repositoryMissedSchedules"`
+		RepositoryHTTPAttempts    int64                              `json:"repositoryHTTPAttempts"`
+		RepositoryHTTPRetries     int64                              `json:"repositoryHTTPRetries"`
+		RepositoryDrainTimedOut   bool                               `json:"repositoryDrainTimedOut"`
+		RepositoryAttemptErrors   map[string]int64                   `json:"repositoryAttemptErrors"`
+		RepositoryAttemptFailures []repositoryCapacityAttemptFailure `json:"repositoryAttemptFailures"`
+		RepositoryOmittedFailures int64                              `json:"repositoryOmittedFailures"`
+		RepositoryStages          map[string]secretCapacityLatency   `json:"repositoryStages"`
+		Before                    []secretCapacityResourceSnapshot   `json:"before"`
+		LoadEnd                   []secretCapacityResourceSnapshot   `json:"loadEnd"`
+		Stabilized                []secretCapacityResourceSnapshot   `json:"stabilized"`
 	}{
 		SchemaVersion: 1, Component: "repository-workload-comparison/v1", RunID: fixtureRunID,
 		Mode: cfg.mode, Workload: cfg.workload, FixturePrefix: poolPrefix,
@@ -469,8 +608,9 @@ func runRepositoryWorkloadDiagnostic(t *testing.T, client *http.Client, cfg repo
 		RepositoryFailed: repositoryLoad.failed, RepositoryDropped: repositoryLoad.backpressured,
 		RepositoryMissedSchedules: repositoryLoad.missedSchedules,
 		RepositoryHTTPAttempts:    repositoryLoad.attempts, RepositoryHTTPRetries: repositoryLoad.retries,
-		RepositoryDrainTimedOut: repositoryLoad.drainTimedOut,
-		RepositoryAttemptErrors: repositoryLoad.attemptErrors,
+		RepositoryDrainTimedOut:   repositoryLoad.drainTimedOut,
+		RepositoryAttemptErrors:   repositoryLoad.attemptErrors,
+		RepositoryAttemptFailures: repositoryLoad.failures, RepositoryOmittedFailures: repositoryLoad.omittedFailures,
 		RepositoryStages: map[string]secretCapacityLatency{
 			"queue_wait": latency(repositoryLoad.queueLatencies), "resource_lock": latency(repositoryLoad.lockLatencies),
 			"mutation": latency(repositoryLoad.requestLatencies), "http_attempt": latency(repositoryLoad.httpLatencies),
@@ -489,6 +629,45 @@ func runRepositoryWorkloadDiagnostic(t *testing.T, client *http.Client, cfg repo
 		require.Zero(t, repositoryLoad.backpressured)
 		require.Equal(t, repositoryLoad.produced, repositoryLoad.admitted)
 	}
+}
+
+func validateRepositoryCapacityControllerRestart(before, after [2]secretCapacityControllerSample) error {
+	invalid := errors.New("capacity: controller restart requires exactly one fresh authenticated replica and progress on both peers")
+	if before[0].ID == before[1].ID || after[0].ID == after[1].ID {
+		return invalid
+	}
+	replacements := 0
+	for i := range before {
+		replaced := before[i].ID != after[i].ID
+		progress, err := secretCapacityControllerProgress(before[i], after[i], replaced)
+		if err != nil {
+			return err
+		}
+		if !after[i].Ready || !after[i].Healthy || !after[i].CredentialReady {
+			return invalid
+		}
+		if replaced {
+			replacements++
+			if !progress {
+				return invalid
+			}
+		} else if after[i].Reconciliations <= before[i].Reconciliations {
+			return invalid
+		}
+	}
+	if replacements != 1 {
+		return invalid
+	}
+	return nil
+}
+
+type repositoryCapacityProfileCapture struct {
+	Profile     string        `json:"profile"`
+	StartedAt   time.Time     `json:"startedAt"`
+	CompletedAt time.Time     `json:"completedAt"`
+	Duration    time.Duration `json:"duration"`
+	Bytes       int           `json:"bytes"`
+	Failed      bool          `json:"failed"`
 }
 
 func startRepositoryCapacityProfiles(ctx context.Context, project string, mode capacityMode, duration time.Duration) (<-chan error, error) {
@@ -540,14 +719,17 @@ func startRepositoryCapacityProfiles(ctx context.Context, project string, mode c
 		captureCtx, cancel := context.WithTimeout(ctx, time.Duration(seconds+30)*time.Second)
 		defer cancel()
 		results := make(chan error, 2)
+		var captures [2][]repositoryCapacityProfileCapture
 		for i, container := range containers {
 			go func(i int, container string) {
 				for _, profile := range []struct{ name, path string }{
+					{"execution.trace", "trace?seconds=3"},
 					{"cpu.pprof", "profile?seconds=" + strconv.Itoa(seconds)},
 					{"heap.pprof", "heap"}, {"allocs.pprof", "allocs"},
 					{"block.pprof", "block"}, {"mutex.pprof", "mutex"},
-					{"goroutine.pprof", "goroutine"}, {"execution.trace", "trace?seconds=3"},
+					{"goroutine.pprof", "goroutine"},
 				} {
+					started := time.Now()
 					body, err := secretCapacityOwnedCommandOutput(captureCtx, &secretCapacityGitOutput{limit: 32 << 20},
 						"docker", "exec", container, "wget", "-qO-",
 						"http://127.0.0.1:"+port+"/debug/pprof/"+profile.path)
@@ -558,6 +740,11 @@ func startRepositoryCapacityProfiles(ctx context.Context, project string, mode c
 					if err == nil {
 						err = os.WriteFile(filepath.Join(directory, fmt.Sprintf("api-%c-%s", 'a'+i, profile.name)), body, 0600)
 					}
+					completed := time.Now()
+					captures[i] = append(captures[i], repositoryCapacityProfileCapture{
+						Profile: profile.name, StartedAt: started.UTC(), CompletedAt: completed.UTC(),
+						Duration: completed.Sub(started), Bytes: len(body), Failed: err != nil,
+					})
 					clear(body)
 					if err != nil {
 						results <- fmt.Errorf("capture api-%c %s: %w", 'a'+i, profile.name, err)
@@ -569,16 +756,140 @@ func startRepositoryCapacityProfiles(ctx context.Context, project string, mode c
 		}
 		result := errors.Join(<-results, <-results)
 		manifestErr := writeSecretCapacityComponent(root, "profiling.json", struct {
-			SchemaVersion int    `json:"schemaVersion"`
-			Kind          string `json:"kind"`
-			Seconds       int    `json:"cpuSeconds"`
-			Replicas      int    `json:"replicas"`
-			MaximumBytes  int    `json:"maximumBytesPerCapture"`
-			Passed        bool   `json:"passed"`
-		}{1, "owned-go-live-diagnostic", seconds, 2, 32 << 20, result == nil})
+			SchemaVersion int                                   `json:"schemaVersion"`
+			Kind          string                                `json:"kind"`
+			Seconds       int                                   `json:"cpuSeconds"`
+			Replicas      int                                   `json:"replicas"`
+			MaximumBytes  int                                   `json:"maximumBytesPerCapture"`
+			Passed        bool                                  `json:"passed"`
+			Captures      [2][]repositoryCapacityProfileCapture `json:"captures"`
+		}{1, "owned-go-live-diagnostic", seconds, 2, 32 << 20, result == nil, captures})
 		done <- errors.Join(result, manifestErr)
 	}()
 	return done, nil
+}
+
+func TestRepositoryCapacityProfilesCaptureBurstFirstAndReportEveryAttempt(t *testing.T) {
+	for _, failTrace := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fail-trace=%t", failTrace), func(t *testing.T) {
+			bin, root := t.TempDir(), t.TempDir()
+			log := filepath.Join(bin, "captures")
+			require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(`#!/bin/sh
+if [ "$1" = ps ]; then
+  case "$*" in
+    *service=api-a*) printf 'aaaaaaaaaaaa\n' ;;
+    *service=api-b*) printf 'bbbbbbbbbbbb\n' ;;
+    *) exit 91 ;;
+  esac
+  exit 0
+fi
+if [ "$1" != exec ] || [ "$3" != wget ] || [ "$4" != -qO- ]; then
+  exit 92
+fi
+printf '%s %s\n' "$2" "$5" >> "$TEST_PROFILE_COMMAND_LOG"
+case "$5" in
+  http://127.0.0.1:6060/debug/pprof/trace?seconds=3)
+    if [ "$TEST_PROFILE_FAIL_TRACE" = true ] && [ "$2" = bbbbbbbbbbbb ]; then
+      exit 42
+    fi
+    printf 'go 1.26 trace\000\000\000\000'
+    ;;
+  http://127.0.0.1:6060/debug/pprof/*)
+    printf '\037\2130123456789abcdef\n'
+    ;;
+  *) exit 93 ;;
+esac
+`), 0700))
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("TEST_PROFILE_COMMAND_LOG", log)
+			t.Setenv("TEST_PROFILE_FAIL_TRACE", strconv.FormatBool(failTrace))
+			t.Setenv("REPOSITORY_CAPACITY_OWNERSHIP_FILE", "")
+			t.Setenv("CAPACITY_PROFILING", "go")
+			t.Setenv("CAPACITY_PROFILE_SECONDS", "1")
+			t.Setenv("CAPACITY_API_PROFILE_PORT", "6060")
+			t.Setenv("CAPACITY_EVIDENCE_DIR", root)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			done, err := startRepositoryCapacityProfiles(ctx, "owned-profile-test", capacityModeDiagnostic, time.Minute)
+			require.NoError(t, err)
+			select {
+			case err = <-done:
+			case <-ctx.Done():
+				t.Fatal("both replica capture workers must finish")
+			}
+			if failTrace {
+				require.ErrorContains(t, err, "capture api-b execution.trace")
+			} else {
+				require.NoError(t, err)
+			}
+			body, err := os.ReadFile(log)
+			require.NoError(t, err)
+			commands := make(map[string][]string)
+			for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+				fields := strings.SplitN(line, " ", 2)
+				require.Len(t, fields, 2)
+				commands[fields[0]] = append(commands[fields[0]], fields[1])
+			}
+			for _, id := range []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb"} {
+				require.NotEmpty(t, commands[id])
+				require.Equal(t, "http://127.0.0.1:6060/debug/pprof/trace?seconds=3", commands[id][0],
+					"execution tracing must capture first-burst scheduling, not a window after CPU profiling")
+			}
+			var manifest struct {
+				Seconds      int  `json:"cpuSeconds"`
+				Replicas     int  `json:"replicas"`
+				MaximumBytes int  `json:"maximumBytesPerCapture"`
+				Passed       bool `json:"passed"`
+				Captures     [2][]struct {
+					Profile     string        `json:"profile"`
+					StartedAt   time.Time     `json:"startedAt"`
+					CompletedAt time.Time     `json:"completedAt"`
+					Duration    time.Duration `json:"duration"`
+					Bytes       int           `json:"bytes"`
+					Failed      bool          `json:"failed"`
+				} `json:"captures"`
+			}
+			body, err = os.ReadFile(filepath.Join(root, "secret", "profiling.json"))
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &manifest))
+			require.Equal(t, !failTrace, manifest.Passed)
+			require.Equal(t, 1, manifest.Seconds)
+			require.Equal(t, 2, manifest.Replicas)
+			require.Equal(t, 32<<20, manifest.MaximumBytes)
+			profiles := []string{"execution.trace", "cpu.pprof", "heap.pprof", "allocs.pprof", "block.pprof", "mutex.pprof", "goroutine.pprof"}
+			for replica, captures := range manifest.Captures {
+				count := len(profiles)
+				if replica == 1 && failTrace {
+					count = 1
+				}
+				require.Len(t, captures, count)
+				for i, capture := range captures {
+					require.Equal(t, profiles[i], capture.Profile)
+					require.False(t, capture.StartedAt.IsZero())
+					require.False(t, capture.CompletedAt.Before(capture.StartedAt))
+					require.Positive(t, capture.Duration)
+					if i > 0 {
+						require.False(t, capture.StartedAt.Before(captures[i-1].CompletedAt))
+					}
+					file := filepath.Join(root, "profiles", fmt.Sprintf("api-%c-%s", 'a'+replica, capture.Profile))
+					if replica == 1 && failTrace {
+						require.True(t, capture.Failed)
+						require.Zero(t, capture.Bytes)
+						_, err := os.Stat(file)
+						require.ErrorIs(t, err, os.ErrNotExist)
+					} else {
+						require.False(t, capture.Failed)
+						info, err := os.Stat(file)
+						require.NoError(t, err)
+						require.EqualValues(t, capture.Bytes, info.Size())
+						require.Positive(t, capture.Bytes)
+						require.LessOrEqual(t, capture.Bytes, 32<<20)
+						require.Zero(t, info.Mode().Perm()&0077)
+					}
+				}
+			}
+		})
+	}
 }
 
 func TestRepositoryCapacityProfileValidation(t *testing.T) {
@@ -663,6 +974,10 @@ func loadRepositoryCapacityConfig(t *testing.T) repositoryCapacityConfig {
 	require.NoError(t, err)
 	duration := capacityEnvDuration(t, "REPOSITORY_CAPACITY_DURATION", 60*time.Minute)
 	delay := capacityEnvDuration(t, "REPOSITORY_CAPACITY_REPLACEMENT_DELAY", duration/2)
+	verifyStorage := getEnv("REPOSITORY_CAPACITY_VERIFY_STORAGE", "0")
+	require.Contains(t, []string{"0", "1"}, verifyStorage, "REPOSITORY_CAPACITY_VERIFY_STORAGE must be 0 or 1")
+	verifyFinalizers := getEnv("REPOSITORY_CAPACITY_VERIFY_FINALIZERS", "0")
+	require.Contains(t, []string{"0", "1"}, verifyFinalizers, "REPOSITORY_CAPACITY_VERIFY_FINALIZERS must be 0 or 1")
 	return repositoryCapacityConfig{
 		apiA: strings.TrimSuffix(os.Getenv("REPOSITORY_API_A"), "/"), apiB: strings.TrimSuffix(os.Getenv("REPOSITORY_API_B"), "/"),
 		overflowAPI: strings.TrimSuffix(getEnv("REPOSITORY_OVERFLOW_API", os.Getenv("REPOSITORY_API_A")), "/"),
@@ -679,7 +994,10 @@ func loadRepositoryCapacityConfig(t *testing.T) repositoryCapacityConfig {
 		baselineStabilization:    capacityEnvDuration(t, "REPOSITORY_CAPACITY_BASELINE_STABILIZATION", 5*time.Minute),
 		postLoadStabilization:    capacityEnvDuration(t, "REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION", 10*time.Minute),
 		mode:                     mode, skipReplacement: os.Getenv("REPOSITORY_CAPACITY_SKIP_REPLACEMENT") == "1",
-		workload: os.Getenv("REPOSITORY_CAPACITY_WORKLOAD"),
+		workload:         os.Getenv("REPOSITORY_CAPACITY_WORKLOAD"),
+		traceCorrelation: os.Getenv("REPOSITORY_CAPACITY_TRACE_CORRELATION"),
+		verifyStorage:    verifyStorage == "1", project: os.Getenv("REPOSITORY_CAPACITY_PROJECT"),
+		verifyFinalizers: verifyFinalizers == "1", keyspace: os.Getenv("CAPACITY_SCYLLA_KEYSPACE"),
 	}
 }
 
@@ -714,7 +1032,36 @@ func repositoryCapacityMetricSamples(t *testing.T, client *http.Client, cfg repo
 	return result
 }
 
+func validateRepositoryCapacityTraceCorrelation(value, workload string, secret bool) error {
+	switch value {
+	case "", "0":
+		return nil
+	case "1":
+		if secret || workload == "file" || workload == "combined" {
+			return nil
+		}
+		return errors.New("REPOSITORY_CAPACITY_TRACE_CORRELATION=1 requires a File workload or the full secret scenario")
+	default:
+		return errors.New("REPOSITORY_CAPACITY_TRACE_CORRELATION must be 0 or 1")
+	}
+}
+
 func validateRepositoryCapacityScale(cfg repositoryCapacityConfig) error {
+	if err := validateRepositoryCapacityTraceCorrelation(cfg.traceCorrelation, cfg.workload, secretCapacityRequested()); err != nil {
+		return err
+	}
+	if cfg.mode != capacityModeDiagnostic && !cfg.verifyStorage {
+		return errors.New("alpha/production deletion evidence requires physical Git storage verification")
+	}
+	if cfg.verifyStorage && !secretCapacityComposeIdentity.MatchString(cfg.project) {
+		return errors.New("physical Git storage verification requires a valid owned REPOSITORY_CAPACITY_PROJECT")
+	}
+	if cfg.mode != capacityModeDiagnostic && !cfg.verifyFinalizers {
+		return errors.New("alpha/production deletion evidence requires terminating-resource finalizer fixtures")
+	}
+	if cfg.verifyFinalizers && (!cfg.verifyStorage || !regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}$`).MatchString(cfg.keyspace)) {
+		return errors.New("finalizer fixtures require owned physical storage verification and an explicit CAPACITY_SCYLLA_KEYSPACE")
+	}
 	if err := validateRepositoryCapacityWorkload(cfg.workload, cfg.mode, secretCapacityRequested()); err != nil {
 		return err
 	}
@@ -807,6 +1154,7 @@ func TestValidateRepositoryCapacityScale(t *testing.T) {
 			controllerA: "http://controller-a", controllerB: "http://controller-b",
 			replacement: "http://api-b", trigger: t.TempDir() + "/replacement", token: "token",
 			mode: mode, burstInterval: time.Minute, overflowBackpressureWait: repositoryCapacityMinimumOverflowWait,
+			verifyStorage: true, project: "owned-capacity", verifyFinalizers: true, keyspace: "owned_capacity",
 		}
 		if mode == capacityModeAlpha {
 			cfg.duration, cfg.subscribers, cfg.replayEvents = 10*time.Minute, 100, 1000
@@ -834,6 +1182,10 @@ func TestValidateRepositoryCapacityScale(t *testing.T) {
 			"overflow transitions": func(cfg *repositoryCapacityConfig) { cfg.overflowTransitions-- },
 			"burst size":           func(cfg *repositoryCapacityConfig) { cfg.burstSize-- },
 			"overflow wait":        func(cfg *repositoryCapacityConfig) { cfg.overflowBackpressureWait-- },
+			"physical storage":     func(cfg *repositoryCapacityConfig) { cfg.verifyStorage = false },
+			"finalizer fixtures":   func(cfg *repositoryCapacityConfig) { cfg.verifyFinalizers = false },
+			"fixture keyspace":     func(cfg *repositoryCapacityConfig) { cfg.keyspace = "" },
+			"owned project":        func(cfg *repositoryCapacityConfig) { cfg.project = "" },
 		} {
 			t.Run(string(mode)+" rejects undersized "+name, func(t *testing.T) {
 				cfg := minimum(mode)
@@ -1223,9 +1575,9 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 				if sequence%2 == 0 {
 					endpoint = cfg.apiB
 				}
-				attempts := &repositoryCapacityAttemptObservation{errors: map[string]int64{}}
+				attempts := &repositoryCapacityAttemptObservation{errors: map[string]int64{}, traceCorrelation: cfg.traceCorrelation == "1"}
 				requestStarted := time.Now()
-				err := repositoryCapacityMutationObserved(workCtx, client, endpoint, cfg.token, false, cfg.namespace, poolPrefix+strconv.Itoa(index+1), eventPrefix, sequence, "", attempts)
+				err := repositoryCapacityMutationObserved(workCtx, client, endpoint, cfg.token, false, cfg.namespace, poolPrefix+strconv.Itoa(index+1), eventPrefix, sequence, (sequence-1)/cfg.resourcePool, "", attempts)
 				requestLatency := time.Since(requestStarted)
 				locks[index].Unlock()
 				observations.Lock()
@@ -1234,6 +1586,7 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 				for class, count := range attempts.errors {
 					result.attemptErrors[class] += count
 				}
+				result.retainAttemptFailures(attempts, sequence, sequence%2 == 0, err != nil)
 				result.queueLatencies = append(result.queueLatencies, queueWait)
 				result.lockLatencies = append(result.lockLatencies, lockWait)
 				result.requestLatencies = append(result.requestLatencies, requestLatency)
@@ -1245,6 +1598,9 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 				}
 				admitted.Add(1)
 				result.acknowledged.mark(sequence)
+				if cfg.acknowledgements != nil {
+					cfg.acknowledgements.Add(1)
+				}
 			}
 		}()
 	}
@@ -1316,6 +1672,21 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 	return result
 }
 
+func (r *repositoryCapacityLoadResult) retainAttemptFailures(observed *repositoryCapacityAttemptObservation, sequence int, secondEndpoint, failed bool) {
+	r.omittedFailures += observed.omittedFailures
+	for _, failure := range observed.failures {
+		if len(r.failures) == repositoryCapacityLoadFailureLimit {
+			r.omittedFailures++
+			continue
+		}
+		failure.Sequence, failure.MutationFailed = sequence, failed
+		if secondEndpoint {
+			failure.EndpointIndex = 1
+		}
+		r.failures = append(r.failures, failure)
+	}
+}
+
 func repositoryCapacityQueueDepth(workers, burstSize int) int {
 	// Retain the bounded steady-state backlog while guaranteeing that one
 	// required burst can be offered atomically without client-side shedding.
@@ -1328,16 +1699,16 @@ func TestRepositoryCapacityQueueDepthIncludesOneFullBurst(t *testing.T) {
 }
 
 func repositoryCapacityMutation(ctx context.Context, client *http.Client, endpoint, token string, create bool, namespace, name, prefix string, sequence int, padding string) error {
-	return repositoryCapacityMutationObserved(ctx, client, endpoint, token, create, namespace, name, prefix, sequence, padding, nil)
+	return repositoryCapacityMutationObserved(ctx, client, endpoint, token, create, namespace, name, prefix, sequence, sequence, padding, nil)
 }
 
-func repositoryCapacityMutationObserved(ctx context.Context, client *http.Client, endpoint, token string, create bool, namespace, name, prefix string, sequence int, padding string, observed *repositoryCapacityAttemptObservation) error {
+func repositoryCapacityMutationObserved(ctx context.Context, client *http.Client, endpoint, token string, create bool, namespace, name, prefix string, sequence, specRound int, padding string, observed *repositoryCapacityAttemptObservation) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	query := `mutation($input: UpdateRepositoryInput!) { updateRepository(input: $input) { repository { metadata { name resourceVersion annotations } } } }`
+	query := `mutation($input: UpdateRepositoryInput!) { updateRepository(input: $input) { repository { metadata { name generation resourceVersion annotations } spec { defaultBranch } } } }`
 	operation := "updateRepository"
 	if create {
-		query = `mutation($input: CreateRepositoryInput!) { createRepository(input: $input) { repository { metadata { name resourceVersion annotations } } } }`
+		query = `mutation($input: CreateRepositoryInput!) { createRepository(input: $input) { repository { metadata { name generation resourceVersion annotations } spec { defaultBranch } } } }`
 		operation = "createRepository"
 	}
 	annotations := map[string]any{}
@@ -1348,32 +1719,50 @@ func repositoryCapacityMutationObserved(ctx context.Context, client *http.Client
 	if padding != "" {
 		annotations[repositoryCapacityPaddingAnnotation] = padding
 	}
+	defaultBranch := fmt.Sprintf("capacity-%d", specRound%2)
 	input := map[string]any{
 		"apiVersion": "gitstore.dev/v1beta1", "kind": "Repository",
 		"metadata": map[string]any{"name": name, "namespace": namespace, "annotations": annotations},
-		"spec":     map[string]any{"defaultBranch": fmt.Sprintf("capacity-%d", sequence%2), "visibility": "PRIVATE", "storageClass": "standard"},
+		"spec":     map[string]any{"defaultBranch": defaultBranch, "visibility": "PRIVATE", "storageClass": "standard"},
 	}
 	payload, err := json.Marshal(map[string]any{"query": query, "variables": map[string]any{"input": input}})
 	if err != nil {
 		return err
 	}
 	for {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(endpoint, "/")+"/graphql", bytes.NewReader(payload))
+		attemptCtx, traceID := ctx, ""
+		if observed != nil && observed.traceCorrelation {
+			var traceErr error
+			attemptCtx, traceID, traceErr = secretCapacityPushTrace(ctx, rand.Reader)
+			if traceErr != nil {
+				observed.retainFailure(repositoryCapacityAttemptFailure{Class: "trace_identity", Errors: []repositoryCapacityOperationFailure{}})
+				return traceErr
+			}
+		}
+		req, reqErr := http.NewRequestWithContext(attemptCtx, http.MethodPost, strings.TrimSuffix(endpoint, "/")+"/graphql", bytes.NewReader(payload))
 		if reqErr != nil {
+			if observed != nil {
+				observed.retainFailure(repositoryCapacityAttemptFailure{TraceID: traceID, Class: "request", Errors: []repositoryCapacityOperationFailure{}})
+			}
 			return errors.New("capacity: invalid Repository request endpoint")
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
+		if traceID != "" {
+			req.Header.Set("traceparent", attemptCtx.Value(secretCapacityTraceKey{}).(string))
+		}
 		attemptStarted := time.Now()
 		if observed != nil {
 			observed.attempts++
 		}
 		response, doErr := client.Do(req)
 		class := "transport"
+		failure := repositoryCapacityAttemptFailure{TraceID: traceID, Errors: []repositoryCapacityOperationFailure{}}
 		retryAfter := 100 * time.Millisecond
 		if doErr == nil {
 			contents, readErr := io.ReadAll(io.LimitReader(response.Body, 8*1024*1024+1))
 			response.Body.Close()
+			failure.HTTPStatus = response.StatusCode
 			if readErr != nil || len(contents) > 8*1024*1024 {
 				class = "response"
 			} else if response.StatusCode != http.StatusOK {
@@ -1391,13 +1780,14 @@ func repositoryCapacityMutationObserved(ctx context.Context, client *http.Client
 					retryAfter = delay
 				}
 			} else {
-				class = repositoryCapacityResponseClass(contents, operation, name, annotations)
+				class = repositoryCapacityResponseClass(contents, operation, name, defaultBranch, annotations)
 				if class == "" {
 					if observed != nil {
 						observed.httpLatencies = append(observed.httpLatencies, time.Since(attemptStarted))
 					}
 					return nil
 				}
+				failure.Errors, failure.Truncated = repositoryCapacityResponseFailures(contents)
 			}
 			doErr = fmt.Errorf("capacity: Repository mutation failed (%s)", class)
 		} else {
@@ -1410,7 +1800,8 @@ func repositoryCapacityMutationObserved(ctx context.Context, client *http.Client
 		}
 		if observed != nil {
 			observed.httpLatencies = append(observed.httpLatencies, time.Since(attemptStarted))
-			observed.errors[class]++
+			failure.Class = class
+			observed.retainFailure(failure)
 		}
 		if (class != "conflict" && class != "quota" && class != "transport") || ctx.Err() != nil {
 			return doErr
@@ -1428,7 +1819,78 @@ func repositoryCapacityMutationObserved(ctx context.Context, client *http.Client
 	}
 }
 
-func repositoryCapacityResponseClass(contents []byte, operation, name string, annotations map[string]any) string {
+func (o *repositoryCapacityAttemptObservation) retainFailure(failure repositoryCapacityAttemptFailure) {
+	if o.errors == nil {
+		o.errors = map[string]int64{}
+	}
+	o.errors[failure.Class]++
+	failure.Attempt = o.attempts
+	if len(o.failures) < repositoryCapacityAttemptFailureLimit {
+		o.failures = append(o.failures, failure)
+	} else {
+		o.failures[len(o.failures)-1] = failure
+		o.omittedFailures++
+	}
+}
+
+func repositoryCapacityResponseFailures(contents []byte) ([]repositoryCapacityOperationFailure, bool) {
+	retained := []repositoryCapacityOperationFailure{}
+	var envelope gqlResponse
+	if json.Unmarshal(contents, &envelope) != nil {
+		return retained, false
+	}
+	truncated := len(envelope.Errors) > 4
+	for _, raw := range envelope.Errors[:min(4, len(envelope.Errors))] {
+		var failure struct {
+			Message    string `json:"message"`
+			Extensions struct {
+				Code        string `json:"code"`
+				Diagnostics []struct {
+					Reason string `json:"reason"`
+				} `json:"diagnostics"`
+			} `json:"extensions"`
+		}
+		item := repositoryCapacityOperationFailure{Code: "OTHER", Reasons: []string{}, MessageClass: "other"}
+		if json.Unmarshal(raw, &failure) == nil {
+			switch failure.Extensions.Code {
+			case "ADMISSION_REJECTED", "ALREADY_EXISTS", "NOT_FOUND", "CONFLICT", "FAILED_PRECONDITION",
+				"BAD_USER_INPUT", "FORBIDDEN", "UNAUTHENTICATED", "INTERNAL", "INTERNAL_SERVER_ERROR",
+				"GRAPHQL_VALIDATION_FAILED", "GRAPHQL_PARSE_FAILED":
+				item.Code = failure.Extensions.Code
+			}
+			truncated = truncated || len(failure.Extensions.Diagnostics) > 4
+			for _, diagnostic := range failure.Extensions.Diagnostics[:min(4, len(failure.Extensions.Diagnostics))] {
+				reason := "OTHER"
+				switch diagnostic.Reason {
+				case "RESOURCE_VERSION_CONFLICT", "SUPERSEDED", "VALIDATION_FAILED", "REPAIR_REQUIRED",
+					"NAMESPACE_NOT_FOUND", "NAMESPACE_NOT_ACTIVE", "REPOSITORY_NOT_FOUND",
+					"REPOSITORY_NOT_ACTIVE", "REPOSITORY_NOT_EMPTY", "INTERNAL_ERROR":
+					reason = diagnostic.Reason
+				}
+				item.Reasons = append(item.Reasons, reason)
+			}
+			message := strings.ToLower(failure.Message)
+			switch {
+			case strings.Contains(message, "resourceversion"), strings.Contains(message, "resource version"):
+				item.MessageClass = "resource_version"
+			case strings.Contains(message, "superseded"):
+				item.MessageClass = "superseded"
+			case strings.Contains(message, "context deadline exceeded"):
+				item.MessageClass = "deadline"
+			case strings.Contains(message, "repair required"):
+				item.MessageClass = "repair_required"
+			case strings.Contains(message, "clock moved backwards"):
+				item.MessageClass = "replay_clock"
+			case strings.Contains(message, "not found"):
+				item.MessageClass = "not_found"
+			}
+		}
+		retained = append(retained, item)
+	}
+	return retained, truncated
+}
+
+func repositoryCapacityResponseClass(contents []byte, operation, name, defaultBranch string, annotations map[string]any) string {
 	var envelope gqlResponse
 	if json.Unmarshal(contents, &envelope) != nil {
 		return "response"
@@ -1461,16 +1923,21 @@ func repositoryCapacityResponseClass(contents []byte, operation, name string, an
 		Repository *struct {
 			Metadata struct {
 				Name            string         `json:"name"`
+				Generation      int64          `json:"generation"`
 				ResourceVersion string         `json:"resourceVersion"`
 				Annotations     map[string]any `json:"annotations"`
 			} `json:"metadata"`
+			Spec *struct {
+				DefaultBranch string `json:"defaultBranch"`
+			} `json:"spec"`
 		} `json:"repository"`
 	}
 	if json.Unmarshal(envelope.Data, &data) != nil || data[operation] == nil || data[operation].Repository == nil {
 		return "response"
 	}
 	metadata := data[operation].Repository.Metadata
-	if metadata.Name != name || metadata.ResourceVersion == "" {
+	if metadata.Name != name || metadata.Generation <= 0 || metadata.ResourceVersion == "" ||
+		data[operation].Repository.Spec == nil || data[operation].Repository.Spec.DefaultBranch != defaultBranch {
 		return "response"
 	}
 	for key, value := range annotations {
@@ -1489,7 +1956,9 @@ func TestRepositoryCapacityResponseRequiresConfirmedMutation(t *testing.T) {
 	for _, tc := range []struct {
 		name, response, class string
 	}{
-		{"confirmed", `{"data":{"updateRepository":{"repository":{"metadata":{"name":"catalog","resourceVersion":"2","annotations":{"capacity.gitstore.dev/sequence":"run-1"}}}}}}`, ""},
+		{"confirmed", `{"data":{"updateRepository":{"repository":{"metadata":{"name":"catalog","generation":2,"resourceVersion":"2","annotations":{"capacity.gitstore.dev/sequence":"run-1"}},"spec":{"defaultBranch":"capacity-1"}}}}}`, ""},
+		{"wrong-branch", `{"data":{"updateRepository":{"repository":{"metadata":{"name":"catalog","generation":2,"resourceVersion":"2","annotations":{"capacity.gitstore.dev/sequence":"run-1"}},"spec":{"defaultBranch":"capacity-0"}}}}}`, "response"},
+		{"missing-generation", `{"data":{"updateRepository":{"repository":{"metadata":{"name":"catalog","resourceVersion":"2","annotations":{"capacity.gitstore.dev/sequence":"run-1"}},"spec":{"defaultBranch":"capacity-1"}}}}}`, "response"},
 		{"empty", `{}`, "response"},
 		{"malformed", `{`, "response"},
 		{"null-data", `{"data":null}`, "response"},
@@ -1506,9 +1975,153 @@ func TestRepositoryCapacityResponseRequiresConfirmedMutation(t *testing.T) {
 		{"unknown-error", `{"errors":[{"message":"private provider details"}]}`, "operation"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.class, repositoryCapacityResponseClass([]byte(tc.response), "updateRepository", "catalog", annotations))
+			require.Equal(t, tc.class, repositoryCapacityResponseClass([]byte(tc.response), "updateRepository", "catalog", "capacity-1", annotations))
 		})
 	}
+}
+
+func TestRepositoryCapacityFailureEvidenceIsBoundedAndSanitized(t *testing.T) {
+	t.Parallel()
+	const secret = "PRIVATE_RESPONSE_SECRET"
+	var failures []any
+	for range 6 {
+		failures = append(failures, map[string]any{
+			"message": secret + " resource version changed",
+			"path":    []string{secret},
+			"extensions": map[string]any{
+				"code": secret, "token": secret,
+				"diagnostics": []any{
+					map[string]string{"reason": "RESOURCE_VERSION_CONFLICT", "message": secret},
+					map[string]string{"reason": secret},
+					map[string]string{"reason": "SUPERSEDED"},
+					map[string]string{"reason": "NAMESPACE_NOT_ACTIVE"},
+					map[string]string{"reason": secret},
+				},
+			},
+		})
+	}
+	body, err := json.Marshal(map[string]any{"errors": failures})
+	require.NoError(t, err)
+	retained, truncated := repositoryCapacityResponseFailures(body)
+	require.True(t, truncated)
+	require.Len(t, retained, 4)
+	for _, failure := range retained {
+		require.Equal(t, "OTHER", failure.Code)
+		require.Equal(t, "resource_version", failure.MessageClass)
+		require.Equal(t, []string{"RESOURCE_VERSION_CONFLICT", "OTHER", "SUPERSEDED", "NAMESPACE_NOT_ACTIVE"}, failure.Reasons)
+	}
+	evidence, err := json.Marshal(retained)
+	require.NoError(t, err)
+	require.NotContains(t, string(evidence), secret)
+	require.Less(t, len(evidence), 1500)
+	for _, body := range []string{`{`, `{"errors":[7,{"extensions":{"code":7}}]}`, `{"data":null}`} {
+		retained, _ := repositoryCapacityResponseFailures([]byte(body))
+		evidence, err := json.Marshal(retained)
+		require.NoError(t, err)
+		require.NotContains(t, string(evidence), secret)
+	}
+}
+
+func TestRepositoryCapacityFailureRetentionAccountsForEveryOmission(t *testing.T) {
+	t.Parallel()
+	observed := &repositoryCapacityAttemptObservation{}
+	for attempt := range 20 {
+		observed.attempts++
+		observed.retainFailure(repositoryCapacityAttemptFailure{Class: "quota", TraceID: fmt.Sprintf("%032x", attempt+1)})
+	}
+	require.Len(t, observed.failures, repositoryCapacityAttemptFailureLimit)
+	require.EqualValues(t, 20, observed.failures[len(observed.failures)-1].Attempt)
+	require.EqualValues(t, 4, observed.omittedFailures)
+	var result repositoryCapacityLoadResult
+	for sequence := range 24 {
+		result.retainAttemptFailures(observed, sequence+1, sequence%2 == 0, true)
+	}
+	require.Len(t, result.failures, repositoryCapacityLoadFailureLimit)
+	require.EqualValues(t, 480, int64(len(result.failures))+result.omittedFailures)
+	require.True(t, result.failures[0].MutationFailed)
+	require.Equal(t, 1, result.failures[0].EndpointIndex)
+	require.Zero(t, observed.failures[0].EndpointIndex, "aggregation must not mutate the per-operation observation")
+}
+
+func TestRepositoryCapacityAttemptTracesPreserveRetryAndTerminalOutcomes(t *testing.T) {
+	t.Parallel()
+	for _, enabled := range []bool{false, true} {
+		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
+			var calls atomic.Int64
+			parents := make(chan string, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				parents <- r.Header.Get("traceparent")
+				if calls.Add(1) == 1 {
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
+				_, _ = io.WriteString(w, `{"errors":[{"message":"private-token","extensions":{"code":"FAILED_PRECONDITION","diagnostics":[{"reason":"NAMESPACE_NOT_ACTIVE","message":"private-token"}]}}]}`)
+			}))
+			defer server.Close()
+			observed := &repositoryCapacityAttemptObservation{traceCorrelation: enabled}
+			err := repositoryCapacityMutationObserved(t.Context(), server.Client(), server.URL, "private-token", false, "private-namespace", "private-name", "private-prefix", 1, 1, "", observed)
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "private")
+			require.EqualValues(t, 2, observed.attempts)
+			require.EqualValues(t, 1, observed.retries)
+			require.Len(t, observed.failures, 2)
+			require.Equal(t, "quota", observed.failures[0].Class)
+			require.Equal(t, "operation", observed.failures[1].Class)
+			require.Equal(t, []repositoryCapacityOperationFailure{{Code: "FAILED_PRECONDITION", Reasons: []string{"NAMESPACE_NOT_ACTIVE"}, MessageClass: "other"}}, observed.failures[1].Errors)
+			for i := range 2 {
+				parent := <-parents
+				if enabled {
+					parts := strings.Split(parent, "-")
+					require.Len(t, parts, 4)
+					require.Equal(t, "01", parts[3])
+					require.Equal(t, parts[1], observed.failures[i].TraceID)
+					require.Regexp(t, secretCapacityTraceIDPattern, parts[1])
+				} else {
+					require.Empty(t, parent)
+					require.Empty(t, observed.failures[i].TraceID)
+				}
+			}
+			if enabled {
+				require.NotEqual(t, observed.failures[0].TraceID, observed.failures[1].TraceID)
+			}
+			body, err := json.Marshal(observed.failures)
+			require.NoError(t, err)
+			require.NotContains(t, string(body), "private")
+		})
+	}
+}
+
+func TestRepositoryCapacityLoadRetainsExactFailedOfferIdentity(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"errors":[{"message":"private material","extensions":{"code":"ADMISSION_REJECTED"}}]}`)
+	}))
+	defer server.Close()
+	cfg := repositoryCapacityConfig{
+		apiA: server.URL, apiB: server.URL, token: "private-token", namespace: "private-namespace",
+		duration: 40 * time.Millisecond, transitionInterval: 10 * time.Millisecond,
+		burstInterval: time.Minute, burstSize: 1, mutationWorkers: 2, resourcePool: 2, traceCorrelation: "1",
+	}
+	result := runRepositoryCapacityLoad(t, server.Client(), cfg, "private-name", "private-prefix", 4)
+	require.EqualValues(t, 4, result.failed)
+	require.Zero(t, result.admitted)
+	require.Zero(t, result.retries)
+	require.Zero(t, result.omittedFailures)
+	require.Len(t, result.failures, 4)
+	sequences, traces := map[int]bool{}, map[string]bool{}
+	for _, failure := range result.failures {
+		require.True(t, failure.MutationFailed)
+		require.Equal(t, (failure.Sequence+1)%2, failure.EndpointIndex)
+		require.EqualValues(t, 1, failure.Attempt)
+		require.Equal(t, http.StatusOK, failure.HTTPStatus)
+		require.Equal(t, "operation", failure.Class)
+		require.False(t, sequences[failure.Sequence])
+		require.False(t, traces[failure.TraceID])
+		sequences[failure.Sequence], traces[failure.TraceID] = true, true
+	}
+	body, err := json.Marshal(result.failures)
+	require.NoError(t, err)
+	require.NotContains(t, string(body), "private")
 }
 
 func repositoryCapacityConfirmTestMutation(w http.ResponseWriter, r *http.Request) {
@@ -1516,6 +2129,7 @@ func repositoryCapacityConfirmTestMutation(w http.ResponseWriter, r *http.Reques
 		Variables struct {
 			Input struct {
 				Metadata map[string]any `json:"metadata"`
+				Spec     map[string]any `json:"spec"`
 			} `json:"input"`
 		} `json:"variables"`
 	}
@@ -1524,9 +2138,59 @@ func repositoryCapacityConfirmTestMutation(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	payload.Variables.Input.Metadata["resourceVersion"] = "2"
+	payload.Variables.Input.Metadata["generation"] = 2
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
-		"updateRepository": map[string]any{"repository": map[string]any{"metadata": payload.Variables.Input.Metadata}},
+		"updateRepository": map[string]any{"repository": map[string]any{"metadata": payload.Variables.Input.Metadata, "spec": payload.Variables.Input.Spec}},
 	}})
+}
+
+func TestRepositoryCapacityLoadAlternatesSpecPerResourceRound(t *testing.T) {
+	var lock sync.Mutex
+	previous := map[string]string{}
+	counts := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read offered mutation: %v", err)
+			http.Error(w, "read failed", http.StatusBadRequest)
+			return
+		}
+		var payload struct {
+			Variables struct {
+				Input struct {
+					Metadata struct{ Name string }          `json:"metadata"`
+					Spec     struct{ DefaultBranch string } `json:"spec"`
+				} `json:"input"`
+			} `json:"variables"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Errorf("decode offered mutation: %v", err)
+			http.Error(w, "decode failed", http.StatusBadRequest)
+			return
+		}
+		name, branch := payload.Variables.Input.Metadata.Name, payload.Variables.Input.Spec.DefaultBranch
+		lock.Lock()
+		if counts[name] > 0 && previous[name] == branch {
+			t.Errorf("Repository %s repeated %s instead of changing its spec", name, branch)
+		}
+		previous[name] = branch
+		counts[name]++
+		lock.Unlock()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		repositoryCapacityConfirmTestMutation(w, r)
+	}))
+	defer server.Close()
+	cfg := repositoryCapacityConfig{
+		apiA: server.URL, apiB: server.URL, token: "test-token", namespace: "test",
+		duration: 200 * time.Millisecond, transitionInterval: 10 * time.Millisecond,
+		burstInterval: time.Minute, burstSize: 1, mutationWorkers: 1, resourcePool: 2,
+	}
+	result := runRepositoryCapacityLoad(t, server.Client(), cfg, "pool-", "run-", 20)
+	require.EqualValues(t, 20, result.admitted)
+	require.Zero(t, result.failed)
+	lock.Lock()
+	defer lock.Unlock()
+	require.Equal(t, map[string]int{"pool-1": 10, "pool-2": 10}, counts)
 }
 
 func TestRepositoryCapacityMutationRetriesOnlyTransientFailures(t *testing.T) {
@@ -1559,7 +2223,7 @@ func TestRepositoryCapacityMutationRetriesOnlyTransientFailures(t *testing.T) {
 			}))
 			defer server.Close()
 			observed := &repositoryCapacityAttemptObservation{errors: map[string]int64{}}
-			err := repositoryCapacityMutationObserved(t.Context(), server.Client(), server.URL, "private-token", false, "namespace", "catalog", "run-", 1, "", observed)
+			err := repositoryCapacityMutationObserved(t.Context(), server.Client(), server.URL, "private-token", false, "namespace", "catalog", "run-", 1, 1, "", observed)
 			if tc.retries {
 				require.NoError(t, err)
 				require.Equal(t, int64(2), calls.Load())
@@ -1594,7 +2258,7 @@ func TestRepositoryCapacityMutationCancellationInterruptsRetryDelay(t *testing.T
 	defer cancel()
 	observed := &repositoryCapacityAttemptObservation{errors: map[string]int64{}}
 	started := time.Now()
-	err := repositoryCapacityMutationObserved(ctx, server.Client(), server.URL, "private-token", false, "namespace", "catalog", "run-", 1, "", observed)
+	err := repositoryCapacityMutationObserved(ctx, server.Client(), server.URL, "private-token", false, "namespace", "catalog", "run-", 1, 1, "", observed)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Less(t, time.Since(started), time.Second)
 	require.Equal(t, int64(1), calls.Load())
@@ -2081,13 +2745,15 @@ func TestOpenRepositoryCapacityOverflowSubscriberWaitsForBookmark(t *testing.T) 
 
 func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, name string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	gitURL := strings.TrimRight(os.Getenv("GIT_URL"), "/")
 	require.NoError(t, validateSecretCapacityGitEndpoint(gitURL))
 	var previousUID string
+	var previousStorage *capacityRepositoryStorage
 	directory := filepath.Join(t.TempDir(), "authoring")
 	for _, mode := range []string{"mutation", "push"} {
 		require.NoError(t, repositoryCapacityMutation(ctx, client, cfg.apiA, cfg.token, true, cfg.namespace, name, "deletion", 0, ""))
+		storage := captureCapacityRepositoryStorage(t, client, cfg, name)
 		response := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
 			repository(by: {namespacePath: {namespace: $namespace, name: $name}}) { id metadata { resourceVersion } }
 		}`, map[string]any{"namespace": cfg.namespace, "name": name})
@@ -2102,19 +2768,45 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 		}
 		require.NoError(t, json.Unmarshal(response.Data, &current))
 		require.NotEmpty(t, current.Repository.ID)
+		require.NotEmpty(t, current.Repository.Metadata.ResourceVersion)
+		if mode == "mutation" {
+			assertCapacityCatalogBlockers(t, client, cfg, "Repository")
+		}
 		if previousUID != "" {
 			require.NotEqual(t, previousUID, current.Repository.ID)
-			stale := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($ns: String!, $name: String!, $uid: ID!, $rv: String!) {
+			assertCapacityRepositoryStorage(t, storage, false)
+			assertCapacityRepositoryStorage(t, previousStorage, true)
+			for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+				stale := gqlQueryWithURL(t, endpoint, cfg.token, `mutation($ns: String!, $name: String!, $uid: ID!, $rv: String!) {
 				completeRepositoryDeletion(input: {namespace: $ns, name: $name, id: $uid, resourceVersion: $rv}) { id }
 			}`, map[string]any{"ns": cfg.namespace, "name": name, "uid": previousUID, "rv": current.Repository.Metadata.ResourceVersion})
-			require.NotEmpty(t, stale.Errors, "stale completion must reject a same-name replacement")
-			var staleError struct {
-				Extensions struct {
-					Code string `json:"code"`
-				} `json:"extensions"`
+				require.NotEmpty(t, stale.Errors, "stale completion must reject a same-name replacement")
+				var staleError struct {
+					Extensions struct {
+						Code string `json:"code"`
+					} `json:"extensions"`
+				}
+				require.NoError(t, json.Unmarshal(stale.Errors[0], &staleError))
+				require.Equal(t, "CONFLICT", staleError.Extensions.Code)
+				missingID := secretTestGraphQL(t, endpoint, cfg.token, `mutation($ns: String!, $name: String!, $rv: String!) {
+				completeRepositoryDeletion(input: {namespace: $ns, name: $name, resourceVersion: $rv}) { id }
+			}`, map[string]any{"ns": cfg.namespace, "name": name, "rv": current.Repository.Metadata.ResourceVersion})
+				require.Equal(t, http.StatusUnprocessableEntity, missingID.Status)
+				require.Len(t, missingID.Errors, 1)
+				require.NoError(t, json.Unmarshal(missingID.Errors[0], &staleError))
+				require.Equal(t, "GRAPHQL_VALIDATION_FAILED", staleError.Extensions.Code)
+				replacement := gqlQueryWithURL(t, endpoint, cfg.token, `query($namespace: String!, $name: String!) {
+					repository(by: {namespacePath: {namespace: $namespace, name: $name}}) { id }
+				}`, map[string]any{"namespace": cfg.namespace, "name": name})
+				require.Empty(t, replacement.Errors)
+				var observed struct {
+					Repository struct {
+						ID string `json:"id"`
+					} `json:"repository"`
+				}
+				require.NoError(t, json.Unmarshal(replacement.Data, &observed))
+				require.Equal(t, current.Repository.ID, observed.Repository.ID, "stale completion must preserve the replacement on both APIs")
 			}
-			require.NoError(t, json.Unmarshal(stale.Errors[0], &staleError))
-			require.Equal(t, "CONFLICT", staleError.Extensions.Code)
 		}
 		path := "repositories/" + name + ".md"
 		if mode == "mutation" {
@@ -2129,6 +2821,11 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 		contents, err := secretCapacityGit(ctx, directory, "", "ls-tree", "--name-only", "HEAD", "--", path)
 		require.NoError(t, err)
 		require.Equal(t, path, strings.TrimSpace(string(contents)), "created manifest must exist")
+		started := time.Now()
+		var before int64
+		if cfg.acknowledgements != nil {
+			before = cfg.acknowledgements.Load()
+		}
 		if mode == "mutation" {
 			deleted := gqlQueryWithURL(t, cfg.apiB, cfg.token, `mutation($id: ID!) {
 				deleteRepository(input: {id: $id}) { outcome repository { metadata { deletionTimestamp } } }
@@ -2148,18 +2845,926 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 		contents, err = secretCapacityGit(ctx, directory, "", "ls-tree", "--name-only", "FETCH_HEAD", "--", path)
 		require.NoError(t, err)
 		require.Empty(t, strings.TrimSpace(string(contents)), "initiation must remove the authoring manifest")
-		require.Eventually(t, func() bool {
-			for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
-				read := gqlQueryWithURL(t, endpoint, cfg.token, `query($id: ID!) { node(id: $id) { id } }`, map[string]any{"id": current.Repository.ID})
-				if len(read.Errors) != 0 || !bytes.Contains(read.Data, []byte(`"node":null`)) {
-					return false
-				}
-			}
-			return true
-		}, 60*time.Second, 250*time.Millisecond, "controllers must complete deletion on both replicas")
+		waitCapacityNodesDeleted(t, cfg, current.Repository.ID)
+		assertCapacityRepositoryStorage(t, storage, true)
+		if cfg.acknowledgements != nil {
+			completed, after := time.Now(), cfg.acknowledgements.Load()
+			t.Logf("deletion_under_load mode=%s started_at=%s completed_at=%s acknowledged_before=%d acknowledged_after=%d",
+				mode, started.UTC().Format(time.RFC3339Nano), completed.UTC().Format(time.RFC3339Nano), before, after)
+			require.Positive(t, before)
+			require.Greater(t, after, before, "each deletion mode requires acknowledged sustained mutations during initiation and completion")
+		}
 		previousUID = current.Repository.ID
+		previousStorage = storage
 	}
 	t.Log("repository deletion parity: mutation/push manifest removal, controller completion, name reuse and stale UID rejection verified")
+}
+
+func assertCapacityCatalogBlockers(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, parentKind string) {
+	t.Helper()
+	require.Contains(t, []string{"Repository", "Namespace"}, parentKind)
+	gitURL := strings.TrimRight(os.Getenv("GIT_URL"), "/")
+	type snapshot struct {
+		ID       string `json:"id"`
+		Metadata *struct {
+			Name              string    `json:"name"`
+			Namespace         string    `json:"namespace"`
+			DeletionTimestamp *string   `json:"deletionTimestamp"`
+			Finalizers        []string  `json:"finalizers"`
+			CreationTimestamp time.Time `json:"creationTimestamp"`
+			ResourceVersion   string    `json:"resourceVersion"`
+			Generation        int64     `json:"generation"`
+		} `json:"metadata"`
+		Status struct {
+			Conditions []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			} `json:"conditions"`
+		} `json:"status"`
+	}
+	for _, catalog := range []struct {
+		kind, field, directory string
+		fixture                func(string, string) string
+	}{
+		{"Product", "product", "products", validProductFixture},
+		{"ProductVariant", "productVariant", "variants", func(name, namespace string) string {
+			return minimalVariantFixture(name, namespace, name, "unresolved-"+name)
+		}},
+		{"Collection", "collection", "collections", minimalCollectionFixture},
+		{"File", "file", "files", func(name, namespace string) string {
+			return fmt.Sprintf(`---
+apiVersion: storage.gitstore.dev/v1beta1
+kind: File
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  contentType: text/plain
+  source:
+    type: git
+    uri: assets/capacity.txt
+---
+
+Owned capacity File.
+`, name, namespace)
+		}},
+		{"CategoryTaxonomy", "category", "categories", func(name, _ string) string {
+			return rootCategoryFixture(name)
+		}},
+	} {
+		name := uniqueName("catalog-repository")
+		if parentKind == "Namespace" {
+			cfg.namespace = uniqueName("catalog-namespace")
+			createWatchMetadataNamespace(t, cfg.apiA, cfg.apiB, cfg.token, cfg.namespace)
+			require.NoError(t, waitRepositoryCapacityNamespaceReady(t.Context(), client, cfg))
+			name = namespaceContractSystemRepository
+		} else {
+			require.NoError(t, repositoryCapacityMutation(t.Context(), client, cfg.apiA, cfg.token, true, cfg.namespace, name, "catalog-blocker", 0, ""))
+			require.NoError(t, waitRepositoryCapacityResourceReady(t.Context(), client, cfg, "Repository", name))
+		}
+		storage := captureCapacityRepositoryStorage(t, client, cfg, name)
+		repository := secretTestGraphQL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
+			namespace(by: {name: $namespace}) { id metadata { name finalizers } }
+			repository(by: {namespacePath: {namespace: $namespace, name: $name}}) { id }
+		}`, map[string]any{"namespace": cfg.namespace, "name": name})
+		require.Equal(t, http.StatusOK, repository.Status)
+		require.Empty(t, repository.Errors)
+		var parent struct {
+			Namespace  *snapshot `json:"namespace"`
+			Repository struct {
+				ID string `json:"id"`
+			} `json:"repository"`
+		}
+		require.NoError(t, json.Unmarshal(repository.Data, &parent))
+		repositoryID := parent.Repository.ID
+		require.NotEmpty(t, repositoryID)
+		parentID, deleteField := repositoryID, "deleteRepository"
+		if parentKind == "Namespace" {
+			require.NotNil(t, parent.Namespace)
+			require.NotNil(t, parent.Namespace.Metadata)
+			require.NotEmpty(t, parent.Namespace.ID)
+			parentID, deleteField = parent.Namespace.ID, "deleteNamespace"
+		}
+		directory := filepath.Join(t.TempDir(), "catalog-authoring")
+		_, err := newSecretCapacityGitWorker(t.Context(), directory, gitURL+"/"+cfg.namespace+"/"+name+".git", cfg.namespace, name, cfg.token, 0)
+		require.NoError(t, err)
+		catalogName := uniqueName("repo-catalog")
+		path := catalog.directory + "/" + catalogName + ".md"
+		require.NoError(t, os.MkdirAll(filepath.Join(directory, catalog.directory), 0700))
+		manifest := catalog.fixture(catalogName, cfg.namespace)
+		require.NoError(t, os.WriteFile(filepath.Join(directory, path), []byte(manifest), 0600))
+		if catalog.kind == "File" {
+			require.NoError(t, os.MkdirAll(filepath.Join(directory, "assets"), 0700))
+			require.NoError(t, os.WriteFile(filepath.Join(directory, "assets/capacity.txt"), []byte("Owned capacity asset.\n"), 0600))
+			_, err = secretCapacityGit(t.Context(), directory, "", "add", "--", "assets/capacity.txt")
+			require.NoError(t, err)
+		}
+		_, err = secretCapacityGit(t.Context(), directory, "", "add", "--", path)
+		require.NoError(t, err)
+		_, err = secretCapacityGit(t.Context(), directory, "", "commit", "--quiet", "-m", "Create isolated capacity "+catalog.kind)
+		require.NoError(t, err)
+		_, err = secretCapacityGit(t.Context(), directory, cfg.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+		require.NoError(t, err)
+		selector := "(by: {namespacePath: {namespace: $namespace, name: $name}})"
+		if catalog.kind == "File" {
+			selector = "(namespace: $namespace, name: $name)"
+		}
+		status := ""
+		if catalog.kind == "ProductVariant" {
+			status = "status { conditions { type status } }"
+		}
+		query := fmt.Sprintf(`query($namespace: String!, $name: String!) {
+			resource: %s%s { id metadata { name namespace deletionTimestamp finalizers creationTimestamp resourceVersion generation } %s }
+		}`, catalog.field, selector, status)
+		nodeKind := catalog.kind
+		if nodeKind == "CategoryTaxonomy" {
+			nodeKind = "Category"
+		}
+		var resourceID string
+		readFixture := func(endpoint string) snapshot {
+			t.Helper()
+			response := secretTestGraphQL(t, endpoint, cfg.token, query, map[string]any{"namespace": cfg.namespace, "name": catalogName})
+			require.Equal(t, http.StatusOK, response.Status)
+			require.Empty(t, response.Errors)
+			var data struct {
+				Resource *snapshot `json:"resource"`
+			}
+			require.NoError(t, json.Unmarshal(response.Data, &data))
+			require.NotNil(t, data.Resource)
+			require.NotNil(t, data.Resource.Metadata)
+			require.Equal(t, resourceID, data.Resource.ID)
+			require.Equal(t, catalogName, data.Resource.Metadata.Name)
+			require.Equal(t, cfg.namespace, data.Resource.Metadata.Namespace)
+			return *data.Resource
+		}
+		for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+			var observed snapshot
+			require.Eventually(t, func() bool {
+				response := secretTestGraphQL(t, endpoint, cfg.token, query, map[string]any{"namespace": cfg.namespace, "name": catalogName})
+				require.Equal(t, http.StatusOK, response.Status)
+				if len(response.Errors) != 0 {
+					for _, raw := range response.Errors {
+						var notFound struct {
+							Extensions struct {
+								Code string `json:"code"`
+							} `json:"extensions"`
+						}
+						require.NoError(t, json.Unmarshal(raw, &notFound))
+						require.Equal(t, "NOT_FOUND", notFound.Extensions.Code, "%s", raw)
+					}
+					t.Logf("catalog projection pending kind=%s errors=%s", catalog.kind, response.Errors)
+					return false
+				}
+				var data struct {
+					Resource *snapshot `json:"resource"`
+				}
+				require.NoError(t, json.Unmarshal(response.Data, &data))
+				if data.Resource == nil {
+					return false
+				}
+				observed = *data.Resource
+				return observed.ID != "" && observed.Metadata != nil
+			}, 30*time.Second, 100*time.Millisecond, "%s must be projected on both APIs", catalog.kind)
+			require.Equal(t, catalogName, observed.Metadata.Name)
+			require.Equal(t, cfg.namespace, observed.Metadata.Namespace)
+			require.Nil(t, observed.Metadata.DeletionTimestamp)
+			if catalog.kind == "ProductVariant" {
+				unresolved := false
+				for _, condition := range observed.Status.Conditions {
+					if condition.Type == "ProductResolved" && condition.Status == "FALSE" {
+						unresolved = true
+					}
+				}
+				require.True(t, unresolved, "isolated Variant must not rely on a co-resident Product blocker")
+			}
+			if resourceID == "" {
+				resourceID = observed.ID
+			}
+			require.Equal(t, resourceID, observed.ID)
+		}
+		started := time.Now()
+		var before int64
+		if cfg.acknowledgements != nil {
+			before = cfg.acknowledgements.Load()
+		}
+		rejectParent := func(terminating bool) {
+			t.Helper()
+			for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+				rejected := secretTestGraphQL(t, endpoint, cfg.token, fmt.Sprintf(`mutation($id: ID!) {
+				%s(input: {id: $id}) { outcome }
+			}`, deleteField), map[string]any{"id": parentID})
+				require.Equal(t, http.StatusOK, rejected.Status)
+				require.Len(t, rejected.Errors, 1)
+				var blocker struct {
+					Message    string `json:"message"`
+					Extensions struct {
+						Code        string `json:"code"`
+						Diagnostics []struct {
+							Reason string `json:"reason"`
+						} `json:"diagnostics"`
+					} `json:"extensions"`
+				}
+				require.NoError(t, json.Unmarshal(rejected.Errors[0], &blocker))
+				if parentKind == "Namespace" {
+					require.Equal(t, "FAILED_PRECONDITION", blocker.Extensions.Code)
+					require.Len(t, blocker.Extensions.Diagnostics, 1)
+					require.Equal(t, "NAMESPACE_NOT_EMPTY", blocker.Extensions.Diagnostics[0].Reason)
+				} else {
+					require.Equal(t, fmt.Sprintf("repository %q contains catalog resources and cannot be deleted", name), blocker.Message)
+				}
+				targets := []struct{ kind, id string }{
+					{"Repository", repositoryID}, {nodeKind, resourceID},
+				}
+				if parentKind == "Namespace" {
+					targets = append(targets, struct{ kind, id string }{"Namespace", parentID})
+				}
+				for _, target := range targets {
+					metadata := "name namespace deletionTimestamp finalizers"
+					if target.kind == "Namespace" {
+						metadata = "name finalizers"
+					}
+					preserved := secretTestGraphQL(t, endpoint, cfg.token, fmt.Sprintf(`query($id: ID!) {
+					node(id: $id) {
+						id
+						... on %s { metadata { %s } }
+					}
+				}`, target.kind, metadata), map[string]any{"id": target.id})
+					require.Equal(t, http.StatusOK, preserved.Status, "%s", preserved.Errors)
+					require.Empty(t, preserved.Errors)
+					var data struct {
+						Node *snapshot `json:"node"`
+					}
+					require.NoError(t, json.Unmarshal(preserved.Data, &data))
+					require.NotNil(t, data.Node)
+					require.Equal(t, target.id, data.Node.ID)
+					require.NotNil(t, data.Node.Metadata)
+					if target.id == resourceID && terminating {
+						require.NotNil(t, data.Node.Metadata.DeletionTimestamp)
+						require.Contains(t, data.Node.Metadata.Finalizers, capacityCatalogHeldFinalizer)
+					} else {
+						require.Nil(t, data.Node.Metadata.DeletionTimestamp, "rejection must not terminate Repository or child")
+					}
+					if target.kind == "Namespace" {
+						require.Equal(t, cfg.namespace, data.Node.Metadata.Name)
+						require.ElementsMatch(t, parent.Namespace.Metadata.Finalizers, data.Node.Metadata.Finalizers, "rejection must not add Namespace termination finalizers")
+					}
+				}
+			}
+		}
+		rejectParent(false)
+		if cfg.verifyFinalizers {
+			original := readFixture(cfg.apiA)
+			require.Nil(t, original.Metadata.DeletionTimestamp)
+			require.Empty(t, original.Metadata.Finalizers)
+			terminated := time.Now().UTC().Truncate(time.Millisecond)
+			t.Logf("catalog_finalizer_fixture kind=%s namespace=%s name=%s id=%s repository_id=%s creation_timestamp=%s termination_timestamp=%s",
+				catalog.kind, cfg.namespace, catalogName, resourceID, repositoryID,
+				original.Metadata.CreationTimestamp.UTC().Format(time.RFC3339Nano), terminated.Format(time.RFC3339Nano))
+			updateFixture := func(restore bool) {
+				t.Helper()
+				for range 8 {
+					current := readFixture(cfg.apiA)
+					require.Equal(t, original.Metadata.Generation, current.Metadata.Generation)
+					if restore {
+						require.Equal(t, []string{capacityCatalogHeldFinalizer}, current.Metadata.Finalizers)
+						require.NotNil(t, current.Metadata.DeletionTimestamp)
+						observed, err := time.Parse(time.RFC3339Nano, *current.Metadata.DeletionTimestamp)
+						require.NoError(t, err)
+						require.True(t, terminated.Equal(observed), "fixture must not clear a different termination")
+					} else {
+						require.Nil(t, current.Metadata.DeletionTimestamp)
+						require.Empty(t, current.Metadata.Finalizers)
+					}
+					fixture := capacityCatalogFixture{
+						kind: catalog.kind, namespace: cfg.namespace, name: catalogName, id: resourceID,
+						repositoryID: repositoryID, version: current.Metadata.ResourceVersion,
+						created: current.Metadata.CreationTimestamp, terminated: terminated,
+					}
+					if applyCapacityCatalogFixture(t, cfg, fixture, restore) {
+						return
+					}
+				}
+				t.Fatal("finalizer fixture exhausted its eight resource-version CAS attempts")
+			}
+			updateFixture(false)
+			for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+				current := readFixture(endpoint)
+				require.NotNil(t, current.Metadata.DeletionTimestamp)
+				require.Equal(t, []string{capacityCatalogHeldFinalizer}, current.Metadata.Finalizers)
+				require.Equal(t, original.Metadata.Generation, current.Metadata.Generation)
+			}
+			heldAt := time.Now()
+			var heldBefore int64
+			if cfg.acknowledgements != nil {
+				heldBefore = cfg.acknowledgements.Load()
+			}
+			rejectParent(true)
+			if cfg.acknowledgements != nil {
+				require.Positive(t, heldBefore)
+				require.Eventually(t, func() bool { return cfg.acknowledgements.Load() > heldBefore },
+					5*time.Second, 100*time.Millisecond, "terminating blocker must overlap acknowledged offered work")
+			}
+			rejectParent(true)
+			assertCapacityRepositoryStorage(t, storage, false)
+			var heldAfter int64
+			if cfg.acknowledgements != nil {
+				heldAfter = cfg.acknowledgements.Load()
+			}
+			t.Logf("%s_terminating_catalog_blocker kind=%s unrelated_finalizer=true api_rejections=4 manifest_removal=false started_at=%s completed_at=%s acknowledged_before=%d acknowledged_after=%d",
+				strings.ToLower(parentKind), catalog.kind, heldAt.UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), heldBefore, heldAfter)
+			updateFixture(true)
+			for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+				current := readFixture(endpoint)
+				require.Nil(t, current.Metadata.DeletionTimestamp)
+				require.Empty(t, current.Metadata.Finalizers)
+				require.Equal(t, original.Metadata.Generation, current.Metadata.Generation)
+			}
+		}
+		_, err = secretCapacityGit(t.Context(), directory, cfg.token, "fetch", "--quiet", "--depth=1", "origin", "refs/heads/main")
+		require.NoError(t, err)
+		contents, err := secretCapacityGit(t.Context(), directory, "", "show", "FETCH_HEAD:"+path)
+		require.NoError(t, err)
+		require.Equal(t, manifest, string(contents), "rejection must preserve the committed catalog manifest")
+		assertCapacityRepositoryStorage(t, storage, false)
+		_, err = secretCapacityGit(t.Context(), directory, "", "rm", "--", path)
+		require.NoError(t, err)
+		_, err = secretCapacityGit(t.Context(), directory, "", "commit", "--quiet", "-m", "Delete isolated capacity "+catalog.kind)
+		require.NoError(t, err)
+		_, err = secretCapacityGit(t.Context(), directory, cfg.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+		require.NoError(t, err)
+		waitCapacityNodesDeleted(t, cfg, resourceID)
+		_, err = secretCapacityGit(t.Context(), directory, cfg.token, "fetch", "--quiet", "--depth=1", "origin", "refs/heads/main")
+		require.NoError(t, err)
+		contents, err = secretCapacityGit(t.Context(), directory, "", "ls-tree", "--name-only", "FETCH_HEAD", "--", path)
+		require.NoError(t, err)
+		require.Empty(t, strings.TrimSpace(string(contents)))
+		deleted := secretTestGraphQL(t, cfg.apiB, cfg.token, fmt.Sprintf(`mutation($id: ID!) {
+			%s(input: {id: $id}) { outcome }
+		}`, deleteField), map[string]any{"id": parentID})
+		require.Equal(t, http.StatusOK, deleted.Status)
+		require.Empty(t, deleted.Errors)
+		require.JSONEq(t, fmt.Sprintf(`{%q:{"outcome":"TERMINATION_STARTED"}}`, deleteField), string(deleted.Data))
+		ids := []string{repositoryID}
+		if parentKind == "Namespace" {
+			ids = append(ids, parentID)
+		}
+		waitCapacityNodesDeleted(t, cfg, ids...)
+		assertCapacityRepositoryStorage(t, storage, true)
+		var after int64
+		if cfg.acknowledgements != nil {
+			after = cfg.acknowledgements.Load()
+			require.Positive(t, before)
+			require.Greater(t, after, before, "each isolated catalog blocker and cleanup must overlap acknowledged offered work")
+		}
+		t.Logf("%s_catalog_blocker kind=%s isolated=true parent_id=%s repository_id=%s api_rejections=2 child_deleted=true parent_deleted=true repository_deleted=true manifest_preserved=true started_at=%s completed_at=%s acknowledged_before=%d acknowledged_after=%d",
+			strings.ToLower(parentKind), catalog.kind, parentID, repositoryID, started.UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), before, after)
+	}
+}
+
+const capacityCatalogHeldFinalizer = "capacity.gitstore.dev/held-finalizer"
+
+type capacityCatalogFixture struct {
+	kind, namespace, name, id, repositoryID, version string
+	created, terminated                              time.Time
+}
+
+func capacityFixtureResourceUUID(id, kind string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(id)
+	prefix := "gid://GitStore/" + kind + "/"
+	if err != nil || !strings.HasPrefix(string(raw), prefix) {
+		return "", errors.New("finalizer fixture requires a matching canonical Relay identity")
+	}
+	uid := strings.TrimPrefix(string(raw), prefix)
+	if !regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`).MatchString(uid) {
+		return "", errors.New("finalizer fixture requires a canonical UUID")
+	}
+	return uid, nil
+}
+
+type capacityInfrastructureFixture struct {
+	kind, namespace, name, id, version string
+	created                            time.Time
+	finalizers                         []string
+}
+
+func capacityInfrastructureFixtureUpdate(keyspace string, fixture capacityInfrastructureFixture, release bool) (string, error) {
+	if !regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}$`).MatchString(keyspace) ||
+		!regexp.MustCompile(`^under-load-namespace-[0-9]{1,20}$`).MatchString(fixture.namespace) {
+		return "", errors.New("infrastructure finalizer fixture requires an owned fresh Namespace and canonical keyspace")
+	}
+	table, scope := "", ""
+	switch fixture.kind {
+	case "Namespace":
+		if fixture.name != fixture.namespace {
+			return "", errors.New("Namespace fixture identity must match its owned scope")
+		}
+		table = "namespaces_by_uid"
+	case "Repository":
+		if fixture.name != namespaceContractSystemRepository &&
+			!regexp.MustCompile(`^namespace-blocker-[0-9]{1,20}$`).MatchString(fixture.name) {
+			return "", errors.New("Repository finalizer fixture requires an owned ordinary or system Repository")
+		}
+		table, scope = "repositories_by_uid", fmt.Sprintf(" AND namespace='%s'", fixture.namespace)
+	default:
+		return "", errors.New("infrastructure finalizer fixture requires Namespace or Repository")
+	}
+	uid, err := capacityFixtureResourceUUID(fixture.id, fixture.kind)
+	if err != nil {
+		return "", err
+	}
+	version, err := strconv.ParseInt(fixture.version, 10, 64)
+	if err != nil || version < 1 || version == 1<<63-1 ||
+		fixture.created.IsZero() || fixture.created.Year() < 2000 || fixture.created.Year() > 9999 {
+		return "", errors.New("infrastructure finalizer fixture requires a bounded version and explicit creation timestamp")
+	}
+	if len(fixture.finalizers) > 64 || (!release && len(fixture.finalizers) == 64) {
+		return "", errors.New("infrastructure fixture must fit at most 64 finalizers including its owned marker")
+	}
+	next, encoded, held := make([]string, 0, len(fixture.finalizers)+1), make([]string, 0, len(fixture.finalizers)), 0
+	for _, finalizer := range fixture.finalizers {
+		if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,252}$`).MatchString(finalizer) {
+			return "", errors.New("infrastructure finalizer fixture contains an invalid finalizer")
+		}
+		encoded = append(encoded, "'"+finalizer+"'")
+		if finalizer == capacityCatalogHeldFinalizer {
+			held++
+		} else {
+			next = append(next, "'"+finalizer+"'")
+		}
+	}
+	if release {
+		if held != 1 {
+			return "", errors.New("infrastructure release requires exactly one owned held finalizer")
+		}
+	} else {
+		if held != 0 {
+			return "", errors.New("infrastructure seed must not replace an existing held finalizer")
+		}
+		next = append(next, "'"+capacityCatalogHeldFinalizer+"'")
+	}
+	termination := "deletion_timestamp=null"
+	if release {
+		termination = "deletion_timestamp!=null AND finalizers=[" + strings.Join(encoded, ",") + "]"
+	}
+	return fmt.Sprintf("CONSISTENCY LOCAL_QUORUM; SERIAL CONSISTENCY LOCAL_SERIAL; "+
+		"UPDATE %s.%s SET finalizers=[%s],resource_version='%d' WHERE uid=%s "+
+		"IF resource_version='%s' AND name='%s' AND creation_timestamp='%s'%s AND %s;",
+		keyspace, table, strings.Join(next, ","), version+1, uid, fixture.version, fixture.name,
+		fixture.created.UTC().Format("2006-01-02T15:04:05.000Z"), scope, termination), nil
+}
+
+func capacityCatalogFixtureUpdate(keyspace string, fixture capacityCatalogFixture, restore bool) (string, error) {
+	tables := map[string]string{
+		"Product": "products_by_namespace", "ProductVariant": "product_variants_by_namespace",
+		"CategoryTaxonomy": "category_taxonomies_by_namespace", "Collection": "collections_by_namespace", "File": "files_by_namespace",
+	}
+	table, ok := tables[fixture.kind]
+	if !ok || !regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}$`).MatchString(keyspace) ||
+		!regexp.MustCompile(`^[a-z][a-z0-9-]{0,252}$`).MatchString(fixture.namespace) ||
+		!regexp.MustCompile(`^repo-catalog-[0-9]{1,20}$`).MatchString(fixture.name) {
+		return "", errors.New("finalizer fixture requires an allowlisted kind, owned fixture name and canonical keyspace/namespace")
+	}
+	nodeKind := fixture.kind
+	if nodeKind == "CategoryTaxonomy" {
+		nodeKind = "Category"
+	}
+	uid, err := capacityFixtureResourceUUID(fixture.id, nodeKind)
+	if err != nil {
+		return "", err
+	}
+	repositoryUID, err := capacityFixtureResourceUUID(fixture.repositoryID, "Repository")
+	if err != nil {
+		return "", err
+	}
+	version, err := strconv.ParseInt(fixture.version, 10, 64)
+	if err != nil || version < 1 || version == 1<<63-1 ||
+		fixture.created.IsZero() || fixture.terminated.IsZero() ||
+		fixture.created.Year() < 2000 || fixture.created.Year() > 9999 ||
+		fixture.terminated.Year() < 2000 || fixture.terminated.Year() > 9999 {
+		return "", errors.New("finalizer fixture requires a bounded numeric version and explicit timestamps")
+	}
+	created := fixture.created.UTC().Format("2006-01-02T15:04:05.000Z")
+	terminated := fixture.terminated.UTC().Format("2006-01-02T15:04:05.000Z")
+	assignments := fmt.Sprintf("finalizers=['%s'],deletion_timestamp='%s'", capacityCatalogHeldFinalizer, terminated)
+	condition := " AND deletion_timestamp=null"
+	if restore {
+		assignments = "finalizers=[],deletion_timestamp=null"
+		condition = fmt.Sprintf(" AND deletion_timestamp='%s' AND finalizers=['%s']", terminated, capacityCatalogHeldFinalizer)
+	}
+	return fmt.Sprintf("CONSISTENCY LOCAL_QUORUM; SERIAL CONSISTENCY LOCAL_SERIAL; "+
+		"UPDATE %s.%s SET %s,resource_version='%d' "+
+		"WHERE namespace='%s' AND creation_timestamp='%s' AND uid=%s "+
+		"IF resource_version='%s' AND repository_id=%s AND name='%s'%s;",
+		keyspace, table, assignments, version+1, fixture.namespace, created, uid,
+		fixture.version, repositoryUID, fixture.name, condition), nil
+}
+
+func capacityCatalogFixtureApplied(body []byte) (bool, error) {
+	if bytes.Count(body, []byte("[applied]")) != 1 {
+		return false, errors.New("finalizer fixture command omitted the CAS acknowledgement")
+	}
+	rows := regexp.MustCompile(`(?m)^[ \t]*(True|False)[ \t]*(\||$)`).FindAllSubmatch(body, -1)
+	if len(rows) == 1 {
+		return bytes.Equal(rows[0][1], []byte("True")), nil
+	}
+	return false, errors.New("finalizer fixture command returned a malformed CAS acknowledgement")
+}
+
+func applyCapacityCatalogFixture(t *testing.T, cfg repositoryCapacityConfig, fixture capacityCatalogFixture, restore bool) bool {
+	t.Helper()
+	statement, err := capacityCatalogFixtureUpdate(cfg.keyspace, fixture, restore)
+	require.NoError(t, err)
+	return applyCapacityOwnedFinalizerFixture(t, cfg, statement)
+}
+
+func applyCapacityOwnedFinalizerFixture(t *testing.T, cfg repositoryCapacityConfig, statement string) bool {
+	t.Helper()
+	require.True(t, cfg.verifyFinalizers && cfg.verifyStorage, "system metadata fixtures require explicit owned-deployment verification")
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	for _, service := range []string{"api-a", "api-b"} {
+		api, err := secretCapacityServiceContainer(ctx, cfg.project, service)
+		require.NoError(t, err)
+		keyspace, err := secretCapacityOwnedCommand(ctx, "docker", "inspect", "--format",
+			`{{range .Config.Env}}{{$entry := split . "="}}{{if eq (index $entry 0) "GITSTORE_API__DATASTORE__SCYLLA__KEYSPACE"}}{{index $entry 1}}{{end}}{{end}}`, api)
+		require.NoError(t, err)
+		require.Equal(t, cfg.keyspace, strings.TrimSpace(string(keyspace)), "fixture keyspace must match both owned APIs")
+	}
+	scylla, err := secretCapacityServiceContainer(ctx, cfg.project, "scylla-1")
+	require.NoError(t, err)
+	body, err := secretCapacityOwnedCommand(ctx, "docker", "exec", scylla, "cqlsh", "--no-color",
+		"--connect-timeout=5", "--request-timeout=10", "--execute", statement)
+	require.NoError(t, err, "owned finalizer fixture command failed")
+	applied, err := capacityCatalogFixtureApplied(body)
+	require.NoError(t, err)
+	return applied
+}
+
+func TestCapacityInfrastructureFinalizerFixtureBounds(t *testing.T) {
+	fixture := capacityInfrastructureFixture{
+		kind: "Namespace", namespace: "under-load-namespace-123", name: "under-load-namespace-123",
+		id:      base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/019d19b5-9870-733d-81ec-61fa8d63396e")),
+		version: "7", created: time.Date(2026, 10, 15, 14, 0, 0, 0, time.UTC),
+		finalizers: []string{"gitstore.dev/foreground-deletion"},
+	}
+	for _, kind := range []string{"Namespace", "Repository"} {
+		t.Run(kind, func(t *testing.T) {
+			current := fixture
+			current.kind = kind
+			current.id = base64.StdEncoding.EncodeToString([]byte("gid://GitStore/" + kind + "/019d19b5-9870-733d-81ec-61fa8d63396e"))
+			if kind == "Repository" {
+				current.name = namespaceContractSystemRepository
+			}
+			seed, err := capacityInfrastructureFixtureUpdate("owned_keyspace", current, false)
+			require.NoError(t, err)
+			require.Contains(t, seed, "resource_version='8'")
+			require.Contains(t, seed, "WHERE uid=019d19b5-9870-733d-81ec-61fa8d63396e IF resource_version='7'")
+			require.Contains(t, seed, "creation_timestamp='2026-10-15T14:00:00.000Z'")
+			require.Contains(t, seed, "AND deletion_timestamp=null")
+			require.Contains(t, seed, "SET finalizers=['gitstore.dev/foreground-deletion','"+capacityCatalogHeldFinalizer+"']")
+			require.NotContains(t, seed, "SET deletion_timestamp")
+			require.NotContains(t, seed, "generation=")
+			current.finalizers = append(append([]string{}, current.finalizers...), capacityCatalogHeldFinalizer, "operator.dev/preserve")
+			release, err := capacityInfrastructureFixtureUpdate("owned_keyspace", current, true)
+			require.NoError(t, err)
+			require.Contains(t, release, "SET finalizers=['gitstore.dev/foreground-deletion','operator.dev/preserve']")
+			require.Contains(t, release, "AND deletion_timestamp!=null AND finalizers=['gitstore.dev/foreground-deletion','"+capacityCatalogHeldFinalizer+"','operator.dev/preserve']")
+			require.NotContains(t, release, "SET deletion_timestamp")
+			if kind == "Repository" {
+				require.Contains(t, seed, "owned_keyspace.repositories_by_uid")
+				require.Contains(t, seed, "AND namespace='under-load-namespace-123'")
+				current.name = "namespace-blocker-123"
+				_, err = capacityInfrastructureFixtureUpdate("owned_keyspace", current, true)
+				require.NoError(t, err)
+			} else {
+				require.Contains(t, seed, "owned_keyspace.namespaces_by_uid")
+			}
+		})
+	}
+	for name, corrupt := range map[string]func(*capacityInfrastructureFixture){
+		"kind":      func(f *capacityInfrastructureFixture) { f.kind = "Product" },
+		"namespace": func(f *capacityInfrastructureFixture) { f.namespace = "operator-namespace" },
+		"name":      func(f *capacityInfrastructureFixture) { f.name = "operator-namespace" },
+		"uid":       func(f *capacityInfrastructureFixture) { f.id = "invalid" },
+		"version":   func(f *capacityInfrastructureFixture) { f.version = "1'; DELETE FROM resource; --" },
+		"overflow":  func(f *capacityInfrastructureFixture) { f.version = "9223372036854775807" },
+		"creation":  func(f *capacityInfrastructureFixture) { f.created = time.Time{} },
+		"finalizers": func(f *capacityInfrastructureFixture) {
+			f.finalizers = []string{"operator.dev/x']; DELETE FROM resource; --"}
+		},
+		"held":      func(f *capacityInfrastructureFixture) { f.finalizers = []string{capacityCatalogHeldFinalizer} },
+		"unbounded": func(f *capacityInfrastructureFixture) { f.finalizers = make([]string, 65) },
+		"wrong-kind": func(f *capacityInfrastructureFixture) {
+			f.id = base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Repository/019d19b5-9870-733d-81ec-61fa8d63396e"))
+		},
+		"repository": func(f *capacityInfrastructureFixture) {
+			f.kind, f.name = "Repository", "operator-repository"
+			f.id = base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Repository/019d19b5-9870-733d-81ec-61fa8d63396e"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := fixture
+			corrupt(&bad)
+			_, err := capacityInfrastructureFixtureUpdate("owned_keyspace", bad, false)
+			require.Error(t, err)
+		})
+	}
+	_, err := capacityInfrastructureFixtureUpdate("owned_keyspace", fixture, true)
+	require.Error(t, err, "release cannot remove an absent owned marker")
+	fixture.finalizers = []string{capacityCatalogHeldFinalizer, capacityCatalogHeldFinalizer}
+	_, err = capacityInfrastructureFixtureUpdate("owned_keyspace", fixture, true)
+	require.Error(t, err, "release cannot normalize duplicate owned markers")
+	fixture.finalizers = make([]string, 63)
+	for i := range fixture.finalizers {
+		fixture.finalizers[i] = fmt.Sprintf("operator.dev/hold-%d", i)
+	}
+	_, err = capacityInfrastructureFixtureUpdate("owned_keyspace", fixture, false)
+	require.NoError(t, err)
+	fixture.finalizers = append(fixture.finalizers, capacityCatalogHeldFinalizer)
+	_, err = capacityInfrastructureFixtureUpdate("owned_keyspace", fixture, false)
+	require.Error(t, err)
+	_, err = capacityInfrastructureFixtureUpdate("owned_keyspace", fixture, true)
+	require.NoError(t, err, "the largest seeded list must remain releasable")
+}
+
+func TestCapacityCatalogFinalizerFixtureBounds(t *testing.T) {
+	id := func(kind, uid string) string {
+		return base64.StdEncoding.EncodeToString([]byte("gid://GitStore/" + kind + "/" + uid))
+	}
+	at := time.Date(2026, 10, 15, 14, 0, 0, 0, time.UTC)
+	fixture := capacityCatalogFixture{
+		kind: "Product", namespace: "owned-namespace", name: "repo-catalog-123",
+		id:           id("Product", "019d19b5-9870-733d-81ec-61fa8d63396e"),
+		repositoryID: id("Repository", "019d19b5-9870-733d-81ec-61fa8d63396f"),
+		version:      "7", created: at, terminated: at.Add(time.Second),
+	}
+	for kind, table := range map[string]string{
+		"Product": "products_by_namespace", "ProductVariant": "product_variants_by_namespace",
+		"CategoryTaxonomy": "category_taxonomies_by_namespace", "Collection": "collections_by_namespace", "File": "files_by_namespace",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			valid := fixture
+			valid.kind = kind
+			if kind == "CategoryTaxonomy" {
+				kind = "Category"
+			}
+			valid.id = id(kind, "019d19b5-9870-733d-81ec-61fa8d63396e")
+			statement, err := capacityCatalogFixtureUpdate("owned_keyspace", valid, false)
+			require.NoError(t, err)
+			require.Contains(t, statement, "UPDATE owned_keyspace."+table+" SET ")
+		})
+	}
+	for _, restore := range []bool{false, true} {
+		statement, err := capacityCatalogFixtureUpdate("owned_keyspace", fixture, restore)
+		require.NoError(t, err)
+		require.Contains(t, statement, "UPDATE owned_keyspace.products_by_namespace SET ")
+		require.Contains(t, statement, "resource_version='8'")
+		require.Contains(t, statement, "IF resource_version='7' AND repository_id=")
+		require.Contains(t, statement, "AND name='repo-catalog-123'")
+		require.Contains(t, statement, "SERIAL CONSISTENCY LOCAL_SERIAL")
+		if restore {
+			require.Contains(t, statement, "AND finalizers=['"+capacityCatalogHeldFinalizer+"']")
+		}
+	}
+	for name, corrupt := range map[string]func(*capacityCatalogFixture){
+		"kind":       func(f *capacityCatalogFixture) { f.kind = "Namespace" },
+		"namespace":  func(f *capacityCatalogFixture) { f.namespace = "owned'; DROP TABLE products; --" },
+		"name":       func(f *capacityCatalogFixture) { f.name = "operator-resource" },
+		"wrong-kind": func(f *capacityCatalogFixture) { f.id = id("File", "019d19b5-9870-733d-81ec-61fa8d63396e") },
+		"uid":        func(f *capacityCatalogFixture) { f.id = id("Product", "../../outside") },
+		"repository": func(f *capacityCatalogFixture) {
+			f.repositoryID = id("Namespace", "019d19b5-9870-733d-81ec-61fa8d63396f")
+		},
+		"version":             func(f *capacityCatalogFixture) { f.version = "7'; DELETE FROM x; --" },
+		"overflow":            func(f *capacityCatalogFixture) { f.version = "9223372036854775807" },
+		"missing-created":     func(f *capacityCatalogFixture) { f.created = time.Time{} },
+		"missing-termination": func(f *capacityCatalogFixture) { f.terminated = time.Time{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := fixture
+			corrupt(&bad)
+			_, err := capacityCatalogFixtureUpdate("owned_keyspace", bad, false)
+			require.Error(t, err)
+		})
+	}
+	_, err := capacityCatalogFixtureUpdate("owned; DROP KEYSPACE x", fixture, false)
+	require.Error(t, err)
+	for _, tc := range []struct {
+		body             string
+		applied, invalid bool
+	}{
+		{"[applied]\n-----------\n True\n(1 rows)\n", true, false},
+		{"[applied] | resource_version | name\n True | null | null\n", true, false},
+		{"[applied] | resource_version\n False | 8\n", false, false},
+		{"[applied]\nUnknown\n", false, true},
+		{"[applied]\n True\n False\n", false, true},
+		{"[applied]\n True\n[applied]\n True\n", false, true},
+		{"True\n", false, true},
+		{"", false, true},
+	} {
+		applied, err := capacityCatalogFixtureApplied([]byte(tc.body))
+		require.Equal(t, tc.invalid, err != nil, tc.body)
+		require.Equal(t, tc.applied, applied, tc.body)
+	}
+}
+
+type capacityRepositoryStorage struct {
+	container, identity, path string
+}
+
+func capacityRepositoryStoragePath(root, nodeID string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(nodeID)
+	if err != nil || !strings.HasPrefix(string(raw), "gid://GitStore/Repository/") {
+		return "", errors.New("storage probe requires a Repository Relay ID")
+	}
+	uid := strings.TrimPrefix(string(raw), "gid://GitStore/Repository/")
+	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString(uid) {
+		return "", errors.New("storage probe requires a canonical Repository UUID")
+	}
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == "/" {
+		return "", errors.New("storage probe requires a bounded absolute data root")
+	}
+	hex := strings.ReplaceAll(uid, "-", "")
+	return root + "/" + hex[:2] + "/" + hex[2:4] + "/" + uid + ".git", nil
+}
+
+func captureCapacityRepositoryStorage(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, name string) *capacityRepositoryStorage {
+	t.Helper()
+	if !cfg.verifyStorage {
+		return nil
+	}
+	if name == namespaceContractSystemRepository {
+		require.NoError(t, waitRepositoryCapacityNamespaceReady(t.Context(), client, cfg))
+	} else {
+		require.NoError(t, waitRepositoryCapacityResourceReady(t.Context(), client, cfg, "Repository", name))
+	}
+	read := secretTestGraphQL(t, cfg.apiA, cfg.token, `query($ns: String!, $name: String!) {
+		repository(by: {namespacePath: {namespace: $ns, name: $name}}) { id }
+	}`, map[string]any{"ns": cfg.namespace, "name": name})
+	require.Equal(t, http.StatusOK, read.Status)
+	require.Empty(t, read.Errors)
+	var resource struct {
+		Repository struct {
+			ID string `json:"id"`
+		} `json:"repository"`
+	}
+	require.NoError(t, json.Unmarshal(read.Data, &resource))
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	container, err := secretCapacityServiceContainer(ctx, cfg.project, "capacity-git-service")
+	require.NoError(t, err)
+	mounts, err := secretCapacityOwnedCommand(ctx, "docker", "inspect", "--format", "{{json .Mounts}}", container)
+	require.NoError(t, err)
+	var storageMounts []struct {
+		Name, Destination, Type string
+		RW                      bool
+	}
+	require.NoError(t, json.Unmarshal(mounts, &storageMounts))
+	var root string
+	for _, mount := range storageMounts {
+		if mount.Type == "volume" && mount.Name == cfg.project+"_git-repo-data-root" && mount.RW {
+			require.Empty(t, root, "owned Git data mount must be unique")
+			root = mount.Destination
+		}
+	}
+	path, err := capacityRepositoryStoragePath(root, resource.Repository.ID)
+	require.NoError(t, err)
+	identity, err := secretCapacityOwnedCommand(ctx, "docker", "inspect", "--format", "{{.Id}} {{.State.StartedAt}} {{.State.Running}}", container)
+	require.NoError(t, err)
+	parts := strings.Fields(string(identity))
+	require.Len(t, parts, 3)
+	require.Equal(t, "true", parts[2])
+	result := &capacityRepositoryStorage{container: container, identity: string(identity), path: path}
+	assertCapacityRepositoryStorage(t, result, false)
+	return result
+}
+
+func assertCapacityRepositoryStorage(t *testing.T, storage *capacityRepositoryStorage, deleted bool) {
+	t.Helper()
+	if storage == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	identity, err := secretCapacityOwnedCommand(ctx, "docker", "inspect", "--format", "{{.Id}} {{.State.StartedAt}} {{.State.Running}}", storage.container)
+	require.NoError(t, err)
+	require.Equal(t, storage.identity, string(identity), "singleton Git process must not change during the storage probe")
+	check := `test -d "$1" && ! test -L "$1" && ! test -e "$2" && ! test -L "$2"`
+	if deleted {
+		check = `! test -e "$1" && ! test -L "$1" && test -f "$2" && ! test -L "$2" && ! test -s "$2"`
+	}
+	_, err = secretCapacityOwnedCommand(ctx, "docker", "exec", storage.container, "sh", "-ec", check, "storage-probe", storage.path, storage.path+".deleted")
+	require.NoError(t, err, "UID-bound storage existence/tombstone check failed")
+	after, err := secretCapacityOwnedCommand(ctx, "docker", "inspect", "--format", "{{.Id}} {{.State.StartedAt}} {{.State.Running}}", storage.container)
+	require.NoError(t, err)
+	require.Equal(t, storage.identity, string(after))
+	t.Logf("repository_storage_checked deleted=%t singleton_process_unchanged=true", deleted)
+}
+
+func TestCapacityRepositoryStoragePathRejectsUnownedPaths(t *testing.T) {
+	const uid = "019d19b5-9870-733d-81ec-61fa8d63396e"
+	id := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Repository/" + uid))
+	root := "/var/lib/gitstore/repos"
+	path := root + "/01/9d/" + uid + ".git"
+	got, err := capacityRepositoryStoragePath(root, id)
+	require.NoError(t, err)
+	require.Equal(t, path, got)
+	for _, tc := range []struct{ root, id string }{
+		{"/", id},
+		{root + "/..", id},
+		{"relative", id},
+		{root, "invalid"},
+		{root, base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/" + uid))},
+		{root, base64.StdEncoding.EncodeToString([]byte("gid://Other/Repository/" + uid))},
+		{root, base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Repository/../../outside"))},
+		{root, base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Repository/" + uid + "?extra=1"))},
+		{root, base64.StdEncoding.EncodeToString([]byte("Repository:" + uid))},
+	} {
+		_, err := capacityRepositoryStoragePath(tc.root, tc.id)
+		require.Error(t, err)
+	}
+}
+
+func capacityNodeDeleted(data json.RawMessage, expectedID string) (bool, error) {
+	var observed struct {
+		Node json.RawMessage `json:"node"`
+	}
+	if err := json.Unmarshal(data, &observed); err != nil {
+		return false, fmt.Errorf("decode deletion read: %w", err)
+	}
+	if len(observed.Node) == 0 {
+		return false, errors.New("deletion read omitted node")
+	}
+	if bytes.Equal(bytes.TrimSpace(observed.Node), []byte("null")) {
+		return true, nil
+	}
+	var identity struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(observed.Node, &identity); err != nil {
+		return false, fmt.Errorf("decode deletion node identity: %w", err)
+	}
+	if expectedID == "" || identity.ID != expectedID {
+		return false, errors.New("deletion node identity does not match the requested resource")
+	}
+	return false, nil
+}
+
+func waitCapacityNodesDeleted(t *testing.T, cfg repositoryCapacityConfig, ids ...string) {
+	t.Helper()
+	require.NotEmpty(t, ids)
+	require.LessOrEqual(t, len(ids), 2, "deletion completion probe must keep bounded read fan-out")
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	for {
+		completed := true
+		for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+			for _, id := range ids {
+				require.NotEmpty(t, id)
+				read := secretTestGraphQLContext(t, ctx, endpoint, cfg.token, `query($id: ID!) { node(id: $id) { id } }`, map[string]any{"id": id})
+				require.Equal(t, http.StatusOK, read.Status)
+				require.Empty(t, read.Errors)
+				deleted, err := capacityNodeDeleted(read.Data, id)
+				require.NoError(t, err)
+				completed = completed && deleted
+			}
+		}
+		require.NoError(t, ctx.Err(), "controllers must complete deletion on both replicas within 60s")
+		if completed {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("controllers did not complete deletion on both replicas within 60s")
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+func TestCapacityNodeDeletedRequiresExactResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name, data     string
+		deleted, valid bool
+	}{
+		{"deleted", `{"node":null}`, true, true},
+		{"live", `{"node":{"id":"expected"}}`, false, true},
+		{"omitted", `{}`, false, false},
+		{"null_data", `null`, false, false},
+		{"wrong_identity", `{"node":{"id":"other"}}`, false, false},
+		{"empty_identity", `{"node":{}}`, false, false},
+		{"invalid_node", `{"node":[]}`, false, false},
+		{"malformed", `{"node":`, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deleted, err := capacityNodeDeleted(json.RawMessage(tc.data), "expected")
+			require.Equal(t, tc.deleted, deleted)
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
 }
 
 func assertRepositoryCrossReplicaRead(t *testing.T, cfg repositoryCapacityConfig, name string) {
@@ -2225,6 +3830,7 @@ type secretCapacityPushBatch struct {
 }
 
 type secretCapacityPushResult struct {
+	traceID                                            string
 	gitAttempted, acknowledged                         bool
 	files, bytes                                       int
 	referenceLatencies                                 []time.Duration
@@ -2238,10 +3844,14 @@ type secretCapacityPushResult struct {
 	projectionReadLatency                              time.Duration
 	projectionReadPeakLatency                          time.Duration
 	projectionPolls                                    int64
+	projectionInterruptedRounds                        int64
+	projectionReadTraces                               []secretCapacityProjectionReadTrace
+	projectionReadTracesOmitted                        int64
 	failureStage                                       string
 }
 
 type secretCapacityPushMeasurements struct {
+	traceCorrelation                                                                       bool
 	sustainedOffered, missedSchedules, completed, dropped, gitPushes, acknowledged, failed int64
 	queuePeak, workersPeak, maxFiles, maxBytes                                             int
 	offeredDuration                                                                        time.Duration
@@ -2253,6 +3863,7 @@ type secretCapacityPushMeasurements struct {
 	projectionReadLatencies                                                                []time.Duration
 	projectionReadPeakLatencies                                                            []time.Duration
 	projectionPolls                                                                        int64
+	projectionInterruptedRounds                                                            int64
 	failureClasses                                                                         map[string]int64
 	clockMaximumDrift                                                                      time.Duration
 	timelines                                                                              []secretCapacityPushTimeline
@@ -2261,21 +3872,24 @@ type secretCapacityPushMeasurements struct {
 const secretCapacityTimelineLimit = 2048
 
 type secretCapacityPushTimeline struct {
-	Sequence             int64         `json:"sequence"`
-	Burst                int           `json:"burst"`
-	Worker               int           `json:"worker"`
-	OfferedAt            time.Time     `json:"offeredAt"`
-	QueueWait            time.Duration `json:"queueWait"`
-	ACK                  time.Duration `json:"ack"`
-	WorkerOccupied       time.Duration `json:"workerOccupied"`
-	LocalGit             time.Duration `json:"localGit"`
-	GitHTTP              time.Duration `json:"gitHTTP"`
-	ProjectionVisibility time.Duration `json:"projectionVisibility"`
-	ProjectionRead       time.Duration `json:"projectionRead"`
-	ProjectionReadPeak   time.Duration `json:"projectionReadPeak"`
-	ProjectionPolls      int64         `json:"projectionPolls"`
-	Acknowledged         bool          `json:"acknowledged"`
-	ProjectionFailed     bool          `json:"projectionFailed"`
+	TraceID                     string                              `json:"traceID,omitempty"`
+	Sequence                    int64                               `json:"sequence"`
+	Burst                       int                                 `json:"burst"`
+	Worker                      int                                 `json:"worker"`
+	OfferedAt                   time.Time                           `json:"offeredAt"`
+	QueueWait                   time.Duration                       `json:"queueWait"`
+	ACK                         time.Duration                       `json:"ack"`
+	WorkerOccupied              time.Duration                       `json:"workerOccupied"`
+	LocalGit                    time.Duration                       `json:"localGit"`
+	GitHTTP                     time.Duration                       `json:"gitHTTP"`
+	ProjectionVisibility        time.Duration                       `json:"projectionVisibility"`
+	ProjectionRead              time.Duration                       `json:"projectionRead"`
+	ProjectionReadPeak          time.Duration                       `json:"projectionReadPeak"`
+	ProjectionPolls             int64                               `json:"projectionPolls"`
+	ProjectionReadTraces        []secretCapacityProjectionReadTrace `json:"projectionReadTraces,omitempty"`
+	ProjectionReadTracesOmitted int64                               `json:"projectionReadTracesOmitted,omitempty"`
+	Acknowledged                bool                                `json:"acknowledged"`
+	ProjectionFailed            bool                                `json:"projectionFailed"`
 }
 
 func (m *secretCapacityPushMeasurements) recordTimeline(row secretCapacityPushTimeline) {
@@ -2347,12 +3961,14 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
 		for item := range results {
 			r := item.result
 			completed.recordTimeline(secretCapacityPushTimeline{
+				TraceID:  r.traceID,
 				Sequence: item.batch.sequence, Burst: item.batch.burst, Worker: item.worker,
 				OfferedAt: item.batch.offeredAt.UTC(), QueueWait: item.queueWait, ACK: r.ackLatency,
 				WorkerOccupied: item.at.Sub(item.batch.offeredAt) - item.queueWait,
 				LocalGit:       r.localGitLatency, GitHTTP: r.gitHTTPLatency,
 				ProjectionVisibility: r.projectionLatency, ProjectionRead: r.projectionReadLatency,
 				ProjectionReadPeak: r.projectionReadPeakLatency, ProjectionPolls: r.projectionPolls,
+				ProjectionReadTraces: r.projectionReadTraces, ProjectionReadTracesOmitted: r.projectionReadTracesOmitted,
 				Acknowledged: r.acknowledged, ProjectionFailed: r.projectionFailed,
 			})
 			completed.completed++
@@ -2404,6 +4020,7 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
 				completed.projectionLoss++
 			}
 			completed.crossReplicaChecks += r.projectionChecks
+			completed.projectionInterruptedRounds += r.projectionInterruptedRounds
 			if r.gitAttempted {
 				completed.gitPushes++
 				completed.typedFiles += int64(r.files)
@@ -2512,6 +4129,7 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
 	measured.queueLatencies, measured.localGitLatencies = completed.queueLatencies, completed.localGitLatencies
 	measured.gitHTTPLatencies, measured.projectionLatencies = completed.gitHTTPLatencies, completed.projectionLatencies
 	measured.projectionReadLatencies, measured.projectionPolls = completed.projectionReadLatencies, completed.projectionPolls
+	measured.projectionInterruptedRounds = completed.projectionInterruptedRounds
 	measured.projectionReadPeakLatencies = completed.projectionReadPeakLatencies
 	measured.failureClasses = completed.failureClasses
 	measured.timelines = completed.timelines
@@ -2712,6 +4330,12 @@ func secretCapacityFailureClass(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "cancelled"
 	}
+	if errors.Is(err, errSecretCapacityGraphQLTransport) || errors.Is(err, errSecretCapacityGraphQLRead) {
+		return "transport"
+	}
+	if errors.Is(err, errSecretCapacityGraphQLTimeout) {
+		return "request_timeout"
+	}
 	var gitErr *secretCapacityGitError
 	if errors.As(err, &gitErr) {
 		return gitErr.class
@@ -2740,6 +4364,7 @@ func classifySecretCapacityGitFailure(output []byte, overflow bool) string {
 		markers []string
 	}{
 		{"non_fast_forward", []string{"non-fast-forward", "(fetch first)"}},
+		{"rebase_conflict", []string{"conflict (content):", "could not apply"}},
 		{"quota", []string{"returned error: 429", "http 429", "quota exceeded", "rate limit exceeded"}},
 		{"authentication", []string{"authentication failed", "returned error: 401", "returned error: 403", "http 401", "http 403"}},
 		{"rejection", []string{"[remote rejected]", "pre-receive hook declined"}},
@@ -2756,6 +4381,22 @@ func classifySecretCapacityGitFailure(output []byte, overflow bool) string {
 
 func secretCapacityGit(ctx context.Context, directory, token string, args ...string) ([]byte, error) {
 	return secretCapacityGitInspect(ctx, directory, token, nil, args...)
+}
+
+type secretCapacityTraceKey struct{}
+
+var secretCapacityTraceIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+func secretCapacityPushTrace(ctx context.Context, entropy io.Reader) (context.Context, string, error) {
+	var identity [24]byte
+	if _, err := io.ReadFull(entropy, identity[:]); err != nil {
+		return ctx, "", errors.New("capacity: trace identity entropy unavailable")
+	}
+	traceID, parentID := hex.EncodeToString(identity[:16]), hex.EncodeToString(identity[16:])
+	if traceID == strings.Repeat("0", 32) || parentID == strings.Repeat("0", 16) {
+		return ctx, "", errors.New("capacity: trace identity must be nonzero")
+	}
+	return context.WithValue(ctx, secretCapacityTraceKey{}, "00-"+traceID+"-"+parentID+"-01"), traceID, nil
 }
 
 func secretCapacityGitInspect(ctx context.Context, directory, token string, inspect func([]byte), args ...string) ([]byte, error) {
@@ -2778,11 +4419,19 @@ func secretCapacityGitInspect(ctx context.Context, directory, token string, insp
 		}
 	}
 	command.Env = append(command.Env, "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull,
-		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=credential.helper", "GIT_CONFIG_VALUE_0=")
+		"GIT_CONFIG_KEY_0=credential.helper", "GIT_CONFIG_VALUE_0=")
+	headers := make([]string, 0, 2)
 	if token != "" {
 		// Git's command-scoped environment avoids argv and .git/config secrets.
-		command.Env = append(command.Env, "GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_1=http.extraHeader",
-			"GIT_CONFIG_VALUE_1=Authorization: Bearer "+token)
+		headers = append(headers, "Authorization: Bearer "+token)
+	}
+	if parent, ok := ctx.Value(secretCapacityTraceKey{}).(string); ok {
+		headers = append(headers, "traceparent: "+parent)
+	}
+	command.Env = append(command.Env, "GIT_CONFIG_COUNT="+strconv.Itoa(1+len(headers)))
+	for index, header := range headers {
+		key := strconv.Itoa(index + 1)
+		command.Env = append(command.Env, "GIT_CONFIG_KEY_"+key+"=http.extraHeader", "GIT_CONFIG_VALUE_"+key+"="+header)
 	}
 	var output secretCapacityGitOutput
 	command.Stdout, command.Stderr = &output, &output
@@ -2875,8 +4524,17 @@ func secretCapacityReadFileIDs(ctx context.Context, endpoint, token, namespace, 
 		}
 		query := "query(" + definitions.String() + "){" + fields.String() + "}"
 		var data map[string]*secretCapacityFileProjection
-		if err := secretCapacityGraphQL(ctx, client, endpoint, token, query, variables, &data); err != nil {
+		err := secretCapacityGraphQL(ctx, client, endpoint, token, query, variables, &data)
+		var operationErr *secretCapacityGraphQLOperationError
+		if err != nil && (!errors.As(err, &operationErr) || operationErr.missingFiles == 0) {
 			return nil, fmt.Errorf("secret capacity: File pool lookup batch %d: %w", offset/10, err)
+		}
+		if len(data) != 10 {
+			return nil, errors.New("secret capacity: File lookup omitted a requested response field or returned unexpected fields")
+		}
+		var missingFiles uint16
+		if operationErr != nil {
+			missingFiles = operationErr.missingFiles
 		}
 		for index := range 10 {
 			file, exists := data[fmt.Sprintf("file%d", index)]
@@ -2884,7 +4542,13 @@ func secretCapacityReadFileIDs(ctx context.Context, endpoint, token, namespace, 
 				return nil, errors.New("secret capacity: File lookup omitted a requested response field")
 			}
 			if file == nil {
-				return nil, fmt.Errorf("%w at index %d", errSecretCapacityFilePending, offset+index)
+				if missingFiles&(1<<index) == 0 {
+					return nil, errors.New("secret capacity: File lookup returned null without matching NOT_FOUND diagnostics")
+				}
+				continue
+			}
+			if missingFiles&(1<<index) != 0 {
+				return nil, errors.New("secret capacity: File lookup returned NOT_FOUND diagnostics for a non-null File")
 			}
 			name := secretCapacityFileName(runID, offset+index)
 			if err := validateSecretCapacityFile(*file, namespace, name, 0); err != nil {
@@ -2895,6 +4559,9 @@ func secretCapacityReadFileIDs(ctx context.Context, endpoint, token, namespace, 
 			}
 			seenIDs[file.ID] = true
 			ids[name] = file.ID
+		}
+		if missingFiles != 0 {
+			return nil, fmt.Errorf("%w in batch %d", errSecretCapacityFilePending, offset/10)
 		}
 	}
 	return ids, nil
@@ -2921,6 +4588,50 @@ func validateSecretCapacityFile(file secretCapacityFileProjection, namespace, na
 	return nil
 }
 
+var (
+	errSecretCapacityGraphQLTransport = errors.New("secret capacity: GraphQL transport failed")
+	errSecretCapacityGraphQLTimeout   = errors.New("secret capacity: GraphQL request timed out")
+	errSecretCapacityGraphQLRead      = errors.New("secret capacity: GraphQL response unreadable")
+)
+
+type secretCapacityGraphQLOperationError struct {
+	count        int
+	missingFiles uint16
+}
+
+func (e *secretCapacityGraphQLOperationError) Error() string {
+	return fmt.Sprintf("secret capacity: GraphQL returned %d operation errors (details redacted)", e.count)
+}
+
+func secretCapacityMissingFileAliases(rawErrors []json.RawMessage) uint16 {
+	var aliases uint16
+	for _, raw := range rawErrors {
+		var operationError struct {
+			Path       []string                   `json:"path"`
+			Extensions map[string]json.RawMessage `json:"extensions"`
+		}
+		if json.Unmarshal(raw, &operationError) != nil || len(operationError.Path) != 1 || len(operationError.Extensions) != 2 {
+			return 0
+		}
+		var code string
+		var diagnostics []struct {
+			Reason string `json:"reason"`
+			Level  string `json:"level"`
+		}
+		if json.Unmarshal(operationError.Extensions["code"], &code) != nil || code != "NOT_FOUND" ||
+			json.Unmarshal(operationError.Extensions["diagnostics"], &diagnostics) != nil || len(diagnostics) != 1 ||
+			diagnostics[0].Reason != "FILE_NOT_FOUND" || diagnostics[0].Level != "FAILURE" {
+			return 0
+		}
+		index, err := strconv.Atoi(strings.TrimPrefix(operationError.Path[0], "file"))
+		if err != nil || index < 0 || index >= 10 || operationError.Path[0] != fmt.Sprintf("file%d", index) || aliases&(1<<index) != 0 {
+			return 0
+		}
+		aliases |= 1 << index
+	}
+	return aliases
+}
+
 func secretCapacityGraphQL(ctx context.Context, client *http.Client, endpoint, token, query string, variables map[string]any, destination any) error {
 	return secretCapacityGraphQLBounded(ctx, client, endpoint, token, query, variables, destination, 1024*1024)
 }
@@ -2940,15 +4651,18 @@ func secretCapacityGraphQLBounded(ctx context.Context, client *http.Client, endp
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+token)
+	if parent, ok := ctx.Value(secretCapacityTraceKey{}).(string); ok {
+		request.Header.Set("traceparent", parent)
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("secret capacity: GraphQL request canceled: %w", ctx.Err())
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return errors.New("secret capacity: GraphQL request timed out")
+			return errSecretCapacityGraphQLTimeout
 		}
-		return errors.New("secret capacity: GraphQL transport failed")
+		return errSecretCapacityGraphQLTransport
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -2958,7 +4672,13 @@ func secretCapacityGraphQLBounded(ctx context.Context, client *http.Client, endp
 		}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
-	if err != nil || int64(len(body)) > limit {
+	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("secret capacity: GraphQL response canceled: %w", ctx.Err())
+		}
+		return errSecretCapacityGraphQLRead
+	}
+	if int64(len(body)) > limit {
 		return errors.New("secret capacity: GraphQL response unreadable or exceeds byte limit")
 	}
 	var envelope gqlResponse
@@ -2966,7 +4686,15 @@ func secretCapacityGraphQLBounded(ctx context.Context, client *http.Client, endp
 		return errors.New("secret capacity: malformed GraphQL response")
 	}
 	if len(envelope.Errors) != 0 {
-		return fmt.Errorf("secret capacity: GraphQL returned %d operation errors (details redacted)", len(envelope.Errors))
+		operationErr := &secretCapacityGraphQLOperationError{
+			count: len(envelope.Errors), missingFiles: secretCapacityMissingFileAliases(envelope.Errors),
+		}
+		if operationErr.missingFiles != 0 {
+			if len(envelope.Data) == 0 || bytes.Equal(bytes.TrimSpace(envelope.Data), []byte("null")) || json.Unmarshal(envelope.Data, destination) != nil {
+				return errors.New("secret capacity: missing or malformed GraphQL data")
+			}
+		}
+		return operationErr
 	}
 	if len(envelope.Data) == 0 || bytes.Equal(bytes.TrimSpace(envelope.Data), []byte("null")) || json.Unmarshal(envelope.Data, destination) != nil {
 		return errors.New("secret capacity: missing or malformed GraphQL data")
@@ -3309,14 +5037,63 @@ type secretCapacityProjectionRequest struct {
 }
 
 type secretCapacityProjectionTiming struct {
-	readNanos atomic.Int64
-	peakNanos atomic.Int64
-	polls     atomic.Int64
+	readNanos         atomic.Int64
+	peakNanos         atomic.Int64
+	polls             atomic.Int64
+	interruptedRounds atomic.Int64
+	traceMu           sync.Mutex
+	readTraces        []secretCapacityProjectionReadTrace
+	readTracesOmitted int64
+}
+
+const secretCapacityProjectionTraceLimit = 32
+
+type secretCapacityProjectionReadTrace struct {
+	TraceIDs         [2]string        `json:"traceIDs"`
+	RequestDurations [2]time.Duration `json:"requestDurations"`
+	StartedAt        time.Time        `json:"startedAt"`
+	Duration         time.Duration    `json:"duration"`
+	Failed           bool             `json:"failed,omitempty"`
+}
+
+func (timing *secretCapacityProjectionTiming) recordRead(read secretCapacityProjectionReadTrace, traced bool) {
+	timing.traceMu.Lock()
+	defer timing.traceMu.Unlock()
+	timing.readNanos.Add(int64(read.Duration))
+	timing.peakNanos.Store(max(timing.peakNanos.Load(), int64(read.Duration)))
+	timing.polls.Add(1)
+	if !traced {
+		return
+	}
+	if len(timing.readTraces) == secretCapacityProjectionTraceLimit {
+		timing.readTracesOmitted++
+		return
+	}
+	timing.readTraces = append(timing.readTraces, read)
+}
+
+func (timing *secretCapacityProjectionTiming) snapshotReadTraces() ([]secretCapacityProjectionReadTrace, int64) {
+	timing.traceMu.Lock()
+	defer timing.traceMu.Unlock()
+	return slices.Clone(timing.readTraces), timing.readTracesOmitted
+}
+
+func secretCapacityRetryableProjectionRead(err error) bool {
+	if errors.Is(err, errSecretCapacityGraphQLTransport) || errors.Is(err, errSecretCapacityGraphQLTimeout) ||
+		errors.Is(err, errSecretCapacityGraphQLRead) {
+		return true
+	}
+	var status *capacityHTTPStatusError
+	return errors.As(err, &status) && status.retryAfter == 0 &&
+		(status.status == http.StatusBadGateway || status.status == http.StatusServiceUnavailable ||
+			status.status == http.StatusGatewayTimeout)
 }
 
 func runSecretCapacityProjectionVerifier(ctx context.Context, client *http.Client, endpoints []string, token string,
 	ids map[string]string, requests <-chan secretCapacityProjectionRequest,
 ) {
+	faultReads := os.Getenv("CAPACITY_CHAOS_PROFILE") != "" || secretCapacityRequested()
+	traceCorrelation := os.Getenv("REPOSITORY_CAPACITY_TRACE_CORRELATION") == "1"
 	pending := make([]secretCapacityProjectionRequest, 0, 32)
 	finish := func(err error) {
 		for _, request := range pending {
@@ -3407,13 +5184,25 @@ func runSecretCapacityProjectionVerifier(ctx context.Context, client *http.Clien
 			replicas := make([]map[string]*secretCapacityFileProjection, 2)
 			readErrors := make([]error, 2)
 			readStarted := time.Now()
+			readTrace := secretCapacityProjectionReadTrace{StartedAt: readStarted.UTC()}
 			var reads sync.WaitGroup
 			for index, endpoint := range endpoints {
 				reads.Go(func() {
+					requestStarted := time.Now()
+					defer func() { readTrace.RequestDurations[index] = time.Since(requestStarted) }()
+					readCtx := ctx
+					if traceCorrelation {
+						var traceErr error
+						readCtx, readTrace.TraceIDs[index], traceErr = secretCapacityPushTrace(ctx, rand.Reader)
+						if traceErr != nil {
+							readErrors[index] = fmt.Errorf("secret capacity: projection trace: %w", traceErr)
+							return
+						}
+					}
 					var data struct {
 						Nodes []*secretCapacityFileProjection `json:"nodes"`
 					}
-					readErrors[index] = secretCapacityGraphQL(ctx, client, endpoint, token,
+					readErrors[index] = secretCapacityGraphQL(readCtx, client, endpoint, token,
 						`query($ids:[ID!]!) { nodes(ids:$ids) { ... on File { `+secretCapacityFileSelection+` } } }`,
 						map[string]any{"ids": selected}, &data)
 					if readErrors[index] != nil {
@@ -3438,14 +5227,28 @@ func runSecretCapacityProjectionVerifier(ctx context.Context, client *http.Clien
 			}
 			reads.Wait()
 			readElapsed := time.Since(readStarted)
+			readTrace.Duration = readElapsed
+			readTrace.Failed = readErrors[0] != nil || readErrors[1] != nil
 			for _, request := range pending {
 				if request.timing != nil {
-					request.timing.readNanos.Add(int64(readElapsed))
-					request.timing.peakNanos.Store(max(request.timing.peakNanos.Load(), int64(readElapsed)))
-					request.timing.polls.Add(1)
+					request.timing.recordRead(readTrace, traceCorrelation)
 				}
 			}
 			if readErr := errors.Join(readErrors...); readErr != nil {
+				retry := faultReads
+				for _, err := range readErrors {
+					if err != nil && !secretCapacityRetryableProjectionRead(err) {
+						retry = false
+					}
+				}
+				if retry {
+					for _, request := range pending {
+						if request.timing != nil {
+							request.timing.interruptedRounds.Add(1)
+						}
+					}
+					continue
+				}
 				finish(readErr)
 				continue
 			}
@@ -3481,6 +5284,7 @@ func (workload *secretCapacityFileWorkload) run(ctx context.Context, duration ti
 	defer client.CloseIdleConnections()
 	cfg := secretCapacityProductionLoadConfig()
 	cfg.duration = duration
+	traceCorrelation := os.Getenv("REPOSITORY_CAPACITY_TRACE_CORRELATION") == "1"
 	verificationCtx, stopVerification := context.WithCancel(ctx)
 	requests := make(chan secretCapacityProjectionRequest, cfg.workers)
 	verificationDone := make(chan struct{})
@@ -3495,9 +5299,18 @@ func (workload *secretCapacityFileWorkload) run(ctx context.Context, duration ti
 	measurements, err := runSecretCapacityPushes(ctx, cfg, func(ctx context.Context, index int, batch secretCapacityPushBatch) secretCapacityPushResult {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
+		var traceID string
+		if traceCorrelation {
+			var err error
+			ctx, traceID, err = secretCapacityPushTrace(ctx, rand.Reader)
+			if err != nil {
+				return secretCapacityPushResult{err: err, failureStage: "unclassified"}
+			}
+		}
 		resolution, resolutionErr := workload.runtime.resolve(ctx)
 		worker := workload.workers[index]
 		result := worker.push(ctx, batch)
+		result.traceID = traceID
 		result.resolutionLatency, result.resolutionFailed = resolution, resolutionErr != nil
 		if result.acknowledged {
 			projectionStarted := time.Now()
@@ -3515,9 +5328,14 @@ func (workload *secretCapacityFileWorkload) run(ctx context.Context, duration ti
 				projectionErr = ctx.Err()
 			}
 			result.projectionLatency = time.Since(projectionStarted)
+			timing.traceMu.Lock()
 			result.projectionReadLatency = time.Duration(timing.readNanos.Load())
 			result.projectionReadPeakLatency = time.Duration(timing.peakNanos.Load())
 			result.projectionPolls = timing.polls.Load()
+			result.projectionInterruptedRounds = timing.interruptedRounds.Load()
+			result.projectionReadTraces = slices.Clone(timing.readTraces)
+			result.projectionReadTracesOmitted = timing.readTracesOmitted
+			timing.traceMu.Unlock()
 			result.projectionFailed = projectionErr != nil
 			result.projectionErr = projectionErr
 			if projectionErr == nil {
@@ -3526,6 +5344,7 @@ func (workload *secretCapacityFileWorkload) run(ctx context.Context, duration ti
 		}
 		return result
 	})
+	measurements.traceCorrelation = traceCorrelation
 	return secretCapacityFileLoadResult{measurements, err}
 }
 
@@ -3658,7 +5477,8 @@ func writeSecretCapacityFileObservations(directory, runID string, mode capacityM
 		TypedFiles: m.typedFiles, QueuePeak: m.queuePeak, WorkersPeak: m.workersPeak,
 		MaxFiles: m.maxFiles, MaxBytes: m.maxBytes, ProjectionLoss: m.projectionLoss,
 		CrossReplicaChecks: m.crossReplicaChecks, LocalHealthyFailures: m.localHealthyFailures, ProjectionPolls: m.projectionPolls,
-		Bursts: m.bursts, Reference: latency(m.referenceLatencies), Resolution: latency(m.resolutionLatencies), Push: latency(m.pushLatencies),
+		ProjectionInterruptedRounds: m.projectionInterruptedRounds,
+		Bursts:                      m.bursts, Reference: latency(m.referenceLatencies), Resolution: latency(m.resolutionLatencies), Push: latency(m.pushLatencies),
 		RuntimeCallers: proof.callers, ProviderPeak: proof.peak, ProviderCalls: proof.providerCalls, AcceptedCalls: proof.acceptedCalls,
 		SaturationDenied: proof.saturationDenied, DeadlineDenied: proof.deadlineDenied, NamespaceDenied: proof.namespaceDenied,
 		BindingDenied: proof.bindingDenied, UnsupportedDenied: proof.unsupportedDenied,
@@ -3673,6 +5493,7 @@ func writeSecretCapacityFileObservations(directory, runID string, mode capacityM
 		ClockMaximumDrift: m.clockMaximumDrift,
 		Timelines:         m.timelines,
 		TimelineLimit:     secretCapacityTimelineLimit,
+		TraceCorrelation:  m.traceCorrelation,
 	}
 	if observations.FailureClasses == nil {
 		observations.FailureClasses = map[string]int64{}
@@ -3681,50 +5502,52 @@ func writeSecretCapacityFileObservations(directory, runID string, mode capacityM
 }
 
 type secretCapacityFileObservations struct {
-	Timelines            []secretCapacityPushTimeline     `json:"timelines"`
-	TimelineLimit        int                              `json:"timelineLimit"`
-	ClockMaximumDrift    time.Duration                    `json:"clockMaximumDrift"`
-	ScheduledOffered     int64                            `json:"scheduledOffered"`
-	QueueAdmitted        int64                            `json:"queueAdmitted"`
-	ExecutionAttempts    int64                            `json:"executionAttempts"`
-	Stages               map[string]secretCapacityLatency `json:"stages"`
-	FailureClasses       map[string]int64                 `json:"failureClasses"`
-	SchemaVersion        int                              `json:"schemaVersion"`
-	RunID                string                           `json:"runID"`
-	Component            string                           `json:"component"`
-	Mode                 capacityMode                     `json:"mode"`
-	WorkloadCompleted    bool                             `json:"workloadCompleted"`
-	NominalDuration      time.Duration                    `json:"nominalDuration"`
-	OfferedDuration      time.Duration                    `json:"offeredDuration"`
-	SustainedOffered     int64                            `json:"sustainedOffered"`
-	MissedSchedules      int64                            `json:"missedSchedules"`
-	Completed            int64                            `json:"completed"`
-	GitPushes            int64                            `json:"gitPushes"`
-	Acknowledged         int64                            `json:"acknowledged"`
-	Failed               int64                            `json:"failed"`
-	Dropped              int64                            `json:"dropped"`
-	TypedFiles           int64                            `json:"typedFiles"`
-	QueuePeak            int                              `json:"queuePeak"`
-	WorkersPeak          int                              `json:"workersPeak"`
-	MaxFiles             int                              `json:"maxFilesPerPush"`
-	MaxBytes             int                              `json:"maxBytesPerPush"`
-	ProjectionLoss       int64                            `json:"projectionLoss"`
-	ProjectionPolls      int64                            `json:"projectionPolls"`
-	CrossReplicaChecks   int64                            `json:"crossReplicaChecks"`
-	LocalHealthyFailures int64                            `json:"localHealthyFailures"`
-	Bursts               []secretCapacityBurst            `json:"bursts"`
-	Reference            secretCapacityLatency            `json:"reference"`
-	Resolution           secretCapacityLatency            `json:"resolution"`
-	Push                 secretCapacityLatency            `json:"push"`
-	RuntimeCallers       int                              `json:"runtimeCallers"`
-	ProviderPeak         int                              `json:"providerPeak"`
-	ProviderCalls        int64                            `json:"providerCalls"`
-	AcceptedCalls        int64                            `json:"acceptedCalls"`
-	SaturationDenied     int64                            `json:"saturationDenied"`
-	DeadlineDenied       int64                            `json:"deadlineDenied"`
-	NamespaceDenied      int64                            `json:"namespaceDenied"`
-	BindingDenied        int64                            `json:"bindingDenied"`
-	UnsupportedDenied    int64                            `json:"unsupportedDenied"`
+	TraceCorrelation            bool                             `json:"traceCorrelation,omitempty"`
+	Timelines                   []secretCapacityPushTimeline     `json:"timelines"`
+	TimelineLimit               int                              `json:"timelineLimit"`
+	ClockMaximumDrift           time.Duration                    `json:"clockMaximumDrift"`
+	ScheduledOffered            int64                            `json:"scheduledOffered"`
+	QueueAdmitted               int64                            `json:"queueAdmitted"`
+	ExecutionAttempts           int64                            `json:"executionAttempts"`
+	Stages                      map[string]secretCapacityLatency `json:"stages"`
+	FailureClasses              map[string]int64                 `json:"failureClasses"`
+	SchemaVersion               int                              `json:"schemaVersion"`
+	RunID                       string                           `json:"runID"`
+	Component                   string                           `json:"component"`
+	Mode                        capacityMode                     `json:"mode"`
+	WorkloadCompleted           bool                             `json:"workloadCompleted"`
+	NominalDuration             time.Duration                    `json:"nominalDuration"`
+	OfferedDuration             time.Duration                    `json:"offeredDuration"`
+	SustainedOffered            int64                            `json:"sustainedOffered"`
+	MissedSchedules             int64                            `json:"missedSchedules"`
+	Completed                   int64                            `json:"completed"`
+	GitPushes                   int64                            `json:"gitPushes"`
+	Acknowledged                int64                            `json:"acknowledged"`
+	Failed                      int64                            `json:"failed"`
+	Dropped                     int64                            `json:"dropped"`
+	TypedFiles                  int64                            `json:"typedFiles"`
+	QueuePeak                   int                              `json:"queuePeak"`
+	WorkersPeak                 int                              `json:"workersPeak"`
+	MaxFiles                    int                              `json:"maxFilesPerPush"`
+	MaxBytes                    int                              `json:"maxBytesPerPush"`
+	ProjectionLoss              int64                            `json:"projectionLoss"`
+	ProjectionPolls             int64                            `json:"projectionPolls"`
+	ProjectionInterruptedRounds int64                            `json:"projectionInterruptedRounds"`
+	CrossReplicaChecks          int64                            `json:"crossReplicaChecks"`
+	LocalHealthyFailures        int64                            `json:"localHealthyFailures"`
+	Bursts                      []secretCapacityBurst            `json:"bursts"`
+	Reference                   secretCapacityLatency            `json:"reference"`
+	Resolution                  secretCapacityLatency            `json:"resolution"`
+	Push                        secretCapacityLatency            `json:"push"`
+	RuntimeCallers              int                              `json:"runtimeCallers"`
+	ProviderPeak                int                              `json:"providerPeak"`
+	ProviderCalls               int64                            `json:"providerCalls"`
+	AcceptedCalls               int64                            `json:"acceptedCalls"`
+	SaturationDenied            int64                            `json:"saturationDenied"`
+	DeadlineDenied              int64                            `json:"deadlineDenied"`
+	NamespaceDenied             int64                            `json:"namespaceDenied"`
+	BindingDenied               int64                            `json:"bindingDenied"`
+	UnsupportedDenied           int64                            `json:"unsupportedDenied"`
 }
 
 func writeSecretCapacityComponent(directory, name string, observations any) error {

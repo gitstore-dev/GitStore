@@ -4,6 +4,14 @@
 global:
   scrape_interval: 5s
   evaluation_interval: 5s
+  scrape_protocols:
+    - OpenMetricsText1.0.0
+    - OpenMetricsText0.0.1
+    - PrometheusText0.0.4
+
+storage:
+  exemplars:
+    max_exemplars: 10000
 
 scrape_configs:
   - job_name: gitstore-api-capacity
@@ -13,3 +21,6 @@ scrape_configs:
   - job_name: gitstore-observability-capacity
     static_configs:
       - targets: ["capacity-otel-collector:8888", "capacity-tempo:3200", "capacity-loki:3100"]
+  - job_name: gitstore-otlp-metrics-capacity
+    static_configs:
+      - targets: ["capacity-otel-collector:8889"]

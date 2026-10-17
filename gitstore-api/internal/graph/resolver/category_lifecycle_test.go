@@ -544,7 +544,7 @@ func TestUpdateCategoryRejections(t *testing.T) {
 	t.Run("terminating", func(t *testing.T) {
 		env := newCategoryLifecycleEnv(t)
 		record := env.pushCategory(t, lifecycleSystemRepoID, "categories/laptops.md", "laptops", "Laptops", "", "")
-		_, err := env.store.(datastore.CategoryTaxonomyDeletionStore).MarkCategoryTaxonomyDeletion(context.Background(), record.Namespace, record.Name, record.ResourceVersion, record.CreationTimestamp)
+		_, err := env.store.(datastore.CategoryTaxonomyDeletionStore).MarkCategoryTaxonomyDeletion(context.Background(), record.Namespace, record.Name, record.ResourceVersion, record.UID, record.CreationTimestamp)
 		require.NoError(t, err)
 		_, err = env.service.CommitCategoryManifest(context.Background(), categoryInput("laptops", "Laptops 2", ""), "bob", false)
 		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "CATEGORY_TERMINATING")

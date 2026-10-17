@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,11 +18,16 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/gocql/gocql"
 	"github.com/google/uuid"
 	"github.com/scylladb/gocqlx/v3"
 	"github.com/scylladb/gocqlx/v3/qb"
 	"github.com/scylladb/gocqlx/v3/table"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -299,7 +305,10 @@ func openSession(cfg config.ScyllaConfig) (*gocql.Session, error) {
 	cluster.Consistency = gocql.Quorum
 	cluster.DisableShardAwarePort = cfg.DisableShardAwarePort
 	cluster.IgnorePeerAddr = cfg.IgnorePeerAddr
-	cluster.QueryObserver = cfg.QueryObserver
+	observer := cqlTraceObserver{tracer: otel.Tracer("gitstore/datastore/scylla"), next: cfg.QueryObserver}
+	cluster.QueryObserver = observer
+	cluster.BatchObserver = observer
+	cluster.StreamObserver = observer
 	if at, ok := cfg.AddressTranslator.(gocql.AddressTranslator); ok {
 		cluster.AddressTranslator = at
 	}
@@ -321,6 +330,174 @@ func openSession(cfg config.ScyllaConfig) (*gocql.Session, error) {
 		return nil, fmt.Errorf("scylla: open session: %w", err)
 	}
 	return rawSession, nil
+}
+
+type cqlTraceObserver struct {
+	tracer trace.Tracer
+	next   gocql.QueryObserver
+}
+
+type cqlExchangeKey struct{}
+
+type cqlExchangeTrace struct {
+	mu       sync.Mutex
+	streams  [4]cqlExchangeStream
+	reserved int
+	overflow int
+}
+
+type cqlExchangeStream struct {
+	exchange  *cqlExchangeTrace
+	started   time.Time
+	finished  time.Time
+	abandoned bool
+}
+
+func (s *cqlExchangeStream) StreamStarted(gocql.ObservedStream) {
+	s.exchange.mu.Lock()
+	s.started = time.Now()
+	s.exchange.mu.Unlock()
+}
+
+func (s *cqlExchangeStream) StreamFinished(gocql.ObservedStream) {
+	s.exchange.mu.Lock()
+	s.finished = time.Now()
+	s.exchange.mu.Unlock()
+}
+
+func (s *cqlExchangeStream) StreamAbandoned(gocql.ObservedStream) {
+	s.exchange.mu.Lock()
+	s.finished = time.Now()
+	s.abandoned = true
+	s.exchange.mu.Unlock()
+}
+
+func startCQLExchange(ctx context.Context, tracer trace.Tracer) (context.Context, func(error)) {
+	parent := trace.SpanFromContext(ctx)
+	if !parent.IsRecording() || !parent.SpanContext().IsSampled() {
+		return ctx, func(error) {}
+	}
+	start := time.Now()
+	ctx, span := tracer.Start(ctx, "scylla.exchange", trace.WithSpanKind(trace.SpanKindClient), trace.WithTimestamp(start))
+	observability.AnnotateRuntimeSpan(ctx)
+	exchange := &cqlExchangeTrace{}
+	return context.WithValue(ctx, cqlExchangeKey{}, exchange), func(err error) {
+		exchange.mu.Lock()
+		end := time.Now()
+		streams, reserved, overflow := exchange.streams, exchange.reserved, exchange.overflow
+		exchange.mu.Unlock()
+		var starts, finishes, durations []int64
+		var completed, abandoned int
+		for _, stream := range streams[:reserved] {
+			if stream.started.IsZero() {
+				continue
+			}
+			starts = append(starts, stream.started.Sub(start).Nanoseconds())
+			if stream.finished.IsZero() {
+				finishes = append(finishes, -1)
+				durations = append(durations, -1)
+				continue
+			}
+			finishes = append(finishes, stream.finished.Sub(start).Nanoseconds())
+			durations = append(durations, stream.finished.Sub(stream.started).Nanoseconds())
+			if stream.abandoned {
+				abandoned++
+			} else {
+				completed++
+			}
+		}
+		span.SetAttributes(
+			attribute.String("db.system.name", "scylla"),
+			attribute.Int64("gitstore.db.exchange.duration_ns", end.Sub(start).Nanoseconds()),
+			attribute.Int("gitstore.db.stream.reserved", reserved),
+			attribute.Int("gitstore.db.stream.started", len(starts)),
+			attribute.Int("gitstore.db.stream.completed", completed),
+			attribute.Int("gitstore.db.stream.abandoned", abandoned),
+			attribute.Int("gitstore.db.stream.overflow", overflow),
+			attribute.Int64Slice("gitstore.db.stream.start_offset_ns", starts),
+			attribute.Int64Slice("gitstore.db.stream.finish_offset_ns", finishes),
+			attribute.Int64Slice("gitstore.db.stream.duration_ns", durations),
+		)
+		if err != nil {
+			span.SetAttributes(attribute.String("error.type", fmt.Sprintf("%T", err)))
+			span.SetStatus(codes.Error, "CQL exchange failed")
+		}
+		span.End(trace.WithTimestamp(end))
+	}
+}
+
+func (o cqlTraceObserver) StreamContext(ctx context.Context) gocql.StreamObserverContext {
+	exchange, _ := ctx.Value(cqlExchangeKey{}).(*cqlExchangeTrace)
+	if exchange == nil {
+		return nil
+	}
+	exchange.mu.Lock()
+	defer exchange.mu.Unlock()
+	if exchange.reserved == len(exchange.streams) {
+		exchange.overflow++
+		return nil
+	}
+	stream := &exchange.streams[exchange.reserved]
+	stream.exchange = exchange
+	exchange.reserved++
+	return stream
+}
+
+func (o cqlTraceObserver) ObserveQuery(ctx context.Context, query gocql.ObservedQuery) {
+	if parent := trace.SpanFromContext(ctx); parent.IsRecording() && parent.SpanContext().IsSampled() {
+		operation, _, _ := strings.Cut(strings.TrimSpace(query.Statement), " ")
+		operation = strings.ToUpper(operation)
+		switch operation {
+		case "SELECT", "INSERT", "UPDATE", "DELETE":
+		default:
+			operation = "OTHER"
+		}
+		o.record(ctx, "scylla.query", query.Start, query.End, query.Host, query.Attempt, query.Err,
+			attribute.String("db.operation.name", operation),
+			attribute.Int("db.response.returned_rows", query.Rows))
+	}
+	if o.next != nil {
+		o.next.ObserveQuery(ctx, query)
+	}
+}
+
+func (o cqlTraceObserver) ObserveBatch(ctx context.Context, batch gocql.ObservedBatch) {
+	if parent := trace.SpanFromContext(ctx); parent.IsRecording() && parent.SpanContext().IsSampled() {
+		o.record(ctx, "scylla.batch", batch.Start, batch.End, batch.Host, batch.Attempt, batch.Err,
+			attribute.String("db.operation.name", "BATCH"),
+			attribute.Int("db.operation.batch.size", len(batch.Statements)))
+	}
+}
+
+func (o cqlTraceObserver) record(ctx context.Context, name string, start, end time.Time, host *gocql.HostInfo, attempt int, err error, attrs ...attribute.KeyValue) {
+	_, span := o.tracer.Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient), trace.WithTimestamp(start))
+	if !span.IsRecording() {
+		span.End(trace.WithTimestamp(end))
+		return
+	}
+	span.SetAttributes(
+		attribute.String("db.system.name", "scylla"),
+		attribute.Int("db.operation.retry_count", attempt),
+		attribute.Int64("gitstore.db.attempt.duration_ns", end.Sub(start).Nanoseconds()),
+	)
+	span.SetAttributes(attrs...)
+	if host != nil {
+		if address := host.ConnectAddress(); len(address) != 0 {
+			span.SetAttributes(attribute.String("server.address", address.String()))
+		}
+		if port := host.Port(); port > 0 {
+			span.SetAttributes(attribute.Int("server.port", port))
+		}
+		if id := host.HostID(); id != "" {
+			span.SetAttributes(attribute.String("db.cassandra.coordinator.id", id))
+		}
+	}
+	if err != nil {
+		// Driver errors can contain query literals; preserve the class, not their text.
+		span.SetAttributes(attribute.String("error.type", fmt.Sprintf("%T", err)))
+		span.SetStatus(codes.Error, "CQL execution attempt failed")
+	}
+	span.End(trace.WithTimestamp(end))
 }
 
 // New opens an existing keyspace, optionally migrates it, and validates its
@@ -739,7 +916,7 @@ func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 	if err != nil {
 		return err
 	}
-	return s.deleteProductWithResourceVersion(ctx, p, p.ResourceVersion, false)
+	return s.deleteProductWithResourceVersion(ctx, p, p.ResourceVersion)
 }
 
 func (s *scyllaDatastore) DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
@@ -747,16 +924,16 @@ func (s *scyllaDatastore) DeleteProductWithResourceVersion(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	return s.deleteProductWithResourceVersion(ctx, p, expectedResourceVersion, true)
+	return s.deleteProductWithResourceVersion(ctx, p, expectedResourceVersion)
 }
 
-func (s *scyllaDatastore) deleteProductWithResourceVersion(ctx context.Context, p *datastore.Product, expectedResourceVersion string, authoritativeFirst bool) error {
+func (s *scyllaDatastore) deleteProductWithResourceVersion(ctx context.Context, p *datastore.Product, expectedResourceVersion string) error {
 	return s.catalogMutation(ctx, "Product", p.Namespace, p.RepositoryID, p.UID, true, func() error {
-		return s.deleteProductFenced(ctx, p, expectedResourceVersion, authoritativeFirst)
+		return s.deleteProductFenced(ctx, p, expectedResourceVersion)
 	})
 }
 
-func (s *scyllaDatastore) deleteProductFenced(ctx context.Context, p *datastore.Product, expectedResourceVersion string, authoritativeFirst bool) error {
+func (s *scyllaDatastore) deleteProductFenced(ctx context.Context, p *datastore.Product, expectedResourceVersion string) error {
 	uid := p.UID
 	parsedUID := mustParseUUID(uid)
 
@@ -799,12 +976,7 @@ func (s *scyllaDatastore) deleteProductFenced(ctx context.Context, p *datastore.
 			},
 		},
 	}
-	var err error
-	if authoritativeFirst {
-		err = s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
-	} else {
-		err = s.mutations.executeDelete(ctx, authoritative, projections...)
-	}
+	err := s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
 	if err != nil {
 		return fmt.Errorf("scylla: delete product: %w", err)
 	}
@@ -1179,7 +1351,7 @@ func (s *scyllaDatastore) deleteCategoryTaxonomyWithResourceVersion(ctx context.
 func (s *scyllaDatastore) deleteCategoryTaxonomyFenced(ctx context.Context, c *datastore.CategoryTaxonomy, expectedResourceVersion string) error {
 	parsedUID := mustParseUUID(c.UID)
 
-	err := s.mutations.executeDelete(ctx,
+	err := s.mutations.executeConditionalDelete(ctx, expectedResourceVersion,
 		mutationAction{
 			Step: catalogueStep("delete", "CategoryTaxonomy", c.UID, "category_taxonomies_by_namespace", c.UID, "delete-authoritative"),
 			Apply: func(ctx context.Context) error {
@@ -1482,7 +1654,7 @@ func (s *scyllaDatastore) DeleteCollection(ctx context.Context, uid string) erro
 	if err != nil {
 		return err
 	}
-	return s.deleteCollectionWithResourceVersion(ctx, c, c.ResourceVersion, false)
+	return s.deleteCollectionWithResourceVersion(ctx, c, c.ResourceVersion)
 }
 
 func (s *scyllaDatastore) DeleteCollectionWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
@@ -1490,16 +1662,16 @@ func (s *scyllaDatastore) DeleteCollectionWithResourceVersion(ctx context.Contex
 	if err != nil {
 		return err
 	}
-	return s.deleteCollectionWithResourceVersion(ctx, c, expectedResourceVersion, true)
+	return s.deleteCollectionWithResourceVersion(ctx, c, expectedResourceVersion)
 }
 
-func (s *scyllaDatastore) deleteCollectionWithResourceVersion(ctx context.Context, c *datastore.Collection, expectedResourceVersion string, authoritativeFirst bool) error {
+func (s *scyllaDatastore) deleteCollectionWithResourceVersion(ctx context.Context, c *datastore.Collection, expectedResourceVersion string) error {
 	return s.catalogMutation(ctx, "Collection", c.Namespace, c.RepositoryID, c.UID, true, func() error {
-		return s.deleteCollectionFenced(ctx, c, expectedResourceVersion, authoritativeFirst)
+		return s.deleteCollectionFenced(ctx, c, expectedResourceVersion)
 	})
 }
 
-func (s *scyllaDatastore) deleteCollectionFenced(ctx context.Context, c *datastore.Collection, expectedResourceVersion string, authoritativeFirst bool) error {
+func (s *scyllaDatastore) deleteCollectionFenced(ctx context.Context, c *datastore.Collection, expectedResourceVersion string) error {
 	uid := c.UID
 	parsedUID := mustParseUUID(uid)
 
@@ -1529,12 +1701,7 @@ func (s *scyllaDatastore) deleteCollectionFenced(ctx context.Context, c *datasto
 			},
 		},
 	}
-	var err error
-	if authoritativeFirst {
-		err = s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
-	} else {
-		err = s.mutations.executeDelete(ctx, authoritative, projections...)
-	}
+	err := s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
 	if err != nil {
 		return fmt.Errorf("scylla: delete collection: %w", err)
 	}
@@ -1994,7 +2161,7 @@ func (s *scyllaDatastore) DeleteProductVariant(ctx context.Context, uid string) 
 	if err != nil {
 		return err
 	}
-	return s.deleteProductVariantWithResourceVersion(ctx, v, v.ResourceVersion, false)
+	return s.deleteProductVariantWithResourceVersion(ctx, v, v.ResourceVersion)
 }
 
 func (s *scyllaDatastore) DeleteProductVariantWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
@@ -2002,16 +2169,16 @@ func (s *scyllaDatastore) DeleteProductVariantWithResourceVersion(ctx context.Co
 	if err != nil {
 		return err
 	}
-	return s.deleteProductVariantWithResourceVersion(ctx, v, expectedResourceVersion, true)
+	return s.deleteProductVariantWithResourceVersion(ctx, v, expectedResourceVersion)
 }
 
-func (s *scyllaDatastore) deleteProductVariantWithResourceVersion(ctx context.Context, v *datastore.ProductVariant, expectedResourceVersion string, authoritativeFirst bool) error {
+func (s *scyllaDatastore) deleteProductVariantWithResourceVersion(ctx context.Context, v *datastore.ProductVariant, expectedResourceVersion string) error {
 	return s.catalogMutation(ctx, "ProductVariant", v.Namespace, v.RepositoryID, v.UID, true, func() error {
-		return s.deleteProductVariantFenced(ctx, v, expectedResourceVersion, authoritativeFirst)
+		return s.deleteProductVariantFenced(ctx, v, expectedResourceVersion)
 	})
 }
 
-func (s *scyllaDatastore) deleteProductVariantFenced(ctx context.Context, v *datastore.ProductVariant, expectedResourceVersion string, authoritativeFirst bool) error {
+func (s *scyllaDatastore) deleteProductVariantFenced(ctx context.Context, v *datastore.ProductVariant, expectedResourceVersion string) error {
 	uid := v.UID
 	parsedUID := mustParseUUID(uid)
 	projections := []mutationAction{
@@ -2075,12 +2242,7 @@ func (s *scyllaDatastore) deleteProductVariantFenced(ctx context.Context, v *dat
 			return s.deleteProductVariantAuthoritative(ctx, toProductVariantRow(v), expectedResourceVersion)
 		},
 	}
-	var err error
-	if authoritativeFirst {
-		err = s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
-	} else {
-		err = s.mutations.executeDelete(ctx, authoritative, projections...)
-	}
+	err := s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
 	if err != nil {
 		return fmt.Errorf("scylla: delete product_variant: %w", err)
 	}
@@ -2546,17 +2708,25 @@ func (s *scyllaDatastore) GetNamespace(ctx context.Context, uidString string) (*
 	return fromNamespaceRow(&row), nil
 }
 
-func (s *scyllaDatastore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
+func (s *scyllaDatastore) getNamespaceUIDByName(ctx context.Context, name string) (gocql.UUID, error) {
 	stmt, names := s.namespaceByNameTable.Get()
 	var row namespaceNameRow
 	if err := s.session.Query(stmt, names).WithContext(ctx).
 		BindMap(qb.M{"name": name}).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, fmt.Errorf("%w: namespace name %s", datastore.ErrNotFound, name)
+			return gocql.UUID{}, fmt.Errorf("%w: namespace name %s", datastore.ErrNotFound, name)
 		}
-		return nil, fmt.Errorf("scylla: get namespace by name: %w", err)
+		return gocql.UUID{}, fmt.Errorf("scylla: get namespace by name: %w", err)
 	}
-	namespace, err := s.GetNamespace(ctx, row.UID.String())
+	return row.UID, nil
+}
+
+func (s *scyllaDatastore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
+	uid, err := s.getNamespaceUIDByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	namespace, err := s.GetNamespace(ctx, uid.String())
 	if errors.Is(err, datastore.ErrNotFound) {
 		return nil, fmt.Errorf("%w: namespace name %s", datastore.ErrNotFound, name)
 	}
@@ -2696,7 +2866,7 @@ func (s *scyllaDatastore) markNamespaceLifecycle(ctx context.Context, ns *datast
 	if err != nil {
 		return err
 	}
-	fence, err := s.loadNamespaceRepositoryFence(ctx, ns.UID)
+	fence, err := s.loadNamespaceRepositoryFence(ctx, ns.UID, false)
 	if err != nil {
 		return err
 	}
@@ -2731,7 +2901,7 @@ func (s *scyllaDatastore) markNamespaceLifecycle(ctx context.Context, ns *datast
 	if applied {
 		return nil
 	}
-	latestFence, fenceErr := s.loadNamespaceRepositoryFence(ctx, ns.UID)
+	latestFence, fenceErr := s.loadNamespaceRepositoryFence(ctx, ns.UID, false)
 	if fenceErr == nil {
 		if latestFence.DeletionTimestamp != nil {
 			return datastore.ErrNamespaceNotActive
@@ -2786,19 +2956,9 @@ func (s *scyllaDatastore) DeleteNamespaceWithResourceVersion(ctx context.Context
 	if blocked {
 		return datastore.ErrNamespaceNotEmpty
 	}
-	// Retain the intent/finalizer until cleanup succeeds. On an ordinary
-	// failure restore list visibility so another controller can resume.
-	restore := func() error {
-		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceProjectionCleanupTimeout)
-		defer cancel()
-		err := s.session.Query("INSERT INTO namespaces_by_bucket (bucket,creation_timestamp,uid) VALUES (?,?,?)", nil).
-			WithContext(restoreCtx).Bind(namespaceBucket(ns.CreationTimestamp), ns.CreationTimestamp, mustParseUUID(uidString)).ExecRelease()
-		_, nameErr := s.session.Query("INSERT INTO namespaces_by_name (name,uid) VALUES (?,?) IF NOT EXISTS", nil).
-			WithContext(restoreCtx).Bind(ns.Name, mustParseUUID(uidString)).ExecCASRelease()
-		return errors.Join(err, nameErr)
-	}
+	// Retain the intent/finalizer until cleanup succeeds.
 	if err := s.deleteNamespaceIndexes(ctx, ns); err != nil {
-		return errors.Join(err, restore())
+		return s.restoreNamespaceAfterDeleteFailure(ctx, ns, err)
 	}
 	const statement = "DELETE FROM namespaces_by_uid WHERE uid=? IF resource_version=?"
 	applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(
@@ -2811,14 +2971,51 @@ func (s *scyllaDatastore) DeleteNamespaceWithResourceVersion(ctx context.Context
 			return resolveErr
 		}
 		if !committed {
-			return errors.Join(primary, restore())
+			return s.restoreNamespaceAfterDeleteFailure(ctx, ns, primary)
 		}
-		return nil
+		return s.completeNamespaceDeleteCleanup(ctx, ns)
 	}
 	if !applied {
-		return errors.Join(datastore.ErrConflict, restore())
+		return s.restoreNamespaceAfterDeleteFailure(ctx, ns, datastore.ErrConflict)
 	}
-	return nil
+	// A losing peer may have restored projections before this CAS committed.
+	return s.completeNamespaceDeleteCleanup(ctx, ns)
+}
+
+func (s *scyllaDatastore) restoreNamespaceAfterDeleteFailure(ctx context.Context, ns *datastore.Namespace, primary error) error {
+	uid := mustParseUUID(ns.UID)
+	committed, err := s.resolveNamespaceDeleteCommit(ctx, uid, primary)
+	if err != nil {
+		return err
+	}
+	if committed {
+		return s.completeNamespaceDeleteCleanup(ctx, ns)
+	}
+	restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceProjectionCleanupTimeout)
+	defer cancel()
+	bucketErr := s.session.Query("INSERT INTO namespaces_by_bucket (bucket,creation_timestamp,uid) VALUES (?,?,?)", nil).
+		WithContext(restoreCtx).Bind(namespaceBucket(ns.CreationTimestamp), ns.CreationTimestamp, uid).ExecRelease()
+	_, nameErr := s.session.Query("INSERT INTO namespaces_by_name (name,uid) VALUES (?,?) IF NOT EXISTS", nil).
+		WithContext(restoreCtx).Bind(ns.Name, uid).ExecCASRelease()
+	restoreErr := errors.Join(bucketErr, nameErr)
+	// An existence check before the writes cannot fence a peer's later delete.
+	committed, err = s.resolveNamespaceDeleteCommit(ctx, uid, errors.Join(primary, restoreErr))
+	if err != nil {
+		return err
+	}
+	if committed {
+		return s.completeNamespaceDeleteCleanup(ctx, ns)
+	}
+	if restoreErr != nil {
+		return datastore.NewRepairRequiredError(datastore.MutationStep{
+			Operation:    "delete_namespace",
+			ResourceKind: "Namespace",
+			ResourceUID:  ns.UID,
+			Projection:   "namespace_indexes",
+			Action:       "restore_after_failed_delete",
+		}, primary, restoreErr)
+	}
+	return primary
 }
 
 func (s *scyllaDatastore) resolveNamespaceDeleteCommit(

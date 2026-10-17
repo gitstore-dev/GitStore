@@ -6,8 +6,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net/netip"
-	"net/url"
 	"os"
 	"reflect"
 	"regexp"
@@ -16,6 +14,7 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/go-playground/validator/v10"
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/gocql/gocql"
@@ -36,45 +35,10 @@ type Config struct {
 	Observability ObservabilityConfig `mapstructure:"observability"`
 }
 
-type ObservabilityConfig struct {
-	OTLP OTLPConfig `mapstructure:"otlp"`
-}
+type ObservabilityConfig = observability.Config
+type OTLPConfig = observability.OTLPConfig
 
-type OTLPConfig struct {
-	Endpoint         string  `mapstructure:"endpoint"`
-	TraceSampleRatio float64 `mapstructure:"trace_sample_ratio" validate:"gte=0,lte=1"`
-}
-
-func (c OTLPConfig) Validate() error {
-	if !(c.TraceSampleRatio >= 0 && c.TraceSampleRatio <= 1) {
-		return errors.New("observability.otlp.trace_sample_ratio must be between zero and one")
-	}
-	if c.Endpoint == "" {
-		return nil
-	}
-	endpoint, err := url.Parse(c.Endpoint)
-	if err != nil || len(c.Endpoint) > 256 || endpoint == nil ||
-		(endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Hostname() == "" ||
-		endpoint.User != nil || endpoint.ForceQuery || endpoint.RawQuery != "" || strings.Contains(c.Endpoint, "#") {
-		return errors.New("observability.otlp.endpoint must be an HTTP(S) URL without credentials, query or fragment")
-	}
-	return nil
-}
-
-type ProfilingConfig struct {
-	ListenAddr string `mapstructure:"listen_addr"`
-}
-
-func (c ProfilingConfig) Validate() error {
-	if c.ListenAddr == "" {
-		return nil
-	}
-	address, err := netip.ParseAddrPort(c.ListenAddr)
-	if err != nil || !address.Addr().IsLoopback() || address.Port() == 0 {
-		return errors.New("api.profiling.listen_addr must contain an explicit loopback host and port")
-	}
-	return nil
-}
+type ProfilingConfig = observability.ProfilingConfig
 
 // ApiConfig holds HTTP API server settings and everything gitstore-api owns.
 type ApiConfig struct {
@@ -333,6 +297,9 @@ type legacyKey struct {
 // final merged state so a renamed/removed key never silently resolves to a
 // default. Ordered most-specific-first so the most helpful match wins.
 var legacyKeys = []legacyKey{
+	{"observability.otlp.endpoint", "observability.otlp.uri"},
+	{"api.profiling.listen_addr", "api.profiling.uri"},
+	{"git_service.metrics.listen_addr", "git_service.metrics.uri"},
 	// Shared-file validation must reject the removed identity selector before
 	// Compose starts any services, not only when the controller finally boots.
 	{"controller.serviceaccount.namespace", "controller.serviceaccount.name (ServiceAccounts are cluster-scoped; remove namespace)"},
@@ -428,9 +395,9 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("api.git_service.uri", "dns:///localhost:50051")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
-	v.SetDefault("observability.otlp.endpoint", "")
+	v.SetDefault("observability.otlp.uri", "")
 	v.SetDefault("observability.otlp.trace_sample_ratio", 0.05)
-	v.SetDefault("api.profiling.listen_addr", "")
+	v.SetDefault("api.profiling.uri", "")
 	v.SetDefault("grpc_auth.hmac_secret", "")
 	v.SetDefault("grpc_auth.hmac_secret_previous", "")
 	v.SetDefault("push_limits.max_pack_size", "512MiB")
@@ -572,7 +539,7 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 	if err := cfg.Api.Profiling.Validate(); err != nil {
-		return err
+		return fmt.Errorf("api.%w", err)
 	}
 	validate := validator.New()
 	if err := validate.Struct(cfg); err != nil {

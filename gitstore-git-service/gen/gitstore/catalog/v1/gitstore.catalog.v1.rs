@@ -101,6 +101,11 @@ pub struct ValidateResourcesResponse {
     /// All violations across all files are collected before returning (no fail-fast).
     #[prost(message, repeated, tag="2")]
     pub errors: ::prost::alloc::vec::Vec<ValidationError>,
+    /// True only when accepted validation proves that this receive needs no
+    /// additional Product/CategoryTaxonomy deletion snapshot check. Older APIs
+    /// omit this field, preserving the conservative full-tree callout.
+    #[prost(bool, tag="3")]
+    pub resource_deletion_validation_complete: bool,
 }
 /// ValidateResourceDeletionsRequest carries every changed ref tree in one
 /// atomic receive-pack operation. ResourceValidationTree is deliberately shared

@@ -48,6 +48,7 @@ import (
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/google/uuid"
 	grpcprom "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/prometheus/client_golang/prometheus"
@@ -198,7 +199,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	store := datastore.NewInstrumentedDatastore(rawStore, cfg.Api.Datastore.Backend, log)
 	ids := apiruntime.UUIDGenerator{}
 
-	tracingEnabled := cfg.Observability.OTLP.Endpoint != ""
+	tracingEnabled := cfg.Observability.OTLP.URI != ""
 	var clientOptions []grpc.DialOption
 	var serverOptions []grpc.ServerOption
 	if tracingEnabled {
@@ -269,6 +270,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		ServiceAccountAudience:    cfg.Api.Auth.ServiceAccount.Audience,
 		RateLimitPerSecond:        cfg.Api.RateLimit.PerSecond,
 		RateLimitBurst:            cfg.Api.RateLimit.Burst,
+		Tracing:                   tracingEnabled,
 		PushLimits:                cfg.PushLimits,
 	})
 	if err != nil {
@@ -349,6 +351,7 @@ func newCatalogGRPCServer(handler catalogv1.CatalogServiceServer, registerer pro
 
 // GraphQLHandlerDeps are the dependencies for NewGraphQLHandler.
 type GraphQLHandlerDeps struct {
+	Tracing                   bool
 	Store                     datastore.Datastore
 	GitWriter                 resolver.GitWriter
 	Logger                    *zap.Logger
@@ -433,15 +436,20 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	gqlServer.AroundOperations(authenticateMiddleware.GraphQLAuthenticator)
 	gqlServer.AroundOperations(authorizeMiddleware.GraphQLAuthorizer)
 	gqlServer.AroundFields(authorizeMiddleware.GraphQLFieldAuthorizer)
+	gqlServer.AroundResponses(graphQLExecutionPhase)
 	gqlServer.AroundResponses(authorizeMiddleware.GraphQLResponseAuthorizer)
 
+	var operationHandler http.Handler = graphQLHTTPCompletion(gqlServer, deps.Logger)
+	if deps.Tracing {
+		operationHandler = observability.HTTPHandler(operationHandler)
+	}
 	gqlHandler := gin.HandlerFunc(func(c *gin.Context) {
 		if !authenticateMiddleware.AuthenticateWebSocketUpgrade(c) {
 			return
 		}
 		ctx := security.ContextWithRemoteAddr(c.Request.Context(), c.RemoteIP())
 		c.Request = c.Request.WithContext(ctx)
-		gqlServer.ServeHTTP(c.Writer, c.Request)
+		operationHandler.ServeHTTP(c.Writer, c.Request)
 	})
 
 	rateLimitPerSecond := deps.RateLimitPerSecond

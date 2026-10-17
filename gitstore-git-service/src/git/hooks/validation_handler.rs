@@ -86,7 +86,7 @@ impl ValidationHandler for SchemaValidationHandler {
             }],
             authorization: Some(hook_ctx.callback_authorization(vec![])),
         };
-        self.call(req, file_count, start).await
+        self.call(req, file_count, start, hook_ctx).await
     }
 
     async fn validate_receive(
@@ -96,6 +96,9 @@ impl ValidationHandler for SchemaValidationHandler {
         quarantine_dir: Option<&std::path::Path>,
         hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
+        hook_ctx
+            .resource_deletion_validation_complete
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         let trees = with_quarantine_repo(git_dir, quarantine_dir, |repo| {
             let mut trees = Vec::new();
             for update in updates {
@@ -158,7 +161,7 @@ impl SchemaValidationHandler {
             )),
             trees,
         };
-        self.call(req, file_count, start).await
+        self.call(req, file_count, start, hook_ctx).await
     }
 
     async fn call(
@@ -166,7 +169,11 @@ impl SchemaValidationHandler {
         req: ValidateResourcesRequest,
         file_count: usize,
         start: std::time::Instant,
+        hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
+        hook_ctx
+            .resource_deletion_validation_complete
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         let mut client = self.client.clone();
         let request = crate::auth::interceptor::callback_request(
             req,
@@ -189,7 +196,7 @@ impl SchemaValidationHandler {
                 ))
             }
             Ok(Err(e)) => {
-                error!(file_count, duration_ms, outcome = "service_unavailable", error = %e, "validation_callout_complete");
+                error!(file_count, duration_ms, outcome = "service_unavailable", rpc_code = ?e.code(), error = %e, "validation_callout_complete");
                 self.record_metric("service_unavailable");
                 Ok(AdmissionDecision::Reject(
                     "validation service unavailable".to_string(),
@@ -198,6 +205,10 @@ impl SchemaValidationHandler {
             Ok(Ok(resp)) => {
                 let resp = resp.into_inner();
                 if resp.accepted {
+                    hook_ctx.resource_deletion_validation_complete.store(
+                        resp.resource_deletion_validation_complete,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
                     info!(
                         file_count,
                         duration_ms,
@@ -336,6 +347,7 @@ mod tests {
             assert_eq!(req.repository_id, "repo-from-push");
             Ok(ValidateResourcesResponse {
                 accepted: true,
+                resource_deletion_validation_complete: false,
                 errors: vec![],
             })
         })
@@ -370,6 +382,7 @@ mod tests {
             assert!(String::from_utf8_lossy(&req.trees[0].proposed_blobs[0].content).contains("kind: Repository"));
             Ok(ValidateResourcesResponse {
                 accepted: false,
+                resource_deletion_validation_complete: false,
                 errors: vec![ValidationError {
                     file_path: "repositories/payments.md".into(),
                     field: "metadata.namespace".into(),
@@ -427,6 +440,7 @@ mod tests {
                 assert_eq!(req.trees[0].proposed_blobs[0].content, expected);
                 Ok(ValidateResourcesResponse {
                     accepted,
+                    resource_deletion_validation_complete: false,
                     errors: if accepted {
                         vec![]
                     } else {
@@ -473,6 +487,7 @@ mod tests {
         let addr = start_mock_server(|_req| {
             Ok(ValidateResourcesResponse {
                 accepted: false,
+                resource_deletion_validation_complete: false,
                 errors: vec![
                     ValidationError {
                         file_path: "products/p.md".into(),
@@ -527,6 +542,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(200));
             Ok(ValidateResourcesResponse {
                 accepted: true,
+                resource_deletion_validation_complete: false,
                 errors: vec![],
             })
         })

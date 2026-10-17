@@ -9,8 +9,10 @@ use dashmap::DashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 
 use super::metrics::{start_file_read_phase, FileReadPhase};
@@ -18,6 +20,7 @@ use crate::auth::interceptor::RPCVerifier;
 use crate::git::hooks::{HookPipeline, NoopAdmissionHandler, NoopValidationHandler, RefUpdate};
 use crate::git::repo::{create_repository, delete_repository, fanout_path, list_tags};
 use tracing::{debug, error, info};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 pub mod proto {
     include!(concat!(
@@ -42,6 +45,30 @@ const COMMIT_FILE_MAX_ATTEMPTS: usize = 32;
 const COMMIT_FILE_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const DELETE_RECEIPT_PREFIX: &str = "refs/gitstore/deletions/";
 const DELETE_RECEIPT_HISTORY_LIMIT: usize = 4096;
+
+/// Dropping the response consumer interrupts its background pack reads.
+#[derive(Debug)]
+pub struct CancellableUploadPackStream {
+    inner: tokio_stream::wrappers::ReceiverStream<Result<UploadPackResponse, Status>>,
+    interrupt: Arc<AtomicBool>,
+}
+
+impl Stream for CancellableUploadPackStream {
+    type Item = Result<UploadPackResponse, Status>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_next(cx)
+    }
+}
+
+impl Drop for CancellableUploadPackStream {
+    fn drop(&mut self) {
+        self.interrupt.store(true, Ordering::Release);
+    }
+}
 
 fn attach_file_read_report<T>(
     response: &mut Response<T>,
@@ -120,6 +147,7 @@ impl From<&PushContext> for HookContext {
                 .map(|p| p.max_file_size_bytes)
                 .unwrap_or(0),
             config_resource_version: ctx.config_resource_version.clone(),
+            resource_deletion_validation_complete: Default::default(),
         }
     }
 }
@@ -169,12 +197,27 @@ fn effective_limit(repository_policy: i64, ceiling: u64) -> i64 {
     }
 }
 
+#[derive(Default)]
+pub struct RepositoryLocks {
+    operation: Arc<RwLock<()>>,
+    snapshot: Arc<RwLock<()>>,
+}
+
 pub struct GitServiceImpl {
     rpc_auth: RPCVerifier,
     pub data_root: Arc<PathBuf>,
-    pub repo_locks: Arc<DashMap<String, Arc<RwLock<()>>>>,
+    pub repo_locks: Arc<DashMap<String, RepositoryLocks>>,
     pub hook_pipeline: Arc<HookPipeline>,
     pub push_limits: PushLimits,
+}
+
+enum ReceivePackRepositoryGuard {
+    Shared {
+        _guard: tokio::sync::OwnedRwLockReadGuard<()>,
+    },
+    Exclusive {
+        _guard: tokio::sync::OwnedRwLockWriteGuard<()>,
+    },
 }
 
 impl GitServiceImpl {
@@ -228,10 +271,22 @@ fn file_read_target_error(error: Status) -> Status {
 }
 
 /// Get or insert a per-repository lock.
-fn get_or_insert_lock(repo_locks: &DashMap<String, Arc<RwLock<()>>>, id: &str) -> Arc<RwLock<()>> {
+fn get_or_insert_lock(repo_locks: &DashMap<String, RepositoryLocks>, id: &str) -> Arc<RwLock<()>> {
     repo_locks
         .entry(id.to_string())
-        .or_insert_with(|| Arc::new(RwLock::new(())))
+        .or_default()
+        .operation
+        .clone()
+}
+
+fn get_or_insert_snapshot_lock(
+    repo_locks: &DashMap<String, RepositoryLocks>,
+    id: &str,
+) -> Arc<RwLock<()>> {
+    repo_locks
+        .entry(id.to_string())
+        .or_default()
+        .snapshot
         .clone()
 }
 
@@ -948,9 +1003,12 @@ impl GitService for GitServiceImpl {
         let repo_path = fanout_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let guard = lock.write_owned().await;
+        let snapshot = get_or_insert_snapshot_lock(&self.repo_locks, &req.repository_id);
+        let snapshot_guard = snapshot.write_owned().await;
 
         crate::spawn_blocking(move || {
             let _guard = guard;
+            let _snapshot_guard = snapshot_guard;
             ensure_repository_not_deleted(&repo_path)?;
             if repo_path.exists() {
                 return Err(Status::already_exists(format!(
@@ -1006,10 +1064,13 @@ impl GitService for GitServiceImpl {
 
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let guard = lock.write_owned().await;
+        let snapshot = get_or_insert_snapshot_lock(&self.repo_locks, &req.repository_id);
+        let snapshot_guard = snapshot.write_owned().await;
         let data_root = Arc::clone(&self.data_root);
 
         crate::spawn_blocking(move || {
             let _guard = guard;
+            let _snapshot_guard = snapshot_guard;
             persist_repository_tombstone(&data_root, &repo_path)
                 .map_err(|e| Status::internal(format!("persist repository tombstone: {e}")))?;
             info!(
@@ -1077,7 +1138,7 @@ impl GitService for GitServiceImpl {
         };
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)
             .map_err(file_read_target_error)?;
-        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
+        let lock = get_or_insert_snapshot_lock(&self.repo_locks, &req.repository_id);
         let lock_started = std::time::Instant::now();
         let lock_timer = start_file_read_phase(FileReadPhase::RepositoryLock);
         let guard = lock.read_owned().await;
@@ -1086,12 +1147,14 @@ impl GitService for GitServiceImpl {
 
         let queue_started = std::time::Instant::now();
         let queue_timer = start_file_read_phase(FileReadPhase::BlockingQueue);
+        let payload_span = tracing::Span::current();
         crate::spawn_blocking(move || {
             let _guard = guard;
             let queue_elapsed = queue_started.elapsed();
             queue_timer.observe_duration();
             let payload_started = std::time::Instant::now();
-            let _payload_timer = start_file_read_phase(FileReadPhase::Payload);
+            let _payload_timer =
+                super::metrics::start_file_read_phase_in_span(FileReadPhase::Payload, payload_span);
             let open_started = std::time::Instant::now();
             let repo = gix::open(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
@@ -1274,12 +1337,14 @@ impl GitService for GitServiceImpl {
         let repository_lock = started.elapsed();
         let queued = std::time::Instant::now();
         let queue_timer = start_file_read_phase(FileReadPhase::BlockingQueue);
+        let payload_span = tracing::Span::current();
         crate::spawn_blocking(move || {
             let _guard = guard;
             let blocking_queue = queued.elapsed();
             queue_timer.observe_duration();
             let payload_started = std::time::Instant::now();
-            let _payload_timer = start_file_read_phase(FileReadPhase::Payload);
+            let _payload_timer =
+                super::metrics::start_file_read_phase_in_span(FileReadPhase::Payload, payload_span);
             let opened = std::time::Instant::now();
             let repo = gix::open(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {e}")))?;
@@ -1577,9 +1642,13 @@ impl GitService for GitServiceImpl {
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let guard = lock.write_owned().await;
+        let snapshot = get_or_insert_snapshot_lock(&self.repo_locks, &req.repository_id);
+        let snapshot_guard = snapshot.write_owned().await;
+        let rpc_span = tracing::Span::current();
 
         crate::spawn_blocking(move || {
             let _guard = guard;
+            let _snapshot_guard = snapshot_guard;
             validate_file_path(&req.path)?;
 
             // The async lock above coordinates this service instance. This
@@ -1677,6 +1746,16 @@ impl GitService for GitServiceImpl {
                     parents.iter().copied(),
                 ) {
                     Ok(commit_id) => {
+                        rpc_span.set_attribute("git.write.commit_oid", commit_id.to_string());
+                        if let Some(parent) = parents.first() {
+                            rpc_span.set_attribute("git.write.parent_oid", parent.to_string());
+                        }
+                        info!(
+                            parent: &rpc_span,
+                            git_commit_oid = %commit_id,
+                            git_parent_oid = parents.first().map(ToString::to_string).unwrap_or_default(),
+                            "git_ref_published"
+                        );
                         return Ok(Response::new(CommitFileResponse {
                             commit_sha: commit_id.to_string(),
                             branch: "main".to_string(),
@@ -1749,9 +1828,12 @@ impl GitService for GitServiceImpl {
         let repo_path = fanout_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let guard = lock.write_owned().await;
+        let snapshot = get_or_insert_snapshot_lock(&self.repo_locks, &req.repository_id);
+        let snapshot_guard = snapshot.write_owned().await;
 
         crate::spawn_blocking(move || {
             let _guard = guard;
+            let _snapshot_guard = snapshot_guard;
             validate_file_path(&req.path)?;
             if precondition.is_some() {
                 ensure_repository_not_deleted(&repo_path)?;
@@ -1939,9 +2021,12 @@ impl GitService for GitServiceImpl {
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let guard = lock.write_owned().await;
+        let snapshot = get_or_insert_snapshot_lock(&self.repo_locks, &req.repository_id);
+        let snapshot_guard = snapshot.write_owned().await;
 
         crate::spawn_blocking(move || {
             let _guard = guard;
+            let _snapshot_guard = snapshot_guard;
             let repo = gix::open(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
@@ -2069,11 +2154,12 @@ impl GitService for GitServiceImpl {
             expected_action,
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
-        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        let _guard = lock.read().await;
+        let lock = get_or_insert_snapshot_lock(&self.repo_locks, &req.repository_id);
+        let guard = lock.read_owned().await;
         let service_enum = req.service;
 
         let advertisement = crate::spawn_blocking(move || {
+            let _guard = guard;
             let pack_server = crate::git::pack_server::HttpPackServer::new(repo_path, 0);
             let svc = proto::Service::try_from(service_enum).unwrap_or(proto::Service::Unspecified);
             match svc {
@@ -2135,6 +2221,7 @@ impl GitService for GitServiceImpl {
             &repo_id,
             &["repository.contents.write"],
         )?;
+        record_push_ref_snapshot(&first.ref_commands);
 
         // T041: Extract pack size limit before any pack I/O. Effective limit
         // = min(repository policy, ceiling); a 0/absent repository policy
@@ -2152,7 +2239,16 @@ impl GitService for GitServiceImpl {
 
         let repo_path = resolve_repo_path(&self.data_root, &repo_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &repo_id);
-        let guard = lock.write_owned().await;
+        // Git may send a flush-only request after rejecting every local update.
+        let guard = if first.ref_commands.is_empty() {
+            ReceivePackRepositoryGuard::Shared {
+                _guard: lock.read_owned().await,
+            }
+        } else {
+            ReceivePackRepositoryGuard::Exclusive {
+                _guard: lock.write_owned().await,
+            }
+        };
 
         info!(repo_id = %repo_id, "receive_pack: stream start");
 
@@ -2364,14 +2460,20 @@ impl GitService for GitServiceImpl {
         // Non-fast-forward validation in blocking context (gix::Repository is !Send).
         let ref_updates_clone = ref_updates.clone();
         let repo_path_nff = repo_path.clone();
+        let rpc_span = tracing::Span::current();
         let (nff_rejected, pipeline_updates) = crate::spawn_blocking(move || {
             let repo = gix::open(&repo_path_nff)
                 .map_err(|e| Status::internal(format!("open repo for nff: {}", e)))?;
             let mut rejected = Vec::new();
             let mut valid = Vec::new();
-            for update in &ref_updates_clone {
-                let is_non_ff = validate_ref_command(&repo, &update.ref_name, &update.old_oid)
-                    .map_err(|e| Status::internal(e.to_string()))?;
+            for (index, update) in ref_updates_clone.iter().enumerate() {
+                let is_non_ff = validate_ref_command(
+                    &repo,
+                    &update.ref_name,
+                    &update.old_oid,
+                    (index == 0).then_some(&rpc_span),
+                )
+                .map_err(|e| Status::internal(e.to_string()))?;
                 if is_non_ff {
                     rejected.push(update.ref_name.clone());
                 } else {
@@ -2419,10 +2521,24 @@ impl GitService for GitServiceImpl {
         let repo_path_commit = repo_path.clone();
         let hook_ctx_post = hook_ctx.clone();
         let repo_id_commit = repo_id.clone();
+        // Snapshot readers exclude publication and deletion, not pack staging
+        // or validation. The operation guard still serializes complete pushes.
+        let snapshot_guard = if accepted_indices.is_empty() {
+            None
+        } else {
+            Some(
+                get_or_insert_snapshot_lock(&self.repo_locks, &repo_id)
+                    .write_owned()
+                    .await,
+            )
+        };
         crate::spawn_blocking(move || {
             let _guard = guard;
             use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 
+            if accepted_indices_clone.is_empty() {
+                return Ok(());
+            }
             let repo = gix::open(&repo_path_commit)
                 .map_err(|e| Status::internal(format!("open repo for commit: {}", e)))?;
 
@@ -2494,6 +2610,7 @@ impl GitService for GitServiceImpl {
                 txn.commit(None)
                     .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
             }
+            drop(snapshot_guard);
             info!(repo_id = %repo_id_commit, "receive_pack: refs committed");
             pipeline.run_post_receive(
                 &repo_path_commit,
@@ -2523,8 +2640,7 @@ impl GitService for GitServiceImpl {
         Ok(Response::new(ReceivePackResponse { report_status }))
     }
 
-    type UploadPackStream =
-        tokio_stream::wrappers::ReceiverStream<Result<UploadPackResponse, Status>>;
+    type UploadPackStream = CancellableUploadPackStream;
 
     async fn upload_pack(
         &self,
@@ -2545,34 +2661,43 @@ impl GitService for GitServiceImpl {
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        let _guard = lock.read().await;
+        let guard = lock.read_owned().await;
 
         info!(repo_id = %req.repository_id, "upload_pack: start");
 
         let (tx, rx) = tokio::sync::mpsc::channel(16);
         let max_pack_size = self.push_limits.max_pack_size;
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let stream = CancellableUploadPackStream {
+            inner: tokio_stream::wrappers::ReceiverStream::new(rx),
+            interrupt: interrupt.clone(),
+        };
 
         crate::spawn_blocking(move || {
             let pack_server =
                 crate::git::pack_server::HttpPackServer::new(repo_path, max_pack_size);
-            match pack_server.handle_upload_pack(&req.body) {
+            let result = pack_server.handle_upload_pack_with_interrupt(&req.body, &interrupt);
+            drop(guard);
+            match result {
                 Ok(pack_bytes) => {
                     const CHUNK_SIZE: usize = 64 * 1024;
-                    let chunks: Vec<&[u8]> = pack_bytes.chunks(CHUNK_SIZE).collect();
-                    let last = chunks.len().saturating_sub(1);
-                    for (i, chunk) in chunks.iter().enumerate() {
-                        let is_last = i == last;
+                    let num_chunks = pack_bytes.len().div_ceil(CHUNK_SIZE);
+                    for (i, chunk) in pack_bytes.chunks(CHUNK_SIZE).enumerate() {
+                        let is_last = i + 1 == num_chunks;
                         let msg = Ok(UploadPackResponse {
                             chunk_index: i as u32,
                             data: chunk.to_vec(),
                             is_last,
                         });
+                        if tx.blocking_send(msg).is_err() {
+                            info!(repo_id = %req.repository_id, "upload_pack: consumer cancelled");
+                            return;
+                        }
                         info!(
                             chunk_index = i,
                             bytes = chunk.len(),
                             "upload_pack: chunk sent"
                         );
-                        let _ = tx.blocking_send(msg);
                     }
                     if pack_bytes.is_empty() {
                         let _ = tx.blocking_send(Ok(UploadPackResponse {
@@ -2582,6 +2707,10 @@ impl GitService for GitServiceImpl {
                         }));
                     }
                 }
+                Err(e) if interrupt.load(Ordering::Acquire) => {
+                    info!(repo_id = %req.repository_id, error = %e, "upload_pack: generation cancelled");
+                    let _ = tx.blocking_send(Err(Status::cancelled("upload-pack cancelled")));
+                }
                 Err(e) => {
                     error!(error = %e, "upload_pack error");
                     let _ = tx.blocking_send(Err(Status::internal(format!("upload-pack: {}", e))));
@@ -2589,9 +2718,7 @@ impl GitService for GitServiceImpl {
             }
         });
 
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
-            rx,
-        )))
+        Ok(Response::new(stream))
     }
 
     async fn get_latest_tag(
@@ -2669,14 +2796,35 @@ impl GitService for GitServiceImpl {
 
 /// Validate a single ref command's old_oid against the current ref tip.
 /// Returns true if the command is a non-fast-forward (should be rejected).
+fn record_push_ref_snapshot(commands: &[RefCommand]) {
+    let span = tracing::Span::current();
+    span.set_attribute("git.push.ref_command_count", commands.len() as i64);
+    if let Some(command) = commands.first() {
+        let old = gix::ObjectId::from_hex(command.old_oid.as_bytes());
+        let new = gix::ObjectId::from_hex(command.new_oid.as_bytes());
+        span.set_attribute("git.push.first_oid_valid", old.is_ok() && new.is_ok());
+        if let (Ok(old), Ok(new)) = (old, new) {
+            span.set_attribute("git.push.old_oid", old.to_string());
+            span.set_attribute("git.push.new_oid", new.to_string());
+        }
+    }
+}
+
 fn validate_ref_command(
     repo: &gix::Repository,
     ref_name: &str,
     old_oid: &str,
+    snapshot_span: Option<&tracing::Span>,
 ) -> Result<bool, Status> {
     let zero = "0000000000000000000000000000000000000000";
     if old_oid == zero {
+        if let Some(span) = snapshot_span {
+            span.set_attribute("git.push.current_lookup_attempted", false);
+        }
         return Ok(false);
+    }
+    if let Some(span) = snapshot_span {
+        span.set_attribute("git.push.current_lookup_attempted", true);
     }
     match repo.find_reference(ref_name) {
         Ok(r) => {
@@ -2685,12 +2833,24 @@ fn validate_ref_command(
                 .try_id()
                 .map(|id| id.to_string())
                 .unwrap_or_default();
+            if let Some(span) = snapshot_span {
+                span.set_attribute("git.push.current_lookup_succeeded", true);
+                span.set_attribute("git.push.current_target_is_oid", !current_oid.is_empty());
+                if !current_oid.is_empty() {
+                    span.set_attribute("git.push.current_oid", current_oid.clone());
+                }
+            }
             if current_oid != old_oid {
                 return Ok(true);
             }
             Ok(false)
         }
-        Err(_) => Ok(false),
+        Err(_) => {
+            if let Some(span) = snapshot_span {
+                span.set_attribute("git.push.current_lookup_succeeded", false);
+            }
+            Ok(false)
+        }
     }
 }
 
@@ -4263,6 +4423,645 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_receive_pack_snapshot_reads_pass_validation_but_exclude_publication() {
+        use crate::git::hooks::{AdmissionDecision, ResourceBlob, ValidationHandler};
+
+        struct PausedValidation {
+            entered: Arc<tokio::sync::Notify>,
+            proceed: Arc<tokio::sync::Notify>,
+        }
+
+        #[async_trait::async_trait]
+        impl ValidationHandler for PausedValidation {
+            async fn validate(
+                &self,
+                _blobs: &[ResourceBlob],
+                _hook_ctx: &HookContext,
+            ) -> anyhow::Result<AdmissionDecision> {
+                self.entered.notify_one();
+                self.proceed.notified().await;
+                Ok(AdmissionDecision::Accept)
+            }
+        }
+
+        let root = TempDir::new().unwrap();
+        repo_with_commit(root.path(), TEST_REPO_D);
+        let path = fanout_path(root.path(), TEST_REPO_D).unwrap();
+        let old = gix::open(&path)
+            .unwrap()
+            .head_commit()
+            .unwrap()
+            .id
+            .to_string();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let proceed = Arc::new(tokio::sync::Notify::new());
+        let service = GitServiceImpl::with_pipeline(
+            root.path().into(),
+            Arc::new(HookPipeline::new(
+                std::time::Duration::from_secs(10),
+                Arc::new(PausedValidation {
+                    entered: entered.clone(),
+                    proceed: proceed.clone(),
+                }),
+                Arc::new(NoopAdmissionHandler),
+            )),
+            PushLimits::default(),
+            RPCVerifier::new("fixture-key", None, root.path()).unwrap(),
+        );
+        let snapshot = get_or_insert_snapshot_lock(&service.repo_locks, TEST_REPO_D);
+        let mut client = make_grpc_client_for_service(service).await;
+        let mut pushing = client.clone();
+        let update = delete_ref_cmd_with_ctx(
+            TEST_REPO_D,
+            "refs/heads/main",
+            &old,
+            minimal_push_ctx(TEST_REPO_D),
+        );
+        let push =
+            tokio::spawn(
+                async move { pushing.receive_pack(signed_test_stream(vec![update])).await },
+            );
+        tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.get_file(signed_test_request(GetFileRequest {
+                repository_id: TEST_REPO_D.into(),
+                path: "products/p1.md".into(),
+                r#ref: "refs/heads/main".into(),
+                authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+                unchanged_since_commit: Some(old.clone()),
+                allow_ancestor_receipt: false,
+            })),
+        )
+        .await
+        .expect("history proof waited for the paused push validation")
+        .unwrap()
+        .into_inner();
+        assert_eq!(response.ref_commit_sha, old);
+        assert!(!response.content.is_empty());
+        for service in [Service::GitUploadPack, Service::GitReceivePack] {
+            let response = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                client.info_refs(signed_test_request(InfoRefsRequest {
+                    repository_id: TEST_REPO_D.into(),
+                    service: service as i32,
+                    authorization: test_authorization(
+                        TEST_REPO_D,
+                        if service == Service::GitUploadPack {
+                            "repository.contents.read"
+                        } else {
+                            "repository.contents.write"
+                        },
+                    ),
+                })),
+            )
+            .await
+            .expect("ref advertisement waited for the paused push validation")
+            .unwrap()
+            .into_inner();
+            assert!(String::from_utf8_lossy(&response.advertisement)
+                .contains(&format!("{old} refs/heads/main")));
+        }
+        let read = snapshot.read().await;
+        proceed.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while snapshot.try_read().is_ok() {
+                assert!(!push.is_finished(), "push bypassed a live snapshot reader");
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            gix::open(&path).unwrap().head_id().unwrap().to_string(),
+            old
+        );
+        drop(read);
+        let report = tokio::time::timeout(std::time::Duration::from_secs(5), push)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .into_inner()
+            .report_status;
+        assert!(String::from_utf8_lossy(&report).contains("ok refs/heads/main"));
+        assert!(gix::open(path)
+            .unwrap()
+            .try_find_reference("refs/heads/main")
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_file_snapshot_does_not_wait_for_push_preparation() {
+        let root = TempDir::new().unwrap();
+        repo_with_commit(root.path(), TEST_REPO_D);
+        let commit = gix::open(fanout_path(root.path(), TEST_REPO_D).unwrap())
+            .unwrap()
+            .head_commit()
+            .unwrap()
+            .id
+            .to_string();
+        let service = make_test_service(root.path());
+        let operation = get_or_insert_lock(&service.repo_locks, TEST_REPO_D);
+        let _preparation = operation.write().await;
+        for receipt in [false, true] {
+            let response = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                service.get_file(signed_test_request(GetFileRequest {
+                    repository_id: TEST_REPO_D.into(),
+                    path: "products/p1.md".into(),
+                    r#ref: "refs/heads/main".into(),
+                    authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+                    unchanged_since_commit: Some(commit.clone()),
+                    allow_ancestor_receipt: receipt,
+                })),
+            )
+            .await
+            .expect("immutable snapshot waited for a push that has not reached publication")
+            .unwrap()
+            .into_inner();
+            assert_eq!(response.ref_commit_sha, commit);
+            assert_eq!(response.at_ancestor, receipt);
+            assert_eq!(response.content.is_empty(), receipt);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_gate_excludes_every_repository_mutator() {
+        for operation in ["create", "delete", "commit", "delete_file", "tag"] {
+            let root = TempDir::new().unwrap();
+            if operation != "create" {
+                repo_with_commit(root.path(), TEST_REPO_D);
+            }
+            let service = Arc::new(make_test_service(root.path()));
+            let snapshot = get_or_insert_snapshot_lock(&service.repo_locks, TEST_REPO_D);
+            let reader = snapshot.read().await;
+            let writer = tokio::spawn(async move {
+                let authorization = test_authorization(
+                    TEST_REPO_D,
+                    match operation {
+                        "create" => "repository.create",
+                        "delete" => "repository.delete",
+                        _ => "repository.contents.write",
+                    },
+                );
+                match operation {
+                    "create" => service
+                        .create_repository(signed_test_request(CreateRepositoryRequest {
+                            repository_id: TEST_REPO_D.into(),
+                            authorization,
+                            ..Default::default()
+                        }))
+                        .await
+                        .map(|_| ()),
+                    "delete" => service
+                        .delete_repository(signed_test_request(DeleteRepositoryRequest {
+                            repository_id: TEST_REPO_D.into(),
+                            authorization,
+                        }))
+                        .await
+                        .map(|_| ()),
+                    "commit" => service
+                        .commit_file(signed_test_request(CommitFileRequest {
+                            repository_id: TEST_REPO_D.into(),
+                            path: "products/p1.md".into(),
+                            content: b"replacement".to_vec(),
+                            commit_message: "snapshot gate".into(),
+                            authorization,
+                            ..Default::default()
+                        }))
+                        .await
+                        .map(|_| ()),
+                    "delete_file" => service
+                        .delete_file(signed_test_request(DeleteFileRequest {
+                            repository_id: TEST_REPO_D.into(),
+                            path: "products/p1.md".into(),
+                            commit_message: "snapshot gate".into(),
+                            authorization,
+                            ..Default::default()
+                        }))
+                        .await
+                        .map(|_| ()),
+                    "tag" => service
+                        .create_tag(signed_test_request(CreateTagRequest {
+                            repository_id: TEST_REPO_D.into(),
+                            tag_name: "snapshot-gate".into(),
+                            authorization,
+                            ..Default::default()
+                        }))
+                        .await
+                        .map(|_| ()),
+                    _ => unreachable!(),
+                }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    assert!(
+                        !writer.is_finished(),
+                        "{operation} bypassed the snapshot gate"
+                    );
+                    // Tokio prevents another reader once the real mutator queues
+                    // its writer, so this observes lock admission, not a delay.
+                    if snapshot.try_read().is_err() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            drop(reader);
+            tokio::time::timeout(std::time::Duration::from_secs(5), writer)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_file_snapshot_waits_for_publication_and_ref_deletion() {
+        for delete in [false, true] {
+            let root = TempDir::new().unwrap();
+            repo_with_commit(root.path(), TEST_REPO_D);
+            let repo = gix::open(fanout_path(root.path(), TEST_REPO_D).unwrap()).unwrap();
+            let commit = repo.head_commit().unwrap().id().detach();
+            let service = make_test_service(root.path());
+            let snapshot = get_or_insert_snapshot_lock(&service.repo_locks, TEST_REPO_D);
+            let writer = snapshot.write().await;
+            let request = signed_test_request(GetFileRequest {
+                repository_id: TEST_REPO_D.into(),
+                path: "products/p1.md".into(),
+                r#ref: "refs/heads/main".into(),
+                authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+                unchanged_since_commit: Some(commit.to_string()),
+                allow_ancestor_receipt: true,
+            });
+            let envelope = request
+                .metadata()
+                .get(crate::auth::interceptor::SIGNATURE_HEADER)
+                .unwrap()
+                .to_str()
+                .unwrap();
+            let fields: Vec<_> = envelope.split(':').collect();
+            let nonce_path = root
+                .path()
+                .join(".rpc-replay-v1")
+                .join(format!("{}-{}", fields[1], fields[2]));
+            let mut reader = Box::pin(service.get_file(request));
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                std::future::poll_fn(|cx| {
+                    assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                    if nonce_path.exists() {
+                        std::task::Poll::Ready(())
+                    } else {
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
+            })
+            .await
+            .unwrap();
+            let mut published = None;
+            if delete {
+                repo.find_reference("refs/heads/main")
+                    .unwrap()
+                    .delete()
+                    .unwrap();
+            } else {
+                let signature = gix::actor::SignatureRef {
+                    name: "Test".into(),
+                    email: "test@example.com".into(),
+                    time: "0 +0000",
+                };
+                published = Some(
+                    repo.commit_as(
+                        signature,
+                        signature,
+                        "refs/heads/main",
+                        "concurrent publication",
+                        repo.head_commit().unwrap().tree_id().unwrap().detach(),
+                        [commit],
+                    )
+                    .unwrap()
+                    .to_string(),
+                );
+            }
+            drop(writer);
+            let result = reader.await;
+            if delete {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::Aborted);
+            } else {
+                let response = result.unwrap().into_inner();
+                assert_eq!(response.ref_commit_sha, published.unwrap());
+                assert!(!response.at_ancestor);
+                assert!(!response.content.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_file_snapshot_cancellation_retains_queued_blocking_guard() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let root = TempDir::new().unwrap();
+            repo_with_commit(root.path(), TEST_REPO_D);
+            let service = make_test_service(root.path());
+            let snapshot = get_or_insert_snapshot_lock(&service.repo_locks, TEST_REPO_D);
+            let writer = snapshot.write().await;
+            let request = signed_test_request(GetFileRequest {
+                repository_id: TEST_REPO_D.into(),
+                path: "products/p1.md".into(),
+                r#ref: "refs/heads/main".into(),
+                authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+                unchanged_since_commit: None,
+                allow_ancestor_receipt: false,
+            });
+            let envelope = request
+                .metadata()
+                .get(crate::auth::interceptor::SIGNATURE_HEADER)
+                .unwrap()
+                .to_str()
+                .unwrap();
+            let fields: Vec<_> = envelope.split(':').collect();
+            let nonce_path = root
+                .path()
+                .join(".rpc-replay-v1")
+                .join(format!("{}-{}", fields[1], fields[2]));
+            let mut reader = Box::pin(service.get_file(request));
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                std::future::poll_fn(|cx| {
+                    assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                    if nonce_path.exists() {
+                        std::task::Poll::Ready(())
+                    } else {
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
+            })
+            .await
+            .unwrap();
+            let (release, receive) = std::sync::mpsc::channel::<()>();
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let blocker = crate::spawn_blocking(move || {
+                let _ = started.send(());
+                let _ = receive.recv();
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(5), ready)
+                .await
+                .unwrap()
+                .unwrap();
+            drop(writer);
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            drop(reader);
+            let retained = snapshot.try_write().is_err();
+            drop(release);
+            blocker.await.unwrap();
+            let writer = tokio::time::timeout(std::time::Duration::from_secs(5), snapshot.write())
+                .await
+                .unwrap();
+            drop(writer);
+            assert!(
+                retained,
+                "cancellation released an accepted snapshot job's guard"
+            );
+        });
+    }
+
+    #[tokio::test]
+    async fn test_info_refs_snapshot_does_not_wait_for_push_preparation() {
+        let root = TempDir::new().unwrap();
+        repo_with_commit(root.path(), TEST_REPO_D);
+        let commit = gix::open(fanout_path(root.path(), TEST_REPO_D).unwrap())
+            .unwrap()
+            .head_commit()
+            .unwrap()
+            .id
+            .to_string();
+        let service = make_test_service(root.path());
+        let operation = get_or_insert_lock(&service.repo_locks, TEST_REPO_D);
+        let _preparation = operation.write().await;
+        for kind in [Service::GitUploadPack, Service::GitReceivePack] {
+            let response = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                service.info_refs(signed_test_request(InfoRefsRequest {
+                    repository_id: TEST_REPO_D.into(),
+                    service: kind as i32,
+                    authorization: test_authorization(
+                        TEST_REPO_D,
+                        if kind == Service::GitUploadPack {
+                            "repository.contents.read"
+                        } else {
+                            "repository.contents.write"
+                        },
+                    ),
+                })),
+            )
+            .await
+            .expect("ref advertisement waited for a push before publication")
+            .unwrap()
+            .into_inner();
+            assert_eq!(response.service, kind as i32);
+            assert!(String::from_utf8_lossy(&response.advertisement)
+                .contains(&format!("{commit} refs/heads/main")));
+        }
+        let denied = service
+            .info_refs(signed_test_request(InfoRefsRequest {
+                repository_id: TEST_REPO_D.into(),
+                service: Service::GitReceivePack as i32,
+                authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(denied.code(), tonic::Code::PermissionDenied);
+    }
+
+    #[tokio::test]
+    async fn test_info_refs_snapshot_waits_for_publication_and_ref_deletion() {
+        for kind in [Service::GitUploadPack, Service::GitReceivePack] {
+            for delete in [false, true] {
+                let root = TempDir::new().unwrap();
+                repo_with_commit(root.path(), TEST_REPO_D);
+                let repo = gix::open(fanout_path(root.path(), TEST_REPO_D).unwrap()).unwrap();
+                let commit = repo.head_commit().unwrap().id().detach();
+                let service = make_test_service(root.path());
+                let snapshot = get_or_insert_snapshot_lock(&service.repo_locks, TEST_REPO_D);
+                let writer = snapshot.write().await;
+                let request = signed_test_request(InfoRefsRequest {
+                    repository_id: TEST_REPO_D.into(),
+                    service: kind as i32,
+                    authorization: test_authorization(
+                        TEST_REPO_D,
+                        if kind == Service::GitUploadPack {
+                            "repository.contents.read"
+                        } else {
+                            "repository.contents.write"
+                        },
+                    ),
+                });
+                let envelope = request
+                    .metadata()
+                    .get(crate::auth::interceptor::SIGNATURE_HEADER)
+                    .unwrap()
+                    .to_str()
+                    .unwrap();
+                let fields: Vec<_> = envelope.split(':').collect();
+                let nonce_path = root
+                    .path()
+                    .join(".rpc-replay-v1")
+                    .join(format!("{}-{}", fields[1], fields[2]));
+                let mut reader = Box::pin(service.info_refs(request));
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    std::future::poll_fn(|cx| {
+                        assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                        if nonce_path.exists() {
+                            std::task::Poll::Ready(())
+                        } else {
+                            cx.waker().wake_by_ref();
+                            std::task::Poll::Pending
+                        }
+                    })
+                    .await;
+                })
+                .await
+                .unwrap();
+                let mut published = None;
+                if delete {
+                    repo.find_reference("refs/heads/main")
+                        .unwrap()
+                        .delete()
+                        .unwrap();
+                } else {
+                    let signature = gix::actor::SignatureRef {
+                        name: "Test".into(),
+                        email: "test@example.com".into(),
+                        time: "0 +0000",
+                    };
+                    published = Some(
+                        repo.commit_as(
+                            signature,
+                            signature,
+                            "refs/heads/main",
+                            "concurrent publication",
+                            repo.head_commit().unwrap().tree_id().unwrap().detach(),
+                            [commit],
+                        )
+                        .unwrap()
+                        .to_string(),
+                    );
+                }
+                drop(writer);
+                let response = reader.await.unwrap().into_inner();
+                assert_eq!(response.service, kind as i32);
+                let advertisement = String::from_utf8_lossy(&response.advertisement);
+                assert!(!advertisement.contains(&format!("{commit} refs/heads/main")));
+                if let Some(published) = published {
+                    assert!(advertisement.contains(&format!("{published} refs/heads/main")));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_info_refs_snapshot_cancellation_retains_queued_blocking_guard() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            for kind in [Service::GitUploadPack, Service::GitReceivePack] {
+                let root = TempDir::new().unwrap();
+                repo_with_commit(root.path(), TEST_REPO_D);
+                let service = make_test_service(root.path());
+                let snapshot = get_or_insert_snapshot_lock(&service.repo_locks, TEST_REPO_D);
+                let writer = snapshot.write().await;
+                let request = signed_test_request(InfoRefsRequest {
+                    repository_id: TEST_REPO_D.into(),
+                    service: kind as i32,
+                    authorization: test_authorization(
+                        TEST_REPO_D,
+                        if kind == Service::GitUploadPack {
+                            "repository.contents.read"
+                        } else {
+                            "repository.contents.write"
+                        },
+                    ),
+                });
+                let envelope = request
+                    .metadata()
+                    .get(crate::auth::interceptor::SIGNATURE_HEADER)
+                    .unwrap()
+                    .to_str()
+                    .unwrap();
+                let fields: Vec<_> = envelope.split(':').collect();
+                let nonce_path = root
+                    .path()
+                    .join(".rpc-replay-v1")
+                    .join(format!("{}-{}", fields[1], fields[2]));
+                let mut reader = Box::pin(service.info_refs(request));
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    std::future::poll_fn(|cx| {
+                        assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                        if nonce_path.exists() {
+                            std::task::Poll::Ready(())
+                        } else {
+                            cx.waker().wake_by_ref();
+                            std::task::Poll::Pending
+                        }
+                    })
+                    .await;
+                })
+                .await
+                .unwrap();
+                let (release, receive) = std::sync::mpsc::channel::<()>();
+                let (started, ready) = tokio::sync::oneshot::channel();
+                let blocker = crate::spawn_blocking(move || {
+                    let _ = started.send(());
+                    let _ = receive.recv();
+                });
+                tokio::time::timeout(std::time::Duration::from_secs(5), ready)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                drop(writer);
+                std::future::poll_fn(|cx| {
+                    assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                    std::task::Poll::Ready(())
+                })
+                .await;
+                drop(reader);
+                let retained = snapshot.try_write().is_err();
+                drop(release);
+                blocker.await.unwrap();
+                let writer =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), snapshot.write())
+                        .await
+                        .unwrap();
+                drop(writer);
+                assert!(
+                    retained,
+                    "cancelled advertisement released an accepted snapshot job's guard"
+                );
+            }
+        });
+    }
+
+    #[tokio::test]
     async fn test_get_file_happy_path() {
         let dir = TempDir::new().unwrap();
         repo_with_commit(dir.path(), TEST_REPO_D);
@@ -5101,6 +5900,237 @@ mod tests {
     }
 
     #[test]
+    fn test_ref_snapshot_telemetry_correlates_actual_git_objects_without_raw_inputs() {
+        use opentelemetry::trace::TracerProvider;
+        use opentelemetry_sdk::trace::{SpanData, SpanExporter};
+        use tracing_subscriber::prelude::*;
+
+        #[derive(Clone, Debug, Default)]
+        struct CapturedSpans(Arc<std::sync::Mutex<Vec<SpanData>>>);
+
+        impl SpanExporter for CapturedSpans {
+            async fn export(
+                &self,
+                batch: Vec<SpanData>,
+            ) -> opentelemetry_sdk::error::OTelSdkResult {
+                self.0.lock().unwrap().extend(batch);
+                Ok(())
+            }
+        }
+
+        let captured = CapturedSpans::default();
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn)
+            .with_simple_exporter(captured.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer().with_tracer(provider.tracer("ref snapshot contract")),
+        );
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_E);
+        let repo_path = fanout_path(dir.path(), TEST_REPO_E).unwrap();
+        let original = gix::open(&repo_path)
+            .unwrap()
+            .head_id()
+            .unwrap()
+            .to_string();
+        let next = "1".repeat(40);
+        let replacement = tracing::subscriber::with_default(subscriber, || {
+            let pack = crate::git::pack_server::HttpPackServer::new(repo_path.clone(), 1024 * 1024);
+            for (name, upload) in [("advertise.upload", true), ("advertise.receive", false)] {
+                tracing::info_span!("ref.snapshot", operation = name).in_scope(|| {
+                    let advertised = if upload {
+                        pack.advertise_upload_pack_refs().unwrap()
+                    } else {
+                        pack.advertise_receive_pack_refs().unwrap()
+                    };
+                    assert!(advertised
+                        .windows(original.len())
+                        .any(|part| part == original.as_bytes()));
+                });
+            }
+            tracing::info_span!("ref.snapshot", operation = "fetch").in_scope(|| {
+                let mut request = Vec::new();
+                for line in [
+                    format!("want {original}\n"),
+                    format!("want {next}\n"),
+                    format!("have {original}\n"),
+                    format!("have {next}\n"),
+                ] {
+                    write_pkt_line_buf(&mut request, line.as_bytes()).unwrap();
+                }
+                request.extend_from_slice(b"0000");
+                assert_eq!(pack.handle_upload_pack(&request).unwrap(), b"0008NAK\n");
+            });
+            tracing::info_span!("ref.snapshot", operation = "push").in_scope(|| {
+                record_push_ref_snapshot(&[
+                    RefCommand {
+                        ref_name: "refs/heads/private-marker".into(),
+                        old_oid: original.clone(),
+                        new_oid: next.clone(),
+                    },
+                    RefCommand {
+                        ref_name: "private-marker".into(),
+                        old_oid: "private-marker".into(),
+                        new_oid: "private-marker".into(),
+                    },
+                ]);
+            });
+            tracing::info_span!("ref.snapshot", operation = "invalid").in_scope(|| {
+                record_push_ref_snapshot(&[RefCommand {
+                    ref_name: "private-marker".into(),
+                    old_oid: "private-marker".into(),
+                    new_oid: "private-marker".repeat(100_000),
+                }]);
+            });
+            tracing::info_span!("ref.snapshot", operation = "empty").in_scope(|| {
+                record_push_ref_snapshot(&[]);
+            });
+            tracing::info_span!("ref.snapshot", operation = "empty.fetch").in_scope(|| {
+                assert_eq!(pack.handle_upload_pack(b"0000").unwrap(), b"0008NAK\n");
+            });
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let svc = make_test_service(dir.path());
+            let replacement =
+                tracing::info_span!("ref.snapshot", operation = "write").in_scope(|| {
+                    runtime
+                        .block_on(svc.commit_file(signed_test_request(CommitFileRequest {
+                            repository_id: TEST_REPO_E.into(),
+                            path: "private-marker.md".into(),
+                            content: b"private-marker".to_vec(),
+                            commit_message: "private-marker".into(),
+                            author_name: "private-marker".into(),
+                            author_email: "private-marker".into(),
+                            authorization: test_authorization(
+                                TEST_REPO_E,
+                                "repository.contents.write",
+                            ),
+                        })))
+                        .unwrap()
+                        .into_inner()
+                        .commit_sha
+                });
+            tracing::info_span!("ref.snapshot", operation = "validate").in_scope(|| {
+                let span = tracing::Span::current();
+                let dispatch = tracing::dispatcher::get_default(Clone::clone);
+                let repo_path = repo_path.clone();
+                let expected = original.clone();
+                std::thread::spawn(move || {
+                    tracing::dispatcher::with_default(&dispatch, || {
+                        tracing::info_span!("unrelated.worker").in_scope(|| {
+                            let repo = gix::open(repo_path).unwrap();
+                            assert!(validate_ref_command(
+                                &repo,
+                                "refs/heads/main",
+                                &expected,
+                                Some(&span)
+                            )
+                            .unwrap());
+                        });
+                    });
+                })
+                .join()
+                .unwrap();
+            });
+            tracing::info_span!("ref.snapshot", operation = "create").in_scope(|| {
+                let span = tracing::Span::current();
+                let repo = gix::open(&repo_path).unwrap();
+                assert!(!validate_ref_command(
+                    &repo,
+                    "refs/heads/main",
+                    &"0".repeat(40),
+                    Some(&span)
+                )
+                .unwrap());
+            });
+            tracing::info_span!("ref.snapshot", operation = "missing").in_scope(|| {
+                let span = tracing::Span::current();
+                let repo = gix::open(&repo_path).unwrap();
+                assert!(!validate_ref_command(
+                    &repo,
+                    "refs/heads/private-marker",
+                    &original,
+                    Some(&span)
+                )
+                .unwrap());
+            });
+            tracing::info_span!("ref.snapshot", operation = "unobserved").in_scope(|| {
+                let repo = gix::open(&repo_path).unwrap();
+                assert!(
+                    !validate_ref_command(&repo, "refs/heads/main", &replacement, None).unwrap()
+                );
+            });
+            replacement
+        });
+        provider.force_flush().unwrap();
+        let spans = captured.0.lock().unwrap();
+        let snapshots: std::collections::BTreeMap<_, _> = spans
+            .iter()
+            .filter(|span| span.name == "ref.snapshot")
+            .map(|span| {
+                let attributes: std::collections::BTreeMap<_, _> = span
+                    .attributes
+                    .iter()
+                    .map(|attribute| (attribute.key.as_str(), attribute.value.to_string()))
+                    .collect();
+                (attributes["operation"].clone(), attributes)
+            })
+            .collect();
+        assert_eq!(snapshots.len(), 12);
+        for operation in ["advertise.upload", "advertise.receive"] {
+            assert_eq!(snapshots[operation]["git.advertised_head_oid"], original);
+        }
+        let fetch = &snapshots["fetch"];
+        assert_eq!(fetch["git.fetch.want_oid"], original);
+        assert_eq!(fetch["git.fetch.have_oid"], original);
+        assert_eq!(fetch["git.fetch.want_count"], "2");
+        assert_eq!(fetch["git.fetch.have_count"], "2");
+        assert_eq!(fetch["git.fetch.done"], "false");
+        assert_eq!(snapshots["empty.fetch"]["git.fetch.want_count"], "0");
+        assert!(!snapshots["empty.fetch"].contains_key("git.fetch.want_oid"));
+        assert!(!snapshots["empty.fetch"].contains_key("git.fetch.have_oid"));
+        let push = &snapshots["push"];
+        assert_eq!(push["git.push.ref_command_count"], "2");
+        assert_eq!(push["git.push.first_oid_valid"], "true");
+        assert_eq!(push["git.push.old_oid"], original);
+        assert_eq!(push["git.push.new_oid"], next);
+        assert_eq!(snapshots["invalid"]["git.push.first_oid_valid"], "false");
+        assert!(!snapshots["invalid"].contains_key("git.push.old_oid"));
+        assert!(!snapshots["invalid"].contains_key("git.push.new_oid"));
+        assert_eq!(snapshots["empty"]["git.push.ref_command_count"], "0");
+        assert!(!snapshots["empty"].contains_key("git.push.old_oid"));
+        assert_eq!(snapshots["write"]["git.write.parent_oid"], original);
+        assert_eq!(snapshots["write"]["git.write.commit_oid"], replacement);
+        assert_eq!(snapshots["validate"]["git.push.current_oid"], replacement);
+        assert_eq!(
+            snapshots["validate"]["git.push.current_lookup_succeeded"],
+            "true"
+        );
+        assert!(!snapshots["unobserved"].contains_key("git.push.current_oid"));
+        assert_eq!(
+            snapshots["create"]["git.push.current_lookup_attempted"],
+            "false"
+        );
+        assert!(!snapshots["create"].contains_key("git.push.current_oid"));
+        assert_eq!(
+            snapshots["missing"]["git.push.current_lookup_succeeded"],
+            "false"
+        );
+        assert!(!snapshots["missing"].contains_key("git.push.current_oid"));
+        assert!(spans
+            .iter()
+            .filter(|span| span.name == "unrelated.worker")
+            .all(|span| !span
+                .attributes
+                .iter()
+                .any(|attribute| attribute.key.as_str().starts_with("git.push."))));
+        assert!(!format!("{spans:?}").contains("private-marker"));
+    }
+
+    #[test]
     fn test_repository_commit_lock_recovers_when_owner_releases_descriptor() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("gitstore-commit.lock");
@@ -5901,8 +6931,207 @@ mod tests {
     const TEST_REPO_H: &str = "01960000-0000-7000-8000-000000000030";
     const TEST_REPO_I: &str = "01960000-0000-7000-8000-000000000031";
 
+    #[test]
+    fn test_upload_pack_cancellation_retains_queued_reader() {
+        use tokio_stream::StreamExt;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            for shallow in [false, true] {
+                let root = TempDir::new().unwrap();
+                repo_with_commit(root.path(), TEST_REPO_H);
+                let tip = gix::open(fanout_path(root.path(), TEST_REPO_H).unwrap())
+                    .unwrap()
+                    .head_commit()
+                    .unwrap()
+                    .id
+                    .to_string();
+                let service = make_test_service(root.path());
+                let lock = get_or_insert_lock(&service.repo_locks, TEST_REPO_H);
+                let writer = lock.write().await;
+                let want = format!("want {tip} side-band-64k shallow\n");
+                let mut body = format!("{:04x}{want}", want.len() + 4).into_bytes();
+                if shallow {
+                    body.extend_from_slice(b"000ddeepen 1\n");
+                }
+                body.extend_from_slice(b"00000009done\n");
+                let request = signed_test_request(UploadPackRequest {
+                    repository_id: TEST_REPO_H.into(),
+                    body,
+                    authorization: test_authorization(TEST_REPO_H, "repository.contents.read"),
+                });
+                let envelope = request
+                    .metadata()
+                    .get(crate::auth::interceptor::SIGNATURE_HEADER)
+                    .unwrap()
+                    .to_str()
+                    .unwrap();
+                let fields: Vec<_> = envelope.split(':').collect();
+                let nonce_path = root
+                    .path()
+                    .join(".rpc-replay-v1")
+                    .join(format!("{}-{}", fields[1], fields[2]));
+                let mut reader = Box::pin(service.upload_pack(request));
+                std::future::poll_fn(|cx| {
+                    assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                    std::task::Poll::Ready(())
+                })
+                .await;
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    while !nonce_path.exists() {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                let (release, receive) = std::sync::mpsc::channel::<()>();
+                let (started, ready) = tokio::sync::oneshot::channel();
+                let blocker = crate::spawn_blocking(move || {
+                    let _ = started.send(());
+                    let _ = receive.recv();
+                });
+                tokio::time::timeout(std::time::Duration::from_secs(5), ready)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                drop(writer);
+                let mut stream = reader.await.unwrap().into_inner();
+                let retained = lock.try_write().is_err();
+                let interrupt = stream.interrupt.clone();
+                assert!(!interrupt.load(Ordering::Acquire));
+                interrupt.store(true, Ordering::Release);
+                drop(release);
+                blocker.await.unwrap();
+                let error = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    stream.next(),
+                )
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+                assert_eq!(error.code(), tonic::Code::Cancelled);
+                assert_eq!(error.message(), "upload-pack cancelled");
+                assert!(stream.next().await.is_none());
+                drop(stream);
+                let writer =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), lock.write())
+                        .await
+                        .unwrap();
+                drop(writer);
+                assert!(
+                    retained,
+                    "shallow={shallow}: upload-pack released its queued reader before generation ended"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn test_upload_pack_backpressure_releases_reader_and_cancellation_drains_worker() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let root = TempDir::new().unwrap();
+            repo_with_commit(root.path(), TEST_REPO_H);
+            let repo = gix::open(fanout_path(root.path(), TEST_REPO_H).unwrap()).unwrap();
+            let parent = repo.head_commit().unwrap();
+            let mut state = 0x1234_5678_90ab_cdefu64;
+            let bytes: Vec<_> = (0..2 * 1024 * 1024)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    state as u8
+                })
+                .collect();
+            let blob = repo.write_blob(&bytes).unwrap().detach();
+            let mut tree = repo.edit_tree(parent.tree_id().unwrap().detach()).unwrap();
+            tree.upsert("payload.bin", gix::objs::tree::EntryKind::Blob, blob)
+                .unwrap();
+            let tree = tree.write().unwrap().detach();
+            let sig = gix::actor::SignatureRef {
+                name: "Test".into(),
+                email: "test@example.com".into(),
+                time: "0 +0000",
+            };
+            let tip = repo
+                .commit_as(
+                    sig,
+                    sig,
+                    "refs/heads/main",
+                    "large fetch",
+                    tree,
+                    [parent.id],
+                )
+                .unwrap()
+                .detach();
+            let limits = PushLimits::default();
+            let pack = crate::git::pack_server::build_pack_for_wants(
+                &repo,
+                &[tip.to_string()],
+                &[],
+                limits.max_pack_size,
+            )
+            .unwrap();
+            assert!(
+                pack.len() > 16 * 64 * 1024,
+                "fixture must fill the response channel"
+            );
+            drop(pack);
+            drop(bytes);
+            let service = make_test_service(root.path());
+            let lock = get_or_insert_lock(&service.repo_locks, TEST_REPO_H);
+            for shallow in [false, true] {
+                let want = format!("want {tip} side-band-64k shallow\n");
+                let mut body = format!("{:04x}{want}", want.len() + 4).into_bytes();
+                if shallow {
+                    body.extend_from_slice(b"000ddeepen 1\n");
+                }
+                body.extend_from_slice(b"00000009done\n");
+                let stream = service
+                    .upload_pack(signed_test_request(UploadPackRequest {
+                        repository_id: TEST_REPO_H.into(),
+                        body,
+                        authorization: test_authorization(TEST_REPO_H, "repository.contents.read"),
+                    }))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    while stream.inner.as_ref().len() != 16 {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                let interrupt = stream.interrupt.clone();
+                assert!(!interrupt.load(Ordering::Acquire));
+                let writer = tokio::time::timeout(std::time::Duration::from_secs(5), lock.write())
+                    .await
+                    .expect("response backpressure must not retain the repository read guard");
+                drop(writer);
+                let drained = crate::spawn_blocking(|| ());
+                assert!(!drained.is_finished());
+                drop(stream);
+                assert!(interrupt.load(Ordering::Acquire));
+                tokio::time::timeout(std::time::Duration::from_secs(5), drained)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+        });
+    }
+
     #[tokio::test]
-    async fn test_upload_pack_shallow_uses_configured_platform_bound() {
+    async fn test_upload_pack_uses_configured_platform_bound() {
         use tokio_stream::StreamExt;
 
         let root = TempDir::new().unwrap();
@@ -5926,31 +7155,46 @@ mod tests {
             .unwrap()
             .detach();
         let want = format!("want {tip} side-band-64k shallow\n");
-        let mut body = format!("{:04x}{want}", want.len() + 4).into_bytes();
-        body.extend_from_slice(b"000ddeepen 1\n00000009done\n");
-        let request = || {
+        let request = |shallow| {
+            let mut body = format!("{:04x}{want}", want.len() + 4).into_bytes();
+            if shallow {
+                body.extend_from_slice(b"000ddeepen 1\n");
+            }
+            body.extend_from_slice(b"00000009done\n");
             signed_test_request(UploadPackRequest {
                 repository_id: TEST_REPO_H.to_owned(),
-                body: body.clone(),
+                body,
                 authorization: test_authorization(TEST_REPO_H, "repository.contents.read"),
             })
         };
         let mut client =
             make_grpc_client_with_push_limits(root.path().to_path_buf(), PushLimits::default())
                 .await;
-        let mut stream = client.upload_pack(request()).await.unwrap().into_inner();
-        let mut response = Vec::new();
-        while let Some(chunk) = stream.next().await {
-            response.extend_from_slice(&chunk.unwrap().data);
+        for shallow in [false, true] {
+            let mut stream = client
+                .upload_pack(request(shallow))
+                .await
+                .unwrap()
+                .into_inner();
+            let mut response = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                response.extend_from_slice(&chunk.unwrap().data);
+            }
+            let expected = if shallow {
+                let boundary = format!("shallow {tip}\n");
+                format!("{:04x}{boundary}00000008NAK\n", boundary.len() + 4)
+            } else {
+                "0008NAK\n".to_owned()
+            };
+            assert!(response.starts_with(expected.as_bytes()));
+            assert!(response.len() > expected.len() + 4);
         }
-        let boundary = format!("shallow {tip}\n");
-        let expected = format!("{:04x}{boundary}00000008NAK\n", boundary.len() + 4);
-        assert!(response.starts_with(expected.as_bytes()));
-        assert!(response.len() > expected.len() + 4);
 
-        for (ceiling, expected_error) in [
-            (1, "shallow traversal exceeds configured pack size"),
-            (20, "shallow pack exceeds configured pack size"),
+        for (shallow, ceiling, expected_error) in [
+            (true, 1, "shallow traversal exceeds configured pack size"),
+            (true, 20, "shallow pack exceeds configured pack size"),
+            (false, 1, "pack exceeds configured pack size"),
+            (false, 20, "pack exceeds configured pack size"),
         ] {
             let mut client = make_grpc_client_with_push_limits(
                 root.path().to_path_buf(),
@@ -5960,8 +7204,16 @@ mod tests {
                 },
             )
             .await;
-            let mut stream = client.upload_pack(request()).await.unwrap().into_inner();
+            let mut stream = client
+                .upload_pack(request(shallow))
+                .await
+                .unwrap()
+                .into_inner();
             let error = stream.next().await.unwrap().unwrap_err();
+            assert!(
+                stream.next().await.is_none(),
+                "oversized pack must not send partial data"
+            );
             assert_eq!(error.code(), tonic::Code::Internal);
             assert!(error.message().contains(expected_error));
         }
@@ -6179,6 +7431,7 @@ mod tests {
                 &repo,
                 &[new.to_string()],
                 &[old.to_string()],
+                PushLimits::default().max_pack_size,
             )
             .unwrap();
             (old.to_string(), seed, new.to_string(), pack)
@@ -6265,6 +7518,156 @@ mod tests {
             .next()
             .is_none());
         assert!(!target_path.join("shallow").exists());
+    }
+
+    #[tokio::test]
+    async fn test_empty_receive_pack_shares_repository_read_guard() {
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_A);
+        let path = fanout_path(dir.path(), TEST_REPO_A).unwrap();
+        let head = gix::open(&path).unwrap().head_id().unwrap().to_string();
+        let svc = GitServiceImpl::new(
+            dir.path().into(),
+            RPCVerifier::new("fixture-key", None, dir.path()).unwrap(),
+        );
+        let lock = get_or_insert_lock(&svc.repo_locks, TEST_REPO_A);
+        let read = lock.clone().read_owned().await;
+        let mut client = make_grpc_client_for_service(svc).await;
+        let request = ReceivePackRequest {
+            repository_id: TEST_REPO_A.into(),
+            push_context: Some(minimal_push_ctx(TEST_REPO_A)),
+            shallow_oids: vec![head.clone()],
+            is_last: true,
+            ..Default::default()
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            client.receive_pack(signed_test_stream(vec![request])),
+        )
+        .await;
+        drop(read);
+        let report = result
+            .expect("an empty receive-pack must not require an exclusive repository lock")
+            .unwrap()
+            .into_inner()
+            .report_status;
+        assert!(String::from_utf8_lossy(&report).contains("unpack ok"));
+        assert!(!String::from_utf8_lossy(&report).contains("ok refs/"));
+        assert_eq!(
+            gix::open(&path).unwrap().head_id().unwrap().to_string(),
+            head
+        );
+        assert!(
+            lock.try_write().is_ok(),
+            "completed request retained a guard"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_empty_receive_pack_preserves_auth_and_shallow_validation() {
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_A);
+        let svc = GitServiceImpl::new(
+            dir.path().into(),
+            RPCVerifier::new("fixture-key", None, dir.path()).unwrap(),
+        );
+        let lock = get_or_insert_lock(&svc.repo_locks, TEST_REPO_A);
+        let read = lock.clone().read_owned().await;
+        let mut client = make_grpc_client_for_service(svc).await;
+        let base = ReceivePackRequest {
+            repository_id: TEST_REPO_A.into(),
+            push_context: Some(minimal_push_ctx(TEST_REPO_A)),
+            is_last: true,
+            ..Default::default()
+        };
+        let mut unsigned = signed_test_stream(vec![base.clone()]);
+        unsigned.metadata_mut().clear();
+        assert_eq!(
+            client.receive_pack(unsigned).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        let mut denied = base.clone();
+        denied
+            .push_context
+            .as_mut()
+            .unwrap()
+            .authorization
+            .as_mut()
+            .unwrap()
+            .action = "repository.contents.read".into();
+        assert_eq!(
+            client
+                .receive_pack(signed_test_stream(vec![denied]))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+        let mut invalid = base;
+        invalid.shallow_oids = vec!["invalid-shallow-id".into()];
+        assert_eq!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                client.receive_pack(signed_test_stream(vec![invalid])),
+            )
+            .await
+            .expect("shallow validation must not require exclusive locking")
+            .unwrap_err()
+            .code(),
+            tonic::Code::InvalidArgument
+        );
+        drop(read);
+        assert!(lock.try_write().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_nonempty_receive_pack_retains_exclusive_repository_guard() {
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_A);
+        let path = fanout_path(dir.path(), TEST_REPO_A).unwrap();
+        let head = gix::open(&path).unwrap().head_id().unwrap().to_string();
+        let svc = GitServiceImpl::new(
+            dir.path().into(),
+            RPCVerifier::new("fixture-key", None, dir.path()).unwrap(),
+        );
+        let lock = get_or_insert_lock(&svc.repo_locks, TEST_REPO_A);
+        let read = lock.clone().read_owned().await;
+        let mut client = make_grpc_client_for_service(svc).await;
+        let request = delete_ref_cmd_with_ctx(
+            TEST_REPO_A,
+            "refs/heads/main",
+            &head,
+            minimal_push_ctx(TEST_REPO_A),
+        );
+        let mut pending =
+            tokio::spawn(
+                async move { client.receive_pack(signed_test_stream(vec![request])).await },
+            );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut pending)
+                .await
+                .is_err(),
+            "a real ref update must wait for existing repository readers"
+        );
+        assert_eq!(
+            gix::open(&path).unwrap().head_id().unwrap().to_string(),
+            head
+        );
+        drop(read);
+        let report = tokio::time::timeout(std::time::Duration::from_secs(3), pending)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .into_inner()
+            .report_status;
+        assert!(String::from_utf8_lossy(&report).contains("ok refs/heads/main"));
+        assert!(gix::open(&path)
+            .unwrap()
+            .try_find_reference("refs/heads/main")
+            .unwrap()
+            .is_none());
+        assert!(lock.try_write().is_ok());
     }
 
     #[tokio::test]
@@ -6363,8 +7766,13 @@ mod tests {
     /// Build a full pack file containing all objects reachable from `tip_oid` in `src_repo`.
     /// Returns raw PACK bytes suitable for inclusion in a ReceivePackRequest.
     fn build_pack_bytes_from_repo(src_repo: &gix::Repository, tip_oid: gix::ObjectId) -> Vec<u8> {
-        crate::git::pack_server::build_pack_for_wants(src_repo, &[tip_oid.to_string()], &[])
-            .expect("build pack for test")
+        crate::git::pack_server::build_pack_for_wants(
+            src_repo,
+            &[tip_oid.to_string()],
+            &[],
+            PushLimits::default().max_pack_size,
+        )
+        .expect("build pack for test")
     }
 
     #[tokio::test]

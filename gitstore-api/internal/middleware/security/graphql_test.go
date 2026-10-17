@@ -106,7 +106,9 @@ func TestRepositoryNodeAbsenceDoesNotReachResolverOrHideOtherFailures(t *testing
 			})
 			require.Equal(t, 1, reads)
 			if mode == "missing" {
-				require.NoError(t, err)
+				var notFound *gqlerror.Error
+				require.ErrorAs(t, err, &notFound)
+				require.Equal(t, "NOT_FOUND", notFound.Extensions["code"])
 				require.Nil(t, value)
 				require.False(t, called, "an absent UID must not be reread without authorization")
 			} else if outcome == "existing" {

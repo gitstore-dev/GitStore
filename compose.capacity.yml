@@ -24,9 +24,9 @@ services:
         export GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat /run/secrets/serviceaccount-signing-key)"
         exec /app/api --config-file /etc/gitstore/gitstore.toml
     environment: &capacity-api-environment
-      GITSTORE_OBSERVABILITY__OTLP__ENDPOINT: ${CAPACITY_OTLP_ENDPOINT:-}
+      GITSTORE_OBSERVABILITY__OTLP__URI: ${CAPACITY_OTLP_URI:-}
       GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO: ${CAPACITY_TRACE_SAMPLE_RATIO:-0.05}
-      GITSTORE_API__PROFILING__LISTEN_ADDR: ${CAPACITY_API_PROFILE_ADDR:-}
+      GITSTORE_API__PROFILING__URI: ${CAPACITY_API_PROFILE_URI:-}
       REPOSITORY_CAPACITY_SECRET_SCENARIO: ${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}
       GITSTORE_API__DATASTORE__BACKEND: scylla
       GITSTORE_API__DATASTORE__SCYLLA__HOSTS: scylla-1:9042,scylla-2:9042,scylla-3:9042
@@ -152,9 +152,9 @@ services:
     command: ["/app/git-service", "--config-file", "/etc/gitstore/gitstore.toml"]
     environment:
       GITSTORE_GIT_SERVICE__CATALOG__URI: dns:///api-a:6000
-      GITSTORE_OBSERVABILITY__OTLP__ENDPOINT: ${CAPACITY_OTLP_ENDPOINT:-}
+      GITSTORE_OBSERVABILITY__OTLP__URI: ${CAPACITY_OTLP_URI:-}
       GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO: ${CAPACITY_TRACE_SAMPLE_RATIO:-0.05}
-      GITSTORE_GIT_SERVICE__METRICS__LISTEN_ADDR: ${CAPACITY_GIT_METRICS_ADDR:-}
+      GITSTORE_GIT_SERVICE__METRICS__URI: ${CAPACITY_GIT_METRICS_URI:-}
     volumes:
       - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
       - git-repo-data-root:/var/lib/gitstore/repos
@@ -181,6 +181,8 @@ services:
         exec /app/controller-manager --config-file /etc/gitstore/gitstore.toml
     environment:
       GITSTORE_CONTROLLER__API_URI: http://api-a:4000/graphql
+      GITSTORE_OBSERVABILITY__OTLP__URI: ${CAPACITY_OTLP_URI:-}
+      GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO: ${CAPACITY_TRACE_SAMPLE_RATIO:-0.05}
     ports:
       - "${CAPACITY_CONTROLLER_A_PORT:-5001}:5001"
     volumes:
@@ -205,6 +207,8 @@ services:
     container_name: ${COMPOSE_PROJECT_NAME:-gitstore-repository-capacity}-controller-manager-b
     environment:
       GITSTORE_CONTROLLER__API_URI: http://api-b:4000/graphql
+      GITSTORE_OBSERVABILITY__OTLP__URI: ${CAPACITY_OTLP_URI:-}
+      GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO: ${CAPACITY_TRACE_SAMPLE_RATIO:-0.05}
     ports:
       - "${CAPACITY_CONTROLLER_B_PORT:-5002}:5001"
     volumes:
@@ -252,6 +256,7 @@ services:
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=${CAPACITY_PROMETHEUS_RETENTION:-24h}
       - --storage.tsdb.retention.size=512MB
+      - --enable-feature=exemplar-storage
     ports:
       - "127.0.0.1:${CAPACITY_PROMETHEUS_PORT:-9090}:9090"
     extra_hosts:

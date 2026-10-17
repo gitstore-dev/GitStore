@@ -4,6 +4,7 @@
 package watchjournal
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -116,6 +117,9 @@ func namespaceLabels(payload json.RawMessage) map[string]string {
 }
 
 func jsonEqual(left, right json.RawMessage) bool {
+	if bytes.Equal(left, right) {
+		return true
+	}
 	var l, r any
 	if json.Unmarshal(left, &l) != nil || json.Unmarshal(right, &r) != nil {
 		return string(left) == string(right)

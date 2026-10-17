@@ -87,12 +87,22 @@ func TestCategoryTaxonomyDeletionLifecycleUsesResourceVersionPreconditions(t *te
 
 	require.NoError(t, store.CreateCategoryTaxonomy(ctx, category))
 
-	_, err = lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, "stale", time.Now())
+	_, err = lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, "stale", category.UID, time.Now())
 	require.ErrorIs(t, err, datastore.ErrConflict)
-	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, "1", time.Now())
+	for _, uid := range []string{"", "00000000-0000-0000-0000-000000000011"} {
+		_, err = lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, "1", uid, time.Now())
+		require.ErrorIs(t, err, datastore.ErrConflict)
+		current, err := store.GetCategoryTaxonomy(ctx, category.UID)
+		require.NoError(t, err)
+		require.Nil(t, current.DeletionTimestamp)
+		require.Equal(t, "1", current.ResourceVersion)
+	}
+	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, "1", category.UID, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, terminating.DeletionTimestamp)
 	assert.Contains(t, terminating.Finalizers, datastore.CategoryTaxonomyForegroundDeletionFinalizer)
+	_, err = lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, terminating.ResourceVersion, "", time.Now())
+	require.ErrorIs(t, err, datastore.ErrConflict)
 
 	_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, "1", category.UID)
 	require.ErrorIs(t, err, datastore.ErrConflict)
@@ -127,6 +137,8 @@ func TestCategoryTaxonomyCompletionFencesSameNameReplacement(t *testing.T) {
 	// Another replica has already deleted the observed incarnation and created
 	// a same-name replacement before this replica enters its write transaction.
 	for _, uid := range []string{observed.UID, ""} {
+		_, err = lifecycle.MarkCategoryTaxonomyDeletion(ctx, observed.Namespace, observed.Name, observed.ResourceVersion, uid, now)
+		require.ErrorIs(t, err, datastore.ErrConflict)
 		_, err = lifecycle.CompleteCategoryTaxonomyDeletion(ctx, observed.Namespace, observed.Name, observed.ResourceVersion, uid)
 		require.ErrorIs(t, err, datastore.ErrConflict)
 	}

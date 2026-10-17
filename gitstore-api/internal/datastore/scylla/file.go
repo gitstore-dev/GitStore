@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gocql/gocql"
 	"github.com/scylladb/gocqlx/v3/qb"
+	"go.opentelemetry.io/otel"
 )
 
 type fileRow struct {
@@ -64,6 +66,7 @@ func (s *scyllaDatastore) CreateFile(ctx context.Context, f *datastore.File) err
 	if f == nil {
 		return datastore.ErrInvalidArgument
 	}
+	s.takeFileMutationSnapshot(ctx, f.Namespace, f.UID)
 	return s.catalogMutation(ctx, "File", f.Namespace, f.RepositoryID, f.UID, false, func() error {
 		return s.createFile(ctx, f)
 	})
@@ -126,7 +129,7 @@ func (s *scyllaDatastore) GetFile(ctx context.Context, uid string) (*datastore.F
 	return s.getFileByKey(ctx, idx.Namespace, idx.CreationTimestamp, idx.UID)
 }
 
-const fileSnapshotLocatorBatchLimit = 16
+const fileSnapshotReadBatchLimit = 16
 
 func (s *scyllaDatastore) GetFileSnapshots(ctx context.Context, uids []string) ([]*datastore.File, error) {
 	if len(uids) > datastore.FileSnapshotBatchLimit {
@@ -147,6 +150,18 @@ func (s *scyllaDatastore) GetFileSnapshots(ctx context.Context, uids []string) (
 			keys = append(keys, key)
 		}
 		positions[key] = append(positions[key], i)
+	}
+	readSnapshots := func(namespace string, indices []fileIndexRow) error {
+		rows, err := s.getFileSnapshotRows(ctx, namespace, indices)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			for _, position := range positions[row.UID] {
+				results[position] = fileSnapshotFromRow(&row)
+			}
+		}
+		return nil
 	}
 	run := func(count int, read func(int) error) error {
 		errs := make([]error, count)
@@ -169,9 +184,10 @@ func (s *scyllaDatastore) GetFileSnapshots(ctx context.Context, uids []string) (
 		}
 		return errors.Join(errs...)
 	}
-	indices := make([]fileIndexRow, 0, len(keys))
-	for start := 0; start < len(keys); start += fileSnapshotLocatorBatchLimit {
-		end := min(start+fileSnapshotLocatorBatchLimit, len(keys))
+	batches := make([][]fileIndexRow, (len(keys)+fileSnapshotReadBatchLimit-1)/fileSnapshotReadBatchLimit)
+	err := run(len(batches), func(batch int) error {
+		start := batch * fileSnapshotReadBatchLimit
+		end := min(start+fileSnapshotReadBatchLimit, len(keys))
 		args := make([]any, end-start)
 		expected := make(map[gocql.UUID]bool, len(args))
 		for i, key := range keys[start:end] {
@@ -179,42 +195,52 @@ func (s *scyllaDatastore) GetFileSnapshots(ctx context.Context, uids []string) (
 		}
 		stmt := "SELECT " + strings.Join(s.fileByUIDTable.Metadata().Columns, ", ") +
 			" FROM files_by_uid WHERE uid IN (" + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + ")"
-		var batch []fileIndexRow
-		if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&batch); err != nil {
-			return nil, err
+		if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&batches[batch]); err != nil {
+			return err
 		}
-		for _, index := range batch {
+		fullNamespaceBatch := len(batches[batch]) == fileSnapshotReadBatchLimit
+		for _, index := range batches[batch] {
 			if index.Namespace == "" || !expected[index.UID] {
-				return nil, fmt.Errorf("%w: invalid File UID locator", datastore.ErrRepairRequired)
+				return fmt.Errorf("%w: invalid File UID locator", datastore.ErrRepairRequired)
 			}
 			delete(expected, index.UID)
-			indices = append(indices, index)
+			if index.Namespace != batches[batch][0].Namespace {
+				fullNamespaceBatch = false
+			}
 		}
+		// Full single-Namespace batches cannot merge with later locators.
+		// Read them now without increasing query counts or the worker ceiling.
+		if fullNamespaceBatch {
+			if err := readSnapshots(batches[batch][0].Namespace, batches[batch]); err != nil {
+				return err
+			}
+			batches[batch] = nil
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	groups := make(map[string][]fileIndexRow)
 	order := make([]string, 0)
-	for _, index := range indices {
-		if index.Namespace == "" {
-			continue
-		}
-		if _, seen := groups[index.Namespace]; !seen {
-			order = append(order, index.Namespace)
-		}
-		groups[index.Namespace] = append(groups[index.Namespace], index)
-	}
-	err := run(len(order), func(i int) error {
-		namespace := order[i]
-		indices := groups[namespace]
-		rows, err := s.getFileSnapshotRows(ctx, namespace, indices)
-		if err != nil {
-			return err
-		}
-		for _, row := range rows {
-			for _, position := range positions[row.UID] {
-				results[position] = fileSnapshotFromRow(&row)
+	for _, indices := range batches {
+		for _, index := range indices {
+			if _, seen := groups[index.Namespace]; !seen {
+				order = append(order, index.Namespace)
 			}
+			groups[index.Namespace] = append(groups[index.Namespace], index)
 		}
-		return nil
+	}
+	var authoritativeBatches [][]fileIndexRow
+	for _, namespace := range order {
+		indices := groups[namespace]
+		for start := 0; start < len(indices); start += fileSnapshotReadBatchLimit {
+			authoritativeBatches = append(authoritativeBatches, indices[start:min(start+fileSnapshotReadBatchLimit, len(indices))])
+		}
+	}
+	err = run(len(authoritativeBatches), func(i int) error {
+		indices := authoritativeBatches[i]
+		return readSnapshots(indices[0].Namespace, indices)
 	})
 	if err != nil {
 		return nil, err
@@ -361,11 +387,14 @@ func (s *scyllaDatastore) UpdateFile(ctx context.Context, f *datastore.File, exp
 	var existing *datastore.File
 	return s.catalogMutationWithProjection(ctx, "File", f.Namespace, f.RepositoryID, f.UID, false,
 		func() (*ProjectionRecord, error) {
+			if existing != nil {
+				return s.getFileCatalogProjectionByKey(ctx, existing.Namespace, existing.CreationTimestamp, mustParseUUID(existing.UID))
+			}
 			var err error
-			if existing == nil {
+			var found bool
+			existing, err, found = s.takeFileMutationSnapshot(ctx, f.Namespace, f.UID)
+			if !found {
 				existing, err = s.GetFile(ctx, f.UID)
-			} else {
-				existing, err = s.getFileByKey(ctx, existing.Namespace, existing.CreationTimestamp, mustParseUUID(existing.UID))
 			}
 			if err != nil {
 				return nil, err
@@ -374,6 +403,381 @@ func (s *scyllaDatastore) UpdateFile(ctx context.Context, f *datastore.File, exp
 		}, func() error {
 			return s.updateFile(ctx, f, expectedResourceVersion, existing)
 		})
+}
+
+type fileMutationSnapshot struct {
+	file  *datastore.File
+	err   error
+	ready bool
+}
+
+type fileMutationSnapshotRead struct {
+	uids   []string
+	batch  *fileMutationSnapshotReadBatch
+	offset int
+}
+
+type fileMutationSnapshotReadBatch struct {
+	ctx   context.Context
+	uids  []string
+	once  sync.Once
+	files []*datastore.File
+	err   error
+}
+
+func prepareFileMutationSnapshots(ctx context.Context, group []*fileMutationRequest) {
+	var selected []*fileMutationSnapshotRead
+	for i, request := range group {
+		if request.snapshots == nil || len(request.snapshots.uids) < 2 || request.ctx.Err() != nil {
+			continue
+		}
+		overlaps := false
+		for _, predecessor := range group[:i] {
+			if fileMutationRequestsOverlap(request, predecessor) {
+				overlaps = true
+				break
+			}
+			if predecessor.snapshots != nil {
+				for _, uid := range request.snapshots.uids {
+					if slices.Contains(predecessor.snapshots.uids, uid) {
+						overlaps = true
+						break
+					}
+				}
+			}
+			if overlaps {
+				break
+			}
+		}
+		if !overlaps {
+			selected = append(selected, request.snapshots)
+		}
+	}
+	if len(selected) < 2 {
+		return
+	}
+	batch := &fileMutationSnapshotReadBatch{ctx: ctx}
+	for _, read := range selected {
+		read.offset = len(batch.uids)
+		batch.uids = append(batch.uids, read.uids...)
+		read.batch = batch
+	}
+}
+
+func (read *fileMutationSnapshotRead) load(ctx context.Context, get func(context.Context, []string) ([]*datastore.File, error)) ([]*datastore.File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if read.batch == nil {
+		return get(ctx, read.uids)
+	}
+	batch := read.batch
+	// Only declared disjoint callbacks share this read. Cancellation follows
+	// the existing all-callers cohort context; selected callers still drain it.
+	batch.once.Do(func() { batch.files, batch.err = get(batch.ctx, batch.uids) })
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if batch.err != nil {
+		return nil, batch.err
+	}
+	return batch.files[read.offset : read.offset+len(read.uids)], nil
+}
+
+func (read *fileMutationSnapshotRead) loadWithParent(
+	ctx context.Context,
+	get func(context.Context, []string) ([]*datastore.File, error),
+	checkParent func(context.Context) error,
+) ([]*datastore.File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	parentDone := make(chan error, 1)
+	go func() { parentDone <- checkParent(ctx) }()
+	files, readErr := read.load(ctx, get)
+	parentErr := <-parentDone
+	if err := errors.Join(parentErr, readErr); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func (s *scyllaDatastore) WithFileMutationBatchSnapshots(ctx context.Context, namespace, repositoryID string, names, existingUIDs []string, operation func(context.Context) error) error {
+	if len(existingUIDs) > 4 || len(existingUIDs) > len(names) {
+		return fmt.Errorf("%w: File mutation snapshots exceed the callback bounds", datastore.ErrInvalidArgument)
+	}
+	uids := append([]string(nil), existingUIDs...)
+	read := &fileMutationSnapshotRead{uids: uids}
+	return s.withFileMutationBatch(ctx, namespace, repositoryID, names, read, func(batchCtx context.Context) error {
+		if len(uids) < 2 {
+			return operation(batchCtx)
+		}
+		scope, _ := batchCtx.Value(catalogFenceScopeKey{}).(*catalogFenceScope)
+		if !scope.isActiveFor(s, namespace) {
+			return errors.New("scylla: File mutation snapshots require an active reservation")
+		}
+		slots := make([]*fileMutationSnapshot, len(uids))
+		// Consuming an unfinished slot also prevents its later read result
+		// from becoming a stale write fact after a nested mutation.
+		scope.snapshotMu.Lock()
+		if scope.snapshots == nil {
+			scope.snapshots = make(map[string]*fileMutationSnapshot)
+		}
+		for i, uid := range uids {
+			if _, present := scope.snapshots[uid]; present || len(scope.snapshots) < 16 {
+				slots[i] = &fileMutationSnapshot{}
+				scope.snapshots[uid] = slots[i]
+			}
+		}
+		scope.snapshotMu.Unlock()
+		var files []*datastore.File
+		err := datastore.MeasureCatalogMutationPhase(batchCtx, datastore.FileMutationSnapshotRead, func() error {
+			var err error
+			files, err = read.loadWithParent(batchCtx, s.GetFileSnapshots, func(parentCtx context.Context) error {
+				return s.catalogParentsActive(parentCtx, namespace, repositoryID)
+			})
+			return err
+		})
+		scope.snapshotMu.Lock()
+		for i, uid := range uids {
+			if slot := slots[i]; slot != nil && scope.snapshots[uid] == slot {
+				slot.err, slot.ready = err, true
+				if err == nil {
+					slot.file = files[i]
+				}
+			}
+		}
+		scope.snapshotMu.Unlock()
+		return operation(batchCtx)
+	})
+}
+
+func (s *scyllaDatastore) takeFileMutationSnapshot(ctx context.Context, namespace, uid string) (*datastore.File, error, bool) {
+	scope, _ := ctx.Value(catalogFenceScopeKey{}).(*catalogFenceScope)
+	if !scope.isActiveFor(s, namespace) {
+		return nil, nil, false
+	}
+	scope.snapshotMu.Lock()
+	defer scope.snapshotMu.Unlock()
+	snapshot := scope.snapshots[uid]
+	delete(scope.snapshots, uid)
+	if snapshot == nil || !snapshot.ready {
+		return nil, nil, false
+	}
+	if snapshot.err != nil {
+		return nil, snapshot.err, true
+	}
+	if snapshot.file == nil {
+		return nil, datastore.ErrNotFound, true
+	}
+	return snapshot.file, nil, true
+}
+
+func (s *scyllaDatastore) getFileCatalogProjectionByKey(ctx context.Context, namespace string, created time.Time, uid gocql.UUID) (*ProjectionRecord, error) {
+	key := fileProjectionKey{created: created, uid: uid}
+	if scope, _ := ctx.Value(catalogFenceScopeKey{}).(*catalogFenceScope); scope.isActiveFor(s, namespace) {
+		return scope.readFileProjection(ctx, key)
+	}
+	return s.getFileCatalogProjectionPoint(ctx, namespace, key)
+}
+
+func (s *scyllaDatastore) getFileCatalogProjectionPoint(ctx context.Context, namespace string, key fileProjectionKey) (*ProjectionRecord, error) {
+	const statement = "SELECT namespace, creation_timestamp, uid, name, repository_id FROM files_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=?"
+	var row fileRow
+	if err := s.session.Query(statement, nil).WithContext(ctx).Bind(namespace, key.created, key.uid).GetRelease(&row); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, datastore.ErrNotFound
+		}
+		return nil, err
+	}
+	return fileCatalogProjection(fromFileRow(&row)), nil
+}
+
+func (s *scyllaDatastore) getFileCatalogProjectionRows(ctx context.Context, namespace string, keys []fileProjectionKey) ([]*ProjectionRecord, error) {
+	if len(keys) == 1 {
+		record, err := s.getFileCatalogProjectionPoint(ctx, namespace, keys[0])
+		if errors.Is(err, datastore.ErrNotFound) {
+			return []*ProjectionRecord{nil}, nil
+		}
+		return []*ProjectionRecord{record}, err
+	}
+	if len(keys) == 0 || len(keys) > fileSnapshotReadBatchLimit {
+		return nil, fmt.Errorf("%w: File projection reads require 1-%d keys", datastore.ErrInvalidArgument, fileSnapshotReadBatchLimit)
+	}
+	args := make([]any, 1, 1+2*len(keys))
+	args[0] = namespace
+	for _, key := range keys {
+		args = append(args, key.created, key.uid)
+	}
+	statement := "SELECT namespace, creation_timestamp, uid, name, repository_id FROM files_by_namespace " +
+		"WHERE namespace=? AND (creation_timestamp,uid) IN (" +
+		strings.TrimSuffix(strings.Repeat("(?,?),", len(keys)), ",") + ")"
+	var rows []fileRow
+	if err := s.session.Query(statement, nil).WithContext(ctx).Bind(args...).SelectRelease(&rows); err != nil {
+		return nil, err
+	}
+	results := make([]*ProjectionRecord, len(keys))
+	seen := make(map[gocql.UUID]bool, len(rows))
+	for _, row := range rows {
+		matched := false
+		for i, key := range keys {
+			if row.UID == key.uid && row.CreationTimestamp.Equal(key.created) && row.Namespace == namespace {
+				results[i] = fileCatalogProjection(fromFileRow(&row))
+				matched = true
+			}
+		}
+		if !matched || seen[row.UID] {
+			return nil, fmt.Errorf("%w: invalid File projection identity", datastore.ErrRepairRequired)
+		}
+		seen[row.UID] = true
+	}
+	return results, nil
+}
+
+type fileProjectionKey struct {
+	created time.Time
+	uid     gocql.UUID
+}
+
+type fileProjectionResult struct {
+	record *ProjectionRecord
+	err    error
+}
+
+type fileProjectionRequest struct {
+	ctx       context.Context
+	key       fileProjectionKey
+	reply     chan fileProjectionResult
+	queueDone func(error)
+}
+
+func (request *fileProjectionRequest) finishQueue(err error) {
+	if request.queueDone != nil {
+		request.queueDone(err)
+		request.queueDone = nil
+	}
+}
+
+type fileProjectionReader struct {
+	mu       sync.Mutex
+	closed   bool
+	requests chan *fileProjectionRequest
+	done     chan struct{}
+	read     func(context.Context, []fileProjectionKey) ([]*ProjectionRecord, error)
+}
+
+func newFileProjectionReader(read func(context.Context, []fileProjectionKey) ([]*ProjectionRecord, error)) *fileProjectionReader {
+	reader := &fileProjectionReader{
+		requests: make(chan *fileProjectionRequest, fileSnapshotReadBatchLimit),
+		done:     make(chan struct{}), read: read,
+	}
+	go reader.run()
+	return reader
+}
+
+func (reader *fileProjectionReader) submit(ctx context.Context, key fileProjectionKey) (*ProjectionRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	request := &fileProjectionRequest{
+		ctx: ctx, key: key, reply: make(chan fileProjectionResult, 1),
+		queueDone: datastore.StartCatalogMutationPhase(ctx, datastore.FileProjectionReadQueue),
+	}
+	reader.mu.Lock()
+	if reader.closed {
+		reader.mu.Unlock()
+		err := errors.New("scylla: File projection reader is closed")
+		request.finishQueue(err)
+		return nil, err
+	}
+	select {
+	case reader.requests <- request:
+		reader.mu.Unlock()
+	default:
+		reader.mu.Unlock()
+		err := errors.New("scylla: File projection reader queue exhausted")
+		request.finishQueue(err)
+		return nil, err
+	}
+	// Accepted reads must join physical work before their fence can be released.
+	result := <-request.reply
+	return result.record, result.err
+}
+
+func (reader *fileProjectionReader) close() {
+	reader.mu.Lock()
+	if !reader.closed {
+		reader.closed = true
+		close(reader.requests)
+	}
+	reader.mu.Unlock()
+	<-reader.done
+}
+
+func (reader *fileProjectionReader) run() {
+	defer close(reader.done)
+	for first := range reader.requests {
+		group := []*fileProjectionRequest{first}
+	drain:
+		for len(group) < cap(reader.requests) {
+			select {
+			case request, open := <-reader.requests:
+				if !open {
+					break drain
+				}
+				group = append(group, request)
+			default:
+				break drain
+			}
+		}
+		reader.execute(group)
+	}
+}
+
+func (reader *fileProjectionReader) execute(group []*fileProjectionRequest) {
+	liveRequests := make([]*fileProjectionRequest, 0, len(group))
+	for _, request := range group {
+		if err := request.ctx.Err(); err != nil {
+			request.finishQueue(err)
+			request.reply <- fileProjectionResult{err: err}
+		} else {
+			request.finishQueue(nil)
+			liveRequests = append(liveRequests, request)
+		}
+	}
+	if len(liveRequests) == 0 {
+		return
+	}
+	keys := make([]fileProjectionKey, len(liveRequests))
+	contexts := make([]context.Context, len(liveRequests))
+	for i, request := range liveRequests {
+		keys[i], contexts[i] = request.key, request.ctx
+	}
+	ctx, cancel := fileRequestGroupContext(contexts)
+	defer cancel()
+	var records []*ProjectionRecord
+	phase := datastore.FileProjectionReadBatch1 + datastore.CatalogMutationPhase(len(keys)-1)
+	err := datastore.MeasureCatalogMutationPhase(ctx, phase, func() error {
+		var err error
+		records, err = reader.read(ctx, keys)
+		if err == nil && len(records) != len(keys) {
+			return fmt.Errorf("%w: incomplete File projection read results", datastore.ErrRepairRequired)
+		}
+		return err
+	})
+	for i, request := range liveRequests {
+		result := fileProjectionResult{err: err}
+		switch {
+		case request.ctx.Err() != nil:
+			result.err = request.ctx.Err()
+		case err != nil:
+		case records[i] == nil:
+			result.err = datastore.ErrNotFound
+		default:
+			result.record = records[i]
+		}
+		request.reply <- result
+	}
 }
 
 func fileCatalogProjection(f *datastore.File) *ProjectionRecord {
@@ -422,6 +826,7 @@ func (s *scyllaDatastore) DeleteFileWithResourceVersion(ctx context.Context, uid
 	return s.deleteFileWithResourceVersion(ctx, f, expectedResourceVersion)
 }
 func (s *scyllaDatastore) deleteFileWithResourceVersion(ctx context.Context, f *datastore.File, expectedResourceVersion string) error {
+	s.takeFileMutationSnapshot(ctx, f.Namespace, f.UID)
 	return s.catalogMutation(ctx, "File", f.Namespace, f.RepositoryID, f.UID, true, func() error {
 		return s.deleteFileFenced(ctx, f, expectedResourceVersion)
 	})
@@ -430,15 +835,32 @@ func (s *scyllaDatastore) deleteFileWithResourceVersion(ctx context.Context, f *
 func (s *scyllaDatastore) deleteFileFenced(ctx context.Context, f *datastore.File, expectedResourceVersion string) error {
 	uid := f.UID
 	parsed := mustParseUUID(uid)
-	if err := s.deleteFileAuthoritative(ctx, toFileRow(f), expectedResourceVersion); err != nil {
-		return err
-	}
-	if err := s.syncOwnerReferenceDependents(ctx, f.Namespace, f.RepositoryID, "File", f.UID, f.Name, f.ResourceVersion, f.OwnerReferences, nil); err != nil {
-		return err
-	}
-	_ = s.releaseName(ctx, "files_by_name", f.Namespace, f.Name, parsed)
-	_ = s.releaseUID(ctx, "files_by_uid", f.Namespace, parsed, f.CreationTimestamp)
-	return nil
+	return s.mutations.executeConditionalDelete(ctx, expectedResourceVersion,
+		mutationAction{
+			Step: catalogueStep("delete", "File", uid, "files_by_namespace", uid, "delete-authoritative"),
+			Apply: func(ctx context.Context) error {
+				return s.deleteFileAuthoritative(ctx, toFileRow(f), expectedResourceVersion)
+			},
+		},
+		mutationAction{
+			Step: catalogueStep("delete", "File", uid, ownerReferenceDependentsTable, uid, "delete-owner-references"),
+			Apply: func(ctx context.Context) error {
+				return s.syncOwnerReferenceDependents(ctx, f.Namespace, f.RepositoryID, "File", uid, f.Name, f.ResourceVersion, f.OwnerReferences, nil)
+			},
+		},
+		mutationAction{
+			Step: catalogueStep("delete", "File", uid, "files_by_name", f.Namespace+"/"+f.Name, "delete-name"),
+			Apply: func(ctx context.Context) error {
+				return s.releaseName(ctx, "files_by_name", f.Namespace, f.Name, parsed)
+			},
+		},
+		mutationAction{
+			Step: catalogueStep("delete", "File", uid, "files_by_uid", uid, "delete-uid"),
+			Apply: func(ctx context.Context) error {
+				return s.releaseUID(ctx, "files_by_uid", f.Namespace, parsed, f.CreationTimestamp)
+			},
+		},
+	)
 }
 func (s *scyllaDatastore) UpdateFileStatus(ctx context.Context, ns, name string, p datastore.FileStatusPatch) (*datastore.File, error) {
 	f, err := s.GetFileByName(ctx, ns, name)
@@ -484,10 +906,18 @@ func (s *scyllaDatastore) updateFileAuthoritative(ctx context.Context, row, prev
 }
 
 type fileCASRequest struct {
-	ctx    context.Context
-	uid    gocql.UUID
-	values []any
-	reply  chan error
+	ctx       context.Context
+	uid       gocql.UUID
+	values    []any
+	reply     chan error
+	queueDone func(error)
+}
+
+func (request *fileCASRequest) finishQueue(err error) {
+	if request.queueDone != nil {
+		request.queueDone(err)
+		request.queueDone = nil
+	}
 }
 
 const fileCASBatchPayloadLimit = 64 << 10
@@ -524,18 +954,25 @@ func (writer *fileCASWriter) submit(ctx context.Context, uid gocql.UUID, values 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	request := &fileCASRequest{ctx: ctx, uid: uid, values: values, reply: make(chan error, 1)}
+	request := &fileCASRequest{
+		ctx: ctx, uid: uid, values: values, reply: make(chan error, 1),
+		queueDone: datastore.StartCatalogMutationPhase(ctx, datastore.FileMutationConditionalQueue),
+	}
 	writer.mu.Lock()
 	if writer.closed {
 		writer.mu.Unlock()
-		return errors.New("scylla: File conditional writer is closed")
+		err := errors.New("scylla: File conditional writer is closed")
+		request.finishQueue(err)
+		return err
 	}
 	select {
 	case writer.requests <- request:
 		writer.mu.Unlock()
 	default:
 		writer.mu.Unlock()
-		return errors.New("scylla: File conditional writer queue exhausted")
+		err := errors.New("scylla: File conditional writer queue exhausted")
+		request.finishQueue(err)
+		return err
 	}
 	// An accepted request must drain before its reservation can be released.
 	return <-request.reply
@@ -565,6 +1002,7 @@ func (writer *fileCASWriter) run() {
 			}
 		}
 		if err := first.ctx.Err(); err != nil {
+			first.finishQueue(err)
 			first.reply <- err
 			continue
 		}
@@ -579,6 +1017,7 @@ func (writer *fileCASWriter) run() {
 					break drain
 				}
 				if err := request.ctx.Err(); err != nil {
+					request.finishQueue(err)
 					request.reply <- err
 					continue
 				}
@@ -599,28 +1038,19 @@ func (writer *fileCASWriter) run() {
 }
 
 func (writer *fileCASWriter) execute(group []*fileCASRequest) {
+	for _, request := range group {
+		request.finishQueue(nil)
+	}
 	if len(group) == 1 {
 		group[0].reply <- writer.single(group[0])
 		return
 	}
-	ctx, cancel := context.WithCancel(context.WithoutCancel(group[0].ctx))
-	defer cancel()
-	var live atomic.Int64
-	live.Store(int64(len(group)))
-	for _, request := range group {
-		if request.ctx.Err() != nil {
-			if live.Add(-1) == 0 {
-				cancel()
-			}
-			continue
-		}
-		stop := context.AfterFunc(request.ctx, func() {
-			if live.Add(-1) == 0 {
-				cancel()
-			}
-		})
-		defer stop()
+	contexts := make([]context.Context, len(group))
+	for i, request := range group {
+		contexts[i] = request.ctx
 	}
+	ctx, cancel := fileRequestGroupContext(contexts)
+	defer cancel()
 	applied, err := writer.batch(ctx, group)
 	for _, request := range group {
 		switch {
@@ -635,29 +1065,61 @@ func (writer *fileCASWriter) execute(group []*fileCASRequest) {
 	}
 }
 
+func fileRequestGroupContext(contexts []context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(contexts[0]))
+	var live atomic.Int64
+	live.Store(int64(len(contexts)))
+	stops := make([]func() bool, 0, len(contexts))
+	for _, requestCtx := range contexts {
+		if requestCtx.Err() != nil {
+			if live.Add(-1) == 0 {
+				cancel()
+			}
+			continue
+		}
+		stop := context.AfterFunc(requestCtx, func() {
+			if live.Add(-1) == 0 {
+				cancel()
+			}
+		})
+		stops = append(stops, stop)
+	}
+	return ctx, func() {
+		for _, stop := range stops {
+			stop()
+		}
+		cancel()
+	}
+}
+
 func (s *scyllaDatastore) executeFileCAS(request *fileCASRequest) error {
 	if err := request.ctx.Err(); err != nil {
 		return err
 	}
-	applied, err := s.session.Query(fileUpdateStatement, nil).WithContext(request.ctx).Bind(request.values...).ExecCASRelease()
-	if err != nil {
-		return err
-	}
-	if !applied {
-		return datastore.ErrConflict
-	}
-	return nil
+	return datastore.MeasureCatalogMutationPhase(request.ctx, datastore.FileMutationConditionalSingle, func() (err error) {
+		ctx, finish := startCQLExchange(request.ctx, otel.Tracer("gitstore/datastore/scylla"))
+		defer func() { finish(err) }()
+		applied, err := s.session.Query(fileUpdateStatement, nil).WithContext(ctx).Bind(request.values...).ExecCASRelease()
+		if err != nil {
+			return err
+		}
+		if !applied {
+			return datastore.ErrConflict
+		}
+		return nil
+	})
 }
 
 func (s *scyllaDatastore) executeFileCASBatch(ctx context.Context, group []*fileCASRequest) (bool, error) {
 	phase := datastore.FileMutationConditionalBatch2 + datastore.CatalogMutationPhase(len(group)-2)
 	var applied bool
-	err := datastore.MeasureCatalogMutationPhase(ctx, phase, func() error {
-		batch := s.session.Batch(gocql.LoggedBatch).WithContext(ctx).RetryPolicy(&gocql.SimpleRetryPolicy{})
+	err := datastore.MeasureCatalogMutationPhase(ctx, phase, func() (err error) {
+		queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"))
+		defer func() { finish(err) }()
+		batch := s.session.Batch(gocql.LoggedBatch).WithContext(queryCtx).RetryPolicy(&gocql.SimpleRetryPolicy{})
 		for _, request := range group {
 			batch.Query(fileUpdateStatement, request.values...)
 		}
-		var err error
 		var iter *gocql.Iter
 		applied, iter, err = s.session.MapExecuteBatchCAS(batch, make(map[string]any))
 		if iter != nil {

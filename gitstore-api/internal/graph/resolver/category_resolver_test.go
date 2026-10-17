@@ -93,7 +93,7 @@ func TestCategoryResolver_CategoryByNamespacePath_NotFound(t *testing.T) {
 	got, err := qr.Category(context.Background(), model.CategoryBy{
 		NamespacePath: &model.CategoryNamespacePath{Namespace: "test-ns", Name: "missing"},
 	})
-	require.NoError(t, err)
+	requireReadNotFoundEnvelope(t, err, nodeKindCategory)
 	assert.Nil(t, got)
 }
 
@@ -102,7 +102,7 @@ func TestCategoryResolver_CategoryByID_NotFound(t *testing.T) {
 	categoryID := mustEncodeNodeID(nodeKindCategory, uuid.New().String())
 
 	got, err := qr.Category(context.Background(), model.CategoryBy{ID: &categoryID})
-	require.NoError(t, err)
+	requireReadNotFoundEnvelope(t, err, nodeKindCategory)
 	assert.Nil(t, got)
 }
 
@@ -290,7 +290,7 @@ func TestUpdateCategoryStatusDecouplesNonBlockingProducts(t *testing.T) {
 	datastore.AdvanceCategoryTaxonomySystemVersion(category)
 	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category, expectedResourceVersion))
 	lifecycle := store.(datastore.CategoryTaxonomyDeletionStore)
-	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
+	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, category.UID, time.Now().UTC())
 	require.NoError(t, err)
 
 	ownerReferences, err := json.Marshal([]catalog.OwnerReference{{
@@ -326,7 +326,7 @@ func TestUpdateCategoryStatusDecouplesProductsInBoundedPages(t *testing.T) {
 	datastore.AdvanceCategoryTaxonomySystemVersion(category)
 	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category, expectedResourceVersion))
 	lifecycle := store.(datastore.CategoryTaxonomyDeletionStore)
-	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
+	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, category.UID, time.Now().UTC())
 	require.NoError(t, err)
 
 	references, err := json.Marshal([]catalog.OwnerReference{{
@@ -369,7 +369,7 @@ func TestUpdateCategoryStatusDecoupleRejectsStaleCategoryVersion(t *testing.T) {
 	ctx := context.Background()
 	category := seedCategory(t, store, "test-ns", "parent", time.Now().UTC())
 	lifecycle := store.(datastore.CategoryTaxonomyDeletionStore)
-	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
+	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, category.UID, time.Now().UTC())
 	require.NoError(t, err)
 
 	decouple := true

@@ -2,5 +2,7 @@
   "schemaVersion": 1,
   "description": "Restart one explicitly selected GitStore API replica.",
   "action": "restart",
-  "expectedRecovery": "30s"
+  "expectedRecovery": "30s",
+  "readinessKind": "api",
+  "readinessURL": "http://127.0.0.1:4000/ready"
 }

@@ -166,14 +166,18 @@ query GetNode($id: ID!) {
 
 File IDs returned by `file` also resolve through `node` and `nodes`, with the
 same `file.read` authorization. Batch results retain input order, including
-duplicate IDs and null entries for missing resources. File datastore failures
-are reported as GraphQL errors, not successful missing-resource responses.
-The same absence/failure distinction applies to every supported Node kind,
-including Repository owner-namespace lookups: genuine absence remains null,
-while infrastructure failures and cancellation return errors. Error messages
-do not expose underlying datastore details. A failed batch does not return a
-success-shaped partial result. ServiceAccount implements Actor, not Node, and
-is queried through its identity-specific operations.
+duplicate IDs. A missing resource produces a null entry and a `NOT_FOUND`
+error whose `path` identifies that array index; malformed IDs produce a null
+entry and `BAD_USER_INPUT`. These errors do not discard other authorized
+results. An alias is retained in the error path, for example `["selected", 2]`
+for `selected: nodes(...)`.
+The same error envelope applies to every supported Node kind and to typed
+lookups such as `category`, `product`, and `namespace`, including missing
+Repository owner namespaces. Infrastructure failures and cancellation remain
+errors, never `NOT_FOUND`; they fail the batch rather than returning a
+success-shaped partial result. Error messages do not expose underlying
+datastore details. ServiceAccount implements Actor, not Node, and is queried
+through its identity-specific operations.
 Batch hydration uses at most eight concurrent resource reads per request.
 Cancellation stops scheduling new reads and cancels in-flight File lookups.
 File authorization checks use the record loaded by UID, including its owner,
@@ -1146,7 +1150,14 @@ GraphQL errors use the standard response shape:
       "message": "repository not found",
       "path": ["repository"],
       "extensions": {
-        "code": "NOT_FOUND"
+        "code": "NOT_FOUND",
+        "diagnostics": [
+          {
+            "reason": "REPOSITORY_NOT_FOUND",
+            "message": "repository not found",
+            "level": "FAILURE"
+          }
+        ]
       }
     }
   ],
@@ -1156,11 +1167,23 @@ GraphQL errors use the standard response shape:
 }
 ```
 
-Single-resource queries return `null` when the resource is not found.
+Single-resource queries return a null field **and an error**, not silent
+absence. Typed selectors (by ID or namespace/name) and `node(id:)` use the
+same domain error envelope as mutations. Missing resources use `NOT_FOUND`
+with a resource-specific diagnostic reason: `NAMESPACE_NOT_FOUND`,
+`PRODUCT_NOT_FOUND`, `CATEGORY_NOT_FOUND`, `REPOSITORY_NOT_FOUND`,
+`COLLECTION_NOT_FOUND`, `PRODUCT_VARIANT_NOT_FOUND`, or `FILE_NOT_FOUND`.
+If a referenced namespace is missing, the reason is `NAMESPACE_NOT_FOUND`.
+Malformed global IDs use `BAD_USER_INPUT` with `INVALID_GLOBAL_ID`.
+Clients should branch on `code` and `diagnostics[].reason`, not message text.
+Authorization denials retain `FORBIDDEN` without diagnostics or resource
+details. Do not interpret other GraphQL errors as permission to create a
+resource or as proof of deletion.
 
-### Mutation error envelope
+### Domain error envelope
 
-Git-backed mutations (`createCategory`, `updateCategory`, `deleteCategory`, `completeCategoryDeletion`, and the Namespace mutations) and status writes return errors with at most four `extensions` keys:
+Resource lookup domain errors, Git-backed mutation domain errors, and status
+conflicts share at most four domain `extensions` keys:
 
 | Key           | Present when                                                          | Value |
 |---------------|-----------------------------------------------------------------------|-------|

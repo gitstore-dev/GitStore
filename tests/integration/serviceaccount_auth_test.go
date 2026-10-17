@@ -5,6 +5,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
@@ -12,6 +13,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +22,261 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
+
+func TestServiceAccountReplicaLifecycleDeployed(t *testing.T) {
+	if os.Getenv("SECRET_TEST_RUN") != "1" {
+		t.Skip("use make test TARGET=secret-integration against an explicitly owned two-API deployment")
+	}
+	require.Equal(t, "1", os.Getenv("SECRET_TEST_OWNED_DEPLOYMENT"))
+	endpoints := []string{strings.TrimSuffix(os.Getenv("SECRET_TEST_API_A"), "/"),
+		strings.TrimSuffix(os.Getenv("SECRET_TEST_API_B"), "/")}
+	require.NotEmpty(t, endpoints[0])
+	require.NotEmpty(t, endpoints[1])
+	require.NotEqual(t, endpoints[0], endpoints[1])
+	tokenBytes, err := os.ReadFile(os.Getenv("SECRET_TEST_TOKEN_FILE"))
+	require.NoError(t, err)
+	adminToken := strings.TrimSpace(string(tokenBytes))
+	clear(tokenBytes)
+	require.NotEmpty(t, adminToken)
+	client := &http.Client{Timeout: 5 * time.Second}
+	defer client.CloseIdleConnections()
+	identities := []string{repositoryCapacityAPIIdentity(t, client, endpoints[0]),
+		repositoryCapacityAPIIdentity(t, client, endpoints[1])}
+	require.NotEqual(t, identities[0], identities[1], "endpoints must be independent API processes")
+
+	issuer := strings.TrimSuffix(os.Getenv("SECRET_TEST_REINCARNATION_API"), "/")
+	name := os.Getenv("SECRET_TEST_REINCARNATION_SERVICEACCOUNT")
+	require.Equal(t, issuer == "", name == "", "reincarnation issuer and test-created ServiceAccount name must be supplied together")
+	if issuer == "" {
+		name = uniqueName("sa-replica")
+	} else {
+		issuerIdentity := repositoryCapacityAPIIdentity(t, client, issuer)
+		for _, identity := range identities {
+			require.NotEqual(t, identity, issuerIdentity, "the test-policy issuer must not replace either target API")
+		}
+	}
+	privateKey := generateEd25519PEM(t)
+	create := `mutation($input:CreateServiceAccountInput!) {
+		createServiceAccount(input:$input) { serviceAccount {
+			metadata { name namespace uid } keyIDs
+		} }
+	}`
+	createInput := map[string]any{"input": map[string]any{
+		"metadata": map[string]any{"name": name},
+		"publicKeys": []map[string]any{{"kid": "key-1", "algorithm": "Ed25519",
+			"publicKeyPEM": extractPublicKeyPEM(t, privateKey)}},
+	}}
+	ownedUID := ""
+	const remove = `mutation($input:DeleteServiceAccountInput!) {
+		deleteServiceAccount(input:$input) { serviceAccount { metadata { uid } } }
+	}`
+	removeInput := map[string]any{"input": map[string]any{"metadata": map[string]any{"name": name}}}
+	t.Cleanup(func() {
+		if ownedUID == "" {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		result := secretTestGraphQLContext(t, ctx, endpoints[0], adminToken, remove, removeInput)
+		require.Equal(t, http.StatusOK, result.Status)
+		require.Empty(t, result.Errors, "test-owned ServiceAccount cleanup failed")
+		var data struct {
+			DeleteServiceAccount struct {
+				ServiceAccount struct{ Metadata struct{ UID string } }
+			}
+		}
+		require.NoError(t, json.Unmarshal(result.Data, &data))
+		require.Equal(t, ownedUID, data.DeleteServiceAccount.ServiceAccount.Metadata.UID)
+	})
+	var results [2]gqlResponse
+	t.Run("concurrent-global-create", func(t *testing.T) {
+		for index, endpoint := range endpoints {
+			t.Run(fmt.Sprintf("replica-%d", index), func(t *testing.T) {
+				t.Parallel()
+				results[index] = secretTestGraphQL(t, endpoint, adminToken, create, createInput)
+			})
+		}
+	})
+	require.False(t, t.Failed(), "concurrent API requests failed")
+	uid := ""
+	successes := 0
+	decodeCreated := func(result gqlResponse) string {
+		t.Helper()
+		require.Equal(t, http.StatusOK, result.Status)
+		require.Empty(t, result.Errors, "ServiceAccount creation failed")
+		var data struct {
+			CreateServiceAccount struct {
+				ServiceAccount struct {
+					Metadata struct{ Name, Namespace, UID string }
+					KeyIDs   []string
+				}
+			}
+		}
+		require.NoError(t, json.Unmarshal(result.Data, &data))
+		record := data.CreateServiceAccount.ServiceAccount
+		require.Equal(t, name, record.Metadata.Name)
+		require.Empty(t, record.Metadata.Namespace)
+		require.NotEmpty(t, record.Metadata.UID)
+		require.Equal(t, []string{"key-1"}, record.KeyIDs)
+		return record.Metadata.UID
+	}
+	for _, result := range results {
+		require.Equal(t, http.StatusOK, result.Status)
+		if len(result.Errors) == 0 {
+			uid = decodeCreated(result)
+			ownedUID = uid
+			successes++
+		} else {
+			require.Len(t, result.Errors, 1)
+			var conflict struct {
+				Message    string
+				Extensions struct{ Code string }
+			}
+			require.NoError(t, json.Unmarshal(result.Errors[0], &conflict))
+			require.True(t, conflict.Extensions.Code == "ALREADY_EXISTS" ||
+				conflict.Message == "datastore: already exists" ||
+				conflict.Message == fmt.Sprintf("service account %s already exists", name),
+				"losing creation must report the expected global uniqueness conflict")
+		}
+	}
+	require.Equal(t, 1, successes)
+
+	const issue = `mutation($input:IssueServiceAccountTokenInput!) {
+		issueServiceAccountToken(input:$input) { tokenRequest {
+			metadata { name namespace uid } status { token expirationTimestamp }
+		} }
+	}`
+	issueInput := map[string]any{"input": map[string]any{"metadata": map[string]any{"name": name},
+		"spec": map[string]any{"audiences": []string{"gitstore-api"}, "expirationSeconds": 600}}}
+	h := &serviceAccountAuthHarness{t: t}
+	issueToken := func(endpoint, assertion, expectedName, expectedUID string) (string, time.Time) {
+		t.Helper()
+		result := secretTestGraphQL(t, endpoint, assertion, issue, issueInput)
+		require.Equal(t, http.StatusOK, result.Status)
+		var firstError struct{ Extensions struct{ Code string } }
+		if len(result.Errors) > 0 {
+			require.NoError(t, json.Unmarshal(result.Errors[0], &firstError))
+		}
+		require.True(t, len(result.Errors) == 0, "fresh assertion was denied with code %q", firstError.Extensions.Code)
+		var data struct {
+			IssueServiceAccountToken struct {
+				TokenRequest struct {
+					Metadata struct{ Name, Namespace, UID string }
+					Status   struct {
+						Token               string
+						ExpirationTimestamp time.Time
+					}
+				}
+			}
+		}
+		require.NoError(t, json.Unmarshal(result.Data, &data))
+		record := data.IssueServiceAccountToken.TokenRequest
+		require.Equal(t, expectedName, record.Metadata.Name)
+		require.Empty(t, record.Metadata.Namespace)
+		require.Equal(t, expectedUID, record.Metadata.UID)
+		require.True(t, record.Status.Token != "", "issuance must return a token")
+		claims := jwt.MapClaims{}
+		_, _, err := jwt.NewParser().ParseUnverified(record.Status.Token, claims)
+		require.True(t, err == nil, "issued token must contain valid claims")
+		require.Equal(t, "system:serviceaccount:"+expectedName, claims["sub"])
+		require.Equal(t, expectedUID, claims["sa_uid"])
+		expiration, err := claims.GetExpirationTime()
+		require.NoError(t, err)
+		require.NotNil(t, expiration)
+		require.True(t, expiration.After(time.Now().Add(30*time.Second)), "token must remain valid during its peer read")
+		require.WithinDuration(t, expiration.Time, record.Status.ExpirationTimestamp, time.Second)
+		return record.Status.Token, expiration.Time
+	}
+	denied := func(result gqlResponse, code string) {
+		t.Helper()
+		require.True(t, result.Status == http.StatusOK || result.Status == http.StatusUnauthorized,
+			"transport/server failure is not an expected identity denial")
+		require.Len(t, result.Errors, 1)
+		require.True(t, len(bytes.TrimSpace(result.Data)) == 0 || bytes.Equal(bytes.TrimSpace(result.Data), []byte("null")),
+			"identity denial must not return successful partial data")
+		var rejection struct{ Extensions struct{ Code string } }
+		require.NoError(t, json.Unmarshal(result.Errors[0], &rejection))
+		require.Equal(t, code, rejection.Extensions.Code)
+	}
+	assertion := h.signClientAssertion(name, uid, privateKey)
+	denied(secretTestGraphQL(t, endpoints[0], assertion, issue, issueInput), "FORBIDDEN")
+	denied(secretTestGraphQL(t, endpoints[1], assertion, issue, issueInput), "UNAUTHENTICATED")
+
+	const read = `query { namespaces(first:1) { edges { node { id } } } }`
+	var oldToken string
+	var oldExpiration time.Time
+	if issuer != "" {
+		oldToken, oldExpiration = issueToken(issuer, h.signClientAssertion(name, uid, privateKey), name, uid)
+		for _, endpoint := range endpoints {
+			denied(secretTestGraphQL(t, endpoint, oldToken, read, nil), "FORBIDDEN")
+		}
+	}
+
+	deleted := secretTestGraphQL(t, endpoints[1], adminToken, remove, removeInput)
+	require.Equal(t, http.StatusOK, deleted.Status)
+	require.Empty(t, deleted.Errors)
+	if issuer != "" {
+		for _, endpoint := range endpoints {
+			require.True(t, time.Now().Before(oldExpiration), "token must not expire before deletion rejection is checked")
+			denied(secretTestGraphQL(t, endpoint, oldToken, read, nil), "UNAUTHENTICATED")
+		}
+	}
+	replacement := decodeCreated(secretTestGraphQL(t, endpoints[0], adminToken, create, createInput))
+	ownedUID = replacement
+	require.NotEqual(t, uid, replacement, "same-name recreation must create a new incarnation")
+	for index, endpoint := range endpoints {
+		denied(secretTestGraphQL(t, endpoint, h.signClientAssertion(name, uid, privateKey), issue, issueInput), "UNAUTHENTICATED")
+		denied(secretTestGraphQL(t, endpoint, h.signClientAssertion(name, replacement, privateKey), issue, issueInput), "FORBIDDEN")
+		require.Equal(t, identities[index], repositoryCapacityAPIIdentity(t, client, endpoint),
+			"identity checks must not be explained by an API process replacement")
+	}
+	if issuer != "" {
+		replacementToken, _ := issueToken(issuer, h.signClientAssertion(name, replacement, privateKey), name, replacement)
+		for _, endpoint := range endpoints {
+			require.True(t, time.Now().Before(oldExpiration), "recreation rejection must be independent of token expiration")
+			denied(secretTestGraphQL(t, endpoint, oldToken, read, nil), "UNAUTHENTICATED")
+			denied(secretTestGraphQL(t, endpoint, replacementToken, read, nil), "FORBIDDEN")
+		}
+		t.Log("unexpired old access token authenticated on both target APIs before deletion, then was denied after deletion and same-name/same-key recreation; replacement token authenticated without gaining target-policy permissions")
+	} else {
+		t.Log("access-token reincarnation not exercised: supply a separate test-policy issuer and a test-created bound name")
+	}
+
+	boundName := getEnv("SECRET_TEST_SERVICEACCOUNT", "gitstore-controller-manager")
+	kid := uniqueName("replica-proof-key")
+	boundUID := secretTestRotate(t, endpoints[0], adminToken, boundName,
+		[]secretCapacityOwnedKey{{ID: kid, Public: extractPublicKeyPEM(t, privateKey)}}, []string{})
+	t.Cleanup(func() {
+		require.Equal(t, boundUID, secretTestRotate(t, endpoints[0], adminToken, boundName, nil, []string{kid}),
+			"test-key cleanup must preserve the enrolled identity")
+	})
+	issueInput = map[string]any{"input": map[string]any{"metadata": map[string]any{"name": boundName},
+		"spec": map[string]any{"audiences": []string{"gitstore-api"}, "expirationSeconds": 600}}}
+	for index, endpoint := range endpoints {
+		assertion := h.signClientAssertionWithKeyID(boundName, boundUID, kid, privateKey)
+		token, _ := issueToken(endpoint, assertion, boundName, boundUID)
+		peer := endpoints[1-index]
+		denied(secretTestGraphQL(t, peer, assertion, issue, issueInput), "UNAUTHENTICATED")
+		result := secretTestGraphQL(t, peer, token,
+			`query { namespaces(first:1) { edges { node { id } } } }`, nil)
+		require.Equal(t, http.StatusOK, result.Status)
+		require.True(t, len(result.Errors) == 0, "peer-issued controller token must authorize its declared read")
+		var data struct {
+			Namespaces *struct {
+				Edges []struct{ Node struct{ ID string } }
+			}
+		}
+		require.NoError(t, json.Unmarshal(result.Data, &data))
+		require.NotNil(t, data.Namespaces)
+		require.NotNil(t, data.Namespaces.Edges)
+		require.True(t, len(data.Namespaces.Edges) <= 1)
+		for _, edge := range data.Namespaces.Edges {
+			require.NotEmpty(t, edge.Node.ID)
+		}
+		require.Equal(t, identities[index], repositoryCapacityAPIIdentity(t, client, endpoint))
+	}
+	t.Log("two independent APIs: global uniqueness, authorization versus stale-UID denial, shared replay rejection and peer-token authentication passed; original enrolled identity retained")
+}
 
 // generateEd25519PEM returns a fresh Ed25519 private key PEM-encoded as PKCS#8.
 func generateEd25519PEM(t *testing.T) string {

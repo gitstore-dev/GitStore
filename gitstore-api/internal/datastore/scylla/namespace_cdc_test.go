@@ -836,6 +836,10 @@ func TestNamespaceCreateRollbackSurfacesRepairRequired(t *testing.T) {
 	assert.ErrorContains(t, repair.Compensation, "cleanup could not be confirmed")
 }
 
+func NamespaceCDCDeletionReadyForTest(ctx context.Context, store datastore.Datastore, ns *datastore.Namespace) (bool, error) {
+	return store.(*scyllaDatastore).namespaceCDCDeletionReady(ctx, ns, true)
+}
+
 func TestNamespaceDeleteCleanupDetachesFromCanceledRequest(t *testing.T) {
 	requestCtx, cancelRequest := context.WithCancel(context.Background())
 	cancelRequest()

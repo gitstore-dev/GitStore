@@ -1002,6 +1002,137 @@ func TestValidateAndAdmitResources_File(t *testing.T) {
 	require.Equal(t, catalog.ConditionReady, status.Conditions[1].Type)
 }
 
+func TestAdmitResources_CurrentSnapshotReceiptAvoidsPreliminaryRefRead(t *testing.T) {
+	for count := 2; count <= 4; count++ {
+		for _, scenario := range []string{"success", "aborted", "deleted", "advanced", "unavailable", "denied", "unimplemented", "invalid-receipt", "cancelled", "final-ref-failure"} {
+			t.Run(fmt.Sprintf("%d/%s", count, scenario), func(t *testing.T) {
+				store := newTestDatastore(t)
+				oldCommit, newCommit := strings.Repeat("a", 40), strings.Repeat("b", 40)
+				paths := make([]string, count)
+				for i := range paths {
+					paths[i] = fmt.Sprintf("files/receipt-%d.md", i)
+				}
+				refCalls, pairCalls := 0, 0
+				failures := map[string]codes.Code{
+					"unavailable": codes.Unavailable, "denied": codes.PermissionDenied,
+					"unimplemented": codes.Unimplemented, "invalid-receipt": codes.Internal,
+					"cancelled": codes.Canceled, "final-ref-failure": codes.Unavailable,
+				}
+				git := &mockGitReader{
+					resolveRefFunc: func(context.Context, string, string) (string, error) {
+						refCalls++
+						switch scenario {
+						case "deleted":
+							return "", grpcstatus.Error(codes.NotFound, "ref deleted")
+						case "advanced":
+							return strings.Repeat("c", 40), nil
+						case "final-ref-failure":
+							return "", grpcstatus.Error(codes.Unavailable, "ref unavailable")
+						}
+						return newCommit, nil
+					},
+					readFilePairFunc: func(_ context.Context, repo string, actual []string, first, second, ref string) ([][]byte, [][]byte, error) {
+						pairCalls++
+						if pairCalls == 1 {
+							assert.Zero(t, refCalls, "a signed locked snapshot receipt must precede any redundant ref-only RPC")
+						}
+						require.Equal(t, testRepoID, repo)
+						require.Equal(t, paths, actual)
+						require.Equal(t, oldCommit, first)
+						require.Equal(t, newCommit, second)
+						require.Equal(t, "refs/heads/main", ref)
+						if pairCalls == 1 && (scenario == "aborted" || scenario == "deleted" || scenario == "advanced") {
+							return nil, nil, grpcstatus.Error(codes.Aborted, "snapshot ref changed")
+						}
+						if code, failed := failures[scenario]; failed && scenario != "final-ref-failure" {
+							return nil, nil, grpcstatus.Error(code, "snapshot proof unavailable")
+						}
+						before, after := make([][]byte, count), make([][]byte, count)
+						for i := range after {
+							after[i] = makeFile(fmt.Sprintf("receipt-%d", i))
+						}
+						return before, after, nil
+					},
+				}
+				srv := newCatalogServer(t, store, git)
+				_, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+					RepositoryId: testRepoID, OldCommitSha: oldCommit, NewCommitSha: newCommit,
+					RefName: "refs/heads/main", ChangedPaths: paths,
+				})
+				if code, failed := failures[scenario]; failed {
+					require.Equal(t, code, grpcstatus.Code(err))
+				} else {
+					require.NoError(t, err)
+				}
+				expectedPairs, expectedRefs := 1, 0
+				switch scenario {
+				case "success", "final-ref-failure", "deleted", "advanced":
+					expectedRefs = 1
+				case "aborted":
+					expectedPairs, expectedRefs = 2, 2
+				}
+				require.Equal(t, expectedPairs, pairCalls)
+				require.Equal(t, expectedRefs, refCalls, "only proof supersession or the final fresh check may resolve the ref")
+				for i := range paths {
+					file, readErr := store.GetFileByName(t.Context(), "gitstore", fmt.Sprintf("receipt-%d", i))
+					if scenario == "success" || scenario == "aborted" || scenario == "final-ref-failure" {
+						require.NoError(t, readErr)
+						require.Equal(t, newCommit, file.GitCommitSHA)
+					} else {
+						require.ErrorIs(t, readErr, datastore.ErrNotFound, "failed or superseded proofs must not publish Files")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestAdmitResources_SupersededSnapshotReceiptRetainsNamespaceOnlyConvergence(t *testing.T) {
+	store := newNamespacePolicyDatastore(t)
+	seed, accepted, newer := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)
+	path := "namespaces/receipt-convergence.md"
+	content := namespaceManifest("receipt-convergence", "Accepted", "ORGANIZATION")
+	head := newer
+	reader := newTreeGitReader(&head, map[string]map[string][]byte{
+		seed: {},
+		accepted: {
+			path: content, "files/receipt.md": makeFileWithBody("receipt", "accepted"),
+		},
+		newer: {
+			path: content, "files/receipt.md": makeFileWithBody("receipt", "newer"),
+		},
+	})
+	proofs := 0
+	reader.readFilePairFunc = func(context.Context, string, []string, string, string, string) ([][]byte, [][]byte, error) {
+		proofs++
+		return nil, nil, grpcstatus.Error(codes.Aborted, "the requested commit is no longer current")
+	}
+	srv := newCatalogServer(t, store, &repositoryHistoryReader{
+		mockGitReader: reader,
+		proof: func(ctx context.Context, repository, path, tip, ancestor string) ([]byte, error) {
+			require.Equal(t, accepted, ancestor)
+			require.Equal(t, newer, tip)
+			return reader.ReadFile(ctx, repository, path, tip)
+		},
+	})
+	_, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, OldCommitSha: seed, NewCommitSha: accepted,
+		RefName: "refs/heads/main", ChangedPaths: []string{path, "files/receipt.md"},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{
+			Subject: "alice", AuthMethod: "static-users",
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, proofs)
+	namespace, err := store.GetNamespaceByName(t.Context(), "receipt-convergence")
+	require.NoError(t, err)
+	require.Equal(t, "Accepted", namespace.Title)
+	require.Equal(t, accepted, namespace.GitCommitSHA)
+	require.Equal(t, "alice", namespace.CreationActor)
+	_, err = store.GetFileByName(t.Context(), "gitstore-system", "receipt")
+	require.ErrorIs(t, err, datastore.ErrNotFound, "superseded File content must not enter Namespace-only convergence")
+}
+
 func TestCatalogAdmissionStagesPreserveSuccessAndFailure(t *testing.T) {
 	for _, scenario := range []string{"success", "unsigned", "read-failure"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -1216,6 +1347,181 @@ func TestAdmitResources_FileMutationErrorsReachBatchBoundary(t *testing.T) {
 	require.Equal(t, 1, store.batches)
 	require.EqualValues(t, 2, store.writes.Load(), "all independent writes must finish before deciding the batch outcome")
 	require.ErrorIs(t, store.batchError, datastore.ErrRepairRequired, "the parent fence must retain ambiguous writes")
+}
+
+type filePreparationStore struct {
+	*fileMutationBatchStore
+	points    atomic.Int64
+	snapshots atomic.Int64
+	read      func(context.Context, string, []string) ([]*datastore.File, error)
+}
+
+func (s *filePreparationStore) GetFileByName(ctx context.Context, namespace, name string) (*datastore.File, error) {
+	s.points.Add(1)
+	return s.Datastore.GetFileByName(ctx, namespace, name)
+}
+
+func (s *filePreparationStore) GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*datastore.File, error) {
+	s.snapshots.Add(1)
+	if s.read != nil {
+		return s.read(ctx, namespace, names)
+	}
+	return s.Datastore.GetFileSnapshotsByName(ctx, namespace, names)
+}
+
+func TestAdmitResources_FilePreparationUsesOneFreshBoundedSnapshot(t *testing.T) {
+	for _, count := range []int{1, 2, 4, 5} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			base := newTestDatastore(t)
+			store := &filePreparationStore{fileMutationBatchStore: &fileMutationBatchStore{Datastore: base}}
+			first, second := strings.Repeat("a", 40), strings.Repeat("b", 40)
+			current := first
+			oldTree, newTree := make(map[string][]byte), make(map[string][]byte)
+			for i := range count {
+				name := fmt.Sprintf("prepared-%d", i)
+				oldTree["files/"+name+".md"] = makeFileWithBody(name, "old body")
+				newTree["files/"+name+".md"] = makeFileWithBody(name, "new body")
+			}
+			git := newTreeGitReader(&current, map[string]map[string][]byte{first: oldTree, second: newTree})
+			srv := newCatalogServer(t, store, git)
+			for _, commit := range []string{first, second} {
+				store.points.Store(0)
+				store.snapshots.Store(0)
+				current = commit
+				previous := ""
+				if commit == second {
+					previous = first
+				}
+				_, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+					RepositoryId: testRepoID, OldCommitSha: previous, NewCommitSha: commit, RefName: "refs/heads/main",
+				})
+				require.NoError(t, err)
+				if count > 1 && count <= 4 {
+					require.EqualValues(t, 1, store.snapshots.Load(), "each preparation boundary must load one new bounded snapshot")
+					require.Zero(t, store.points.Load(), "preparation must not issue redundant per-File point reads")
+				} else {
+					require.Zero(t, store.snapshots.Load())
+					require.EqualValues(t, count, store.points.Load(), "other shapes retain existing point reads")
+				}
+				for i := range count {
+					file, err := base.GetFileByName(t.Context(), "gitstore", fmt.Sprintf("prepared-%d", i))
+					require.NoError(t, err)
+					require.Equal(t, commit, file.GitCommitSHA)
+					require.Equal(t, map[string]string{first: "old body", second: "new body"}[commit], file.Body)
+				}
+			}
+		})
+	}
+}
+
+type fileFencedSnapshotStore struct {
+	*fileCohortStore
+	snapshotBatches int
+	uids            []string
+}
+
+func (s *fileFencedSnapshotStore) WithFileMutationBatchSnapshots(ctx context.Context, namespace, repositoryID string, names, uids []string, operation func(context.Context) error) error {
+	s.snapshotBatches++
+	s.uids = append([]string(nil), uids...)
+	return s.WithFileMutationBatch(ctx, namespace, repositoryID, names, operation)
+}
+
+func TestAdmitResources_FileMutationSnapshotsReceiveOnlyBoundedUpdateUIDs(t *testing.T) {
+	for _, count := range []int{1, 2, 4, 5} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			base := newTestDatastore(t)
+			store := &fileFencedSnapshotStore{fileCohortStore: &fileCohortStore{
+				fileMutationBatchStore: &fileMutationBatchStore{Datastore: base},
+			}}
+			first, second := strings.Repeat("a", 40), strings.Repeat("b", 40)
+			current := first
+			oldTree, newTree := make(map[string][]byte), make(map[string][]byte)
+			for i := range count {
+				name := fmt.Sprintf("fenced-%d", i)
+				oldTree["files/"+name+".md"] = makeFileWithBody(name, "old body")
+				newTree["files/"+name+".md"] = makeFileWithBody(name, "new body")
+			}
+			git := newTreeGitReader(&current, map[string]map[string][]byte{first: oldTree, second: newTree})
+			srv := newCatalogServer(t, store, git)
+			_, err := srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, NewCommitSha: first, RefName: "refs/heads/main",
+			})
+			require.NoError(t, err)
+			require.Zero(t, store.snapshotBatches, "creates must not add a UID prefetch")
+			current = second
+			_, err = srv.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: second, RefName: "refs/heads/main",
+			})
+			require.NoError(t, err)
+			if count > 1 && count <= 4 {
+				require.Equal(t, 1, store.snapshotBatches)
+				require.Len(t, store.uids, count)
+				for _, uid := range store.uids {
+					file, err := base.GetFile(t.Context(), uid)
+					require.NoError(t, err)
+					require.Equal(t, second, file.GitCommitSHA)
+					require.Equal(t, "new body", file.Body)
+				}
+			} else {
+				require.Zero(t, store.snapshotBatches)
+			}
+		})
+	}
+}
+
+func TestAdmitResources_FilePreparationSnapshotFailuresDoNotFallBackOrWrite(t *testing.T) {
+	for _, scenario := range []string{"storage", "cardinality", "namespace", "name", "uid", "cancelled"} {
+		t.Run(scenario, func(t *testing.T) {
+			base := newTestDatastore(t)
+			failure := errors.New("File snapshot storage unavailable")
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			store := &filePreparationStore{fileMutationBatchStore: &fileMutationBatchStore{Datastore: base}}
+			store.read = func(_ context.Context, namespace string, names []string) ([]*datastore.File, error) {
+				require.Equal(t, "gitstore", namespace)
+				require.Len(t, names, 2)
+				files := make([]*datastore.File, len(names))
+				for i, name := range names {
+					files[i] = &datastore.File{UID: fmt.Sprintf("snapshot-%d", i), Namespace: namespace, Name: name}
+				}
+				switch scenario {
+				case "storage":
+					return nil, failure
+				case "cardinality":
+					return files[:1], nil
+				case "namespace":
+					files[0].Namespace = "other"
+				case "name":
+					files[0].Name = "other"
+				case "uid":
+					files[0].UID = ""
+				case "cancelled":
+					cancel()
+				}
+				return files, nil
+			}
+			current := strings.Repeat("a", 40)
+			git := newTreeGitReader(&current, map[string]map[string][]byte{current: {
+				"files/first.md": makeFile("first"), "files/second.md": makeFile("second"),
+			}})
+			srv := newCatalogServer(t, store, git)
+			_, err := srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, NewCommitSha: current, RefName: "refs/heads/main",
+			})
+			require.Error(t, err)
+			require.EqualValues(t, 1, store.snapshots.Load())
+			require.Zero(t, store.points.Load(), "a failed batch must not silently retry through point reads")
+			require.Zero(t, store.writes.Load(), "invalid or failed snapshots must never become absence and create resources")
+			switch scenario {
+			case "storage":
+				require.ErrorIs(t, store.batchError, failure)
+			case "cancelled":
+				require.ErrorIs(t, store.batchError, context.Canceled)
+			default:
+				require.ErrorIs(t, store.batchError, datastore.ErrRepairRequired)
+			}
+		})
+	}
 }
 
 func TestAdmitResources_FileBatchPreflightPreservesCASAndFreshNoops(t *testing.T) {
@@ -2012,6 +2318,33 @@ func deletionValidationTree(oldResources, proposedResources map[string][]byte) *
 	return &catalogv1.ResourceValidationTree{
 		OldBlobs:      toBlobs(oldResources),
 		ProposedBlobs: toBlobs(proposedResources),
+	}
+}
+
+func TestValidateResourcesDeletionCompletionRequiresNoSnapshotChecks(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		trees    []*catalogv1.ResourceValidationTree
+		complete bool
+	}{
+		{"file-deletion", []*catalogv1.ResourceValidationTree{deletionValidationTree(map[string][]byte{"files/image.md": makeFile("image")}, nil)}, true},
+		{"product-update", []*catalogv1.ResourceValidationTree{deletionValidationTree(map[string][]byte{"products/widget.md": makeProduct("widget")}, map[string][]byte{"products/widget.md": makeProduct("widget")})}, true},
+		{"product-deletion", []*catalogv1.ResourceValidationTree{deletionValidationTree(map[string][]byte{"products/widget.md": makeProduct("widget")}, nil)}, false},
+		{"category-deletion", []*catalogv1.ResourceValidationTree{deletionValidationTree(map[string][]byte{"categories/parent.md": makeCategoryTaxonomy("parent")}, nil)}, false},
+		{"mixed-refs", []*catalogv1.ResourceValidationTree{
+			deletionValidationTree(map[string][]byte{"files/image.md": makeFile("image")}, nil),
+			deletionValidationTree(map[string][]byte{"products/widget.md": makeProduct("widget")}, nil),
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newCatalogServer(t, newTestDatastore(t), nil)
+			response, err := srv.ValidateResources(t.Context(), &catalogv1.ValidateResourcesRequest{
+				RepositoryId: testRepoID, Trees: tc.trees,
+			})
+			require.NoError(t, err)
+			require.True(t, response.Accepted)
+			require.Equal(t, tc.complete, response.ResourceDeletionValidationComplete)
+		})
 	}
 }
 
@@ -2957,6 +3290,7 @@ func (s *concurrentProductDeleteStore) MarkProductTerminating(ctx context.Contex
 	}
 	snapshotVersion := current.ResourceVersion
 	datastore.AdvanceProductSystemVersion(current)
+	current.GitRef = "refs/heads/reowned"
 	if err := s.UpdateProduct(ctx, current, snapshotVersion); err != nil {
 		return nil, err
 	}
@@ -3007,6 +3341,8 @@ func TestAdmitResources_DeleteRejectsConcurrentReownership(t *testing.T) {
 	product, getErr := base.GetProductByName(context.Background(), "gitstore", "widget")
 	require.NoError(t, getErr)
 	assert.Equal(t, "2", product.ResourceVersion)
+	assert.Equal(t, "refs/heads/reowned", product.GitRef)
+	assert.Nil(t, product.DeletionTimestamp)
 }
 
 func TestAdmitResources_OperationAwareDeleteRemovesProductVariant(t *testing.T) {
@@ -3849,6 +4185,9 @@ func TestAdmitResourcesFileConflictRefFailureIsNotSupersession(t *testing.T) {
 func TestAdmitResourcesNamespaceWriteFailureIsNotSuccess(t *testing.T) {
 	store := &admissionWriteFailureStore{Datastore: newTestDatastore(t), namespaceError: errors.New("Namespace write IO failure")}
 	srv := newCatalogServer(t, store, &mockGitReader{
+		resolveRefFunc: func(context.Context, string, string) (string, error) {
+			return strings.Repeat("b", 40), nil
+		},
 		readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
 			return namespaceManifest("write-failure", "Write Failure", "ORGANIZATION"), nil
 		},
@@ -3967,7 +4306,7 @@ func TestAdmitResourcesSnapshotRefReceiptRetainsFreshnessBoundaries(t *testing.T
 			switch scenario {
 			case "current pair", "final ref failure":
 				require.Equal(t, 1, pairReads)
-				require.Equal(t, 2, refReads, "initial and final ref checks are mandatory")
+				require.Equal(t, 1, refReads, "the locked snapshot proves initial freshness; the final ref check remains mandatory")
 			case "single path", "new branch":
 				require.Zero(t, pairReads)
 				require.Equal(t, 3, refReads, "unpaired reads retain the middle recheck")
@@ -3975,7 +4314,7 @@ func TestAdmitResourcesSnapshotRefReceiptRetainsFreshnessBoundaries(t *testing.T
 				require.Equal(t, namespaceadmission.AdmissionWriteAttempts, pairReads)
 			case "deleted during pair":
 				require.Equal(t, 1, pairReads)
-				require.Equal(t, 2, refReads)
+				require.Equal(t, 1, refReads)
 			}
 			if scenario == "stale pair" || scenario == "deleted during pair" || scenario == "pair failure" {
 				_, err := store.GetFileByName(t.Context(), "gitstore", "receipt-a")

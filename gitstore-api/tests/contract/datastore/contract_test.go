@@ -2,9 +2,8 @@
 // Copyright (c) 2026 GitStore contributors
 
 // Backend-agnostic datastore contract suite.
-// RunContractSuite verifies that any Datastore implementation satisfies the full
-// behavioural contract: all 18 CRUD operations, sentinel error wrapping, filter
-// semantics, and slug/SKU lookups.
+// RunContractSuite verifies supported resource operations, sentinel error
+// wrapping, strict CAS, canonical envelopes, filters and identity lookups.
 
 package datastore_contract_test
 
@@ -186,6 +185,82 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 			},
 			func() (string, int64, error) {
 				got, err := ds.GetRepository(ctx, original.UID)
+				if err != nil {
+					return "", 0, err
+				}
+				return got.ResourceVersion, got.Generation, nil
+			})
+	})
+	t.Run("Product/VersionCAS", func(t *testing.T) {
+		original := newProduct()
+		original.ResourceVersion, original.Generation = "1", 7
+		require.NoError(t, ds.CreateProduct(ctx, original))
+		runVersionCASContract(t,
+			func(expected, desired string) error {
+				next := *original
+				next.ResourceVersion, next.Body = desired, "updated"
+				return ds.UpdateProduct(ctx, &next, expected)
+			},
+			func() (string, int64, error) {
+				got, err := ds.GetProduct(ctx, original.UID)
+				if err != nil {
+					return "", 0, err
+				}
+				return got.ResourceVersion, got.Generation, nil
+			})
+	})
+	t.Run("ProductVariant/VersionCAS", func(t *testing.T) {
+		original := &datastore.ProductVariant{
+			UID: newID(), Namespace: "cas-ns", Name: "variant-" + newID()[:8],
+			SKU: newID(), ProductRefName: "parent", ResourceVersion: "1", Generation: 7,
+			CreationTimestamp: time.Now(),
+		}
+		require.NoError(t, ds.CreateProductVariant(ctx, original))
+		runVersionCASContract(t,
+			func(expected, desired string) error {
+				next := *original
+				next.ResourceVersion, next.Body = desired, "updated"
+				return ds.UpdateProductVariant(ctx, &next, expected)
+			},
+			func() (string, int64, error) {
+				got, err := ds.GetProductVariant(ctx, original.UID)
+				if err != nil {
+					return "", 0, err
+				}
+				return got.ResourceVersion, got.Generation, nil
+			})
+	})
+	t.Run("CategoryTaxonomy/VersionCAS", func(t *testing.T) {
+		original := newCategoryTaxonomy()
+		original.ResourceVersion, original.Generation = "1", 7
+		require.NoError(t, ds.CreateCategoryTaxonomy(ctx, original))
+		runVersionCASContract(t,
+			func(expected, desired string) error {
+				next := *original
+				next.ResourceVersion, next.Body = desired, "updated"
+				return ds.UpdateCategoryTaxonomy(ctx, &next, expected)
+			},
+			func() (string, int64, error) {
+				got, err := ds.GetCategoryTaxonomy(ctx, original.UID)
+				if err != nil {
+					return "", 0, err
+				}
+				return got.ResourceVersion, got.Generation, nil
+			})
+	})
+	t.Run("Collection/VersionCAS", func(t *testing.T) {
+		original := newCollection()
+		original.ResourceVersion, original.Generation = "1", 7
+		original.CreationTimestamp = time.Now()
+		require.NoError(t, ds.CreateCollection(ctx, original))
+		runVersionCASContract(t,
+			func(expected, desired string) error {
+				next := *original
+				next.ResourceVersion, next.Body = desired, "updated"
+				return ds.UpdateCollection(ctx, &next, expected)
+			},
+			func() (string, int64, error) {
+				got, err := ds.GetCollection(ctx, original.UID)
 				if err != nil {
 					return "", 0, err
 				}
@@ -1379,10 +1454,17 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		p := newProduct()
 		p.Namespace = ns.Name
 		p.RepositoryID = repo.UID
+		p.ResourceVersion = "1"
 		require.NoError(t, ds.CreateProduct(ctx, p))
 		has, err = ds.HasCatalogResources(ctx, repo.UID)
 		require.NoError(t, err)
 		assert.True(t, has)
+		deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+		p.DeletionTimestamp, p.Finalizers, p.ResourceVersion = &deletedAt, []string{"gitstore.dev/contract-blocker"}, "2"
+		require.NoError(t, ds.UpdateProduct(ctx, p, "1"))
+		has, err = ds.HasCatalogResources(ctx, repo.UID)
+		require.NoError(t, err)
+		assert.True(t, has, "a terminating Product remains a deletion blocker")
 		require.NoError(t, ds.DeleteProduct(ctx, p.UID))
 
 		v := &datastore.ProductVariant{
@@ -1395,11 +1477,17 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 			SKU:               "sku-" + newID()[:8],
 			ProductRefName:    "product-" + newID()[:8],
 			RepositoryID:      repo.UID,
+			ResourceVersion:   "1",
 		}
 		require.NoError(t, ds.CreateProductVariant(ctx, v))
 		has, err = ds.HasCatalogResources(ctx, repo.UID)
 		require.NoError(t, err)
 		assert.True(t, has)
+		v.DeletionTimestamp, v.Finalizers, v.ResourceVersion = &deletedAt, []string{"gitstore.dev/contract-blocker"}, "2"
+		require.NoError(t, ds.UpdateProductVariant(ctx, v, "1"))
+		has, err = ds.HasCatalogResources(ctx, repo.UID)
+		require.NoError(t, err)
+		assert.True(t, has, "a terminating ProductVariant remains a deletion blocker")
 		require.NoError(t, ds.DeleteProductVariant(ctx, v.UID))
 
 		c := newCategoryTaxonomy()
@@ -1409,15 +1497,26 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		has, err = ds.HasCatalogResources(ctx, repo.UID)
 		require.NoError(t, err)
 		assert.True(t, has)
+		c.DeletionTimestamp, c.Finalizers, c.ResourceVersion = &deletedAt, []string{"gitstore.dev/contract-blocker"}, "2"
+		require.NoError(t, ds.UpdateCategoryTaxonomy(ctx, c, "1"))
+		has, err = ds.HasCatalogResources(ctx, repo.UID)
+		require.NoError(t, err)
+		assert.True(t, has, "a terminating CategoryTaxonomy remains a deletion blocker")
 		require.NoError(t, ds.DeleteCategoryTaxonomy(ctx, c.UID))
 
 		coll := newCollection()
 		coll.Namespace = ns.Name
 		coll.RepositoryID = repo.UID
+		coll.ResourceVersion = "1"
 		require.NoError(t, ds.CreateCollection(ctx, coll))
 		has, err = ds.HasCatalogResources(ctx, repo.UID)
 		require.NoError(t, err)
 		assert.True(t, has)
+		coll.DeletionTimestamp, coll.Finalizers, coll.ResourceVersion = &deletedAt, []string{"gitstore.dev/contract-blocker"}, "2"
+		require.NoError(t, ds.UpdateCollection(ctx, coll, "1"))
+		has, err = ds.HasCatalogResources(ctx, repo.UID)
+		require.NoError(t, err)
+		assert.True(t, has, "a terminating Collection remains a deletion blocker")
 		require.NoError(t, ds.DeleteCollection(ctx, coll.UID))
 
 		file := &datastore.File{
@@ -1428,6 +1527,11 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		has, err = ds.HasCatalogResources(ctx, repo.UID)
 		require.NoError(t, err)
 		assert.True(t, has, "File must block deletion just like every other repository resource")
+		file.DeletionTimestamp, file.Finalizers, file.ResourceVersion = &deletedAt, []string{"gitstore.dev/contract-blocker"}, "2"
+		require.NoError(t, ds.UpdateFile(ctx, file, "1"))
+		has, err = ds.HasCatalogResources(ctx, repo.UID)
+		require.NoError(t, err)
+		assert.True(t, has, "a terminating File remains a deletion blocker")
 		require.NoError(t, ds.DeleteFile(ctx, file.UID))
 
 		has, err = ds.HasCatalogResources(ctx, repo.UID)
@@ -1510,6 +1614,48 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 
 		_, err := ds.UpdateServiceAccountKeys(ctx, sa.UID, nil, nil, "stale-version")
 		assert.ErrorIs(t, err, datastore.ErrConflict)
+	})
+	t.Run("ServiceAccount/KeyCASAndSystemGeneration", func(t *testing.T) {
+		original := newServiceAccount()
+		original.Generation = 7
+		require.NoError(t, ds.CreateServiceAccount(ctx, original))
+		start := make(chan struct{})
+		results := make(chan error, 8)
+		for i := range 8 {
+			go func() {
+				<-start
+				_, err := ds.UpdateServiceAccountKeys(ctx, original.UID, []datastore.ServiceAccountPublicKey{{
+					KeyID: fmt.Sprintf("contender-%d", i), Algorithm: "Ed25519",
+					PublicKey: []byte("contract-public-key"), EnrolledAt: time.Now().UTC(),
+				}}, nil, "1")
+				results <- err
+			}()
+		}
+		close(start)
+		winners := 0
+		for range 8 {
+			err := <-results
+			if err == nil {
+				winners++
+			} else {
+				require.ErrorIs(t, err, datastore.ErrConflict)
+			}
+		}
+		require.Equal(t, 1, winners, "only one key writer may consume the expected version")
+		current, err := ds.GetServiceAccountByUID(ctx, original.UID)
+		require.NoError(t, err)
+		require.Equal(t, "2", current.ResourceVersion)
+		require.Equal(t, int64(8), current.Generation, "public-key changes advance authored generation once")
+		require.Len(t, current.PublicKeys, 2)
+		require.Equal(t, original.UID, current.UID)
+		require.NoError(t, ds.SetServiceAccountDisabled(ctx, original.UID, true))
+		disabled, err := ds.GetServiceAccountByUID(ctx, original.UID)
+		require.NoError(t, err)
+		require.True(t, disabled.Disabled)
+		require.Equal(t, "3", disabled.ResourceVersion)
+		require.Equal(t, current.Generation, disabled.Generation, "system disable does not author new key material")
+		require.Equal(t, current.PublicKeys, disabled.PublicKeys)
+		require.Equal(t, current.UID, disabled.UID)
 	})
 
 	t.Run("ServiceAccount/UpdateKeysEmptyResultReturnsInvalidArgument", func(t *testing.T) {
@@ -1796,7 +1942,7 @@ func runCategoryAncestorIndexContract(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, err)
 		lifecycle, ok := ds.(datastore.CategoryTaxonomyDeletionStore)
 		require.True(t, ok)
-		marked, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, ns, "laptops", laptops.ResourceVersion, time.Now())
+		marked, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, ns, "laptops", laptops.ResourceVersion, laptops.UID, time.Now())
 		require.NoError(t, err)
 		// Foreground deletion keeps the rows until final removal.
 		assert.Contains(t, descendants(t, ds, ns, "computers", false, 0), "laptops@1")

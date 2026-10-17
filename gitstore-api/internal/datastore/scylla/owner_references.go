@@ -204,12 +204,15 @@ func (s *scyllaDatastore) ListNonBlockingProductOwnerDependents(
 
 func (s *scyllaDatastore) MarkCategoryTaxonomyDeletion(
 	ctx context.Context,
-	namespace, name, expectedResourceVersion string,
+	namespace, name, expectedResourceVersion, expectedUID string,
 	at time.Time,
 ) (*datastore.CategoryTaxonomy, error) {
 	category, err := s.GetCategoryTaxonomyByName(ctx, namespace, name)
 	if err != nil {
 		return nil, err
+	}
+	if expectedUID == "" || category.UID != expectedUID {
+		return nil, datastore.ErrConflict
 	}
 	if category.DeletionTimestamp != nil {
 		return category, nil
@@ -258,9 +261,6 @@ func (s *scyllaDatastore) CompleteCategoryTaxonomyDeletion(
 	if category.DeletionTimestamp == nil || !containsFinalizer(category.Finalizers, datastore.CategoryTaxonomyForegroundDeletionFinalizer) {
 		return nil, fmt.Errorf("%w: category taxonomy is not terminating", datastore.ErrInvalidArgument)
 	}
-	// deleteCategoryTaxonomyWithResourceVersion executes reverse projections
-	// before the authoritative CAS and compensates them on a pre-commit
-	// failure, so retrying converges a partially failed projection.
 	if err := s.deleteCategoryTaxonomyWithResourceVersion(ctx, category, expectedResourceVersion); err != nil {
 		return nil, err
 	}

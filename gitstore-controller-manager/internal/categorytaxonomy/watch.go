@@ -4,9 +4,35 @@
 package categorytaxonomy
 
 import (
+	"encoding/json"
+	"fmt"
 	"math/big"
 	"slices"
 )
+
+// ProductRelationVersion changes only when category resolution can change for
+// referencing Products, not when unrelated counts or conditions are refreshed.
+func ProductRelationVersion(category CategoryTaxonomy) (string, error) {
+	var resolved ResolvedCategoryTaxonomy
+	if len(category.Status.Resolved) != 0 {
+		if err := json.Unmarshal(category.Status.Resolved, &resolved); err != nil {
+			return "", fmt.Errorf("decode category path for Product fan-out: %w", err)
+		}
+	}
+	version, err := json.Marshal(struct {
+		UID         string
+		Namespace   string
+		Name        string
+		Terminating bool
+		Path        []string `json:",omitempty"`
+	}{
+		UID: category.UID, Namespace: category.Namespace, Name: category.Name,
+		Terminating: category.DeletionTimestamp != nil ||
+			slices.Contains(category.Finalizers, datastoreForegroundDeletionFinalizer),
+		Path: resolved.Path,
+	})
+	return string(version), err
+}
 
 // AcceptWatchUpdate rejects stale CategoryTaxonomy watch payloads. Generation
 // orders spec changes; resourceVersion orders status updates within one

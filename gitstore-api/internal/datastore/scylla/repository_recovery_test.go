@@ -21,6 +21,415 @@ import (
 
 const sagaTestRepositoryID = "11111111-1111-1111-1111-111111111111"
 
+func TestNamespaceFenceCandidateRequiresConfirmedReleaseAndLiveQueue(t *testing.T) {
+	var queue namespaceCatalogQueue
+	_, finish, err := queue.enqueue(t.Context(), "namespace", nil)
+	require.NoError(t, err)
+	epoch, pending := int64(7), int64(1)
+	fence := namespaceRepositoryFence{RepositoryCreationEpoch: &epoch, PendingRepositoryCreations: &pending}
+	queue.rememberFence("namespace", fence)
+	_, ok := queue.takeReleasedFence("namespace")
+	require.False(t, ok, "an in-flight reservation cannot authorize another acquisition")
+	queue.rememberFence("namespace", fence)
+	queue.confirmFenceRelease("namespace", 6)
+	_, ok = queue.takeReleasedFence("namespace")
+	require.False(t, ok, "a different epoch cannot confirm this reservation")
+	queue.rememberFence("namespace", fence)
+	queue.confirmFenceRelease("namespace", epoch)
+	candidate, ok := queue.takeReleasedFence("namespace")
+	require.True(t, ok)
+	require.EqualValues(t, 7, candidate.epoch())
+	require.Zero(t, candidate.pending())
+	_, ok = queue.takeReleasedFence("namespace")
+	require.False(t, ok, "a candidate is consumed even if the fresh conditional acquisition fails")
+	queue.rememberFence("namespace", fence)
+	queue.confirmFenceRelease("namespace", epoch)
+	queue.forgetFence("namespace")
+	_, ok = queue.takeReleasedFence("namespace")
+	require.False(t, ok, "failed or counted-fallback release must invalidate the candidate")
+	queue.rememberFence("namespace", fence)
+	queue.confirmFenceRelease("namespace", epoch)
+	finish()
+	_, ok = queue.takeReleasedFence("namespace")
+	require.False(t, ok, "candidates do not outlive the bounded queue entry")
+	queue.rememberFence("namespace", fence)
+	require.Empty(t, queue.entries, "remembering a reservation cannot allocate an unqueued namespace")
+}
+
+func TestFileCohortSnapshotAndParentReadsOverlapAndDrain(t *testing.T) {
+	read := &fileMutationSnapshotRead{uids: []string{"first", "second"}}
+	parentStarted, snapshotStarted := make(chan struct{}), make(chan struct{})
+	resume, done := make(chan struct{}), make(chan struct{})
+	var released sync.Once
+	release := func() { released.Do(func() { close(resume) }) }
+	t.Cleanup(func() { release(); <-done })
+	var files []*datastore.File
+	var err error
+	go func() {
+		defer close(done)
+		files, err = read.loadWithParent(t.Context(),
+			func(ctx context.Context, uids []string) ([]*datastore.File, error) {
+				assert.Equal(t, read.uids, uids)
+				close(snapshotStarted)
+				<-resume
+				return []*datastore.File{{UID: "first"}, {UID: "second"}}, nil
+			},
+			func(context.Context) error {
+				close(parentStarted)
+				<-resume
+				return nil
+			})
+	}()
+	for _, started := range []<-chan struct{}{parentStarted, snapshotStarted} {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("independent parent and snapshot reads did not overlap")
+		}
+	}
+	select {
+	case <-done:
+		t.Fatal("snapshot preparation returned before both reads drained")
+	default:
+	}
+	release()
+	<-done
+	require.NoError(t, err)
+	require.Equal(t, []*datastore.File{{UID: "first"}, {UID: "second"}}, files)
+}
+
+func TestFileCohortSnapshotAndParentReadsPreserveErrors(t *testing.T) {
+	parentFailure, snapshotFailure := errors.New("parent lookup failed"), errors.New("snapshot read failed")
+	for _, scenario := range []struct {
+		name   string
+		parent error
+		read   error
+	}{
+		{name: "parent", parent: parentFailure},
+		{name: "snapshot", read: snapshotFailure},
+		{name: "both", parent: parentFailure, read: snapshotFailure},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			var parents, snapshots atomic.Int64
+			read := &fileMutationSnapshotRead{uids: []string{"first", "second"}}
+			files, err := read.loadWithParent(t.Context(),
+				func(context.Context, []string) ([]*datastore.File, error) {
+					snapshots.Add(1)
+					return []*datastore.File{{UID: "first"}, {UID: "second"}}, scenario.read
+				},
+				func(context.Context) error {
+					parents.Add(1)
+					return scenario.parent
+				})
+			require.Error(t, err)
+			require.Nil(t, files)
+			for _, expected := range []error{scenario.parent, scenario.read} {
+				if expected != nil {
+					require.ErrorIs(t, err, expected)
+				}
+			}
+			require.EqualValues(t, 1, parents.Load())
+			require.EqualValues(t, 1, snapshots.Load())
+		})
+	}
+}
+
+func TestFileCohortSnapshotParentFailuresRemainIndependent(t *testing.T) {
+	group := []*fileMutationRequest{
+		{ctx: t.Context(), names: []string{"a", "b"}, snapshots: &fileMutationSnapshotRead{uids: []string{"a", "b"}}},
+		{ctx: t.Context(), names: []string{"c", "d"}, snapshots: &fileMutationSnapshotRead{uids: []string{"c", "d"}}},
+	}
+	prepareFileMutationSnapshots(t.Context(), group)
+	parentFailure := errors.New("first parent lookup failed")
+	var reads atomic.Int64
+	get := func(_ context.Context, uids []string) ([]*datastore.File, error) {
+		reads.Add(1)
+		files := make([]*datastore.File, len(uids))
+		for i, uid := range uids {
+			files[i] = &datastore.File{UID: uid}
+		}
+		return files, nil
+	}
+	var workers sync.WaitGroup
+	for i, request := range group {
+		workers.Go(func() {
+			files, err := request.snapshots.loadWithParent(t.Context(), get, func(context.Context) error {
+				if i == 0 {
+					return parentFailure
+				}
+				return nil
+			})
+			if i == 0 {
+				assert.ErrorIs(t, err, parentFailure)
+				assert.Nil(t, files)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, []*datastore.File{{UID: "c"}, {UID: "d"}}, files)
+			}
+		})
+	}
+	workers.Wait()
+	require.EqualValues(t, 1, reads.Load(), "one parent error must not poison or retry the shared snapshot")
+}
+
+func TestFileCohortSnapshotParentCancellationDrainsAcceptedRead(t *testing.T) {
+	for _, canceledBefore := range []bool{false, true} {
+		t.Run(fmt.Sprint(canceledBefore), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			read := &fileMutationSnapshotRead{uids: []string{"first", "second"}}
+			if canceledBefore {
+				cancel()
+				files, err := read.loadWithParent(ctx,
+					func(context.Context, []string) ([]*datastore.File, error) {
+						t.Error("canceled preparation started a snapshot read")
+						return nil, nil
+					},
+					func(context.Context) error {
+						t.Error("canceled preparation started a parent read")
+						return nil
+					})
+				require.ErrorIs(t, err, context.Canceled)
+				require.Nil(t, files)
+				return
+			}
+			started, canceled := make(chan struct{}), make(chan struct{})
+			resume, done := make(chan struct{}), make(chan struct{})
+			var released sync.Once
+			release := func() { released.Do(func() { close(resume) }) }
+			t.Cleanup(func() { cancel(); release(); <-done })
+			var result error
+			go func() {
+				defer close(done)
+				_, result = read.loadWithParent(ctx,
+					func(context.Context, []string) ([]*datastore.File, error) {
+						return []*datastore.File{{UID: "first"}, {UID: "second"}}, nil
+					},
+					func(ctx context.Context) error {
+						close(started)
+						<-ctx.Done()
+						close(canceled)
+						<-resume
+						return ctx.Err()
+					})
+			}()
+			<-started
+			cancel()
+			<-canceled
+			select {
+			case <-done:
+				t.Fatal("preparation returned before the accepted parent read drained")
+			default:
+			}
+			release()
+			<-done
+			require.ErrorIs(t, result, context.Canceled)
+		})
+	}
+}
+
+func TestFileCohortSnapshotReadsShareOnlyDeclaredDisjointFacts(t *testing.T) {
+	type contextKey struct{}
+	group := make([]*fileMutationRequest, 4)
+	for i := range group {
+		uids := []string{fmt.Sprintf("%d-first", i), fmt.Sprintf("%d-second", i)}
+		group[i] = &fileMutationRequest{ctx: t.Context(), names: []string{fmt.Sprint(i)},
+			snapshots: &fileMutationSnapshotRead{uids: uids}}
+	}
+	group[2].names = group[0].names
+	cohortCtx := context.WithValue(t.Context(), contextKey{}, "cohort")
+	prepareFileMutationSnapshots(cohortCtx, group)
+	require.NotNil(t, group[0].snapshots.batch)
+	require.Same(t, group[0].snapshots.batch, group[1].snapshots.batch)
+	require.Nil(t, group[2].snapshots.batch, "overlapping predecessors require a later independent fresh read")
+	require.Same(t, group[0].snapshots.batch, group[3].snapshots.batch)
+	var calls atomic.Int64
+	get := func(ctx context.Context, uids []string) ([]*datastore.File, error) {
+		calls.Add(1)
+		assert.Equal(t, "cohort", ctx.Value(contextKey{}))
+		assert.Equal(t, []string{"0-first", "0-second", "1-first", "1-second", "3-first", "3-second"}, uids)
+		files := make([]*datastore.File, len(uids))
+		for i, uid := range uids {
+			files[i] = &datastore.File{UID: uid}
+		}
+		return files, nil
+	}
+	require.Zero(t, calls.Load(), "selecting known callbacks must not start a read or wait for more arrivals")
+	var workers sync.WaitGroup
+	for _, i := range []int{0, 1, 3} {
+		workers.Go(func() {
+			files, err := group[i].snapshots.load(t.Context(), get)
+			assert.NoError(t, err)
+			assert.Equal(t, group[i].snapshots.uids, []string{files[0].UID, files[1].UID})
+		})
+	}
+	workers.Wait()
+	require.EqualValues(t, 1, calls.Load())
+	_, err := group[2].snapshots.load(t.Context(), func(ctx context.Context, uids []string) ([]*datastore.File, error) {
+		assert.Nil(t, ctx.Value(contextKey{}))
+		assert.Equal(t, group[2].snapshots.uids, uids)
+		return []*datastore.File{{UID: uids[0]}, {UID: uids[1]}}, nil
+	})
+	require.NoError(t, err)
+}
+
+func TestFileCohortSnapshotReadsPreserveBoundsAndIndependentRequests(t *testing.T) {
+	for _, scenario := range []string{"sixteen", "same-uid", "single", "canceled", "shared-error", "missing"} {
+		t.Run(scenario, func(t *testing.T) {
+			group := make([]*fileMutationRequest, 4)
+			for i := range group {
+				names := make([]string, 4)
+				for j := range names {
+					names[j] = fmt.Sprintf("%d-%d", i, j)
+				}
+				group[i] = &fileMutationRequest{ctx: t.Context(), names: names,
+					snapshots: &fileMutationSnapshotRead{uids: append([]string(nil), names...)}}
+			}
+			switch scenario {
+			case "same-uid":
+				group[1].snapshots.uids[0] = group[0].snapshots.uids[0]
+			case "single":
+				group = group[:1]
+			case "canceled":
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				group[1].ctx = ctx
+			}
+			prepareFileMutationSnapshots(t.Context(), group)
+			if scenario == "single" {
+				require.Nil(t, group[0].snapshots.batch, "one caller retains its own deadline and original read path")
+				return
+			}
+			batch := group[0].snapshots.batch
+			require.NotNil(t, batch)
+			require.LessOrEqual(t, len(batch.uids), 16)
+			if scenario == "sixteen" {
+				require.Len(t, batch.uids, 16)
+			}
+			if scenario == "same-uid" || scenario == "canceled" {
+				require.Nil(t, group[1].snapshots.batch)
+				require.Len(t, batch.uids, 12)
+			}
+			expected := errors.New("snapshot storage unavailable")
+			calls := 0
+			get := func(_ context.Context, uids []string) ([]*datastore.File, error) {
+				calls++
+				if scenario == "shared-error" {
+					return nil, expected
+				}
+				files := make([]*datastore.File, len(uids))
+				for i, uid := range uids {
+					if scenario != "missing" || i != 0 {
+						files[i] = &datastore.File{UID: uid}
+					}
+				}
+				return files, nil
+			}
+			for _, request := range group {
+				if request.snapshots.batch == nil {
+					continue
+				}
+				files, err := request.snapshots.load(request.ctx, get)
+				if scenario == "shared-error" {
+					require.ErrorIs(t, err, expected)
+					require.Nil(t, files)
+				} else {
+					require.NoError(t, err)
+					require.Len(t, files, 4)
+					if scenario == "missing" && request == group[0] {
+						require.Nil(t, files[0])
+					} else {
+						require.Equal(t, request.snapshots.uids[0], files[0].UID)
+					}
+				}
+			}
+			require.Equal(t, 1, calls, "a shared error or absence must not trigger point-read retries")
+		})
+	}
+}
+
+func TestFileCohortSnapshotReadCancellationDrainsWithoutCancelingLivePeers(t *testing.T) {
+	for _, all := range []bool{false, true} {
+		t.Run(fmt.Sprintf("all=%t", all), func(t *testing.T) {
+			firstCtx, cancelFirst := context.WithCancel(t.Context())
+			defer cancelFirst()
+			secondCtx, cancelSecond := context.WithCancel(t.Context())
+			defer cancelSecond()
+			group := []*fileMutationRequest{
+				{ctx: firstCtx, names: []string{"a", "b"}, snapshots: &fileMutationSnapshotRead{uids: []string{"a", "b"}}},
+				{ctx: secondCtx, names: []string{"c", "d"}, snapshots: &fileMutationSnapshotRead{uids: []string{"c", "d"}}},
+			}
+			started, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var released sync.Once
+			release := func() { released.Do(func() { close(resume) }) }
+			var readCanceled atomic.Bool
+			t.Cleanup(func() { cancelFirst(); cancelSecond(); release(); <-done })
+			get := func(ctx context.Context, uids []string) ([]*datastore.File, error) {
+				close(started)
+				select {
+				case <-ctx.Done():
+					readCanceled.Store(true)
+					return nil, ctx.Err()
+				case <-resume:
+					files := make([]*datastore.File, len(uids))
+					for i, uid := range uids {
+						files[i] = &datastore.File{UID: uid}
+					}
+					return files, nil
+				}
+			}
+			for _, request := range group {
+				request.operation = func(ctx context.Context) error {
+					_, err := request.snapshots.loadWithParent(ctx, get, func(parentCtx context.Context) error {
+						return parentCtx.Err()
+					})
+					return err
+				}
+			}
+			go func() {
+				defer close(done)
+				var cohortCtx context.Context
+				runFileMutationGroup(group, func(ctx context.Context, apply func() error) error {
+					cohortCtx = ctx
+					return apply()
+				}, func(group []*fileMutationRequest) []*fileMutationRequest {
+					prepareFileMutationSnapshots(cohortCtx, group)
+					return group
+				})
+			}()
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("shared read did not start")
+			}
+			cancelFirst()
+			select {
+			case <-done:
+				t.Fatal("selected callbacks returned before their shared read drained")
+			case <-time.After(10 * time.Millisecond):
+			}
+			require.False(t, readCanceled.Load(), "a canceled leader must not cancel a live peer's physical read")
+			if all {
+				cancelSecond()
+			} else {
+				release()
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("selected callbacks did not join their physical read")
+			}
+			require.ErrorIs(t, group[0].err, context.Canceled)
+			if all {
+				require.True(t, readCanceled.Load())
+				require.ErrorIs(t, group[1].err, context.Canceled)
+			} else {
+				require.NoError(t, group[1].err)
+			}
+		})
+	}
+}
+
 func TestCatalogFenceScopeMatchesOnlyActiveOwner(t *testing.T) {
 	first, second := &scyllaDatastore{}, &scyllaDatastore{}
 	var scope *catalogFenceScope
@@ -172,6 +581,19 @@ func QueuedNamespaceCatalogWritesForTest(store datastore.Datastore, namespaceUID
 		return 0
 	}
 	return len(entry.waiters)
+}
+
+func QueuedFileProjectionReadsForTest(ctx context.Context) int {
+	scope, _ := ctx.Value(catalogFenceScopeKey{}).(*catalogFenceScope)
+	if scope == nil {
+		return 0
+	}
+	scope.readMu.Lock()
+	defer scope.readMu.Unlock()
+	if scope.fileReads == nil {
+		return 0
+	}
+	return len(scope.fileReads.requests)
 }
 
 func CatalogParentsActiveForTest(store datastore.Datastore, ctx context.Context, namespace, repositoryID string) error {
@@ -469,7 +891,7 @@ func TestQueuedFileMutationDrainsSelectedOperationsOnCancellation(t *testing.T) 
 	active, finish := make(chan struct{}), make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- store.runQueuedFileMutation(ctx, "uid", "repo", []string{"file"}, func(context.Context) error {
+		done <- store.runQueuedFileMutation(ctx, "uid", "repo", []string{"file"}, nil, func(context.Context) error {
 			close(active)
 			<-finish
 			return context.Canceled
@@ -647,7 +1069,7 @@ func TestQueuedFileMutationsCoalesceAndCancelWaitingRequests(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(t.Context())
 	canceled := make(chan error, 1)
 	go func() {
-		canceled <- store.runQueuedFileMutation(canceledCtx, "uid", "canceled", []string{"canceled"},
+		canceled <- store.runQueuedFileMutation(canceledCtx, "uid", "canceled", []string{"canceled"}, nil,
 			func(context.Context) error { t.Error("canceled waiting callback executed"); return nil }, execute)
 	}()
 	require.Eventually(t, func() bool {
@@ -661,7 +1083,7 @@ func TestQueuedFileMutationsCoalesceAndCancelWaitingRequests(t *testing.T) {
 	for i := range 8 {
 		go func() {
 			name := fmt.Sprintf("file-%d", i)
-			done <- store.runQueuedFileMutation(t.Context(), "uid", name, []string{name},
+			done <- store.runQueuedFileMutation(t.Context(), "uid", name, []string{name}, nil,
 				func(context.Context) error { return nil }, execute)
 		}()
 	}
@@ -801,7 +1223,7 @@ func TestNamespaceCatalogRetryJitterPreservesBounds(t *testing.T) {
 
 // InjectRepositoryCompletionFailureForTest exposes the existing injector to
 // external-package Scylla integration tests without a production API.
-func InjectRepositoryCompletionFailureForTest(store datastore.Datastore, step string, after bool) func() {
+func InjectRepositoryCompletionFailureForTest(store datastore.Datastore, step string, after bool) (func(), func() bool) {
 	s := store.(*scyllaDatastore)
 	previous := s.mutations.injector
 	injector := newTestFailureInjector()
@@ -811,7 +1233,11 @@ func InjectRepositoryCompletionFailureForTest(store datastore.Datastore, step st
 	}
 	injector.fail(step, point)
 	s.mutations.injector = injector
-	return func() { s.mutations.injector = previous }
+	return func() { s.mutations.injector = previous }, func() bool {
+		injector.mu.Lock()
+		defer injector.mu.Unlock()
+		return len(injector.failures) == 0
+	}
 }
 
 func TestInfrastructureCompletionRetainsRowAcrossCleanupFailure(t *testing.T) {

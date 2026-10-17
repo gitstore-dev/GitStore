@@ -18,18 +18,21 @@ env:
 
 jobs:
   secret-material-test:
-    name: Shared Secret Material Tests
+    name: Shared Go Module Tests (${{ matrix.module }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [secretmaterial, observability]
     defaults:
       run:
-        working-directory: ./shared/secretmaterial
+        working-directory: ./shared/${{ matrix.module }}
     env:
       GOWORK: 'off'
     steps:
     - uses: actions/checkout@v6
     - uses: actions/setup-go@v6
       with:
-        go-version: '1.25.x'
+        go-version: '1.26.0'
         cache: false
     - name: Check formatting
       run: test -z "$(gofmt -l .)"

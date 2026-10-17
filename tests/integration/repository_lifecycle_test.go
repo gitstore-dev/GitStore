@@ -99,11 +99,24 @@ func TestRepositoryWatchMetadataGenerationAndSelectorReplay(t *testing.T) {
 	require.NotEqual(t, cfg.apiA, cfg.apiB)
 	require.NotEqual(t, cfg.controllerA, cfg.controllerB)
 	cfg.token = repositoryCapacityToken(t)
+	runRepositoryWatchMetadataGenerationAndSelectorReplay(t, cfg)
+}
+
+func runRepositoryWatchMetadataGenerationAndSelectorReplay(t *testing.T, cfg repositoryCapacityConfig) repositoryCapacityConfig {
+	t.Helper()
+	require.NotEmpty(t, cfg.apiA)
+	require.NotEmpty(t, cfg.apiB)
+	require.NotEmpty(t, cfg.controllerA)
+	require.NotEmpty(t, cfg.controllerB)
+	require.NotEmpty(t, cfg.token)
+	require.NotEqual(t, cfg.apiA, cfg.apiB)
+	require.NotEqual(t, cfg.controllerA, cfg.controllerB)
+	cfg.namespace = uniqueName("repository-watch-metadata")
 	client := &http.Client{Timeout: 10 * time.Second}
 	beforeA := requireRepositoryController(t, client, cfg.controllerA)
 	beforeB := requireRepositoryController(t, client, cfg.controllerB)
 	require.NotEqual(t, repositoryControllerIdentity(t, client, cfg.controllerA), repositoryControllerIdentity(t, client, cfg.controllerB))
-	createNamespaceThrough(t, cfg.apiA, cfg.token, cfg.namespace)
+	createWatchMetadataNamespace(t, cfg.apiA, cfg.apiB, cfg.token, cfg.namespace)
 	require.NoError(t, waitRepositoryCapacityNamespaceReady(t.Context(), client, cfg))
 	name := uniqueName("metadata-replay")
 	selector := map[string]any{"matchLabels": map[string]any{"watch-metadata-run": name, "selected": "yes"}}
@@ -131,7 +144,7 @@ func TestRepositoryWatchMetadataGenerationAndSelectorReplay(t *testing.T) {
 			operation, inputType = "createRepository", "CreateRepositoryInput"
 		}
 		query := fmt.Sprintf(`mutation($input: %s!) { result: %s(input: $input) { repository { metadata { generation resourceVersion revision } } } }`, inputType, operation)
-		response := gqlQueryWithURL(t, endpoint, cfg.token, query, map[string]any{"input": map[string]any{
+		response := watchMetadataGraphQL(t, endpoint, cfg.token, query, map[string]any{"input": map[string]any{
 			"metadata": map[string]any{
 				"name": name, "namespace": cfg.namespace, "labels": labels,
 				"annotations": map[string]any{"watch-metadata-phase": phase},
@@ -200,12 +213,8 @@ func TestRepositoryWatchMetadataGenerationAndSelectorReplay(t *testing.T) {
 	provenanceOnly := strings.Replace(string(content), "---\n", "---\n# provenance-only rewrite\n", 1)
 	require.NotEqual(t, string(content), provenanceOnly)
 	h.commitRepository(name+".md", provenanceOnly)
-	revision, err := secretCapacityGit(t.Context(), h.workDir, cfg.token, "rev-parse", "HEAD")
-	require.NoError(t, err)
-	if output, pushErr := h.push(); pushErr != nil {
-		t.Fatalf("push provenance-only Repository rewrite: %v\n%s", pushErr, output)
-	}
-	provenance := read(watchB, "MODIFIED", "main@sha1:"+strings.TrimSpace(string(revision)))
+	revision := pushWatchMetadataProvenance(t, h)
+	provenance := read(watchB, "MODIFIED", revision)
 	require.Equal(t, "reentered", provenance.Repository.Metadata.Annotations["watch-metadata-phase"])
 	require.NotEqual(t, reenteredRevision, provenance.Repository.Metadata.Revision)
 	require.NoError(t, waitRepositoryCapacityResourceReady(t.Context(), client, cfg, "Repository", name))
@@ -213,6 +222,7 @@ func TestRepositoryWatchMetadataGenerationAndSelectorReplay(t *testing.T) {
 	waitForRepositoryControllerAdvance(t, client, cfg.controllerB, beforeB)
 	require.Empty(t, repositoryControllerPoison(t, client, cfg.controllerA))
 	require.Empty(t, repositoryControllerPoison(t, client, cfg.controllerB))
+	return cfg
 }
 
 func runRepositoryLifecycleDualControllerRegistrationAndReconcile(t *testing.T) {

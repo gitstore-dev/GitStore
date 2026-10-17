@@ -5,17 +5,21 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,7 +33,6 @@ var namespaceContractServer struct {
 	refs   int
 	apiURL string
 	cmd    *exec.Cmd
-	logs   bytes.Buffer
 }
 
 type namespaceContractHarness struct {
@@ -112,10 +115,9 @@ func acquireNamespaceContractAPI(t *testing.T) string {
 	defer namespaceContractServer.mu.Unlock()
 
 	if namespaceContractServer.cmd == nil {
-		apiURL, cmd, logs := startNamespaceContractAPIServer(t)
+		apiURL, cmd, _ := startNamespaceContractAPIServer(t)
 		namespaceContractServer.apiURL = apiURL
 		namespaceContractServer.cmd = cmd
-		namespaceContractServer.logs = *logs
 	}
 	namespaceContractServer.refs++
 	t.Cleanup(func() {
@@ -142,7 +144,6 @@ func releaseNamespaceContractAPI(t *testing.T) {
 
 	namespaceContractServer.apiURL = ""
 	namespaceContractServer.cmd = nil
-	namespaceContractServer.logs.Reset()
 }
 
 func startNamespaceContractAPIServer(t *testing.T) (string, *exec.Cmd, *bytes.Buffer) {
@@ -158,6 +159,7 @@ func startNamespaceContractAPIServer(t *testing.T) (string, *exec.Cmd, *bytes.Bu
 	source := `package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -198,7 +200,10 @@ type mockGitWriter struct {
 	seq int
 	heads map[string]string
 	trees map[string]map[string][]byte
+	parents map[string]string
 }
+
+var _ cataloggrpc.GitReader = (*mockGitWriter)(nil)
 
 // namespaceOwnerAuthZ mirrors namespace-scoped authorization: a non-admin
 // subject may act on categories only in a namespace it owns.
@@ -233,12 +238,13 @@ func (m *mockGitWriter) CommitFile(ctx context.Context, p gitclient.CommitFilePa
 }
 
 func (m *mockGitWriter) write(repo, path string, content []byte) string {
-	if m.heads == nil { m.heads = map[string]string{}; m.trees = map[string]map[string][]byte{} }
+	if m.heads == nil { m.heads = map[string]string{}; m.trees = map[string]map[string][]byte{}; m.parents = map[string]string{} }
 	tree := map[string][]byte{}
 	for path, content := range m.trees[m.heads[repo]] { tree[path] = content }
 	if content == nil { delete(tree, path) } else { tree[path] = append([]byte(nil), content...) }
 	m.seq++
 	commit := fmt.Sprintf("%040x", m.seq)
+	m.parents[commit] = m.heads[repo]
 	m.trees[commit], m.heads[repo] = tree, commit
 	return commit
 }
@@ -283,6 +289,50 @@ func (m *mockGitWriter) ListFiles(_ context.Context, repo, prefix, ref string) (
 
 func (m *mockGitWriter) ReadFile(ctx context.Context, repo, path, ref string) ([]byte, error) {
 	return m.ReadFileForRepo(ctx, repo, path, ref)
+}
+
+func (m *mockGitWriter) readFilesLocked(repo string, paths []string, ref string) [][]byte {
+	if strings.HasPrefix(ref, "refs/") || ref == "HEAD" { ref = m.heads[repo] }
+	result := make([][]byte, len(paths))
+	for i, path := range paths {
+		if content, ok := m.trees[ref][path]; ok {
+			result[i] = make([]byte, len(content))
+			copy(result[i], content)
+		}
+	}
+	return result
+}
+
+func (m *mockGitWriter) ReadFiles(ctx context.Context, repo string, paths []string, ref string) ([][]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil { return nil, err }
+	return m.readFilesLocked(repo, paths, ref), nil
+}
+
+func (m *mockGitWriter) ReadFilePair(ctx context.Context, repo string, paths []string, primaryCommit, secondaryCommit, refName string) ([][]byte, [][]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil { return nil, nil, err }
+	if refName != "" && m.heads[repo] != secondaryCommit { return nil, nil, status.Error(codes.Aborted, "revision changed") }
+	return m.readFilesLocked(repo, paths, primaryCommit), m.readFilesLocked(repo, paths, secondaryCommit), nil
+}
+
+func (m *mockGitWriter) ReadCurrentUnchangedFile(ctx context.Context, repo, path, refName, ancestor string) (bool, []byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil { return false, nil, err }
+	current := m.heads[repo]
+	if current == ancestor { return true, nil, nil }
+	content, present := m.trees[current][path]
+	if !present { return false, nil, status.Error(codes.NotFound, "file not found") }
+	for commit := current; commit != ""; commit = m.parents[commit] {
+		if err := ctx.Err(); err != nil { return false, nil, err }
+		other, present := m.trees[commit][path]
+		if !present || !bytes.Equal(content, other) { return false, nil, status.Error(codes.Aborted, "path changed in history") }
+		if commit == ancestor { return false, append([]byte(nil), content...), nil }
+	}
+	return false, nil, status.Error(codes.Aborted, "ancestor is not reachable")
 }
 
 func (m *mockGitWriter) ResolveRef(ctx context.Context, repo, ref string) (string, error) {
@@ -1312,4 +1362,790 @@ func TestNamespaceContract_DeleteNamespaceFinalizesEmptySystemRepository(t *test
 	_, exists = h.lookupRepositoryID(identifier, namespaceContractSystemRepository)
 	require.False(t, exists)
 	created = false
+}
+
+type namespaceCapacityRaceResult struct {
+	response gqlResponse
+	err      error
+}
+
+func namespaceCapacityUnmaterializedRejection(response gqlResponse, namespace, repository string) bool {
+	if response.Status != http.StatusOK || len(response.Errors) != 1 {
+		return false
+	}
+	var failure struct {
+		Message    string `json:"message"`
+		Extensions struct {
+			Code        string `json:"code"`
+			Phase       string `json:"phase"`
+			Commit      string `json:"commit"`
+			Diagnostics []struct {
+				Level   string `json:"level"`
+				Message string `json:"message"`
+				Reason  string `json:"reason"`
+			} `json:"diagnostics"`
+		} `json:"extensions"`
+	}
+	if json.Unmarshal(response.Errors[0], &failure) != nil {
+		return false
+	}
+	extensions := failure.Extensions
+	if extensions.Code != "ADMISSION_REJECTED" || extensions.Phase != "POST_RECEIVE" ||
+		len(extensions.Commit) != 40 || strings.Trim(extensions.Commit, "0123456789abcdef") != "" ||
+		len(extensions.Diagnostics) != 1 {
+		return false
+	}
+	message := fmt.Sprintf("admission failed: committed admission did not materialize Repository %s/%s: datastore: not found: namespace mapping %s/%s",
+		namespace, repository, namespace, repository)
+	diagnostic := extensions.Diagnostics[0]
+	return failure.Message == message && diagnostic.Message == message &&
+		diagnostic.Level == "FAILURE" && diagnostic.Reason == "ADMISSION_FAILED"
+}
+
+func TestNamespaceCapacityUnmaterializedRejectionClassification(t *testing.T) {
+	message := "admission failed: committed admission did not materialize Repository owned/child: datastore: not found: namespace mapping owned/child"
+	for _, test := range []struct {
+		name, code, phase, commit, reason, detail string
+		want                                      bool
+	}{
+		{"exact missing projection", "ADMISSION_REJECTED", "POST_RECEIVE", strings.Repeat("a", 40), "ADMISSION_FAILED", message, true},
+		{"storage unavailable", "ADMISSION_REJECTED", "POST_RECEIVE", strings.Repeat("a", 40), "ADMISSION_FAILED", "datastore unavailable", false},
+		{"authorization", "FORBIDDEN", "POST_RECEIVE", strings.Repeat("a", 40), "ADMISSION_FAILED", message, false},
+		{"pre receive", "ADMISSION_REJECTED", "PRE_RECEIVE", strings.Repeat("a", 40), "ADMISSION_FAILED", message, false},
+		{"missing commit", "ADMISSION_REJECTED", "POST_RECEIVE", "", "ADMISSION_FAILED", message, false},
+		{"invalid commit", "ADMISSION_REJECTED", "POST_RECEIVE", strings.Repeat("z", 40), "ADMISSION_FAILED", message, false},
+		{"other reason", "ADMISSION_REJECTED", "POST_RECEIVE", strings.Repeat("a", 40), "NAMESPACE_NOT_READY", message, false},
+		{"other identity", "ADMISSION_REJECTED", "POST_RECEIVE", strings.Repeat("a", 40), "ADMISSION_FAILED", strings.ReplaceAll(message, "owned/child", "other/child"), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{"errors": []any{map[string]any{
+				"message": test.detail,
+				"extensions": map[string]any{
+					"code": test.code, "phase": test.phase, "commit": test.commit,
+					"diagnostics": []any{map[string]any{"level": "FAILURE", "message": test.detail, "reason": test.reason}},
+				},
+			}}})
+			require.NoError(t, err)
+			var response gqlResponse
+			require.NoError(t, json.Unmarshal(body, &response))
+			response.Status = http.StatusOK
+			require.Equal(t, test.want, namespaceCapacityUnmaterializedRejection(response, "owned", "child"))
+			response.Status = http.StatusServiceUnavailable
+			require.False(t, namespaceCapacityUnmaterializedRejection(response, "owned", "child"))
+		})
+	}
+}
+
+func runNamespaceCapacityAdmissionDeletionRace(ctx context.Context, cfg repositoryCapacityConfig, namespaceID, repository string) [2]namespaceCapacityRaceResult {
+	operations := [2]struct {
+		endpoint, query string
+		variables       map[string]any
+	}{
+		{cfg.apiA, `mutation($input: CreateRepositoryInput!) {
+			createRepository(input: $input) { repository { id } }
+		}`, map[string]any{"input": map[string]any{
+			"apiVersion": "gitstore.dev/v1beta1", "kind": "Repository",
+			"metadata": map[string]any{"namespace": cfg.namespace, "name": repository},
+			"spec":     map[string]any{"defaultBranch": "main", "visibility": "PRIVATE", "storageClass": "standard"},
+		}}},
+		{cfg.apiB, `mutation($id: ID!) {
+			deleteNamespace(input: {id: $id}) { outcome namespace { id } }
+		}`, map[string]any{"id": namespaceID}},
+	}
+	var results [2]namespaceCapacityRaceResult
+	var workers sync.WaitGroup
+	start := make(chan struct{})
+	for index, operation := range operations {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			results[index].response, results[index].err = secretTestGraphQLRequest(ctx, operation.endpoint, cfg.token, operation.query, operation.variables)
+		}()
+	}
+	close(start)
+	workers.Wait()
+	return results
+}
+
+func TestNamespaceCapacityAdmissionDeletionRaceConcurrentRequests(t *testing.T) {
+	var arrived atomic.Int32
+	ready := make(chan struct{})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer owned-test-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if arrived.Add(1) == 2 {
+			close(ready)
+		}
+		select {
+		case <-ready:
+			_, _ = w.Write([]byte(`{"data":{"acknowledged":true}}`))
+		case <-r.Context().Done():
+		}
+	})
+	apiA, apiB := httptest.NewServer(handler), httptest.NewServer(handler)
+	defer apiA.Close()
+	defer apiB.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	results := runNamespaceCapacityAdmissionDeletionRace(ctx, repositoryCapacityConfig{
+		apiA: apiA.URL, apiB: apiB.URL, token: "owned-test-token", namespace: "owned-race",
+	}, "namespace-id", "owned-child")
+	for _, result := range results {
+		require.NoError(t, result.err)
+		require.Equal(t, http.StatusOK, result.response.Status)
+		require.Empty(t, result.response.Errors)
+		require.JSONEq(t, `{"acknowledged":true}`, string(result.response.Data))
+	}
+	require.EqualValues(t, 2, arrived.Load(), "each actor must issue exactly one request, without retries")
+}
+
+func assertNamespaceCapacityDeletionLifecycle(t *testing.T, client *http.Client, cfg repositoryCapacityConfig) {
+	t.Helper()
+	assertCapacityCatalogBlockers(t, client, cfg, "Namespace")
+	cfg.namespace = uniqueName("under-load-namespace")
+	createWatchMetadataNamespace(t, cfg.apiA, cfg.apiB, cfg.token, cfg.namespace)
+	require.NoError(t, waitRepositoryCapacityNamespaceReady(t.Context(), client, cfg))
+	type lifecycleResource struct {
+		ID       string `json:"id"`
+		Metadata struct {
+			Name              string    `json:"name"`
+			ResourceVersion   string    `json:"resourceVersion"`
+			Generation        int64     `json:"generation"`
+			CreationTimestamp time.Time `json:"creationTimestamp"`
+			DeletionTimestamp *string   `json:"deletionTimestamp"`
+			Finalizers        []string  `json:"finalizers"`
+		} `json:"metadata"`
+		Status struct {
+			Conditions []namespaceContractStatusCondition `json:"conditions"`
+		} `json:"status"`
+	}
+	type snapshot struct {
+		Namespace  *lifecycleResource `json:"namespace"`
+		Repository *lifecycleResource `json:"repository"`
+	}
+	read := func(endpoint, repository string) snapshot {
+		t.Helper()
+		response := secretTestGraphQL(t, endpoint, cfg.token, `query($namespace: String!, $repository: String!) {
+			namespace(by: {name: $namespace}) {
+				id metadata { name resourceVersion generation creationTimestamp finalizers }
+				status { conditions { type status } }
+			}
+			repository(by: {namespacePath: {namespace: $namespace, name: $repository}}) {
+				id metadata { name resourceVersion generation creationTimestamp deletionTimestamp finalizers }
+			}
+		}`, map[string]any{"namespace": cfg.namespace, "repository": repository})
+		require.Equal(t, http.StatusOK, response.Status)
+		require.Empty(t, response.Errors)
+		var result snapshot
+		require.NoError(t, json.Unmarshal(response.Data, &result))
+		require.NotNil(t, result.Namespace)
+		require.NotNil(t, result.Repository)
+		require.NotEmpty(t, result.Namespace.ID)
+		require.NotEmpty(t, result.Namespace.Metadata.ResourceVersion)
+		require.NotEmpty(t, result.Repository.ID)
+		return result
+	}
+	fixtureResource := func(current snapshot, kind string) *lifecycleResource {
+		if kind == "Namespace" {
+			return current.Namespace
+		}
+		require.Equal(t, "Repository", kind)
+		return current.Repository
+	}
+	changeHeldFinalizer := func(kind string, baseline snapshot, repository string, release bool) {
+		t.Helper()
+		expected := fixtureResource(baseline, kind)
+		for range 8 {
+			current := read(cfg.apiA, repository)
+			require.Equal(t, baseline.Namespace.ID, current.Namespace.ID, "fixture cannot cross a Namespace incarnation")
+			target := fixtureResource(current, kind)
+			require.Equal(t, expected.ID, target.ID)
+			require.Equal(t, expected.Metadata.Generation, target.Metadata.Generation)
+			require.True(t, expected.Metadata.CreationTimestamp.Equal(target.Metadata.CreationTimestamp))
+			statement, err := capacityInfrastructureFixtureUpdate(cfg.keyspace, capacityInfrastructureFixture{
+				kind: kind, namespace: cfg.namespace, name: target.Metadata.Name, id: target.ID,
+				version: target.Metadata.ResourceVersion, created: target.Metadata.CreationTimestamp,
+				finalizers: target.Metadata.Finalizers,
+			}, release)
+			require.NoError(t, err)
+			t.Logf("infrastructure_finalizer_fixture kind=%s namespace=%s name=%s id=%s resource_version=%s creation_timestamp=%s release=%t",
+				kind, cfg.namespace, target.Metadata.Name, target.ID, target.Metadata.ResourceVersion,
+				target.Metadata.CreationTimestamp.UTC().Format(time.RFC3339Nano), release)
+			if applyCapacityOwnedFinalizerFixture(t, cfg, statement) {
+				return
+			}
+		}
+		t.Fatal("infrastructure finalizer fixture exhausted its eight resource-version CAS attempts")
+	}
+	assertHeldCompletion := func(kind string, baseline snapshot, repository string) {
+		t.Helper()
+		for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+			rejected := false
+			for range 8 {
+				current := read(endpoint, repository)
+				require.Equal(t, baseline.Namespace.ID, current.Namespace.ID)
+				target := fixtureResource(current, kind)
+				require.Equal(t, fixtureResource(baseline, kind).ID, target.ID)
+				query := `mutation($id: ID!, $name: String!, $rv: String!) {
+					completeNamespaceDeletion(input: {id: $id, name: $name, resourceVersion: $rv}) { id }
+				}`
+				variables := map[string]any{"id": target.ID, "name": target.Metadata.Name, "rv": target.Metadata.ResourceVersion}
+				if kind == "Repository" {
+					query = `mutation($id: ID!, $name: String!, $namespace: String!, $rv: String!) {
+						completeRepositoryDeletion(input: {id: $id, name: $name, namespace: $namespace, resourceVersion: $rv}) { id }
+					}`
+					variables["namespace"] = cfg.namespace
+				}
+				response := secretTestGraphQL(t, endpoint, cfg.token, query, variables)
+				require.Equal(t, http.StatusOK, response.Status)
+				require.Len(t, response.Errors, 1)
+				var failure struct {
+					Message    string `json:"message"`
+					Extensions struct {
+						Code string `json:"code"`
+					} `json:"extensions"`
+				}
+				require.NoError(t, json.Unmarshal(response.Errors[0], &failure))
+				if failure.Extensions.Code == "CONFLICT" {
+					continue
+				}
+				require.Contains(t, failure.Message, "other finalizers", "completion must be rejected by the held finalizer, not another failure")
+				rejected = true
+				break
+			}
+			require.True(t, rejected, "held completion did not reach the finalizer gate within eight version attempts")
+		}
+	}
+	initial := read(cfg.apiA, namespaceContractSystemRepository)
+	systemStorage := captureCapacityRepositoryStorage(t, client, cfg, namespaceContractSystemRepository)
+	if cfg.verifyFinalizers {
+		for direction := range 2 {
+			baseline := read(cfg.apiA, namespaceContractSystemRepository)
+			changeHeldFinalizer("Namespace", baseline, namespaceContractSystemRepository, false)
+			raceConfig := cfg
+			if direction == 1 {
+				raceConfig.apiA, raceConfig.apiB = cfg.apiB, cfg.apiA
+			}
+			childName := uniqueName("namespace-racer")
+			started := time.Now()
+			var before int64
+			if cfg.acknowledgements != nil {
+				before = cfg.acknowledgements.Load()
+				require.Positive(t, before)
+			}
+			results := runNamespaceCapacityAdmissionDeletionRace(t.Context(), raceConfig, baseline.Namespace.ID, childName)
+			codes := [2]string{}
+			for index, result := range results {
+				require.NoError(t, result.err, "concurrent actor %d failed at transport/protocol level", index)
+				require.Equal(t, http.StatusOK, result.response.Status)
+				if len(result.response.Errors) == 0 {
+					continue
+				}
+				require.Len(t, result.response.Errors, 1)
+				var failure struct {
+					Extensions struct {
+						Code string `json:"code"`
+					} `json:"extensions"`
+				}
+				require.NoError(t, json.Unmarshal(result.response.Errors[0], &failure))
+				codes[index] = failure.Extensions.Code
+				allowed := []string{"CONFLICT", "FAILED_PRECONDITION"}
+				if index == 0 {
+					allowed = append(allowed, "NOT_FOUND")
+					if codes[index] == "ADMISSION_REJECTED" {
+						require.True(t, namespaceCapacityUnmaterializedRejection(result.response, cfg.namespace, childName),
+							"only the exact committed missing-projection denial is eligible for a terminating parent")
+						allowed = append(allowed, "ADMISSION_REJECTED")
+					}
+				}
+				require.Contains(t, allowed, codes[index], "unrelated failures are not evidence of a lifecycle fence")
+			}
+			childAcknowledged, deletionAcknowledged := codes[0] == "", codes[1] == ""
+			require.False(t, childAcknowledged && deletionAcknowledged, "Namespace deletion and child creation must not both win")
+			if !childAcknowledged && !deletionAcknowledged {
+				require.Equal(t, [2]string{"CONFLICT", "CONFLICT"}, codes, "an active, childless Namespace can only reject both actors for contention")
+			}
+			for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+				current := read(endpoint, namespaceContractSystemRepository)
+				require.Equal(t, baseline.Namespace.ID, current.Namespace.ID)
+				require.Equal(t, baseline.Repository.ID, current.Repository.ID)
+				for _, kind := range []string{"Namespace", "Repository"} {
+					expected, actual := fixtureResource(baseline, kind), fixtureResource(current, kind)
+					require.Equal(t, expected.Metadata.Generation, actual.Metadata.Generation)
+					require.True(t, expected.Metadata.CreationTimestamp.Equal(actual.Metadata.CreationTimestamp))
+				}
+				require.Contains(t, current.Namespace.Metadata.Finalizers, capacityCatalogHeldFinalizer)
+				require.Nil(t, current.Repository.Metadata.DeletionTimestamp)
+				terminating := namespaceContractStatusCondition{Type: "Terminating", Status: "TRUE"}
+				if deletionAcknowledged {
+					require.Contains(t, current.Namespace.Status.Conditions, terminating)
+				} else {
+					require.NotContains(t, current.Namespace.Status.Conditions, terminating)
+				}
+			}
+			assertCapacityRepositoryStorage(t, systemStorage, false)
+			var childID string
+			if childAcknowledged {
+				var created struct {
+					Create struct {
+						Repository *lifecycleResource `json:"repository"`
+					} `json:"createRepository"`
+				}
+				require.NoError(t, json.Unmarshal(results[0].response.Data, &created))
+				require.NotNil(t, created.Create.Repository)
+				childID = created.Create.Repository.ID
+				require.NotEmpty(t, childID)
+				for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+					current := read(endpoint, childName)
+					require.Equal(t, childID, current.Repository.ID)
+					require.Nil(t, current.Repository.Metadata.DeletionTimestamp)
+					require.Equal(t, baseline.Namespace.ID, current.Namespace.ID)
+				}
+			} else {
+				for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+					response := secretTestGraphQL(t, endpoint, cfg.token, `query($namespace: String!, $name: String!) {
+						repository(by: {namespacePath: {namespace: $namespace, name: $name}}) { id }
+					}`, map[string]any{"namespace": cfg.namespace, "name": childName})
+					require.Equal(t, http.StatusOK, response.Status)
+					require.Len(t, response.Errors, 1)
+					var missing struct {
+						Extensions struct {
+							Code string `json:"code"`
+						} `json:"extensions"`
+					}
+					require.NoError(t, json.Unmarshal(response.Errors[0], &missing))
+					require.Equal(t, "NOT_FOUND", missing.Extensions.Code, "rejected admission must not leave a visible orphan")
+				}
+			}
+			if deletionAcknowledged {
+				require.JSONEq(t, fmt.Sprintf(`{"deleteNamespace":{"outcome":"TERMINATION_STARTED","namespace":{"id":%q}}}`, baseline.Namespace.ID),
+					string(results[1].response.Data))
+			}
+			directory := filepath.Join(t.TempDir(), "race-manifest")
+			_, err := newSecretCapacityGitWorker(t.Context(), directory,
+				strings.TrimRight(os.Getenv("GIT_URL"), "/")+"/"+cfg.namespace+"/gitstore-system.git",
+				cfg.namespace, childName, cfg.token, 0)
+			require.NoError(t, err)
+			path := "repositories/" + childName + ".md"
+			manifest, err := secretCapacityGit(t.Context(), directory, "", "ls-tree", "--name-only", "HEAD", "--", path)
+			require.NoError(t, err)
+			if childAcknowledged {
+				require.Equal(t, path, strings.TrimSpace(string(manifest)), "acknowledged child must retain its committed manifest")
+				childStorage := captureCapacityRepositoryStorage(t, client, cfg, childName)
+				assertCapacityRepositoryStorage(t, childStorage, false)
+				rejectNamespaceDeletion := secretTestGraphQL(t, raceConfig.apiB, cfg.token,
+					`mutation($id: ID!) { deleteNamespace(input: {id: $id}) { outcome } }`,
+					map[string]any{"id": baseline.Namespace.ID})
+				require.Equal(t, http.StatusOK, rejectNamespaceDeletion.Status)
+				require.Len(t, rejectNamespaceDeletion.Errors, 1)
+				var blocked struct {
+					Extensions struct {
+						Code        string `json:"code"`
+						Diagnostics []struct {
+							Reason string `json:"reason"`
+						} `json:"diagnostics"`
+					} `json:"extensions"`
+				}
+				require.NoError(t, json.Unmarshal(rejectNamespaceDeletion.Errors[0], &blocked))
+				require.Equal(t, "FAILED_PRECONDITION", blocked.Extensions.Code)
+				require.Len(t, blocked.Extensions.Diagnostics, 1)
+				require.Equal(t, "NAMESPACE_NOT_EMPTY", blocked.Extensions.Diagnostics[0].Reason)
+				cleanup := secretTestGraphQL(t, raceConfig.apiA, cfg.token,
+					`mutation($id: ID!) { deleteRepository(input: {id: $id}) { outcome } }`,
+					map[string]any{"id": childID})
+				require.Equal(t, http.StatusOK, cleanup.Status)
+				require.Empty(t, cleanup.Errors)
+				require.JSONEq(t, `{"deleteRepository":{"outcome":"TERMINATION_STARTED"}}`, string(cleanup.Data))
+				waitCapacityNodesDeleted(t, cfg, childID)
+				assertCapacityRepositoryStorage(t, childStorage, true)
+			}
+			if !deletionAcknowledged {
+				cleanup := secretTestGraphQL(t, raceConfig.apiB, cfg.token,
+					`mutation($id: ID!) { deleteNamespace(input: {id: $id}) { outcome } }`,
+					map[string]any{"id": baseline.Namespace.ID})
+				require.Equal(t, http.StatusOK, cleanup.Status)
+				require.Empty(t, cleanup.Errors)
+				require.JSONEq(t, `{"deleteNamespace":{"outcome":"TERMINATION_STARTED"}}`, string(cleanup.Data))
+			}
+			changeHeldFinalizer("Namespace", baseline, namespaceContractSystemRepository, true)
+			waitCapacityNodesDeleted(t, cfg, baseline.Namespace.ID, baseline.Repository.ID)
+			assertCapacityRepositoryStorage(t, systemStorage, true)
+			var after int64
+			if cfg.acknowledgements != nil {
+				after = cfg.acknowledgements.Load()
+				require.Greater(t, after, before, "admission/deletion contention requires continuing workload acknowledgements")
+			}
+			t.Logf("namespace_admission_deletion_race direction=%d namespace_id=%s child_id=%s child_acknowledged=%t child_code=%s deletion_acknowledged=%t deletion_code=%s committed_child_manifest=%t started_at=%s completed_at=%s acknowledged_before=%d acknowledged_after=%d",
+				direction, baseline.Namespace.ID, childID, childAcknowledged, codes[0], deletionAcknowledged, codes[1],
+				strings.TrimSpace(string(manifest)) == path, started.UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), before, after)
+			createWatchMetadataNamespace(t, cfg.apiA, cfg.apiB, cfg.token, cfg.namespace)
+			require.NoError(t, waitRepositoryCapacityNamespaceReady(t.Context(), client, cfg))
+			initial = read(cfg.apiA, namespaceContractSystemRepository)
+			require.NotEqual(t, baseline.Namespace.ID, initial.Namespace.ID)
+			require.NotEqual(t, baseline.Repository.ID, initial.Repository.ID)
+			systemStorage = captureCapacityRepositoryStorage(t, client, cfg, namespaceContractSystemRepository)
+		}
+	}
+	name := uniqueName("namespace-blocker")
+	require.NoError(t, repositoryCapacityMutation(t.Context(), client, cfg.apiA, cfg.token, true, cfg.namespace, name, "namespace-blocker", 0, ""))
+	require.NoError(t, waitRepositoryCapacityResourceReady(t.Context(), client, cfg, "Repository", name))
+	ordinary := read(cfg.apiA, name)
+	ordinaryStorage := captureCapacityRepositoryStorage(t, client, cfg, name)
+	rejectNamespaceDeletion := func(endpoint string) {
+		t.Helper()
+		blocked := secretTestGraphQL(t, endpoint, cfg.token, `mutation($id: ID!) {
+			deleteNamespace(input: {id: $id}) { outcome }
+		}`, map[string]any{"id": initial.Namespace.ID})
+		require.Equal(t, http.StatusOK, blocked.Status)
+		require.Len(t, blocked.Errors, 1)
+		var diagnostic struct {
+			Extensions struct {
+				Code        string `json:"code"`
+				Diagnostics []struct {
+					Reason string `json:"reason"`
+				} `json:"diagnostics"`
+			} `json:"extensions"`
+		}
+		require.NoError(t, json.Unmarshal(blocked.Errors[0], &diagnostic))
+		require.Equal(t, "FAILED_PRECONDITION", diagnostic.Extensions.Code)
+		require.Len(t, diagnostic.Extensions.Diagnostics, 1)
+		require.Equal(t, "NAMESPACE_NOT_EMPTY", diagnostic.Extensions.Diagnostics[0].Reason)
+	}
+	verifyHeldFinalizer := func(kind string, baseline snapshot, repository string, storage *capacityRepositoryStorage) {
+		t.Helper()
+		started := time.Now()
+		var before int64
+		if cfg.acknowledgements != nil {
+			before = cfg.acknowledgements.Load()
+			require.Positive(t, before)
+		}
+		for repetition := range 2 {
+			for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+				current := read(endpoint, repository)
+				if kind == "Repository" && repository == namespaceContractSystemRepository {
+					require.Eventually(t, func() bool {
+						current = read(endpoint, repository)
+						return current.Repository.Metadata.DeletionTimestamp != nil
+					}, time.Minute, 100*time.Millisecond, "Namespace controller must initiate real system Repository termination")
+				}
+				require.Equal(t, baseline.Namespace.ID, current.Namespace.ID)
+				require.Equal(t, baseline.Repository.ID, current.Repository.ID)
+				for _, targetKind := range []string{"Namespace", "Repository"} {
+					expected, target := fixtureResource(baseline, targetKind), fixtureResource(current, targetKind)
+					require.Equal(t, expected.Metadata.Generation, target.Metadata.Generation)
+					require.True(t, expected.Metadata.CreationTimestamp.Equal(target.Metadata.CreationTimestamp))
+				}
+				target := fixtureResource(current, kind)
+				require.Contains(t, target.Metadata.Finalizers, capacityCatalogHeldFinalizer)
+				if kind == "Namespace" {
+					require.Nil(t, current.Repository.Metadata.DeletionTimestamp, "Namespace finalizer must block even system Repository termination")
+				} else {
+					require.NotNil(t, current.Repository.Metadata.DeletionTimestamp, "only the real API/controller path may initiate termination")
+				}
+				if repository == namespaceContractSystemRepository {
+					require.Contains(t, current.Namespace.Status.Conditions, namespaceContractStatusCondition{Type: "Terminating", Status: "TRUE"})
+				} else {
+					rejectNamespaceDeletion(endpoint)
+					require.ElementsMatch(t, initial.Namespace.Metadata.Finalizers, current.Namespace.Metadata.Finalizers, "terminating ordinary Repository cannot cascade Namespace deletion")
+				}
+			}
+			assertHeldCompletion("Repository", baseline, repository)
+			if repository == namespaceContractSystemRepository {
+				assertHeldCompletion("Namespace", baseline, repository)
+			}
+			assertCapacityRepositoryStorage(t, storage, false)
+			if repetition == 0 && cfg.acknowledgements != nil {
+				require.Eventually(t, func() bool { return cfg.acknowledgements.Load() > before },
+					5*time.Second, 100*time.Millisecond, "held infrastructure completion requires continuing acknowledgements")
+			}
+		}
+		var after int64
+		if cfg.acknowledgements != nil {
+			after = cfg.acknowledgements.Load()
+			require.Greater(t, after, before)
+		}
+		t.Logf("namespace_infrastructure_finalizer_hold kind=%s repository=%s real_termination=true storage_preserved=true started_at=%s completed_at=%s acknowledged_before=%d acknowledged_after=%d",
+			kind, repository, started.UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), before, after)
+	}
+	for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+		rejectNamespaceDeletion(endpoint)
+		current := read(endpoint, name)
+		require.Equal(t, initial.Namespace.ID, current.Namespace.ID)
+		require.Equal(t, ordinary.Repository.ID, current.Repository.ID)
+		require.ElementsMatch(t, initial.Namespace.Metadata.Finalizers, current.Namespace.Metadata.Finalizers, "blocked deletion must not add Namespace termination finalizers")
+		require.Nil(t, current.Repository.Metadata.DeletionTimestamp, "Namespace deletion must not cascade to ordinary Repositories")
+	}
+	if cfg.verifyFinalizers {
+		changeHeldFinalizer("Repository", ordinary, name, false)
+	}
+	deleted := secretTestGraphQL(t, cfg.apiB, cfg.token, `mutation($id: ID!) {
+		deleteRepository(input: {id: $id}) { outcome }
+	}`, map[string]any{"id": ordinary.Repository.ID})
+	require.Equal(t, http.StatusOK, deleted.Status)
+	require.Empty(t, deleted.Errors)
+	require.JSONEq(t, `{"deleteRepository":{"outcome":"TERMINATION_STARTED"}}`, string(deleted.Data))
+	if cfg.verifyFinalizers {
+		verifyHeldFinalizer("Repository", ordinary, name, ordinaryStorage)
+		assertCapacityRepositoryStorage(t, systemStorage, false)
+		changeHeldFinalizer("Repository", ordinary, name, true)
+	}
+	waitCapacityNodesDeleted(t, cfg, ordinary.Repository.ID)
+	assertCapacityRepositoryStorage(t, ordinaryStorage, true)
+	assertCapacityRepositoryStorage(t, systemStorage, false)
+	for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+		current := read(endpoint, namespaceContractSystemRepository)
+		require.Equal(t, initial.Namespace.ID, current.Namespace.ID)
+		require.Equal(t, initial.Repository.ID, current.Repository.ID)
+		require.ElementsMatch(t, initial.Namespace.Metadata.Finalizers, current.Namespace.Metadata.Finalizers)
+		require.Nil(t, current.Repository.Metadata.DeletionTimestamp)
+	}
+	type catalogSnapshot struct {
+		ID       string `json:"id"`
+		Metadata *struct {
+			Name              string  `json:"name"`
+			Namespace         string  `json:"namespace"`
+			ResourceVersion   string  `json:"resourceVersion"`
+			DeletionTimestamp *string `json:"deletionTimestamp"`
+		} `json:"metadata"`
+	}
+	gitURL := strings.TrimRight(os.Getenv("GIT_URL"), "/")
+	for _, catalog := range []struct{ kind, field, directory string }{
+		{"Product", "product", "products"},
+		{"CategoryTaxonomy", "category", "categories"},
+	} {
+		catalogName := uniqueName("namespace-catalog-blocker")
+		suffix := strings.ToUpper(catalog.field[:1]) + catalog.field[1:]
+		readCatalog := func(endpoint string) catalogSnapshot {
+			t.Helper()
+			response := secretTestGraphQL(t, endpoint, cfg.token, fmt.Sprintf(`query($namespace: String!, $name: String!) {
+			resource: %s(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+				id metadata { name namespace resourceVersion deletionTimestamp }
+			}
+		}`, catalog.field), map[string]any{"namespace": cfg.namespace, "name": catalogName})
+			require.Equal(t, http.StatusOK, response.Status)
+			require.Empty(t, response.Errors)
+			var data struct {
+				Resource *catalogSnapshot `json:"resource"`
+			}
+			require.NoError(t, json.Unmarshal(response.Data, &data))
+			require.NotNil(t, data.Resource)
+			require.NotEmpty(t, data.Resource.ID)
+			require.NotNil(t, data.Resource.Metadata)
+			require.Equal(t, catalogName, data.Resource.Metadata.Name)
+			require.Equal(t, cfg.namespace, data.Resource.Metadata.Namespace)
+			require.NotEmpty(t, data.Resource.Metadata.ResourceVersion)
+			require.Nil(t, data.Resource.Metadata.DeletionTimestamp, "blocked Namespace deletion must not cascade to its catalog child")
+			return *data.Resource
+		}
+		var previousID string
+		directory := filepath.Join(t.TempDir(), "catalog-authoring")
+		path := catalog.directory + "/" + catalogName + ".md"
+		for incarnation := range 2 {
+			created := secretTestGraphQL(t, cfg.apiA, cfg.token, fmt.Sprintf(`mutation($input: Create%sInput!) {
+			resource: create%s(input: $input) { object: %s { id } }
+		}`, suffix, suffix, catalog.field), map[string]any{"input": map[string]any{
+				"metadata": map[string]any{"namespace": cfg.namespace, "name": catalogName},
+				"spec":     map[string]any{"title": "Namespace catalog deletion blocker"},
+			}})
+			require.Equal(t, http.StatusOK, created.Status)
+			require.Empty(t, created.Errors)
+			resource := readCatalog(cfg.apiA)
+			require.JSONEq(t, fmt.Sprintf(`{"resource":{"object":{"id":%q}}}`, resource.ID), string(created.Data))
+			if incarnation == 0 {
+				_, err := newSecretCapacityGitWorker(t.Context(), directory, gitURL+"/"+cfg.namespace+"/gitstore-system.git", cfg.namespace, catalogName, cfg.token, 0)
+				require.NoError(t, err)
+			}
+			for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+				if previousID != "" {
+					require.NotEqual(t, previousID, resource.ID)
+					stale := secretTestGraphQL(t, endpoint, cfg.token, fmt.Sprintf(`mutation($id: ID!, $namespace: String!, $name: String!, $rv: String!) {
+					complete%sDeletion(input: {id: $id, namespace: $namespace, name: $name, resourceVersion: $rv}) { id }
+				}`, suffix), map[string]any{"id": previousID, "namespace": cfg.namespace, "name": catalogName, "rv": resource.Metadata.ResourceVersion})
+					require.Equal(t, http.StatusOK, stale.Status)
+					require.Len(t, stale.Errors, 1)
+					var conflict struct {
+						Extensions struct {
+							Code string `json:"code"`
+						} `json:"extensions"`
+					}
+					require.NoError(t, json.Unmarshal(stale.Errors[0], &conflict))
+					require.Equal(t, "CONFLICT", conflict.Extensions.Code)
+					missingID := secretTestGraphQL(t, endpoint, cfg.token, fmt.Sprintf(`mutation($namespace: String!, $name: String!, $rv: String!) {
+						complete%sDeletion(input: {namespace: $namespace, name: $name, resourceVersion: $rv}) { id }
+					}`, suffix), map[string]any{"namespace": cfg.namespace, "name": catalogName, "rv": resource.Metadata.ResourceVersion})
+					require.Equal(t, http.StatusUnprocessableEntity, missingID.Status)
+					require.Len(t, missingID.Errors, 1)
+					require.NoError(t, json.Unmarshal(missingID.Errors[0], &conflict))
+					require.Equal(t, "GRAPHQL_VALIDATION_FAILED", conflict.Extensions.Code)
+				}
+				rejectNamespaceDeletion(endpoint)
+				require.Equal(t, resource.ID, readCatalog(endpoint).ID)
+				current := read(endpoint, namespaceContractSystemRepository)
+				require.Equal(t, initial.Namespace.ID, current.Namespace.ID)
+				require.Equal(t, initial.Repository.ID, current.Repository.ID)
+				require.ElementsMatch(t, initial.Namespace.Metadata.Finalizers, current.Namespace.Metadata.Finalizers)
+				require.Nil(t, current.Repository.Metadata.DeletionTimestamp)
+			}
+			_, err := secretCapacityGit(t.Context(), directory, cfg.token, "fetch", "--quiet", "--depth=1", "origin", "refs/heads/main")
+			require.NoError(t, err)
+			manifest, err := secretCapacityGit(t.Context(), directory, "", "ls-tree", "--name-only", "FETCH_HEAD", "--", path)
+			require.NoError(t, err)
+			require.Equal(t, path, strings.TrimSpace(string(manifest)), "blocked Namespace deletion must preserve the committed catalog manifest")
+			assertCapacityRepositoryStorage(t, systemStorage, false)
+			started := time.Now()
+			var before int64
+			if cfg.acknowledgements != nil {
+				before = cfg.acknowledgements.Load()
+			}
+			deleted := secretTestGraphQL(t, cfg.apiB, cfg.token, fmt.Sprintf(`mutation($id: ID!) {
+			resource: delete%s(input: {id: $id}) { outcome }
+		}`, suffix), map[string]any{"id": resource.ID})
+			require.Equal(t, http.StatusOK, deleted.Status)
+			require.Empty(t, deleted.Errors)
+			require.JSONEq(t, `{"resource":{"outcome":"TERMINATION_STARTED"}}`, string(deleted.Data))
+			waitCapacityNodesDeleted(t, cfg, resource.ID)
+			_, err = secretCapacityGit(t.Context(), directory, cfg.token, "fetch", "--quiet", "--depth=1", "origin", "refs/heads/main")
+			require.NoError(t, err)
+			manifest, err = secretCapacityGit(t.Context(), directory, "", "ls-tree", "--name-only", "FETCH_HEAD", "--", path)
+			require.NoError(t, err)
+			require.Empty(t, strings.TrimSpace(string(manifest)), "explicit catalog deletion must remove its manifest")
+			if cfg.acknowledgements != nil {
+				after := cfg.acknowledgements.Load()
+				require.Positive(t, before)
+				require.Greater(t, after, before, "catalog cleanup requires acknowledged sustained mutations")
+				t.Logf("namespace_catalog_cleanup_under_load kind=%s started_at=%s completed_at=%s acknowledged_before=%d acknowledged_after=%d",
+					catalog.kind, started.UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), before, after)
+			}
+			previousID = resource.ID
+		}
+	}
+	terminate := func(namespaceID, systemID string, storage *capacityRepositoryStorage, heldKind string) {
+		t.Helper()
+		baseline := read(cfg.apiA, namespaceContractSystemRepository)
+		require.Equal(t, namespaceID, baseline.Namespace.ID)
+		require.Equal(t, systemID, baseline.Repository.ID)
+		if cfg.verifyFinalizers {
+			changeHeldFinalizer(heldKind, baseline, namespaceContractSystemRepository, false)
+		}
+		started := time.Now()
+		var before int64
+		if cfg.acknowledgements != nil {
+			before = cfg.acknowledgements.Load()
+		}
+		response := secretTestGraphQL(t, cfg.apiA, cfg.token, `mutation($id: ID!) {
+			deleteNamespace(input: {id: $id}) { outcome namespace { id } }
+		}`, map[string]any{"id": namespaceID})
+		require.Equal(t, http.StatusOK, response.Status)
+		require.Empty(t, response.Errors)
+		var result struct {
+			Delete struct {
+				Outcome   string `json:"outcome"`
+				Namespace struct {
+					ID string `json:"id"`
+				} `json:"namespace"`
+			} `json:"deleteNamespace"`
+		}
+		require.NoError(t, json.Unmarshal(response.Data, &result))
+		require.Equal(t, "TERMINATION_STARTED", result.Delete.Outcome)
+		require.Equal(t, namespaceID, result.Delete.Namespace.ID)
+		if cfg.verifyFinalizers {
+			verifyHeldFinalizer(heldKind, baseline, namespaceContractSystemRepository, storage)
+			if heldKind == "Namespace" {
+				for direction := range 2 {
+					late := cfg
+					if direction == 1 {
+						late.apiA, late.apiB = cfg.apiB, cfg.apiA
+					}
+					name := uniqueName("namespace-late")
+					results := runNamespaceCapacityAdmissionDeletionRace(t.Context(), late, namespaceID, name)
+					for _, result := range results {
+						require.NoError(t, result.err)
+						require.Equal(t, http.StatusOK, result.response.Status)
+					}
+					require.Len(t, results[0].response.Errors, 1, "a child must not be acknowledged after Namespace termination has won")
+					var rejection struct {
+						Extensions struct {
+							Code string `json:"code"`
+						} `json:"extensions"`
+					}
+					require.NoError(t, json.Unmarshal(results[0].response.Errors[0], &rejection))
+					if rejection.Extensions.Code == "ADMISSION_REJECTED" {
+						require.True(t, namespaceCapacityUnmaterializedRejection(results[0].response, cfg.namespace, name),
+							"unrelated admission failures must not pass the termination-first probe")
+					} else {
+						require.Contains(t, []string{"FAILED_PRECONDITION", "NOT_FOUND"}, rejection.Extensions.Code)
+					}
+					require.Empty(t, results[1].response.Errors)
+					require.JSONEq(t, fmt.Sprintf(`{"deleteNamespace":{"outcome":"ALREADY_TERMINATING","namespace":{"id":%q}}}`, namespaceID),
+						string(results[1].response.Data))
+					for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+						missing := secretTestGraphQL(t, endpoint, cfg.token, `query($namespace: String!, $name: String!) {
+							repository(by: {namespacePath: {namespace: $namespace, name: $name}}) { id }
+						}`, map[string]any{"namespace": cfg.namespace, "name": name})
+						require.Equal(t, http.StatusOK, missing.Status)
+						require.Len(t, missing.Errors, 1)
+						require.NoError(t, json.Unmarshal(missing.Errors[0], &rejection))
+						require.Equal(t, "NOT_FOUND", rejection.Extensions.Code)
+						current := read(endpoint, namespaceContractSystemRepository)
+						require.Equal(t, namespaceID, current.Namespace.ID)
+						require.Equal(t, systemID, current.Repository.ID)
+						require.Nil(t, current.Repository.Metadata.DeletionTimestamp)
+					}
+					assertCapacityRepositoryStorage(t, storage, false)
+					t.Logf("namespace_termination_first_admission direction=%d namespace_id=%s child_name=%s rejected=true system_storage_preserved=true",
+						direction, namespaceID, name)
+				}
+			}
+			changeHeldFinalizer(heldKind, baseline, namespaceContractSystemRepository, true)
+		}
+		waitCapacityNodesDeleted(t, cfg, namespaceID, systemID)
+		assertCapacityRepositoryStorage(t, storage, true)
+		if cfg.acknowledgements != nil {
+			completed, after := time.Now(), cfg.acknowledgements.Load()
+			t.Logf("namespace_deletion_under_load started_at=%s completed_at=%s acknowledged_before=%d acknowledged_after=%d",
+				started.UTC().Format(time.RFC3339Nano), completed.UTC().Format(time.RFC3339Nano), before, after)
+			require.Positive(t, before)
+			require.Greater(t, after, before, "Namespace initiation/system-repository completion requires acknowledged sustained mutations")
+		}
+	}
+	terminate(initial.Namespace.ID, initial.Repository.ID, systemStorage, "Namespace")
+	createWatchMetadataNamespace(t, cfg.apiB, cfg.apiA, cfg.token, cfg.namespace)
+	require.NoError(t, waitRepositoryCapacityNamespaceReady(t.Context(), client, cfg))
+	replacement := read(cfg.apiB, namespaceContractSystemRepository)
+	replacementStorage := captureCapacityRepositoryStorage(t, client, cfg, namespaceContractSystemRepository)
+	require.NotEqual(t, initial.Namespace.ID, replacement.Namespace.ID)
+	require.NotEqual(t, initial.Repository.ID, replacement.Repository.ID)
+	for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+		stale := secretTestGraphQL(t, endpoint, cfg.token, `mutation($name: String!, $id: ID!, $rv: String!) {
+			completeNamespaceDeletion(input: {name: $name, id: $id, resourceVersion: $rv}) { id }
+		}`, map[string]any{"name": cfg.namespace, "id": initial.Namespace.ID, "rv": replacement.Namespace.Metadata.ResourceVersion})
+		require.Equal(t, http.StatusOK, stale.Status)
+		require.Len(t, stale.Errors, 1)
+		var conflict struct {
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
+		}
+		require.NoError(t, json.Unmarshal(stale.Errors[0], &conflict))
+		require.Equal(t, "CONFLICT", conflict.Extensions.Code)
+		missingID := secretTestGraphQL(t, endpoint, cfg.token, `mutation($name: String!, $rv: String!) {
+			completeNamespaceDeletion(input: {name: $name, resourceVersion: $rv}) { id }
+		}`, map[string]any{"name": cfg.namespace, "rv": replacement.Namespace.Metadata.ResourceVersion})
+		require.Equal(t, http.StatusUnprocessableEntity, missingID.Status)
+		require.Len(t, missingID.Errors, 1)
+		require.NoError(t, json.Unmarshal(missingID.Errors[0], &conflict))
+		require.Equal(t, "GRAPHQL_VALIDATION_FAILED", conflict.Extensions.Code)
+		current := read(endpoint, namespaceContractSystemRepository)
+		require.Equal(t, replacement.Namespace.ID, current.Namespace.ID)
+		require.Equal(t, replacement.Repository.ID, current.Repository.ID)
+		require.ElementsMatch(t, replacement.Namespace.Metadata.Finalizers, current.Namespace.Metadata.Finalizers)
+		require.Nil(t, current.Repository.Metadata.DeletionTimestamp)
+		assertCapacityRepositoryStorage(t, systemStorage, true)
+		assertCapacityRepositoryStorage(t, replacementStorage, false)
+	}
+	terminate(replacement.Namespace.ID, replacement.Repository.ID, replacementStorage, "Repository")
+	t.Log("Namespace deletion: ordinary Repository, Product and CategoryTaxonomy rejection without cascade, catalog/Namespace reincarnation and stale-UID preservation, and empty system-repository completion verified on both APIs")
 }

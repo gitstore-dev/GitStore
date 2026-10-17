@@ -123,6 +123,10 @@ fi
 export CAPACITY_TARGET="${target}"
 export CAPACITY_SCENARIO="${profile}"
 
+if [[ -n "${CAPACITY_CHAOS_PROFILE:-}" ]]; then
+  "${repo_root}/scripts/run-chaos.sh" --capacity-window-check
+fi
+
 if [[ "${CAPACITY_DRY_RUN:-0}" == "1" ]]; then
   printf 'target=%s profile=%s mode=%s command=' "${target}" "${profile}" "${mode}"
   printf '%q ' "${command[@]}"
@@ -152,16 +156,20 @@ mkdir -p "${evidence_dir}"
 export CAPACITY_RUN_ID="${run_id}"
 
 observability="${CAPACITY_OBSERVABILITY:-none}"
+observability_managed=false
 export CAPACITY_OBSERVABILITY="${observability}"
 case "${CAPACITY_OBSERVABILITY_KEEP:-0}" in 0|1) ;; *) echo "CAPACITY_OBSERVABILITY_KEEP must be 0 or 1" >&2; exit 2 ;; esac
 case "${observability}" in
   none) ;;
   prometheus|full)
-    export CAPACITY_PROMETHEUS_TARGETS_FILE="${evidence_dir}/prometheus/targets.json"
-    make --no-print-directory _capacity-observability
-    export CAPACITY_PROMETHEUS_URL="${CAPACITY_PROMETHEUS_URL:-http://127.0.0.1:${CAPACITY_PROMETHEUS_PORT:-9090}}"
-    if [[ "${CAPACITY_OBSERVABILITY_KEEP:-0}" != 1 ]]; then
-      trap 'make --no-print-directory _capacity-observability-down' EXIT
+    if [[ -z "${CAPACITY_PROMETHEUS_URL:-}" ]]; then
+      export CAPACITY_PROMETHEUS_TARGETS_FILE="${evidence_dir}/prometheus/targets.json"
+      make --no-print-directory _capacity-observability
+      observability_managed=true
+      export CAPACITY_PROMETHEUS_URL="http://127.0.0.1:${CAPACITY_PROMETHEUS_PORT:-9090}"
+      if [[ "${CAPACITY_OBSERVABILITY_KEEP:-0}" != 1 ]]; then
+        trap 'make --no-print-directory _capacity-observability-down' EXIT
+      fi
     fi
     readiness_urls=("${CAPACITY_PROMETHEUS_URL}/-/ready")
     if [[ "${observability}" == full ]]; then
@@ -255,12 +263,42 @@ if (( preflight_status == 0 )) && [[ -n "${CAPACITY_DATASTORE_CONTAINERS:-}" ]];
 fi
 
 verifier_status=${preflight_status}
+chaos_pid=""
+chaos_status=0
+cleanup_chaos_waiter() {
+  if [[ -n "${chaos_pid}" && ! -f "${evidence_dir}/chaos-injection-started" ]] &&
+      kill -0 "${chaos_pid}" 2>/dev/null; then
+    kill "${chaos_pid}" 2>/dev/null || true
+    wait "${chaos_pid}" 2>/dev/null || true
+  fi
+}
+# Preserve the observability teardown installed above.
+trap 'cleanup_chaos_waiter; if [[ "${observability_managed}" == true && "${CAPACITY_OBSERVABILITY_KEEP:-0}" != 1 ]]; then make --no-print-directory _capacity-observability-down; fi' EXIT
 if (( preflight_status == 0 && container_check_status == 0 )); then
+  if [[ -n "${CAPACITY_CHAOS_PROFILE:-}" ]]; then
+    : >"${evidence_dir}/verifier.log"
+    "${repo_root}/scripts/run-chaos.sh" --capacity-window "${evidence_dir}" "${evidence_dir}/verifier.log" \
+      >"${evidence_dir}/chaos-runner.log" 2>&1 &
+    chaos_pid=$!
+  fi
   set +e
   # Recursive make inherits command-line variables ahead of environment values.
   CAPACITY_EVIDENCE_DIR="${evidence_dir}" "${command[@]}" "CAPACITY_EVIDENCE_DIR=${evidence_dir}" 2>&1 | tee "${evidence_dir}/verifier.log"
   verifier_status=${PIPESTATUS[0]}
   set -e
+fi
+
+if [[ -n "${chaos_pid}" ]]; then
+  if kill -0 "${chaos_pid}" 2>/dev/null && [[ ! -f "${evidence_dir}/chaos-injection-started" ]]; then
+    cleanup_chaos_waiter
+    echo "configured chaos did not reach an active declared load window; no fault was injected" | tee -a "${evidence_dir}/chaos-runner.log"
+    chaos_status=124
+  else
+    set +e
+    wait "${chaos_pid}"
+    chaos_status=$?
+    set -e
+  fi
 fi
 
 postflight_status=0
@@ -294,6 +332,9 @@ fi
 if (( status == 0 && postflight_status != 0 )); then
   status=${postflight_status}
 fi
+if (( status == 0 && chaos_status != 0 )); then
+  status=${chaos_status}
+fi
 
 prometheus_status=0
 if [[ -n "${CAPACITY_PROMETHEUS_URL:-}" ]]; then
@@ -322,8 +363,9 @@ jq --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson source_exit_code "${source_status}" \
   --argjson verifier_exit_code "${verifier_status}" --argjson datastore_exit_code "${container_check_status}" \
   --argjson postflight_exit_code "${postflight_status}" \
+  --argjson chaos_exit_code "${chaos_status}" \
   --argjson prometheus_exit_code "${prometheus_status}" \
-  '. + {completedAt:$completed_at,exitCode:$exit_code,sourceStateExitCode:$source_exit_code,sourceStateUnchanged:$source_state_unchanged,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:((.target == "api" and .profile == "authorization") or (.mode != "diagnostic" and ((.target == "namespace" and (.profile == "watch" or .profile == "recovery")) or (.target == "repository" and .profile == "lifecycle")))),postflightExitCode:$postflight_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic" and .worktreeDirty == false and $source_state_unchanged)}' \
+  '. + {completedAt:$completed_at,exitCode:$exit_code,sourceStateExitCode:$source_exit_code,sourceStateUnchanged:$source_state_unchanged,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:((.target == "api" and .profile == "authorization") or (.mode != "diagnostic" and ((.target == "namespace" and (.profile == "watch" or .profile == "recovery")) or (.target == "repository" and .profile == "lifecycle")))),postflightExitCode:$postflight_exit_code,chaosExitCode:$chaos_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic" and .worktreeDirty == false and $source_state_unchanged)}' \
   "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]] && (( status == 0 )); then

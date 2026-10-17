@@ -4,21 +4,92 @@
 package resolver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestCategoryProductsThroughInstrumentedGraphQLTransport(t *testing.T) {
+	_, store, product, leaf := newProductStatusTestFixture(t)
+	ancestor := seedCategory(t, store, "acme", "root", time.Now().UTC())
+	other := seedCategory(t, store, "acme", "other", time.Now().UTC())
+	wrapped := datastore.NewInstrumentedDatastoreWithRegistry(store, "memdb", zap.NewNop(), prometheus.NewRegistry())
+	root, err := NewResolver(ResolverDeps{Store: wrapped, Logger: zap.NewNop()})
+	require.NoError(t, err)
+	server := handler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{Resolvers: root}))
+	execute := func(query string, variables map[string]any) map[string]json.RawMessage {
+		t.Helper()
+		payload, err := json.Marshal(map[string]any{"query": query, "variables": variables})
+		require.NoError(t, err)
+		request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(payload))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		var envelope struct {
+			Data   map[string]json.RawMessage
+			Errors []json.RawMessage
+		}
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &envelope))
+		require.Empty(t, envelope.Errors, response.Body.String())
+		return envelope.Data
+	}
+	assertMembership := func(category *datastore.CategoryTaxonomy, expected bool) {
+		t.Helper()
+		data := execute(`query($id: ID!) {
+			category(by: {id: $id}) {
+				products(first: 2) { edges { node { id } } pageInfo { hasNextPage hasPreviousPage } }
+			}
+		}`, map[string]any{"id": mustEncodeNodeID(nodeKindCategory, category.UID)})
+		var result struct {
+			Products *model.ProductConnection
+		}
+		require.NoError(t, json.Unmarshal(data["category"], &result))
+		require.NotNil(t, result.Products)
+		if expected {
+			require.Len(t, result.Products.Edges, 1)
+			require.Equal(t, mustEncodeNodeID(nodeKindProduct, product.UID), result.Products.Edges[0].Node.ID)
+		} else {
+			require.Empty(t, result.Products.Edges)
+		}
+		require.False(t, result.Products.PageInfo.HasNextPage)
+		require.False(t, result.Products.PageInfo.HasPreviousPage)
+	}
+	for _, resolved := range []map[string]any{
+		{"category": map[string]any{"name": leaf.Name, "uid": mustEncodeNodeID(nodeKindCategory, leaf.UID), "path": []string{ancestor.Name, leaf.Name}}},
+		{"category": map[string]any{"name": other.Name, "uid": mustEncodeNodeID(nodeKindCategory, other.UID), "path": []string{other.Name}}},
+		{"category": nil},
+	} {
+		current, err := store.GetProduct(t.Context(), product.UID)
+		require.NoError(t, err)
+		execute(`mutation($input: UpdateProductStatusInput!) {
+			updateProductStatus(input: $input) { product { id metadata { resourceVersion } } }
+		}`, map[string]any{"input": map[string]any{
+			"namespace": product.Namespace, "name": product.Name, "resourceVersion": current.ResourceVersion, "resolved": resolved,
+		}})
+		category, _ := resolved["category"].(map[string]any)
+		assertMembership(ancestor, category != nil && category["name"] == leaf.Name)
+		assertMembership(leaf, category != nil && category["name"] == leaf.Name)
+		assertMembership(other, category != nil && category["name"] == other.Name)
+	}
+}
 
 // failingCategoryLookupStore wraps a real Datastore, overriding only
 // GetCategoryTaxonomyByName to fail — used to prove a transient lookup
@@ -263,7 +334,7 @@ func TestDecoupleCategoryProducts_ConcurrentSpecUpdateIsNotOverwritten(t *testin
 	datastore.AdvanceProductSystemVersion(product)
 	require.NoError(t, store.UpdateProduct(ctx, product, expected))
 	terminating, err := store.(datastore.CategoryTaxonomyDeletionStore).MarkCategoryTaxonomyDeletion(
-		ctx, category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
+		ctx, category.Namespace, category.Name, category.ResourceVersion, category.UID, time.Now().UTC())
 	require.NoError(t, err)
 
 	interleaved := &productUpdateAfterDependentReadStore{
@@ -342,7 +413,7 @@ func TestUpdateProductStatus_ThenDecoupleCategoryProducts_ConvergesCategoryDelet
 	require.Len(t, refs, 1, "resolved.category sync must have established the owner reference")
 
 	lifecycle := store.(datastore.CategoryTaxonomyDeletionStore)
-	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
+	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, category.UID, time.Now().UTC())
 	require.NoError(t, err)
 
 	decouple := true

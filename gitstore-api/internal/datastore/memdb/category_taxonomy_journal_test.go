@@ -62,7 +62,7 @@ func TestCategoryTaxonomyJournalRecordsOnlyCommittedWritesInOrder(t *testing.T) 
 
 	current, err := store.GetCategoryTaxonomy(t.Context(), category.UID)
 	require.NoError(t, err)
-	marked, err := deletion.MarkCategoryTaxonomyDeletion(t.Context(), "test-ns", "shoes", current.ResourceVersion, time.Now().UTC())
+	marked, err := deletion.MarkCategoryTaxonomyDeletion(t.Context(), "test-ns", "shoes", current.ResourceVersion, current.UID, time.Now().UTC())
 	require.NoError(t, err)
 	_, err = deletion.CompleteCategoryTaxonomyDeletion(t.Context(), "test-ns", "shoes", marked.ResourceVersion, marked.UID)
 	require.NoError(t, err)
@@ -107,7 +107,7 @@ func TestCategoryTaxonomyJournalSkipsRejectedWrites(t *testing.T) {
 	deletion := store.(datastore.CategoryTaxonomyDeletionStore)
 	require.ErrorIs(t, store.UpdateCategoryTaxonomy(t.Context(), journalCategoryFixture("00000000-0000-0000-0000-0000000000c2"), "1"), datastore.ErrNotFound)
 	require.ErrorIs(t, store.DeleteCategoryTaxonomy(t.Context(), "00000000-0000-0000-0000-0000000000c2"), datastore.ErrNotFound)
-	_, err = deletion.MarkCategoryTaxonomyDeletion(t.Context(), "test-ns", "shoes", "1", time.Now())
+	_, err = deletion.MarkCategoryTaxonomyDeletion(t.Context(), "test-ns", "shoes", "1", "00000000-0000-0000-0000-0000000000c2", time.Now())
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 
 	events, err := journal.ReadAfter(t.Context(), datastore.ResourceWatchCursor{}, 8)

@@ -15,6 +15,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDatastoreLifecycleMetadataPreservesDeletionTimestamp(t *testing.T) {
+	const uid = "00000000-0000-0000-0000-000000000101"
+	at := time.Date(2026, 10, 15, 14, 54, 54, 41000000, time.UTC)
+	for _, convert := range []struct {
+		kind string
+		meta func(*time.Time) *model.ObjectMeta
+	}{
+		{"Product", func(deleted *time.Time) *model.ObjectMeta {
+			return DatastoreProductToGraphQL(&datastore.Product{UID: uid, Name: "fixture", Namespace: "owned", DeletionTimestamp: deleted, Finalizers: []string{"example.test/hold"}}).Metadata
+		}},
+		{"ProductVariant", func(deleted *time.Time) *model.ObjectMeta {
+			return DatastoreVariantToGraphQL(&datastore.ProductVariant{UID: uid, Name: "fixture", Namespace: "owned", DeletionTimestamp: deleted, Finalizers: []string{"example.test/hold"}}).Metadata
+		}},
+		{"CategoryTaxonomy", func(deleted *time.Time) *model.ObjectMeta {
+			return DatastoreCategoryTaxonomyToGraphQL(&datastore.CategoryTaxonomy{UID: uid, Name: "fixture", Namespace: "owned", DeletionTimestamp: deleted, Finalizers: []string{"example.test/hold"}}).Metadata
+		}},
+		{"Collection", func(deleted *time.Time) *model.ObjectMeta {
+			return DatastoreCollectionToGraphQL(&datastore.Collection{UID: uid, Name: "fixture", Namespace: "owned", DeletionTimestamp: deleted, Finalizers: []string{"example.test/hold"}}).Metadata
+		}},
+		{"File", func(deleted *time.Time) *model.ObjectMeta {
+			return DatastoreFileToGraphQL(&datastore.File{UID: uid, Name: "fixture", Namespace: "owned", DeletionTimestamp: deleted, Finalizers: []string{"example.test/hold"}}).Metadata
+		}},
+		{"Repository", func(deleted *time.Time) *model.ObjectMeta {
+			return DatastoreRepositoryToGraphQL(&datastore.Repository{UID: uid, Name: "fixture", Namespace: "owned", DeletionTimestamp: deleted, Finalizers: []string{"example.test/hold"}}).Metadata
+		}},
+	} {
+		t.Run(convert.kind, func(t *testing.T) {
+			active := convert.meta(nil)
+			require.NotNil(t, active)
+			require.Nil(t, active.DeletionTimestamp)
+			require.Equal(t, []string{"example.test/hold"}, active.Finalizers)
+			terminating := convert.meta(&at)
+			require.NotNil(t, terminating)
+			require.NotNil(t, terminating.DeletionTimestamp)
+			require.True(t, at.Equal(*terminating.DeletionTimestamp))
+			require.Equal(t, active.UID, terminating.UID)
+			require.Equal(t, active.ResourceVersion, terminating.ResourceVersion)
+			require.Equal(t, active.Generation, terminating.Generation)
+			require.Equal(t, []string{"example.test/hold"}, terminating.Finalizers)
+		})
+	}
+}
+
 func TestDatastoreNamespaceToGraphQL_DeclarativeProjection(t *testing.T) {
 	ns := namespaceContractFixture("6a053cdd-1f95-47f2-b3bb-d950a52a6758", "acme")
 	ns.APIVersion = namespaceAPIVersion

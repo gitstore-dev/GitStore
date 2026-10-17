@@ -66,7 +66,11 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		return nil, nil, err
 	}
 
-	if err := preParseChecks(fmRaw); err != nil {
+	var frontmatterNode yaml.Node
+	if err := yaml.Unmarshal(fmRaw, &frontmatterNode); err != nil {
+		return nil, nil, fmt.Errorf("validate: malformed YAML: %w", err)
+	}
+	if err := preParseChecks(&frontmatterNode); err != nil {
 		return nil, nil, err
 	}
 
@@ -74,7 +78,7 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 	var kindProbe struct {
 		Kind string `yaml:"kind"`
 	}
-	if err := yaml.Unmarshal(fmRaw, &kindProbe); err != nil {
+	if err := frontmatterNode.Decode(&kindProbe); err != nil {
 		return nil, nil, fmt.Errorf("validate: malformed YAML: %w", err)
 	}
 
@@ -315,11 +319,11 @@ func extractFrontmatterBlock(src []byte) ([]byte, error) {
 	return []byte(inner), nil
 }
 
-// preParseChecks unmarshals the frontmatter block into a raw map and enforces
+// preParseChecks decodes the frontmatter tree into a raw map and enforces
 // rules that must fire before struct binding.
-func preParseChecks(fmRaw []byte) error {
+func preParseChecks(frontmatterNode *yaml.Node) error {
 	var raw map[string]any
-	if err := yaml.Unmarshal(fmRaw, &raw); err != nil {
+	if err := frontmatterNode.Decode(&raw); err != nil {
 		return fmt.Errorf("validate: malformed YAML: %w", err)
 	}
 

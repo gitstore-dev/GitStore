@@ -283,6 +283,7 @@ mod tests {
         ) -> Result<Response<ValidateResourcesResponse>, Status> {
             Ok(Response::new(ValidateResourcesResponse {
                 accepted: true,
+                resource_deletion_validation_complete: false,
                 errors: vec![],
             }))
         }
@@ -291,7 +292,6 @@ mod tests {
             &self,
             req: Request<AdmitResourcesRequest>,
         ) -> Result<Response<AdmitResourcesResponse>, Status> {
-            tokio::time::sleep(self.delay).await;
             self.admit_call_count.fetch_add(1, Ordering::SeqCst);
             *self.actor_subject.lock().unwrap() = req
                 .into_inner()
@@ -300,6 +300,7 @@ mod tests {
                 .actor
                 .unwrap()
                 .subject;
+            tokio::time::sleep(self.delay).await;
             Ok(Response::new(AdmitResourcesResponse {}))
         }
 
@@ -419,12 +420,13 @@ mod tests {
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
         tokio::time::timeout(Duration::from_secs(5), async {
-            while count.load(Ordering::SeqCst) == 0 {
+            while !logs_contain("post_receive_admission_timing") {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
         .unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
         logs_assert(|lines| {
             let samples: Vec<_> = lines
                 .iter()

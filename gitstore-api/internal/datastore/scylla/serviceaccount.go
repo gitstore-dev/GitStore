@@ -345,11 +345,17 @@ func (s *scyllaDatastore) DeleteServiceAccount(ctx context.Context, uid string) 
 	if err := s.deleteServiceAccountAuthoritative(ctx, row, sa.ResourceVersion); err != nil {
 		return err
 	}
-	_ = s.deleteServiceAccountListingProjection(ctx, row)
+	listingErr := s.deleteServiceAccountListingProjection(ctx, row)
 	// Release only our own routing reservation, never a replacement account.
 	_, err = s.session.Query("DELETE FROM service_accounts_by_cluster_uid WHERE uid=? IF name=? AND creation_timestamp=?", nil).WithContext(ctx).Bind(row.UID, row.Name, row.CreationTimestamp).ExecCASRelease()
 	if err != nil {
-		return err
+		err = fmt.Errorf("scylla: release service account UID reservation: %w", err)
+	}
+	if cleanupErr := errors.Join(listingErr, err); cleanupErr != nil {
+		return datastore.NewRepairRequiredError(datastore.MutationStep{
+			Operation: "DeleteServiceAccount", ResourceKind: "ServiceAccount", ResourceUID: uid,
+			Projection: "service_account_indexes", Action: "delete",
+		}, cleanupErr, nil)
 	}
 	return nil
 }

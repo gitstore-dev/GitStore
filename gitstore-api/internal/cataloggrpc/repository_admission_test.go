@@ -324,18 +324,25 @@ func TestValidateResources_RepositoryDeletionRejectsDependentCatalogResources(t 
 		SourcePath: "repositories/catalog.md", GitRef: "refs/heads/main",
 	}))
 	require.NoError(t, store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "acme", Name: "catalog", RepositoryID: repositoryID}))
-	require.NoError(t, store.CreateProduct(ctx, &datastore.Product{
-		UID: "00000000-0000-0000-0000-000000000103", Namespace: "acme", Name: "dependent-product", RepositoryID: repositoryID,
-	}))
-
-	response, err := newCatalogServer(t, store, nil).ValidateResources(ctx, &catalogv1.ValidateResourcesRequest{
+	server := newCatalogServer(t, store, nil)
+	request := &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Trees: []*catalogv1.ResourceValidationTree{{
 			OldBlobs: []*catalogv1.ResourceBlob{{Path: "repositories/catalog.md", Content: repositoryManifestFor("catalog", "acme", "main", "standard")}},
 		}},
-	})
+	}
+	empty, err := server.ValidateResources(ctx, request)
+	require.NoError(t, err)
+	require.True(t, empty.Accepted)
+	require.True(t, empty.ResourceDeletionValidationComplete)
+	require.NoError(t, store.CreateProduct(ctx, &datastore.Product{
+		UID: "00000000-0000-0000-0000-000000000103", Namespace: "acme", Name: "dependent-product", RepositoryID: repositoryID,
+	}))
+
+	response, err := server.ValidateResources(ctx, request)
 	require.NoError(t, err)
 	require.False(t, response.Accepted)
+	require.False(t, response.ResourceDeletionValidationComplete)
 	require.Len(t, response.Errors, 1)
 	assert.Equal(t, "dependent_resources", response.Errors[0].Constraint)
 	assert.Contains(t, response.Errors[0].Message, "cannot be deleted")

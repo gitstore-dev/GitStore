@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gocql/gocql"
@@ -254,9 +255,15 @@ func (s *scyllaDatastore) LookupRepository(ctx context.Context, namespace, name 
 	if err != nil {
 		return nil, err
 	}
+	var reverse *datastore.NamespaceMapping
+	var reverseErr error
+	var validation sync.WaitGroup
+	validation.Go(func() {
+		reverse, reverseErr = s.lookupRepositoryReverseMapping(ctx, mapping.RepositoryID)
+	})
 	repository, err := s.GetRepository(ctx, mapping.RepositoryID)
+	validation.Wait()
 	if errors.Is(err, datastore.ErrNotFound) {
-		reverse, reverseErr := s.lookupRepositoryReverseMapping(ctx, mapping.RepositoryID)
 		if reverseErr != nil {
 			return nil, reverseErr
 		}
@@ -279,14 +286,13 @@ func (s *scyllaDatastore) LookupRepository(ctx context.Context, namespace, name 
 			fmt.Errorf("authoritative repository path is %s/%s", repository.Namespace, repository.Name),
 		)
 	}
-	reverse, err := s.lookupRepositoryReverseMapping(ctx, mapping.RepositoryID)
-	if errors.Is(err, datastore.ErrNotFound) {
+	if errors.Is(reverseErr, datastore.ErrNotFound) {
 		return nil, s.repositoryMappingRepairError(
-			"lookup_repository", mapping.RepositoryID, "namespace_mappings_by_repository", path, datastore.FindingMissing, err,
+			"lookup_repository", mapping.RepositoryID, "namespace_mappings_by_repository", path, datastore.FindingMissing, reverseErr,
 		)
 	}
-	if err != nil {
-		return nil, err
+	if reverseErr != nil {
+		return nil, reverseErr
 	}
 	if reverse.Namespace != namespace || reverse.Name != name {
 		return nil, s.repositoryMappingRepairError(

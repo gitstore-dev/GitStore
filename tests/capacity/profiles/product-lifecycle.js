@@ -9,7 +9,7 @@ import { check } from 'k6';
 import http from 'k6/http';
 import { Counter } from 'k6/metrics';
 import { env } from '../lib/config.js';
-import { graphql } from '../lib/graphql.js';
+import { graphql, graphqlSucceeded } from '../lib/graphql.js';
 
 // The local alpha stack is validated from the host on 127.0.0.1, whereas k6
 // joins the Compose network and reaches each independent service by its
@@ -18,9 +18,14 @@ import { graphql } from '../lib/graphql.js';
 const apiA = env('PRODUCT_CAPACITY_API_A', env('CAPACITY_API_A'));
 const apiB = env('PRODUCT_CAPACITY_API_B', env('CAPACITY_API_B'));
 const token = env('CAPACITY_TOKEN');
+if (apiA === apiB) {
+  throw new Error('Product lifecycle endpoints must identify distinct replicas');
+}
 const replicaChecks = new Counter('product_lifecycle_replica_checks');
+const offered = new Counter('product_lifecycle_offered');
 const admissionChecks = new Counter('product_lifecycle_admission_checks');
 const deletionRaceChecks = new Counter('product_lifecycle_deletion_race_checks');
+const deletionReplicaChecks = new Counter('product_lifecycle_deletion_replica_checks');
 
 export const options = {
   scenarios: {
@@ -33,18 +38,21 @@ export const options = {
   },
   thresholds: {
     checks: ['rate==1'],
+    dropped_iterations: ['count==0'],
     http_req_failed: ['rate<0.001'],
   },
 };
 
 export default function () {
+  offered.add(1);
   for (const endpoint of [apiA, apiB]) {
     const result = graphql(endpoint, token, 'query { __typename }', {}, {
       operation: 'productLifecyclePreflight',
     });
     check(result, {
-      'Product lifecycle API replica is reachable': ({ response, body }) =>
-        response.status >= 200 && response.status < 300 && !body.errors,
+      'Product lifecycle API replica is reachable': (result) =>
+        graphqlSucceeded(result) && typeof result.body.data.__typename === 'string' &&
+        result.body.data.__typename.length > 0,
     });
     replicaChecks.add(1);
   }
@@ -57,22 +65,25 @@ export default function () {
     metadata: { namespace: 'default', name }, spec: { title: name },
   } }, { operation: 'productLifecycleCreate' });
   const admitted = check(created, {
-    'Product lifecycle GraphQL admission succeeds': ({ response, body }) =>
-      response.status >= 200 && response.status < 300 && !body.errors &&
-      body.data && body.data.createProduct && body.data.createProduct.product.id &&
-      body.data.createProduct.product.metadata.name === name,
+    'Product lifecycle GraphQL admission succeeds': (result) =>
+      graphqlSucceeded(result) && result.body.data.createProduct && result.body.data.createProduct.product &&
+      typeof result.body.data.createProduct.product.id === 'string' &&
+      result.body.data.createProduct.product.id.length > 0 && result.body.data.createProduct.product.metadata &&
+      result.body.data.createProduct.product.metadata.name === name,
   });
   if (admitted) {
     admissionChecks.add(1);
   }
+  const id = admitted ? created.body.data.createProduct.product.id : null;
 
   const observed = graphql(apiB, token, `query($namespace: String!, $name: String!) {
-    product(by: { namespacePath: { namespace: $namespace, name: $name } }) { metadata { name } }
+    product(by: { namespacePath: { namespace: $namespace, name: $name } }) { id metadata { name } }
   }`, { namespace: 'default', name }, { operation: 'productLifecycleCrossReplicaRead' });
   const visibleOnPeer = check(observed, {
-    'Product lifecycle admission is visible on peer replica': ({ response, body }) =>
-      response.status >= 200 && response.status < 300 && !body.errors &&
-      body.data && body.data.product && body.data.product.metadata.name === name,
+    'Product lifecycle admission is visible on peer replica': (result) =>
+      graphqlSucceeded(result) && result.body.data.product && id !== null &&
+      result.body.data.product.id === id && result.body.data.product.metadata &&
+      result.body.data.product.metadata.name === name,
   });
   if (!admitted || !visibleOnPeer) {
     return;
@@ -82,7 +93,6 @@ export default function () {
   // requests across the two replicas. The latter is the lifecycle's actual
   // idempotency boundary: retries must observe the one terminating workflow,
   // rather than competing to create two independent Git commits.
-  const id = created.body.data.createProduct.product.id;
   const deleteRequest = JSON.stringify({
     query: `mutation($input: DeleteProductInput!) {
       deleteProduct(input: $input) { outcome product { metadata { deletionTimestamp } } }
@@ -93,10 +103,9 @@ export default function () {
     deleteProduct(input: $input) { outcome }
   }`, { input: { id } }, { operation: 'productLifecycleDeletionStart' });
   const workflowStarted = check(started, {
-    'Product lifecycle deletion starts a foreground workflow': ({ response, body }) =>
-      response.status >= 200 && response.status < 300 && !body.errors &&
-      body.data && body.data.deleteProduct &&
-      body.data.deleteProduct.outcome === 'TERMINATION_STARTED',
+    'Product lifecycle deletion starts a foreground workflow': (result) =>
+      graphqlSucceeded(result) && result.body.data.deleteProduct &&
+      result.body.data.deleteProduct.outcome === 'TERMINATION_STARTED',
   });
   if (!workflowStarted) {
     return;
@@ -110,13 +119,13 @@ export default function () {
   })));
   const raceObserved = check(deleteResponses, {
     'Product lifecycle deletion race observes the existing foreground workflow': (responses) =>
-      responses.some((response) => {
-        if (response.status < 200 || response.status >= 300) return false;
+      responses.length === 2 && responses.every((response) => {
         let body;
         try { body = response.json(); } catch (_) { return false; }
-        const payload = body.data && body.data.deleteProduct;
-        return !body.errors && payload &&
-          payload.outcome === 'ALREADY_TERMINATING';
+        const valid = graphqlSucceeded({ response, body }) && body.data.deleteProduct &&
+          body.data.deleteProduct.outcome === 'ALREADY_TERMINATING';
+        if (valid) deletionReplicaChecks.add(1);
+        return valid;
       }),
   });
   if (raceObserved) {

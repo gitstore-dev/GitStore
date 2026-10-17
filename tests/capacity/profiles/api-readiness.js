@@ -5,8 +5,8 @@ import http from 'k6/http';
 import exec from 'k6/execution';
 import { check } from 'k6';
 import { Counter } from 'k6/metrics';
-import { env, integer } from '../lib/config.js';
-import { graphql } from '../lib/graphql.js';
+import { env, integer, durationNanoseconds, announceLoadWindow } from '../lib/config.js';
+import { graphql, graphqlSucceeded } from '../lib/graphql.js';
 
 const baseURL = env('CAPACITY_BASE_URL');
 const endpoints = (__ENV.CAPACITY_API_ENDPOINTS || baseURL).split(',').map((url) => url.trim().replace(/\/$/, ''));
@@ -123,6 +123,10 @@ export function setup() {
 
 export default function (data) {
   const index = Number(exec.scenario.name.replace('readiness_', ''));
+  if (__ENV.CAPACITY_CHAOS_PROFILE && index === 0 && exec.scenario.iterationInTest === 0) {
+    announceLoadWindow(exec.scenario.startTime,
+      durationNanoseconds(exec.test.options.scenarios[exec.scenario.name].duration));
+  }
   const endpoint = endpoints[index];
   const tags = { traffic: 'readiness', replica: `${index}` };
   const health = http.get(`${endpoint}/health`, { timeout: '5s', tags: { ...tags, operation: 'health' } });
@@ -138,13 +142,12 @@ export default function (data) {
   const allow = graphql(`${endpoint}/graphql`, token, query, {}, { ...probeTags, operation: 'authorization_allow' }, { timeout: '5s' });
   const deny = graphql(`${endpoint}/graphql`, deniedToken, query, {}, { ...probeTags, operation: 'authorization_deny' }, { timeout: '5s' });
   const edges = allow.body && allow.body.data && allow.body.data.namespaces && allow.body.data.namespaces.edges;
-  const allowed = allow.response.status === 200 && allow.body &&
-    (!allow.body.errors || (Array.isArray(allow.body.errors) && allow.body.errors.length === 0)) &&
+  const allowed = allow.response.status === 200 && graphqlSucceeded(allow) &&
     Array.isArray(edges) && edges.length <= 1 &&
     edges.every((edge) => edge && edge.node && typeof edge.node.id === 'string' && edge.node.id.length > 0);
   const denied = deny.response.status === 200 && deny.body && deny.body.data == null &&
     Array.isArray(deny.body.errors) && deny.body.errors.length === 1 &&
-    deny.body.errors[0].extensions && deny.body.errors[0].extensions.code === denialCode;
+    deny.body.errors[0] && deny.body.errors[0].extensions && deny.body.errors[0].extensions.code === denialCode;
   check(allowed, { 'namespace list allowed with exact response shape': (value) => value === true });
   check(denied, { 'namespace list denied with exact authorization class': (value) => value === true });
   counters[index].attempts.add(1);

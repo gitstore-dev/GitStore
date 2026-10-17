@@ -18,10 +18,35 @@ const (
 	NamespaceFenceReserve
 	NamespaceFenceMutation
 	NamespaceFenceRelease
+	NamespaceFenceReserveRead
+	NamespaceFenceReserveCAS
+	NamespaceFenceReserveBusyWait
+	NamespaceFenceReserveConflictWait
 )
 
 type namespaceFenceObserverKey struct{}
 type namespaceFenceObserver func(NamespaceFencePhase, time.Time, error)
+
+type fileMutationCohortStarterKey struct{}
+type fileMutationCohortStarter func(context.Context) (context.Context, func(error))
+type fileMutationCohortObserverKey struct{}
+type fileMutationCohortObserver func(context.Context, int, int)
+
+// StartFileMutationCohort observes one shared reservation without changing its
+// cancellation or admission context.
+func StartFileMutationCohort(ctx context.Context) (context.Context, func(error)) {
+	if start, ok := ctx.Value(fileMutationCohortStarterKey{}).(fileMutationCohortStarter); ok {
+		return start(ctx)
+	}
+	return ctx, func(error) {}
+}
+
+// ObserveFileMutationCohort links each selected callback to its physical owner.
+func ObserveFileMutationCohort(ctx, owner context.Context, index, count int) {
+	if observe, ok := ctx.Value(fileMutationCohortObserverKey{}).(fileMutationCohortObserver); ok {
+		observe(owner, index, count)
+	}
+}
 
 type CatalogMutationPhase uint8
 
@@ -48,10 +73,41 @@ const (
 	FileMutationConditionalBatch14
 	FileMutationConditionalBatch15
 	FileMutationConditionalBatch16
+	FileMutationConditionalQueue
+	FileMutationConditionalSingle
+	FileMutationSnapshotRead
+	FileProjectionReadQueue
+	FileProjectionReadBatch1
+	FileProjectionReadBatch2
+	FileProjectionReadBatch3
+	FileProjectionReadBatch4
+	FileProjectionReadBatch5
+	FileProjectionReadBatch6
+	FileProjectionReadBatch7
+	FileProjectionReadBatch8
+	FileProjectionReadBatch9
+	FileProjectionReadBatch10
+	FileProjectionReadBatch11
+	FileProjectionReadBatch12
+	FileProjectionReadBatch13
+	FileProjectionReadBatch14
+	FileProjectionReadBatch15
+	FileProjectionReadBatch16
 )
 
 type catalogMutationObserverKey struct{}
 type catalogMutationObserver func(CatalogMutationPhase, time.Time, error)
+
+// StartCatalogMutationPhase returns a completion hook for work handed to another
+// goroutine, or nil when no observer is installed.
+func StartCatalogMutationPhase(ctx context.Context, phase CatalogMutationPhase) func(error) {
+	observer, ok := ctx.Value(catalogMutationObserverKey{}).(catalogMutationObserver)
+	if !ok {
+		return nil
+	}
+	start := time.Now()
+	return func(err error) { observer(phase, start, err) }
+}
 
 func MeasureCatalogMutationPhase(ctx context.Context, phase CatalogMutationPhase, operation func() error) error {
 	observer, ok := ctx.Value(catalogMutationObserverKey{}).(catalogMutationObserver)

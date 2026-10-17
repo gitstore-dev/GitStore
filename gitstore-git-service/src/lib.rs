@@ -181,24 +181,39 @@ impl Telemetry {
     }
 }
 
+fn telemetry_resource() -> anyhow::Result<Resource> {
+    static INSTANCE_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let instance_id = if let Some(id) = INSTANCE_ID.get() {
+        id
+    } else {
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random)
+            .map_err(|error| anyhow::anyhow!("generate telemetry process identity: {error}"))?;
+        let generated = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        INSTANCE_ID.get_or_init(|| generated)
+    };
+    Ok(Resource::builder_empty()
+        .with_attributes([
+            opentelemetry::KeyValue::new("service.name", "gitstore-git-service"),
+            opentelemetry::KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+            opentelemetry::KeyValue::new("service.instance.id", instance_id.clone()),
+        ])
+        .build())
+}
+
 pub fn init_observability(
     log: &config::LogConfig,
     cfg: &config::OtlpConfig,
 ) -> anyhow::Result<Telemetry> {
-    if cfg.endpoint.is_empty() {
+    if cfg.uri.is_empty() {
         init_logging(&log.level, &log.format).map_err(|e| anyhow::anyhow!("{e}"))?;
         return Ok(Telemetry {
             traces: None,
             logs: None,
         });
     }
-    let endpoint = cfg.endpoint.trim_end_matches('/');
-    let resource = Resource::builder_empty()
-        .with_attributes([
-            opentelemetry::KeyValue::new("service.name", "gitstore-git-service"),
-            opentelemetry::KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-        ])
-        .build();
+    let endpoint = cfg.uri.trim_end_matches('/');
+    let resource = telemetry_resource()?;
     let trace_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
         .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
@@ -408,6 +423,79 @@ fn ignore_already_initialized(
 mod tests {
     use super::*;
 
+    fn resource_attribute(resource: &Resource, key: &str) -> String {
+        resource
+            .iter()
+            .find(|(name, _)| name.as_str() == key)
+            .map(|(_, value)| value.to_string())
+            .unwrap_or_else(|| panic!("missing telemetry resource attribute {key}"))
+    }
+
+    #[test]
+    fn telemetry_resource_identity_is_process_scoped() {
+        const CHILD: &str = "GITSTORE_TEST_TELEMETRY_IDENTITY_CHILD";
+        if std::env::var(CHILD).ok().as_deref() == Some("1") {
+            let workers: Vec<_> = (0..8)
+                .map(|_| {
+                    std::thread::spawn(|| {
+                        let resource = telemetry_resource().unwrap();
+                        assert_eq!(
+                            resource_attribute(&resource, "service.name"),
+                            "gitstore-git-service"
+                        );
+                        assert_eq!(
+                            resource_attribute(&resource, "service.version"),
+                            env!("CARGO_PKG_VERSION")
+                        );
+                        resource_attribute(&resource, "service.instance.id")
+                    })
+                })
+                .collect();
+            let identities: Vec<_> = workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .collect();
+            assert!(identities.iter().all(|id| id == &identities[0]));
+            println!("TELEMETRY_INSTANCE_ID={}", identities[0]);
+            return;
+        }
+        let identities: Vec<_> = (0..2)
+            .map(|_| {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "tests::telemetry_resource_identity_is_process_scoped",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, "1")
+                    .env("HOSTNAME", "reused-telemetry-contract-host")
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "isolated telemetry identity failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let stdout = String::from_utf8(output.stdout).unwrap();
+                let ids: Vec<_> = stdout
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("TELEMETRY_INSTANCE_ID="))
+                    .collect();
+                assert_eq!(ids.len(), 1, "child identity marker must occur once");
+                let id = ids[0].to_owned();
+                assert_eq!(id.len(), 32);
+                assert!(id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+                id
+            })
+            .collect();
+        assert_ne!(
+            identities[0], identities[1],
+            "fresh processes sharing a hostname must not share telemetry identity"
+        );
+    }
+
     fn telemetry_count(signal: &str, stage: &str) -> u64 {
         prometheus::gather()
             .iter()
@@ -549,12 +637,19 @@ mod tests {
             let logs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let trace_count = traces.clone();
             let log_count = logs.clone();
+            let trace_batches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let captured_traces = trace_batches.clone();
+            let log_batches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let captured_logs = log_batches.clone();
             let app = axum::Router::new()
                 .route(
                     "/v1/traces",
                     axum::routing::post(move |body: axum::body::Bytes| {
                         let count = trace_count.clone();
+                        let captured = captured_traces.clone();
                         async move {
+                            assert!(body.len() <= 256 * 1024);
+                            captured.lock().unwrap().push(body.to_vec());
                             count.fetch_add(body.len(), Ordering::Relaxed);
                             axum::http::StatusCode::OK
                         }
@@ -564,7 +659,10 @@ mod tests {
                     "/v1/logs",
                     axum::routing::post(move |body: axum::body::Bytes| {
                         let count = log_count.clone();
+                        let captured = captured_logs.clone();
                         async move {
+                            assert!(body.len() <= 256 * 1024);
+                            captured.lock().unwrap().push(body.to_vec());
                             count.fetch_add(body.len(), Ordering::Relaxed);
                             axum::http::StatusCode::OK
                         }
@@ -577,7 +675,7 @@ mod tests {
                     format: "json".to_string(),
                 },
                 &config::OtlpConfig {
-                    endpoint: format!("http://{address}"),
+                    uri: format!("http://{address}"),
                     trace_sample_ratio: 1.0,
                 },
             )
@@ -590,9 +688,21 @@ mod tests {
                     .unwrap(),
             );
             let span = rpc_span(&headers, "/gitstore.git.v1.GitService/ReceivePack");
+            use opentelemetry::trace::TraceContextExt;
+            let rpc_context = span.context().span().span_context().clone();
+            let blocking_span_id = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let captured_span_id = blocking_span_id.clone();
             use tracing::Instrument;
             async {
-                let request = spawn_blocking(|| {
+                let request = spawn_blocking(move || {
+                    *captured_span_id.lock().unwrap() = Some(
+                        tracing::Span::current()
+                            .context()
+                            .span()
+                            .span_context()
+                            .span_id(),
+                    );
+                    tracing::info!("blocking telemetry correlation contract");
                     let mut metadata = tonic::metadata::MetadataMap::new();
                     inject_trace(&mut metadata);
                     assert!(metadata
@@ -631,6 +741,52 @@ mod tests {
                 .unwrap();
             assert!(traces.load(Ordering::Relaxed) > 0);
             assert!(logs.load(Ordering::Relaxed) > 0);
+            let trace_batches = trace_batches.lock().unwrap();
+            let log_batches = log_batches.lock().unwrap();
+            let instance_key = b"service.instance.id";
+            for batches in [&*trace_batches, &*log_batches] {
+                assert!(
+                    batches.iter().any(|batch| batch
+                        .windows(instance_key.len())
+                        .any(|bytes| bytes == instance_key)),
+                    "exported signal has no service.instance.id resource attribute"
+                );
+            }
+            let instance_id =
+                resource_attribute(&telemetry_resource().unwrap(), "service.instance.id");
+            assert_eq!(instance_id.len(), 32);
+            let mut attribute = vec![0x0a, instance_key.len() as u8];
+            attribute.extend_from_slice(instance_key);
+            attribute.extend_from_slice(&[
+                0x12,
+                instance_id.len() as u8 + 2,
+                0x0a,
+                instance_id.len() as u8,
+            ]);
+            attribute.extend_from_slice(instance_id.as_bytes());
+            for batches in [&*trace_batches, &*log_batches] {
+                assert!(
+                    batches.iter().any(|batch| batch
+                        .windows(attribute.len())
+                        .any(|bytes| bytes == attribute)),
+                    "exported trace and log resources must share the process identity"
+                );
+            }
+            let has_native_id = |tag, id: &[u8]| {
+                let mut field = vec![tag, id.len() as u8];
+                field.extend_from_slice(id);
+                log_batches
+                    .iter()
+                    .any(|batch| batch.windows(field.len()).any(|bytes| bytes == field))
+            };
+            assert!(has_native_id(0x4a, &rpc_context.trace_id().to_bytes()));
+            assert!(has_native_id(0x52, &rpc_context.span_id().to_bytes()));
+            assert!(has_native_id(
+                0x52,
+                &blocking_span_id.lock().unwrap().unwrap().to_bytes()
+            ));
+            drop(trace_batches);
+            drop(log_batches);
             for signal in ["logs", "spans"] {
                 assert!(telemetry_count(signal, "admitted") > 0);
                 assert_eq!(

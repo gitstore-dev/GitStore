@@ -86,13 +86,17 @@ type PageInfo {
 
 type Query {
   """
-  Fetches an object given its globally unique ID
-  Relay Node interface implementation
+  Fetches an object given its globally unique ID.
+  A missing object returns null with a NOT_FOUND error and resource diagnostic.
+  Malformed IDs return BAD_USER_INPUT.
   """
   node(id: ID!): Node
 
   """
-  Fetches multiple objects given their globally unique IDs
+  Fetches multiple objects given their globally unique IDs, preserving input order.
+  Missing objects return null entries with indexed NOT_FOUND errors.
+  Malformed IDs return null entries with indexed BAD_USER_INPUT errors.
+  Other authorized results are retained; infrastructure failures fail the batch.
   """
   nodes(ids: [ID!]!): [Node]!
 }
@@ -415,4 +419,3 @@ input ProductVariantNamespacePath {
   namespace: String!
   name: String!
 }
-

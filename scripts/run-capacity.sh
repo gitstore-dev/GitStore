@@ -131,31 +131,33 @@ elif [[ "${mode}" != "diagnostic" ]]; then
 fi
 
 chaos_pid=""
-if [[ -n "${CAPACITY_CHAOS_PROFILE:-}" ]]; then
-  if [[ -z "${CAPACITY_CHAOS_TARGET:-}" || "${CAPACITY_CHAOS_CONFIRM:-0}" != "1" ]]; then
-    echo "integrated chaos requires CAPACITY_CHAOS_TARGET and CAPACITY_CHAOS_CONFIRM=1" >&2
-    exit 2
+cleanup_chaos_waiter() {
+  if [[ -n "${chaos_pid}" && ! -f "${evidence_dir}/chaos-injection-started" ]] &&
+      kill -0 "${chaos_pid}" 2>/dev/null; then
+    kill "${chaos_pid}" 2>/dev/null || true
+    wait "${chaos_pid}" 2>/dev/null || true
   fi
-  (
-    sleep "${CAPACITY_CHAOS_DELAY:-30s}"
-    CHAOS_PROFILE="${CAPACITY_CHAOS_PROFILE}" \
-      CHAOS_TARGET="${CAPACITY_CHAOS_TARGET}" \
-      CHAOS_CONFIRM=1 \
-      CHAOS_EVIDENCE_DIR="${evidence_dir}/chaos" \
-      "${repo_root}/scripts/run-chaos.sh" "${CAPACITY_CHAOS_PROFILE}"
-  ) >"${evidence_dir}/chaos-runner.log" 2>&1 &
+}
+trap cleanup_chaos_waiter EXIT
+if [[ -n "${CAPACITY_CHAOS_PROFILE:-}" ]]; then
+  CAPACITY_TARGET="${target}" CAPACITY_SCENARIO="${scenario}" \
+    "${repo_root}/scripts/run-chaos.sh" --capacity-window-check
+  : >"${evidence_dir}/k6.log"
+  CAPACITY_TARGET="${target}" CAPACITY_SCENARIO="${scenario}" \
+    "${repo_root}/scripts/run-chaos.sh" --capacity-window "${evidence_dir}" "${evidence_dir}/k6.log" \
+    >"${evidence_dir}/chaos-runner.log" 2>&1 &
   chaos_pid=$!
 fi
 
 set +e
 if [[ -n "${K6_BIN:-}" ]]; then
-  "${K6_BIN}" run --summary-trend-stats 'avg,min,med,max,p(90),p(95),p(99),count' --summary-export "${evidence_dir}/summary.json" "${script}" 2>&1 | tee "${evidence_dir}/k6.log"
+  "${K6_BIN}" run --log-format json --summary-trend-stats 'avg,min,med,max,p(90),p(95),p(99),count' --summary-export "${evidence_dir}/summary.json" "${script}" 2>&1 | tee "${evidence_dir}/k6.log"
   status=${PIPESTATUS[0]}
 elif command -v k6 >/dev/null 2>&1; then
-  k6 run --summary-trend-stats 'avg,min,med,max,p(90),p(95),p(99),count' --summary-export "${evidence_dir}/summary.json" "${script}" 2>&1 | tee "${evidence_dir}/k6.log"
+  k6 run --log-format json --summary-trend-stats 'avg,min,med,max,p(90),p(95),p(99),count' --summary-export "${evidence_dir}/summary.json" "${script}" 2>&1 | tee "${evidence_dir}/k6.log"
   status=${PIPESTATUS[0]}
 else
-  docker_args=(run --rm --network "${CAPACITY_DOCKER_NETWORK:-host}" -v "${repo_root}:/workspace:ro" -v "${evidence_dir}:/evidence" -w /workspace)
+  docker_args=(run --rm --user "$(id -u):$(id -g)" --network "${CAPACITY_DOCKER_NETWORK:-host}" -v "${repo_root}:/workspace:ro" -v "${evidence_dir}:/evidence" -w /workspace)
   if [[ -n "${CAPACITY_ENV_FILE:-}" ]]; then
     docker_args+=(--env-file "${CAPACITY_ENV_FILE}")
   fi
@@ -165,7 +167,7 @@ else
     esac
   done < <(env)
   docker_args+=(-e CAPACITY_SUMMARY_DIR=/evidence)
-  docker "${docker_args[@]}" "${k6_image}" run --summary-trend-stats 'avg,min,med,max,p(90),p(95),p(99),count' --summary-export /evidence/summary.json "/workspace/tests/capacity/profiles/${profile}.js" 2>&1 | tee "${evidence_dir}/k6.log"
+  docker "${docker_args[@]}" "${k6_image}" run --log-format json --summary-trend-stats 'avg,min,med,max,p(90),p(95),p(99),count' --summary-export /evidence/summary.json "/workspace/tests/capacity/profiles/${profile}.js" 2>&1 | tee "${evidence_dir}/k6.log"
   status=${PIPESTATUS[0]}
 fi
 set -e
@@ -181,10 +183,10 @@ fi
 
 chaos_status=0
 if [[ -n "${chaos_pid}" ]]; then
-  if kill -0 "${chaos_pid}" 2>/dev/null; then
+  if kill -0 "${chaos_pid}" 2>/dev/null && [[ ! -f "${evidence_dir}/chaos-injection-started" ]]; then
     kill "${chaos_pid}" 2>/dev/null || true
     wait "${chaos_pid}" 2>/dev/null || true
-    echo "configured chaos delay exceeded the load duration; no fault was injected" | tee -a "${evidence_dir}/chaos-runner.log"
+    echo "configured chaos did not reach an active declared load window; no fault was injected" | tee -a "${evidence_dir}/chaos-runner.log"
     chaos_status=124
   else
   set +e

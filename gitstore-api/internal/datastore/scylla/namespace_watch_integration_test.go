@@ -912,7 +912,7 @@ func TestCategoryTaxonomyCDCReaderMaterializesLifecycle(t *testing.T) {
 	require.Equal(t, category.AncestorPath, observed.AncestorPath)
 
 	deletion := store.(datastore.CategoryTaxonomyDeletionStore)
-	terminating, err := deletion.MarkCategoryTaxonomyDeletion(context.Background(), category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
+	terminating, err := deletion.MarkCategoryTaxonomyDeletion(context.Background(), category.Namespace, category.Name, category.ResourceVersion, category.UID, time.Now().UTC())
 	require.NoError(t, err)
 	modified := next(datastore.ResourceWatchModified)
 	require.NoError(t, json.Unmarshal(modified.Payload, &observed))

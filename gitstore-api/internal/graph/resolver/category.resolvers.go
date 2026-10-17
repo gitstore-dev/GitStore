@@ -188,13 +188,13 @@ func (r *queryResolver) Category(ctx context.Context, by model.CategoryBy) (*mod
 		}
 		c, err := r.service.GetCategoryTaxonomyByUID(ctx, categoryUID)
 		if err != nil {
-			return nil, nil
+			return nil, nodeLookupError(nodeKindCategory, err)
 		}
 		return DatastoreCategoryTaxonomyToGraphQL(c), nil
 	case by.NamespacePath != nil:
 		c, err := r.service.GetCategoryTaxonomyByName(ctx, by.NamespacePath.Namespace, by.NamespacePath.Name)
 		if err != nil {
-			return nil, nil
+			return nil, nodeLookupError(nodeKindCategory, err)
 		}
 		return DatastoreCategoryTaxonomyToGraphQL(c), nil
 	default:

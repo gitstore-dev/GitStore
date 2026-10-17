@@ -193,7 +193,8 @@ type OwnerReferenceStore interface {
 // CategoryTaxonomyDeletionStore provides the durable foreground-deletion
 // lifecycle used by both Git admission and the existing deleteCategory API.
 type CategoryTaxonomyDeletionStore interface {
-	MarkCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*CategoryTaxonomy, error)
+	// Marking must also fence the UID: a same-name replacement can reuse a version.
+	MarkCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string, at time.Time) (*CategoryTaxonomy, error)
 	// Completion must compare the observed UID and resource version at the
 	// destructive boundary, never finalizing a same-name replacement.
 	CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*CategoryTaxonomy, error)
@@ -668,6 +669,17 @@ type CatalogMutationBatcher interface {
 // across callbacks; lifecycle writes are barriers.
 type FileMutationBatcher interface {
 	WithFileMutationBatch(ctx context.Context, namespace, repositoryID string, names []string, operation func(context.Context) error) error
+}
+
+// FileMutationSnapshotBatcher reads up to four existing File UIDs after acquiring
+// the File mutation reservation. Only each UID's first update may consume its
+// fresh full envelope. Readback, subsequent mutations and escaped contexts must
+// read storage again. Missing rows and read failures remain mutation errors;
+// snapshots obtained before the reservation are never accepted as write facts.
+// Independent parent validation may overlap the read under the same reservation,
+// but both reads must drain and retain their errors before mutations proceed.
+type FileMutationSnapshotBatcher interface {
+	WithFileMutationBatchSnapshots(ctx context.Context, namespace, repositoryID string, names, existingUIDs []string, operation func(context.Context) error) error
 }
 
 // Datastore is the aggregate persistence contract used only for backend

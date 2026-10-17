@@ -4,10 +4,13 @@
 package githttp
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +21,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -100,6 +104,10 @@ func (t *gitHTTPTiming) advance(phase gitHTTPPhase, now time.Time) {
 }
 
 func (t *gitHTTPTiming) observe(metrics *prometheus.HistogramVec, operation string, status int, total time.Duration) {
+	ctx := context.Background()
+	if t.root != nil {
+		ctx = trace.ContextWithSpan(ctx, t.root)
+	}
 	outcome := "success"
 	if status >= 500 {
 		outcome = "server_error"
@@ -109,10 +117,10 @@ func (t *gitHTTPTiming) observe(metrics *prometheus.HistogramVec, operation stri
 	phases := [gitHTTPPhaseCount]string{"authentication", "resolution", "authorization", "push_context", "handler"}
 	for phase, name := range phases {
 		if t.attempted[phase] {
-			metrics.WithLabelValues(operation, name, outcome).Observe(t.durations[phase].Seconds())
+			observability.Observe(ctx, metrics.WithLabelValues(operation, name, outcome), t.durations[phase].Seconds())
 		}
 	}
-	metrics.WithLabelValues(operation, "total", outcome).Observe(total.Seconds())
+	observability.Observe(ctx, metrics.WithLabelValues(operation, "total", outcome), total.Seconds())
 }
 
 func gitHTTPTimedStage(phase gitHTTPPhase, next gin.HandlerFunc) gin.HandlerFunc {
@@ -160,6 +168,7 @@ func (h *handler) requestTiming(c *gin.Context) {
 		}
 		log = log.With(zap.String("trace_id", timing.root.SpanContext().TraceID().String()),
 			zap.String("span_id", timing.root.SpanContext().SpanID().String()))
+		log = observability.Logger(trace.ContextWithSpan(c.Request.Context(), timing.root), log)
 		defer timing.root.End(trace.WithTimestamp(end))
 	}
 	timing.observe(h.metrics, operation, c.Writer.Status(), end.Sub(start))
@@ -246,15 +255,48 @@ func (h *handler) infoRefsHandler(c *gin.Context) {
 	h.log.Info("info_refs complete", zap.String("repo_id", repoID))
 }
 
+const maxUploadPackNegotiationBytes = 1 << 20
+
 // uploadPackHandler handles POST /{namespace}/{repo}/git-upload-pack
 func (h *handler) uploadPackHandler(c *gin.Context) {
 	repoID := c.MustGet(repoIDKey).(string)
 
-	body, err := c.GetRawData()
+	encoding := strings.ToLower(strings.TrimSpace(c.GetHeader("Content-Encoding")))
+	if encoding != "" && encoding != "identity" && encoding != "gzip" {
+		h.log.Warn("upload_pack: unsupported content encoding")
+		h.gitPktLineError(c.Writer, http.StatusUnsupportedMediaType, "unsupported content encoding")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxUploadPackNegotiationBytes+1))
 	if err != nil {
 		h.log.Error("upload_pack: read body error", zap.Error(err))
 		h.gitPktLineError(c.Writer, http.StatusBadRequest, "failed to read request body")
 		return
+	}
+	if len(body) > maxUploadPackNegotiationBytes {
+		h.log.Warn("upload_pack: encoded negotiation exceeds byte limit")
+		h.gitPktLineError(c.Writer, http.StatusRequestEntityTooLarge, "negotiation exceeds byte limit")
+		return
+	}
+	if encoding == "gzip" {
+		reader, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			h.log.Warn("upload_pack: invalid gzip negotiation", zap.Error(err))
+			h.gitPktLineError(c.Writer, http.StatusBadRequest, "invalid gzip negotiation")
+			return
+		}
+		defer reader.Close()
+		body, err = io.ReadAll(io.LimitReader(reader, maxUploadPackNegotiationBytes+1))
+		if len(body) > maxUploadPackNegotiationBytes {
+			h.log.Warn("upload_pack: decoded negotiation exceeds byte limit")
+			h.gitPktLineError(c.Writer, http.StatusRequestEntityTooLarge, "negotiation exceeds byte limit")
+			return
+		}
+		if err != nil {
+			h.log.Warn("upload_pack: invalid gzip negotiation", zap.Error(err))
+			h.gitPktLineError(c.Writer, http.StatusBadRequest, "invalid gzip negotiation")
+			return
+		}
 	}
 
 	h.log.Info("upload_pack start", zap.String("repo_id", repoID), zap.Int("body_bytes", len(body)))

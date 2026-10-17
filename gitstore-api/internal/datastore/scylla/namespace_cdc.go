@@ -577,10 +577,8 @@ func retainUnpublishedCDCRequests(pending []namespaceCDCSequenceRequest, publish
 
 // namespaceCDCDeletionReady prevents a DELETED event from crossing the public
 // journal linearization point while the deleted Namespace is still visible in
-// the list projection. Namespace deletion commits the authoritative row first,
-// so a failed conditional delete never transiently removes the projection. A
-// successful delete remains repairable by the later DELETED event until this
-// check observes that projection cleanup has completed.
+// the list projection. A committed delete also repairs projections left behind
+// by a failed completion or a losing peer's restoration.
 func (s *scyllaDatastore) namespaceCDCDeletionReady(ctx context.Context, namespace *datastore.Namespace, committed bool) (bool, error) {
 	if namespace == nil {
 		return false, nil
@@ -605,7 +603,18 @@ func (s *scyllaDatastore) namespaceCDCDeletionReady(ctx context.Context, namespa
 	if err != nil {
 		return false, fmt.Errorf("read Namespace CDC listing projection: %w", err)
 	}
-	return false, fmt.Errorf("namespace CDC listing projection deletion is not committed")
+	primary := errors.New("namespace CDC listing projection deletion is not committed")
+	deleted, err := s.resolveNamespaceDeleteCommit(ctx, uid, primary)
+	if err != nil {
+		return false, err
+	}
+	if !deleted {
+		return false, primary
+	}
+	if err := s.completeNamespaceDeleteCleanup(ctx, namespace); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func namespaceCDCSequenceLess(left, right namespaceCDCSequenceRequest) bool {

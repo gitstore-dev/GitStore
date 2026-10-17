@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -42,8 +43,8 @@ func NewInstrumentedDatastoreWithRegistry(next Datastore, backend string, log *z
 
 func (d *InstrumentedDatastore) observe(ctx context.Context, op string, start time.Time, err error) {
 	elapsed := time.Since(start)
-	d.traceOperation(ctx, op, start, err)
-	d.metrics.duration.WithLabelValues(op, d.backend).Observe(elapsed.Seconds())
+	ctx = d.traceOperation(ctx, op, start, err)
+	observability.Observe(ctx, d.metrics.duration.WithLabelValues(op, d.backend), elapsed.Seconds())
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return
@@ -60,7 +61,7 @@ func (d *InstrumentedDatastore) observe(ctx context.Context, op string, start ti
 				d.metrics.compensationFailures.WithLabelValues(operation, d.backend, kind, projection).Inc()
 			}
 		}
-		d.log.Error("datastore operation failed",
+		observability.Logger(ctx, d.log).Error("datastore operation failed",
 			zap.String("operation", op),
 			zap.String("backend", d.backend),
 			zap.Error(err),
@@ -69,11 +70,11 @@ func (d *InstrumentedDatastore) observe(ctx context.Context, op string, start ti
 	}
 }
 
-func (d *InstrumentedDatastore) traceOperation(ctx context.Context, operation string, start time.Time, err error) {
+func (d *InstrumentedDatastore) traceOperation(ctx context.Context, operation string, start time.Time, err error) context.Context {
 	if !trace.SpanFromContext(ctx).IsRecording() {
-		return
+		return ctx
 	}
-	_, span := otel.Tracer("gitstore/datastore").Start(ctx, "datastore."+operation,
+	ctx, span := otel.Tracer("gitstore/datastore").Start(ctx, "datastore."+operation,
 		trace.WithTimestamp(start),
 		trace.WithAttributes(attribute.String("db.system.name", d.backend)))
 	outcome := "success"
@@ -85,6 +86,7 @@ func (d *InstrumentedDatastore) traceOperation(ctx context.Context, operation st
 	}
 	span.SetAttributes(attribute.String("outcome", outcome))
 	span.End()
+	return ctx
 }
 
 func (d *InstrumentedDatastore) observeFinding(finding ProjectionFinding) {
@@ -107,26 +109,48 @@ func (d *InstrumentedDatastore) observeFinding(finding ProjectionFinding) {
 }
 
 func (d *InstrumentedDatastore) withFindingObserver(ctx context.Context) context.Context {
-	fenceObserver := namespaceFenceObserver(d.observeNamespaceFencePhase)
-	mutationObserver := catalogMutationObserver(d.observeCatalogMutationPhase)
-	if trace.SpanFromContext(ctx).IsRecording() {
-		parent := ctx
-		fenceObserver = func(phase NamespaceFencePhase, start time.Time, err error) {
-			d.observeNamespaceFencePhase(phase, start, err)
-			if int(phase) < len(namespaceFenceMetricOperations) {
-				d.traceOperation(parent, namespaceFenceMetricOperations[phase], start, err)
-			}
-		}
-		mutationObserver = func(phase CatalogMutationPhase, start time.Time, err error) {
-			d.observeCatalogMutationPhase(phase, start, err)
-			if int(phase) < len(catalogMutationMetricOperations) {
-				d.traceOperation(parent, catalogMutationMetricOperations[phase], start, err)
-			}
-		}
+	parent := trace.ContextWithSpan(context.Background(), trace.SpanFromContext(ctx))
+	fenceObserver := func(phase NamespaceFencePhase, start time.Time, err error) {
+		d.observeNamespaceFencePhase(parent, phase, start, err)
 	}
-	ctx = context.WithValue(ctx, namespaceFenceObserverKey{}, fenceObserver)
-	ctx = context.WithValue(ctx, catalogMutationObserverKey{}, mutationObserver)
+	mutationObserver := func(phase CatalogMutationPhase, start time.Time, err error) {
+		d.observeCatalogMutationPhase(parent, phase, start, err)
+	}
+	ctx = context.WithValue(ctx, namespaceFenceObserverKey{}, namespaceFenceObserver(fenceObserver))
+	ctx = context.WithValue(ctx, catalogMutationObserverKey{}, catalogMutationObserver(mutationObserver))
+	ctx = context.WithValue(ctx, fileMutationCohortStarterKey{}, fileMutationCohortStarter(d.startFileMutationCohort))
+	ctx = context.WithValue(ctx, fileMutationCohortObserverKey{}, fileMutationCohortObserver(func(owner context.Context, index, count int) {
+		if count < 1 || count > 4 || index < 0 || index >= count {
+			d.log.Error("invalid File mutation cohort observation", zap.Int("index", index), zap.Int("count", count))
+			return
+		}
+		member, cohort := trace.SpanFromContext(parent), trace.SpanFromContext(owner)
+		if !member.SpanContext().IsValid() || !cohort.SpanContext().IsValid() {
+			return
+		}
+		attrs := []attribute.KeyValue{
+			attribute.Int("gitstore.file.cohort.member_index", index),
+			attribute.Int("gitstore.file.cohort.member_count", count),
+		}
+		member.AddLink(trace.Link{SpanContext: cohort.SpanContext(), Attributes: attrs})
+		cohort.AddLink(trace.Link{SpanContext: member.SpanContext(), Attributes: attrs})
+		cohort.SetAttributes(attribute.Int("gitstore.file.cohort.member_count", count))
+	}))
 	return WithProjectionFindingObserver(ctx, d.observeFinding)
+}
+
+func (d *InstrumentedDatastore) startFileMutationCohort(ctx context.Context) (context.Context, func(error)) {
+	ctx, span := otel.Tracer("gitstore/datastore").Start(ctx, "datastore.FileMutationCohort",
+		trace.WithAttributes(attribute.String("db.system.name", d.backend)))
+	return d.withFindingObserver(ctx), func(err error) {
+		outcome := "success"
+		if err != nil {
+			outcome = "error"
+			span.SetStatus(codes.Error, "File mutation cohort failed")
+		}
+		span.SetAttributes(attribute.String("outcome", outcome))
+		span.End()
+	}
 }
 
 var catalogMutationMetricOperations = [...]string{
@@ -136,29 +160,43 @@ var catalogMutationMetricOperations = [...]string{
 	"FileConditionalBatch5", "FileConditionalBatch6", "FileConditionalBatch7", "FileConditionalBatch8",
 	"FileConditionalBatch9", "FileConditionalBatch10", "FileConditionalBatch11", "FileConditionalBatch12",
 	"FileConditionalBatch13", "FileConditionalBatch14", "FileConditionalBatch15", "FileConditionalBatch16",
+	"FileConditionalQueue", "FileConditionalSingle",
+	"FileMutationSnapshotRead",
+	"FileProjectionReadQueue",
+	"FileProjectionReadBatch1", "FileProjectionReadBatch2", "FileProjectionReadBatch3", "FileProjectionReadBatch4",
+	"FileProjectionReadBatch5", "FileProjectionReadBatch6", "FileProjectionReadBatch7", "FileProjectionReadBatch8",
+	"FileProjectionReadBatch9", "FileProjectionReadBatch10", "FileProjectionReadBatch11", "FileProjectionReadBatch12",
+	"FileProjectionReadBatch13", "FileProjectionReadBatch14", "FileProjectionReadBatch15", "FileProjectionReadBatch16",
 }
 
-var namespaceFenceMetricOperations = [...]string{"NamespaceFenceLookup", "NamespaceFenceQueue", "NamespaceFenceReserve", "NamespaceFenceMutation", "NamespaceFenceRelease"}
+var namespaceFenceMetricOperations = [...]string{
+	"NamespaceFenceLookup", "NamespaceFenceQueue", "NamespaceFenceReserve", "NamespaceFenceMutation", "NamespaceFenceRelease",
+	"NamespaceFenceReserveRead", "NamespaceFenceReserveCAS", "NamespaceFenceReserveBusyWait", "NamespaceFenceReserveConflictWait",
+}
 
-func (d *InstrumentedDatastore) observeCatalogMutationPhase(phase CatalogMutationPhase, start time.Time, err error) {
+func (d *InstrumentedDatastore) observeCatalogMutationPhase(ctx context.Context, phase CatalogMutationPhase, start time.Time, err error) {
 	if int(phase) >= len(catalogMutationMetricOperations) {
 		d.log.Error("invalid catalog mutation metric phase", zap.Uint8("phase", uint8(phase)))
 		return
 	}
 	operation := catalogMutationMetricOperations[phase]
-	d.metrics.duration.WithLabelValues(operation, d.backend).Observe(time.Since(start).Seconds())
+	elapsed := time.Since(start)
+	ctx = d.traceOperation(ctx, operation, start, err)
+	observability.Observe(ctx, d.metrics.duration.WithLabelValues(operation, d.backend), elapsed.Seconds())
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		d.metrics.errors.WithLabelValues(operation, d.backend).Inc()
 	}
 }
 
-func (d *InstrumentedDatastore) observeNamespaceFencePhase(phase NamespaceFencePhase, start time.Time, err error) {
+func (d *InstrumentedDatastore) observeNamespaceFencePhase(ctx context.Context, phase NamespaceFencePhase, start time.Time, err error) {
 	if int(phase) >= len(namespaceFenceMetricOperations) {
 		d.log.Error("invalid namespace fence metric phase", zap.Uint8("phase", uint8(phase)))
 		return
 	}
 	operation := namespaceFenceMetricOperations[phase]
-	d.metrics.duration.WithLabelValues(operation, d.backend).Observe(time.Since(start).Seconds())
+	elapsed := time.Since(start)
+	ctx = d.traceOperation(ctx, operation, start, err)
+	observability.Observe(ctx, d.metrics.duration.WithLabelValues(operation, d.backend), elapsed.Seconds())
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		d.metrics.errors.WithLabelValues(operation, d.backend).Inc()
 	}
@@ -183,6 +221,17 @@ func (d *InstrumentedDatastore) WithFileMutationBatch(ctx context.Context, names
 	}
 	start := time.Now()
 	err := batcher.WithFileMutationBatch(d.withFindingObserver(ctx), namespace, repositoryID, names, operation)
+	d.observe(ctx, "CatalogMutationBatch", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) WithFileMutationBatchSnapshots(ctx context.Context, namespace, repositoryID string, names, existingUIDs []string, operation func(context.Context) error) error {
+	batcher, ok := d.next.(FileMutationSnapshotBatcher)
+	if !ok {
+		return d.WithFileMutationBatch(ctx, namespace, repositoryID, names, operation)
+	}
+	start := time.Now()
+	err := batcher.WithFileMutationBatchSnapshots(d.withFindingObserver(ctx), namespace, repositoryID, names, existingUIDs, operation)
 	d.observe(ctx, "CatalogMutationBatch", start, err)
 	return err
 }
@@ -749,6 +798,34 @@ func (d *InstrumentedDatastore) ListNonBlockingProductOwnerDependents(ctx contex
 	return v, err
 }
 
+var _ CategoryProductIndex = (*InstrumentedDatastore)(nil)
+
+func (d *InstrumentedDatastore) ReplaceCategoryProductMembership(ctx context.Context, product *Product, categoryUIDs []string) error {
+	start := time.Now()
+	index, ok := d.next.(CategoryProductIndex)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support category product membership", ErrProjectionNotReady)
+		d.observe(ctx, "ReplaceCategoryProductMembership", start, err)
+		return err
+	}
+	err := index.ReplaceCategoryProductMembership(d.withFindingObserver(ctx), product, categoryUIDs)
+	d.observe(ctx, "ReplaceCategoryProductMembership", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) ListCategoryProducts(ctx context.Context, namespace, categoryUID string, page PageParams) (*PageResult[Product], error) {
+	start := time.Now()
+	index, ok := d.next.(CategoryProductIndex)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support category product membership", ErrProjectionNotReady)
+		d.observe(ctx, "ListCategoryProducts", start, err)
+		return nil, err
+	}
+	v, err := index.ListCategoryProducts(d.withFindingObserver(ctx), namespace, categoryUID, page)
+	d.observe(ctx, "ListCategoryProducts", start, err)
+	return v, err
+}
+
 // ── CategoryAncestorIndex ────────────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) ListCategoryDescendants(ctx context.Context, q CategoryDescendantQuery) (*PageResult[CategoryDescendant], error) {
@@ -766,7 +843,7 @@ func (d *InstrumentedDatastore) ListCategoryDescendants(ctx context.Context, q C
 
 // ── CategoryTaxonomyDeletionStore ────────────────────────────────────────────
 
-func (d *InstrumentedDatastore) MarkCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*CategoryTaxonomy, error) {
+func (d *InstrumentedDatastore) MarkCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string, at time.Time) (*CategoryTaxonomy, error) {
 	start := time.Now()
 	lifecycle, ok := d.next.(CategoryTaxonomyDeletionStore)
 	if !ok {
@@ -774,7 +851,7 @@ func (d *InstrumentedDatastore) MarkCategoryTaxonomyDeletion(ctx context.Context
 		d.observe(ctx, "MarkCategoryTaxonomyDeletion", start, err)
 		return nil, err
 	}
-	v, err := lifecycle.MarkCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion, at)
+	v, err := lifecycle.MarkCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion, expectedUID, at)
 	d.observe(ctx, "MarkCategoryTaxonomyDeletion", start, err)
 	return v, err
 }

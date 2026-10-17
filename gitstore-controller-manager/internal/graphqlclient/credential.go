@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -112,7 +113,7 @@ func NewServiceAccountSource(
 ) *ServiceAccountSource {
 	return &ServiceAccountSource{
 		endpoint:            endpoint,
-		httpClient:          &http.Client{Timeout: exchangeHTTPTimeout},
+		httpClient:          &http.Client{Timeout: exchangeHTTPTimeout, Transport: observability.Transport(nil)},
 		name:                name,
 		signer:              signer,
 		assertionAudience:   assertionAudience,

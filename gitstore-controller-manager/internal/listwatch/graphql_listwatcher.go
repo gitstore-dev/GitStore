@@ -391,7 +391,7 @@ const productFields = `
     observedGeneration
     lastAppliedRevision
     conditions { type status observedGeneration lastTransitionTime reason message }
-    resolved { category { name uid } }
+    resolved { category { name uid path } }
   }
 `
 
@@ -442,8 +442,9 @@ type productSpecJSON struct {
 
 type productResolvedJSON struct {
 	Category *struct {
-		Name string `json:"name"`
-		UID  string `json:"uid"`
+		Name string   `json:"name"`
+		UID  string   `json:"uid"`
+		Path []string `json:"path,omitempty"`
 	} `json:"category"`
 }
 

@@ -172,14 +172,14 @@ func (r *queryResolver) Namespace(ctx context.Context, by model.NamespaceBy) (*m
 		}
 		ns, err := r.service.GetNamespaceByID(ctx, namespaceID)
 		if err != nil {
-			return nil, err
+			return nil, nodeLookupError(nodeKindNamespace, err)
 		}
 		return DatastoreNamespaceToGraphQL(ns), nil
 	}
 
 	ns, err := r.service.GetNamespaceByName(ctx, *by.Name)
 	if err != nil {
-		return nil, err
+		return nil, nodeLookupError(nodeKindNamespace, err)
 	}
 	return DatastoreNamespaceToGraphQL(ns), nil
 }

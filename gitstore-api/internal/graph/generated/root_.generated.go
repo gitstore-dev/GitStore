@@ -6497,7 +6497,7 @@ type RepositoryConnection {
 extend type Query {
   """
   Look up a repository by its namespace identifier and name.
-  Returns null if not found.
+  Returns null with a NOT_FOUND error and a failure diagnostic if not found.
   """
   repository(by: RepositoryBy!): Repository
 
@@ -6781,13 +6781,17 @@ type PageInfo {
 
 type Query {
   """
-  Fetches an object given its globally unique ID
-  Relay Node interface implementation
+  Fetches an object given its globally unique ID.
+  A missing object returns null with a NOT_FOUND error and resource diagnostic.
+  Malformed IDs return BAD_USER_INPUT.
   """
   node(id: ID!): Node
 
   """
-  Fetches multiple objects given their globally unique IDs
+  Fetches multiple objects given their globally unique IDs, preserving input order.
+  Missing objects return null entries with indexed NOT_FOUND errors.
+  Malformed IDs return null entries with indexed BAD_USER_INPUT errors.
+  Other authorized results are retained; infrastructure failures fail the batch.
   """
   nodes(ids: [ID!]!): [Node]!
 }
@@ -7110,7 +7114,6 @@ input ProductVariantNamespacePath {
   namespace: String!
   name: String!
 }
-
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/serviceaccount.graphqls", Input: `# ServiceAccount identity plane: GitStore-issued service-account
 # credentials so gitstore-controller-manager (and future non-human callers)

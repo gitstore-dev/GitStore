@@ -72,6 +72,7 @@ type namespaceRepositoryFence struct {
 	PendingRepositoryCreations *int64     `db:"pending_repository_creations"`
 	DeletionTimestamp          *time.Time `db:"deletion_timestamp"`
 	Status                     *string    `db:"status"`
+	WatchCommitted             *bool      `db:"watch_committed"`
 }
 
 func (f namespaceRepositoryFence) hasDeletionIntent() bool {
@@ -172,20 +173,23 @@ func (s *scyllaDatastore) completeNamespaceRepositoryRepair(
 	return nil
 }
 
-func (s *scyllaDatastore) loadNamespaceRepositoryFence(ctx context.Context, namespaceUID string) (namespaceRepositoryFence, error) {
+func (s *scyllaDatastore) loadNamespaceRepositoryFence(ctx context.Context, namespaceUID string, requirePublished bool) (namespaceRepositoryFence, error) {
 	uid, err := gocql.ParseUUID(namespaceUID)
 	if err != nil {
 		return namespaceRepositoryFence{}, fmt.Errorf("%w: invalid namespace uid %s", datastore.ErrInvalidArgument, namespaceUID)
 	}
 	var fence namespaceRepositoryFence
 	if err := s.session.Query(
-		"SELECT repository_creation_epoch, pending_repository_creations, deletion_timestamp, status FROM namespaces_by_uid WHERE uid=?",
+		"SELECT repository_creation_epoch, pending_repository_creations, deletion_timestamp, status, watch_committed FROM namespaces_by_uid WHERE uid=?",
 		nil,
 	).WithContext(ctx).Bind(uid).GetRelease(&fence); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return namespaceRepositoryFence{}, fmt.Errorf("%w: namespace uid %s", datastore.ErrNotFound, namespaceUID)
 		}
 		return namespaceRepositoryFence{}, fmt.Errorf("scylla: load namespace repository fence: %w", err)
+	}
+	if requirePublished && fence.WatchCommitted != nil && !*fence.WatchCommitted {
+		return namespaceRepositoryFence{}, fmt.Errorf("%w: namespace uid %s", datastore.ErrNotFound, namespaceUID)
 	}
 	if fence.RepositoryCreationEpoch == nil || fence.PendingRepositoryCreations == nil {
 		return namespaceRepositoryFence{}, fmt.Errorf("%w: namespace uid %s has an uninitialized repository fence", datastore.ErrRepairRequired, namespaceUID)
@@ -196,7 +200,7 @@ func (s *scyllaDatastore) loadNamespaceRepositoryFence(ctx context.Context, name
 func (s *scyllaDatastore) reserveNamespaceRepository(ctx context.Context, namespaceUID string) error {
 	uid := mustParseUUID(namespaceUID)
 	for range namespaceRepositoryFenceAttempts {
-		fence, err := s.loadNamespaceRepositoryFence(ctx, namespaceUID)
+		fence, err := s.loadNamespaceRepositoryFence(ctx, namespaceUID, false)
 		if err != nil {
 			return err
 		}
@@ -233,38 +237,78 @@ func (s *scyllaDatastore) reserveNamespaceCatalog(ctx context.Context, namespace
 	ctx, cancel := context.WithTimeout(ctx, namespaceCatalogReservationTimeout)
 	defer cancel()
 	uid := mustParseUUID(namespaceUID)
+	if fence, ok := s.catalogQueue.takeReleasedFence(namespaceUID); ok && !allowTerminating &&
+		fence.DeletionTimestamp == nil && !fence.hasDeletionIntent() &&
+		(fence.WatchCommitted == nil || *fence.WatchCommitted) {
+		applied, err := s.tryReserveNamespaceCatalog(ctx, namespaceUID, uid, fence)
+		if err != nil {
+			return 0, err
+		}
+		if applied {
+			return fence.epoch() + 1, nil
+		}
+	}
 	delay := 10 * time.Millisecond
 	for {
-		fence, err := s.loadNamespaceRepositoryFence(ctx, namespaceUID)
+		var fence namespaceRepositoryFence
+		err := datastore.MeasureNamespaceFencePhase(ctx, datastore.NamespaceFenceReserveRead, func() error {
+			var err error
+			fence, err = s.loadNamespaceRepositoryFence(ctx, namespaceUID, true)
+			return err
+		})
 		if err != nil {
 			return 0, err
 		}
 		if !allowTerminating && (fence.DeletionTimestamp != nil || fence.hasDeletionIntent()) {
 			return 0, datastore.ErrNamespaceNotActive
 		}
+		waitPhase := datastore.NamespaceFenceReserveBusyWait
 		if fence.pending() == 0 {
-			applied, err := s.session.Query(
-				"UPDATE namespaces_by_uid SET repository_creation_epoch=?, pending_repository_creations=? WHERE uid=? "+
-					"IF repository_creation_epoch=? AND pending_repository_creations=? AND deletion_timestamp=? AND status=?", nil,
-			).WithContext(ctx).Bind(fence.epoch()+1, int64(1), uid, fence.epoch(), fence.pending(), fence.DeletionTimestamp, fence.Status).ExecCASRelease()
+			applied, err := s.tryReserveNamespaceCatalog(ctx, namespaceUID, uid, fence)
 			if err != nil {
 				return 0, err
 			}
 			if applied {
 				return fence.epoch() + 1, nil
 			}
+			waitPhase = datastore.NamespaceFenceReserveConflictWait
 		}
-		timer := time.NewTimer(namespaceCatalogRetryDelay(delay))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return 0, ctx.Err()
-		case <-timer.C:
+		if err := datastore.MeasureNamespaceFencePhase(ctx, waitPhase, func() error {
+			timer := time.NewTimer(namespaceCatalogRetryDelay(delay))
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.C:
+				return nil
+			}
+		}); err != nil {
+			return 0, err
 		}
 		if delay < 100*time.Millisecond {
 			delay = min(2*delay, 100*time.Millisecond)
 		}
 	}
+}
+
+func (s *scyllaDatastore) tryReserveNamespaceCatalog(ctx context.Context, namespaceUID string, uid gocql.UUID, fence namespaceRepositoryFence) (bool, error) {
+	var applied bool
+	err := datastore.MeasureNamespaceFencePhase(ctx, datastore.NamespaceFenceReserveCAS, func() error {
+		var err error
+		applied, err = s.session.Query(
+			"UPDATE namespaces_by_uid SET repository_creation_epoch=?, pending_repository_creations=? WHERE uid=? "+
+				"IF repository_creation_epoch=? AND pending_repository_creations=? AND deletion_timestamp=? AND status=? AND watch_committed=?", nil,
+		).WithContext(ctx).Idempotent(false).RetryPolicy(&gocql.SimpleRetryPolicy{}).Bind(
+			fence.epoch()+1, int64(1), uid, fence.epoch(), fence.pending(), fence.DeletionTimestamp, fence.Status, fence.WatchCommitted,
+		).ExecCASRelease()
+		return err
+	})
+	if err == nil && applied {
+		epoch, pending := fence.epoch()+1, int64(1)
+		fence.RepositoryCreationEpoch, fence.PendingRepositoryCreations = &epoch, &pending
+		s.catalogQueue.rememberFence(namespaceUID, fence)
+	}
+	return applied, err
 }
 
 func namespaceCatalogRetryDelay(backoff time.Duration) time.Duration {
@@ -278,12 +322,14 @@ const namespaceCatalogMaxQueuedWrites = 256
 type namespaceCatalogQueueEntry struct {
 	waiters []chan struct{}
 	files   map[chan struct{}]*fileMutationRequest
+	fence   *namespaceRepositoryFence
 }
 
 type fileMutationRequest struct {
 	ctx          context.Context
 	repositoryID string
 	names        []string
+	snapshots    *fileMutationSnapshotRead
 	operation    func(context.Context) error
 	ready, done  chan struct{}
 	finish       func()
@@ -308,6 +354,49 @@ func (q *namespaceCatalogQueue) acquire(ctx context.Context, uid string) (func()
 	case <-ctx.Done():
 		finish()
 		return nil, ctx.Err()
+	}
+}
+
+func (q *namespaceCatalogQueue) rememberFence(uid string, fence namespaceRepositoryFence) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if entry := q.entries[uid]; entry != nil {
+		entry.fence = &fence
+	}
+}
+
+func (q *namespaceCatalogQueue) confirmFenceRelease(uid string, epoch int64) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if entry := q.entries[uid]; entry != nil && entry.fence != nil {
+		if entry.fence.epoch() != epoch {
+			entry.fence = nil
+			return
+		}
+		pending := int64(0)
+		entry.fence.PendingRepositoryCreations = &pending
+	}
+}
+
+// A previous tuple is only a candidate for a fresh conditional acquisition,
+// never proof that a parent is still active. Queue removal discards it.
+func (q *namespaceCatalogQueue) takeReleasedFence(uid string) (namespaceRepositoryFence, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	entry := q.entries[uid]
+	if entry == nil || entry.fence == nil {
+		return namespaceRepositoryFence{}, false
+	}
+	fence := *entry.fence
+	entry.fence = nil
+	return fence, fence.pending() == 0
+}
+
+func (q *namespaceCatalogQueue) forgetFence(uid string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if entry := q.entries[uid]; entry != nil {
+		entry.fence = nil
 	}
 }
 
@@ -415,6 +504,10 @@ func (q *namespaceCatalogQueue) extendFiles(uid string, group []*fileMutationReq
 }
 
 func (s *scyllaDatastore) WithFileMutationBatch(ctx context.Context, namespace, repositoryID string, names []string, operation func(context.Context) error) error {
+	return s.withFileMutationBatch(ctx, namespace, repositoryID, names, nil, operation)
+}
+
+func (s *scyllaDatastore) withFileMutationBatch(ctx context.Context, namespace, repositoryID string, names []string, snapshots *fileMutationSnapshotRead, operation func(context.Context) error) error {
 	if repositoryID == "" || len(names) == 0 || len(names) > 4 || operation == nil {
 		return fmt.Errorf("%w: File batch requires repository, one to four names and operation", datastore.ErrInvalidArgument)
 	}
@@ -429,18 +522,21 @@ func (s *scyllaDatastore) WithFileMutationBatch(ctx context.Context, namespace, 
 		scope.store == s && scope.namespace == namespace && scope.active.Load() {
 		return operation(ctx)
 	}
-	var ns *datastore.Namespace
+	var uid gocql.UUID
 	err := datastore.MeasureNamespaceFencePhase(ctx, datastore.NamespaceFenceLookup, func() error {
 		var lookupErr error
-		ns, lookupErr = s.GetNamespaceByName(ctx, namespace)
+		uid, lookupErr = s.getNamespaceUIDByName(ctx, namespace)
 		return lookupErr
 	})
 	if err != nil {
 		return err
 	}
-	return s.runQueuedFileMutation(ctx, ns.UID, repositoryID, slices.Clone(names), operation, func(group []*fileMutationRequest) []*fileMutationRequest {
+	namespaceUID := uid.String()
+	return s.runQueuedFileMutation(ctx, namespaceUID, repositoryID, slices.Clone(names), snapshots, operation, func(group []*fileMutationRequest) []*fileMutationRequest {
 		var scope *catalogFenceScope
+		var snapshotCtx context.Context
 		return runFileMutationGroup(group, func(groupCtx context.Context, apply func() error) error {
+			snapshotCtx = groupCtx
 			scope = &catalogFenceScope{store: s, namespace: namespace}
 			scope.active.Store(true)
 			defer scope.close()
@@ -451,28 +547,31 @@ func (s *scyllaDatastore) WithFileMutationBatch(ctx context.Context, namespace, 
 			return executeNamespaceRepositoryReservation(groupCtx,
 				func() error {
 					var err error
-					epoch, err = s.reserveNamespaceCatalog(groupCtx, ns.UID, false)
+					epoch, err = s.reserveNamespaceCatalog(groupCtx, namespaceUID, false)
 					return err
 				},
-				func(releaseCtx context.Context) error { return s.releaseNamespaceCatalog(releaseCtx, ns.UID, epoch) },
+				func(releaseCtx context.Context) error {
+					return s.releaseNamespaceCatalog(releaseCtx, namespaceUID, epoch)
+				},
 				apply,
-				datastore.MutationStep{Operation: "catalog_lifecycle", ResourceKind: "Namespace", ResourceUID: ns.UID,
+				datastore.MutationStep{Operation: "catalog_lifecycle", ResourceKind: "Namespace", ResourceUID: namespaceUID,
 					Projection: "namespaces_by_uid.pending_repository_creations", LookupKey: namespace},
 				"File mutation cohort committed",
 			)
 		}, func(group []*fileMutationRequest) []*fileMutationRequest {
 			previous := len(group)
-			group = s.catalogQueue.extendFiles(ns.UID, group)
+			group = s.catalogQueue.extendFiles(namespaceUID, group)
 			for _, request := range group[previous:] {
 				request.ctx = context.WithValue(request.ctx, catalogFenceScopeKey{}, scope)
 			}
+			prepareFileMutationSnapshots(snapshotCtx, group)
 			return group
 		})
 	})
 }
 
-func (s *scyllaDatastore) runQueuedFileMutation(ctx context.Context, namespaceUID, repositoryID string, names []string, operation func(context.Context) error, execute func([]*fileMutationRequest) []*fileMutationRequest) error {
-	request := &fileMutationRequest{ctx: ctx, repositoryID: repositoryID, names: names, operation: operation, done: make(chan struct{})}
+func (s *scyllaDatastore) runQueuedFileMutation(ctx context.Context, namespaceUID, repositoryID string, names []string, snapshots *fileMutationSnapshotRead, operation func(context.Context) error, execute func([]*fileMutationRequest) []*fileMutationRequest) error {
+	request := &fileMutationRequest{ctx: ctx, repositoryID: repositoryID, names: names, snapshots: snapshots, operation: operation, done: make(chan struct{})}
 	waitCtx, cancel := context.WithTimeout(ctx, namespaceCatalogReservationTimeout)
 	defer cancel()
 	err := datastore.MeasureNamespaceFencePhase(waitCtx, datastore.NamespaceFenceQueue, func() error {
@@ -538,6 +637,7 @@ func runFileMutationGroup(group []*fileMutationRequest, fenced func(context.Cont
 			stop()
 		}
 	}()
+	groupCtx, finishCohort := datastore.StartFileMutationCohort(groupCtx)
 	ran := false
 	groupErr := fenced(groupCtx, func() error {
 		ran = true
@@ -555,6 +655,7 @@ func runFileMutationGroup(group []*fileMutationRequest, fenced func(context.Cont
 		}
 		finished := make([]chan struct{}, len(group))
 		for i := range finished {
+			datastore.ObserveFileMutationCohort(group[i].ctx, groupCtx, i, len(group))
 			finished[i] = make(chan struct{})
 		}
 		var workers sync.WaitGroup
@@ -590,6 +691,7 @@ func runFileMutationGroup(group []*fileMutationRequest, fenced func(context.Cont
 		}
 		return errors.Join(errs...)
 	})
+	finishCohort(groupErr)
 	if !ran || errors.Is(groupErr, datastore.ErrRepairRequired) {
 		for _, request := range group {
 			request.err = errors.Join(request.err, groupErr)
@@ -608,13 +710,33 @@ func fileMutationRequestsOverlap(first, second *fileMutationRequest) bool {
 }
 
 type catalogFenceScope struct {
-	store     *scyllaDatastore
-	namespace string
-	active    atomic.Bool
-	parentMu  sync.Mutex
-	parents   map[string]*catalogRepositoryCheck
-	casMu     sync.Mutex
-	fileCAS   *fileCASWriter
+	store      *scyllaDatastore
+	namespace  string
+	active     atomic.Bool
+	parentMu   sync.Mutex
+	parents    map[string]*catalogRepositoryCheck
+	casMu      sync.Mutex
+	fileCAS    *fileCASWriter
+	readMu     sync.Mutex
+	fileReads  *fileProjectionReader
+	snapshotMu sync.Mutex
+	snapshots  map[string]*fileMutationSnapshot
+}
+
+func (scope *catalogFenceScope) readFileProjection(ctx context.Context, key fileProjectionKey) (*ProjectionRecord, error) {
+	scope.readMu.Lock()
+	if !scope.active.Load() {
+		scope.readMu.Unlock()
+		return scope.store.getFileCatalogProjectionPoint(ctx, scope.namespace, key)
+	}
+	if scope.fileReads == nil {
+		scope.fileReads = newFileProjectionReader(func(ctx context.Context, keys []fileProjectionKey) ([]*ProjectionRecord, error) {
+			return scope.store.getFileCatalogProjectionRows(ctx, scope.namespace, keys)
+		})
+	}
+	reader := scope.fileReads
+	scope.readMu.Unlock()
+	return reader.submit(ctx, key)
 }
 
 func (scope *catalogFenceScope) updateFileCAS(ctx context.Context, uid gocql.UUID, values []any) error {
@@ -633,10 +755,18 @@ func (scope *catalogFenceScope) updateFileCAS(ctx context.Context, uid gocql.UUI
 
 func (scope *catalogFenceScope) close() {
 	scope.active.Store(false)
+	scope.snapshotMu.Lock()
+	clear(scope.snapshots)
+	scope.snapshotMu.Unlock()
 	scope.casMu.Lock()
-	defer scope.casMu.Unlock()
 	if scope.fileCAS != nil {
 		scope.fileCAS.close()
+	}
+	scope.casMu.Unlock()
+	scope.readMu.Lock()
+	defer scope.readMu.Unlock()
+	if scope.fileReads != nil {
+		scope.fileReads.close()
 	}
 }
 
@@ -713,21 +843,22 @@ func (s *scyllaDatastore) withNamespaceCatalogFence(ctx context.Context, namespa
 		}
 		return operation()
 	}
-	var ns *datastore.Namespace
+	var uid gocql.UUID
 	err := datastore.MeasureNamespaceFencePhase(ctx, datastore.NamespaceFenceLookup, func() error {
 		var lookupErr error
-		ns, lookupErr = s.GetNamespaceByName(ctx, namespace)
+		uid, lookupErr = s.getNamespaceUIDByName(ctx, namespace)
 		return lookupErr
 	})
 	if err != nil {
 		return err
 	}
+	namespaceUID := uid.String()
 	acquireCtx, cancel := context.WithTimeout(ctx, namespaceCatalogReservationTimeout)
 	defer cancel()
 	var releaseLocal func()
 	err = datastore.MeasureNamespaceFencePhase(acquireCtx, datastore.NamespaceFenceQueue, func() error {
 		var queueErr error
-		releaseLocal, queueErr = s.catalogQueue.acquire(acquireCtx, ns.UID)
+		releaseLocal, queueErr = s.catalogQueue.acquire(acquireCtx, namespaceUID)
 		return queueErr
 	})
 	if err != nil {
@@ -738,12 +869,14 @@ func (s *scyllaDatastore) withNamespaceCatalogFence(ctx context.Context, namespa
 	return executeNamespaceRepositoryReservation(ctx,
 		func() error {
 			var err error
-			epoch, err = s.reserveNamespaceCatalog(acquireCtx, ns.UID, allowTerminating)
+			epoch, err = s.reserveNamespaceCatalog(acquireCtx, namespaceUID, allowTerminating)
 			return err
 		},
-		func(releaseCtx context.Context) error { return s.releaseNamespaceCatalog(releaseCtx, ns.UID, epoch) },
+		func(releaseCtx context.Context) error {
+			return s.releaseNamespaceCatalog(releaseCtx, namespaceUID, epoch)
+		},
 		operation,
-		datastore.MutationStep{Operation: "catalog_lifecycle", ResourceKind: "Namespace", ResourceUID: ns.UID, Projection: "namespaces_by_uid.pending_repository_creations", LookupKey: namespace},
+		datastore.MutationStep{Operation: "catalog_lifecycle", ResourceKind: "Namespace", ResourceUID: namespaceUID, Projection: "namespaces_by_uid.pending_repository_creations", LookupKey: namespace},
 		"catalog lifecycle mutation committed",
 	)
 }
@@ -758,18 +891,21 @@ func (s *scyllaDatastore) releaseNamespaceCatalog(ctx context.Context, namespace
 		int64(0), mustParseUUID(namespaceUID), epoch, int64(1),
 	).ExecCASRelease()
 	if err != nil {
+		s.catalogQueue.forgetFence(namespaceUID)
 		return fmt.Errorf("scylla: release namespace catalog reservation: %w", err)
 	}
 	if applied {
+		s.catalogQueue.confirmFenceRelease(namespaceUID, epoch)
 		return nil
 	}
+	s.catalogQueue.forgetFence(namespaceUID)
 	return s.releaseNamespaceRepository(ctx, namespaceUID)
 }
 
 func (s *scyllaDatastore) releaseNamespaceRepository(ctx context.Context, namespaceUID string) error {
 	uid := mustParseUUID(namespaceUID)
 	for range namespaceRepositoryFenceAttempts {
-		fence, err := s.loadNamespaceRepositoryFence(ctx, namespaceUID)
+		fence, err := s.loadNamespaceRepositoryFence(ctx, namespaceUID, false)
 		if err != nil {
 			if errors.Is(err, datastore.ErrNotFound) {
 				return nil
@@ -1126,20 +1262,20 @@ func (s *scyllaDatastore) UpdateRepository(ctx context.Context, repository *data
 	if repository.Namespace == existing.Namespace && repository.Name == existing.Name &&
 		existing.DeletionTimestamp == nil && !datastore.HasDeletionIntent(existing.Status) &&
 		repository.DeletionTimestamp == nil && !datastore.HasDeletionIntent(repository.Status) {
-		return s.updateRepository(ctx, repository, expectedResourceVersion)
+		return s.updateRepository(ctx, repository, existing, expectedResourceVersion)
 	}
 	return s.withNamespaceCatalogFence(ctx, existing.Namespace, true, func() error {
-		return s.updateRepository(ctx, repository, expectedResourceVersion)
+		current, err := s.GetRepository(ctx, repository.UID)
+		if err != nil {
+			return err
+		}
+		return s.updateRepository(ctx, repository, current, expectedResourceVersion)
 	})
 }
 
-func (s *scyllaDatastore) updateRepository(ctx context.Context, repository *datastore.Repository, expectedResourceVersion string) error {
+func (s *scyllaDatastore) updateRepository(ctx context.Context, repository, existing *datastore.Repository, expectedResourceVersion string) error {
 	if repository == nil {
 		return fmt.Errorf("%w: repository is nil", datastore.ErrInvalidArgument)
-	}
-	existing, err := s.GetRepository(ctx, repository.UID)
-	if err != nil {
-		return err
 	}
 	if existing.DeletionTimestamp != nil && repository.DeletionTimestamp == nil {
 		return datastore.ErrConflict
@@ -1147,10 +1283,11 @@ func (s *scyllaDatastore) updateRepository(ctx context.Context, repository *data
 	if err := datastore.ValidateCatalogUpdateVersion(existing.ResourceVersion, expectedResourceVersion, repository.ResourceVersion); err != nil {
 		return err
 	}
-	repository.Status, err = datastore.MergeInfrastructureStatus(existing.Status, repository.Status)
+	mergedStatus, err := datastore.MergeInfrastructureStatus(existing.Status, repository.Status)
 	if err != nil {
 		return err
 	}
+	repository.Status = mergedStatus
 	if (repository.DeletionTimestamp != nil || datastore.HasDeletionIntent(repository.Status)) &&
 		existing.DeletionTimestamp == nil && !datastore.HasDeletionIntent(existing.Status) {
 		blocked, err := s.HasCatalogResources(ctx, existing.UID)

@@ -30,8 +30,11 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_LOG__LEVEL",
 		"GITSTORE_LOG__FORMAT",
 		"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT",
+		"GITSTORE_OBSERVABILITY__OTLP__URI",
 		"GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO",
 		"GITSTORE_API__PROFILING__LISTEN_ADDR",
+		"GITSTORE_API__PROFILING__URI",
+		"GITSTORE_GIT_SERVICE__METRICS__LISTEN_ADDR",
 		"GITSTORE_GRPC_AUTH__HMAC_SECRET",
 		"GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE",
 		"GITSTORE_PUSH_LIMITS__MAX_FILE_SIZE",
@@ -125,17 +128,17 @@ func TestLoad_ObservabilitySources(t *testing.T) {
 
 	cfg, err := Load()
 	require.NoError(t, err)
-	assert.Empty(t, cfg.Observability.OTLP.Endpoint)
+	assert.Empty(t, cfg.Observability.OTLP.URI)
 	assert.Equal(t, 0.05, cfg.Observability.OTLP.TraceSampleRatio)
-	assert.Empty(t, cfg.Api.Profiling.ListenAddr)
+	assert.Empty(t, cfg.Api.Profiling.URI)
 
 	base := filepath.Join(t.TempDir(), "base.toml")
 	require.NoError(t, os.WriteFile(base, []byte(`
 [observability.otlp]
-endpoint = "http://collector:4318"
+uri = "http://collector:4318"
 trace_sample_ratio = 0.1
 [api.profiling]
-listen_addr = "127.0.0.1:6060"
+uri = "http://127.0.0.1:6060"
 `), 0o600))
 	overlay := filepath.Join(t.TempDir(), "overlay.toml")
 	require.NoError(t, os.WriteFile(overlay, []byte(`
@@ -144,38 +147,44 @@ trace_sample_ratio = 0.25
 `), 0o600))
 	cfg, err = LoadFromFiles([]string{base, overlay})
 	require.NoError(t, err)
-	assert.Equal(t, "http://collector:4318", cfg.Observability.OTLP.Endpoint)
+	assert.Equal(t, "http://collector:4318", cfg.Observability.OTLP.URI)
 	assert.Equal(t, 0.25, cfg.Observability.OTLP.TraceSampleRatio)
-	assert.Equal(t, "127.0.0.1:6060", cfg.Api.Profiling.ListenAddr)
+	assert.Equal(t, "http://127.0.0.1:6060", cfg.Api.Profiling.URI)
 
-	t.Setenv("GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://local-collector:4318")
+	t.Setenv("GITSTORE_OBSERVABILITY__OTLP__URI", "http://local-collector:4318")
 	t.Setenv("GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "0")
-	t.Setenv("GITSTORE_API__PROFILING__LISTEN_ADDR", "[::1]:6061")
+	t.Setenv("GITSTORE_API__PROFILING__URI", "http://[::1]:6061")
 	cfg, err = LoadFromFiles([]string{base, overlay})
 	require.NoError(t, err)
-	assert.Equal(t, "http://local-collector:4318", cfg.Observability.OTLP.Endpoint)
+	assert.Equal(t, "http://local-collector:4318", cfg.Observability.OTLP.URI)
 	assert.Zero(t, cfg.Observability.OTLP.TraceSampleRatio)
-	assert.Equal(t, "[::1]:6061", cfg.Api.Profiling.ListenAddr)
+	assert.Equal(t, "http://[::1]:6061", cfg.Api.Profiling.URI)
 }
 
 func TestLoad_RejectsInvalidObservability(t *testing.T) {
 	for _, tc := range []struct{ key, value string }{
-		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "grpc://collector:4317"},
-		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://user:sensitive-value@collector:4318"},
-		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://collector:4318?token=sensitive-value"},
-		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://collector:4318#sensitive-value"},
-		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://collector:4318?"},
-		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://collector:4318#"},
-		{"GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://:4318"},
+		{"GITSTORE_OBSERVABILITY__OTLP__URI", "grpc://collector:4317"},
+		{"GITSTORE_OBSERVABILITY__OTLP__URI", "http://user:sensitive-value@collector:4318"},
+		{"GITSTORE_OBSERVABILITY__OTLP__URI", "http://collector:4318?token=sensitive-value"},
+		{"GITSTORE_OBSERVABILITY__OTLP__URI", "http://collector:4318#sensitive-value"},
+		{"GITSTORE_OBSERVABILITY__OTLP__URI", "http://collector:4318?"},
+		{"GITSTORE_OBSERVABILITY__OTLP__URI", "http://collector:4318#"},
+		{"GITSTORE_OBSERVABILITY__OTLP__URI", "http://:4318"},
 		{"GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "-0.1"},
 		{"GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "1.1"},
 		{"GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "NaN"},
 		{"GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "+Inf"},
-		{"GITSTORE_API__PROFILING__LISTEN_ADDR", "0.0.0.0:6060"},
-		{"GITSTORE_API__PROFILING__LISTEN_ADDR", "localhost:6060"},
-		{"GITSTORE_API__PROFILING__LISTEN_ADDR", "127.0.0.1:0"},
-		{"GITSTORE_API__PROFILING__LISTEN_ADDR", "[::]:6060"},
-		{"GITSTORE_API__PROFILING__LISTEN_ADDR", "127.0.0.1:65536"},
+		{"GITSTORE_API__PROFILING__URI", "http://0.0.0.0:6060"},
+		{"GITSTORE_API__PROFILING__URI", "http://localhost:6060"},
+		{"GITSTORE_API__PROFILING__URI", "http://127.0.0.1:0"},
+		{"GITSTORE_API__PROFILING__URI", "http://[::]:6060"},
+		{"GITSTORE_API__PROFILING__URI", "http://127.0.0.1:65536"},
+		{"GITSTORE_API__PROFILING__URI", "127.0.0.1:6060"},
+		{"GITSTORE_API__PROFILING__URI", "https://127.0.0.1:6060"},
+		{"GITSTORE_API__PROFILING__URI", "http://127.0.0.1:6060/debug/pprof"},
+		{"GITSTORE_API__PROFILING__URI", "http://user:sensitive-value@127.0.0.1:6060"},
+		{"GITSTORE_API__PROFILING__URI", "http://127.0.0.1:6060?"},
+		{"GITSTORE_API__PROFILING__URI", "http://127.0.0.1:6060#"},
 	} {
 		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
 			restore := clearEnv(t)
@@ -194,7 +203,42 @@ func TestOTLPConfigValidation(t *testing.T) {
 		require.Error(t, (OTLPConfig{TraceSampleRatio: ratio}).Validate())
 	}
 	for _, ratio := range []float64{0, 0.05, 1} {
-		require.NoError(t, (OTLPConfig{Endpoint: "https://collector:4318/otlp", TraceSampleRatio: ratio}).Validate())
+		require.NoError(t, (OTLPConfig{URI: "https://collector:4318/otlp", TraceSampleRatio: ratio}).Validate())
+	}
+}
+
+func TestProfilingURIListenAddress(t *testing.T) {
+	for uri, want := range map[string]string{
+		"":                       "",
+		"http://127.0.0.1:6060":  "127.0.0.1:6060",
+		"http://127.0.0.1:6060/": "127.0.0.1:6060",
+		"http://[::1]:6061":      "[::1]:6061",
+	} {
+		got, err := (ProfilingConfig{URI: uri}).ListenAddress()
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+}
+
+func TestLoad_RejectsRenamedTelemetryKeys(t *testing.T) {
+	for _, test := range []struct{ section, key, replacement, env, value string }{
+		{"observability.otlp", "endpoint", "observability.otlp.uri", "GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "http://collector:4318"},
+		{"api.profiling", "listen_addr", "api.profiling.uri", "GITSTORE_API__PROFILING__LISTEN_ADDR", "127.0.0.1:6060"},
+		{"git_service.metrics", "listen_addr", "git_service.metrics.uri", "GITSTORE_GIT_SERVICE__METRICS__LISTEN_ADDR", "0.0.0.0:50052"},
+	} {
+		t.Run(test.section, func(t *testing.T) {
+			restore := clearEnv(t)
+			defer restore()
+			setRequiredAuth(t)
+			path := filepath.Join(t.TempDir(), "legacy.toml")
+			data := "[" + test.section + "]\n" + test.key + " = \"" + test.value + "\"\n"
+			require.NoError(t, os.WriteFile(path, []byte(data), 0o600))
+			_, err := LoadFrom(path)
+			require.ErrorContains(t, err, test.replacement)
+			t.Setenv(test.env, test.value)
+			_, err = Load()
+			require.ErrorContains(t, err, test.replacement)
+		})
 	}
 }
 

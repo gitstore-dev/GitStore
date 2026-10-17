@@ -9,8 +9,9 @@ CONTROLLER_MANAGER_DIR := $(ROOT)/gitstore-controller-manager
 GIT_SERVICE_DIR := $(ROOT)/gitstore-git-service
 OIDC_BRIDGE_DIR := $(ROOT)/gitstore-oidc-bridge
 SECRET_MATERIAL_DIR := $(ROOT)/shared/secretmaterial
+OBSERVABILITY_DIR := $(ROOT)/shared/observability
 CDC_DIR := $(ROOT)/shared/scylla-cdc-go
-GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR) $(CDC_DIR)
+GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR) $(OBSERVABILITY_DIR) $(CDC_DIR)
 
 API_ENV_FILE ?= $(API_DIR)/.env
 CONFIG_FILE ?= ./config/config.toml
@@ -123,6 +124,10 @@ REPOSITORY_CAPACITY_REPLACEMENT_DELAY ?=
 REPOSITORY_CAPACITY_BASELINE_STABILIZATION ?=5m
 REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION ?=10m
 REPOSITORY_CAPACITY_SKIP_REPLACEMENT ?=0
+REPOSITORY_CAPACITY_TRACE_CORRELATION ?=0
+REPOSITORY_CAPACITY_VERIFY_STORAGE ?=$(if $(filter alpha production,$(MODE)),1,0)
+REPOSITORY_CAPACITY_VERIFY_FINALIZERS ?=$(if $(filter alpha production,$(MODE)),1,0)
+export CAPACITY_SCYLLA_KEYSPACE
 REPOSITORY_API_A ?=http://localhost:4000
 REPOSITORY_API_B ?=http://localhost:4001
 REPOSITORY_OVERFLOW_API ?=$(REPOSITORY_API_A)
@@ -160,6 +165,7 @@ CAPACITY_PROMETHEUS_RETENTION ?= 24h
 CAPACITY_PROMETHEUS_TARGETS ?= host.docker.internal:4000,host.docker.internal:4001
 CAPACITY_PROMETHEUS_CONTROLLER_TARGETS ?=
 CAPACITY_PROMETHEUS_GIT_TARGETS ?=
+CAPACITY_PROMETHEUS_SCYLLA_TARGETS ?=
 CAPACITY_OBSERVABILITY_KEEP ?= 0
 CAPACITY_PROFILING ?= none
 CAPACITY_PROFILE_SECONDS ?= 30
@@ -171,19 +177,25 @@ CAPACITY_TEMPO_PORT ?= 3200
 CAPACITY_LOKI_PORT ?= 3100
 export CAPACITY_PROMETHEUS_GIT_TARGETS CAPACITY_OBSERVABILITY_KEEP CAPACITY_OTLP_PORT CAPACITY_OTEL_HEALTH_PORT CAPACITY_TEMPO_PORT CAPACITY_LOKI_PORT
 export CAPACITY_PROMETHEUS_CONTROLLER_TARGETS
+export CAPACITY_PROMETHEUS_SCYLLA_TARGETS
 CAPACITY_PROMETHEUS_TARGETS_FILE ?=
 CAPACITY_OBSERVABILITY ?= none
 CAPACITY_DATASTORE_CONTAINERS ?=
 K6_IMAGE ?= grafana/k6:2.1.0
 CHAOS_PROFILE ?= api-restart
 CHAOS_TARGET ?=
+CHAOS_COMPOSE_PROJECT ?=
 CHAOS_CONFIRM ?= 0
+CHAOS_READINESS_URL ?=
+CHAOS_POLICY_DIR ?=
 CHAOS_EVIDENCE_DIR ?= $(ROOT)/.gitstore/chaos
 PUMBA_IMAGE ?= ghcr.io/alexei-led/pumba:1.1.7
 CAPACITY_CHAOS_PROFILE ?=
 CAPACITY_CHAOS_TARGET ?=
 CAPACITY_CHAOS_DELAY ?=30s
 CAPACITY_CHAOS_CONFIRM ?=0
+CAPACITY_CHAOS_READINESS_URL ?=
+CAPACITY_CHAOS_POLICY_DIR ?=
 REPOSITORY_CAPACITY_PROJECT ?= gitstore-repository-capacity
 REPOSITORY_CAPACITY_STATE_DIR ?= $(ROOT)/.gitstore/repository-capacity
 PRODUCT_CAPACITY_PROJECT ?= gitstore-product-capacity
@@ -239,11 +251,14 @@ help: ## Show available targets and common variables.
 	@printf "  CAPACITY_PROMETHEUS_URL=<url> Export phase queries into the evidence bundle\n"
 	@printf "  CAPACITY_PROMETHEUS_TARGETS=%s  Scrape endpoints reachable from Prometheus\n" "$(CAPACITY_PROMETHEUS_TARGETS)"
 	@printf "  CAPACITY_PROMETHEUS_CONTROLLER_TARGETS=%s  Optional controller endpoints for retained time series\n" "$(CAPACITY_PROMETHEUS_CONTROLLER_TARGETS)"
+	@printf "  CAPACITY_PROMETHEUS_SCYLLA_TARGETS=%s  Optional Scylla endpoints for server-side CAS and scheduling history\n" "$(CAPACITY_PROMETHEUS_SCYLLA_TARGETS)"
 	@printf "  CAPACITY_API_ENDPOINTS=<urls>  Comma-separated live API replica endpoints\n"
 	@printf "  CAPACITY_API_CONTAINERS=<names>  Matching digest-pinned API containers\n"
 	@printf "  CAPACITY_GIT_SERVICE_CONTAINER=<name>  Digest-pinned Git-service container\n"
 	@printf "  CHAOS_PROFILE=%s           Reusable Pumba fault profile\n" "$(CHAOS_PROFILE)"
 	@printf "  CHAOS_TARGET=<name>        Explicit GitStore container targeted by chaos\n"
+	@printf "  CHAOS_POLICY_DIR=<path>    Owned policy directory for invalid-policy reload\n"
+	@printf "  CAPACITY_CHAOS_POLICY_DIR  Same directory for a fault inside sustained load\n"
 	@printf "  NAMESPACE_WATCH_API_A=%s NAMESPACE_WATCH_API_B=%s\n" "$(NAMESPACE_WATCH_API_A)" "$(NAMESPACE_WATCH_API_B)"
 	@printf "  NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=<path> Required coordination signal for an actual replica restart\n"
 	@printf "  NAMESPACE_WATCH_TOKEN=<token> Required for the cross-replica Namespace watch probe\n"
@@ -255,7 +270,7 @@ help: ## Show available targets and common variables.
 	@printf "  REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT=%s  Per-node laptop alpha Scylla limit\n" "$(REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT)"
 	@printf "  BOOTSTRAP_TOKEN=<token>   Use an existing bearer token for bootstrap\n"
 	@printf "  TARGET=<value>            Required selector for check, clean, bootstrap, secret, and capacity\n"
-	@printf "  test TARGET=<value>       all (default), datastore, or secret-integration\n"
+	@printf "  test TARGET=<value>       all (default), datastore, secret-integration, or git-integration\n"
 	@printf "  test TARGET=datastore DATASTORE=scylla  Run external Scylla contracts; default DATASTORE=memdb needs no external database\n"
 	@printf "  NAMESPACE=%s REPOSITORY=%s DEFAULT_BRANCH=%s\n" "$(NAMESPACE)" "$(REPOSITORY)" "$(DEFAULT_BRANCH)"
 
@@ -465,7 +480,7 @@ stop: ## Stop compose services; optionally pass SERVICE=<name>.
 down: ## Stop and remove compose services and networks.
 	@$(LIFECYCLE_COMPOSE) down --remove-orphans
 
-build: ## Build Rust/Go services and the shared secret-material module.
+build: ## Build Rust/Go services and shared Go modules.
 	@cd "$(GIT_SERVICE_DIR)" && cargo build --verbose
 	@for dir in $(GO_MODULE_DIRS); do \
 		( cd "$$dir" && go build -v ./... ) || exit 1; \
@@ -487,11 +502,14 @@ _generate-all: _generate-proto
 _check-generated:
 	@cd "$(API_DIR)" && go run ./cmd/gitctl generate authz --root "$(ROOT)" --check
 
-test: ## Run tests; TARGET=all (default), datastore, or secret-integration. Datastore tests use DATASTORE=memdb|scylla.
+test: ## Run tests; TARGET=all (default), datastore, secret-integration, or git-integration.
 ifeq ($(TEST_TARGET),secret-integration)
 	@test "$(SECRET_TEST_OWNED_DEPLOYMENT)" = "1" || { echo "SECRET_TEST_OWNED_DEPLOYMENT=1 is required"; exit 2; }
 	@test -n "$(SECRET_TEST_API_A)" -a -n "$(SECRET_TEST_API_B)" -a -n "$(SECRET_TEST_TOKEN_FILE)" || { echo "SECRET_TEST_API_A, SECRET_TEST_API_B and SECRET_TEST_TOKEN_FILE are required"; exit 2; }
 	@test "$(origin SECRET_TEST_NAMESPACE)" = "undefined" || { echo "SECRET_TEST_NAMESPACE is removed; use SECRET_TEST_SERVICEACCOUNT"; exit 2; }
+	@if test -n "$(SECRET_TEST_REINCARNATION_API)$(SECRET_TEST_REINCARNATION_SERVICEACCOUNT)"; then \
+		test -n "$(SECRET_TEST_REINCARNATION_API)" -a -n "$(SECRET_TEST_REINCARNATION_SERVICEACCOUNT)" || \
+		{ echo "SECRET_TEST_REINCARNATION_API and SECRET_TEST_REINCARNATION_SERVICEACCOUNT must be supplied together"; exit 2; }; fi
 	@binary=$$(mktemp "$${TMPDIR:-/tmp}/gitstore-secret-controller.XXXXXX"); \
 		trap 'rm -f "$$binary"' EXIT INT TERM; \
 		(cd "$(CONTROLLER_MANAGER_DIR)" && GOWORK=off go build -o "$$binary" ./cmd/controller) && \
@@ -500,7 +518,24 @@ ifeq ($(TEST_TARGET),secret-integration)
 		SECRET_TEST_CONTROLLER_BINARY="$$binary" SECRET_TEST_API_A="$(SECRET_TEST_API_A)" \
 		SECRET_TEST_API_B="$(SECRET_TEST_API_B)" SECRET_TEST_TOKEN_FILE="$(abspath $(SECRET_TEST_TOKEN_FILE))" \
 		SECRET_TEST_SERVICEACCOUNT="$(SECRET_TEST_SERVICEACCOUNT)" \
-		GOWORK=off go test -v -count=1 -timeout 10m -run '^TestSecretBootstrapRotationDeployed$$' .
+		SECRET_TEST_REINCARNATION_API="$(SECRET_TEST_REINCARNATION_API)" \
+		SECRET_TEST_REINCARNATION_SERVICEACCOUNT="$(SECRET_TEST_REINCARNATION_SERVICEACCOUNT)" \
+		GOWORK=off go test -v -count=1 -timeout 10m -run '^(TestSecretBootstrapRotationDeployed|TestServiceAccountReplicaLifecycleDeployed)$$' .
+
+else ifeq ($(TEST_TARGET),git-integration)
+	@test "$(GIT_TEST_OWNED_DEPLOYMENT)" = "1" || { echo "GIT_TEST_OWNED_DEPLOYMENT=1 is required"; exit 2; }
+	@test -n "$(GIT_TEST_URI)" -a -n "$(GIT_TEST_HMAC_SECRET_FILE)" || { echo "GIT_TEST_URI and GIT_TEST_HMAC_SECRET_FILE are required"; exit 2; }
+	@test "$(DATASTORE)" = "memdb" -o "$(DATASTORE)" = "scylla" || { echo "git-integration DATASTORE must be memdb or scylla"; exit 2; }
+	@cd "$(API_DIR)" && GIT_TEST_RUN=1 GIT_TEST_OWNED_DEPLOYMENT=1 \
+		GIT_TEST_URI="$(GIT_TEST_URI)" GIT_TEST_HMAC_SECRET_FILE="$(abspath $(GIT_TEST_HMAC_SECRET_FILE))" \
+		GOWORK=off go test -v -race -count=1 -timeout 3m -run '^TestGitRPCDeletionRecoveryDeployed$$' ./internal/gitclient
+ifeq ($(DATASTORE),scylla)
+	@cd "$(API_DIR)" && GIT_TEST_RUN=1 GIT_TEST_OWNED_DEPLOYMENT=1 \
+		GIT_TEST_URI="$(GIT_TEST_URI)" GIT_TEST_HMAC_SECRET_FILE="$(abspath $(GIT_TEST_HMAC_SECRET_FILE))" \
+		GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
+		GOWORK=off go test -v -race -tags scylla -count=1 -timeout 5m \
+		-run '^TestScylla_GitDeletionSagaRecoveryNative$$' ./internal/datastore/scylla
+endif
 
 else ifeq ($(TEST_TARGET),datastore)
 ifeq ($(DATASTORE),memdb)
@@ -526,7 +561,7 @@ else ifeq ($(TEST_TARGET),all)
 		( cd "$$dir" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./... ) || exit 1; \
 	done
 else
-	@echo "test TARGET must be all, datastore, or secret-integration" >&2; exit 2
+	@echo "test TARGET must be all, datastore, secret-integration, or git-integration" >&2; exit 2
 endif
 
 capacity: ## Run a capacity scenario; set TARGET, PROFILE, and MODE.
@@ -566,12 +601,15 @@ else
 		CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" CAPACITY_PROMETHEUS_TARGETS="$(CAPACITY_PROMETHEUS_TARGETS)" \
 		CAPACITY_CONFIG_MANIFEST="$(CAPACITY_CONFIG_MANIFEST)" CAPACITY_ENVIRONMENT_MANIFEST="$(CAPACITY_ENVIRONMENT_MANIFEST)" \
 		CAPACITY_DATASTORE_CONTAINERS="$(CAPACITY_DATASTORE_CONTAINERS)" \
+		CAPACITY_CHAOS_PROFILE="$(CAPACITY_CHAOS_PROFILE)" CAPACITY_CHAOS_TARGET="$(CAPACITY_CHAOS_TARGET)" \
+		CAPACITY_CHAOS_DELAY="$(CAPACITY_CHAOS_DELAY)" CAPACITY_CHAOS_CONFIRM="$(CAPACITY_CHAOS_CONFIRM)" \
+		CAPACITY_CHAOS_READINESS_URL="$(CAPACITY_CHAOS_READINESS_URL)" CAPACITY_CHAOS_POLICY_DIR="$(CAPACITY_CHAOS_POLICY_DIR)" \
 		./scripts/run-capacity-target.sh "$(TARGET)" "$(PROFILE)" "$(MODE)"
 endif
 
 _capacity-observability:
 	@test -n "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" || { echo "CAPACITY_PROMETHEUS_TARGETS_FILE is required"; exit 2; }
-	@./scripts/write-capacity-prometheus-targets.sh "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" "$(CAPACITY_PROMETHEUS_TARGETS)" "$(CAPACITY_PROMETHEUS_CONTROLLER_TARGETS)" "$(CAPACITY_PROMETHEUS_GIT_TARGETS)"
+	@./scripts/write-capacity-prometheus-targets.sh "$(CAPACITY_PROMETHEUS_TARGETS_FILE)" "$(CAPACITY_PROMETHEUS_TARGETS)" "$(CAPACITY_PROMETHEUS_CONTROLLER_TARGETS)" "$(CAPACITY_PROMETHEUS_GIT_TARGETS)" "$(CAPACITY_PROMETHEUS_SCYLLA_TARGETS)"
 	@CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" CAPACITY_PROMETHEUS_TARGETS_FILE="$(CAPACITY_PROMETHEUS_TARGETS_FILE)" \
 		docker compose --profile capacity -f compose.yml -f compose.capacity.yml up -d capacity-prometheus $(if $(filter full,$(CAPACITY_OBSERVABILITY)),capacity-otel-collector capacity-tempo capacity-loki)
 
@@ -600,13 +638,18 @@ _capacity-k6:
 		CAPACITY_CHAOS_TARGET="$(CAPACITY_CHAOS_TARGET)" \
 		CAPACITY_CHAOS_DELAY="$(CAPACITY_CHAOS_DELAY)" \
 		CAPACITY_CHAOS_CONFIRM="$(CAPACITY_CHAOS_CONFIRM)" \
+		CAPACITY_CHAOS_READINESS_URL="$(CAPACITY_CHAOS_READINESS_URL)" \
+		CAPACITY_CHAOS_POLICY_DIR="$(CAPACITY_CHAOS_POLICY_DIR)" \
 		K6_IMAGE="$(K6_IMAGE)" \
 		./scripts/run-capacity.sh "$(CAPACITY_PROFILE)"
 
 chaos: ## Inject an opt-in container fault and retain structured evidence.
 	@CHAOS_PROFILE="$(CHAOS_PROFILE)" \
 		CHAOS_TARGET="$(CHAOS_TARGET)" \
+		CHAOS_COMPOSE_PROJECT="$(CHAOS_COMPOSE_PROJECT)" \
 		CHAOS_CONFIRM="$(CHAOS_CONFIRM)" \
+		CHAOS_READINESS_URL="$(CHAOS_READINESS_URL)" \
+		CHAOS_POLICY_DIR="$(CHAOS_POLICY_DIR)" \
 		CHAOS_EVIDENCE_DIR="$(CHAOS_EVIDENCE_DIR)" \
 		PUMBA_IMAGE="$(PUMBA_IMAGE)" \
 		./scripts/run-chaos.sh "$(CHAOS_PROFILE)"
@@ -633,6 +676,7 @@ _capacity-namespace-admission:
 
 _capacity-namespace-watch:
 	@cd "$(ROOT)/tests/integration" && \
+		GIT_URL="$(or $(GIT_URL),$(REPOSITORY_GIT_URL))" \
 		NAMESPACE_WATCH_API_A="$(NAMESPACE_WATCH_API_A)" \
 		NAMESPACE_WATCH_API_B="$(NAMESPACE_WATCH_API_B)" \
 		NAMESPACE_WATCH_API_REPLACEMENT="$(NAMESPACE_WATCH_API_REPLACEMENT)" \
@@ -671,6 +715,7 @@ _capacity-namespace-recovery:
 _capacity-repository-lifecycle:
 	@cd "$(ROOT)/tests/integration" && \
 		REPOSITORY_CAPACITY_WORKLOAD="$(REPOSITORY_CAPACITY_WORKLOAD)" \
+		REPOSITORY_CAPACITY_TRACE_CORRELATION="$(REPOSITORY_CAPACITY_TRACE_CORRELATION)" \
 		REPOSITORY_CAPACITY_SECRET_SCENARIO="$(REPOSITORY_CAPACITY_SECRET_SCENARIO)" \
 		REPOSITORY_API_A="$(REPOSITORY_API_A)" \
 		REPOSITORY_API_B="$(REPOSITORY_API_B)" \
@@ -700,6 +745,9 @@ _capacity-repository-lifecycle:
 		REPOSITORY_CAPACITY_BASELINE_STABILIZATION="$(REPOSITORY_CAPACITY_BASELINE_STABILIZATION)" \
 		REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION="$(REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION)" \
 		REPOSITORY_CAPACITY_SKIP_REPLACEMENT="$(REPOSITORY_CAPACITY_SKIP_REPLACEMENT)" \
+		REPOSITORY_CAPACITY_VERIFY_STORAGE="$(REPOSITORY_CAPACITY_VERIFY_STORAGE)" \
+		REPOSITORY_CAPACITY_VERIFY_FINALIZERS="$(REPOSITORY_CAPACITY_VERIFY_FINALIZERS)" \
+		REPOSITORY_CAPACITY_PROJECT="$(REPOSITORY_CAPACITY_PROJECT)" \
 		MODE="$(MODE)" REPOSITORY_LIFECYCLE_CAPACITY_RUN=1 \
 		go test -v -count=1 -timeout 0 -run '^TestRepositoryLifecycle_DeployedEvidenceGate$$' .
 
@@ -718,7 +766,7 @@ _capacity-repository-overflow:
 		MODE="$(MODE)" REPOSITORY_LIFECYCLE_OVERFLOW_RUN=1 \
 		go test -v -count=1 -timeout 0 -run '^TestRepositoryLifecycle_OverflowOnly$$' .
 
-lint: ## Run Rust and Go lint checks, including shared secret material.
+lint: ## Run Rust and Go lint checks, including shared Go modules.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check
 	@cd "$(GIT_SERVICE_DIR)" && cargo clippy --all-targets --all-features -- -D warnings
 	@for dir in $(GO_MODULE_DIRS); do \

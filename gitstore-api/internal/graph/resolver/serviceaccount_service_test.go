@@ -8,7 +8,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -19,6 +22,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -265,6 +269,164 @@ func TestDeleteServiceAccountIsIdempotentAndRevokesAuthentication(t *testing.T) 
 	})
 	require.NoError(t, err)
 	assert.Nil(t, deleted.ServiceAccount, "deleting an absent account returns a null serviceAccount")
+}
+
+type serviceAccountDeletionFailureStore struct {
+	datastore.Datastore
+	deletionErr, confirmationErr, subjectErr error
+	removeAuthority                          bool
+	replacement                              *datastore.ServiceAccount
+}
+
+func (s serviceAccountDeletionFailureStore) DeleteServiceAccount(ctx context.Context, uid string) error {
+	if s.removeAuthority {
+		if err := s.Datastore.DeleteServiceAccount(ctx, uid); err != nil {
+			return err
+		}
+		if s.replacement != nil {
+			if err := s.Datastore.CreateServiceAccount(ctx, s.replacement); err != nil {
+				return err
+			}
+		}
+	}
+	return s.deletionErr
+}
+
+func (s serviceAccountDeletionFailureStore) GetServiceAccountByUID(ctx context.Context, uid string) (*datastore.ServiceAccount, error) {
+	if s.confirmationErr != nil {
+		return nil, s.confirmationErr
+	}
+	return s.Datastore.GetServiceAccountByUID(ctx, uid)
+}
+
+func (s serviceAccountDeletionFailureStore) GetServiceAccountBySubject(ctx context.Context, name string) (*datastore.ServiceAccount, error) {
+	if s.subjectErr != nil {
+		return nil, s.subjectErr
+	}
+	return s.Datastore.GetServiceAccountBySubject(ctx, name)
+}
+
+func TestDeleteServiceAccountLookupFailurePreservesAbsenceAndCauses(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{"absent", datastore.ErrNotFound},
+		{"wrapped absence", fmt.Errorf("lookup ServiceAccount: %w", datastore.ErrNotFound)},
+		{"storage unavailable", errors.New("private subject lookup detail")},
+		{"canceled", context.Canceled},
+		{"deadline", context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := newServiceAccountResolverHarness(t)
+			h.resolver.store = serviceAccountDeletionFailureStore{Datastore: h.store, subjectErr: test.err}
+			h.resolver.connectionRegistry = wsregistry.New()
+			connection, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			h.resolver.connectionRegistry.Register(t.Context(), "unrelated-uid", cancel)
+			result, err := h.resolver.DeleteServiceAccount(serviceAccountAdminContext(), &model.DeleteServiceAccountInput{
+				Metadata: &model.ObjectMetaInput{Name: "manager"},
+			})
+			require.NoError(t, connection.Err(), "subject lookup failure must not authorize UID revocation")
+			if errors.Is(test.err, datastore.ErrNotFound) {
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.Nil(t, result.ServiceAccount)
+			} else {
+				require.Nil(t, result)
+				require.ErrorIs(t, err, test.err)
+				encoded, marshalErr := json.Marshal(err)
+				require.NoError(t, marshalErr)
+				require.JSONEq(t, `{"message":"delete ServiceAccount"}`, string(encoded))
+			}
+		})
+	}
+}
+
+func TestDeleteServiceAccountPartialCleanupPreservesFailureAndUIDRevocation(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		removed         bool
+		confirmationErr error
+		deletionCause   error
+	}{
+		{"authority removed", true, nil, nil},
+		{"authority retained", false, nil, nil},
+		{"authority conflict", false, nil, datastore.ErrConflict},
+		{"confirmation unavailable", true, errors.New("private confirmation detail"), nil},
+		{"confirmation canceled", true, context.Canceled, nil},
+		{"wrapped absence confirmation", true, fmt.Errorf("confirm UID: %w", datastore.ErrNotFound), nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := newServiceAccountResolverHarness(t)
+			ctx := serviceAccountAdminContext()
+			_, err := h.resolver.CreateServiceAccount(ctx, serviceAccountCreateInput(t, "", "manager", "key-1"))
+			require.NoError(t, err)
+			account, err := h.store.GetServiceAccountBySubject(ctx, "manager")
+			require.NoError(t, err)
+			replacement := *account
+			replacement.UID = "01960000-0000-7000-8000-000000000199"
+			replacement.CreationTimestamp = account.CreationTimestamp.Add(time.Second)
+			oldToken, _, err := h.provider.IssueAccessToken(account, "gitstore-api", time.Minute)
+			require.NoError(t, err)
+			deletionErr := errors.New("private listing cleanup detail")
+			if test.deletionCause != nil {
+				deletionErr = test.deletionCause
+			}
+			failed := serviceAccountDeletionFailureStore{
+				Datastore: h.store, deletionErr: deletionErr, confirmationErr: test.confirmationErr,
+				removeAuthority: test.removed, replacement: &replacement,
+			}
+			h.resolver.store = failed
+			h.resolver.connectionRegistry = wsregistry.New()
+			oldConnection, cancelOld := context.WithCancel(t.Context())
+			defer cancelOld()
+			newConnection, cancelNew := context.WithCancel(t.Context())
+			defer cancelNew()
+			h.resolver.connectionRegistry.Register(ctx, account.UID, cancelOld)
+			h.resolver.connectionRegistry.Register(ctx, replacement.UID, cancelNew)
+			result, err := h.resolver.DeleteServiceAccount(ctx, &model.DeleteServiceAccountInput{
+				Metadata: &model.ObjectMetaInput{Name: account.Name},
+			})
+			require.Nil(t, result, "partial cleanup must not fabricate a successful deletion payload")
+			require.ErrorIs(t, err, deletionErr)
+			if test.confirmationErr != nil && !errors.Is(test.confirmationErr, datastore.ErrNotFound) {
+				require.ErrorIs(t, err, test.confirmationErr)
+			}
+			require.NotErrorIs(t, err, datastore.ErrNotFound, "absence confirmation must not turn partial cleanup into a not-found response")
+			encoded, marshalErr := json.Marshal(err)
+			require.NoError(t, marshalErr)
+			require.JSONEq(t, `{"message":"delete ServiceAccount"}`, string(encoded))
+			require.NotContains(t, err.Error(), "private")
+			require.NotContains(t, string(encoded), "private")
+			if test.removed && (test.confirmationErr == nil || errors.Is(test.confirmationErr, datastore.ErrNotFound)) {
+				require.ErrorIs(t, oldConnection.Err(), context.Canceled)
+			} else {
+				require.NoError(t, oldConnection.Err(), "failed or unconfirmed deletion must not revoke a live UID")
+			}
+			require.NoError(t, newConnection.Err(), "old-UID cleanup must never revoke the name's replacement UID")
+			_, decision, authErr := h.resolver.registry.AuthN().Authenticate(ctx, auth.AuthRequest{
+				Header: http.Header{"Authorization": []string{"Bearer " + oldToken}},
+			})
+			require.NoError(t, authErr)
+			if test.removed {
+				require.Equal(t, auth.OutcomeDeny, decision.Outcome, "the old credential must fail even if deletion confirmation is unavailable")
+				got, lookupErr := h.store.GetServiceAccountBySubject(ctx, account.Name)
+				require.NoError(t, lookupErr)
+				require.Equal(t, replacement.UID, got.UID)
+				newToken, _, issueErr := h.provider.IssueAccessToken(got, "gitstore-api", time.Minute)
+				require.NoError(t, issueErr)
+				principal, newDecision, newAuthErr := h.resolver.registry.AuthN().Authenticate(ctx, auth.AuthRequest{
+					Header: http.Header{"Authorization": []string{"Bearer " + newToken}},
+				})
+				require.NoError(t, newAuthErr)
+				require.Equal(t, auth.OutcomeAllow, newDecision.Outcome)
+				require.Equal(t, replacement.UID, principal.ServiceAccountUID)
+			} else {
+				require.Equal(t, auth.OutcomeAllow, decision.Outcome, "a failed pre-delete operation must preserve the live credential")
+			}
+		})
+	}
 }
 
 func TestIssueServiceAccountTokenRequiresMatchingAssertionIdentityAndClampsTTL(t *testing.T) {

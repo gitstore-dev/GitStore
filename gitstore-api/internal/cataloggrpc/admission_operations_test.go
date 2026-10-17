@@ -75,7 +75,7 @@ func TestRepositoryCurrentCheckUsesOneProofWithoutRefOnlyFallback(t *testing.T) 
 				return tc.atAncestor, tc.content, tc.err
 			}}
 			server := &Server{git: reader}
-			current, err := server.isCommittedRepositoryCurrent(t.Context(), admission.CommittedManifestRequest{
+			current, err := server.isCommittedManifestCurrent(t.Context(), admission.CommittedManifestRequest{
 				RepositoryID: "repo", Path: "repositories/catalog.md", RefName: "refs/heads/main",
 				CommitSHA: strings.Repeat("a", 40), Content: []byte("manifest"),
 			})
@@ -89,7 +89,7 @@ func TestRepositoryCurrentCheckUsesOneProofWithoutRefOnlyFallback(t *testing.T) 
 		})
 	}
 	server := &Server{git: &batchOnlyAdmissionReader{}}
-	current, err := server.isCommittedRepositoryCurrent(t.Context(), admission.CommittedManifestRequest{})
+	current, err := server.isCommittedManifestCurrent(t.Context(), admission.CommittedManifestRequest{})
 	require.False(t, current)
 	require.ErrorContains(t, err, "cannot prove current unchanged")
 }

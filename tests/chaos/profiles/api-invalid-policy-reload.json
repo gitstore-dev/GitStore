@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "description": "Reject an invalid policy on one explicitly owned API, then restore its policy without restarting.",
+  "action": "reload-invalid-policy",
+  "expectedRecovery": "30s",
+  "readinessKind": "api",
+  "readinessURL": "http://127.0.0.1:4000/ready"
+}

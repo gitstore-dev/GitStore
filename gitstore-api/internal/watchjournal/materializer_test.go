@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -130,11 +131,65 @@ func TestClassifyResourcePreservesKindScopeAndResourceLabels(t *testing.T) {
 
 func TestClassifyResourceSuppressesNoopRepositoryCDCWrite(t *testing.T) {
 	payload := json.RawMessage(`{"Labels":{"team":"catalog"},"Name":"catalog","Namespace":"shop"}`)
-	event, ok := ClassifyResource(Change{
-		Kind: "Repository", Namespace: "shop", Name: "catalog", Before: payload, After: payload,
-	}, namespaceLabels)
+	change := Change{
+		Kind: "Repository", Namespace: "shop", Name: "catalog",
+		Before: payload, After: append(json.RawMessage(nil), payload...),
+	}
+	event, ok := ClassifyResource(change, namespaceLabels)
 	assert.False(t, ok)
 	assert.Empty(t, event.Type)
+	allocations := testing.AllocsPerRun(100, func() {
+		_, ok = ClassifyResource(change, namespaceLabels)
+	})
+	assert.False(t, ok)
+	assert.Zero(t, allocations)
+}
+
+func TestJSONEqualPreservesSemanticAndMalformedComparisons(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		left, right string
+		equal       bool
+	}{
+		{"identical", `{"status":{"ready":true}}`, `{"status":{"ready":true}}`, true},
+		{"reordered", `{"a":1,"b":[true,null]}`, ` { "b": [true, null], "a": 1 } `, true},
+		{"number formatting", `{"a":1}`, `{"a":1.0}`, true},
+		{"changed version", `{"version":"1"}`, `{"version":"2"}`, false},
+		{"null versus empty object", `null`, `{}`, false},
+		{"array ordering", `[1,2]`, `[2,1]`, false},
+		{"identical malformed", `{"a":`, `{"a":`, true},
+		{"different malformed", `{"a":`, `{"b":`, false},
+		{"empty", "", "", true},
+		{"empty versus null", "", "null", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			left, right := json.RawMessage(tt.left), json.RawMessage(tt.right)
+			require.Equal(t, tt.equal, jsonEqual(left, right))
+			require.Equal(t, tt.equal, jsonEqual(right, left))
+		})
+	}
+}
+
+func BenchmarkClassifyResourceNoopCDCWrite(b *testing.B) {
+	payload, err := json.Marshal(datastore.Namespace{
+		UID: "fixture-namespace", Name: "shop", ResourceVersion: "42",
+		Labels: map[string]string{"team": "catalog"},
+		Body:   strings.Repeat("namespace-body", 64),
+		Status: json.RawMessage(`{"conditions":[{"type":"Ready","status":"True"}]}`),
+	})
+	require.NoError(b, err)
+	change := Change{
+		Kind: "Namespace", Name: "shop",
+		Before: payload, After: append(json.RawMessage(nil), payload...),
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, published := ClassifyResource(change, namespaceLabels)
+		if published {
+			b.Fatal("an unchanged public image must not publish")
+		}
+	}
 }
 
 func TestMaterializerAppendsBeforeSavingProgress(t *testing.T) {

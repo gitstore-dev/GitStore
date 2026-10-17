@@ -18,6 +18,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 type blockingNamespaceWriteStore struct {
@@ -67,6 +69,101 @@ func (s *blockingNamespaceWriteStore) MarkNamespaceDeletion(
 		s.conflicts.Add(1)
 	}
 	return err
+}
+
+func TestNamespaceStaleUpdateCannotOverwriteNewerReplica(t *testing.T) {
+	for _, raw := range []bool{false, true} {
+		name := "committed"
+		if raw {
+			name = "raw"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			base := newNamespacePolicyDatastore(t)
+			name := "committed-replica-race"
+			seed, older, newer := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)
+			path := "namespaces/" + name + ".md"
+			files := map[string]map[string][]byte{
+				seed:  {path: namespaceManifest(name, "Original", "ORGANIZATION")},
+				older: {path: namespaceManifest(name, "Older", "ORGANIZATION")},
+				newer: {path: namespaceManifest(name, "Newer", "ORGANIZATION")},
+			}
+			current := seed
+			var tip atomic.Value
+			tip.Store(seed)
+			reader := &repositoryHistoryReader{mockGitReader: newTreeGitReader(&current, files)}
+			reader.resolveRefFunc = func(context.Context, string, string) (string, error) {
+				return tip.Load().(string), nil
+			}
+			reader.proof = func(context.Context, string, string, string, string) ([]byte, error) {
+				return nil, grpcstatus.Error(codes.Aborted, "same path changed")
+			}
+			store := &blockingNamespaceWriteStore{
+				Datastore: base,
+				shouldBlock: func(namespace *datastore.Namespace) bool {
+					return namespace.Name == name && namespace.Title == "Older"
+				},
+				started: make(chan struct{}),
+				release: make(chan struct{}),
+			}
+			peer := newCatalogServer(t, base, reader)
+			stale := newCatalogServer(t, store, reader)
+			admit := func(server *catalogTestServer, request admission.CommittedManifestRequest, oldCommit string) error {
+				if raw {
+					_, err := server.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
+						RepositoryId: request.RepositoryID, OldCommitSha: oldCommit,
+						NewCommitSha: request.CommitSHA, RefName: request.RefName, ChangedPaths: []string{request.Path},
+						Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{
+							Subject: request.ActorSubject, AuthMethod: "static-users",
+						}},
+					})
+					return err
+				}
+				_, err := server.AdmitCommittedManifest(ctx, request)
+				return err
+			}
+			request := admission.CommittedManifestRequest{
+				RepositoryID: testRepoID, Namespace: "gitstore-system", ActorSubject: "alice",
+				CommitSHA: seed, RefName: "refs/heads/main", Path: path,
+				Content: files[seed][path], Operation: admission.OperationCreate,
+			}
+			err := admit(peer, request, strings.Repeat("0", 40))
+			require.NoError(t, err)
+			tip.Store(older)
+			oldRequest := request
+			oldRequest.CommitSHA, oldRequest.Content, oldRequest.Operation = older, files[older][path], admission.OperationUpdate
+			done := make(chan error, 1)
+			go func() {
+				done <- admit(stale, oldRequest, seed)
+			}()
+			waitForReplicaRace(t, store.started, "old admission did not reach CAS")
+			t.Cleanup(func() {
+				select {
+				case <-store.release:
+				default:
+					close(store.release)
+				}
+			})
+			tip.Store(newer)
+			request.CommitSHA, request.Content, request.Operation, request.ActorSubject = newer, files[newer][path], admission.OperationUpdate, "bob"
+			err = admit(peer, request, older)
+			require.NoError(t, err)
+			close(store.release)
+			staleErr := waitForReplicaResult(t, done)
+			if raw {
+				require.NoError(t, staleErr)
+			} else {
+				require.ErrorIs(t, staleErr, admission.ErrCommittedManifestSuperseded)
+			}
+			stored, err := base.GetNamespaceByName(ctx, name)
+			require.NoError(t, err)
+			assert.Equal(t, "Newer", stored.Title)
+			assert.Equal(t, newer, stored.GitCommitSHA)
+			assert.Equal(t, "bob", stored.UpdateActor)
+			assert.Equal(t, int64(2), stored.Generation)
+			assert.Equal(t, int64(1), store.conflicts.Load())
+		})
+	}
 }
 
 func TestNamespaceReplicaStaleUpdateCannotOverwriteConcurrentDeletion(t *testing.T) {

@@ -106,6 +106,23 @@ func createInfrastructureRepository(t *testing.T, e *categoryLifecycleEnv, name 
 	return repo
 }
 
+func createInfrastructureNamespace(t *testing.T, e *categoryLifecycleEnv, name string) *datastore.Namespace {
+	t.Helper()
+	ctx := t.Context()
+	const bootstrapUID = "00000000-0000-0000-0000-00000000b000"
+	const bootstrapRepo = "00000000-0000-0000-0000-00000000b001"
+	require.NoError(t, e.store.CreateNamespace(ctx, &datastore.Namespace{UID: bootstrapUID, Name: SystemRepositoryName}))
+	require.NoError(t, e.store.CreateRepository(ctx, &datastore.Repository{UID: bootstrapRepo, Namespace: SystemRepositoryName, Name: SystemRepositoryName}))
+	require.NoError(t, e.store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: SystemRepositoryName, Name: SystemRepositoryName, RepositoryID: bootstrapRepo}))
+	ns, err := e.service.CreateNamespace(ctx, model.CreateNamespaceInput{
+		APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace",
+		Metadata: &model.NamespaceMetadataInput{Name: name},
+		Spec:     &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
+	}, "alice")
+	require.NoError(t, err)
+	return ns
+}
+
 func TestInfrastructureDeletionRecoversAfterAdmissionProcessLoss(t *testing.T) {
 	e := newCategoryLifecycleEnv(t)
 	ctx := context.Background()
@@ -199,13 +216,183 @@ func TestInfrastructureDeletionRecoversLostGitResponse(t *testing.T) {
 	intent, err := admission.ReadDeletionIntent(pending.Status)
 	require.NoError(t, err)
 	require.Empty(t, intent.RemovalCommit, "the API never received the commit")
-	e.service.gitWriter = e.git
-	_, err = e.service.CompleteRepositoryDeletion(ctx, pending.Namespace, pending.Name, pending.ResourceVersion, pending.UID)
+	removal, err := e.git.ResolveRefForRepo(ctx, intent.RepositoryID, intent.Ref)
+	require.NoError(t, err)
+	head := e.git.write(intent.RepositoryID, "unrelated.md", []byte("unrelated authoring work"))
+	peer, err := NewService(ServiceDeps{Store: e.store, GitWriter: e.git, Logger: zap.NewNop(), CommittedManifestAdmitter: e.catalog})
+	require.NoError(t, err)
+	_, err = peer.CompleteRepositoryDeletion(ctx, pending.Namespace, pending.Name, pending.ResourceVersion, pending.UID)
 	require.ErrorIs(t, err, datastore.ErrConflict)
 	current, err := e.store.GetRepository(ctx, before.UID)
 	require.NoError(t, err)
 	require.NotNil(t, current.DeletionTimestamp)
+	require.Equal(t, before.UID, current.UID)
+	require.Equal(t, before.Generation, current.Generation)
+	intent, err = admission.ReadDeletionIntent(current.Status)
+	require.NoError(t, err)
+	require.Equal(t, removal, intent.RemovalCommit)
+	actualHead, err := e.git.ResolveRefForRepo(ctx, intent.RepositoryID, intent.Ref)
+	require.NoError(t, err)
+	require.Equal(t, head, actualHead)
 	require.Len(t, e.git.deletes, 1)
+}
+
+func TestNamespaceDeletionPeerRecoversLostGitResponseAfterUnrelatedCommit(t *testing.T) {
+	e := newCategoryLifecycleEnv(t)
+	ctx := t.Context()
+	before := createInfrastructureNamespace(t, e, "lost-response")
+	require.NoError(t, e.service.ProvisionSystemRepository(ctx, before.Name, "controller"))
+	e.service.gitWriter = lostDeletionResponse{e.git}
+	_, err := e.service.DeleteNamespace(ctx, before)
+	require.Error(t, err)
+	pending, err := e.store.GetNamespaceByName(ctx, before.Name)
+	require.NoError(t, err)
+	require.Nil(t, pending.DeletionTimestamp)
+	intent, err := admission.ReadDeletionIntent(pending.Status)
+	require.NoError(t, err)
+	require.NotNil(t, intent)
+	require.Empty(t, intent.RemovalCommit, "the response containing the deletion receipt was lost")
+	removal, err := e.git.ResolveRefForRepo(ctx, intent.RepositoryID, intent.Ref)
+	require.NoError(t, err)
+	head := e.git.write(intent.RepositoryID, "unrelated.md", []byte("unrelated authoring work"))
+	require.NotEqual(t, removal, head)
+
+	peer, err := NewService(ServiceDeps{Store: e.store, GitWriter: e.git, Logger: zap.NewNop(), CommittedManifestAdmitter: e.catalog})
+	require.NoError(t, err)
+	_, err = peer.CompleteNamespaceDeletion(ctx, pending.Name, pending.ResourceVersion, pending.UID)
+	require.ErrorIs(t, err, datastore.ErrConflict, "recovery publishes a newer terminating version before completion")
+	current, err := e.store.GetNamespaceByName(ctx, before.Name)
+	require.NoError(t, err)
+	require.Equal(t, before.UID, current.UID)
+	require.Equal(t, before.Generation, current.Generation)
+	require.NotNil(t, current.DeletionTimestamp)
+	intent, err = admission.ReadDeletionIntent(current.Status)
+	require.NoError(t, err)
+	require.Equal(t, removal, intent.RemovalCommit, "retain the original receipt, not the unrelated current tip")
+	require.Len(t, e.git.deletes, 1, "peer recovery must not create a second removal commit")
+	actualHead, err := e.git.ResolveRefForRepo(ctx, intent.RepositoryID, intent.Ref)
+	require.NoError(t, err)
+	require.Equal(t, head, actualHead)
+	_, err = peer.CompleteNamespaceDeletion(ctx, current.Name, current.ResourceVersion, current.UID)
+	require.NoError(t, err)
+	_, err = e.store.GetNamespaceByName(ctx, current.Name)
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+	_, err = e.store.LookupRepository(ctx, current.Name, SystemRepositoryName)
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+type lostStorageDeletionResponse struct {
+	GitWriter
+	deleted  map[string]bool
+	calls    []string
+	retryErr error
+}
+
+func (w *lostStorageDeletionResponse) DeleteRepository(_ context.Context, uid string) error {
+	w.calls = append(w.calls, uid)
+	if w.deleted[uid] {
+		return w.retryErr
+	}
+	w.deleted[uid] = true
+	return status.Error(codes.Unavailable, "response lost after storage removal")
+}
+
+func TestInfrastructureCompletionPeerRecoversLostStorageResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		retryErr       error
+		missingMapping bool
+	}{
+		{name: "idempotent-native-retry"},
+		{name: "not-found-retry", retryErr: status.Error(codes.NotFound, "storage was already removed")},
+		{name: "partial-name-cleanup", missingMapping: true},
+	} {
+		for _, kind := range []string{"Repository", "Namespace"} {
+			t.Run(tc.name+"/"+kind, func(t *testing.T) {
+				e := newCategoryLifecycleEnv(t)
+				ctx := t.Context()
+				var parent *datastore.Namespace
+				var repository *datastore.Repository
+				if kind == "Namespace" {
+					parent = createInfrastructureNamespace(t, e, "storage-response")
+					require.NoError(t, e.service.ProvisionSystemRepository(ctx, parent.Name, "controller"))
+					_, err := e.service.DeleteNamespace(ctx, parent)
+					require.NoError(t, err)
+					parent, err = e.store.GetNamespaceByName(ctx, parent.Name)
+					require.NoError(t, err)
+					mapping, err := e.store.LookupRepository(ctx, parent.Name, SystemRepositoryName)
+					require.NoError(t, err)
+					repository, err = e.store.GetRepository(ctx, mapping.RepositoryID)
+					require.NoError(t, err)
+				} else {
+					repository = createInfrastructureRepository(t, e, "storage-response")
+					var err error
+					repository, _, err = e.service.deleteRepositoryWithOutcome(ctx, repository.UID, "alice")
+					require.NoError(t, err)
+				}
+				writer := &lostStorageDeletionResponse{GitWriter: e.git, deleted: map[string]bool{}, retryErr: tc.retryErr}
+				e.service.gitWriter = writer
+				complete := func(service *Service, resourceVersion string) error {
+					if parent != nil {
+						_, err := service.CompleteNamespaceDeletion(ctx, parent.Name, resourceVersion, parent.UID)
+						return err
+					}
+					_, err := service.CompleteRepositoryDeletion(ctx, repository.Namespace, repository.Name, resourceVersion, repository.UID)
+					return err
+				}
+				version := repository.ResourceVersion
+				if parent != nil {
+					version = parent.ResourceVersion
+				}
+				require.Error(t, complete(e.service, version))
+				require.True(t, writer.deleted[repository.UID])
+				require.Equal(t, []string{repository.UID}, writer.calls)
+				retained, err := e.store.GetRepository(ctx, repository.UID)
+				require.NoError(t, err)
+				require.NotNil(t, retained.DeletionTimestamp)
+				require.Contains(t, retained.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
+				mapping, err := e.store.LookupRepository(ctx, repository.Namespace, repository.Name)
+				require.NoError(t, err)
+				require.Equal(t, repository.UID, mapping.RepositoryID)
+				if parent != nil {
+					current, err := e.store.GetNamespaceByName(ctx, parent.Name)
+					require.NoError(t, err)
+					require.Equal(t, parent.UID, current.UID)
+					require.Equal(t, parent.ResourceVersion, current.ResourceVersion)
+					require.Equal(t, parent.Finalizers, current.Finalizers)
+				}
+				peer, err := NewService(ServiceDeps{Store: e.store, GitWriter: writer, Logger: zap.NewNop(), CommittedManifestAdmitter: e.catalog})
+				require.NoError(t, err)
+				require.ErrorIs(t, complete(peer, "stale"), datastore.ErrConflict)
+				require.Len(t, writer.calls, 1, "stale completion cannot retry storage removal")
+				if tc.missingMapping {
+					require.NoError(t, e.store.DeleteNamespaceMapping(ctx, repository.Namespace, repository.Name))
+					if parent != nil {
+						require.ErrorContains(t, complete(peer, version), "still contains repositories")
+						require.Len(t, writer.calls, 1, "parent cleanup must wait for the UID-bound child cleanup")
+						current, err := e.store.GetNamespaceByName(ctx, parent.Name)
+						require.NoError(t, err)
+						require.Equal(t, parent.UID, current.UID)
+						require.Equal(t, parent.ResourceVersion, current.ResourceVersion)
+						_, err = peer.CompleteRepositoryDeletion(ctx, retained.Namespace, retained.Name, retained.ResourceVersion, retained.UID)
+						require.NoError(t, err, "the Repository controller can resume its retained UID without a name mapping")
+					}
+				}
+				require.NoError(t, complete(peer, version))
+				require.Equal(t, []string{repository.UID, repository.UID}, writer.calls)
+				_, err = e.store.GetRepository(ctx, repository.UID)
+				require.ErrorIs(t, err, datastore.ErrNotFound)
+				_, err = e.store.LookupRepository(ctx, repository.Namespace, repository.Name)
+				require.ErrorIs(t, err, datastore.ErrNotFound)
+				if parent != nil {
+					_, err = e.store.GetNamespaceByName(ctx, parent.Name)
+					require.ErrorIs(t, err, datastore.ErrNotFound)
+				}
+				require.NoError(t, complete(peer, version), "completed cleanup remains idempotent")
+				require.Len(t, writer.calls, 2, "completed cleanup must not touch storage again")
+			})
+		}
+	}
 }
 
 func TestInfrastructureDeletionDoesNotTreatArbitraryAbsenceAsSuccess(t *testing.T) {
@@ -356,19 +543,10 @@ func TestSystemRepositoryCannotBeDeletedByUser(t *testing.T) {
 func TestNamespaceDeletionRemovesManifestAndFinalizesEmptySystemRepository(t *testing.T) {
 	e := newCategoryLifecycleEnv(t)
 	ctx := context.Background()
-	const bootstrapUID = "00000000-0000-0000-0000-00000000b000"
 	const bootstrapRepo = "00000000-0000-0000-0000-00000000b001"
-	require.NoError(t, e.store.CreateNamespace(ctx, &datastore.Namespace{UID: bootstrapUID, Name: "gitstore-system"}))
-	require.NoError(t, e.store.CreateRepository(ctx, &datastore.Repository{UID: bootstrapRepo, Namespace: "gitstore-system", Name: "gitstore-system"}))
-	require.NoError(t, e.store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "gitstore-system", Name: "gitstore-system", RepositoryID: bootstrapRepo}))
-	ns, err := e.service.CreateNamespace(ctx, model.CreateNamespaceInput{
-		APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace",
-		Metadata: &model.NamespaceMetadataInput{Name: "removable"},
-		Spec:     &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
-	}, "alice")
-	require.NoError(t, err)
+	ns := createInfrastructureNamespace(t, e, "removable")
 	require.NoError(t, e.service.ProvisionSystemRepository(ctx, ns.Name, "controller"))
-	_, err = e.service.DeleteNamespace(ctx, ns)
+	_, err := e.service.DeleteNamespace(ctx, ns)
 	require.NoError(t, err)
 	_, err = e.git.ReadFile(ctx, bootstrapRepo, "namespaces/removable.md", "refs/heads/main")
 	require.Equal(t, codes.NotFound, status.Code(err))
@@ -380,10 +558,142 @@ func TestNamespaceDeletionRemovesManifestAndFinalizesEmptySystemRepository(t *te
 		_, err := e.service.CompleteNamespaceDeletion(ctx, current.Name, current.ResourceVersion, current.UID)
 		return err
 	})
+	mapping, err := e.store.LookupRepository(ctx, current.Name, SystemRepositoryName)
+	require.NoError(t, err)
+	system, err := e.store.GetRepository(ctx, mapping.RepositoryID)
+	require.NoError(t, err)
+	expected := current.ResourceVersion
+	current.Finalizers = append(current.Finalizers, "example.test/retain")
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.NoError(t, e.store.UpdateNamespace(ctx, current, expected))
+	_, err = e.service.CompleteNamespaceDeletion(ctx, current.Name, current.ResourceVersion, current.UID)
+	require.ErrorContains(t, err, "other finalizers")
+	_, err = e.service.CompleteRepositoryDeletion(ctx, system.Namespace, system.Name, system.ResourceVersion, system.UID)
+	require.ErrorContains(t, err, "other finalizers", "direct System Repository completion must honor the Namespace blocker")
+	preserved, err := e.store.GetRepository(ctx, system.UID)
+	require.NoError(t, err)
+	require.Equal(t, system.ResourceVersion, preserved.ResourceVersion)
+	require.Nil(t, preserved.DeletionTimestamp, "an unrelated Namespace finalizer must block System Repository cleanup")
+	require.Equal(t, system.Finalizers, preserved.Finalizers)
+	preservedNamespace, err := e.store.GetNamespace(ctx, current.UID)
+	require.NoError(t, err)
+	require.Equal(t, current.ResourceVersion, preservedNamespace.ResourceVersion)
+	require.Equal(t, current.Finalizers, preservedNamespace.Finalizers)
+	expected = current.ResourceVersion
+	current.Finalizers = []string{datastore.NamespaceForegroundDeletionFinalizer}
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.NoError(t, e.store.UpdateNamespace(ctx, current, expected))
 	_, err = e.service.CompleteNamespaceDeletion(ctx, current.Name, current.ResourceVersion, current.UID)
 	require.NoError(t, err)
 	_, err = e.store.GetNamespaceByName(ctx, current.Name)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 	_, err = e.store.LookupRepository(ctx, current.Name, "gitstore-system")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+type infrastructureCompletionReadHook struct {
+	GitWriter
+	afterRemovalRead func()
+}
+
+func (w *infrastructureCompletionReadHook) ReadFileForRepo(ctx context.Context, repositoryID, path, ref string) ([]byte, error) {
+	content, err := w.GitWriter.ReadFileForRepo(ctx, repositoryID, path, ref)
+	if status.Code(err) == codes.NotFound && w.afterRemovalRead != nil {
+		hook := w.afterRemovalRead
+		w.afterRemovalRead = nil
+		hook()
+	}
+	return content, err
+}
+
+type infrastructureCompletionNamespaceReadHook struct {
+	datastore.Datastore
+	name            string
+	reads           int
+	afterParentRead func()
+}
+
+func (s *infrastructureCompletionNamespaceReadHook) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
+	current, err := s.Datastore.GetNamespaceByName(ctx, name)
+	if err == nil && name == s.name {
+		s.reads++
+		if s.reads == 2 && s.afterParentRead != nil {
+			hook := s.afterParentRead
+			s.afterParentRead = nil
+			hook()
+		}
+	}
+	return current, err
+}
+
+func TestNamespaceCompletionPreservesReplacementAcrossSystemRepositorySelection(t *testing.T) {
+	for _, stage := range []string{"after_manifest_read", "after_parent_read"} {
+		t.Run(stage, func(t *testing.T) {
+			e := newCategoryLifecycleEnv(t)
+			ctx := t.Context()
+			const bootstrapUID = "00000000-0000-0000-0000-00000000b000"
+			const bootstrapRepo = "00000000-0000-0000-0000-00000000b001"
+			require.NoError(t, e.store.CreateNamespace(ctx, &datastore.Namespace{UID: bootstrapUID, Name: "gitstore-system"}))
+			require.NoError(t, e.store.CreateRepository(ctx, &datastore.Repository{UID: bootstrapRepo, Namespace: "gitstore-system", Name: "gitstore-system"}))
+			require.NoError(t, e.store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "gitstore-system", Name: "gitstore-system", RepositoryID: bootstrapRepo}))
+			input := model.CreateNamespaceInput{
+				APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace",
+				Metadata: &model.NamespaceMetadataInput{Name: "completion-replacement"},
+				Spec:     &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
+			}
+			original, err := e.service.CreateNamespace(ctx, input, "alice")
+			require.NoError(t, err)
+			require.NoError(t, e.service.ProvisionSystemRepository(ctx, original.Name, "controller"))
+			_, err = e.service.DeleteNamespace(ctx, original)
+			require.NoError(t, err)
+			terminating, err := e.store.GetNamespaceByName(ctx, original.Name)
+			require.NoError(t, err)
+			peer, err := NewService(ServiceDeps{Store: e.store, GitWriter: e.git, Logger: zap.NewNop(), CommittedManifestAdmitter: e.catalog})
+			require.NoError(t, err)
+			var replacement *datastore.Namespace
+			var replacementRepository *datastore.Repository
+			replaced := false
+			replace := func() {
+				_, err := peer.CompleteNamespaceDeletion(ctx, terminating.Name, terminating.ResourceVersion, terminating.UID)
+				require.NoError(t, err)
+				replacement, err = peer.CreateNamespace(ctx, input, "mallory")
+				require.NoError(t, err)
+				require.NotEqual(t, original.UID, replacement.UID)
+				require.NoError(t, peer.ProvisionSystemRepository(ctx, replacement.Name, "controller"))
+				mapping, err := e.store.LookupRepository(ctx, replacement.Name, SystemRepositoryName)
+				require.NoError(t, err)
+				replacementRepository, err = e.store.GetRepository(ctx, mapping.RepositoryID)
+				require.NoError(t, err)
+				require.Nil(t, replacementRepository.DeletionTimestamp)
+				replaced = true
+			}
+			if stage == "after_manifest_read" {
+				e.service.gitWriter = &infrastructureCompletionReadHook{GitWriter: e.git, afterRemovalRead: replace}
+			} else {
+				e.service.store = &infrastructureCompletionNamespaceReadHook{
+					Datastore: e.store, name: terminating.Name, afterParentRead: replace,
+				}
+			}
+			observed, err := e.service.CompleteNamespaceDeletion(ctx, terminating.Name, terminating.ResourceVersion, terminating.UID)
+			require.True(t, replaced, "peer replacement must occur at the selected interleaving")
+			if stage == "after_manifest_read" {
+				require.ErrorIs(t, err, datastore.ErrConflict)
+				require.NotNil(t, observed)
+				require.Equal(t, replacement.UID, observed.UID)
+				require.Equal(t, replacement.ResourceVersion, observed.ResourceVersion)
+			} else {
+				require.ErrorIs(t, err, datastore.ErrNotFound, "the captured old System Repository must fail its UID-bound CAS")
+			}
+			require.NotNil(t, replacementRepository)
+			current, getErr := e.store.GetRepository(ctx, replacementRepository.UID)
+			require.NoError(t, getErr)
+			require.Equal(t, replacementRepository.ResourceVersion, current.ResourceVersion)
+			require.Equal(t, replacementRepository.Finalizers, current.Finalizers)
+			require.Nil(t, current.DeletionTimestamp, "stale Namespace completion must not terminate the replacement's System Repository")
+			namespace, getErr := e.store.GetNamespaceByName(ctx, replacement.Name)
+			require.NoError(t, getErr)
+			require.Equal(t, replacement.UID, namespace.UID)
+			require.Nil(t, namespace.DeletionTimestamp)
+		})
+	}
 }

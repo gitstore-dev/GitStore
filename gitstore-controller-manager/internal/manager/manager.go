@@ -418,7 +418,7 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 	}
 
 	// Call reconciler via safeReconcile so panics are converted to TransientFailure.
-	result := safeReconcile(ks.reg.Reconciler, key)(ctx)
+	result := safeReconcile(ks.reg.Reconciler, key, log)(ctx)
 
 	// Check for panic on the first call: emit structured log and increment the
 	// transient_failure metric immediately (FR-004). The metric is owned here so
@@ -547,7 +547,7 @@ func (m *Manager) handleTransient(
 
 	retryCfg.MaxAttempts = retryAttempts
 	res, attempts, lastErr := retry.RunWithRetry(ctx, key, retryCfg, 0, log, func(rctx context.Context) error {
-		inner := safeReconcile(ks.reg.Reconciler, key)(rctx)
+		inner := safeReconcile(ks.reg.Reconciler, key, log)(rctx)
 		_ = m.logPanic(log, key, inner)
 		switch iv := inner.(type) {
 		case types.TransientFailure:

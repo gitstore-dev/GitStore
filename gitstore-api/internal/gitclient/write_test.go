@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
-// Unit tests for gRPC write client methods (CommitFile, DeleteFile, CreateTag).
-// Uses bufconn — no Docker required.
+// Write client tests use bufconn by default; the deployed probe is explicitly opt-in.
 
 package gitclient_test
 
@@ -18,8 +17,10 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -231,6 +232,113 @@ func TestDeleteFile_Preconditions(t *testing.T) {
 			})
 			_, err := c.DeleteFileForRepo(context.Background(), "selected-repository", p)
 			assert.Equal(t, codes.Aborted, status.Code(err))
+		})
+	}
+}
+
+func TestLostSuccessfulRPCReplyFixture(t *testing.T) {
+	intercept, receipts := testutil.LoseFirstSuccessfulGitReply(gitv1.GitService_DeleteFile_FullMethodName)
+	calls := 0
+	invoke := func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
+		calls++
+		if calls == 1 {
+			return status.Error(codes.Aborted, "preexisting conflict")
+		}
+		return nil
+	}
+	for _, expected := range []codes.Code{codes.Aborted, codes.Unavailable, codes.OK} {
+		err := intercept(t.Context(), gitv1.GitService_DeleteFile_FullMethodName, nil,
+			&gitv1.DeleteFileResponse{CommitSha: "receipt"}, nil, invoke)
+		require.Equal(t, expected, status.Code(err))
+	}
+	require.Equal(t, 3, calls, "the fixture must neither retry nor suppress an upstream failure")
+	require.Len(t, receipts, 1)
+	require.Equal(t, "receipt", <-receipts)
+}
+
+func TestGitRPCDeletionRecoveryDeployed(t *testing.T) {
+	uri, secret := testutil.NativeGitTestConfiguration(t)
+	for _, method := range []string{gitv1.GitService_DeleteFile_FullMethodName, gitv1.GitService_DeleteRepository_FullMethodName} {
+		t.Run(strings.TrimPrefix(method, "/gitstore.git.v1.GitService/"), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			client := func(options ...grpc.DialOption) *gitclient.Client {
+				c, err := gitclient.NewClientWithAddr(uri, secret, options...)
+				require.NoError(t, err)
+				c.Registry = auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil)
+				t.Cleanup(func() { require.NoError(t, c.Close()) })
+				return c
+			}
+			intercept, receipts := testutil.LoseFirstSuccessfulGitReply(method)
+			writer := client(grpc.WithChainUnaryInterceptor(intercept))
+			cleaner := client()
+			provision := func() string {
+				uid := uuid.NewString()
+				t.Cleanup(func() {
+					cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					require.NoError(t, cleaner.DeleteRepository(cleanup, uid))
+				})
+				_, err := cleaner.CreateRepository(ctx, uid, "")
+				require.NoError(t, err)
+				return uid
+			}
+			uid := provision()
+			content := []byte("disposable native receipt fixture\n")
+			write := func(c *gitclient.Client, repository, path string) string {
+				sha, err := c.CommitFileForRepo(ctx, repository, gitclient.CommitFileParams{
+					Path: path, Content: content, CommitMessage: "native deletion recovery fixture",
+					AuthorName: "GitStore test", AuthorEmail: "native-test@gitstore.invalid",
+				})
+				require.NoError(t, err)
+				require.Len(t, sha, 40)
+				return sha
+			}
+			initial := write(cleaner, uid, "receipt.md")
+			if method == gitv1.GitService_DeleteFile_FullMethodName {
+				params := gitclient.DeleteFileParams{Path: "receipt.md", RefName: "refs/heads/main",
+					ExpectedCommitSHA: initial, CommitMessage: "remove native receipt fixture",
+					AuthorName: "GitStore test", AuthorEmail: "native-test@gitstore.invalid"}
+				sha, err := writer.DeleteFileForRepo(ctx, uid, params)
+				require.Equal(t, codes.Unavailable, status.Code(err))
+				require.Empty(t, sha, "the caller must not receive the discarded success")
+				require.Len(t, receipts, 1)
+				removed := <-receipts
+				require.Len(t, removed, 40)
+				peer := client()
+				head := write(peer, uid, "unrelated.md")
+				require.NotEqual(t, removed, head)
+				for range 2 {
+					recovered, err := peer.DeleteFileForRepo(ctx, uid, params)
+					require.NoError(t, err)
+					require.Equal(t, removed, recovered, "retry must recover the original removal, not the later head")
+					actual, err := peer.ResolveRefForRepo(ctx, uid, "refs/heads/main")
+					require.NoError(t, err)
+					require.Equal(t, head, actual, "receipt retry must not author another commit")
+				}
+				_, err = peer.ReadFileForRepo(ctx, uid, "receipt.md", head)
+				require.Equal(t, codes.NotFound, status.Code(err))
+				restored := write(peer, uid, "receipt.md")
+				_, err = peer.DeleteFileForRepo(ctx, uid, params)
+				require.Equal(t, codes.FailedPrecondition, status.Code(err))
+				actual, err := peer.ReadFileForRepo(ctx, uid, "receipt.md", restored)
+				require.NoError(t, err)
+				require.Equal(t, content, actual, "stale receipt must not delete restored content")
+			} else {
+				require.Equal(t, codes.Unavailable, status.Code(writer.DeleteRepository(ctx, uid)))
+				require.Len(t, receipts, 1)
+				require.Equal(t, uid, <-receipts)
+				peer := client()
+				require.NoError(t, peer.DeleteRepository(ctx, uid))
+				_, err := peer.CreateRepository(ctx, uid, "")
+				require.Equal(t, codes.FailedPrecondition, status.Code(err), "a deleted UID must stay tombstoned")
+				replacement := provision()
+				head := write(peer, replacement, "receipt.md")
+				require.NoError(t, peer.DeleteRepository(ctx, uid))
+				actual, err := peer.ReadFileForRepo(ctx, replacement, "receipt.md", head)
+				require.NoError(t, err)
+				require.Equal(t, content, actual, "stale cleanup must not touch replacement-UID storage")
+			}
 		})
 	}
 }

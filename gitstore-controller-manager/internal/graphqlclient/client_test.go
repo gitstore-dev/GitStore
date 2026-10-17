@@ -22,7 +22,71 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
+
+func TestClientWatchHandshakeSpanEndsBeforeWatchAndPropagates(t *testing.T) {
+	previous := otel.GetTracerProvider()
+	defer otel.SetTracerProvider(previous)
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer provider.Shutdown(t.Context())
+	otel.SetTracerProvider(provider)
+	propagated := make(chan trace.SpanContext, 1)
+	release := make(chan struct{})
+	upgrader := websocket.Upgrader{Subprotocols: []string{"graphql-transport-ws"}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := propagation.TraceContext{}.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		propagated <- trace.SpanContextFromContext(ctx)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+		var message map[string]any
+		require.NoError(t, conn.ReadJSON(&message))
+		require.NoError(t, conn.WriteJSON(map[string]string{"type": "connection_ack"}))
+		require.NoError(t, conn.ReadJSON(&message))
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+	ctx, parent := otel.Tracer("test").Start(t.Context(), "reconcile")
+	sub, err := graphqlclient.New(server.URL, graphqlclient.NewStaticToken("private")).Subscribe(ctx, "subscription { private }", nil)
+	require.NoError(t, err)
+	defer sub.Stop()
+	spans := recorder.Ended()
+	require.Len(t, spans, 1, "handshake span must end while subscription remains open")
+	require.Equal(t, "api.watch.connect", spans[0].Name())
+	require.Equal(t, parent.SpanContext().SpanID(), spans[0].Parent().SpanID())
+	require.Equal(t, spans[0].SpanContext().SpanID(), (<-propagated).SpanID())
+	require.Empty(t, spans[0].Attributes(), "do not export URLs, auth or documents")
+	sub.Stop()
+	parent.End()
+	require.Len(t, recorder.Ended(), 2)
+}
+
+func TestClientDisabledTelemetryAndCancelledHTTPStayNoop(t *testing.T) {
+	previous := otel.GetTracerProvider()
+	defer otel.SetTracerProvider(previous)
+	otel.SetTracerProvider(noop.NewTracerProvider())
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		require.Empty(t, r.Header.Get("Traceparent"))
+		_, _ = io.WriteString(w, `{"data":{}}`)
+	}))
+	defer server.Close()
+	client := graphqlclient.New(server.URL, graphqlclient.NewStaticToken("private"))
+	require.NoError(t, client.Query(t.Context(), "query { private }", nil, nil))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, client.Query(ctx, "query { private }", nil, nil), context.Canceled)
+	require.EqualValues(t, 1, calls.Load())
+}
 
 // ── Query / Mutate ──────────────────────────────────────────────────────────
 

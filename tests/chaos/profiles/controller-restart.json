@@ -2,5 +2,7 @@
   "schemaVersion": 1,
   "description": "Restart one explicitly selected test-owned controller replica.",
   "action": "restart",
-  "expectedRecovery": "60s"
+  "expectedRecovery": "60s",
+  "readinessKind": "controller",
+  "readinessURL": "http://127.0.0.1:5001/health"
 }

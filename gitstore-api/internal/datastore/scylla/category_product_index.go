@@ -298,6 +298,7 @@ func collectCategoryProductPage(
 	}
 	queries, lookups := categoryProductShardCount, 0
 	items := make([]*datastore.Product, 0, limit+1)
+	seen := make(map[string]struct{}, limit+1)
 	for len(items) < limit+1 {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -344,6 +345,10 @@ func collectCategoryProductPage(
 			return nil, fmt.Errorf("scylla: hydrate listed category product: %w", err)
 		}
 		if product.Namespace == namespace && product.CreationTimestamp.Equal(row.CreationTimestamp) {
+			if _, duplicate := seen[product.UID]; duplicate {
+				return nil, fmt.Errorf("%w: duplicate category product membership; repair stale projections", datastore.ErrProjectionNotReady)
+			}
+			seen[product.UID] = struct{}{}
 			items = append(items, product)
 		}
 	}

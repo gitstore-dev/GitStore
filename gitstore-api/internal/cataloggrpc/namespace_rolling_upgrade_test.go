@@ -17,6 +17,7 @@ func TestValidationProtobufFieldNumbersAndKindsRemainStable(t *testing.T) {
 	assertProtoField(t, (&catalogv1.ValidateResourcesRequest{}).ProtoReflect().Descriptor(), "repository_id", 15, protoreflect.StringKind, false)
 	assertProtoField(t, (&catalogv1.ValidateResourcesResponse{}).ProtoReflect().Descriptor(), "accepted", 1, protoreflect.BoolKind, false)
 	assertProtoField(t, (&catalogv1.ValidateResourcesResponse{}).ProtoReflect().Descriptor(), "errors", 2, protoreflect.MessageKind, true)
+	assertProtoField(t, (&catalogv1.ValidateResourcesResponse{}).ProtoReflect().Descriptor(), "resource_deletion_validation_complete", 3, protoreflect.BoolKind, false)
 	assertProtoField(t, (&catalogv1.ResourceValidationTree{}).ProtoReflect().Descriptor(), "old_blobs", 1, protoreflect.MessageKind, true)
 	assertProtoField(t, (&catalogv1.ResourceValidationTree{}).ProtoReflect().Descriptor(), "proposed_blobs", 2, protoreflect.MessageKind, true)
 	assertProtoField(t, (&catalogv1.ValidateResourceDeletionsRequest{}).ProtoReflect().Descriptor(), "trees", 1, protoreflect.MessageKind, true)

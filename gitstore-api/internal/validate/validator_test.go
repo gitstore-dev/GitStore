@@ -441,6 +441,70 @@ func TestParse_NoFrontmatterSkipped(t *testing.T) {
 	assert.NotEmpty(t, body)
 }
 
+func BenchmarkParserProductFrontmatter(b *testing.B) {
+	document, err := testFS.ReadFile("testdata/macbook-pro-64gb-1tb-ssd-m4.md")
+	require.NoError(b, err)
+	parser := validate.NewParser()
+	_, _, err = parser.ParseResource(strings.NewReader(string(document)))
+	require.NoError(b, err)
+	text := string(document)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		resource, body, err := parser.ParseResource(strings.NewReader(text))
+		if err != nil || resource == nil || resource.Product == nil || len(body) == 0 {
+			b.Fatal("valid Product parsing changed", err)
+		}
+	}
+}
+
+func TestParseResourceKindProbePreservesYAMLSemantics(t *testing.T) {
+	for _, tt := range []struct {
+		name, frontmatter, wantError string
+	}{
+		{"empty", "", "missing apiVersion"},
+		{"duplicate kind", "apiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nkind: File\nspec: {}", "already defined"},
+		{"invalid kind type", "apiVersion: catalog.gitstore.dev/v1beta1\nkind: [Product]\nspec: {}", "cannot unmarshal !!seq into string"},
+		{"precheck precedence", "apiVersion: catalog.gitstore.dev/v1beta1\nkind: [Product]\nspec: {}\nstatus: {}", "status is system-managed"},
+		{"numeric kind", "apiVersion: catalog.gitstore.dev/v1beta1\nkind: 123\nspec: {}", `kind "123" is not a recognized`},
+		{"null kind", "apiVersion: catalog.gitstore.dev/v1beta1\nkind: null\nspec: {}", `kind "" is not a recognized`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resource, body, err := validate.NewParser().ParseResource(strings.NewReader("---\n" + tt.frontmatter + "\n---\nbody"))
+			require.ErrorContains(t, err, tt.wantError)
+			require.Nil(t, resource)
+			require.Nil(t, body)
+		})
+	}
+}
+
+func TestParseResourceFrontmatterTreeIsRequestLocal(t *testing.T) {
+	parser := validate.NewParser()
+	for i := range 16 {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			t.Parallel()
+			name := fmt.Sprintf("product-%d", i)
+			document := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: &resourceKind Product\nmetadata:\n  name: " + name +
+				"\nspec:\n  title: *resourceKind\n---\nbody " + name
+			for range 20 {
+				resource, body, err := parser.ParseResource(strings.NewReader(document))
+				require.NoError(t, err)
+				require.Equal(t, name, resource.Product.Metadata.Name)
+				require.Equal(t, "Product", resource.Product.Spec.Title)
+				require.Equal(t, "body "+name, string(body))
+			}
+		})
+	}
+}
+
+func TestParseResourceTypedBindingRetainsFullHeaderAndBody(t *testing.T) {
+	document := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: product\nspec:\n  title: Part---Two\n---\n# Body\n\n---\nuntouched\n"
+	resource, body, err := validate.NewParser().ParseResource(strings.NewReader(document))
+	require.NoError(t, err)
+	require.Equal(t, "Part---Two", resource.Product.Spec.Title)
+	require.Equal(t, "# Body\n\n---\nuntouched\n", string(body))
+}
+
 // ── US4: Spec field constraints (016-product-spec-hydration) ─────────────────
 
 func TestParse_SpecTitle_TooLong_Rejected(t *testing.T) {

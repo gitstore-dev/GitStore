@@ -172,8 +172,38 @@ datastore_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=da
 scylla_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=127.0.0.1:9142)"
 [[ "${scylla_tests}" == *"-tags scylla"* && "${scylla_tests}" == *"127.0.0.1:9142"* ]]
 secret_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=secret-integration)"
+git_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=git-integration \
+  GIT_TEST_OWNED_DEPLOYMENT=1 GIT_TEST_URI=owned-git:50051 GIT_TEST_HMAC_SECRET_FILE=/test-owned/grpc-secret)"
+[[ "${git_tests}" == *"TestGitRPCDeletionRecoveryDeployed"* &&
+   "${git_tests}" == *'GIT_TEST_URI="owned-git:50051"'* &&
+   "${git_tests}" == *'GIT_TEST_HMAC_SECRET_FILE="/test-owned/grpc-secret"'* ]]
+[[ "${git_tests}" != *"TestScylla_GitDeletionSagaRecoveryNative"* ]]
+git_scylla_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=git-integration DATASTORE=scylla \
+  SCYLLA_TEST_ADDR=owned-scylla:9042 GIT_TEST_OWNED_DEPLOYMENT=1 \
+  GIT_TEST_URI=owned-git:50051 GIT_TEST_HMAC_SECRET_FILE=/test-owned/grpc-secret)"
+[[ "${git_scylla_tests}" == *"TestGitRPCDeletionRecoveryDeployed"* &&
+   "${git_scylla_tests}" == *"TestScylla_GitDeletionSagaRecoveryNative"* &&
+   "${git_scylla_tests}" == *'GITSTORE_TEST_SCYLLA_ADDR="owned-scylla:9042"'* &&
+   "${git_scylla_tests}" == *"-race -tags scylla"* ]]
+if make --no-print-directory -C "${repo_root}" test TARGET=git-integration DATASTORE=unknown \
+  GIT_TEST_OWNED_DEPLOYMENT=1 GIT_TEST_URI=owned-git:50051 \
+  GIT_TEST_HMAC_SECRET_FILE=/test-owned/grpc-secret >"${test_dir}/git-datastore.log" 2>&1; then
+  echo "native Git integration accepted an unknown datastore" >&2; exit 1
+fi
+for ownership in 0 ''; do
+  if make --no-print-directory -C "${repo_root}" test TARGET=git-integration \
+    GIT_TEST_OWNED_DEPLOYMENT="${ownership}" GIT_TEST_URI=owned-git:50051 \
+    GIT_TEST_HMAC_SECRET_FILE=/test-owned/grpc-secret >"${test_dir}/git-ownership.log" 2>&1; then
+    echo "native Git integration ran without explicit ownership" >&2; exit 1
+  fi
+done
+if make --no-print-directory -C "${repo_root}" test TARGET=git-integration \
+  GIT_TEST_OWNED_DEPLOYMENT=1 >"${test_dir}/git-inputs.log" 2>&1; then
+  echo "native Git integration accepted missing connection/credential inputs" >&2; exit 1
+fi
 [[ "${secret_tests}" == *"SECRET_TEST_OWNED_DEPLOYMENT=1 is required"* &&
-   "${secret_tests}" == *"TestSecretBootstrapRotationDeployed"* ]]
+   "${secret_tests}" == *"TestSecretBootstrapRotationDeployed"* &&
+   "${secret_tests}" == *"TestServiceAccountReplicaLifecycleDeployed"* ]]
 [[ "${secret_tests}" != *'SECRET_TEST_NAMESPACE="'* ]]
 for legacy_namespace in controllers ''; do
   if make --no-print-directory -C "${repo_root}" test TARGET=secret-integration \

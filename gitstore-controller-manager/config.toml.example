@@ -35,3 +35,7 @@ resync_interval = "10m"
 [log]
 level = "info"
 format = "json"
+
+[observability.otlp]
+uri = ""
+trace_sample_ratio = 0.05

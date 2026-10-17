@@ -7,10 +7,8 @@ package resolver
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
-	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"go.uber.org/zap"
@@ -62,21 +60,15 @@ func (r *queryResolver) Collection(ctx context.Context, by model.CollectionBy) (
 			return nil, err
 		}
 		c, err := r.service.GetCollectionByUID(ctx, uid)
-		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, nil
-		}
 		if err != nil {
-			return nil, fmt.Errorf("collection lookup by id: %w", err)
+			return nil, nodeLookupError(nodeKindCollection, err)
 		}
 		return DatastoreCollectionToGraphQL(c), nil
 	}
 	if by.NamespacePath != nil {
 		c, err := r.service.GetCollectionByName(ctx, by.NamespacePath.Namespace, by.NamespacePath.Name)
-		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, nil
-		}
 		if err != nil {
-			return nil, fmt.Errorf("collection lookup by name: %w", err)
+			return nil, nodeLookupError(nodeKindCollection, err)
 		}
 		return DatastoreCollectionToGraphQL(c), nil
 	}

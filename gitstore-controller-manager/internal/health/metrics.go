@@ -59,6 +59,11 @@ var (
 		Help: "Total reconcile attempts per kind and result.",
 	}, []string{"kind", "result"})
 
+	ReconcileDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "gitstore_controller_reconcile_duration_seconds",
+		Help: "Duration of individual reconcile attempts, excluding retry backoff and queue wait.",
+	}, []string{"kind", "result"})
+
 	DependencyDeferrals = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "gitstore_controller_dependency_deferrals_total",
 		Help: "Reconciliation deferral attempts for shared dependencies; not unique items or durable acknowledgements.",

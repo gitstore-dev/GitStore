@@ -162,7 +162,7 @@ func (s *Service) GetProductByUID(ctx context.Context, uid string) (*datastore.P
 func (s *Service) GetProductByName(ctx context.Context, namespace, name string) (*datastore.Product, error) {
 	p, err := s.store.GetProductByName(ctx, namespace, name)
 	if err != nil {
-		return nil, fmt.Errorf("product not found: %s/%s", namespace, name)
+		return nil, fmt.Errorf("product not found: %s/%s: %w", namespace, name, err)
 	}
 	return p, nil
 }
@@ -424,7 +424,7 @@ func (s *Service) GetCategoryTaxonomyByUID(ctx context.Context, uid string) (*da
 func (s *Service) GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error) {
 	c, err := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
 	if err != nil {
-		return nil, fmt.Errorf("category not found: %s/%s", namespace, name)
+		return nil, fmt.Errorf("category not found: %s/%s: %w", namespace, name, err)
 	}
 	return c, nil
 }
@@ -604,7 +604,7 @@ func (s *Service) GetCollectionByUID(ctx context.Context, uid string) (*datastor
 func (s *Service) GetCollectionByName(ctx context.Context, namespace, name string) (*datastore.Collection, error) {
 	c, err := s.store.GetCollectionByName(ctx, namespace, name)
 	if err != nil {
-		return nil, fmt.Errorf("collection not found: %s/%s", namespace, name)
+		return nil, fmt.Errorf("collection not found: %s/%s: %w", namespace, name, err)
 	}
 	return c, nil
 }
@@ -1375,9 +1375,11 @@ func (s *Service) GetNamespaceByName(ctx context.Context, name string) (*datasto
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
 			s.logger.Debug("namespace not found", zap.String("name", name))
-			return nil, gqlerror.Errorf("namespace %q not found", name)
+			result := admission.ResourceNotFound("Namespace", fmt.Sprintf("namespace %q not found", name))
+			result.Err = err
+			return nil, result
 		}
-		return nil, gqlerror.Errorf("failed to retrieve namespace")
+		return nil, &gqlerror.Error{Message: "failed to retrieve namespace", Err: err}
 	}
 	return ns, nil
 }
@@ -1396,7 +1398,9 @@ func (s *Service) GetNamespaceByID(ctx context.Context, id string) (*datastore.N
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
 			s.logger.Debug("namespace not found", zap.String("id", id))
-			return nil, &gqlerror.Error{Message: fmt.Sprintf("namespace with id %q not found", id), Err: err}
+			result := admission.ResourceNotFound("Namespace", fmt.Sprintf("namespace with id %q not found", id))
+			result.Err = err
+			return nil, result
 		}
 		return nil, &gqlerror.Error{Message: "failed to retrieve namespace", Err: err}
 	}
@@ -1537,10 +1541,20 @@ func (s *Service) CompleteNamespaceDeletion(ctx context.Context, name, expectedR
 		!containsString(current.Finalizers, datastore.NamespaceForegroundDeletionFinalizer) {
 		return nil, gqlerror.Errorf("namespace %q is not awaiting foreground deletion", name)
 	}
+	if len(current.Finalizers) != 1 {
+		return current, gqlerror.Errorf("namespace has other finalizers")
+	}
 	if err := s.verifyInfrastructureRemoval(ctx, current.Status, current.UID); err != nil {
 		return current, err
 	}
 	if err := s.finalizeNamespaceSystemRepository(ctx, current); err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			latest, getErr := s.store.GetNamespaceByName(ctx, name)
+			if getErr != nil {
+				return nil, fmt.Errorf("read namespace after system repository completion conflict: %w", getErr)
+			}
+			return latest, datastore.ErrConflict
+		}
 		return current, err
 	}
 	hasRepos, err := s.store.HasRepositories(ctx, current.Name)
@@ -1549,9 +1563,6 @@ func (s *Service) CompleteNamespaceDeletion(ctx context.Context, name, expectedR
 	}
 	if hasRepos {
 		return nil, gqlerror.Errorf("namespace %q still contains repositories", name)
-	}
-	if len(current.Finalizers) != 1 {
-		return current, gqlerror.Errorf("namespace has other finalizers")
 	}
 	if err := s.store.DeleteNamespaceWithResourceVersion(ctx, current.ID, expectedResourceVersion); err != nil {
 		if errors.Is(err, datastore.ErrConflict) {
@@ -1961,6 +1972,9 @@ func (s *Service) CompleteRepositoryDeletion(ctx context.Context, namespace, nam
 		}
 		if parent.DeletionTimestamp == nil {
 			return repo, gqlerror.Errorf("system repository cleanup requires terminating namespace")
+		}
+		if len(parent.Finalizers) > 1 {
+			return repo, gqlerror.Errorf("namespace has other finalizers")
 		}
 	} else if err := s.verifyInfrastructureRemoval(ctx, repo.Status, repo.UID); err != nil {
 		return repo, err

@@ -300,6 +300,21 @@ uses conditional projection mutations, and performs a post-repair audit. Never
 reuse an old plan after a concurrent-writer error; audit again. Full operator
 procedure: [`runbooks/scylla-projection-repair.md`](runbooks/scylla-projection-repair.md).
 
+Datastore contracts use fresh, isolated test keyspaces and leave application
+keyspaces untouched. Both Scylla test suites default to replication factor 1.
+For an owned three-node test cluster, select replication factor 3 explicitly:
+
+```bash
+GITSTORE_TEST_SCYLLA_REPLICATION_FACTOR=3 \
+  make test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=127.0.0.1:9042
+```
+
+The contract fixture verifies the server's actual keyspace replication settings
+and reports cleanup errors. Its schema-only sessions allow up to one minute per
+operation for replicated create/drop work; datastore request timeouts and service
+deadlines are unchanged. This is functional contract coverage, not a
+sustained-load or capacity gate.
+
 The capacity test is intentionally opt-in and requires a dedicated preloaded
 Scylla environment:
 

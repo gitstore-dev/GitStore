@@ -50,8 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let telemetry = gitstore::init_observability(&cfg.log, &cfg.observability.otlp)
         .map_err(|e| format!("Failed to initialize logger: {e}"))?;
-    let metrics_handle =
-        gitstore::grpc::metrics::start_metrics(&cfg.git_service.metrics.listen_addr).await?;
+    let metrics_handle = gitstore::grpc::metrics::start_metrics(&cfg.git_service.metrics).await?;
 
     info!(
         grpc_port = cfg.git_service.grpc_port,

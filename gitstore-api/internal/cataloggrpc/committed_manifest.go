@@ -6,6 +6,7 @@ package cataloggrpc
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -127,8 +128,8 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 		return nil, fmt.Errorf("committed manifest has no supported resource")
 	}
 	isCurrent := func(ctx context.Context) (bool, error) {
-		if entry.identity.Kind == "Repository" {
-			return s.isCommittedRepositoryCurrent(ctx, req)
+		if entry.identity.Kind == "Repository" || entry.identity.Kind == "Namespace" {
+			return s.isCommittedManifestCurrent(ctx, req)
 		}
 		return s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
 	}
@@ -153,15 +154,15 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 	now := s.clock.Now().UTC()
 	superseded := false
 	admCtx := AdmissionContext{
-		RepositoryID:      req.RepositoryID,
-		Namespace:         req.Namespace,
-		ActorSubject:      actor,
-		CommitSHA:         commitSHA,
-		RefName:           req.RefName,
-		Revision:          strings.TrimPrefix(req.RefName, "refs/heads/") + "@sha1:" + commitSHA,
-		Now:               now,
-		superseded:        &superseded,
-		repositoryCurrent: isCurrent,
+		RepositoryID:    req.RepositoryID,
+		Namespace:       req.Namespace,
+		ActorSubject:    actor,
+		CommitSHA:       commitSHA,
+		RefName:         req.RefName,
+		Revision:        strings.TrimPrefix(req.RefName, "refs/heads/") + "@sha1:" + commitSHA,
+		Now:             now,
+		superseded:      &superseded,
+		manifestCurrent: isCurrent,
 	}
 	ops := map[string]resourceAdmissionOperation{entry.identity.key(): {
 		operation: req.Operation,
@@ -221,28 +222,34 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 	return result, nil
 }
 
-func (s *Server) isRepositoryAdmissionCurrent(ctx context.Context, admCtx AdmissionContext) (bool, error) {
-	if admCtx.repositoryCurrent != nil {
-		return admCtx.repositoryCurrent(ctx)
+func (s *Server) isManifestAdmissionCurrent(ctx context.Context, admCtx AdmissionContext) (bool, error) {
+	if admCtx.manifestCurrent != nil {
+		return admCtx.manifestCurrent(ctx)
 	}
 	return s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA)
 }
 
-func (s *Server) isCommittedRepositoryCurrent(ctx context.Context, req admission.CommittedManifestRequest) (bool, error) {
-	reader, ok := s.git.(interface {
-		ReadCurrentUnchangedFile(context.Context, string, string, string, string) (bool, []byte, error)
-	})
+type committedManifestHistoryReader interface {
+	ReadCurrentUnchangedFile(context.Context, string, string, string, string) (bool, []byte, error)
+}
+
+func (s *Server) isCommittedManifestCurrent(ctx context.Context, req admission.CommittedManifestRequest) (bool, error) {
+	return s.isCommittedManifestSourceCurrent(ctx, req, sha256.Sum256(req.Content))
+}
+
+func (s *Server) isCommittedManifestSourceCurrent(ctx context.Context, req admission.CommittedManifestRequest, sourceHash [sha256.Size]byte) (bool, error) {
+	reader, ok := s.git.(committedManifestHistoryReader)
 	if !ok {
-		return false, fmt.Errorf("git reader cannot prove current unchanged Repository history")
+		return false, fmt.Errorf("git reader cannot prove current unchanged manifest history")
 	}
 	atAncestor, content, err := reader.ReadCurrentUnchangedFile(ctx, req.RepositoryID, req.Path, req.RefName, req.CommitSHA)
 	if err != nil {
 		if status.Code(err) == codes.Aborted || status.Code(err) == codes.NotFound {
 			return false, nil
 		}
-		return false, fmt.Errorf("prove committed Repository history: %w", err)
+		return false, fmt.Errorf("prove committed manifest history: %w", err)
 	}
-	return atAncestor || bytes.Equal(content, req.Content), nil
+	return atAncestor || sha256.Sum256(content) == sourceHash, nil
 }
 
 // repairCommittedManifest retries only while this caller's commit remains the
@@ -440,11 +447,7 @@ func (s *Server) admitCommittedProductDeletion(ctx context.Context, req admissio
 	if product.RepositoryID != req.RepositoryID || product.SourcePath != req.Path {
 		return nil, fmt.Errorf("committed Product deletion provenance does not match")
 	}
-	lifecycle, ok := s.store.(datastore.ProductLifecycleStore)
-	if !ok {
-		return nil, fmt.Errorf("product lifecycle datastore is unavailable")
-	}
-	if _, err := lifecycle.MarkProductTerminating(ctx, product.UID, product.ResourceVersion, "gitstore.dev/foreground-deletion", s.clock.Now().UTC()); err != nil {
+	if err := s.markProductDeletion(ctx, product); err != nil {
 		return nil, err
 	}
 	return &admission.CommittedManifestResult{Kind: "Product", Namespace: product.Namespace, Name: product.Name, CommitSHA: req.CommitSHA}, nil

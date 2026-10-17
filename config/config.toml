@@ -18,7 +18,7 @@ timeout = "10s"
 branch_pattern = "^refs/heads/main$"
 
 [git_service.metrics]
-listen_addr = ""
+uri = ""
 
 [api]
 port = 4000
@@ -30,7 +30,7 @@ per_second = 50
 burst = 100
 
 [api.profiling]
-listen_addr = ""
+uri = ""
 
 [api.git_service]
 uri = "dns:///git-service:50051"
@@ -80,6 +80,9 @@ policy_file = "/etc/gitstore/policy.yaml"
 port = 5001
 api_uri = "http://api:4000/graphql"
 
+[controller.profiling]
+uri = ""
+
 [controller.api_client.rate_limit]
 # Shared across all reconciliation kinds; leave room under the API's IP budget
 # for credential renewal. Replicas sharing an egress IP must share that budget.
@@ -123,5 +126,6 @@ level = "info"
 format = "json"
 
 [observability.otlp]
-endpoint = ""
+# Shared by the API, controller-manager and Git service.
+uri = ""
 trace_sample_ratio = 0.05

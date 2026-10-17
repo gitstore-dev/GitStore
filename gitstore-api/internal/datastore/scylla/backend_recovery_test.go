@@ -9,19 +9,395 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
+	"testing/synctest"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gocql/gocql"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/scylladb/gocqlx/v3/migrate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
+
+type fileCASPhaseStore struct {
+	datastore.Datastore
+}
+
+func (*fileCASPhaseStore) WithCatalogMutationBatch(ctx context.Context, _ string, operation func(context.Context) error) error {
+	return operation(ctx)
+}
+
+func filePhaseObservation(t *testing.T, registry *prometheus.Registry, operation string) (uint64, float64, float64) {
+	t.Helper()
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	var count uint64
+	var elapsed, failures float64
+	for _, family := range families {
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() != "operation" || label.GetValue() != operation {
+					continue
+				}
+				switch family.GetName() {
+				case "gitstore_datastore_operation_duration_seconds":
+					count += metric.GetHistogram().GetSampleCount()
+					elapsed += metric.GetHistogram().GetSampleSum()
+				case "gitstore_datastore_operation_errors_total":
+					failures += metric.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return count, elapsed, failures
+}
+
+func TestFileProjectionReaderSeparatesQueueFromPhysicalReadAndCanceledKeys(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		registry := prometheus.NewRegistry()
+		wrapped := datastore.NewInstrumentedDatastoreWithRegistry(&fileCASPhaseStore{}, "scylla", zap.NewNop(), registry)
+		require.NoError(t, wrapped.(datastore.CatalogMutationBatcher).WithCatalogMutationBatch(t.Context(), "private-namespace", func(ctx context.Context) error {
+			started, release := make(chan struct{}), make(chan struct{})
+			var unblocked sync.Once
+			unblock := func() { unblocked.Do(func() { close(release) }) }
+			var calls int
+			failure := errors.New("physical read failed")
+			reader := newFileProjectionReader(func(_ context.Context, keys []fileProjectionKey) ([]*ProjectionRecord, error) {
+				calls++
+				if calls == 1 {
+					require.Len(t, keys, 1)
+					close(started)
+					<-release
+					return []*ProjectionRecord{{UID: keys[0].uid.String()}}, nil
+				}
+				require.Len(t, keys, 2)
+				for _, key := range keys {
+					require.NotEqual(t, byte(2), key.uid[15])
+				}
+				time.Sleep(5 * time.Millisecond)
+				return nil, failure
+			})
+			defer func() { unblock(); reader.close() }()
+			results := make([]chan error, 4)
+			canceled, cancel := context.WithCancel(ctx)
+			defer cancel()
+			for i := range results {
+				results[i] = make(chan error, 1)
+				caller := ctx
+				if i == 1 {
+					caller = canceled
+				}
+				go func() {
+					_, err := reader.submit(caller, fileProjectionKey{uid: gocql.UUID{15: byte(i + 1)}})
+					results[i] <- err
+				}()
+				if i == 0 {
+					<-started
+				}
+			}
+			synctest.Wait()
+			count, elapsed, failures := filePhaseObservation(t, registry, "FileProjectionReadQueue")
+			require.EqualValues(t, 1, count, "queue observation must finish before physical work completes")
+			require.Zero(t, elapsed)
+			require.Zero(t, failures)
+			count, _, _ = filePhaseObservation(t, registry, "FileProjectionReadBatch1")
+			require.Zero(t, count, "physical observations must wait for the query result")
+			time.Sleep(7 * time.Millisecond)
+			cancel()
+			synctest.Wait()
+			time.Sleep(4 * time.Millisecond)
+			unblock()
+			require.NoError(t, <-results[0])
+			require.ErrorIs(t, <-results[1], context.Canceled)
+			for _, result := range results[2:] {
+				require.ErrorIs(t, <-result, failure)
+			}
+			reader.close()
+			count, elapsed, failures = filePhaseObservation(t, registry, "FileProjectionReadQueue")
+			require.EqualValues(t, 4, count)
+			require.InDelta(t, .033, elapsed, 1e-9, "three queued callers wait eleven milliseconds each")
+			require.EqualValues(t, 1, failures, "only the canceled queued caller has a queue error")
+			count, elapsed, failures = filePhaseObservation(t, registry, "FileProjectionReadBatch1")
+			require.EqualValues(t, 1, count)
+			require.InDelta(t, .011, elapsed, 1e-9)
+			require.Zero(t, failures)
+			count, elapsed, failures = filePhaseObservation(t, registry, "FileProjectionReadBatch2")
+			require.EqualValues(t, 1, count, "two live keys share one physical read and one failure observation")
+			require.InDelta(t, .005, elapsed, 1e-9)
+			require.EqualValues(t, 1, failures)
+			return nil
+		}))
+	})
+}
+
+func TestFileProjectionReaderBatchesOnlyReadyRequestsAndNeverCaches(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started, release := make(chan struct{}), make(chan struct{})
+		var calls [][]fileProjectionKey
+		reader := newFileProjectionReader(func(ctx context.Context, keys []fileProjectionKey) ([]*ProjectionRecord, error) {
+			calls = append(calls, slices.Clone(keys))
+			if len(calls) == 1 {
+				close(started)
+				<-release
+			}
+			results := make([]*ProjectionRecord, len(keys))
+			for i, key := range keys {
+				results[i] = &ProjectionRecord{UID: key.uid.String(), Name: fmt.Sprint(len(calls))}
+			}
+			return results, nil
+		})
+		defer reader.close()
+		results := make([]chan fileProjectionResult, 13)
+		for i := range results {
+			results[i] = make(chan fileProjectionResult, 1)
+			go func() {
+				record, err := reader.submit(t.Context(), fileProjectionKey{uid: gocql.UUID{15: byte(i + 1)}})
+				results[i] <- fileProjectionResult{record: record, err: err}
+			}()
+			if i == 0 {
+				<-started
+			}
+		}
+		synctest.Wait()
+		require.Len(t, reader.requests, 12)
+		require.Len(t, calls, 1, "one request must execute without an arrival barrier")
+		close(release)
+		for i, result := range results {
+			got := <-result
+			require.NoError(t, got.err)
+			require.Equal(t, (gocql.UUID{15: byte(i + 1)}).String(), got.record.UID)
+		}
+		require.Len(t, calls, 2)
+		require.Len(t, calls[1], 12)
+		current, err := reader.submit(t.Context(), calls[0][0])
+		require.NoError(t, err)
+		require.Equal(t, "3", current.Name, "repeated keys require a new physical read, not cached cohort facts")
+		reader.close()
+		_, err = reader.submit(t.Context(), calls[0][0])
+		require.ErrorContains(t, err, "closed")
+	})
+}
+
+func TestFileProjectionReaderCancellationAndFailures(t *testing.T) {
+	for _, allCanceled := range []bool{false, true} {
+		t.Run(fmt.Sprint("allCanceled=", allCanceled), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				firstStarted, releaseFirst := make(chan struct{}), make(chan struct{})
+				batchStarted, releaseBatch := make(chan struct{}), make(chan struct{})
+				var calls int
+				canceled, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				peer, cancelPeer := context.WithCancel(t.Context())
+				defer cancelPeer()
+				reader := newFileProjectionReader(func(ctx context.Context, keys []fileProjectionKey) ([]*ProjectionRecord, error) {
+					calls++
+					if calls == 1 {
+						close(firstStarted)
+						<-releaseFirst
+						return []*ProjectionRecord{{UID: keys[0].uid.String()}}, nil
+					}
+					close(batchStarted)
+					select {
+					case <-ctx.Done():
+						require.True(t, allCanceled)
+						return nil, ctx.Err()
+					case <-releaseBatch:
+						require.NoError(t, ctx.Err(), "canceling one reader must not cancel its live peer")
+						return []*ProjectionRecord{{UID: keys[0].uid.String()}, {UID: keys[1].uid.String()}}, nil
+					}
+				})
+				defer reader.close()
+				results := make([]chan error, 3)
+				for i, ctx := range []context.Context{t.Context(), canceled, peer} {
+					results[i] = make(chan error, 1)
+					go func() {
+						_, err := reader.submit(ctx, fileProjectionKey{uid: gocql.UUID{15: byte(i + 1)}})
+						results[i] <- err
+					}()
+					if i == 0 {
+						<-firstStarted
+					}
+				}
+				synctest.Wait()
+				close(releaseFirst)
+				require.NoError(t, <-results[0])
+				<-batchStarted
+				cancel()
+				synctest.Wait()
+				select {
+				case <-results[1]:
+					t.Fatal("accepted reads must join physical work before returning")
+				default:
+				}
+				if allCanceled {
+					cancelPeer()
+				} else {
+					close(releaseBatch)
+				}
+				require.ErrorIs(t, <-results[1], context.Canceled)
+				if allCanceled {
+					require.ErrorIs(t, <-results[2], context.Canceled)
+				} else {
+					require.NoError(t, <-results[2])
+				}
+			})
+		})
+	}
+	for _, tc := range []struct {
+		name    string
+		records []*ProjectionRecord
+		err     error
+		want    error
+	}{
+		{"missing", []*ProjectionRecord{nil}, nil, datastore.ErrNotFound},
+		{"storage error", nil, errors.New("physical read failed"), nil},
+		{"invalid result size", nil, nil, datastore.ErrRepairRequired},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := newFileProjectionReader(func(context.Context, []fileProjectionKey) ([]*ProjectionRecord, error) {
+				return tc.records, tc.err
+			})
+			defer reader.close()
+			_, err := reader.submit(t.Context(), fileProjectionKey{})
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+			} else {
+				require.ErrorIs(t, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestFileProjectionReaderBoundsCloseAndQueuedCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started, release := make(chan struct{}), make(chan struct{})
+		failure := errors.New("shared projection read failed")
+		var sizes []int
+		reader := newFileProjectionReader(func(ctx context.Context, keys []fileProjectionKey) ([]*ProjectionRecord, error) {
+			sizes = append(sizes, len(keys))
+			if len(sizes) == 1 {
+				close(started)
+				<-release
+				return []*ProjectionRecord{{UID: keys[0].uid.String()}}, nil
+			}
+			for _, key := range keys {
+				require.NotEqual(t, byte(2), key.uid[15], "canceled queued reads must not issue queries")
+			}
+			return nil, failure
+		})
+		results := make([]chan error, 17)
+		canceled, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		for i := range results {
+			results[i] = make(chan error, 1)
+			ctx := t.Context()
+			if i == 1 {
+				ctx = canceled
+			}
+			go func() {
+				_, err := reader.submit(ctx, fileProjectionKey{uid: gocql.UUID{15: byte(i + 1)}})
+				results[i] <- err
+			}()
+			if i == 0 {
+				<-started
+			}
+		}
+		synctest.Wait()
+		require.Len(t, reader.requests, 16)
+		_, err := reader.submit(t.Context(), fileProjectionKey{})
+		require.ErrorContains(t, err, "queue exhausted")
+		cancel()
+		closed := make(chan struct{})
+		go func() { reader.close(); close(closed) }()
+		synctest.Wait()
+		select {
+		case <-closed:
+			t.Fatal("close must wait for accepted physical work")
+		default:
+		}
+		close(release)
+		require.NoError(t, <-results[0])
+		require.ErrorIs(t, <-results[1], context.Canceled)
+		for _, result := range results[2:] {
+			require.ErrorIs(t, <-result, failure)
+		}
+		<-closed
+		require.Equal(t, []int{1, 15}, sizes)
+		reader.close()
+	})
+}
+
+func TestFileCASWriterReportsAcceptedQueueUntilExecutionOrCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		registry := prometheus.NewRegistry()
+		wrapped := datastore.NewInstrumentedDatastoreWithRegistry(&fileCASPhaseStore{}, "scylla", zap.NewNop(), registry)
+		observation := func() (uint64, float64, float64) {
+			return filePhaseObservation(t, registry, "FileConditionalQueue")
+		}
+		require.NoError(t, wrapped.(datastore.CatalogMutationBatcher).WithCatalogMutationBatch(t.Context(), "private-namespace", func(ctx context.Context) error {
+			started, release := make(chan struct{}), make(chan struct{})
+			var unblocked sync.Once
+			unblock := func() { unblocked.Do(func() { close(release) }) }
+			var executions atomic.Int64
+			writer := newFileCASWriter(func(request *fileCASRequest) error {
+				executions.Add(1)
+				if request.uid[15] == 1 {
+					close(started)
+					<-release
+				}
+				return nil
+			}, func(context.Context, []*fileCASRequest) (bool, error) {
+				t.Error("only one live queued follower should remain")
+				return false, errors.New("unexpected batch")
+			})
+			defer func() { unblock(); writer.close() }()
+			done := []chan error{make(chan error, 1), make(chan error, 1), make(chan error, 1)}
+			go func() { done[0] <- writer.submit(ctx, gocql.UUID{15: 1}, nil) }()
+			<-started
+			canceled, cancel := context.WithCancel(ctx)
+			defer cancel()
+			go func() { done[1] <- writer.submit(canceled, gocql.UUID{15: 2}, nil) }()
+			go func() { done[2] <- writer.submit(ctx, gocql.UUID{15: 3}, nil) }()
+			synctest.Wait()
+			require.Len(t, writer.requests, 2)
+			count, elapsed, failures := observation()
+			require.EqualValues(t, 1, count, "a dequeued request must be observed before its physical write finishes")
+			require.Zero(t, elapsed)
+			require.Zero(t, failures)
+			time.Sleep(7 * time.Millisecond)
+			cancel()
+			synctest.Wait()
+			for _, result := range done {
+				select {
+				case <-result:
+					t.Fatal("accepted writes must drain before their reservation can be released")
+				default:
+				}
+			}
+			time.Sleep(4 * time.Millisecond)
+			unblock()
+			require.NoError(t, <-done[0])
+			require.ErrorIs(t, <-done[1], context.Canceled)
+			require.NoError(t, <-done[2])
+			writer.close()
+			count, elapsed, failures = observation()
+			require.EqualValues(t, 3, count, "every accepted request must finish its queue phase exactly once")
+			require.InDelta(t, .022, elapsed, 1e-9, "queued time must exclude physical work but retain canceled drain time")
+			require.EqualValues(t, 1, failures)
+			require.EqualValues(t, 2, executions.Load(), "a canceled queued request must not execute")
+			return nil
+		}))
+	})
+}
 
 func TestFileCASWriterBatchesReadyRowsAndPreservesIndependentConflicts(t *testing.T) {
 	ambiguous := errors.New("conditional batch outcome unknown")

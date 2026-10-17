@@ -76,7 +76,8 @@ func NewHandler(deps HandlerDeps) *Handler {
 	if clock == nil {
 		clock = apiruntime.SystemClock{}
 	}
-	metricsHandler := promhttp.Handler()
+	metricsHandler := promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer,
+		promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{EnableOpenMetrics: true}))
 	if deps.InstanceID != "" {
 		instanceRegistry := prometheus.NewRegistry()
 		instanceRegistry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
@@ -86,7 +87,7 @@ func NewHandler(deps HandlerDeps) *Handler {
 				"instance_id": deps.InstanceID,
 			},
 		}, func() float64 { return 1 }))
-		metricsHandler = promhttp.HandlerFor(prometheus.Gatherers{prometheus.DefaultGatherer, instanceRegistry}, promhttp.HandlerOpts{})
+		metricsHandler = promhttp.HandlerFor(prometheus.Gatherers{prometheus.DefaultGatherer, instanceRegistry}, promhttp.HandlerOpts{EnableOpenMetrics: true})
 	}
 	return &Handler{
 		store:              deps.Store,

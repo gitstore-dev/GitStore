@@ -32,7 +32,7 @@ func TestProductValidatingPolicy_RejectsTerminatingCategoryAndAllowsMissingTarge
 	}
 	require.NoError(t, store.CreateCategoryTaxonomy(context.Background(), category))
 	lifecycle := store.(datastore.CategoryTaxonomyDeletionStore)
-	_, err = lifecycle.MarkCategoryTaxonomyDeletion(context.Background(), "ns", "retiring", "1", time.Now())
+	_, err = lifecycle.MarkCategoryTaxonomyDeletion(context.Background(), "ns", "retiring", "1", category.UID, time.Now())
 	require.NoError(t, err)
 
 	policy := admcatalog.NewProductValidatingPolicy(zap.NewNop(), store)

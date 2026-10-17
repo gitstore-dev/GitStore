@@ -24,6 +24,23 @@ type updatePolicyItem struct {
 	Version    string
 }
 
+func TestDiskRelatedVersionPreservesErrors(t *testing.T) {
+	failure := errors.New("category path is invalid")
+	runner := &Runner[updatePolicyItem]{
+		Kind: "CategoryTaxonomy",
+		KeyFunc: func(item updatePolicyItem) types.WorkItemKey {
+			return types.WorkItemKey{Kind: "CategoryTaxonomy", Name: item.Name}
+		},
+		RevisionFunc: func(item updatePolicyItem) string { return item.Version },
+		DiskRelatedVersion: func(updatePolicyItem) (string, error) {
+			return "", failure
+		},
+	}
+	if _, err := runner.diskItem(updatePolicyItem{Name: "leaf", Version: "2"}); !errors.Is(err, failure) {
+		t.Fatalf("invalid related projection must fail before checkpointing: %v", err)
+	}
+}
+
 func TestWatchStopUnblocksBackpressuredOutput(t *testing.T) {
 	calls := 0
 	control := newWatchStop(func() { calls++ })

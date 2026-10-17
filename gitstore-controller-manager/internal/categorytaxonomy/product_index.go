@@ -58,9 +58,8 @@ func NewProductCategoryIndexHandler(idx *ProductCategoryIndex) cache.EventHandle
 }
 
 // NewCategoryReenqueueHandler returns a cache.EventHandler[CategoryTaxonomy]
-// that re-enqueues previously-unresolved Products when a CategoryTaxonomy
-// newly matches their spec.categoryRef (FR-009): on OnAdd, and on an
-// OnUpdate where the category's Name changed (a rename), it looks up idx
+// that re-enqueues Products when category identity, lifecycle or resolved path
+// changes: on OnAdd and qualifying OnUpdate events, it looks up idx
 // for (namespace, name) — and, for a rename, also (namespace, oldName) —
 // and calls enqueue for every matching Product key. This is always an O(1)
 // map lookup plus O(matching Products) enqueues, never a full Product-cache
@@ -76,10 +75,19 @@ func NewCategoryReenqueueHandler(idx *ProductCategoryIndex, enqueue func(types.W
 			reenqueue(c.Namespace, c.Name)
 		},
 		OnUpdate: func(_ types.WorkItemKey, old, current CategoryTaxonomy) {
-			if old.Name == current.Name {
+			oldVersion, oldErr := ProductRelationVersion(old)
+			currentVersion, currentErr := ProductRelationVersion(current)
+			if oldErr == nil && currentErr == nil && oldVersion == currentVersion {
 				return
 			}
+			// Invalid paths must reach the Product reconciler's explicit
+			// projection error rather than suppressing dependent work.
 			reenqueue(old.Namespace, old.Name)
+			if old.Namespace != current.Namespace || old.Name != current.Name {
+				reenqueue(current.Namespace, current.Name)
+			}
+		},
+		OnDelete: func(_ types.WorkItemKey, current CategoryTaxonomy) {
 			reenqueue(current.Namespace, current.Name)
 		},
 	}

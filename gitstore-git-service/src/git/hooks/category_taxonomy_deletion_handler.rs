@@ -19,7 +19,7 @@ use catalog_proto::{ResourceValidationTree, ValidateResourceDeletionsRequest};
 
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 
-/// Validates every supported resource removal before receive-pack updates refs.
+/// Validates resource removals not already completed by schema admission.
 /// The API receives complete old and proposed resource trees, so it can assess
 /// an atomic deletion or reparenting against the proposed state rather than
 /// stale admitted relationships.
@@ -108,6 +108,7 @@ impl ResourceDeletionHandler {
                     tree_count,
                     duration_ms,
                     outcome = "service_unavailable",
+                    rpc_code = ?error.code(),
                     error = %error,
                     "resource_deletion_validation_complete"
                 );
@@ -161,6 +162,12 @@ impl ValidationHandler for ResourceDeletionHandler {
         quarantine_dir: Option<&std::path::Path>,
         hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
+        if hook_ctx
+            .resource_deletion_validation_complete
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Ok(AdmissionDecision::Accept);
+        }
         let trees = with_quarantine_repo(git_dir, quarantine_dir, |repo| {
             collect_resource_deletion_trees(repo, updates)
         })
@@ -339,6 +346,7 @@ mod tests {
     struct MockCatalogService {
         calls: Arc<AtomicUsize>,
         accepted: bool,
+        deletion_validation_complete: bool,
     }
 
     #[tonic::async_trait]
@@ -349,6 +357,7 @@ mod tests {
         ) -> Result<Response<ValidateResourcesResponse>, Status> {
             Ok(Response::new(ValidateResourcesResponse {
                 accepted: true,
+                resource_deletion_validation_complete: self.deletion_validation_complete,
                 errors: vec![],
             }))
         }
@@ -382,6 +391,14 @@ mod tests {
     }
 
     async fn start_mock_server(calls: Arc<AtomicUsize>, accepted: bool) -> String {
+        start_mock_server_with_completion(calls, accepted, false).await
+    }
+
+    async fn start_mock_server_with_completion(
+        calls: Arc<AtomicUsize>,
+        accepted: bool,
+        deletion_validation_complete: bool,
+    ) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -389,6 +406,7 @@ mod tests {
                 .add_service(CatalogServiceServer::new(MockCatalogService {
                     calls,
                     accepted,
+                    deletion_validation_complete,
                 }))
                 .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
                 .await
@@ -469,6 +487,117 @@ mod tests {
             .unwrap()
             .detach()
             .to_string()
+    }
+
+    #[tokio::test]
+    async fn validated_receive_skips_oversized_unrelated_snapshot() {
+        use super::super::{validation_handler::SchemaValidationHandler, ChainedValidationHandler};
+        use prost::Message;
+
+        let directory = tempfile::TempDir::new().unwrap();
+        let repository_path = make_bare_repo(directory.path());
+        make_commit(
+            &repository_path,
+            "---\napiVersion: gitstore.dev/v1beta1\nkind: Repository\nmetadata:\n  name: catalog\n  namespace: test\n---\n",
+        );
+        let repo = gix::open(&repository_path).unwrap();
+        let parent = repo.head_commit().unwrap().id().detach();
+        let parent_tree = get_tree_id(&repo, parent).unwrap();
+        let background = format!(
+            "---\nkind: Repository\n---\n{}",
+            "x".repeat(4 * 1024 * 1024)
+        );
+        let background_blob = repo.write_blob(background.as_bytes()).unwrap().detach();
+        let tree = repo
+            .edit_tree(parent_tree)
+            .unwrap()
+            .upsert(
+                "unchanged.md",
+                gix::object::tree::EntryKind::Blob,
+                background_blob,
+            )
+            .unwrap()
+            .write()
+            .unwrap()
+            .detach();
+        let signature = gix::actor::Signature {
+            name: "test".into(),
+            email: "test@example.com".into(),
+            time: gix::date::Time::now_local_or_utc(),
+        };
+        let mut time_buf = gix::date::parse::TimeBuf::default();
+        let signature_ref = signature.to_ref(&mut time_buf);
+        let old_oid = repo
+            .commit_as(
+                signature_ref,
+                signature_ref,
+                "HEAD",
+                "seed background",
+                tree,
+                [parent],
+            )
+            .unwrap()
+            .detach()
+            .to_string();
+        let new_oid = make_commit(&repository_path, "removed resource");
+        let updates = vec![RefUpdate {
+            ref_name: "refs/heads/main".into(),
+            old_oid,
+            new_oid,
+        }];
+        let full_trees = collect_resource_deletion_trees(&repo, &updates).unwrap();
+        assert!(
+            ValidateResourceDeletionsRequest {
+                repository_id: "repo-1".into(),
+                trees: full_trees,
+                authorization: None,
+            }
+            .encoded_len()
+                > 4 * 1024 * 1024
+        );
+
+        for complete in [true, false] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let address =
+                start_mock_server_with_completion(Arc::clone(&calls), true, complete).await;
+            let chain = ChainedValidationHandler::new(vec![
+                Arc::new(
+                    SchemaValidationHandler::connect(
+                        &address,
+                        Duration::from_secs(2),
+                        "repo-1".into(),
+                    )
+                    .await
+                    .unwrap()
+                    .with_service_token("fixture-key"),
+                ),
+                Arc::new(
+                    ResourceDeletionHandler::connect(
+                        &address,
+                        Duration::from_secs(2),
+                        "repo-1".into(),
+                    )
+                    .await
+                    .unwrap()
+                    .with_service_token("fixture-key"),
+                ),
+            ]);
+            let context = HookContext::default();
+            // A previous receive's receipt must not survive the chain reset.
+            context
+                .resource_deletion_validation_complete
+                .store(true, Ordering::Relaxed);
+            let decision = chain
+                .validate_receive(&repository_path, &updates, None, &context)
+                .await
+                .unwrap();
+            if complete {
+                assert!(matches!(decision, AdmissionDecision::Accept));
+            } else {
+                assert!(matches!(decision, AdmissionDecision::Reject(_)));
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[tokio::test]

@@ -184,13 +184,21 @@ func (r *Resolver) DeleteServiceAccount(ctx context.Context, input *model.Delete
 		return &model.DeleteServiceAccountPayload{ServiceAccount: nil}, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, &gqlerror.Error{Message: "delete ServiceAccount", Err: err}
 	}
 
 	// Delete the service account
 	err = r.store.DeleteServiceAccount(ctx, sa.UID)
 	if err != nil {
-		return nil, err
+		if r.connectionRegistry != nil {
+			_, confirmationErr := r.store.GetServiceAccountByUID(ctx, sa.UID)
+			if errors.Is(confirmationErr, datastore.ErrNotFound) {
+				r.connectionRegistry.CancelAll(sa.UID)
+			} else if confirmationErr != nil {
+				err = errors.Join(err, fmt.Errorf("confirm service account deletion: %w", confirmationErr))
+			}
+		}
+		return nil, &gqlerror.Error{Message: "delete ServiceAccount", Err: err}
 	}
 	if r.connectionRegistry != nil {
 		r.connectionRegistry.CancelAll(sa.UID)

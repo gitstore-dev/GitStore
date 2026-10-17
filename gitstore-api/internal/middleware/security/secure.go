@@ -405,15 +405,33 @@ func (a *Authorize) GitHttpAuthorizer(c *gin.Context) {
 		c.AbortWithStatus(http.StatusServiceUnavailable)
 		return
 	}
-	repository, err := a.store.GetRepository(c.Request.Context(), repoID)
+	ctx := c.Request.Context()
+	namespaceName := c.Param("namespace")
+	var namespace *datastore.Namespace
+	var namespaceErr error
+	var namespaceRead sync.WaitGroup
+	namespaceRead.Go(func() {
+		namespace, namespaceErr = a.store.GetNamespaceByName(ctx, namespaceName)
+	})
+	repository, err := a.store.GetRepository(ctx, repoID)
+	namespaceRead.Wait()
 	if err != nil {
 		a.logger.Error("GitHttpAuthorizer: resolve repository", zap.Error(err))
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
-	namespace, err := a.store.GetNamespaceByName(c.Request.Context(), repository.Namespace)
-	if err != nil {
-		a.logger.Error("GitHttpAuthorizer: resolve namespace", zap.Error(err))
+	if repository.Namespace != namespaceName || repository.Name != strings.TrimSuffix(c.Param("repo"), ".git") {
+		a.logger.Warn("GitHttpAuthorizer: repository path changed after resolution", zap.String("repo_id", repoID))
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	if errors.Is(namespaceErr, datastore.ErrNotFound) || (namespaceErr == nil && namespace == nil) {
+		a.logger.Warn("GitHttpAuthorizer: namespace not found", zap.String("namespace", repository.Namespace))
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	if namespaceErr != nil {
+		a.logger.Error("GitHttpAuthorizer: resolve namespace", zap.Error(namespaceErr))
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}

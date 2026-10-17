@@ -4,11 +4,14 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,18 +55,27 @@ func TestNamespaceWatchMetadataGenerationAndSelectorReplay(t *testing.T) {
 	if apiA == "" || apiB == "" || apiA == apiB || token == "" {
 		t.Skip("set two distinct NAMESPACE_WATCH_API endpoints and NAMESPACE_WATCH_TOKEN for the replica probe")
 	}
+	runNamespaceWatchMetadataGenerationAndSelectorReplay(t, apiA, apiB, token)
+}
+
+func runNamespaceWatchMetadataGenerationAndSelectorReplay(t *testing.T, apiA, apiB, token string) {
+	t.Helper()
+	require.NotEmpty(t, apiA)
+	require.NotEmpty(t, apiB)
+	require.NotEmpty(t, token)
+	require.NotEqual(t, apiA, apiB)
 	name := uniqueName("watch-metadata")
 	selector := map[string]any{"matchLabels": map[string]any{"watch-metadata-run": name, "selected": "yes"}}
 	watchA := openNamespaceWatch(t, apiA, token, "__namespace_watch_bootstrap__", selector)
 	require.Equal(t, "BOOKMARK", readNamespaceWatchEvent(t, watchA).Type)
-	createNamespaceThrough(t, apiB, token, name)
+	createWatchMetadataNamespace(t, apiB, apiA, token, name)
 	update := func(endpoint, phase string, selected bool) string {
 		t.Helper()
 		labels := map[string]any{"watch-metadata-run": name}
 		if selected {
 			labels["selected"] = "yes"
 		}
-		response := gqlQueryWithURL(t, strings.TrimSuffix(endpoint, "/"), token, `
+		response := watchMetadataGraphQL(t, strings.TrimSuffix(endpoint, "/"), token, `
 				mutation($input: UpdateNamespaceInput!) {
 					updateNamespace(input: $input) { namespace { metadata { generation resourceVersion } } }
 				}`, map[string]any{"input": map[string]any{
@@ -102,6 +114,8 @@ func TestNamespaceWatchMetadataGenerationAndSelectorReplay(t *testing.T) {
 			metadata, ok := event.Namespace["metadata"].(map[string]any)
 			require.True(t, ok)
 			if revision != "" && metadata["revision"] != revision {
+				t.Logf("metadata watch provenance mismatch resource_version=%s revision=%v expected=%s",
+					event.ResourceVersion, metadata["revision"], revision)
 				continue
 			}
 			if phase != "" {
@@ -132,19 +146,87 @@ func TestNamespaceWatchMetadataGenerationAndSelectorReplay(t *testing.T) {
 	require.NotEqual(t, modified.ResourceVersion, exited.ResourceVersion)
 	update(apiB, "provenance", true)
 	reentered := readPhase(watchB, "ADDED", "provenance", "")
-	h := newPushHelperForRepoWithToken(t, "gitstore-system", "gitstore-system", token)
+	h := newPushHelperForRepoWithToken(t, "gitstore-system", "gitstore-system", token, "namespaces/"+name+".md")
 	content, err := os.ReadFile(filepath.Join(h.workDir, "namespaces", name+".md"))
 	require.NoError(t, err)
 	provenanceOnly := strings.Replace(string(content), "---\n", "---\n# provenance-only rewrite\n", 1)
 	require.NotEqual(t, string(content), provenanceOnly)
 	h.commitNamespace(name+".md", provenanceOnly)
-	revision, err := secretCapacityGit(t.Context(), h.workDir, token, "rev-parse", "HEAD")
-	require.NoError(t, err)
-	if output, pushErr := h.push(); pushErr != nil {
-		t.Fatalf("push provenance-only Namespace rewrite: %v\n%s", pushErr, output)
-	}
-	provenance := readPhase(watchB, "MODIFIED", "provenance", "main@sha1:"+strings.TrimSpace(string(revision)))
+	revision := pushWatchMetadataProvenance(t, h)
+	provenance := readPhase(watchB, "MODIFIED", "provenance", revision)
 	require.NotEqual(t, reentered.ResourceVersion, provenance.ResourceVersion)
+}
+
+func watchMetadataRetryable(errors []json.RawMessage) bool {
+	if len(errors) == 0 {
+		return false
+	}
+	for _, raw := range errors {
+		if !capacityCreateRetryable(&capacityGraphQLErrors{raw: string(raw)}) {
+			return false
+		}
+	}
+	return true
+}
+
+func createWatchMetadataNamespace(t *testing.T, apiA, apiB, token, name string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	client := &http.Client{Timeout: 10 * time.Second}
+	defer client.CloseIdleConnections()
+	cfg := capacityConfig{apiA: apiA, apiB: apiB, token: token}
+	require.NoError(t, createCapacityNamespaceRetryingContext(ctx, client, cfg, name, 30*time.Second))
+}
+
+func watchMetadataGraphQL(t *testing.T, endpoint, token, query string, variables map[string]any) gqlResponse {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	for attempt := 1; ; attempt++ {
+		require.NoError(t, ctx.Err(), "metadata mutation exhausted its bounded retry window")
+		response := secretTestGraphQLContext(t, ctx, endpoint, token, query, variables)
+		require.Equal(t, http.StatusOK, response.Status)
+		if len(response.Errors) == 0 {
+			return response
+		}
+		require.True(t, watchMetadataRetryable(response.Errors), namespaceContractErrors(response.Errors))
+		t.Logf("metadata mutation retry=%d classification=transient_graphql_conflict", attempt)
+		timer := time.NewTimer(time.Duration(1<<min(attempt-1, 4)) * 25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			t.Fatalf("metadata mutation retry deadline: %v", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func TestWatchMetadataRetryRequiresEveryErrorToBeTransient(t *testing.T) {
+	conflict := json.RawMessage(`{"message":"superseded","extensions":{"code":"CONFLICT","diagnostics":[{"reason":"SUPERSEDED"}]}}`)
+	denied := json.RawMessage(`{"message":"denied","extensions":{"code":"FORBIDDEN"}}`)
+	require.True(t, watchMetadataRetryable([]json.RawMessage{conflict}))
+	require.False(t, watchMetadataRetryable(nil))
+	require.False(t, watchMetadataRetryable([]json.RawMessage{denied}))
+	require.False(t, watchMetadataRetryable([]json.RawMessage{conflict, denied}))
+	require.False(t, watchMetadataRetryable([]json.RawMessage{denied, conflict}))
+}
+
+func TestWatchMetadataMutationRetriesSupersededResponses(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if calls.Add(1) == 1 {
+			_, _ = w.Write([]byte(`{"errors":[{"message":"superseded","extensions":{"code":"CONFLICT","diagnostics":[{"reason":"SUPERSEDED"}]}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"updateNamespace":{"namespace":{"metadata":{"generation":1,"resourceVersion":"accepted"}}}}}`))
+	}))
+	defer server.Close()
+	response := watchMetadataGraphQL(t, server.URL, "test-token", "mutation { updateNamespace }", nil)
+	require.Empty(t, response.Errors)
+	require.JSONEq(t, `{"updateNamespace":{"namespace":{"metadata":{"generation":1,"resourceVersion":"accepted"}}}}`, string(response.Data))
+	require.EqualValues(t, 2, calls.Load())
 }
 
 type namespaceWatchWireEvent struct {

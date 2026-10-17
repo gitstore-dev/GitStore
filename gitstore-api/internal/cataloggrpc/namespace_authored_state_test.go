@@ -78,7 +78,7 @@ func TestAdmitResourcesNamespacePersistsCompleteAuthoredState(t *testing.T) {
 	assert.Equal(t, int64(2048), spec.PushPolicyDefaults.MaxPackSizeBytes)
 }
 
-func TestAdmitResourcesNamespaceProvenanceOnlyChangeKeepsGeneration(t *testing.T) {
+func TestAdmitResourcesNamespaceDisjointReplayKeepsAcceptedProvenance(t *testing.T) {
 	store := newNamespacePolicyDatastore(t)
 	zero := strings.Repeat("0", 40)
 	createCommit := strings.Repeat("7", 40)
@@ -87,13 +87,21 @@ func TestAdmitResourcesNamespaceProvenanceOnlyChangeKeepsGeneration(t *testing.T
 	otherPath := "namespaces/provenance-only-other.md"
 	current := createCommit
 	manifest := namespaceManifest("provenance-only-git", "Provenance", "ORGANIZATION")
-	srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{
+	reader := newTreeGitReader(&current, map[string]map[string][]byte{
 		createCommit: {path: manifest},
 		descendantCommit: {
 			path:      manifest,
 			otherPath: namespaceManifest("provenance-only-other", "Other", "ORGANIZATION"),
 		},
-	}))
+	})
+	srv := newCatalogServer(t, store, &repositoryHistoryReader{
+		mockGitReader: reader,
+		proof: func(ctx context.Context, repository, path, tip, ancestor string) ([]byte, error) {
+			require.Equal(t, createCommit, ancestor)
+			require.Equal(t, descendantCommit, tip)
+			return reader.ReadFile(ctx, repository, path, tip)
+		},
+	})
 
 	request := &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
@@ -115,8 +123,8 @@ func TestAdmitResourcesNamespaceProvenanceOnlyChangeKeepsGeneration(t *testing.T
 	updated, err := store.GetNamespaceByName(context.Background(), "provenance-only-git")
 	require.NoError(t, err)
 	assert.Equal(t, created.Generation, updated.Generation)
-	assert.Equal(t, "2", updated.ResourceVersion)
-	assert.Equal(t, descendantCommit, updated.GitCommitSHA)
+	assert.Equal(t, created.ResourceVersion, updated.ResourceVersion)
+	assert.Equal(t, createCommit, updated.GitCommitSHA)
 }
 
 func TestAdmitResourcesNamespaceEmptyValuedLabelKeyChangeKeepsGeneration(t *testing.T) {

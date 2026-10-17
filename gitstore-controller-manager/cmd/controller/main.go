@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -34,6 +33,7 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/version"
+	"github.com/gitstore-dev/gitstore/observability"
 	"go.uber.org/zap"
 )
 
@@ -54,21 +54,55 @@ func main() {
 		os.Exit(1)
 	}
 
-	log, err := manager.InitLogger(cfg.Log.Level, cfg.Log.Format)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to init logger: %v\n", err)
+	if err := run(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "controller-manager failed: %v\n", err)
 		os.Exit(1)
 	}
-	defer log.Sync() //nolint:errcheck
+}
 
-	mgr := manager.New().WithLogger(log)
+func initTelemetry(ctx context.Context, cfg *config.Config, log *zap.Logger) (*zap.Logger, func(context.Context) error, error) {
+	return observability.InitTelemetry(ctx, cfg.Observability.OTLP, observability.ControllerService, version.Version, log)
+}
+
+func run(cfg *config.Config) (runErr error) {
+	log, err := manager.InitLogger(cfg.Log.Level, cfg.Log.Format)
+	if err != nil {
+		return fmt.Errorf("initialize logger: %w", err)
+	}
+	defer log.Sync() //nolint:errcheck
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	log, shutdownTelemetry, err := initTelemetry(ctx, cfg, log)
+	if err != nil {
+		return fmt.Errorf("initialize telemetry: %w", err)
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(flushCtx); err != nil {
+			log.Error("telemetry shutdown failed")
+			runErr = errors.Join(runErr, errors.New("telemetry shutdown failed"))
+		}
+	}()
+	shutdownProfiler, err := observability.StartCapacityProfiler(cfg.Controller.Profiling, log)
+	if err != nil {
+		return fmt.Errorf("initialize capacity profiler: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownProfiler(shutdownCtx); err != nil {
+			log.Error("capacity profiler shutdown failed", zap.Error(err))
+			runErr = errors.Join(runErr, fmt.Errorf("capacity profiler shutdown failed: %w", err))
+		}
+	}()
+	mgr := manager.New().WithLogger(log)
+
 	credentials, err := buildCredentialSource(ctx, cfg, log)
 	if err != nil {
-		log.Fatal("failed to build credential source", zap.Error(err))
+		return fmt.Errorf("build credential source: %w", err)
 	}
 	if closer, ok := credentials.(io.Closer); ok {
 		defer func() {
@@ -80,7 +114,7 @@ func main() {
 	client, err := graphqlclient.NewWithRateLimit(cfg.Controller.ApiURI, credentials,
 		cfg.Controller.APIClient.RateLimit.PerSecond, cfg.Controller.APIClient.RateLimit.Burst)
 	if err != nil {
-		log.Fatal("create API client", zap.Error(err))
+		return fmt.Errorf("create API client: %w", err)
 	}
 
 	// runners tracks every kind's list-then-watch goroutine so shutdown can
@@ -89,7 +123,7 @@ func main() {
 
 	closeStores, err := registerDiskControllers(ctx, &runners, mgr, cfg, log, client)
 	if err != nil {
-		log.Fatal("failed to register durable controllers", zap.Error(err))
+		return fmt.Errorf("register durable controllers: %w", err)
 	}
 	defer func() {
 		if err := closeStores(); err != nil {
@@ -134,6 +168,7 @@ func main() {
 		log.Warn("HTTP server shutdown error", zap.Error(err))
 	}
 	log.Info("controller-manager stopped")
+	return nil
 }
 
 func relationIndex(kind, namespace, name string) string {
@@ -221,9 +256,7 @@ func registerDiskControllers(ctx context.Context, runners *sync.WaitGroup, mgr *
 		}
 		return keys
 	}
-	cat.DiskRelatedVersion = func(c categorytaxonomy.CategoryTaxonomy) string {
-		return fmt.Sprintf("%s/%t", c.UID, c.DeletionTimestamp != nil || slices.Contains(c.Finalizers, "gitstore.dev/foreground-deletion"))
-	}
+	cat.DiskRelatedVersion = categorytaxonomy.ProductRelationVersion
 	product.DiskIndexes = func(p categorytaxonomy.Product) []string {
 		if p.CategoryRefName == "" {
 			return nil

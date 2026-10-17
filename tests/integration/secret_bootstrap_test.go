@@ -176,24 +176,85 @@ func waitSecretTestReady(t *testing.T, c *secretTestController, want bool, timeo
 
 func secretTestGraphQL(t *testing.T, api, token, query string, variables map[string]any) gqlResponse {
 	t.Helper()
-	data, err := json.Marshal(gqlRequest{Query: query, Variables: variables})
+	return secretTestGraphQLContext(t, t.Context(), api, token, query, variables)
+}
+
+func secretTestGraphQLContext(t *testing.T, parent context.Context, api, token, query string, variables map[string]any) gqlResponse {
+	t.Helper()
+	result, err := secretTestGraphQLRequest(parent, api, token, query, variables)
 	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	return result
+}
+
+func secretTestGraphQLRequest(parent context.Context, api, token, query string, variables map[string]any) (gqlResponse, error) {
+	var result gqlResponse
+	data, err := json.Marshal(gqlRequest{Query: query, Variables: variables})
+	if err != nil {
+		return result, errors.New("cannot encode test GraphQL request")
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, api+"/graphql", bytes.NewReader(data))
-	require.NoError(t, err)
+	if err != nil {
+		return result, errors.New("invalid test GraphQL request")
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		t.Fatal("test GraphQL request failed")
+		if ctx.Err() != nil {
+			return result, fmt.Errorf("test GraphQL request failed: %w", ctx.Err())
+		}
+		return result, errors.New("test GraphQL request failed")
 	}
 	defer response.Body.Close()
-	var result gqlResponse
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result); err != nil {
-		t.Fatal("invalid test GraphQL response")
+	result.Status = response.StatusCode
+	body, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
+	if err != nil || len(body) > 1<<20 {
+		return result, errors.New("test GraphQL response unreadable or exceeds byte limit")
 	}
-	return result
+	if err := json.Unmarshal(body, &result); err != nil {
+		return result, errors.New("invalid test GraphQL response")
+	}
+	result.Status = response.StatusCode
+	return result, nil
+}
+
+func TestSecretTestGraphQLRequestResponseBounds(t *testing.T) {
+	for _, test := range []struct {
+		name, body string
+		status     int
+		wantError  bool
+	}{
+		{"domain rejection", `{"data":null,"errors":[{"extensions":{"code":"CONFLICT"}}]}`, http.StatusOK, false},
+		{"HTTP failure", `{"data":null}`, http.StatusServiceUnavailable, false},
+		{"malformed", `{"data":`, http.StatusOK, true},
+		{"trailing response", `{"data":{}} {"data":{}}`, http.StatusOK, true},
+		{"oversized", `{"data":{"padding":"` + strings.Repeat("x", 1<<20) + `"}}`, http.StatusOK, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = io.WriteString(w, test.body)
+			}))
+			defer server.Close()
+			result, err := secretTestGraphQLRequest(t.Context(), server.URL, "private-test-token", "query { node(id:\"test\") { id } }", nil)
+			if test.wantError {
+				require.Error(t, err)
+				require.NotContains(t, err.Error(), "private-test-token")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.status, result.Status)
+			if test.name == "domain rejection" {
+				require.Len(t, result.Errors, 1, "domain rejections must remain available to the race classifier")
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := secretTestGraphQLRequest(ctx, "http://127.0.0.1:1", "private-test-token", "query { node(id:\"test\") { id } }", nil)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func secretTestRotate(t *testing.T, api, token, name string, add []secretCapacityOwnedKey, remove []string) string {

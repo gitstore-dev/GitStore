@@ -19,22 +19,14 @@ const repoIDKey = "repoID"
 
 // RepoResolver is a gin middleware that resolves the (namespace, repo) URL parameters
 // to a stable repository ID and stores it under repoIDKey in the gin context.
-// Returns 404 pkt-line if the namespace or repo is not found.
+// Returns 404 pkt-line if the mapping is not found. GitHttpAuthorizer must
+// subsequently validate the current repository and Namespace before dispatch.
 func RepoResolver(store datastore.Datastore, log *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		namespace := c.Param("namespace")
 		repo := strings.TrimSuffix(c.Param("repo"), ".git")
 
-		ns, err := store.GetNamespaceByName(c.Request.Context(), namespace)
-		if err != nil || ns == nil {
-			if _, werr := gitPktLineErrorRaw(c.Writer, http.StatusNotFound, "repository not found"); werr != nil {
-				log.Error("failed to write pkt-line error response", zap.Error(werr))
-			}
-			c.Abort()
-			return
-		}
-
-		mapping, err := store.LookupRepository(c.Request.Context(), ns.Name, repo)
+		mapping, err := store.LookupRepository(c.Request.Context(), namespace, repo)
 		if err != nil || mapping == nil {
 			if _, werr := gitPktLineErrorRaw(c.Writer, http.StatusNotFound, "repository not found"); werr != nil {
 				log.Error("failed to write pkt-line error response", zap.Error(werr))

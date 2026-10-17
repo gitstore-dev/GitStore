@@ -121,6 +121,25 @@ func TestCategoryProductPageRefillsStaleShards(t *testing.T) {
 	require.False(t, backward.HasPrevious, "deleted rows are not evidence of another live page")
 }
 
+func TestCategoryProductPageRejectsDuplicateMembership(t *testing.T) {
+	var uid gocql.UUID
+	uid[15] = 1
+	created := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	product := &datastore.Product{UID: uid.String(), Namespace: "shop", CreationTimestamp: created}
+	for _, backward := range []bool{false, true} {
+		items, err := collectCategoryProductPage(t.Context(), "shop", backward, 1, nil,
+			func(_ context.Context, shard int8, _ *categoryProductRow) ([]categoryProductRow, error) {
+				if shard < 2 {
+					return []categoryProductRow{{ProductUID: uid, CreationTimestamp: created}}, nil
+				}
+				return nil, nil
+			}, func(context.Context, string) (*datastore.Product, error) { return product, nil })
+		require.ErrorIs(t, err, datastore.ErrProjectionNotReady)
+		require.ErrorContains(t, err, "duplicate")
+		require.Nil(t, items, "a duplicate lookahead cannot create a truncated page or false next-page flag")
+	}
+}
+
 func TestCategoryProductPageErrorsAndWorkBudgets(t *testing.T) {
 	for _, limit := range []int{1, datastore.DefaultPageSize} {
 		t.Run(map[int]string{1: "query-budget", datastore.DefaultPageSize: "lookup-budget"}[limit], func(t *testing.T) {

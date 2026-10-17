@@ -11,7 +11,117 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
+	"github.com/stretchr/testify/require"
 )
+
+func TestSharedObservabilityPrecedenceAndLegacyRejection(t *testing.T) {
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "test-uid")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://ignored:4318")
+	base := "../../../config/config.toml"
+	cfg, err := config.LoadFrom(base)
+	require.NoError(t, err)
+	require.Empty(t, cfg.Observability.OTLP.URI)
+	require.Equal(t, 0.05, cfg.Observability.OTLP.TraceSampleRatio)
+	overlay := filepath.Join(t.TempDir(), "telemetry.toml")
+	require.NoError(t, os.WriteFile(overlay, []byte("[observability.otlp]\nuri='https://collector/base'\ntrace_sample_ratio=0.25\n"), 0600))
+	cfg, err = config.LoadFromFiles([]string{base, overlay})
+	require.NoError(t, err)
+	require.Equal(t, "https://collector/base", cfg.Observability.OTLP.URI)
+	require.Equal(t, 0.25, cfg.Observability.OTLP.TraceSampleRatio)
+	t.Setenv("GITSTORE_OBSERVABILITY__OTLP__URI", "")
+	t.Setenv("GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "0")
+	cfg, err = config.LoadFromFiles([]string{base, overlay})
+	require.NoError(t, err)
+	require.Empty(t, cfg.Observability.OTLP.URI)
+	require.Zero(t, cfg.Observability.OTLP.TraceSampleRatio)
+	for _, source := range []string{"file", "environment"} {
+		t.Run(source, func(t *testing.T) {
+			if source == "file" {
+				require.NoError(t, os.WriteFile(overlay, []byte("[observability.otlp]\nendpoint=''\n"), 0600))
+			} else {
+				require.NoError(t, os.WriteFile(overlay, nil, 0600))
+				t.Setenv("GITSTORE_OBSERVABILITY__OTLP__ENDPOINT", "")
+			}
+			_, err := config.LoadFromFiles([]string{base, overlay})
+			require.ErrorContains(t, err, "obsolete configuration path")
+			require.Contains(t, strings.ToLower(err.Error()), "uri")
+		})
+	}
+}
+
+func TestSharedObservabilityInvalidValuesAreRejectedWithoutSecrets(t *testing.T) {
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "test-uid")
+	for _, tc := range []struct{ key, value string }{
+		{"URI", "http://user:private@collector"},
+		{"URI", "http://collector?private"},
+		{"URI", "http://collector#private"},
+		{"URI", "grpc://collector"},
+		{"TRACE_SAMPLE_RATIO", "NaN"},
+		{"TRACE_SAMPLE_RATIO", "+Inf"},
+		{"TRACE_SAMPLE_RATIO", "-0.1"},
+		{"TRACE_SAMPLE_RATIO", "1.1"},
+		{"TRACE_SAMPLE_RATIO", "private"},
+	} {
+		t.Run(tc.key+"/"+tc.value, func(t *testing.T) {
+			t.Setenv("GITSTORE_OBSERVABILITY__OTLP__"+tc.key, tc.value)
+			_, err := config.LoadFrom("../../../config/config.toml")
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "private")
+		})
+	}
+}
+
+func TestControllerProfilingPrecedenceAndDisabledDefault(t *testing.T) {
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "test-uid")
+	base := "../../../config/config.toml"
+	cfg, err := config.LoadFrom(base)
+	require.NoError(t, err)
+	require.Empty(t, cfg.Controller.Profiling.URI)
+	overlay := filepath.Join(t.TempDir(), "profiling.toml")
+	require.NoError(t, os.WriteFile(overlay, []byte("[controller.profiling]\nuri='http://127.0.0.1:6061'\n"), 0600))
+	cfg, err = config.LoadFromFiles([]string{base, overlay})
+	require.NoError(t, err)
+	require.Equal(t, "http://127.0.0.1:6061", cfg.Controller.Profiling.URI)
+	t.Setenv("GITSTORE_CONTROLLER__PROFILING__URI", "http://[::1]:6062")
+	cfg, err = config.LoadFromFiles([]string{base, overlay})
+	require.NoError(t, err)
+	require.Equal(t, "http://[::1]:6062", cfg.Controller.Profiling.URI)
+	t.Setenv("GITSTORE_CONTROLLER__PROFILING__URI", "")
+	cfg, err = config.LoadFromFiles([]string{base, overlay})
+	require.NoError(t, err)
+	require.Empty(t, cfg.Controller.Profiling.URI, "an empty environment override must disable the listener")
+}
+
+func TestControllerProfilingRejectsInvalidURIWithoutValues(t *testing.T) {
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "test-uid")
+	for _, uri := range []string{
+		"http://0.0.0.0:6061", "http://localhost:6061", "http://127.0.0.1:0",
+		"https://127.0.0.1:6061", "http://127.0.0.1:6061/private",
+		"http://private:password@127.0.0.1:6061", "http://127.0.0.1:6061?private",
+		"http://127.0.0.1:6061#private",
+	} {
+		t.Run(uri, func(t *testing.T) {
+			t.Setenv("GITSTORE_CONTROLLER__PROFILING__URI", uri)
+			_, err := config.LoadFrom("../../../config/config.toml")
+			require.ErrorContains(t, err, "controller.profiling.uri")
+			require.NotContains(t, err.Error(), "private")
+			require.NotContains(t, err.Error(), "password")
+		})
+	}
+	for _, source := range []string{"file", "environment"} {
+		t.Run(source, func(t *testing.T) {
+			overlay := filepath.Join(t.TempDir(), "profiling.toml")
+			body := "[controller.profiling]\nlisten_addr='127.0.0.1:6061'\n"
+			if source == "environment" {
+				body = ""
+				t.Setenv("GITSTORE_CONTROLLER__PROFILING__LISTEN_ADDR", "127.0.0.1:6061")
+			}
+			require.NoError(t, os.WriteFile(overlay, []byte(body), 0600))
+			_, err := config.LoadFromFiles([]string{"../../../config/config.toml", overlay})
+			require.Error(t, err)
+		})
+	}
+}
 
 func TestRemovedServiceAccountNamespaceSettingIsRejected(t *testing.T) {
 	for _, source := range []string{"toml", "env"} {

@@ -4,17 +4,226 @@
 package cataloggrpc_test
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
+
+func TestCommittedNamespaceDisjointCommitsPreserveRequestAudit(t *testing.T) {
+	for _, advanceAt := range []int{1, 2, 3, 4} {
+		t.Run(fmt.Sprintf("advance-at-check-%d", advanceAt), func(t *testing.T) {
+			ctx := context.Background()
+			store := newNamespacePolicyDatastore(t)
+			seed, mine, theirs := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)
+			path := "namespaces/committed-disjoint.md"
+			content := namespaceManifest("committed-disjoint", "Updated", "ORGANIZATION")
+			files := map[string]map[string][]byte{
+				seed: {path: namespaceManifest("committed-disjoint", "Original", "ORGANIZATION")},
+				mine: {path: content},
+				theirs: {
+					path:                      content,
+					"namespaces/unrelated.md": namespaceManifest("unrelated", "Unrelated", "ORGANIZATION"),
+				},
+			}
+			current := seed
+			reader := &repositoryHistoryReader{mockGitReader: newTreeGitReader(&current, files)}
+			reader.proof = func(_ context.Context, repository, requestedPath, tip, ancestor string) ([]byte, error) {
+				assert.Equal(t, testRepoID, repository)
+				assert.Equal(t, path, requestedPath)
+				require.Equal(t, mine, ancestor)
+				require.Equal(t, theirs, tip)
+				require.True(t, bytes.Equal(files[ancestor][path], files[tip][path]))
+				return files[tip][path], nil
+			}
+			srv := newCatalogServer(t, store, reader)
+			request := admission.CommittedManifestRequest{
+				RepositoryID: testRepoID, Namespace: "gitstore-system", ActorSubject: "alice",
+				CommitSHA: seed, RefName: "refs/heads/main", Path: path,
+				Content: files[seed][path], Operation: admission.OperationCreate,
+			}
+			_, err := srv.AdmitCommittedManifest(ctx, request)
+			require.NoError(t, err)
+			current = mine
+			checks := 0
+			reader.resolveRefFunc = func(context.Context, string, string) (string, error) {
+				checks++
+				if checks >= advanceAt {
+					current = theirs
+				}
+				return current, nil
+			}
+			request.CommitSHA, request.Content, request.Operation = mine, content, admission.OperationUpdate
+			result, err := srv.AdmitCommittedManifest(ctx, request)
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, checks, advanceAt)
+			require.Equal(t, mine, result.CommitSHA)
+			stored, err := store.GetNamespaceByName(ctx, "committed-disjoint")
+			require.NoError(t, err)
+			assert.Equal(t, "Updated", stored.Title)
+			assert.Equal(t, mine, stored.GitCommitSHA)
+			assert.Equal(t, "main@sha1:"+mine, stored.Revision)
+			assert.Equal(t, "alice", stored.UpdateActor)
+			assert.Equal(t, int64(2), stored.Generation)
+		})
+	}
+}
+
+func TestCommittedNamespaceHistoryFailuresFailClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		content    []byte
+		proofError error
+		superseded bool
+	}{
+		{name: "same path changed", proofError: grpcstatus.Error(codes.Aborted, "changed"), superseded: true},
+		{name: "deleted and restored", proofError: grpcstatus.Error(codes.Aborted, "history changed"), superseded: true},
+		{name: "path removed", proofError: grpcstatus.Error(codes.NotFound, "missing"), superseded: true},
+		{name: "content mismatch", content: []byte("different"), superseded: true},
+		{name: "Git unavailable", proofError: grpcstatus.Error(codes.Unavailable, "unavailable")},
+		{name: "history budget", proofError: grpcstatus.Error(codes.ResourceExhausted, "budget exhausted")},
+		{name: "corrupt object", proofError: grpcstatus.Error(codes.Internal, "corrupt object")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newNamespacePolicyDatastore(t)
+			mine, theirs := strings.Repeat("a", 40), strings.Repeat("b", 40)
+			current := theirs
+			reader := &repositoryHistoryReader{
+				mockGitReader: newTreeGitReader(&current, nil),
+				proof: func(context.Context, string, string, string, string) ([]byte, error) {
+					return tc.content, tc.proofError
+				},
+			}
+			srv := newCatalogServer(t, store, reader)
+			_, err := srv.AdmitCommittedManifest(context.Background(), admission.CommittedManifestRequest{
+				RepositoryID: testRepoID, Namespace: "gitstore-system", ActorSubject: "alice",
+				CommitSHA: mine, RefName: "refs/heads/main", Path: "namespaces/history-closed.md",
+				Content:   namespaceManifest("history-closed", "Closed", "ORGANIZATION"),
+				Operation: admission.OperationCreate,
+			})
+			require.Error(t, err)
+			if tc.superseded {
+				require.ErrorIs(t, err, admission.ErrCommittedManifestSuperseded)
+			} else {
+				require.NotErrorIs(t, err, admission.ErrCommittedManifestSuperseded)
+			}
+			_, err = store.GetNamespaceByName(context.Background(), "history-closed")
+			require.ErrorIs(t, err, datastore.ErrNotFound)
+		})
+	}
+}
+
+func TestRawNamespaceDisjointProvenanceRetainsAcceptedCommit(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		proofError     error
+		differentBytes bool
+		withoutHistory bool
+		advanceAt      int
+		superseded     bool
+		expectedCode   codes.Code
+	}{
+		{name: "unchanged path"},
+		{name: "advance at first ref check", advanceAt: 1},
+		{name: "advance at second ref check", advanceAt: 2},
+		{name: "advance at third ref check", advanceAt: 3},
+		{name: "advance at fourth ref check", advanceAt: 4},
+		{name: "same-path edit", proofError: grpcstatus.Error(codes.Aborted, "path was edited"), superseded: true},
+		{name: "deleted and restored", proofError: grpcstatus.Error(codes.Aborted, "path was deleted"), superseded: true},
+		{name: "missing path", proofError: grpcstatus.Error(codes.NotFound, "path absent"), superseded: true},
+		{name: "proof bytes differ from accepted source", differentBytes: true, superseded: true},
+		{name: "missing history reader", withoutHistory: true, superseded: true},
+		{name: "Git unavailable", proofError: grpcstatus.Error(codes.Unavailable, "Git unavailable"), expectedCode: codes.Unavailable},
+		{name: "history budget exhausted", proofError: grpcstatus.Error(codes.ResourceExhausted, "history budget"), expectedCode: codes.ResourceExhausted},
+		{name: "history corrupt", proofError: grpcstatus.Error(codes.Internal, "corrupt history"), expectedCode: codes.Internal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := newNamespacePolicyDatastore(t)
+			seed, mine, theirs := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)
+			path := "namespaces/raw-provenance.md"
+			original := namespaceManifest("raw-provenance", "Probe", "ORGANIZATION")
+			rewrite := bytes.Replace(original, []byte("---\n"), []byte("---\n# provenance-only rewrite\n"), 1)
+			files := map[string]map[string][]byte{
+				seed: {path: original},
+				mine: {path: rewrite},
+				theirs: {
+					path:                      rewrite,
+					"namespaces/unrelated.md": namespaceManifest("unrelated", "Other", "ORGANIZATION"),
+				},
+			}
+			if tc.differentBytes {
+				files[theirs][path] = bytes.Replace(rewrite, []byte("# provenance-only rewrite"), []byte("# later same-path rewrite"), 1)
+			}
+			current := seed
+			reader := &repositoryHistoryReader{mockGitReader: newTreeGitReader(&current, files)}
+			reader.proof = func(_ context.Context, repository, requestedPath, tip, ancestor string) ([]byte, error) {
+				require.Equal(t, testRepoID, repository)
+				require.Equal(t, path, requestedPath)
+				require.Equal(t, mine, ancestor)
+				require.Equal(t, theirs, tip)
+				return files[tip][path], tc.proofError
+			}
+			var gitReader cataloggrpc.GitReader = reader
+			if tc.withoutHistory {
+				gitReader = struct{ cataloggrpc.GitReader }{reader}
+			}
+			srv := newCatalogServer(t, store, gitReader)
+			request := &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, OldCommitSha: strings.Repeat("0", 40), NewCommitSha: seed,
+				RefName: "refs/heads/main", ChangedPaths: []string{path},
+				Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{
+					Subject: "alice", AuthMethod: "static-users",
+				}},
+			}
+			_, err := srv.AdmitResources(ctx, request)
+			require.NoError(t, err)
+			before, err := store.GetNamespaceByName(ctx, "raw-provenance")
+			require.NoError(t, err)
+			current = theirs
+			checks := 0
+			if tc.advanceAt != 0 {
+				current = mine
+				reader.resolveRefFunc = func(context.Context, string, string) (string, error) {
+					checks++
+					if checks >= tc.advanceAt {
+						current = theirs
+					}
+					return current, nil
+				}
+			}
+			request.OldCommitSha, request.NewCommitSha = seed, mine
+			request.Authorization.Actor.Subject = "bob"
+			_, err = srv.AdmitResources(ctx, request)
+			require.Equal(t, tc.expectedCode, grpcstatus.Code(err))
+			require.GreaterOrEqual(t, checks, tc.advanceAt)
+			stored, readErr := store.GetNamespaceByName(ctx, "raw-provenance")
+			require.NoError(t, readErr)
+			if tc.superseded || tc.expectedCode != codes.OK {
+				assert.Equal(t, before, stored)
+				return
+			}
+			assert.Equal(t, mine, stored.GitCommitSHA)
+			assert.Equal(t, "main@sha1:"+mine, stored.Revision)
+			assert.Equal(t, before.Generation, stored.Generation)
+			assert.NotEqual(t, before.ResourceVersion, stored.ResourceVersion)
+			assert.Equal(t, "alice", stored.CreationActor)
+			assert.Equal(t, "bob", stored.UpdateActor)
+		})
+	}
+}
 
 func TestNamespaceDescendantAdmissionConvergesDisjointResources(t *testing.T) {
 	store := newNamespacePolicyDatastore(t)
@@ -24,14 +233,22 @@ func TestNamespaceDescendantAdmissionConvergesDisjointResources(t *testing.T) {
 	xPath := "namespaces/descendant-x.md"
 	yPath := "namespaces/descendant-y.md"
 	current := newer
-	srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{
+	reader := newTreeGitReader(&current, map[string]map[string][]byte{
 		zero:  {},
 		older: {xPath: namespaceManifest("descendant-x", "X", "ORGANIZATION")},
 		newer: {
 			xPath: namespaceManifest("descendant-x", "X", "ORGANIZATION"),
 			yPath: namespaceManifest("descendant-y", "Y", "ORGANIZATION"),
 		},
-	}))
+	})
+	srv := newCatalogServer(t, store, &repositoryHistoryReader{
+		mockGitReader: reader,
+		proof: func(ctx context.Context, repository, path, tip, ancestor string) ([]byte, error) {
+			require.Equal(t, older, ancestor)
+			require.Equal(t, newer, tip)
+			return reader.ReadFile(ctx, repository, path, tip)
+		},
+	})
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
@@ -58,7 +275,7 @@ func TestNamespaceDescendantAdmissionConvergesDisjointResources(t *testing.T) {
 	require.NoError(t, err)
 	y, err := store.GetNamespaceByName(context.Background(), "descendant-y")
 	require.NoError(t, err)
-	assert.Equal(t, newer, x.GitCommitSHA)
+	assert.Equal(t, older, x.GitCommitSHA)
 	assert.Equal(t, newer, y.GitCommitSHA)
 }
 
@@ -185,7 +402,15 @@ func TestNamespaceDescendantDisjointCommitKeepsRequestAudit(t *testing.T) {
 	staleTime := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	exactTime := staleTime.Add(time.Hour)
 
-	stale := newCatalogServer(t, store, newTreeGitReader(&current, files), func(deps *cataloggrpc.ServerDeps) {
+	reader := newTreeGitReader(&current, files)
+	stale := newCatalogServer(t, store, &repositoryHistoryReader{
+		mockGitReader: reader,
+		proof: func(ctx context.Context, repository, path, tip, ancestor string) ([]byte, error) {
+			require.Equal(t, older, ancestor)
+			require.Equal(t, newer, tip)
+			return reader.ReadFile(ctx, repository, path, tip)
+		},
+	}, func(deps *cataloggrpc.ServerDeps) {
 		deps.Clock = apiruntime.NewFixedClock(staleTime)
 	})
 	_, err := stale.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
@@ -205,7 +430,7 @@ func TestNamespaceDescendantDisjointCommitKeepsRequestAudit(t *testing.T) {
 	assert.Equal(t, "alice", x.UpdateActor)
 	assert.Equal(t, staleTime, x.CreationTimestamp)
 	assert.Equal(t, staleTime, x.UpdateTimestamp)
-	assert.Equal(t, newer, x.GitCommitSHA)
+	assert.Equal(t, older, x.GitCommitSHA)
 
 	exact := newCatalogServer(t, store, newTreeGitReader(&current, files), func(deps *cataloggrpc.ServerDeps) {
 		deps.Clock = apiruntime.NewFixedClock(exactTime)

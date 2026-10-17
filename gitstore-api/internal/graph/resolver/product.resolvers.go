@@ -168,17 +168,17 @@ func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model
 	case by.ID != nil:
 		rawID, err := decodeNodeIDAs(nodeKindProduct, *by.ID)
 		if err != nil {
-			return nil, nil
+			return nil, err
 		}
 		p, err := r.service.GetProductByUID(ctx, rawID)
 		if err != nil {
-			return nil, nil
+			return nil, nodeLookupError(nodeKindProduct, err)
 		}
 		return DatastoreProductToGraphQL(p), nil
 	case by.NamespacePath != nil:
 		p, err := r.service.GetProductByName(ctx, by.NamespacePath.Namespace, by.NamespacePath.Name)
 		if err != nil {
-			return nil, nil
+			return nil, nodeLookupError(nodeKindProduct, err)
 		}
 		return DatastoreProductToGraphQL(p), nil
 	default:

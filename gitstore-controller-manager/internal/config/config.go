@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/gitstore-dev/gitstore/secretmaterial"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
@@ -22,19 +23,21 @@ import (
 )
 
 type Config struct {
-	Controller ControllerConfig `mapstructure:"controller"`
-	Log        LogConfig        `mapstructure:"log"`
+	Controller    ControllerConfig     `mapstructure:"controller"`
+	Log           LogConfig            `mapstructure:"log"`
+	Observability observability.Config `mapstructure:"observability"`
 }
 
 type ControllerConfig struct {
-	Port            int                   `mapstructure:"port"`
-	ApiURI          string                `mapstructure:"api_uri"`
-	APIClient       APIClientConfig       `mapstructure:"api_client"`
-	ServiceAccount  ServiceAccountConfig  `mapstructure:"serviceaccount"`
-	SecretProviders SecretProvidersConfig `mapstructure:"secret_providers"`
-	Checkpoint      CheckpointConfig      `mapstructure:"checkpoint"`
-	Reconcile       ReconcileConfig       `mapstructure:"reconcile"`
-	Watch           WatchConfig           `mapstructure:"watch"`
+	Port            int                           `mapstructure:"port"`
+	ApiURI          string                        `mapstructure:"api_uri"`
+	APIClient       APIClientConfig               `mapstructure:"api_client"`
+	ServiceAccount  ServiceAccountConfig          `mapstructure:"serviceaccount"`
+	SecretProviders SecretProvidersConfig         `mapstructure:"secret_providers"`
+	Checkpoint      CheckpointConfig              `mapstructure:"checkpoint"`
+	Reconcile       ReconcileConfig               `mapstructure:"reconcile"`
+	Watch           WatchConfig                   `mapstructure:"watch"`
+	Profiling       observability.ProfilingConfig `mapstructure:"profiling"`
 }
 
 type APIClientConfig struct {
@@ -81,7 +84,10 @@ type LogConfig struct {
 }
 
 var defaults = map[string]any{
+	"observability.otlp.uri":                             "",
+	"observability.otlp.trace_sample_ratio":              0.05,
 	"controller.port":                                    5001,
+	"controller.profiling.uri":                           "",
 	"controller.api_uri":                                 "http://localhost:4000/graphql",
 	"controller.api_client.rate_limit.per_second":        40,
 	"controller.api_client.rate_limit.burst":             10,
@@ -156,7 +162,7 @@ func load(paths []string) (*Config, error) {
 			}
 		}
 	}
-	for _, root := range []string{"controller", "log"} {
+	for _, root := range []string{"controller", "log", "observability"} {
 		if v.IsSet(root) {
 			if err := validateSource(root, v.Get(root)); err != nil {
 				return nil, err
@@ -166,7 +172,8 @@ func load(paths []string) (*Config, error) {
 	for _, variable := range os.Environ() {
 		name, _, _ := strings.Cut(variable, "=")
 		if name == "GITSTORE_CONTROLLER" || name == "GITSTORE_LOG" ||
-			strings.HasPrefix(name, "GITSTORE_CONTROLLER_") || strings.HasPrefix(name, "GITSTORE_LOG_") {
+			strings.HasPrefix(name, "GITSTORE_CONTROLLER_") || strings.HasPrefix(name, "GITSTORE_LOG_") ||
+			name == "GITSTORE_OBSERVABILITY" || strings.HasPrefix(name, "GITSTORE_OBSERVABILITY_") {
 			path := strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(name, "GITSTORE_")), "__", ".")
 			if _, ok := defaults[path]; !ok {
 				return nil, sourceError(path, name)
@@ -219,6 +226,12 @@ func validateSource(path string, value any) error {
 }
 
 func sourceError(path, env string) error {
+	if path == "observability.otlp.endpoint" {
+		if env != "" {
+			return fmt.Errorf("obsolete configuration path %s; use GITSTORE_OBSERVABILITY__OTLP__URI", env)
+		}
+		return errors.New("obsolete configuration path observability.otlp.endpoint; use observability.otlp.uri")
+	}
 	if strings.Contains(path, "serviceaccount.namespace") || strings.Contains(path, "serviceaccount_namespace") {
 		return fmt.Errorf("ServiceAccount is cluster-scoped: remove %s %s; configure controller.serviceaccount.name, uid and key_ref", path, env)
 	}
@@ -279,6 +292,17 @@ func decodeValue(from, to reflect.Type, value any) (any, error) {
 		return duration, nil
 	}
 	switch to.Kind() {
+	case reflect.Float64:
+		if from.Kind() == reflect.String {
+			n, err := strconv.ParseFloat(value.(string), 64)
+			if err != nil {
+				return nil, errors.New("must be a number")
+			}
+			return n, nil
+		}
+		if from.Kind() != reflect.Float64 && from.Kind() != reflect.Int && from.Kind() != reflect.Int64 {
+			return nil, errors.New("must be a number")
+		}
 	case reflect.String:
 		if from.Kind() != reflect.String {
 			return nil, errors.New("must be a string")
@@ -303,7 +327,13 @@ func decodeValue(from, to reflect.Type, value any) (any, error) {
 }
 
 func validate(cfg *Config) error {
+	if err := cfg.Observability.OTLP.Validate(); err != nil {
+		return err
+	}
 	c := &cfg.Controller
+	if err := c.Profiling.Validate(); err != nil {
+		return fmt.Errorf("controller.%w", err)
+	}
 	if c.Port < 1 || c.Port > 65535 {
 		return errors.New("controller.port must be between 1 and 65535")
 	}

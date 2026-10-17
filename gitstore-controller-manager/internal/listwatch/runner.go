@@ -58,7 +58,7 @@ type Runner[T any] struct {
 	Disk               *checkpoint.DiskStore
 	DiskIndexes        func(T) []string
 	DiskRelated        func(T) []types.WorkItemKey
-	DiskRelatedVersion func(T) string
+	DiskRelatedVersion func(T) (string, error)
 	Enqueue            func(types.WorkItemKey) error
 	// ReplayEnqueue receives related replay keys restored from the checkpoint.
 	// It is used when this runner observes changes whose durable work belongs to
@@ -164,7 +164,10 @@ func (r *Runner[T]) diskItem(value T) (checkpoint.DiskItem, error) {
 		item.Related = r.DiskRelated(value)
 	}
 	if r.DiskRelatedVersion != nil {
-		item.RelatedVersion = r.DiskRelatedVersion(value)
+		item.RelatedVersion, err = r.DiskRelatedVersion(value)
+		if err != nil {
+			return checkpoint.DiskItem{}, fmt.Errorf("%s related work version: %w", r.Kind, err)
+		}
 	}
 	return item, nil
 }

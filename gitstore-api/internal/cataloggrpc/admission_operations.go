@@ -212,14 +212,9 @@ func (s *Server) authorizeOperations(ctx context.Context, operations []resourceA
 	var files []*datastore.File
 	if batchFiles {
 		var err error
-		files, err = s.store.GetFileSnapshotsByName(ctx, namespace, names)
-		if err != nil || ctx.Err() != nil || len(files) != len(operations) {
+		files, err = s.fileNameSnapshotFacts(ctx, namespace, names)
+		if err != nil {
 			return status.Error(codes.Unavailable, "resource authorization facts unavailable")
-		}
-		for i, file := range files {
-			if file != nil && (file.Namespace != namespace || file.Name != names[i] || file.UID == "") {
-				return status.Error(codes.Unavailable, "resource authorization facts unavailable")
-			}
 		}
 	}
 	for i, op := range operations {
@@ -240,6 +235,25 @@ func (s *Server) authorizeOperations(ctx context.Context, operations []resourceA
 		}
 	}
 	return nil
+}
+
+func (s *Server) fileNameSnapshotFacts(ctx context.Context, namespace string, names []string) ([]*datastore.File, error) {
+	files, err := s.store.GetFileSnapshotsByName(ctx, namespace, names)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(files) != len(names) {
+		return nil, fmt.Errorf("%w: invalid File snapshot cardinality", datastore.ErrRepairRequired)
+	}
+	for i, file := range files {
+		if file != nil && (file.Namespace != namespace || file.Name != names[i] || file.UID == "") {
+			return nil, fmt.Errorf("%w: invalid File snapshot identity", datastore.ErrRepairRequired)
+		}
+	}
+	return files, nil
 }
 
 type resourceIdentity struct {
@@ -296,6 +310,7 @@ func namespaceConvergenceOperations(
 			requested.contentHash != operation.newEntry.contentHash {
 			continue
 		}
+		operation.newEntry = requested
 		operation.operation = namespaceConvergenceOperation
 		converged = append(converged, operation)
 	}

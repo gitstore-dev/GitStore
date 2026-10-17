@@ -63,6 +63,7 @@ type capacityConfig struct {
 	allowMissingMetrics            bool
 	skipReplacement                bool
 	mode                           capacityMode
+	acknowledgements               *atomic.Int64
 }
 
 type capacityMode string
@@ -224,7 +225,14 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 			recoveryResult <- coordinateCapacityReplacement(client, cfg, poolPrefix, livePrefix, maxTransitions+1, soakStarted)
 		}()
 	}
-	workload := runCapacityMutationWorkload(t, client, cfg, poolPrefix, livePrefix, maxTransitions)
+	var workload capacityWorkload
+	runCapacityMetadataUnderLoad(t, cfg.duration, func(loadTest *testing.T, progress *atomic.Int64) {
+		loadCfg := cfg
+		loadCfg.acknowledgements = progress
+		workload = runCapacityMutationWorkload(loadTest, client, loadCfg, poolPrefix, livePrefix, maxTransitions)
+	}, func(probeTest *testing.T, _ *atomic.Int64) {
+		runNamespaceWatchMetadataGenerationAndSelectorReplay(probeTest, cfg.apiA, cfg.apiB, cfg.token)
+	})
 	soakElapsed := time.Since(soakStarted)
 	recovery := <-recoveryResult
 	t.Logf("load accounting produced=%d enqueued=%d backpressured=%d attempted=%d admitted=%d acknowledged=%d failed=%d drain_timed_out=%t",
@@ -839,6 +847,152 @@ type capacityWorkload struct {
 
 const capacityMutationDrainTimeout = 30 * time.Second
 
+func validateCapacityMetadataOverlap(windowStart, windowEnd, probeStart, probeEnd time.Time, before, after int64) error {
+	if probeStart.Before(windowStart) || !probeEnd.Before(windowEnd) || probeEnd.Before(probeStart) {
+		return errors.New("metadata/provenance probe must finish entirely inside the sustained scheduling window")
+	}
+	if before <= 0 || after <= before {
+		return errors.New("metadata/provenance probe requires acknowledged sustained mutations before and during the probe")
+	}
+	return nil
+}
+
+func capacityMetadataNextCycle(probeEnd, windowEnd time.Time, previousDuration time.Duration) (time.Time, bool) {
+	next := probeEnd.Add(time.Minute)
+	return next, next.Add(max(time.Minute, previousDuration)).Before(windowEnd)
+}
+
+func TestCapacityMetadataNextCycleReservesObservedProbeDuration(t *testing.T) {
+	base := time.Now()
+	for _, tc := range []struct {
+		name          string
+		window, probe time.Duration
+		want          bool
+	}{
+		{"minimum_budget_fits", 121 * time.Second, 10 * time.Second, true},
+		{"minimum_budget_exact_boundary", 120 * time.Second, 10 * time.Second, false},
+		{"long_probe_does_not_fit", 140 * time.Second, 90 * time.Second, false},
+		{"long_probe_exact_boundary", 150 * time.Second, 90 * time.Second, false},
+		{"long_probe_fits", 151 * time.Second, 90 * time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next, fits := capacityMetadataNextCycle(base, base.Add(tc.window), tc.probe)
+			require.Equal(t, base.Add(time.Minute), next, "pacing must remain unchanged")
+			require.Equal(t, tc.want, fits)
+		})
+	}
+}
+
+func runCapacityMetadataUnderLoad(t *testing.T, duration time.Duration, load func(*testing.T, *atomic.Int64), probe func(*testing.T, *atomic.Int64)) {
+	t.Helper()
+	var progress atomic.Int64
+	window := make(chan time.Time, 1)
+	done := make(chan struct{})
+	t.Run("metadata_under_sustained_load", func(t *testing.T) {
+		go func() {
+			defer close(done)
+			t.Run("load", func(t *testing.T) {
+				window <- time.Now()
+				load(t, &progress)
+			})
+		}()
+		// Run owns the background assertions; join its return even if the
+		// foreground probe fails. This also works with go test -parallel=1.
+		defer func() { <-done }()
+		t.Run("metadata", func(t *testing.T) {
+			start := <-window
+			end := start.Add(duration)
+			for progress.Load() == 0 {
+				select {
+				case <-done:
+					t.Fatal("sustained workload finished without an acknowledgement for metadata overlap")
+				case <-time.After(10 * time.Millisecond):
+					require.True(t, time.Now().Before(end), "no sustained acknowledgement inside the scheduling window")
+				}
+			}
+			for cycle := 1; ; cycle++ {
+				probeStart, before := time.Now(), progress.Load()
+				passed := t.Run(fmt.Sprintf("cycle_%03d", cycle), func(t *testing.T) { probe(t, &progress) })
+				probeEnd, after := time.Now(), progress.Load()
+				t.Logf("metadata_under_load cycle=%d passed=%t started_at=%s completed_at=%s acknowledged_before=%d acknowledged_after=%d",
+					cycle, passed, probeStart.UTC().Format(time.RFC3339Nano), probeEnd.UTC().Format(time.RFC3339Nano), before, after)
+				require.True(t, passed, "metadata/generation/selector/replay/provenance probe failed")
+				require.NoError(t, validateCapacityMetadataOverlap(start, end, probeStart, probeEnd, before, after))
+				// Leave a full probe budget before starting another cycle; work in
+				// the drain phase cannot count as sustained-load coverage.
+				next, fits := capacityMetadataNextCycle(probeEnd, end, probeEnd.Sub(probeStart))
+				if !fits {
+					return
+				}
+				timer := time.NewTimer(time.Until(next))
+				select {
+				case <-done:
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+		})
+	})
+}
+
+func TestCapacityMetadataUnderLoadJoinsOwnedLoad(t *testing.T) {
+	var joined atomic.Bool
+	var cycles atomic.Int64
+	duration := 200 * time.Millisecond
+	runCapacityMetadataUnderLoad(t, duration, func(t *testing.T, progress *atomic.Int64) {
+		deadline := time.NewTimer(duration)
+		defer deadline.Stop()
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-deadline.C:
+				joined.Store(true)
+				return
+			case <-ticker.C:
+				progress.Add(1)
+			}
+		}
+	}, func(t *testing.T, progress *atomic.Int64) {
+		cycles.Add(1)
+		require.Positive(t, progress.Load())
+		time.Sleep(20 * time.Millisecond)
+		require.False(t, joined.Load(), "probe must not run after load completion")
+	})
+	require.True(t, joined.Load(), "orchestrator must join the owned load test")
+	require.EqualValues(t, 1, cycles.Load())
+}
+
+func TestCapacityMetadataOverlapRequiresActiveAcknowledgedLoad(t *testing.T) {
+	start := time.Unix(100, 0)
+	end := start.Add(time.Minute)
+	for _, tc := range []struct {
+		name             string
+		probeStart, stop time.Time
+		before, after    int64
+		valid            bool
+	}{
+		{"active", start.Add(time.Second), end.Add(-time.Second), 1, 2, true},
+		{"before_load", start.Add(-time.Second), end.Add(-time.Second), 1, 2, false},
+		{"drain", start.Add(time.Second), end, 1, 2, false},
+		{"after_load", start.Add(time.Second), end.Add(time.Second), 1, 2, false},
+		{"reversed", start.Add(2 * time.Second), start.Add(time.Second), 1, 2, false},
+		{"no_baseline", start.Add(time.Second), end.Add(-time.Second), 0, 2, false},
+		{"idle", start.Add(time.Second), end.Add(-time.Second), 1, 1, false},
+		{"regressed", start.Add(time.Second), end.Add(-time.Second), 2, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateCapacityMetadataOverlap(start, end, tc.probeStart, tc.stop, tc.before, tc.after)
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
 func runCapacityMutationWorkload(t *testing.T, client *http.Client, cfg capacityConfig, resourcePrefix, eventPrefix string, maxTransitions int) capacityWorkload {
 	t.Helper()
 	// Bound the queue by the amount of sustained work that may legally drain
@@ -886,7 +1040,11 @@ func runCapacityMutationWorkload(t *testing.T, client *http.Client, cfg capacity
 				}
 				acknowledged.mark(job.seq)
 				admitted.Add(1)
+				if cfg.acknowledgements != nil {
+					cfg.acknowledgements.Add(1)
+				}
 			}
+
 		}()
 	}
 

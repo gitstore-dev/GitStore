@@ -653,8 +653,8 @@ func decodeSecretCapacityObservations(data []byte) (secretCapacityEvidence, erro
 	return observations, nil
 }
 
-// All fields, including zero-valued counters, are required. encoding/json alone
-// accepts duplicate keys, case-folded names and nulls for scalar observations.
+// Fields without omitempty, including zero-valued counters, are required.
+// encoding/json alone accepts duplicate keys, case-folded names and scalar nulls.
 func decodeSecretCapacityJSON(data []byte, destination any) error {
 	invalid := errors.New("secret capacity: incomplete or invalid evidence JSON")
 	if len(data) == 0 || len(data) > secretCapacityJSONLimit {
@@ -699,9 +699,14 @@ func checkSecretCapacityJSON(decoder *json.Decoder, shape reflect.Type, depth in
 			return invalid
 		}
 		fields := make(map[string]reflect.Type, shape.NumField())
+		required := make(map[string]bool, shape.NumField())
 		for i := range shape.NumField() {
 			field := shape.Field(i)
-			fields[field.Tag.Get("json")] = field.Type
+			name, option, _ := strings.Cut(field.Tag.Get("json"), ",")
+			fields[name] = field.Type
+			if option != "omitempty" {
+				required[name] = true
+			}
 		}
 		for decoder.More() {
 			key, err := decoder.Token()
@@ -714,11 +719,12 @@ func checkSecretCapacityJSON(decoder *json.Decoder, shape reflect.Type, depth in
 				return invalid
 			}
 			delete(fields, name)
+			delete(required, name)
 			if err := checkSecretCapacityJSON(decoder, field, depth+1); err != nil {
 				return invalid
 			}
 		}
-		if len(fields) != 0 {
+		if len(required) != 0 {
 			return invalid
 		}
 		token, err = decoder.Token()
@@ -1408,9 +1414,14 @@ func TestSecretCapacityPushMatchedTimelines(t *testing.T) {
 		projectionStarted := time.Now()
 		time.Sleep(5 * time.Millisecond)
 		return secretCapacityPushResult{
+			traceID:      fmt.Sprintf("%032x", batch.sequence),
 			gitAttempted: true, acknowledged: true, ackLatency: ack,
 			localGitLatency: localGit, projectionLatency: time.Since(projectionStarted),
 			projectionPolls: 1, projectionChecks: 2,
+			projectionReadTraces: []secretCapacityProjectionReadTrace{{
+				TraceIDs:  [2]string{fmt.Sprintf("%032x", 2*batch.sequence), fmt.Sprintf("%032x", 2*batch.sequence+1)},
+				StartedAt: projectionStarted.UTC(), Duration: time.Millisecond,
+			}},
 		}
 	})
 	require.NoError(t, err)
@@ -1419,6 +1430,7 @@ func TestSecretCapacityPushMatchedTimelines(t *testing.T) {
 	for _, item := range measured.timelines {
 		require.False(t, seen[item.Sequence])
 		seen[item.Sequence] = true
+		require.Equal(t, fmt.Sprintf("%032x", item.Sequence), item.TraceID)
 		require.Equal(t, 0, item.Worker)
 		require.False(t, item.OfferedAt.IsZero())
 		require.True(t, item.Acknowledged)
@@ -1427,6 +1439,112 @@ func TestSecretCapacityPushMatchedTimelines(t *testing.T) {
 		require.GreaterOrEqual(t, item.QueueWait+item.WorkerOccupied, item.ACK+item.ProjectionVisibility)
 		require.GreaterOrEqual(t, item.ProjectionVisibility, 5*time.Millisecond)
 		require.EqualValues(t, 1, item.ProjectionPolls)
+		require.Len(t, item.ProjectionReadTraces, 1)
+		require.Equal(t, fmt.Sprintf("%032x", 2*item.Sequence), item.ProjectionReadTraces[0].TraceIDs[0])
+		require.Equal(t, time.Millisecond, item.ProjectionReadTraces[0].Duration)
+		require.Zero(t, item.ProjectionReadTracesOmitted)
+	}
+}
+
+func TestSecretCapacityPushTraceAndGitHeaders(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "http.extraHeader")
+	t.Setenv("GIT_CONFIG_VALUE_0", "traceparent: inherited-parent")
+	parent, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	ctx, traceID, err := secretCapacityPushTrace(parent, bytes.NewReader(bytes.Repeat([]byte{0x11}, 24)))
+	require.NoError(t, err)
+	require.Equal(t, strings.Repeat("11", 16), traceID)
+	require.Equal(t, "00-"+traceID+"-"+strings.Repeat("11", 8)+"-01", ctx.Value(secretCapacityTraceKey{}))
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	expectedDeadline, _ := parent.Deadline()
+	require.Equal(t, expectedDeadline, deadline)
+	for _, token := range []string{"", "private-bearer-fixture"} {
+		for _, traced := range []bool{false, true} {
+			t.Run(fmt.Sprintf("bearer=%t/trace=%t", token != "", traced), func(t *testing.T) {
+				commandCtx := parent
+				if traced {
+					commandCtx = ctx
+				}
+				directory := t.TempDir()
+				output, err := secretCapacityGit(commandCtx, directory, token, "config", "--list")
+				require.NoError(t, err)
+				require.NotContains(t, string(output), "inherited-parent")
+				if token != "" {
+					require.Contains(t, string(output), "http.extraheader=Authorization: Bearer "+token)
+				} else {
+					require.NotContains(t, string(output), "Authorization:")
+				}
+				if traced {
+					require.Contains(t, string(output), "http.extraheader=traceparent: "+ctx.Value(secretCapacityTraceKey{}).(string))
+				} else {
+					require.NotContains(t, string(output), "traceparent:")
+				}
+				require.NoFileExists(t, filepath.Join(directory, ".git", "config"))
+			})
+		}
+	}
+	cancel()
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+}
+
+func TestSecretCapacityGraphQLForwardsOnlyExplicitTraceParent(t *testing.T) {
+	for _, traced := range []bool{false, true} {
+		t.Run(strconv.FormatBool(traced), func(t *testing.T) {
+			parents := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				parents <- r.Header.Get("traceparent")
+				_, _ = io.WriteString(w, `{"data":{"ok":true}}`)
+			}))
+			defer server.Close()
+			ctx := t.Context()
+			var expected string
+			if traced {
+				var err error
+				ctx, _, err = secretCapacityPushTrace(ctx, bytes.NewReader(bytes.Repeat([]byte{0x11}, 24)))
+				require.NoError(t, err)
+				expected = ctx.Value(secretCapacityTraceKey{}).(string)
+			}
+			var result struct {
+				OK bool `json:"ok"`
+			}
+			require.NoError(t, secretCapacityGraphQL(ctx, server.Client(), server.URL, "private-token",
+				`query { ok }`, nil, &result))
+			require.True(t, result.OK)
+			require.Equal(t, expected, <-parents)
+		})
+	}
+}
+
+func TestSecretCapacityPushTraceRejectsInvalidEntropy(t *testing.T) {
+	for _, entropy := range [][]byte{nil, make([]byte, 23), make([]byte, 24),
+		append(make([]byte, 16), bytes.Repeat([]byte{1}, 8)...),
+		append(bytes.Repeat([]byte{1}, 16), make([]byte, 8)...)} {
+		ctx, id, err := secretCapacityPushTrace(t.Context(), bytes.NewReader(entropy))
+		require.Error(t, err)
+		require.Empty(t, id)
+		require.Nil(t, ctx.Value(secretCapacityTraceKey{}))
+	}
+}
+
+func TestRepositoryCapacityTraceCorrelationScope(t *testing.T) {
+	for _, tc := range []struct {
+		value, workload string
+		secret, valid   bool
+	}{
+		{"", "", false, true}, {"0", "repository", false, true},
+		{"1", "file", false, true}, {"1", "combined", false, true},
+		{"1", "", true, true}, {"1", "", false, false},
+		{"1", "repository", false, false}, {"true", "combined", false, false},
+		{"2", "file", false, false},
+	} {
+		err := validateRepositoryCapacityTraceCorrelation(tc.value, tc.workload, tc.secret)
+		if tc.valid {
+			require.NoError(t, err)
+		} else {
+			require.Error(t, err)
+		}
 	}
 }
 
@@ -1647,13 +1765,15 @@ func TestSecretCapacityPushStagesAccountForOverlappingFailures(t *testing.T) {
 		burstInterval: 40 * time.Millisecond, burstSize: 1, burstWindow: time.Millisecond,
 		workers: 1, queueLimit: 8, drainTimeout: time.Second,
 	}
-	measurements, err := runSecretCapacityPushes(t.Context(), cfg, func(context.Context, int, secretCapacityPushBatch) secretCapacityPushResult {
+	measurements, err := runSecretCapacityPushes(t.Context(), cfg, func(_ context.Context, _ int, batch secretCapacityPushBatch) secretCapacityPushResult {
 		return secretCapacityPushResult{
+			traceID:      fmt.Sprintf("%032x", batch.sequence),
 			gitAttempted: true, acknowledged: false, err: &secretCapacityGitError{class: "quota"},
 			failureStage: "git_http", projectionFailed: true, resolutionFailed: true,
 			localGitLatency: time.Millisecond, gitHTTPLatency: 2 * time.Millisecond, projectionLatency: 3 * time.Millisecond,
 			projectionReadLatency: time.Millisecond, projectionPolls: 1,
-			projectionReadPeakLatency: time.Millisecond,
+			projectionInterruptedRounds: 1,
+			projectionReadPeakLatency:   time.Millisecond,
 		}
 	})
 	require.Error(t, err)
@@ -1669,6 +1789,8 @@ func TestSecretCapacityPushStagesAccountForOverlappingFailures(t *testing.T) {
 	require.Len(t, measurements.projectionReadLatencies, 5)
 	require.Len(t, measurements.projectionReadPeakLatencies, 5)
 	require.EqualValues(t, 5, measurements.projectionPolls)
+	require.EqualValues(t, 5, measurements.projectionInterruptedRounds)
+	measurements.traceCorrelation = true
 	root := t.TempDir()
 	require.NoError(t, writeSecretCapacityFileObservations(root, "stages", capacityModeDiagnostic, cfg.duration,
 		secretCapacityRuntimeProof{}, secretCapacityFileLoadResult{measurements: measurements, err: err}))
@@ -1676,11 +1798,13 @@ func TestSecretCapacityPushStagesAccountForOverlappingFailures(t *testing.T) {
 	require.NoError(t, readErr)
 	var evidence secretCapacityFileObservations
 	require.NoError(t, json.Unmarshal(data, &evidence))
+	require.True(t, evidence.TraceCorrelation)
 	require.EqualValues(t, 5, evidence.ScheduledOffered)
 	require.Equal(t, evidence.ScheduledOffered, evidence.QueueAdmitted+evidence.Dropped)
 	require.Equal(t, evidence.QueueAdmitted, evidence.ExecutionAttempts)
 	require.Len(t, evidence.Stages, 6)
 	require.EqualValues(t, 5, evidence.ProjectionPolls)
+	require.EqualValues(t, 5, evidence.ProjectionInterruptedRounds)
 	require.Equal(t, secretCapacityTimelineLimit, evidence.TimelineLimit)
 	require.Len(t, evidence.Timelines, len(measurements.timelines))
 	for i, expected := range measurements.timelines {
@@ -1739,10 +1863,17 @@ func TestSecretCapacityFilePoolReadsPersistedStateWithoutWatchHistory(t *testing
 							"secretRef": map[string]any{"kind": "SecretRef", "name": "capacity-media"}}}},
 			}
 		}
+		response := map[string]any{"data": data}
 		if missing.Load() || delayed.Swap(false) {
 			data["file0"] = nil
+			response["errors"] = []any{map[string]any{
+				"message": "file not found", "path": []string{"file0"},
+				"extensions": map[string]any{"code": "NOT_FOUND", "diagnostics": []any{
+					map[string]any{"reason": "FILE_NOT_FOUND", "level": "FAILURE", "message": "file not found"},
+				}},
+			}}
 		}
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+		require.NoError(t, json.NewEncoder(w).Encode(response))
 	})
 	a, b := httptest.NewServer(handler), httptest.NewServer(handler)
 	defer a.Close()
@@ -1801,6 +1932,122 @@ func TestSecretCapacityFilePoolErrorsAreClassifiedAndRedacted(t *testing.T) {
 	cancel()
 	_, err := secretCapacityReadFileIDs(ctx, "http://127.0.0.1:1", "private-token", "ns", "fixture")
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestSecretCapacityFilePoolRetriesOnlyMatchingFileAbsence(t *testing.T) {
+	type responseEdit func(map[string]any, []map[string]any) []map[string]any
+	extension := func(errs []map[string]any) map[string]any {
+		return errs[0]["extensions"].(map[string]any)
+	}
+	diagnostic := func(errs []map[string]any) map[string]any {
+		return extension(errs)["diagnostics"].([]map[string]any)[0]
+	}
+	for _, tc := range []struct {
+		name    string
+		edit    responseEdit
+		pending bool
+	}{
+		{name: "canonical absence", pending: true},
+		{name: "forbidden", edit: func(_ map[string]any, errs []map[string]any) []map[string]any {
+			extension(errs)["code"] = "FORBIDDEN"
+			return errs
+		}},
+		{name: "wrong resource", edit: func(_ map[string]any, errs []map[string]any) []map[string]any {
+			diagnostic(errs)["reason"] = "NAMESPACE_NOT_FOUND"
+			return errs
+		}},
+		{name: "wrong level", edit: func(_ map[string]any, errs []map[string]any) []map[string]any {
+			diagnostic(errs)["level"] = "WARNING"
+			return errs
+		}},
+		{name: "extra diagnostic", edit: func(_ map[string]any, errs []map[string]any) []map[string]any {
+			extension(errs)["diagnostics"] = []map[string]any{diagnostic(errs), {"reason": "INTERNAL_ERROR", "level": "FAILURE"}}
+			return errs
+		}},
+		{name: "missing diagnostics", edit: func(_ map[string]any, errs []map[string]any) []map[string]any {
+			delete(extension(errs), "diagnostics")
+			return errs
+		}},
+		{name: "mutation phase", edit: func(_ map[string]any, errs []map[string]any) []map[string]any {
+			extension(errs)["phase"] = "ADMISSION"
+			return errs
+		}},
+		{name: "unrequested alias", edit: func(_ map[string]any, errs []map[string]any) []map[string]any {
+			errs[0]["path"] = []string{"private-response-marker"}
+			return errs
+		}},
+		{name: "indexed node path", edit: func(_ map[string]any, errs []map[string]any) []map[string]any {
+			errs[0]["path"] = []any{"nodes", 0}
+			return errs
+		}},
+		{name: "duplicate path", edit: func(_ map[string]any, errs []map[string]any) []map[string]any {
+			errs[0]["path"] = []string{"file1"}
+			return errs
+		}},
+		{name: "mixed infrastructure error", edit: func(_ map[string]any, errs []map[string]any) []map[string]any {
+			errs[9] = map[string]any{"message": "private-response-marker"}
+			return errs
+		}},
+		{name: "nonnull missing File", edit: func(data map[string]any, errs []map[string]any) []map[string]any {
+			data["file9"] = map[string]any{"id": "private-response-marker"}
+			return errs
+		}},
+		{name: "invalid positive projection after missing Files", edit: func(data map[string]any, errs []map[string]any) []map[string]any {
+			data["file9"] = map[string]any{"id": "private-response-marker"}
+			return errs[:9]
+		}},
+		{name: "missing field", edit: func(data map[string]any, errs []map[string]any) []map[string]any {
+			delete(data, "file9")
+			return errs
+		}},
+		{name: "extra field", edit: func(data map[string]any, errs []map[string]any) []map[string]any {
+			data["private-response-marker"] = nil
+			return errs
+		}},
+		{name: "null without error", edit: func(_ map[string]any, _ []map[string]any) []map[string]any {
+			return nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := make(map[string]any, 10)
+			errs := make([]map[string]any, 10)
+			for i := range 10 {
+				alias := fmt.Sprintf("file%d", i)
+				data[alias] = nil
+				errs[i] = map[string]any{
+					"message": "private-response-marker", "path": []string{alias},
+					"extensions": map[string]any{"code": "NOT_FOUND", "diagnostics": []map[string]any{
+						{"reason": "FILE_NOT_FOUND", "level": "FAILURE", "message": "private-response-marker"},
+					}},
+				}
+			}
+			if tc.edit != nil {
+				errs = tc.edit(data, errs)
+			}
+			var calls atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data, "errors": errs}))
+			}))
+			defer server.Close()
+			_, err := secretCapacityReadFileIDs(t.Context(), server.URL, "private-token", "ns", "fixture")
+			require.Error(t, err)
+			require.Equal(t, tc.pending, errors.Is(err, errSecretCapacityFilePending))
+			require.NotContains(t, err.Error(), "private-response-marker")
+			require.NotContains(t, err.Error(), "private-token")
+			ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+			defer cancel()
+			_, err = secretCapacityWaitForFileIDs(ctx, server.URL, "private-token", "ns", "fixture")
+			if tc.pending {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			} else {
+				require.Error(t, err)
+				require.NotErrorIs(t, err, context.DeadlineExceeded)
+				require.NotErrorIs(t, err, errSecretCapacityFilePending)
+			}
+			require.EqualValues(t, 2, calls.Load(), "unexpected errors must fail without a visibility retry")
+		})
+	}
 }
 
 func TestSecretCapacityGraphQLErrorsDoNotExposeBodies(t *testing.T) {
@@ -1958,6 +2205,18 @@ func secretCapacityProjectionTestNode(worker *secretCapacityGitWorker, file int,
 }
 
 func TestSecretCapacityProjectionVerifierBatchesBothReplicas(t *testing.T) {
+	for _, traced := range []bool{false, true} {
+		t.Run(strconv.FormatBool(traced), func(t *testing.T) {
+			t.Setenv("REPOSITORY_CAPACITY_TRACE_CORRELATION", "0")
+			if traced {
+				t.Setenv("REPOSITORY_CAPACITY_TRACE_CORRELATION", "1")
+			}
+			testSecretCapacityProjectionVerifierBatchesBothReplicas(t, traced)
+		})
+	}
+}
+
+func testSecretCapacityProjectionVerifierBatchesBothReplicas(t *testing.T, traced bool) {
 	ids := make(map[string]string)
 	nodes := make(map[string]map[string]any)
 	requests := make(chan secretCapacityProjectionRequest, 32)
@@ -1978,9 +2237,15 @@ func TestSecretCapacityProjectionVerifierBatchesBothReplicas(t *testing.T) {
 		requests <- secretCapacityProjectionRequest{ctx: t.Context(), worker: worker, batch: secretCapacityPushBatch{sequence: 1}, reply: reply, timing: timing}
 	}
 	var readsA, readsB atomic.Int64
-	handler := func(reads *atomic.Int64) http.HandlerFunc {
+	type observedParent struct {
+		endpoint int
+		parent   string
+	}
+	parents := make(chan observedParent, 2)
+	handler := func(reads *atomic.Int64, endpoint int) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			reads.Add(1)
+			parents <- observedParent{endpoint: endpoint, parent: r.Header.Get("traceparent")}
 			var request struct {
 				Variables struct {
 					IDs []string `json:"ids"`
@@ -2000,7 +2265,7 @@ func TestSecretCapacityProjectionVerifierBatchesBothReplicas(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": result}})
 		}
 	}
-	a, b := httptest.NewServer(handler(&readsA)), httptest.NewServer(handler(&readsB))
+	a, b := httptest.NewServer(handler(&readsA, 0)), httptest.NewServer(handler(&readsB, 1))
 	defer a.Close()
 	defer b.Close()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -2020,15 +2285,50 @@ func TestSecretCapacityProjectionVerifierBatchesBothReplicas(t *testing.T) {
 	}
 	require.EqualValues(t, 1, readsA.Load())
 	require.EqualValues(t, 1, readsB.Load())
+	var traceIDs [2]string
+	for range 2 {
+		parent := <-parents
+		if traced {
+			parts := strings.Split(parent.parent, "-")
+			require.Len(t, parts, 4)
+			require.Equal(t, "00", parts[0])
+			require.Regexp(t, secretCapacityTraceIDPattern, parts[1])
+			require.NotEqual(t, strings.Repeat("0", 32), parts[1])
+			require.Len(t, parts[2], 16)
+			require.Equal(t, "01", parts[3])
+			traceIDs[parent.endpoint] = parts[1]
+		} else {
+			require.Empty(t, parent.parent)
+		}
+	}
+	if traced {
+		require.NotEqual(t, traceIDs[0], traceIDs[1])
+	}
 	for _, timing := range timings {
 		require.EqualValues(t, 1, timing.polls.Load())
 		require.Positive(t, timing.readNanos.Load())
 		require.Equal(t, timing.readNanos.Load(), timing.peakNanos.Load())
 		require.Equal(t, timings[0].readNanos.Load(), timing.readNanos.Load())
+		traces, omitted := timing.snapshotReadTraces()
+		require.Zero(t, omitted)
+		if traced {
+			require.Len(t, traces, 1)
+			require.Equal(t, traceIDs, traces[0].TraceIDs)
+			require.Equal(t, time.Duration(timing.readNanos.Load()), traces[0].Duration)
+			require.False(t, traces[0].StartedAt.IsZero())
+			require.False(t, traces[0].Failed)
+			for _, duration := range traces[0].RequestDurations {
+				require.Positive(t, duration)
+				require.LessOrEqual(t, duration, traces[0].Duration)
+			}
+		} else {
+			require.Empty(t, traces)
+		}
 	}
 }
 
 func TestSecretCapacityProjectionVerifierRecordsPeakAcrossPollingRounds(t *testing.T) {
+	t.Setenv("REPOSITORY_CAPACITY_TRACE_CORRELATION", "1")
 	worker := &secretCapacityGitWorker{namespace: "ns", runID: "fixture", files: secretCapacityWorkerFiles(0)}
 	ids := make(map[string]string)
 	for _, file := range worker.files {
@@ -2075,6 +2375,55 @@ func TestSecretCapacityProjectionVerifierRecordsPeakAcrossPollingRounds(t *testi
 	require.EqualValues(t, 2, readsB.Load())
 	require.Positive(t, timing.peakNanos.Load())
 	require.Less(t, timing.peakNanos.Load(), timing.readNanos.Load())
+	traces, omitted := timing.snapshotReadTraces()
+	require.Zero(t, omitted)
+	require.Len(t, traces, 2)
+	require.Equal(t, time.Duration(timing.readNanos.Load()), traces[0].Duration+traces[1].Duration)
+	require.Equal(t, time.Duration(timing.peakNanos.Load()), max(traces[0].Duration, traces[1].Duration))
+	require.True(t, traces[0].StartedAt.Before(traces[1].StartedAt))
+	seen := make(map[string]bool)
+	for _, read := range traces {
+		require.False(t, read.Failed)
+		for _, traceID := range read.TraceIDs {
+			require.Regexp(t, secretCapacityTraceIDPattern, traceID)
+			require.False(t, seen[traceID], "each endpoint and polling round needs a distinct trace")
+			seen[traceID] = true
+		}
+	}
+}
+
+func TestSecretCapacityProjectionReadTracesAreBoundedAndCopied(t *testing.T) {
+	timing := &secretCapacityProjectionTiming{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for index := range secretCapacityProjectionTraceLimit + 17 {
+			timing.recordRead(secretCapacityProjectionReadTrace{
+				TraceIDs:  [2]string{fmt.Sprintf("%032x", index+1), fmt.Sprintf("%032x", index+100)},
+				StartedAt: time.Now().UTC(), Duration: time.Millisecond, Failed: index == 0,
+			}, true)
+		}
+	}()
+	for range 100 {
+		traces, _ := timing.snapshotReadTraces()
+		require.LessOrEqual(t, len(traces), secretCapacityProjectionTraceLimit)
+		timing.traceMu.Lock()
+		count := int64(len(timing.readTraces)) + timing.readTracesOmitted
+		polls := timing.polls.Load()
+		cumulative := timing.readNanos.Load()
+		timing.traceMu.Unlock()
+		require.Equal(t, count, polls)
+		require.Equal(t, count*int64(time.Millisecond), cumulative)
+	}
+	<-done
+	traces, omitted := timing.snapshotReadTraces()
+	require.Len(t, traces, secretCapacityProjectionTraceLimit)
+	require.EqualValues(t, 17, omitted)
+	require.True(t, traces[0].Failed)
+	require.EqualValues(t, secretCapacityProjectionTraceLimit+17, timing.polls.Load())
+	traces[0].TraceIDs[0] = "changed"
+	retained, _ := timing.snapshotReadTraces()
+	require.NotEqual(t, "changed", retained[0].TraceIDs[0])
 }
 
 func TestSecretCapacityProjectionVerifierDrainsArrivalsDuringSlowRead(t *testing.T) {
@@ -2209,7 +2558,256 @@ func TestSecretCapacityProjectionVerifierReadsBothReplicasConcurrently(t *testin
 	}
 }
 
+func TestRepositoryCapacityControllerRestartRequiresIndependentProgress(t *testing.T) {
+	for _, fault := range []string{"", "restart peer B", "no restart", "two restarts", "duplicate identity", "missing fresh token", "no fresh reconciliation", "idle peer", "peer counter reset", "unready peer", "excess credential fanout", "stale sample"} {
+		t.Run(fault, func(t *testing.T) {
+			now := time.Now()
+			before := [2]secretCapacityControllerSample{
+				{ID: "controller-instance-before-a", ObservedAt: now, Healthy: true, Ready: true, CredentialReady: true, FreshTokens: 10, Reconciliations: 100, ExchangePeak: 1},
+				{ID: "controller-instance-before-b", ObservedAt: now, Healthy: true, Ready: true, CredentialReady: true, FreshTokens: 10, Reconciliations: 100, ExchangePeak: 1},
+			}
+			after := before
+			for i := range after {
+				after[i].ObservedAt = now.Add(time.Minute)
+				after[i].Reconciliations++
+			}
+			after[0].ID = "controller-instance-after-a"
+			after[0].FreshTokens, after[0].Reconciliations = 1, 1
+			switch fault {
+			case "restart peer B":
+				after[0] = before[0]
+				after[0].ObservedAt, after[0].Reconciliations = now.Add(time.Minute), 101
+				after[1].ID = "controller-instance-after-b"
+				after[1].FreshTokens, after[1].Reconciliations = 1, 1
+			case "no restart":
+				after[0].ID, after[0].FreshTokens, after[0].Reconciliations = before[0].ID, 10, 101
+			case "two restarts":
+				after[1].ID = "controller-instance-after-b"
+			case "duplicate identity":
+				after[1].ID = after[0].ID
+			case "missing fresh token":
+				after[0].FreshTokens = 0
+			case "no fresh reconciliation":
+				after[0].Reconciliations = 0
+			case "idle peer":
+				after[1].Reconciliations = before[1].Reconciliations
+			case "peer counter reset":
+				after[1].FreshTokens = before[1].FreshTokens - 1
+			case "unready peer":
+				after[1].Ready = false
+			case "excess credential fanout":
+				after[0].ExchangePeak = 2
+			case "stale sample":
+				after[0].ObservedAt = before[0].ObservedAt
+			}
+			err := validateRepositoryCapacityControllerRestart(before, after)
+			if fault == "" || fault == "restart peer B" {
+				require.NoError(t, err, "the retained peer need not renew an unexpired credential")
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestSecretCapacityProjectionVerifierRecoversFaultReadWithinCallerBudget(t *testing.T) {
+	t.Setenv("REPOSITORY_CAPACITY_TRACE_CORRELATION", "1")
+	for _, interruption := range []string{"http_503", "connection_closed", "body_interrupted", "client_timeout"} {
+		t.Run(interruption, func(t *testing.T) {
+			t.Setenv("CAPACITY_CHAOS_PROFILE", "api-restart")
+			t.Setenv("REPOSITORY_CAPACITY_SECRET_SCENARIO", "0")
+			worker := &secretCapacityGitWorker{namespace: "ns", runID: "fixture", files: []int{0}}
+			ids := map[string]string{secretCapacityFileName(worker.runID, 0): "file-0"}
+			var healthyReads, peerReads atomic.Int64
+			respond := func(w http.ResponseWriter) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []map[string]any{secretCapacityProjectionTestNode(worker, 0, 1)}}})
+			}
+			a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				healthyReads.Add(1)
+				respond(w)
+			}))
+			defer a.Close()
+			releaseTimeout := make(chan struct{})
+			b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if peerReads.Add(1) == 1 {
+					switch interruption {
+					case "http_503":
+						http.Error(w, "private outage response", http.StatusServiceUnavailable)
+					case "connection_closed":
+						connection, _, err := w.(http.Hijacker).Hijack()
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						_ = connection.Close()
+					case "body_interrupted":
+						w.Header().Set("Content-Length", "100")
+						_, _ = io.WriteString(w, `{"data":`)
+					case "client_timeout":
+						select {
+						case <-r.Context().Done():
+						case <-releaseTimeout:
+						}
+					}
+					return
+				}
+				respond(w)
+			}))
+			defer b.Close()
+			defer close(releaseTimeout)
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			requests := make(chan secretCapacityProjectionRequest, 1)
+			reply := make(chan error, 1)
+			timing := &secretCapacityProjectionTiming{}
+			requests <- secretCapacityProjectionRequest{ctx: ctx, worker: worker, batch: secretCapacityPushBatch{sequence: 1}, reply: reply, timing: timing}
+			done := make(chan struct{})
+			client := a.Client()
+			if interruption == "client_timeout" {
+				client.Timeout = 100 * time.Millisecond
+			}
+			go func() {
+				defer close(done)
+				runSecretCapacityProjectionVerifier(ctx, client, []string{a.URL, b.URL}, "test-token", ids, requests)
+			}()
+			defer func() { cancel(); <-done }()
+			select {
+			case err := <-reply:
+				require.NoError(t, err, "an explicitly faulted read must converge within its original caller deadline")
+			case <-ctx.Done():
+				t.Fatal("recovered peer did not converge within the original caller deadline")
+			}
+			require.Equal(t, int64(2), peerReads.Load())
+			require.Equal(t, int64(2), healthyReads.Load(), "successful peer results must not be cached across interrupted rounds")
+			require.Equal(t, int64(2), timing.polls.Load())
+			require.Equal(t, int64(1), timing.interruptedRounds.Load())
+			traces, omitted := timing.snapshotReadTraces()
+			require.Zero(t, omitted)
+			require.Len(t, traces, 2)
+			require.True(t, traces[0].Failed)
+			require.False(t, traces[1].Failed)
+			for _, read := range traces {
+				for _, traceID := range read.TraceIDs {
+					require.Regexp(t, secretCapacityTraceIDPattern, traceID)
+				}
+			}
+		})
+	}
+}
+
+func TestSecretCapacityProjectionVerifierFaultReadsStayFailClosedAndBounded(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		fault      bool
+		status     int
+		deniedPeer bool
+		retryAfter bool
+		malformed  bool
+		persistent bool
+		wantReads  int64
+	}{
+		{name: "ordinary_read_still_fails_fast", status: http.StatusServiceUnavailable, wantReads: 1},
+		{name: "quota", fault: true, status: http.StatusTooManyRequests, wantReads: 1},
+		{name: "server_backoff_not_bypassed", fault: true, status: http.StatusServiceUnavailable, retryAfter: true, wantReads: 1},
+		{name: "mixed_peer_denial", fault: true, status: http.StatusServiceUnavailable, deniedPeer: true, wantReads: 1},
+		{name: "malformed_after_interruption", fault: true, status: http.StatusServiceUnavailable, malformed: true, wantReads: 2},
+		{name: "original_deadline", fault: true, status: http.StatusServiceUnavailable, persistent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := ""
+			if tc.fault {
+				profile = "api-restart"
+			}
+			t.Setenv("CAPACITY_CHAOS_PROFILE", profile)
+			t.Setenv("REPOSITORY_CAPACITY_SECRET_SCENARIO", "0")
+			worker := &secretCapacityGitWorker{namespace: "ns", runID: "fixture", files: []int{0}}
+			ids := map[string]string{secretCapacityFileName(worker.runID, 0): "file-0"}
+			a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.deniedPeer {
+					http.Error(w, "private peer denial", http.StatusForbidden)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []map[string]any{secretCapacityProjectionTestNode(worker, 0, 1)}}})
+			}))
+			defer a.Close()
+			var peerReads atomic.Int64
+			b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				reads := peerReads.Add(1)
+				if reads == 1 || tc.persistent {
+					if tc.retryAfter {
+						w.Header().Set("Retry-After", "1")
+					}
+					http.Error(w, "private outage", tc.status)
+					return
+				}
+				if tc.malformed {
+					_, _ = io.WriteString(w, "malformed private response")
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []map[string]any{secretCapacityProjectionTestNode(worker, 0, 1)}}})
+			}))
+			defer b.Close()
+			budget := 2 * time.Second
+			if tc.persistent {
+				budget = 350 * time.Millisecond
+			}
+			requestCtx, stopRequest := context.WithTimeout(t.Context(), budget)
+			defer stopRequest()
+			reply := make(chan error, 1)
+			requests := make(chan secretCapacityProjectionRequest, 1)
+			timing := &secretCapacityProjectionTiming{}
+			requests <- secretCapacityProjectionRequest{ctx: requestCtx, worker: worker, batch: secretCapacityPushBatch{sequence: 1}, reply: reply, timing: timing}
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				runSecretCapacityProjectionVerifier(ctx, a.Client(), []string{a.URL, b.URL}, "test-token", ids, requests)
+			}()
+			defer func() { cancel(); <-done }()
+			select {
+			case err := <-reply:
+				require.Error(t, err)
+				require.NotContains(t, err.Error(), "private")
+				if tc.persistent {
+					require.ErrorIs(t, err, context.DeadlineExceeded)
+					require.Positive(t, timing.interruptedRounds.Load())
+				}
+			case <-time.After(time.Second):
+				t.Fatal("terminal read or original caller deadline was not preserved")
+			}
+			if tc.wantReads != 0 {
+				require.Equal(t, tc.wantReads, peerReads.Load())
+			}
+		})
+	}
+}
+
+func TestSecretCapacityProjectionReadClassification(t *testing.T) {
+	for _, tc := range []struct {
+		err   error
+		retry bool
+	}{
+		{errSecretCapacityGraphQLTransport, true},
+		{errSecretCapacityGraphQLTimeout, true},
+		{errSecretCapacityGraphQLRead, true},
+		{&capacityHTTPStatusError{status: http.StatusBadGateway}, true},
+		{&capacityHTTPStatusError{status: http.StatusServiceUnavailable}, true},
+		{&capacityHTTPStatusError{status: http.StatusGatewayTimeout}, true},
+		{&capacityHTTPStatusError{status: http.StatusInternalServerError}, false},
+		{&capacityHTTPStatusError{status: http.StatusUnauthorized}, false},
+		{&capacityHTTPStatusError{status: http.StatusTooManyRequests}, false},
+		{&capacityHTTPStatusError{status: http.StatusServiceUnavailable, retryAfter: time.Second}, false},
+		{context.Canceled, false},
+		{context.DeadlineExceeded, false},
+		{errors.New("malformed projection"), false},
+	} {
+		require.Equal(t, tc.retry, secretCapacityRetryableProjectionRead(tc.err), tc.err)
+	}
+}
+
 func TestSecretCapacityProjectionVerifierFailsClosed(t *testing.T) {
+	t.Setenv("CAPACITY_CHAOS_PROFILE", "api-restart")
+	t.Setenv("REPOSITORY_CAPACITY_SECRET_SCENARIO", "0")
 	for _, tc := range []struct {
 		name   string
 		status int
@@ -2217,6 +2815,7 @@ func TestSecretCapacityProjectionVerifierFailsClosed(t *testing.T) {
 	}{
 		{name: "quota", status: http.StatusTooManyRequests},
 		{name: "authentication", status: http.StatusUnauthorized},
+		{name: "internal server error", status: http.StatusInternalServerError},
 		{name: "operation error", body: `{"errors":[{"message":"denied"}],"data":null}`},
 		{name: "incorrect cardinality", body: `{"data":{"nodes":[]}}`},
 		{name: "changed identity", body: `{"data":{"nodes":[{"id":"wrong-id"}]}}`},
@@ -2348,7 +2947,20 @@ func validateSecretCapacityFileStages(workload secretCapacityFileObservations) e
 		return invalid
 	}
 	timelineSequences := make(map[int64]bool, len(workload.Timelines))
+	traceIDs := make(map[string]bool, len(workload.Timelines))
+	if workload.TraceCorrelation && len(workload.Timelines) == 0 {
+		return invalid
+	}
 	for _, row := range workload.Timelines {
+		if workload.TraceCorrelation != (row.TraceID != "") {
+			return invalid
+		}
+		if row.TraceID != "" {
+			if !secretCapacityTraceIDPattern.MatchString(row.TraceID) || row.TraceID == strings.Repeat("0", 32) || traceIDs[row.TraceID] {
+				return invalid
+			}
+			traceIDs[row.TraceID] = true
+		}
 		if row.Sequence <= 0 || row.Sequence > secretCapacityTimelineLimit || timelineSequences[row.Sequence] ||
 			row.Worker < 0 || row.Worker >= 32 || row.OfferedAt.IsZero() ||
 			row.QueueWait < 0 || row.ACK < 0 || row.WorkerOccupied < 0 ||
@@ -2373,7 +2985,8 @@ func validateSecretCapacityFileStages(workload secretCapacityFileObservations) e
 		workload.GitPushes < 0 || workload.GitPushes > workload.Completed ||
 		workload.Acknowledged < 0 || workload.Failed < 0 ||
 		workload.Acknowledged+workload.Failed != workload.Completed || len(workload.Stages) != 6 ||
-		workload.ProjectionPolls < workload.Acknowledged {
+		workload.ProjectionPolls < workload.Acknowledged || workload.ProjectionInterruptedRounds < 0 ||
+		workload.ProjectionInterruptedRounds > workload.ProjectionPolls {
 		return invalid
 	}
 	for name, samples := range map[string]int64{
@@ -2407,7 +3020,7 @@ func validateSecretCapacityFileStages(workload secretCapacityFileObservations) e
 				return invalid
 			}
 			switch parts[1] {
-			case "deadline", "cancelled", "unclassified", "non_fast_forward", "quota", "authentication", "rejection", "transport", "command_failure", "output_limit", "verification":
+			case "deadline", "cancelled", "unclassified", "non_fast_forward", "quota", "authentication", "rejection", "transport", "request_timeout", "command_failure", "output_limit", "verification":
 			default:
 				return invalid
 			}
@@ -2815,7 +3428,7 @@ func TestSecretCapacityRejectsMixedOrIncompleteComponents(t *testing.T) {
 }
 
 func TestSecretCapacityFileStageEvidenceRejectsIncompleteAccounting(t *testing.T) {
-	for _, fault := range []string{"scheduled", "admitted", "attempts", "missing stage", "missing projection read", "missing projection peak", "projection polls", "samples", "projection read samples", "projection peak samples", "projection peak p95", "projection peak p99", "percentiles", "failure counter", "private class", "projection counter", "clock jump"} {
+	for _, fault := range []string{"scheduled", "admitted", "attempts", "missing stage", "missing projection read", "missing projection peak", "projection polls", "negative interrupted rounds", "excess interrupted rounds", "samples", "projection read samples", "projection peak samples", "projection peak p95", "projection peak p99", "percentiles", "failure counter", "private class", "projection counter", "clock jump"} {
 		t.Run(fault, func(t *testing.T) {
 			workload, _, _, _ := secretCapacityComponentFixture(t, t.TempDir())
 			require.NoError(t, validateSecretCapacityFileStages(workload))
@@ -2834,6 +3447,10 @@ func TestSecretCapacityFileStageEvidenceRejectsIncompleteAccounting(t *testing.T
 				delete(workload.Stages, "projection_read_peak")
 			case "projection polls":
 				workload.ProjectionPolls--
+			case "negative interrupted rounds":
+				workload.ProjectionInterruptedRounds = -1
+			case "excess interrupted rounds":
+				workload.ProjectionInterruptedRounds = workload.ProjectionPolls + 1
 			case "samples":
 				stage := workload.Stages["queue_wait"]
 				stage.Samples--
@@ -2906,6 +3523,42 @@ func TestSecretCapacityFileTimelineEvidenceBounds(t *testing.T) {
 				workload.Timelines[0].ACK = -1
 			case "peak":
 				workload.Timelines[0].ProjectionReadPeak++
+			}
+			require.Error(t, validateSecretCapacityFileStages(workload))
+		})
+	}
+}
+
+func TestSecretCapacityFileTraceEvidenceFailsClosed(t *testing.T) {
+	base, _, _, _ := secretCapacityComponentFixture(t, t.TempDir())
+	base.TraceCorrelation = true
+	base.Timelines = []secretCapacityPushTimeline{{
+		Sequence: 1, OfferedAt: time.Now().UTC(), TraceID: strings.Repeat("a", 32),
+	}}
+	require.NoError(t, validateSecretCapacityFileStages(base))
+	for _, fault := range []string{"missing", "zero", "short", "uppercase", "private", "undeclared", "duplicate", "empty"} {
+		t.Run(fault, func(t *testing.T) {
+			workload := base
+			workload.Timelines = append([]secretCapacityPushTimeline{}, base.Timelines...)
+			switch fault {
+			case "missing":
+				workload.Timelines[0].TraceID = ""
+			case "zero":
+				workload.Timelines[0].TraceID = strings.Repeat("0", 32)
+			case "short":
+				workload.Timelines[0].TraceID = "a"
+			case "uppercase":
+				workload.Timelines[0].TraceID = strings.Repeat("A", 32)
+			case "private":
+				workload.Timelines[0].TraceID = "private arbitrary response"
+			case "undeclared":
+				workload.TraceCorrelation = false
+			case "duplicate":
+				second := workload.Timelines[0]
+				second.Sequence = 2
+				workload.Timelines = append(workload.Timelines, second)
+			case "empty":
+				workload.Timelines = nil
 			}
 			require.Error(t, validateSecretCapacityFileStages(workload))
 		})

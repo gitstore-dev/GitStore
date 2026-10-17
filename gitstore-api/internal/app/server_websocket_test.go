@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,9 +23,14 @@ import (
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/gqlerror"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
 )
 
@@ -89,7 +95,12 @@ type webSocketTestEnvironment struct {
 	connections *wsregistry.Registry
 }
 
-func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTestEnvironment {
+func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time, tracing ...bool) *webSocketTestEnvironment {
+	t.Helper()
+	return newWebSocketTestEnvironmentWithLogger(t, expiresAt, zap.NewNop(), tracing...)
+}
+
+func newWebSocketTestEnvironmentWithLogger(t *testing.T, expiresAt time.Time, logger *zap.Logger, tracing ...bool) *webSocketTestEnvironment {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -111,8 +122,9 @@ func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTe
 		nil,
 	)
 	handler, err := NewGraphQLHandler(GraphQLHandlerDeps{
+		Tracing:         len(tracing) > 0 && tracing[0],
 		Store:           store,
-		Logger:          zap.NewNop(),
+		Logger:          logger,
 		Registry:        registry,
 		IDs:             apiruntime.NewSequenceIDGenerator(),
 		ResourceJournal: store.(datastore.ResourceWatchCapable).ResourceWatchJournal(),
@@ -126,6 +138,46 @@ func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTe
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	return &webSocketTestEnvironment{server: server, store: store, connections: connections}
+}
+
+func TestGraphQLTelemetryLinksHTTPParentWithoutTracingWatchLifetime(t *testing.T) {
+	previous := otel.GetTracerProvider()
+	defer otel.SetTracerProvider(previous)
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer provider.Shutdown(t.Context())
+	otel.SetTracerProvider(provider)
+	env := newWebSocketTestEnvironment(t, time.Now().Add(time.Hour), true)
+	ctx, parent := otel.Tracer("controller-test").Start(t.Context(), "controller.reconcile")
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, env.server.URL+"/graphql",
+		strings.NewReader(`{"query":"query { __typename }"}`))
+	require.NoError(t, err)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Transport: observability.Transport(nil)}).Do(request)
+	require.NoError(t, err)
+	_, err = io.Copy(io.Discard, response.Body)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	parent.End()
+	spans := recorder.Ended()
+	require.Len(t, spans, 3)
+	var serverParent, clientID string
+	for _, span := range spans {
+		switch span.Name() {
+		case "http.request":
+			serverParent = span.Parent().SpanID().String()
+			require.Empty(t, span.Attributes())
+		case "api.request":
+			clientID = span.SpanContext().SpanID().String()
+			require.Equal(t, parent.SpanContext().SpanID(), span.Parent().SpanID())
+		}
+		require.Equal(t, parent.SpanContext().TraceID(), span.SpanContext().TraceID())
+	}
+	require.NotEmpty(t, clientID)
+	require.Equal(t, clientID, serverParent)
+	conn := env.dial(t)
+	require.NoError(t, conn.Close())
+	require.Len(t, recorder.Ended(), 3, "WebSocket transport must not start a server span over the watch lifetime")
 }
 
 func (e *webSocketTestEnvironment) dial(t *testing.T) *websocket.Conn {
@@ -299,12 +351,18 @@ func TestGraphQLFilePoolLookupAcceptsBoundedAliasesAndTypedProjection(t *testing
 					}
 				}
 			}
-			Errors json.RawMessage
+			Errors gqlerror.List
 		}
 		err = json.NewDecoder(response.Body).Decode(&result)
 		require.NoError(t, response.Body.Close())
 		require.NoError(t, err)
-		require.Empty(t, result.Errors, "%s", result.Errors)
+		require.Len(t, result.Errors, 1)
+		require.Equal(t, "missing", result.Errors[0].Path.String())
+		require.Len(t, result.Errors[0].Extensions, 2)
+		require.Equal(t, "NOT_FOUND", result.Errors[0].Extensions["code"])
+		diagnostics, err := json.Marshal(result.Errors[0].Extensions["diagnostics"])
+		require.NoError(t, err)
+		require.JSONEq(t, `[{"reason":"FILE_NOT_FOUND","message":"file not found","level":"FAILURE"}]`, string(diagnostics))
 		require.Nil(t, result.Data["missing"])
 		for index := range 10 {
 			file := result.Data[fmt.Sprintf("f%d", index)]

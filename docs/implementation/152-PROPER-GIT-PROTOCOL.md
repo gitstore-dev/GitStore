@@ -1,4 +1,4 @@
-# T152: Implement Proper Git Protocol Solution (Production Architecture)
+# 152: Implement Proper Git Protocol Solution (Production Architecture)
 
 **Date Updated**: 2026-05-09  
 **Status**: 🚫 SUPERSEDED by [Spec 004 (gRPC git service)](../../specs/004-grpc-git-service)

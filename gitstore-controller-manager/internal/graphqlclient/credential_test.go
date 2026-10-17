@@ -22,8 +22,50 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"golang.org/x/time/rate"
 )
+
+func TestServiceAccountExchangeTracesExcludePrivateMaterialAndPreserveCaching(t *testing.T) {
+	previous := otel.GetTracerProvider()
+	defer otel.SetTracerProvider(previous)
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer provider.Shutdown(t.Context())
+	otel.SetTracerProvider(provider)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		require.NotEmpty(t, r.Header.Get("Authorization"))
+		require.NotEmpty(t, r.Header.Get("Traceparent"))
+		_, _ = fmt.Fprintf(w, `{"data":{"issueServiceAccountToken":{"tokenRequest":{"status":{"token":"private-token","expirationTimestamp":%q}}}}}`,
+			time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+	}))
+	defer server.Close()
+	source := NewServiceAccountSource(server.URL, "private-identity", &mockTokenSigner{assertion: "private-assertion"},
+		"assertion-audience", "access-audience", 10*time.Minute, time.Hour)
+	ctx, parent := otel.Tracer("test").Start(t.Context(), "controller.reconcile")
+	token, err := source.Current(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, token)
+	cached, err := source.Current(ctx)
+	require.NoError(t, err)
+	require.Equal(t, token, cached)
+	parent.End()
+	require.EqualValues(t, 1, calls.Load())
+	spans := recorder.Ended()
+	require.Len(t, spans, 2)
+	require.Equal(t, "api.request", spans[0].Name())
+	require.Equal(t, parent.SpanContext().SpanID(), spans[0].Parent().SpanID())
+	for _, span := range spans {
+		for _, attr := range span.Attributes() {
+			require.NotContains(t, attr.Value.AsString(), "private")
+		}
+		require.Empty(t, span.Events())
+	}
+}
 
 // T026: StaticToken tests (unchanged, always returns configured string)
 func TestStaticToken_ReturnsConfiguredToken(t *testing.T) {

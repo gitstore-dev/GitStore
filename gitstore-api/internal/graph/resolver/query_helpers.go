@@ -6,17 +6,34 @@ package resolver
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
+	"github.com/99designs/gqlgen/graphql"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
+	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const nodeFetchFanout = 8
 
-func (r *queryResolver) resolveNodes(ctx context.Context, ids []string) ([]model.Node, error) {
+func (r *queryResolver) resolveNodes(ctx context.Context, ids []string) (result []model.Node, resultErr error) {
+	if trace.SpanFromContext(ctx).IsRecording() {
+		var span trace.Span
+		ctx, span = otel.Tracer("gitstore/graphql").Start(ctx, "graphql.node_resolution")
+		defer func() {
+			if resultErr != nil {
+				span.SetStatus(codes.Error, "node resolution failed")
+			}
+			span.End()
+		}()
+	}
 	nodes := make([]model.Node, len(ids))
 	errs := make([]error, len(ids))
 	var next int
@@ -37,6 +54,7 @@ func (r *queryResolver) resolveNodes(ctx context.Context, ids []string) ([]model
 				}
 				kind, rawID, err := DecodeNodeID(ids[i])
 				if err != nil {
+					errs[i] = invalidGlobalIDError(err)
 					continue
 				}
 				nodes[i], errs[i] = r.resolveNode(ctx, kind, rawID)
@@ -49,18 +67,35 @@ func (r *queryResolver) resolveNodes(ctx context.Context, ids []string) ([]model
 	}
 	for _, err := range errs {
 		if err != nil {
-			return nil, err
+			var structured *gqlerror.Error
+			if !errors.As(err, &structured) ||
+				(structured.Extensions["code"] != string(admission.CodeNotFound) &&
+					structured.Extensions["code"] != string(admission.CodeBadUserInput)) {
+				return nil, err
+			}
+		}
+	}
+	for i, err := range errs {
+		if err != nil {
+			var structured *gqlerror.Error
+			errors.As(err, &structured)
+			indexed := *structured
+			indexed.Path = append(graphql.GetPath(ctx), ast.PathIndex(i))
+			graphql.AddError(ctx, &indexed)
 		}
 	}
 	return nodes, nil
 }
 
 func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (model.Node, error) {
+	if err := security.AuthorizedNodeError(ctx, kind, rawID); err != nil {
+		return nil, err
+	}
 	switch kind {
 	case nodeKindFile:
 		if file, ok := security.AuthorizedFileNode(ctx, rawID); ok {
 			if file == nil {
-				return nil, nil
+				return nil, nodeLookupError(kind, datastore.ErrNotFound)
 			}
 			return DatastoreFileToGraphQL(file), nil
 		}
@@ -115,8 +150,24 @@ func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (mo
 }
 
 func nodeLookupError(kind string, err error) error {
+	var structured *gqlerror.Error
+	if !errors.As(err, &structured) || structured.Extensions["code"] == nil {
+		errors.As(admissionMutationGraphQLError(err), &structured)
+	}
+	if structured != nil && structured.Extensions["code"] != nil {
+		if structured.Extensions["code"] == string(admission.CodeNotFound) && structured.Extensions["diagnostics"] == nil {
+			result := admission.ResourceNotFound(kind, structured.Message)
+			result.Err = err
+			return result
+		}
+		result := *structured
+		result.Err = err
+		return &result
+	}
 	if errors.Is(err, datastore.ErrNotFound) {
-		return nil
+		result := admission.ResourceNotFound(kind, strings.ToLower(kind)+" not found")
+		result.Err = err
+		return result
 	}
 	return &gqlerror.Error{Message: "retrieve " + kind, Err: err}
 }

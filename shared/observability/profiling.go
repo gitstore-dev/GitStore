@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
-package app
+package observability
 
 import (
 	"context"
@@ -11,21 +11,38 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"runtime"
+	runtimetrace "runtime/trace"
 	"strconv"
 	"sync"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/config"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
+var capacityProfileCapture sync.Mutex
+
+// AnnotateRuntimeSpan links the SDK's current runtime task to a sampled,
+// recording span without creating another task or changing its lifetime.
+func AnnotateRuntimeSpan(ctx context.Context) {
+	if !runtimetrace.IsEnabled() {
+		return
+	}
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() || !span.SpanContext().IsSampled() {
+		return
+	}
+	runtimetrace.Log(ctx, "otel.trace_id", span.SpanContext().TraceID().String())
+	runtimetrace.Log(ctx, "otel.span_id", span.SpanContext().SpanID().String())
+}
+
 // StartCapacityProfiler exposes bounded profiles only on an explicitly selected
-// loopback listener. It is separate from the public API and Git HTTP routers.
-func StartCapacityProfiler(cfg config.ProfilingConfig, logger *zap.Logger) (func(context.Context) error, error) {
-	if err := cfg.Validate(); err != nil {
+// loopback listener, separate from the service's public HTTP routers.
+func StartCapacityProfiler(cfg ProfilingConfig, logger *zap.Logger) (func(context.Context) error, error) {
+	address, err := cfg.ListenAddress()
+	if err != nil {
 		return nil, err
 	}
-	address := cfg.ListenAddr
 	if address == "" {
 		return func(context.Context) error { return nil }, nil
 	}
@@ -38,17 +55,33 @@ func StartCapacityProfiler(cfg config.ProfilingConfig, logger *zap.Logger) (func
 		WriteTimeout: 65 * time.Second, IdleTimeout: 5 * time.Second,
 		MaxHeaderBytes: 8 * 1024,
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("capacity profiling listener failed", zap.Error(err))
 		}
 	}()
 	logger.Info("loopback capacity profiler enabled")
-	return server.Shutdown, nil
+	return func(ctx context.Context) error {
+		shutdownErr := server.Shutdown(ctx)
+		// Shutdown can run before Serve has registered this listener.
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			shutdownErr = errors.Join(shutdownErr, err)
+		}
+		if shutdownErr != nil {
+			shutdownErr = errors.Join(shutdownErr, server.Close())
+		}
+		select {
+		case <-done:
+			return shutdownErr
+		case <-ctx.Done():
+			return errors.Join(shutdownErr, ctx.Err())
+		}
+	}, nil
 }
 
 func capacityProfileHandler() http.Handler {
-	var capture sync.Mutex
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /debug/pprof/profile", func(w http.ResponseWriter, r *http.Request) {
 		seconds, err := strconv.Atoi(r.URL.Query().Get("seconds"))
@@ -56,11 +89,11 @@ func capacityProfileHandler() http.Handler {
 			http.Error(w, "profile duration must be 1..60 seconds", http.StatusBadRequest)
 			return
 		}
-		if !capture.TryLock() {
+		if !capacityProfileCapture.TryLock() {
 			http.Error(w, "profile capture already active", http.StatusConflict)
 			return
 		}
-		defer capture.Unlock()
+		defer capacityProfileCapture.Unlock()
 		previousMutexFraction := runtime.SetMutexProfileFraction(5)
 		runtime.SetBlockProfileRate(1_000_000)
 		defer func() {
@@ -75,11 +108,11 @@ func capacityProfileHandler() http.Handler {
 			http.Error(w, "trace duration must be 1..5 seconds", http.StatusBadRequest)
 			return
 		}
-		if !capture.TryLock() {
+		if !capacityProfileCapture.TryLock() {
 			http.Error(w, "profile capture already active", http.StatusConflict)
 			return
 		}
-		defer capture.Unlock()
+		defer capacityProfileCapture.Unlock()
 		pprof.Trace(w, r)
 	})
 	for _, profile := range []string{"heap", "allocs", "block", "mutex", "goroutine"} {
@@ -93,11 +126,11 @@ func capacityProfileHandler() http.Handler {
 				http.Error(w, "only binary profiles are supported", http.StatusBadRequest)
 				return
 			}
-			if !capture.TryLock() {
+			if !capacityProfileCapture.TryLock() {
 				http.Error(w, "profile capture already active", http.StatusConflict)
 				return
 			}
-			defer capture.Unlock()
+			defer capacityProfileCapture.Unlock()
 			handler.ServeHTTP(w, r)
 		})
 	}
