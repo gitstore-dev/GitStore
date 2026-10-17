@@ -1072,6 +1072,127 @@ func TestScylla_FileSnapshotHydrationTopology(t *testing.T) {
 	require.Nil(t, current, "storage failures must not return partial success")
 }
 
+func TestScylla_FileLocatorQueryTopology(t *testing.T) {
+	const readers, rounds, fixtureSize = 8, 6, 64
+	store := newTestStore(t)
+	namespace := "locator-topology-" + newID()
+	require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{UID: newID(), Name: namespace}))
+	uids := make([]gocql.UUID, fixtureSize)
+	created := time.Now().UTC().Truncate(time.Millisecond)
+	for i := range uids {
+		uids[i] = gocql.TimeUUID()
+		require.NoError(t, store.CreateFile(t.Context(), &datastore.File{
+			UID: uids[i].String(), Namespace: namespace, Name: fmt.Sprintf("locator-%d", i),
+			Kind: "File", APIVersion: "storage.gitstore.dev/v1beta1",
+			ResourceVersion: "1", CreationTimestamp: created,
+		}))
+	}
+	host, rawPort, err := net.SplitHostPort(scyllaAddr)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(rawPort)
+	require.NoError(t, err)
+	evidence := &capacityRoutingEvidence{hosts: make(map[string]int)}
+	cluster := gocql.NewCluster(host)
+	cluster.Port, cluster.Keyspace = port, scyllaKeyspace
+	cluster.Consistency = gocql.Quorum
+	cluster.Timeout = 5 * time.Second
+	cluster.DisableShardAwarePort, cluster.IgnorePeerAddr = true, true
+	cluster.AddressTranslator = contactPointTranslator(host, port)
+	cluster.QueryObserver, cluster.StreamObserver = evidence, evidence
+	session, err := cluster.CreateSession()
+	require.NoError(t, err)
+	defer session.Close()
+
+	read := func(ctx context.Context, keys []gocql.UUID, tracer gocql.Tracer) error {
+		args := make([]any, len(keys))
+		expected := make(map[gocql.UUID]bool, len(keys))
+		for i, uid := range keys {
+			args[i], expected[uid] = uid, true
+		}
+		statement := "SELECT uid, namespace, creation_timestamp FROM files_by_uid WHERE uid IN (" +
+			strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",") + ")"
+		iter := session.Query(statement, args...).WithContext(ctx).Trace(tracer).Iter()
+		var uid gocql.UUID
+		var actualNamespace string
+		var actualCreated time.Time
+		var identityErr error
+		for iter.Scan(&uid, &actualNamespace, &actualCreated) {
+			if !expected[uid] || actualNamespace != namespace || !actualCreated.Equal(created) {
+				identityErr = errors.New("invalid File UID locator readback")
+			}
+			delete(expected, uid)
+		}
+		if err := errors.Join(identityErr, iter.Close()); err != nil {
+			return err
+		}
+		if len(expected) != 0 {
+			return errors.New("missing File UID locator readback")
+		}
+		return nil
+	}
+	execute := func(ctx context.Context, keys, batchSize int) error {
+		batches := (keys + batchSize - 1) / batchSize
+		errs := make([]error, batches)
+		var next atomic.Int64
+		var workers sync.WaitGroup
+		for range min(readers, batches) {
+			workers.Go(func() {
+				for batch := int(next.Add(1) - 1); batch < batches; batch = int(next.Add(1) - 1) {
+					start := batch * batchSize
+					errs[batch] = read(ctx, uids[start:min(start+batchSize, keys)], nil)
+				}
+			})
+		}
+		workers.Wait()
+		return errors.Join(errs...)
+	}
+	for _, keys := range []int{8, 16, fixtureSize} {
+		batchSizes := []int{1, 4, 8, 16}
+		for _, batchSize := range batchSizes {
+			require.NoError(t, execute(t.Context(), keys, batchSize))
+		}
+		for round := range rounds {
+			for offset := range batchSizes {
+				batchSize := batchSizes[(offset+round)%len(batchSizes)]
+				evidence.mu.Lock()
+				driverBefore, streamBefore := evidence.driverDuration, evidence.streamDuration
+				requestsBefore := evidence.requests
+				startsBefore, finishesBefore := evidence.streamStarts, evidence.streamFinishes
+				abandonedBefore, retriesBefore := evidence.streamAbandoned, evidence.attempts
+				evidence.mu.Unlock()
+				ctx, cancel := context.WithTimeout(context.WithValue(t.Context(), capacityRoutingKey{}, evidence), 5*time.Second)
+				start := time.Now()
+				err := execute(ctx, keys, batchSize)
+				elapsed := time.Since(start)
+				cancel()
+				require.NoError(t, err)
+				evidence.streams.Wait()
+				evidence.mu.Lock()
+				driver, stream := evidence.driverDuration-driverBefore, evidence.streamDuration-streamBefore
+				requests := evidence.requests - requestsBefore
+				starts, finishes := evidence.streamStarts-startsBefore, evidence.streamFinishes-finishesBefore
+				abandoned, retries := evidence.streamAbandoned-abandonedBefore, evidence.attempts-retriesBefore
+				evidence.mu.Unlock()
+				queries := (keys + batchSize - 1) / batchSize
+				require.Equal(t, queries, requests)
+				require.Equal(t, queries, starts)
+				require.Equal(t, starts, finishes)
+				require.Zero(t, abandoned)
+				require.Zero(t, retries)
+				t.Logf("diagnostic-only File UID locators: RF=%d round=%d keys=%d batch=%d max_readers=%d queries=%d rows=%d elapsed=%s driver_total=%s streams=%d stream_total=%s",
+					scyllaReplicationFactor, round, keys, batchSize, readers, queries, keys, elapsed, driver, starts, stream)
+			}
+		}
+	}
+	if os.Getenv("GITSTORE_TEST_SCYLLA_SERVER_TRACE") == "1" {
+		for _, keys := range []int{1, 16} {
+			traceCapacityRoutingRequest(t, t.Context(), session, evidence, func(ctx context.Context, tracer gocql.Tracer) (bool, error) {
+				return true, read(ctx, uids[:keys], tracer)
+			})
+		}
+	}
+}
+
 func TestScylla_FileUpdateWriteAmplification(t *testing.T) {
 	cfg := testScyllaConfig(t)
 	cfg.QueryObserver = capacityQueryObserver{}
@@ -1337,6 +1458,7 @@ func execCapacityBatchCAS(batch *gocql.Batch) (bool, error) {
 type capacityRoutingEvidence struct {
 	mu              sync.Mutex
 	hosts           map[string]int
+	requests        int
 	attempts        int
 	driverDuration  time.Duration
 	streamStarts    int
@@ -1355,6 +1477,7 @@ func (e *capacityRoutingEvidence) record(ctx context.Context, host *gocql.HostIn
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.hosts[host.ConnectAddress().String()]++
+	e.requests++
 	e.attempts += attempt
 	e.driverDuration += elapsed
 }

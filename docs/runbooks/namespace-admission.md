@@ -1433,6 +1433,16 @@ returning 500 rows in total. The diagnostic compares against bounded point reads
 preserves cross-replica update, deletion/recreation and stale-locator readback.
 Its isolated timings do not establish a combined-load acknowledgement benefit.
 
+The native UID locator diagnostic compares batches of one, four, eight and
+sixteen keys against the same eight-, sixteen- and sixty-four-key fixtures,
+using at most eight readers. It rotates case order across six rounds and checks
+every returned locator, the physical request count, completed driver streams
+and zero retries. Smaller batches issue more requests; compare both elapsed
+time and amplification before changing production packing. Optional
+`GITSTORE_TEST_SCYLLA_SERVER_TRACE=1` captures two explicitly requested server
+traces, for one- and sixteen-key reads. Isolated locator timings and these two
+server traces do not identify the cause of a mixed-workload tail.
+
 Seeded File discovery retries only explicit `NOT_FOUND` errors with a
 `FILE_NOT_FOUND` failure diagnostic at a requested alias whose value is null.
 Other GraphQL failures, malformed responses and mismatched projections fail
