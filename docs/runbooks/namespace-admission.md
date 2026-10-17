@@ -1559,6 +1559,19 @@ continuous OS CPU execution, and overlapping reader intervals must not be
 summed across requests. Transport, host/VM effects and server work remain
 unseparated; this observation does not justify a production tuning change.
 
+Historical byte counters from that same diagnostic show modest sustained
+network demand. The largest per-instance, per-direction rates between adjacent
+approximately five-second scrapes were 3.83 MB/s received and 2.46 MB/s sent
+for the APIs, and 2.80 MB/s received and 4.56 MB/s sent for Scylla. These are
+decimal MB/s; Scylla's counters count socket bytes, not complete Ethernet
+frames. Each value is an independent maximum, not a simultaneous total or a
+sum across network hops. Both APIs' CQL connections reach the three Scylla
+containers directly on their shared Docker bridge, rather than traversing
+the host's physical Ethernet/Wi-Fi link. This argues against sustained bulk
+bandwidth saturation, but does not measure the virtual network's capacity or
+exclude sub-scrape bursts, packet-rate limits, retransmissions, latency or
+host/VM scheduling stalls. Socket waiting alone cannot distinguish these.
+
 For a subsequent owned diagnostic, explicit native tracing can pair a File
 conditional exchange with its own server trace rather than an unrelated
 histogram or isolated query. Add `CAPACITY_PROFILE_NATIVE_SAMPLES=16` to the
