@@ -1714,7 +1714,20 @@ conflict handling remain mandatory. A three-replica regression verifies that
 12 prepared updates use one physical conditional batch, with no initial single;
 stale or canceled rows retire their preparations while the other 11 still
 converge. This verifies the reduced exchange count, not an ACK latency gain.
-The new combining change has not yet passed the original-workload capacity gate.
+
+The isolated combining candidate also failed its single prospective unprofiled
+comparison. Whole-command conditional execution scopes per authoritative row
+fell from 0.523 to 0.261 (50.12%), with single-row scopes falling from 1,120 to
+two. These counters enclose preparation and settling; they are invocation
+scopes, not independently counted wire/server attempts. Nevertheless,
+queue-inclusive File ACK p95 was 3.013s for the control and 3.246s for the
+candidate; p99 was 3.451s and 3.727s. Both missed the unchanged 2s p95 gate,
+and the declared regression threshold again required restoring the control.
+The workload, workers, attached checks and resource limits were unchanged.
+One fixed-order pair is not causal proof, but it does not justify retaining
+the deployment or repeating it for a favorable result. A lower conditional
+execution count or synthetic coordinator speedup is not a substitute for
+improving the complete ACK critical path.
 
 For the running Scylla engine revision, native duration is foreground elapsed
 time measured with a steady clock, not CPU time. Execution tracing begins
