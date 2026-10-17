@@ -3339,14 +3339,23 @@ func (s *scyllaDatastore) catalogParentsActive(ctx context.Context, namespace, r
 		return nil
 	}
 	check := func(checkCtx context.Context) error {
-		repository, err := s.GetRepository(checkCtx, repositoryID)
+		uid, err := gocql.ParseUUID(repositoryID)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: invalid repository uid %s", datastore.ErrNotFound, repositoryID)
 		}
-		if repository != nil && (repository.DeletionTimestamp != nil || datastore.HasDeletionIntent(repository.Status)) {
+		var repository repositoryRow
+		err = s.session.Query("SELECT namespace, deletion_timestamp, status FROM repositories_by_uid WHERE uid=?", nil).
+			WithContext(checkCtx).Bind(uid).GetRelease(&repository)
+		if err != nil {
+			if errors.Is(err, gocql.ErrNotFound) {
+				return fmt.Errorf("%w: repository uid %s", datastore.ErrNotFound, repositoryID)
+			}
+			return fmt.Errorf("scylla: get repository: %w", err)
+		}
+		if repository.DeletionTimestamp != nil || datastore.HasDeletionIntent(jsonOrNil(repository.Status)) {
 			return datastore.ErrConflict
 		}
-		if repository == nil || repository.Namespace != namespace {
+		if repository.Namespace != namespace {
 			return datastore.ErrConflict
 		}
 		return nil

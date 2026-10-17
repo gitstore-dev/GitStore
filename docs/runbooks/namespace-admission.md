@@ -1661,6 +1661,28 @@ queueing as a concrete investigation target for post-ACK worker occupancy;
 they do not establish that changing a fence will improve the ACK gate.
 Preserve Namespace deletion, concurrent-replica and mutation-fencing guarantees.
 
+Resolving the exact reciprocal owner/member links for that entire failing-ACK
+cohort identifies 53 File fence holders and 211 callbacks: 52 groups of four
+and one group of three. Thirteen additional retained traces close all their
+members, on the same API instance clock. Holder mutation intervals have median
+101.035ms and p95 198.503ms; physical query/batch interval unions within each
+holder have median 96.343ms and p95 196.054ms. Compute each holder's uncovered
+interval individually: its median is 1.315ms and p95 5.582ms, not a subtraction
+of the preceding marginal percentiles. Outstanding-request intervals still
+include client, transport and server work; uncovered time is not a CPU profile.
+This closes the linked File holders, not all preceding Repository/lifecycle
+holders or the complete burst critical path.
+
+Catalog parent checks select only the Repository's current Namespace, deletion
+timestamp and status from its authoritative UID row. They do not hydrate its
+body, spec or unrelated metadata. Status remains necessary to reject deletion
+intent and malformed lifecycle state. Only the existing bounded, active
+Namespace reservation can reuse a successful check; failures, a different
+Namespace and a closed reservation retain fresh validation. Ordinary Repository
+reads still return complete envelopes. This reduces the parent-read payload;
+it is not evidence of a passing acknowledgement latency or a reason to omit
+the fresh File projection readback after a mutation.
+
 For the running Scylla engine revision, native duration is foreground elapsed
 time measured with a steady clock, not CPU time. Execution tracing begins
 inside request processing and stops before subsequent response queuing/writing.

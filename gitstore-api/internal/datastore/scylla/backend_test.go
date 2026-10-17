@@ -5070,6 +5070,71 @@ func TestScylla_CatalogReleaseFailureRetainsReservation(t *testing.T) {
 	require.EqualValues(t, 1, pending, "unconfirmed releases remain blocked for explicit repair")
 }
 
+func TestScylla_CatalogParentChecksReadOnlyFreshLifecycleFields(t *testing.T) {
+	type checkKey struct{}
+	peer := newTestStore(t)
+	ctx := t.Context()
+	namespace := &datastore.Namespace{UID: newID(), Name: "narrow-parent-" + newID()[:8]}
+	require.NoError(t, peer.CreateNamespace(ctx, namespace))
+	repository := &datastore.Repository{
+		UID: newID(), Namespace: namespace.Name, Name: "catalog",
+		Body: strings.Repeat("repository payload", 4096),
+		Spec: json.RawMessage(`{"defaultBranch":"main"}`),
+	}
+	require.NoError(t, peer.CreateRepositoryInActiveNamespace(ctx, repository))
+	uid, err := gocql.ParseUUID(repository.UID)
+	require.NoError(t, err)
+	var reads atomic.Int64
+	cfg := testScyllaConfig(t)
+	cfg.QueryObserver = namespaceReservationObserver(func(queryCtx context.Context, query gocql.ObservedQuery) {
+		if queryCtx.Value(checkKey{}) != true ||
+			!strings.Contains(query.Statement, " FROM repositories_by_uid WHERE ") {
+			return
+		}
+		reads.Add(1)
+		assert.Equal(t, "SELECT namespace, deletion_timestamp, status FROM repositories_by_uid WHERE uid=?", query.Statement)
+		assert.Equal(t, []any{uid}, query.Values)
+	})
+	store, err := scylla.New(cfg, zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	raw := newRawSession(t)
+	deleted := time.Now().UTC().Truncate(time.Millisecond)
+	for _, tc := range []struct {
+		name      string
+		namespace string
+		deleted   *time.Time
+		status    string
+		want      error
+	}{
+		{"active", namespace.Name, nil, "", nil},
+		{"deleting", namespace.Name, &deleted, "", datastore.ErrConflict},
+		{"deletion intent", namespace.Name, nil, `{"deletionIntent":{"uid":"intent"}}`, datastore.ErrConflict},
+		{"malformed status", namespace.Name, nil, "{", datastore.ErrConflict},
+		{"null intent", namespace.Name, nil, `{"deletionIntent":null}`, nil},
+		{"wrong namespace", "different", nil, "", datastore.ErrConflict},
+		{"active again", namespace.Name, nil, `{"conditions":[]}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, raw.Query("UPDATE repositories_by_uid SET namespace=?,deletion_timestamp=?,status=? WHERE uid=?",
+				tc.namespace, tc.deleted, tc.status, uid).Exec())
+			before := reads.Load()
+			err := scylla.CatalogParentsActiveForTest(store, context.WithValue(ctx, checkKey{}, true), namespace.Name, repository.UID)
+			require.ErrorIs(t, err, tc.want)
+			require.Equal(t, before+1, reads.Load(), "an unreserved parent check must observe the peer's current row")
+		})
+	}
+	current, err := peer.GetRepository(ctx, repository.UID)
+	require.NoError(t, err)
+	require.Equal(t, repository.Body, current.Body, "ordinary Repository hydration must retain the complete envelope")
+	for _, missing := range []string{newID(), "invalid-uid"} {
+		require.ErrorIs(t, scylla.CatalogParentsActiveForTest(store, ctx, namespace.Name, missing), datastore.ErrNotFound)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	require.ErrorIs(t, scylla.CatalogParentsActiveForTest(store, canceled, namespace.Name, repository.UID), context.Canceled)
+}
+
 func TestScylla_CheckedCatalogParentCannotMoveUntilReservationEnds(t *testing.T) {
 	first, second := newTestStores(t)
 	ctx := t.Context()
