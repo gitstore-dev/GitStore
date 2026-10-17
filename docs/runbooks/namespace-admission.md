@@ -1416,15 +1416,20 @@ the API never sends a 250-key cross-partition `IN` query. This reduces repeated
 client/coordinator request setup, not the number of locator partitions read.
 Canonical records are fetched by exact `(creation_timestamp, uid)` tuples within
 each Namespace, with at most eight Namespace reads active. All locator reads
-finish before authoritative reads begin, preserving the eight-query concurrency
-bound across both phases. Neither lookup uses
+and authoritative reads share one pool of at most eight readers. A full
+sixteen-key, single-Namespace locator batch can proceed directly to its
+authoritative read. Remaining locator results are grouped after all locators
+finish, without waiting for unrelated full-batch authoritative reads.
+Neither lookup uses
 filtering or full-partition scans. Duplicate positions receive
 independent copies; stale locators remain absent and storage failures fail the
 whole read. Authorization checks each record's stored owner and reuses that exact
 snapshot for hydration, without a second read or cross-request cache. Existing
 public request limits are unchanged; singular node reads remain point reads.
 The native hydration diagnostic checks the physical query and returned-row
-counts at the maximum request size, compares against bounded point reads, and
+counts and maximum keys per query at the maximum request size. A 250-File,
+single-Namespace request uses sixteen locator and sixteen authoritative queries,
+returning 500 rows in total. The diagnostic compares against bounded point reads and
 preserves cross-replica update, deletion/recreation and stale-locator readback.
 Its isolated timings do not establish a combined-load acknowledgement benefit.
 

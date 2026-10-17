@@ -230,6 +230,8 @@ type capacityQueryEvidence struct {
 	fileCASAttempts             int
 	fileProjectionReads         int
 	fileProjectionKeys          int
+	fileSnapshotLocatorMaxKeys  int
+	fileSnapshotRowMaxKeys      int
 	namespaceFenceReads         int
 	namespaceReleaseCASAttempts int
 	categoryProductQueries      int
@@ -288,6 +290,12 @@ func (capacityQueryObserver) ObserveQuery(ctx context.Context, query gocql.Obser
 	for i, field := range fields {
 		if field == "from" && i+1 < len(fields) {
 			evidence.tables[fields[i+1]]++
+			switch fields[i+1] {
+			case "files_by_uid":
+				evidence.fileSnapshotLocatorMaxKeys = max(evidence.fileSnapshotLocatorMaxKeys, len(query.Values))
+			case "files_by_namespace":
+				evidence.fileSnapshotRowMaxKeys = max(evidence.fileSnapshotRowMaxKeys, (len(query.Values)-1)/2)
+			}
 			if fields[i+1] == "category_products_by_category" {
 				evidence.categoryProductQueries++
 				evidence.categoryProductRows += query.Rows
@@ -1031,8 +1039,12 @@ func TestScylla_FileSnapshotHydrationTopology(t *testing.T) {
 		require.Equal(t, allUIDs[i], file.UID)
 	}
 	evidence.mu.Lock()
-	require.Equal(t, (datastore.FileSnapshotBatchLimit+15)/16, evidence.tables["files_by_uid"])
-	require.Equal(t, 1, evidence.tables["files_by_namespace"])
+	queriesPerStage := (datastore.FileSnapshotBatchLimit + 15) / 16
+	require.Equal(t, queriesPerStage, evidence.tables["files_by_uid"])
+	require.Equal(t, queriesPerStage, evidence.tables["files_by_namespace"])
+	require.Equal(t, 2*queriesPerStage, evidence.attempts)
+	require.Equal(t, 16, evidence.fileSnapshotLocatorMaxKeys)
+	require.Equal(t, 16, evidence.fileSnapshotRowMaxKeys)
 	require.Equal(t, 2*datastore.FileSnapshotBatchLimit, evidence.rows)
 	require.Zero(t, evidence.retries)
 	require.Zero(t, evidence.errors)
