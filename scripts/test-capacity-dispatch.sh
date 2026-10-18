@@ -1537,6 +1537,7 @@ for (const invalid of [
   ...[null, 'invalid', { data: { category: null } },
     { data: { category: { ...ownCategory, metadata: { ...ownCategory.metadata, name: 'different-name' } } } },
     { data: { category: { ...ownCategory, metadata: { ...ownCategory.metadata, revision: '' } } } },
+    { data: { category: { ...ownCategory, spec: { ...ownCategory.spec, parentRef: { name: 'different-parent' } } } } },
     { data: { category: { ...ownCategory, spec: { title: 'different-title' } } } }].map((body) =>
     ({ response: { status: 200 }, body })),
 ]) {
@@ -1574,6 +1575,23 @@ for (const result of [
   request = () => { calls++; return result; };
   assert.equal(category.submit('create', 'fixture-category', 'fixture-title', '', 0, {}), null);
   assert.equal(calls, 1);
+}
+for (const initialResult of [undefined, classifiedConflict,
+  { response: { status: 503 }, body: classifiedConflict.body }]) {
+  observedCounters = {};
+  calls = 0;
+  request = () => { calls++; return classifiedConflict; };
+  assert.equal(category.submit('create', 'fixture-category', 'fixture-title', '', 0, {}, initialResult), null);
+  assert.equal(calls, 4, 'batch history must not enlarge the four-attempt retry bound');
+  assert.equal(observedCounters.category_mutation_conflicts, initialResult === classifiedConflict ? 5 : 4);
+}
+for (const initialResult of [undefined, { response: { status: 503 }, body: classifiedConflict.body }]) {
+  observedCounters = {};
+  calls = 0;
+  request = () => { calls++; return { response: { status: 200 },
+    body: { errors: [{ extensions: { code: 'ALREADY_EXISTS' } }] } }; };
+  assert.equal(category.submit('create', 'fixture-category', 'fixture-title', '', 0, {}, initialResult), null);
+  assert.equal(calls, 1, 'AlreadyExists without a uniform successful-HTTP conflict must fail');
 }
 
 let now = 1000;
@@ -1699,6 +1717,53 @@ for (const incomplete of [[], [categoryResponse({ metadata: { name: 'incomplete'
 }
 
 const fixtureRequest = request;
+for (const outcome of ['committed', 'wrong-parent', 'wrong-title', 'invalid-revision', 'denied', 'mixed']) {
+  observedCounters = {};
+  now = 1000;
+  const retriedSeeds = new Map();
+  let confirmations = 0;
+  request = (...args) => {
+    const [, , , variables, tags] = args;
+    if (tags.operation === 'createCategory' && /-n[12]$/.test(variables.input.metadata.name)) {
+      retriedSeeds.set(variables.input.metadata.name, variables.input);
+      return { response: { status: 200 }, body: {
+        errors: [{ extensions: { code: 'ALREADY_EXISTS' } }],
+      } };
+    }
+    if (tags.operation === 'confirmCategory') {
+      confirmations++;
+      const input = retriedSeeds.get(variables.name);
+      assert.ok(input, 'confirmation must follow this seed request');
+      const record = categoryResponse(input).json().data.createCategory.category;
+      record.spec = { ...input.spec };
+      if (outcome === 'wrong-parent') record.spec.parentRef = { name: 'different-parent' };
+      if (outcome === 'wrong-title') record.spec.title = 'different-title';
+      if (outcome === 'invalid-revision') record.metadata.revision = '';
+      return { response: { status: 200 }, body: { data: { category: record } } };
+    }
+    return fixtureRequest(...args);
+  };
+  batches = (requests) => requests.map(() => ({
+    status: 200, json: () => ({ errors: [
+      { extensions: { code: outcome === 'denied' ? 'FORBIDDEN' : 'CONFLICT' } },
+      ...(outcome === 'mixed' ? [{ extensions: { code: 'FORBIDDEN' } }] : []),
+    ] }),
+  }));
+  if (outcome === 'committed') {
+    seedCategory.setup();
+    assert.equal(observedCounters.category_seed_created, 2,
+      'a committed batch conflict must retain its history through the bounded seed retry');
+    assert.equal(observedCounters.category_mutation_conflicts, 2);
+    assert.equal(confirmations, 2);
+    assert.equal(retriedSeeds.size, 2);
+  } else {
+    assert.throws(seedCategory.setup, /cannot seed/);
+    assert.equal(observedCounters.category_seed_created, 0);
+    assert.equal(confirmations, outcome === 'denied' || outcome === 'mixed' ? 0 : 1,
+      'only a uniform conflict permits exact-record confirmation');
+  }
+}
+request = fixtureRequest;
 const initialProductData = JSON.parse(JSON.stringify(seededProductData));
 const productRoot = Object.keys(initialProductData.categories).find((name) => name.endsWith('-n0'));
 const productLeaf = productRoot.replace(/-n0$/, '-n2');

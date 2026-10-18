@@ -348,7 +348,12 @@ acknowledged by creation, not merely a same-name resource. Every offered
 Product iteration must finish admission and deletion-race checks, with all six
 checks sampled and zero dropped iterations.
 Category mutation and conflict confirmations validate the expected name, title
-and commit revision. Batch seeds require a response for every request and
+and commit revision; create-conflict confirmation also verifies the intended
+parent. Batch seeding carries an initial uniformly classified conflict into its
+existing four-attempt retry, so a committed create followed by `ALREADY_EXISTS`
+is confirmed rather than losing its conflict history. `ALREADY_EXISTS` alone,
+mixed error codes and HTTP failures do not authorize confirmation.
+Batch seeds require a response for every request and
 cannot trust payloads from HTTP failures. Convergence probes require successful,
 error-free reads of the requested category and a well-formed path; a valid
 zero-millisecond convergence is not a timeout. Filtered reads reject malformed

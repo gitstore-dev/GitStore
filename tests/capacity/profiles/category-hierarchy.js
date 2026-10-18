@@ -543,11 +543,12 @@ function categoryRecord(result, field, name, title) {
 
 // submit runs one create/update, retrying retryable CONFLICTs alternately
 // across both replicas. It returns the admitted record or null.
-function submit(kind, name, title, parent, seq, tags) {
+function submit(kind, name, title, parent, seq, tags, initialResult) {
   const mutation = kind === 'create' ? createMutation : updateMutation;
   const field = kind === 'create' ? 'createCategory' : 'updateCategory';
   const endpoints = seq % 2 === 0 ? [apiA, apiB] : [apiB, apiA];
-  let sawConflict = false;
+  let sawConflict = kind === 'create' && graphqlErrorCode(initialResult) === 'CONFLICT';
+  if (sawConflict) conflicts.add(1);
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const endpoint = endpoints[attempt % 2];
     const result = graphql(endpoint, token, mutation, { input: inputFor(name, title, parent) },
@@ -561,7 +562,11 @@ function submit(kind, name, title, parent, seq, tags) {
     } else if (code === 'ALREADY_EXISTS' && kind === 'create' && sawConflict) {
       // A superseded attempt may have committed: accept only our own record.
       const read = graphql(endpoint, token, readQuery, { namespace, name }, { operation: 'confirmCategory' });
-      return categoryRecord(read, 'category', name, title);
+      const confirmed = categoryRecord(read, 'category', name, title);
+      if (!confirmed) return null;
+      const parentRef = confirmed.spec.parentRef;
+      return (parent ? parentRef && parentRef.name === parent : parentRef === undefined || parentRef === null)
+        ? confirmed : null;
     } else {
       return null;
     }
@@ -621,8 +626,9 @@ export function setup() {
       responses.forEach((response, n) => {
         let body;
         try { body = response.json(); } catch (_) { body = null; }
-        const ok = categoryRecord({ response, body }, 'createCategory', nodeName(chunk[n]), `seed-${nodeName(chunk[n])}`);
-        if (!ok && !submit('create', nodeName(chunk[n]), `seed-${nodeName(chunk[n])}`, nodeName(parentIndex(chunk[n])), n, { traffic: 'seed' })) {
+        const initialResult = { response, body };
+        const ok = categoryRecord(initialResult, 'createCategory', nodeName(chunk[n]), `seed-${nodeName(chunk[n])}`);
+        if (!ok && !submit('create', nodeName(chunk[n]), `seed-${nodeName(chunk[n])}`, nodeName(parentIndex(chunk[n])), n, { traffic: 'seed' }, initialResult)) {
           throw new Error(`cannot seed ${nodeName(chunk[n])}`);
         }
         seeded.add(1);

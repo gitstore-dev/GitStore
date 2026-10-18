@@ -2178,7 +2178,12 @@ against deployed API replicas or capacity acceptance.
 
 Category capacity acknowledgements require successful, error-free responses
 carrying the expected name, title and commit revision, including after conflict
-confirmation. Batch seeding verifies every response before counting admitted
+confirmation. Create-conflict confirmation also checks the intended parent.
+Batch seeding preserves an initial uniformly classified conflict across its
+existing bounded retry; a subsequent already-existing result still requires
+that exact-record confirmation. An already-existing result alone, mixed error
+codes or an HTTP failure cannot authorize confirmation.
+Batch seeding verifies every response before counting admitted
 nodes. Convergence cannot use partial error data or a different category's path;
 a valid zero-millisecond sample remains distinct from timeout. Filtered reads
 reject malformed or duplicate identities and incomplete pagination metadata.
