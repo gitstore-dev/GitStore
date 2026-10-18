@@ -2214,6 +2214,14 @@ actual start and declared duration; cascade convergence during teardown cannot
 inflate overlap with companion pushes. Acceptance retains the minimum
 20 mutations/s for 300 seconds, the existing latency thresholds and worker
 bounds. This accounting supports a single k6 process, not segmented runs.
+The Git companion logs terminal failures as bounded stage/class counts, such as
+`retry_push/non_fast_forward` or `pull/transport`. If its initial push and
+subsequent pull both fail, the pull's classification is retained rather than
+being masked by the earlier push failure. Raw Git output, command arguments and
+credentials are not included. A successful push against a quiescent branch
+does not establish concurrent-write capacity: branch advancement can still
+reject the existing single rebase/retry, and any resulting failure or dropped
+offer continues to fail acceptance.
 The single exclusive-endpoint callback that k6 may deliver while its stop timer
 races is counted separately and sends no request. It cannot replace a planned
 offer or hide a late scheduled request; more than one such callback fails

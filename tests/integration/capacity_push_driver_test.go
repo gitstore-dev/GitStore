@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -77,6 +79,7 @@ type capacityPushStats struct {
 type capacityPushResult struct {
 	acknowledged bool
 	retried      bool
+	failure      string
 	at           time.Time
 	latency      time.Duration
 }
@@ -327,22 +330,32 @@ func (w *capacityPushWorker) push(ctx context.Context, sequence int) capacityPus
 	path, content := capacityPushManifest(w.cfg.kind, w.cfg.runID, w.cfg.namespace, sequence)
 	full := filepath.Join(w.directory, path)
 	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+		result.failure = "prepare/" + secretCapacityFailureClass(err)
 		return result
 	}
 	if err := os.WriteFile(full, content, 0o600); err != nil {
+		result.failure = "write/" + secretCapacityFailureClass(err)
 		return result
 	}
 	for _, args := range [][]string{{"add", "--", path}, {"commit", "--quiet", "-m", fmt.Sprintf("capacity push %s %d", w.cfg.runID, sequence)}} {
 		if _, err := secretCapacityGit(ctx, w.directory, "", args...); err != nil {
+			result.failure = args[0] + "/" + secretCapacityFailureClass(err)
 			return result
 		}
 	}
 	_, err := secretCapacityGit(ctx, w.directory, w.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+	stage := "push"
 	if err != nil && ctx.Err() == nil {
 		result.retried = true
-		if _, pullErr := secretCapacityGit(ctx, w.directory, w.token, "pull", "--quiet", "--rebase", "origin", "main"); pullErr == nil {
+		if _, pullErr := secretCapacityGit(ctx, w.directory, w.token, "pull", "--quiet", "--rebase", "origin", "main"); pullErr != nil {
+			stage, err = "pull", pullErr
+		} else {
+			stage = "retry_push"
 			_, err = secretCapacityGit(ctx, w.directory, w.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
 		}
+	}
+	if err != nil {
+		result.failure = stage + "/" + secretCapacityFailureClass(err)
 	}
 	result.acknowledged = err == nil
 	result.at = time.Now()
@@ -394,6 +407,15 @@ func TestCapacityGitPushDriver(t *testing.T) {
 	t.Logf("push evidence: scheduled=%d offered=%d pushes=%d failures=%d dropped=%d missed=%d cancelled=%t drainTimedOut=%t retries=%d p95=%dms",
 		evidence.Scheduled, evidence.Offered, evidence.Pushes, evidence.Failures, evidence.Dropped,
 		evidence.MissedSchedules, evidence.Cancelled, evidence.DrainTimedOut, evidence.Retries, evidence.LatencyMs.P95)
+	failures := make(map[string]int)
+	for _, result := range schedule.results {
+		if !result.acknowledged {
+			failures[result.failure]++
+		}
+	}
+	if len(failures) > 0 {
+		t.Logf("push failure stages/classes: %v", failures)
+	}
 	if evidence.Pushes == 0 || evidence.Scheduled != evidence.Offered || evidence.Pushes != evidence.Offered ||
 		evidence.Failures != 0 || evidence.Dropped != 0 || evidence.MissedSchedules != 0 ||
 		evidence.Cancelled || evidence.DrainTimedOut {
@@ -477,6 +499,48 @@ func TestCapacityPushDriverCanceledScheduleOffersNothing(t *testing.T) {
 		})
 	if schedule.offered != 0 || schedule.dropped != 0 || len(schedule.results) != 0 || !schedule.cancelled || schedule.scheduled != 20 {
 		t.Fatalf("canceled schedule still offered work or lost its declared plan: %+v", schedule)
+	}
+}
+
+func TestCapacityPushWorkerRetainsFailedPullClass(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		pushCode, pullCode int
+		want               string
+	}{
+		{"authentication", http.StatusServiceUnavailable, http.StatusForbidden, "pull/authentication"},
+		{"transport", http.StatusForbidden, http.StatusServiceUnavailable, "pull/transport"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				code := test.pushCode
+				if requests.Add(1) > 1 {
+					code = test.pullCode
+				}
+				http.Error(w, "private fixture response must not appear in failure evidence", code)
+			}))
+			defer server.Close()
+			directory := t.TempDir()
+			for _, args := range [][]string{
+				{"init", "--quiet"},
+				{"config", "user.name", "GitStore Capacity"},
+				{"config", "user.email", "capacity@gitstore.dev"},
+				{"config", "commit.gpgSign", "false"},
+				{"config", "core.hooksPath", os.DevNull},
+				{"remote", "add", "origin", server.URL + "/fixture.git"},
+			} {
+				if _, err := secretCapacityGit(t.Context(), directory, "", args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			worker := capacityPushWorker{directory: directory,
+				cfg: capacityPushConfig{kind: "category", runID: "failure-class", namespace: "acme"}}
+			result := worker.push(t.Context(), 0)
+			if result.acknowledged || !result.retried || result.failure != test.want || requests.Load() != 2 {
+				t.Fatalf("failed pull was hidden or exposed raw output: %+v requests=%d", result, requests.Load())
+			}
+		})
 	}
 }
 
