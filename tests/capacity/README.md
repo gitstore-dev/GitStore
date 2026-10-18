@@ -1018,7 +1018,13 @@ Set `GIT_URL` to the reachable singleton Git endpoint for Namespace watch runs;
 Repository lifecycle continues to use `REPOSITORY_GIT_URL`. Provenance pushes
 retry only non-fast-forward races, refreshing the current tree at depth one and
 rebasing only the single probe comment commit without force within a 30-second,
-eight-attempt bound. Other Git failures remain fatal.
+eight-attempt bound. The path-only refresh verifies that only the probe manifest
+changed locally and refuses a concurrent edit or deletion of that manifest.
+It preserves unrelated fetched tree entries without checking out the catalog.
+A successful soft reset records the original commit in `ORIG_HEAD`; reusing its
+author and message avoids a separate Git process to rediscover that commit.
+This reduces local preparation, not the fast-forward requirement or retry bound.
+Other Git failures remain fatal.
 Metadata mutations use the existing transient GraphQL classification with a
 30-second total deadline and explicit retry records. Every returned error must
 qualify; a concurrent conflict cannot mask a companion authorization/domain

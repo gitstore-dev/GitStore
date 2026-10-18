@@ -296,17 +296,14 @@ func refreshWatchMetadataProvenancePath(ctx context.Context, h *pushHelper) erro
 	if _, err := secretCapacityGit(ctx, h.workDir, "", "diff", "--quiet", "HEAD^", "FETCH_HEAD", "--", h.provenancePath); err != nil {
 		return fmt.Errorf("provenance manifest changed concurrently; refusing to overwrite it: %w", err)
 	}
-	revision, err := secretCapacityGit(ctx, h.workDir, "", "rev-parse", "HEAD")
-	if err != nil {
-		return err
-	}
 	// Move only our local parent, retaining the comment rewrite in the one
 	// checked-out file. --only preserves FETCH_HEAD's unrelated tree entries
 	// without checking out or rebasing the deployment's full resource tree.
+	// Successful reset records our previous commit in ORIG_HEAD.
 	if _, err := secretCapacityGit(ctx, h.workDir, "", "reset", "--soft", "FETCH_HEAD"); err != nil {
 		return err
 	}
-	_, err = secretCapacityGit(ctx, h.workDir, "", "commit", "--quiet", "--only", "--reuse-message="+strings.TrimSpace(string(revision)), "--", h.provenancePath)
+	_, err = secretCapacityGit(ctx, h.workDir, "", "commit", "--quiet", "--only", "--reuse-message=ORIG_HEAD", "--", h.provenancePath)
 	return err
 }
 
@@ -397,9 +394,19 @@ func TestWatchMetadataProvenancePathOnlyPreparation(t *testing.T) {
 				require.Equal(t, remoteBefore, strings.TrimSpace(string(git(remote, "rev-parse", "main"))))
 				return
 			}
+			metadataArgs := []string{"show", "--no-patch", "--format=%an%x00%ae%x00%aI%x00%B", "HEAD"}
+			originalMetadata := git(h.workDir, metadataArgs...)
+			git(h.workDir, "config", "user.name", "Retry Committer")
+			git(h.workDir, "config", "user.email", "retry@gitstore.dev")
 			for round := range 2 {
+				previousHead := git(h.workDir, "rev-parse", "HEAD")
+				git(h.workDir, "update-ref", "ORIG_HEAD", "HEAD^")
 				git(h.workDir, "fetch", "--quiet", "--depth=1", "origin", "main")
 				require.NoError(t, refreshWatchMetadataProvenancePath(t.Context(), h))
+				require.Equal(t, previousHead, git(h.workDir, "rev-parse", "ORIG_HEAD"),
+					"reset must replace a stale ORIG_HEAD with this attempt's original commit")
+				require.Equal(t, originalMetadata, git(h.workDir, metadataArgs...),
+					"each refresh must preserve the original author, author date and full message")
 				require.Equal(t, remoteBefore, strings.TrimSpace(string(git(h.workDir, "rev-parse", "HEAD^"))))
 				peerHelper.commitProduct("untouched.md", fmt.Sprintf("concurrent catalog content %d\n", round))
 				git(peer, "push", "origin", "main")
