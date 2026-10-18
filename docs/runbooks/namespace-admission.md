@@ -1393,6 +1393,13 @@ with bounded
 These attributes describe encoding, not snapshot freshness. Shallow history,
 ordinary object identity, cancellation, and the exact pack-byte ceiling remain
 unchanged.
+Upload-pack uses a request-local decoded-object cache, capped at the smaller
+of 8 MiB or the pack byte limit. This avoids repeatedly decompressing the same
+subtrees while selecting and encoding intervening commits. The encoder's
+cloned object-database handles disable their own object caches so they do not
+multiply that budget. The cache is released with the request; it neither
+retains refs across requests nor changes fast-forward checks, publication
+locks, retries or acceptance gates.
 Scylla repository-path lookup still validates the forward mapping, current
 authoritative repository, and reverse mapping on every call. After resolving
 the repository UID, its authoritative and reverse reads overlap; both finish

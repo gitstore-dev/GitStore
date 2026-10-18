@@ -60,7 +60,11 @@ impl HttpPackServer {
     ) -> Result<Vec<u8>> {
         let start = Instant::now();
         check_upload_pack_interrupt(interrupt)?;
-        let repo = open_repo(&self.repo_path)?;
+        let mut repo = open_repo(&self.repo_path)?;
+        repo.object_cache_size(
+            self.max_pack_size
+                .min(UPLOAD_PACK_OBJECT_CACHE_BYTES as u64) as usize,
+        );
         let request = parse_upload_pack_request(body)?;
         let span = tracing::Span::current();
         span.set_attribute("git.fetch.want_count", request.wants.len() as i64);
@@ -518,6 +522,7 @@ const MAX_TREE_DELTA_BYTES: usize = 1024 * 1024;
 const MAX_TREE_DELTA_LITERAL_BYTES: usize = 4096;
 const MAX_TREE_DELTA_CANDIDATES: usize = 8;
 const MAX_TREE_DELTA_CHAIN: usize = 32;
+const UPLOAD_PACK_OBJECT_CACHE_BYTES: usize = 8 * 1024 * 1024;
 
 #[cfg(test)]
 thread_local! {
@@ -865,6 +870,7 @@ fn build_incremental_pack<'repo>(
     }
 
     let mut odb = (*repo.objects).clone();
+    odb.unset_object_cache();
     odb.prevent_pack_unload();
     let entries = output::entry::iter_from_counts(
         passthrough,
@@ -997,6 +1003,7 @@ fn build_pack_with_commits(
     // Clone and prepare ODB handle: prevent_pack_unload ensures pack location data
     // remains valid during the entire pack generation pipeline.
     let mut odb = (*repo.objects).clone();
+    odb.unset_object_cache();
     odb.prevent_pack_unload();
 
     // Peel annotated tags: rev_walk traverses commits only, so a want pointing at a
@@ -3059,8 +3066,29 @@ mod tests {
         use std::io::Write;
         use std::process::{Command, Stdio};
 
-        for entry_count in [2000, 10_000, 16_000] {
+        for (entry_count, nested) in [
+            (2000, false),
+            (10_000, false),
+            (16_000, false),
+            (16_000, true),
+        ] {
             let (_dir, repo) = make_test_repo();
+            let write_root = |tree: &gix::objs::Tree| {
+                let id = repo.write_object(tree).unwrap().detach();
+                if nested {
+                    repo.write_object(&gix::objs::Tree {
+                        entries: vec![gix::objs::tree::Entry {
+                            mode: gix::objs::tree::EntryKind::Tree.into(),
+                            filename: "notes".into(),
+                            oid: id,
+                        }],
+                    })
+                    .unwrap()
+                    .detach()
+                } else {
+                    id
+                }
+            };
             let mut tree = gix::objs::Tree::default();
             for index in 0..entry_count {
                 tree.entries.push(gix::objs::tree::Entry {
@@ -3083,7 +3111,7 @@ mod tests {
                     sig,
                     "refs/heads/main",
                     "known catalog snapshot",
-                    repo.write_object(&tree).unwrap().detach(),
+                    write_root(&tree),
                     std::iter::empty::<gix::ObjectId>(),
                 )
                 .unwrap()
@@ -3116,7 +3144,7 @@ mod tests {
                         sig,
                         "refs/heads/main",
                         format!("catalog mutation {index}"),
-                        repo.write_object(&tree).unwrap().detach(),
+                        write_root(&tree),
                         [tip],
                     )
                     .unwrap()
@@ -3131,6 +3159,37 @@ mod tests {
                         .output()
                         .unwrap();
                     assert!(repacked.status.success(), "{repacked:?}");
+                }
+                let commits: Vec<_> = repo
+                    .rev_walk([tip])
+                    .with_boundary([parent])
+                    .sorting(gix::revision::walk::Sorting::BreadthFirst)
+                    .all()
+                    .unwrap()
+                    .map(|commit| commit.unwrap().id)
+                    .collect();
+                let baseline = repo.find_commit(parent).unwrap().tree().unwrap();
+                let mut expected = None;
+                for cache_bytes in [None, Some(UPLOAD_PACK_OBJECT_CACHE_BYTES)] {
+                    let mut diff_repo = repo.clone();
+                    diff_repo.object_cache_size(cache_bytes);
+                    let started = std::time::Instant::now();
+                    let objects = pack_objects_since_snapshot(
+                        &diff_repo,
+                        &commits,
+                        &baseline,
+                        &AtomicBool::new(false),
+                    )
+                    .unwrap();
+                    eprintln!(
+                        "snapshot diff {entry_count} entries (nested={nested}, repacked={packed}, cache={cache_bytes:?}): {:.3} ms",
+                        started.elapsed().as_secs_f64() * 1000.0,
+                    );
+                    if let Some(expected) = &expected {
+                        assert_eq!(&objects, expected);
+                    } else {
+                        expected = Some(objects);
+                    }
                 }
                 FULL_TREE_ENTRIES.with(|count| count.set(0));
                 let started = std::time::Instant::now();
@@ -3151,10 +3210,28 @@ mod tests {
                     "incremental trees must be compacted before full-entry compression: {full_entries} full entries"
                 );
                 eprintln!(
-                    "48 mixed mutations in a {entry_count}-entry tree (repacked={packed}): {} pack bytes, {full_entries} full tree entries, {:.3} ms",
+                    "48 mixed mutations in a {entry_count}-entry tree (nested={nested}, repacked={packed}): {} pack bytes, {full_entries} full tree entries, {:.3} ms",
                     pack.len(),
                     elapsed.as_secs_f64() * 1000.0,
                 );
+                let mut cached_repo = repo.clone();
+                cached_repo.object_cache_size(UPLOAD_PACK_OBJECT_CACHE_BYTES);
+                let started = std::time::Instant::now();
+                let cached_pack = build_pack_with_commits(
+                    &cached_repo,
+                    &[tip.to_string()],
+                    &[parent.to_string()],
+                    None,
+                    true,
+                    8 * 1024 * 1024,
+                    &AtomicBool::new(false),
+                )
+                .unwrap();
+                eprintln!(
+                    "cached pack {entry_count} entries (nested={nested}, repacked={packed}): {:.3} ms",
+                    started.elapsed().as_secs_f64() * 1000.0,
+                );
+                assert_eq!(cached_pack, pack, "caching must not change pack bytes");
                 assert!(
                     pack.len() < 48 * MAX_TREE_DELTA_LITERAL_BYTES + entry_count * 64,
                     "intervening commits must not each resend the complete known catalog tree"
@@ -3247,10 +3324,15 @@ mod tests {
                     count.stdout, b"48\n",
                     "all intervening commits must remain fetchable"
                 );
+                let path = if nested {
+                    "notes/category-01447.md"
+                } else {
+                    "category-01447.md"
+                };
                 let content = Command::new("git")
                     .arg("--git-dir")
                     .arg(receiver.path())
-                    .args(["show", &format!("{tip}:category-01447.md")])
+                    .args(["show", &format!("{tip}:{path}")])
                     .output()
                     .unwrap();
                 assert!(content.status.success(), "{content:?}");
