@@ -16,7 +16,6 @@ use tonic::{metadata::MetadataMap, Request, Status};
 
 pub const SIGNATURE_HEADER: &str = "x-gitstore-rpc";
 const MAX_REPLAYS: usize = 100_000;
-const VERIFICATION_SLOTS: usize = 32;
 const REPLAY_CLEANUP_CLOCK_INTERVAL_MS: u64 = 250;
 const VERIFICATION_WAITERS: u32 = 256;
 const VERIFICATION_WAIT_BYTES: u32 = 128 * 1024 * 1024;
@@ -110,8 +109,6 @@ pub fn callback_request<T: Message>(
 /// capacity bound: requests fail closed until expired entries can be reclaimed.
 struct ReplayState {
     directory: PathBuf,
-    inodes: [Arc<ReplayInode>; 2],
-    next_inode: usize,
     entries: BTreeSet<(u64, String)>,
     nonces: HashSet<String>,
     pending: HashSet<String>,
@@ -120,8 +117,8 @@ struct ReplayState {
     maintenance_in_progress: bool,
 }
 
-#[derive(Debug, Default)]
-struct ReplayDurabilityState {
+#[derive(Default)]
+struct ReplayDirectoryState {
     next: u64,
     pending: Vec<u64>,
     outcomes: HashMap<u64, Result<(), Status>>,
@@ -129,36 +126,20 @@ struct ReplayDurabilityState {
     syncing: bool,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-enum ReplayBarrierKind {
-    #[default]
-    Directory,
-    Inode,
-}
-
-#[derive(Debug, Default)]
-struct ReplayDurability {
-    state: Mutex<ReplayDurabilityState>,
+#[derive(Default)]
+struct ReplayDirectoryDurability {
+    state: Mutex<ReplayDirectoryState>,
     changed: Condvar,
-    kind: ReplayBarrierKind,
-    #[cfg(test)]
-    attempts: std::sync::atomic::AtomicUsize,
 }
 
-impl ReplayDurability {
+impl ReplayDirectoryDurability {
     fn sync(&self, persist: impl Fn() -> Result<(), Status>) -> Result<(), Status> {
-        let unavailable = || {
-            Status::unavailable(match self.kind {
-                ReplayBarrierKind::Directory => "RPC replay directory barrier unavailable",
-                ReplayBarrierKind::Inode => "RPC replay inode barrier unavailable",
-            })
-        };
+        let unavailable = || Status::unavailable("RPC replay directory barrier unavailable");
         let mut state = self.state.lock().map_err(|_| unavailable())?;
-        if state.pending.len() + state.outcomes.len() + state.in_flight >= VERIFICATION_SLOTS {
-            return Err(Status::resource_exhausted(match self.kind {
-                ReplayBarrierKind::Directory => "RPC replay directory barrier exhausted",
-                ReplayBarrierKind::Inode => "RPC replay inode barrier exhausted",
-            }));
+        if state.pending.len() + state.outcomes.len() + state.in_flight >= 32 {
+            return Err(Status::resource_exhausted(
+                "RPC replay directory barrier exhausted",
+            ));
         }
         state.next = state.next.checked_add(1).ok_or_else(unavailable)?;
         let ticket = state.next;
@@ -171,16 +152,13 @@ impl ReplayDurability {
                 state = self.changed.wait(state).map_err(|_| unavailable())?;
                 continue;
             }
-            // Cover only changes queued before this fsync. Later arrivals
-            // require another barrier, including changes to the same inode.
+            // Only entries whose inode fsync already completed can share this
+            // directory barrier. Arrivals during fsync require a later barrier.
             let ready = std::mem::take(&mut state.pending);
             state.in_flight = ready.len();
             state.syncing = true;
             drop(state);
             let started = Instant::now();
-            #[cfg(test)]
-            self.attempts
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let outcome = persist();
             let duration = started.elapsed();
             let publishing = Instant::now();
@@ -192,107 +170,23 @@ impl ReplayDurability {
             state.in_flight = 0;
             self.changed.notify_all();
             drop(state);
-            let (publish_phase, report_phase) = match self.kind {
-                ReplayBarrierKind::Directory => (
-                    RPCVerificationPhase::DirectoryPublish,
-                    RPCVerificationPhase::DirectoryReport,
-                ),
-                ReplayBarrierKind::Inode => (
-                    RPCVerificationPhase::InodePublish,
-                    RPCVerificationPhase::InodeReport,
-                ),
-            };
-            record_rpc_verification_phase(publish_phase, publishing.elapsed().as_secs_f64());
+            record_rpc_verification_phase(
+                RPCVerificationPhase::DirectoryPublish,
+                publishing.elapsed().as_secs_f64(),
+            );
             let reporting = Instant::now();
-            match self.kind {
-                ReplayBarrierKind::Directory => tracing::info!(
-                    requests = ready.len(),
-                    duration_ms = duration.as_secs_f64() * 1000.0,
-                    success = outcome.is_ok(),
-                    "RPC replay directory barrier timing"
-                ),
-                ReplayBarrierKind::Inode => tracing::info!(
-                    requests = ready.len(),
-                    duration_ms = duration.as_secs_f64() * 1000.0,
-                    success = outcome.is_ok(),
-                    "RPC replay inode barrier timing"
-                ),
-            }
-            record_rpc_verification_phase(report_phase, reporting.elapsed().as_secs_f64());
+            tracing::info!(
+                requests = ready.len(),
+                duration_ms = duration.as_secs_f64() * 1000.0,
+                success = outcome.is_ok(),
+                "RPC replay directory barrier timing"
+            );
+            record_rpc_verification_phase(
+                RPCVerificationPhase::DirectoryReport,
+                reporting.elapsed().as_secs_f64(),
+            );
             state = self.state.lock().map_err(|_| unavailable())?;
         }
-    }
-}
-
-#[derive(Debug)]
-struct ReplayInode {
-    path: PathBuf,
-    file: File,
-    durability: ReplayDurability,
-    #[cfg(test)]
-    fail_sync: std::sync::atomic::AtomicBool,
-}
-
-impl ReplayInode {
-    fn open(path: PathBuf) -> Result<Arc<Self>, Status> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .or_else(|error| {
-                if error.kind() != std::io::ErrorKind::AlreadyExists {
-                    return Err(error);
-                }
-                let metadata = fs::symlink_metadata(&path)?;
-                if !metadata.is_file() || metadata.len() != 0 {
-                    return Err(std::io::Error::other("invalid RPC replay inode"));
-                }
-                OpenOptions::new().read(true).write(true).open(&path)
-            })
-            .map_err(|_| Status::unavailable("RPC replay inode storage unavailable"))?;
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|_| Status::unavailable("RPC replay inode metadata unavailable"))?;
-        if !metadata.is_file() || metadata.len() != 0 {
-            return Err(Status::unavailable("invalid RPC replay inode"));
-        }
-        file.sync_all()
-            .map_err(|_| Status::unavailable("RPC replay inode durability failed"))?;
-        Ok(Arc::new(Self {
-            path,
-            file,
-            durability: ReplayDurability {
-                kind: ReplayBarrierKind::Inode,
-                ..Default::default()
-            },
-            #[cfg(test)]
-            fail_sync: std::sync::atomic::AtomicBool::new(false),
-        }))
-    }
-
-    fn sync_all(&self) -> Result<(), Status> {
-        self.durability.sync(|| {
-            let started = Instant::now();
-            let result = self.persist();
-            record_rpc_verification_phase(
-                RPCVerificationPhase::InodeBarrier,
-                started.elapsed().as_secs_f64(),
-            );
-            result
-        })
-    }
-
-    fn persist(&self) -> Result<(), Status> {
-        #[cfg(test)]
-        if self
-            .fail_sync
-            .swap(false, std::sync::atomic::Ordering::Relaxed)
-        {
-            return Err(Status::unavailable("injected RPC replay inode failure"));
-        }
-        self.file
-            .sync_all()
-            .map_err(|_| Status::unavailable("RPC replay durability failed"))
     }
 }
 
@@ -300,21 +194,6 @@ impl ReplayState {
     fn open(directory: PathBuf) -> Result<Self, Status> {
         fs::create_dir_all(&directory)
             .map_err(|_| Status::unavailable("RPC replay storage unavailable"))?;
-        // Keep anchors outside the v1 record directory so existing readers
-        // still recover every spent nonce without knowing about shared inodes.
-        let inode_directory = directory.with_extension("inodes-v1");
-        fs::create_dir_all(&inode_directory)
-            .map_err(|_| Status::unavailable("RPC replay inode storage unavailable"))?;
-        let inodes = [
-            ReplayInode::open(inode_directory.join("0"))?,
-            ReplayInode::open(inode_directory.join("1"))?,
-        ];
-        Self::sync_directory_at(&inode_directory)?;
-        Self::sync_directory_at(
-            directory
-                .parent()
-                .ok_or_else(|| Status::unavailable("RPC replay parent directory unavailable"))?,
-        )?;
         let high_water = match fs::read_to_string(directory.join("clock")) {
             Ok(value) => value
                 .parse()
@@ -324,8 +203,6 @@ impl ReplayState {
         };
         let mut state = Self {
             directory,
-            inodes,
-            next_inode: 0,
             entries: BTreeSet::new(),
             nonces: HashSet::new(),
             pending: HashSet::new(),
@@ -382,7 +259,7 @@ impl ReplayState {
             .map_err(|_| Status::unavailable("RPC replay clock unavailable"))?;
         Self::sync_directory_at(directory)
     }
-    fn reserve(&mut self, now: u64, expiry: u64, nonce: &str) -> Result<Arc<ReplayInode>, Status> {
+    fn reserve(&mut self, now: u64, expiry: u64, nonce: &str) -> Result<File, Status> {
         if now < self.high_water {
             return Err(Status::unavailable("RPC clock moved backwards"));
         }
@@ -393,30 +270,22 @@ impl ReplayState {
             return Err(Status::resource_exhausted("RPC replay capacity exhausted"));
         }
         let path = self.directory.join(format!("{expiry}-{nonce}"));
-        let mut reserved = None;
-        for offset in 0..self.inodes.len() {
-            let index = (self.next_inode + offset) % self.inodes.len();
-            match fs::hard_link(&self.inodes[index].path, &path) {
-                Ok(()) => {
-                    self.next_inode = (index + 1) % self.inodes.len();
-                    reserved = Some(self.inodes[index].clone());
-                    break;
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    Status::unauthenticated("RPC replay rejected")
+                } else {
+                    Status::unavailable("RPC replay storage unavailable")
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::TooManyLinks => continue,
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    return Err(Status::unauthenticated("RPC replay rejected"));
-                }
-                Err(_) => return Err(Status::unavailable("RPC replay storage unavailable")),
-            }
-        }
-        let inode = reserved.ok_or_else(|| {
-            Status::resource_exhausted("RPC replay inode link capacity exhausted")
-        })?;
+            })?;
         self.entries.insert((expiry, nonce.to_owned()));
         self.nonces.insert(nonce.to_owned());
         self.pending.insert(nonce.to_owned());
         self.high_water = now;
-        Ok(inode)
+        Ok(file)
     }
 }
 #[derive(Clone)]
@@ -424,7 +293,7 @@ pub struct RPCVerifier {
     secret: Arc<str>,
     previous: Option<Arc<str>>,
     replay: Arc<Mutex<ReplayState>>,
-    directory_durability: Arc<ReplayDurability>,
+    directory_durability: Arc<ReplayDirectoryDurability>,
     verification_slots: Arc<tokio::sync::Semaphore>,
     verification_waiters: Arc<tokio::sync::Semaphore>,
     verification_wait_bytes: Arc<tokio::sync::Semaphore>,
@@ -440,8 +309,8 @@ impl RPCVerifier {
             replay: Arc::new(Mutex::new(ReplayState::open(
                 data_root.join(".rpc-replay-v1"),
             )?)),
-            directory_durability: Arc::new(ReplayDurability::default()),
-            verification_slots: Arc::new(tokio::sync::Semaphore::new(VERIFICATION_SLOTS)),
+            directory_durability: Arc::new(ReplayDirectoryDurability::default()),
+            verification_slots: Arc::new(tokio::sync::Semaphore::new(32)),
             verification_waiters: Arc::new(tokio::sync::Semaphore::new(
                 VERIFICATION_WAITERS as usize,
             )),
@@ -730,7 +599,9 @@ impl RPCVerifier {
         // Pending reservations cannot be reclaimed while their durable writes
         // drain, even if the request expires or its caller is cancelled.
         let persisting = Instant::now();
-        let inode = file.sync_all();
+        let inode = file
+            .sync_all()
+            .map_err(|_| Status::unavailable("RPC replay durability failed"));
         let replay_inode_ms = persisting.elapsed().as_secs_f64() * 1000.0;
         record_rpc_verification_phase(RPCVerificationPhase::ReplayInode, replay_inode_ms / 1000.0);
         let mut replay_directory_ms = 0.0;
@@ -1181,7 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_barrier_reporting_cannot_block_later_durability() {
+    fn directory_barrier_reporting_cannot_block_later_durability() {
         use std::sync::mpsc;
         use std::thread;
         use std::time::Duration;
@@ -1207,14 +1078,8 @@ mod tests {
                 }
             }
         }
-        for (kind, failed) in [ReplayBarrierKind::Directory, ReplayBarrierKind::Inode]
-            .into_iter()
-            .flat_map(|kind| [false, true].map(|failed| (kind, failed)))
-        {
-            let durability = Arc::new(ReplayDurability {
-                kind,
-                ..Default::default()
-            });
+        for failed in [false, true] {
+            let durability = Arc::new(ReplayDirectoryDurability::default());
             let (entered, reporting) = mpsc::channel();
             let (release, resumed) = mpsc::channel();
             let (completed, completion) = mpsc::channel();
@@ -1262,7 +1127,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_barriers_coalesce_ready_peers_bound_waiters_and_preserve_failures() {
+    fn directory_barriers_coalesce_ready_peers_bound_waiters_and_preserve_failures() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::mpsc;
         use std::thread;
@@ -1276,14 +1141,8 @@ mod tests {
                 }
             }
         }
-        for (kind, failed) in [ReplayBarrierKind::Directory, ReplayBarrierKind::Inode]
-            .into_iter()
-            .flat_map(|kind| [false, true].map(|failed| (kind, failed)))
-        {
-            let durability = Arc::new(ReplayDurability {
-                kind,
-                ..Default::default()
-            });
+        for failed in [false, true] {
+            let durability = Arc::new(ReplayDirectoryDurability::default());
             let calls = Arc::new(AtomicUsize::new(0));
             let (entered, entries) = mpsc::channel();
             let (first_release, first_wait) = mpsc::channel();
@@ -1974,324 +1833,6 @@ mod tests {
                 .code(),
             tonic::Code::Unavailable
         );
-    }
-
-    #[test]
-    fn shared_nonce_inodes_require_both_barriers_and_preserve_legacy_replay_records() {
-        use std::sync::atomic::Ordering;
-        use std::sync::mpsc;
-        use std::thread;
-        use std::time::Duration;
-
-        struct Resume<'a> {
-            inodes: &'a [Arc<ReplayInode>; 2],
-            directory: &'a ReplayDurability,
-            inode_paused: bool,
-            directory_paused: bool,
-        }
-        impl Resume<'_> {
-            fn inodes(&mut self) {
-                if self.inode_paused {
-                    for inode in self.inodes {
-                        inode.durability.state.lock().unwrap().syncing = false;
-                        inode.durability.changed.notify_all();
-                    }
-                    self.inode_paused = false;
-                }
-            }
-            fn directory(&mut self) {
-                if self.directory_paused {
-                    self.directory.state.lock().unwrap().syncing = false;
-                    self.directory.changed.notify_all();
-                    self.directory_paused = false;
-                }
-            }
-        }
-        impl Drop for Resume<'_> {
-            fn drop(&mut self) {
-                self.inodes();
-                self.directory();
-            }
-        }
-
-        let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join(".rpc-replay-v1");
-        fs::create_dir(&directory).unwrap();
-        let method = "/gitstore.git.v1.GitService/CreateRepository";
-        let now = 1_700_000_000_000;
-        let legacy = signed_at(
-            CreateRepositoryRequest::default(),
-            "key",
-            "gitstore-git",
-            method,
-            now,
-            &"f".repeat(32),
-        )
-        .unwrap();
-        File::create(directory.join(format!("{}-{}", now + 60_000, "f".repeat(32))))
-            .unwrap()
-            .sync_all()
-            .unwrap();
-        ReplayState::sync_directory_at(&directory).unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
-        let inodes = verifier.replay.lock().unwrap().inodes.clone();
-        let requests: Vec<_> = (0..VERIFICATION_SLOTS)
-            .map(|nonce| {
-                signed_at(
-                    CreateRepositoryRequest::default(),
-                    "key",
-                    "gitstore-git",
-                    method,
-                    now,
-                    &format!("{nonce:032x}"),
-                )
-                .unwrap()
-            })
-            .collect();
-        for inode in &inodes {
-            inode.durability.state.lock().unwrap().syncing = true;
-        }
-        verifier.directory_durability.state.lock().unwrap().syncing = true;
-        thread::scope(|scope| {
-            let mut resume = Resume {
-                inodes: &inodes,
-                directory: &verifier.directory_durability,
-                inode_paused: true,
-                directory_paused: true,
-            };
-            let (completed, results) = mpsc::channel();
-            for request in &requests {
-                let completed = completed.clone();
-                let verifier = &verifier;
-                scope.spawn(move || {
-                    completed
-                        .send(verifier.verify_at(
-                            request.metadata(),
-                            method,
-                            request.get_ref(),
-                            now,
-                        ))
-                        .unwrap();
-                });
-            }
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while inodes
-                .iter()
-                .map(|inode| inode.durability.state.lock().unwrap().pending.len())
-                .sum::<usize>()
-                != VERIFICATION_SLOTS
-            {
-                assert!(Instant::now() < deadline, "inode waiters did not register");
-                thread::sleep(Duration::from_millis(1));
-            }
-            assert!(results.try_recv().is_err());
-            assert_eq!(
-                verifier.replay.lock().unwrap().pending.len(),
-                VERIFICATION_SLOTS
-            );
-            for inode in &inodes {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::MetadataExt;
-                    assert_eq!(inode.file.metadata().unwrap().nlink(), 17);
-                }
-            }
-            resume.inodes();
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while verifier
-                .directory_durability
-                .state
-                .lock()
-                .unwrap()
-                .pending
-                .len()
-                != VERIFICATION_SLOTS
-            {
-                assert!(
-                    Instant::now() < deadline,
-                    "directory waiters did not register"
-                );
-                thread::sleep(Duration::from_millis(1));
-            }
-            assert!(results.try_recv().is_err());
-            for inode in &inodes {
-                assert_eq!(inode.durability.attempts.load(Ordering::Relaxed), 1);
-            }
-            resume.directory();
-            for _ in 0..VERIFICATION_SLOTS {
-                results
-                    .recv_timeout(Duration::from_secs(5))
-                    .unwrap()
-                    .unwrap();
-            }
-        });
-        assert_eq!(
-            verifier
-                .directory_durability
-                .attempts
-                .load(Ordering::Relaxed),
-            1
-        );
-        assert!(verifier.replay.lock().unwrap().pending.is_empty());
-        let names: Vec<_> = fs::read_dir(&directory)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-            .collect();
-        assert_eq!(names.len(), VERIFICATION_SLOTS + 1);
-        for name in names {
-            let (expiry, nonce) = name.split_once('-').unwrap();
-            assert_eq!(expiry.parse::<u64>().unwrap(), now + 60_000);
-            decode_hex(nonce, 16).unwrap();
-        }
-        drop(inodes);
-        drop(verifier);
-        let replacement = RPCVerifier::new("key", None, root.path()).unwrap();
-        for request in requests.iter().chain(std::iter::once(&legacy)) {
-            assert_eq!(
-                replacement
-                    .verify_at(request.metadata(), method, request.get_ref(), now)
-                    .unwrap_err()
-                    .code(),
-                tonic::Code::Unauthenticated
-            );
-        }
-    }
-
-    #[test]
-    fn shared_nonce_inode_failures_remain_spent_and_do_not_poison_later_flushes() {
-        use std::sync::atomic::Ordering;
-
-        let root = tempfile::tempdir().unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
-        verifier.replay.lock().unwrap().inodes[0]
-            .fail_sync
-            .store(true, Ordering::Relaxed);
-        let method = "/gitstore.git.v1.GitService/CreateRepository";
-        let now = 1_700_000_000_000;
-        let request = signed_at(
-            CreateRepositoryRequest::default(),
-            "key",
-            "gitstore-git",
-            method,
-            now,
-            &"a".repeat(32),
-        )
-        .unwrap();
-        assert_eq!(
-            verifier
-                .verify_at(request.metadata(), method, request.get_ref(), now)
-                .unwrap_err()
-                .code(),
-            tonic::Code::Unavailable
-        );
-        assert_eq!(
-            verifier
-                .directory_durability
-                .attempts
-                .load(Ordering::Relaxed),
-            0
-        );
-        assert!(verifier.replay.lock().unwrap().pending.is_empty());
-        assert_eq!(
-            verifier
-                .verify_at(request.metadata(), method, request.get_ref(), now)
-                .unwrap_err()
-                .code(),
-            tonic::Code::Unauthenticated
-        );
-        for nonce in ["b".repeat(32), "c".repeat(32)] {
-            let request = signed_at(
-                CreateRepositoryRequest::default(),
-                "key",
-                "gitstore-git",
-                method,
-                now,
-                &nonce,
-            )
-            .unwrap();
-            verifier
-                .verify_at(request.metadata(), method, request.get_ref(), now)
-                .unwrap();
-        }
-        assert!(
-            verifier.replay.lock().unwrap().inodes[0]
-                .durability
-                .attempts
-                .load(Ordering::Relaxed)
-                >= 2
-        );
-    }
-
-    #[test]
-    fn shared_nonce_inode_storage_and_destination_collisions_fail_closed() {
-        let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join("replay");
-        let anchors = directory.with_extension("inodes-v1");
-        fs::create_dir(&anchors).unwrap();
-        fs::write(anchors.join("0"), b"not an empty replay inode").unwrap();
-        assert_eq!(
-            ReplayState::open(directory.clone()).err().unwrap().code(),
-            tonic::Code::Unavailable
-        );
-        assert_eq!(
-            fs::read(anchors.join("0")).unwrap(),
-            b"not an empty replay inode"
-        );
-        fs::remove_file(anchors.join("0")).unwrap();
-        #[cfg(unix)]
-        {
-            let target = root.path().join("not-created");
-            std::os::unix::fs::symlink(&target, anchors.join("0")).unwrap();
-            assert_eq!(
-                ReplayState::open(directory.clone()).err().unwrap().code(),
-                tonic::Code::Unavailable
-            );
-            assert!(!target.exists());
-            fs::remove_file(anchors.join("0")).unwrap();
-        }
-        let mut replay = ReplayState::open(directory.clone()).unwrap();
-        let nonce = "a".repeat(32);
-        let path = directory.join(format!("1000-{nonce}"));
-        fs::write(&path, b"existing record").unwrap();
-        assert_eq!(
-            replay.reserve(1, 1000, &nonce).unwrap_err().code(),
-            tonic::Code::Unauthenticated
-        );
-        assert_eq!(fs::read(&path).unwrap(), b"existing record");
-        assert!(replay.entries.is_empty() && replay.nonces.is_empty() && replay.pending.is_empty());
-        assert_eq!(replay.high_water, 0);
-    }
-
-    #[test]
-    fn shared_nonce_inodes_preserve_the_full_retained_record_capacity() {
-        let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join("replay");
-        let mut replay = ReplayState::open(directory.clone()).unwrap();
-        for nonce in 0..MAX_REPLAYS {
-            replay.reserve(1, 60_001, &format!("{nonce:032x}")).unwrap();
-            if replay.pending.len() == VERIFICATION_SLOTS || nonce + 1 == MAX_REPLAYS {
-                for inode in &replay.inodes {
-                    inode.sync_all().unwrap();
-                }
-                replay.sync_directory().unwrap();
-                replay.pending.clear();
-            }
-        }
-        assert_eq!(replay.entries.len(), MAX_REPLAYS);
-        assert_eq!(replay.nonces.len(), MAX_REPLAYS);
-        assert!(replay.pending.is_empty());
-        assert_eq!(
-            replay
-                .reserve(1, 60_001, &"f".repeat(32))
-                .unwrap_err()
-                .code(),
-            tonic::Code::ResourceExhausted
-        );
-        drop(replay);
-        let recovered = ReplayState::open(directory).unwrap();
-        assert_eq!(recovered.entries.len(), MAX_REPLAYS);
-        assert_eq!(recovered.nonces.len(), MAX_REPLAYS);
-        assert!(recovered.pending.is_empty());
     }
 
     #[test]

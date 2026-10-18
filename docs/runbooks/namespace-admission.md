@@ -293,26 +293,14 @@ and `RPC replay reservation timing` logs. Deployments without a Git-service
 Prometheus scrape surface must collect these completed-request events; cgroup
 CPU/RSS snapshots do not contain the verification histograms.
 
-Signed RPCs retain an exclusive nonce record for each request. New records
-are hard links to two retained, empty inodes, spread between them to bound
-per-inode link pressure. Each link must be covered by a successful inode
-fsync, then a successful nonce-directory fsync. Already-ready requests sharing
-an inode can share its fsync; requests arriving during that fsync require a
-later one. The directory barrier applies the same rule after inode persistence.
-Each barrier starts immediately and covers at most the existing 32 verifiers.
-No request is authorized before both of its covering barriers succeed.
-A failed barrier fails every covered request, without relaxing replay rejection
-or allowing uncertain records to be retried as new nonces. There is no collection
-timer, background writer or increase in verification concurrency. Empty anchors
-live beside the nonce directory in `.rpc-replay-v1.inodes-v1`; the existing
-`<expiry>-<nonce>` record names and restart scan are unchanged. Retain the complete
-Git data volume. Storage must support same-filesystem hard links and durable
-file/directory synchronization; allocation and synchronization errors fail closed.
-The 100,000-record ceiling remains unchanged.
-
-The `inode_barrier` verification phase counts physical shared-inode fsync
-attempts, not requests or startup preparation. `RPC replay inode barrier timing`
-events report its duration, success and covered-request count. The
+Signed RPCs retain an exclusive nonce record and an inode fsync for each
+request. After that fsync completes, at most 32 verification requests can
+share an already-ready directory fsync. The first ready request starts its
+barrier immediately; arrivals during a barrier require a later barrier.
+No request is authorized until its own covering barrier succeeds. A failed
+barrier fails every covered request, without relaxing replay rejection or
+allowing uncertain records to be retried as new nonces. There is no collection
+timer, background writer or increase in verification concurrency. The
 `directory_barrier` verification phase counts physical nonce-directory fsync
 attempts, not individual requests or separate clock-cleanup barriers.
 Fixed-field `RPC replay directory barrier timing`
@@ -320,17 +308,16 @@ events report the same barrier duration, success and covered-request count.
 Completed results are published and waiting verifiers notified before that
 timing event is reported, so a slow log sink cannot retain the shared durability
 gate. Reporting remains synchronous in the owning verification slot.
-The fixed `inode_publish`/`inode_report` and
-`directory_publish`/`directory_report` phases separate result
+The fixed `directory_publish` and `directory_report` phases separate result
 publication from timing-event reporting; neither replaces or skips a durability
 barrier, changes its outcome, or increases the existing admission bounds.
 Reconcile these counts with completed reservation events before claiming
 physical request reduction; per-request persistence also includes inode fsync
 and any wait for its covering barrier.
 The `replay_inode` and `replay_directory` phases, also present as fixed fields
-on reservation timing events, separate the complete inode wait from the
+on reservation timing events, separate the mandatory inode fsync from the
 complete directory wait. A shared barrier's physical duration is contained
-inside participating requests' corresponding waits; do not add these overlapping
+inside participating requests' directory waits; do not add these overlapping
 durations or compare their unlike sample counts as an end-to-end latency claim.
 
 One already-admitted verifier performs expired-record maintenance at a time.
@@ -1746,25 +1733,53 @@ Exact span/event joins for the 198 retained ACKs above 2s account for all
 792 Git RPCs in those traces, with no missing verification events. Mean
 verification/persistence times were 38.147/33.304ms for discovery and
 34.830/27.853ms for receive-pack. Envelope checks averaged below 0.1ms and
-verification-slot waits below 0.01ms. This attributes the observed verification
-delay to durable replay persistence, not cryptography or an exhausted verifier
-pool. The corresponding file-read RPCs are asynchronous admission readback,
-not direct ACK dependencies. This selected failing-ACK cohort does not describe
-all requests or establish that eliminating its persistence time would meet
-the complete queue-inclusive gate.
+verification-slot waits below 0.01ms. In discovery, mean inode persistence
+and directory-barrier waits were 15.813ms and 17.490ms. These observations
+identify durable replay persistence, not cryptography or an exhausted
+verification pool. The file-read RPCs in this cohort are asynchronous admission
+readback, not direct ACK dependencies. This selected cohort does not describe
+all requests or establish that removing its persistence time would meet the
+complete queue-inclusive gate.
 
-The shared-inode durability candidate retains both covering fsync barriers.
-A separate filesystem mechanism check used 32 workers and three counterbalanced
-rounds: grouped shared-inode p95 was 5.064/4.985/4.449ms, versus
-12.014/8.417/9.225ms for fresh per-request inodes. Ungrouped shared-inode
-p95 was 10.404/11.319/11.503ms. Grouping reduced physical request inode fsyncs
-from 512 to 166/163/154, without a collection timer. These are primitive
-measurements, not Git RPC or ACK improvements. The Rust implementation also
-exercises both barriers, failed durability, late arrivals, cancellation,
-legacy records and replacement; an actual 100,000-record population survives
-restart and rejects the next reservation at the unchanged ceiling.
-The candidate has not been deployed or compared under the original workload,
-and none of these results satisfies the 2s ACK gate.
+A subsequent Rust candidate used exclusive hard links to two empty anchors,
+retaining a covering inode fsync followed by a covering directory fsync for
+every request. It shared only already-ready inode flushes, without a timer,
+background writer or increased verification bounds. A separate 32-worker,
+three-round filesystem check reduced primitive p95 from
+12.014/8.417/9.225ms to 5.064/4.985/4.449ms. Native and Linux verifier
+regressions covered both barriers, failures, late arrivals, cancellation,
+legacy records and replacement. Actual 100,000-record creation and restart
+recovery preserved the unchanged capacity ceiling. These checks did not
+establish a production crash-durability or ACK improvement claim.
+
+Its single prospective original-load comparison did not demonstrate an ACK
+benefit. Both roles retained the same driver, 1,400 File and 1,400 Repository
+offers, 32/20 workers, 2,800 attached two-API checks, queues, deadlines, policies
+and resource limits. Only the Git binary changed; the APIs and Git runtime
+filesystem were unchanged. The Git replacement was non-overlapping on retained
+storage. All offers completed without mutation or projection failures.
+
+| Queue-inclusive File ACK | Control | Shared-inode candidate |
+| --- | ---: | ---: |
+| p95 | 3.094s | 3.123s |
+| p99 | 3.670s | 3.707s |
+
+Both observations missed the unchanged 2s p95 gate; candidate p95 was 0.96%
+higher. Whole-command inode fsyncs per completed reservation fell only from
+1.000 to 0.968: 20,303 physical inode barriers covered 20,979 reservations.
+Directory barriers per reservation increased from 0.881 to 0.921, so combined
+request-barrier scopes did not decrease. These counts include preparation
+and settling and are not File-only critical-path measurements. The primitive
+grouping benefit did not transfer to the actual arrival pattern sufficiently
+to justify the candidate. Neither a faster isolated primitive nor lower
+marginal HTTP/readback percentiles substitutes for the ACK objective.
+
+The 5% regression cutoff was not triggered. Nevertheless, the non-winning
+candidate was explicitly rejected, the original Git process was restored,
+and the candidate code was reverted while preserving its experiment history.
+One ordered pair is not statistical proof, and it must not be repeated to
+seek a favorable result. The ACK gate and remaining lifecycle obligations
+remain open.
 
 For the running Scylla engine revision, native duration is foreground elapsed
 time measured with a steady clock, not CPU time. Execution tracing begins
