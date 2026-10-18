@@ -414,9 +414,19 @@ enforces its 30-second operation deadline against the owned process group,
 including transport children, with a bounded output-pipe drain. A timed-out
 child cannot keep downloading after its caller has returned.
 
-Stateless upload-pack negotiation ends an intermediate response with its
-`NAK` packet, not an additional flush packet. Shallow boundary announcements
-and the final sideband pack retain their own flush delimiters. An extra flush
+Stateless upload-pack negotiation acknowledges known commit IDs using the
+client's selected mode: `ACK ... common` for `multi_ack_detailed`,
+`ACK ... continue` for `multi_ack`, or a single ordinary `ACK` without either
+capability. Unknown objects and non-commit IDs are not acknowledged; object
+lookup errors fail the request. A common commit does not by itself prove that
+every wanted history is complete, so the server does not claim `ready`.
+These acknowledgements let the client stop revisiting known ancestry between
+HTTP negotiation rounds. A final multi-ACK response identifies the last common
+commit before its pack; a fetch without a common commit retains `NAK`.
+An intermediate multi-ACK response ends with `NAK`, not an additional flush
+packet; single-ACK negotiation sends only its first common acknowledgement.
+Shallow boundary announcements and the final sideband pack retain their own
+flush delimiters. An extra flush
 after an intermediate `NAK` breaks repeated fetches with longer common history
 (`expected ACK/NAK, got a flush packet`), even when initial shallow clones and
 small fetches succeed. Native metadata/provenance capacity probes perform

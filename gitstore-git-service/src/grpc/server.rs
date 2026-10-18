@@ -6104,7 +6104,9 @@ mod tests {
                     write_pkt_line_buf(&mut request, line.as_bytes()).unwrap();
                 }
                 request.extend_from_slice(b"0000");
-                assert_eq!(pack.handle_upload_pack(&request).unwrap(), b"0008NAK\n");
+                let mut expected = Vec::new();
+                write_pkt_line_buf(&mut expected, format!("ACK {original}\n").as_bytes()).unwrap();
+                assert_eq!(pack.handle_upload_pack(&request).unwrap(), expected);
             });
             tracing::info_span!("ref.snapshot", operation = "push").in_scope(|| {
                 record_push_ref_snapshot(&[
