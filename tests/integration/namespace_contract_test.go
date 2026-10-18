@@ -665,6 +665,7 @@ func gqlQueryWithURL(t *testing.T, apiURL, token, query string, vars map[string]
 	if err := json.NewDecoder(resp.Body).Decode(&gqlResp); err != nil {
 		t.Fatalf("decode gql response: %v", err)
 	}
+	gqlResp.Status = resp.StatusCode
 	return gqlResp
 }
 

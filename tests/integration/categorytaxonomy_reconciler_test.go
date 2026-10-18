@@ -4,10 +4,15 @@
 package integration
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Package-level tests covering spec 039 (CategoryTaxonomy Controller
@@ -70,6 +75,89 @@ type categoryWithStatusResult struct {
 	Status *categoryStatusResult `json:"status"`
 }
 
+func categoryQueryNotFound(resp gqlResponse) bool {
+	if resp.Status != 200 || len(resp.Errors) != 1 {
+		return false
+	}
+	var data map[string]json.RawMessage
+	if json.Unmarshal(resp.Data, &data) != nil || len(data) != 1 ||
+		!bytes.Equal(bytes.TrimSpace(data["category"]), []byte("null")) {
+		return false
+	}
+	var graphError struct {
+		Path       []string `json:"path"`
+		Extensions struct {
+			Code        string          `json:"code"`
+			Phase       json.RawMessage `json:"phase"`
+			Commit      json.RawMessage `json:"commit"`
+			Diagnostics []struct {
+				Reason string `json:"reason"`
+				Level  string `json:"level"`
+			} `json:"diagnostics"`
+		} `json:"extensions"`
+	}
+	if json.Unmarshal(resp.Errors[0], &graphError) != nil {
+		return false
+	}
+	ext := graphError.Extensions
+	return len(graphError.Path) == 1 && graphError.Path[0] == "category" &&
+		ext.Code == "NOT_FOUND" && len(ext.Phase) == 0 && len(ext.Commit) == 0 &&
+		len(ext.Diagnostics) == 1 && ext.Diagnostics[0].Reason == "CATEGORY_NOT_FOUND" &&
+		ext.Diagnostics[0].Level == "FAILURE"
+}
+
+func TestCategoryQueryNotFoundRequiresExactAbsence(t *testing.T) {
+	const absent = `{"message":"category not found","path":["category"],"extensions":{"code":"NOT_FOUND","diagnostics":[{"reason":"CATEGORY_NOT_FOUND","level":"FAILURE"}]}}`
+	for _, tc := range []struct {
+		name   string
+		status int
+		data   string
+		error  string
+		want   bool
+	}{
+		{"category absence", 200, `{"category":null}`, absent, true},
+		{"positive category", 200, `{"category":{"id":"present"}}`, absent, false},
+		{"missing field", 200, `{}`, absent, false},
+		{"missing data", 200, `null`, absent, false},
+		{"extra field", 200, `{"category":null,"other":null}`, absent, false},
+		{"malformed data", 200, `{`, absent, false},
+		{"transport failure", 503, `{"category":null}`, absent, false},
+		{"malformed error", 200, `{"category":null}`, `{`, false},
+		{"denied", 200, `{"category":null}`, `{"path":["category"],"extensions":{"code":"FORBIDDEN"}}`, false},
+		{"wrong resource", 200, `{"category":null}`, `{"path":["category"],"extensions":{"code":"NOT_FOUND","diagnostics":[{"reason":"NAMESPACE_NOT_FOUND","level":"FAILURE"}]}}`, false},
+		{"wrong path", 200, `{"category":null}`, `{"path":["other"],"extensions":{"code":"NOT_FOUND","diagnostics":[{"reason":"CATEGORY_NOT_FOUND","level":"FAILURE"}]}}`, false},
+		{"missing diagnostic", 200, `{"category":null}`, `{"path":["category"],"extensions":{"code":"NOT_FOUND"}}`, false},
+		{"wrong level", 200, `{"category":null}`, `{"path":["category"],"extensions":{"code":"NOT_FOUND","diagnostics":[{"reason":"CATEGORY_NOT_FOUND","level":"WARNING"}]}}`, false},
+		{"mutation phase", 200, `{"category":null}`, `{"path":["category"],"extensions":{"code":"NOT_FOUND","phase":"COMMITTED","diagnostics":[{"reason":"CATEGORY_NOT_FOUND","level":"FAILURE"}]}}`, false},
+		{"mutation commit", 200, `{"category":null}`, `{"path":["category"],"extensions":{"code":"NOT_FOUND","commit":"private","diagnostics":[{"reason":"CATEGORY_NOT_FOUND","level":"FAILURE"}]}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := gqlResponse{Status: tc.status, Data: json.RawMessage(tc.data), Errors: []json.RawMessage{json.RawMessage(tc.error)}}
+			require.Equal(t, tc.want, categoryQueryNotFound(resp))
+			resp.Errors = append(resp.Errors, json.RawMessage(tc.error))
+			require.False(t, categoryQueryNotFound(resp), "multiple errors must not be retried")
+			resp.Errors = nil
+			require.False(t, categoryQueryNotFound(resp), "silent null is not structured absence")
+		})
+	}
+}
+
+func TestCategoryQueryNotFoundUsesHTTPResponseStatus(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusServiceUnavailable} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				fmt.Fprint(w, `{"data":{"category":null},"errors":[{"path":["category"],"extensions":{"code":"NOT_FOUND","diagnostics":[{"reason":"CATEGORY_NOT_FOUND","level":"FAILURE"}]}}]}`)
+			}))
+			defer server.Close()
+			resp := gqlQueryWithURL(t, server.URL, "", "{ category { id } }", nil)
+			require.Equal(t, status, resp.Status)
+			require.Equal(t, status == http.StatusOK, categoryQueryNotFound(resp))
+		})
+	}
+}
+
 func queryCategoryStatus(t *testing.T, name string) *categoryStatusResult {
 	t.Helper()
 	ns := getEnv("NAMESPACE", "gitstore-test")
@@ -84,6 +172,9 @@ func queryCategoryStatus(t *testing.T, name string) *categoryStatusResult {
 		}
 	`, map[string]any{"namespace": ns, "name": name})
 	if len(resp.Errors) > 0 {
+		if categoryQueryNotFound(resp) {
+			return nil
+		}
 		t.Fatalf("graphql errors querying category %q status: %s", name, resp.Errors)
 	}
 	var data struct {

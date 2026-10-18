@@ -9,6 +9,14 @@ served from the same durable, replica-safe watch journal, so one set of signals
 covers all of them. A cursor issued by one API replica can be resumed on any
 other replica.
 
+A successful Git push can precede catalog admission and controller status
+publication. Bounded category polling therefore permits only a null `category`
+with the matching `NOT_FOUND` / `CATEGORY_NOT_FOUND` failure diagnostic while
+waiting for admission. Namespace absence, authorization failures, malformed
+responses and operational errors are not convergence signals. Once admitted,
+resolved paths and filtered membership still converge asynchronously; endpoint
+readiness alone does not prove that a newly pushed hierarchy has reconciled.
+
 ## Diagnostic Steps: Watch Disconnects
 
 1. Check how many subscribers are connected and whether streams are being

@@ -159,7 +159,7 @@ func queryCategory(t *testing.T, name string) *categoryQueryResult {
 				}
 			}
 		`, map[string]any{"namespace": ns, "name": name})
-		if len(resp.Errors) > 0 {
+		if len(resp.Errors) > 0 && !categoryQueryNotFound(resp) {
 			t.Fatalf("graphql errors querying category %q: %s", name, resp.Errors)
 		}
 		var data struct {

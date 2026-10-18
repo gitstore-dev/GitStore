@@ -130,7 +130,7 @@ func queryCategoryID(t *testing.T, namespace, name string) (string, bool) {
 		}
 	`, map[string]any{"namespace": namespace, "name": name})
 	if len(resp.Errors) > 0 {
-		if isNotFoundGraphQLError(resp.Errors) {
+		if categoryQueryNotFound(resp) {
 			return "", false
 		}
 		t.Fatalf("graphql errors querying category %q id: %s", name, resp.Errors)
