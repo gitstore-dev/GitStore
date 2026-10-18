@@ -2534,6 +2534,70 @@ signals. The enforced limits are critical saturation thresholds. Do not raise
 concurrency or request-size limits to mask saturation; first inspect parse
 latency, policy datastore latency, CPU, garbage collection, and conflict rate.
 
+### Recorded operation rates (2026-10-18, interim)
+
+These are observed rates at the stated workload, **not maximum sustainable
+capacity**. An acknowledged logical mutation is not an HTTP-attempt count:
+retries, peer verification and watch delivery can add requests. Expected denials
+are successful authorization checks, not successful resource reads.
+
+| Operation | Observed rate | Measurement and scope |
+| --- | --- | --- |
+| `GET /health` | 20.001 successful HTTP requests/s | Across two APIs over 600.012s; passed readiness alpha at a fixed offer |
+| `GET /ready` | 20.001 successful HTTP requests/s | Same run; excludes the two setup requests |
+| Authorized `namespaces(first: 1)` | 20.001 semantically successful HTTP requests/s | Same run, 12,001 exact allowed responses; only this small page was measured |
+| Anonymous `namespaces(first: 1)` | 20.001 expected-denial HTTP requests/s | Same run, 12,001 exact `FORBIDDEN` outcomes; zero semantic mismatches or dropped iterations |
+| Repository update | 2.333 acknowledged logical mutations/s | 1,400 ACKs over 600.12s, 20-resource pool and 100 subscribers; passed lifecycle alpha, zero failed/dropped mutations and one recovered transport attempt |
+| Category creation | 20 acknowledged logical mutations/s | 600/600 ACKs over a 30s, 20-worker diagnostic on retained fixtures; not a passed hierarchy/fault gate |
+| Namespace transition | 10.831 acknowledged logical transitions/s | 1,300/1,300 ACKs over 120.024s, 50 resources, 20 workers and 1,000 subscribers; nominal 10/s plus a 100-transition burst; diagnostic, not a full-duration/replacement gate |
+| Sustained Git pushes, File ACKs, Product operations and other endpoint operations | Not established | No passing per-operation sustainable-capacity result is claimed |
+
+The readiness run issued four requests per iteration, not one: health,
+readiness, an allowed query and an expected denial. Its aggregate measured
+traffic was approximately 80 HTTP requests/s across both APIs. The combined
+health/readiness p95/p99 were 1.045/1.556ms on API A and 1.054/1.611ms on API B;
+these are not isolated per-endpoint percentiles. Repository mutation p95/p99
+were 103.886/127.302ms. The Category diagnostic recorded 260.571/365.521ms, but
+its companion Git workload failed, so those mutation results cannot pass the
+combined gate.
+
+The full-fixture Namespace diagnostic recorded visibility p95/p99 of
+1.098/1.388s and replay p95 of 2.885s over 20 samples after preparing 10,000
+replay events. API RSS grew 2.47%/1.74% after normal five-minute baseline and
+ten-minute post-load stabilization, below the unchanged 10% limit. Visibility
+still exceeded the 1s production p95 target, and two minutes without API
+replacement cannot establish sustained watch or recovery acceptance.
+
+Readiness used clean revision `5924c69`; Repository lifecycle used `6926146`.
+Both used two APIs, two controllers, one Git service and three single-shard
+Scylla nodes with replication factor three. Readiness authorization probes used
+`static-users`, anonymous denial and `rbac-local`, not a production identity
+provider. Later Category and Namespace
+diagnostics used the retained two-API/three-Scylla deployment without its
+controllers, API source `5694da9` and native Git source `68d9393`. They are not
+fresh, equally seeded comparisons. Linux Git 2.39.5 completed provenance
+checks under Namespace load: a four-subscriber diagnostic succeeded on its
+first push in 26.902ms; the 1,000-subscriber diagnostic succeeded on its third
+push in 38.304ms after preserving both earlier rejections. Apple Git 2.54.0
+four-subscriber probes exhausted their bounded retries. These changed client
+OS, version and network placement; they neither isolate the responsible
+difference nor establish sustained Git throughput.
+
+The separate pure authorization evaluator measured **59,321 / 308,824 /
+350,090 decisions/s** at 1 / 8 / 32 workers, respectively, over ten minutes per
+level after a 60-second warmup. The concurrent-reload soak measured
+**157,311 decisions/s** over 1,800.102s, with zero invalid outcomes. These are
+**not HTTP requests/s**. They used revision `6926146`, native Go 1.26.4 on macOS
+arm64, 11 logical CPUs, and the maximum 200-role/1,000-binding/2,000-rule/50-group
+policy. Per-case latency sampling was 1/64; highest sampled case p99s were
+35/103/225 microseconds, all below the unchanged 1ms limit. The largest sampled
+outlier was 588.379ms, so passing p99 does not mean every decision took less than
+1ms. Reload-soak post-GC heap was 88.91% of baseline.
+
+Full production acceptance and per-operation sustainable ceilings remain
+unestablished. Fixed offered rates, short diagnostics and evaluator-only
+decisions must not be advertised as those ceilings.
+
 ## Structured logs
 
 Namespace logs use bounded fields:
