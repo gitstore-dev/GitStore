@@ -20,9 +20,9 @@ import (
 
 func repositoryNodeJSON(namespace, name, rv string) map[string]any {
 	return map[string]any{
-		"metadata": map[string]any{"uid": "uid-" + name, "namespace": namespace, "name": name, "resourceVersion": rv, "generation": 2, "finalizers": []any{}},
+		"metadata": map[string]any{"uid": "uid-" + name, "namespace": namespace, "name": name, "resourceVersion": rv, "generation": 2, "revision": "main@sha1:" + strings.Repeat(rv, 40), "finalizers": []any{}},
 		"spec":     map[string]any{"defaultBranch": "main"},
-		"status":   map[string]any{"observedGeneration": 2, "conditions": []any{map[string]any{"type": "AdmissionAccepted", "status": "TRUE", "observedGeneration": 2}}, "resolved": map[string]any{"storageClass": "default"}},
+		"status":   map[string]any{"observedGeneration": 2, "lastAppliedRevision": "stale-status-revision", "conditions": []any{map[string]any{"type": "AdmissionAccepted", "status": "TRUE", "observedGeneration": 2}}, "resolved": map[string]any{"storageClass": "default"}},
 	}
 }
 
@@ -45,6 +45,7 @@ func TestRepositoryListWatcherListsRepositoriesAcrossNamespaces(t *testing.T) {
 				ID      string `json:"id"`
 				Payload struct {
 					Variables map[string]any `json:"variables"`
+					Query     string         `json:"query"`
 				} `json:"payload"`
 			}
 			if conn.ReadJSON(&subscribe) != nil {
@@ -52,6 +53,9 @@ func TestRepositoryListWatcherListsRepositoriesAcrossNamespaces(t *testing.T) {
 			}
 			if _, found := subscribe.Payload.Variables["namespace"]; found {
 				t.Error("global repository watch must not send namespace")
+			}
+			if !strings.Contains(subscribe.Payload.Query, " revision ") {
+				t.Error("watch must select metadata.revision")
 			}
 			_ = conn.WriteJSON(map[string]any{"id": subscribe.ID, "type": "next", "payload": map[string]any{"data": map[string]any{"watchRepositories": map[string]any{"type": "BOOKMARK", "name": "", "resourceVersion": "cursor-7"}}}})
 			return
@@ -72,6 +76,9 @@ func TestRepositoryListWatcherListsRepositoriesAcrossNamespaces(t *testing.T) {
 			return
 		}
 		namespace, _ := request.Variables["namespace"].(string)
+		if !strings.Contains(request.Query, " revision ") {
+			t.Error("list must select metadata.revision")
+		}
 		if namespace != "acme" && namespace != "beta" {
 			t.Fatalf("namespace = %#v, want acme or beta", request.Variables["namespace"])
 		}
@@ -89,6 +96,11 @@ func TestRepositoryListWatcherListsRepositoriesAcrossNamespaces(t *testing.T) {
 	}
 	if response.ResourceVersion != "cursor-7" {
 		t.Fatalf("ResourceVersion = %q, want cursor-7", response.ResourceVersion)
+	}
+	for _, item := range response.Items {
+		if item.Revision != "main@sha1:"+strings.Repeat("8", 40) || item.Status.LastAppliedRevision != "stale-status-revision" {
+			t.Fatalf("authored/status revisions = %+v", item)
+		}
 	}
 }
 
@@ -110,6 +122,7 @@ func TestRepositoryListWatcherMapsTypedWatchEvents(t *testing.T) {
 			ID      string `json:"id"`
 			Payload struct {
 				Variables map[string]any `json:"variables"`
+				Query     string         `json:"query"`
 			} `json:"payload"`
 		}
 		if conn.ReadJSON(&subscribe) != nil {
@@ -117,6 +130,9 @@ func TestRepositoryListWatcherMapsTypedWatchEvents(t *testing.T) {
 		}
 		if _, found := subscribe.Payload.Variables["namespace"]; found {
 			t.Error("global repository watch must not send namespace")
+		}
+		if !strings.Contains(subscribe.Payload.Query, " revision ") {
+			t.Error("watch must select metadata.revision")
 		}
 		if subscribe.Payload.Variables["resourceVersion"] != "8" {
 			t.Errorf("resourceVersion = %#v, want 8", subscribe.Payload.Variables["resourceVersion"])
@@ -134,6 +150,9 @@ func TestRepositoryListWatcherMapsTypedWatchEvents(t *testing.T) {
 	case event := <-w.Events():
 		if event.Type != listwatch.Modified || event.Object.Namespace != "acme" || event.Object.Name != "catalog" || event.Object.ResourceVersion != "9" {
 			t.Fatalf("event = %+v, want modified acme/catalog/9", event)
+		}
+		if event.Object.Revision != "main@sha1:"+strings.Repeat("9", 40) || event.Object.Status.LastAppliedRevision != "stale-status-revision" {
+			t.Fatalf("authored/status revisions = %+v", event.Object)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for repository event")

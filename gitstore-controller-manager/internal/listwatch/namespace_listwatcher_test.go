@@ -25,10 +25,12 @@ func namespaceNodeJSON(name, rv string, generation int, finalizers []string) map
 			"name":            name,
 			"resourceVersion": rv,
 			"generation":      generation,
+			"revision":        "main@sha1:" + strings.Repeat(rv, 40),
 			"finalizers":      finalizers,
 		},
 		"status": map[string]any{
-			"observedGeneration": generation,
+			"observedGeneration":  generation,
+			"lastAppliedRevision": "stale-status-revision",
 			"conditions": []any{
 				map[string]any{"type": "AdmissionAccepted", "status": "TRUE", "observedGeneration": generation},
 			},
@@ -55,6 +57,9 @@ func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 			if err := conn.ReadJSON(&subMsg); err != nil {
 				return
 			}
+			if !strings.Contains(subMsg["payload"].(map[string]any)["query"].(string), " revision ") {
+				t.Error("watch must select metadata.revision")
+			}
 			_ = conn.WriteJSON(map[string]any{
 				"id": subMsg["id"], "type": "next",
 				"payload": map[string]any{"data": map[string]any{"watchNamespaces": map[string]any{
@@ -62,6 +67,14 @@ func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 				}}},
 			})
 			return
+		}
+		var request struct{ Query string }
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if !strings.Contains(request.Query, " revision ") {
+			t.Error("list must select metadata.revision")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
@@ -83,6 +96,9 @@ func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 	}
 	if resp.ResourceVersion != "17" {
 		t.Fatalf("ResourceVersion = %q, want 17", resp.ResourceVersion)
+	}
+	if resp.Items[0].Revision != "main@sha1:"+strings.Repeat("8", 40) || resp.Items[0].Status.LastAppliedRevision != "stale-status-revision" {
+		t.Fatalf("authored/status revisions = %+v", resp.Items[0])
 	}
 }
 
@@ -106,6 +122,9 @@ func TestNamespaceListWatcherMapsTypedWatchEvents(t *testing.T) {
 		var subMsg map[string]any
 		if err := conn.ReadJSON(&subMsg); err != nil {
 			return
+		}
+		if !strings.Contains(subMsg["payload"].(map[string]any)["query"].(string), " revision ") {
+			t.Error("watch must select metadata.revision")
 		}
 		out := map[string]any{"id": subMsg["id"]}
 		maps.Copy(out, map[string]any{
@@ -135,6 +154,9 @@ func TestNamespaceListWatcherMapsTypedWatchEvents(t *testing.T) {
 		}
 		if len(event.Object.Finalizers) != 1 {
 			t.Fatalf("finalizers = %v, want foreground deletion", event.Object.Finalizers)
+		}
+		if event.Object.Revision != "main@sha1:"+strings.Repeat("9", 40) || event.Object.Status.LastAppliedRevision != "stale-status-revision" {
+			t.Fatalf("authored/status revisions = %+v", event.Object)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for namespace watch event")

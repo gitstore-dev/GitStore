@@ -35,6 +35,7 @@ func categoryNodeJSON(uid, name, namespace, rv string, generation int, parentRef
 			"namespace":       namespace,
 			"resourceVersion": rv,
 			"generation":      generation,
+			"revision":        "main@sha1:" + strings.Repeat(rv, 40),
 		},
 		"spec": spec,
 	}
@@ -101,6 +102,9 @@ func TestList_DecodesCategoryLifecycleMetadata(t *testing.T) {
 			}}})
 			return
 		}
+		if !strings.Contains(req.Query, " revision") {
+			t.Error("category list must select metadata.revision")
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"categories": map[string]any{
 			"edges":    []any{map[string]any{"node": node}},
 			"pageInfo": map[string]any{"hasNextPage": false},
@@ -113,6 +117,9 @@ func TestList_DecodesCategoryLifecycleMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	category := response.Items[0]
+	if category.Revision != "main@sha1:"+strings.Repeat("7", 40) {
+		t.Fatalf("authored revision = %q", category.Revision)
+	}
 	if category.DeletionTimestamp == nil || category.DeletionTimestamp.Format(time.RFC3339) != deletionTimestamp {
 		t.Fatalf("deletion timestamp = %v, want %s", category.DeletionTimestamp, deletionTimestamp)
 	}
@@ -270,6 +277,9 @@ func stubWatchCategoriesServer(t *testing.T, messages []map[string]any) *httptes
 		if err := conn.ReadJSON(&subMsg); err != nil {
 			return
 		}
+		if !strings.Contains(subMsg["payload"].(map[string]any)["query"].(string), " revision") {
+			t.Error("category watch must select metadata.revision")
+		}
 		id := subMsg["id"]
 		for _, m := range messages {
 			out := map[string]any{"id": id}
@@ -320,6 +330,9 @@ func TestWatch_MapsAddedModifiedDeletedEvents(t *testing.T) {
 			}
 			if ev.Object.Name != "electronics" {
 				t.Errorf("event %d Object.Name = %q, want %q", i, ev.Object.Name, "electronics")
+			}
+			if want != listwatch.Deleted && ev.Object.Revision != "main@sha1:"+strings.Repeat(ev.Object.ResourceVersion, 40) {
+				t.Errorf("event %d authored revision = %q", i, ev.Object.Revision)
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatalf("timed out waiting for event %d", i)

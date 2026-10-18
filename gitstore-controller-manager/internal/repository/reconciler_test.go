@@ -8,12 +8,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type fakeStatusClient struct {
@@ -49,6 +54,202 @@ func (f *fakeCompletionClient) CompleteDeletion(_ context.Context, namespace, na
 
 func repositoryKey(namespace, name string) types.WorkItemKey {
 	return types.WorkItemKey{Kind: "Repository", Namespace: namespace, Name: name}
+}
+
+func reconcileRepositorySnapshot(t *testing.T, r *Reconciler, key types.WorkItemKey, recording bool) (types.ReconcileResult, []sdktrace.Event) {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	sampler := sdktrace.NeverSample()
+	if recording {
+		sampler = sdktrace.AlwaysSample()
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sampler), sdktrace.WithSpanProcessor(recorder),
+		sdktrace.WithRawSpanLimits(sdktrace.SpanLimits{
+			AttributeValueLengthLimit: 256, AttributeCountLimit: 32,
+			EventCountLimit: 32, LinkCountLimit: 8,
+			AttributePerEventCountLimit: 8, AttributePerLinkCountLimit: 8,
+		}))
+	defer func() { require.NoError(t, provider.Shutdown(context.Background())) }()
+	ctx, span := provider.Tracer("test").Start(t.Context(), "controller.reconcile")
+	result := r.Reconcile(ctx, key)
+	span.End()
+	if !recording {
+		require.Empty(t, recorder.Ended())
+		return result, nil
+	}
+	require.Len(t, recorder.Ended(), 1)
+	return result, recorder.Ended()[0].Events()
+}
+
+func requireRepositorySnapshot(t *testing.T, events []sdktrace.Event, current Repository, exact, invalid bool) {
+	t.Helper()
+	require.Len(t, events, 1)
+	require.Equal(t, "controller.reconcile.snapshot", events[0].Name)
+	uid, rv, revision := current.UID, current.ResourceVersion, current.Revision
+	if invalid {
+		uid, rv, revision = "[invalid]", "[invalid]", "[invalid]"
+	}
+	attributes := make(map[string]attribute.Value)
+	for _, attr := range events[0].Attributes {
+		attributes[string(attr.Key)] = attr.Value
+	}
+	require.Len(t, events[0].Attributes, 5)
+	require.Equal(t, map[string]attribute.Value{
+		"resource.uid":              attribute.StringValue(uid),
+		"resource.resource_version": attribute.StringValue(rv),
+		"resource.generation":       attribute.Int64Value(current.Generation),
+		"resource.revision":         attribute.StringValue(revision),
+		"resource.snapshot.exact":   attribute.BoolValue(exact),
+	}, attributes)
+}
+
+func TestReconcileSnapshotUsesLookupAndAllowsCoalescing(t *testing.T) {
+	key := repositoryKey("acme", "catalog")
+	current := Repository{UID: "old-uid", Namespace: key.Namespace, Name: key.Name, Generation: 3, ResourceVersion: "7",
+		Revision: "main@sha1:" + strings.Repeat("a", 40),
+		Status:   status.ResourceStatus{LastAppliedRevision: "stale-status-revision"}}
+	c := cache.New[Repository]()
+	c.Set(key, current)
+	statuses, completion := &fakeStatusClient{}, &fakeCompletionClient{}
+	r := NewReconcilerWithLookup(cache.LookupFrom(cache.AsReadOnly(c)), statuses, &fakeStorageClient{}, completion)
+	result, events := reconcileRepositorySnapshot(t, r, key, true)
+	require.IsType(t, types.Success{}, result)
+	requireRepositorySnapshot(t, events, current, true, false)
+	require.Len(t, statuses.patches, 1)
+	require.Equal(t, current.ResourceVersion, statuses.patches[0].ResourceVersion)
+	require.Equal(t, current.Generation, *statuses.patches[0].ObservedGeneration)
+	require.Nil(t, statuses.patches[0].LastAppliedRevision)
+
+	// The key is level-triggered: intermediate versions need not be reconciled.
+	current.ResourceVersion, current.Revision = "8", "main@sha1:"+strings.Repeat("b", 40)
+	c.Set(key, current)
+	current.ResourceVersion, current.Revision = "9", "main@sha1:"+strings.Repeat("c", 40)
+	c.Set(key, current)
+	result, events = reconcileRepositorySnapshot(t, r, key, true)
+	require.IsType(t, types.Success{}, result)
+	requireRepositorySnapshot(t, events, current, true, false)
+	require.Len(t, statuses.patches, 2)
+	require.Equal(t, "9", statuses.patches[1].ResourceVersion)
+	require.Equal(t, int64(3), *statuses.patches[1].ObservedGeneration)
+
+	current.UID, current.ResourceVersion = "replacement-uid", "10"
+	current.Finalizers = []string{ForegroundDeletionFinalizer}
+	c.Set(key, current)
+	result, events = reconcileRepositorySnapshot(t, r, key, true)
+	require.IsType(t, types.Success{}, result)
+	requireRepositorySnapshot(t, events, current, true, false)
+	require.Len(t, completion.calls, 1)
+	require.Equal(t, current.UID, completion.calls[0].uid)
+	require.Equal(t, current.ResourceVersion, completion.calls[0].resourceVersion)
+}
+
+func TestReconcileSnapshotPreservesOutcomes(t *testing.T) {
+	failure := errors.New("dependency unavailable")
+	for _, test := range []struct {
+		name                                              string
+		missing, system, deleting                         bool
+		lookupErr, statusErr, provisionErr, completionErr error
+		requeue                                           time.Duration
+	}{
+		{name: "active"},
+		{name: "system", system: true},
+		{name: "missing", missing: true},
+		{name: "lookup I/O error", lookupErr: failure},
+		{name: "lookup cancelled", lookupErr: context.Canceled},
+		{name: "status error", statusErr: failure},
+		{name: "provision error", provisionErr: failure},
+		{name: "status conflict", statusErr: types.ErrConflict, requeue: conflictRequeueDelay},
+		{name: "status rate limit", statusErr: types.ErrRateLimited, requeue: rateLimitRequeueDelay},
+		{name: "provision rate limit", provisionErr: types.ErrRateLimited, requeue: rateLimitRequeueDelay},
+		{name: "deletion", deleting: true},
+		{name: "deletion error", deleting: true, completionErr: failure},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, recording := range []bool{false, true} {
+				current := Repository{UID: "uid", Namespace: "acme", Name: "catalog", ResourceVersion: "7", Generation: 3,
+					Revision: "main@sha1:" + strings.Repeat("a", 40),
+					Status:   status.ResourceStatus{Conditions: []*status.Condition{admissionAccepted(3)}}}
+				if test.system {
+					current.Name = SystemRepositoryName
+				}
+				if test.deleting {
+					current.Finalizers = []string{ForegroundDeletionFinalizer}
+				}
+				statuses, storage, completion := &fakeStatusClient{err: test.statusErr}, &fakeStorageClient{err: test.provisionErr}, &fakeCompletionClient{err: test.completionErr}
+				r := NewReconcilerWithLookup(func(context.Context, types.WorkItemKey) (Repository, bool, error) {
+					return current, !test.missing, test.lookupErr
+				}, statuses, storage, completion)
+				result, events := reconcileRepositorySnapshot(t, r, repositoryKey(current.Namespace, current.Name), recording)
+				if recording && !test.missing && test.lookupErr == nil {
+					requireRepositorySnapshot(t, events, current, true, false)
+				} else {
+					require.Empty(t, events)
+				}
+				switch {
+				case test.requeue > 0:
+					require.Equal(t, types.RequeueAfter{After: test.requeue}, result)
+				case errors.Join(test.lookupErr, test.statusErr, test.provisionErr, test.completionErr) != nil:
+					require.IsType(t, types.TransientFailure{}, result)
+					for _, err := range []error{test.lookupErr, test.statusErr, test.provisionErr, test.completionErr} {
+						if err != nil {
+							require.ErrorIs(t, result.(types.TransientFailure).Err, err)
+						}
+					}
+				default:
+					require.IsType(t, types.Success{}, result)
+				}
+				if test.missing || test.lookupErr != nil || test.system {
+					require.Empty(t, statuses.patches)
+					require.Empty(t, storage.calls)
+					require.Empty(t, completion.calls)
+				}
+			}
+		})
+	}
+}
+
+func TestReconcileSnapshotBoundsDoNotChangeConsumedObject(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		uid, rv, revision string
+		exact, invalid    bool
+	}{
+		{"maximum", strings.Repeat("u", 64), strings.Repeat("v", 128), strings.Repeat("r", 256), true, false},
+		{"uid overflow", strings.Repeat("u", 65), "7", "revision", false, true},
+		{"rv overflow", "uid", strings.Repeat("v", 129), "revision", false, true},
+		{"revision overflow", "uid", "7", strings.Repeat("r", 257), false, true},
+		{"invalid UTF-8", "uid", "7", "\xff", false, true},
+		{"absent authored revision", "uid", "7", "", false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current := Repository{UID: test.uid, Namespace: "acme", Name: "catalog", ResourceVersion: test.rv, Generation: 3, Revision: test.revision,
+				Status: status.ResourceStatus{LastAppliedRevision: "not-authored"}}
+			for _, recording := range []bool{false, true} {
+				statuses := &fakeStatusClient{}
+				r := NewReconcilerWithLookup(func(context.Context, types.WorkItemKey) (Repository, bool, error) {
+					return current, true, nil
+				}, statuses, &fakeStorageClient{}, &fakeCompletionClient{})
+				result, events := reconcileRepositorySnapshot(t, r, repositoryKey(current.Namespace, current.Name), recording)
+				require.IsType(t, types.Success{}, result)
+				require.Len(t, statuses.patches, 1)
+				require.Equal(t, current.ResourceVersion, statuses.patches[0].ResourceVersion)
+				require.Equal(t, current.Generation, *statuses.patches[0].ObservedGeneration)
+				require.Nil(t, statuses.patches[0].LastAppliedRevision)
+				if recording {
+					requireRepositorySnapshot(t, events, current, test.exact, test.invalid)
+				}
+			}
+		})
+	}
+}
+
+func TestReconcileSnapshotNonrecordingDoesNotAllocate(t *testing.T) {
+	r := NewReconcilerWithLookup(func(context.Context, types.WorkItemKey) (Repository, bool, error) {
+		return Repository{Name: SystemRepositoryName}, true, nil
+	}, nil, nil, nil)
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		r.Reconcile(context.Background(), repositoryKey("acme", SystemRepositoryName))
+	}))
 }
 
 func seedRepositoryCache(t *testing.T, items ...Repository) cache.CacheAccessor[Repository] {

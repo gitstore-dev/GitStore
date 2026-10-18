@@ -17,7 +17,7 @@ import (
 
 const categoryFields = `
   metadata {
-    uid name namespace resourceVersion generation
+    uid name namespace resourceVersion generation revision
     finalizers deletionTimestamp
     ownerReferences { uid kind blockOwnerDeletion }
   }
@@ -64,6 +64,7 @@ type categoryMetadataJSON struct {
 	Name              string     `json:"name"`
 	Namespace         string     `json:"namespace"`
 	ResourceVersion   string     `json:"resourceVersion"`
+	Revision          string     `json:"revision"`
 	Generation        int64      `json:"generation"`
 	Finalizers        []string   `json:"finalizers"`
 	DeletionTimestamp *time.Time `json:"deletionTimestamp"`
@@ -124,6 +125,7 @@ func (n categoryNodeJSON) toCategoryTaxonomy() categorytaxonomy.CategoryTaxonomy
 		Name:              n.Metadata.Name,
 		Generation:        n.Metadata.Generation,
 		ResourceVersion:   n.Metadata.ResourceVersion,
+		Revision:          n.Metadata.Revision,
 		Finalizers:        append([]string(nil), n.Metadata.Finalizers...),
 		DeletionTimestamp: n.Metadata.DeletionTimestamp,
 	}
@@ -385,7 +387,7 @@ type namespacesListResponse struct {
 }
 
 const productFields = `
-  metadata { uid name namespace resourceVersion generation finalizers deletionTimestamp }
+  metadata { uid name namespace resourceVersion generation revision finalizers deletionTimestamp }
   spec { categoryRef { name } }
   status {
     observedGeneration
@@ -429,6 +431,7 @@ type productMetadataJSON struct {
 	Name              string     `json:"name"`
 	Namespace         string     `json:"namespace"`
 	ResourceVersion   string     `json:"resourceVersion"`
+	Revision          string     `json:"revision"`
 	Generation        int64      `json:"generation"`
 	Finalizers        []string   `json:"finalizers"`
 	DeletionTimestamp *time.Time `json:"deletionTimestamp"`
@@ -468,6 +471,7 @@ func (n productNodeJSON) toProduct() categorytaxonomy.Product {
 		Name:              n.Metadata.Name,
 		Generation:        n.Metadata.Generation,
 		ResourceVersion:   n.Metadata.ResourceVersion,
+		Revision:          n.Metadata.Revision,
 		Finalizers:        n.Metadata.Finalizers,
 		DeletionTimestamp: n.Metadata.DeletionTimestamp,
 	}

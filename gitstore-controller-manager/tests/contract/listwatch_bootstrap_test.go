@@ -8,14 +8,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
+	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
+	repositorycontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/repository"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -31,6 +36,47 @@ func widgetKey(w widget) types.WorkItemKey {
 }
 
 func widgetRevision(w widget) string { return w.ResourceVersion }
+
+func testDiskProjectionRevision[T any](t *testing.T, kind string, current T) {
+	t.Helper()
+	ctx, dir := t.Context(), t.TempDir()
+	store, err := checkpoint.OpenDiskStore(dir, kind)
+	require.NoError(t, err)
+	key := types.WorkItemKey{Kind: kind, Name: "resource"}
+	generation, err := store.BeginSnapshot(ctx)
+	require.NoError(t, err)
+	data, err := json.Marshal(current)
+	require.NoError(t, err)
+	require.NoError(t, store.PutSnapshotPage(ctx, generation, []checkpoint.DiskItem{{Key: key, Version: "7", Value: data}}))
+	require.NoError(t, store.FinishSnapshot(ctx, generation, "cursor"))
+	require.NoError(t, store.Close())
+	store, err = checkpoint.OpenDiskStore(dir, kind)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
+	item, found, _, err := store.Read(ctx, key)
+	require.NoError(t, err)
+	require.True(t, found)
+	var restored T
+	require.NoError(t, json.Unmarshal(item.Value, &restored))
+	require.Equal(t, current, restored)
+}
+
+func TestDiskProjectionPreservesAuthoredRevision(t *testing.T) {
+	revision := "main@sha1:" + strings.Repeat("a", 40)
+	provenance := status.ResourceStatus{LastAppliedRevision: "different-status-provenance"}
+	t.Run("Namespace", func(t *testing.T) {
+		testDiskProjectionRevision(t, "Namespace", namespacecontroller.Namespace{UID: "uid", Name: "resource", ResourceVersion: "7", Generation: 3, Revision: revision, Status: provenance})
+	})
+	t.Run("Repository", func(t *testing.T) {
+		testDiskProjectionRevision(t, "Repository", repositorycontroller.Repository{UID: "uid", Name: "resource", ResourceVersion: "7", Generation: 3, Revision: revision, Status: provenance})
+	})
+	t.Run("CategoryTaxonomy", func(t *testing.T) {
+		testDiskProjectionRevision(t, "CategoryTaxonomy", categorytaxonomy.CategoryTaxonomy{UID: "uid", Name: "resource", ResourceVersion: "7", Generation: 3, Revision: revision, Status: provenance})
+	})
+	t.Run("Product", func(t *testing.T) {
+		testDiskProjectionRevision(t, "Product", categorytaxonomy.Product{UID: "uid", Name: "resource", ResourceVersion: "7", Generation: 3, Revision: revision, Status: provenance})
+	})
+}
 
 type streamedWidgetListWatcher struct {
 	*stubListWatcher[widget]

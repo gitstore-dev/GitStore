@@ -183,6 +183,44 @@ Provenance-only clones fetch the latest commit without tags and check out only
 the target manifest, including outside capacity runs; they do not need the
 deployment's full Git history.
 
+### Namespace and Repository consumed snapshots
+
+On a recording reconciliation-attempt span, Namespace and Repository emit one
+`controller.reconcile.snapshot` event immediately after a successful cache
+lookup, before selecting the active, deletion or reserved-resource path.
+The five fixed attributes are `resource.uid`, `resource.resource_version`,
+`resource.generation`, `resource.revision` and `resource.snapshot.exact`.
+The revision is the consumed object's authored `metadata.revision`, not
+`status.lastAppliedRevision`. The attempt span carries `resource.kind`.
+No snapshot event is emitted for a missing object or a failed lookup.
+Identities appear only in trace events, never metric labels.
+
+UID, resource version and authored revision are bounded to 64, 128 and 256
+UTF-8 bytes respectively, within the trace SDK's string limit. If any exceeds
+its limit or is invalid UTF-8, all three strings become `[invalid]` and
+`resource.snapshot.exact` is false.
+Missing identity/revision or nonpositive generation also makes it false.
+Such events cannot establish exact consumption evidence. Bounds affect only
+telemetry, not reconciliation decisions, status writes, retries or cancellation.
+Nonrecording attempts do not construct event attributes.
+
+Queues remain level-triggered: a newer cache object may supersede an
+intermediate version before a queued key is processed. An event proves lookup
+of its recorded UID/version/revision, not delivery of every intermediate
+version, successful status publication or completion of reconciliation.
+Check the attempt result separately. Same-name replacement must be matched by
+UID, not name or generation alone. CategoryTaxonomy and Product carry authored
+revision through list/watch projections but do not emit this snapshot event.
+Older persisted projections without that scalar yield a non-exact event until
+refreshed; status provenance must not fill the gap.
+
+This plumbing is not deployed acceptance evidence. Exact sampled traces still
+need to be collected and correlated on both controller replicas during sustained
+authoring/reconciliation load and controlled non-overlapping controller
+replacement, alongside acknowledged API postimages, watch recovery, readiness
+and successful attempt outcomes. Missing samples or exporter-dropped events
+are not proof of non-consumption, and watch-only checks do not close this gap.
+
 Credential acquisition failures are shared dependency failures, not evidence
 that an individual resource is invalid. The HTTP/WebSocket client shares a
 cancellable cooldown before retrying acquisition, and the manager defers
