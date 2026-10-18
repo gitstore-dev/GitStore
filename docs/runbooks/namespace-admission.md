@@ -2676,6 +2676,30 @@ or drops; RPC p95/p99 were 12.161/15.085ms. All ten concurrent Git operations
 still failed on the retried push. This does not establish successful Git
 throughput or unblock the full acceptance workload.
 
+A command-timed follow-up on the same native image retained the seed, Git
+command sequence, offered work, workers and retry/deadline budgets. It again
+acknowledged all 600 RPC writes and none of the ten Git operations. The
+load-phase client-command measurements were:
+
+| Git command | Observations | Median wall time | Median client CPU time |
+| --- | ---: | ---: | ---: |
+| `pull --rebase` | 20 | 475.581ms | 461.365ms |
+| `add` | 10 | 9.900ms | 21.367ms |
+| `commit` | 10 | 25.976ms | 37.746ms |
+| `push` | 20 | 8.554ms | 6.552ms |
+
+CPU is user plus system time, including waited-for child processes; parallel
+work can make it exceed wall time. Native data-bearing fetches had a median
+46ms duration. In **all 20 push attempts**, 2–15 competing RPC commits were
+published after native pack completion but before the client started its push.
+That interval had a median 429.810ms, using timestamps from the same Linux VM
+clock and a verified linear chain of 600 RPC commits. The observed rejection
+therefore follows real branch advancement, not merely an unexplained CAS error.
+`pull` includes transfer, pack processing and rebase: these measurements do not
+isolate its internal cost or rule out a server encoding choice increasing client
+CPU work. Timing adds measurement overhead; this is neither a sustainable
+throughput result nor a passing published-release comparison.
+
 Full production acceptance and per-operation sustainable ceilings remain
 unestablished. Fixed offered rates, short diagnostics and evaluator-only
 decisions must not be advertised as those ceilings.
