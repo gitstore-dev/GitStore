@@ -82,19 +82,27 @@ inspection="$(docker inspect "${api_containers[@]}")" || {
 source_revision="$(git rev-parse HEAD)"
 container_json="$(jq -c '[.[] | {
   id:.Id,name:(.Name | ltrimstr("/")),running:.State.Running,
-  imageReference:.Config.Image,imageID:.Image,revision:(.Config.Labels["org.opencontainers.image.revision"] // ""),executable:.Path
+  imageReference:.Config.Image,imageID:.Image,revision:(.Config.Labels["org.opencontainers.image.revision"] // ""),executable:.Path,
+  arguments:(.Args // [])
 }]' <<<"${inspection}")"
 jq -e --argjson expected "${config_replicas}" --arg revision "${source_revision}" '
   length == $expected and all(.[]; .running) and
   ([.[].id] | unique | length) == length and
   ([.[].name] | unique | length) == length and
   all(.[];
-    .revision == $revision and .executable == "/app/api" and
+    .revision == $revision and
+    (.executable == "/app/api" or
+      (.executable == "/bin/sh" and
+       (.arguments | length) == 2 and
+       .arguments[0] == "-ec" and
+       (.arguments[1] | contains("cat /run/secrets/serviceaccount-signing-key")) and
+       (.arguments[1] | contains("exec /app/api --config-file /etc/gitstore/gitstore.toml")))) and
     (.imageReference | test("@sha256:[0-9a-f]{64}$")))
 ' <<<"${container_json}" >/dev/null || {
   echo "CAPACITY_API_CONTAINERS must identify distinct running digest-pinned release containers for the tested revision" >&2
   exit 1
 }
+container_json="$(jq -c 'map(. + {argumentCount:(.arguments | length),approvedExecutable:true} | del(.arguments))' <<<"${container_json}")"
 identity_json='[]'
 for index in "${!api_endpoints[@]}"; do
   endpoint="${api_endpoints[$index]}"

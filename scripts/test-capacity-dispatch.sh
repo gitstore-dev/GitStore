@@ -250,6 +250,29 @@ if MOCK_READINESS_CONTAINERS_FILE="${test_dir}/unverified-readiness-containers.j
   exit 1
 fi
 
+jq 'map(.Path = "/bin/sh" | .Args = ["-ec",
+  "export GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY=\"$(cat /run/secrets/serviceaccount-signing-key)\"\nexec /app/api --config-file /etc/gitstore/gitstore.toml\n"])' \
+  "${test_dir}/readiness-containers.json" >"${test_dir}/wrapped-readiness-containers.json"
+MOCK_READINESS_CONTAINERS_FILE="${test_dir}/wrapped-readiness-containers.json" \
+  PATH="${test_dir}/bin:${PATH}" MODE=alpha CAPACITY_BASE_URL=http://api-a.internal \
+  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
+  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
+  "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid"
+jq -e 'all(.artifacts.apiContainers[]; .approvedExecutable == true and .argumentCount == 2 and (has("arguments") | not))' \
+  "${test_dir}/readiness-valid/preflight-environment.json" >/dev/null
+for mutation in '.[0].Path = "/bin/bash"' '.[0].Args[0] = "-c"' \
+  '.[0].Args[1] = "exec /app/api"' '.[0].Args += ["unexpected"]'; do
+  jq "${mutation}" "${test_dir}/wrapped-readiness-containers.json" >"${test_dir}/invalid-wrapped-readiness-containers.json"
+  if MOCK_READINESS_CONTAINERS_FILE="${test_dir}/invalid-wrapped-readiness-containers.json" \
+    PATH="${test_dir}/bin:${PATH}" MODE=alpha CAPACITY_BASE_URL=http://api-a.internal \
+    CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
+    CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
+    "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid" >/dev/null 2>&1; then
+    echo "API readiness unexpectedly accepted an unapproved startup wrapper: ${mutation}" >&2
+    exit 1
+  fi
+done
+
 make_output="$(make --no-print-directory -C "${repo_root}" capacity TARGET=namespace PROFILE=watch MODE=alpha CAPACITY_DRY_RUN=1)"
 [[ "${make_output}" == *"target=namespace profile=watch mode=alpha"* ]]
 

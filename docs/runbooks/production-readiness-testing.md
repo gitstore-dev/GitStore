@@ -302,8 +302,12 @@ to the internal container scrape. Start time remains the replacement signal;
 legitimate same-tick starts remain valid while aliases cannot satisfy the
 topology. The workload
 `CAPACITY_BASE_URL` must be one of those verified endpoints, and every live API
-container must have a digest-pinned image, `/app/api` executable, and OCI
-revision matching the tested checkout.
+container must have a digest-pinned image and OCI revision matching the tested
+checkout. The executable must be `/app/api` or the capacity Compose stack's
+`/bin/sh -ec` signing-key wrapper, which reads the mounted issuer key and
+executes `/app/api --config-file /etc/gitstore/gitstore.toml`. Preflight records
+the approved executable shape and argument count without retaining raw
+startup arguments or key material.
 Namespace recovery requires a fresh
 `NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE`; the deployment harness replaces the
 selected endpoint when the file appears. The verifier records an actual
