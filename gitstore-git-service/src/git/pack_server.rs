@@ -3144,6 +3144,106 @@ mod tests {
     }
 
     #[test]
+    fn nested_catalog_tree_records_the_clients_subtree_as_a_delta_base() {
+        let (_dir, repo) = make_test_repo();
+        let blob = repo.write_blob("category\n").unwrap().detach();
+        let mut categories = gix::objs::Tree::default();
+        for index in 0..400 {
+            categories.entries.push(gix::objs::tree::Entry {
+                mode: gix::objs::tree::EntryKind::Blob.into(),
+                filename: format!("category-{index:05}.md").into(),
+                oid: blob,
+            });
+        }
+        let known_categories = repo.write_object(&categories).unwrap().detach();
+        let mut root = gix::objs::Tree {
+            entries: vec![gix::objs::tree::Entry {
+                mode: gix::objs::tree::EntryKind::Tree.into(),
+                filename: "categories".into(),
+                oid: known_categories,
+            }],
+        };
+        let baseline_id = repo.write_object(&root).unwrap().detach();
+        let sig = gix::actor::SignatureRef {
+            name: "Test".into(),
+            email: "test@example.com".into(),
+            time: "1 +0000",
+        };
+        let parent = repo
+            .commit_as(
+                sig,
+                sig,
+                "refs/heads/main",
+                "known nested catalog",
+                baseline_id,
+                std::iter::empty::<gix::ObjectId>(),
+            )
+            .unwrap()
+            .detach();
+        categories.entries.push(gix::objs::tree::Entry {
+            mode: gix::objs::tree::EntryKind::Blob.into(),
+            filename: "new-category.md".into(),
+            oid: blob,
+        });
+        let changed_categories = repo.write_object(&categories).unwrap().detach();
+        root.entries[0].oid = changed_categories;
+        let tip = repo
+            .commit_as(
+                sig,
+                sig,
+                "refs/heads/main",
+                "nested catalog change",
+                repo.write_object(&root).unwrap().detach(),
+                [parent],
+            )
+            .unwrap()
+            .detach();
+        let (_, candidates) = pack_objects_since_snapshot(
+            &repo,
+            &[tip],
+            &repo.find_tree(baseline_id).unwrap(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(
+            candidates.contains(&TreeDeltaBase {
+                base: known_categories,
+                target: changed_categories,
+            }),
+            "a small repository root must not hide its large changed catalog subtree"
+        );
+        for packed in [false, true] {
+            if packed {
+                let repacked = std::process::Command::new("git")
+                    .arg("--git-dir")
+                    .arg(repo.path())
+                    .args(["repack", "-ad"])
+                    .output()
+                    .unwrap();
+                assert!(repacked.status.success(), "{repacked:?}");
+            }
+            let pack = build_pack_with_commits(
+                &repo,
+                &[tip.to_string()],
+                &[parent.to_string()],
+                None,
+                true,
+                1024 * 1024,
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            eprintln!(
+                "nested catalog (repacked={packed}): {} pack bytes",
+                pack.len()
+            );
+            assert!(
+                pack.len() < 512,
+                "an incremental nested pack must not resend the complete known catalog"
+            );
+        }
+    }
+
+    #[test]
     fn thin_tree_selection_does_not_discard_a_compact_alternative() {
         let (_dir, repo) = make_test_repo();
         let blob = repo.write_blob("category\n").unwrap().detach();

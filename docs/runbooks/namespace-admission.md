@@ -396,6 +396,13 @@ the cancelled caller. Failed publication does not dispatch a callback.
 This protects task cancellation; it does not make callbacks durable across
 a Git-service process crash.
 
+Backing `CommitFile` writes share the repository lifecycle guard with immutable
+upload-pack generation, rather than waiting for the complete pack to be built.
+Their snapshot writer still serializes publication and excludes live content
+validation snapshots. Repository creation, deletion and receive-pack retain
+exclusive repository coordination; cancellation retains both guards until the
+blocking write finishes.
+
 Shallow Git clients can push or delete refs when their declared shallow
 boundaries already exist as commits in the complete live repository.
 The API preserves these boundaries in the signed first receive chunk;

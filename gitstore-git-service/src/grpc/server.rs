@@ -1660,7 +1660,9 @@ impl GitService for GitServiceImpl {
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        let guard = lock.write_owned().await;
+        // Immutable uploads may continue; lifecycle operations and receive-pack
+        // stay excluded, while the snapshot writer serializes publication.
+        let guard = lock.read_owned().await;
         let snapshot = get_or_insert_snapshot_lock(&self.repo_locks, &req.repository_id);
         let snapshot_guard = snapshot.write_owned().await;
         let rpc_span = tracing::Span::current();
@@ -4734,6 +4736,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_commit_file_can_publish_while_an_upload_snapshot_is_live() {
+        let root = TempDir::new().unwrap();
+        repo_with_commit(root.path(), TEST_REPO_D);
+        let service = make_test_service(root.path());
+        let operation = get_or_insert_lock(&service.repo_locks, TEST_REPO_D);
+        let _upload_guard = operation.read().await;
+
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            service.commit_file(signed_test_request(CommitFileRequest {
+                repository_id: TEST_REPO_D.into(),
+                path: "notes/concurrent.txt".into(),
+                content: b"immutable upload objects remain available".to_vec(),
+                commit_message: "concurrent backing write".into(),
+                authorization: test_authorization(TEST_REPO_D, "repository.contents.write"),
+                ..Default::default()
+            })),
+        )
+        .await
+        .expect("CommitFile must not wait for an immutable upload snapshot")
+        .unwrap();
+        let repo = gix::open(fanout_path(root.path(), TEST_REPO_D).unwrap()).unwrap();
+        assert_eq!(
+            repo.head_commit().unwrap().id().to_string(),
+            response.into_inner().commit_sha
+        );
+    }
+
+    #[tokio::test]
     async fn test_snapshot_gate_excludes_every_repository_mutator() {
         for operation in ["create", "delete", "commit", "delete_file", "tag"] {
             let root = TempDir::new().unwrap();
@@ -6307,6 +6338,7 @@ mod tests {
         .unwrap();
         let svc = Arc::new(make_test_service(dir.path()));
         let lock = get_or_insert_lock(&svc.repo_locks, TEST_REPO_E);
+        let snapshot = get_or_insert_snapshot_lock(&svc.repo_locks, TEST_REPO_E);
         let writer = tokio::spawn(async move {
             svc.commit_file(signed_test_request(CommitFileRequest {
                 repository_id: TEST_REPO_E.into(),
@@ -6320,7 +6352,7 @@ mod tests {
             .await
         });
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while lock.try_read().is_ok() {
+            while snapshot.try_read().is_ok() {
                 tokio::task::yield_now().await;
             }
         })
@@ -6329,6 +6361,7 @@ mod tests {
         writer.abort();
         assert!(writer.await.unwrap_err().is_cancelled());
         let retained = lock.try_write().is_err();
+        let retained_snapshot = snapshot.try_read().is_err();
         drop(marker);
         let guard = tokio::time::timeout(std::time::Duration::from_secs(5), lock.write())
             .await
@@ -6357,8 +6390,8 @@ mod tests {
         );
         drop(guard);
         assert!(
-            retained,
-            "cancelled caller released a live publication's writer"
+            retained && retained_snapshot,
+            "cancelled caller released a live publication's lifecycle guard or snapshot writer"
         );
     }
 
