@@ -5922,7 +5922,7 @@ func startSecretCapacityFileLoad(t *testing.T, workload *secretCapacityFileWorkl
 
 func (m capacityMode) fileACKP95Limit() time.Duration {
 	switch m {
-	case capacityModeAlpha, capacityModeDiagnostic:
+	case capacityModeDiagnostic:
 		return 3 * time.Second
 	default:
 		return 2 * time.Second

@@ -244,7 +244,7 @@ func TestSecretCapacityFileACKP95Limits(t *testing.T) {
 		limit time.Duration
 	}{
 		{capacityModeDiagnostic, 3 * time.Second},
-		{capacityModeAlpha, 3 * time.Second},
+		{capacityModeAlpha, 2 * time.Second},
 		{capacityModeProduction, 2 * time.Second},
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
