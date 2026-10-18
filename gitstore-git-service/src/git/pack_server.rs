@@ -729,7 +729,7 @@ fn thin_tree_entry(
     candidates: &[TreeDeltaBase],
     interrupt: &AtomicBool,
 ) -> Result<Option<gix_pack::data::output::Entry>> {
-    let mut selected: Option<(usize, TreeDeltaBase)> = None;
+    let mut ranked = Vec::with_capacity(candidates.len().min(MAX_TREE_DELTA_CANDIDATES));
     'candidate: for candidate in candidates.iter().take(MAX_TREE_DELTA_CANDIDATES) {
         let mut target_size = 0;
         for id in [candidate.base, candidate.target] {
@@ -746,22 +746,23 @@ fn thin_tree_entry(
             }
             target_size = size;
         }
-        if selected.is_none_or(|(size, _)| target_size > size) {
-            selected = Some((target_size, *candidate));
+        ranked.push((target_size, *candidate));
+    }
+    ranked.sort_by_key(|(size, _)| std::cmp::Reverse(*size));
+    for (_, candidate) in ranked {
+        check_upload_pack_interrupt(interrupt)?;
+        let base = repo
+            .find_tree(candidate.base)
+            .context("read thin tree base")?;
+        check_upload_pack_interrupt(interrupt)?;
+        let target = repo
+            .find_tree(candidate.target)
+            .context("read thin tree target")?;
+        if let Some(entry) = tree_delta_entry(repo, &base, &target, interrupt)? {
+            return Ok(Some(entry));
         }
     }
-    let Some((_, candidate)) = selected else {
-        return Ok(None);
-    };
-    check_upload_pack_interrupt(interrupt)?;
-    let base = repo
-        .find_tree(candidate.base)
-        .context("read thin tree base")?;
-    check_upload_pack_interrupt(interrupt)?;
-    let target = repo
-        .find_tree(candidate.target)
-        .context("read thin tree target")?;
-    tree_delta_entry(repo, &base, &target, interrupt)
+    Ok(None)
 }
 
 fn tree_delta_entry(
@@ -3140,6 +3141,63 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn thin_tree_selection_does_not_discard_a_compact_alternative() {
+        let (_dir, repo) = make_test_repo();
+        let blob = repo.write_blob("category\n").unwrap().detach();
+        let mut tree = gix::objs::Tree::default();
+        for index in 0..400 {
+            tree.entries.push(gix::objs::tree::Entry {
+                mode: gix::objs::tree::EntryKind::Blob.into(),
+                filename: format!("category-{index:05}.md").into(),
+                oid: blob,
+            });
+        }
+        let base = repo.write_object(&tree).unwrap().detach();
+        tree.entries.insert(
+            0,
+            gix::objs::tree::Entry {
+                mode: gix::objs::tree::EntryKind::Blob.into(),
+                filename: "aaa-category.md".into(),
+                oid: blob,
+            },
+        );
+        let compact = repo.write_object(&tree).unwrap().detach();
+        tree.entries.push(gix::objs::tree::Entry {
+            mode: gix::objs::tree::EntryKind::Blob.into(),
+            filename: "zzz-category.md".into(),
+            oid: blob,
+        });
+        let dispersed = repo.write_object(&tree).unwrap().detach();
+        let interrupt = AtomicBool::new(false);
+        let base_tree = repo.find_tree(base).unwrap();
+        let dispersed_tree = repo.find_tree(dispersed).unwrap();
+        assert!(
+            tree_delta_entry(&repo, &base_tree, &dispersed_tree, &interrupt)
+                .unwrap()
+                .is_none()
+        );
+        let candidates = [
+            TreeDeltaBase {
+                base,
+                target: compact,
+            },
+            TreeDeltaBase {
+                base,
+                target: dispersed,
+            },
+        ];
+        let entry = thin_tree_entry(&repo, &candidates, &interrupt)
+            .unwrap()
+            .expect("a larger rejected literal must not discard a compact candidate");
+        assert_eq!(entry.id, compact);
+        assert_eq!(
+            entry.kind,
+            gix_pack::data::output::entry::Kind::DeltaOid { id: base }
+        );
+        assert!(entry.compressed_data.len() < MAX_TREE_DELTA_LITERAL_BYTES);
     }
 
     #[test]
