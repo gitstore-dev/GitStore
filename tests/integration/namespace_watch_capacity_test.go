@@ -1978,7 +1978,7 @@ func mergeCapacityBaselineSamples(
 ) map[string]capacityProcessMetrics {
 	for label, sample := range latest {
 		previous, ok := retained[label]
-		if !ok || !previous.available || !sameCapacityProcess(previous, sample) {
+		if !ok || !previous.available || !sample.available || !sameCapacityProcess(previous, sample) {
 			previous.available = false
 			retained[label] = previous
 			continue
@@ -1997,7 +1997,7 @@ func mergeCapacityMemorySamples(
 ) map[string]capacityProcessMetrics {
 	for label, sample := range latest {
 		previous, ok := retained[label]
-		if !ok || !previous.available || !sameCapacityProcess(previous, sample) {
+		if !ok || !previous.available || !sample.available || !sameCapacityProcess(previous, sample) {
 			previous.available = false
 			retained[label] = previous
 			continue
@@ -2011,6 +2011,9 @@ func mergeCapacityMemorySamples(
 }
 
 func sameCapacityProcess(left, right capacityProcessMetrics) bool {
+	if left.instanceID != "" || right.instanceID != "" {
+		return left.instanceID != "" && left.instanceID == right.instanceID
+	}
 	// process_start_time_seconds is derived from host boot time and process
 	// start ticks. Docker Desktop's virtualized procfs has shown multi-second
 	// collector offsets for an unchanged container even though repeated samples
@@ -2073,6 +2076,47 @@ func TestSameCapacityProcessAllowsFractionalCollectorJitter(t *testing.T) {
 	require.True(t, sameCapacityProcess(left, capacityProcessMetrics{processStart: 100.25}))
 	require.True(t, sameCapacityProcess(left, capacityProcessMetrics{processStart: 104}))
 	require.False(t, sameCapacityProcess(left, capacityProcessMetrics{processStart: 106}))
+}
+
+func TestCapacityMetricMergesUseProcessIdentity(t *testing.T) {
+	for name, merge := range map[string]func(map[string]capacityProcessMetrics, map[string]capacityProcessMetrics) map[string]capacityProcessMetrics{
+		"baseline":  mergeCapacityBaselineSamples,
+		"post-load": mergeCapacityMemorySamples,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name      string
+				identity  string
+				start     float64
+				available bool
+				wantValid bool
+			}{
+				{"same process with collector offset", "original", 110, true, true},
+				{"replacement with same start sample", "replacement", 100, true, false},
+				{"missing identity", "", 100, true, false},
+				{"unavailable sample", "original", 100, false, false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					retained := map[string]capacityProcessMetrics{
+						"api_a": {available: true, instanceID: "original", processStart: 100, cpu: 10, resident: 120, gomaxprocs: 2},
+					}
+					latest := map[string]capacityProcessMetrics{
+						"api_a": {available: tc.available, instanceID: tc.identity, processStart: tc.start, cpu: 12, resident: 100, gomaxprocs: 2},
+					}
+					got := merge(retained, latest)["api_a"]
+					require.Equal(t, tc.wantValid, got.available)
+					if tc.wantValid {
+						require.Equal(t, float64(100), got.resident)
+						if name == "baseline" {
+							require.Equal(t, float64(12), got.cpu)
+						} else {
+							require.Equal(t, float64(10), got.cpu)
+						}
+					}
+				})
+			}
+		})
+	}
 }
 
 func fetchCapacityMetrics(client *http.Client, endpoint string) (capacityProcessMetrics, error) {

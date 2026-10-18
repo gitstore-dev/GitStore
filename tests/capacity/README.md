@@ -674,6 +674,10 @@ Alpha's wider relative RSS allowance accounts for Go/runtime cache warm-up in
 the cold-start 10-minute run, but the simultaneous 256 MiB per-API ceiling
 keeps it bounded. Production retains the stricter less-than-10% RSS-growth
 gate. The less-than-80% normalized CPU gate is unchanged in both modes.
+Baseline and post-load stabilization match samples by the exported process
+instance identity when present, not by virtualized process-start-time estimates.
+Changed or missing identities and unavailable samples invalidate stabilization;
+legacy endpoints without identities retain the bounded start-time comparison.
 
 The default runner uses the pinned container image declared in the Makefile.
 Set `K6_BIN` to an explicit executable when container networking is unsuitable,
