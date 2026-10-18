@@ -238,6 +238,24 @@ func TestSecretCapacityOwnedMounts(t *testing.T) {
 	}
 }
 
+func TestSecretCapacityFileACKP95Limits(t *testing.T) {
+	for _, tc := range []struct {
+		mode  capacityMode
+		limit time.Duration
+	}{
+		{capacityModeDiagnostic, 3 * time.Second},
+		{capacityModeAlpha, 3 * time.Second},
+		{capacityModeProduction, 2 * time.Second},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			require.Equal(t, tc.limit, tc.mode.fileACKP95Limit())
+		})
+	}
+	evidence := secretCapacityEvidenceFixture()
+	evidence.Push.P95 = 2500 * time.Millisecond
+	require.ErrorContains(t, validateSecretCapacityEvidence(evidence), "push latency")
+}
+
 func TestSecretCapacityProductionEvidence(t *testing.T) {
 	require.NoError(t, validateSecretCapacityEvidence(secretCapacityEvidenceFixture()))
 	cases := []struct {
@@ -541,7 +559,7 @@ func validateSecretCapacityEvidenceMode(e secretCapacityEvidence, requireProduct
 	check(latency(e.Resolution, 10*time.Millisecond, 50*time.Millisecond), "healthy local resolution latency evidence missing or over threshold")
 	check(e.LocalHealthyFailures >= 0 && e.Resolution.Samples > 0 &&
 		float64(e.LocalHealthyFailures)/float64(e.Resolution.Samples) < .001, "unexpected healthy resolver errors must be below 0.1 percent")
-	check(latency(e.Push, 3*time.Second, 30*time.Second) && e.Push.Samples == e.GitPushes, "push latency must cover sustained and burst traffic")
+	check(latency(e.Push, capacityModeProduction.fileACKP95Limit(), 30*time.Second) && e.Push.Samples == e.GitPushes, "push latency must cover sustained and burst traffic")
 	check(e.ResolverCallers == 32 && e.ProviderPeak == 16 && e.ProviderQueued == 0 && e.ProviderRetries == 0 &&
 		e.SaturationDenied > 0 && e.DeadlineDenied > 0, "bounded resolver contention/deadline proof missing")
 
@@ -603,7 +621,7 @@ func secretCapacityEvidenceFixture() secretCapacityEvidence {
 		TypedFiles: 42_000, CrossReplicaProjectionChecks: 2,
 		Reference:       secretCapacityLatency{42_000, 5 * time.Millisecond, 20 * time.Millisecond},
 		Resolution:      secretCapacityLatency{42_000, 10 * time.Millisecond, 50 * time.Millisecond},
-		Push:            secretCapacityLatency{42_000, 3 * time.Second, 30 * time.Second},
+		Push:            secretCapacityLatency{42_000, 2 * time.Second, 30 * time.Second},
 		ResolverCallers: 32, ProviderPeak: 16, SaturationDenied: 16, DeadlineDenied: 1,
 		OutageAt: 15 * time.Minute, OutageDuration: 90 * time.Second, OutageElapsed: 90 * time.Second, ExpiredUnready: true, ClassifiedOutageFailures: 1,
 		RotationAt: 30 * time.Minute, RetiredKeyDenied: 1, WrongSubjectDenied: 1,
