@@ -2179,6 +2179,11 @@ against deployed API replicas or capacity acceptance.
 Category capacity acknowledgements require successful, error-free responses
 carrying the expected name, title and commit revision, including after conflict
 confirmation. Create-conflict confirmation also checks the intended parent.
+GraphQL Category and Product admission proves that the caller's committed
+manifest path remains unchanged in the current branch history. An unrelated
+commit advancing that branch does not supersede the mutation or replace its
+authored revision. A changed or missing path still supersedes it; unavailable
+history proof fails explicitly rather than falling back to a ref-only check.
 Batch seeding preserves an initial uniformly classified conflict across its
 existing bounded retry; a subsequent already-existing result still requires
 that exact-record confirmation. An already-existing result alone, mixed error

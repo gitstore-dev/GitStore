@@ -128,10 +128,12 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 		return nil, fmt.Errorf("committed manifest has no supported resource")
 	}
 	isCurrent := func(ctx context.Context) (bool, error) {
-		if entry.identity.Kind == "Repository" || entry.identity.Kind == "Namespace" {
+		switch entry.identity.Kind {
+		case "Repository", "Namespace", "CategoryTaxonomy", "Product":
 			return s.isCommittedManifestCurrent(ctx, req)
+		default:
+			return s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
 		}
-		return s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
 	}
 	current, err := isCurrent(ctx)
 	if err != nil {

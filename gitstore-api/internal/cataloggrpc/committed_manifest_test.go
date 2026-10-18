@@ -17,6 +17,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 type failCategoryCreateOnceStore struct {
@@ -186,6 +188,192 @@ func TestAdmitCommittedManifest_CategoryTaxonomySupersededByDifferentHead(t *tes
 	require.ErrorIs(t, err, admission.ErrCommittedManifestSuperseded)
 	_, err = store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
 	assert.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestAdmitCommittedManifest_UnchangedCatalogPathSurvivesUnrelatedPeerCommits(t *testing.T) {
+	for _, tc := range []struct {
+		kind, name, path string
+		initial, update  []byte
+	}{
+		{
+			kind: "CategoryTaxonomy", name: "electronics", path: "categories/electronics.md",
+			initial: categoryManifestTitled("electronics", "Electronics"),
+			update:  categoryManifestTitled("electronics", "Updated"),
+		},
+		{
+			kind: "Product", name: "phone", path: "products/phone.md",
+			initial: makeProduct("phone"),
+			update:  []byte(strings.Replace(string(makeProduct("phone")), "title: phone", "title: Updated", 1)),
+		},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			store := newTestDatastore(t)
+			created, updated := strings.Repeat("a", 40), strings.Repeat("c", 40)
+			firstTip, secondTip := strings.Repeat("b", 40), strings.Repeat("d", 40)
+			current := firstTip
+			files := map[string]map[string][]byte{
+				created:   {tc.path: tc.initial},
+				firstTip:  {tc.path: tc.initial, "unrelated.md": []byte("first peer commit")},
+				updated:   {tc.path: tc.update},
+				secondTip: {tc.path: tc.update, "unrelated.md": []byte("second peer commit")},
+			}
+			reader := newTreeGitReader(&current, files)
+			proofs := 0
+			reader.readCurrentUnchangedFileFunc = func(_ context.Context, repositoryID, path, refName, ancestor string) ([]byte, error) {
+				proofs++
+				require.Equal(t, testRepoID, repositoryID)
+				require.Equal(t, tc.path, path)
+				require.Equal(t, "refs/heads/main", refName)
+				require.Contains(t, []string{created, updated}, ancestor)
+				return files[current][path], nil
+			}
+			replicas := []*catalogTestServer{
+				newCatalogServer(t, store, reader),
+				newCatalogServer(t, store, reader),
+			}
+			for i, phase := range []struct {
+				commit, tip string
+				content     []byte
+				operation   admission.Operation
+			}{
+				{commit: created, tip: firstTip, content: tc.initial, operation: admission.OperationCreate},
+				{commit: updated, tip: secondTip, content: tc.update, operation: admission.OperationUpdate},
+			} {
+				current = phase.tip
+				result, err := replicas[i].AdmitCommittedManifest(t.Context(), admission.CommittedManifestRequest{
+					RepositoryID: testRepoID, Namespace: "gitstore", ActorSubject: "alice",
+					CommitSHA: phase.commit, RefName: "refs/heads/main", Path: tc.path,
+					Content: phase.content, Operation: phase.operation,
+				})
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.False(t, result.NoOp)
+				require.Equal(t, phase.commit, result.CommitSHA)
+			}
+			require.GreaterOrEqual(t, proofs, 4, "both replicas must prove the caller's path before and after admission")
+
+			read := func() (string, string, int64) {
+				if tc.kind == "CategoryTaxonomy" {
+					record, err := store.GetCategoryTaxonomyByName(t.Context(), "gitstore", tc.name)
+					require.NoError(t, err)
+					require.Contains(t, string(record.Spec), "Updated")
+					return record.GitCommitSHA, record.Revision, record.Generation
+				}
+				record, err := store.GetProductByName(t.Context(), "gitstore", tc.name)
+				require.NoError(t, err)
+				require.Contains(t, string(record.Spec), "Updated")
+				return record.GitCommitSHA, record.Revision, record.Generation
+			}
+			commit, revision, generation := read()
+			require.Equal(t, updated, commit)
+			require.Equal(t, "main@sha1:"+updated, revision, "an unrelated tip must not replace authored provenance")
+			require.Equal(t, int64(2), generation)
+
+			files[secondTip][tc.path] = tc.initial
+			result, err := replicas[0].AdmitCommittedManifest(t.Context(), admission.CommittedManifestRequest{
+				RepositoryID: testRepoID, Namespace: "gitstore", ActorSubject: "alice",
+				CommitSHA: updated, RefName: "refs/heads/main", Path: tc.path,
+				Content: tc.update, Operation: admission.OperationUpdate,
+			})
+			require.Nil(t, result)
+			require.ErrorIs(t, err, admission.ErrCommittedManifestSuperseded)
+			afterCommit, afterRevision, afterGeneration := read()
+			require.Equal(t, commit, afterCommit)
+			require.Equal(t, revision, afterRevision)
+			require.Equal(t, generation, afterGeneration)
+
+			for _, failure := range []error{
+				grpcstatus.Error(codes.Aborted, "path history changed"),
+				grpcstatus.Error(codes.NotFound, "path removed"),
+				grpcstatus.Error(codes.PermissionDenied, "history denied"),
+				context.DeadlineExceeded,
+				context.Canceled,
+			} {
+				t.Run(failure.Error(), func(t *testing.T) {
+					reader.readCurrentUnchangedFileFunc = func(context.Context, string, string, string, string) ([]byte, error) {
+						return nil, failure
+					}
+					result, err := replicas[1].AdmitCommittedManifest(t.Context(), admission.CommittedManifestRequest{
+						RepositoryID: testRepoID, Namespace: "gitstore", ActorSubject: "alice",
+						CommitSHA: updated, RefName: "refs/heads/main", Path: tc.path,
+						Content: tc.update, Operation: admission.OperationUpdate,
+					})
+					require.Nil(t, result)
+					if grpcstatus.Code(failure) == codes.Aborted || grpcstatus.Code(failure) == codes.NotFound {
+						require.ErrorIs(t, err, admission.ErrCommittedManifestSuperseded)
+					} else {
+						require.ErrorIs(t, err, failure)
+						require.NotErrorIs(t, err, admission.ErrCommittedManifestSuperseded)
+					}
+					afterCommit, afterRevision, afterGeneration := read()
+					require.Equal(t, commit, afterCommit)
+					require.Equal(t, revision, afterRevision)
+					require.Equal(t, generation, afterGeneration)
+				})
+			}
+		})
+	}
+}
+
+func TestAdmitCommittedManifest_UnchangedCatalogPathsConvergeConcurrentlyAcrossReplicas(t *testing.T) {
+	store := newTestDatastore(t)
+	categoryCommit, productCommit := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	current := strings.Repeat("c", 40)
+	categoryContent := categoryManifestTitled("electronics", "Electronics")
+	productContent := makeProduct("phone")
+	reader := newTreeGitReader(&current, map[string]map[string][]byte{
+		current: {"categories/electronics.md": categoryContent, "products/phone.md": productContent},
+	})
+	var proofs atomic.Int32
+	reader.readCurrentUnchangedFileFunc = func(_ context.Context, _, path, _, _ string) ([]byte, error) {
+		proofs.Add(1)
+		if path == "categories/electronics.md" {
+			return categoryContent, nil
+		}
+		return productContent, nil
+	}
+	replicas := []*catalogTestServer{newCatalogServer(t, store, reader), newCatalogServer(t, store, reader)}
+	requests := []admission.CommittedManifestRequest{
+		{
+			RepositoryID: testRepoID, Namespace: "gitstore", ActorSubject: "alice",
+			CommitSHA: categoryCommit, RefName: "refs/heads/main", Path: "categories/electronics.md",
+			Content: categoryContent, Operation: admission.OperationCreate,
+		},
+		{
+			RepositoryID: testRepoID, Namespace: "gitstore", ActorSubject: "alice",
+			CommitSHA: productCommit, RefName: "refs/heads/main", Path: "products/phone.md",
+			Content: productContent, Operation: admission.OperationCreate,
+		},
+	}
+	type reply struct {
+		result *admission.CommittedManifestResult
+		err    error
+		commit string
+	}
+	start := make(chan struct{})
+	replies := make(chan reply, len(requests))
+	for i, request := range requests {
+		go func() {
+			<-start
+			result, err := replicas[i].AdmitCommittedManifest(t.Context(), request)
+			replies <- reply{result: result, err: err, commit: request.CommitSHA}
+		}()
+	}
+	close(start)
+	for range requests {
+		response := <-replies
+		require.NoError(t, response.err)
+		require.NotNil(t, response.result)
+		require.Equal(t, response.commit, response.result.CommitSHA)
+		require.False(t, response.result.NoOp)
+	}
+	require.GreaterOrEqual(t, proofs.Load(), int32(4))
+	category, err := store.GetCategoryTaxonomyByName(t.Context(), "gitstore", "electronics")
+	require.NoError(t, err)
+	require.Equal(t, categoryCommit, category.GitCommitSHA)
+	product, err := store.GetProductByName(t.Context(), "gitstore", "phone")
+	require.NoError(t, err)
+	require.Equal(t, productCommit, product.GitCommitSHA)
 }
 
 func TestAdmitCommittedManifest_CategoryTaxonomyDeletionStartsTermination(t *testing.T) {
