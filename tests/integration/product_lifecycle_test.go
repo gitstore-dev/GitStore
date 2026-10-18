@@ -94,6 +94,7 @@ type gqlRequest struct {
 }
 
 type gqlResponse struct {
+	Status int               `json:"-"`
 	Data   json.RawMessage   `json:"data"`
 	Errors []json.RawMessage `json:"errors,omitempty"`
 }
