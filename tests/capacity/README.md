@@ -1002,6 +1002,15 @@ applies uniquely tagged updates to that pool. Override
 `NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL` only when resource cardinality is an
 explicit experiment dimension; subscriber count, transition rate, bursts,
 replay size, and duration remain independent acceptance dimensions.
+Logical mutation coverage and duplicate delivery are separate checks. A
+controller status update can retain the mutation's title marker while carrying
+a new journal resource version; it must not count as a repeated delivery.
+Subscribers share a bounded SHA-256 cursor index and retain separate delivery
+bitsets, so repeating an earlier journal event after a newer status event still
+fails the zero-duplicate gate. Logical ACK coverage and first-observation
+latencies remain sequence-based. The observer rejects missing/oversized cursors,
+one cursor naming different sequences, and more than 1,048,576 distinct
+matching live versions rather than evicting duplicate history.
 Alpha and production watch evidence enforces at least 60 minutes, 1,000
 subscribers, 10,000 replay events, 100 transitions per burst, and a burst
 interval shorter than the run. Smaller experiments must use diagnostic mode.

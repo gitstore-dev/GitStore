@@ -2568,6 +2568,12 @@ ten-minute post-load stabilization, below the unchanged 10% limit. Visibility
 still exceeded the 1s production p95 target, and two minutes without API
 replacement cannot establish sustained watch or recovery acceptance.
 
+Watch duplicate accounting distinguishes a repeated journal resource version
+on the same subscription from a distinct controller status update carrying
+the same logical mutation marker. Every subscriber must still observe every
+acknowledged mutation; a replayed journal event remains a duplicate even when
+a newer status event was delivered in between.
+
 Readiness used clean revision `5924c69`; Repository lifecycle used `6926146`.
 Both used two APIs, two controllers, one Git service and three single-shard
 Scylla nodes with replication factor three. Readiness authorization probes used
