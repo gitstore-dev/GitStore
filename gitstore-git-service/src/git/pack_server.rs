@@ -463,6 +463,7 @@ const MIN_TREE_DELTA_BYTES: usize = 4096;
 const MAX_TREE_DELTA_BYTES: usize = 1024 * 1024;
 const MAX_TREE_DELTA_LITERAL_BYTES: usize = 4096;
 const MAX_TREE_DELTA_CANDIDATES: usize = 8;
+const MAX_TREE_DELTA_CHAIN: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TreeDeltaBase {
@@ -478,6 +479,7 @@ fn record_tree_delta(candidates: &mut Vec<TreeDeltaBase>, candidate: TreeDeltaBa
 
 struct PackTreeObjects<'a> {
     objects: &'a mut HashSet<gix::ObjectId>,
+    ordered: &'a mut Vec<gix::ObjectId>,
     tree_deltas: &'a mut Vec<TreeDeltaBase>,
     interrupt: &'a AtomicBool,
 }
@@ -522,8 +524,10 @@ impl gix::diff::tree::Visit for PackTreeObjects<'_> {
             }
             | Change::Modification {
                 entry_mode, oid, ..
-            } if entry_mode.kind() != gix::object::tree::EntryKind::Commit => {
-                self.objects.insert(oid);
+            } if entry_mode.kind() != gix::object::tree::EntryKind::Commit
+                && self.objects.insert(oid) =>
+            {
+                self.ordered.push(oid);
             }
             _ => {}
         }
@@ -540,18 +544,21 @@ fn pack_objects_since_snapshot(
     check_upload_pack_interrupt(interrupt)?;
     let mut tree_deltas = Vec::new();
     let mut objects = HashSet::with_capacity(commits.len());
-    for commit in commits {
-        check_upload_pack_interrupt(interrupt)?;
-        objects.insert(*commit);
-    }
+    let mut ordered = Vec::with_capacity(commits.len());
     let mut state = gix::diff::tree::State::default();
-    for commit in commits {
+    // Keep nearby loose tree versions together without changing pack object membership.
+    for commit in commits.iter().rev() {
         check_upload_pack_interrupt(interrupt)?;
+        if objects.insert(*commit) {
+            ordered.push(*commit);
+        }
         let tree_id = repo.find_commit(*commit)?.tree_id()?.detach();
         if tree_id == baseline.id {
             continue;
         }
-        objects.insert(tree_id);
+        if objects.insert(tree_id) {
+            ordered.push(tree_id);
+        }
         let tree = repo.find_tree(tree_id)?;
         if baseline.data.len() >= MIN_TREE_DELTA_BYTES {
             record_tree_delta(
@@ -564,6 +571,7 @@ fn pack_objects_since_snapshot(
         }
         let mut changes = PackTreeObjects {
             objects: &mut objects,
+            ordered: &mut ordered,
             tree_deltas: &mut tree_deltas,
             interrupt,
         };
@@ -576,11 +584,8 @@ fn pack_objects_since_snapshot(
         )
         .context("compare pack tree to client snapshot")?;
     }
-    let mut objects: Vec<_> = objects.into_iter().collect();
     check_upload_pack_interrupt(interrupt)?;
-    objects.sort_unstable();
-    check_upload_pack_interrupt(interrupt)?;
-    Ok((objects, tree_deltas))
+    Ok((ordered, tree_deltas))
 }
 
 fn encode_tree_delta(
@@ -670,8 +675,6 @@ fn thin_tree_entry(
     candidates: &[TreeDeltaBase],
     interrupt: &AtomicBool,
 ) -> Result<Option<gix_pack::data::output::Entry>> {
-    use gix_pack::data::output;
-
     let mut selected: Option<(usize, TreeDeltaBase)> = None;
     'candidate: for candidate in candidates.iter().take(MAX_TREE_DELTA_CANDIDATES) {
         let mut target_size = 0;
@@ -704,12 +707,23 @@ fn thin_tree_entry(
     let target = repo
         .find_tree(candidate.target)
         .context("read thin tree target")?;
+    tree_delta_entry(repo, &base, &target, interrupt)
+}
+
+fn tree_delta_entry(
+    repo: &gix::Repository,
+    base: &gix::Tree<'_>,
+    target: &gix::Tree<'_>,
+    interrupt: &AtomicBool,
+) -> Result<Option<gix_pack::data::output::Entry>> {
+    use gix_pack::data::output;
+
     let Some(delta) = encode_tree_delta(&base.data, &target.data, interrupt)? else {
         return Ok(None);
     };
     let mut entry = output::Entry::from_data(
         &output::Count {
-            id: candidate.target,
+            id: target.id,
             entry_pack_location: output::count::PackLocation::NotLookedUp,
         },
         &gix::objs::Data {
@@ -720,12 +734,47 @@ fn thin_tree_entry(
         gix::zlib::Compression::DEFAULT,
     )
     .context("compress thin tree delta")?;
-    entry.kind = output::entry::Kind::DeltaOid { id: candidate.base };
+    entry.kind = output::entry::Kind::DeltaOid { id: base.id };
     tracing::Span::current()
         .set_attribute("git.pack.thin_tree_target_bytes", target.data.len() as i64);
     tracing::Span::current().set_attribute("git.pack.thin_tree_delta_bytes", delta.len() as i64);
     check_upload_pack_interrupt(interrupt)?;
     Ok(Some(entry))
+}
+
+fn compact_tree_entry<'repo>(
+    repo: &'repo gix::Repository,
+    entry: &mut gix_pack::data::output::Entry,
+    snapshot: &mut Option<(gix::Tree<'repo>, usize)>,
+    interrupt: &AtomicBool,
+) -> Result<bool> {
+    use gix_pack::data::output::entry::Kind;
+
+    check_upload_pack_interrupt(interrupt)?;
+    if entry.kind != Kind::Base(gix::objs::Kind::Tree)
+        || !(MIN_TREE_DELTA_BYTES..=MAX_TREE_DELTA_BYTES).contains(&entry.decompressed_size)
+    {
+        return Ok(false);
+    }
+    let target = repo
+        .find_tree(entry.id)
+        .context("read pack tree snapshot")?;
+    let mut depth = 0;
+    if let Some((base, base_depth)) = snapshot.as_ref() {
+        if *base_depth < MAX_TREE_DELTA_CHAIN {
+            if let Some(delta) = tree_delta_entry(repo, base, &target, interrupt)? {
+                if delta.compressed_data.len() + repo.object_hash().len_in_bytes()
+                    < entry.compressed_data.len()
+                {
+                    *entry = delta;
+                    depth = base_depth + 1;
+                }
+            }
+        }
+    }
+    // At most the previous tree and this target are decoded, as for one thin delta.
+    *snapshot = Some((target, depth));
+    Ok(depth != 0)
 }
 
 fn build_pack_with_commits(
@@ -738,7 +787,6 @@ fn build_pack_with_commits(
     interrupt: &AtomicBool,
 ) -> Result<Vec<u8>> {
     use gix::object::Kind;
-    use gix_pack::data::output;
     use gix_pack::data::output::count::objects::ObjectExpansion;
 
     check_upload_pack_interrupt(interrupt)?;
@@ -885,20 +933,23 @@ fn build_pack_with_commits(
     }
 
     let expected_entries = u32::try_from(counts.len()).context("too many pack entries")?;
-    let mut trailing_entry = if thin_pack {
+    let initial_delta = if thin_pack {
         thin_tree_entry(repo, &tree_deltas, interrupt)?
     } else {
         None
     };
-    tracing::Span::current().set_attribute("git.pack.thin_tree_delta", trailing_entry.is_some());
-    if let Some(entry) = &trailing_entry {
-        let index = counts
-            .iter()
-            .position(|count| count.id == entry.id)
-            .context("thin tree is missing from counted pack objects")?;
-        counts.remove(index);
-    }
-    let mut entries_iter = output::entry::iter_from_counts(
+    let mut snapshot = match initial_delta {
+        Some(gix_pack::data::output::Entry {
+            kind: gix_pack::data::output::entry::Kind::DeltaOid { id },
+            ..
+        }) => Some((
+            repo.find_tree(id)
+                .context("read negotiated pack tree base")?,
+            0,
+        )),
+        _ => None,
+    };
+    let entries_iter = gix_pack::data::output::entry::iter_from_counts(
         counts,
         odb.clone(),
         Box::new(gix::progress::Discard),
@@ -908,19 +959,23 @@ fn build_pack_with_commits(
         },
     )
     .context("resolving pack entry locations")?;
-    // Append the external-base delta so existing in-pack delta indexes remain unchanged.
-    let mut sequence = 0;
-    let entries_iter = std::iter::from_fn(move || {
-        if let Some(batch) = entries_iter.next() {
-            sequence += 1;
-            return Some(batch);
-        }
-        trailing_entry
-            .take()
-            .map(|entry| Ok((sequence, vec![entry])))
+    let mut compacted_trees = 0i64;
+    // Replace entries in place so reused in-pack delta indexes remain unchanged.
+    let entries_iter = entries_iter.map(|batch| {
+        let compacted = (|| -> Result<_> {
+            let (sequence, mut entries) = batch?;
+            if thin_pack {
+                for entry in &mut entries {
+                    compacted_trees +=
+                        i64::from(compact_tree_entry(repo, entry, &mut snapshot, interrupt)?);
+                }
+            }
+            Ok((sequence, entries))
+        })();
+        compacted.map_err(|error| gix::Error::from_boxed(error.into_boxed_dyn_error()))
     });
 
-    Ok(write_pack_entries(
+    let pack = write_pack_entries(
         entries_iter,
         expected_entries,
         LimitedPackWriter {
@@ -932,8 +987,11 @@ fn build_pack_with_commits(
         max_pack_size,
         limit_message,
         interrupt,
-    )?
-    .bytes)
+    )?;
+    let span = tracing::Span::current();
+    span.set_attribute("git.pack.thin_tree_delta", compacted_trees != 0);
+    span.set_attribute("git.pack.compacted_tree_count", compacted_trees);
+    Ok(pack.bytes)
 }
 
 fn write_pack_entries<I, W>(
@@ -2407,6 +2465,7 @@ mod tests {
         let mut changes = CancelAfterFirst {
             inner: PackTreeObjects {
                 objects: &mut objects,
+                ordered: &mut Vec::new(),
                 tree_deltas: &mut Vec::new(),
                 interrupt: &interrupt,
             },
@@ -2440,6 +2499,7 @@ mod tests {
         let mut objects = HashSet::new();
         let mut changes = PackTreeObjects {
             objects: &mut objects,
+            ordered: &mut Vec::new(),
             tree_deltas: &mut Vec::new(),
             interrupt: &interrupt,
         };
@@ -2593,6 +2653,239 @@ mod tests {
                 "only the new commit is needed; the client already has its tree and blob"
             );
         }
+    }
+
+    #[test]
+    fn incremental_pack_compacts_intervening_large_tree_versions() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        for entry_count in [2000, 10_000] {
+            let (_dir, repo) = make_test_repo();
+            let mut tree = gix::objs::Tree::default();
+            for index in 0..entry_count {
+                tree.entries.push(gix::objs::tree::Entry {
+                    mode: gix::objs::tree::EntryKind::Blob.into(),
+                    filename: format!("category-{index:05}.md").into(),
+                    oid: repo
+                        .write_blob(format!("original category {index}\n"))
+                        .unwrap()
+                        .detach(),
+                });
+            }
+            let sig = gix::actor::SignatureRef {
+                name: "Test".into(),
+                email: "test@example.com".into(),
+                time: "1 +0000",
+            };
+            let parent = repo
+                .commit_as(
+                    sig,
+                    sig,
+                    "refs/heads/main",
+                    "known catalog snapshot",
+                    repo.write_object(&tree).unwrap().detach(),
+                    std::iter::empty::<gix::ObjectId>(),
+                )
+                .unwrap()
+                .detach();
+            let mut tip = parent;
+            for index in 0..48 {
+                let blob = repo
+                    .write_blob(format!("changed category {index}\n"))
+                    .unwrap()
+                    .detach();
+                if index % 2 == 0 {
+                    tree.entries.push(gix::objs::tree::Entry {
+                        mode: gix::objs::tree::EntryKind::Blob.into(),
+                        filename: format!("capacity-{index:05}.md").into(),
+                        oid: blob,
+                    });
+                    tree.entries
+                        .sort_by(|left, right| left.filename.cmp(&right.filename));
+                } else {
+                    let filename = format!("category-{:05}.md", 1400 + index);
+                    tree.entries
+                        .iter_mut()
+                        .find(|entry| entry.filename == filename.as_str())
+                        .unwrap()
+                        .oid = blob;
+                }
+                tip = repo
+                    .commit_as(
+                        sig,
+                        sig,
+                        "refs/heads/main",
+                        format!("catalog mutation {index}"),
+                        repo.write_object(&tree).unwrap().detach(),
+                        [tip],
+                    )
+                    .unwrap()
+                    .detach();
+            }
+            for packed in [false, true] {
+                if packed {
+                    let repacked = Command::new("git")
+                        .arg("--git-dir")
+                        .arg(repo.path())
+                        .args(["repack", "-ad"])
+                        .output()
+                        .unwrap();
+                    assert!(repacked.status.success(), "{repacked:?}");
+                }
+                let pack = build_pack_with_commits(
+                    &repo,
+                    &[tip.to_string()],
+                    &[parent.to_string()],
+                    None,
+                    true,
+                    8 * 1024 * 1024,
+                    &AtomicBool::new(false),
+                )
+                .expect("incremental catalog pack");
+                eprintln!(
+                "48 mixed mutations in a {entry_count}-entry tree (repacked={packed}): {} pack bytes",
+                pack.len()
+            );
+                assert!(
+                    pack.len() < 48 * MAX_TREE_DELTA_LITERAL_BYTES + entry_count * 64,
+                    "intervening commits must not each resend the complete known catalog tree"
+                );
+
+                let (_receiver_dir, receiver) = make_test_repo();
+                let fetched = Command::new("git")
+                    .arg("--git-dir")
+                    .arg(receiver.path())
+                    .args(["fetch", "--quiet", "--no-tags"])
+                    .arg(repo.path())
+                    .arg(parent.to_string())
+                    .output()
+                    .unwrap();
+                assert!(fetched.status.success(), "{fetched:?}");
+                let mut child = Command::new("git")
+                    .arg("--git-dir")
+                    .arg(receiver.path())
+                    .args(["index-pack", "--strict", "--stdin", "--fix-thin"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                child.stdin.take().unwrap().write_all(&pack).unwrap();
+                let indexed = child.wait_with_output().unwrap();
+                assert!(indexed.status.success(), "{indexed:?}");
+                if !packed {
+                    if entry_count == 10_000 {
+                        let exact = build_pack_with_commits(
+                            &repo,
+                            &[tip.to_string()],
+                            &[parent.to_string()],
+                            None,
+                            true,
+                            pack.len() as u64,
+                            &AtomicBool::new(false),
+                        )
+                        .unwrap();
+                        assert_eq!(exact, pack);
+                        assert!(build_pack_with_commits(
+                            &repo,
+                            &[tip.to_string()],
+                            &[parent.to_string()],
+                            None,
+                            true,
+                            pack.len() as u64 - 1,
+                            &AtomicBool::new(false),
+                        )
+                        .unwrap_err()
+                        .to_string()
+                        .contains("pack exceeds configured pack size"));
+                    }
+                    let hash = std::str::from_utf8(&indexed.stdout)
+                        .unwrap()
+                        .split_whitespace()
+                        .last()
+                        .unwrap();
+                    let verified = Command::new("git")
+                        .arg("verify-pack")
+                        .arg("-v")
+                        .arg(
+                            receiver
+                                .path()
+                                .join("objects/pack")
+                                .join(format!("pack-{hash}.idx")),
+                        )
+                        .output()
+                        .unwrap();
+                    assert!(verified.status.success(), "{verified:?}");
+                    let mut deepest = 0;
+                    for line in std::str::from_utf8(&verified.stdout).unwrap().lines() {
+                        let fields: Vec<_> = line.split_whitespace().collect();
+                        if fields.len() == 7 && fields[0].len() == 40 {
+                            deepest = deepest.max(fields[5].parse::<usize>().unwrap());
+                        }
+                    }
+                    assert!(deepest > 0 && deepest <= MAX_TREE_DELTA_CHAIN);
+                }
+                let count = Command::new("git")
+                    .arg("--git-dir")
+                    .arg(receiver.path())
+                    .args(["rev-list", "--count"])
+                    .arg(tip.to_string())
+                    .arg(format!("^{parent}"))
+                    .output()
+                    .unwrap();
+                assert!(count.status.success(), "{count:?}");
+                assert_eq!(
+                    count.stdout, b"48\n",
+                    "all intervening commits must remain fetchable"
+                );
+                let content = Command::new("git")
+                    .arg("--git-dir")
+                    .arg(receiver.path())
+                    .args(["show", &format!("{tip}:category-01447.md")])
+                    .output()
+                    .unwrap();
+                assert!(content.status.success(), "{content:?}");
+                assert_eq!(content.stdout, b"changed category 47\n");
+            }
+        }
+    }
+
+    #[test]
+    fn tree_compaction_preserves_bounds_cancellation_and_lookup_errors() {
+        use gix_pack::data::output;
+
+        let (_dir, repo) = make_test_repo();
+        let missing = gix::ObjectId::from_hex(b"1111111111111111111111111111111111111111").unwrap();
+        let mut snapshot = None;
+        let mut entry = output::Entry {
+            id: missing,
+            kind: output::entry::Kind::Base(gix::objs::Kind::Tree),
+            decompressed_size: MAX_TREE_DELTA_BYTES + 1,
+            compressed_data: Vec::new(),
+        };
+        for size in [MIN_TREE_DELTA_BYTES - 1, MAX_TREE_DELTA_BYTES + 1] {
+            entry.decompressed_size = size;
+            assert!(
+                !compact_tree_entry(&repo, &mut entry, &mut snapshot, &AtomicBool::new(false))
+                    .unwrap()
+            );
+            assert!(snapshot.is_none());
+        }
+        entry.decompressed_size = MIN_TREE_DELTA_BYTES;
+        assert!(
+            compact_tree_entry(&repo, &mut entry, &mut snapshot, &AtomicBool::new(true))
+                .unwrap_err()
+                .to_string()
+                .contains("upload-pack cancelled")
+        );
+        assert!(
+            compact_tree_entry(&repo, &mut entry, &mut snapshot, &AtomicBool::new(false))
+                .unwrap_err()
+                .to_string()
+                .contains("read pack tree snapshot")
+        );
+        assert!(snapshot.is_none());
     }
 
     #[test]

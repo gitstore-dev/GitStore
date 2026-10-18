@@ -1350,15 +1350,20 @@ Flush-only pushes have a zero command count and no submitted IDs; malformed
 first-command IDs record `git.push.first_oid_valid=false` without copying
 their input. No object ID becomes a metric label.
 An upload that explicitly requests `thin-pack` on its first want can encode
-one changed tree against a complete tree proven by a known client commit.
-At most eight changed-tree pairs are considered; header checks admit only
-4 KiB–1 MiB trees, and the selected pair adds at most two bounded tree reads.
+successive changed trees against a complete tree proven by a known client
+commit or an earlier tree already included in the pack. This avoids resending
+the full catalog tree for every intervening commit. At most eight initial
+changed-tree pairs are considered. Only 4 KiB–1 MiB trees qualify; compaction
+retains one previous tree and decodes one target at a time. Newly generated
+delta chains stop at 32 entries and restart with an ordinary complete tree.
 The encoder copies a common prefix and suffix and permits at most 4 KiB of
 literal bytes. Small, oversized, or widely changed trees retain ordinary
-encoding, as do clients without `thin-pack` or a known commit. Storage errors
+encoding, as do clients without `thin-pack`. Unknown haves never supply
+external bases. Existing in-pack delta indexes remain unchanged. Storage errors
 remain errors rather than being treated as an unavailable optimization.
 `git.fetch.thin_pack` records the negotiated capability;
-`git.pack.thin_tree_delta` records actual use, with bounded
+`git.pack.thin_tree_delta` and `git.pack.compacted_tree_count` record actual use,
+with bounded
 `git.pack.thin_tree_target_bytes` and `git.pack.thin_tree_delta_bytes` when used.
 These attributes describe encoding, not snapshot freshness. Shallow history,
 ordinary object identity, cancellation, and the exact pack-byte ceiling remain
