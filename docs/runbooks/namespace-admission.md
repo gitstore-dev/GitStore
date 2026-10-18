@@ -2613,6 +2613,24 @@ policy. Per-case latency sampling was 1/64; highest sampled case p99s were
 outlier was 588.379ms, so passing p99 does not mean every decision took less than
 1ms. Reload-soak post-GC heap was 88.91% of baseline.
 
+A separate native-only diagnostic offered **20 signed file-write RPCs/s**
+against fresh, identically seeded 16,000-file repositories. Both the published
+release (`b1b26caa`) and repaired source (`3cd4e03`) acknowledged all 600 writes
+over 29.961s, with zero RPC failures or drops. RPC p95/p99 were
+14.159/20.653ms and 12.720/17.351ms, respectively. These are ordinary-file
+RPC acknowledgements, not HTTP or catalog admission throughput. Each run used
+one native process and a 4-vCPU/1-GiB Linux client with Git 2.39.5; the native
+container had no per-container CPU or memory limit.
+
+The same diagnostic offered ten concurrent same-branch Git operations, one
+per second with one push retry. Neither version accepted any of those ten pushes. The
+release encountered fetch-protocol errors as well as a fast-forward rejection;
+the repaired version completed fetches but exhausted the push retry on all ten
+operations. These controls use an allow-all HTTP fixture without Scylla,
+controllers or deployed authentication. They do not establish sustainable push
+throughput or a passing regression baseline for a known-working release
+workflow.
+
 Full production acceptance and per-operation sustainable ceilings remain
 unestablished. Fixed offered rates, short diagnostics and evaluator-only
 decisions must not be advertised as those ceilings.
