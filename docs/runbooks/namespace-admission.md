@@ -2550,7 +2550,8 @@ are successful authorization checks, not successful resource reads.
 | Repository update | 2.333 acknowledged logical mutations/s | 1,400 ACKs over 600.12s, 20-resource pool and 100 subscribers; passed lifecycle alpha, zero failed/dropped mutations and one recovered transport attempt |
 | Category creation | 20 acknowledged logical mutations/s | 600/600 ACKs over a 30s, 20-worker diagnostic on retained fixtures; not a passed hierarchy/fault gate |
 | Namespace transition | 10.831 acknowledged logical transitions/s | 1,300/1,300 ACKs over 120.024s, 50 resources, 20 workers and 1,000 subscribers; nominal 10/s plus a 100-transition burst; diagnostic, not a full-duration/replacement gate |
-| Sustained Git pushes, File ACKs, Product operations and other endpoint operations | Not established | No passing per-operation sustainable-capacity result is claimed |
+| File Git push | Approximately 11.654 acknowledged logical pushes/s | 1,400/1,400 ACKs over a reconstructed 120.132s first-offer-to-last-ACK span in a historical combined diagnostic; 32 workers, zero failed/dropped pushes; not capacity acceptance |
+| Standalone Git fetch/push, Product operations and unlisted endpoints | Not established | No per-operation sustainable-capacity result is claimed |
 
 The readiness run issued four requests per iteration, not one: health,
 readiness, an allowed query and an expected denial. Its aggregate measured
@@ -2560,6 +2561,18 @@ these are not isolated per-endpoint percentiles. Repository mutation p95/p99
 were 103.886/127.302ms. The Category diagnostic recorded 260.571/365.521ms, but
 its companion Git workload failed, so those mutation results cannot pass the
 combined gate.
+
+The File result is from a separate 2026-10-17 combined File/Repository
+diagnostic, not the later Namespace deployment or a controlled comparison.
+Its offered window was 120.001s, including two 100-push bursts; the reported
+ACK rate includes the last ACK after that window, not the additional
+post-load stabilization time. Push ACK p95/p99 were 2.943/3.515s, including
+client queueing. Each push contained at most four typed files and 2,356 bytes;
+2,800 attached checks verified visibility through both APIs. Trace correlation
+was enabled, without runtime profiling. The original dispatcher failed its
+then-configured 2s p95 gate. The present File targets are 3s p95 and 30s p99,
+but this does not retroactively turn that short diagnostic into a passed
+production, fault or sustainable-capacity gate.
 
 The full-fixture Namespace diagnostic recorded visibility p95/p99 of
 1.098/1.388s and replay p95 of 2.885s over 20 samples after preparing 10,000
