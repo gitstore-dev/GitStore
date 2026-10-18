@@ -41,6 +41,7 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -4754,7 +4755,8 @@ func testFileConditionalBatches(t *testing.T, nativeTrace bool) {
 				desired[i] = current
 			}
 			registry := prometheus.NewRegistry()
-			batcher := datastore.NewInstrumentedDatastoreWithRegistry(store, "scylla", zap.NewNop(), registry).(datastore.CatalogMutationBatcher)
+			instrumented := datastore.NewInstrumentedDatastoreWithRegistry(store, "scylla", zap.NewNop(), registry)
+			batcher := instrumented.(datastore.CatalogMutationBatcher)
 			resume := func() { resumed.Do(func() { close(release) }) }
 			t.Cleanup(resume)
 			var results [count]error
@@ -4764,7 +4766,7 @@ func testFileConditionalBatches(t *testing.T, nativeTrace bool) {
 			}
 			err = batcher.WithCatalogMutationBatch(context.WithValue(ctx, updateKey{}, true), ns.Name, func(batchCtx context.Context) error {
 				var writes sync.WaitGroup
-				writes.Go(func() { results[0] = store.UpdateFile(batchCtx, desired[0], "1") })
+				writes.Go(func() { results[0] = instrumented.UpdateFile(batchCtx, desired[0], "1") })
 				select {
 				case <-started:
 				case <-ctx.Done():
@@ -4773,7 +4775,7 @@ func testFileConditionalBatches(t *testing.T, nativeTrace bool) {
 					return ctx.Err()
 				}
 				for i := 1; i < count; i++ {
-					writes.Go(func() { results[i] = store.UpdateFile(batchCtx, desired[i], "1") })
+					writes.Go(func() { results[i] = instrumented.UpdateFile(batchCtx, desired[i], "1") })
 				}
 				ready := assert.Eventually(t, func() bool { return reads.Load() >= count }, 5*time.Second, time.Millisecond)
 				if ready {
@@ -4877,6 +4879,7 @@ func testFileConditionalBatches(t *testing.T, nativeTrace bool) {
 			}
 			require.Positive(t, queriesTraced)
 			require.Positive(t, batchesTraced, "the real ExecuteBatch path must reach the batch observer")
+			requireFileUpdateTraceLinks(t, recorder.Ended(), parent.SpanContext(), count, nativeTrace)
 			requireFileNativeTraceSessions(t, recorder.Ended(), raw, nativeTrace)
 			require.Greater(t, maximumBatch, 4, "the proof must exercise larger same-partition physical batches")
 			require.LessOrEqual(t, maximumBatch, count)
@@ -4894,6 +4897,110 @@ func testFileConditionalBatches(t *testing.T, nativeTrace bool) {
 			require.True(t, blocked)
 		})
 	}
+}
+
+func requireFileUpdateTraceLinks(t *testing.T, spans []sdktrace.ReadOnlySpan, parent trace.SpanContext, count int, nativeTrace bool) {
+	t.Helper()
+	rows := make(map[trace.SpanID]sdktrace.ReadOnlySpan)
+	for _, span := range spans {
+		if span.Name() == "datastore.UpdateFile" {
+			require.Equal(t, parent.TraceID(), span.SpanContext().TraceID())
+			require.Equal(t, parent.SpanID(), span.Parent().SpanID())
+			rows[span.SpanContext().SpanID()] = span
+		}
+	}
+	require.Len(t, rows, count, "the fixture must use the production instrumentation decorator for every row")
+	phases, sharedCAS, readbacks, linkedAttempts := 0, 0, 0, 0
+	nativeRows := make(map[trace.SpanID]bool)
+	for _, span := range spans {
+		switch span.Name() {
+		case "datastore.CatalogParentCheck", "datastore.CatalogProjectionReadBefore",
+			"datastore.CatalogMembershipWrite", "datastore.FileAuthoritativeCAS",
+			"datastore.FileOwnerReferenceSync", "datastore.CatalogProjectionReadAfter",
+			"datastore.FileConditionalQueue", "datastore.FileProjectionReadQueue":
+			row := rows[span.Parent().SpanID()]
+			require.NotNil(t, row, "a row phase must not remain a sibling under the admission root")
+			require.False(t, span.StartTime().Before(row.StartTime()))
+			require.False(t, span.EndTime().After(row.EndTime()))
+			phases++
+		case "scylla.exchange":
+			row := rows[span.Parent().SpanID()]
+			for _, event := range span.Events() {
+				if event.Name == "scylla.server_trace" {
+					require.True(t, nativeTrace)
+					require.NotNil(t, row, "native sessions must join a physical exchange owned by a row")
+					nativeRows[row.SpanContext().SpanID()] = true
+					for _, link := range span.Links() {
+						require.Contains(t, rows, link.SpanContext.SpanID())
+						nativeRows[link.SpanContext.SpanID()] = true
+					}
+				}
+			}
+			if row == nil {
+				continue
+			}
+			members := int64(0)
+			for _, attr := range span.Attributes() {
+				switch attr.Key {
+				case "gitstore.db.group.member_count":
+					members = attr.Value.AsInt64()
+				case "gitstore.db.group.links_overflow":
+					require.False(t, attr.Value.AsBool())
+				case "db.collection.name":
+					require.Equal(t, "files_by_namespace", attr.Value.AsString())
+				}
+			}
+			if members == 0 {
+				continue
+			}
+			require.LessOrEqual(t, members, int64(16))
+			require.Len(t, span.Links(), int(members))
+			for _, link := range span.Links() {
+				member := rows[link.SpanContext.SpanID()]
+				require.NotNil(t, member)
+				require.Equal(t, member.SpanContext(), link.SpanContext)
+				backlinks := 0
+				for _, back := range member.Links() {
+					if back.SpanContext.Equal(span.SpanContext()) {
+						backlinks++
+					}
+				}
+				require.Equal(t, 1, backlinks, "each accepted row must identify its exact physical exchange")
+			}
+			for _, attempt := range spans {
+				if attempt.Parent().SpanID() != span.SpanContext().SpanID() {
+					continue
+				}
+				switch attempt.Name() {
+				case "scylla.batch":
+					sharedCAS++
+					for _, attr := range attempt.Attributes() {
+						if attr.Key == "db.operation.batch.size" {
+							require.Equal(t, members, attr.Value.AsInt64())
+						}
+					}
+					linkedAttempts++
+				case "scylla.query":
+					for _, attr := range attempt.Attributes() {
+						if attr.Key == "db.operation.name" && attr.Value.AsString() == "SELECT" {
+							readbacks++
+						}
+					}
+					linkedAttempts++
+				}
+			}
+		}
+	}
+	require.GreaterOrEqual(t, phases, 7*count)
+	require.Positive(t, sharedCAS, "a real physical batch must link to its row operations")
+	require.Positive(t, readbacks, "real post-write readback must preserve exact row links")
+	if nativeTrace {
+		require.Len(t, nativeRows, count, "every row must join a native execution through its exact single or shared exchange")
+	} else {
+		require.Empty(t, nativeRows)
+	}
+	t.Logf("File row trace round-trip: %d rows, %d phases, %d shared conditional attempts, %d readback attempts, %d linked attempts, %d native-linked rows",
+		len(rows), phases, sharedCAS, readbacks, linkedAttempts, len(nativeRows))
 }
 
 func startFileNativeTraceCapture(t *testing.T, ctx context.Context) func() {

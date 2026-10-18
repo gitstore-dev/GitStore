@@ -1908,6 +1908,21 @@ old traces, enable native tracing without the existing explicit profiling
 controls, or establish an ACK improvement. No capacity acceptance follows from
 this instrumentation change.
 
+The real-driver regression also sends every update through the production
+instrumentation decorator, not directly to the raw backend. Its 16-row success
+and definite-conflict cases check row-phase parentage, reciprocal shared-write
+and readback links, and independent conditional fallback. With native capture
+explicitly enabled, every row must join through its single or shared exchange
+to a completed Scylla execution session; preparation sessions are identified
+separately and cannot stand in for execution. With capture disabled, native
+session observations must remain absent.
+
+This regression uses a test-owned RF3 keyspace, contact-point test routing and
+an intentionally held first response to make queued work deterministic. Its
+timings are not production-routing evidence, an unprofiled comparison or an
+ACK percentile measurement. The keyspace and temporary runner are removed
+afterward; deployed API and Git processes need not change to run the check.
+
 For the running Scylla engine revision, native duration is foreground elapsed
 time measured with a steady clock, not CPU time. Execution tracing begins
 inside request processing and stops before subsequent response queuing/writing.
