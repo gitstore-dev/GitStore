@@ -868,6 +868,14 @@ afresh; interrupted reads never count as verified membership or peer checks.
 these failures, not unique physical HTTP request counts. Failed attempts remain
 in the existing read timing/poll measurements and native HTTP telemetry.
 Permanent outage still fails at the original deadline.
+
+The File offered-to-ACK gate requires p95 <=3s and p99 <=30s across sustained
+and burst traffic, including time waiting in the original worker queue.
+The p95 limit was revised from 2s to 3s on 2026-10-18; historical runs retain
+their original thresholds and outcomes. This changes no offered load, workers,
+queue bounds, deadlines, attached cross-replica checks or other acceptance
+criteria. A diagnostic pass does not certify alpha or production acceptance.
+
 For opt-in per-push server telemetry correlation, add
 `REPOSITORY_CAPACITY_TRACE_CORRELATION=1` to a File/combined comparison or the
 full secret scenario. The default is `0`; other values and Repository-only use

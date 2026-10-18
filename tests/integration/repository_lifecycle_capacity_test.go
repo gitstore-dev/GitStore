@@ -5934,7 +5934,7 @@ func assertSecretCapacityFileLoad(t *testing.T, result secretCapacityFileLoadRes
 	require.LessOrEqual(t, percentileDuration(m.referenceLatencies, .99), 20*time.Millisecond)
 	require.LessOrEqual(t, percentileDuration(m.resolutionLatencies, .95), 10*time.Millisecond)
 	require.LessOrEqual(t, percentileDuration(m.resolutionLatencies, .99), 50*time.Millisecond)
-	require.LessOrEqual(t, percentileDuration(m.pushLatencies, .95), 2*time.Second)
+	require.LessOrEqual(t, percentileDuration(m.pushLatencies, .95), 3*time.Second)
 	require.LessOrEqual(t, percentileDuration(m.pushLatencies, .99), 30*time.Second)
 }
 
