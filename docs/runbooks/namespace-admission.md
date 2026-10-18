@@ -2541,7 +2541,7 @@ signals. The enforced limits are critical saturation thresholds. Do not raise
 concurrency or request-size limits to mask saturation; first inspect parse
 latency, policy datastore latency, CPU, garbage collection, and conflict rate.
 
-### Recorded operation rates (2026-10-18, interim)
+### Recorded operation rates (interim, through 2026-10-19)
 
 These are observed rates at the stated workload, **not maximum sustainable
 capacity**. An acknowledged logical mutation is not an HTTP-attempt count:
@@ -2668,6 +2668,13 @@ operations. These controls use an allow-all HTTP fixture without Scylla,
 controllers or deployed authentication. They do not establish sustainable push
 throughput or a passing regression baseline for a known-working release
 workflow.
+
+The 2026-10-19 request-local cache follow-up (`64d54cc`) used the same compiled
+Linux probe, 16,000-file seed, offers, workers, resources and retry/deadline
+budgets. It acknowledged 600/600 RPC writes over 29.963s with zero RPC failures
+or drops; RPC p95/p99 were 12.161/15.085ms. All ten concurrent Git operations
+still failed on the retried push. This does not establish successful Git
+throughput or unblock the full acceptance workload.
 
 Full production acceptance and per-operation sustainable ceilings remain
 unestablished. Fixed offered rates, short diagnostics and evaluator-only
