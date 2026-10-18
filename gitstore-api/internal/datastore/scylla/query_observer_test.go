@@ -25,6 +25,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 	"go.uber.org/zap"
 )
 
@@ -114,7 +115,7 @@ func TestCQLServerTraceIDsAreBoundedAndDoNotExposeInvalidBytes(t *testing.T) {
 		require.Empty(t, got.Events())
 		require.Contains(t, got.Attributes(), attribute.Bool("gitstore.db.server_trace.invalid", true))
 		for _, attr := range got.Attributes() {
-			require.NotContains(t, attr.Value.Emit(), "private")
+			require.NotContains(t, attr.Value.String(), "private")
 		}
 	}
 	recorder := tracetest.NewSpanRecorder()
@@ -198,7 +199,7 @@ func TestCQLAttemptTracing(t *testing.T) {
 				attrs := make(map[attribute.Key]attribute.Value)
 				for _, item := range span.Attributes() {
 					attrs[item.Key] = item.Value
-					assert.NotContains(t, item.Value.Emit(), "private-")
+					assert.NotContains(t, item.Value.String(), "private-")
 				}
 				assert.Equal(t, int64(2), attrs["db.operation.retry_count"].AsInt64())
 				assert.Equal(t, int64(3*time.Millisecond), attrs["gitstore.db.attempt.duration_ns"].AsInt64())
@@ -315,7 +316,7 @@ func TestCQLExchangeStreamTimingsHaveExactAttemptParent(t *testing.T) {
 	attrs := make(map[attribute.Key]attribute.Value)
 	for _, item := range exchange.Attributes() {
 		attrs[item.Key] = item.Value
-		require.NotContains(t, item.Value.Emit(), "private-")
+		require.NotContains(t, item.Value.String(), "private-")
 	}
 	require.EqualValues(t, 1, attrs["gitstore.db.stream.reserved"].AsInt64())
 	require.Equal(t, "files_by_uid", attrs["db.collection.name"].AsString())
@@ -378,7 +379,7 @@ func TestCQLRequestGroupLinksExactRowsWithoutChangingCancellation(t *testing.T) 
 			rows[span.SpanContext().SpanID()] = span
 		}
 		for _, attr := range span.Attributes() {
-			require.NotContains(t, attr.Value.Emit(), "private-")
+			require.NotContains(t, attr.Value.String(), "private-")
 		}
 	}
 	require.NotNil(t, exchange)
@@ -458,7 +459,7 @@ func TestCQLRequestGroupDoesNotLinkUnrecordedExchange(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
 	ctx, row := provider.Tracer("test").Start(t.Context(), "row")
 	group := withCQLRequestGroup(ctx, []context.Context{ctx})
-	_, finish := startCQLExchange(group, trace.NewNoopTracerProvider().Tracer("test"))
+	_, finish := startCQLExchange(group, noop.NewTracerProvider().Tracer("test"))
 	finish(nil)
 	row.End()
 	require.Len(t, recorder.Ended(), 1)
@@ -602,7 +603,7 @@ func TestCQLExchangeIgnoresCompletedAndRemoteSampledParents(t *testing.T) {
 
 func BenchmarkCQLExchangeDisabled(b *testing.B) {
 	ctx := context.Background()
-	tracer := trace.NewNoopTracerProvider().Tracer("test")
+	tracer := noop.NewTracerProvider().Tracer("test")
 	b.ReportAllocs()
 	for b.Loop() {
 		_, finish := startCQLExchange(ctx, tracer)

@@ -221,7 +221,7 @@ func TestInstrumentedDatastoreUpdateFileOwnsConcurrentPhases(t *testing.T) {
 					updates[span.SpanContext().SpanID()] = span
 				}
 				for _, attr := range span.Attributes() {
-					require.NotContains(t, attr.Value.Emit(), "private-")
+					require.NotContains(t, attr.Value.String(), "private-")
 				}
 				require.NotContains(t, span.Status().Description, "private-")
 			}
