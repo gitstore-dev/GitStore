@@ -1839,6 +1839,46 @@ fencing, fresh authorized reads, cohort bounds and attached verification.
 These observations neither establish an optimization nor authorize another
 capacity pair merely to seek a better result.
 
+The follow-through resolved all nine preceding control cohorts through exact
+reciprocal owner/member trace links: 36 callbacks, 110 observed File updates
+and 209 CQL attempts. It reused the closed workload and captured searches,
+retaining 27 additional linked traces without new load or profiling. Every
+observed attempt reported zero retries. Independent interval reconstruction
+checked the raw spans and clipped them to the two original queue waits:
+
+| Preceding mutation work overlapping the selected queue | First window | Second window |
+| --- | ---: | ---: |
+| Mutation wall time | 342.3ms | 338.8ms |
+| Union with a CQL request outstanding | 331.5ms | 335.7ms |
+| Union with conditional execution active | 200.9ms | 204.3ms |
+| Union with fresh snapshot phases active | 49.7ms | 101.3ms |
+| Union with post-write readback phases active | 126.2ms | 102.5ms |
+
+Only the mutation-wall-time row bounds each column. Other rows overlap:
+callbacks and individual updates run concurrently, and readback for a completed
+write can overlap the next conditional execution. Adding stage unions or
+individual update durations would double-count time. The full nine mutation
+intervals, including portions outside the selected waits, total 830.9ms;
+801.8ms overlaps an outstanding request. Neither quantity is a population
+percentile or a prediction of removable ACK latency.
+
+Each cohort already used two conditional execution scopes for its 12 or 13
+observed updates: 18 scopes across 110 updates. Fresh snapshots, conservative
+membership writes and authoritative readback remain part of the dependency.
+The earlier rejected conditional-combining comparison is still relevant:
+fewer conditional scopes alone did not deliver an ACK improvement. This census
+does not justify repeating that change or dropping required writes or reads.
+
+The retained phase spans are siblings under each admission request rather than
+row-identified children of individual update spans. They establish concurrent
+stage occupancy, but not an exact row-level critical path. Client request
+intervals also do not distinguish native database execution from transport or
+scheduling. Two analysis errors were retained and corrected before publication:
+assuming the four-row maximum was an exact count, and summing concurrent update
+durations. The final accounting uses actual counts and interval unions.
+No optimization was selected or deployed from this census; the unchanged
+queue-inclusive ACK gate remains open.
+
 For the running Scylla engine revision, native duration is foreground elapsed
 time measured with a steady clock, not CPU time. Execution tracing begins
 inside request processing and stops before subsequent response queuing/writing.
