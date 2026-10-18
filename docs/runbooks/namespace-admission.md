@@ -1781,6 +1781,64 @@ One ordered pair is not statistical proof, and it must not be repeated to
 seek a favorable result. The ACK gate and remaining lifecycle obligations
 remain open.
 
+A subsequent dependency census used the same closed pair, without new offered
+load or profiling. It reconstructed all 1,400 timelines per role and selected
+every offer at or above that role's native whole-command ACK p95: 71 offers
+per role. Of those, 37 control and 27 candidate offers were sustained offers
+caught behind a burst, not explicit burst offers. All tail offers fell within
+the first 30 seconds of one of the two burst windows. Restricting analysis to
+the explicitly marked 100-offer bursts would miss those affected requests.
+
+Each queued tail interval was intersected with earlier jobs on its actual
+assigned worker. ACK service and attached post-ACK verification were separated
+using matching row durations, rather than subtracting marginal percentiles:
+
+| Mean time across the 71 native ACK-tail offers | Control | Rejected candidate |
+| --- | ---: | ---: |
+| Queue-inclusive ACK | 3,470.6ms | 3,483.7ms |
+| Own ACK service after dequeue | 742.0ms | 568.9ms |
+| Queue overlap with predecessors' pre-ACK work | 1,008.4ms | 1,204.7ms |
+| Queue overlap with predecessors' attached post-ACK work | 1,720.2ms | 1,710.0ms |
+| Of that post-ACK overlap, recorded shared read-round wall time | 1,065.8ms | 1,002.8ms |
+
+Predecessors' post-ACK work accounts for 63.0% of the control tail's queue
+wait and 49.6% of its queue-inclusive ACK time. The residual between measured
+queue wait and reconstructed predecessor intervals averaged 0.019ms in
+control and 0.056ms in the candidate. Offer timestamps are microsecond-rounded;
+interval durations use the driver's monotonic clock. Shared two-API read
+rounds are counted once per affected worker interval, not as the sum of the
+two peer request durations. Time outside those reads is not established CPU
+idleness: asynchronous admission, polling and scheduling can overlap it.
+This accounting is not a prediction of how rescheduling or removing a phase
+would change latency, and does not permit detaching the attached checks.
+
+For each burst window and role, the next retained-trace sample selected the
+predecessor contributing the largest summed post-ACK overlap to those tail
+queues. Thirty-four existing push, read and explicitly linked cohort traces
+were retained. In the original control, the selected predecessors' namespace
+queue waits were 665.5ms and 395.9ms. Complete, non-saturated same-instance
+trace searches attributed 662.4ms and 395.3ms of those waits to six and three
+preceding four-callback File cohorts, respectively, excluding the selected
+request's own cohort. No retained non-File mutation phase overlapped either queue;
+the remaining 3.1ms and 0.6ms stay unattributed. Cohort service describes local
+queue ownership, not an exact distributed-lock holding interval.
+
+Within those preceding cohorts, reserve/mutation/release phase overlaps were
+164.1/342.3/155.8ms for the first queue and 33.7/338.8/22.6ms for the second.
+These are clipped, non-overlapping intervals on the same API clock, not sums
+of nested phase percentiles. The variation matters: removing reservation
+overhead alone cannot be assumed to solve both burst windows.
+
+This identifies an indirect dependency: earlier workers cannot finish their
+required checks while their File admission is queued behind other File
+cohorts. The retained control samples place their authoritative writes after
+the Git HTTP response. Faster polling alone cannot bypass that admission.
+The next implementation discriminator must therefore explain and reduce
+service on this occupied-worker dependency chain, while retaining lifecycle
+fencing, fresh authorized reads, cohort bounds and attached verification.
+These observations neither establish an optimization nor authorize another
+capacity pair merely to seek a better result.
+
 For the running Scylla engine revision, native duration is foreground elapsed
 time measured with a steady clock, not CPU time. Execution tracing begins
 inside request processing and stops before subsequent response queuing/writing.
