@@ -123,7 +123,7 @@ expiry-spanning provider failure, peer progress, restoration and a new source.
 It is **not** evidence of deployed two-API/two-controller recovery or the
 production capacity gate; the separate deployed evidence below covers the former.
 
-The deployed acceptance harness is available through:
+The deployed functional harness is available through:
 
 ```bash
 make test TARGET=secret-integration \
@@ -134,19 +134,39 @@ make test TARGET=secret-integration \
 ```
 
 Use an isolated two-API deployment sharing Scylla with one Git service. Set both
-APIs' `auth.serviceaccount.default_ttl` and `max_ttl` to `60s`. The existing
-`controllers/gitstore-controller-manager` ServiceAccount must have controller
-RBAC permissions; `SECRET_TEST_NAMESPACE` and `SECRET_TEST_SERVICEACCOUNT`
-override that test identity. The command builds the current controller binary,
-starts two test-owned processes with separate private records/checkpoint roots,
+APIs' `api.auth.serviceaccount.default_ttl` and
+`api.auth.serviceaccount.max_ttl` to `60s`. The existing cluster-scoped
+`gitstore-controller-manager` ServiceAccount must have controller RBAC permissions.
+`SECRET_TEST_SERVICEACCOUNT` selects another enrolled test identity;
+`SECRET_TEST_NAMESPACE` is rejected, even when empty. The command builds the
+current controller binary, starts two test-owned processes with separate
+private records/checkpoint roots,
 enrolls only uniquely named test keys, withdraws one record for 90 seconds,
 tests overlap and retirement across token expiry, and replaces a process.
 Cleanup stops those processes and removes only their enrolled keys, leaving
 the pre-existing key set intact. Never use an operator deployment.
 
-This is functional deployed acceptance, not a production capacity run. It does
+This is functional deployed verification, not a production capacity run. It does
 not establish sustained File-push latency, the five-million-Product dataset or
 the production fault schedule.
+
+On 2026-10-19, both deployed tests passed against clean source `3cd4e03`,
+two target APIs, three Scylla nodes and one Git process. The run verified
+cross-replica account uniqueness and assertion replay rejection, provider
+outage and restoration, mismatched keys, key overlap and retirement, and
+controller replacement without changing its configuration. Restoration to
+readiness took **4.602 seconds** in this single observation, not a recovery
+percentile or load-tested bound.
+
+A third disposable issuer also exercised the optional
+[unexpired-token recreation check](controller-auth.md): the old token
+authenticated on both targets before deletion, but was rejected after deletion
+and same-name, same-key recreation while still unexpired. A new-UID token
+authenticated without gaining target-policy permissions. Neither target API
+process nor its policy changed. The enrolled controller identity was retained;
+test keys, processes and disposable deployment data were removed after evidence
+capture. This closes that functional verification gap, not the sustained-load
+or production gates above.
 
 **Observed 2026-10-03:** the expanded harness passed in 293.56s with two real API
 processes sharing three Scylla nodes, two test-owned controller processes and
