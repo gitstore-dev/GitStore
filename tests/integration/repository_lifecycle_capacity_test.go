@@ -3340,7 +3340,18 @@ Owned capacity File.
 					return false
 				}
 				observed = *data.Resource
-				return observed.ID != "" && observed.Metadata != nil
+				if observed.ID == "" || observed.Metadata == nil {
+					return false
+				}
+				node := secretTestGraphQL(t, endpoint, cfg.token, `query($id: ID!) { node(id: $id) { id } }`,
+					map[string]any{"id": observed.ID})
+				require.Equal(t, http.StatusOK, node.Status)
+				missing, err := capacityNodeDeleted(node.Data, observed.ID, node.Errors...)
+				require.NoError(t, err, "catalog UID projection readiness must fail on unexpected errors")
+				if missing {
+					t.Logf("catalog UID projection pending kind=%s", catalog.kind)
+				}
+				return !missing
 			}, 30*time.Second, 100*time.Millisecond, "%s must be projected on both APIs", catalog.kind)
 			require.Equal(t, catalogName, observed.Metadata.Name)
 			require.Equal(t, cfg.namespace, observed.Metadata.Namespace)

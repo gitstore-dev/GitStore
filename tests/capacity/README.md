@@ -662,6 +662,9 @@ Deletion completion reads require a null node on both replicas. When GraphQL
 returns errors, only the single exact kind-specific `NOT_FOUND` diagnostic on
 the `node` field is accepted; authorization, transport and other failures
 cannot count as completed deletion.
+Catalog blocker fixtures wait for both name-based and exact-UID reads on
+each replica before testing parent rejection, so a partially published
+creation is not mistaken for deletion or a lost acknowledged resource.
 
 Both modes require two real API processes, two real controller-manager
 processes, shared durable storage, an observed replacement of the selected API
