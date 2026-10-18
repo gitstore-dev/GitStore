@@ -1373,8 +1373,13 @@ the full catalog tree for every intervening commit. At most eight initial
 changed-tree pairs are considered. Only 4 KiB–1 MiB trees qualify; compaction
 tries qualifying pairs in descending target size until one fits the literal
 bound. A widely changed larger candidate does not discard a compact alternative
-within those same eight pairs. Compaction retains one previous tree and decodes
-one target at a time. Newly generated
+within those same eight pairs. For incremental fetches, qualifying trees are
+encoded directly as bounded deltas instead of compressing each complete tree
+and then discarding that work. A complete tree is compressed only when the
+bounded delta cannot be used or its chain needs restarting. Other objects
+retain the existing pack-reuse path; freshly encoded trees follow those entries
+so reused in-pack delta indexes remain valid. Compaction retains one previous
+tree and decodes one target at a time. Newly generated
 delta chains stop at 32 entries and restart with an ordinary complete tree.
 The encoder copies a common prefix and suffix and permits at most 4 KiB of
 literal bytes. Small, oversized, or widely changed trees retain ordinary

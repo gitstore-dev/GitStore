@@ -519,6 +519,11 @@ const MAX_TREE_DELTA_LITERAL_BYTES: usize = 4096;
 const MAX_TREE_DELTA_CANDIDATES: usize = 8;
 const MAX_TREE_DELTA_CHAIN: usize = 32;
 
+#[cfg(test)]
+thread_local! {
+    static FULL_TREE_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TreeDeltaBase {
     base: gix::ObjectId,
@@ -832,6 +837,120 @@ fn compact_tree_entry<'repo>(
     Ok(depth != 0)
 }
 
+fn build_incremental_pack<'repo>(
+    repo: &'repo gix::Repository,
+    counts: Vec<gix_pack::data::output::Count>,
+    mut snapshot: Option<(gix::Tree<'repo>, usize)>,
+    max_pack_size: u64,
+    limit_message: &'static str,
+    interrupt: &AtomicBool,
+) -> Result<(Vec<u8>, i64)> {
+    use gix_pack::data::output;
+
+    let expected_entries = u32::try_from(counts.len()).context("too many pack entries")?;
+    let mut passthrough = Vec::new();
+    let mut trees = Vec::new();
+    for count in counts {
+        check_upload_pack_interrupt(interrupt)?;
+        let header = repo
+            .find_header(count.id)
+            .context("read incremental pack object header")?;
+        if header.kind() == gix::objs::Kind::Tree
+            && (MIN_TREE_DELTA_BYTES as u64..=MAX_TREE_DELTA_BYTES as u64).contains(&header.size())
+        {
+            trees.push(count);
+        } else {
+            passthrough.push(count);
+        }
+    }
+
+    let mut odb = (*repo.objects).clone();
+    odb.prevent_pack_unload();
+    let entries = output::entry::iter_from_counts(
+        passthrough,
+        odb,
+        Box::new(gix::progress::Discard),
+        output::entry::iter_from_counts::Options {
+            thread_limit: Some(1),
+            ..Default::default()
+        },
+    )
+    .context("resolving incremental pack entry locations")?;
+    let mut expected_sequence = 0usize;
+    let entries = entries.map(|batch| -> Result<_> {
+        let (sequence, entries) = batch.context("incremental pack entry generation error")?;
+        anyhow::ensure!(
+            sequence == expected_sequence,
+            "pack entry batches out of order"
+        );
+        expected_sequence = expected_sequence
+            .checked_add(1)
+            .context("too many pack entry batches")?;
+        Ok(entries)
+    });
+    let mut compacted_trees = 0i64;
+    let trees = trees.into_iter().map(|count| -> Result<_> {
+        check_upload_pack_interrupt(interrupt)?;
+        let tree = repo
+            .find_tree(count.id)
+            .context("read incremental pack tree")?;
+        let mut depth = 0;
+        let delta = match snapshot.as_ref() {
+            Some((base, base_depth)) if *base_depth < MAX_TREE_DELTA_CHAIN => {
+                let delta = tree_delta_entry(repo, base, &tree, interrupt)?;
+                if delta.is_some() {
+                    depth = base_depth + 1;
+                }
+                delta
+            }
+            _ => None,
+        };
+        let entry = match delta {
+            Some(entry) => {
+                compacted_trees += 1;
+                entry
+            }
+            None => {
+                #[cfg(test)]
+                FULL_TREE_ENTRIES.with(|count| count.set(count.get() + 1));
+                output::Entry::from_data(
+                    &count,
+                    &gix::objs::Data {
+                        kind: gix::objs::Kind::Tree,
+                        data: &tree.data,
+                        object_hash: repo.object_hash(),
+                    },
+                    gix::zlib::Compression::DEFAULT,
+                )
+                .context("compress incremental pack tree")?
+            }
+        };
+        snapshot = Some((tree, depth));
+        Ok(vec![entry])
+    });
+    // Append freshly encoded trees after the reused entries: their removal from
+    // gix's counts must not shift the reused entries' in-pack delta base indexes.
+    let entries = entries.chain(trees).enumerate().map(|(sequence, batch)| {
+        batch
+            .map(|entries| (sequence, entries))
+            .map_err(|error| gix::Error::from_boxed(error.into_boxed_dyn_error()))
+    });
+    let pack = write_pack_entries(
+        entries,
+        expected_entries,
+        LimitedPackWriter {
+            bytes: Vec::new(),
+            limit: max_pack_size,
+            limit_message,
+            interrupt,
+        },
+        max_pack_size,
+        limit_message,
+        interrupt,
+    )?;
+    Ok((pack.bytes, compacted_trees))
+}
+
 fn build_pack_with_commits(
     repo: &gix::Repository,
     wants: &[String],
@@ -949,6 +1068,7 @@ fn build_pack_with_commits(
     }
     // Even a shallow have proves its complete tree, not its parent history.
     // Compare every selected commit to that snapshot instead of resending it.
+    let incremental = baseline.is_some();
     let (object_ids, tree_deltas, expansion) = match baseline {
         Some(tree) => {
             let (objects, candidate) =
@@ -1004,6 +1124,20 @@ fn build_pack_with_commits(
         )),
         _ => None,
     };
+    if thin_pack && incremental {
+        let (pack, compacted_trees) = build_incremental_pack(
+            repo,
+            counts,
+            snapshot,
+            max_pack_size,
+            limit_message,
+            interrupt,
+        )?;
+        let span = tracing::Span::current();
+        span.set_attribute("git.pack.thin_tree_delta", compacted_trees != 0);
+        span.set_attribute("git.pack.compacted_tree_count", compacted_trees);
+        return Ok(pack);
+    }
     let entries_iter = gix_pack::data::output::entry::iter_from_counts(
         counts,
         odb.clone(),
@@ -1021,6 +1155,14 @@ fn build_pack_with_commits(
             let (sequence, mut entries) = batch?;
             if thin_pack {
                 for entry in &mut entries {
+                    #[cfg(test)]
+                    if entry.kind
+                        == gix_pack::data::output::entry::Kind::Base(gix::objs::Kind::Tree)
+                        && (MIN_TREE_DELTA_BYTES..=MAX_TREE_DELTA_BYTES)
+                            .contains(&entry.decompressed_size)
+                    {
+                        FULL_TREE_ENTRIES.with(|count| count.set(count.get() + 1));
+                    }
                     compacted_trees +=
                         i64::from(compact_tree_entry(repo, entry, &mut snapshot, interrupt)?);
                 }
@@ -2787,11 +2929,137 @@ mod tests {
     }
 
     #[test]
+    fn incremental_tree_encoding_preserves_reused_blob_delta_indexes() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let (_dir, repo) = make_test_repo();
+        let blobs: Vec<_> = (0..20)
+            .map(|index| {
+                repo.write_blob(format!("blob {index}\n{}", "shared content\n".repeat(512)))
+                    .unwrap()
+                    .detach()
+            })
+            .collect();
+        let mut tree = gix::objs::Tree::default();
+        for index in 0..2000 {
+            tree.entries.push(gix::objs::tree::Entry {
+                mode: gix::objs::tree::EntryKind::Blob.into(),
+                filename: format!("category-{index:05}.md").into(),
+                oid: blobs[index % blobs.len()],
+            });
+        }
+        let sig = gix::actor::SignatureRef {
+            name: "Test".into(),
+            email: "test@example.com".into(),
+            time: "1 +0000",
+        };
+        let mut parent = None;
+        let mut commits = Vec::new();
+        let mut tree_ids = Vec::new();
+        for index in 0..3 {
+            tree.entries[index].oid = blobs[index + 1];
+            let tree_id = repo.write_object(&tree).unwrap().detach();
+            parent = Some(
+                repo.commit_as(
+                    sig,
+                    sig,
+                    "refs/heads/main",
+                    format!("catalog mutation {index}"),
+                    tree_id,
+                    parent,
+                )
+                .unwrap()
+                .detach(),
+            );
+            commits.push(parent.unwrap());
+            tree_ids.push(tree_id);
+        }
+        let repacked = Command::new("git")
+            .arg("--git-dir")
+            .arg(repo.path())
+            .args(["repack", "-ad"])
+            .output()
+            .unwrap();
+        assert!(repacked.status.success(), "{repacked:?}");
+        let counts = blobs
+            .iter()
+            .chain(&tree_ids[1..])
+            .map(|id| gix_pack::data::output::Count {
+                id: *id,
+                entry_pack_location: gix_pack::data::output::count::PackLocation::NotLookedUp,
+            })
+            .collect();
+        let (pack, compacted) = build_incremental_pack(
+            &repo,
+            counts,
+            Some((repo.find_tree(tree_ids[0]).unwrap(), 0)),
+            1024 * 1024,
+            "test pack exceeds limit",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(compacted, 2);
+
+        let (_receiver_dir, receiver) = make_test_repo();
+        let fetched = Command::new("git")
+            .arg("--git-dir")
+            .arg(receiver.path())
+            .args(["fetch", "--quiet", "--no-tags"])
+            .arg(repo.path())
+            .arg(commits[0].to_string())
+            .output()
+            .unwrap();
+        assert!(fetched.status.success(), "{fetched:?}");
+        let mut child = Command::new("git")
+            .arg("--git-dir")
+            .arg(receiver.path())
+            .args(["index-pack", "--strict", "--stdin", "--fix-thin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(&pack).unwrap();
+        let indexed = child.wait_with_output().unwrap();
+        assert!(indexed.status.success(), "{indexed:?}");
+        let output = String::from_utf8(indexed.stdout).unwrap();
+        let pack_id = output.split_whitespace().last().unwrap();
+        let verified = Command::new("git")
+            .args(["verify-pack", "-v"])
+            .arg(
+                receiver
+                    .path()
+                    .join("objects/pack")
+                    .join(format!("pack-{pack_id}.idx")),
+            )
+            .output()
+            .unwrap();
+        assert!(verified.status.success(), "{verified:?}");
+        assert!(
+            String::from_utf8(verified.stdout)
+                .unwrap()
+                .lines()
+                .any(|line| {
+                    let fields: Vec<_> = line.split_whitespace().collect();
+                    fields.len() == 7 && fields[1] == "blob"
+                }),
+            "fixture must actually reuse packed blob deltas alongside newly encoded trees"
+        );
+        for id in &tree_ids[1..] {
+            assert_eq!(
+                receiver.find_tree(*id).unwrap().data,
+                repo.find_tree(*id).unwrap().data
+            );
+        }
+    }
+
+    #[test]
     fn incremental_pack_compacts_intervening_large_tree_versions() {
         use std::io::Write;
         use std::process::{Command, Stdio};
 
-        for entry_count in [2000, 10_000] {
+        for entry_count in [2000, 10_000, 16_000] {
             let (_dir, repo) = make_test_repo();
             let mut tree = gix::objs::Tree::default();
             for index in 0..entry_count {
@@ -2864,6 +3132,8 @@ mod tests {
                         .unwrap();
                     assert!(repacked.status.success(), "{repacked:?}");
                 }
+                FULL_TREE_ENTRIES.with(|count| count.set(0));
+                let started = std::time::Instant::now();
                 let pack = build_pack_with_commits(
                     &repo,
                     &[tip.to_string()],
@@ -2874,10 +3144,17 @@ mod tests {
                     &AtomicBool::new(false),
                 )
                 .expect("incremental catalog pack");
+                let elapsed = started.elapsed();
+                let full_entries = FULL_TREE_ENTRIES.with(std::cell::Cell::get);
+                assert!(
+                    full_entries <= 2,
+                    "incremental trees must be compacted before full-entry compression: {full_entries} full entries"
+                );
                 eprintln!(
-                "48 mixed mutations in a {entry_count}-entry tree (repacked={packed}): {} pack bytes",
-                pack.len()
-            );
+                    "48 mixed mutations in a {entry_count}-entry tree (repacked={packed}): {} pack bytes, {full_entries} full tree entries, {:.3} ms",
+                    pack.len(),
+                    elapsed.as_secs_f64() * 1000.0,
+                );
                 assert!(
                     pack.len() < 48 * MAX_TREE_DELTA_LITERAL_BYTES + entry_count * 64,
                     "intervening commits must not each resend the complete known catalog tree"
