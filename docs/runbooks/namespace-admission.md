@@ -2543,10 +2543,10 @@ are successful authorization checks, not successful resource reads.
 
 | Operation | Observed rate | Measurement and scope |
 | --- | --- | --- |
-| `GET /health` | 20.001 successful HTTP requests/s | Across two APIs over 600.012s; passed readiness alpha at a fixed offer |
-| `GET /ready` | 20.001 successful HTTP requests/s | Same run; excludes the two setup requests |
-| Authorized `namespaces(first: 1)` | 20.001 semantically successful HTTP requests/s | Same run, 12,001 exact allowed responses; only this small page was measured |
-| Anonymous `namespaces(first: 1)` | 20.001 expected-denial HTTP requests/s | Same run, 12,001 exact `FORBIDDEN` outcomes; zero semantic mismatches or dropped iterations |
+| `GET /health` | 20.001 alpha; 600.359 short-diagnostic successful HTTP requests/s | Across two APIs; separate 600.012s alpha and conservative 64s diagnostic windows, detailed below |
+| `GET /ready` | 20.001 alpha; 600.359 short-diagnostic successful HTTP requests/s | Same respective runs; setup requests excluded |
+| Authorized `namespaces(first: 1)` | 20.001 alpha; 600.359 short-diagnostic semantically successful HTTP requests/s | 12,001 exact allowed responses in alpha; 38,423 in the diagnostic; only this small page was measured |
+| Anonymous `namespaces(first: 1)` | 20.001 alpha; 600.359 short-diagnostic expected-denial HTTP requests/s | 12,001 exact `FORBIDDEN` outcomes in alpha; 38,423 in the diagnostic |
 | Repository update | 2.333 acknowledged logical mutations/s | 1,400 ACKs over 600.12s, 20-resource pool and 100 subscribers; passed lifecycle alpha, zero failed/dropped mutations and one recovered transport attempt |
 | Category creation | 20 acknowledged logical mutations/s | 600/600 ACKs over a 30s, 20-worker diagnostic on retained fixtures; not a passed hierarchy/fault gate |
 | Namespace transition | 10.831 acknowledged logical transitions/s | 1,300/1,300 ACKs over 120.024s, 50 resources, 20 workers and 1,000 subscribers; nominal 10/s plus a 100-transition burst; diagnostic, not a full-duration/replacement gate |
@@ -2561,6 +2561,37 @@ these are not isolated per-endpoint percentiles. Repository mutation p95/p99
 were 103.886/127.302ms. The Category diagnostic recorded 260.571/365.521ms, but
 its companion Git workload failed, so those mutation results cannot pass the
 combined gate.
+
+Higher offers must account for configured quotas. The unchanged default is
+50 requests/s with burst 100 per client IP: GraphQL calls share an application
+bucket, while each operational route has its own bucket. A one-client,
+100-iterations/s-per-replica diagnostic exceeded those budgets and failed its
+exact-response checks. That is not an engine-throughput ceiling or a reason
+to disable authentication or rate limiting.
+
+A separate fresh diagnostic used 16 client containers directly on the owned
+network, each offering 20 iterations/s to each API, without quota changes or
+forwarded-IP spoofing. All 16 load summaries completed: 153,692 measured HTTP
+requests, including 38,423 successful outcomes for each of the four operations,
+with zero HTTP failures, semantic mismatches or dropped iterations. The offer
+was 2,560 HTTP requests/s in aggregate. A conservative 64s window enclosing
+dispatch and summary export yields **2,401.438 completed HTTP requests/s**,
+or **600.359/s per operation**; 32 setup requests are excluded.
+
+This used source `3cd4e03`, 52 namespaces including 50 seeded fixtures, two
+APIs, two controllers, one Git service and three single-shard Scylla nodes
+capped at 1.5 GiB each. The 11-logical-CPU, 36-GiB macOS host allocated
+approximately 16.55 GiB to Docker and also retained an idle diagnostic
+deployment. Application containers had no individual CPU or memory caps.
+Each client's measurement lasted 60.056-60.533s. The highest per-client,
+per-replica combined health/readiness p95/p99 were 3.276/22.013ms, not pooled
+percentiles or isolated authorization-query latencies.
+
+The cohort orchestrator failed while inspecting auto-removed clients after
+load completion and interrupted post-run verification. Its original failed
+and incomplete outputs remain unchanged. These recovered, complete traffic
+summaries are **not a passed capacity run**, sustained-load or fault acceptance,
+or a measured maximum.
 
 The File result is from a separate 2026-10-17 combined File/Repository
 diagnostic, not the later Namespace deployment or a controlled comparison.
