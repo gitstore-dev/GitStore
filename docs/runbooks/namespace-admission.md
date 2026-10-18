@@ -1879,6 +1879,35 @@ durations. The final accounting uses actual counts and interval unions.
 No optimization was selected or deployed from this census; the unchanged
 queue-inclusive ACK gate remains open.
 
+The same retained sample has 36 instrumented exchanges, each with one
+completed stream and no abandoned or overflowing stream records. Stream
+intervals account for 96.9% of their summed exchange time, but no native
+server-trace events were retained. A stream interval includes transport,
+database service and scheduling; it cannot identify which of those is slow.
+Exchange sums are not a mutation-wall-time union. These records do not support
+attributing the observed delay to JSON processing or preparation outside the
+stream.
+
+To close the row-correlation gap for future recorded requests, File update
+operation spans now start before backend execution. Internal mutation phases
+and individual query attempts are children of the corresponding update rather
+than siblings under the admission request. Shared conditional writes and
+post-write readback exchanges carry reciprocal links to their participating
+recorded update spans. Link collection is bounded to 16 input operations,
+deduplicates repeated span identities and explicitly marks overflow. Unrecorded
+or unsampled parents do not enable group-link collection. Resource names, UIDs,
+versions, bodies and query literals are not added to spans or metric labels.
+
+Readback exchanges also retain the existing bounded stream timing, and File
+conditional exchanges identify their table. Metrics still record one sample
+per operation or phase; the change does not introduce an extra File-update
+completion span, increase queue/cohort bounds, or alter admission, cancellation
+or independent-error handling. These additive trace relationships do not change
+the stored schema or require replicas to upgrade together. They cannot repair
+old traces, enable native tracing without the existing explicit profiling
+controls, or establish an ACK improvement. No capacity acceptance follows from
+this instrumentation change.
+
 For the running Scylla engine revision, native duration is foreground elapsed
 time measured with a steady clock, not CPU time. Execution tracing begins
 inside request processing and stops before subsequent response queuing/writing.

@@ -19,6 +19,7 @@ import (
 	"github.com/gocql/gocql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -332,6 +333,181 @@ func TestCQLExchangeStreamTimingsHaveExactAttemptParent(t *testing.T) {
 	require.GreaterOrEqual(t, durations[0], int64(0))
 	require.Equal(t, finishes[0]-starts[0], durations[0])
 	require.LessOrEqual(t, finishes[0], attrs["gitstore.db.exchange.duration_ns"].AsInt64())
+}
+
+func TestCQLRequestGroupLinksExactRowsWithoutChangingCancellation(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+	tracer := provider.Tracer("test")
+	type callerKey struct{}
+	first, firstSpan := tracer.Start(context.WithValue(t.Context(), callerKey{}, "private-value"), "datastore.UpdateFile")
+	second, secondSpan := tracer.Start(t.Context(), "datastore.UpdateFile")
+	first, cancelFirst := context.WithCancel(first)
+	defer cancelFirst()
+	second, cancelSecond := context.WithCancel(second)
+	defer cancelSecond()
+	group, cancelGroup := fileRequestGroupContext([]context.Context{first, second})
+	defer cancelGroup()
+	require.Equal(t, "private-value", group.Value(callerKey{}))
+	cancelFirst()
+	require.NoError(t, group.Err(), "one canceled row must not cancel accepted work for its live peer")
+	queryCtx, finish := startCQLExchange(group, tracer)
+	observer := cqlTraceObserver{tracer: tracer}
+	stream := observer.StreamContext(queryCtx)
+	require.NotNil(t, stream)
+	stream.StreamStarted(gocql.ObservedStream{})
+	stream.StreamFinished(gocql.ObservedStream{})
+	start := time.Now()
+	observer.ObserveBatch(queryCtx, gocql.ObservedBatch{Start: start, End: time.Now()})
+	finish(nil)
+	cancelSecond()
+	select {
+	case <-group.Done():
+	case <-time.After(time.Second):
+		t.Fatal("all-caller cancellation must still reach accepted physical work")
+	}
+	firstSpan.End()
+	secondSpan.End()
+	var exchange sdktrace.ReadOnlySpan
+	rows := map[trace.SpanID]sdktrace.ReadOnlySpan{}
+	for _, span := range recorder.Ended() {
+		if span.Name() == "scylla.exchange" {
+			exchange = span
+		} else if span.Name() == "datastore.UpdateFile" {
+			rows[span.SpanContext().SpanID()] = span
+		}
+		for _, attr := range span.Attributes() {
+			require.NotContains(t, attr.Value.Emit(), "private-")
+		}
+	}
+	require.NotNil(t, exchange)
+	require.Len(t, rows, 2)
+	require.Len(t, exchange.Links(), 2)
+	for _, link := range exchange.Links() {
+		row := rows[link.SpanContext.SpanID()]
+		require.NotNil(t, row)
+		require.Equal(t, row.SpanContext(), link.SpanContext)
+		require.Len(t, row.Links(), 1)
+		require.Equal(t, exchange.SpanContext(), row.Links()[0].SpanContext)
+	}
+	for _, span := range recorder.Ended() {
+		if span.Name() == "scylla.batch" {
+			require.Equal(t, exchange.SpanContext().SpanID(), span.Parent().SpanID())
+		}
+	}
+}
+
+func TestCQLRequestGroupBoundsAndDeduplicatesLinks(t *testing.T) {
+	for _, count := range []int{2, 16, 17} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(recorder))
+			t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+			tracer := provider.Tracer("test")
+			var contexts []context.Context
+			var members []trace.Span
+			for range count {
+				ctx, span := tracer.Start(t.Context(), "row")
+				contexts = append(contexts, ctx)
+				members = append(members, span)
+			}
+			group := withCQLRequestGroup(contexts[0], contexts)
+			_, finish := startCQLExchange(group, tracer)
+			finish(nil)
+			exchange := recorder.Ended()[0]
+			require.Len(t, exchange.Links(), min(count, 16))
+			values := map[attribute.Key]attribute.Value{}
+			for _, attr := range exchange.Attributes() {
+				values[attr.Key] = attr.Value
+			}
+			require.EqualValues(t, count, values["gitstore.db.group.member_count"].AsInt64())
+			require.EqualValues(t, min(count, 16), values["gitstore.db.group.linked_member_count"].AsInt64())
+			require.Equal(t, count > 16, values["gitstore.db.group.links_overflow"].AsBool())
+			for _, member := range members {
+				member.End()
+			}
+			repeated := []context.Context{contexts[0], contexts[0], contexts[1]}
+			// Ended spans and remote sampled parents are not live row operations.
+			require.Equal(t, contexts[0], withCQLRequestGroup(contexts[0], repeated))
+			first, firstSpan := tracer.Start(t.Context(), "first")
+			defer firstSpan.End()
+			remote := trace.ContextWithRemoteSpanContext(t.Context(), firstSpan.SpanContext())
+			_, finish = startCQLExchange(withCQLRequestGroup(first, []context.Context{first, first, remote}), tracer)
+			finish(nil)
+			exchanges := recorder.Ended()
+			require.Len(t, exchanges[len(exchanges)-1].Links(), 1)
+		})
+	}
+}
+
+func TestCQLRequestGroupDisabledDoesNotAllocate(t *testing.T) {
+	ctx := t.Context()
+	contexts := []context.Context{ctx, ctx}
+	var result context.Context
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		result = withCQLRequestGroup(ctx, contexts)
+	}))
+	require.Equal(t, ctx, result)
+	require.Nil(t, result.Value(cqlRequestGroupKey{}))
+}
+
+func TestCQLRequestGroupDoesNotLinkUnrecordedExchange(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+	ctx, row := provider.Tracer("test").Start(t.Context(), "row")
+	group := withCQLRequestGroup(ctx, []context.Context{ctx})
+	_, finish := startCQLExchange(group, trace.NewNoopTracerProvider().Tracer("test"))
+	finish(nil)
+	row.End()
+	require.Len(t, recorder.Ended(), 1)
+	require.Empty(t, recorder.Ended()[0].Links(), "an unrecorded physical exchange must not create a dangling or self link")
+}
+
+func TestFileProjectionReaderExchangeLinksEveryAcceptedRow(t *testing.T) {
+	previous := otel.GetTracerProvider()
+	defer otel.SetTracerProvider(previous)
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+	otel.SetTracerProvider(provider)
+	tracer := provider.Tracer("test")
+	var requests []*fileProjectionRequest
+	var rowSpans []trace.Span
+	for range 2 {
+		ctx, span := tracer.Start(t.Context(), "datastore.UpdateFile")
+		rowSpans = append(rowSpans, span)
+		requests = append(requests, &fileProjectionRequest{ctx: ctx, reply: make(chan fileProjectionResult, 1)})
+	}
+	reader := &fileProjectionReader{read: func(ctx context.Context, keys []fileProjectionKey) ([]*ProjectionRecord, error) {
+		require.Len(t, keys, 2)
+		observer := cqlTraceObserver{tracer: tracer}
+		stream := observer.StreamContext(ctx)
+		require.NotNil(t, stream)
+		stream.StreamStarted(gocql.ObservedStream{})
+		stream.StreamFinished(gocql.ObservedStream{})
+		start := time.Now()
+		observer.ObserveQuery(ctx, gocql.ObservedQuery{Start: start, End: time.Now(), Statement: "SELECT private-columns"})
+		return []*ProjectionRecord{{}, {}}, nil
+	}}
+	reader.execute(requests)
+	for _, request := range requests {
+		require.NoError(t, (<-request.reply).err)
+	}
+	for _, row := range rowSpans {
+		row.End()
+	}
+	spans := recorder.Ended()
+	require.Len(t, spans, 4)
+	require.Equal(t, "scylla.query", spans[0].Name())
+	require.Equal(t, "scylla.exchange", spans[1].Name())
+	require.Equal(t, spans[1].SpanContext().SpanID(), spans[0].Parent().SpanID())
+	require.Len(t, spans[1].Links(), 2)
+	for _, row := range spans[2:] {
+		require.Len(t, row.Links(), 1)
+		require.Equal(t, spans[1].SpanContext(), row.Links()[0].SpanContext)
+	}
 }
 
 func TestCQLExchangeBoundsConcurrentStreamsAndLateCallbacks(t *testing.T) {

@@ -44,6 +44,10 @@ func NewInstrumentedDatastoreWithRegistry(next Datastore, backend string, log *z
 func (d *InstrumentedDatastore) observe(ctx context.Context, op string, start time.Time, err error) {
 	elapsed := time.Since(start)
 	ctx = d.traceOperation(ctx, op, start, err)
+	d.observeResult(ctx, op, elapsed, err)
+}
+
+func (d *InstrumentedDatastore) observeResult(ctx context.Context, op string, elapsed time.Duration, err error) {
 	observability.Observe(ctx, d.metrics.duration.WithLabelValues(op, d.backend), elapsed.Seconds())
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -71,12 +75,24 @@ func (d *InstrumentedDatastore) observe(ctx context.Context, op string, start ti
 }
 
 func (d *InstrumentedDatastore) traceOperation(ctx context.Context, operation string, start time.Time, err error) context.Context {
+	ctx, span := d.startOperationSpan(ctx, operation, start)
+	endOperationSpan(span, err)
+	return ctx
+}
+
+func (d *InstrumentedDatastore) startOperationSpan(ctx context.Context, operation string, start time.Time) (context.Context, trace.Span) {
 	if !trace.SpanFromContext(ctx).IsRecording() {
-		return ctx
+		return ctx, nil
 	}
-	ctx, span := otel.Tracer("gitstore/datastore").Start(ctx, "datastore."+operation,
+	return otel.Tracer("gitstore/datastore").Start(ctx, "datastore."+operation,
 		trace.WithTimestamp(start),
 		trace.WithAttributes(attribute.String("db.system.name", d.backend)))
+}
+
+func endOperationSpan(span trace.Span, err error) {
+	if span == nil {
+		return
+	}
 	outcome := "success"
 	if errors.Is(err, ErrNotFound) {
 		outcome = "absent"
@@ -86,7 +102,6 @@ func (d *InstrumentedDatastore) traceOperation(ctx context.Context, operation st
 	}
 	span.SetAttributes(attribute.String("outcome", outcome))
 	span.End()
-	return ctx
 }
 
 func (d *InstrumentedDatastore) observeFinding(finding ProjectionFinding) {
@@ -363,8 +378,11 @@ func (d *InstrumentedDatastore) ListFiles(ctx context.Context, namespace string,
 }
 func (d *InstrumentedDatastore) UpdateFile(ctx context.Context, f *File, expectedResourceVersion string) error {
 	start := time.Now()
+	ctx, span := d.startOperationSpan(ctx, "UpdateFile", start)
 	err := d.next.UpdateFile(d.withFindingObserver(ctx), f, expectedResourceVersion)
-	d.observe(ctx, "UpdateFile", start, err)
+	elapsed := time.Since(start)
+	endOperationSpan(span, err)
+	d.observeResult(ctx, "UpdateFile", elapsed, err)
 	return err
 }
 func (d *InstrumentedDatastore) DeleteFile(ctx context.Context, id string) error {

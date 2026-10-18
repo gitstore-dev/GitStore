@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -341,6 +342,34 @@ type cqlTraceObserver struct {
 
 type cqlExchangeKey struct{}
 
+type cqlRequestGroupKey struct{}
+type cqlRequestGroupTrace struct {
+	members  []trace.Span
+	count    int
+	overflow bool
+}
+
+func withCQLRequestGroup(ctx context.Context, contexts []context.Context) context.Context {
+	parent := trace.SpanFromContext(ctx)
+	if !parent.IsRecording() || !parent.SpanContext().IsSampled() {
+		return ctx
+	}
+	group := &cqlRequestGroupTrace{count: len(contexts), overflow: len(contexts) > fileSnapshotReadBatchLimit}
+	for _, memberCtx := range contexts[:min(len(contexts), fileSnapshotReadBatchLimit)] {
+		member := trace.SpanFromContext(memberCtx)
+		if !member.IsRecording() || !member.SpanContext().IsSampled() {
+			continue
+		}
+		if slices.ContainsFunc(group.members, func(previous trace.Span) bool {
+			return previous.SpanContext().Equal(member.SpanContext())
+		}) {
+			continue
+		}
+		group.members = append(group.members, member)
+	}
+	return context.WithValue(ctx, cqlRequestGroupKey{}, group)
+}
+
 type cqlServerTrace struct {
 	span      trace.Span
 	callbacks atomic.Int32
@@ -418,8 +447,27 @@ func startCQLExchange(ctx context.Context, tracer trace.Tracer, attrs ...attribu
 		return ctx, func(error) {}
 	}
 	start := time.Now()
+	group, _ := ctx.Value(cqlRequestGroupKey{}).(*cqlRequestGroupTrace)
+	var links []trace.Link
+	if group != nil {
+		for _, member := range group.members {
+			links = append(links, trace.Link{SpanContext: member.SpanContext()})
+		}
+	}
 	ctx, span := tracer.Start(ctx, "scylla.exchange", trace.WithSpanKind(trace.SpanKindClient), trace.WithTimestamp(start),
-		trace.WithAttributes(attrs...))
+		trace.WithAttributes(attrs...), trace.WithLinks(links...))
+	if group != nil && span.IsRecording() {
+		span.SetAttributes(
+			attribute.Int("gitstore.db.group.member_count", group.count),
+			attribute.Int("gitstore.db.group.linked_member_count", len(links)),
+			attribute.Bool("gitstore.db.group.links_overflow", group.overflow),
+		)
+		for _, member := range group.members {
+			member.AddLink(trace.Link{SpanContext: span.SpanContext(), Attributes: []attribute.KeyValue{
+				attribute.Int("gitstore.db.group.member_count", group.count),
+			}})
+		}
+	}
 	observability.AnnotateRuntimeSpan(ctx)
 	exchange := &cqlExchangeTrace{}
 	return context.WithValue(ctx, cqlExchangeKey{}, exchange), func(err error) {

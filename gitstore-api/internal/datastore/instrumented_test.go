@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,6 +139,125 @@ type batchForwardingStore struct {
 	namespace string
 	calls     int
 	phases    []datastore.NamespaceFencePhase
+}
+
+type fileUpdateTracingStore struct {
+	datastore.Datastore
+	update func(context.Context, *datastore.File, string) error
+}
+
+func (s *fileUpdateTracingStore) UpdateFile(ctx context.Context, file *datastore.File, expected string) error {
+	return s.update(ctx, file, expected)
+}
+
+func TestInstrumentedDatastoreUpdateFileOwnsConcurrentPhases(t *testing.T) {
+	previous := otel.GetTracerProvider()
+	defer otel.SetTracerProvider(previous)
+	for _, sampled := range []bool{false, true} {
+		t.Run(fmt.Sprint(sampled), func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+			sampler := sdktrace.NeverSample()
+			if sampled {
+				sampler = sdktrace.AlwaysSample()
+			}
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sampler), sdktrace.WithSpanProcessor(recorder))
+			defer provider.Shutdown(t.Context())
+			otel.SetTracerProvider(provider)
+			ctx, root := provider.Tracer("test").Start(t.Context(), "admission")
+			type rowKey struct{}
+			deadline := time.Now().Add(time.Minute)
+			ctx, cancel := context.WithDeadline(ctx, deadline)
+			defer cancel()
+			files := []*datastore.File{{UID: "private-first"}, {UID: "private-second"}}
+			ready := make(chan struct{}, 2)
+			release := make(chan struct{})
+			stub := &fileUpdateTracingStore{update: func(ctx context.Context, file *datastore.File, expected string) error {
+				index, ok := ctx.Value(rowKey{}).(int)
+				assert.True(t, ok)
+				assert.Same(t, files[index], file)
+				assert.Equal(t, "private-version", expected)
+				gotDeadline, hasDeadline := ctx.Deadline()
+				assert.True(t, hasDeadline)
+				assert.Equal(t, deadline, gotDeadline)
+				assert.NoError(t, ctx.Err())
+				return datastore.MeasureCatalogMutationPhase(ctx, datastore.FileMutationAuthoritativeCAS, func() error {
+					_, query := provider.Tracer("test").Start(ctx, "scylla.query")
+					defer query.End()
+					ready <- struct{}{}
+					<-release
+					if index == 1 {
+						return datastore.ErrConflict
+					}
+					return nil
+				})
+			}}
+			wrapped, logs, registry := newTestInstrumented(t, stub)
+			errs := make([]error, 2)
+			var workers sync.WaitGroup
+			for i, file := range files {
+				workers.Go(func() {
+					errs[i] = wrapped.UpdateFile(context.WithValue(ctx, rowKey{}, i), file, "private-version")
+				})
+			}
+			<-ready
+			<-ready
+			close(release)
+			workers.Wait()
+			root.End()
+			require.NoError(t, errs[0])
+			require.ErrorIs(t, errs[1], datastore.ErrConflict)
+			require.EqualValues(t, 2, histogramObservationCount(t, registry, "UpdateFile", "test-backend"))
+			require.EqualValues(t, 2, histogramObservationCount(t, registry, "FileAuthoritativeCAS", "test-backend"))
+			require.Equal(t, float64(1), counterValue(t, registry, "UpdateFile", "test-backend"))
+			require.Equal(t, 1, logs.FilterMessage("datastore operation failed").Len())
+			if !sampled {
+				require.Empty(t, recorder.Ended())
+				return
+			}
+			updates := map[trace.SpanID]sdktrace.ReadOnlySpan{}
+			for _, span := range recorder.Ended() {
+				if span.Name() == "datastore.UpdateFile" {
+					require.Equal(t, root.SpanContext().SpanID(), span.Parent().SpanID())
+					updates[span.SpanContext().SpanID()] = span
+				}
+				for _, attr := range span.Attributes() {
+					require.NotContains(t, attr.Value.Emit(), "private-")
+				}
+				require.NotContains(t, span.Status().Description, "private-")
+			}
+			require.Len(t, updates, 2, "one operation span per row, not an additional completion span")
+			children := map[trace.SpanID]int{}
+			for _, span := range recorder.Ended() {
+				if span.Name() != "datastore.FileAuthoritativeCAS" && span.Name() != "scylla.query" {
+					continue
+				}
+				update := updates[span.Parent().SpanID()]
+				require.NotNil(t, update, "concurrent phases must identify their exact row operation")
+				require.False(t, span.StartTime().Before(update.StartTime()))
+				require.False(t, span.EndTime().After(update.EndTime()))
+				children[span.Parent().SpanID()]++
+			}
+			require.Len(t, children, 2)
+			for _, count := range children {
+				require.Equal(t, 2, count)
+			}
+		})
+	}
+}
+
+func TestInstrumentedDatastoreUpdateFilePreservesCancellationAndAbsence(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	wrapped, logs, registry := newTestInstrumented(t, &fileUpdateTracingStore{update: func(received context.Context, file *datastore.File, expected string) error {
+		require.ErrorIs(t, received.Err(), context.Canceled)
+		require.Nil(t, file)
+		require.Equal(t, "private-version", expected)
+		return datastore.ErrNotFound
+	}})
+	require.ErrorIs(t, wrapped.UpdateFile(ctx, nil, "private-version"), datastore.ErrNotFound)
+	require.EqualValues(t, 1, histogramObservationCount(t, registry, "UpdateFile", "test-backend"))
+	require.Zero(t, counterValue(t, registry, "UpdateFile", "test-backend"))
+	require.Zero(t, logs.Len())
 }
 
 func TestInstrumentedDatastoreFileCohortsLinkExactOwnerAndPhysicalPhases(t *testing.T) {

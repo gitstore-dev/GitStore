@@ -799,9 +799,11 @@ func (reader *fileProjectionReader) execute(group []*fileProjectionRequest) {
 	defer cancel()
 	var records []*ProjectionRecord
 	phase := datastore.FileProjectionReadBatch1 + datastore.CatalogMutationPhase(len(keys)-1)
-	err := datastore.MeasureCatalogMutationPhase(ctx, phase, func() error {
-		var err error
-		records, err = reader.read(ctx, keys)
+	err := datastore.MeasureCatalogMutationPhase(ctx, phase, func() (err error) {
+		queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"),
+			attribute.String("db.collection.name", "files_by_namespace"))
+		defer func() { finish(err) }()
+		records, err = reader.read(queryCtx, keys)
 		if err == nil && len(records) != len(keys) {
 			return fmt.Errorf("%w: incomplete File projection read results", datastore.ErrRepairRequired)
 		}
@@ -1187,6 +1189,7 @@ func (writer *fileCASWriter) execute(group []*fileCASRequest) {
 
 func fileRequestGroupContext(contexts []context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(contexts[0]))
+	ctx = withCQLRequestGroup(ctx, contexts)
 	var live atomic.Int64
 	live.Store(int64(len(contexts)))
 	stops := make([]func() bool, 0, len(contexts))
@@ -1217,7 +1220,8 @@ func (s *scyllaDatastore) executeFileCAS(request *fileCASRequest) error {
 		return err
 	}
 	return datastore.MeasureCatalogMutationPhase(request.ctx, datastore.FileMutationConditionalSingle, func() (err error) {
-		ctx, finish := startCQLExchange(request.ctx, otel.Tracer("gitstore/datastore/scylla"))
+		ctx, finish := startCQLExchange(request.ctx, otel.Tracer("gitstore/datastore/scylla"),
+			attribute.String("db.collection.name", "files_by_namespace"))
 		defer func() { finish(err) }()
 		query := s.session.Query(fileUpdateStatement, nil).WithContext(ctx).Bind(request.values...)
 		if tracer := sampleCQLServerTrace(ctx); tracer != nil {
@@ -1238,7 +1242,8 @@ func (s *scyllaDatastore) executeFileCASBatch(ctx context.Context, group []*file
 	phase := datastore.FileMutationConditionalBatch2 + datastore.CatalogMutationPhase(len(group)-2)
 	var applied bool
 	err := datastore.MeasureCatalogMutationPhase(ctx, phase, func() (err error) {
-		queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"))
+		queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"),
+			attribute.String("db.collection.name", "files_by_namespace"))
 		defer func() { finish(err) }()
 		batch := s.session.Batch(gocql.LoggedBatch).WithContext(queryCtx).RetryPolicy(&gocql.SimpleRetryPolicy{})
 		if tracer := sampleCQLServerTrace(queryCtx); tracer != nil {
