@@ -416,16 +416,6 @@ func (s *scyllaDatastore) UpdateFile(ctx context.Context, f *datastore.File, exp
 	if f == nil {
 		return datastore.ErrInvalidArgument
 	}
-	if scope, _ := ctx.Value(catalogFenceScopeKey{}).(*catalogFenceScope); scope.isActiveFor(s, f.Namespace) {
-		if writer := scope.fileConditionalWriter(); writer != nil {
-			preparedCtx, finish, err := writer.prepare(ctx)
-			if err != nil {
-				return err
-			}
-			defer finish()
-			ctx = preparedCtx
-		}
-	}
 	var existing *datastore.File
 	return s.catalogMutationWithProjection(ctx, "File", f.Namespace, f.RepositoryID, f.UID, false,
 		func() (*ProjectionRecord, error) {
@@ -980,65 +970,18 @@ func (request *fileCASRequest) payloadSize() int {
 }
 
 type fileCASWriter struct {
-	mu        sync.Mutex
-	closed    bool
-	preparing int
-	changed   chan struct{}
-	requests  chan *fileCASRequest
-	done      chan struct{}
-	single    func(*fileCASRequest) error
-	batch     func(context.Context, []*fileCASRequest) (bool, error)
+	mu       sync.Mutex
+	closed   bool
+	requests chan *fileCASRequest
+	done     chan struct{}
+	single   func(*fileCASRequest) error
+	batch    func(context.Context, []*fileCASRequest) (bool, error)
 }
 
 func newFileCASWriter(single func(*fileCASRequest) error, batch func(context.Context, []*fileCASRequest) (bool, error)) *fileCASWriter {
-	writer := &fileCASWriter{
-		changed: make(chan struct{}, 1), requests: make(chan *fileCASRequest, 16),
-		done: make(chan struct{}), single: single, batch: batch,
-	}
+	writer := &fileCASWriter{requests: make(chan *fileCASRequest, 16), done: make(chan struct{}), single: single, batch: batch}
 	go writer.run()
 	return writer
-}
-
-type fileCASPreparationKey struct{}
-
-type fileCASPreparation struct {
-	writer   *fileCASWriter
-	finished bool
-}
-
-func (writer *fileCASWriter) notify() {
-	select {
-	case writer.changed <- struct{}{}:
-	default:
-	}
-}
-
-func (writer *fileCASWriter) prepare(ctx context.Context) (context.Context, func(), error) {
-	if err := ctx.Err(); err != nil {
-		return nil, nil, err
-	}
-	writer.mu.Lock()
-	defer writer.mu.Unlock()
-	if writer.closed {
-		return nil, nil, errors.New("scylla: File conditional writer is closed")
-	}
-	preparation := &fileCASPreparation{writer: writer}
-	writer.preparing++
-	return context.WithValue(ctx, fileCASPreparationKey{}, preparation), preparation.finish, nil
-}
-
-func (preparation *fileCASPreparation) finishLocked() {
-	if !preparation.finished {
-		preparation.finished = true
-		preparation.writer.preparing--
-		preparation.writer.notify()
-	}
-}
-
-func (preparation *fileCASPreparation) finish() {
-	preparation.writer.mu.Lock()
-	defer preparation.writer.mu.Unlock()
-	preparation.finishLocked()
 }
 
 func (writer *fileCASWriter) submit(ctx context.Context, uid gocql.UUID, values []any) error {
@@ -1058,10 +1001,6 @@ func (writer *fileCASWriter) submit(ctx context.Context, uid gocql.UUID, values 
 	}
 	select {
 	case writer.requests <- request:
-		if preparation, _ := ctx.Value(fileCASPreparationKey{}).(*fileCASPreparation); preparation != nil && preparation.writer == writer {
-			preparation.finishLocked()
-		}
-		writer.notify()
 		writer.mu.Unlock()
 	default:
 		writer.mu.Unlock()
@@ -1069,8 +1008,6 @@ func (writer *fileCASWriter) submit(ctx context.Context, uid gocql.UUID, values 
 		request.finishQueue(err)
 		return err
 	}
-	stop := context.AfterFunc(ctx, writer.notify)
-	defer stop()
 	// An accepted request must drain before its reservation can be released.
 	return <-request.reply
 }
@@ -1080,7 +1017,6 @@ func (writer *fileCASWriter) close() {
 	if !writer.closed {
 		writer.closed = true
 		close(writer.requests)
-		writer.notify()
 	}
 	writer.mu.Unlock()
 	<-writer.done
@@ -1128,34 +1064,10 @@ func (writer *fileCASWriter) run() {
 				payloadSize += requestSize
 				group = append(group, request)
 			default:
-				writer.mu.Lock()
-				ready := len(writer.requests) > 0
-				wait := writer.preparing > 0 && !writer.closed
-				writer.mu.Unlock()
-				// The last preparation enqueues and retires under this lock.
-				if ready {
-					continue
-				}
-				if !wait || !slices.ContainsFunc(group, func(request *fileCASRequest) bool { return request.ctx.Err() == nil }) {
-					break drain
-				}
-				// Join only preparations already running in this reservation,
-				// not future arrivals or a timer-based batching window.
-				<-writer.changed
+				break drain
 			}
 		}
-		live := group[:0]
-		for _, request := range group {
-			if err := request.ctx.Err(); err != nil {
-				request.finishQueue(err)
-				request.reply <- err
-			} else {
-				live = append(live, request)
-			}
-		}
-		if len(live) > 0 {
-			writer.execute(live)
-		}
+		writer.execute(group)
 	}
 }
 

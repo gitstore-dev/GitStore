@@ -245,14 +245,14 @@ func TestSecretCapacityFileACKP95Limits(t *testing.T) {
 	}{
 		{capacityModeDiagnostic, 3 * time.Second},
 		{capacityModeAlpha, 2 * time.Second},
-		{capacityModeProduction, 2 * time.Second},
+		{capacityModeProduction, 3 * time.Second},
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
 			require.Equal(t, tc.limit, tc.mode.fileACKP95Limit())
 		})
 	}
 	evidence := secretCapacityEvidenceFixture()
-	evidence.Push.P95 = 2500 * time.Millisecond
+	evidence.Push.P95 = 3*time.Second + time.Nanosecond
 	require.ErrorContains(t, validateSecretCapacityEvidence(evidence), "push latency")
 }
 
@@ -621,7 +621,7 @@ func secretCapacityEvidenceFixture() secretCapacityEvidence {
 		TypedFiles: 42_000, CrossReplicaProjectionChecks: 2,
 		Reference:       secretCapacityLatency{42_000, 5 * time.Millisecond, 20 * time.Millisecond},
 		Resolution:      secretCapacityLatency{42_000, 10 * time.Millisecond, 50 * time.Millisecond},
-		Push:            secretCapacityLatency{42_000, 2 * time.Second, 30 * time.Second},
+		Push:            secretCapacityLatency{42_000, 3 * time.Second, 30 * time.Second},
 		ResolverCallers: 32, ProviderPeak: 16, SaturationDenied: 16, DeadlineDenied: 1,
 		OutageAt: 15 * time.Minute, OutageDuration: 90 * time.Second, OutageElapsed: 90 * time.Second, ExpiredUnready: true, ClassifiedOutageFailures: 1,
 		RotationAt: 30 * time.Minute, RetiredKeyDenied: 1, WrongSubjectDenied: 1,

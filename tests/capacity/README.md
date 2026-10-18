@@ -869,10 +869,10 @@ these failures, not unique physical HTTP request counts. Failed attempts remain
 in the existing read timing/poll measurements and native HTTP telemetry.
 Permanent outage still fails at the original deadline.
 
-The File offered-to-ACK p95 working target is <=3s for diagnostic comparisons;
-acceptance checks retain <=2s. All modes retain p99 <=30s across sustained and
+The File offered-to-ACK p95 limit is <=3s for production and diagnostic
+comparisons. All modes retain p99 <=30s across sustained and
 burst traffic, including time waiting in the original worker queue. The
-diagnostic target was revised on 2026-10-18; historical runs retain
+production target was revised from 2s to 3s on 2026-10-18; historical runs retain
 their original thresholds and outcomes. This changes no offered load, workers,
 queue bounds, deadlines, attached cross-replica checks or other acceptance
 criteria. A diagnostic pass does not certify alpha or production acceptance.

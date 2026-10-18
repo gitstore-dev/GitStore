@@ -1879,6 +1879,13 @@ durations. The final accounting uses actual counts and interval unions.
 No optimization was selected or deployed from this census; the unchanged
 queue-inclusive ACK gate remains open.
 
+The rejected preparation-combining coordinator has been removed from the
+current source. File conditional execution again drains only requests already
+queued, without waiting for other rows still preparing. The existing
+cancellation, payload bounds, independent-conflict handling and row/exchange
+trace instrumentation remain. Building the current source must not silently
+reintroduce a coordinator that failed its recorded workload comparison.
+
 The same retained sample has 36 instrumented exchanges, each with one
 completed stream and no abandoned or overflowing stream records. Stream
 intervals account for 96.9% of their summed exchange time, but no native
