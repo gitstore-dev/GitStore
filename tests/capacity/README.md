@@ -658,6 +658,11 @@ Repository lifecycle has separate minimum scales for the two evidence tiers:
 | `alpha`      |      10m |               500ms |         100 |         1,000 |              5 |        20 |                  256 |    20 | p95 ≤2s, p99 ≤3s |    <80% | <75% growth and <256 MiB per API |
 | `production` |      60m |               100ms |       1,000 |        10,000 |             20 |        50 |                1,000 |   100 | p95 ≤1s, p99 ≤3s |    <80% | <10% growth                      |
 
+Deletion completion reads require a null node on both replicas. When GraphQL
+returns errors, only the single exact kind-specific `NOT_FOUND` diagnostic on
+the `node` field is accepted; authorization, transport and other failures
+cannot count as completed deletion.
+
 Both modes require two real API processes, two real controller-manager
 processes, shared durable storage, an observed replacement of the selected API
 process, cursor-resumed recovery, and zero event loss. Alpha is intentionally
