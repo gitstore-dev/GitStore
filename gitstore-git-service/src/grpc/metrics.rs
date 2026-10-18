@@ -553,6 +553,9 @@ pub enum RPCVerificationPhase {
     ReplayDirectory,
     DirectoryPublish,
     DirectoryReport,
+    InodeBarrier,
+    InodePublish,
+    InodeReport,
 }
 
 impl RPCVerificationPhase {
@@ -572,6 +575,9 @@ impl RPCVerificationPhase {
             Self::ReplayDirectory => "replay_directory",
             Self::DirectoryPublish => "directory_publish",
             Self::DirectoryReport => "directory_report",
+            Self::InodeBarrier => "inode_barrier",
+            Self::InodePublish => "inode_publish",
+            Self::InodeReport => "inode_report",
         }
     }
 }
@@ -1109,6 +1115,9 @@ mod tests {
             RPCVerificationPhase::ReplayDirectory,
             RPCVerificationPhase::DirectoryPublish,
             RPCVerificationPhase::DirectoryReport,
+            RPCVerificationPhase::InodeBarrier,
+            RPCVerificationPhase::InodePublish,
+            RPCVerificationPhase::InodeReport,
         ] {
             let histogram = rpc_verification_phase_seconds().with_label_values(&[phase.label()]);
             let before = histogram.get_sample_count();
@@ -1137,6 +1146,9 @@ mod tests {
                     | "replay_directory"
                     | "directory_publish"
                     | "directory_report"
+                    | "inode_barrier"
+                    | "inode_publish"
+                    | "inode_report"
             ));
         }
     }
