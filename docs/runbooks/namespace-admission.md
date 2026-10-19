@@ -3051,6 +3051,19 @@ window and no replacement. Visibility p95 was **1.206s**, exceeding the 1s
 production target; p99 was **1.510s**. It is neither a passing production gate
 nor a matched performance comparison with the published image.
 
+The subsequent unchanged full-schedule diagnostic **failed at metadata cycle
+16**, after 15 passing cycles. All eight pushes failed at
+`client_advertised_ref` and submitted zero ref-update commands. Each of the
+seven refreshes requested its exact advertised head, but the following push
+saw a newer head. Exact publication-base joins show 6, 9, 4, 6, 2, 2 and 2
+intervening head publications, representing 12, 15, 4, 11, 2, 2 and 2 individual
+commits. Complete refresh commands took 116.948–565.680ms; native advertisement
+RPCs took 3.338–57.253ms. These overlapping wall-clock scopes are not CPU
+attribution or a matched speedup comparison. The explicit retry-budget failure
+stopped the run before replacement and final accounting. Coalescing therefore
+remains an implemented publication optimization, **not a verified contention
+fix**; full throughput, visibility, replacement and drain acceptance remain open.
+
 Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
 declaration is not a negotiated `have`. A stock-Git control still sent the
 complete tree and blob for a depth-limited request without any `have` lines;
