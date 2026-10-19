@@ -5,15 +5,19 @@ package auth_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -63,22 +67,202 @@ clusterRoleBindings:
 	require.Len(t, logs.All(), 3)
 	for _, entry := range logs.All() {
 		fields := entry.ContextMap()
+		assert.Equal(t, diagnostics.CatalogDigest, fields["catalog_digest"])
+		assert.Equal(t, diagnostics.Policy.Digest, fields["policy_digest"])
+		require.NotNil(t, fields["latency_ns"])
+		assert.Positive(t, fields["latency_ns"])
 		assert.NotContains(t, fmt.Sprint(fields), "super-secret")
 		assert.NotContains(t, fields, "claims")
 		assert.NotContains(t, fields, "attrs")
 		assert.NotContains(t, fields, "roles")
 	}
+
+}
+
+func TestDecisionLoggerBoundsFieldsWithoutChangingDecision(t *testing.T) {
+	core, logs := observer.New(zapcore.InfoLevel)
+	reason := strings.Repeat("r", 4096)
+	inner := &staticAuthZProvider{name: "test", decision: authpkg.Allow("test", reason)}
+	provider := authpkg.NewDecisionLogger(inner, zap.New(core))
+	decision, err := provider.Authorize(t.Context(), &authpkg.Principal{
+		Subject: strings.Repeat("s", 4096),
+	}, strings.Repeat("a", 4096), authpkg.ResourceContext{
+		Kind: strings.Repeat("k", 4096), Name: strings.Repeat("n", 4096),
+	})
+	require.NoError(t, err)
+	require.Equal(t, inner.decision, decision, "diagnostics must not rewrite the returned decision")
+	require.Len(t, logs.All(), 1)
+	fields := logs.All()[0].ContextMap()
+	for _, field := range []string{"subject", "action", "resource_kind", "resource_name"} {
+		require.LessOrEqual(t, len(fields[field].(string)), 256, field)
+	}
+	require.LessOrEqual(t, len(fields["reason"].(string)), 2048)
+	require.Equal(t, true, fields["fields_truncated"])
 }
 
 type staticAuthZProvider struct {
 	name     string
 	decision authpkg.Decision
+	err      error
 }
 
 func (s *staticAuthZProvider) Name() string { return s.name }
 
 func (s *staticAuthZProvider) Authorize(_ context.Context, _ *authpkg.Principal, _ string, _ authpkg.ResourceContext) (authpkg.Decision, error) {
-	return s.decision, nil
+	return s.decision, s.err
+}
+
+type afterDecisionProvider struct {
+	*rbaclocal.RBACLocalProvider
+	after func()
+}
+
+func (p afterDecisionProvider) Authorize(ctx context.Context, principal *authpkg.Principal, action string, resource authpkg.ResourceContext) (authpkg.Decision, error) {
+	decision, err := p.RBACLocalProvider.Authorize(ctx, principal, action, resource)
+	p.after()
+	return decision, err
+}
+
+func TestDecisionLoggerUsesEvaluatedSnapshotAfterReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	document := `apiVersion: rbac.authorization.gitstore.dev/v1beta1
+kind: RbacLocalConfiguration
+clusterRoles:
+  reader:
+    rules: [{resources: [namespace], verbs: [read]}]
+clusterRoleBindings:
+  - roleRef: {kind: ClusterRole, name: reader}
+    subjects: [{kind: User, name: alice}]
+`
+	require.NoError(t, os.WriteFile(path, []byte(document), 0600))
+	inner, err := rbaclocal.New(config.RBACConfig{PolicyFile: path}, zap.NewNop())
+	require.NoError(t, err)
+	oldSnapshot, _ := inner.AuthorizationSnapshot()
+	core, logs := observer.New(zapcore.InfoLevel)
+	provider := authpkg.NewDecisionLogger(afterDecisionProvider{
+		RBACLocalProvider: inner,
+		after: func() {
+			require.NoError(t, os.WriteFile(path, []byte(strings.ReplaceAll(document, "name: alice", "name: bob")), 0600))
+			require.NoError(t, inner.Reload())
+		},
+	}, zap.New(core).With(zap.String("instance_id", "replica-a")))
+	decision, err := provider.Authorize(t.Context(), &authpkg.Principal{
+		Subject: "alice", AuthMethod: "static-users",
+	}, "namespace.read", authpkg.ResourceContext{Kind: "namespace"})
+	require.NoError(t, err)
+	require.Equal(t, authpkg.OutcomeAllow, decision.Outcome)
+	current, _ := inner.AuthorizationSnapshot()
+	require.NotEqual(t, oldSnapshot.Digest, current.Digest)
+	require.Equal(t, oldSnapshot.Digest, decision.PolicyDigest)
+	require.Len(t, logs.All(), 1)
+	require.Equal(t, oldSnapshot.Digest, logs.All()[0].ContextMap()["policy_digest"])
+	require.Equal(t, "replica-a", logs.All()[0].ContextMap()["instance_id"])
+}
+
+func authorizationMetricSamples(t *testing.T, action, outcome string) uint64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != "gitstore_authz_decision_duration_seconds" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			labels := map[string]string{}
+			for _, label := range metric.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			require.Len(t, labels, 2, "no principal, resource, policy or request labels")
+			if labels["action"] == action && labels["outcome"] == outcome {
+				return metric.GetHistogram().GetSampleCount()
+			}
+		}
+	}
+	return 0
+}
+
+func TestProviderRegistryReloadCountersExistBeforeFirstAttempt(t *testing.T) {
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != "gitstore_authz_registry_reloads_total" {
+			continue
+		}
+		outcomes := []string{}
+		for _, metric := range family.Metric {
+			require.Len(t, metric.Label, 1)
+			require.Equal(t, "outcome", metric.Label[0].GetName())
+			outcomes = append(outcomes, metric.Label[0].GetValue())
+			require.Zero(t, metric.GetCounter().GetValue())
+		}
+		require.ElementsMatch(t, []string{"accepted", "rejected"}, outcomes)
+		return
+	}
+	t.Fatal("zero baselines must exist so the first reload increment is observable")
+}
+
+func TestDecisionLoggerBoundsMetricCardinalityAndErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		outcome  authpkg.Outcome
+		err      error
+		metric   string
+		errClass string
+	}{
+		{"allow", authpkg.OutcomeAllow, nil, "allow", ""},
+		{"deny", authpkg.OutcomeDeny, nil, "deny", ""},
+		{"challenge", authpkg.OutcomeChallenge, nil, "challenge", ""},
+		{"invalid", authpkg.Outcome(255), nil, "invalid", ""},
+		{"error", authpkg.OutcomeAllow, errors.New("credential-must-not-be-logged"), "error", "provider_error"},
+		{"cancel", authpkg.OutcomeDeny, context.Canceled, "error", "canceled"},
+		{"deadline", authpkg.OutcomeDeny, context.DeadlineExceeded, "error", "deadline_exceeded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			core, logs := observer.New(zapcore.InfoLevel)
+			original := authpkg.Decision{Outcome: tc.outcome, PolicyDigest: "invalid-secret-digest"}
+			inner := &staticAuthZProvider{name: "test", decision: original, err: tc.err}
+			provider := authpkg.NewDecisionLogger(inner, zap.New(core))
+			before := authorizationMetricSamples(t, "unknown", tc.metric)
+			for i := range 3 {
+				decision, err := provider.Authorize(t.Context(), &authpkg.Principal{Subject: fmt.Sprint(i)},
+					fmt.Sprintf("unregistered.%d", i), authpkg.ResourceContext{Name: fmt.Sprint(i)})
+				require.ErrorIs(t, err, tc.err)
+				require.Equal(t, original.Outcome, decision.Outcome)
+				require.Equal(t, original.PolicyDigest, decision.PolicyDigest)
+			}
+			require.Equal(t, before+3, authorizationMetricSamples(t, "unknown", tc.metric))
+			require.Len(t, logs.All(), 3)
+			for _, entry := range logs.All() {
+				fields := entry.ContextMap()
+				require.NotContains(t, fields, "policy_digest")
+				require.Equal(t, true, fields["invalid_policy_digest"])
+				require.NotContains(t, fmt.Sprint(fields), "invalid-secret-digest")
+				require.NotContains(t, fmt.Sprint(fields), "credential-must-not-be-logged")
+				if tc.err != nil {
+					require.Equal(t, tc.errClass, fields["error_class"])
+					require.Equal(t, zapcore.WarnLevel, entry.Level)
+				}
+			}
+		})
+	}
+}
+
+func TestDecisionLoggerUTF8BoundsAndKnownMetric(t *testing.T) {
+	core, logs := observer.New(zapcore.InfoLevel)
+	inner := &staticAuthZProvider{name: "test", decision: authpkg.Allow("test", strings.Repeat("\u00e9", 2049))}
+	provider := authpkg.NewDecisionLogger(inner, zap.New(core))
+	before := authorizationMetricSamples(t, "namespace.read", "allow")
+	_, err := provider.Authorize(t.Context(), nil, "namespace.read", authpkg.ResourceContext{
+		Kind: "namespace", Name: strings.Repeat("\u00e9", 127) + "x\u00e9",
+	})
+	require.NoError(t, err)
+	require.Equal(t, before+1, authorizationMetricSamples(t, "namespace.read", "allow"))
+	fields := logs.All()[0].ContextMap()
+	for _, key := range []string{"resource_name", "reason"} {
+		require.True(t, utf8.ValidString(fields[key].(string)))
+	}
+	require.Len(t, fields["resource_name"], 256)
+	require.Len(t, fields["reason"], 2048)
 }
 
 func TestDecisionLogger_EmitsStructuredFieldsAndRequestID(t *testing.T) {

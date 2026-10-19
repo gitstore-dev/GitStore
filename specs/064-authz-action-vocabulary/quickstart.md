@@ -11,7 +11,7 @@ The user assigned the remaining capacity work to
 including unfinished harness instrumentation, sustained load, reload/heap soak,
 and deployed multi-replica replacement/fault evidence. The evaluator-only
 benchmark/soak (T069) and per-replica readiness/baseline authorization (T070)
-passed on 2026-10-18. T065–T068, T071–T073 and deployment portions of
+passed on 2026-10-18. T065/T066/T068, T071–T073 and deployment portions of
 T021/T045/T054 remain unchecked. T062's standalone deployed credential suite
 passed on 2026-10-19. These narrow alpha and functional passes do not
 establish overall alpha or production capacity acceptance; `rbac-local` remains
@@ -80,7 +80,7 @@ functional evidence, not a sustained-load fault or rolling-upgrade pass.
 artifact-scan/manifest and strict production-evidence contract tests passed
 again on 2026-10-19, including name-only subjects and sanitized failure output.
 
-Current task ledger: **71/82 complete, 11 unchecked**. These results do not establish
+Current task ledger: **72/82 complete, 10 unchecked**. These results do not establish
 the remaining boundary matrix, sustained Git/lifecycle success, rolling
 replacement/fault acceptance or acknowledged five-million-Product production
 gate. In particular, the later full Namespace runs failed provenance contention
@@ -103,6 +103,50 @@ This is additional T066/T068 implementation coverage, not a new deployed alpha
 pass. Their broader workload/domain/fault obligations remain unchecked.
 Existing load, retry, deadline, replacement and resource gates are unchanged;
 the before/after probes do not establish the under-load authorization matrix.
+
+### Bounded authorization diagnostics (2026-10-19)
+
+T067 implementation is complete. A decision carries its evaluated immutable
+policy digest through the logger; a reload between evaluation and logging cannot
+substitute the current snapshot. Logs retain catalog/policy identity and the
+existing API process UUID, bounded text/reasons, nanosecond latency, explicit
+truncation/invalid-metadata flags and bounded error classes without raw provider
+errors. Original decisions/errors and configured logging behavior are preserved.
+No credential claims or resource attributes are added.
+
+Native authorization histograms use only registered action/finite outcome
+labels; unknown actions collapse to one label. Complete-registry reload counters
+distinguish publication from intermediate candidate policy construction and
+publish zero baselines so the first reload increment is observable. Rejected
+reload records identify the retained active policy. Repository/category
+histories include these series and the existing API process identity;
+alpha/production exports require fresh per-target decision increments and
+process identities. Counter reset followed by recovery remains valid. Exports
+reject non-finite/negative authorization history and principal/resource-name/
+request/digest labels. Bounded run/source/config/environment fingerprints bind
+the configured fixture context without copying fixture contents into logs or
+metric labels. Full phase exports include registry reload records, and existing
+controller credential/recovery histories are preserved.
+
+Final source checks passed:
+
+```bash
+(cd gitstore-api && go test -race ./internal/auth/... ./internal/app -count=1)
+(cd gitstore-api && "$(go env GOPATH)/bin/staticcheck" ./internal/auth/... ./internal/app)
+(cd gitstore-api && go build ./...)
+bash -n scripts/export-capacity-prometheus.sh scripts/test-capacity-prometheus-export.sh
+bash scripts/test-capacity-prometheus-export.sh
+bash scripts/test-capacity-dispatch.sh
+```
+
+Tests cover reload-after-decision correlation, concurrent snapshots at 2/32
+workers, finite metric cardinality, UTF-8 bounds, raw-error exclusion, zero
+reload baselines, retained/new policy identities, both API histories,
+missing/stale/reset-only/invalid process evidence and malformed provenance.
+The dispatcher passed in an isolated rerun, separate from repository-local
+temporary export fixtures. This is source-only instrumentation evidence, not a
+new deployed alpha, under-load matrix/fault or sustained Git pass; the earlier
+sealed alpha results remain evidence for their recorded revisions only.
 
 ### Non-capacity completion pass (2026-10-11, after `eff9e28`)
 

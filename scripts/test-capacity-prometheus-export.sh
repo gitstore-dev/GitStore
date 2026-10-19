@@ -88,7 +88,7 @@ for observability_mode in none prometheus; do
 done
 
 mkdir -p "${test_dir}/repository"
-printf '{"target":"repository","scenario":"lifecycle","startedAt":"2026-09-04T00:00:00Z"}\n' >"${test_dir}/repository/metadata.json"
+printf '{"target":"repository","scenario":"lifecycle","startedAt":"2026-09-04T00:00:00Z","runId":"export-fixture","gitRevision":"1111111111111111111111111111111111111111","sourceStateSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","configDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","environmentDigest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}\n' >"${test_dir}/repository/metadata.json"
 cat >"${test_dir}/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
 exit 0
@@ -98,7 +98,27 @@ cat >"${test_dir}/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
   */api/v1/query_range)
-    printf '{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"up","instance":"api-a.internal:4000"},"values":[[1,"1"],[2,"1"]]},{"metric":{"__name__":"gitstore_git_http_stage_duration_seconds_count","operation":"receive_pack","phase":"handler","outcome":"success","instance":"api-a.internal:4000"},"values":[[1,"10"],[2,"20"]]}]}}'
+    response='{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"up","instance":"api-a.internal:4000"},"values":[[1,"1"],[2,"1"]]},{"metric":{"__name__":"gitstore_git_http_stage_duration_seconds_count","operation":"receive_pack","phase":"handler","outcome":"success","instance":"api-a.internal:4000"},"values":[[1,"10"],[2,"20"]]},{"metric":{"__name__":"gitstore_authz_decision_duration_seconds_count","action":"namespace.read","outcome":"allow","instance":"api-a.internal:4000"},"values":[[1,"10"],[2,"20"]]},{"metric":{"__name__":"gitstore_api_process_instance_info","instance":"api-a.internal:4000","instance_id":"process-api-a"},"values":[[1,"1"],[2,"1"]]}]}}'
+    case "${AUTHZ_EXPORT_FAILURE:-}" in
+      nonfinite) jq '.data.result[2].values[0][1] = "NaN"' <<<"${response}" ;;
+      negative) jq '.data.result[2].values[0][1] = "-1"' <<<"${response}" ;;
+      missing) jq 'del(.data.result[2])' <<<"${response}" ;;
+      stale) jq '.data.result[2].values[1][1] = "10"' <<<"${response}" ;;
+      missing-identity) jq 'del(.data.result[3])' <<<"${response}" ;;
+      invalid-identity) jq '.data.result[3].metric.instance_id = ""' <<<"${response}" ;;
+      reset-only) jq '.data.result[2].values = [[1,"20"],[2,"0"]]' <<<"${response}" ;;
+      reset-recovered) jq '.data.result[2].values = [[1,"20"],[2,"0"],[3,"1"]]' <<<"${response}" ;;
+      second-up-only|second-active)
+        jq --arg variant "${AUTHZ_EXPORT_FAILURE}" '
+          .data.result += [{metric:{__name__:"up",instance:"api-b.internal:4001"},values:[[1,"1"],[2,"1"]]},
+            (.data.result[3] | .metric.instance = "api-b.internal:4001" | .metric.instance_id = "process-api-b")] |
+          if $variant == "second-active" then
+            .data.result += [(.data.result[2] | .metric.instance = "api-b.internal:4001")]
+          else . end' <<<"${response}" ;;
+      subject|resource_name|request_id|policy_digest|catalog_digest|fixture_digest)
+        jq --arg field "${AUTHZ_EXPORT_FAILURE}" '.data.result[2].metric[$field] = "forbidden"' <<<"${response}" ;;
+      *) printf '%s' "${response}" ;;
+    esac
     ;;
   *) printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1,"1"]}]}}' ;;
 esac
@@ -109,7 +129,63 @@ jq -e '.capacityTarget == "repository/lifecycle" and (.queries | map(.name)) == 
   "${test_dir}/repository/prometheus/manifest.json" >/dev/null
 jq -e '.data.result[1].metric.phase == "handler" and .data.result[1].values == [[1,"10"],[2,"20"]]' \
   "${test_dir}/repository/prometheus/api-series.json" >/dev/null
+jq -e --slurpfile metadata "${test_dir}/repository/metadata.json" '
+  .runContext == ($metadata[0] | {runId,gitRevision,sourceStateSha256,configDigest,environmentDigest})
+' "${test_dir}/repository/prometheus/manifest.json" >/dev/null
+jq -e 'any(.data.result[]; .metric.__name__ == "gitstore_authz_decision_duration_seconds_count" and
+  .metric.action == "namespace.read" and .metric.outcome == "allow" and .values == [[1,"10"],[2,"20"]])' \
+  "${test_dir}/repository/prometheus/api-series.json" >/dev/null
+for failure in nonfinite negative subject resource_name request_id policy_digest catalog_digest fixture_digest; do
+  if PATH="${test_dir}/bin:${PATH}" AUTHZ_EXPORT_FAILURE="${failure}" \
+    "${repo_root}/scripts/export-capacity-prometheus.sh" "${test_dir}/repository" \
+    http://prometheus.invalid >/dev/null 2>&1; then
+    echo "invalid authorization metric history unexpectedly succeeded: ${failure}" >&2
+    exit 1
+  fi
+done
+jq '.mode = "alpha"' "${test_dir}/repository/metadata.json" >"${test_dir}/repository/metadata.next.json"
+mv "${test_dir}/repository/metadata.next.json" "${test_dir}/repository/metadata.json"
+PATH="${test_dir}/bin:${PATH}" CAPACITY_PROMETHEUS_TARGETS=api-a.internal:4000 \
+  "${repo_root}/scripts/export-capacity-prometheus.sh" "${test_dir}/repository" http://prometheus.invalid >/dev/null
+for failure in missing stale reset-only missing-identity invalid-identity; do
+  if PATH="${test_dir}/bin:${PATH}" CAPACITY_PROMETHEUS_TARGETS=api-a.internal:4000 \
+    AUTHZ_EXPORT_FAILURE="${failure}" \
+    "${repo_root}/scripts/export-capacity-prometheus.sh" "${test_dir}/repository" \
+    http://prometheus.invalid >/dev/null 2>&1; then
+    echo "missing or stale alpha authorization history unexpectedly succeeded: ${failure}" >&2
+    exit 1
+  fi
+done
+if PATH="${test_dir}/bin:${PATH}" CAPACITY_PROMETHEUS_TARGETS=api-a.internal:4000,api-b.internal:4001 \
+  AUTHZ_EXPORT_FAILURE=second-up-only \
+  "${repo_root}/scripts/export-capacity-prometheus.sh" "${test_dir}/repository" \
+  http://prometheus.invalid >/dev/null 2>&1; then
+  echo "missing second API authorization history unexpectedly succeeded" >&2
+  exit 1
+fi
+PATH="${test_dir}/bin:${PATH}" CAPACITY_PROMETHEUS_TARGETS=api-a.internal:4000,api-b.internal:4001 \
+  AUTHZ_EXPORT_FAILURE=second-active \
+  "${repo_root}/scripts/export-capacity-prometheus.sh" "${test_dir}/repository" http://prometheus.invalid >/dev/null
+PATH="${test_dir}/bin:${PATH}" CAPACITY_PROMETHEUS_TARGETS=api-a.internal:4000 \
+  AUTHZ_EXPORT_FAILURE=reset-recovered \
+  "${repo_root}/scripts/export-capacity-prometheus.sh" "${test_dir}/repository" http://prometheus.invalid >/dev/null
+jq 'del(.mode)' "${test_dir}/repository/metadata.json" >"${test_dir}/repository/metadata.next.json"
+mv "${test_dir}/repository/metadata.next.json" "${test_dir}/repository/metadata.json"
+cp "${test_dir}/repository/metadata.json" "${test_dir}/repository/metadata.saved.json"
+for mutation in '.runId = ("x" * 129)' '.gitRevision = "not-a-revision"' \
+  '.sourceStateSha256 = []' '.configDigest = "not-a-digest"' '.environmentDigest = 42'; do
+  jq "${mutation}" "${test_dir}/repository/metadata.saved.json" >"${test_dir}/repository/metadata.json"
+  if PATH="${test_dir}/bin:${PATH}" \
+    "${repo_root}/scripts/export-capacity-prometheus.sh" "${test_dir}/repository" \
+    http://prometheus.invalid >/dev/null 2>&1; then
+    echo "invalid run/fixture provenance unexpectedly succeeded: ${mutation}" >&2
+    exit 1
+  fi
+done
+mv "${test_dir}/repository/metadata.saved.json" "${test_dir}/repository/metadata.json"
 jq -e '(.apiQuery | contains("gitstore_namespace_deletion_.*")) and
+  (.apiQuery | contains("gitstore_authz_.*")) and
+  (.apiQuery | contains("gitstore_api_process_instance_info")) and
   (.apiQuery | contains("gitstore_product_deletion_.*")) and
   (.apiQuery | contains("gitstore_api_graphql_http_request_duration_seconds_.*")) and
   all(.queries[] | select(.name == "repository_datastore_operation_p95" or .name == "repository_datastore_errors");
@@ -378,6 +454,10 @@ case "$*" in
               ["1788480001000000000","sampled request completed"]]}] end)}}'
       exit 0
     fi
+    [[ "$*" == *"auth provider registry reload accepted"* &&
+      "$*" == *"auth provider registry reload rejected"* ]] || {
+      echo "phase query omitted complete-registry reload diagnostics" >&2; exit 1;
+    }
     case "${EXPORT_FAILURE:-}" in
       empty-logs) printf '{"status":"success","data":{"result":[]}}' ;;
       truncated-logs) jq -n '{status:"success",data:{result:[{values:[range(10000) | ["1","phase"]]}]}}' ;;

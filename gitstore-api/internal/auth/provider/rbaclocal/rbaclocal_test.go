@@ -950,7 +950,13 @@ func soakAuthorizationReloads(t *testing.T, duration time.Duration, concurrency 
 				want := tc.want
 				switch {
 				case strings.Contains(decision.Reason, "policy="+oldSnapshot.digest):
+					if decision.PolicyDigest != oldSnapshot.digest {
+						invalid.Add(1)
+					}
 				case strings.Contains(decision.Reason, "policy="+newSnapshot.digest):
+					if decision.PolicyDigest != newSnapshot.digest {
+						invalid.Add(1)
+					}
 					if tc.name == "last-allow" || tc.name == "owner-transfer" {
 						want = authpkg.OutcomeDeny
 					}
@@ -961,7 +967,7 @@ func soakAuthorizationReloads(t *testing.T, duration time.Duration, concurrency 
 					invalid.Add(1)
 				}
 				retainedDecision, retainedErr := retained.Authorize(ctx, tc.principal, tc.action, tc.resource)
-				if retainedErr != nil || retainedDecision.Outcome != tc.want {
+				if retainedErr != nil || retainedDecision.Outcome != tc.want || retainedDecision.PolicyDigest != oldSnapshot.digest {
 					invalid.Add(1)
 				}
 				decisions.Add(1)
@@ -1018,7 +1024,11 @@ func soakAuthorizationReloads(t *testing.T, duration time.Duration, concurrency 
 }
 
 func TestAuthorizationConcurrentReloadSnapshots(t *testing.T) {
-	soakAuthorizationReloads(t, 100*time.Millisecond, 2)
+	for _, workers := range []int{2, 32} {
+		t.Run(fmt.Sprintf("workers-%d", workers), func(t *testing.T) {
+			soakAuthorizationReloads(t, 100*time.Millisecond, workers)
+		})
+	}
 }
 
 func auditAuthorizationEvaluator(t *testing.T) map[string]any {

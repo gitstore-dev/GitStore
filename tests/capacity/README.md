@@ -27,6 +27,17 @@ behavior.
 
 ## Local telemetry and live profiling
 
+API decision histograms use finite action/outcome labels and preserve
+sub-millisecond latency; their counts are provider calls, not HTTP throughput
+or Git acknowledgements. Repository/category API histories include
+`gitstore_authz_*`, with alpha/production requiring a fresh decision-count
+increment per configured API. Export manifests carry the run/source and
+available config/environment digests from metadata; policy/catalog identities
+remain in semantic proof and bounded logs, not metric labels. Complete-registry
+reload outcomes are separate from candidate policy initialization, and full
+phase logs include their retained/published policy identities and API instance
+IDs. Existing controller credential/recovery series are unchanged.
+
 `CAPACITY_OBSERVABILITY=full` extends the existing Prometheus selector with an
 OTLP HTTP collector, Tempo and Loki in `compose.capacity.yml`. Core processes
 must already have their typed telemetry configuration enabled; collector startup

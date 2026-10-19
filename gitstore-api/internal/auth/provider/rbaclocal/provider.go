@@ -243,7 +243,13 @@ func principalSubjects(p *auth.Principal, subjects []SubjectRef) ([]SubjectRef, 
 
 func (p *RBACLocalProvider) Authorize(_ context.Context, principal *auth.Principal, action string, resource auth.ResourceContext) (auth.Decision, error) {
 	snapshot := p.snapshot.Load()
-	deny := func(reason string) (auth.Decision, error) { return auth.Deny(p.Name(), reason), nil }
+	deny := func(reason string) (auth.Decision, error) {
+		decision := auth.Deny(p.Name(), reason)
+		if snapshot != nil {
+			decision.PolicyDigest = snapshot.digest
+		}
+		return decision, nil
+	}
 	definition, registered := auth.LookupAction(action)
 	var subjectBuffer [MaxPrincipalGroups + 1]SubjectRef
 	subjects, valid := principalSubjects(principal, subjectBuffer[:0])
@@ -259,7 +265,9 @@ func (p *RBACLocalProvider) Authorize(_ context.Context, principal *auth.Princip
 		}
 	}
 	if slices.Contains(principal.Groups, "system:masters") {
-		return auth.Allow(p.Name(), "trusted system:masters; policy="+snapshot.digest), nil
+		decision := auth.Allow(p.Name(), "trusted system:masters; policy="+snapshot.digest)
+		decision.PolicyDigest = snapshot.digest
+		return decision, nil
 	}
 	// Resolve candidate bindings once, in document order. Duplicate groups and
 	// subjects cannot multiply rule evaluation. Rule bodies are shared by role.
@@ -322,7 +330,9 @@ func (p *RBACLocalProvider) Authorize(_ context.Context, principal *auth.Princip
 					reason = "transfer constraint"
 					continue
 				}
-				return auth.Allow(p.Name(), fmt.Sprintf("policy=%s binding=%s role=%s rule=%d", snapshot.digest, binding.diagnostic, binding.roleName, rule.index)), nil
+				decision := auth.Allow(p.Name(), fmt.Sprintf("policy=%s binding=%s role=%s rule=%d", snapshot.digest, binding.diagnostic, binding.roleName, rule.index))
+				decision.PolicyDigest = snapshot.digest
+				return decision, nil
 			}
 		}
 	}

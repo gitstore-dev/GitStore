@@ -23,6 +23,24 @@ fi
 output_dir="${evidence_dir}/prometheus"
 mkdir -p "${output_dir}"
 capacity_target="$(jq -r '[.target, (.scenario // .profile)] | join("/")' "${metadata}")"
+mode="$(jq -r '.mode // "diagnostic"' "${metadata}")"
+run_context="$(jq -ce '
+  {runId,gitRevision,sourceStateSha256,configDigest,environmentDigest} |
+  with_entries(select(.value != null)) |
+  select(all(to_entries[];
+    (.value | type) == "string" and
+    (if .key == "runId" then (.value | test("^[A-Za-z0-9_.-]{1,128}$"))
+     elif .key == "gitRevision" then (.value | test("^([a-f0-9]{40}|[a-f0-9]{64})$"))
+     else (.value | test("^[a-f0-9]{64}$")) end)))
+' "${metadata}")" || {
+  echo "capacity run/fixture provenance metadata is malformed" >&2; exit 2;
+}
+counter_increment_filter='
+  def has_increment:
+    .values as $values |
+    any(range(1; $values | length); . as $i |
+      ($values[$i][1] | tonumber) > ($values[$i - 1][1] | tonumber));
+'
 
 observability_query=""
 exemplar_query=""
@@ -37,11 +55,7 @@ if [[ "${CAPACITY_OBSERVABILITY:-none}" == full ]]; then
   curl -fsS --max-time 120 --max-filesize 67108864 --get --data-urlencode "query=${observability_query}" \
     --data-urlencode "start=${started_at}" --data-urlencode "end=${completed_at}" --data-urlencode "step=5s" \
     "${prometheus_url%/}/api/v1/query_range" >"${output_dir}/observability-series.json"
-  jq -e --arg git_targets "${CAPACITY_PROMETHEUS_GIT_TARGETS:-}" '
-    def has_increment:
-      .values as $values |
-      any(range(1; $values | length); . as $i |
-        ($values[$i][1] | tonumber) > ($values[$i - 1][1] | tonumber));
+  jq -e --arg git_targets "${CAPACITY_PROMETHEUS_GIT_TARGETS:-}" "${counter_increment_filter}"'
     .data.result as $series |
     .status == "success" and .data.resultType == "matrix" and
     all(["capacity-otel-collector:8888", "capacity-tempo:3200", "capacity-loki:3100"][]; . as $target |
@@ -117,7 +131,7 @@ if [[ "${CAPACITY_OBSERVABILITY:-none}" == full ]]; then
     echo "exemplar-linked log evidence is missing, malformed or exceeded the bounded export" >&2; exit 1;
   }
   curl -fsS --max-time 120 --max-filesize 67108864 --get \
-    --data-urlencode 'query={service_name=~"gitstore-.*"} |~ "git_http_request_timing|post_receive_admission_timing|post_receive_dispatch_timing|Git RPC completed|graphql HTTP request completed|reconcile attempt completed|profil|telemetry export failed"' \
+    --data-urlencode 'query={service_name=~"gitstore-.*"} |~ "git_http_request_timing|post_receive_admission_timing|post_receive_dispatch_timing|Git RPC completed|graphql HTTP request completed|reconcile attempt completed|auth provider registry reload accepted|auth provider registry reload rejected|profil|telemetry export failed"' \
     --data-urlencode "start=${started_at}000000000" --data-urlencode "end=${completed_at}000000000" \
     --data-urlencode 'limit=10000' --data-urlencode 'direction=forward' \
     "http://127.0.0.1:${CAPACITY_LOKI_PORT:-3100}/loki/api/v1/query_range" >"${telemetry_dir}/phase-logs.json"
@@ -129,21 +143,36 @@ fi
 
 api_query=""
 if [[ "${capacity_target}" == "repository/lifecycle" || "${capacity_target}" == "category/hierarchy" ]]; then
-  api_query='{job="gitstore-api-capacity",__name__=~"up|gitstore_telemetry_records_total|rpc_.*|gitstore_api_graphql_http_request_duration_seconds_.*|gitstore_git_http_stage_duration_seconds_.*|gitstore_git_file_read_server_phase_seconds_.*|gitstore_datastore_operation_duration_seconds_.*|gitstore_datastore_operation_errors_total|gitstore_datastore_projection_.*|gitstore_datastore_compensation_.*|gitstore_category_mutation_.*|gitstore_category_ancestor_index_.*|gitstore_namespace_admission_stage_duration_seconds_.*|gitstore_namespace_deletion_.*|gitstore_product_deletion_.*|gitstore_catalog_grpc_server_handling_seconds_.*|grpc_client_handling_seconds_.*|gitstore_resource_watch_.*|process_cpu_seconds_total|process_resident_memory_bytes|process_start_time_seconds|go_.*"}'
+  api_query='{job="gitstore-api-capacity",__name__=~"up|gitstore_authz_.*|gitstore_api_process_instance_info|gitstore_telemetry_records_total|rpc_.*|gitstore_api_graphql_http_request_duration_seconds_.*|gitstore_git_http_stage_duration_seconds_.*|gitstore_git_file_read_server_phase_seconds_.*|gitstore_datastore_operation_duration_seconds_.*|gitstore_datastore_operation_errors_total|gitstore_datastore_projection_.*|gitstore_datastore_compensation_.*|gitstore_category_mutation_.*|gitstore_category_ancestor_index_.*|gitstore_namespace_admission_stage_duration_seconds_.*|gitstore_namespace_deletion_.*|gitstore_product_deletion_.*|gitstore_catalog_grpc_server_handling_seconds_.*|grpc_client_handling_seconds_.*|gitstore_resource_watch_.*|process_cpu_seconds_total|process_resident_memory_bytes|process_start_time_seconds|go_.*"}'
   curl -fsS --max-time 120 --max-filesize 67108864 --get --data-urlencode "query=${api_query}" \
     --data-urlencode "start=${started_at}" --data-urlencode "end=${completed_at}" \
     --data-urlencode "step=5s" "${prometheus_url%/}/api/v1/query_range" \
     >"${output_dir}/api-series.json"
-  jq -e --arg targets "${CAPACITY_PROMETHEUS_TARGETS:-}" '
+  jq -e --arg targets "${CAPACITY_PROMETHEUS_TARGETS:-}" --arg mode "${mode}" "${counter_increment_filter}"'
     .data.result as $series |
     .status == "success" and .data.resultType == "matrix" and ($series | length) > 0 and
     all($series[]; (.values | length) > 0) and
+    all($series[] | select(.metric.__name__ | startswith("gitstore_authz_"));
+      all(.values[]; (.[1] | tonumber | isfinite) and (.[1] | tonumber) >= 0) and
+      (.metric | has("subject") or has("resource_name") or has("request_id") or
+        has("policy_digest") or has("catalog_digest") or has("fixture_digest") | not)) and
     any($series[]; .metric.__name__ == "up" and any(.values[]; .[1] == "1")) and
     all(($targets | split(",") | map(select(length > 0)))[]; . as $target |
       any($series[]; .metric.__name__ == "up" and .metric.instance == $target and
-        any(.values[]; .[1] == "1")))
+        any(.values[]; .[1] == "1"))) and
+    (if $mode == "alpha" or $mode == "production" then
+      ($targets | split(",") | map(select(length > 0))) as $targets |
+      ($targets | length) > 0 and all($targets[]; . as $target |
+        any($series[]; .metric.instance == $target and
+          .metric.__name__ == "gitstore_authz_decision_duration_seconds_count" and has_increment) and
+        any($series[]; .metric.instance == $target and
+          .metric.__name__ == "gitstore_api_process_instance_info" and
+          (.metric.instance_id | type) == "string" and
+          (.metric.instance_id | test("^[A-Za-z0-9._:-]{8,128}$")) and
+          all(.values[]; .[1] == "1")))
+     else true end)
   ' "${output_dir}/api-series.json" >/dev/null || {
-    echo "Prometheus API history is missing or invalid" >&2
+    echo "Prometheus API/authorization history is missing or invalid" >&2
     exit 1
   }
 fi
@@ -277,6 +306,7 @@ for index in "${!names[@]}"; do
 done
 
 jq -n \
+  --argjson run_context "${run_context}" \
   --arg collected_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg source "${prometheus_url%/}" \
   --arg capacity_target "${capacity_target}" \
@@ -291,7 +321,7 @@ jq -n \
   --arg started_at "$(jq -r '.startedAt' "${metadata}")" \
   --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson queries "$(for index in "${!names[@]}"; do jq -n --arg name "${names[index]}" --arg query "${queries[index]}" '{name:$name,query:$query}'; done | jq -s .)" \
-  '{schemaVersion:1,collectedAt:$collected_at,source:$source,capacityTarget:$capacity_target,runStartedAt:$started_at,runCompletedAt:$completed_at,lookback:$lookback,queries:$queries,apiQuery:$api_query,apiStepSeconds:5,controllerQuery:$controller_query,controllerStepSeconds:5,scyllaQuery:$scylla_query,scyllaStepSeconds:5,observabilityMode:$observability_mode,observabilityQuery:$observability_query,observabilityStepSeconds:5,observabilitySettleSeconds:(if $observability_mode == "full" then 15 else 0 end),exemplarQuery:$exemplar_query,exemplarSampleLimit:10000,exemplarTraceLimit:32,correlatedLogQuery:$correlated_log_query}' \
+  '{schemaVersion:1,collectedAt:$collected_at,source:$source,capacityTarget:$capacity_target,runContext:$run_context,runStartedAt:$started_at,runCompletedAt:$completed_at,lookback:$lookback,queries:$queries,apiQuery:$api_query,apiStepSeconds:5,controllerQuery:$controller_query,controllerStepSeconds:5,scyllaQuery:$scylla_query,scyllaStepSeconds:5,observabilityMode:$observability_mode,observabilityQuery:$observability_query,observabilityStepSeconds:5,observabilitySettleSeconds:(if $observability_mode == "full" then 15 else 0 end),exemplarQuery:$exemplar_query,exemplarSampleLimit:10000,exemplarTraceLimit:32,correlatedLogQuery:$correlated_log_query}' \
   >"${output_dir}/manifest.json"
 
 echo "Prometheus capacity evidence: ${output_dir}"

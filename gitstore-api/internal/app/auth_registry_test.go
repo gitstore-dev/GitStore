@@ -16,9 +16,12 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -51,8 +54,25 @@ func TestProviderRegistryReloadPreservesUsableBindingInvariant(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 	revocations := store.(staticusers.RevocationStore)
-	registry, reloader, shutdowns, err := buildProviderRegistry(cfg, store, zap.NewNop(), revocations)
+	core, logs := observer.New(zapcore.InfoLevel)
+	registry, reloader, shutdowns, err := buildProviderRegistry(cfg, store, zap.New(core), revocations)
 	require.NoError(t, err)
+	initial := registry.Diagnostics()
+	reloadCount := func(outcome string) float64 {
+		families, gatherErr := prometheus.DefaultGatherer.Gather()
+		require.NoError(t, gatherErr)
+		for _, family := range families {
+			if family.GetName() == "gitstore_authz_registry_reloads_total" {
+				for _, metric := range family.Metric {
+					if metric.Label[0].GetValue() == outcome {
+						return metric.Counter.GetValue()
+					}
+				}
+			}
+		}
+		return 0
+	}
+	initialAccepted, initialRejected := reloadCount("accepted"), reloadCount("rejected")
 	for _, shutdown := range shutdowns {
 		t.Cleanup(shutdown.Shutdown)
 	}
@@ -76,6 +96,19 @@ func TestProviderRegistryReloadPreservesUsableBindingInvariant(t *testing.T) {
 	require.NoError(t, reloader.Reload())
 	assertLoginDecision(t, registry, "alice", auth.OutcomeDeny)
 	assertLoginDecision(t, registry, "bob", auth.OutcomeAllow)
+	require.Equal(t, initialAccepted+1, reloadCount("accepted"))
+	require.Equal(t, initialRejected+3, reloadCount("rejected"))
+	rejected := logs.FilterMessage("auth provider registry reload rejected").All()
+	require.Len(t, rejected, 3)
+	for _, entry := range rejected {
+		require.Equal(t, initial.Policy.Digest, entry.ContextMap()["policy_digest"])
+		require.Equal(t, initial.CatalogDigest, entry.ContextMap()["catalog_digest"])
+		require.NotContains(t, entry.ContextMap(), "error", "raw candidate content must not be logged")
+	}
+	accepted := logs.FilterMessage("auth provider registry reload accepted").All()
+	require.Len(t, accepted, 1)
+	require.Equal(t, registry.Diagnostics().Policy.Digest, accepted[0].ContextMap()["policy_digest"])
+	require.NotEqual(t, initial.Policy.Digest, accepted[0].ContextMap()["policy_digest"])
 }
 
 func assertLoginDecision(t *testing.T, registry *auth.ProviderRegistry, username string, want auth.Outcome) {

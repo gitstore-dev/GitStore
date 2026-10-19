@@ -145,6 +145,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	}
 	clock := apiruntime.SystemClock{}
 	instanceID := uuid.NewString()
+	log = log.With(zap.String("instance_id", instanceID))
 
 	rawStore, err := dsfactory.NewDatastore(cfg.Api.Datastore, log, cfg.Api.Watch.Journal)
 	if err != nil {
@@ -618,9 +619,27 @@ type providerRegistryRuntime struct {
 	closed      bool
 }
 
-func (r *providerRegistryRuntime) Reload() error {
+func (r *providerRegistryRuntime) Reload() (err error) {
+	started := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	defer func() {
+		auth.ObserveProviderRegistryReload(err == nil)
+		diagnostics := r.registry.Diagnostics()
+		fields := []zap.Field{
+			zap.String("catalog_digest", diagnostics.CatalogDigest),
+			zap.String("authz_provider", diagnostics.AuthZ),
+			zap.Duration("duration", time.Since(started)),
+		}
+		if diagnostics.Policy != nil {
+			fields = append(fields, zap.String("policy_digest", diagnostics.Policy.Digest))
+		}
+		if err != nil {
+			r.log.Warn("auth provider registry reload rejected", fields...)
+		} else {
+			r.log.Info("auth provider registry reload accepted", fields...)
+		}
+	}()
 	if r.closed {
 		return errors.New("auth provider registry is closed")
 	}
@@ -785,7 +804,7 @@ func (s *Server) Start() {
 		go func() {
 			for range sigCh {
 				if err := s.authReloader.Reload(); err != nil {
-					s.log.Error("auth provider reload failed; previous configuration remains active", zap.Error(err))
+					s.log.Error("auth provider reload failed; previous configuration remains active")
 				} else {
 					s.log.Info("auth providers reloaded atomically")
 				}

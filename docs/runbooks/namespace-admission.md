@@ -977,6 +977,43 @@ Existing load, retry, deadline, watch, replacement and resource gates remain
 required. This additional harness coverage is not a completed deployment
 acceptance result.
 
+### Authorization diagnostics
+
+Each API adds its `gitstore_api_process_instance_info` identity to logs as
+`instance_id`. Authorization decision records include `catalog_digest`, the
+evaluated policy's `policy_digest`
+when supplied by the provider, and `latency_ns` alongside the existing integer
+`latency_ms`. The policy identity travels with the decision: a concurrent reload
+cannot replace it with the identity of a newer snapshot. Providers without
+policy metadata do not invent a policy identity.
+
+Decision logging still processes every call. Text fields are capped at 256 bytes
+and reasons at 2,048 bytes, with `fields_truncated` marking truncation and valid
+UTF-8 preserved. Claims, resource attributes and raw provider errors are not
+included; failures use a bounded `error_class` and still return the original
+error to the caller. Providers must keep their explanatory reasons free of
+credentials.
+
+`gitstore_authz_decision_duration_seconds` measures provider latency; its
+histogram count counts authorization decisions, not HTTP requests or Git ACKs.
+Labels contain only a registered action (or `unknown`) and a fixed outcome.
+`gitstore_authz_registry_reloads_total` counts accepted/rejected complete registry
+reloads, excluding startup and intermediate candidate policy loads. Structured
+reload records identify the retained or newly published policy. Digests,
+principals, resource names and request IDs are not metric labels.
+
+Repository/category Prometheus histories retain these metrics by scrape
+instance; alpha/production exports require a decision-count increment on each
+configured API alongside its process identity. Missing/stale histories,
+non-finite values and subject/resource-name/request/digest metric labels are
+rejected. Export
+manifests retain bounded run, source and available configuration/environment
+digests from the capacity metadata to join the configured fixture context.
+Full telemetry also retains registry reload
+phase records; existing controller credential/recovery histories remain
+unchanged. Source coverage and exported diagnostics are not a deployed fault,
+permission-matrix or capacity acceptance result.
+
 ### Git-backed deletion safety
 
 Use matching current Git service, API, and controller builds. GitStore is under
