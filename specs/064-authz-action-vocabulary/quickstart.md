@@ -4,26 +4,71 @@ The core v1beta1, name-only ServiceAccount and signed-RPC implementation is in
 local commit `eff9e28`. Use an isolated development deployment; old policy,
 configuration and namespaced ServiceAccount schemas are not supported.
 
-## Current acceptance scope (2026-10-11)
+## Current acceptance scope (2026-10-19)
 
-The user deferred all remaining capacity work to
+The user assigned the remaining capacity work to
 [#451](https://github.com/gitstore-dev/GitStore/issues/451#issuecomment-6107662533),
 including unfinished harness instrumentation, sustained load, reload/heap soak,
-and deployed multi-replica replacement/fault evidence. T065–T073 and deployment
-portions of T021/T045/T054/T062 remain unchecked. Local contracts and short
-diagnostics are not substitutes. Neither alpha nor production capacity is
-accepted; `rbac-local` remains development/evaluation-only. Do not close the
-overall specification until the remaining required evidence exists.
+and deployed multi-replica replacement/fault evidence. The evaluator-only
+benchmark/soak (T069) and per-replica readiness/baseline authorization (T070)
+passed on 2026-10-18. T065–T068, T071–T073 and deployment portions of
+T021/T045/T054/T062 remain unchecked. These two narrow alpha passes do not
+establish overall alpha or production capacity acceptance; `rbac-local` remains
+development/evaluation-only. Do not close the overall specification until the
+remaining required evidence exists.
 
-The issue handoff records the stopped historical capacity-container name
-collision. Those containers, keyspaces and retained volumes were not changed.
-Project/fixture isolation must be resolved before running destructive cleanup
-or chaos. No compatibility reader or old-fleet rollout is required.
+The original handoff's stopped capacity-container collision is historical.
+The two passing runs below used isolated fixtures; their evidence records the
+retained diagnostic runtime unchanged. Isolation and ownership checks remain
+required before cleanup or chaos. No compatibility reader or old-fleet rollout
+is required.
 
 Earlier ledger entries below are chronological checkpoints, not current claims
 that their then-uncommitted files remain uncommitted.
 
 ## Implementation evidence ledger
+
+### Reconciled alpha evidence (2026-10-19)
+
+The following are completed 2026-10-18 runs, not new executions against the
+current branch head. Their sealed proof hashes and all 27 referenced artifact
+hashes were reverified on 2026-10-19.
+
+| Task | Run / tested revision | Result and scope |
+| --- | --- | --- |
+| T069 | `451-authz-alpha-6926146-20261018` / `6926146c92a0630e9bdbc5b7c7101b1b4edb8eb6` | Evaluator-only alpha: 60s warmup and 600s measurement at concurrency 1/8/32; all 18 case/concurrency sampled p99 bounds below 1ms. Largest per-level p99 bounds: 35/103/225us. |
+| T070 | `451-readiness-alpha-5924c69-20261018` / `5924c69a29c47dd8b74558969cef75488e40565d` | Two-API readiness/baseline authorization alpha: 600.012s, 10 offered iterations/s per replica, 10 preallocated/100 maximum VUs; 12,001 completed iterations, 60,005 passing checks, zero failed checks, dropped iterations or unexpected HTTP failures. |
+
+T069 used native macOS arm64, Go 1.26.4, 11 logical CPUs and 36GiB host memory.
+Its concurrent reload phase ran 1,800.102s with 32 decision workers:
+283,176,365 decisions, 856 valid reloads, 2,568 rejected reloads and zero invalid
+outcomes. Post-GC heap fell from 10,257,792 to 9,120,152 bytes (88.91% of
+baseline). The synchronous evaluator has no decision queue; allocation results
+and bounded histograms are retained in the run bundle. Its failing transitive
+call-graph audit excludes policy-file, datastore-client and network-client
+dependencies from evaluation. This is not runtime-spy coverage, so the exact
+T065 instrumentation task remains open. The largest sampled individual decision
+was 588.379ms; the sub-millisecond claim is p99, not a maximum-latency guarantee.
+The proof `authorization-alpha-20261018-verified.json` has SHA-256
+`fba75d7566b8767ae3e3e622bf3df220f8a9b29cc4f0e27ddeb369f38f9059e4`
+and binds 13 evidence artifacts.
+
+T070 used shipped v1beta1 policy digest
+`6a833c03b6daa7ee2d6cf2555144ad8c0c4d57e8ab5c3f5c22e31b666ea9a898`;
+both APIs reported matching policy/catalog/provider identities and exact
+allow/anonymous-deny results. Readiness p95/p99 was 1.045/1.556ms on API A and
+1.054/1.611ms on API B. The proof
+`readiness-alpha-20261018-verified.json` has SHA-256
+`64495d170f2ab2ef667a592598b2ddb7be7591284f386a1ab6e886dc1ef2b922`
+and binds 14 evidence artifacts. The offered 10/s is not a measured sustainable
+service throughput ceiling.
+
+Current task ledger: **70/82 complete, 12 unchecked**. Neither proof establishes
+the remaining boundary matrix, sustained Git/lifecycle success, rolling
+replacement/fault acceptance or acknowledged five-million-Product production
+gate. In particular, the later full Namespace runs failed provenance contention
+before replacement; the short direct-routing diagnostic was not a fix or an
+acceptance pass. T078 and the overall specification remain open.
 
 ### Non-capacity completion pass (2026-10-11, after `eff9e28`)
 
@@ -64,7 +109,7 @@ Final local verification after the boundary fixes:
   ignored, with no tracked source diff; its zero-node/nonsemantic-document
   warnings do not replace source/test verification.
 
-Task ledger: 68/82 complete. The 14 unchecked items retain only the deferred
+Historical task ledger at this checkpoint: 68/82 complete. The 14 unchecked items retained the deferred
 capacity/deployed-acceptance work and final acceptance closure. Previous owned
 Scylla contracts and Compose/root-integration results remain recorded below;
 neither they nor this local run are a multi-replica capacity certificate.
