@@ -2953,16 +2953,15 @@ proven explanation for every rejection or a demonstrated fix. The run failed
 before replacement and produced no complete visibility or throughput result.
 Its disposable runtime was removed; the original deployment remained unchanged.
 
-Native replay verification now prepares at most **64** independent, empty,
-file-synced nonce inodes outside the request path. A request exclusively renames
-one into its nonce record, then waits for both source and destination directory
-durability before effects. One bounded background task replenishes the pool;
-exhaustion uses the original create-and-sync path. Preparation failures are
-logged, and request durability failures remain fail-closed. Replay capacity,
-expiry, clock-rollback protection, signed wire format and Resource contracts
-are unchanged. This is a performance candidate, not an established throughput
-improvement: the isolated filesystem probe had mixed tail-latency results, and
-the unchanged sustained workload must still validate it.
+A subsequent independent-prepared-inode candidate passed eight metadata cycles
+before cycle nine exhausted the same eight-attempt push budget: six
+client-advertised-ref rejections and two remote-ref-update rejections.
+The candidate used exclusive renames and both directory durability barriers;
+it did not change Resource contracts, authorization or the workload. It did not
+resolve the sustained failure and was removed. All **55** actual Git exchanges
+were logged, and traces for the last **32** were retained. The run ended before
+replacement, without complete visibility or throughput results. Its disposable
+runtime was removed and the original deployment remained unchanged.
 
 Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
 declaration is not a negotiated `have`. A stock-Git control still sent the

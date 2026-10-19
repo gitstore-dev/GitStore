@@ -10,7 +10,7 @@ use std::{
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tonic::{metadata::MetadataMap, Request, Status};
 
@@ -19,187 +19,6 @@ const MAX_REPLAYS: usize = 100_000;
 const REPLAY_CLEANUP_CLOCK_INTERVAL_MS: u64 = 250;
 const VERIFICATION_WAITERS: u32 = 256;
 const VERIFICATION_WAIT_BYTES: u32 = 128 * 1024 * 1024;
-const PREPARED_REPLAY_INODES: usize = 64;
-
-struct ReplayPreparationState {
-    ready: Vec<tempfile::NamedTempFile>,
-    refilling: bool,
-    disabled: bool,
-    retry_after: Instant,
-}
-
-struct ReplayPreparationPool {
-    directory: PathBuf,
-    state: Mutex<ReplayPreparationState>,
-}
-
-impl ReplayPreparationPool {
-    fn open(directory: PathBuf) -> std::io::Result<Arc<Self>> {
-        fs::create_dir_all(&directory)?;
-        if !fs::symlink_metadata(&directory)?.is_dir() {
-            return Err(std::io::Error::other("invalid RPC preparation directory"));
-        }
-        let stale = fs::read_dir(&directory)?
-            .take(PREPARED_REPLAY_INODES + 33)
-            .collect::<std::io::Result<Vec<_>>>()?;
-        if stale.len() > PREPARED_REPLAY_INODES + 32 {
-            return Err(std::io::Error::other("RPC preparation capacity exceeded"));
-        }
-        for entry in &stale {
-            let metadata = fs::symlink_metadata(entry.path())?;
-            if !entry.file_name().to_string_lossy().starts_with("nonce-")
-                || !metadata.is_file()
-                || metadata.len() != 0
-            {
-                return Err(std::io::Error::other("invalid RPC preparation file"));
-            }
-        }
-        for entry in stale {
-            fs::remove_file(entry.path())?;
-        }
-        let ready = Self::prepare(&directory, PREPARED_REPLAY_INODES, File::sync_all)?;
-        File::open(
-            directory
-                .parent()
-                .ok_or_else(|| std::io::Error::other("RPC preparation parent unavailable"))?,
-        )?
-        .sync_all()?;
-        Ok(Arc::new(Self {
-            directory,
-            state: Mutex::new(ReplayPreparationState {
-                ready,
-                refilling: false,
-                disabled: false,
-                retry_after: Instant::now(),
-            }),
-        }))
-    }
-
-    fn prepare(
-        directory: &Path,
-        count: usize,
-        persist: impl Fn(&File) -> std::io::Result<()>,
-    ) -> std::io::Result<Vec<tempfile::NamedTempFile>> {
-        let files = (0..count)
-            .map(|_| {
-                tempfile::Builder::new()
-                    .prefix("nonce-")
-                    .tempfile_in(directory)
-            })
-            .collect::<std::io::Result<Vec<_>>>()?;
-        for file in &files {
-            persist(file.as_file())?;
-        }
-        File::open(directory)?.sync_all()?;
-        Ok(files)
-    }
-
-    fn take(self: &Arc<Self>) -> Result<Option<tempfile::NamedTempFile>, Status> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| Status::unavailable("RPC preparation state unavailable"))?;
-        if state.disabled {
-            return Ok(None);
-        }
-        let file = state.ready.pop();
-        if state.ready.len() <= PREPARED_REPLAY_INODES / 2
-            && !state.refilling
-            && Instant::now() >= state.retry_after
-        {
-            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                let count = PREPARED_REPLAY_INODES - state.ready.len();
-                state.refilling = true;
-                let pool = self.clone();
-                runtime.spawn_blocking(move || {
-                    let started = Instant::now();
-                    let prepared = Self::prepare(&pool.directory, count, File::sync_all);
-                    let mut state = match pool.state.lock() {
-                        Ok(state) => state,
-                        Err(_) => {
-                            tracing::error!("RPC preparation state unavailable");
-                            return;
-                        }
-                    };
-                    let failure = match prepared {
-                        Ok(files) => {
-                            state.ready.extend(files);
-                            None
-                        }
-                        Err(error) => {
-                            state.retry_after = Instant::now() + Duration::from_millis(250);
-                            Some(error)
-                        }
-                    };
-                    drop(state);
-                    if let Some(error) = failure {
-                        tracing::warn!(
-                            error = %error,
-                            "RPC preparation failed; standalone inode durability remains enabled"
-                        );
-                    } else {
-                        tracing::info!(
-                            prepared_inodes = count,
-                            duration_ms = started.elapsed().as_secs_f64() * 1000.0,
-                            "RPC replay preparation timing"
-                        );
-                    }
-                    match pool.state.lock() {
-                        Ok(mut state) => state.refilling = false,
-                        Err(_) => tracing::error!("RPC preparation state unavailable"),
-                    }
-                });
-            }
-        }
-        Ok(file)
-    }
-
-    fn disable(&self) -> Result<(), Status> {
-        self.state
-            .lock()
-            .map_err(|_| Status::unavailable("RPC preparation state unavailable"))?
-            .disabled = true;
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-enum ReplayReservation {
-    Fresh(File),
-    Prepared,
-}
-
-impl ReplayReservation {
-    fn sync_all(&self) -> std::io::Result<()> {
-        match self {
-            Self::Fresh(file) => file.sync_all(),
-            // The immutable empty inode was flushed before its exclusive move.
-            Self::Prepared => Ok(()),
-        }
-    }
-}
-
-fn rename_prepared_inode(from: &Path, to: &Path) -> std::io::Result<()> {
-    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
-    {
-        rustix::fs::renameat_with(
-            rustix::fs::CWD,
-            from,
-            rustix::fs::CWD,
-            to,
-            rustix::fs::RenameFlags::NOREPLACE,
-        )?;
-        Ok(())
-    }
-    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
-    {
-        let _ = (from, to);
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "exclusive RPC preparation rename unsupported",
-        ))
-    }
-}
 
 fn now_millis() -> Result<u64, Status> {
     SystemTime::now()
@@ -290,7 +109,6 @@ pub fn callback_request<T: Message>(
 /// capacity bound: requests fail closed until expired entries can be reclaimed.
 struct ReplayState {
     directory: PathBuf,
-    preparation: Option<Arc<ReplayPreparationPool>>,
     entries: BTreeSet<(u64, String)>,
     nonces: HashSet<String>,
     pending: HashSet<String>,
@@ -384,17 +202,6 @@ impl ReplayState {
             Err(_) => return Err(Status::unavailable("RPC replay clock unavailable")),
         };
         let mut state = Self {
-            preparation: match ReplayPreparationPool::open(directory.with_extension("prepared-v1"))
-            {
-                Ok(pool) => Some(pool),
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        "RPC preparation unavailable; standalone inode durability remains enabled"
-                    );
-                    None
-                }
-            },
             directory,
             entries: BTreeSet::new(),
             nonces: HashSet::new(),
@@ -435,21 +242,7 @@ impl ReplayState {
     }
     #[cfg(test)]
     fn sync_directory(&self) -> Result<(), Status> {
-        Self::sync_record_directories_at(
-            &self.directory,
-            self.preparation
-                .as_ref()
-                .map(|pool| pool.directory.as_path()),
-        )
-    }
-    fn sync_record_directories_at(
-        directory: &Path,
-        preparation: Option<&Path>,
-    ) -> Result<(), Status> {
-        if let Some(source) = preparation {
-            Self::sync_directory_at(source)?;
-        }
-        Self::sync_directory_at(directory)
+        Self::sync_directory_at(&self.directory)
     }
     fn sync_directory_at(directory: &Path) -> Result<(), Status> {
         File::open(directory)
@@ -466,7 +259,7 @@ impl ReplayState {
             .map_err(|_| Status::unavailable("RPC replay clock unavailable"))?;
         Self::sync_directory_at(directory)
     }
-    fn reserve(&mut self, now: u64, expiry: u64, nonce: &str) -> Result<ReplayReservation, Status> {
+    fn reserve(&mut self, now: u64, expiry: u64, nonce: &str) -> Result<File, Status> {
         if now < self.high_water {
             return Err(Status::unavailable("RPC clock moved backwards"));
         }
@@ -477,55 +270,17 @@ impl ReplayState {
             return Err(Status::resource_exhausted("RPC replay capacity exhausted"));
         }
         let path = self.directory.join(format!("{expiry}-{nonce}"));
-        let storage_error = |error: std::io::Error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                Status::unauthenticated("RPC replay rejected")
-            } else {
-                Status::unavailable("RPC replay storage unavailable")
-            }
-        };
-        let prepared = self
-            .preparation
-            .as_ref()
-            .map(|pool| pool.take())
-            .transpose()?
-            .flatten();
-        let file = if let Some(prepared) = prepared {
-            match rename_prepared_inode(prepared.path(), &path) {
-                Ok(()) => {
-                    let (_file, mut source) = prepared.into_parts();
-                    source.disable_cleanup(true);
-                    ReplayReservation::Prepared
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    Status::unauthenticated("RPC replay rejected")
+                } else {
+                    Status::unavailable("RPC replay storage unavailable")
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    return Err(storage_error(error));
-                }
-                Err(error) => {
-                    if let Some(pool) = &self.preparation {
-                        pool.disable()?;
-                    }
-                    tracing::warn!(
-                        error = %error,
-                        "RPC preparation rename unavailable; using standalone inode durability"
-                    );
-                    ReplayReservation::Fresh(
-                        OpenOptions::new()
-                            .write(true)
-                            .create_new(true)
-                            .open(&path)
-                            .map_err(storage_error)?,
-                    )
-                }
-            }
-        } else {
-            ReplayReservation::Fresh(
-                OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)
-                    .map_err(storage_error)?,
-            )
-        };
+            })?;
         self.entries.insert((expiry, nonce.to_owned()));
         self.nonces.insert(nonce.to_owned());
         self.pending.insert(nonce.to_owned());
@@ -835,11 +590,6 @@ impl RPCVerifier {
         }
         let file = replay.reserve(now, expiry, parts[2])?;
         let directory = replay.directory.clone();
-        let prepared_inode = matches!(file, ReplayReservation::Prepared);
-        let preparation_directory = replay
-            .preparation
-            .as_ref()
-            .map(|pool| pool.directory.clone());
         let replay_reserve_ms = reserving.elapsed().as_secs_f64() * 1000.0;
         record_rpc_verification_phase(
             RPCVerificationPhase::ReplayReserve,
@@ -859,12 +609,7 @@ impl RPCVerifier {
             let directory_started = Instant::now();
             let result = self.directory_durability.sync(|| {
                 let started = Instant::now();
-                // A prepared inode was synced before its exclusive rename.
-                // Both directories must cover that move before effects.
-                let result = ReplayState::sync_record_directories_at(
-                    &directory,
-                    preparation_directory.as_deref(),
-                );
+                let result = ReplayState::sync_directory_at(&directory);
                 record_rpc_verification_phase(
                     RPCVerificationPhase::DirectoryBarrier,
                     started.elapsed().as_secs_f64(),
@@ -896,7 +641,6 @@ impl RPCVerifier {
         );
         tracing::info!(
             method,
-            prepared_inode,
             replay_lock_wait_ms,
             envelope_check_ms,
             replay_reserve_ms,
@@ -918,394 +662,6 @@ impl RPCVerifier {
 mod tests {
     use super::*;
     use crate::grpc::server::proto::CreateRepositoryRequest;
-
-    #[cfg(unix)]
-    #[test]
-    fn replay_reservation_publishes_an_independent_prepared_inode() {
-        use std::os::unix::fs::MetadataExt;
-
-        let root = tempfile::tempdir().unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
-        let pool = root.path().join(".rpc-replay-v1.prepared-v1");
-        let prepared: HashSet<_> = fs::read_dir(&pool)
-            .expect("durable empty inodes must be prepared before requests")
-            .map(|entry| {
-                let metadata = entry.unwrap().metadata().unwrap();
-                assert!(metadata.is_file());
-                assert_eq!(metadata.len(), 0);
-                assert_eq!(metadata.nlink(), 1);
-                (metadata.dev(), metadata.ino())
-            })
-            .collect();
-        assert_eq!(prepared.len(), 64);
-        let now = 1_700_000_000_000;
-        let nonce = "a".repeat(32);
-        let method = "/gitstore.git.v1.GitService/CreateRepository";
-        let request = signed_at(
-            CreateRepositoryRequest::default(),
-            "key",
-            "gitstore-git",
-            method,
-            now,
-            &nonce,
-        )
-        .unwrap();
-        verifier
-            .verify_at(request.metadata(), method, request.get_ref(), now)
-            .unwrap();
-        let record = root
-            .path()
-            .join(".rpc-replay-v1")
-            .join(format!("{}-{nonce}", now + 60_000));
-        let metadata = record.metadata().unwrap();
-        assert!(prepared.contains(&(metadata.dev(), metadata.ino())));
-        assert_eq!(metadata.nlink(), 1);
-        assert_eq!(fs::read_dir(pool).unwrap().count(), 63);
-    }
-
-    #[test]
-    fn preparation_failure_does_not_publish_unflushed_inodes() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let root = tempfile::tempdir().unwrap();
-        let persisted = AtomicUsize::new(0);
-        let failure = ReplayPreparationPool::prepare(root.path(), 4, |file| {
-            if persisted.fetch_add(1, Ordering::SeqCst) == 1 {
-                return Err(std::io::Error::other("injected preparation failure"));
-            }
-            file.sync_all()
-        });
-        assert!(failure.is_err());
-        assert_eq!(persisted.load(Ordering::SeqCst), 2);
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn prepared_publication_never_overwrites_an_unindexed_nonce_record() {
-        let root = tempfile::tempdir().unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
-        let now = 1_700_000_000_000;
-        let nonce = "a".repeat(32);
-        let path = root
-            .path()
-            .join(".rpc-replay-v1")
-            .join(format!("{}-{nonce}", now + 60_000));
-        fs::write(&path, b"must not replace").unwrap();
-        let mut replay = verifier.replay.lock().unwrap();
-        assert_eq!(
-            replay
-                .reserve(now, now + 60_000, &nonce)
-                .unwrap_err()
-                .code(),
-            tonic::Code::Unauthenticated
-        );
-        assert_eq!(fs::read(path).unwrap(), b"must not replace");
-        assert!(replay.entries.is_empty());
-        assert!(replay.pending.is_empty());
-    }
-
-    #[test]
-    fn exhausted_preparation_uses_original_inode_durability() {
-        let root = tempfile::tempdir().unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
-        let mut replay = verifier.replay.lock().unwrap();
-        replay
-            .preparation
-            .as_ref()
-            .unwrap()
-            .state
-            .lock()
-            .unwrap()
-            .ready
-            .clear();
-        let nonce = "a".repeat(32);
-        let reservation = replay
-            .reserve(1_700_000_000_000, 1_700_000_060_000, &nonce)
-            .unwrap();
-        assert!(matches!(reservation, ReplayReservation::Fresh(_)));
-        reservation.sync_all().unwrap();
-        replay.sync_directory().unwrap();
-        assert!(replay.pending.remove(&nonce));
-        let directory = replay.directory.clone();
-        drop(replay);
-        drop(verifier);
-        assert!(ReplayState::open(directory)
-            .unwrap()
-            .nonces
-            .contains(&nonce));
-    }
-
-    #[test]
-    fn prepared_records_recover_without_the_preparation_pool() {
-        let root = tempfile::tempdir().unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
-        let now = 1_700_000_000_000;
-        let method = "/gitstore.git.v1.GitService/CreateRepository";
-        let request = signed_at(
-            CreateRepositoryRequest::default(),
-            "key",
-            "gitstore-git",
-            method,
-            now,
-            &"a".repeat(32),
-        )
-        .unwrap();
-        verifier
-            .verify_at(request.metadata(), method, request.get_ref(), now)
-            .unwrap();
-        drop(verifier);
-        let pool = root.path().join(".rpc-replay-v1.prepared-v1");
-        fs::remove_dir(&pool).unwrap();
-        fs::write(pool, b"unavailable preparation directory").unwrap();
-        let replacement = RPCVerifier::new("key", None, root.path()).unwrap();
-        assert!(replacement.replay.lock().unwrap().preparation.is_none());
-        assert_eq!(
-            replacement
-                .verify_at(request.metadata(), method, request.get_ref(), now)
-                .unwrap_err()
-                .code(),
-            tonic::Code::Unauthenticated
-        );
-    }
-
-    #[test]
-    fn stale_preparation_is_bounded_and_does_not_become_nonce_history() {
-        let root = tempfile::tempdir().unwrap();
-        let pool = root.path().join(".rpc-replay-v1.prepared-v1");
-        fs::create_dir(&pool).unwrap();
-        let stale = pool.join("nonce-unfinished");
-        File::create(&stale).unwrap().sync_all().unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
-        assert!(!stale.exists());
-        let replay = verifier.replay.lock().unwrap();
-        assert!(replay.entries.is_empty());
-        assert!(replay.nonces.is_empty());
-        assert_eq!(
-            replay
-                .preparation
-                .as_ref()
-                .unwrap()
-                .state
-                .lock()
-                .unwrap()
-                .ready
-                .len(),
-            PREPARED_REPLAY_INODES
-        );
-        drop(replay);
-        drop(verifier);
-        for i in 0..PREPARED_REPLAY_INODES + 33 {
-            File::create(pool.join(format!("nonce-{i}"))).unwrap();
-        }
-        let replacement = RPCVerifier::new("key", None, root.path()).unwrap();
-        assert!(replacement.replay.lock().unwrap().preparation.is_none());
-        assert_eq!(
-            fs::read_dir(pool).unwrap().count(),
-            PREPARED_REPLAY_INODES + 33
-        );
-    }
-
-    #[test]
-    fn prepared_publication_requires_source_directory_durability() {
-        let root = tempfile::tempdir().unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
-        let mut replay = verifier.replay.lock().unwrap();
-        let nonce = "a".repeat(32);
-        let record = replay
-            .reserve(1_700_000_000_000, 1_700_000_060_000, &nonce)
-            .unwrap();
-        assert!(matches!(record, ReplayReservation::Prepared));
-        record.sync_all().unwrap();
-        let source = replay.preparation.as_ref().unwrap().directory.clone();
-        let backup = root.path().join("temporarily-unavailable-preparation");
-        fs::rename(&source, &backup).unwrap();
-        assert_eq!(
-            replay.sync_directory().unwrap_err().code(),
-            tonic::Code::Unavailable
-        );
-        assert!(replay.pending.contains(&nonce));
-        assert!(replay.nonces.contains(&nonce));
-        fs::rename(backup, source).unwrap();
-        replay.sync_directory().unwrap();
-        assert!(replay.pending.remove(&nonce));
-    }
-
-    #[test]
-    fn preparation_rename_failure_disables_the_pool_and_retains_failed_nonces() {
-        let root = tempfile::tempdir().unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
-        let now = 1_700_000_000_000;
-        let method = "/gitstore.git.v1.GitService/CreateRepository";
-        let source = root.path().join(".rpc-replay-v1.prepared-v1");
-        let backup = root.path().join("unavailable-preparation");
-        fs::rename(&source, &backup).unwrap();
-        let request = signed_at(
-            CreateRepositoryRequest::default(),
-            "key",
-            "gitstore-git",
-            method,
-            now,
-            &"a".repeat(32),
-        )
-        .unwrap();
-        assert_eq!(
-            verifier
-                .verify_at(request.metadata(), method, request.get_ref(), now)
-                .unwrap_err()
-                .code(),
-            tonic::Code::Unavailable,
-        );
-        fs::rename(backup, source).unwrap();
-        {
-            let replay = verifier.replay.lock().unwrap();
-            assert!(replay.pending.is_empty());
-            assert!(
-                replay
-                    .preparation
-                    .as_ref()
-                    .unwrap()
-                    .state
-                    .lock()
-                    .unwrap()
-                    .disabled
-            );
-        }
-        assert_eq!(
-            verifier
-                .verify_at(request.metadata(), method, request.get_ref(), now)
-                .unwrap_err()
-                .code(),
-            tonic::Code::Unauthenticated,
-        );
-        let next = signed_at(
-            CreateRepositoryRequest::default(),
-            "key",
-            "gitstore-git",
-            method,
-            now,
-            &"b".repeat(32),
-        )
-        .unwrap();
-        verifier
-            .verify_at(next.metadata(), method, next.get_ref(), now)
-            .unwrap();
-    }
-
-    #[test]
-    #[ignore = "100,000-record filesystem capacity and restart case; run explicitly"]
-    fn prepared_publication_preserves_the_full_retained_nonce_capacity() {
-        let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join(".rpc-replay-v1");
-        let mut replay = ReplayState::open(directory.clone()).unwrap();
-        for nonce in 0..MAX_REPLAYS {
-            replay
-                .reserve(1, 60_001, &format!("{nonce:032x}"))
-                .unwrap()
-                .sync_all()
-                .unwrap();
-            if replay.pending.len() == 32 || nonce + 1 == MAX_REPLAYS {
-                replay.sync_directory().unwrap();
-                replay.pending.clear();
-            }
-        }
-        assert_eq!(replay.entries.len(), MAX_REPLAYS);
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), MAX_REPLAYS);
-        assert_eq!(
-            replay
-                .reserve(1, 60_001, &"f".repeat(32))
-                .unwrap_err()
-                .code(),
-            tonic::Code::ResourceExhausted,
-        );
-        drop(replay);
-        let mut recovered = ReplayState::open(directory).unwrap();
-        assert_eq!(recovered.entries.len(), MAX_REPLAYS);
-        assert_eq!(recovered.nonces.len(), MAX_REPLAYS);
-        assert!(recovered.pending.is_empty());
-        assert_eq!(
-            recovered
-                .reserve(1, 60_001, &"f".repeat(32))
-                .unwrap_err()
-                .code(),
-            tonic::Code::ResourceExhausted,
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn prepared_refill_stays_bounded_and_replacement_rejects_every_spent_nonce() {
-        let root = tempfile::tempdir().unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
-        let now = now_millis().unwrap();
-        let method = "/gitstore.git.v1.GitService/CreateRepository";
-        let mut tasks = tokio::task::JoinSet::new();
-        for worker in 0..32 {
-            let verifier = verifier.clone();
-            tasks.spawn(async move {
-                for offset in 0..4 {
-                    let nonce = format!("{:032x}", worker * 4 + offset);
-                    let request = signed_at(
-                        CreateRepositoryRequest::default(),
-                        "key",
-                        "gitstore-git",
-                        method,
-                        now,
-                        &nonce,
-                    )
-                    .unwrap();
-                    verifier
-                        .verify(request.metadata(), method, request.get_ref())
-                        .await
-                        .unwrap();
-                    let replay = verifier.replay.lock().unwrap();
-                    let pool = replay.preparation.as_ref().unwrap();
-                    assert!(pool.state.lock().unwrap().ready.len() <= PREPARED_REPLAY_INODES);
-                    assert!(
-                        fs::read_dir(&pool.directory).unwrap().count()
-                            <= PREPARED_REPLAY_INODES + 32
-                    );
-                }
-            });
-        }
-        while let Some(result) = tasks.join_next().await {
-            result.unwrap();
-        }
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                let done = {
-                    let replay = verifier.replay.lock().unwrap();
-                    let state = replay.preparation.as_ref().unwrap().state.lock().unwrap();
-                    !state.refilling && !state.ready.is_empty()
-                };
-                if done {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(verifier.replay.lock().unwrap().entries.len(), 128);
-        drop(verifier);
-        let replacement = RPCVerifier::new("key", None, root.path()).unwrap();
-        for nonce in 0..128 {
-            let request = signed_at(
-                CreateRepositoryRequest::default(),
-                "key",
-                "gitstore-git",
-                method,
-                now,
-                &format!("{nonce:032x}"),
-            )
-            .unwrap();
-            assert_eq!(
-                replacement
-                    .verify_at(request.metadata(), method, request.get_ref(), now)
-                    .unwrap_err()
-                    .code(),
-                tonic::Code::Unauthenticated,
-            );
-        }
-    }
 
     #[test]
     fn clock_checkpoint_does_not_block_peer_durability_or_lower_the_clock_floor() {
