@@ -2767,6 +2767,23 @@ visibility p95 still exceeded 1s; neither short run exercised replacement or
 established sustained provenance success. Any longer direct-route result must
 declare that routing explicitly rather than imply the earlier route passed.
 
+The subsequent full-length, clean-source direct-route attempt passed **19**
+cycles, then failed cycle **20** with seven client-advertised-ref rejections and
+one remote-ref-update rejection. It was canceled before rolling replacement.
+In the failed cycle, native logs show intervening ref publications between fetch
+and push advertisements for all seven client-side rejections; for the remote
+rejection, a publication occurred after the push advertisement and before
+receive-pack started. This is consistent with genuine concurrent branch
+advancement in the actual workload, not just the standalone rebase probe.
+It does not establish the latency regression's root cause or exonerate earlier
+changes. **Direct routing did not resolve the sustained gate.**
+
+Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
+declaration is not a negotiated `have`. A stock-Git control still sent the
+complete tree and blob for a depth-limited request without any `have` lines;
+omitting that snapshot merely because its boundary was declared is not a
+validated optimization.
+
 Full production acceptance and per-operation sustainable ceilings remain
 unestablished. Fixed offered rates, short diagnostics and evaluator-only
 decisions must not be advertised as those ceilings.

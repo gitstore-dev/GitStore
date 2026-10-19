@@ -2889,6 +2889,61 @@ mod tests {
     }
 
     #[test]
+    fn shallow_boundary_without_have_still_sends_the_complete_snapshot() {
+        let (_dir, repo) = make_test_repo();
+        let parent = make_commit(&repo, "known shallow snapshot", None);
+        let tree = repo
+            .find_commit(parent)
+            .unwrap()
+            .tree_id()
+            .unwrap()
+            .detach();
+        let sig = gix::actor::SignatureRef {
+            name: "Test".into(),
+            email: "test@example.com".into(),
+            time: "1 +0000",
+        };
+        let tip = repo
+            .commit_as(sig, sig, "refs/heads/main", "same tree", tree, [parent])
+            .unwrap()
+            .detach();
+        for depth in [1, 2] {
+            let want = format!("want {tip} side-band-64k shallow\n");
+            let shallow = format!("shallow {parent}\n");
+            let deepen = format!("deepen {depth}\n");
+            let mut request = pkt_lines(&[want.as_bytes(), shallow.as_bytes(), deepen.as_bytes()]);
+            flush(&mut request);
+            request.extend_from_slice(&pkt_lines(&[b"done\n"]));
+            let server = HttpPackServer::new(repo.path().to_path_buf(), 64 * 1024 * 1024);
+            let response = server.handle_upload_pack(&request).unwrap();
+            let mut pack = Vec::new();
+            let mut position = 0;
+            while position < response.len() {
+                let length = usize::from_str_radix(
+                    std::str::from_utf8(&response[position..position + 4]).unwrap(),
+                    16,
+                )
+                .unwrap();
+                if length == 0 {
+                    position += 4;
+                    continue;
+                }
+                let payload = &response[position + 4..position + length];
+                if payload.first() == Some(&1) {
+                    pack.extend_from_slice(&payload[1..]);
+                }
+                position += length;
+            }
+            assert!(pack.starts_with(b"PACK"));
+            assert_eq!(
+                u32::from_be_bytes(pack[8..12].try_into().unwrap()),
+                depth + 2,
+                "a shallow declaration is not a negotiated have; include the tree and blob"
+            );
+        }
+    }
+
+    #[test]
     fn incremental_pack_does_not_resend_unchanged_snapshot() {
         let (_dir, repo) = make_test_repo();
         let parent = make_commit(&repo, "known snapshot", None);
