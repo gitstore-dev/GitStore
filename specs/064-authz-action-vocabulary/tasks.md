@@ -17,9 +17,10 @@ this session. T078 must retain the missing evidence and must not close the spec
 as fully accepted before the deferred gates pass. Existing thresholds are unchanged.
 
 **Evidence reconciliation (2026-10-19):** T069 and T070 passed their individual
-alpha scopes on 2026-10-18; the run identities, limits and reverified evidence
-hashes are recorded in quickstart.md. This does not complete the other deferred
-tasks or establish lifecycle/production acceptance. T065 remains unchecked:
+alpha scopes on 2026-10-18; T062's standalone deployed credential suite passed
+on 2026-10-19. The run identities, limits and reverified evidence hashes are
+recorded in quickstart.md. This does not complete the other deferred tasks or
+establish lifecycle/production acceptance. T065 remains unchecked:
 the implemented zero-I/O proof is a failing transitive call-graph audit, not the
 requested runtime spies.
 
@@ -149,7 +150,7 @@ Treat protobuf regeneration and its consumers as one compile-safe slice. Do not 
 - [X] T059 [US4] Extend existing runRBAC in `gitstore-api/cmd/gitctl/main.go`, `Makefile` and `scripts/run-make-workflow.sh` with SCOPE=cluster default or namespace, SUBJECT_KIND=User default and ROLE_KIND=ClusterRole default; require explicit namespace only for namespace bindings, reject DENY including Make variable usage, and route make check TARGET=config through the same strict parser.
 - [X] T060 [US4] Rewrite `config/policy.yaml` and `gitstore-api/policy.yaml.example` to v1beta1 with cluster-admin, admin/edit/view, namespace-owner, namespace-creator, controller, a separate instance-restricted controller-token role, system:api-internal and conditional public-reader; use exact registered pairs, preserve the baseline matrix, give admin only a cluster-admin binding and no default masters membership.
 - [X] T061 [US4] Replace namespaced SA/legacy policy wiring in `config/config.toml`, `compose.yml`, `compose.capacity.yml`, `gitstore-api/cmd/gitctl/enroll_serviceaccount.go` and `scripts/repository-capacity-stack.sh`, updating other existing config/Compose fixtures found by the inventory without adding overlays; retain secret-reference/UID enrollment and no compatibility settings.
-- [ ] T062 [US4] Update name-only enrollment and least-privilege expectations in `tests/integration/secret_bootstrap_test.go`, `tests/integration/secret_capacity_contract_test.go` and `scripts/check-enroll-serviceaccount-output.sh`; verify bootstrap, key overlap/retirement and no-secret output against fresh owned fixtures without weakening spec 063 protections.
+- [X] T062 [US4] Update name-only enrollment and least-privilege expectations in `tests/integration/secret_bootstrap_test.go`, `tests/integration/secret_capacity_contract_test.go` and `scripts/check-enroll-serviceaccount-output.sh`; verify bootstrap, key overlap/retirement and no-secret output against fresh owned fixtures without weakening spec 063 protections.
 - [X] T063 [US4] Run the empty-policy CLI workflow and idempotence/invalid-write scenarios in `gitstore-api/cmd/gitctl/main_test.go` and `gitstore-api/internal/auth/provider/rbaclocal/policyfile_test.go`, then validate `config/policy.yaml` through make check TARGET=config; record commands/results in `specs/064-authz-action-vocabulary/quickstart.md`.
 - [X] T064 [US4] Exercise the shipped-policy admin/controller/internal/anonymous baseline and explicitly new self-service cases in `tests/integration/authz_repository_contract_test.go`, `serviceaccount_auth_test.go` and `namespace_contract_test.go`; assert no unintended allow/deny, controller purge coverage and forbidden namespace leakage, retaining negative legacy fixtures separately from shipped examples.
 

@@ -12,13 +12,14 @@ including unfinished harness instrumentation, sustained load, reload/heap soak,
 and deployed multi-replica replacement/fault evidence. The evaluator-only
 benchmark/soak (T069) and per-replica readiness/baseline authorization (T070)
 passed on 2026-10-18. T065–T068, T071–T073 and deployment portions of
-T021/T045/T054/T062 remain unchecked. These two narrow alpha passes do not
+T021/T045/T054 remain unchecked. T062's standalone deployed credential suite
+passed on 2026-10-19. These narrow alpha and functional passes do not
 establish overall alpha or production capacity acceptance; `rbac-local` remains
 development/evaluation-only. Do not close the overall specification until the
 remaining required evidence exists.
 
 The original handoff's stopped capacity-container collision is historical.
-The two passing runs below used isolated fixtures; their evidence records the
+The passing runs below used isolated fixtures; their evidence records the
 retained diagnostic runtime unchanged. Isolation and ownership checks remain
 required before cleanup or chaos. No compatibility reader or old-fleet rollout
 is required.
@@ -63,7 +64,23 @@ allow/anonymous-deny results. Readiness p95/p99 was 1.045/1.556ms on API A and
 and binds 14 evidence artifacts. The offered 10/s is not a measured sustainable
 service throughput ceiling.
 
-Current task ledger: **70/82 complete, 12 unchecked**. Neither proof establishes
+T062's fresh owned two-API/Scylla credential suite ran on
+`3cd4e03700aa97eaa306de2b8b4dff68d622f016`: bootstrap, isolated provider
+outage, mismatched-key denial, key overlap/retirement, controller process
+replacement and cross-replica ServiceAccount lifecycle tests passed. The
+bootstrap test scans both APIs' and controllers' metrics plus controller logs
+for PEM/JWT/credential markers. The additional reincarnation check denied
+still-unexpired old access tokens after same-name/same-key recreation on both
+unchanged target APIs. Its sealed proof
+`secret-replica-20261019c-sealed-proof.json` has SHA-256
+`b33a89d2adc1417ac00542b12e5dc364f8c81c07109a376e21417eec0d48db68`;
+all 28 referenced artifact hashes were reverified. The suite is standalone
+functional evidence, not a sustained-load fault or rolling-upgrade pass.
+`make check TARGET=credentials` and the owned-fixture/signing-record,
+artifact-scan/manifest and strict production-evidence contract tests passed
+again on 2026-10-19, including name-only subjects and sanitized failure output.
+
+Current task ledger: **71/82 complete, 11 unchecked**. These results do not establish
 the remaining boundary matrix, sustained Git/lifecycle success, rolling
 replacement/fault acceptance or acknowledged five-million-Product production
 gate. In particular, the later full Namespace runs failed provenance contention
