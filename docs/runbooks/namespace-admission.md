@@ -2884,6 +2884,26 @@ reported no quota throttling across 85 samples. This short, telemetry-enabled
 diagnostic did not reproduce the late eight-attempt exhaustion, exercise
 replacement, identify the regression's cause or establish a fix.
 
+A longer trace-enabled reproduction preserved the full schedule and retry
+limits. Sixteen metadata cycles succeeded; cycle **17** exhausted all eight
+attempts with **client-advertised-ref** rejections. The last 32 of 53 logged Git
+exchanges were captured with no missing traces, including all 15 exchanges in
+the failed cycle. Every refresh requested exactly its advertised OID, but the
+following push advertised a different head. Native publication logs establish
+that these heads were strict descendants, with **10/7/11/9/3/1/1** intervening
+commits across the seven refreshes. All eight rejected pushes submitted zero
+ref commands; this exhausted cycle did not reach native ref-update validation.
+
+Those seven complete fetch commands took **43.38-269.07ms**, while their
+pack-generation worker spans took **2.10-26.49ms**. One native advertisement RPC
+took 96.23ms, including 80.97ms reported as span idle time; that is not a CPU or
+lock-wait measurement. These observations locate delays and actual advancement
+but do not identify the introduced regression or constitute a matched comparison
+with a published deployment. The fatal assertion canceled the run before
+replacement, so there is no complete throughput, visibility or drain result.
+The disposable deployment was removed and the original deployment remained
+unchanged. **The sustained gate remains failed; no fix is claimed.**
+
 Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
 declaration is not a negotiated `have`. A stock-Git control still sent the
 complete tree and blob for a depth-limited request without any `have` lines;
