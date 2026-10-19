@@ -185,24 +185,25 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	}
 
 	var authorization repositoryCapacityAuthorizationEvidence
+	var persistAuthorization func()
 	if cfg.mode != capacityModeDiagnostic {
 		authorization = repositoryCapacityAuthorizationEvidence{
-			SchemaVersion: 1, Component: "repository-lifecycle-authorization", RunID: os.Getenv("CAPACITY_RUN_ID"), Mode: cfg.mode,
+			SchemaVersion: 2, Component: "repository-lifecycle-authorization", RunID: os.Getenv("CAPACITY_RUN_ID"), Mode: cfg.mode,
 		}
 		directory := os.Getenv("CAPACITY_EVIDENCE_DIR")
 		require.NotEmpty(t, directory, "authorization acceptance requires a dispatcher evidence directory")
-		persist := func() {
+		persistAuthorization = func() {
 			if t.Failed() {
 				authorization.Passed = false
 			}
 			require.NoError(t, writeSecretCapacityPrivateJSON(filepath.Join(directory, "authorization-probes.json"), authorization))
 		}
-		persist()
-		t.Cleanup(persist)
+		persistAuthorization()
+		t.Cleanup(persistAuthorization)
 		var err error
 		authorization.Before, err = repositoryCapacityAuthorizationProbes(t.Context(), client, []string{cfg.apiA, cfg.apiB}, cfg.token)
 		require.NoError(t, err, "both replicas must pass exact authorization probes before lifecycle work")
-		persist()
+		persistAuthorization()
 	}
 
 	var dataset secretCapacityDatasetObservations
@@ -307,11 +308,19 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		go func() { replacementDone <- runRepositoryCapacityReplacement(t.Context(), cfg, client, soakStarted) }()
 	}
 	var load repositoryCapacityLoadResult
-	runCapacityMetadataUnderLoad(t, cfg.duration, func(loadTest *testing.T, progress *atomic.Int64) {
+	loadStart, loadEnd := runCapacityMetadataUnderLoad(t, cfg.duration, func(loadTest *testing.T, progress *atomic.Int64) {
 		loadCfg := cfg
 		loadCfg.acknowledgements = progress
 		load = runRepositoryCapacityLoad(loadTest, client, loadCfg, poolPrefix, livePrefix, maxTransitions)
 	}, func(probeTest *testing.T, progress *atomic.Int64) {
+		authorizationStarted, authorizationBefore := time.Now(), progress.Load()
+		var unavailable uint64
+		if cfg.mode != capacityModeDiagnostic {
+			var err error
+			unavailable, err = repositoryCapacityAuthorizationUnderLoad(probeTest.Context(), client,
+				[]string{cfg.apiA, cfg.apiB}, cfg.token, authorization.Before)
+			require.NoError(probeTest, err, "under-load decisions must match the baseline on both replicas")
+		}
 		probeCfg := runRepositoryWatchMetadataGenerationAndSelectorReplay(probeTest, cfg)
 		probeCfg.acknowledgements = progress
 		started, before := time.Now(), progress.Load()
@@ -327,7 +336,16 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		require.True(probeTest, probeTest.Run("namespace_deletion", func(t *testing.T) {
 			assertNamespaceCapacityDeletionLifecycle(t, client, probeCfg)
 		}))
+		if cfg.mode != capacityModeDiagnostic {
+			require.NoError(probeTest, authorization.UnderLoad.record(authorizationStarted, time.Now(),
+				authorizationBefore, progress.Load(), unavailable))
+			persistAuthorization()
+		}
 	})
+	if cfg.mode != capacityModeDiagnostic {
+		require.NoError(t, authorization.UnderLoad.bindWindow(loadStart, loadEnd))
+		persistAuthorization()
+	}
 	if fileLoad != nil {
 		result := <-fileLoad
 		assertSecretCapacityFileLoad(t, cfg.mode, result)
@@ -520,12 +538,63 @@ type repositoryCapacityAuthorizationEvidence struct {
 	Passed        bool                                     `json:"passed"`
 	Before        []repositoryCapacityAuthorizationReplica `json:"before"`
 	After         []repositoryCapacityAuthorizationReplica `json:"after"`
+	UnderLoad     repositoryCapacityAuthorizationLoad      `json:"underLoad"`
+}
+
+type repositoryCapacityAuthorizationLoad struct {
+	Cycles                     int64    `json:"cycles"`
+	Allowed                    [2]int64 `json:"allowed"`
+	Denied                     [2]int64 `json:"denied"`
+	FirstStartedMS             int64    `json:"firstStartedMS"`
+	LastCompletedMS            int64    `json:"lastCompletedMS"`
+	LoadStartMS                int64    `json:"loadStartMS"`
+	LoadEndMS                  int64    `json:"loadEndMS"`
+	AcknowledgedBefore         int64    `json:"acknowledgedBefore"`
+	AcknowledgedAfter          int64    `json:"acknowledgedAfter"`
+	MinimumAcknowledgedAdvance int64    `json:"minimumAcknowledgedAdvance"`
+	UnavailableAttempts        uint64   `json:"unavailableAttempts"`
+}
+
+func (s *repositoryCapacityAuthorizationLoad) record(started, completed time.Time, before, after int64, unavailable uint64) error {
+	const maxSafeInteger = 1<<53 - 1
+	first, last := started.UnixMilli(), completed.UnixMilli()
+	if first <= 0 || last <= first || last > maxSafeInteger ||
+		before <= 0 || after <= before || after > maxSafeInteger ||
+		s.Cycles < 0 || s.Cycles >= maxSafeInteger || s.UnavailableAttempts > maxSafeInteger ||
+		unavailable > maxSafeInteger-s.UnavailableAttempts ||
+		(s.Cycles > 0 && (first < s.LastCompletedMS || before < s.AcknowledgedAfter)) {
+		return errors.New("under-load authorization requires ordered acknowledged cycles and bounded timestamps/counts")
+	}
+	if s.Cycles == 0 {
+		s.FirstStartedMS, s.AcknowledgedBefore = first, before
+		s.MinimumAcknowledgedAdvance = after - before
+	} else if after-before < s.MinimumAcknowledgedAdvance {
+		s.MinimumAcknowledgedAdvance = after - before
+	}
+	s.Cycles++
+	s.Allowed, s.Denied = [2]int64{s.Cycles, s.Cycles}, [2]int64{s.Cycles, s.Cycles}
+	s.LastCompletedMS, s.AcknowledgedAfter = last, after
+	s.UnavailableAttempts += unavailable
+	return nil
+}
+
+func (s *repositoryCapacityAuthorizationLoad) bindWindow(start, end time.Time) error {
+	const maxSafeInteger = 1<<53 - 1
+	first, last := start.UnixMilli(), end.UnixMilli()
+	if s.Cycles <= 0 || first <= 0 || last <= first || last > maxSafeInteger ||
+		s.FirstStartedMS < first || s.LastCompletedMS >= last {
+		return errors.New("authorization cycles must finish inside the actual sustained scheduling window, never drain")
+	}
+	s.LoadStartMS, s.LoadEndMS = first, last
+	return nil
 }
 
 func (s repositoryCapacityAuthorizationSnapshot) equal(other repositoryCapacityAuthorizationSnapshot) bool {
 	return slices.Equal(s.Authn, other.Authn) && s.Authz == other.Authz &&
 		s.Userdir == other.Userdir && s.CatalogDigest == other.CatalogDigest && s.Policy == other.Policy
 }
+
+var repositoryCapacityAuthorizationUnavailable = errors.New("capacity authorization endpoint unavailable (details redacted)")
 
 func repositoryCapacityAuthorizationProbes(ctx context.Context, client *http.Client, endpoints []string, token string) ([]repositoryCapacityAuthorizationReplica, error) {
 	invalid := errors.New("capacity authorization probes failed exact response, snapshot or replica checks (details redacted)")
@@ -556,11 +625,26 @@ func repositoryCapacityAuthorizationProbes(ctx context.Context, client *http.Cli
 			if ctx.Err() != nil {
 				return 0, fmt.Errorf("capacity authorization probe canceled: %w", ctx.Err())
 			}
-			return 0, invalid
+			return 0, repositoryCapacityAuthorizationUnavailable
 		}
 		defer response.Body.Close()
 		data, err := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
-		if err != nil || len(data) > 64<<10 || json.Unmarshal(data, destination) != nil {
+		if err != nil || len(data) > 64<<10 {
+			return 0, invalid
+		}
+		if response.StatusCode == http.StatusBadGateway || response.StatusCode == http.StatusServiceUnavailable ||
+			response.StatusCode == http.StatusGatewayTimeout {
+			var envelope map[string]json.RawMessage
+			if path != "/graphql" || json.Unmarshal(data, &envelope) != nil {
+				return response.StatusCode, repositoryCapacityAuthorizationUnavailable
+			}
+			_, hasData := envelope["data"]
+			_, hasErrors := envelope["errors"]
+			if !hasData && !hasErrors {
+				return response.StatusCode, repositoryCapacityAuthorizationUnavailable
+			}
+		}
+		if json.Unmarshal(data, destination) != nil {
 			return 0, invalid
 		}
 		return response.StatusCode, nil
@@ -660,8 +744,55 @@ func repositoryCapacityAuthorizationProbes(ctx context.Context, client *http.Cli
 	return replicas, nil
 }
 
+func repositoryCapacityAuthorizationUnderLoad(ctx context.Context, client *http.Client, endpoints []string, token string, expected []repositoryCapacityAuthorizationReplica) (uint64, error) {
+	invalid := errors.New("under-load authorization outcomes, endpoints or snapshots differ from the baseline (details redacted)")
+	if len(expected) != 2 || len(endpoints) != 2 {
+		return 0, invalid
+	}
+	for i := range expected {
+		if expected[i].Endpoint != endpoints[i] || !expected[i].Allowed || !expected[i].Denied {
+			return 0, invalid
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var unavailable uint64
+	delay := 250 * time.Millisecond
+	for {
+		replicas, err := repositoryCapacityAuthorizationProbes(ctx, client, endpoints, token)
+		if err == nil {
+			if len(replicas) != len(expected) {
+				return unavailable, invalid
+			}
+			for i := range replicas {
+				if replicas[i].Endpoint != expected[i].Endpoint || !replicas[i].Auth.equal(expected[i].Auth) ||
+					replicas[i].DenialCode != expected[i].DenialCode || !replicas[i].Allowed || !replicas[i].Denied {
+					return unavailable, invalid
+				}
+			}
+			return unavailable, nil
+		}
+		if !errors.Is(err, repositoryCapacityAuthorizationUnavailable) {
+			return unavailable, err
+		}
+		unavailable++
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return unavailable, fmt.Errorf("under-load authorization availability recovery expired: %w", ctx.Err())
+		case <-timer.C:
+		}
+		if delay < 2*time.Second {
+			delay *= 2
+		}
+	}
+}
+
 func TestSecretCapacityRepositoryAuthorizationProbes(t *testing.T) {
 	for _, mutation := range []string{"", "alternate-provider", "no-anonymous", "wrong-denial", "partial-data", "multiple-errors", "empty-allow",
+		"during-load", "during-recovery", "during-graphql-recovery", "during-persistent",
+		"during-policy-change", "during-wrong-denial", "during-http-denial", "during-partial-data",
 		"missing-snapshot", "missing-counts", "null-counts", "different-policy", "different-provider", "http-failure", "oversized"} {
 		t.Run(mutation, func(t *testing.T) {
 			auth := repositoryCapacityAuthorizationSnapshot{
@@ -683,7 +814,16 @@ func TestSecretCapacityRepositoryAuthorizationProbes(t *testing.T) {
 					calls[replica].Add(1)
 					switch r.URL.Path {
 					case "/ready":
+						if replica == 1 && (mutation == "during-persistent" ||
+							(mutation == "during-recovery" && calls[replica].Load() == 1)) {
+							w.WriteHeader(http.StatusServiceUnavailable)
+							_, _ = io.WriteString(w, "private-gateway-marker")
+							return
+						}
 						snapshot := auth
+						if mutation == "during-policy-change" {
+							snapshot.Policy.Digest = strings.Repeat("c", 64)
+						}
 						if replica == 1 && mutation == "different-policy" {
 							snapshot.Policy.Digest = strings.Repeat("c", 64)
 						}
@@ -704,7 +844,13 @@ func TestSecretCapacityRepositoryAuthorizationProbes(t *testing.T) {
 							require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"auth": snapshot}))
 						}
 					case "/graphql":
-						if mutation == "http-failure" {
+						if mutation == "during-http-denial" {
+							w.WriteHeader(http.StatusServiceUnavailable)
+							_, _ = io.WriteString(w, `{"errors":[{"extensions":{"code":"FORBIDDEN"}}]}`)
+						} else if replica == 1 && mutation == "during-graphql-recovery" && calls[replica].Load() == 2 {
+							w.WriteHeader(http.StatusBadGateway)
+							_, _ = io.WriteString(w, `{"message":"private-gateway-marker"}`)
+						} else if mutation == "http-failure" {
 							w.WriteHeader(http.StatusForbidden)
 							_, _ = io.WriteString(w, "private-response-marker")
 						} else if mutation == "oversized" {
@@ -719,9 +865,9 @@ func TestSecretCapacityRepositoryAuthorizationProbes(t *testing.T) {
 							require.Empty(t, r.Header.Get("Authorization"), "anonymous probes must not forward the allowed credential")
 							body := `{"data":null,"errors":[{"message":"private-response-marker","extensions":{"code":"FORBIDDEN"}}]}`
 							switch mutation {
-							case "wrong-denial":
+							case "wrong-denial", "during-wrong-denial":
 								body = strings.ReplaceAll(body, "FORBIDDEN", "NOT_FOUND")
-							case "partial-data":
+							case "partial-data", "during-partial-data":
 								body = strings.Replace(body, `"data":null`, `"data":{"namespaces":{"edges":[]}}`, 1)
 							case "multiple-errors":
 								body = `{"errors":[{"extensions":{"code":"FORBIDDEN"}},{"extensions":{"code":"FORBIDDEN"}}]}`
@@ -738,6 +884,34 @@ func TestSecretCapacityRepositoryAuthorizationProbes(t *testing.T) {
 				}))
 				t.Cleanup(server.Close)
 				servers = append(servers, server)
+			}
+			if strings.HasPrefix(mutation, "during-") {
+				expected := make([]repositoryCapacityAuthorizationReplica, 2)
+				for i := range expected {
+					expected[i] = repositoryCapacityAuthorizationReplica{
+						Endpoint: servers[i].URL, Auth: auth, Allowed: true, Denied: true, DenialCode: "FORBIDDEN",
+					}
+				}
+				ctx := t.Context()
+				if mutation == "during-persistent" {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, 75*time.Millisecond)
+					defer cancel()
+				}
+				retries, err := repositoryCapacityAuthorizationUnderLoad(ctx, http.DefaultClient,
+					[]string{servers[0].URL, servers[1].URL}, "private-token-marker", expected)
+				if mutation == "during-persistent" {
+					require.ErrorIs(t, err, context.DeadlineExceeded)
+					require.Positive(t, retries)
+				} else if mutation == "during-load" || mutation == "during-recovery" || mutation == "during-graphql-recovery" {
+					require.NoError(t, err)
+					require.Equal(t, mutation != "during-load", retries > 0)
+				} else {
+					require.Error(t, err)
+					require.NotContains(t, err.Error(), "private-")
+					require.Zero(t, retries, "unexpected decisions/snapshots must never be retried")
+				}
+				return
 			}
 			result, err := repositoryCapacityAuthorizationProbes(t.Context(), http.DefaultClient,
 				[]string{servers[0].URL, servers[1].URL}, "private-token-marker")
@@ -791,6 +965,66 @@ func TestSecretCapacityRepositoryAuthorizationProbeBounds(t *testing.T) {
 	cancel()
 	_, err = repositoryCapacityAuthorizationProbes(ctx, http.DefaultClient, []string{source.URL, sink.URL}, "private-token-marker")
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestSecretCapacityRepositoryAuthorizationLoadEvidence(t *testing.T) {
+	start := time.Unix(1700000000, 0)
+	var proof repositoryCapacityAuthorizationLoad
+	for i := range 10000 {
+		begin := start.Add(time.Duration(i) * 3 * time.Millisecond)
+		require.NoError(t, proof.record(begin, begin.Add(time.Millisecond), int64(i+1), int64(i+2), 1))
+	}
+	require.NoError(t, proof.bindWindow(start, start.Add(time.Minute)))
+	require.EqualValues(t, 10000, proof.Cycles)
+	require.Equal(t, [2]int64{10000, 10000}, proof.Allowed)
+	require.Equal(t, proof.Allowed, proof.Denied)
+	require.EqualValues(t, 10000, proof.UnavailableAttempts)
+	require.EqualValues(t, 1, proof.MinimumAcknowledgedAdvance)
+	data, err := json.Marshal(proof)
+	require.NoError(t, err)
+	require.Less(t, len(data), 1024, "evidence must use constant space regardless of cycle count")
+	before := proof
+	for _, tc := range []struct {
+		name             string
+		begin, end       time.Time
+		ackBefore, after int64
+		unavailable      uint64
+	}{
+		{"zero-clock", time.Unix(0, 0), time.Unix(0, 1), 10001, 10002, 0},
+		{"clock-order", start, start.Add(-time.Second), 10001, 10002, 0},
+		{"sub-millisecond", start, start.Add(time.Nanosecond), 10001, 10002, 0},
+		{"out-of-order-cycle", start, start.Add(time.Second), 10001, 10002, 0},
+		{"no-baseline-ack", start.Add(time.Minute), start.Add(2 * time.Minute), 0, 1, 0},
+		{"no-progress", start.Add(time.Minute), start.Add(2 * time.Minute), 10001, 10001, 0},
+		{"regressed-ack", start.Add(time.Minute), start.Add(2 * time.Minute), 10000, 10002, 0},
+		{"unsafe-ack", start.Add(time.Minute), start.Add(2 * time.Minute), 10001, 1 << 53, 0},
+		{"unsafe-attempts", start.Add(time.Minute), start.Add(2 * time.Minute), 10001, 10002, 1 << 53},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, proof.record(tc.begin, tc.end, tc.ackBefore, tc.after, tc.unavailable))
+			require.Equal(t, before, proof, "failed samples must not mutate passing counters")
+		})
+	}
+	for _, window := range [][2]time.Time{
+		{start.Add(time.Millisecond), start.Add(time.Minute)},
+		{start, time.UnixMilli(proof.LastCompletedMS)},
+		{start, start},
+	} {
+		require.Error(t, proof.bindWindow(window[0], window[1]))
+		require.Equal(t, before, proof)
+	}
+	var empty repositoryCapacityAuthorizationLoad
+	require.Error(t, empty.bindWindow(start, start.Add(time.Minute)))
+	saturated := proof
+	saturated.Cycles = 1<<53 - 1
+	require.Error(t, saturated.record(start.Add(time.Minute), start.Add(2*time.Minute), 10001, 10002, 0))
+	for _, malformed := range []repositoryCapacityAuthorizationLoad{
+		{Cycles: -1}, {UnavailableAttempts: 1 << 53},
+	} {
+		original := malformed
+		require.Error(t, malformed.record(start, start.Add(time.Second), 1, 2, 0))
+		require.Equal(t, original, malformed)
+	}
 }
 
 func validateRepositoryCapacityWorkload(workload string, mode capacityMode, secretScenario bool) error {

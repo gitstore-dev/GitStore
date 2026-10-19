@@ -1043,8 +1043,9 @@ func TestCapacityMetadataNextCycleReservesObservedProbeDuration(t *testing.T) {
 	}
 }
 
-func runCapacityMetadataUnderLoad(t *testing.T, duration time.Duration, load func(*testing.T, *atomic.Int64), probe func(*testing.T, *atomic.Int64)) {
+func runCapacityMetadataUnderLoad(t *testing.T, duration time.Duration, load func(*testing.T, *atomic.Int64), probe func(*testing.T, *atomic.Int64)) (time.Time, time.Time) {
 	t.Helper()
+	var windowStart, windowEnd time.Time
 	var progress atomic.Int64
 	window := make(chan time.Time, 1)
 	done := make(chan struct{})
@@ -1062,6 +1063,7 @@ func runCapacityMetadataUnderLoad(t *testing.T, duration time.Duration, load fun
 		t.Run("metadata", func(t *testing.T) {
 			start := <-window
 			end := start.Add(duration)
+			windowStart, windowEnd = start, end
 			for progress.Load() == 0 {
 				select {
 				case <-done:
@@ -1094,13 +1096,14 @@ func runCapacityMetadataUnderLoad(t *testing.T, duration time.Duration, load fun
 			}
 		})
 	})
+	return windowStart, windowEnd
 }
 
 func TestCapacityMetadataUnderLoadJoinsOwnedLoad(t *testing.T) {
 	var joined atomic.Bool
 	var cycles atomic.Int64
 	duration := 200 * time.Millisecond
-	runCapacityMetadataUnderLoad(t, duration, func(t *testing.T, progress *atomic.Int64) {
+	windowStart, windowEnd := runCapacityMetadataUnderLoad(t, duration, func(t *testing.T, progress *atomic.Int64) {
 		deadline := time.NewTimer(duration)
 		defer deadline.Stop()
 		ticker := time.NewTicker(5 * time.Millisecond)
@@ -1122,6 +1125,9 @@ func TestCapacityMetadataUnderLoadJoinsOwnedLoad(t *testing.T) {
 	})
 	require.True(t, joined.Load(), "orchestrator must join the owned load test")
 	require.EqualValues(t, 1, cycles.Load())
+	require.False(t, windowStart.IsZero())
+	require.Equal(t, duration, windowEnd.Sub(windowStart))
+	require.False(t, windowEnd.After(time.Now()), "returned bounds describe the joined scheduling window, not drain")
 }
 
 func TestCapacityMetadataOverlapRequiresActiveAcknowledgedLoad(t *testing.T) {

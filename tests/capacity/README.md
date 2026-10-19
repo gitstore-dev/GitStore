@@ -15,12 +15,21 @@ two-replica soak. `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
 The dispatcher is the only public capacity entry point.
 
 Repository lifecycle alpha/production now also emits bounded
-`authorization-probes.json`: exact authenticated Namespace-list allow and
-unauthenticated deny checks on both APIs before work and after the completed
+`authorization-probes.json` schema version 2: exact authenticated Namespace-list
+allow and unauthenticated deny checks on both APIs before work, at the start of
+each existing under-load metadata cycle, and after the completed
 load/recovery/replacement path, with matching unchanged provider/policy/catalog
-snapshots. The artifact starts incomplete and the postflight verifier requires
+snapshots. A constant-space summary retains successful per-replica cycle counts,
+cycle time bounds, the actual scheduling window and minimum/overall ACK
+advancement over the complete metadata cycles containing the checks, not over
+each individual HTTP exchange. Idle/drain cycles and older before/after-only
+proofs are rejected. Endpoint availability recovery during load is bounded to
+30 seconds with backoff and separately counted unavailable attempts; unexpected
+decisions, partial data and snapshot changes are never retried. Before/after
+probes remain one-shot.
+The artifact starts incomplete and the postflight verifier requires
 a passing run-bound result tied to the distinct preflight API endpoints.
-Expected denials do not count as unexpected HTTP/domain failures. These checks
+Expected denials do not count as unexpected HTTP/domain failures. These sampled checks
 do not replace the under-load permission/fault matrix or any existing workload,
 latency, retry, replacement or resource gate; diagnostics retain their existing
 behavior.

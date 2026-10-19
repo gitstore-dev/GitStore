@@ -240,9 +240,23 @@ if [[ "${target}/${profile}" == repository/lifecycle && "${phase}" == postflight
         (.endpoint | type == "string" and test("^https?://[^@\\s,?#]+$")) and
         (.auth | snapshot) and .allowed == true and .denied == true and
         .denialCode == (if (.auth.authn | index("anonymous")) != null then "FORBIDDEN" else "UNAUTHENTICATED" end));
-    keys == ["after","before","component","mode","passed","runID","schemaVersion"] and
-    .schemaVersion == 1 and .component == "repository-lifecycle-authorization" and
+    def bounded_count:
+      type == "number" and isfinite and . == floor and . >= 0 and . <= 9007199254740991;
+    def under_load:
+      keys == ["acknowledgedAfter","acknowledgedBefore","allowed","cycles","denied","firstStartedMS",
+        "lastCompletedMS","loadEndMS","loadStartMS","minimumAcknowledgedAdvance","unavailableAttempts"] and
+      all([.cycles,.firstStartedMS,.lastCompletedMS,.loadStartMS,.loadEndMS,
+        .acknowledgedBefore,.acknowledgedAfter,.minimumAcknowledgedAdvance,.unavailableAttempts][]; bounded_count) and
+      .cycles > 0 and .allowed == [.cycles,.cycles] and .denied == [.cycles,.cycles] and
+      .loadStartMS > 0 and .loadEndMS > .loadStartMS and
+      .firstStartedMS >= .loadStartMS and .lastCompletedMS > .firstStartedMS and .lastCompletedMS < .loadEndMS and
+      .acknowledgedBefore > 0 and .acknowledgedAfter > .acknowledgedBefore and
+      .minimumAcknowledgedAdvance > 0 and
+      .minimumAcknowledgedAdvance * .cycles <= (.acknowledgedAfter - .acknowledgedBefore);
+    keys == ["after","before","component","mode","passed","runID","schemaVersion","underLoad"] and
+    .schemaVersion == 2 and .component == "repository-lifecycle-authorization" and
     .mode == $mode and .runID == $run and .passed == true and
+    (.underLoad | under_load) and
     (.before | replicas) and (.after | replicas) and
     ([.before[].auth, .after[].auth] | unique | length) == 1 and
     ([.before[].endpoint] | sort) == ([.after[].endpoint] | sort) and

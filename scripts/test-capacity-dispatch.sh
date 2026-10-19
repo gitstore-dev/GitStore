@@ -337,6 +337,17 @@ jq '
   {schemaVersion:1,component:"repository-lifecycle-authorization",runID:"lifecycle-semantics",
    mode:"diagnostic",passed:true,before:replicas,after:replicas}
 ' "${test_dir}/original-readiness-probes.json" >"${lifecycle_semantic_dir}/authorization-probes.json"
+if CAPACITY_RUN_ID=lifecycle-semantics "${repo_root}/scripts/validate-capacity-evidence.sh" \
+  "${lifecycle_semantic_dir}" repository lifecycle diagnostic postflight >/dev/null 2>&1; then
+  echo "Repository lifecycle accepted before/after-only evidence without acknowledged-load coverage" >&2
+  exit 1
+fi
+jq '.schemaVersion = 2 | .underLoad = {
+  cycles:1,allowed:[1,1],denied:[1,1],firstStartedMS:100010,lastCompletedMS:100100,
+  loadStartMS:100000,loadEndMS:700000,acknowledgedBefore:1,acknowledgedAfter:2,
+  minimumAcknowledgedAdvance:1,unavailableAttempts:0
+}' "${lifecycle_semantic_dir}/authorization-probes.json" >"${lifecycle_semantic_dir}/authorization.next.json"
+mv "${lifecycle_semantic_dir}/authorization.next.json" "${lifecycle_semantic_dir}/authorization-probes.json"
 CAPACITY_RUN_ID=lifecycle-semantics "${repo_root}/scripts/validate-capacity-evidence.sh" \
   "${lifecycle_semantic_dir}" repository lifecycle diagnostic postflight
 cp "${lifecycle_semantic_dir}/authorization-probes.json" "${test_dir}/original-lifecycle-probes.json"
@@ -348,6 +359,15 @@ for mutation in \
   '.before[].endpoint = "http://other-api.internal"' \
   '.after[1].endpoint = .after[0].endpoint' \
   '.before[0].auth.policy.loaded = false' '.after[0].token = "private-token-marker"' \
+  '.schemaVersion = 1' 'del(.underLoad)' '.underLoad = null' \
+  '.underLoad.cycles = 0' '.underLoad.cycles = 0.5' '.underLoad.allowed[0] = 0' \
+  '.underLoad.denied[1] = 0' '.underLoad.minimumAcknowledgedAdvance = 0' \
+  '.underLoad.acknowledgedAfter = .underLoad.acknowledgedBefore' \
+  '.underLoad.firstStartedMS = (.underLoad.loadStartMS - 1)' \
+  '.underLoad.lastCompletedMS = .underLoad.loadEndMS' \
+  '.underLoad.lastCompletedMS = .underLoad.firstStartedMS' \
+  '.underLoad.unavailableAttempts = -1' '.underLoad.cycles = 9007199254740992' \
+  '.underLoad.minimumAcknowledgedAdvance = 2' '.underLoad.token = "private-token-marker"' \
   '.token = "private-token-marker"'; do
   jq "${mutation}" "${test_dir}/original-lifecycle-probes.json" >"${lifecycle_semantic_dir}/authorization-probes.json"
   if CAPACITY_RUN_ID=lifecycle-semantics "${repo_root}/scripts/validate-capacity-evidence.sh" \
@@ -390,8 +410,11 @@ if [[ "$*" == *"_capacity-repository-lifecycle"* && "${MODE:-}" != diagnostic ]]
   jq --arg run "${CAPACITY_RUN_ID}" --slurpfile fixture "${MOCK_LIFECYCLE_AUTH_FILE}" '
     def replicas: [.topology.liveApiReplicas[] |
       {endpoint,auth:$fixture[0].replicas[0].auth,allowed:true,denied:true,denialCode:"FORBIDDEN"}];
-    {schemaVersion:1,component:"repository-lifecycle-authorization",runID:$run,
-     mode:.mode,passed:true,before:replicas,after:replicas}
+    {schemaVersion:2,component:"repository-lifecycle-authorization",runID:$run,
+     mode:.mode,passed:true,before:replicas,after:replicas,
+     underLoad:{cycles:1,allowed:[1,1],denied:[1,1],firstStartedMS:100010,lastCompletedMS:100100,
+       loadStartMS:100000,loadEndMS:700000,acknowledgedBefore:1,acknowledgedAfter:2,
+       minimumAcknowledgedAdvance:1,unavailableAttempts:0}}
   ' "${CAPACITY_EVIDENCE_DIR}/preflight-environment.json" >"${CAPACITY_EVIDENCE_DIR}/authorization-probes.json"
 fi
 [[ "${FAIL_MAKE:-0}" != "1" ]]

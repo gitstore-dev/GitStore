@@ -104,6 +104,20 @@ pass. Their broader workload/domain/fault obligations remain unchecked.
 Existing load, retry, deadline, replacement and resource gates are unchanged;
 the before/after probes do not establish the under-load authorization matrix.
 
+The follow-up adds sampled baseline probes at the start of each existing
+acknowledged-load metadata cycle. Schema version 2 retains constant-space
+per-replica successful cycle counts, ordered cycle timestamps, the orchestrator's
+actual scheduling window and advancing ACKs across each complete metadata cycle,
+not each HTTP exchange. Postflight rejects old before/after-only proof and
+missing, unsafe or inconsistent counts/time/ACK bounds. Only endpoint
+availability failures receive bounded 30-second recovery with backoff and a
+separate unavailable-attempt count; unexpected domain results, partial data and
+changed snapshots fail immediately. Before/after probes remain one-shot.
+The full standalone integration `TestSecretCapacity` race suite, metadata
+window/overlap tests, integration vet and isolated dispatcher regression passed.
+This remains partial T066/T068 coverage: neither task is checked, the ledger
+remains 72/82, and no new deployed acceptance or Git contention fix is claimed.
+
 ### Bounded authorization diagnostics (2026-10-19)
 
 T067 implementation is complete. A decision carries its evaluated immutable

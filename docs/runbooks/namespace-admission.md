@@ -957,21 +957,35 @@ weakening durable replay protection.
 ### Authorization evidence
 
 Alpha and production Repository lifecycle runs require exact authorization
-checks on both APIs before lifecycle work and again after load, recovery and
-replacement. The configured credential must successfully list at most one
+checks on both APIs before lifecycle work, at the start of each existing
+under-load metadata cycle, and again after load, recovery and replacement.
+The configured credential must successfully list at most one
 Namespace; an unauthenticated request must return the expected authorization
 error without partial resource data. When anonymous authentication is enabled,
 that error is `FORBIDDEN`; otherwise it is `UNAUTHENTICATED`. Expected denials
 are separate from unexpected HTTP or domain failures.
 
 Both replicas must expose matching loaded policy, provider and compiled catalog
-identities, unchanged across the two checks. Local RBAC metadata must identify
+identities, unchanged across these checks. Local RBAC metadata must identify
 the v1beta1 policy format. Evidence is bounded, excludes credentials and response
 bodies, and starts incomplete; an interrupted or failed run cannot supply a
 passing authorization result. The verifier also binds it to the run and the
 distinct API endpoints observed at preflight.
 
-These before/after checks do not establish uninterrupted authorization behavior
+The bounded summary retains successful cycle counts per replica, the first/last
+cycle timestamps, the actual load scheduling window and advancing mutation ACKs
+over each complete metadata cycle containing the authorization checks. It does
+not claim an ACK occurred during every individual HTTP exchange. Cycles must
+finish before the scheduling window ends; idle periods and drain cannot count.
+The current evidence format rejects older before/after-only results.
+
+During-load checks allow at most 30 seconds for endpoint availability recovery,
+with bounded backoff and a separate unavailable-attempt count. Gateway
+502/503/504 responses without a GraphQL result may be retried; unexpected
+decisions, partial data, malformed responses and snapshot changes fail without
+retry. The before/after checks remain one-shot.
+
+These sampled checks do not establish uninterrupted authorization behavior
 during faults, the full permission matrix or successful sustained Git pushes.
 Existing load, retry, deadline, watch, replacement and resource gates remain
 required. This additional harness coverage is not a completed deployment
