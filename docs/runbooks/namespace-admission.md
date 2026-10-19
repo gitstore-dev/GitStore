@@ -2724,6 +2724,23 @@ unpack/rebase measurements therefore do not establish the cause of this gate's
 failure. End-to-end client scheduling and native writer admission still need
 direct attribution in that workload.
 
+A five-minute follow-up exercised the **actual Namespace gate** with 1,000
+subscribers, 50 resources, 10,000 prepared replay transitions, 20 mutation
+workers, the 10/s sustained schedule and 100/s minute bursts. It completed
+**3,399/3,399 mutation-and-watch acknowledgements in 300.001s (11.33/s)**,
+with zero errors, duplicates or backpressure. Visibility p95/p99 were
+**1.462s/1.746s**; 20 replay samples had p95 **2.934s**. Four metadata/provenance
+cycles passed, using 3, 1, 3 and 5 push attempts respectively, within the
+unchanged eight-attempt/30s budget. All 85 client cgroup samples recorded zero
+cumulative CPU-quota throttling.
+
+This was a **mixed-revision diagnostic**, with native `64d54cc` and unchanged
+API/controller code from `3cd4e03`, shortened stabilization and no replacement.
+It did not exercise the previously failing fifth cycle, prove that the cache
+caused the pass, or establish a sustainable rate. Its visibility p95 also
+exceeded the production watch target of 1s. A complete hour-long run and
+rolling-replacement evidence remain necessary.
+
 Full production acceptance and per-operation sustainable ceilings remain
 unestablished. Fixed offered rates, short diagnostics and evaluator-only
 decisions must not be advertised as those ceilings.
