@@ -991,12 +991,15 @@ Existing load, retry, deadline, watch, replacement and resource gates remain
 required. This additional harness coverage is not a completed deployment
 acceptance result.
 
-Local signed-callback regressions separately check independent shipped-policy
-authorizers across same-policy reload, rejected legacy-policy reload and
-one-at-a-time instance reconstruction. They preserve exact owner/non-owner and
-USER-identity/tier decisions, shared replay rejection and fresh ownership facts.
-These use a shared in-memory datastore; they are not deployed Scylla,
-process-replacement or sustained-load evidence.
+Local signed-callback and generated GraphQL HTTP regressions separately check
+independent shipped-policy authorizers across same-policy reload, rejected
+legacy-policy reload and one-at-a-time instance reconstruction. Callback replay
+rejection and USER-identity/tier decisions remain enforced. GraphQL checks cover
+Namespace name/ID/node/nodes lookups, mixed authorized/unauthorized node requests
+without partial data, and list denial rather than unauthorized list filtering.
+Both paths reread changed ownership. These use a shared in-memory datastore;
+GraphQL principals are injected trusted fixtures, not an AuthN test. They are not
+deployed Scylla, process-replacement or sustained-load evidence.
 
 ### Authorization diagnostics
 

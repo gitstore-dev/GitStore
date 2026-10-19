@@ -118,7 +118,7 @@ window/overlap tests, integration vet and isolated dispatcher regression passed.
 This remains partial T066/T068 coverage: neither task is checked, the ledger
 remains 72/82, and no new deployed acceptance or Git contention fix is claimed.
 
-### Same-version Namespace callback replacement (2026-10-19)
+### Same-version Namespace boundary replacement (2026-10-19)
 
 The existing catalog replacement suite now exercises two independent real
 shipped-policy providers over shared memdb, using signed callbacks through
@@ -134,6 +134,17 @@ The permissive-fixture red test failed the expected denial assertions before
 real provider wiring. Full cataloggrpc race tests and staticcheck passed.
 This is local T072 coverage, not deployed Scylla/process replacement, controller
 recovery, actual Git or under-load acceptance. T072 stays unchecked.
+
+The generated HTTP GraphQL counterpart now uses two independent shipped-policy
+providers plus the production field authorizer and resolver/presentation path.
+Owner, non-owner, admin and anonymous fixtures cover name/ID/node/nodes,
+mixed-owner nodes without partial data and list denial without filtering.
+The same six joined phases preserve exact outcomes and unchanged policy
+snapshots; both reconstructed instances immediately revoke the previous owner
+after the authoritative fixture changes. This injects trusted principals and
+does not test AuthN or an actual ownership-transfer mutation. The full resolver
+race suite/staticcheck passed, and the final expanded matrix passed three race
+repetitions. These are local memdb regressions, not deployed acceptance.
 
 ### Bounded authorization diagnostics (2026-10-19)
 
