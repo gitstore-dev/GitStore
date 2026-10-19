@@ -2862,6 +2862,28 @@ advancement in the actual workload, not just the standalone rebase probe.
 It does not establish the latency regression's root cause or exonerate earlier
 changes. **Direct routing did not resolve the sustained gate.**
 
+An additional five-minute diagnostic enabled existing OTLP export for the same
+frozen direct-route workload, sampling only explicitly sampled Git parents.
+It acknowledged **3,399/3,399 updates with watch verification in 300.001s
+(11.33/s)**, with no failures, duplicates or backpressure. Visibility p95/p99
+were **1.050s/1.224s**, still above the 1s production p95 target; replay p95 was
+**1.875s** across 20 samples. Four metadata cycles succeeded in 3/2/1/3 push
+attempts. These are configured-load observations, not sustainable ceilings or
+a matched speedup experiment.
+
+All 14 logged Git exchanges were retained as traces, including five fetches
+and nine pushes. In every fetch, the advertised and wanted OIDs matched the
+following push's advertisement. Two pushes then submitted that same advertised
+old OID but encountered a different current OID during native validation:
+these sampled remote rejections were genuine concurrent advancement, not a
+different advertised-versus-requested OID. Three initial client rejections
+submitted zero ref commands. The five pack-generation worker spans were
+1.17-2.21ms, whereas complete fetch commands took 20.24-48.34ms; those different
+scopes do not assign the remaining time to a particular component. The client
+reported no quota throttling across 85 samples. This short, telemetry-enabled
+diagnostic did not reproduce the late eight-attempt exhaustion, exercise
+replacement, identify the regression's cause or establish a fix.
+
 Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
 declaration is not a negotiated `have`. A stock-Git control still sent the
 complete tree and blob for a depth-limited request without any `have` lines;
