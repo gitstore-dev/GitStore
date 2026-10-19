@@ -2963,6 +2963,35 @@ were logged, and traces for the last **32** were retained. The run ended before
 replacement, without complete visibility or throughput results. Its disposable
 runtime was removed and the original deployment remained unchanged.
 
+Native signed-RPC replay storage uses a bounded, checksummed journal rather
+than one file per nonce. Fully appended reservations can share a data flush;
+arrivals during that flush require a later barrier. A flush selects the current
+journal after freezing its ready cohort, so compaction cannot leave a newer
+reservation covered only by an older inode. Startup and compaction retain file
+and directory durability barriers. Each journal or compaction file is bounded
+to **6,400,032 bytes**, with the same **100,000** live-nonce ceiling and no
+eviction of live or pending work. Recovery truncates only an incomplete final
+record; malformed complete records and missing active history fail closed.
+A durable format marker prevents a missing journal from being mistaken for
+first startup.
+
+**Breaking retained-format change:** the existing `.rpc-replay-v1` directory
+now contains `journal-v2`. Legacy per-nonce history is rejected, not silently
+discarded or migrated; an older binary also rejects the journal filename.
+Ordinary restarts must retain this history. To reinitialize a deployment with
+legacy history, stop its singleton Git process and retire the old shared RPC
+signing key on the API and Git services, including any previous-key overlap,
+before reinitializing **only** replay history. Preserve repository data.
+Signed wire messages and Resource contracts are unchanged; recovery restores
+the newest persisted reservation's clock watermark.
+
+The `replay_persist` telemetry phase still measures each verification's wait.
+`replay_inode` now measures shared journal data flushes rather than individual
+nonce-file flushes; ordinary reservations no longer emit `replay_directory` or
+`directory_barrier` samples. Clock-checkpoint durability remains separate.
+The journal is a performance candidate, not an established sustained throughput
+improvement or a passing production gate.
+
 Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
 declaration is not a negotiated `have`. A stock-Git control still sent the
 complete tree and blob for a depth-limited request without any `have` lines;

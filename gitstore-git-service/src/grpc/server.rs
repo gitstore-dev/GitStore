@@ -4456,15 +4456,12 @@ mod tests {
                     .to_str()
                     .unwrap();
                 let fields: Vec<_> = envelope.split(':').collect();
-                let nonce_path = root
-                    .path()
-                    .join(".rpc-replay-v1")
-                    .join(format!("{}-{}", fields[1], fields[2]));
+                let nonce = fields[2].to_owned();
                 let mut reader = Box::pin(service.get_files(request));
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {
                     std::future::poll_fn(|cx| {
                         assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
-                        if nonce_path.exists() {
+                        if service.rpc_auth.has_replay_reservation(&nonce).unwrap() {
                             std::task::Poll::Ready(())
                         } else {
                             cx.waker().wake_by_ref();
@@ -4537,10 +4534,7 @@ mod tests {
                 .to_str()
                 .unwrap();
             let fields: Vec<_> = envelope.split(':').collect();
-            let nonce_path = root
-                .path()
-                .join(".rpc-replay-v1")
-                .join(format!("{}-{}", fields[1], fields[2]));
+            let nonce = fields[2].to_owned();
             let mut reader = Box::pin(service.get_files(request));
             std::future::poll_fn(|cx| {
                 assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
@@ -4548,7 +4542,7 @@ mod tests {
             })
             .await;
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                while !nonce_path.exists() {
+                while !service.rpc_auth.has_replay_reservation(&nonce).unwrap() {
                     tokio::task::yield_now().await;
                 }
             })
@@ -4899,15 +4893,12 @@ mod tests {
                 .to_str()
                 .unwrap();
             let fields: Vec<_> = envelope.split(':').collect();
-            let nonce_path = root
-                .path()
-                .join(".rpc-replay-v1")
-                .join(format!("{}-{}", fields[1], fields[2]));
+            let nonce = fields[2].to_owned();
             let mut reader = Box::pin(service.get_file(request));
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 std::future::poll_fn(|cx| {
                     assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
-                    if nonce_path.exists() {
+                    if service.rpc_auth.has_replay_reservation(&nonce).unwrap() {
                         std::task::Poll::Ready(())
                     } else {
                         cx.waker().wake_by_ref();
@@ -4984,15 +4975,12 @@ mod tests {
                 .to_str()
                 .unwrap();
             let fields: Vec<_> = envelope.split(':').collect();
-            let nonce_path = root
-                .path()
-                .join(".rpc-replay-v1")
-                .join(format!("{}-{}", fields[1], fields[2]));
+            let nonce = fields[2].to_owned();
             let mut reader = Box::pin(service.get_file(request));
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 std::future::poll_fn(|cx| {
                     assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
-                    if nonce_path.exists() {
+                    if service.rpc_auth.has_replay_reservation(&nonce).unwrap() {
                         std::task::Poll::Ready(())
                     } else {
                         cx.waker().wake_by_ref();
@@ -5112,15 +5100,12 @@ mod tests {
                     .to_str()
                     .unwrap();
                 let fields: Vec<_> = envelope.split(':').collect();
-                let nonce_path = root
-                    .path()
-                    .join(".rpc-replay-v1")
-                    .join(format!("{}-{}", fields[1], fields[2]));
+                let nonce = fields[2].to_owned();
                 let mut reader = Box::pin(service.info_refs(request));
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {
                     std::future::poll_fn(|cx| {
                         assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
-                        if nonce_path.exists() {
+                        if service.rpc_auth.has_replay_reservation(&nonce).unwrap() {
                             std::task::Poll::Ready(())
                         } else {
                             cx.waker().wake_by_ref();
@@ -5201,15 +5186,12 @@ mod tests {
                     .to_str()
                     .unwrap();
                 let fields: Vec<_> = envelope.split(':').collect();
-                let nonce_path = root
-                    .path()
-                    .join(".rpc-replay-v1")
-                    .join(format!("{}-{}", fields[1], fields[2]));
+                let nonce = fields[2].to_owned();
                 let mut reader = Box::pin(service.info_refs(request));
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {
                     std::future::poll_fn(|cx| {
                         assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
-                        if nonce_path.exists() {
+                        if service.rpc_auth.has_replay_reservation(&nonce).unwrap() {
                             std::task::Poll::Ready(())
                         } else {
                             cx.waker().wake_by_ref();
@@ -6143,10 +6125,7 @@ mod tests {
                         .to_str()
                         .unwrap();
                     let fields: Vec<_> = envelope.split(':').collect();
-                    let nonce_path = root
-                        .path()
-                        .join(".rpc-replay-v1")
-                        .join(format!("{}-{}", fields[1], fields[2]));
+                    let nonce = fields[2].to_owned();
                     let mut reader = Box::pin(
                         service
                             .info_refs(request)
@@ -6155,7 +6134,7 @@ mod tests {
                     tokio::time::timeout(std::time::Duration::from_secs(5), async {
                         std::future::poll_fn(|cx| {
                             assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
-                            if nonce_path.exists() {
+                            if service.rpc_auth.has_replay_reservation(&nonce).unwrap() {
                                 std::task::Poll::Ready(())
                             } else {
                                 cx.waker().wake_by_ref();
@@ -7289,10 +7268,7 @@ mod tests {
                     .to_str()
                     .unwrap();
                 let fields: Vec<_> = envelope.split(':').collect();
-                let nonce_path = root
-                    .path()
-                    .join(".rpc-replay-v1")
-                    .join(format!("{}-{}", fields[1], fields[2]));
+                let nonce = fields[2].to_owned();
                 let mut reader = Box::pin(service.upload_pack(request));
                 std::future::poll_fn(|cx| {
                     assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
@@ -7300,7 +7276,7 @@ mod tests {
                 })
                 .await;
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                    while !nonce_path.exists() {
+                    while !service.rpc_auth.has_replay_reservation(&nonce).unwrap() {
                         tokio::task::yield_now().await;
                     }
                 })

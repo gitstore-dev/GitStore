@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     fs::{self, File, OpenOptions},
+    io::{BufWriter, Read, Seek, Write},
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
@@ -19,6 +20,9 @@ const MAX_REPLAYS: usize = 100_000;
 const REPLAY_CLEANUP_CLOCK_INTERVAL_MS: u64 = 250;
 const VERIFICATION_WAITERS: u32 = 256;
 const VERIFICATION_WAIT_BYTES: u32 = 128 * 1024 * 1024;
+const JOURNAL_HEADER: usize = 32;
+const JOURNAL_RECORD: usize = 64;
+const JOURNAL_MAGIC: &[u8; 8] = b"GSRPC2\r\n";
 
 fn now_millis() -> Result<u64, Status> {
     SystemTime::now()
@@ -109,6 +113,9 @@ pub fn callback_request<T: Message>(
 /// capacity bound: requests fail closed until expired entries can be reclaimed.
 struct ReplayState {
     directory: PathBuf,
+    journal: Arc<File>,
+    records: usize,
+    journal_failed: bool,
     entries: BTreeSet<(u64, String)>,
     nonces: HashSet<String>,
     pending: HashSet<String>,
@@ -118,7 +125,7 @@ struct ReplayState {
 }
 
 #[derive(Default)]
-struct ReplayDirectoryState {
+struct ReplayDurabilityState {
     next: u64,
     pending: Vec<u64>,
     outcomes: HashMap<u64, Result<(), Status>>,
@@ -127,19 +134,17 @@ struct ReplayDirectoryState {
 }
 
 #[derive(Default)]
-struct ReplayDirectoryDurability {
-    state: Mutex<ReplayDirectoryState>,
+struct ReplayDurability {
+    state: Mutex<ReplayDurabilityState>,
     changed: Condvar,
 }
 
-impl ReplayDirectoryDurability {
+impl ReplayDurability {
     fn sync(&self, persist: impl Fn() -> Result<(), Status>) -> Result<(), Status> {
-        let unavailable = || Status::unavailable("RPC replay directory barrier unavailable");
+        let unavailable = || Status::unavailable("RPC replay barrier unavailable");
         let mut state = self.state.lock().map_err(|_| unavailable())?;
         if state.pending.len() + state.outcomes.len() + state.in_flight >= 32 {
-            return Err(Status::resource_exhausted(
-                "RPC replay directory barrier exhausted",
-            ));
+            return Err(Status::resource_exhausted("RPC replay barrier exhausted"));
         }
         state.next = state.next.checked_add(1).ok_or_else(unavailable)?;
         let ticket = state.next;
@@ -152,8 +157,8 @@ impl ReplayDirectoryDurability {
                 state = self.changed.wait(state).map_err(|_| unavailable())?;
                 continue;
             }
-            // Only entries whose inode fsync already completed can share this
-            // directory barrier. Arrivals during fsync require a later barrier.
+            // Only fully appended reservations can share this flush.
+            // Arrivals during fsync require a later barrier.
             let ready = std::mem::take(&mut state.pending);
             state.in_flight = ready.len();
             state.syncing = true;
@@ -179,7 +184,7 @@ impl ReplayDirectoryDurability {
                 requests = ready.len(),
                 duration_ms = duration.as_secs_f64() * 1000.0,
                 success = outcome.is_ok(),
-                "RPC replay directory barrier timing"
+                "RPC replay durability barrier timing"
             );
             record_rpc_verification_phase(
                 RPCVerificationPhase::DirectoryReport,
@@ -194,6 +199,22 @@ impl ReplayState {
     fn open(directory: PathBuf) -> Result<Self, Status> {
         fs::create_dir_all(&directory)
             .map_err(|_| Status::unavailable("RPC replay storage unavailable"))?;
+        let unavailable = || Status::unavailable("RPC replay journal unavailable");
+        for entry in fs::read_dir(&directory).map_err(|_| unavailable())?.take(6) {
+            let entry = entry.map_err(|_| unavailable())?;
+            let name = entry.file_name();
+            if !matches!(
+                name.to_str(),
+                Some("clock" | "clock.tmp" | "journal-v2" | "journal-v2.tmp" | "format-v2")
+            ) {
+                return Err(Status::unavailable(
+                    "legacy RPC replay storage requires reinitialization with a new signing key",
+                ));
+            }
+            if !entry.file_type().map_err(|_| unavailable())?.is_file() {
+                return Err(unavailable());
+            }
+        }
         let high_water = match fs::read_to_string(directory.join("clock")) {
             Ok(value) => value
                 .parse()
@@ -201,8 +222,70 @@ impl ReplayState {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
             Err(_) => return Err(Status::unavailable("RPC replay clock unavailable")),
         };
+        let path = directory.join("journal-v2");
+        let temporary = directory.join("journal-v2.tmp");
+        let marker = directory.join("format-v2");
+        let mut journal = match OpenOptions::new().read(true).append(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if temporary.try_exists().map_err(|_| unavailable())?
+                    || marker.try_exists().map_err(|_| unavailable())?
+                {
+                    return Err(unavailable());
+                }
+                let mut file = OpenOptions::new()
+                    .read(true)
+                    .append(true)
+                    .create_new(true)
+                    .open(&path)
+                    .map_err(|_| unavailable())?;
+                file.write_all(&Self::header(high_water))
+                    .map_err(|_| unavailable())?;
+                file.sync_all().map_err(|_| unavailable())?;
+                Self::sync_directory_at(&directory)?;
+                file
+            }
+            Err(_) => return Err(unavailable()),
+        };
+        let length = journal.metadata().map_err(|_| unavailable())?.len();
+        let maximum = (JOURNAL_HEADER + MAX_REPLAYS * JOURNAL_RECORD) as u64;
+        if length < JOURNAL_HEADER as u64 || length > maximum {
+            return Err(Status::unavailable("invalid RPC replay journal length"));
+        }
+        journal.rewind().map_err(|_| unavailable())?;
+        let mut header = [0u8; JOURNAL_HEADER];
+        journal.read_exact(&mut header).map_err(|_| unavailable())?;
+        if &header[..8] != JOURNAL_MAGIC || Sha256::digest(&header[..16])[..16] != header[16..] {
+            return Err(Status::unavailable("invalid RPC replay journal header"));
+        }
+        let mut high_water = high_water.max(u64::from_le_bytes(header[8..16].try_into().unwrap()));
+        let records = (length as usize - JOURNAL_HEADER) / JOURNAL_RECORD;
+        let mut recovered = Vec::with_capacity(records);
+        for _ in 0..records {
+            let mut record = [0u8; JOURNAL_RECORD];
+            journal.read_exact(&mut record).map_err(|_| unavailable())?;
+            if Sha256::digest(&record[..48])[..16] != record[48..] {
+                return Err(Status::unavailable("invalid RPC replay journal record"));
+            }
+            let now = u64::from_le_bytes(record[..8].try_into().unwrap());
+            let expiry = u64::from_le_bytes(record[8..16].try_into().unwrap());
+            let nonce = std::str::from_utf8(&record[16..48])
+                .map_err(|_| Status::unavailable("invalid RPC replay journal nonce"))?;
+            decode_hex(nonce, 16)?;
+            high_water = high_water.max(now);
+            recovered.push((expiry, nonce.to_owned()));
+        }
+        // Only an incomplete final append can be discarded. A malformed full
+        // record fails closed: it must not hide an acknowledged successor.
+        journal
+            .set_len((JOURNAL_HEADER + records * JOURNAL_RECORD) as u64)
+            .map_err(|_| unavailable())?;
+        journal.sync_all().map_err(|_| unavailable())?;
         let mut state = Self {
             directory,
+            journal: Arc::new(journal),
+            records,
+            journal_failed: false,
             entries: BTreeSet::new(),
             nonces: HashSet::new(),
             pending: HashSet::new(),
@@ -210,35 +293,113 @@ impl ReplayState {
             durable_high_water: high_water,
             maintenance_in_progress: false,
         };
-        for entry in fs::read_dir(&state.directory)
-            .map_err(|_| Status::unavailable("RPC replay storage unavailable"))?
-        {
-            let entry = entry.map_err(|_| Status::unavailable("RPC replay storage unavailable"))?;
-            let name = entry
-                .file_name()
-                .into_string()
-                .map_err(|_| Status::unavailable("invalid RPC replay record"))?;
-            if name == "clock" || name == "clock.tmp" {
+        for (expiry, nonce) in recovered {
+            if expiry <= high_water {
                 continue;
             }
-            if state.entries.len() >= MAX_REPLAYS {
-                return Err(Status::resource_exhausted(
-                    "RPC replay storage capacity exceeded",
-                ));
-            }
-            let (expiry, nonce) = name
-                .split_once('-')
-                .ok_or_else(|| Status::unavailable("invalid RPC replay record"))?;
-            let expiry = expiry
-                .parse()
-                .map_err(|_| Status::unavailable("invalid RPC replay expiry"))?;
-            decode_hex(nonce, 16)?;
-            if !state.nonces.insert(nonce.to_owned()) {
+            if !state.nonces.insert(nonce.clone()) {
                 return Err(Status::unavailable("duplicate RPC replay nonce"));
             }
-            state.entries.insert((expiry, nonce.to_owned()));
+            state.entries.insert((expiry, nonce));
         }
+        if temporary.try_exists().map_err(|_| unavailable())? {
+            let metadata = fs::symlink_metadata(&temporary).map_err(|_| unavailable())?;
+            if !metadata.is_file() || metadata.len() > maximum {
+                return Err(unavailable());
+            }
+            fs::remove_file(temporary).map_err(|_| unavailable())?;
+            Self::sync_directory_at(&state.directory)?;
+        }
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&marker)
+        {
+            Ok(file) => file.sync_all().map_err(|_| unavailable())?,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if marker.metadata().map_err(|_| unavailable())?.len() != 0 {
+                    return Err(unavailable());
+                }
+            }
+            Err(_) => return Err(unavailable()),
+        }
+        Self::sync_directory_at(&state.directory)?;
+        let parent = state.directory.parent().ok_or_else(unavailable)?;
+        Self::sync_directory_at(if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        })?;
         Ok(state)
+    }
+    fn header(now: u64) -> [u8; JOURNAL_HEADER] {
+        let mut header = [0; JOURNAL_HEADER];
+        header[..8].copy_from_slice(JOURNAL_MAGIC);
+        header[8..16].copy_from_slice(&now.to_le_bytes());
+        let checksum = Sha256::digest(&header[..16]);
+        header[16..].copy_from_slice(&checksum[..16]);
+        header
+    }
+    fn record(now: u64, expiry: u64, nonce: &str) -> Result<[u8; JOURNAL_RECORD], Status> {
+        decode_hex(nonce, 16)?;
+        let mut record = [0; JOURNAL_RECORD];
+        record[..8].copy_from_slice(&now.to_le_bytes());
+        record[8..16].copy_from_slice(&expiry.to_le_bytes());
+        record[16..48].copy_from_slice(nonce.as_bytes());
+        let checksum = Sha256::digest(&record[..48]);
+        record[48..].copy_from_slice(&checksum[..16]);
+        Ok(record)
+    }
+    fn compact(&mut self) -> Result<(), Status> {
+        let result = (|| {
+            let mut file = OpenOptions::new()
+                .read(true)
+                .append(true)
+                .create_new(true)
+                .open(self.directory.join("journal-v2.tmp"))?;
+            {
+                let mut output = BufWriter::new(&mut file);
+                output.write_all(&Self::header(self.high_water))?;
+                for (expiry, nonce) in &self.entries {
+                    let record = Self::record(self.high_water, *expiry, nonce)
+                        .map_err(|_| std::io::Error::other("invalid retained replay nonce"))?;
+                    output.write_all(&record)?;
+                }
+                output.flush()?;
+            }
+            file.sync_all()?;
+            fs::rename(
+                self.directory.join("journal-v2.tmp"),
+                self.directory.join("journal-v2"),
+            )?;
+            File::open(&self.directory)?.sync_all()?;
+            Ok::<_, std::io::Error>(file)
+        })();
+        match result {
+            Ok(file) => {
+                self.journal = Arc::new(file);
+                self.records = self.entries.len();
+                Ok(())
+            }
+            Err(error) => {
+                self.journal_failed = true;
+                tracing::error!(error = %error, "RPC replay compaction failed");
+                Err(Status::unavailable("RPC replay compaction failed"))
+            }
+        }
+    }
+    fn append_record(
+        &mut self,
+        record: &[u8; JOURNAL_RECORD],
+        write: impl FnOnce(&File, &[u8]) -> std::io::Result<()>,
+    ) -> Result<(), Status> {
+        if let Err(error) = write(&self.journal, record) {
+            self.journal_failed = true;
+            tracing::error!(error = %error, "RPC replay append failed");
+            return Err(Status::unavailable("RPC replay append failed"));
+        }
+        self.records += 1;
+        Ok(())
     }
     #[cfg(test)]
     fn sync_directory(&self) -> Result<(), Status> {
@@ -259,7 +420,10 @@ impl ReplayState {
             .map_err(|_| Status::unavailable("RPC replay clock unavailable"))?;
         Self::sync_directory_at(directory)
     }
-    fn reserve(&mut self, now: u64, expiry: u64, nonce: &str) -> Result<File, Status> {
+    fn reserve(&mut self, now: u64, expiry: u64, nonce: &str) -> Result<Arc<File>, Status> {
+        if self.journal_failed {
+            return Err(Status::unavailable("RPC replay journal requires recovery"));
+        }
         if now < self.high_water {
             return Err(Status::unavailable("RPC clock moved backwards"));
         }
@@ -269,23 +433,30 @@ impl ReplayState {
         if self.entries.len() >= MAX_REPLAYS {
             return Err(Status::resource_exhausted("RPC replay capacity exhausted"));
         }
-        let path = self.directory.join(format!("{expiry}-{nonce}"));
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::AlreadyExists {
-                    Status::unauthenticated("RPC replay rejected")
-                } else {
-                    Status::unavailable("RPC replay storage unavailable")
-                }
-            })?;
+        let metadata = self
+            .journal
+            .metadata()
+            .map_err(|_| Status::unavailable("RPC replay journal unavailable"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if metadata.nlink() == 0 {
+                return Err(Status::unavailable("RPC replay journal unpublished"));
+            }
+        }
+        if !metadata.is_file() {
+            return Err(Status::unavailable("invalid RPC replay journal"));
+        }
+        if self.records == MAX_REPLAYS {
+            self.compact()?;
+        }
+        let record = Self::record(now, expiry, nonce)?;
+        self.append_record(&record, |mut file, record| file.write_all(record))?;
         self.entries.insert((expiry, nonce.to_owned()));
         self.nonces.insert(nonce.to_owned());
         self.pending.insert(nonce.to_owned());
         self.high_water = now;
-        Ok(file)
+        Ok(self.journal.clone())
     }
 }
 #[derive(Clone)]
@@ -293,7 +464,7 @@ pub struct RPCVerifier {
     secret: Arc<str>,
     previous: Option<Arc<str>>,
     replay: Arc<Mutex<ReplayState>>,
-    directory_durability: Arc<ReplayDirectoryDurability>,
+    durability: Arc<ReplayDurability>,
     verification_slots: Arc<tokio::sync::Semaphore>,
     verification_waiters: Arc<tokio::sync::Semaphore>,
     verification_wait_bytes: Arc<tokio::sync::Semaphore>,
@@ -309,7 +480,7 @@ impl RPCVerifier {
             replay: Arc::new(Mutex::new(ReplayState::open(
                 data_root.join(".rpc-replay-v1"),
             )?)),
-            directory_durability: Arc::new(ReplayDirectoryDurability::default()),
+            durability: Arc::new(ReplayDurability::default()),
             verification_slots: Arc::new(tokio::sync::Semaphore::new(32)),
             verification_waiters: Arc::new(tokio::sync::Semaphore::new(
                 VERIFICATION_WAITERS as usize,
@@ -404,6 +575,15 @@ impl RPCVerifier {
         })
         .await
         .map_err(|_| Status::unavailable("RPC verification failed"))?
+    }
+    #[cfg(test)]
+    pub(crate) fn has_replay_reservation(&self, nonce: &str) -> Result<bool, Status> {
+        Ok(self
+            .replay
+            .lock()
+            .map_err(|_| Status::unavailable("RPC replay state unavailable"))?
+            .nonces
+            .contains(nonce))
     }
     #[cfg(test)]
     fn verify_at<T: Message>(
@@ -530,8 +710,8 @@ impl RPCVerifier {
                 replay.maintenance_in_progress = true;
                 drop(replay);
                 // One admitted verifier performs bounded maintenance. Peers can
-                // persist fresh nonces, but no old record is forgotten before
-                // its clock floor and unlink have both completed.
+                // persist fresh nonces, but no old nonce is forgotten before
+                // its clock floor is durable. Compaction retains pending work.
                 let maintenance = (|| {
                     if checkpoint {
                         let started = Instant::now();
@@ -553,10 +733,6 @@ impl RPCVerifier {
                         let started = Instant::now();
                         let result = (|| {
                             for (expires, nonce) in expired {
-                                fs::remove_file(directory.join(format!("{expires}-{nonce}")))
-                                    .map_err(|_| {
-                                        Status::unavailable("RPC replay cleanup failed")
-                                    })?;
                                 let mut replay = self.replay.lock().map_err(|_| {
                                     Status::unavailable("RPC replay state unavailable")
                                 })?;
@@ -588,8 +764,7 @@ impl RPCVerifier {
                 }
             }
         }
-        let file = replay.reserve(now, expiry, parts[2])?;
-        let directory = replay.directory.clone();
+        replay.reserve(now, expiry, parts[2])?;
         let replay_reserve_ms = reserving.elapsed().as_secs_f64() * 1000.0;
         record_rpc_verification_phase(
             RPCVerificationPhase::ReplayReserve,
@@ -599,27 +774,22 @@ impl RPCVerifier {
         // Pending reservations cannot be reclaimed while their durable writes
         // drain, even if the request expires or its caller is cancelled.
         let persisting = Instant::now();
-        let inode = file
-            .sync_all()
-            .map_err(|_| Status::unavailable("RPC replay durability failed"));
-        let replay_inode_ms = persisting.elapsed().as_secs_f64() * 1000.0;
-        record_rpc_verification_phase(RPCVerificationPhase::ReplayInode, replay_inode_ms / 1000.0);
-        let mut replay_directory_ms = 0.0;
-        let result = inode.and_then(|_| {
-            let directory_started = Instant::now();
-            let result = self.directory_durability.sync(|| {
-                let started = Instant::now();
-                let result = ReplayState::sync_directory_at(&directory);
-                record_rpc_verification_phase(
-                    RPCVerificationPhase::DirectoryBarrier,
-                    started.elapsed().as_secs_f64(),
-                );
-                result
-            });
-            replay_directory_ms = directory_started.elapsed().as_secs_f64() * 1000.0;
+        let result = self.durability.sync(|| {
+            // Select after the ready cohort is frozen: compaction may have
+            // replaced the inode since a member appended its reservation.
+            let journal = self
+                .replay
+                .lock()
+                .map_err(|_| Status::unavailable("RPC replay state unavailable"))?
+                .journal
+                .clone();
+            let started = Instant::now();
+            let result = journal
+                .sync_data()
+                .map_err(|_| Status::unavailable("RPC replay journal durability failed"));
             record_rpc_verification_phase(
-                RPCVerificationPhase::ReplayDirectory,
-                replay_directory_ms / 1000.0,
+                RPCVerificationPhase::ReplayInode,
+                started.elapsed().as_secs_f64(),
             );
             result
         });
@@ -648,8 +818,6 @@ impl RPCVerifier {
             replay_cleanup_ms,
             replay_cleanup_records,
             replay_persist_ms,
-            replay_inode_ms,
-            replay_directory_ms,
             replay_complete_wait_ms,
             success = result.is_ok(),
             "RPC replay reservation timing"
@@ -662,6 +830,274 @@ impl RPCVerifier {
 mod tests {
     use super::*;
     use crate::grpc::server::proto::CreateRepositoryRequest;
+
+    #[test]
+    fn journal_reservation_survives_partial_tail_recovery() {
+        use std::io::Write;
+
+        let root = tempfile::tempdir().unwrap();
+        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
+        let journal = root.path().join(".rpc-replay-v1/journal-v2");
+        assert!(
+            journal.is_file(),
+            "bounded replay journal must exist before requests"
+        );
+        let method = "/gitstore.git.v1.GitService/CreateRepository";
+        let request = signed_at(
+            CreateRepositoryRequest::default(),
+            "key",
+            "gitstore-git",
+            method,
+            1,
+            &"a".repeat(32),
+        )
+        .unwrap();
+        verifier
+            .verify_at(request.metadata(), method, request.get_ref(), 1)
+            .unwrap();
+        drop(verifier);
+        let length = journal.metadata().unwrap().len();
+        OpenOptions::new()
+            .append(true)
+            .open(&journal)
+            .unwrap()
+            .write_all(b"partial")
+            .unwrap();
+        let replacement = RPCVerifier::new("key", None, root.path()).unwrap();
+        assert_eq!(journal.metadata().unwrap().len(), length);
+        assert_eq!(
+            replacement
+                .verify_at(request.metadata(), method, request.get_ref(), 1)
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unauthenticated,
+        );
+    }
+
+    #[test]
+    fn journal_rejects_legacy_history_and_complete_corruption() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join(".rpc-replay-v1");
+        fs::create_dir(&directory).unwrap();
+        let legacy = directory.join(format!("60001-{}", "a".repeat(32)));
+        File::create(&legacy).unwrap().sync_all().unwrap();
+        assert!(RPCVerifier::new("key", None, root.path()).is_err());
+        assert!(legacy.is_file());
+        assert!(!directory.join("journal-v2").exists());
+        fs::remove_file(legacy).unwrap();
+        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
+        let mut replay = verifier.replay.lock().unwrap();
+        replay
+            .reserve(1, 60_001, &"a".repeat(32))
+            .unwrap()
+            .sync_all()
+            .unwrap();
+        replay.pending.clear();
+        let journal = directory.join("journal-v2");
+        drop(replay);
+        drop(verifier);
+        let mut bytes = fs::read(&journal).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        fs::write(&journal, bytes).unwrap();
+        assert!(RPCVerifier::new("key", None, root.path()).is_err());
+        assert_eq!(
+            journal.metadata().unwrap().len(),
+            (JOURNAL_HEADER + JOURNAL_RECORD) as u64
+        );
+    }
+
+    #[test]
+    fn partial_append_blocks_successors_until_tail_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("replay");
+        let mut replay = ReplayState::open(directory.clone()).unwrap();
+        let nonce = "a".repeat(32);
+        replay
+            .reserve(1, 60_001, &nonce)
+            .unwrap()
+            .sync_all()
+            .unwrap();
+        replay.pending.clear();
+        let next = ReplayState::record(2, 60_002, &"b".repeat(32)).unwrap();
+        assert!(replay
+            .append_record(&next, |mut file, bytes| {
+                file.write_all(&bytes[..11])?;
+                Err(std::io::Error::other("injected partial append"))
+            })
+            .is_err());
+        assert!(replay.journal_failed);
+        assert_eq!(
+            replay
+                .reserve(3, 60_003, &"c".repeat(32))
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unavailable
+        );
+        drop(replay);
+        let recovered = ReplayState::open(directory).unwrap();
+        assert!(recovered.nonces.contains(&nonce));
+        assert_eq!(recovered.records, 1);
+        assert!(!recovered.journal_failed);
+    }
+
+    #[test]
+    fn compaction_retains_pending_history_and_newer_appends() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("replay");
+        let mut replay = ReplayState::open(directory.clone()).unwrap();
+        let a = "a".repeat(32);
+        let b = "b".repeat(32);
+        let old = replay.reserve(1, 60_001, &a).unwrap();
+        replay.compact().unwrap();
+        assert!(replay.pending.contains(&a));
+        assert!(!Arc::ptr_eq(&old, &replay.journal));
+        replay.reserve(2, 60_002, &b).unwrap();
+        replay.journal.sync_data().unwrap();
+        drop(old);
+        drop(replay);
+        let recovered = ReplayState::open(directory).unwrap();
+        assert_eq!(recovered.records, 2);
+        assert!(recovered.nonces.contains(&a) && recovered.nonces.contains(&b));
+        assert_eq!(recovered.high_water, 2);
+    }
+
+    #[test]
+    fn abandoned_compaction_cannot_replace_acknowledged_history() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("replay");
+        let mut replay = ReplayState::open(directory.clone()).unwrap();
+        let nonce = "a".repeat(32);
+        replay
+            .reserve(1, 60_001, &nonce)
+            .unwrap()
+            .sync_all()
+            .unwrap();
+        replay.pending.clear();
+        let mut abandoned = ReplayState::header(2).to_vec();
+        abandoned.extend_from_slice(&ReplayState::record(2, 60_002, &"b".repeat(32)).unwrap());
+        fs::write(directory.join("journal-v2.tmp"), abandoned).unwrap();
+        drop(replay);
+        let recovered = ReplayState::open(directory.clone()).unwrap();
+        assert!(recovered.nonces.contains(&nonce));
+        assert!(!recovered.nonces.contains(&"b".repeat(32)));
+        assert!(!directory.join("journal-v2.tmp").exists());
+        drop(recovered);
+        fs::remove_file(directory.join("journal-v2")).unwrap();
+        fs::write(directory.join("journal-v2.tmp"), ReplayState::header(1)).unwrap();
+        assert!(ReplayState::open(directory).is_err());
+    }
+
+    #[test]
+    fn empty_compaction_preserves_its_clock_watermark() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("replay");
+        let mut replay = ReplayState::open(directory.clone()).unwrap();
+        replay.high_water = 5;
+        replay.compact().unwrap();
+        drop(replay);
+        let mut recovered = ReplayState::open(directory).unwrap();
+        assert_eq!(recovered.high_water, 5);
+        assert_eq!(recovered.records, 0);
+        assert_eq!(
+            recovered
+                .reserve(4, 60_004, &"a".repeat(32))
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unavailable
+        );
+    }
+
+    #[test]
+    fn malformed_header_and_oversize_journal_fail_closed_without_truncation() {
+        for oversized in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let directory = root.path().join("replay");
+            drop(ReplayState::open(directory.clone()).unwrap());
+            let path = directory.join("journal-v2");
+            if oversized {
+                OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_len((JOURNAL_HEADER + MAX_REPLAYS * JOURNAL_RECORD + 1) as u64)
+                    .unwrap();
+            } else {
+                let mut header = ReplayState::header(1);
+                header[8] ^= 1;
+                fs::write(&path, header).unwrap();
+            }
+            let length = path.metadata().unwrap().len();
+            assert!(ReplayState::open(directory).is_err());
+            assert_eq!(path.metadata().unwrap().len(), length);
+        }
+    }
+
+    #[test]
+    fn missing_active_journal_cannot_silently_reinitialize_history() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("replay");
+        let mut replay = ReplayState::open(directory.clone()).unwrap();
+        replay
+            .reserve(1, 60_001, &"a".repeat(32))
+            .unwrap()
+            .sync_all()
+            .unwrap();
+        drop(replay);
+        fs::remove_file(directory.join("journal-v2")).unwrap();
+        assert!(directory.join("format-v2").is_file());
+        assert!(ReplayState::open(directory.clone()).is_err());
+        assert!(!directory.join("journal-v2").exists());
+    }
+
+    #[test]
+    #[ignore = "physical 100,000-record journal capacity, compaction and recovery; run explicitly"]
+    fn journal_preserves_full_capacity_and_bounded_compaction() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("replay");
+        let mut replay = ReplayState::open(directory.clone()).unwrap();
+        for nonce in 0..MAX_REPLAYS {
+            replay.reserve(1, 60_001, &format!("{nonce:032x}")).unwrap();
+            if replay.pending.len() == 32 || nonce + 1 == MAX_REPLAYS {
+                replay.journal.sync_data().unwrap();
+                replay.pending.clear();
+            }
+        }
+        assert_eq!(
+            replay.journal.metadata().unwrap().len(),
+            (JOURNAL_HEADER + MAX_REPLAYS * JOURNAL_RECORD) as u64
+        );
+        assert_eq!(
+            replay
+                .reserve(1, 60_001, &"f".repeat(32))
+                .unwrap_err()
+                .code(),
+            tonic::Code::ResourceExhausted
+        );
+        drop(replay);
+        let mut replay = ReplayState::open(directory.clone()).unwrap();
+        assert_eq!(replay.entries.len(), MAX_REPLAYS);
+        ReplayState::persist_clock_at(&directory, 60_002).unwrap();
+        replay.high_water = 60_002;
+        replay.durable_high_water = 60_002;
+        replay.entries.clear();
+        replay.nonces.clear();
+        replay
+            .reserve(60_002, 120_002, &"f".repeat(32))
+            .unwrap()
+            .sync_all()
+            .unwrap();
+        assert_eq!(replay.records, 1);
+        assert_eq!(
+            replay.journal.metadata().unwrap().len(),
+            (JOURNAL_HEADER + JOURNAL_RECORD) as u64
+        );
+        assert!(fs::read_dir(&directory).unwrap().count() <= 3);
+        drop(replay);
+        let recovered = ReplayState::open(directory).unwrap();
+        assert_eq!(recovered.entries.len(), 1);
+        assert!(recovered.nonces.contains(&"f".repeat(32)));
+        assert_eq!(recovered.high_water, 60_002);
+    }
 
     #[test]
     fn clock_checkpoint_does_not_block_peer_durability_or_lower_the_clock_floor() {
@@ -767,10 +1203,10 @@ mod tests {
                     assert_eq!(replay.high_water, checkpoint + 1);
                     assert_eq!(replay.durable_high_water, 0);
                     assert!(replay.nonces.contains(&format!("{:032x}", 0)));
-                    assert!(replay
-                        .directory
-                        .join(format!("{}-{:032x}", base + 60_000, 0))
-                        .exists());
+                    assert_eq!(
+                        replay.journal.metadata().unwrap().len(),
+                        (JOURNAL_HEADER + replay.records * JOURNAL_RECORD) as u64
+                    );
                     assert!(replay.pending.is_empty());
                 }
                 release.0.take().unwrap().send(()).unwrap();
@@ -932,10 +1368,10 @@ mod tests {
                 for remaining in [0, 256] {
                     let nonce = format!("{remaining:032x}");
                     assert!(replay.nonces.contains(&nonce));
-                    assert!(replay
-                        .directory
-                        .join(format!("{}-{nonce}", base + 1))
-                        .exists());
+                    assert_eq!(
+                        replay.journal.metadata().unwrap().len(),
+                        (JOURNAL_HEADER + replay.records * JOURNAL_RECORD) as u64
+                    );
                 }
                 assert!(replay.pending.remove(&format!("{:032x}", 0)));
             } else {
@@ -946,7 +1382,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_cleanup_failure_retains_unremoved_nonces_and_allows_recovery() {
+    fn compaction_failure_retains_live_nonces_and_allows_recovery() {
         let root = tempfile::tempdir().unwrap();
         let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
         let base = 1_700_000_000_000;
@@ -956,16 +1392,16 @@ mod tests {
             for nonce in 0..3 {
                 let nonce = format!("{nonce:032x}");
                 replay
-                    .reserve(base, base + 1, &nonce)
+                    .reserve(base, base + 60_000, &nonce)
                     .unwrap()
                     .sync_all()
                     .unwrap();
                 assert!(replay.pending.remove(&nonce));
             }
             replay.sync_directory().unwrap();
-            broken = replay.directory.join(format!("{}-{:032x}", base + 1, 2));
+            broken = replay.directory.join("journal-v2.tmp");
+            replay.records = MAX_REPLAYS;
         }
-        fs::remove_file(&broken).unwrap();
         fs::create_dir(&broken).unwrap();
         let method = "/gitstore.git.v1.GitService/CreateRepository";
         let request = signed_at(
@@ -987,19 +1423,21 @@ mod tests {
         {
             let replay = verifier.replay.lock().unwrap();
             assert!(!replay.maintenance_in_progress);
-            assert_eq!(replay.durable_high_water, base + 2);
-            assert_eq!(replay.entries.len(), 1);
+            assert_eq!(replay.durable_high_water, 0);
+            assert_eq!(replay.entries.len(), 3);
+            assert!(replay.journal_failed);
             assert!(replay.nonces.contains(&format!("{:032x}", 2)));
             assert!(replay.pending.is_empty());
         }
         fs::remove_dir(&broken).unwrap();
-        File::create(&broken).unwrap().sync_all().unwrap();
+        drop(verifier);
+        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
         verifier
             .verify_at(request.metadata(), method, request.get_ref(), base + 3)
             .unwrap();
         let replay = verifier.replay.lock().unwrap();
         assert!(!replay.maintenance_in_progress);
-        assert_eq!(replay.entries.len(), 1);
+        assert_eq!(replay.entries.len(), 4);
         assert!(replay.nonces.contains(&"f".repeat(32)));
         assert!(!broken.exists());
         assert!(replay.pending.is_empty());
@@ -1079,7 +1517,7 @@ mod tests {
             }
         }
         for failed in [false, true] {
-            let durability = Arc::new(ReplayDirectoryDurability::default());
+            let durability = Arc::new(ReplayDurability::default());
             let (entered, reporting) = mpsc::channel();
             let (release, resumed) = mpsc::channel();
             let (completed, completion) = mpsc::channel();
@@ -1142,7 +1580,7 @@ mod tests {
             }
         }
         for failed in [false, true] {
-            let durability = Arc::new(ReplayDirectoryDurability::default());
+            let durability = Arc::new(ReplayDurability::default());
             let calls = Arc::new(AtomicUsize::new(0));
             let (entered, entries) = mpsc::channel();
             let (first_release, first_wait) = mpsc::channel();
@@ -1290,8 +1728,8 @@ mod tests {
         );
         let replacement =
             ReplayState::open(verifier.replay.lock().unwrap().directory.clone()).unwrap();
-        assert!(replacement.nonces.contains(&b));
-        assert_eq!(replacement.high_water, now + 2);
+        assert!(!replacement.nonces.contains(&b));
+        assert_eq!(replacement.high_water, now + 4);
         reserve(now + 252, now + 60_000, &"e".repeat(32)).unwrap();
         let state = verifier.replay.lock().unwrap();
         assert!(state.pending.is_empty());
@@ -1344,10 +1782,10 @@ mod tests {
             let replay = verifier.replay.lock().unwrap();
             assert!(replay.pending.contains(&nonce));
             assert!(replay.nonces.contains(&nonce));
-            assert!(replay
-                .directory
-                .join(format!("{}-{nonce}", now + 60_000))
-                .exists());
+            assert_eq!(
+                replay.journal.metadata().unwrap().len(),
+                (JOURNAL_HEADER + replay.records * JOURNAL_RECORD) as u64,
+            );
         }
         file.sync_all().unwrap();
         {
@@ -1825,6 +2263,8 @@ mod tests {
             tonic::Code::ResourceExhausted
         );
         state.entries.clear();
+        fs::remove_file(directory.join("journal-v2")).unwrap();
+        fs::remove_file(directory.join("format-v2")).unwrap();
         fs::remove_dir(&directory).unwrap();
         assert_eq!(
             state
