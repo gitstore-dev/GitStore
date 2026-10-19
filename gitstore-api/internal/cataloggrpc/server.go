@@ -1305,7 +1305,11 @@ func (s *Server) AdmitResources(
 				return nil, err
 			}
 		}
-		if !refChecked {
+		_, namespaceHistoryAvailable := s.git.(committedManifestHistoryReader)
+		namespaceOnlySourceProof := convergeNamespacesOnly && namespaceHistoryAvailable
+		// Namespace convergence checks each accepted source's ancestry and bytes
+		// before its CAS; unrelated publications need not leave the whole ref idle.
+		if !refChecked && !namespaceOnlySourceProof {
 			current, err := s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit)
 			if err != nil {
 				return nil, admissionGitReadError("recheck ref", err)
@@ -1344,12 +1348,14 @@ func (s *Server) AdmitResources(
 		if admCtx.wasSuperseded() {
 			continue
 		}
-		current, err := s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit)
-		if err != nil {
-			return nil, admissionGitReadError("recheck ref", err)
-		}
-		if !current {
-			continue
+		if !namespaceOnlySourceProof {
+			current, err := s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit)
+			if err != nil {
+				return nil, admissionGitReadError("recheck ref", err)
+			}
+			if !current {
+				continue
+			}
 		}
 		return &catalogv1.AdmitResourcesResponse{}, nil
 	}

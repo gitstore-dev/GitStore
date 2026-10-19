@@ -2914,6 +2914,26 @@ sampled trace exporter, add no metric labels, and preserve authorization,
 publication locking and cancellation behavior. Older traces do not contain
 these measurements; span idle time cannot substitute for them.
 
+A subsequent instrumented diagnostic captured all **21** actual Git exchanges
+with no missing advertisement measurements. Maximum snapshot acquisition,
+worker queue and advertisement execution were **0.001208ms**, **0.588ms**
+and **0.944292ms**, respectively. These samples do not reproduce or explain
+the earlier exhausted cycle. Eight metadata cycles passed; the ninth push
+succeeded on its first attempt in **44.54ms**, but its exact-provenance watch
+timed out. The API logged exhausted Namespace convergence for that accepted
+commit. This is a different failure from push retry exhaustion; there is no
+complete throughput, replacement or visibility result for this diagnostic.
+
+Namespace-only convergence uses the existing per-manifest ancestry and exact
+source-byte proofs before its resource-version CAS, rather than requiring the
+entire branch to stop advancing between admission reads. This prevents
+unrelated publications from starving an unchanged Namespace source. Same-path
+rewrites, deletion/recreation and failed history proofs remain fail-closed;
+authorization and optimistic concurrency are unchanged. Mixed-resource
+admission and readers without history-proof support retain their whole-ref
+checks. This correction does not establish that the separate sustained Git
+retry regression or production capacity gate has been resolved.
+
 Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
 declaration is not a negotiated `have`. A stock-Git control still sent the
 complete tree and blob for a depth-limited request without any `have` lines;

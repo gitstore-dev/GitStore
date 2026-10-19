@@ -131,6 +131,7 @@ func TestRawNamespaceDisjointProvenanceRetainsAcceptedCommit(t *testing.T) {
 		proofError     error
 		differentBytes bool
 		withoutHistory bool
+		continuousTip  bool
 		advanceAt      int
 		superseded     bool
 		expectedCode   codes.Code
@@ -140,6 +141,10 @@ func TestRawNamespaceDisjointProvenanceRetainsAcceptedCommit(t *testing.T) {
 		{name: "advance at second ref check", advanceAt: 2},
 		{name: "advance at third ref check", advanceAt: 3},
 		{name: "advance at fourth ref check", advanceAt: 4},
+		{name: "continuously advancing disjoint tip", continuousTip: true},
+		{name: "continuous tip without history reader", continuousTip: true, withoutHistory: true, superseded: true},
+		{name: "continuous tip with later same-path rewrite", continuousTip: true, differentBytes: true, superseded: true},
+		{name: "continuous tip with unavailable history", continuousTip: true, proofError: grpcstatus.Error(codes.Unavailable, "Git unavailable"), expectedCode: codes.Unavailable},
 		{name: "same-path edit", proofError: grpcstatus.Error(codes.Aborted, "path was edited"), superseded: true},
 		{name: "deleted and restored", proofError: grpcstatus.Error(codes.Aborted, "path was deleted"), superseded: true},
 		{name: "missing path", proofError: grpcstatus.Error(codes.NotFound, "path absent"), superseded: true},
@@ -173,7 +178,9 @@ func TestRawNamespaceDisjointProvenanceRetainsAcceptedCommit(t *testing.T) {
 				require.Equal(t, testRepoID, repository)
 				require.Equal(t, path, requestedPath)
 				require.Equal(t, mine, ancestor)
-				require.Equal(t, theirs, tip)
+				if !tc.continuousTip {
+					require.Equal(t, theirs, tip)
+				}
 				return files[tip][path], tc.proofError
 			}
 			var gitReader cataloggrpc.GitReader = reader
@@ -194,21 +201,30 @@ func TestRawNamespaceDisjointProvenanceRetainsAcceptedCommit(t *testing.T) {
 			require.NoError(t, err)
 			current = theirs
 			checks := 0
-			if tc.advanceAt != 0 {
+			if tc.advanceAt != 0 || tc.continuousTip {
 				current = mine
 				reader.resolveRefFunc = func(context.Context, string, string) (string, error) {
 					checks++
-					if checks >= tc.advanceAt {
+					if tc.continuousTip {
+						current = fmt.Sprintf("%040x", checks)
+						files[current] = files[theirs]
+					} else if checks >= tc.advanceAt {
 						current = theirs
 					}
 					return current, nil
 				}
+			}
+			if tc.continuousTip {
+				srv = newCatalogServer(t, store, gitReader)
 			}
 			request.OldCommitSha, request.NewCommitSha = seed, mine
 			request.Authorization.Actor.Subject = "bob"
 			_, err = srv.AdmitResources(ctx, request)
 			require.Equal(t, tc.expectedCode, grpcstatus.Code(err))
 			require.GreaterOrEqual(t, checks, tc.advanceAt)
+			if tc.continuousTip {
+				require.Greater(t, checks, 1)
+			}
 			stored, readErr := store.GetNamespaceByName(ctx, "raw-provenance")
 			require.NoError(t, readErr)
 			if tc.superseded || tc.expectedCode != codes.OK {
