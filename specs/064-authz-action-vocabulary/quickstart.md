@@ -87,6 +87,23 @@ gate. In particular, the later full Namespace runs failed provenance contention
 before replacement; the short direct-routing diagnostic was not a fix or an
 acceptance pass. T078 and the overall specification remain open.
 
+### Lifecycle semantic-harness follow-up (2026-10-19)
+
+Repository lifecycle alpha/production now requires bounded before/after
+authorization evidence from both APIs: authenticated Namespace-list allow,
+exact unauthenticated deny without partial data, and matching unchanged loaded
+provider/policy/catalog snapshots. The artifact starts incomplete, is persisted
+atomically and cannot pass after a failed/incomplete lifecycle path. Postflight
+ties its run/mode/endpoints to distinct preflight processes and rejects missing,
+partial, legacy local-policy, mismatched or secret-bearing evidence.
+The Go probe rejects redirects, bounds response sizes/time and preserves
+pluggable provider identity and anonymous-disabled denial semantics.
+
+This is additional T066/T068 implementation coverage, not a new deployed alpha
+pass. Their broader workload/domain/fault obligations remain unchecked.
+Existing load, retry, deadline, replacement and resource gates are unchanged;
+the before/after probes do not establish the under-load authorization matrix.
+
 ### Non-capacity completion pass (2026-10-11, after `eff9e28`)
 
 - Added exact allow/deny watch/status recorder coverage and all-five-kind typed/

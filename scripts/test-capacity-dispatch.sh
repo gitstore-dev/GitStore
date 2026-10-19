@@ -306,6 +306,7 @@ for mutation in \
   'del(.replicas[1].denied)' '.replicas = [.replicas[0]]' \
   '.replicas[1].endpoint = .replicas[0].endpoint' \
   '.replicas[0].auth.policy.loaded = false' '.replicas[0].auth.policy.roles = 201' \
+  '.replicas[].auth.policy.apiVersion = "v1"' \
   '.replicas[0].auth.catalogDigest = ("b"*64)' \
   '.replicas[].auth.policy.digest = ("b"*64)' \
   '.replicas[0].token = "forbidden-material"' '.token = "forbidden-material"'; do
@@ -327,6 +328,45 @@ fi
 rm "${test_dir}/readiness-valid/authorization-probes.json"
 mv "${test_dir}/saved-readiness-probes.json" "${test_dir}/readiness-valid/authorization-probes.json"
 
+lifecycle_semantic_dir="${test_dir}/lifecycle-semantics"
+mkdir -p "${lifecycle_semantic_dir}"
+jq '.mode = "diagnostic" | .topology.liveApiReplicas = .topology.liveReplicas' \
+  "${test_dir}/readiness-valid/preflight-environment.json" >"${lifecycle_semantic_dir}/preflight-environment.json"
+jq '
+  def replicas: [.replicas[] | {endpoint,auth,allowed:true,denied:true,denialCode:"FORBIDDEN"}];
+  {schemaVersion:1,component:"repository-lifecycle-authorization",runID:"lifecycle-semantics",
+   mode:"diagnostic",passed:true,before:replicas,after:replicas}
+' "${test_dir}/original-readiness-probes.json" >"${lifecycle_semantic_dir}/authorization-probes.json"
+CAPACITY_RUN_ID=lifecycle-semantics "${repo_root}/scripts/validate-capacity-evidence.sh" \
+  "${lifecycle_semantic_dir}" repository lifecycle diagnostic postflight
+cp "${lifecycle_semantic_dir}/authorization-probes.json" "${test_dir}/original-lifecycle-probes.json"
+for mutation in \
+  '.passed = false' '.runID = "another-run"' '.mode = "alpha"' \
+  '.before = []' '.after = null' '.after[1].denied = false' '.after[0].allowed = false' \
+  '.after[0].denialCode = "NOT_FOUND"' '.after[0].auth.policy.digest = ("c"*64)' \
+  '.before[].auth.policy.apiVersion = "v1" | .after[].auth.policy.apiVersion = "v1"' \
+  '.before[].endpoint = "http://other-api.internal"' \
+  '.after[1].endpoint = .after[0].endpoint' \
+  '.before[0].auth.policy.loaded = false' '.after[0].token = "private-token-marker"' \
+  '.token = "private-token-marker"'; do
+  jq "${mutation}" "${test_dir}/original-lifecycle-probes.json" >"${lifecycle_semantic_dir}/authorization-probes.json"
+  if CAPACITY_RUN_ID=lifecycle-semantics "${repo_root}/scripts/validate-capacity-evidence.sh" \
+    "${lifecycle_semantic_dir}" repository lifecycle diagnostic postflight >/dev/null 2>&1; then
+    echo "Repository lifecycle accepted invalid authorization evidence: ${mutation}" >&2
+    exit 1
+  fi
+done
+cp "${test_dir}/original-lifecycle-probes.json" "${lifecycle_semantic_dir}/authorization-probes.json"
+mv "${lifecycle_semantic_dir}/authorization-probes.json" "${test_dir}/saved-lifecycle-probes.json"
+ln -s "${test_dir}/saved-lifecycle-probes.json" "${lifecycle_semantic_dir}/authorization-probes.json"
+if CAPACITY_RUN_ID=lifecycle-semantics "${repo_root}/scripts/validate-capacity-evidence.sh" \
+  "${lifecycle_semantic_dir}" repository lifecycle diagnostic postflight >/dev/null 2>&1; then
+  echo "Repository lifecycle accepted symlink authorization evidence" >&2
+  exit 1
+fi
+rm "${lifecycle_semantic_dir}/authorization-probes.json"
+mv "${test_dir}/saved-lifecycle-probes.json" "${lifecycle_semantic_dir}/authorization-probes.json"
+
 for removed_target in capacity-observability capacity-observability-down test-scylla-capacity test-namespace-admission-capacity test-namespace-watch-capacity test-namespace-watch-recovery; do
   if rg -q "^${removed_target}:" "${repo_root}/Makefile"; then
     echo "removed public target ${removed_target} is still defined" >&2
@@ -335,7 +375,27 @@ for removed_target in capacity-observability capacity-observability-down test-sc
 done
 
 mkdir -p "${test_dir}/evidence"
-printf '#!/usr/bin/env bash\necho "mock capacity command: $*"\nif [[ -n "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE:-}" ]]; then cp "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE}" "${MOCK_SERVICE_CONTAINERS_FILE}"; fi\nif [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" ]]; then touch "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}"; fi\n[[ "${FAIL_MAKE:-0}" != "1" ]]\n' >"${test_dir}/bin/make"
+export MOCK_LIFECYCLE_AUTH_FILE="${test_dir}/original-readiness-probes.json"
+cat >"${test_dir}/bin/make" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "mock capacity command: $*"
+if [[ -n "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE:-}" ]]; then
+  cp "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE}" "${MOCK_SERVICE_CONTAINERS_FILE}"
+fi
+if [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" ]]; then
+  touch "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}"
+fi
+if [[ "$*" == *"_capacity-repository-lifecycle"* && "${MODE:-}" != diagnostic ]]; then
+  jq --arg run "${CAPACITY_RUN_ID}" --slurpfile fixture "${MOCK_LIFECYCLE_AUTH_FILE}" '
+    def replicas: [.topology.liveApiReplicas[] |
+      {endpoint,auth:$fixture[0].replicas[0].auth,allowed:true,denied:true,denialCode:"FORBIDDEN"}];
+    {schemaVersion:1,component:"repository-lifecycle-authorization",runID:$run,
+     mode:.mode,passed:true,before:replicas,after:replicas}
+  ' "${CAPACITY_EVIDENCE_DIR}/preflight-environment.json" >"${CAPACITY_EVIDENCE_DIR}/authorization-probes.json"
+fi
+[[ "${FAIL_MAKE:-0}" != "1" ]]
+EOF
 cat >"${test_dir}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == exec ]]; then

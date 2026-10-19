@@ -14,6 +14,17 @@ Valid target/profile pairs are `api/readiness`, `api/authorization`, `namespace/
 two-replica soak. `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
 The dispatcher is the only public capacity entry point.
 
+Repository lifecycle alpha/production now also emits bounded
+`authorization-probes.json`: exact authenticated Namespace-list allow and
+unauthenticated deny checks on both APIs before work and after the completed
+load/recovery/replacement path, with matching unchanged provider/policy/catalog
+snapshots. The artifact starts incomplete and the postflight verifier requires
+a passing run-bound result tied to the distinct preflight API endpoints.
+Expected denials do not count as unexpected HTTP/domain failures. These checks
+do not replace the under-load permission/fault matrix or any existing workload,
+latency, retry, replacement or resource gate; diagnostics retain their existing
+behavior.
+
 ## Local telemetry and live profiling
 
 `CAPACITY_OBSERVABILITY=full` extends the existing Prometheus selector with an

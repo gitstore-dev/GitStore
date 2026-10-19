@@ -143,6 +143,26 @@ if [[ "${target}/${profile}" == api/authorization && "${phase}" == postflight ]]
   exit 0
 fi
 
+readonly authorization_snapshot_filter='
+  def integer: type == "number" and floor == .;
+  def digest: type == "string" and test("^[0-9a-f]{64}$");
+  def snapshot:
+    keys == ["authn","authz","catalogDigest","policy","userdir"] and
+    (.catalogDigest | digest) and
+    (.authn | type == "array" and length > 0 and length <= 5 and (unique | length) == length) and
+    all(.authn[]; . == "static-users" or . == "anonymous" or . == "oidc-jwt" or
+      . == "serviceaccount-assertion" or . == "serviceaccount-jwt") and
+    (.authz | type == "string" and length > 0 and length <= 64) and
+    (.userdir | type == "string" and length > 0 and length <= 64) and
+    (.authz != "rbac-local" or .policy.apiVersion == "rbac.authorization.gitstore.dev/v1beta1") and
+    (.policy |
+      keys == ["apiVersion","bindings","digest","loaded","roles","rules"] and .loaded == true and
+      (.apiVersion | type == "string" and length > 0 and length <= 128) and
+      (.digest | digest) and (.roles | integer) and .roles >= 0 and .roles <= 200 and
+      (.bindings | integer) and .bindings >= 0 and .bindings <= 1000 and
+      (.rules | integer) and .rules >= 0 and .rules <= 2000);
+'
+
 if [[ "${target}/${profile}" == api/readiness && "${phase}" == postflight &&
       ("${mode}" != diagnostic || -n "${CAPACITY_TOKEN_FILE:-}${CAPACITY_TOKEN:-}" ||
        -e "${evidence_dir}/authorization-probes.json" || -L "${evidence_dir}/authorization-probes.json") ]]; then
@@ -159,23 +179,7 @@ if [[ "${target}/${profile}" == api/readiness && "${phase}" == postflight &&
     }
     preflight="$(jq -c . "${evidence_dir}/preflight-environment.json")"
   fi
-  jq -e --arg mode "${mode}" --arg run "${CAPACITY_RUN_ID:-}" --argjson preflight "${preflight}" '
-    def integer: type == "number" and floor == .;
-    def digest: type == "string" and test("^[0-9a-f]{64}$");
-    def snapshot:
-      keys == ["authn","authz","catalogDigest","policy","userdir"] and
-      (.catalogDigest | digest) and
-      (.authn | type == "array" and length > 0 and length <= 5 and (unique | length) == length) and
-      all(.authn[]; . == "static-users" or . == "anonymous" or . == "oidc-jwt" or
-        . == "serviceaccount-assertion" or . == "serviceaccount-jwt") and
-      (.authz | type == "string" and length > 0 and length <= 64) and
-      (.userdir | type == "string" and length > 0 and length <= 64) and
-      (.policy |
-        keys == ["apiVersion","bindings","digest","loaded","roles","rules"] and .loaded == true and
-        (.apiVersion | type == "string" and length > 0 and length <= 128) and
-        (.digest | digest) and (.roles | integer) and .roles >= 0 and .roles <= 200 and
-        (.bindings | integer) and .bindings >= 0 and .bindings <= 1000 and
-        (.rules | integer) and .rules >= 0 and .rules <= 2000);
+  jq -e --arg mode "${mode}" --arg run "${CAPACITY_RUN_ID:-}" --argjson preflight "${preflight}" "${authorization_snapshot_filter}"'
     keys == ["component","denialCode","deniedIdentity","droppedIterations","duration","maxVUs","measurementSeconds","mismatches",
       "mode","passed","preAllocatedVUs","rate","replicas","runID","schemaVersion"] and
     .schemaVersion == 1 and .component == "api-readiness-authorization" and
@@ -213,6 +217,44 @@ if [[ "${target}/${profile}" == api/readiness && "${phase}" == postflight &&
     '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,passed:true,scope:"readiness-and-baseline-authorization"}' \
     >"${evidence_file}"
   exit 0
+fi
+
+if [[ "${target}/${profile}" == repository/lifecycle && "${phase}" == postflight &&
+      ("${mode}" != diagnostic || -e "${evidence_dir}/authorization-probes.json" ||
+       -L "${evidence_dir}/authorization-probes.json") ]]; then
+  path="${evidence_dir}/authorization-probes.json"
+  preflight="${evidence_dir}/preflight-environment.json"
+  for artifact in "${path}" "${preflight}"; do
+    [[ -f "${artifact}" && ! -L "${artifact}" && "$(wc -c <"${artifact}")" -le 1048576 ]] || {
+      echo "Repository lifecycle requires regular bounded authorization and preflight evidence" >&2
+      exit 2
+    }
+  done
+  jq -e --arg mode "${mode}" --arg run "${CAPACITY_RUN_ID:-}" --slurpfile preflight "${preflight}" \
+    "${authorization_snapshot_filter}"'
+    def replicas:
+      type == "array" and length == 2 and
+      ([.[].endpoint] | unique | length) == 2 and
+      all(.[];
+        keys == ["allowed","auth","denialCode","denied","endpoint"] and
+        (.endpoint | type == "string" and test("^https?://[^@\\s,?#]+$")) and
+        (.auth | snapshot) and .allowed == true and .denied == true and
+        .denialCode == (if (.auth.authn | index("anonymous")) != null then "FORBIDDEN" else "UNAUTHENTICATED" end));
+    keys == ["after","before","component","mode","passed","runID","schemaVersion"] and
+    .schemaVersion == 1 and .component == "repository-lifecycle-authorization" and
+    .mode == $mode and .runID == $run and .passed == true and
+    (.before | replicas) and (.after | replicas) and
+    ([.before[].auth, .after[].auth] | unique | length) == 1 and
+    ([.before[].endpoint] | sort) == ([.after[].endpoint] | sort) and
+    $preflight[0].passed == true and $preflight[0].mode == $mode and
+    ([.before[].endpoint] | sort) == ([$preflight[0].topology.liveApiReplicas[].endpoint] | sort) and
+    ($preflight[0].topology.liveApiReplicas | length) == 2 and
+    all($preflight[0].topology.liveApiReplicas[]; .instanceID | type == "string" and length > 0) and
+    ([$preflight[0].topology.liveApiReplicas[].instanceID] | unique | length) == 2
+  ' "${path}" >/dev/null || {
+    echo "Repository lifecycle authorization evidence failed exact outcomes, snapshot or replica checks" >&2
+    exit 1
+  }
 fi
 
 if [[ "${mode}" == "diagnostic" ]]; then

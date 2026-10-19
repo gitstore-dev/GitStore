@@ -184,6 +184,27 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		return
 	}
 
+	var authorization repositoryCapacityAuthorizationEvidence
+	if cfg.mode != capacityModeDiagnostic {
+		authorization = repositoryCapacityAuthorizationEvidence{
+			SchemaVersion: 1, Component: "repository-lifecycle-authorization", RunID: os.Getenv("CAPACITY_RUN_ID"), Mode: cfg.mode,
+		}
+		directory := os.Getenv("CAPACITY_EVIDENCE_DIR")
+		require.NotEmpty(t, directory, "authorization acceptance requires a dispatcher evidence directory")
+		persist := func() {
+			if t.Failed() {
+				authorization.Passed = false
+			}
+			require.NoError(t, writeSecretCapacityPrivateJSON(filepath.Join(directory, "authorization-probes.json"), authorization))
+		}
+		persist()
+		t.Cleanup(persist)
+		var err error
+		authorization.Before, err = repositoryCapacityAuthorizationProbes(t.Context(), client, []string{cfg.apiA, cfg.apiB}, cfg.token)
+		require.NoError(t, err, "both replicas must pass exact authorization probes before lifecycle work")
+		persist()
+	}
+
 	var dataset secretCapacityDatasetObservations
 	var secretFaultDriver *secretCapacityFaultDriver
 	if secretCapacityRequested() {
@@ -393,6 +414,15 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 			ControllersBefore: secretControllersBefore[:], ControllersAfter: secretControllersAfter[:], RepositoryLifecyclePassed: true,
 		}))
 	}
+	if cfg.mode != capacityModeDiagnostic {
+		var err error
+		authorization.After, err = repositoryCapacityAuthorizationProbes(t.Context(), client, []string{cfg.apiA, cfg.apiB}, cfg.token)
+		require.NoError(t, err, "both replicas must retain exact authorization outcomes after lifecycle work and replacement")
+		for i := range authorization.Before {
+			require.True(t, authorization.Before[i].Auth.equal(authorization.After[i].Auth), "lifecycle work changed the active provider, policy or catalog snapshot")
+		}
+		authorization.Passed = true
+	}
 	t.Logf("Repository lifecycle capacity passed: mode=%s replay=%d replay_p95=%s subscribers=%d admitted=%d duration=%s", cfg.mode, cfg.replayEvents, replayP95, cfg.subscribers, load.admitted, time.Since(soakStarted))
 }
 
@@ -457,6 +487,310 @@ type repositoryCapacityWindowErrorWriter struct{}
 
 func (repositoryCapacityWindowErrorWriter) Write([]byte) (int, error) {
 	return 0, io.ErrClosedPipe
+}
+
+type repositoryCapacityAuthorizationSnapshot struct {
+	Authn         []string `json:"authn"`
+	Authz         string   `json:"authz"`
+	Userdir       string   `json:"userdir"`
+	CatalogDigest string   `json:"catalogDigest"`
+	Policy        struct {
+		Loaded     bool   `json:"loaded"`
+		APIVersion string `json:"apiVersion"`
+		Digest     string `json:"digest"`
+		Roles      int    `json:"roles"`
+		Bindings   int    `json:"bindings"`
+		Rules      int    `json:"rules"`
+	} `json:"policy"`
+}
+
+type repositoryCapacityAuthorizationReplica struct {
+	Endpoint   string                                  `json:"endpoint"`
+	Auth       repositoryCapacityAuthorizationSnapshot `json:"auth"`
+	Allowed    bool                                    `json:"allowed"`
+	Denied     bool                                    `json:"denied"`
+	DenialCode string                                  `json:"denialCode"`
+}
+
+type repositoryCapacityAuthorizationEvidence struct {
+	SchemaVersion int                                      `json:"schemaVersion"`
+	Component     string                                   `json:"component"`
+	RunID         string                                   `json:"runID"`
+	Mode          capacityMode                             `json:"mode"`
+	Passed        bool                                     `json:"passed"`
+	Before        []repositoryCapacityAuthorizationReplica `json:"before"`
+	After         []repositoryCapacityAuthorizationReplica `json:"after"`
+}
+
+func (s repositoryCapacityAuthorizationSnapshot) equal(other repositoryCapacityAuthorizationSnapshot) bool {
+	return slices.Equal(s.Authn, other.Authn) && s.Authz == other.Authz &&
+		s.Userdir == other.Userdir && s.CatalogDigest == other.CatalogDigest && s.Policy == other.Policy
+}
+
+func repositoryCapacityAuthorizationProbes(ctx context.Context, client *http.Client, endpoints []string, token string) ([]repositoryCapacityAuthorizationReplica, error) {
+	invalid := errors.New("capacity authorization probes failed exact response, snapshot or replica checks (details redacted)")
+	if client == nil || len(endpoints) != 2 || endpoints[0] == endpoints[1] || strings.TrimSpace(token) == "" {
+		return nil, invalid
+	}
+	probeClient := *client
+	probeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	readJSON := func(endpoint, path, credential string, destination any) (int, error) {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		method := http.MethodGet
+		var body io.Reader
+		if path == "/graphql" {
+			method = http.MethodPost
+			body = strings.NewReader(`{"query":"query { namespaces(first: 1) { edges { node { id } } } }","variables":{}}`)
+		}
+		request, err := http.NewRequestWithContext(ctx, method, endpoint+path, body)
+		if err != nil {
+			return 0, invalid
+		}
+		request.Header.Set("Content-Type", "application/json")
+		if credential != "" {
+			request.Header.Set("Authorization", "Bearer "+credential)
+		}
+		response, err := probeClient.Do(request)
+		if err != nil {
+			if ctx.Err() != nil {
+				return 0, fmt.Errorf("capacity authorization probe canceled: %w", ctx.Err())
+			}
+			return 0, invalid
+		}
+		defer response.Body.Close()
+		data, err := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
+		if err != nil || len(data) > 64<<10 || json.Unmarshal(data, destination) != nil {
+			return 0, invalid
+		}
+		return response.StatusCode, nil
+	}
+	digest := func(value string) bool {
+		_, err := hex.DecodeString(value)
+		return len(value) == 64 && value == strings.ToLower(value) && err == nil
+	}
+	replicas := make([]repositoryCapacityAuthorizationReplica, 0, 2)
+	for _, endpoint := range endpoints {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
+			parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
+			strings.HasSuffix(endpoint, "/") {
+			return nil, invalid
+		}
+		var ready struct {
+			Auth json.RawMessage `json:"auth"`
+		}
+		status, err := readJSON(endpoint, "/ready", "", &ready)
+		if err != nil {
+			return nil, err
+		}
+		auth := new(repositoryCapacityAuthorizationSnapshot)
+		var shape struct {
+			Policy map[string]json.RawMessage
+		}
+		if json.Unmarshal(ready.Auth, auth) != nil || json.Unmarshal(ready.Auth, &shape) != nil ||
+			status != http.StatusOK || !auth.Policy.Loaded ||
+			!digest(auth.CatalogDigest) || !digest(auth.Policy.Digest) ||
+			auth.Authz == "" || len(auth.Authz) > 64 || auth.Userdir == "" || len(auth.Userdir) > 64 ||
+			len(auth.Authn) == 0 || len(auth.Authn) > 5 ||
+			auth.Policy.APIVersion == "" || len(auth.Policy.APIVersion) > 128 ||
+			auth.Policy.Roles < 0 || auth.Policy.Roles > 200 ||
+			auth.Policy.Bindings < 0 || auth.Policy.Bindings > 1000 || auth.Policy.Rules < 0 || auth.Policy.Rules > 2000 ||
+			(auth.Authz == "rbac-local" && auth.Policy.APIVersion != "rbac.authorization.gitstore.dev/v1beta1") {
+			return nil, invalid
+		}
+		for _, field := range []string{"roles", "bindings", "rules"} {
+			value := bytes.TrimSpace(shape.Policy[field])
+			if len(value) == 0 || bytes.Equal(value, []byte("null")) {
+				return nil, invalid
+			}
+		}
+		for i, provider := range auth.Authn {
+			if provider == "" || len(provider) > 64 || slices.Contains(auth.Authn[:i], provider) {
+				return nil, invalid
+			}
+		}
+		if len(replicas) != 0 && !auth.equal(replicas[0].Auth) {
+			return nil, invalid
+		}
+		var allow gqlResponse
+		status, err = readJSON(endpoint, "/graphql", token, &allow)
+		if err != nil {
+			return nil, err
+		}
+		var data struct {
+			Namespaces *struct {
+				Edges []struct {
+					Node *struct{ ID string }
+				}
+			}
+		}
+		if status != http.StatusOK || len(allow.Errors) != 0 || json.Unmarshal(allow.Data, &data) != nil ||
+			data.Namespaces == nil || data.Namespaces.Edges == nil || len(data.Namespaces.Edges) > 1 {
+			return nil, invalid
+		}
+		for _, edge := range data.Namespaces.Edges {
+			if edge.Node == nil || edge.Node.ID == "" {
+				return nil, invalid
+			}
+		}
+		denialCode := "UNAUTHENTICATED"
+		if slices.Contains(auth.Authn, "anonymous") {
+			denialCode = "FORBIDDEN"
+		}
+		var deny gqlResponse
+		status, err = readJSON(endpoint, "/graphql", "", &deny)
+		if err != nil {
+			return nil, err
+		}
+		if (status != http.StatusOK && !(denialCode == "UNAUTHENTICATED" && status == http.StatusUnauthorized)) ||
+			(len(deny.Data) != 0 && !bytes.Equal(bytes.TrimSpace(deny.Data), []byte("null"))) || len(deny.Errors) != 1 {
+			return nil, invalid
+		}
+		var operationError struct {
+			Extensions struct{ Code string }
+		}
+		if json.Unmarshal(deny.Errors[0], &operationError) != nil || operationError.Extensions.Code != denialCode {
+			return nil, invalid
+		}
+		replicas = append(replicas, repositoryCapacityAuthorizationReplica{
+			Endpoint: endpoint, Auth: *auth, Allowed: true, Denied: true, DenialCode: denialCode,
+		})
+	}
+	return replicas, nil
+}
+
+func TestSecretCapacityRepositoryAuthorizationProbes(t *testing.T) {
+	for _, mutation := range []string{"", "alternate-provider", "no-anonymous", "wrong-denial", "partial-data", "multiple-errors", "empty-allow",
+		"missing-snapshot", "missing-counts", "null-counts", "different-policy", "different-provider", "http-failure", "oversized"} {
+		t.Run(mutation, func(t *testing.T) {
+			auth := repositoryCapacityAuthorizationSnapshot{
+				Authn: []string{"static-users", "anonymous"}, Authz: "rbac-local",
+				Userdir: "static-users", CatalogDigest: strings.Repeat("a", 64),
+			}
+			auth.Policy.Loaded, auth.Policy.APIVersion, auth.Policy.Digest = true, "rbac.authorization.gitstore.dev/v1beta1", strings.Repeat("b", 64)
+			auth.Policy.Roles, auth.Policy.Bindings, auth.Policy.Rules = 1, 1, 1
+			if mutation == "alternate-provider" {
+				auth.Authz, auth.Policy.APIVersion = "another-provider", "provider-policy/v1"
+			}
+			if mutation == "no-anonymous" {
+				auth.Authn = []string{"static-users"}
+			}
+			var calls [2]atomic.Int64
+			var servers []*httptest.Server
+			for replica := range 2 {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls[replica].Add(1)
+					switch r.URL.Path {
+					case "/ready":
+						snapshot := auth
+						if replica == 1 && mutation == "different-policy" {
+							snapshot.Policy.Digest = strings.Repeat("c", 64)
+						}
+						if replica == 1 && mutation == "different-provider" {
+							snapshot.Authz = "another-provider"
+						}
+						if mutation == "missing-snapshot" {
+							_, _ = io.WriteString(w, `{"ready":true}`)
+						} else if mutation == "missing-counts" || mutation == "null-counts" {
+							counts := ""
+							if mutation == "null-counts" {
+								counts = `,"roles":null,"bindings":null,"rules":null`
+							}
+							_, _ = io.WriteString(w, `{"auth":{"authn":["anonymous"],"authz":"rbac-local","userdir":"static-users","catalogDigest":"`+
+								auth.CatalogDigest+`","policy":{"loaded":true,"apiVersion":"rbac.authorization.gitstore.dev/v1beta1","digest":"`+
+								auth.Policy.Digest+`"`+counts+`}}}`)
+						} else {
+							require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"auth": snapshot}))
+						}
+					case "/graphql":
+						if mutation == "http-failure" {
+							w.WriteHeader(http.StatusForbidden)
+							_, _ = io.WriteString(w, "private-response-marker")
+						} else if mutation == "oversized" {
+							_, _ = io.WriteString(w, strings.Repeat("private-response-marker", 4096))
+						} else if r.Header.Get("Authorization") == "Bearer private-token-marker" {
+							body := `{"data":{"namespaces":{"edges":[]}}}`
+							if mutation == "empty-allow" {
+								body = `{"data":{"namespaces":null}}`
+							}
+							_, _ = io.WriteString(w, body)
+						} else {
+							require.Empty(t, r.Header.Get("Authorization"), "anonymous probes must not forward the allowed credential")
+							body := `{"data":null,"errors":[{"message":"private-response-marker","extensions":{"code":"FORBIDDEN"}}]}`
+							switch mutation {
+							case "wrong-denial":
+								body = strings.ReplaceAll(body, "FORBIDDEN", "NOT_FOUND")
+							case "partial-data":
+								body = strings.Replace(body, `"data":null`, `"data":{"namespaces":{"edges":[]}}`, 1)
+							case "multiple-errors":
+								body = `{"errors":[{"extensions":{"code":"FORBIDDEN"}},{"extensions":{"code":"FORBIDDEN"}}]}`
+							case "no-anonymous":
+								body = strings.ReplaceAll(body, "FORBIDDEN", "UNAUTHENTICATED")
+								w.WriteHeader(http.StatusUnauthorized)
+							}
+							_, _ = io.WriteString(w, body)
+						}
+					default:
+						t.Errorf("unexpected authorization probe path %s", r.URL.Path)
+						w.WriteHeader(http.StatusNotFound)
+					}
+				}))
+				t.Cleanup(server.Close)
+				servers = append(servers, server)
+			}
+			result, err := repositoryCapacityAuthorizationProbes(t.Context(), http.DefaultClient,
+				[]string{servers[0].URL, servers[1].URL}, "private-token-marker")
+			if mutation == "" || mutation == "alternate-provider" || mutation == "no-anonymous" {
+				require.NoError(t, err)
+				require.Len(t, result, 2)
+				for i, replica := range result {
+					require.Equal(t, int64(3), calls[i].Load())
+					require.Equal(t, servers[i].URL, replica.Endpoint)
+					require.Equal(t, auth, replica.Auth)
+					require.True(t, replica.Allowed)
+					require.True(t, replica.Denied)
+					if mutation == "no-anonymous" {
+						require.Equal(t, "UNAUTHENTICATED", replica.DenialCode)
+					} else {
+						require.Equal(t, "FORBIDDEN", replica.DenialCode)
+					}
+				}
+				data, err := json.Marshal(result)
+				require.NoError(t, err)
+				require.NotContains(t, string(data), "private-")
+			} else {
+				require.Error(t, err)
+				require.NotContains(t, err.Error(), "private-")
+			}
+		})
+	}
+}
+
+func TestSecretCapacityRepositoryAuthorizationProbeBounds(t *testing.T) {
+	var redirected atomic.Int64
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirected.Add(1)
+		_, _ = io.WriteString(w, `{"ready":true}`)
+	}))
+	t.Cleanup(sink.Close)
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, sink.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+	_, err := repositoryCapacityAuthorizationProbes(t.Context(), http.DefaultClient, []string{source.URL, sink.URL}, "private-token-marker")
+	require.Error(t, err)
+	require.Zero(t, redirected.Load(), "probes must not follow redirects to a different process or credential recipient")
+	for _, endpoints := range [][]string{{}, {source.URL}, {source.URL, source.URL}, {"http://user:password@localhost", sink.URL}} {
+		_, err := repositoryCapacityAuthorizationProbes(t.Context(), http.DefaultClient, endpoints, "private-token-marker")
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "private-")
+		require.NotContains(t, err.Error(), "password")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = repositoryCapacityAuthorizationProbes(ctx, http.DefaultClient, []string{source.URL, sink.URL}, "private-token-marker")
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func validateRepositoryCapacityWorkload(workload string, mode capacityMode, secretScenario bool) error {
