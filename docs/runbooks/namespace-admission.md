@@ -3033,8 +3033,23 @@ can be an intermediate member rather than the pre-publication head. Each
 successful caller's RPC span retains its own commit and parent attributes plus
 `git.write.batch_size`. Native contract checks cover authored history, repeated
 paths, cohort splitting, real reference-conflict rebuilding, cancellation,
-capacity recovery and corrupt-head rejection. Deployed cohort frequency and
-sustained performance remain unestablished; this is not a passing capacity gate.
+capacity recovery and corrupt-head rejection.
+
+A subsequent five-minute diagnostic on two APIs, two controllers, singleton Git
+and three Scylla nodes acknowledged all **3,400** offered mutations with no
+failures, drops or duplicate deliveries. It retained 1,000 subscribers, the
+50-resource pool, 20 mutation workers, 10/s scheduling plus 100-operation minute
+bursts, and the eight-attempt/30-second Git push budget. All four metadata
+cycles passed. Cohorts formed naturally, without holding competing writers.
+The complete native service-lifetime log recorded **13,695 backing-file commits
+in 11,780 head publications**, with cohort sizes up to 15; these counts include
+setup, replay and drain, not just the offered-load window.
+
+This establishes activation, **not a sustained contention fix or throughput
+ceiling**. The diagnostic used no baseline stabilization, a 10-second post-load
+window and no replacement. Visibility p95 was **1.206s**, exceeding the 1s
+production target; p99 was **1.510s**. It is neither a passing production gate
+nor a matched performance comparison with the published image.
 
 Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
 declaration is not a negotiated `have`. A stock-Git control still sent the
