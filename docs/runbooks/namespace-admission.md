@@ -2748,6 +2748,25 @@ It was canceled after that explicit failure, before the scheduled rolling
 replacement. The cache therefore has **not resolved the full gate**; this
 attempt supplies no completed-run acceptance or sustainable-throughput result.
 
+A paired five-minute diagnostic then changed only the Linux client's endpoint
+routing: direct API container DNS instead of the VM-to-host-to-VM published-port
+path. The compiled test binary, service images, client limits, offered workload
+and retry budgets matched the earlier five-minute control.
+
+| Measurement | Published-port route | Direct container route |
+| --- | --- | --- |
+| Mutation-and-watch acknowledgements | 3,399/3,399, 11.33/s | 3,399/3,399, 11.33/s |
+| Visibility p95 / p99 | 1.462s / 1.746s | 1.024s / 1.198s |
+| Replay p95, 20 samples | 2.934s | 1.924s |
+| Successful push attempt in each of four cycles | 3, 1, 3, 5 | 1, 1, 2, 1 |
+
+Both had zero errors, duplicate deliveries, backpressure and observed client
+CPU-quota throttling. This single sequential pair supports investigating routing
+overhead, not a claim of exclusive causation or a server fix. The direct-route
+visibility p95 still exceeded 1s; neither short run exercised replacement or
+established sustained provenance success. Any longer direct-route result must
+declare that routing explicitly rather than imply the earlier route passed.
+
 Full production acceptance and per-operation sustainable ceilings remain
 unestablished. Fixed offered rates, short diagnostics and evaluator-only
 decisions must not be advertised as those ceilings.
