@@ -2904,6 +2904,16 @@ replacement, so there is no complete throughput, visibility or drain result.
 The disposable deployment was removed and the original deployment remained
 unchanged. **The sustained gate remains failed; no fix is claimed.**
 
+For new instrumented runs, the native `InfoRefs` server span records three
+separate wall-clock intervals: `git.advertisement.snapshot_acquisition_ms`
+around snapshot acquisition, `git.advertisement.blocking_queue_ms` until the
+advertisement worker starts, and `git.advertisement.execution_ms` for the
+worker's advertisement work. Snapshot acquisition includes runtime wake-up
+scheduling; none of these fields measures CPU time. They use the existing
+sampled trace exporter, add no metric labels, and preserve authorization,
+publication locking and cancellation behavior. Older traces do not contain
+these measurements; span idle time cannot substitute for them.
+
 Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
 declaration is not a negotiated `have`. A stock-Git control still sent the
 complete tree and blob for a depth-limited request without any `have` lines;

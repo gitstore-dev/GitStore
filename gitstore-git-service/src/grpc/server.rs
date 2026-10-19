@@ -2176,14 +2176,26 @@ impl GitService for GitServiceImpl {
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_snapshot_lock(&self.repo_locks, &req.repository_id);
+        let rpc_span = tracing::Span::current();
+        let snapshot_started = std::time::Instant::now();
         let guard = lock.read_owned().await;
+        rpc_span.set_attribute(
+            "git.advertisement.snapshot_acquisition_ms",
+            snapshot_started.elapsed().as_secs_f64() * 1000.0,
+        );
         let service_enum = req.service;
 
+        let queued_at = std::time::Instant::now();
         let advertisement = crate::spawn_blocking(move || {
             let _guard = guard;
+            rpc_span.set_attribute(
+                "git.advertisement.blocking_queue_ms",
+                queued_at.elapsed().as_secs_f64() * 1000.0,
+            );
+            let execution_started = std::time::Instant::now();
             let pack_server = crate::git::pack_server::HttpPackServer::new(repo_path, 0);
             let svc = proto::Service::try_from(service_enum).unwrap_or(proto::Service::Unspecified);
-            match svc {
+            let result = match svc {
                 proto::Service::GitUploadPack => pack_server
                     .advertise_upload_pack_refs()
                     .map_err(|e| Status::internal(format!("upload-pack advertise: {}", e))),
@@ -2191,7 +2203,12 @@ impl GitService for GitServiceImpl {
                     .advertise_receive_pack_refs()
                     .map_err(|e| Status::internal(format!("receive-pack advertise: {}", e))),
                 _ => Err(Status::invalid_argument("unknown service")),
-            }
+            };
+            rpc_span.set_attribute(
+                "git.advertisement.execution_ms",
+                execution_started.elapsed().as_secs_f64() * 1000.0,
+            );
+            result
         })
         .await
         .map_err(|e| Status::internal(format!("task join: {}", e)))??;
@@ -6074,24 +6091,146 @@ mod tests {
         find_blob_in_tree(&repo, tree_id, "products/new.md").unwrap();
     }
 
+    #[derive(Clone, Debug, Default)]
+    struct CapturedSpans(Arc<std::sync::Mutex<Vec<opentelemetry_sdk::trace::SpanData>>>);
+
+    impl opentelemetry_sdk::trace::SpanExporter for CapturedSpans {
+        async fn export(
+            &self,
+            batch: Vec<opentelemetry_sdk::trace::SpanData>,
+        ) -> opentelemetry_sdk::error::OTelSdkResult {
+            self.0.lock().unwrap().extend(batch);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_info_refs_phase_telemetry_separates_snapshot_and_blocking_queue_waits() {
+        use opentelemetry::trace::TracerProvider;
+        use tracing::Instrument;
+        use tracing_subscriber::prelude::*;
+
+        let captured = CapturedSpans::default();
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn)
+            .with_simple_exporter(captured.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer().with_tracer(provider.tracer("advertisement phases")),
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let (snapshot_held_ms, blocking_held_ms) =
+            tracing::subscriber::with_default(subscriber, || {
+                runtime.block_on(async {
+                    let root = TempDir::new().unwrap();
+                    repo_with_commit(root.path(), TEST_REPO_D);
+                    let service = make_test_service(root.path());
+                    let snapshot = get_or_insert_snapshot_lock(&service.repo_locks, TEST_REPO_D);
+                    let writer = snapshot.write().await;
+                    let request = signed_test_request(InfoRefsRequest {
+                        repository_id: TEST_REPO_D.into(),
+                        service: Service::GitUploadPack as i32,
+                        authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+                    });
+                    let envelope = request
+                        .metadata()
+                        .get(crate::auth::interceptor::SIGNATURE_HEADER)
+                        .unwrap()
+                        .to_str()
+                        .unwrap();
+                    let fields: Vec<_> = envelope.split(':').collect();
+                    let nonce_path = root
+                        .path()
+                        .join(".rpc-replay-v1")
+                        .join(format!("{}-{}", fields[1], fields[2]));
+                    let mut reader = Box::pin(
+                        service
+                            .info_refs(request)
+                            .instrument(tracing::info_span!("advertisement.phases")),
+                    );
+                    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                        std::future::poll_fn(|cx| {
+                            assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                            if nonce_path.exists() {
+                                std::task::Poll::Ready(())
+                            } else {
+                                cx.waker().wake_by_ref();
+                                std::task::Poll::Pending
+                            }
+                        })
+                        .await;
+                    })
+                    .await
+                    .unwrap();
+                    let (release, receive) = std::sync::mpsc::channel::<()>();
+                    let (started, ready) = tokio::sync::oneshot::channel();
+                    let blocker = crate::spawn_blocking(move || {
+                        let _ = started.send(());
+                        let _ = receive.recv();
+                    });
+                    ready.await.unwrap();
+                    std::future::poll_fn(|cx| {
+                        assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                        std::task::Poll::Ready(())
+                    })
+                    .await;
+                    let held = std::time::Instant::now();
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    let snapshot_held_ms = held.elapsed().as_secs_f64() * 1000.0;
+                    drop(writer);
+                    std::future::poll_fn(|cx| {
+                        assert!(std::future::Future::poll(reader.as_mut(), cx).is_pending());
+                        std::task::Poll::Ready(())
+                    })
+                    .await;
+                    assert!(snapshot.try_write().is_err());
+                    let held = std::time::Instant::now();
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    let blocking_held_ms = held.elapsed().as_secs_f64() * 1000.0;
+                    drop(release);
+                    blocker.await.unwrap();
+                    reader.as_mut().await.unwrap();
+                    drop(reader);
+                    assert!(snapshot.try_write().is_ok());
+                    (snapshot_held_ms, blocking_held_ms)
+                })
+            });
+        provider.force_flush().unwrap();
+        let spans = captured.0.lock().unwrap();
+        let span = spans
+            .iter()
+            .find(|span| span.name == "advertisement.phases")
+            .unwrap();
+        let durations: std::collections::BTreeMap<_, _> = span
+            .attributes
+            .iter()
+            .filter_map(|attribute| match attribute.value {
+                opentelemetry::Value::F64(value) => Some((attribute.key.as_str(), value)),
+                _ => None,
+            })
+            .collect();
+        assert!(durations["git.advertisement.snapshot_acquisition_ms"] >= snapshot_held_ms);
+        assert!(durations["git.advertisement.blocking_queue_ms"] >= blocking_held_ms);
+        assert!(durations["git.advertisement.execution_ms"] >= 0.0);
+        assert!(
+            durations["git.advertisement.execution_ms"]
+                < (span
+                    .end_time
+                    .duration_since(span.start_time)
+                    .unwrap()
+                    .as_secs_f64()
+                    * 1000.0)
+        );
+    }
+
     #[test]
     fn test_ref_snapshot_telemetry_correlates_actual_git_objects_without_raw_inputs() {
         use opentelemetry::trace::TracerProvider;
-        use opentelemetry_sdk::trace::{SpanData, SpanExporter};
         use tracing_subscriber::prelude::*;
-
-        #[derive(Clone, Debug, Default)]
-        struct CapturedSpans(Arc<std::sync::Mutex<Vec<SpanData>>>);
-
-        impl SpanExporter for CapturedSpans {
-            async fn export(
-                &self,
-                batch: Vec<SpanData>,
-            ) -> opentelemetry_sdk::error::OTelSdkResult {
-                self.0.lock().unwrap().extend(batch);
-                Ok(())
-            }
-        }
 
         let captured = CapturedSpans::default();
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
