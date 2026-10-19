@@ -2953,6 +2953,17 @@ proven explanation for every rejection or a demonstrated fix. The run failed
 before replacement and produced no complete visibility or throughput result.
 Its disposable runtime was removed; the original deployment remained unchanged.
 
+Native replay verification now prepares at most **64** independent, empty,
+file-synced nonce inodes outside the request path. A request exclusively renames
+one into its nonce record, then waits for both source and destination directory
+durability before effects. One bounded background task replenishes the pool;
+exhaustion uses the original create-and-sync path. Preparation failures are
+logged, and request durability failures remain fail-closed. Replay capacity,
+expiry, clock-rollback protection, signed wire format and Resource contracts
+are unchanged. This is a performance candidate, not an established throughput
+improvement: the isolated filesystem probe had mixed tail-latency results, and
+the unchanged sustained workload must still validate it.
+
 Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
 declaration is not a negotiated `have`. A stock-Git control still sent the
 complete tree and blob for a depth-limited request without any `have` lines;
