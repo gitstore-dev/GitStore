@@ -2992,6 +2992,23 @@ nonce-file flushes; ordinary reservations no longer emit `replay_directory` or
 The journal is a performance candidate, not an established sustained throughput
 improvement or a passing production gate.
 
+A full-schedule journal diagnostic passed **13** metadata cycles, then exhausted
+all **eight** push attempts in cycle **14**, before replacement. Every rejected
+push submitted **zero** ref-update commands: rejection occurred against the
+client-visible advertisement, not inside native ref-update validation. Each of
+the seven refreshes requested its exact advertised head, but the next push
+advertised a newer head. Retained publication chains establish **exactly one**
+intervening commit in each case.
+
+In that failed cycle, the **15** actual push/fetch commands contained **37**
+native RPCs. Native advertisement RPCs took **1.193–13.860 ms**; complete refresh
+commands took **46.668–88.023 ms**. These are measured wall-clock scopes, not
+additive CPU costs or a matched speedup comparison. The journal did not resolve
+the unchanged retry-budget failure. No complete throughput, visibility,
+replacement or drain result was produced. All **96** actual Git exchanges were
+logged and the last **32** traces retained; the disposable runtime was removed
+without changing the original deployment.
+
 Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
 declaration is not a negotiated `have`. A stock-Git control still sent the
 complete tree and blob for a depth-limited request without any `have` lines;
