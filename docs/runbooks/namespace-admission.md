@@ -2660,8 +2660,9 @@ RPC acknowledgements, not HTTP or catalog admission throughput. Each run used
 one native process and a 4-vCPU/1-GiB Linux client with Git 2.39.5; the native
 container had no per-container CPU or memory limit.
 
-The same diagnostic offered ten concurrent same-branch Git operations, one
-per second with one push retry. Neither version accepted any of those ten pushes. The
+The same diagnostic offered ten same-branch Git operations, scheduled one
+per second with one worker and one push retry, concurrently with the RPC writers.
+Neither version accepted any of those ten pushes. The
 release encountered fetch-protocol errors as well as a fast-forward rejection;
 the repaired version completed fetches but exhausted the push retry on all ten
 operations. These controls use an allow-all HTTP fixture without Scylla,
@@ -2709,6 +2710,19 @@ durations and must not be summed. Raw events, arguments, paths, configuration
 and session IDs were discarded in memory; only fixed process classes and timing
 fields were retained. Both unpacking and rebase are material costs, so native
 pack-generation time alone does not describe the observed contention window.
+
+These 16,000-file controls are **not a direct reproduction of the Namespace
+provenance gate**. That gate uses a shallow fetch and a sparse, path-only comment
+rewrite, with eight push attempts inside an unchanged 30s context; it does not
+run the full `pull --rebase` sequence measured above. In the failed 2026-10-18
+gate attempt, path-only retry preparation took **4.496–17.855ms**, and retry
+fetches took **21.685–69.836ms**. Its 95 recorded HTTP requests had median
+server-side totals of **3.414ms** for ref advertisements, **3.365ms** for uploads
+and **6.930ms** for receives. These are HTTP timings, not push acknowledgements:
+Git can report a ref rejection inside an HTTP 200 response. The standalone
+unpack/rebase measurements therefore do not establish the cause of this gate's
+failure. End-to-end client scheduling and native writer admission still need
+direct attribution in that workload.
 
 Full production acceptance and per-operation sustainable ceilings remain
 unestablished. Fixed offered rates, short diagnostics and evaluator-only
