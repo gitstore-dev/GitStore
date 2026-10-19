@@ -118,6 +118,23 @@ window/overlap tests, integration vet and isolated dispatcher regression passed.
 This remains partial T066/T068 coverage: neither task is checked, the ledger
 remains 72/82, and no new deployed acceptance or Git contention fix is claimed.
 
+### Same-version Namespace callback replacement (2026-10-19)
+
+The existing catalog replacement suite now exercises two independent real
+shipped-policy providers over shared memdb, using signed callbacks through
+the production authentication/validation entry point rather than the
+allow-all domain wrapper. Nine exact allow/deny/domain rows run concurrently
+against both instances in six joined phases: initial, rejected v1 reload,
+same-policy reload, replacement A, replacement B and changed authoritative
+owner. Policy snapshots stay identical; stale signed callbacks remain rejected
+after either reconstruction. Previous-owner authorization is revoked on both
+instances, USER identity/tier invariants remain enforced, and validation never
+creates proposed Namespace rows or changes their authored state.
+The permissive-fixture red test failed the expected denial assertions before
+real provider wiring. Full cataloggrpc race tests and staticcheck passed.
+This is local T072 coverage, not deployed Scylla/process replacement, controller
+recovery, actual Git or under-load acceptance. T072 stays unchecked.
+
 ### Bounded authorization diagnostics (2026-10-19)
 
 T067 implementation is complete. A decision carries its evaluated immutable
