@@ -2934,6 +2934,25 @@ admission and readers without history-proof support retain their whole-ref
 checks. This correction does not establish that the separate sustained Git
 retry regression or production capacity gate has been resolved.
 
+A full-schedule instrumented diagnostic with that correction passed **15**
+metadata cycles, then exhausted the unchanged eight-attempt budget on cycle
+**16**: seven client-advertised-ref rejections and one remote-ref-update
+rejection. All 15 Git exchanges in that failed cycle were retained. Their
+command wall times totaled **1,227.15ms**; native server RPC intervals within
+those exchanges totaled **906.29ms**. Exact trace-event and service-log joins
+covered all **37** native RPCs: verification took **844.11ms**, including
+**654.81ms** persisting nonce records and **177.80ms** persisting replay clock
+checkpoints. These scopes overlap and must not be added together.
+
+The slowest advertisement RPC took **137.20ms**. Its replay persistence took
+**136.22ms**, including **124.33ms** in nonce inode sync and **11.88ms** in
+directory durability; advertisement execution took **0.448ms**. These are
+wall-clock timings, not CPU or physical-device latency measurements. They
+identify substantial replay-durability overhead in the failed cycle, not a
+proven explanation for every rejection or a demonstrated fix. The run failed
+before replacement and produced no complete visibility or throughput result.
+Its disposable runtime was removed; the original deployment remained unchanged.
+
 Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
 declaration is not a negotiated `have`. A stock-Git control still sent the
 complete tree and blob for a depth-limited request without any `have` lines;
