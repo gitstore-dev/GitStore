@@ -3009,6 +3009,33 @@ replacement or drain result was produced. All **96** actual Git exchanges were
 logged and the last **32** traces retained; the disposable runtime was removed
 without changing the original deployment.
 
+Internal backing-file writes now coalesce already-ready work for the same
+repository into cohorts of at most **32** operations, without a batching delay.
+Each operation still creates its own commit, author, message and content state;
+repeated writes to one path remain separate commits in their original order.
+Only the final head is published, conditionally against the cohort's original
+base. A real reference conflict rebuilds the complete chain against the new
+head. Each caller receives its own commit revision only after publication.
+This shared backing-write path applies equally to all Resource kinds; external
+Git pushes retain normal fast-forward and conditional-update checks.
+
+**Publication and backpressure change:** one head/reflog transition can now
+publish several individual commits. Across repositories, a Git process admits
+at most **64** pending or dispatched backing writes; excess calls return
+`RESOURCE_EXHAUSTED`. Canceled queued callers are removed before dispatch.
+Dispatched work retains its lifecycle, snapshot and advisory-lock protection
+through publication even if its caller cancels. Signed-RPC replay checks and
+wire messages are unchanged.
+
+The `git_ref_published` event records the final published commit, its actual
+commit parent, `git_publish_base_oid` and `git_batch_commits`. The commit parent
+can be an intermediate member rather than the pre-publication head. Each
+successful caller's RPC span retains its own commit and parent attributes plus
+`git.write.batch_size`. Native contract checks cover authored history, repeated
+paths, cohort splitting, real reference-conflict rebuilding, cancellation,
+capacity recovery and corrupt-head rejection. Deployed cohort frequency and
+sustained performance remain unestablished; this is not a passing capacity gate.
+
 Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
 declaration is not a negotiated `have`. A stock-Git control still sent the
 complete tree and blob for a depth-limited request without any `have` lines;

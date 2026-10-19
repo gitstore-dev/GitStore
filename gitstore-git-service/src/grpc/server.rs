@@ -6,12 +6,13 @@
 #![allow(clippy::result_large_err)]
 
 use dashmap::DashMap;
+use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{oneshot, Mutex, Notify, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 
@@ -43,6 +44,8 @@ use crate::git::hooks::HookContext;
 
 const COMMIT_FILE_MAX_ATTEMPTS: usize = 32;
 const COMMIT_FILE_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const COMMIT_FILE_COHORT_LIMIT: usize = 32;
+const COMMIT_FILE_PENDING_LIMIT: usize = 64;
 const DELETE_RECEIPT_PREFIX: &str = "refs/gitstore/deletions/";
 const DELETE_RECEIPT_HISTORY_LIMIT: usize = 4096;
 
@@ -201,6 +204,34 @@ fn effective_limit(repository_policy: i64, ceiling: u64) -> i64 {
 pub struct RepositoryLocks {
     operation: Arc<RwLock<()>>,
     snapshot: Arc<RwLock<()>>,
+    commits: Arc<CommitFileQueue>,
+}
+
+struct CommitFileEntry {
+    request: CommitFileRequest,
+    span: tracing::Span,
+    result: oneshot::Sender<Result<CommitFileResponse, Status>>,
+    _permit: OwnedSemaphorePermit,
+}
+
+#[derive(Default)]
+struct CommitFilePending {
+    entries: VecDeque<CommitFileEntry>,
+    running: bool,
+}
+
+#[derive(Default)]
+struct CommitFileQueue {
+    pending: Mutex<CommitFilePending>,
+    changed: Notify,
+}
+
+struct CommitFileCancellation(Arc<CommitFileQueue>);
+
+impl Drop for CommitFileCancellation {
+    fn drop(&mut self) {
+        self.0.changed.notify_one();
+    }
 }
 
 pub struct GitServiceImpl {
@@ -209,6 +240,7 @@ pub struct GitServiceImpl {
     pub repo_locks: Arc<DashMap<String, RepositoryLocks>>,
     pub hook_pipeline: Arc<HookPipeline>,
     pub push_limits: PushLimits,
+    commit_slots: Arc<Semaphore>,
 }
 
 enum ReceivePackRepositoryGuard {
@@ -246,6 +278,7 @@ impl GitServiceImpl {
             repo_locks: Arc::new(DashMap::new()),
             hook_pipeline,
             push_limits,
+            commit_slots: Arc::new(Semaphore::new(COMMIT_FILE_PENDING_LIMIT)),
         }
     }
 }
@@ -288,6 +321,310 @@ fn get_or_insert_snapshot_lock(
         .or_default()
         .snapshot
         .clone()
+}
+
+async fn acquire_commit_guard<T>(
+    queue: &CommitFileQueue,
+    acquire: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::pin!(acquire);
+    loop {
+        let changed = queue.changed.notified();
+        {
+            let mut pending = queue.pending.lock().await;
+            pending.entries.retain(|entry| !entry.result.is_closed());
+            if pending.entries.is_empty() {
+                pending.running = false;
+                return None;
+            }
+        }
+        tokio::select! {
+            guard = &mut acquire => return Some(guard),
+            _ = changed => {}
+        }
+    }
+}
+
+async fn run_commit_file_queue(
+    repo_path: PathBuf,
+    operation: Arc<RwLock<()>>,
+    snapshot: Arc<RwLock<()>>,
+    queue: Arc<CommitFileQueue>,
+) {
+    loop {
+        let Some(operation_guard) =
+            acquire_commit_guard(&queue, operation.clone().read_owned()).await
+        else {
+            return;
+        };
+        let Some(snapshot_guard) =
+            acquire_commit_guard(&queue, snapshot.clone().write_owned()).await
+        else {
+            return;
+        };
+        let entries = {
+            let mut pending = queue.pending.lock().await;
+            pending.entries.retain(|entry| !entry.result.is_closed());
+            let count = pending.entries.len().min(COMMIT_FILE_COHORT_LIMIT);
+            pending.entries.drain(..count).collect::<Vec<_>>()
+        };
+        if entries.is_empty() {
+            continue;
+        }
+        let path = repo_path.clone();
+        let publication = crate::spawn_blocking(move || {
+            let _operation_guard = operation_guard;
+            let _snapshot_guard = snapshot_guard;
+            let results = publish_commit_file_cohort(&path, &entries);
+            match results {
+                Ok(results) => {
+                    for (entry, result) in entries.into_iter().zip(results) {
+                        let _ = entry.result.send(result);
+                    }
+                }
+                Err(error) => {
+                    for entry in entries {
+                        let _ = entry.result.send(Err(error.clone()));
+                    }
+                }
+            }
+        });
+        tokio::pin!(publication);
+        let result = loop {
+            tokio::select! {
+                result = &mut publication => break result,
+                _ = queue.changed.notified() => {
+                    queue.pending.lock().await.entries.retain(|entry| !entry.result.is_closed());
+                }
+            }
+        };
+        if let Err(error) = result {
+            error!(%error, "CommitFile cohort worker failed");
+            let mut pending = queue.pending.lock().await;
+            for entry in pending.entries.drain(..) {
+                let _ = entry
+                    .result
+                    .send(Err(Status::internal("CommitFile cohort worker failed")));
+            }
+            pending.running = false;
+            return;
+        }
+    }
+}
+
+fn publish_commit_file_ref(
+    repo: &gix::Repository,
+    expected: Option<gix::ObjectId>,
+    commit: gix::ObjectId,
+    signature: &gix::actor::Signature,
+    message: &str,
+) -> Result<(), Status> {
+    use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
+    let expected = match expected {
+        Some(id) => PreviousValue::MustExistAndMatch(gix::refs::Target::Object(id)),
+        None => PreviousValue::MustNotExist,
+    };
+    let edit = RefEdit {
+        change: Change::Update {
+            log: LogChange {
+                mode: RefLog::AndReference,
+                force_create_reflog: false,
+                message: format!("commit: {}", message.lines().next().unwrap_or("")).into(),
+            },
+            expected,
+            new: gix::refs::Target::Object(commit),
+        },
+        name: "HEAD"
+            .try_into()
+            .map_err(|error: gix::refs::name::Error| Status::internal(error.to_string()))?,
+        deref: true,
+    };
+    let fail =
+        gix::lock::acquire::Fail::AfterDurationWithBackoff(std::time::Duration::from_secs(1));
+    let transaction = repo
+        .refs
+        .transaction()
+        .prepare([edit], fail, fail)
+        .map_err(|error| {
+            if is_reference_content_conflict(&error) {
+                Status::aborted(format!("CommitFile reference changed: {error}"))
+            } else {
+                Status::internal(format!("prepare CommitFile reference: {error}"))
+            }
+        })?;
+    let mut time = gix::date::parse::TimeBuf::default();
+    transaction
+        .commit(Some(signature.to_ref(&mut time)))
+        .map_err(|error| Status::internal(format!("publish CommitFile reference: {error}")))?;
+    Ok(())
+}
+
+fn publish_commit_file_cohort(
+    repo_path: &Path,
+    entries: &[CommitFileEntry],
+) -> Result<Vec<Result<CommitFileResponse, Status>>, Status> {
+    if entries.is_empty() || entries.len() > COMMIT_FILE_COHORT_LIMIT {
+        return Err(Status::internal("invalid CommitFile cohort size"));
+    }
+    let marker_started = std::time::Instant::now();
+    let _repository_guard = acquire_repository_commit_lock(
+        &repo_path.join("gitstore-commit.lock"),
+        COMMIT_FILE_LOCK_TIMEOUT,
+    )
+    .map_err(|error| {
+        Status::resource_exhausted(format!("acquire repository commit lock: {error}"))
+    })?;
+    debug!(
+        marker_lock_wait_seconds = marker_started.elapsed().as_secs_f64(),
+        "CommitFile repository marker lock acquired"
+    );
+    let objects = gix::open(repo_path)
+        .map_err(|error| Status::internal(format!("failed to open repo: {error}")))?;
+    let prepared = entries
+        .iter()
+        .map(|entry| {
+            validate_file_path(&entry.request.path)?;
+            let signature = gix::actor::Signature {
+                name: if entry.request.author_name.is_empty() {
+                    "GitStore"
+                } else {
+                    &entry.request.author_name
+                }
+                .into(),
+                email: if entry.request.author_email.is_empty() {
+                    "gitstore@localhost"
+                } else {
+                    &entry.request.author_email
+                }
+                .into(),
+                time: gix::date::Time::now_local_or_utc(),
+            };
+            let blob = objects
+                .write_blob(&entry.request.content)
+                .map_err(|error| Status::internal(format!("write_blob: {error}")))?
+                .detach();
+            Ok((blob, signature))
+        })
+        .collect::<Vec<Result<_, Status>>>();
+    for attempt in 0..COMMIT_FILE_MAX_ATTEMPTS {
+        let repo = gix::open(repo_path)
+            .map_err(|error| Status::internal(format!("failed to reopen repo: {error}")))?;
+        let head =
+            if repo
+                .head()
+                .map_err(|error| Status::internal(format!("read CommitFile HEAD: {error}")))?
+                .is_unborn()
+            {
+                None
+            } else {
+                Some(repo.head_commit().map_err(|error| {
+                    Status::internal(format!("read CommitFile parent: {error}"))
+                })?)
+            };
+        let base = head.as_ref().map(|head| head.id().detach());
+        let mut parent = base;
+        let mut tree = match head {
+            Some(head) => head
+                .tree_id()
+                .map_err(|error| Status::internal(error.to_string()))?
+                .detach(),
+            None => gix::ObjectId::empty_tree(gix::hash::Kind::Sha1),
+        };
+        let mut last = None;
+        let mut results = Vec::with_capacity(entries.len());
+        let mut commits = Vec::with_capacity(entries.len());
+        for (index, (entry, prepared)) in entries.iter().zip(&prepared).enumerate() {
+            let result = (|| {
+                let (blob, signature) = prepared.as_ref().map_err(Clone::clone)?;
+                let next_tree = repo
+                    .edit_tree(tree)
+                    .map_err(|error| Status::internal(format!("edit_tree: {error}")))?
+                    .upsert(
+                        entry.request.path.as_str(),
+                        gix::object::tree::EntryKind::Blob,
+                        *blob,
+                    )
+                    .map_err(|error| Status::internal(format!("upsert: {error}")))?
+                    .write()
+                    .map_err(|error| Status::internal(format!("tree write: {error}")))?
+                    .detach();
+                let id = repo
+                    .write_object(&gix::objs::Commit {
+                        tree: next_tree,
+                        parents: parent.into_iter().collect(),
+                        author: signature.clone(),
+                        committer: signature.clone(),
+                        encoding: None,
+                        message: entry.request.commit_message.as_str().into(),
+                        extra_headers: vec![],
+                    })
+                    .map_err(|error| Status::internal(format!("write commit: {error}")))?
+                    .detach();
+                let previous = parent;
+                parent = Some(id);
+                tree = next_tree;
+                last = Some((index, signature));
+                Ok((id, previous))
+            })();
+            match result {
+                Ok((id, parent)) => {
+                    commits.push((index, id, parent));
+                    results.push(Ok(CommitFileResponse {
+                        commit_sha: id.to_string(),
+                        branch: "main".into(),
+                    }));
+                }
+                Err(error) => results.push(Err(error)),
+            }
+        }
+        let Some((last_index, signature)) = last else {
+            return Ok(results);
+        };
+        let tip = parent.expect("successful cohort has a tip");
+        // The entire immutable chain is published against its original base,
+        // not against an intermediate commit that has never been HEAD.
+        match publish_commit_file_ref(
+            &repo,
+            base,
+            tip,
+            signature,
+            &entries[last_index].request.commit_message,
+        ) {
+            Ok(()) => {
+                let committed = commits.len();
+                let tip_parent = commits.last().expect("successful cohort").2;
+                info!(
+                    parent: &entries[last_index].span,
+                    git_commit_oid = %tip,
+                    git_parent_oid = tip_parent.map(|id| id.to_string()).unwrap_or_default(),
+                    git_publish_base_oid = base.map(|id| id.to_string()).unwrap_or_default(),
+                    git_batch_commits = committed,
+                    "git_ref_published"
+                );
+                for (index, id, parent) in commits {
+                    let span = &entries[index].span;
+                    span.set_attribute("git.write.commit_oid", id.to_string());
+                    if let Some(parent) = parent {
+                        span.set_attribute("git.write.parent_oid", parent.to_string());
+                    }
+                    span.set_attribute("git.write.batch_size", committed as i64);
+                }
+                return Ok(results);
+            }
+            Err(error)
+                if error.code() == tonic::Code::Aborted
+                    && attempt + 1 < COMMIT_FILE_MAX_ATTEMPTS =>
+            {
+                debug!(
+                    retry_attempt = attempt + 1,
+                    "CommitFile cohort reference conflict; rebuilding"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1_u64 << attempt.min(4)));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("bounded commit loop returns on its last attempt")
 }
 
 fn ensure_repository_not_deleted(repo_path: &Path) -> Result<(), Status> {
@@ -1658,149 +1995,42 @@ impl GitService for GitServiceImpl {
             &req.repository_id,
             &["repository.contents.write"],
         )?;
+        validate_file_path(&req.path)?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        // Immutable uploads may continue; lifecycle operations and receive-pack
-        // stay excluded, while the snapshot writer serializes publication.
-        let guard = lock.read_owned().await;
         let snapshot = get_or_insert_snapshot_lock(&self.repo_locks, &req.repository_id);
-        let snapshot_guard = snapshot.write_owned().await;
-        let rpc_span = tracing::Span::current();
-
-        crate::spawn_blocking(move || {
-            let _guard = guard;
-            let _snapshot_guard = snapshot_guard;
-            validate_file_path(&req.path)?;
-
-            // The async lock above coordinates this service instance. This
-            // repository-local advisory lock extends the same critical section
-            // to other Git-service processes sharing the bare repository. Its
-            // OS-owned lifetime makes it recoverable after a process crash.
-            let marker_lock_started = std::time::Instant::now();
-            let marker_lock_result = acquire_repository_commit_lock(
-                &repo_path.join("gitstore-commit.lock"),
-                COMMIT_FILE_LOCK_TIMEOUT,
-            );
-            debug!(
-                marker_lock_wait_seconds = marker_lock_started.elapsed().as_secs_f64(),
-                "CommitFile repository marker lock acquired"
-            );
-            let _repository_guard = marker_lock_result.map_err(|e| {
-                Status::resource_exhausted(format!("acquire repository commit lock: {e}"))
-            })?;
-
-            let object_repo = gix::open(&repo_path)
-                .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
-
-            let author_name = if req.author_name.is_empty() {
-                "GitStore"
-            } else {
-                &req.author_name
-            };
-            let author_email = if req.author_email.is_empty() {
-                "gitstore@localhost"
-            } else {
-                &req.author_email
-            };
-
-            let sig = gix::actor::Signature {
-                name: author_name.into(),
-                email: author_email.into(),
-                time: gix::date::Time::now_local_or_utc(),
-            };
-
-            // Write blob
-            let blob_oid: gix::ObjectId = object_repo
-                .write_blob(&req.content)
-                .map_err(|e| Status::internal(format!("write_blob: {}", e)))?
-                .detach();
-
-            for attempt in 0..COMMIT_FILE_MAX_ATTEMPTS {
-                // Re-read HEAD and rebuild the tree on every optimistic-ref
-                // retry. The in-process repository lock coordinates callers
-                // of this service instance; the ref transaction coordinates
-                // multiple Git-service replicas and other writers.
-                let repo = gix::open(&repo_path)
-                    .map_err(|e| Status::internal(format!("failed to reopen repo: {}", e)))?;
-                let maybe_head = repo.head_commit().ok();
-                let (new_tree_id, parents): (gix::ObjectId, Vec<gix::ObjectId>) =
-                    if let Some(head_commit) = maybe_head {
-                        let tree_id = head_commit
-                            .tree_id()
-                            .map_err(|e| Status::internal(e.to_string()))?
-                            .detach();
-                        let new_tree = repo
-                            .edit_tree(tree_id)
-                            .map_err(|e| Status::internal(format!("edit_tree: {}", e)))?
-                            .upsert(
-                                req.path.as_str(),
-                                gix::object::tree::EntryKind::Blob,
-                                blob_oid,
-                            )
-                            .map_err(|e| Status::internal(format!("upsert: {}", e)))?
-                            .write()
-                            .map_err(|e| Status::internal(format!("tree write: {}", e)))?;
-                        (new_tree.detach(), vec![head_commit.id().detach()])
-                    } else {
-                        let new_tree = repo
-                            .edit_tree(gix::ObjectId::empty_tree(gix::hash::Kind::Sha1))
-                            .map_err(|e| Status::internal(format!("edit_tree: {}", e)))?
-                            .upsert(
-                                req.path.as_str(),
-                                gix::object::tree::EntryKind::Blob,
-                                blob_oid,
-                            )
-                            .map_err(|e| Status::internal(format!("upsert: {}", e)))?
-                            .write()
-                            .map_err(|e| Status::internal(format!("tree write: {}", e)))?;
-                        (new_tree.detach(), vec![])
-                    };
-
-                let mut time_buf = gix::date::parse::TimeBuf::default();
-                let sig_ref = sig.to_ref(&mut time_buf);
-                match repo.commit_as(
-                    sig_ref,
-                    sig_ref,
-                    "HEAD",
-                    &req.commit_message,
-                    new_tree_id,
-                    parents.iter().copied(),
-                ) {
-                    Ok(commit_id) => {
-                        rpc_span.set_attribute("git.write.commit_oid", commit_id.to_string());
-                        if let Some(parent) = parents.first() {
-                            rpc_span.set_attribute("git.write.parent_oid", parent.to_string());
-                        }
-                        info!(
-                            parent: &rpc_span,
-                            git_commit_oid = %commit_id,
-                            git_parent_oid = parents.first().map(ToString::to_string).unwrap_or_default(),
-                            "git_ref_published"
-                        );
-                        return Ok(Response::new(CommitFileResponse {
-                            commit_sha: commit_id.to_string(),
-                            branch: "main".to_string(),
-                        }));
-                    }
-                    Err(err)
-                        if attempt + 1 < COMMIT_FILE_MAX_ATTEMPTS
-                            && is_reference_content_conflict(&err) =>
-                    {
-                        debug!(
-                            retry_attempt = attempt + 1,
-                            "CommitFile optimistic reference conflict; retrying"
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(
-                            1_u64 << attempt.min(4),
-                        ));
-                    }
-                    Err(err) => return Err(Status::internal(format!("commit: {}", err))),
-                }
-            }
-            unreachable!("bounded commit loop always returns on its final attempt")
-        })
-        .await
-        .map_err(|e| Status::internal(format!("task join error: {}", e)))?
+        let queue = self
+            .repo_locks
+            .entry(req.repository_id.clone())
+            .or_default()
+            .commits
+            .clone();
+        let permit = self
+            .commit_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("CommitFile pending capacity exhausted"))?;
+        let (result, completed) = oneshot::channel();
+        let _cancellation = CommitFileCancellation(queue.clone());
+        let start = {
+            let mut pending = queue.pending.lock().await;
+            pending.entries.push_back(CommitFileEntry {
+                request: req,
+                span: tracing::Span::current(),
+                result,
+                _permit: permit,
+            });
+            let start = !pending.running;
+            pending.running = true;
+            start
+        };
+        if start {
+            tokio::spawn(run_commit_file_queue(repo_path, lock, snapshot, queue));
+        }
+        completed
+            .await
+            .map_err(|_| Status::internal("CommitFile worker ended without a result"))?
+            .map(Response::new)
     }
 
     async fn delete_file(
@@ -6076,6 +6306,360 @@ mod tests {
     #[derive(Clone, Debug, Default)]
     struct CapturedSpans(Arc<std::sync::Mutex<Vec<opentelemetry_sdk::trace::SpanData>>>);
 
+    fn enable_commit_reflog(repo_path: &Path) {
+        let path = repo_path.join("config");
+        let mut config = std::fs::read_to_string(&path).unwrap();
+        config.push_str("\n[core]\nlogAllRefUpdates = true\n");
+        std::fs::write(path, config).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_commit_file_ready_cohorts_preserve_each_authored_commit() {
+        for (writes, same_path, cancelled) in [
+            (8_usize, false, None),
+            (8, true, None),
+            (40, false, None),
+            (8, false, Some(0)),
+            (8, true, Some(3)),
+        ] {
+            let root = TempDir::new().unwrap();
+            bare_repo_with_main(root.path(), TEST_REPO_E);
+            let repo_path = fanout_path(root.path(), TEST_REPO_E).unwrap();
+            enable_commit_reflog(&repo_path);
+            let base = gix::open(&repo_path)
+                .unwrap()
+                .head_commit()
+                .unwrap()
+                .id()
+                .detach();
+            let service = Arc::new(make_test_service(root.path()));
+            let snapshot = get_or_insert_snapshot_lock(&service.repo_locks, TEST_REPO_E);
+            let writer = snapshot.write_owned().await;
+            let queue = service
+                .repo_locks
+                .entry(TEST_REPO_E.into())
+                .or_default()
+                .commits
+                .clone();
+            let mut calls = Vec::new();
+            for number in 0..writes {
+                let path = if same_path {
+                    "products/shared.md".to_string()
+                } else {
+                    format!("products/{number}.md")
+                };
+                let request = signed_test_request(CommitFileRequest {
+                    repository_id: TEST_REPO_E.into(),
+                    path: path.clone(),
+                    content: format!("content {number}").into_bytes(),
+                    author_name: format!("Author {number}"),
+                    author_email: format!("author{number}@example.invalid"),
+                    commit_message: format!("operation {number}"),
+                    authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
+                });
+                let caller = service.clone();
+                calls.push((
+                    number,
+                    path,
+                    tokio::spawn(
+                        async move { caller.commit_file(request).await.unwrap().into_inner() },
+                    ),
+                ));
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    while queue.pending.lock().await.entries.len() != number + 1 {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+            }
+            let invalid = service
+                .commit_file(signed_test_request(CommitFileRequest {
+                    repository_id: TEST_REPO_E.into(),
+                    path: "../rejected.md".into(),
+                    content: b"invalid".to_vec(),
+                    authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
+                    ..Default::default()
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(invalid.code(), tonic::Code::InvalidArgument);
+            assert_eq!(queue.pending.lock().await.entries.len(), writes);
+            if let Some(index) = cancelled {
+                calls[index].2.abort();
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    while queue.pending.lock().await.entries.len() != writes - 1 {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+            }
+            drop(writer);
+            let mut commits = Vec::new();
+            for (number, path, call) in calls {
+                if Some(number) == cancelled {
+                    assert!(call.await.unwrap_err().is_cancelled());
+                    continue;
+                }
+                commits.push((number, path, call.await.unwrap().commit_sha));
+            }
+            let repo = gix::open(&repo_path).unwrap();
+            let mut parent = base;
+            for (number, path, sha) in &commits {
+                let id = gix::ObjectId::from_hex(sha.as_bytes()).unwrap();
+                let commit = repo.find_object(id).unwrap().try_into_commit().unwrap();
+                let decoded = commit.decode().unwrap();
+                assert_eq!(decoded.parents().collect::<Vec<_>>(), vec![parent]);
+                assert_eq!(
+                    decoded.author().unwrap().name,
+                    format!("Author {number}").as_str()
+                );
+                assert_eq!(decoded.message, format!("operation {number}").as_str());
+                let blob =
+                    find_blob_in_tree(&repo, commit.tree_id().unwrap().detach(), path).unwrap();
+                assert_eq!(
+                    repo.find_object(blob).unwrap().data,
+                    format!("content {number}").as_bytes()
+                );
+                parent = id;
+            }
+            assert_eq!(repo.head_commit().unwrap().id().detach(), parent);
+            let reflog = std::fs::read_to_string(repo_path.join("logs/refs/heads/main")).unwrap();
+            assert_eq!(
+                reflog.lines().count(),
+                commits.len().div_ceil(COMMIT_FILE_COHORT_LIMIT)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_commit_file_cohort_initializes_unborn_head_and_rejects_corruption() {
+        let root = TempDir::new().unwrap();
+        let repo_path = fanout_path(root.path(), TEST_REPO_E).unwrap();
+        std::fs::create_dir_all(repo_path.parent().unwrap()).unwrap();
+        gix::init_bare(&repo_path).unwrap();
+        std::fs::write(repo_path.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
+        let service = make_test_service(root.path());
+        let request = || {
+            signed_test_request(CommitFileRequest {
+                repository_id: TEST_REPO_E.into(),
+                path: "products/first.md".into(),
+                content: b"first".to_vec(),
+                authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
+                ..Default::default()
+            })
+        };
+        let response = service.commit_file(request()).await.unwrap().into_inner();
+        let repo = gix::open(&repo_path).unwrap();
+        let commit = repo.head_commit().unwrap();
+        assert_eq!(commit.id().to_string(), response.commit_sha);
+        assert_eq!(commit.decode().unwrap().parents().count(), 0);
+        std::fs::write(repo_path.join("HEAD"), b"corrupt HEAD\n").unwrap();
+        assert_eq!(
+            service.commit_file(request()).await.unwrap_err().code(),
+            tonic::Code::Internal
+        );
+        assert_eq!(
+            std::fs::read(repo_path.join("HEAD")).unwrap(),
+            b"corrupt HEAD\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_file_pending_capacity_is_explicit_and_recovers() {
+        let root = TempDir::new().unwrap();
+        bare_repo_with_main(root.path(), TEST_REPO_E);
+        let service = make_test_service(root.path());
+        let capacity = service
+            .commit_slots
+            .clone()
+            .acquire_many_owned(COMMIT_FILE_PENDING_LIMIT as u32)
+            .await
+            .unwrap();
+        let request = || {
+            signed_test_request(CommitFileRequest {
+                repository_id: TEST_REPO_E.into(),
+                path: "products/capacity.md".into(),
+                content: b"content".to_vec(),
+                authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
+                ..Default::default()
+            })
+        };
+        assert_eq!(
+            service.commit_file(request()).await.unwrap_err().code(),
+            tonic::Code::ResourceExhausted
+        );
+        drop(capacity);
+        service.commit_file(request()).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_commit_file_cohort_rebuilds_after_actual_ref_conflict() {
+        let root = TempDir::new().unwrap();
+        bare_repo_with_main(root.path(), TEST_REPO_E);
+        let repo_path = fanout_path(root.path(), TEST_REPO_E).unwrap();
+        let repo = gix::open(&repo_path).unwrap();
+        let head = repo.head_commit().unwrap();
+        let base = head.id().detach();
+        let blob = repo.write_blob(b"external").unwrap().detach();
+        let tree = repo
+            .edit_tree(head.tree_id().unwrap().detach())
+            .unwrap()
+            .upsert(
+                "products/external.md",
+                gix::object::tree::EntryKind::Blob,
+                blob,
+            )
+            .unwrap()
+            .write()
+            .unwrap()
+            .detach();
+        let signature = gix::actor::Signature {
+            name: "External".into(),
+            email: "external@example.invalid".into(),
+            time: gix::date::Time::now_local_or_utc(),
+        };
+        let external = repo
+            .write_object(&gix::objs::Commit {
+                tree,
+                parents: vec![base].into(),
+                author: signature.clone(),
+                committer: signature,
+                encoding: None,
+                message: "external writer".into(),
+                extra_headers: vec![],
+            })
+            .unwrap()
+            .detach();
+        let ref_path = repo_path.join("refs/heads/main");
+        let ref_lock = ref_path.with_extension("lock");
+        let held = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&ref_lock)
+            .unwrap();
+        let service = make_test_service(root.path());
+        let writer = tokio::spawn(async move {
+            service
+                .commit_file(signed_test_request(CommitFileRequest {
+                    repository_id: TEST_REPO_E.into(),
+                    path: "products/cohort.md".into(),
+                    content: b"cohort".to_vec(),
+                    commit_message: "cohort candidate".into(),
+                    authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
+                    ..Default::default()
+                }))
+                .await
+                .unwrap()
+                .into_inner()
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let mut prepared = false;
+                for directory in std::fs::read_dir(repo_path.join("objects")).unwrap() {
+                    let directory = directory.unwrap();
+                    let prefix = directory.file_name().to_string_lossy().into_owned();
+                    if prefix.len() != 2 || !directory.file_type().unwrap().is_dir() {
+                        continue;
+                    }
+                    for entry in std::fs::read_dir(directory.path()).unwrap() {
+                        let suffix = entry.unwrap().file_name().to_string_lossy().into_owned();
+                        if suffix.len() != 38 {
+                            continue;
+                        }
+                        let id = gix::ObjectId::from_hex(format!("{prefix}{suffix}").as_bytes())
+                            .unwrap();
+                        let object = repo.find_object(id).unwrap();
+                        if object.kind == gix::objs::Kind::Commit {
+                            let commit = object.try_into_commit().unwrap();
+                            let decoded = commit.decode().unwrap();
+                            prepared |= decoded.message == "cohort candidate"
+                                && decoded.parents().collect::<Vec<_>>() == vec![base];
+                        }
+                    }
+                }
+                if prepared {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // The fixture owns the lock; advance its ref before allowing the real CAS.
+        std::fs::write(&ref_path, format!("{external}\n")).unwrap();
+        drop(held);
+        std::fs::remove_file(ref_lock).unwrap();
+        let result = writer.await.unwrap();
+        let commit = repo
+            .find_object(gix::ObjectId::from_hex(result.commit_sha.as_bytes()).unwrap())
+            .unwrap()
+            .try_into_commit()
+            .unwrap();
+        assert_eq!(
+            commit.decode().unwrap().parents().collect::<Vec<_>>(),
+            vec![external]
+        );
+        let tree = commit.tree_id().unwrap().detach();
+        assert!(find_blob_in_tree(&repo, tree, "products/external.md").is_ok());
+        assert!(find_blob_in_tree(&repo, tree, "products/cohort.md").is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_commit_file_cancelled_queue_releases_lifecycle_and_capacity() {
+        let root = TempDir::new().unwrap();
+        bare_repo_with_main(root.path(), TEST_REPO_E);
+        let service = Arc::new(make_test_service(root.path()));
+        let snapshot = get_or_insert_snapshot_lock(&service.repo_locks, TEST_REPO_E);
+        let held = snapshot.write_owned().await;
+        let operation = get_or_insert_lock(&service.repo_locks, TEST_REPO_E);
+        let queue = service
+            .repo_locks
+            .entry(TEST_REPO_E.into())
+            .or_default()
+            .commits
+            .clone();
+        let caller = service.clone();
+        let call = tokio::spawn(async move {
+            caller
+                .commit_file(signed_test_request(CommitFileRequest {
+                    repository_id: TEST_REPO_E.into(),
+                    path: "products/cancelled-queued.md".into(),
+                    content: b"must not publish".to_vec(),
+                    authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
+                    ..Default::default()
+                }))
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while queue.pending.lock().await.entries.len() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        call.abort();
+        assert!(call.await.unwrap_err().is_cancelled());
+        let _exclusive = tokio::time::timeout(std::time::Duration::from_secs(5), operation.write())
+            .await
+            .unwrap();
+        assert_eq!(
+            service.commit_slots.available_permits(),
+            COMMIT_FILE_PENDING_LIMIT
+        );
+        assert!(!queue.pending.lock().await.running);
+        drop(held);
+        let repo = gix::open(fanout_path(root.path(), TEST_REPO_E).unwrap()).unwrap();
+        let tree = repo.head_commit().unwrap().tree_id().unwrap().detach();
+        assert_eq!(
+            find_blob_in_tree(&repo, tree, "products/cancelled-queued.md")
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
+        );
+    }
+
     impl opentelemetry_sdk::trace::SpanExporter for CapturedSpans {
         async fn export(
             &self,
@@ -6457,6 +7041,14 @@ mod tests {
         let svc = Arc::new(make_test_service(dir.path()));
         let lock = get_or_insert_lock(&svc.repo_locks, TEST_REPO_E);
         let snapshot = get_or_insert_snapshot_lock(&svc.repo_locks, TEST_REPO_E);
+        let pending_caller = svc.clone();
+        let queue = svc
+            .repo_locks
+            .entry(TEST_REPO_E.into())
+            .or_default()
+            .commits
+            .clone();
+        let slots = svc.commit_slots.clone();
         let writer = tokio::spawn(async move {
             svc.commit_file(signed_test_request(CommitFileRequest {
                 repository_id: TEST_REPO_E.into(),
@@ -6476,6 +7068,34 @@ mod tests {
         })
         .await
         .unwrap();
+        let pending = tokio::spawn(async move {
+            pending_caller
+                .commit_file(signed_test_request(CommitFileRequest {
+                    repository_id: TEST_REPO_E.into(),
+                    path: "products/cancelled-pending.md".into(),
+                    content: b"must not publish".to_vec(),
+                    authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
+                    ..Default::default()
+                }))
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while queue.pending.lock().await.entries.len() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        pending.abort();
+        assert!(pending.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while slots.available_permits() != COMMIT_FILE_PENDING_LIMIT - 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(queue.pending.lock().await.entries.is_empty());
         writer.abort();
         assert!(writer.await.unwrap_err().is_cancelled());
         let retained = lock.try_write().is_err();
@@ -6505,6 +7125,12 @@ mod tests {
         assert_eq!(
             repo.find_object(blob).unwrap().data,
             b"committed despite caller cancellation"
+        );
+        assert_eq!(
+            find_blob_in_tree(&repo, tree, "products/cancelled-pending.md")
+                .unwrap_err()
+                .code(),
+            tonic::Code::NotFound
         );
         drop(guard);
         assert!(
