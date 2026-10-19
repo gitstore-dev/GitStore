@@ -2695,10 +2695,20 @@ published after native pack completion but before the client started its push.
 That interval had a median 429.810ms, using timestamps from the same Linux VM
 clock and a verified linear chain of 600 RPC commits. The observed rejection
 therefore follows real branch advancement, not merely an unexplained CAS error.
-`pull` includes transfer, pack processing and rebase: these measurements do not
+`pull` includes transfer, pack processing and rebase: wall/CPU totals alone do not
 isolate its internal cost or rule out a server encoding choice increasing client
 CPU work. Timing adds measurement overhead; this is neither a sustainable
 throughput result nor a passing published-release comparison.
+
+A subsequent bounded, in-memory Trace2 run again acknowledged 600/600 RPC writes
+and none of the ten Git operations. All 66 command captures completed without
+capture errors. All 20 fetches used `unpack-objects`, with median subprocess
+elapsed time **110.901ms**; 19 `rebase` subprocesses had median elapsed time
+**272.064ms**. These subprocess durations are nested within other command
+durations and must not be summed. Raw events, arguments, paths, configuration
+and session IDs were discarded in memory; only fixed process classes and timing
+fields were retained. Both unpacking and rebase are material costs, so native
+pack-generation time alone does not describe the observed contention window.
 
 Full production acceptance and per-operation sustainable ceilings remain
 unestablished. Fixed offered rates, short diagnostics and evaluator-only
