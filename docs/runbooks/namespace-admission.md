@@ -2741,6 +2741,13 @@ caused the pass, or establish a sustainable rate. Its visibility p95 also
 exceeded the production watch target of 1s. A complete hour-long run and
 rolling-replacement evidence remain necessary.
 
+The subsequent clean-source `64d54cc` full-alpha attempt passed **23**
+metadata/provenance cycles, but cycle **24** exhausted all eight push attempts:
+six client-advertised-ref rejections and two remote-ref-update rejections.
+It was canceled after that explicit failure, before the scheduled rolling
+replacement. The cache therefore has **not resolved the full gate**; this
+attempt supplies no completed-run acceptance or sustainable-throughput result.
+
 Full production acceptance and per-operation sustainable ceilings remain
 unestablished. Fixed offered rates, short diagnostics and evaluator-only
 decisions must not be advertised as those ceilings.
