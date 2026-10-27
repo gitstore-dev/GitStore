@@ -1,6 +1,6 @@
-# Commerce Resource Storage Overview
+# Commerce Resource Storage Group Overview
 
-This section classifies GitStore resource types by where their source of truth
+This section classifies GitStore resource storage groups by where their source of truth
 should live. The goal is to keep Git history useful for reviewable desired state,
 while keeping high-churn runtime state, PII, payment state, and computed data out
 of Git.
@@ -17,7 +17,7 @@ That shape does not imply Git storage. Some resources are Git-authored and
 hydrated into ScyllaDB or memDB. Others are datastore-only durable records or
 transient request/response objects.
 
-Namespace and Repository expose the same canonical envelope through GraphQL.
+GitStore resources expose the same canonical envelope through GraphQL.
 Their authoritative UID rows persist the complete author/system state,
 including raw Markdown body content. GraphQL Relay `id` values remain encoded
 API-boundary identifiers; datastore identity is always the resource `uid`.
@@ -49,6 +49,18 @@ projections and hydrate only the requested page. Connections do not expose a
 `totalCount` field — an exact count would require scanning unbounded historical
 buckets, which this pagination model is specifically designed to avoid.
 Fetch-all-then-sort is not an accepted pagination implementation.
+
+Product listings and category Product connections hydrate authoritative rows
+through an ordered window of at most 16 reads. Completed slots can be reused
+without waiting for a whole batch; pending rows still reserve the requested
+page's lookahead. Missing or mismatched resources are skipped within
+the existing work budgets. Datastore failures or budget exhaustion fail the
+page rather than returning a success-shaped partial result; all started reads
+finish before the request returns.
+
+Queued watch checkpoints retain source positions rather than decoded CDC row
+frames. Public resource transitions must still enter the durable journal
+before their source positions are checkpointed.
 
 The resource list is anchored in the Kubernetes-style frontmatter initiative
 tracked by `gitstore-dev/GitStore#40`. That initiative currently covers

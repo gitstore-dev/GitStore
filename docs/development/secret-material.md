@@ -1,7 +1,7 @@
 # Shared secret-material boundary
 
-`shared/secretmaterial` is a dependency-free Go 1.25 module. API/controller
-services currently use Go 1.26. Root `make build`, `make test` and `make lint`
+`shared/secretmaterial` is a dependency-free Go 1.27.2 module. API/controller
+services use the same toolchain. Root `make build`, `make test` and `make lint`
 include the module. For focused work:
 
 ```sh

@@ -86,7 +86,11 @@ Rules:
 - **Storage group.** `storageGroup` is immutable after creation. It selects the hook matrix row
   in [ADR 0015 §2](0015-resource-lifecycle-hooks.md#2-storage-group-matrix). A `GitBacked` kind
   therefore can't have mutating hooks, and its instances are Markdown documents like core
-  resources. `DatastoreOnly` kinds are written through GraphQL. LFS payloads are referenced via
+  resources. Resources can enter through Git or GraphQL mutations. Admission for Git ingress
+  is asynchronous; admission for GraphQL mutations is synchronous. For GraphQL writes, the
+  resolver routes `GitBacked` kinds through the Git service's gRPC API and `DatastoreOnly`
+  kinds directly to the datastore. Git ingress rejects `DatastoreOnly` instances during
+  admission. LFS payloads are referenced via
   `File`, never embedded, and transient kinds are not definable in v1alpha1.
 
 ### 2. The GitStore structural profile
@@ -159,11 +163,14 @@ CRD instances automatically get:
 - a watch journal source, so they get `watchResources` and event subscriptions. Sources are
   registered in the shared catalog CDC source registry (kind → authoritative table → payload
   decoder) rather than per-kind runners; the generic CRD instance table is future schema work;
-- GraphQL list/get/watch types generated from the served versions;
+- GraphQL list/get/watch types generated from the served versions (proposed approach;
+  the GraphQL exposure mechanism is not yet decided);
 - authorization actions in the [ADR 0010](0010-authorization-model.md) grammar.
   - The `<kind>` slug is `names.kind` in lower camelCase (`PricingTable` → `pricingTable`).
-  - The verbs are `read`, `list` and `watch`, plus `create`/`update`/`delete` for datastore-only
-    kinds. For Git-backed kinds those writes happen only through push admission.
+  - The verbs are `read`, `list` and `watch`, plus `create`/`update`/`delete` for writable
+    kinds. Git-backed writes go through admission regardless of ingress: asynchronously for
+    Git ingress and synchronously for GraphQL mutations. The ingress path does not change
+    the kind's authorization requirements.
   - A status subresource adds `<kind>.status.write` for its controller's service account.
   - The slug must be unique across core kinds and installed CRDs. A CRD whose slug collides is
     rejected at admission.

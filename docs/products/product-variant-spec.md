@@ -57,7 +57,6 @@ All spec fields are individually optional unless noted otherwise. Constraints ap
 |-----------------------|--------|----------|----------------------------------|
 | `productRef.name`     | string | yes      | Name of the parent `Product`     |
 | `productRef.kind`     | string | no       | Defaults to `Product`            |
-| `productRef.optional` | bool   | no       | Present for parity only; ignored |
 
 ### Selected Options
 

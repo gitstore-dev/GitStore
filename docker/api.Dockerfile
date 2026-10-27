@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # Multi-stage build for GraphQL API (Go)
-FROM golang:1.26.1-alpine3.23 AS builder
+FROM golang:1.27.2-alpine3.23 AS builder
 
 RUN apk add --no-cache git
 

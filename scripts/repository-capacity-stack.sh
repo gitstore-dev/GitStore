@@ -95,6 +95,19 @@ if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]]; then
 fi
 export CONFIG_FILE="${CONFIG_FILE:-${repo_root}/config/config.toml}"
 export SCYLLA_CLUSTER_SMP="${SCYLLA_CLUSTER_SMP:-1}"
+export SCYLLA_TABLETS_PER_SHARD_GOAL="${SCYLLA_TABLETS_PER_SHARD_GOAL-100}"
+export CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS="${CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS-0}"
+for variable in SCYLLA_TABLETS_PER_SHARD_GOAL CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS; do
+  value="${!variable}"
+  [[ "${value}" =~ ^(0|[1-9][0-9]{0,9})$ ]] && (( value <= 4294967295 )) || {
+    echo "${variable} must be an unsigned 32-bit integer" >&2
+    exit 2
+  }
+done
+(( SCYLLA_TABLETS_PER_SHARD_GOAL > 0 )) || {
+  echo "SCYLLA_TABLETS_PER_SHARD_GOAL must be positive" >&2
+  exit 2
+}
 export SCYLLA_CLUSTER_MEMORY_LIMIT="${SCYLLA_CLUSTER_MEMORY_LIMIT:-1536m}"
 export CAPACITY_PROMETHEUS_TARGETS_FILE="${CAPACITY_PROMETHEUS_TARGETS_FILE:-${state_dir}/prometheus-targets.json}"
 export GITSTORE_BOOTSTRAP_ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
@@ -240,7 +253,9 @@ host_memory_bytes() {
 
 write_manifests() {
   mkdir -p "${state_dir}"
-  jq -n --argjson smp "${SCYLLA_CLUSTER_SMP}" '{schemaVersion:1,services:{api:{build:"release",replicas:2,watch:{pollInterval:"100ms",idleBackoffMax:"2s",readBatch:256,liveRing:512,subscriberBuffer:64}},gitService:{build:"release",replicas:1},scylla:{nodes:3,smpPerNode:$smp}}}' >"${state_dir}/config-manifest.json"
+  jq -n --argjson smp "${SCYLLA_CLUSTER_SMP}" \
+    --argjson goal "${SCYLLA_TABLETS_PER_SHARD_GOAL}" --argjson minimum "${CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS}" \
+    '{schemaVersion:1,services:{api:{build:"release",replicas:2,watch:{pollInterval:"100ms",idleBackoffMax:"2s",readBatch:256,liveRing:512,subscriberBuffer:64}},gitService:{build:"release",replicas:1},scylla:{nodes:3,smpPerNode:$smp,tabletsPerShardGoal:$goal,productMinimumTablets:$minimum}}}' >"${state_dir}/config-manifest.json"
   jq -n --arg architecture "$(host_architecture)" --argjson cpus "$(getconf _NPROCESSORS_ONLN)" \
     --argjson memory "$(host_memory_bytes)" --argjson datastore_memory "${REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES:-1610612736}" \
     '{schemaVersion:1,runtime:"docker",architecture:$architecture,host:{logicalCPUs:$cpus,memoryBytes:$memory},datastore:{authenticationMode:"local-unauthenticated",memoryBytesPerNode:$datastore_memory,requireNoUnexpectedRestarts:true,requireNoOOMKills:true},topology:{apiReplicas:2,gitServiceReplicas:1,scyllaNodes:3}}' >"${state_dir}/environment-manifest.json"
@@ -358,6 +373,15 @@ run_alpha() {
   trap - EXIT INT TERM
 }
 
+configure_scylla_tablets() {
+  (( CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS > 0 )) || return 0
+  wait_http "${api_a}/ready" "API A readiness"
+  wait_http "${api_b}/ready" "API B readiness"
+  docker exec "${project}-scylla-1" cqlsh --no-color -e \
+    "ALTER TABLE ${CAPACITY_SCYLLA_KEYSPACE}.products_by_key WITH tablets={'min_tablet_count':${CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS}};"
+  echo "Requested Product minimum-tablet hint ${CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS}; achieved allocation must be verified separately"
+}
+
 secret_fixtures() {
   (
     cd "${repo_root}/tests/integration"
@@ -370,6 +394,7 @@ secret_fixtures() {
 finish_secret_startup() {
   wait_http "${api_a}/ready" "API A readiness"
   wait_http "${api_b}/ready" "API B readiness"
+  configure_scylla_tablets
   local enrollment_id enrollment_status
   enrollment_id="$("${compose[@]}" ps --all --quiet capacity-serviceaccount-enrollment)"
   [[ "${enrollment_id}" =~ ^[a-f0-9]{12,64}$ ]] || {
@@ -449,6 +474,7 @@ start_owned_stack() {
   if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" != 1 ]]; then
     owned_stack_started=1
     "${compose[@]}" up -d "${build_args[@]}" api-a api-b controller-manager-a controller-manager-b
+    configure_scylla_tablets
     return
   fi
   [[ "${CHAOS_CONFIRM:-0}" == 1 ]] || {

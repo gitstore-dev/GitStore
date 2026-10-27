@@ -7,6 +7,10 @@
 
 This guide keeps implementation detail out of the user guide. It covers service topology, local development, datastore backends, hook/admission flow, controller-manager runtime, generated schema/proto workflow, and module responsibilities.
 
+For command discovery, selectors, prerequisites and safe examples, see the
+[Make command reference](development/make-reference.md). Run `make help` from
+the repository root for the current target list.
+
 ## Current Topology
 
 ```mermaid
@@ -347,6 +351,23 @@ The API is the Git Smart HTTP front door. The Rust Git service is gRPC-only stor
 
 The pre-receive phase is intentionally stateless and blocking. Admission can use datastore state and is allowed to complete asynchronously relative to the Git client acknowledgement.
 
+The asynchronous dispatcher waits for the admission handler's actual callback
+responses; the handler does not detach another task per ref. It attempts every
+matching ref, logs each failure and returns an error if any callback failed.
+`hook_phase_complete` with `outcome="accepted"` is emitted only after the handler
+finishes successfully, not when it is dispatched. Callback timing includes the
+RPC.
+
+Post-receive callbacks are dispatched in-process without a persistent retry
+queue. A service restart or callback failure can therefore leave Git changes
+without a completed catalog projection. Git acknowledgement is not proof of
+catalog admission; verify accepted content and current-generation readiness
+through the API before treating bulk authoring as complete.
+
+Changed-path computation propagates missing commits and unreadable subtrees;
+it cannot acknowledge a partial diff as successful delivery. Identical trees
+produce no admission call, rather than an empty-path legacy full scan.
+
 Admission identity is `apiVersion`, `kind`, resolved namespace, and `metadata.name`; the Git file path is stored as provenance only. A path move with the same identity preserves `metadata.uid` and only increments `resourceVersion`. Spec/body edits increment both `generation` and `resourceVersion`. Deleting a resource file removes the stored identity; adding the same identity again later allocates a new UID.
 
 Post-receive admission cannot reject an already accepted Git push. DB-backed conflicts such as duplicate `ProductVariant.spec.sku` leave the existing resource unchanged, skip the conflicting incoming resource, and emit structured API logs with the operation, namespace, name, SKU, and conflicting identity.
@@ -438,6 +459,110 @@ cargo test
 cargo test --test integration
 cargo build --release
 ```
+
+Concurrent `GetFile` and `GetFiles` requests can share native object-store
+indexes while retaining fresh per-request configuration and reference stores.
+The sharing registry has 16 weak slots: it does not keep repository indexes
+alive after their active readers finish. Authentication, repository locks and
+source-proof budgets are unchanged.
+
+The ignored `test_file_history_wide_tree_diagnostic` test accepts
+`GITSTORE_READ_DIAGNOSTIC_REPOSITORY` and
+`GITSTORE_READ_DIAGNOSTIC_MANIFEST` for an explicitly supplied, read-only
+25,000-entry acknowledged fixture. It compares fresh handles, shared object
+stores and active-reader sharing, checking identical commit IDs, blob IDs and
+contents. These library timings do not establish RPC, push-acknowledgment or
+sustained-load performance.
+
+`GetFile` supports an explicit `prove_path_absence` mode with a named ref,
+path and `unchanged_since_commit`. It checks the path is absent at the ancestor
+and every intervening tree through the guarded current-ref snapshot. The
+history walk has the same per-RPC 4,096-edge and one-second limits as unchanged-file
+proofs; merges, unrelated history and a recreated path fail closed. Even exact
+ancestor/tip equality requires a tree read, not an ancestor-only receipt.
+Exhausting either budget returns `RESOURCE_EXHAUSTED`, not a source-divergence
+result. An exhausted native read can return a verified prefix in a bounded
+2 KiB `x-gitstore-file-history-bin` error trailer. This is still an RPC failure,
+never a successful or complete proof; its cursor names the first unverified
+parent. Successful responses never carry a continuation cursor.
+
+The Go client can continue at immutable commits, checking the path, original
+ancestor, cursor linkage and identical blob ID or continuous absence throughout.
+It makes at most eight RPCs within the caller's unchanged context deadline,
+rejects malformed or cyclic progress, and returns no content before reaching
+the ancestor. A segmented named-ref proof then rechecks the current ref against
+its verified head; advancement must also prove unchanged history. Thus an old
+Product source can span multiple bounded reads without treating matching
+endpoints as evidence that intermediate writes never happened. RPC exhaustion
+remains observable even when the overall proof eventually succeeds.
+
+Requests and signing are unchanged. Older Git services without prefix trailers
+still return their original exhaustion errors; older API clients still see
+failure from a new service. If continuation or its final ref check exhausts
+the caller's bounds, the API propagates the failure rather than treating an
+unproven manifest as superseded. These bounded proofs do not establish
+large-catalog lifecycle or sustained-load acceptance.
+
+The Go client's `ReadCurrentFileAbsenceForRepo` requires an explicit
+`path_absent` response with matching path/ancestor and a full current commit ID.
+It rejects blob data, ancestor-only receipts and legacy default responses.
+Upgrade the singleton Git service before enabling this request mode in API
+callers; missing support and ordinary `NotFound` errors are not proof.
+This is snapshot evidence, not a datastore UID binding, an atomic
+Git/datastore transaction or a durable callback-replay mechanism.
+
+Product removals, including current-tip callbacks, combine this proof with
+a persisted deletion reservation before verification. The API first proves the
+stored source's lineage through the original pre-removal commit, then reserves its UID and
+proves continuous absence from the accepted removal. Each fresh acquisition
+uses a random token; resuming an existing acquisition preserves its token,
+while release and reacquisition invalidate older proofs. The token remains
+held through the termination CAS, and controller status patches preserve it.
+Failure cleanup must match the exact acquisition, not just actor and commits.
+For branch deletion, `ListFiles.prove_ref_absence` instead requires a named
+ref, empty prefix and nonrecursive mode. Under the owned snapshot read guard,
+an accessible repository with no such ref returns only its matching
+`ref_absent`. Present, corrupt or inaccessible targets do not prove absence.
+The Go client rejects ordinary `NotFound`, legacy empty replies and unsolicited
+ref-absence receipts in ordinary listings or ref resolution.
+All participating API writers must honor and preserve these intents. Older
+writers that ignore them cannot safely overlap this protocol: quiesce
+publications and admission during such an upgrade rather than treating it as
+a compatible rolling change. Deployed rolling recovery requires separate
+verification. Product status reservations are not a replay queue and do not
+schedule recovery of interrupted admission.
+
+A Product created during a Git admission attempt is reserved with its full
+authored envelope before the final source check. Once that check and
+authorization succeed, Scylla can complete admission with a conditional
+status-and-resource-version write. The stored UID, source, actors, timestamps
+and authored fields must still match; deletion and version changes reject
+completion. Reverse owner-reference records retain the new resource version.
+Only a successful create in the same attempt uses this path. Older pending
+records, partial creates and conflict retries retain the full update and
+projection-repair path. Completion checks parent eligibility, but does not
+reacquire the membership writer reservation: the already-created child remains
+a durable parent-deletion blocker, its identity and membership cannot change,
+and its exact row version fences concurrent source and lifecycle writes.
+Both paths use the existing `UpdateProduct` operation
+metric, so comparisons include the complete datastore work.
+
+Distinct Product-only admission batches use cohorts of at most four workers per
+callback. After each cohort's lookups and authorization, same-Namespace
+Products may share the datastore's existing parent mutation fence. That fence
+remains held until every cohort worker finishes; it is not shared with deletion
+or parent lifecycle operations. Each cohort releases it before the next cohort.
+Each Product still performs its own authorization, source proofs, provisional
+creation and version-fenced completion; there is no shared authorization or
+source-proof shortcut. Decisions and combined errors retain input order, and
+one Product's failure does not skip independent Products. Workers check
+cancellation before starting another Product, and the callback waits for every
+worker before completing. Fence acquisition or release failures are reported
+for affected Products. A repair-required failure stops later cohorts rather
+than continuing under an uncertain parent reservation.
+Mixed-kind batches and repeated Product identities retain sequential admission,
+including category dependency ordering and updates before deletions. This does
+not change the native post-receive handler or add callback replay.
 
 ### `gitstore-controller-manager`
 

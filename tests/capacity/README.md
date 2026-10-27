@@ -422,6 +422,16 @@ Namespace admission and watch workloads create generated `ORGANIZATION`
 namespaces and preserve that tier during updates. `USER` namespaces are bound
 to a human's identity and cannot serve as a pool of generated workload names.
 
+For RSS attribution, compare allocator gauges with paired heap and goroutine
+profiles at the baseline, offered-load and post-load boundaries. Compression
+pools and profiler allocations can appear in the measured heap; distinguish
+them from retained resource data. Forced-GC captures are diagnostic only.
+An allocation benchmark improvement does not establish resident-memory stability:
+rerun the unprofiled deployment workload with its original resource gates.
+The duplicate-delivery metric retains at most 100,000 SHA-256 cursor/key
+fingerprints rather than journal strings. This is a diagnostic history, not
+authoritative deduplication; durable journal and replay identities are unchanged.
+
 Scylla query evidence must cover real datastore access paths, partition and
 clustering restrictions, shard merging and hydration, read/write amplification,
 tombstones, and projection repair under sparse, hot/skewed and churning fixtures.
@@ -579,11 +589,21 @@ preloaded fixtures) and `acknowledged: true`. Names must be strictly sorted
 and unique. Limits are 4 KiB/line, 8 GiB/file, 10 million rows and 30 minutes for
 the complete verification. Production rejects fewer than five million rows
 before requesting pages. No aggregate query or Scylla counter is used.
+Every returned Product must also have the canonical `catalog.gitstore.dev/v1beta1`
+API version, `Product` kind, a UID, resource version, positive generation and a
+named owner. Its status must observe that generation, with exactly one current
+`AdmissionAccepted=True` and `Ready=True` condition. Direct datastore inserts
+that bypass admission, rejected Products and stale controller status fail
+verification even when their names, titles and revisions match the manifest.
+Optional fields such as tags, options, body and category references may be empty;
+their absence does not establish a read-path defect.
 
 `secret/dataset.json` contains counts, per-replica page observations, manifest
 SHA-256 and an order-independent row-content digest, not the manifest or Product
 contents. Count plus digest comparison rejects missing, duplicated or changed
 namespace/name/title/revision rows without retaining millions of names.
+The admitted and Ready counts must equal the row count; older evidence without
+these lifecycle checks cannot satisfy the capacity gate.
 `secret/controllers-before-load.json` and `secret/controllers-after-load.json`
 record process-local exchange/reconciliation counters and resource snapshots.
 The observer brackets readiness with identity-checked metrics scrapes, bounds
@@ -679,6 +699,15 @@ Prebuilt production images can be selected with `CAPACITY_API_IMAGE`,
 references). The existing stack and replacement watcher reuse these references
 without rebuilding them; unspecified images retain the normal local build tags.
 
+Owned-stack provisioning can select `SCYLLA_TABLETS_PER_SHARD_GOAL` (default
+`100`) and `CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS` (default `0`, no table-option
+change). The latter is applied only during fresh startup or its pre-fixture
+resume, after schema readiness. Both selections are included in the configuration
+manifest. Keep them consistent for subsequent lifecycle commands. Tablet hints
+are globally scaled; measure the actual latest active CDC streams, reader cost
+and partition sizes rather than treating a requested minimum as a proven floor.
+Larger allocations do not waive resource gates or repair older CDC partitions.
+
 Modes classify acceptance independently of workload. `diagnostic` records
 results but can never set `passed: true`. `alpha` keeps correctness, error,
 recovery, CPU, and memory requirements hard, enforces Namespace visibility p95
@@ -733,8 +762,12 @@ For datastore-backed profiles, record per-node memory limits, CPU/shards,
 restart counts, OOM state, and authentication mode. A gate fails if a node is
 OOM-killed, unexpectedly restarts, or leaves cluster membership during load.
 Set `CAPACITY_DATASTORE_CONTAINERS` to the comma-separated container names. The
-runner captures sanitized `docker inspect` state before and after load and
-fails on OOM, restart, disappearance, stopped state, incomplete `nodetool
+runner captures sanitized `docker inspect` state and the native Scylla process
+PID/start time before and after load. Exactly one native `scylla` process must
+be inspectable through `docker top` on each node. A supervisor restarting that
+process fails the gate even when the container ID, start time and restart
+count remain unchanged. The runner also fails on OOM, container restart,
+disappearance, stopped state, incomplete `nodetool
 status` membership, or a runtime `--smp` value that differs from the config
 manifest. Namespace admission
 alpha and production modes additionally require:
@@ -1058,8 +1091,12 @@ Set `GIT_URL` to the reachable singleton Git endpoint for Namespace watch runs;
 Repository lifecycle continues to use `REPOSITORY_GIT_URL`. Provenance pushes
 retry only non-fast-forward races, refreshing the current tree at depth one and
 rebasing only the single probe comment commit without force within a 30-second,
-eight-attempt bound. The path-only refresh verifies that only the probe manifest
-changed locally and refuses a concurrent edit or deletion of that manifest.
+eight-attempt bound. Non-fast-forward retries wait before refreshing, using full
+jitter with an exponentially increasing ceiling from 100ms to 2s; waits share
+the original deadline and are logged separately. This probe-client policy does
+not change the offered mutation workload or server capacity. The path-only
+refresh verifies that only the probe manifest changed locally and refuses a
+concurrent edit or deletion of that manifest.
 It preserves unrelated fetched tree entries without checking out the catalog.
 A successful soft reset records the original commit in `ORIG_HEAD`; reusing its
 author and message avoids a separate Git process to rediscover that commit.
@@ -1384,6 +1421,12 @@ than truncated. An unset or empty setting retains its existing fallback.
     `CAPACITY_PUSH_*` settings) pushes commits to the same `gitstore-system`
     repository for the duration of the load. Set `CAPACITY_PUSH_NAMESPACE` to
     the profile's namespace and give both producers the same `CAPACITY_RUN_ID`.
+    Workers use shallow sparse clones with
+    [sparse indexes](https://github.blog/open-source/git/make-your-monorepo-feel-small-with-gits-sparse-index/)
+    to avoid checking out the existing catalog or keeping an index entry for
+    every unchanged file outside the checkout. Explicit sparse staging preserves the complete existing
+    tree while adding each new manifest, including after a rebase; command
+    deadlines and push-latency accounting are unchanged.
     The verifier consumes the driver's complete document, including `kind`,
     `namespace`, `runId`, `offered`, `pushes`, `failures`, `dropped`, `retries`,
     worker/interval bounds, latency statistics and first/last acknowledgement

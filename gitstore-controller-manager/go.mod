@@ -1,6 +1,6 @@
 module github.com/gitstore-dev/gitstore/controller-manager
 
-go 1.26.0
+go 1.27.2
 
 replace github.com/gitstore-dev/gitstore/secretmaterial => ../shared/secretmaterial
 

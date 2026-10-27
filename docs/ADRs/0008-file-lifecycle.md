@@ -154,8 +154,9 @@ metadata:
 spec:
   contentType: image/jpeg
   type: gitstore.dev/media
+  # provider: s3
   source:
-    type: s3
+    type: s3 # TODO change to provider
     uri: s3://acme-assets/products/macbook-pro-hero.jpg
     checksum:
       algorithm: sha256

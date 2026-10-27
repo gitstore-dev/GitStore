@@ -421,6 +421,21 @@ fi
 EOF
 cat >"${test_dir}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
+if [[ "$1" == top ]]; then
+  [[ "$*" == *"-eo pid,lstart,comm" ]] || exit 2
+  printf 'PID STARTED COMMAND\n10 Tue Oct 20 22:37:19 2026 supervisord\n'
+  case "${MOCK_SCYLLA_NATIVE_STATE:-}" in
+    inspection-failed) exit 1 ;;
+    missing) ;;
+    multiple) printf '101 Tue Oct 20 22:37:20 2026 scylla\n102 Tue Oct 20 22:37:20 2026 scylla\n' ;;
+    restarted) printf '201 Tue Oct 20 22:37:20 2026 scylla\n' ;;
+    reused-pid) printf '101 Tue Oct 20 22:37:21 2026 scylla\n' ;;
+    malformed) printf 'unknown Tue Oct 20 22:37:20 2026 scylla\n' ;;
+    *) printf '101 Tue Oct 20 22:37:20 2026 scylla\n' ;;
+  esac
+  printf '103 Tue Oct 20 22:37:20 2026 scylla-housekee\n104 Tue Oct 20 22:37:20 2026 sleep\n'
+  exit 0
+fi
 if [[ "$1" == exec ]]; then
   if [[ "${3:-}" == date ]]; then
     if [[ "${MOCK_CLOCK_INVALID:-0}" == 1 ]]; then echo unknown; exit 0; fi
@@ -2848,6 +2863,35 @@ PATH="${test_dir}/bin:${PATH}" CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,s
   "${repo_root}/scripts/check-capacity-containers.sh" snapshot "${test_dir}/clock-valid.json"
 jq -e 'length == 3 and all(.[]; .clock.passed and (.clock.containerEpochSeconds | type == "number"))' \
   "${test_dir}/clock-valid.json" >/dev/null
+jq -e 'all(.[]; .nativeProcess == {pid:101,startedAt:"Tue Oct 20 22:37:20 2026"})' \
+  "${test_dir}/clock-valid.json" >/dev/null
+PATH="${test_dir}/bin:${PATH}" CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
+  "${repo_root}/scripts/check-capacity-containers.sh" verify \
+  "${test_dir}/clock-valid.json" "${test_dir}/native-stable.json"
+jq -e '.passed' "${test_dir}/native-stable.json.verification.json" >/dev/null
+for state in restarted reused-pid; do
+  if PATH="${test_dir}/bin:${PATH}" MOCK_SCYLLA_NATIVE_STATE="${state}" \
+    CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
+    "${repo_root}/scripts/check-capacity-containers.sh" verify "${test_dir}/clock-valid.json" \
+    "${test_dir}/native-${state}.json" >/dev/null 2>&1; then
+    echo "native Scylla replacement inside unchanged containers unexpectedly passed: ${state}" >&2
+    exit 1
+  fi
+  jq -e '.passed == false and all(.containers[];
+    .passed == false and .before.id == .after.id and
+    .before.state == .after.state and .before.restartCount == .after.restartCount and
+    .before.nativeProcess != .after.nativeProcess)' \
+    "${test_dir}/native-${state}.json.verification.json" >/dev/null
+done
+for state in missing multiple malformed inspection-failed; do
+  if PATH="${test_dir}/bin:${PATH}" MOCK_SCYLLA_NATIVE_STATE="${state}" \
+    CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
+    "${repo_root}/scripts/check-capacity-containers.sh" snapshot \
+    "${test_dir}/native-${state}.json" >/dev/null 2>&1; then
+    echo "uninspectable native Scylla process unexpectedly passed: ${state}" >&2
+    exit 1
+  fi
+done
 for offset in -900 900; do
   if PATH="${test_dir}/bin:${PATH}" MOCK_CLOCK_OFFSET_SECONDS="${offset}" \
     CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \

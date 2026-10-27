@@ -4,7 +4,7 @@ services:
     container_name: gitstore-scylla
     ports:
       - "9042:9042"   # CQL native transport
-    command: --developer-mode=1 --overprovisioned=1 --smp=1
+    command: --developer-mode=1 --overprovisioned=1 --smp=1 --tablets-per-shard-goal=${SCYLLA_TABLETS_PER_SHARD_GOAL-100}
     volumes:
       - scylla-data:/var/lib/scylla
     networks:

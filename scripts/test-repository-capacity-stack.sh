@@ -13,6 +13,9 @@ cat >"${test_dir}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${REPOSITORY_CAPACITY_DOCKER_LOG}"
 case "$*" in
+  "exec "*)
+    exit "${TEST_CAPACITY_CQL_EXIT:-0}"
+    ;;
   "ps -aq --filter label=com.docker.compose.project="*) printf '%s' "${TEST_CAPACITY_EXISTING_CONTAINER:-}" ;;
   "volume ls -q --filter label=com.docker.compose.project="*) printf '%s' "${TEST_CAPACITY_EXISTING_VOLUME:-}" ;;
   "inspect --format "*)
@@ -91,11 +94,47 @@ for existing in container volume; do
   fi
 done
 
-for setting in 'CAPACITY_SCYLLA_KEYSPACE=bad;name' 'CAPACITY_API_A_PORT=65536' 'CAPACITY_API_B_PORT=4000'; do
+for setting in 'CAPACITY_SCYLLA_KEYSPACE=bad;name' 'CAPACITY_API_A_PORT=65536' 'CAPACITY_API_B_PORT=4000' \
+  'SCYLLA_TABLETS_PER_SHARD_GOAL=0' 'SCYLLA_TABLETS_PER_SHARD_GOAL=' \
+  'SCYLLA_TABLETS_PER_SHARD_GOAL=-1' 'SCYLLA_TABLETS_PER_SHARD_GOAL=4294967296' \
+  'CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS=' 'CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS=-1' \
+  'CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS=01' 'CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS=1;bad'; do
   if env PATH="${test_dir}/bin:${PATH}" "${setting}" \
     "${repo_root}/scripts/repository-capacity-stack.sh" config >"${test_dir}/invalid.log" 2>&1; then
     echo "managed stack accepted invalid keyspace/port setting" >&2
     exit 1
+  fi
+done
+
+: >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
+for mode in unchanged tuned failed; do
+  : >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
+  minimum=256
+  status=0
+  [[ "${mode}" != unchanged ]] || minimum=0
+  [[ "${mode}" != failed ]] || status=42
+  if env PATH="${test_dir}/bin:${PATH}" TEST_CAPACITY_CQL_EXIT="${status}" \
+    SCYLLA_TABLETS_PER_SHARD_GOAL=512 CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS="${minimum}" \
+    REPOSITORY_CAPACITY_PROJECT=capacity-test REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/tablets-${mode}" \
+    CAPACITY_API_A_PORT=49100 CAPACITY_API_B_PORT=49101 \
+    CAPACITY_GIT_HTTP_A_PORT=49102 CAPACITY_GIT_HTTP_B_PORT=49103 \
+    CAPACITY_CATALOG_A_PORT=49104 CAPACITY_CATALOG_B_PORT=49105 \
+    CAPACITY_CONTROLLER_A_PORT=49106 CAPACITY_CONTROLLER_B_PORT=49107 \
+    "${repo_root}/scripts/repository-capacity-stack.sh" up >"${test_dir}/tablets-${mode}.log" 2>&1; then
+    [[ "${mode}" != failed ]] || { echo "native CQL failure was hidden" >&2; exit 1; }
+  else
+    actual_status=$?
+    [[ "${mode}" == failed ]] || { cat "${test_dir}/tablets-${mode}.log" >&2; exit 1; }
+    [[ "${actual_status}" == 42 ]] || { cat "${test_dir}/tablets-${mode}.log" >&2; exit 1; }
+  fi
+  if [[ "${mode}" == unchanged ]]; then
+    if grep -q 'ALTER TABLE' "${REPOSITORY_CAPACITY_DOCKER_LOG}"; then
+      echo "default startup changed Product tablet options" >&2
+      exit 1
+    fi
+  else
+    grep -q "exec capacity-test-scylla-1 cqlsh --no-color -e ALTER TABLE gitstore.products_by_key WITH tablets={'min_tablet_count':256};" \
+      "${REPOSITORY_CAPACITY_DOCKER_LOG}"
   fi
 done
 
@@ -172,6 +211,8 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
       -f "${repo_root}/compose.scylla.cluster.yml" \
       -f "${repo_root}/compose.capacity.yml" config --format json >"${rendered}"
   jq -e '
+    all(.services["scylla-1","scylla-2","scylla-3"];
+      .command | index("--tablets-per-shard-goal=100") != null) and
     .services["scylla-1"].container_name == "capacity-render-test-scylla-1" and
     .services["api-a"].labels["dev.gitstore.capacity.run"] != null and
     (.services["api-b"].labels == .services["api-a"].labels) and
@@ -189,7 +230,7 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     (.services["api-a"].depends_on["api-b"] == null)
   ' "${rendered}" >/dev/null
 
-  CAPACITY_SCYLLA_KEYSPACE=capacity_owned CAPACITY_API_A_PORT=14000 CAPACITY_API_B_PORT=14001 \
+  SCYLLA_TABLETS_PER_SHARD_GOAL=512 CAPACITY_SCYLLA_KEYSPACE=capacity_owned CAPACITY_API_A_PORT=14000 CAPACITY_API_B_PORT=14001 \
     CAPACITY_GIT_HTTP_A_PORT=19000 CAPACITY_GIT_HTTP_B_PORT=19001 \
     CAPACITY_CATALOG_A_PORT=16000 CAPACITY_CATALOG_B_PORT=16001 \
     CAPACITY_CONTROLLER_A_PORT=15001 CAPACITY_CONTROLLER_B_PORT=15002 \
@@ -198,6 +239,8 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
       -f "${repo_root}/compose.yml" -f "${repo_root}/compose.scylla.cluster.yml" \
       -f "${repo_root}/compose.capacity.yml" config --format json >"${test_dir}/custom-compose.json"
   jq -e --arg root "${test_dir}" '
+    all(.services["scylla-1","scylla-2","scylla-3"];
+      .command | index("--tablets-per-shard-goal=512") != null) and
     .services["api-a"].container_name == "another-capacity-api-a" and
     .services["api-b"].container_name == "another-capacity-api-b" and
     .services["api-a"].ports[0].published == "14000" and
@@ -269,6 +312,10 @@ printf 'token\n' >"${test_dir}/failed-state/token"
 set +e
 failure_output="$(PATH="${test_dir}/bin:${PATH}" \
   CAPACITY_GIT_REVISION=0123456789abcdef0123456789abcdef01234567 \
+  CAPACITY_API_A_PORT=49100 CAPACITY_API_B_PORT=49101 \
+  CAPACITY_GIT_HTTP_A_PORT=49102 CAPACITY_GIT_HTTP_B_PORT=49103 \
+  CAPACITY_CATALOG_A_PORT=49104 CAPACITY_CATALOG_B_PORT=49105 \
+  CAPACITY_CONTROLLER_A_PORT=49106 CAPACITY_CONTROLLER_B_PORT=49107 \
   REPOSITORY_CAPACITY_HOST_MEMORY_BYTES=17179869184 \
   REPOSITORY_CAPACITY_RUNNER="${test_dir}/bin/capacity-runner" \
   REPOSITORY_CAPACITY_REPLACEMENT_WATCHER="${test_dir}/bin/replacement-watcher" \
@@ -298,6 +345,8 @@ fi
 [[ -f "${test_dir}/failed-state/token" ]]
 [[ -f "${test_dir}/failed-state/compose-failure-ps.log" ]]
 [[ -f "${test_dir}/failed-state/compose-failure.log" ]]
+jq -e '.services.scylla.tabletsPerShardGoal == 100 and .services.scylla.productMinimumTablets == 0' \
+  "${test_dir}/failed-state/config-manifest.json" >/dev/null
 
 cat >"${test_dir}/bin/healthy-capacity-runner" <<'EOF'
 #!/usr/bin/env bash
@@ -364,6 +413,7 @@ for controller_port in 5001 5002; do
   touch "${health_dir}/recover-${controller_port}"
 done
 PATH="${test_dir}/bin:${PATH}" CAPACITY_RUN_ID=owned-run \
+  SCYLLA_TABLETS_PER_SHARD_GOAL=512 CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS=256 \
   CAPACITY_GIT_REVISION=0123456789abcdef0123456789abcdef01234567 \
   REPOSITORY_CAPACITY_HOST_MEMORY_BYTES=17179869184 \
   REPOSITORY_CAPACITY_WAIT_SECONDS=5 \
@@ -381,6 +431,8 @@ PATH="${test_dir}/bin:${PATH}" CAPACITY_RUN_ID=owned-run \
    -f "${health_dir}/after" && -f "${health_dir}/watcher.stopped" ]]
 jq -e '.passed == true' \
   "${health_dir}/evidence/repository/lifecycle/alpha/owned-run/metadata.json" >/dev/null
+jq -e '.services.scylla.tabletsPerShardGoal == 512 and .services.scylla.productMinimumTablets == 256' \
+  "${test_dir}/watcher-state/config-manifest.json" >/dev/null
 
 alpha_recipe="$(make --no-print-directory -C "${repo_root}" -n capacity TARGET=repository PROFILE=lifecycle MODE=alpha)"
 grep -q 'repository-capacity-stack.sh local-alpha' <<<"${alpha_recipe}"

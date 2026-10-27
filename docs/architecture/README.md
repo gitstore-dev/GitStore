@@ -73,9 +73,50 @@ blanket HA guarantee.
 - Git push validation, admission, projection, and reconciliation must use
   bounded concurrency and backpressure and must pass sustained-load testing.
 
+### Product Storage
+
+Product storage separates logical ownership from physical distribution.
+`products_by_key` holds one full resource envelope per
+`(namespace, creation_timestamp, uid)` partition and is the Product CDC source.
+`products_by_identity` reserves each `(namespace, name)` independently;
+`products_by_uid` locates the authoritative key. The narrow
+`products_by_namespace_shard` projection distributes listing keys across 64
+stable UID-hash shards. A bounded merge/refill pager hydrates authoritative
+rows and preserves timestamp/UID keyset ordering in both directions.
+Per-shard read-ahead scales with page size rather than fetching a full page
+from every shard; skewed or dangling keys trigger refills within fixed query
+and hydration budgets.
+The listing row is installed before authoritative creation, so a new durable
+watch event cannot precede its listing key. These physical partitions do not
+split a logical Repository or change its ownership and admission fences.
+Shard count is not a demonstrated capacity limit; monitor actual partition
+sizes, query costs and convergence under the intended workload.
+
+Catalog admission and Repository lifecycle coordination use a separate
+`namespace_catalog_fences_by_uid` table without CDC. Namespace termination
+acquires the same exclusive fence before checking emptiness and committing its
+lifecycle transition. Repository creation retains its separate Namespace
+counter and conditional termination guard. Child coordination therefore does
+not generate full Namespace CDC images. Reservations do not expire; ambiguous
+outcomes require projection verification and conditional repair while all
+writers are stopped.
+
+This development storage baseline requires a fresh keyspace and reseeding when
+replacing an earlier layout. Existing migration-history checks reject changed
+baselines; startup does not transfer or delete existing data. Do not overlap
+old-layout and new-layout API writers against one keyspace.
+
 ### Service Boundary
 
 The API gateway (`gitstore-api`) and the Git server (`gitstore-git-service`) communicate exclusively through gRPC on port `50051`. The API holds no local git state; every read (catalogue load) and every write (commit, delete, tag) is an RPC call to the Git service.
+
+Native file reads share object indexes only while readers overlap. Each request
+still opens a fresh configuration and reference view. When an active reader
+already owns the object store, the fresh view avoids rescanning the pack
+directory to size a discarded store. Cold opens size their store proportionally
+from index filenames, including alternate object directories, without statting
+and sorting every pack just to calculate capacity. Actual object discovery and
+validation remain unchanged; idle repositories retain no indexes.
 
 `gitstore-api` serves 3 ports:
 - Port `4000` — GraphQL API
@@ -94,6 +135,24 @@ The API gateway (`gitstore-api`) and the Git server (`gitstore-git-service`) com
 
 Business packages receive dependencies through plain `Deps` structs rather than package globals or a DI framework. Shared infrastructure seams such as clocks, ID generators, catalog parsers, Git clients, auth services, and loggers are passed into constructors so tests can use deterministic time, IDs, and token expiry behavior.
 
+Go services and shared modules use Go 1.27.2 in native development, CI and
+container builds. Its standard `encoding/json` package uses the JSON v2 engine
+by default while retaining v1 API semantics; no experimental flag or gqlgen
+codec override is required.
+
+Typed and generic Namespace watches reuse immutable resource projections when
+subscribers consume the same durable event. Each API replica retains at most 256
+events' typed models and generic JSON maps in independently synchronized slots,
+keyed by journal epoch, sequence and payload digest; replay and cache misses
+convert the supplied event rather than reading current resource state. This is
+not an event source: subscriptions, cursors, selector transitions, authorization
+and backpressure remain independent, and every event still comes from the
+durable journal. The fixed reuse window matches a default journal read batch;
+older or colliding events are recomputed without affecting delivery.
+The journal tailer shares an immutable latest batch between caught-up subscribers;
+lagging readers still receive independent retained-ring snapshots or replay from
+the durable journal. Publication validates the whole sequence before exposing it.
+
 Key environment variables:
 
 | Service                | Variable                            | Purpose                                                          |
@@ -111,7 +170,7 @@ Key consequences of this change:
 
 - **No native library dependency**: the service binary links only Rust crates; no libgit2 or OpenSSL linkage.
 - **Tree-editor writes**: `commit_file` and `delete_file` use gix's built-in tree-editor API to mutate bare repository trees directly, eliminating the previous clone-to-tmpdir pattern.
-- **MSRV 1.88**: required by `gix 0.89.0`; the Rust toolchain must be ≥ 1.88. Tree editing remains available without the removed `tree-editor` Cargo feature.
+- **Rust 1.99.1**: pinned for native development, CI and container builds. Tree editing remains available without the removed `tree-editor` Cargo feature.
 
 ### Multi-Repository Hosting
 
@@ -829,6 +888,14 @@ The API surface stays GraphQL-first while preserving Kubernetes-style watch sema
   backend until its own durable-watch migration lands.
 
 ### Reconciliation Model
+
+Each resource kind keeps its projection, pending work and retry schedule in a
+durable local checkpoint. Ready-work reads retain only a constant-size lower
+bound for each priority, avoiding repeated traversal of obsolete index entries.
+These bounds do not consume work: new earlier obligations rewind them, and
+generation changes or process replacement reconstruct scheduling from disk.
+Acknowledgements still require the captured work token, so stale completions
+cannot erase newer obligations.
 
 1. Controller receives the latest `.spec` and `.status` from its list/watch
    cache.

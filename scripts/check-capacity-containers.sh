@@ -25,7 +25,7 @@ for target in "${targets[@]}"; do
 done
 
 snapshot() {
-  local output_file="$1" host_before host_after container_seconds clock_passed
+  local output_file="$1" host_before host_after container_seconds clock_passed processes native_process
   docker inspect "${targets[@]}" | jq '[.[] |
     (((.Config.Entrypoint // []) + (.Config.Cmd // [])) | map(tostring) | join(" ")) as $command |
     {
@@ -42,6 +42,24 @@ snapshot() {
     }
   ] | sort_by(.name)' >"${output_file}"
   for target in "${targets[@]}"; do
+    processes="$(docker top "${target}" -eo pid,lstart,comm)" || {
+      echo "cannot inspect native Scylla process through ${target}" >&2
+      exit 1
+    }
+    native_process="$(awk 'NF == 7 && $1 ~ /^[1-9][0-9]*$/ && $7 == "scylla" {
+        printf "%s %s %s %s %s %s\n", $1, $2, $3, $4, $5, $6
+      }' <<<"${processes}" | jq -Rsec '
+        split("\n") | map(select(length > 0) | split(" ") |
+          {pid:(.[0] | tonumber),startedAt:(.[1:] | join(" "))}) |
+        select(length == 1) | .[0]
+      ')" || {
+      echo "expected exactly one inspectable native Scylla process through ${target}" >&2
+      exit 1
+    }
+    jq --arg name "${target}" --argjson process "${native_process}" \
+      'map(if .name == $name then . + {nativeProcess:$process} else . end)' \
+      "${output_file}" >"${output_file}.tmp"
+    mv "${output_file}.tmp" "${output_file}"
     host_before="$(date -u +%s)"
     container_seconds="$(docker exec "${target}" date -u +%s)" || {
       echo "cannot inspect datastore clock through ${target}" >&2
@@ -115,13 +133,15 @@ case "${mode}" in
          passed:($new.state.running and ($new.state.oomKilled|not) and
                  $new.id == $old.id and
                  $new.restartCount == $old.restartCount and
-                 $new.state.startedAt == $old.state.startedAt),
+                 $new.state.startedAt == $old.state.startedAt and
+                 $old.nativeProcess != null and
+                 $new.nativeProcess == $old.nativeProcess),
          before:$old, after:$new}
       ] as $containers |
       {schemaVersion:1, passed:(($containers|length) == ($b|length) and ([$containers[].passed] | all)), containers:$containers}
     ' >"${after_file}.verification.json"
     jq -e '.passed' "${after_file}.verification.json" >/dev/null || {
-      echo "datastore container OOM, restart, disappearance, or stopped state detected" >&2
+      echo "datastore container OOM, restart, disappearance, stopped state, or native Scylla process replacement detected" >&2
       exit 1
     }
     ;;

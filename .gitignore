@@ -88,6 +88,9 @@ catalogue-work/
 /gitstore-controller-manager/controller
 /out/
 .claude/
+!/.claude/
+/.claude/*
+!/.claude/rules/
 
 # graphify local-machine state (not portable across clones)
 /graphify-out/

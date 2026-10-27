@@ -116,25 +116,23 @@ and a disconnected reader stops further chunk delivery.
 
 Scylla File admission can coalesce up to four queued callbacks in one Namespace
 under a single exclusive durable parent fence.
-Catalog fence entry resolves the Namespace name to its UID. After the existing
-queue grants access, a fresh authoritative reservation read checks publication,
-deletion intent and state without loading the full Namespace envelope or issuing
-a separate publication query. Its conditional reservation also compares that
-publication marker: an intervening change loses the old condition and requires
-a fresh check before any callback can run.
-Staged or missing authoritative rows remain absent, including unpublished rows
-with uninitialized fence fields; legacy null markers remain visible. While that
-bounded queue still has work, a confirmed release can supply a candidate tuple
-for the next conditional acquisition. That fresh transaction must match the
-epoch, zero pending writers, deletion state, status and publication marker;
-previous observations never authorize a callback themselves. A mismatch discards
-the candidate and reloads authoritative state. Errors do not fall back or retry
-an ambiguous acquisition. Candidates disappear with the queue entry, and
-unconfirmed or counted-fallback releases cannot supply one. File snapshots and
-post-write reads remain fresh and unchanged. Reservation
-release still drains a confirmed writer even if publication subsequently changes,
-without releasing a peer's remaining reservation. Ordinary Namespace API reads
-retain their full envelopes and existing error behavior.
+Catalog fence entry resolves the Namespace name to its UID, then conditionally
+acquires an exclusive reservation in the non-CDC
+`namespace_catalog_fences_by_uid` table. It reads current Namespace publication
+and lifecycle state only after acquisition. Namespace termination acquires the
+same fence, preventing child admission from racing deletion initiation.
+Repository creation retains its separate counter and conditional termination
+guard. Catalog coordination does not itself produce Namespace watch events.
+
+Staged or missing authoritative rows remain absent; legacy null publication
+markers remain visible. A cached released epoch is only a candidate for another
+conditional acquisition, never permission to skip the current parent check.
+Reservations have no expiry. Ambiguous writes or releases fail closed and
+retain the fence; restarting the API does not clear it. Stop all API and other
+datastore writers before auditing and repairing projections, and release only
+the exact audited fence after verification. Do not clear a reservation merely
+because it is old. A stale release or repair cannot clear a newer holder.
+Ordinary Namespace reads and File snapshots retain their existing behavior.
 Before joining that fence, a callback containing two to four distinct File
 creates or updates loads a fresh bounded name snapshot instead of separate
 point reads. Its name locators and authoritative rows use at most two partition-local
@@ -917,29 +915,34 @@ measure the complete request path under the intended load and partition skew.
 To distinguish Git RPC transport time from signed-request verification, enable
 the Git service's `RUST_LOG=info,gitstore::auth::interceptor=debug` tracing filter.
 `RPC verification dispatch timing` reports capacity-slot wait, blocking-pool
-dispatch wait and total verification time. `RPC replay reservation timing`
-reports replay-lock wait, envelope checking, serialized reservation,
-durable nonce persistence and reservation-completion wait.
+dispatch wait and total verification time. The phase histograms separately
+report envelope checking and replay-lock wait. Replay persistence phases in
+older evidence belong to the retired durable-journal implementation.
 Fields use milliseconds and the fixed RPC method; no nonce, signature,
 credential, payload or resource identity is logged. These are per-request
 diagnostics, not capacity acceptance metrics. Retain an exact measurement
-window, account for tracing overhead and keep durable replay protection enabled.
+window, account for tracing overhead and keep receiver-bound replay protection enabled.
 
 Signed Git RPC verification keeps nonce uniqueness, clock checks and expiration
-cleanup serialized, but drains each nonce's file and directory synchronization
-outside that lock. The existing 32 verification slots bound concurrent durable
-writes. Pending nonces remain spent and cannot be reclaimed, even after expiry,
-until persistence finishes. Cancellation after dispatch still drains the write;
-durability failures reject the request and retain replay exclusion. No handler
-effects run before successful persistence. This does not remove the singleton
-Git requirement or establish zero-downtime replacement.
+cleanup serialized in bounded memory. Every Git-operation signature includes
+the active process's random receiver identity; a replacement cannot accept an
+earlier process's envelopes, even though it starts with empty nonce memory.
+Discovery and pre-effect replacement notices authenticate that identity against
+the API's exact signed request. Unbound operations and old servers are rejected,
+not downgraded. API and Git upgrades therefore require the matching wire contract.
+The existing 32 verification slots remain bounded. Once dispatched, verification
+keeps its slot even if the caller disconnects; no handler effects run before
+successful nonce reservation. This does not remove the singleton Git requirement
+or establish zero-downtime replacement.
 
-Expiration cleanup reuses a durable clock floor and advances it at most once
-per 250 milliseconds while expired records exist. Only nonpending records at
-or below that persisted floor can be removed; later-expiring records remain
-spent until a later cleanup. Signature expiry checks and in-process clock
-rollback rejection remain exact, not rounded. The 100,000-record ceiling still
-fails closed, and every removal is covered by a persisted rollback barrier.
+Expiration is rechecked after verification queues and replay-lock waits.
+Cleanup reclaims at most 256 expired entries per reservation and retains an
+in-process clock high-water mark. Clock rollback fails closed, preventing a
+reclaimed envelope from becoming valid again within that process.
+The unchanged 100,000-record ceiling rejects new work instead of evicting live
+nonces. Git no longer reads, writes or automatically deletes old
+`.rpc-replay-v1` directories; reverse API callbacks still use shared datastore
+replay reservations.
 
 The API retries only side-effect-free unary Git reads (`GetFile`, `GetFiles`, `ListFiles`,
 `InfoRefs`, `ListTags` and `GetLatestTag`) after `UNAVAILABLE`, at most four
@@ -950,7 +953,66 @@ wait. Authorization failures, absence, invalid input, saturation and other
 status codes are not retried. Writes and streams are never retried by this
 path, and exhaustion returns the failure. This allows a brief unavailable
 read to recover without accepting requests during a clock rollback or
-weakening durable replay protection.
+weakening receiver-bound replay protection. An authenticated replacement notice
+can update the binding before the next read attempt, without replaying a write
+or stream after an ambiguous failure.
+
+### Receiver-bound authentication measurement
+
+Measurements below were collected on 2026-10-19 on an **Apple M3 Pro,
+11 cores, 36 GiB RAM** (macOS, arm64).
+
+The authentication benchmark used the same `InfoRefs` request, four Tokio
+workers and a Rust debug build. Results are the median of three per-run p99
+measurements, with 200 calls per worker.
+
+| Concurrency | Journal verification p99 | Receiver-bound verification p99 |
+| --- | --- | --- |
+| 1 | 4.103 ms | 0.142 ms |
+| 8 | 15.057 ms | 0.442 ms |
+| 32 | 27.174 ms | 1.904 ms |
+
+These measure authentication only, not end-to-end Git RPC latency or throughput.
+
+### Deployed receiver-bound diagnostic
+
+Docker Desktop had **11 vCPUs and 16.6 GiB RAM** allocated on the same host.
+The deployment used two APIs, two controllers, one Git service and three
+Scylla nodes (one shard and 1.5 GiB per node). API, controller and Git containers
+had no individual resource caps. The client had four vCPUs and 1 GiB RAM.
+The first two runs shared the host with an older diagnostic stack; that stack
+was absent from the upgraded run.
+
+Each five-minute run used **1,000 subscribers**, 50 Namespaces, 20 mutation
+workers, ten mutations/second plus bursts of 100/minute, and 10,000-event replay.
+
+| Measurement | Receiver-bound RPC (`df7739a`) | Plus batched wakeups (`fc55f0a`) | Upgraded toolchains (`ead2a73`) |
+| --- | --- | --- | --- |
+| Acknowledged mutations | 3,400 / 3,400 | 3,400 / 3,400 | 3,399 / 3,399 |
+| Observed mutation throughput | 11.33/s | 11.33/s | 11.33/s |
+| Failed / dropped / duplicate work | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| Event visibility p95 / p99 | 1.357 / 1.656 s | 1.522 / 1.948 s | 0.901 / 1.148 s |
+| 10,000-event replay p95 | 2.785 s | 3.547 s | 1.376 s |
+
+These are fixed-offer diagnostics, not sustainable capacity ceilings or
+production acceptance. The upgraded run used Go 1.27.2, Rust 1.99.1 and
+single-pass generic Namespace conversion. It met the latency targets over five
+minutes, but the combined code, toolchain and co-tenancy changes do not isolate
+one cause. Full-duration, fault and replacement acceptance remains open.
+
+### Watch delivery attribution and batch wakeups
+
+On the same host, a Go benchmark with 1,000 subscribers measured shared watch
+batch publication. Values are medians of three one-second repetitions.
+
+| Events per batch | Before | Batched wakeups |
+| --- | --- | --- |
+| 1 | 36.3 us | 36.4 us |
+| 128 | 1,183.2 us | 38.7 us |
+
+The 128-event publication cost fell **30.6x**, with zero allocations in both
+versions. This isolates publication bookkeeping, excluding concurrent consumers,
+durable I/O and WebSocket serialization.
 
 ## Repository lifecycle fence
 
@@ -1593,7 +1655,7 @@ storage retain their error behavior; the fast path adds no cross-request cache.
 
 Provisioning retries for existing storage return `AlreadyExists`; RPC histogram
 completion counts therefore do not count newly created repositories. These
-checks still verify the signed request, authorization, durable replay record
+checks still verify the signed request, authorization, single-use nonce
 and deletion tombstone. They use the retained shared lifecycle gate without
 excluding immutable readers. Actual creation rechecks absence and the tombstone
 under the exclusive lifecycle and publication gates; deletion retains those
@@ -2963,7 +3025,8 @@ were logged, and traces for the last **32** were retained. The run ended before
 replacement, without complete visibility or throughput results. Its disposable
 runtime was removed and the original deployment remained unchanged.
 
-Native signed-RPC replay storage uses a bounded, checksummed journal rather
+**Historical journal candidate, superseded by receiver-bound signatures:**
+Native signed-RPC replay storage used a bounded, checksummed journal rather
 than one file per nonce. Fully appended reservations can share a data flush;
 arrivals during that flush require a later barrier. A flush selects the current
 journal after freezing its ready cohort, so compaction cannot leave a newer
@@ -2975,15 +3038,13 @@ record; malformed complete records and missing active history fail closed.
 A durable format marker prevents a missing journal from being mistaken for
 first startup.
 
-**Breaking retained-format change:** the existing `.rpc-replay-v1` directory
-now contains `journal-v2`. Legacy per-nonce history is rejected, not silently
-discarded or migrated; an older binary also rejects the journal filename.
-Ordinary restarts must retain this history. To reinitialize a deployment with
-legacy history, stop its singleton Git process and retire the old shared RPC
-signing key on the API and Git services, including any previous-key overlap,
-before reinitializing **only** replay history. Preserve repository data.
-Signed wire messages and Resource contracts are unchanged; recovery restores
-the newest persisted reservation's clock watermark.
+That candidate changed the retained format inside `.rpc-replay-v1` to
+`journal-v2` and rejected legacy per-nonce history. Its restarts depended on
+retaining the journal and restoring its clock watermark; its wire messages
+and Resource contracts were unchanged. These are historical recovery
+requirements, not instructions to reinitialize current deployments. Current
+Git-operation signatures use a different, mandatory receiver-bound wire
+contract and leave any old replay history untouched.
 
 The `replay_persist` telemetry phase still measures each verification's wait.
 `replay_inode` now measures shared journal data flushes rather than individual
@@ -3152,5 +3213,5 @@ keeps 32 active slots and at most 256 waiting requests, with an additional
 Waiters have a one-second budget and are canceled with their caller.
 Queue overflow or timeout fails
 explicitly without consuming the request nonce. Once verification starts, its
-slot stays held through the durable replay reservation, even if the caller
-disconnects. No live nonce is evicted and no replay or durability check is skipped.
+slot stays held through the receiver-bound replay reservation, even if the caller
+disconnects. No live nonce is evicted and no replay or receiver check is skipped.

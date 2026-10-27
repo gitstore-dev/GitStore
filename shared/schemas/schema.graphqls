@@ -16,7 +16,7 @@ An object with a globally unique ID
 """
 interface Node {
   """
-  Globally unique identifier (format: [type]_[base62])
+  Globally unique identifier
   """
   id: ID!
 }
@@ -46,10 +46,11 @@ interface Actor {
 }
 
 """
-An object that can be published or unpublished. Implemented in
-- Product
-- ProductVariant
+An object that can be published or unpublished.
 """
+# Implemented in
+# - Product
+# - ProductVariant
 interface Publishable {
   published: Boolean!
   # publications: PublicationConnection!
@@ -108,8 +109,8 @@ type Query {
 type Mutation {
   """
   Generic status-subresource write for CRD-defined kinds that have no
-  compile-time-known `resolved` shape. Core kinds SHOULD use their
-  dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
+  compile-time-known `resolved` shape. Core kinds have their
+  dedicated per-kind mutation (e.g. `updateCategoryStatus`) instead —
   this field exists so a kind unknown to the schema at build time can
   still write status. Semantics (partial-merge,
   resourceVersion precondition, spec-write rejection by construction,
@@ -129,7 +130,7 @@ type Subscription {
   Generic list-then-watch entry point for every kind with a durable watch
   journal source: Namespace, Repository, CategoryTaxonomy, Product and File
   today, and CRD-defined kinds once they register a source. Core kinds SHOULD prefer their dedicated per-kind subscription
-  (e.g. watchCategories) for compile-time-typed payloads. A kind without a
+  (e.g. `watchCategories`) for compile-time-typed payloads. A kind without a
   journal source is rejected with an UNSUPPORTED_KIND extension error
   rather than an empty stream.
 
@@ -151,10 +152,6 @@ type Subscription {
     resourceVersion: String
   ): WatchEvent!
 }
-
-# ============================================================================
-# Watch API
-# ============================================================================
 
 """
 A single change notification for a watched resource kind, delivered by
@@ -179,17 +176,50 @@ type WatchEvent {
   object: JSON
 }
 
-enum WatchEventType {
-  ADDED
-  MODIFIED
-  DELETED
+type UpdateResourceStatusPayload {
+  """JSON-boxed current resource state."""
+  object: JSON
+}
 
-  """
-  Carries only a resourceVersion advance with no object change — used
-  to let a long-idle subscription periodically refresh its cursor
-  without a corresponding resource change. object is always null.
-  """
-  BOOKMARK
+"""
+The resource's current owner subject. Distinct from
+OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
+delete relationship, not a principal-ownership one.
+"""
+type ResourceOwner {
+  kind: OwnerKind!
+  name: String!
+}
+
+"""
+Metadata shared by core catalog resources.
+"""
+type ObjectMeta {
+  name: String!
+  namespace: String!
+  labels: JSON
+  annotations: JSON
+  uid: ID!
+  resourceVersion: String!
+  generation: Int!
+  creationTimestamp: DateTime!
+  revision: String
+  ownerReferences: [OwnerReference!]!
+  owner: ResourceOwner!
+  finalizers: [String!]!
+  deletionTimestamp: DateTime
+}
+
+"""
+A named status condition shared by core catalog resources.
+"""
+type Condition {
+  type: String!
+  status: ConditionStatus!
+  observedGeneration: Int
+  lastTransitionTime: DateTime!
+  reason: String
+  message: String
 }
 
 """
@@ -224,11 +254,6 @@ input UpdateResourceStatusInput {
   resolved: JSON
 }
 
-type UpdateResourceStatusPayload {
-  """JSON-boxed current resource state."""
-  object: JSON
-}
-
 """
 A named status condition input, mirroring the shared Condition
 convention used across core resources.
@@ -240,6 +265,95 @@ input ConditionInput {
   lastTransitionTime: DateTime!
   reason: String
   message: String
+}
+
+"""
+Input shape for naming a target owner, e.g. transferNamespaceOwner's
+targetOwnerRef.
+"""
+input ResourceOwnerInput {
+  kind: OwnerKind!
+  name: String!
+}
+
+"""
+Selector for a single product lookup. Exactly one field must be set.
+"""
+input ProductBy @oneOf {
+  """Look up by globally unique ID."""
+  id: ID
+
+  """Look up by namespace + product name."""
+  namespacePath: ProductNamespacePath
+}
+
+"""
+Composite selector: namespace + product name.
+"""
+input ProductNamespacePath {
+  namespace: String!
+  name: String!
+}
+
+"""
+Selector for looking up a category by exactly one unique key.
+"""
+input CategoryBy @oneOf {
+  """Look up by globally unique ID."""
+  id: ID
+
+  """
+  Look up by namespace + category name.
+  """
+  namespacePath: CategoryNamespacePath
+}
+
+"""
+Composite selector: namespace + category name.
+"""
+input CategoryNamespacePath {
+  namespace: String!
+  name: String!
+}
+
+"""
+Selector for looking up a collection by exactly one unique key.
+"""
+input CollectionBy @oneOf {
+  """Look up by globally unique ID."""
+  id: ID
+
+  """Look up by namespace + collection name."""
+  namespacePath: CollectionNamespacePath
+}
+
+"""
+Composite selector: namespace + collection name.
+"""
+input CollectionNamespacePath {
+  namespace: String!
+  name: String!
+}
+
+"""
+Selector for a single ProductVariant lookup. Exactly one field must be set.
+"""
+input ProductVariantBy @oneOf {
+  """Look up by globally unique ID."""
+  id: ID
+
+  """Look up by namespace + variant name."""
+  namespacePath: ProductVariantNamespacePath
+  # look up by namespace + variant SKU
+  # skuPath: ProductVariantSKUPath
+}
+
+"""
+Composite selector: namespace + variant name.
+"""
+input ProductVariantNamespacePath {
+  namespace: String!
+  name: String!
 }
 
 # ============================================================================
@@ -278,60 +392,17 @@ enum OwnerKind {
   SERVICE_ACCOUNT
 }
 
-"""
-The resource's current owner subject. Distinct from
-OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
-delete relationship, not a principal-ownership one.
-"""
-type ResourceOwner {
-  kind: OwnerKind!
-  name: String!
-}
+enum WatchEventType {
+  ADDED
+  MODIFIED
+  DELETED
 
-"""
-Input shape for naming a target owner, e.g. transferNamespaceOwner's
-targetOwnerRef.
-"""
-input ResourceOwnerInput {
-  kind: OwnerKind!
-  name: String!
-}
-
-"""
-System-managed metadata shared by core catalog resources.
-"""
-type ObjectMeta {
-  name: String!
-  namespace: String!
-  labels: JSON
-  annotations: JSON
-  uid: ID!
-  resourceVersion: String!
-  generation: Int!
-  creationTimestamp: DateTime!
-  revision: String
-  ownerReferences: [OwnerReference!]!
-  owner: ResourceOwner!
-  finalizers: [String!]!
-  deletionTimestamp: DateTime
-}
-
-"""
-A named status condition shared by core catalog resources.
-"""
-type Condition {
-  type: String!
-  status: ConditionStatus!
-  observedGeneration: Int
-  lastTransitionTime: DateTime!
-  reason: String
-  message: String
-}
-
-enum ConditionStatus {
-  TRUE
-  FALSE
-  UNKNOWN
+  """
+  Carries only a resourceVersion advance with no object change — used
+  to let a long-idle subscription periodically refresh its cursor
+  without a corresponding resource change. object is always null.
+  """
+  BOOKMARK
 }
 
 enum ActorStatus {
@@ -342,80 +413,8 @@ enum ActorStatus {
   PENDING_VERIFICATION
 }
 
-"""
-Selector for a single product lookup. Exactly one field must be set.
-"""
-input ProductBy @oneOf {
-  """Look up by globally unique Relay ID (encodes the product UID)."""
-  id: ID
-
-  """Look up by namespace identifier + product name (Kubernetes-style metadata.name)."""
-  namespacePath: ProductNamespacePath
-}
-
-"""
-Composite selector: namespace identifier (human-readable slug) + product name.
-"""
-input ProductNamespacePath {
-  namespace: String!
-  name: String!
-}
-
-"""
-Selector for looking up a category by exactly one unique key.
-"""
-input CategoryBy @oneOf {
-  """Look up by globally unique Relay ID (encodes the category UID)."""
-  id: ID
-
-  """
-  Look up by namespace identifier + category name (Kubernetes-style metadata.name).
-  """
-  namespacePath: CategoryNamespacePath
-}
-
-"""
-Composite selector: namespace identifier (human-readable slug) + category name.
-"""
-input CategoryNamespacePath {
-  namespace: String!
-  name: String!
-}
-
-"""
-Selector for looking up a collection by exactly one unique key.
-"""
-input CollectionBy @oneOf {
-  """Look up by globally unique Relay ID (encodes the collection UID)."""
-  id: ID
-
-  """Look up by namespace identifier + collection name."""
-  namespacePath: CollectionNamespacePath
-}
-
-"""
-Composite selector: namespace identifier + collection name.
-"""
-input CollectionNamespacePath {
-  namespace: String!
-  name: String!
-}
-
-"""
-Selector for a single ProductVariant lookup. Exactly one field must be set.
-"""
-input ProductVariantBy @oneOf {
-  """Look up by globally unique Relay ID (encodes the variant UID)."""
-  id: ID
-
-  """Look up by namespace identifier + variant name (Kubernetes-style metadata.name)."""
-  namespacePath: ProductVariantNamespacePath
-}
-
-"""
-Composite selector: namespace identifier (human-readable slug) + variant name.
-"""
-input ProductVariantNamespacePath {
-  namespace: String!
-  name: String!
+enum ConditionStatus {
+  TRUE
+  FALSE
+  UNKNOWN
 }

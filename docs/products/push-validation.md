@@ -42,18 +42,82 @@ remote: error: push rejected by pre-receive: validate: spec.title exceeds maximu
 
 ## Post-receive Admission
 
-After refs are committed, the git service calls `CatalogService.AdmitResources` with `repository_id`, `ref_name`, the old commit SHA, and the new commit SHA. `commit_sha` is still sent as a compatibility alias for the new commit. The call is fire-and-forget — the git client receives the push acknowledgment immediately without waiting for storage to complete.
+After refs are committed, the git service calls `CatalogService.AdmitResources` with `repository_id`, `ref_name`, the old commit SHA, and the new commit SHA. The call is fire-and-forget — the git client receives the push acknowledgment immediately without waiting for storage to complete.
 
 The API then:
-1. Confirms the ref still points at the admitted new commit. If a newer push has already advanced the ref, the stale admission is skipped.
+1. Checks the current ref. If it has advanced, Namespace and Product upserts may converge only when their accepted identity and content still match and Git history proves the accepted source remains current. Product removals may converge through the reserved-deletion protocol below. Convergence retains the original callback actor and accepted revision; it does not admit a later writer's changed content under the earlier actor. Other kinds retain their stale-callback skip behavior.
 2. Compares resource files at the old and new commits.
 3. Derives operations by resource identity: create, update, delete, or path move.
 4. Calls `GetFile` for changed resource files, parses frontmatter, dispatches on `kind`, and stores, updates, or deletes the catalog record.
 5. Sets `AdmissionAccepted: True` status on stored or updated resources.
 
-Supported `kind` values: `Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`, `File`, and `Namespace`.
+Supported `kind` values: `Repository`, `Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`, `File`, and `Namespace`.
 
-Failures for individual resources are logged with operation, namespace, name, and conflict details where available. They do not block remaining resources and cannot reject a Git push that has already been accepted.
+Failures are logged with operation, namespace, name, and conflict details where available. A failed Product is reported at the callback boundary while other Products in that batch are still attempted. Authorization is checked again before retrying a Product write after a controller status conflict. Failed upserts can prevent the later deletion phase; no post-receive failure can reject a Git push that has already been accepted.
+
+New Products are first stored provisionally with a durable UID and
+`AdmissionAccepted=False`, reason `SourceVerificationPending`. Their
+`lastAppliedRevision` is unset. After the accepted Git source is verified again,
+a conditional write sets `AdmissionAccepted=True` and records the accepted
+revision. The controller cannot mark a provisional Product `Ready=True`.
+This creates an `ADDED` watch event followed by a `MODIFIED` event, and consumes
+an additional resource version without changing generation. In the absence of
+concurrent status writes, a newly accepted Product therefore has
+`generation=1` and `resourceVersion=2`.
+
+A matching retry by the original creator can finish the provisional create
+through another API replica using create permission; it does not require
+update permission. Current authorization is checked again before acceptance.
+A concurrent deletion, ownership change, or replacement UID cannot be
+overwritten by that acceptance. If the source is found absent after reserving
+the UID, the still-matching provisional Product enters normal foreground
+deletion. Uncertain Git reads or failed cleanup return an error and leave the
+Product unaccepted rather than claiming success.
+
+Post-receive callbacks have no persistent retry queue. A native-service restart
+or failed callback can leave accepted Git changes without completed admission.
+Missing or unreadable diff objects are errors, not requests for a full scan;
+an unchanged tree produces no call.
+
+Git source checks and datastore conditional writes are not one atomic
+transaction, and publication and admission can still race with direct writers.
+A successful Git acknowledgment, or a successful callback response, is not
+proof that every catalog record exists or is ready. Before counting
+bulk-authored Products as complete, read them through the API and verify their
+identity, content, accepted revision, and current-generation
+`AdmissionAccepted=True` and `Ready=True` conditions on each API replica.
+
+For a Product removal, admission first proves the stored source remained
+unchanged through the original pre-removal commit. It then conditionally
+reserves that Product UID before proving the path has remained absent from
+the removal commit through the current ref. This applies even when that
+removal is still the current tip, not only after an unrelated publication.
+The reservation binds the source, ref, removal commits, original actor and a
+unique acquisition token. An identical newer upsert cannot bypass a held
+reservation as a successful no-op. A released and reacquired reservation
+cannot reuse an older proof.
+
+Successful verification rechecks current delete authorization and marks the
+matching Product terminating while retaining its reservation. Normal
+foreground finalization and blocking ProductVariant dependencies still apply.
+Controller status writes preserve the reservation. Failed verification
+releases only the same acquisition; uncertain writes or cancellation may
+leave it held for an explicit retry through another API replica. These
+transitions consume additional resource versions, not generations.
+
+The proof is bounded and fails closed on recreated paths, directories,
+unrelated history, merges, unavailable history or exhausted history limits.
+A file that remains present with a different identity is not path absence.
+Branch deletion uses the same reservation but requires an explicit native
+proof that the named ref is absent in an accessible repository. A missing
+repository, corrupt ref or ordinary `NotFound` response is not that proof.
+Upgrade the Git service before the API uses absence proofs; unsupported peers
+are errors, not evidence of removal.
+
+Provisional creation and deletion reservations do not schedule callback retries
+or repair older lost work.
+Other kinds' superseded deletions still retain their current-ref guard. Do not
+assume every pending or obsolete record will automatically converge.
 
 If `old_commit_sha` is absent because an older git service called the API, admission falls back to the legacy full-tree snapshot path and logs a warning.
 
@@ -74,12 +138,12 @@ Lifecycle rules:
 
 | Git change                                                    | Stored result                                                                  |
 |---------------------------------------------------------------|--------------------------------------------------------------------------------|
-| New identity appears                                          | Create resource with a new `metadata.uid`, `generation=1`, `resourceVersion=1` |
+| New identity appears                                          | Allocate a new `metadata.uid`, `generation=1`, initial `resourceVersion=1`; Products advance to version 2 on acceptance |
 | Existing identity changes `spec` or Markdown body             | Preserve `metadata.uid`, increment `generation`, increment `resourceVersion`   |
 | Existing identity moves to a new path with the same spec/body | Preserve `metadata.uid` and `generation`, increment `resourceVersion`          |
 | Existing identity changes only labels/annotations             | Preserve `metadata.uid` and `generation`, increment `resourceVersion`          |
-| Identity disappears from the admitted ref                     | Delete the stored resource and remove lookup indexes                           |
-| Identity is deleted in one commit and added again later       | Allocate a new `metadata.uid`, reset `generation=1` and `resourceVersion=1`    |
+| Identity disappears from the admitted ref                     | Remove the identity; Products first enter guarded foreground termination, and finalization removes their lookup indexes |
+| Identity is deleted in one commit and added again later       | Allocate a new `metadata.uid`, reset `generation=1` and initial `resourceVersion=1`; Products advance again on acceptance |
 | `metadata.name` or `kind` changes in a file                   | Delete the old identity and create the new identity                            |
 
 Duplicate SKU conflicts for `ProductVariant` are not inserted after detection. The existing variant remains unchanged, the conflicting incoming variant is skipped, and the conflict is visible in structured API logs. Structural validation errors still reject the push during pre-receive.

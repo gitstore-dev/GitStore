@@ -44,7 +44,7 @@ corresponding schema in this directory.
 | `collection.schema.json` | `Collection` | `catalog.gitstore.dev/v1beta1` | Yes |
 | `file.schema.json` | `File` | `storage.gitstore.dev/v1beta1` | Yes |
 | `namespace.schema.json` | `Namespace` | `gitstore.dev/v1beta1` | Yes |
-| `repository.schema.json` | `Repository` | `gitstore.dev/v1beta1` | **No** — see below |
+| `repository.schema.json` | `Repository` | `gitstore.dev/v1beta1` | Yes |
 
 Each schema is self-contained (no cross-file `$ref`s) so a single file gives
 an LLM or IDE everything it needs, at the cost of duplicating shared
@@ -52,16 +52,6 @@ definitions (`ObjectMeta`, `ObjectReference`, `FileReference`,
 `MediaDefinition`, etc.) across files. All schemas use `additionalProperties:
 false` throughout, so unknown/system-managed fields (e.g. `status`, `uid`,
 `resourceVersion`) are rejected — matching the real admission contract.
-
-### Repository is a special case
-
-Unlike the other six kinds, `Repository` resources are **not** currently
-created by pushing a manifest through `git push` — the server's
-frontmatter parser has no case for `kind: Repository` yet. Repositories are
-created via the `createRepository` GraphQL mutation. `repository.schema.json`
-documents the shape of a Repository as read back from the API today, and
-anticipates a possible future declarative/git-authored form. Don't expect a
-file matching this schema to be accepted by `git push`.
 
 ## Ground truth
 

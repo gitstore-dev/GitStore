@@ -60,6 +60,8 @@ DATASTORE ?= memdb
 IDENTITY ?= none
 PROFILE ?= single
 SCYLLA_CLUSTER_SMP ?= 1
+export SCYLLA_TABLETS_PER_SHARD_GOAL ?= 100
+export CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS ?= 0
 SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS ?= 2048
 SCYLLA_COMPOSE_FILE = $(if $(filter cluster,$(PROFILE)),compose.scylla.cluster.yml,compose.scylla.yml)
 DATASTORE_COMPOSE_FILE = $(if $(filter scylla,$(DATASTORE)),-f $(SCYLLA_COMPOSE_FILE),)
@@ -228,6 +230,8 @@ help: ## Show available targets and common variables.
 	@printf "  SERVICE=<name>            Limit logs/stop to one compose service; SERVICE=scylla includes all Scylla variants; SERVICE=oidc (with IDENTITY=oidc) covers the whole OIDC stack\n"
 	@printf "  SCYLLA_COMPOSE_FILE=%s  Derived Scylla overlay used by scylla and compose DATASTORE=scylla\n" "$(SCYLLA_COMPOSE_FILE)"
 	@printf "  SCYLLA_CLUSTER_SMP=%s     CPU shards per Scylla node for PROFILE=cluster\n" "$(SCYLLA_CLUSTER_SMP)"
+	@printf "  SCYLLA_TABLETS_PER_SHARD_GOAL=%s  Native Scylla tablet budget per shard\n" "$(SCYLLA_TABLETS_PER_SHARD_GOAL)"
+	@printf "  CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS=%s  Optional fresh owned-stack Product tablet hint\n" "$(CAPACITY_SCYLLA_PRODUCT_MIN_TABLETS)"
 	@printf "  SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS=%s  Networking AIO blocks per cluster node\n" "$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)"
 	@printf "  GIT_DATA_DIR=%s\n" "$(GIT_DATA_DIR)"
 	@printf "  CONTROLLER_CHECKPOINT_DIR=%s\n" "$(CONTROLLER_CHECKPOINT_DIR)"
@@ -773,9 +777,11 @@ lint: ## Run Rust and Go lint checks, including shared Go modules.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check
 	@cd "$(GIT_SERVICE_DIR)" && cargo clippy --all-targets --all-features -- -D warnings
 	@for dir in $(GO_MODULE_DIRS); do \
-		if [ "$$(cd "$$dir" && gofmt -s -l . | wc -l | tr -d ' ')" != "0" ]; then \
+		goroot=$$(cd "$$dir" && go env GOROOT) || exit 1; \
+		unformatted=$$(cd "$$dir" && "$$goroot/bin/gofmt" -s -l .) || exit 1; \
+		if [ -n "$$unformatted" ]; then \
 			echo "The following files need formatting in $$dir:"; \
-			cd "$$dir" && gofmt -s -l .; \
+			printf '%s\n' "$$unformatted"; \
 			exit 1; \
 		fi; \
 	done

@@ -1,6 +1,7 @@
--- Product. products_by_namespace is authoritative and the CDC watch source;
+-- Product envelopes and name reservations have resource-sized partitions.
+-- Namespace listings contain only keys, distributed across 64 stable shards;
 
-CREATE TABLE IF NOT EXISTS products_by_namespace (
+CREATE TABLE IF NOT EXISTS products_by_key (
     namespace            text,
     creation_timestamp   timestamp,
     uid                  uuid,
@@ -25,18 +26,26 @@ CREATE TABLE IF NOT EXISTS products_by_namespace (
     spec                 text,
     body                 text,
     status               text,
-    PRIMARY KEY ((namespace), creation_timestamp, uid)
+    PRIMARY KEY ((namespace, creation_timestamp, uid))
 ) WITH cdc = {'enabled': 'true', 'preimage': 'full', 'postimage': 'true', 'ttl': '1209600'}
-  AND CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)
   AND gc_grace_seconds = 864000;
 
-CREATE TABLE IF NOT EXISTS products_by_name (
+CREATE TABLE IF NOT EXISTS products_by_identity (
     namespace          text,
     name               text,
     uid                uuid,
     creation_timestamp timestamp,
-    PRIMARY KEY ((namespace), name)
+    PRIMARY KEY ((namespace, name))
 ) WITH gc_grace_seconds = 864000;
+
+CREATE TABLE IF NOT EXISTS products_by_namespace_shard (
+    namespace          text,
+    shard              tinyint,
+    creation_timestamp timestamp,
+    uid                uuid,
+    PRIMARY KEY ((namespace, shard), creation_timestamp, uid)
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)
+  AND gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS products_by_uid (
     uid                uuid,

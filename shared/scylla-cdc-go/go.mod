@@ -1,6 +1,6 @@
 module github.com/scylladb/scylla-cdc-go
 
-go 1.25.0
+go 1.27.2
 
 require (
 	github.com/gocql/gocql v1.17.0

@@ -87,6 +87,11 @@ message PushContext {
 // Callers (gitstore-api) MUST resolve namespace/name → repo_id before calling any RPC.
 // gitstore-git-service never receives or interprets namespace strings.
 service GitService {
+  // GetRPCReceiver authenticates the current process incarnation. The response
+  // proof binds its random identity to this exact signed discovery request.
+  // It has no repository effects and does not consume a durable replay entry.
+  rpc GetRPCReceiver(GetRPCReceiverRequest) returns (GetRPCReceiverResponse);
+
   // ── Repository lifecycle ───────────────────────────────────────────────────
 
   // CreateRepository provisions a new, empty bare repository at the fanout path.
@@ -147,6 +152,13 @@ service GitService {
 
   // GetLatestTag returns the latest semver release tag by version ordering.
   rpc GetLatestTag(GetLatestTagRequest) returns (GetLatestTagResponse);
+}
+
+message GetRPCReceiverRequest {}
+
+message GetRPCReceiverResponse {
+  string receiver_id = 1;
+  string proof = 2;
 }
 
 // ─── Git smart HTTP transport messages ────────────────────────────────────────
@@ -268,12 +280,21 @@ message GetFileRequest {
   string ref  = 2;
   // If set, require an unchanged file along at most 4096 single-parent
   // commits from ref back to this full commit ID. Changed/restored paths,
-  // merges, unrelated history and exhausted bounds return ABORTED.
+  // merges and unrelated history return ABORTED; exhausted bounds return
+  // RESOURCE_EXHAUSTED. A bounded x-gitstore-file-history-bin error trailer may
+  // contain a GetFileResponse describing a verified prefix, never a complete
+  // proof. Resume from history_next_commit with the same ancestor; every
+  // segment must prove the same blob or absence. Recheck named refs afterwards.
   optional string unchanged_since_commit = 3;
   // For a named ref, allow a ref-identity receipt instead of a file read when
   // its resolved tip equals unchanged_since_commit. Otherwise require the
   // complete unchanged-path proof and content. The signed request binds this.
   bool allow_ancestor_receipt = 4;
+  // Prove continuous path absence from unchanged_since_commit through the
+  // current named-ref tip (or an immutable continuation), within the
+  // same history bounds. Never return an ancestor-only receipt.
+  // A present/recreated path returns ABORTED.
+  bool prove_path_absence = 5;
   RequestAuthorization authorization = 14;
 }
 
@@ -282,12 +303,20 @@ message GetFileResponse {
   bytes  content    = 2;
   string blob_sha   = 3;
   uint64 size_bytes = 4;
-  // Proof fields are populated only after a guarded read succeeds.
+  // Proof fields describe a guarded read. With history_next_commit, only a
+  // prefix has been verified; callers must not treat it as a complete proof.
   string unchanged_since_commit = 5;
   string ref_commit_sha = 6;
   // Only with allow_ancestor_receipt and exact ancestor/tip equality. Confirms
   // ref identity, not file existence; content/blob_sha/size_bytes are empty.
   bool at_ancestor = 7;
+  // Only with prove_path_absence, after verifying every intervening tree.
+  // Content, blob_sha and size_bytes are empty; proof fields remain required.
+  bool path_absent = 8;
+  // First unverified parent after a bounded, verified single-parent prefix.
+  // Only in the RESOURCE_EXHAUSTED error trailer; never on successful replies.
+  // Prefix trailers carry the blob ID or path_absent, without file content.
+  string history_next_commit = 9;
 }
 
 message GetFilesRequest {
@@ -340,12 +369,18 @@ message ListFilesRequest {
   string ref         = 1;
   string path_prefix = 2;
   bool   recursive   = 3;
+  // Prove the named ref is absent in an accessible repository, without a tree
+  // walk. Requires a full ref, empty path_prefix and recursive=false.
+  bool prove_ref_absence = 4;
   RequestAuthorization authorization = 14;
 }
 
 message ListFilesResponse {
   repeated FileEntry files          = 1;
   string             ref_commit_sha = 2;
+  // Only for prove_ref_absence, under the repository snapshot read guard.
+  // Matches the requested ref; files and ref_commit_sha must be empty.
+  string ref_absent = 3;
 }
 
 message FileEntry {
