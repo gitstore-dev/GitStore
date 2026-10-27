@@ -4,6 +4,9 @@ GitStore lets you manage a commerce catalogue as Markdown files in Git and read 
 
 This guide treats GitStore as a running product. It focuses on what you do as a user: start the stack, create a namespace and repository, push catalogue manifests, query GraphQL, and troubleshoot common issues.
 
+To grant users or groups access, see [Configure local authorization](authorization.md)
+for policy examples and namespace and resource-name restrictions.
+
 ## Prerequisites
 
 - Docker and Docker Compose

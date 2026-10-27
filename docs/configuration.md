@@ -313,6 +313,9 @@ that verifies bearer JWTs via OIDC Discovery + JWKS. It is enabled only when
 | `api.auth.rbac_local.policy_file` | `GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE` | string | `policy.yaml` | No | No | YAML RBAC policy path, used when `authz.provider = "rbac-local"` |
 | `api.auth.userdir.provider` | `GITSTORE_API__AUTH__USERDIR__PROVIDER` | string | `none` | No | No | Active user-directory provider |
 
+See [Configure local authorization](authorization.md) for Role and ClusterRole
+bindings, namespace scope, subject matching and `resourceNames` examples.
+
 #### Controller deletion-completion grants
 
 The controller-only deletion-completion mutations are authorized with a

@@ -1,6 +1,7 @@
 # DEVELOPMENT / EVALUATION ONLY. Production requires a reviewed policy.
 # Breaking v1beta1 baseline: legacy action lists, deny rules and namespaced
 # ServiceAccount subjects are rejected, never translated.
+# Operator guide: ../docs/authorization.md
 apiVersion: rbac.authorization.gitstore.dev/v1beta1
 kind: RbacLocalConfiguration
 defaultDeny: true
@@ -70,6 +71,45 @@ clusterRoles:
         verbs: [read]
         when: [{attr: visibility, op: eq, value: public}]
 roles: {}
+# Optional Role: replace `roles: {}` above with this mapping, then adapt names.
+# Role definitions have no namespace; the RoleBinding supplies the scope.
+# roles:
+#   catalog-maintainer:
+#     rules:
+#       - resources: [repository]
+#         verbs: [read, update]
+#         resourceNames: [catalog, seasonal-catalog]
+#       - resources: [product]
+#         verbs: [read, update]
+#         resourceNames: [coffee, tea]
+#       - resources: [repository/contents]
+#         verbs: [read]
+#         resourceNames: [catalog]
+# resourceNames matches exact resource names, not IDs, namespace/name paths or
+# patterns. Omitted or [] means all names within the binding's scope. A named
+# grant cannot authorize list/watch requests, which have no resource name.
+# Keep create grants in separate rules without resourceNames. The current
+# provider accepts named create rules and checks the proposed name when supplied.
+# Rules and bindings add grants: another broad grant can allow other names.
+# Optional when examples: add rules like these to the Role above as needed.
+# Each condition in a rule must match; attributes must be supplied by the action.
+#       - resources: [repository]
+#         verbs: [update]
+#         when: [owner]
+#       - resources: [repository]
+#         verbs: [transfer]
+#         when: [owner, targetOwnerMember]
+#       - resources: [repository/contents]
+#         verbs: [read]
+#         when:
+#           - {attr: namespace, op: in, values: [acme, storefront]}
+#           - {attr: visibility, op: eq, value: public}
+# Alternative comparisons (use instead of the allow-lists above as appropriate):
+#           - {attr: namespace, op: notIn, values: [restricted, internal]}
+#           - {attr: visibility, op: neq, value: private}
+# eq/neq require a string value; in/notIn require a nonempty string values list.
+# Missing/wrong-type attributes fail even neq/notIn. Tier comparisons belong on
+# actions supplying tier, e.g. namespace-creator above (USER or ORGANIZATION).
 clusterRoleBindings:
   - roleRef: {kind: ClusterRole, name: cluster-admin}
     subjects: [{kind: User, name: admin}]
@@ -86,3 +126,15 @@ clusterRoleBindings:
   - roleRef: {kind: ClusterRole, name: public-reader}
     subjects: [{kind: Group, name: 'system:unauthenticated'}]
 roleBindings: []
+# Optional RoleBindings: replace `roleBindings: []` above with this list.
+# roleBindings:
+#   # Grant the custom Role above to a user, only in gitstore-system namespace.
+#   - namespace: gitstore-system
+#     roleRef: {kind: Role, name: catalog-maintainer}
+#     subjects: [{kind: User, name: alice}]
+#   # Reuse a ClusterRole, confined to gitstore-system rather than all namespaces.
+#   - namespace: gitstore-system
+#     roleRef: {kind: ClusterRole, name: view}
+#     subjects: [{kind: Group, name: catalog-readers}]
+# A RoleBinding cannot grant cluster-scoped namespace or serviceAccount actions.
+# For those, use a ClusterRoleBinding referencing a ClusterRole, as above.
