@@ -34,3 +34,8 @@
 - Repository names (`gitstore-system`), the API group and the watch journal are existing
   product surfaces, named deliberately.
 - Resolved 2026-10-06: bounded staleness + strict RBAC writes (FR-012); embedded OPA via provider translation, no guardrails (FR-010, FR-023); deletion via finalizers/ownerReferences (FR-018a–d).
+
+- Reviewed 2026-10-27: USER namespace owner provisioning (FR-025–031),
+  protected binding lifecycle, trusted bootstrap authority, per-replica access
+  readiness, retry/UID safety, existing-namespace cutover, and acceptance
+  scenarios in User Story 6. Removed the obsolete rule `effect` field.

@@ -189,7 +189,7 @@ rejected.
 
 1. **Given** a fresh deployment, **When** it starts, **Then** built-in
    ClusterRoles (`cluster-admin`, `admin`, `edit`, `view`,
-   `namespace-owner`, `namespace-creator`, `controller`,
+   `namespace-owner`, `namespace-creator`, `namespace-full-control`, `controller`,
    `system:api-internal`) and the system ClusterRoleBindings (controller
    ServiceAccount, `system:api`, `namespace-owner` and `namespace-creator` to
    `system:authenticated`) are effective.
@@ -229,6 +229,50 @@ and confirm the answer matches enforcement.
 
 ---
 
+### User Story 6 - Use a personal namespace without manual grants (Priority: P1)
+
+An authenticated human who is permitted to create a USER namespace creates
+one named after their authenticated username. GitStore provisions the owner's
+namespace access automatically; no operator edits a policy file or creates a
+binding for that user. The owner can manage every namespaced resource there,
+while existing admission and transfer invariants continue to apply.
+
+**Independent Test**: With two API replicas and no pre-existing user binding,
+create USER namespace `alice` as `alice`; verify the system-managed binding
+appears in `alice/gitstore-system`, becomes effective on both replicas, and
+permits namespaced operations there while denying access to `bob`'s namespace.
+
+**Acceptance Scenarios**:
+
+1. **Given** an authorized human `alice` with no binding in namespace `alice`,
+   **When** she creates her USER namespace, **Then** GitStore provisions a
+   RoleBinding to built-in ClusterRole `namespace-full-control`, with subject
+   `{kind: User, name: alice}`, without requiring Alice to already hold RBAC
+   write, `bind` or `escalate` permissions.
+2. **Given** that binding, **When** it becomes effective, **Then** all registered
+   namespaced resource/verb pairs are granted in `alice` on every replica;
+   other namespaces and cluster-scoped resources receive no additional grants.
+   Resource admission and transfer constraints still apply.
+3. **Given** provisioning is incomplete or a replica has not observed the
+   binding, **When** Alice acts there, **Then** access fails closed; namespace
+   status distinguishes pending provisioning from usable owner access.
+4. **Given** retries, process restarts or concurrent reconcilers, **When**
+   provisioning resumes, **Then** exactly one binding exists for that namespace
+   identity, with the correct role and owner, and no duplicate grants result.
+5. **Given** an active USER namespace, **When** any external caller attempts to
+   delete, replace or change its managed owner binding by GraphQL or Git push,
+   **Then** admission rejects the change, including attempts by its owner or
+   a cluster administrator. Ordinary, non-managed bindings remain removable.
+6. **Given** a USER namespace, **When** a caller attempts a different username,
+   owner, second namespace identity or ownership transfer, **Then** existing
+   namespace identity and uniqueness checks reject it, regardless of RBAC grants.
+7. **Given** namespace deletion or deletion followed by same-name recreation,
+   **When** lifecycle work is delayed or retried, **Then** old grants stop within
+   the revocation bound and cannot attach to the new namespace identity; the
+   recreated namespace receives its own correctly owned binding.
+
+---
+
 ### Edge Cases
 
 - Projection lag beyond the staleness bound, a lost watch cursor, or an
@@ -248,8 +292,9 @@ and confirm the answer matches enforcement.
 - Concurrent edits of the same manifest via push and GraphQL → resolved by
   Git (non-fast-forward rejected; GraphQL retries on conflict).
 - A push touching many RBAC manifests → admitted or rejected as a unit.
-- A user removes their own last administrative binding → allowed (not
-  blocked), but the initial-admin/break-glass path still exists.
+- A user removes their own last ordinary administrative binding → allowed
+  (not blocked), but the initial-admin/break-glass path still exists. The
+  system-managed USER namespace owner binding is protected by FR-029.
 - Duplicate manifest names within a scope → rejected.
 - Manifest for a subject that does not exist in the UserDir → admitted
   (subjects are not validated against the directory); it grants nothing until
@@ -268,8 +313,9 @@ and confirm the answer matches enforcement.
 - **FR-001**: The system MUST define `Role`, `ClusterRole`, `RoleBinding`
   and `ClusterRoleBinding` as Git-backed resources in
   `rbac.authorization.gitstore.dev/v1beta1`, using spec 064's rule and
-  binding shapes (`rules` with `resources`, `verbs`, `resourceNames`, `when`,
-  `effect`; `roleRef` and structured `subjects`).
+  binding shapes (`rules` with `resources`, `verbs`, `resourceNames`, `when`;
+  `roleRef` and structured `subjects`). Rules are allow-only; an `effect`
+  field or deny entry MUST be rejected.
 - **FR-002**: `ClusterRole`/`ClusterRoleBinding` manifests MUST live only in
   `gitstore-system/gitstore-system`; `Role`/`RoleBinding` manifests only in
   their own namespace's `gitstore-system` repository, at a fixed per-kind
@@ -387,6 +433,64 @@ and confirm the answer matches enforcement.
   the four kinds replacing its IAM entities, and the chosen engine and
   consistency model.
 
+**USER namespace owner provisioning**
+
+- **FR-025**: For each admitted USER namespace, GitStore MUST automatically
+  provision exactly one system-managed RoleBinding in that namespace's
+  `gitstore-system` repository, referencing built-in ClusterRole
+  `namespace-full-control` and the namespace's authenticated human owner as
+  a structured User subject. This MUST work for both namespace creation paths
+  (Git push and GraphQL), require no per-user operator action, and reconcile
+  existing live USER namespaces when the production provider is enabled.
+- **FR-026**: `namespace-full-control` MUST be an immutable built-in granting
+  `resources: ["*"]` and `verbs: ["*"]`. Its managed owner binding MUST be
+  namespaced, never a ClusterRoleBinding. It grants all registered namespaced
+  capabilities, including RBAC management there, without granting access to
+  other namespaces or cluster-scoped namespace/ServiceAccount operations.
+  Existing admission checks and transfer constraints remain authoritative.
+- **FR-027**: Provisioning MUST use a trusted system identity with narrowly
+  constrained authority to create and maintain this specific binding for an
+  admitted namespace and its verified owner. It MUST pass common admission
+  and escalation checks under that identity, without requiring or granting
+  bootstrap `bind`/`escalate` rights to the user. Caller-supplied subjects,
+  role references or ownership claims MUST NOT widen this system authority.
+  Git history and audit MUST identify both the system writer and the initiating
+  namespace owner or migration action.
+- **FR-028**: Namespace admission and binding provisioning need not be atomic
+  across repositories. Existing namespace status conditions MUST expose
+  owner-access provisioning as pending, successful or failed with an actionable
+  reason. Successful provisioning MUST identify the admitted binding revision;
+  it MUST NOT imply every replica has consumed it. Each replica MUST deny until
+  it has a valid snapshot containing the grant, then converge within FR-012's
+  propagation bound measured from binding admission. Transient provisioning
+  failures MUST be retried with bounded work and backoff, without operator
+  policy edits; retries/restarts/concurrent controller replicas MUST converge
+  on one deterministic binding for the Namespace UID.
+- **FR-029**: While its USER namespace is active, the managed binding's
+  identity, subject, role reference and lifecycle ownership MUST be protected
+  against external create/update/delete, replacement, Git removal or revert,
+  including by the namespace owner and cluster administrators. Only trusted
+  lifecycle reconciliation may maintain it or remove it as part of namespace
+  deletion. This is an explicit exception to last-binding self-removal; it does
+  not protect ordinary user-created bindings. A collision with a non-managed
+  manifest MUST fail closed and report a condition, never silently adopt it.
+- **FR-030**: Managed bindings MUST carry the Namespace UID ownerReference
+  and follow FR-018b/FR-018c cleanup and revocation. Namespace deletion MUST
+  stop their grants within the revocation bound even if binding cleanup is
+  delayed. Provisioning MUST NOT recreate a binding for a terminating namespace;
+  delayed work for an old UID MUST NOT create, modify or revoke a recreated
+  namespace's binding. USER name/username/owner equality, name uniqueness,
+  immutable ownership and non-transferability remain admission invariants,
+  independent of provider or wildcard grants. One USER namespace means one
+  namespace identity per username at a time, not a lifetime ban on recreation.
+- **FR-031**: This automatic provisioning applies to the dynamic Git-backed
+  RBAC model. `rbac-local` MUST remain static: no username substitution,
+  generated per-user bindings or merging with dynamic resources. Production
+  cutover MUST include reconciling owner bindings for existing USER namespaces
+  and verifying access parity before traffic switches. This feature adds no
+  role aggregation or new ownership condition, and MUST NOT broaden the
+  UserDir's restrictions on which identities may perform operator actions.
+
 ### Production Requirements *(mandatory for core-service or load-bearing changes)*
 
 - **PR-001 Replica Safety**: Every API replica converges on the same RBAC
@@ -454,6 +558,12 @@ and confirm the answer matches enforcement.
   attempts rejected).
 - **SC-007**: Decision latency stays ≤2 ms p99 at PR-003 dataset size during
   sustained RBAC writes.
+- **SC-008**: Every admitted live USER namespace receives exactly one managed
+  owner binding without manual grants; after binding admission, owner access
+  reaches all replicas within SC-001 bounds. Retry, concurrent-controller,
+  restart, deletion/recreation and rolling-upgrade tests produce zero duplicate
+  bindings, cross-namespace grants, stale-UID grants or successful external
+  mutations of protected bindings.
 
 ## Assumptions
 
