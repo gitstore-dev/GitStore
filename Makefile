@@ -214,7 +214,7 @@ export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 .PHONY: build test lint pr-ready check clean bootstrap secret capacity chaos generate _generate-authz _generate-proto _generate-all _check-generated
 .PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-repository-lifecycle _capacity-repository-overflow _capacity-observability _capacity-observability-down
 .PHONY: _capacity-authorization
-.PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
+.PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage _check-infrastructure _bootstrap-infrastructure
 .PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
 .PHONY: add-user add-role assign-role hash-user-password enroll-controller-serviceaccount _enroll-controller-serviceaccount
 .PHONY: oidc
@@ -793,8 +793,11 @@ lint: ## Run Rust and Go lint checks, including shared Go modules.
 		( cd "$$dir" && "$$(go env GOPATH)"/bin/staticcheck ./... ) || exit 1; \
 	done
 
-check: ## Run validation checks; set TARGET=all, config, compose, licenses, or credentials.
+check: ## Run validation checks; TARGET=all, config, compose, licenses, credentials, or infrastructure.
 	@./scripts/run-make-workflow.sh check "$(TARGET)"
+
+_check-infrastructure:
+	@PROFILE="$(if $(filter single,$(PROFILE)),digitalocean,$(PROFILE))" ./scripts/run-infrastructure.sh check
 
 _check-licenses:
 	@./scripts/check-go-license-headers.sh --all
@@ -816,8 +819,11 @@ _check-all: _check-compose-config _check-licenses _check-credentials _check-gene
 
 pr-ready: lint build test _check-licenses _check-credentials ## Run the full PR readiness workflow.
 
-bootstrap: ## Bootstrap local resources; set TARGET=all, token, namespace, or repository.
+bootstrap: ## Bootstrap resources; TARGET=all, token, namespace, repository, or infrastructure (ACTION selects operation).
 	@./scripts/run-make-workflow.sh bootstrap "$(TARGET)"
+
+_bootstrap-infrastructure:
+	@PROFILE="$(if $(filter single,$(PROFILE)),digitalocean,$(PROFILE))" ./scripts/run-infrastructure.sh "$(or $(ACTION),plan)"
 
 _bootstrap-all:
 	@$(MAKE) --no-print-directory _bootstrap-namespace

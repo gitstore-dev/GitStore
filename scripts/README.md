@@ -2,6 +2,23 @@
 
 Utility scripts for GitStore development and demonstration.
 
+## run-infrastructure.sh
+
+Runs the DigitalOcean OpenTofu configuration through the root command interface:
+
+```bash
+make check TARGET=infrastructure PROFILE=digitalocean
+make bootstrap TARGET=infrastructure PROFILE=digitalocean ACTION=init
+make bootstrap TARGET=infrastructure PROFILE=digitalocean ACTION=plan
+make bootstrap TARGET=infrastructure PROFILE=digitalocean ACTION=show
+make bootstrap TARGET=infrastructure PROFILE=digitalocean ACTION=apply
+```
+
+Set `INFRA_BACKEND_CONFIG` and `INFRA_VAR_FILE` to absolute private paths for
+initialization and planning. `apply` executes the saved plan without a prompt.
+See the [provisioning runbook](../docs/runbooks/digitalocean-provisioning.md)
+for prerequisites, outputs and application configuration after provisioning.
+
 ## run-capacity.sh
 
 Runs a named profile from `tests/capacity/profiles/` with pinned k6 and writes

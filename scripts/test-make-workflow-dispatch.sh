@@ -22,12 +22,14 @@ assert_dispatch check config _check-local-config
 assert_dispatch check compose _check-compose-config
 assert_dispatch check licenses _check-licenses
 assert_dispatch check credentials _check-credentials
+assert_dispatch check infrastructure _check-infrastructure
 assert_dispatch clean git-data _clean-git-data
 assert_dispatch clean controller-checkpoints _clean-controller-checkpoints
 assert_dispatch bootstrap all _bootstrap-all
 assert_dispatch bootstrap token _bootstrap-token
 assert_dispatch bootstrap namespace _bootstrap-namespace
 assert_dispatch bootstrap repository _bootstrap-repository
+assert_dispatch bootstrap infrastructure _bootstrap-infrastructure
 assert_dispatch secret jwt _secret-jwt
 assert_dispatch secret grpc-hmac _secret-grpc-hmac
 assert_dispatch secret signing-key _secret-signing-key

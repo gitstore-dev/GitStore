@@ -100,3 +100,15 @@ catalogue-work/
 
 # Codex hook config embeds an absolute path to the local graphify binary
 .codex/hooks.json
+
+# Infrastructure inputs, state, saved plans and local provider caches.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+/deploy/digitalocean/backend.hcl
+crash.log

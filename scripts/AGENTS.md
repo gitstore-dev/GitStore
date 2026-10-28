@@ -95,3 +95,19 @@ belong there.
   This command does not transfer data.
 - `make clean TARGET=<git-data|controller-checkpoints> CONFIRM=1` removes
   only selected local runtime state, never Docker volumes.
+
+## Infrastructure provisioning
+
+- `make bootstrap TARGET=infrastructure PROFILE=digitalocean ACTION=<init|plan|show|apply|output>`
+  operates `deploy/digitalocean`. The default action is `plan`; `apply` consumes
+  the saved plan and does not prompt. It is never called by `check` or `plan`.
+- `init` requires `INFRA_BACKEND_CONFIG`; `plan` requires `INFRA_VAR_FILE`.
+  Supply absolute paths to private files. Keep credentials in environment
+  variables, not command arguments, cloud-init or versioned configuration.
+- `make check TARGET=infrastructure PROFILE=digitalocean` runs formatting,
+  backend-disabled initialization, validation and mocked topology tests. It is
+  opt-in because it requires OpenTofu and the pinned provider download. Set
+  `TOFU_BIN` to override the executable.
+- Provisioning installs Docker and prepares storage, not application containers.
+  Read `../docs/runbooks/digitalocean-provisioning.md` for runtime handoff,
+  networking, state protection and non-overlapping recovery requirements.

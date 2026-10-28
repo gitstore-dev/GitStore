@@ -30,11 +30,24 @@ clusterRoles:
         verbs: [read, list, watch]
       - resources: [product/management, productVariant/management]
         verbs: [read, list]
+  # Bind this ClusterRole with a RoleBinding for each user's namespace.
+  # The binding confines wildcard grants to namespaced actions in that namespace.
+  # Do not use a ClusterRoleBinding for this role: that grants cluster-wide access.
+  namespace-full-control:
+    rules:
+      - resources: ["*"]
+        verbs: ["*"]
+  # This grants access to the namespace object itself, not its child resources.
+  # USER namespace ownership is immutable: admission rejects owner changes even
+  # when a rule grants transfer. ORGANIZATION namespaces may be transferred.
   namespace-owner:
     rules:
       - resources: [namespace]
         verbs: [read, update, delete, transfer]
         when: [owner]
+  # Admission requires USER metadata.name == authenticated username == owner.
+  # Name uniqueness permits at most one USER namespace per user at a time.
+  # Creation alone does not grant access to resources inside that namespace.
   namespace-creator:
     rules:
       - resources: [namespace]
@@ -128,6 +141,11 @@ clusterRoleBindings:
 roleBindings: []
 # Optional RoleBindings: replace `roleBindings: []` above with this list.
 # roleBindings:
+#   # USER namespace: alice controls all namespaced resources in namespace alice.
+#   # Adapt both names to the authenticated username; repeat for each user.
+#   - namespace: alice
+#     roleRef: {kind: ClusterRole, name: namespace-full-control}
+#     subjects: [{kind: User, name: alice}]
 #   # Grant the custom Role above to a user, only in gitstore-system namespace.
 #   - namespace: gitstore-system
 #     roleRef: {kind: Role, name: catalog-maintainer}
@@ -138,3 +156,8 @@ roleBindings: []
 #     subjects: [{kind: Group, name: catalog-readers}]
 # A RoleBinding cannot grant cluster-scoped namespace or serviceAccount actions.
 # For those, use a ClusterRoleBinding referencing a ClusterRole, as above.
+# rbac-local reads static bindings: it does not substitute the current username
+# or provision a binding when a USER namespace is created. Operators must add
+# each binding explicitly. Dynamic RBAC providers can use the same role/binding
+# model; automatic binding provisioning requires namespace lifecycle integration.
+# Wildcard grants still respect admission invariants and transfer constraints.

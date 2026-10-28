@@ -99,6 +99,11 @@ See the [user guide](docs/user-guide.md) for the complete Docker workflow, catal
 
 ## Documentation
 
+For DigitalOcean infrastructure without Kubernetes, see the
+[OpenTofu provisioning runbook](docs/runbooks/digitalocean-provisioning.md).
+It provisions hosts, networking and storage; application deployment and
+production acceptance remain separate operations.
+
 - **User Guide**: [docs/user-guide.md](docs/user-guide.md)
 - **Developer Guide**: [docs/developer-guide.md](docs/developer-guide.md)
 - **Architecture**: [docs/architecture/](docs/architecture/README.md)

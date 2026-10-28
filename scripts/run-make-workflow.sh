@@ -12,9 +12,10 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   make generate TARGET=<authz|proto|all>
-  make check TARGET=<all|config|compose|licenses|credentials>
+  make check TARGET=<all|config|compose|licenses|credentials|infrastructure>
   make clean TARGET=<git-data|controller-checkpoints> CONFIRM=1
-  make bootstrap TARGET=<all|token|namespace|repository>
+  make bootstrap TARGET=<all|token|namespace|repository|infrastructure>
+    infrastructure: PROFILE=digitalocean ACTION=<init|plan|show|apply|output>
   make secret TARGET=<jwt|grpc-hmac|signing-key> [DESTINATION_PATH=<path>] [RECORD_OUTPUT_PATH=<path>]
     signing-key defaults to controller PEM + JSON; RECORD_OUTPUT_PATH= requests PEM only
   make add-role ROLE=<role> ALLOW=<canonical-actions> [SCOPE=cluster|namespace]
@@ -52,12 +53,14 @@ case "${family}/${target}" in
   check/compose) command=(make --no-print-directory _check-compose-config) ;;
   check/licenses) command=(make --no-print-directory _check-licenses) ;;
   check/credentials) command=(make --no-print-directory _check-credentials) ;;
+  check/infrastructure) command=(make --no-print-directory _check-infrastructure) ;;
   clean/git-data) command=(make --no-print-directory _clean-git-data) ;;
   clean/controller-checkpoints) command=(make --no-print-directory _clean-controller-checkpoints) ;;
   bootstrap/all) command=(make --no-print-directory _bootstrap-all) ;;
   bootstrap/token) command=(make --no-print-directory _bootstrap-token) ;;
   bootstrap/namespace) command=(make --no-print-directory _bootstrap-namespace) ;;
   bootstrap/repository) command=(make --no-print-directory _bootstrap-repository) ;;
+  bootstrap/infrastructure) command=(make --no-print-directory _bootstrap-infrastructure) ;;
   secret/jwt) command=(make --no-print-directory _secret-jwt) ;;
   secret/grpc-hmac) command=(make --no-print-directory _secret-grpc-hmac) ;;
   secret/signing-key) command=(make --no-print-directory _secret-signing-key) ;;
