@@ -1,293 +1,295 @@
-# ADR 0020: ServiceAccount OAuth Client Assertions
+# ADR 0020: Reference-Issuer ServiceAccount Client Assertions
 
 **Status**: Proposed
 
 **Date**: 2026-11-01
 
-**Audience**: workload/app authors, deployment administrators and API/controller maintainers.
+**Audience**: workload/app authors, identity administrators and API/controller maintainers.
 
-**Contracts**: [040 ServiceAccount OAuth token exchange](../implementation/040-serviceaccount-oauth-token-exchange.md).
+**Contracts**: [040 Reference-issuer workload authentication](../implementation/040-serviceaccount-oauth-token-exchange.md).
 
 ## Context
 
-GitStore already enrolls cluster-scoped ServiceAccounts and their public keys.
-A workload loads its private key through the bootstrap secret resolver, signs a
-short-lived single-use assertion, and calls `issueServiceAccountToken` over
-GraphQL. The resulting short-lived access token authenticates ordinary API and
-watch traffic. A current ServiceAccount UID, valid enrolled key, audience,
-expiry, shared replay check and `serviceAccount.token.issue` authorization are
-required. Assertion credentials cannot authenticate arbitrary GraphQL commands.
+GitStore ships an optional reference identity stack: an OAuth/OIDC issuer,
+a headless identity directory and a browser login/consent bridge. Its current
+OAuth client setup uses authorization-code/refresh grants and client-secret
+authentication. It does not provision the workload client-assertion path proposed
+here. Native ServiceAccounts already use enrolled asymmetric keys and the
+GitStore GraphQL token exchange.
 
-That exchange has GitStore-specific HTTP/GraphQL framing, a private JWT type
-and a configured assertion audience. Its security properties do not make its
-wire protocol an OAuth token endpoint. Workload integrations otherwise able to
-sign JWT client assertions need a bespoke client for that framing.
+[The UserDir proposal](https://github.com/gitstore-dev/GitStore/pull/454)
+keeps AuthN, UserDir and AuthZ independent. AuthN establishes identity; UserDir
+resolves profile type, active state and groups; AuthZ decides an operation.
+Its three directory profiles are staff, customer and serviceAccount. A
+ServiceAccount profile is credential-less and login-disabled: GitStore remains
+authoritative for workload keys, immutable UID and enablement.
 
-[RFC 7523](https://www.rfc-editor.org/rfc/rfc7523.html) distinguishes JWT
-authorization grants from JWT client authentication. This proposal selects the
-client-authentication profile with the client-credentials grant from
-[RFC 6749 §4.4](https://www.rfc-editor.org/rfc/rfc6749.html#section-4.4).
-The workload acts as itself; no end-user delegation or JWT bearer grant is added.
+RFC 7523 client assertions can use the reference issuer's existing token
+endpoint. Adding another OAuth server inside gitstore-api would duplicate
+client registration, replay handling and protocol behavior unnecessarily.
+The preferred design therefore extends reference-issuer workload integration,
+while preserving native ServiceAccount issuance for deployments without it.
 
-Initial identity/key enrollment is a separate trust-establishment operation.
-A self-signed assertion from an unknown key cannot establish authority to create
-a ServiceAccount or grant itself permissions. `CredentialsRef` describes resource
-credential semantics; it is not a registration or OAuth protocol.
-
-This is a documentation proposal. No OAuth endpoint, metadata document,
-configuration switch or controller transport selection described here is
-implemented by this ADR. The existing ServiceAccount and credential contracts
-remain the supported baseline. This follow-up can be reviewed independently of
-the [App installation proposal](https://github.com/gitstore-dev/GitStore/pull/507).
+This ADR and its examples are proposed contracts, not implemented support.
+The UserDir dependency remains a draft; its group/profile orchestration cannot
+be assumed present in today's middleware. No GitStore-owned OAuth token endpoint
+is introduced, and existing supported endpoints remain unchanged.
 
 ## Decision
 
-### 1. An additional transport over the existing identity plane
+### 1. Ownership and independent identity planes
 
-Propose `POST /oauth/token`, relative to the installation's public API base path.
-The enabled endpoint accepts form-encoded client-credentials requests authenticated
-by an enrolled asymmetric JWT assertion. It returns an OAuth access-token response
-using the existing ServiceAccount access-token issuer and verifier. It does not
-introduce a second user directory, identity store, token signer or RBAC evaluator.
+| Responsibility | Authority |
+| --- | --- |
+| ServiceAccount UID, keys, enablement and lifecycle | GitStore ServiceAccount record |
+| OAuth client registration and client-assertion verification | Configured issuer, with a controlled registration projection |
+| OAuth access-token signing and assertion replay persistence | Configured issuer |
+| Credential-less identity profile, active state and groups | Configured UserDir; reference directory implementation |
+| Trusted external workload-to-ServiceAccount mapping | Explicit issuer/client/subject/UID registration managed by GitStore |
+| Issuance permission and API operation decisions | Configured AuthZ provider, using enriched authoritative facts |
+| Workload private key acquisition | Deployment bootstrap SecretResolver |
+| Browser login and consent | Existing reference bridge and human identity/session flow |
 
-Reuse a provider-neutral assertion verification/issuance service behind both
-transports. Keep transport-specific JWT profile validation explicit: the OAuth
-handler does not disguise a form assertion as an HTTP bearer token and pass it
-through the entire ordinary AuthN chain. Provider capability support must be
-explicit; if the configured providers cannot verify and issue this exchange,
-the endpoint is not advertised and fails closed.
+The reference implementation uses Hydra as issuer and Kratos as UserDir.
+Those are dependencies, not alternative identity authorities for the same facts.
+Keep issuer adapters replaceable and the OIDC signature verifier generic.
+A non-reference issuer must meet the same workload enrollment, issuance gate,
+claims, replay and revocation contracts before support is advertised.
 
-| Concern | GraphQL exchange: existing | OAuth exchange: proposed |
-| --- | --- | --- |
-| Request | GraphQL mutation; assertion in Authorization header | Form-encoded client-credentials request; assertion in body |
-| JWT profile | `gitstore-sa-assertion+jwt`, configured internal audience | JWT client assertion, exact public token-endpoint audience |
-| Client identity | Canonical ServiceAccount subject and UID | Same subject as OAuth client ID, same UID binding |
-| Trust | Enrolled public key and immutable ServiceAccount UID | Same enrolled key/UID registry |
-| Replay | Shared durable single-use assertion store | Same consumption semantics and namespace across both transports |
-| Authorization | `serviceAccount.token.issue` for the account itself | Same action, subject and authoritative facts |
-| Response | GraphQL TokenRequest payload | `access_token`, `token_type`, `expires_in` |
-| Resource access | Existing ServiceAccount AuthN plus live AuthZ | Identical; OAuth does not add permissions |
+ServiceAccount profiles in the directory must not gain passwords, recovery,
+verification, browser sessions or human consent flows. OAuth client-credentials
+authentication at the issuer is distinct from logging into a directory account.
+No resource CredentialsRef becomes authority to resolve a workload private key.
+Native ServiceAccount JWT/assertion paths remain valid with reference UserDir,
+and reference issuer operation must not become mandatory for native deployments.
 
-The old GraphQL profile remains distinct and is not silently reclassified as a
-standards-compatible client assertion. Neither profile is valid as an access
-token. Adding this endpoint is not approval to expose a general OAuth
-authorization server, user authorization endpoint or dynamic client registration.
+### 2. Enrollment and synchronization
 
-### 2. Enrollment, credentials and client identity
+An authorized installer creates or selects a GitStore ServiceAccount, enrolls
+public keys and assigns policy using supported provider administration. When
+the directory supports profiles, the installation also creates/reconciles a
+credential-less serviceAccount profile. Link by explicit AuthN-provider identity,
+not by email, display name or coincidentally equal subject strings.
 
-An authorized administrator provisions the ServiceAccount, enrolls public keys
-and assigns least-privilege grants through existing identity/provider management.
-ServiceAccount names remain globally unique and cluster-scoped. The OAuth
-`client_id` is the exact canonical subject, for example
-`system:serviceaccount:acme-search`. No namespace or separate OAuth client table
-is introduced. The server returns or exposes the current UID through already
-authorized administrative identity reads; it is not secret material.
+A separately authorized issuer provisioning step registers a workload OAuth
+client with client_credentials and private_key_jwt only. It projects approved
+public JWKs, audience, short TTL and a versioned GitStore registration identity
+into issuer-controlled client state. The private key remains at the workload;
+GitStore's API issuer-signing key is never copied to the OAuth issuer.
 
-The signed assertion binds that immutable UID using the `sa_uid` claim. A
-delete/recreate under the same name cannot revive assertions or access tokens
-for the old UID. This is an explicit GitStore interoperability requirement:
-clients must support a custom signed claim in addition to standard JWT claims.
-The advertised support is for this documented profile, not every OAuth client
-library with unconfigurable JWT generation.
+Each registration binds:
+- trusted issuer identity and its exact configured public endpoint;
+- OAuth client ID and expected signed access-token subject;
+- GitStore ServiceAccount name and immutable UID;
+- source enrolled-key revision, projected public-key IDs and registration generation;
+- configured API audience, enabled state and permitted workload profile.
 
-Workload private keys remain deployment bootstrap identity material under
-[ADR 0009](0009-credential-secret-boundary.md). Only public enrollment data enters
-the ServiceAccount store. Neither an App configuration nor a resource
-`CredentialsRef` can resolve that workload key. Enrolled workload keys sign
-client assertions; the API's separate issuer key signs access tokens. Rotation
-and revocation of these two key families are independent operations.
+Use an immutable client ID such as gs-sa- followed by the ServiceAccount UID
+and key-set registration revision. Key-set changes create a new client ID;
+overlap is explicit and only retains still-approved key sets. Never mutate an
+active client's keys in place and stamp new revision evidence over stale issuer
+key caches. Never reuse an old client ID when an account name is deleted/recreated. The
+OAuth client ID need not equal the canonical system:serviceaccount subject.
+The registration and signed issuer evidence connect them explicitly.
 
-### 3. JWT profile and cross-protocol isolation
+Provisioning across the GitStore store, directory and issuer is a bounded,
+idempotent reconciliation process, not an assumed distributed transaction.
+Stage clients disabled or without usable grants until authoritative identity,
+directory prerequisites and key projection are consistent. GitStore wins any
+UID/key/enablement disagreement. Unavailable dependencies leave external
+activation pending; they do not redirect issuance to an admin identity.
 
-The OAuth assertion uses a registered asymmetric key and includes:
+Changes use expected revisions and record provisioning progress. Reconcile
+disable/delete and orphan profiles/issuer clients. Keep enough tombstone/UID
+history to prevent stale clients and tokens from binding to a replacement.
+Issuer administration is internal-only and available only to the authorized
+provisioner. Human directory administration continues through user.* actions;
+a token hook is not an enrollment or group administration endpoint.
 
-- `iss` and `sub` equal to the canonical client ID;
-- `aud` equal to the configured canonical external token endpoint URL;
-- `iat` and `exp`, with positive lifetime at most 60 seconds;
-- a unique, unpredictable `jti` and current `sa_uid`;
-- protected `kid` matching an enrolled key and a permitted matching algorithm.
+### 3. OAuth transport and assertion profile
 
-Accept protected `typ: JWT` or an omitted type at this endpoint; reject other
-types, especially access-token and GraphQL assertion types. Accept `aud` as a
-string or singleton string array, without URL normalization or additional
-audiences. `nbf` is optional but validated when supplied. GitStore's required
-UID, issued-at and replay claims tighten the base profile deliberately.
+Clients send the client-credentials request to the configured issuer's advertised
+token endpoint, /oauth2/token in the reference integration. Do not add
+/oauth/token to gitstore-api in this proposal. Use only trusted configured
+issuer/discovery metadata, preserve proxy prefixes and never follow a redirect
+carrying an assertion.
 
-Use ES256 for ECDSA P-256 and EdDSA for existing Ed25519 enrollment where
-supported. Public-key type, recorded algorithm and JWT algorithm must match.
-Reject unsigned/shared-secret algorithms, token-supplied verification keys,
-remote key URLs, unknown critical headers, duplicate JSON members, nested or
-compressed JWTs and unsupported extensions. No network fetch selects a key.
+Authenticate the workload OAuth client with private_key_jwt and the standard
+client_assertion_type/client_assertion parameters. Signed iss/sub identify
+that OAuth client. The assertion audience identifies the issuer's token
+endpoint; the returned token audience identifies GitStore's API. These are
+different values. Lifetime, clock leeway, jti and algorithm restrictions are
+explicit per tested issuer version.
 
-The public URL is trusted deployment configuration, including a proxy prefix.
-Do not derive it from request `Host` or untrusted forwarding headers. It must
-be distinct from the GraphQL assertion audience and API access-token audience.
-Audience/type isolation applies even though the enrolled key registry is shared.
-Removing a proxy prefix or accepting arbitrary URL aliases is not normalization;
-it would expand the credential's intended audience.
+The immutable UID is bound through the non-reusable registered client and
+issuer-controlled claims. A custom sa_uid assertion claim is not required for
+this path and cannot override registration. This lets standard JWT-signing
+clients participate without trusting caller-supplied account metadata.
+Use inline enrolled public JWKs rather than token-selected URLs. Verify ES256
+and EdDSA support against the pinned issuer before advertising either.
 
-The OAuth profile has a separate assertion clock-skew ceiling, proposed at 30
-seconds, while retaining the 60-second signed lifetime. It must not inherit a
-larger existing access-token skew implicitly. Reject an `iat` too far in the
-future or past; account for the entire permitted window in replay retention.
+OAuth scopes bound issuer grants; they do not become GitStore actions, groups
+or app capability grants. Restrict client grants to the configured API audience.
+Keep browser openid/profile/email/offline_access grants on separate human clients.
+This workload contract requests no human login, ID token or refresh token.
 
-### 4. Exchange and permission boundaries
+### 4. Issuance gate and token evidence
 
-```mermaid
-sequenceDiagram
-    participant I as Authorized installer
-    participant A as GitStore API
-    participant W as Workload
-    participant S as Shared identity and replay store
-    I->>A: Provision ServiceAccount, enroll public key, assign grants
-    W->>W: Resolve bootstrap key and sign fresh JWT
-    W->>A: POST oauth/token with client assertion
-    A->>S: Resolve current UID, enabled state and enrolled key
-    A->>A: Verify JWT profile and configured AuthZ decision
-    A->>S: Atomically consume assertion replay ID
-    A->>A: Recheck current identity and mint bounded access token
-    A-->>W: OAuth access-token response, no refresh token
-    W->>A: Ordinary API request with access token
-    A->>A: Verify identity and authorize requested operation
-```
+Before returning a workload token, the reference issuer must invoke a mandatory,
+authenticated, fail-closed GitStore issuance check. Use the issuer's existing
+token-hook capability with a version-specific adapter, not a second token
+endpoint. A logical /internal/identity/issuer-token-check route is proposed for
+that adapter; it is not an implemented API or a public authentication path.
 
-The endpoint verifies client authentication and delegates
-`serviceAccount.token.issue` to the configured authorizer using the actual
-cluster-scoped account facts. No token role-name shortcut or caller-selected
-owner bypass is introduced. Valid signature alone does not confer issuance
-authority, and issuance authority does not grant resource access.
+The callback authenticates the configured issuer using internal deployment
+trust, resolves its registered client independently of caller-controlled form
+claims, and checks current ServiceAccount UID/enablement, projection revision,
+configured audience and permitted grant. It resolves UserDir facts under the
+same orchestration as other authenticated identities, then delegates
+serviceAccount.token.issue for the mapped account to the active authorizer.
 
-Token audience is the existing configured API audience, and TTL comes from the
-existing bounded issuer configuration. The first OAuth profile adds no custom
-audience/expiration parameters or OAuth scope-to-action mapping. Nonempty OAuth
-scope requests fail with `invalid_scope`. Omission selects the documented default
-service identity audience and permissions remain live provider-owned RBAC.
-The endpoint cannot grant impersonation, cross-namespace access or a new scope
-by copying claims from the client assertion into the access token.
+A hook invocation does not itself prove client key possession: issuer hook
+ordering must be verified. The issuer must still validate its client assertion
+and replay record before issuing. The callback only returns approval and
+server-derived identity evidence for that registered candidate. It never
+authenticates a caller as a workload merely because a JSON body names one.
 
-### 5. Replay, issuance races and retry
+The signed access token must carry the current SA UID, registration identity
+and enrolled-key projection revision in a reviewed issuer-owned claim namespace.
+No groups, profile type, active state or roles are taken from token claims.
+Claims are evidence of the issuer's approved mapping, not live authority:
+GitStore checks them against its current record/registration again on use.
 
-Reuse the existing atomic durable replay-consumption interface across replicas
-and transports. Preserve its current globally unique `jti` semantics/digest
-compatibility; do not create a separate transport cache or partition replay
-records by endpoint, key or client. Clients generate cryptographically random
-IDs to avoid accidental collision. Record retention covers expiration plus
-the complete configured verification leeway; store failure prevents issuance.
+The reference hook affects all grant types. Dispatch workload checks only for
+the approved workload registrations/grants; preserve the existing human
+authorization-code/refresh behavior without adding SA claims to human tokens.
+An unknown machine client cannot opt into a permissive human branch.
+Hook authentication, routing, timeout and retry behavior require explicit tests.
 
-After full signature/profile validation and authorization, consume the assertion
-once, then use the existing issuer path. Recheck account UID, disabled/deleted
-state, enrolled key revision and relevant policy facts before issuance. The
-implementation must define and test the ordering/conditional revision guard
-for concurrent key removal or identity revocation; a pre-verification lookup
-alone is not authoritative. Resource-server validation still checks current
-ServiceAccount state on use. Policy revocation continues to deny ordinary
-operations even if an access token remains cryptographically valid.
+### 5. Authentication, directory enrichment and authorization
 
-This does not promise immediate revocation of all previously issued tokens when
-an enrollment key alone is retired: current token claims bind ServiceAccount UID,
-not the originating enrollment key. The implementation must preserve and
-document current revocation behavior; disabling/deleting the account is the
-existing broader revocation mechanism. Adding per-enrollment-key access-token
-provenance would be separate scope, not an implicit property of RFC 7523.
+For an issuer-issued workload access token:
+1. Verify signature, issuer, audience, expiry and token purpose with the configured verifier.
+2. Run an explicitly enabled workload identity adapter for that issuer/client profile.
+3. Validate signed registration/UID/key-revision evidence against current GitStore identity.
+4. Construct the canonical ServiceAccount subject with verified provenance.
+5. Resolve UserDir profile, active state and groups using the configured provider link.
+6. Apply profile boundaries and call the configured authorizer for the requested operation.
 
-A crash after consuming an assertion but before returning a token can burn the
-assertion. A timeout does not imply no token was minted. The client signs a
-new assertion for every retry; replay is never transformed into cached success.
-Two tokens may exist after an uncertain response and fresh retry, bounded by
-TTL and client renewal limits. No refresh token or bearer bootstrap credential
-is introduced. Renewals remain coalesced per workload identity and endpoint.
+Today's generic oidc-jwt identity normalization rejects reserved ServiceAccount
+subjects. Do not bypass it by mapping username_claim or email to a system:
+subject. The implementing feature must add a narrowly scoped, provenance-checked
+workload adapter and central principal validation, keeping ordinary human OIDC
+tokens unable to assert ServiceAccount identity. This is new implementation work.
 
-### 6. Transport, compatibility and rollout
+Directory enrichment also applies to native serviceaccount-assertion and
+serviceaccount-jwt before their AuthZ decisions. Enabling this optional issuer
+path is not the only way to obtain directory groups. Static and human OIDC
+identities use their own explicit provider links; equal raw subjects do not
+merge accounts across providers or issuers.
 
-The HTTP request/response, limits and errors are specified in
-[040](../implementation/040-serviceaccount-oauth-token-exchange.md). TLS is
-mandatory on the public endpoint; trusted local transport to a terminating
-proxy follows deployment network policy. Assertions never appear in query
-parameters, redirects, logs, traces or metrics. Only the documented token response
-may return the access token; it has no-store headers and is excluded from
-response capture. Follow current client-authentication guidance in
-[RFC 9700 §2.5](https://www.rfc-editor.org/rfc/rfc9700.html#section-2.5).
+A credential-less serviceAccount profile cannot be reclassified as staff or
+customer by token claims. Groups come only from administrator-controlled UserDir
+state, are rendered as system:group:name, and cannot inject reserved system
+groups. Synthesized groups follow the core identity rules. AuthZ remains
+provider-owned; issuer scopes or directory membership alone never grant an action.
 
-The endpoint starts opt-in. Clients configure its exact URL/profile explicitly;
-the first version does not require or advertise OAuth/OIDC discovery metadata.
-Absence of discovery is not evidence of endpoint support. A later metadata
-contract must advertise only implemented grants/methods and preserve proxy paths.
+The UserDir draft distinguishes:
+- configured none/static-users without group capability: no directory groups,
+  while legitimate explicit subject grants still work;
+- a successful unlinked lookup: no directory profile/groups, with normal
+  authorization on those facts rather than another provider's profile;
+- a failed/timed-out lookup: retryable fail-closed behavior, never an empty-group
+  fallback masquerading as a successful resolution.
 
-Deploy compatible readers/handlers across all API replicas before enabling the
-public route. An old replica must not handle traffic for the newly enabled
-endpoint. Existing GraphQL traffic remains unchanged. Then deploy opt-in clients;
-never silently fall back to another endpoint/profile after authentication or
-authorization rejection. A transport rollback returns clients to an explicitly
-configured GraphQL exchange and fresh profile-appropriate assertions. It does
-not erase replay history, identity records or keys.
+External workload registration activation additionally requires its declared
+directory prerequisites. A missing required linked profile blocks that
+registration; it does not globally change the draft's unlinked-subject semantics.
+GitStore disable/deletion always overrides an apparently active directory profile.
 
-No immediate removal or deprecation of GraphQL issuance is proposed. No
-configuration keys are advertised until a feature specification defines actual
-schema, validation, proxy routing and deployment integration. If implementation
-later touches shared configuration or Compose contracts, track the corresponding
-quickstart repository update.
+### 6. Freshness, revocation and failure boundaries
 
-### 7. Acceptance requirements
+The directory proposal bounds group removal and deactivation propagation to
+five minutes, including re-evaluation or closure of open subscriptions. Reuse
+those bounds rather than baking directory groups into access tokens. Tightening
+them requires implementation evidence. ServiceAccount record/registration
+revocation uses its own separately tested, no-weaker existing identity checks;
+directory freshness is not permission to keep a deleted UID valid.
 
-The implementation must prove all of the following before endpoint support is
-advertised:
+The issuer owns durable single-use assertion replay across issuer replicas.
+The native GraphQL verifier retains its own shared replay records. Do not claim
+both transports share a jti table or erase either history during rollout.
+Distinct audiences and purpose checks prevent cross-protocol assertion reuse;
+unique client IDs and UID checks prevent account-name resurrection.
 
-- a standard form exchange with a properly configured JWT-signing client and
-  both supported enrollment algorithms;
-- exact public audience/client ID/UID and algorithm checks, unknown keys,
-  malformed/oversized input, duplicate parameters/claims and cross-profile rejection;
-- positive and denied pluggable AuthZ decisions, restricted response disclosure,
-  no self-enrollment and no scope-to-permission escalation;
-- two APIs sharing identity/replay state, concurrent identical assertions with
-  at most one successful issuance, store outages and expiry-window cleanup;
-- key overlap/removal, account disable/delete/recreate and revocation races,
-  documenting the limits of already-issued token revocation;
-- two controllers renewing under sustained reconciliation/watch load, jittered
-  singleflight renewal, dropped responses, restart after expiry and bounded retries;
-- API/controller rolling replacement and explicit transport rollback without
-  resetting replay state or accepting incompatible audience/type profiles;
-- leakage checks across reverse proxy, application diagnostics, HTTP capture,
-  telemetry and error responses;
-- bounded sustained valid/invalid exchange load alongside Git push/admission
-  and reconciliation, with latency, CPU, memory, replay growth and fair limits.
+Current enrollment is authoritative even while issuer projections lag. Issuance
+checks and resource access both reject stale projected-key revisions. This
+proposal adds provenance for external tokens; it does not retroactively give
+existing native access tokens enrollment-key provenance. Preserve and document
+native revocation semantics independently.
 
-Git storage remains singleton-only. This token transport adds no Git HA,
-replication, sharding or overlapping replacement guarantees. Tests must report
-the actual deployment envelope and cannot substitute for the full PR readiness
-suite.
+Issuer/client disable, token signing-key rotation, ServiceAccount disable/key
+changes and UserDir deactivation are different controls. Test their races
+separately. An expired authorization cache or unavailable hook/profile lookup
+must not produce an allow decision. Requests already committed retain their
+audit evidence; revocation does not roll back business transactions.
 
-## Consequences
+Lost token responses can burn assertions. Retry with a fresh signed assertion,
+bounded jitter/backoff and coalesced renewal. No automatic fallback to native
+issuance after issuer rejection/outage; operators select a transport explicitly.
+Reacquire on definitive authentication rejection, not ordinary authorization
+denial, and never blindly replay an uncertain business mutation.
 
-Workloads gain a documented OAuth client-credentials exchange without duplicating
-identity, secret resolution or token authorization. Existing GraphQL clients
-continue to work. Explicit profiles prevent confusing assertion credentials with
-resource access tokens. The added HTTP surface requires its own routing, abuse
-controls, interoperability and multi-replica tests.
+### 7. Rollout, evidence and non-goals
 
-Clients must support the UID claim, exact endpoint audience and enrolled algorithms;
-this is deliberately narrower than an unrestricted OAuth server. A valid client
-assertion establishes possession of an enrolled key, not ongoing possession of
-the returned bearer token. Sender-constrained access tokens are a separate design.
+The pinned reference Compose images are Hydra v2.3.0 and Kratos v1.3.1.
+Current client setup is human-only; login/consent handlers do not implement
+the proposed machine token hook. The directory's initial checked-in schema
+also predates the three-profile UserDir draft. These are implementation gaps,
+not configuration already enabled by this documentation.
 
-## Alternatives considered
+Enable external workloads only after compatible enrollment projection,
+issuer callback, trusted subject adapter, directory orchestration, replay and
+revocation behavior are implemented and tested across replicas. Stage human
+and workload clients separately. Retain existing native endpoints, issuer keys,
+replay state and deployment choice on rollback. No reference-issuer requirement
+is added to native-only deployments.
 
-- **JWT bearer authorization grant.** Not selected: the intended caller is the
-  registered workload itself. No delegated subject or independent grant source
-  is required.
-- **Self-enrollment from an assertion.** Rejected: unknown keys have no trust
-  anchor and cannot authorize identity creation or policy grants.
-- **Replace the current exchange immediately.** Rejected: protocol compatibility
-  can be added independently while preserving current workload behavior.
-- **Add client secrets or refresh tokens.** Rejected for this profile: enrolled
-  asymmetric keys already support autonomous short-lived token acquisition.
-- **Publish general OAuth discovery immediately.** Deferred: a token-only
-  profile must not advertise unsupported user flows or dynamic registration.
+Acceptance requires two API and two controller replicas, shared issuer/directory
+state, pluggable AuthN/UserDir/AuthZ combinations, rolling replacements, directory
+and hook outages, blocked self-enrollment, human/customer-to-SA impersonation
+attempts, UID recreation, group changes on live watches, and sustained token,
+Git push and reconciliation load under bounded queues/caches/timeouts.
 
-## Related contracts and standards
+Use existing Make command families and parameterized Compose files when
+implementing. Configuration/Compose changes require a corresponding quickstart
+repository follow-up. This PR changes documents only; no schema, endpoint,
+image version, key store or provider implementation is modified.
+Git remains singleton-only with retained storage and non-overlapping replacement.
 
-- [ADR 0009](0009-credential-secret-boundary.md): bootstrap identity and resource secret boundary.
-- [ADR 0010](0010-authorization-model.md): canonical issuance action and cluster-scoped identity.
-- [ServiceAccount API](../../shared/schemas/serviceaccount.graphqls): current enrollment and GraphQL exchange.
-- [RFC 7523 §§2.2–3](https://www.rfc-editor.org/rfc/rfc7523.html#section-2.2): JWT client authentication.
-- [RFC 6749 §§4.4 and 5](https://www.rfc-editor.org/rfc/rfc6749.html#section-4.4): client credentials and token responses.
-- [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html): OAuth security guidance.
+## Alternatives and consequences
+
+Reusing the issuer avoids duplicating the OAuth protocol server and works with
+the UserDir model, but introduces issuer enrollment projection and a mandatory
+trusted workload adapter. These are substantial boundaries that must be tested,
+not inferred from existing human OIDC login support.
+
+A GitStore-owned OAuth endpoint remains a deferred native-only alternative if
+required later; it is not part of this preferred reference-stack design.
+Making Kratos a second SA key/login authority, importing token groups, accepting
+arbitrary system subjects from oidc-jwt, reusing the browser client, or silently
+bridging issuer tokens into native bearer tokens is rejected.
+
+## Sources and related contracts
+
+- [UserDir draft, pinned revision](https://github.com/gitstore-dev/GitStore/blob/9306c732904d67d9810f241e0d29fb759177fe22/specs/065-kratos-user-directory/spec.md):
+  independent identity planes, per-provider links, credential-less SA profiles and freshness.
+- [Reference configuration](../../compose.oidc.yml), [issuer configuration](../../config/oidc/hydra/config.yaml)
+  and [directory schema](../../config/oidc/kratos/identity.schema.json): current checked-in baseline.
+- [ADR 0009](0009-credential-secret-boundary.md): private-key bootstrap boundary.
+- [ADR 0010](0010-authorization-model.md): canonical actions and trusted principal facts.
+- [RFC 7523](https://www.rfc-editor.org/rfc/rfc7523.html): JWT client authentication.
+- [RFC 6749](https://www.rfc-editor.org/rfc/rfc6749.html): client-credentials exchange.
+- [Hydra v2.3.0 token hook](https://github.com/ory/hydra/blob/v2.3.0/oauth2/token_hook.go)
+  and [configuration schema](https://github.com/ory/hydra/blob/v2.3.0/.schema/config.schema.json):
+  hook context, authenticated calls, response handling and all-grant dispatch.
