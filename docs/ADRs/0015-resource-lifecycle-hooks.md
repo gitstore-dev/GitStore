@@ -37,15 +37,11 @@ becomes authoritative, and so in what a hook may safely do. A Git-backed write i
 once the ref moves, and it is authored by a human who reviews the diff. Changing that content
 server-side would make the stored state diverge from the reviewed commit.
 
-Prior art falls into five patterns:
-
-| Pattern                      | Example                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Lesson for GitStore                                                                            |
-|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
-| In-process expression policy | Kubernetes [ValidatingAdmissionPolicy](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/) (GA in 1.30) separates policy, parameter and binding. [KEP-3488](https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/3488-cel-admission-control) cites the separate infrastructure and network-hop latency of webhooks as its motivation. [Gatekeeper](https://open-policy-agent.github.io/gatekeeper/website/docs/validating-admission-policy) can generate VAP resources from its templates. | Make CEL the default admission extension. Webhooks are the exception.                          |
-| Synchronous remote hook      | commercetools [API Extensions](https://docs.commercetools.com/api/projects/api-extensions) run "before the result is persisted", with a 2 s default and 10 s maximum timeout, and at most 25 per project. Saleor [sync webhooks](https://docs.saleor.io/developer/extending/webhooks/synchronous-events/overview) warn of a "significant performance impact".                                                                                                                                                                                         | Hard caps, trigger predicates and short deadlines. Only trusted operators get this slot.       |
-| Asynchronous subscription    | commercetools Subscriptions, and [CloudEvents 1.0.2](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md) envelopes signed per [Standard Webhooks](https://www.standardwebhooks.com/).                                                                                                                                                                                                                                                                                                                                                | Side effects run after commit, from a durable log, with duplicates allowed and detectable.     |
-| Sandboxed pure function      | [Shopify Functions](https://shopify.dev/docs/api/functions/latest): WebAssembly, 256 kB module, 11 M instructions, 128 kB input, and "Shopify doesn't allow nondeterminism". Input comes from a GraphQL input query.                                                                                                                                                                                                                                                                                                                                  | Extensible business logic (price, eligibility, routing) without network calls on the hot path. |
-| Pipeline of functions        | [Crossplane composition functions](https://docs.crossplane.io/latest/composition/compositions/) run in order over gRPC and return desired state.                                                                                                                                                                                                                                                                                                                                                                                                      | Functions compute desired state and never write storage themselves.                            |
+The extension boundary needs five mechanisms with different latency and trust
+properties: bounded in-process expression policy, tightly controlled remote
+admission, durable asynchronous notification, pure sandboxed computation and
+transition preconditions. Network side effects belong outside the request-time
+computation sandbox. The registration contracts make those boundaries explicit.
 
 ## Decision
 
@@ -80,6 +76,12 @@ belong in `status.resolved` or the hydrated read model, derived deterministicall
 blob. A policy that needs a field set must reject the push and tell the author which field. The
 Git-backed `Chain` refuses to register mutating policies or webhooks. Its phases 1–2 are empty by
 construction, and an attempt to register one is a startup error.
+
+The matrix classifies the operation being extended, not the storage of its
+registration manifest. A Git-backed FunctionBinding can configure a transient
+search-query computation. That does not authorize a function to mutate the
+Git-backed configuration or index. Likewise, an EventSubscription is a
+Git-backed declaration whose delivery occurs after a durable source change.
 
 ### 3. Registration and trust
 
@@ -125,7 +127,7 @@ A synchronous hook must never hold a large push hostage.
 **Self-protection.** Webhooks are never called for registration kinds, for `HookSuspension`, or
 for any push to a `gitstore-system` repository. Only core admission and CEL policies apply there.
 A failing `failurePolicy: Fail` webhook therefore can never block the push that fixes or removes
-it. This is the same exemption Kubernetes applies to its webhook configuration objects.
+it. Required runtime safety gates are different: suspension must not mark them satisfied.
 
 **Lane A: bounded and fail-closed (pre-receive, `ValidateResources`).**
 
@@ -194,9 +196,11 @@ cross-resource checks, deferred webhooks, and anything with `mode: Async`.
 
 A gate is a named precondition on a named transition, such as `ReleaseEligible` on
 `CatalogRelease` preparation (ADR 0014), `Ready` on `File`, or `Paid → Fulfillable` on `Order`.
-Gates are represented as a status condition on the subject plus, for deletion, a finalizer. They
-follow the Kubernetes [finalizer](https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/)
-rules: removal-only, and a deletion completes once the list is empty. The shared gate vocabulary is:
+Gates are represented as a status condition on the subject plus, for deletion, a finalizer.
+After deletion begins finalizers are removal-only, and deletion completes once
+the list is empty. Deletion finalizers must be installed before the deletion
+race can occur; a controller cannot safely add one after observing termination.
+The shared gate vocabulary is:
 
 | Gate kind                    | Satisfied when                                                                           |
 |------------------------------|------------------------------------------------------------------------------------------|
@@ -210,6 +214,22 @@ rules: removal-only, and a deletion completes once the list is empty. The shared
 A gate that is satisfied for one digest is **not** satisfied for another. Any change to the
 material inputs invalidates approvals and attestations automatically. 037 uses this vocabulary
 without redefining it.
+
+A transition definition declares an operation and its supported API executor.
+A LifecycleGate only constrains that existing operation. Neither a FunctionBinding
+nor an EventSubscription creates a transition. Custom kinds declare their
+transition surface in [ADR 0016 §8](0016-custom-resource-definitions.md#8-declared-custom-transitions);
+simple readiness/reconciliation needs no custom state machine. A workflow is
+appropriate when commands, state, assignments or long-running recovery matter.
+
+Conditions are observations, not durable permission to commit a transition.
+The API checks current evidence, policy/issuer revisions, subject material and
+concurrency preconditions at the transition's commit boundary. Required gates
+combine with `allOf`; a gate's internal `anyOf`/`noneOf` is explicit. A removed,
+disabled or unavailable App evaluator must not turn a required gate into an
+empty successful set. Replacing a required gate needs an authorized policy
+change and a prepared replacement. See [039 §11](../implementation/039-resource-lifecycle-hooks.md#11-transition-and-evidence-contracts)
+for digest, evidence, replay and atomicity requirements.
 
 ### 6. Event subscriptions
 
@@ -228,13 +248,20 @@ without redefining it.
 - Exponential backoff, then a per-subscription dead-letter record. A dead-lettered subscription
   never blocks any lifecycle transition. A subscriber that must block something uses a gate.
 
+An event requests asynchronous work; HTTP 2xx acknowledges delivery only. It
+does not prove success of an external business operation or satisfy a gate.
+The consumer separately authenticates/authorizes subject reads and result
+submission. Transient queries and behavioral telemetry are not automatically
+resource-journal events; they need a separate ingestion contract. Watches and
+subscriptions may both wake one reconciler, which deduplicates logical work.
+
 ### 7. Functions (WASM)
 
 - Modules are WebAssembly components with a versioned WIT interface per **target** (for example
   `gitstore:pricing/line-price@1`, `gitstore:catalog/resolve-defaults@1`,
   `gitstore:workflow/transition-guard@1`).
 - **Pure and deterministic**: no clock, randomness, network or filesystem. Inputs are declared by
-  a GraphQL input query over the subject, as Shopify does, and are materialized by the host. The
+  a GraphQL input query over the subject and are materialized by the host. The
   same input produces the same output on every replica, which makes results cacheable and
   replayable.
 - Bounded per target by fuel/instructions, memory, input size, output size and wall-clock time.
@@ -242,6 +269,30 @@ without redefining it.
   set in 039 and benchmarked before GA.
 - Modules are content-addressed (digest-pinned in the `FunctionBinding`), signed per 036's
   artifact policy, and loaded from an OCI or LFS artifact. They are never fetched at call time.
+
+Targets are host-owned contracts. A binding cannot introduce a target or grant
+its module I/O. The host defines the WIT/input/output versions, invocation point,
+namespace/surface/subject selection, single-provider or ordered composition,
+output validation, authorization context, bounds and safe fallback. Input
+selection is restricted by target schema and caller/service authority; generic
+CRD operations are sufficient without dynamic schema stitching. A search ranker
+can reorder bounded candidates supplied by the host but cannot fetch vectors.
+
+### 7a. App composition and capability activation
+
+[ADR 0019](0019-app-installation-and-platform-capabilities.md) composes these
+registrations through an installed App. A CRD describes a kind; an App can own
+several definitions, reuse core kinds, or have no CRD. FunctionBinding remains
+the sole function configuration resource; no app-specific TOML is introduced.
+Operator deployment safety limits remain separate from app configuration.
+
+Package capability requests, explicit capability approval and provider-owned
+RBAC are separate checks. Admitted registrations are prepared under an inactive
+installation revision before one atomic activation switch exposes the complete
+set. Every operation pins a compatible registry/catalog revision. An App label
+alone cannot take over an existing registration. Unsupported targets, missing
+identity or stale grants prevent activation. The Search/Recommendation,
+antivirus and approval/attestation examples in ADR 0019 exercise distinct paths.
 
 ### 8. Service responsibilities
 
@@ -308,8 +359,8 @@ critical path of every author.
 
 ### A generic scripting runtime (JavaScript/Lua) for Functions
 
-Rejected in favour of WASM. WASM has language-neutral authoring, deterministic metering, and
-production precedent in commerce (Shopify Functions).
+Rejected in favour of WASM's language-neutral authoring and deterministic,
+bounded execution contract.
 
 ### Diagnostics only in git notes
 
