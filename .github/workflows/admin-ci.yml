@@ -5,11 +5,12 @@ permissions:
 jobs:
   admin:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 12.6.0
+          version: 12.7.0
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -17,7 +18,15 @@ jobs:
           cache-dependency-path: gitstore-admin/pnpm-lock.yaml
       - run: make install
       - run: pnpm --dir gitstore-admin exec playwright install --with-deps chromium firefox webkit
-      - run: make pr-ready
+      - name: Validate and build Admin and Storybook
+        run: make check TARGET=all
+        timeout-minutes: 5
+        env:
+          CI: true
+          STORYBOOK_DISABLE_TELEMETRY: 1
+      - name: Browser tests and server teardown
+        run: make test TARGET=e2e
+        timeout-minutes: 5
         env:
           CI: true
           STORYBOOK_DISABLE_TELEMETRY: 1

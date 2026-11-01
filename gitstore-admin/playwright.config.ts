@@ -2,6 +2,7 @@ import { defineConfig, devices } from '@playwright/test'
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
+  globalTimeout: process.env.CI ? 180_000 : undefined,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],
@@ -9,11 +10,13 @@ export default defineConfig({
   webServer: [
     {
       command: 'pnpm preview',
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
       url: 'http://127.0.0.1:4173',
       reuseExistingServer: !process.env.CI,
     },
     {
       command: 'pnpm storybook:preview',
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
       url: 'http://127.0.0.1:6006',
       reuseExistingServer: !process.env.CI,
     },

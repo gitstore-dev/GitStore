@@ -18,6 +18,8 @@ The PRD covers future commerce capabilities. Source references in the copied PRD
 
 The root Makefile is canonical. `make dev` defaults to the app; select `TARGET=storybook` for component development. `make check` validates types, lint, unit tests and both production builds. `make pr-ready` additionally exercises Chromium plus Firefox/WebKit compatibility smoke tests and Storybook.
 
+CI runs those same checks as separate validation/build and browser-test steps so their progress is visible. The pinned pnpm version must include the 12.7.0 fix for orphaned non-interactive scripts during Playwright teardown (pnpm/pnpm#15555); 12.6.0 can hang after all tests have passed. Both preview servers receive SIGTERM with a five-second shutdown window, browser runs have a three-minute CI deadline, and workflow steps and the job have outer timeouts.
+
 ## Routing
 
 Namespace pages use `/w/$namespace/<group>/<destination>`; platform pages use `/platform/<destination>`. Lowercase labels are normalized to hyphenated slugs. Group indexes redirect to their first destination. Root defaults to Atelier Kyoto / Home / Overview. Namespace changes preserve the active scoped destination. Platform routes remain platform scoped and do not imply namespace-scoped ServiceAccounts. Unknown demo namespaces explain the local-fixture limitation instead of manufacturing another tenant.

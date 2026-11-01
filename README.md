@@ -6,7 +6,7 @@ An isolated, mock-first Admin foundation: React, strict TypeScript, Vite, TanSta
 
 ## Start
 
-Use Node from `.nvmrc` and pnpm 12.6.0, then:
+Use Node from `.nvmrc` and pnpm 12.7.0, then:
 
 ```sh
 make install
