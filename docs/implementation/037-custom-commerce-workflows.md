@@ -25,6 +25,13 @@ controller-manager maintainers
 >
 > Contracts are in [039](039-resource-lifecycle-hooks.md).
 
+> **Proposed installation alignment (2026-11-01).**
+> [ADR 0019](../ADRs/0019-app-installation-and-platform-capabilities.md) supplies
+> the common App installation lifecycle. Workflow packaging uses that lifecycle;
+> it does not create a second capability-grant or identity-provisioning system.
+> The custom-resource transition adapter below extends the proposed workflow
+> surface and is not implemented support.
+
 ## Decision
 
 Seller and buyer workflows are **separate definitions and separate executions,
@@ -162,7 +169,7 @@ policy for approvals and checks on Git changes; it is not renamed or replaced.
 | `WorkflowProfile`                                             | Git-backed                  | Composes seller, buyer-order, and buyer-return definitions with policy references and allowed checkout entry point(s).                  |
 | `CategoryCluster`                                             | Git-backed                  | A reusable workflow-selection group: category roots/subtrees plus optional product or variant labels.                                   |
 | `WorkflowBinding`                                             | Git-backed                  | Binds a cluster or a product/variant selector to a profile for a namespace, market, and channel.                                        |
-| `WorkflowBundle`                                              | Git-backed                  | A locked desired installation of an imported set of definitions, profiles, clusters, schemas, UI metadata, and optional action modules. |
+| `WorkflowBundle`                                              | Git-backed                  | A pinned workflow content inventory referenced by an App; it does not independently install or approve capabilities. |
 | `WorkflowExecution`                                           | Datastore only              | Current state, input/output references, and immutable definition/profile snapshot for a seller review, order, or return.                |
 | `WorkflowTransition`, `WorkflowTask`, `WorkflowActionAttempt` | Datastore only, append-only | Auditable facts for a transition, human task, and asynchronous action attempt.                                                          |
 
@@ -463,33 +470,75 @@ after a controller or integration failure:
 - outbox event IDs and transition idempotency keys deduplicate retries;
 - on-demand per-execution leases only avoid duplicate work.
 
+## Custom resource transition adapters
+
+Most configuration resources need only reconciliation and `Ready`/`Delete`
+gates. A changed synonym set is applied by a controller; a product update does
+not need a synthetic synonym edit or a workflow execution. Use a workflow for
+explicit commands, multiple stages, assignments, approvals, timers or recoverable
+external work. A DAG describes registration dependencies; execution state
+machines can contain explicit resubmission/retry cycles.
+
+The proposed `CUSTOM_RESOURCE` scope extends the existing seller/buyer scope set.
+It requires a subject GVK and bounded typed command declarations. A CRD's
+`spec.lifecycle.transitions[].executor` references the admitted definition and
+one matching command. The API validates matching subject, action and input
+schema before activation; package input cannot install arbitrary command code.
+Each execution pins definition UID/digest, command schema, subject UID/material
+revision and App activation revision. Workflow records stay datastore-only.
+
+A command receives expected resource/execution versions and a durable
+idempotency key. The API authenticates the actor, delegates AuthZ, checks source
+state and current gates, runs any supported pure computation, validates output,
+and conditionally records the transition and durable event. The persistence
+design must atomically guard the evidence/subject revisions and transition
+outcome; an expired lease or stale condition patch is not authority to commit.
+External work begins only after that durable event and returns through a
+separately authorized idempotent result/attestation API. See
+[039 §11](039-resource-lifecycle-hooks.md#11-transition-and-evidence-contracts).
+
+Runtime workflow state must not mutate a Git-backed subject's authored spec.
+Record activation/execution state in datastore runtime records or system status.
+If a command requests a desired-state edit, create an authorized Git write and
+wait for its admission as a separate step; never bypass reviewed Git content.
+The adapter does not override core payment, inventory or publication commands.
+
+Uninstall stops new executions while retaining pinned definitions and evidence
+for existing executions and legal/audit retention. Continuing an existing
+execution still requires current authorization and a compatible retained host.
+Disabled required gates stay unsatisfied until an authorized replacement is
+ready. Reminders or external review assignment do not themselves approve an offer.
+
 ## Importing custom categories and workflows
 
-An import is a reviewable desired-state change, not a hidden Admin UI setting or
-an arbitrary plugin upload. `WorkflowBundle` locks an external artifact by
-immutable digest, publisher identity/signature, and bundle version. The artifact
-can contain category taxonomy envelopes, clusters, profiles, definitions,
-schemas, UI metadata, test fixtures, and optional WASI modules. Categories
-themselves are normal `CategoryTaxonomy` resources, so imported and hand-authored
-categories follow the same envelope/admission model.
+An import is a reviewable desired-state change. `App` locks the installable
+artifact by immutable digest and verified publisher identity. `WorkflowBundle`
+is its workflow-specific content inventory: taxonomy envelopes, clusters,
+profiles, definitions, schemas, UI metadata, fixtures and function artifacts.
+It has no independent activation, capability approval or ServiceAccount
+enrollment. A standalone workflow import creates an App using the same pipeline;
+the two resources never compete as authorities for one installation revision.
+Categories remain normal `CategoryTaxonomy` resources, so imported and
+hand-authored content follows the same envelope/admission model.
 
 The Admin UI is a convenience client for this process; a Git-native team can
 commit the exact same manifests directly.
 
-1. An administrator invokes `previewWorkflowBundle` with an OCI or Git source.
+1. An administrator invokes the proposed App preview operation with an OCI or Git source.
    The API resolves it to an immutable digest and returns the proposed resource
    diff, requested action capabilities, validation result, and conflicts. No
    installation is active at this point.
 2. The administrator selects names/namespace and accepts the preview. The API
-   writes a review branch or requested Git commit containing a `WorkflowBundle`
-   lock envelope and the materialized category/profile/binding manifests. It
+   writes a review branch or requested Git commit containing an `App`, its
+   `WorkflowBundle` inventory and materialized category/profile/binding manifests. It
    never stores a mutable `latest` reference.
 3. Normal Git admission validates schemas, signature/trusted-publisher policy,
    capability grants, selector ambiguity, cross-resource references, and a
    bundle's declared compatibility with the installed workflow contract.
-4. The controller fetches the digest, verifies it again, performs only declared
-   safe initialization, and reports `Ready` in system status. A binding cannot
-   resolve into a release until its bundle is ready.
+4. Installation provisions separately authorized identity/RBAC, prepares admitted
+   resources and modules, obtains the exact capability grant and atomically
+   activates one App revision. There are no executable installer scripts. A
+   binding cannot resolve into a release until that revision is ready.
 5. A normal `CatalogRelease` and `Publication` activate the imported profile for
    new offers. The UI can then render the profile's constrained, declarative
    forms and call the corresponding typed API commands.

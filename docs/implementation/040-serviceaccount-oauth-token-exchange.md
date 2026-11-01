@@ -79,8 +79,22 @@ Host: identity.example.com
 Content-Type: application/x-www-form-urlencoded
 Accept: application/json
 
-grant_type=client_credentials&client_id=gs-sa-6d9afec3-668e-492e-bb30-82ff8ed59647-r3&client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer&client_assertion=SIGNED_JWT
+grant_type=client_credentials&client_id=gs-sa-6d9afec3-668e-492e-bb30-82ff8ed59647-r3&client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer&client_assertion=SIGNED_JWT&audience=gitstore-api
 ```
+
+For the reference issuer, `audience` is a required form parameter containing
+exactly the configured API access-token audience; `gitstore-api` is the
+illustrative configured value above. URI-valued or other special-character
+audiences must be form-encoded. This issuer-specific parameter is separate
+from the signed client assertion's `aud`, which remains the token endpoint URL.
+
+The registered client audience is an allowlist, not a default audience grant.
+Hydra v2.3.0 grants only permitted audiences explicitly requested by the client
+([pinned client-credentials handler](https://github.com/ory/hydra/blob/v2.3.0/oauth2/handler.go#L928-L931)).
+Omitting `audience` therefore leaves `granted_audience` empty; the workload
+issuance check must reject that request instead of fabricating a grant. Other
+issuer adapters must specify how clients explicitly request the configured
+resource audience; they cannot assume registration requests it automatically.
 
 The decoded assertion illustrates ES256:
 
@@ -161,6 +175,12 @@ The adapter must:
 - call the configured authorizer for serviceAccount.token.issue on that account;
 - return approval plus server-derived UID/client/registration evidence, or deny
   without returning tokens, keys, groups or full profile/contact data.
+
+For the reference workload profile, the requested and granted audience sets
+must both equal the single configured API audience. Empty, mismatched or extra
+audiences fail closed. The callback must not turn an omitted audience into a
+grant, and the issued access token must carry that API audience before the
+resource server accepts it.
 
 The reference token hook receives issuer requester/session context and can
 deny issuance. Hook context is not automatically proof of completed client
@@ -324,6 +344,7 @@ are implied; it remains exactly one active stateful process.
 | --- | --- |
 | Issuer enrollment | Staged disablement, correct public JWK projection, immutable client revisions, no private keys in issuer/directory |
 | Directory | All AuthN/UserDir/AuthZ combinations; three profiles; explicit links; missing versus failed lookup; no token-sourced groups |
+| Audience request | Explicit configured API audience reaches the hook and issued JWT; omitted, mismatched or extra audiences are rejected; assertion audience remains the issuer token endpoint |
 | Issuance hook | Authenticated caller, registered requester, fail-closed deny/outage, bounded retries, human-grant dispatch unaffected |
 | External mapping | Reserved-subject guard retained, missing evidence rejected, issuer/client/UID binding, customer/human impersonation denied |
 | Replay | Two issuer replicas, duplicate assertions, restart, expiry/skew, wrong-endpoint rejection; no invented cross-store guarantee |

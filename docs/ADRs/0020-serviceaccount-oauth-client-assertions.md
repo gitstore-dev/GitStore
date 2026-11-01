@@ -121,6 +121,12 @@ endpoint; the returned token audience identifies GitStore's API. These are
 different values. Lifetime, clock leeway, jti and algorithm restrictions are
 explicit per tested issuer version.
 
+In the reference integration, the token request must explicitly include the
+configured API audience in its `audience` form parameter. Client registration
+only allowlists that audience; it does not request or grant it. The issuance
+check rejects an empty or mismatched granted audience instead of filling it
+in. This parameter does not change the assertion's token-endpoint `aud` claim.
+
 The immutable UID is bound through the non-reusable registered client and
 issuer-controlled claims. A custom sa_uid assertion claim is not required for
 this path and cannot override registration. This lets standard JWT-signing

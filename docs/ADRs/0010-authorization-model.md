@@ -259,6 +259,74 @@ owners; stale writers cannot overwrite newer owner/status/spec fields.
 Future ReBAC providers may project these facts into relation tuples without
 introducing caller-side permission logic.
 
+### 15. Proposed App and custom-kind catalog extension
+
+**Proposed amendment (2026-11-01; not implemented).** This section describes a
+future integration requirement for [ADR 0019](0019-app-installation-and-platform-capabilities.md).
+Sections 1–14 and the compiled finite catalog remain the implemented baseline;
+this addition does not make runtime action strings valid today.
+
+CRD installation and declared transitions need a bounded, authoritative extension
+to the finite action catalog. It must preserve the existing provider contract,
+canonical action grammar, scope facts and default-deny behavior. Group-qualified
+RBAC is not introduced: lower-camelCase kind slugs remain globally unique across
+core kinds and installed definitions. Collisions are rejected atomically, even
+when definitions are initially bound to disjoint namespaces. Namespace binding
+controls kind visibility; it does not create a new authorization name space.
+
+Proposed core App entries are `app.{create,read,list,watch,update,delete}`,
+`app.capabilities.approve` and `app.status.write`. CRD registration entries and
+custom CRUD/status/transition entries are registered before their endpoints or
+bindings are advertised. Only trusted admission can derive entries from an
+admitted definition and validated executor contract. Package input cannot supply
+arbitrary scope, replace core actions or register actions in a request handler.
+
+The extension snapshot contains immutable definition UID/generation, canonical
+kind, exact action/resource/verb tuples, scope and digest. Bound its total kinds,
+transitions and actions per namespace and deployment. Compile policy and catalog
+into one immutable revision outside the request path; decision evaluation stays
+bounded and performs no catalog/datastore/network I/O. Unsupported providers
+cannot activate custom-kind dispatch; they fail closed rather than silently
+falling back to a more permissive provider.
+
+Exact grants require known entries at compile time. Wildcards expand over that
+revision's finite catalog and do not automatically acquire subsequently installed
+kinds. A catalog extension changing effective permissions requires an explicit,
+audited policy recompilation/activation by an authorized principal. Preview must
+show the added actions and effective-grant changes before approval. Requests pin
+one compatible catalog/policy revision; replicas unable to load it deny or return
+a typed unavailable result without executing the operation.
+
+Catalog retirement first stops new dispatch and policy expansion, then retains
+retired identity/action metadata as needed for pinned executions and audit.
+Name reuse must not revive an old installation's grants: scope effective custom
+grants to definition UID/catalog revision and require fresh approval for a
+replacement UID. Retained workflow continuations run only under explicit current
+authority and their pinned contract; retention is not a permanent permission.
+Deletion and revocation invalidate relevant cached decisions and live dispatch.
+
+Creating an App or pushing its manifests is not capability approval. Installation
+must authorize each affected operation: definition/binding creation, managed
+resources, cluster ServiceAccount provisioning/key enrollment, identity reuse,
+RBAC assignment, subscription source access and transition invocation. Capability
+approval cannot manufacture RBAC grants, and an RBAC grant cannot bypass host
+capability approval. Recheck scope and UID facts after a conflicting CAS.
+
+Approvals and external attestations are separate authorities. An approval policy
+selects eligible principals through the configured provider and enforces
+separation of duties. Do not embed a role name in a gate and compare it against
+token claims. Evidence submission, subject reads and transition execution need
+independent grants; delivery signature verification alone grants none of them.
+Issuer registration and capability approval require separate audited actions
+before those operations can be advertised. This proposal does not add those
+entries to the generated JSON/Go/Rust catalogs in a documentation-only change.
+
+Acceptance requires provider-neutral conformance, bounded compilation/evaluation,
+two-API/two-controller concurrent activation/revocation, rolling replacement,
+wildcard non-expansion, collision/name-reuse rejection, and sustained admission
+and reconciliation load. The first implementation must specify shared revision
+storage and activation barriers before claiming replica consistency.
+
 ## Consequences
 
 - One closed vocabulary is shared by policy, API, Git service and tooling.

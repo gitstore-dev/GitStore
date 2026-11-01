@@ -37,15 +37,11 @@ becomes authoritative, and so in what a hook may safely do. A Git-backed write i
 once the ref moves, and it is authored by a human who reviews the diff. Changing that content
 server-side would make the stored state diverge from the reviewed commit.
 
-Prior art falls into five patterns:
-
-| Pattern                      | Example                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Lesson for GitStore                                                                            |
-|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
-| In-process expression policy | Kubernetes [ValidatingAdmissionPolicy](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/) (GA in 1.30) separates policy, parameter and binding. [KEP-3488](https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/3488-cel-admission-control) cites the separate infrastructure and network-hop latency of webhooks as its motivation. [Gatekeeper](https://open-policy-agent.github.io/gatekeeper/website/docs/validating-admission-policy) can generate VAP resources from its templates. | Make CEL the default admission extension. Webhooks are the exception.                          |
-| Synchronous remote hook      | commercetools [API Extensions](https://docs.commercetools.com/api/projects/api-extensions) run "before the result is persisted", with a 2 s default and 10 s maximum timeout, and at most 25 per project. Saleor [sync webhooks](https://docs.saleor.io/developer/extending/webhooks/synchronous-events/overview) warn of a "significant performance impact".                                                                                                                                                                                         | Hard caps, trigger predicates and short deadlines. Only trusted operators get this slot.       |
-| Asynchronous subscription    | commercetools Subscriptions, and [CloudEvents 1.0.2](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md) envelopes signed per [Standard Webhooks](https://www.standardwebhooks.com/).                                                                                                                                                                                                                                                                                                                                                | Side effects run after commit, from a durable log, with duplicates allowed and detectable.     |
-| Sandboxed pure function      | [Shopify Functions](https://shopify.dev/docs/api/functions/latest): WebAssembly, 256 kB module, 11 M instructions, 128 kB input, and "Shopify doesn't allow nondeterminism". Input comes from a GraphQL input query.                                                                                                                                                                                                                                                                                                                                  | Extensible business logic (price, eligibility, routing) without network calls on the hot path. |
-| Pipeline of functions        | [Crossplane composition functions](https://docs.crossplane.io/latest/composition/compositions/) run in order over gRPC and return desired state.                                                                                                                                                                                                                                                                                                                                                                                                      | Functions compute desired state and never write storage themselves.                            |
+The extension boundary needs five mechanisms with different latency and trust
+properties: bounded in-process expression policy, tightly controlled remote
+admission, durable asynchronous notification, pure sandboxed computation and
+transition preconditions. Network side effects belong outside the request-time
+computation sandbox. The registration contracts make those boundaries explicit.
 
 ## Decision
 
@@ -70,7 +66,7 @@ unchanged.
 
 | Storage group       | Admission (policy/webhook)                                                                                                             | Gates                                                                                              | Subscriptions                               | Functions                                                   |
 |---------------------|----------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------|---------------------------------------------|-------------------------------------------------------------|
-| **Git + datastore** | **Validating only.** Lane A rejects the push at pre-receive. Lane B denial sets `AdmissionAccepted=False` on an already-moved ref (§4) | Yes (for example `ReleaseEligible`, ADR 0014)                                                      | From the watch journal, per admitted change | Read-model computation only (for example resolved defaults) |
+| **Git + datastore** | **Validating only.** Pre-receive can reject the push. Post-receive denial sets `AdmissionAccepted=False` on an already-moved ref (§4) | Yes (for example `ReleaseEligible`, ADR 0014)                                                      | From the watch journal, per admitted change | Read-model computation only (for example resolved defaults) |
 | **Datastore-only**  | Mutating and validating, inside the write transaction. The outbox/journal row is written in the same transaction                       | Yes (for example Order transitions)                                                                | From the journal                            | Yes (pricing, eligibility, routing)                         |
 | **LFS / object**    | Validating on the manifest (a Git-backed File). Payload facts never block a push                                                       | **Primary mechanism.** A payload fact becomes a gate (for example a virus scan gates `File Ready`) | Payload-processing events                   | Metadata extraction                                         |
 | **Transient**       | Validating only. There is nothing to persist                                                                                           | No                                                                                                 | No (audit only)                             | Yes. This is the main use (quotes, previews, reviews)       |
@@ -80,6 +76,12 @@ belong in `status.resolved` or the hydrated read model, derived deterministicall
 blob. A policy that needs a field set must reject the push and tell the author which field. The
 Git-backed `Chain` refuses to register mutating policies or webhooks. Its phases 1–2 are empty by
 construction, and an attempt to register one is a startup error.
+
+The matrix classifies the operation being extended, not the storage of its
+registration manifest. A Git-backed FunctionBinding can configure a transient
+search-query computation. That does not authorize a function to mutate the
+Git-backed configuration or index. Likewise, an EventSubscription is a
+Git-backed declaration whose delivery occurs after a durable source change.
 
 ### 3. Registration and trust
 
@@ -118,16 +120,16 @@ manifest. Where a registration is admitted decides its scope and trust, followin
 Registration schemas, CEL variables, match rules and failure policies are specified in
 [039](../implementation/039-resource-lifecycle-hooks.md).
 
-### 4. Git push admission: two lanes
+### 4. Git push admission: pre-receive and post-receive
 
 A synchronous hook must never hold a large push hostage.
 
 **Self-protection.** Webhooks are never called for registration kinds, for `HookSuspension`, or
 for any push to a `gitstore-system` repository. Only core admission and CEL policies apply there.
 A failing `failurePolicy: Fail` webhook therefore can never block the push that fixes or removes
-it. This is the same exemption Kubernetes applies to its webhook configuration objects.
+it. Required runtime safety gates are different: suspension must not mark them satisfied.
 
-**Lane A: bounded and fail-closed (pre-receive, `ValidateResources`).**
+**Pre-receive: bounded and fail-closed (`ValidateResources`).**
 
 1. **Policies first.** CEL policies run in-process against the parsed objects. They have
    estimated-cost limits and need no network.
@@ -137,15 +139,15 @@ it. This is the same exemption Kubernetes applies to its webhook configuration o
    - All hooks run as a **parallel fan-out under one push deadline**, with a per-hook timeout
      and a per-hook circuit breaker.
    - A **decision cache** whose key covers **everything the hook was sent**: hook ID and version,
-     policy and params digests, plus a digest of the per-object request context. A cached
+     actual execution phase, policy and params digests, plus a digest of the per-object request context. A cached
      decision can therefore never apply to a request the hook didn't see. Hooks declare
      `contextFields` (for example `[object, oldObject, operation, ref]`), and only those fields
      are sent and keyed. Narrower fields give more cache hits on re-pushes and rebases. Wider
      fields, such as `pusher`, give fewer.
    - `onLargePush: Defer | Reject` for pushes above a matched-object threshold. `Defer` moves the
-     hook to Lane B for that push. `Reject` fails the push with a remedy message.
-   - `failurePolicy: Fail | Ignore` on timeout or open circuit. `Ignore` also records a Lane B
-     re-check, so the result is never lost.
+     hook to post-receive for that push. `Reject` fails the push with a remedy message.
+   - `failurePolicy: Fail | Ignore` on timeout or open circuit. `Ignore` also records a
+     post-receive re-check, so the result is never lost.
 3. **Diagnostics.** GitStore does not execute standard Git hook programs or capture their
    stdout/stderr. Its in-process Rust `HookPipeline` receives a typed rejection from
    `SchemaValidationHandler`; that handler calls `CatalogService.ValidateResources` and flattens
@@ -157,10 +159,10 @@ it. This is the same exemption Kubernetes applies to its webhook configuration o
    two-error rejection is carried as:
    `ng refs/heads/main products/coat.md: spec.price below floor; products/coat.md: status is system-managed and must not be set by authors`.
 
-Any deny in Lane A rejects every ref in the push. GitStore does not update any ref when its
-in-process pre-receive phase returns a rejection.
+Any deny during pre-receive rejects every ref in the push. GitStore
+does not update any ref when its in-process pre-receive phase returns a rejection.
 
-**Lane B: asynchronous and receipted (post-receive, `AdmitResources`).** Heavy checks run here:
+**Post-receive: asynchronous and receipted (`AdmitResources`).** Heavy checks run here:
 cross-resource checks, deferred webhooks, and anything with `mode: Async`.
 
 - The result is an **`AdmissionReport`**, a datastore-only resource keyed by
@@ -172,7 +174,7 @@ cross-resource checks, deferred webhooks, and anything with `mode: Async`.
   line and column, level, title, message). The report can be exported losslessly as a
   [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) `run`, with
   `versionControlProvenance` carrying `revisionId` = commit and `branch` = ref.
-- A denial in Lane B sets `AdmissionAccepted=False` with reason `AdmissionReportFailed` on the
+- A denial during post-receive sets `AdmissionAccepted=False` with reason `AdmissionReportFailed` on the
   affected resources. The ref has already moved, but the read model keeps serving the last
   accepted generation. A later push that fixes the issue produces a fresh report.
 - **Git notes projection.** The API derives a **rebuildable** projection at
@@ -186,17 +188,20 @@ cross-resource checks, deferred webhooks, and anything with `mode: Async`.
   Git does not rewrite notes on amend or rebase unless `notes.rewriteRef` is configured
   ([git-notes](https://git-scm.com/docs/git-notes)). Rewritten commits therefore show no note
   until they are re-admitted, which is correct.
-- **Next-push echo.** Lane A prints a one-line summary of unresolved Lane B failures for the
-  target ref, for example `remote: 3 unresolved admission errors on main@abc123 (gitctl admission
+- **Next-push echo.** Pre-receive prints a one-line summary of unresolved
+  post-receive failures for the target ref, for example
+  `remote: 3 unresolved admission errors on main@abc123 (gitctl admission
   show)`. Authors see deferred results in the same channel, without polling.
 
 ### 5. Lifecycle gates
 
 A gate is a named precondition on a named transition, such as `ReleaseEligible` on
 `CatalogRelease` preparation (ADR 0014), `Ready` on `File`, or `Paid → Fulfillable` on `Order`.
-Gates are represented as a status condition on the subject plus, for deletion, a finalizer. They
-follow the Kubernetes [finalizer](https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/)
-rules: removal-only, and a deletion completes once the list is empty. The shared gate vocabulary is:
+Gates are represented as a status condition on the subject plus, for deletion, a finalizer.
+After deletion begins finalizers are removal-only, and deletion completes once
+the list is empty. Deletion finalizers must be installed before the deletion
+race can occur; a controller cannot safely add one after observing termination.
+The shared gate vocabulary is:
 
 | Gate kind                    | Satisfied when                                                                           |
 |------------------------------|------------------------------------------------------------------------------------------|
@@ -210,6 +215,22 @@ rules: removal-only, and a deletion completes once the list is empty. The shared
 A gate that is satisfied for one digest is **not** satisfied for another. Any change to the
 material inputs invalidates approvals and attestations automatically. 037 uses this vocabulary
 without redefining it.
+
+A transition definition declares an operation and its supported API executor.
+A LifecycleGate only constrains that existing operation. Neither a FunctionBinding
+nor an EventSubscription creates a transition. Custom kinds declare their
+transition surface in [ADR 0016 §8](0016-custom-resource-definitions.md#8-declared-custom-transitions);
+simple readiness/reconciliation needs no custom state machine. A workflow is
+appropriate when commands, state, assignments or long-running recovery matter.
+
+Conditions are observations, not durable permission to commit a transition.
+The API checks current evidence, policy/issuer revisions, subject material and
+concurrency preconditions at the transition's commit boundary. Required gates
+combine with `allOf`; a gate's internal `anyOf`/`noneOf` is explicit. A removed,
+disabled or unavailable App evaluator must not turn a required gate into an
+empty successful set. Replacing a required gate needs an authorized policy
+change and a prepared replacement. See [039 §11](../implementation/039-resource-lifecycle-hooks.md#11-transition-and-evidence-contracts)
+for digest, evidence, replay and atomicity requirements.
 
 ### 6. Event subscriptions
 
@@ -228,13 +249,20 @@ without redefining it.
 - Exponential backoff, then a per-subscription dead-letter record. A dead-lettered subscription
   never blocks any lifecycle transition. A subscriber that must block something uses a gate.
 
+An event requests asynchronous work; HTTP 2xx acknowledges delivery only. It
+does not prove success of an external business operation or satisfy a gate.
+The consumer separately authenticates/authorizes subject reads and result
+submission. Transient queries and behavioral telemetry are not automatically
+resource-journal events; they need a separate ingestion contract. Watches and
+subscriptions may both wake one reconciler, which deduplicates logical work.
+
 ### 7. Functions (WASM)
 
 - Modules are WebAssembly components with a versioned WIT interface per **target** (for example
   `gitstore:pricing/line-price@1`, `gitstore:catalog/resolve-defaults@1`,
   `gitstore:workflow/transition-guard@1`).
 - **Pure and deterministic**: no clock, randomness, network or filesystem. Inputs are declared by
-  a GraphQL input query over the subject, as Shopify does, and are materialized by the host. The
+  a GraphQL input query over the subject and are materialized by the host. The
   same input produces the same output on every replica, which makes results cacheable and
   replayable.
 - Bounded per target by fuel/instructions, memory, input size, output size and wall-clock time.
@@ -243,12 +271,36 @@ without redefining it.
 - Modules are content-addressed (digest-pinned in the `FunctionBinding`), signed per 036's
   artifact policy, and loaded from an OCI or LFS artifact. They are never fetched at call time.
 
+Targets are host-owned contracts. A binding cannot introduce a target or grant
+its module I/O. The host defines the WIT/input/output versions, invocation point,
+namespace/surface/subject selection, single-provider or ordered composition,
+output validation, authorization context, bounds and safe fallback. Input
+selection is restricted by target schema and caller/service authority; generic
+CRD operations are sufficient without dynamic schema stitching. A search ranker
+can reorder bounded candidates supplied by the host but cannot fetch vectors.
+
+### 7a. App composition and capability activation
+
+[ADR 0019](0019-app-installation-and-platform-capabilities.md) composes these
+registrations through an installed App. A CRD describes a kind; an App can own
+several definitions, reuse core kinds, or have no CRD. FunctionBinding remains
+the sole function configuration resource; no app-specific TOML is introduced.
+Operator deployment safety limits remain separate from app configuration.
+
+Package capability requests, explicit capability approval and provider-owned
+RBAC are separate checks. Admitted registrations are prepared under an inactive
+installation revision before one atomic activation switch exposes the complete
+set. Every operation pins a compatible registry/catalog revision. An App label
+alone cannot take over an existing registration. Unsupported targets, missing
+identity or stale grants prevent activation. The Search/Recommendation,
+antivirus and approval/attestation examples in ADR 0019 exercise distinct paths.
+
 ### 8. Service responsibilities
 
 | Service                         | Owns                                                                                                                                                                                                                                                                |
 |---------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **gitstore-git-service**        | Running the in-process Lane A pipeline and returning its rejection reason in receive-pack `report-status` (`ng <ref> <reason>`); forwarding push options; excluding and protecting `refs/notes/*`; writing notes only on API command. It holds **no hook registry** |
-| **gitstore-api**                | The registry (Git-admitted registrations, bounded by static safety limits); the admission `Chain`; Lane A and B execution; the decision cache; `AdmissionReport`; the journal; Function host                                                                        |
+| **gitstore-git-service**        | Running the in-process pre-receive pipeline and returning its rejection reason in receive-pack `report-status` (`ng <ref> <reason>`); forwarding push options; excluding and protecting `refs/notes/*`; writing notes only on API command. It holds **no hook registry** |
+| **gitstore-api**                | The registry (Git-admitted registrations, bounded by static safety limits); the admission `Chain`; pre-receive and post-receive execution; the decision cache; `AdmissionReport`; the journal; Function host                                                                        |
 | **gitstore-controller-manager** | Gate evaluation and condition patching; event subscription outboxes and delivery; notes projection requests; Function host for controller-side targets                                                                                                              |
 
 036's remaining Git-service extension scope is narrowed to Git-protocol and ref-level policy for
@@ -263,15 +315,16 @@ Positive:
   groups.
 - Git history stays the exact record of desired state, because no server-side mutation touches a
   Git-backed resource.
-- Push latency stays bounded. A slow or failing webhook can at worst defer its verdict to Lane B.
+- Push latency stays bounded. A slow or failing webhook can at worst defer its
+  verdict to post-receive.
 - Side effects run only after commit, from a durable, resumable log.
 
 Negative:
 
 - Git-backed authors can't rely on server-side defaulting to fix their files. Diagnostics must be
   good enough to make rejection cheap.
-- Lane B admits a ref move before every verdict is in. Readers must respect `AdmissionAccepted`
-  and the last accepted generation.
+- Post-receive runs after the ref has moved and some verdicts may still
+  be pending. Readers must respect `AdmissionAccepted` and the last accepted generation.
 - The API gains a WASM runtime and a registry, and the controller gains outbox delivery. Both add
   capacity and security testing surface.
 
@@ -308,8 +361,8 @@ critical path of every author.
 
 ### A generic scripting runtime (JavaScript/Lua) for Functions
 
-Rejected in favour of WASM. WASM has language-neutral authoring, deterministic metering, and
-production precedent in commerce (Shopify Functions).
+Rejected in favour of WASM's language-neutral authoring and deterministic,
+bounded execution contract.
 
 ### Diagnostics only in git notes
 
