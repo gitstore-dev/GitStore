@@ -80,7 +80,7 @@ spec:
   validationActions: [Deny]            # Deny | Warn | Audit
   matchResources:
     refs: [refs/heads/main]            # optional; defaults to the admission branch
-  mode: Sync                           # Sync (Lane A) | Async (Lane B)
+  mode: Sync                           # Git: pre-receive validation; Async: post-receive admission
 ```
 
 CEL environment variables:
@@ -94,7 +94,8 @@ CEL environment variables:
 No network, clock or random functions are available. Every expression has an estimated-cost
 ceiling that is checked at policy admission, and a runtime cost ceiling per evaluation. Both
 values are set in the feature spec from benchmarks. `Warn` produces a `remote: warning` line
-(Lane A) or a `warning` annotation (Lane B). `Audit` only records a result.
+(pre-receive validation) or a `warning` annotation (post-receive admission).
+`Audit` only records a result.
 
 ### 1.2 `AdmissionHookConfiguration` (cluster-scoped, T0/T1)
 
@@ -120,7 +121,7 @@ spec:
   matchConditions:
   - name: taxable
     expression: "object.spec.taxable == true"
-  mode: Sync                         # Sync (Lane A) | Async (Lane B)
+  mode: Sync                         # Git: pre-receive validation; Async: post-receive admission
   timeoutMs: 1500                    # ≤ admission.limits.max_hook_timeout_ms
   failurePolicy: Fail                # Fail | Ignore
   onLargePush: Defer                 # Defer | Reject
@@ -242,7 +243,31 @@ spec:
 
 ## 2. Admission request and response envelope
 
-Lane A and Lane B webhooks receive the same batched envelope:
+Pre-receive validation and post-receive admission webhooks receive the same batched envelope:
+
+`request.phase` identifies the actual execution boundary, independently of the
+registration's requested execution mode:
+
+| Phase value | Meaning | Denial effect |
+| --- | --- | --- |
+| `PreReceiveValidation` | Git push validation before refs move | Rejects the push |
+| `PostReceiveAdmission` | Git admission after refs have moved | Records a report and retains the last accepted read model |
+| `InlineAdmission` | Synchronous admission inside an API operation | Rejects the operation before its work becomes accepted state |
+
+These are execution-boundary names, separate from the admission Chain's
+mutating/validating policy/webhook steps. The host sets `phase`; it is not an
+author-supplied override. Git `mode: Sync` selects pre-receive validation unless
+the configured deferral policy moves that invocation to post-receive admission.
+Git `mode: Async` selects post-receive admission. Datastore-only writes use
+`mode: Sync` and `phase: InlineAdmission`; asynchronous admission after persistence
+is not allowed for them. API writes to Git-backed resources also use
+`InlineAdmission` when admission runs within the API operation rather than a Git
+receive hook; storage-group mutation restrictions remain unchanged.
+
+The field and enum names below are proposed contracts, not an implemented
+protocol migration. Only `phase` is specified; no single-letter aliases are
+accepted. Inline writes omit unavailable Git-specific context instead of
+inventing ref, commit or pusher facts.
 
 ```json
 {
@@ -251,7 +276,7 @@ Lane A and Lane B webhooks receive the same batched envelope:
   "request": {
     "uid": "0c5c…",
     "hook": { "name": "tax-classifier", "version": "2026-09-01" },
-    "lane": "A",
+    "phase": "PreReceiveValidation",
     "repository": { "namespace": "acme-store", "name": "catalog" },
     "ref": "refs/heads/main",
     "oldCommit": "9f2e…",
@@ -302,7 +327,7 @@ Envelope rules:
   all of them. This is what lets the decision cache (§3) key on exactly what the hook saw.
 - Request bodies are capped (default 4 MiB). Above the cap, `onLargePush` applies.
 
-## 3. Lane A execution
+## 3. Pre-receive validation execution
 
 ```mermaid
 sequenceDiagram
@@ -318,16 +343,18 @@ sequenceDiagram
     A->>H: AdmissionReview (batched, deadline)
     H-->>A: results
   end
-  A-->>G: verdict + diagnostics + unresolved Lane B summary
+  A-->>G: verdict + diagnostics + unresolved post-receive admission summary
   G-->>C: remote lines#59; then accept or reject all refs
 ```
 
 - `admission.limits.push_deadline_ms` is the push-wide budget (default 5000). Hook timeouts are
   individually ≤ the remaining budget. After the deadline every pending hook is treated as timed
   out.
-- **Decision cache.** The key is `(hook name, hook version, policy digest, params digest,
+- **Decision cache.** The key is `(hook name, hook version, phase, policy digest, params digest,
   context digest)`. The context digest is the SHA-256 of the canonical JSON of exactly the fields
   sent to the hook for that object.
+  - `phase` is always sent and always keyed, independently of `contextFields`.
+    A pre-receive decision cannot be reused for post-receive or inline admission.
   - The fields are selected by the hook's `contextFields` from: `object` (by blob OID),
     `oldObject` (by blob OID), `operation`, `repository`, `ref`, `path`, `pusher` and
     `pushOptions`.
@@ -357,7 +384,7 @@ spec:
   commit: abc1f00…
   ref: refs/heads/main
   hook: { kind: AdmissionHookConfiguration, name: tax-classifier, version: 2026-09-01 }
-  lane: B
+  phase: PostReceiveAdmission
 status:
   status: completed                   # queued | in_progress | completed
   conclusion: failure                 # success | failure | neutral | skipped | timed_out
@@ -377,6 +404,9 @@ status:
 
 - **Identity.** The report is unique on `(repository, commit, ref, hook)`. Re-running a report
   replaces its annotations and increments `status.attempt`.
+- **Phase.** These Git post-receive reports use `spec.phase: PostReceiveAdmission`.
+  Pre-receive rejection and inline-write failure are returned through their
+  corresponding request paths; they are not mislabeled as post-receive reports.
 - **Bounds.** At most 1,000 annotations per report and 64 KiB per message; the rest are counted
   in `status.truncated`. Retention is 90 days, or until the ref no longer contains the commit and
   30 days have passed.
@@ -490,10 +520,10 @@ admitted from. Remote webhooks additionally require `admissionHookConfiguration.
 
 ## 9. Rollout
 
-1. **R1: CEL validating policies (Lane A only).** Wire policies into the existing Git-backed
+1. **R1: CEL validating policies (pre-receive validation only).** Wire policies into the existing Git-backed
    `Chain` phase 3, and remove mutating registration for Git-backed kinds. Add YAML node-position
    diagnostics.
-2. **R2: `AdmissionReport` and Lane B.** Add `mode: Async`, the report store, GraphQL and
+2. **R2: `AdmissionReport` and post-receive admission.** Add `mode: Async`, the report store, GraphQL and
    `gitctl`, and the next-push echo.
 3. **R3: T0/T1 webhooks**, with batching, the decision cache, deadlines, circuit breakers and
    `onLargePush`.
@@ -513,7 +543,7 @@ safety gates and deny policies must not silently become advisory during rollout.
 ## 10. Test strategy
 
 - **Multi-replica.** Two API replicas share the decision cache and reports, and a report keyed on
-  `(repository, commit, ref, hook)` is written once under concurrent Lane B runs. Two controllers
+  `(repository, commit, ref, hook)` is written once under concurrent post-receive admission runs. Two controllers
   deliver a subscription with no gaps and only detectable duplicates across a lease handover.
 - **Rolling upgrade.** A compatible mixed-version API fleet gives stable verdicts
   for the same revision. Unsupported replicas cannot dispatch activated new
@@ -535,7 +565,9 @@ safety gates and deny policies must not silently become advisory during rollout.
   PROFILE=lifecycle`) with 10 policies and 2 webhooks bound. The p95 push-admission overhead is
   recorded, and the decision-cache hit ratio is measured on re-pushes.
 - **Determinism.** The same Function input gives the same output across replicas and
-  architectures. CEL policies give identical verdicts in Lane A and Lane B.
+  architectures. CEL policies give identical verdicts in pre-receive validation
+  and post-receive admission for identical declared inputs. Cache tests verify
+  that decisions cannot cross execution phases.
 
 ## 11. Transition and evidence contracts
 

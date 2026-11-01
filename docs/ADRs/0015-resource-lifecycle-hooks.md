@@ -66,7 +66,7 @@ unchanged.
 
 | Storage group       | Admission (policy/webhook)                                                                                                             | Gates                                                                                              | Subscriptions                               | Functions                                                   |
 |---------------------|----------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------|---------------------------------------------|-------------------------------------------------------------|
-| **Git + datastore** | **Validating only.** Lane A rejects the push at pre-receive. Lane B denial sets `AdmissionAccepted=False` on an already-moved ref (§4) | Yes (for example `ReleaseEligible`, ADR 0014)                                                      | From the watch journal, per admitted change | Read-model computation only (for example resolved defaults) |
+| **Git + datastore** | **Validating only.** Pre-receive validation rejects the push at pre-receive. Post-receive admission denial sets `AdmissionAccepted=False` on an already-moved ref (§4) | Yes (for example `ReleaseEligible`, ADR 0014)                                                      | From the watch journal, per admitted change | Read-model computation only (for example resolved defaults) |
 | **Datastore-only**  | Mutating and validating, inside the write transaction. The outbox/journal row is written in the same transaction                       | Yes (for example Order transitions)                                                                | From the journal                            | Yes (pricing, eligibility, routing)                         |
 | **LFS / object**    | Validating on the manifest (a Git-backed File). Payload facts never block a push                                                       | **Primary mechanism.** A payload fact becomes a gate (for example a virus scan gates `File Ready`) | Payload-processing events                   | Metadata extraction                                         |
 | **Transient**       | Validating only. There is nothing to persist                                                                                           | No                                                                                                 | No (audit only)                             | Yes. This is the main use (quotes, previews, reviews)       |
@@ -120,7 +120,7 @@ manifest. Where a registration is admitted decides its scope and trust, followin
 Registration schemas, CEL variables, match rules and failure policies are specified in
 [039](../implementation/039-resource-lifecycle-hooks.md).
 
-### 4. Git push admission: two lanes
+### 4. Git push admission: pre-receive validation and post-receive admission
 
 A synchronous hook must never hold a large push hostage.
 
@@ -129,7 +129,7 @@ for any push to a `gitstore-system` repository. Only core admission and CEL poli
 A failing `failurePolicy: Fail` webhook therefore can never block the push that fixes or removes
 it. Required runtime safety gates are different: suspension must not mark them satisfied.
 
-**Lane A: bounded and fail-closed (pre-receive, `ValidateResources`).**
+**Pre-receive validation: bounded and fail-closed (`ValidateResources`).**
 
 1. **Policies first.** CEL policies run in-process against the parsed objects. They have
    estimated-cost limits and need no network.
@@ -139,15 +139,15 @@ it. Required runtime safety gates are different: suspension must not mark them s
    - All hooks run as a **parallel fan-out under one push deadline**, with a per-hook timeout
      and a per-hook circuit breaker.
    - A **decision cache** whose key covers **everything the hook was sent**: hook ID and version,
-     policy and params digests, plus a digest of the per-object request context. A cached
+     actual execution phase, policy and params digests, plus a digest of the per-object request context. A cached
      decision can therefore never apply to a request the hook didn't see. Hooks declare
      `contextFields` (for example `[object, oldObject, operation, ref]`), and only those fields
      are sent and keyed. Narrower fields give more cache hits on re-pushes and rebases. Wider
      fields, such as `pusher`, give fewer.
    - `onLargePush: Defer | Reject` for pushes above a matched-object threshold. `Defer` moves the
-     hook to Lane B for that push. `Reject` fails the push with a remedy message.
-   - `failurePolicy: Fail | Ignore` on timeout or open circuit. `Ignore` also records a Lane B
-     re-check, so the result is never lost.
+     hook to post-receive admission for that push. `Reject` fails the push with a remedy message.
+   - `failurePolicy: Fail | Ignore` on timeout or open circuit. `Ignore` also records a
+     post-receive admission re-check, so the result is never lost.
 3. **Diagnostics.** GitStore does not execute standard Git hook programs or capture their
    stdout/stderr. Its in-process Rust `HookPipeline` receives a typed rejection from
    `SchemaValidationHandler`; that handler calls `CatalogService.ValidateResources` and flattens
@@ -159,10 +159,10 @@ it. Required runtime safety gates are different: suspension must not mark them s
    two-error rejection is carried as:
    `ng refs/heads/main products/coat.md: spec.price below floor; products/coat.md: status is system-managed and must not be set by authors`.
 
-Any deny in Lane A rejects every ref in the push. GitStore does not update any ref when its
-in-process pre-receive phase returns a rejection.
+Any deny during pre-receive validation rejects every ref in the push. GitStore
+does not update any ref when its in-process pre-receive phase returns a rejection.
 
-**Lane B: asynchronous and receipted (post-receive, `AdmitResources`).** Heavy checks run here:
+**Post-receive admission: asynchronous and receipted (`AdmitResources`).** Heavy checks run here:
 cross-resource checks, deferred webhooks, and anything with `mode: Async`.
 
 - The result is an **`AdmissionReport`**, a datastore-only resource keyed by
@@ -174,7 +174,7 @@ cross-resource checks, deferred webhooks, and anything with `mode: Async`.
   line and column, level, title, message). The report can be exported losslessly as a
   [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) `run`, with
   `versionControlProvenance` carrying `revisionId` = commit and `branch` = ref.
-- A denial in Lane B sets `AdmissionAccepted=False` with reason `AdmissionReportFailed` on the
+- A denial during post-receive admission sets `AdmissionAccepted=False` with reason `AdmissionReportFailed` on the
   affected resources. The ref has already moved, but the read model keeps serving the last
   accepted generation. A later push that fixes the issue produces a fresh report.
 - **Git notes projection.** The API derives a **rebuildable** projection at
@@ -188,8 +188,9 @@ cross-resource checks, deferred webhooks, and anything with `mode: Async`.
   Git does not rewrite notes on amend or rebase unless `notes.rewriteRef` is configured
   ([git-notes](https://git-scm.com/docs/git-notes)). Rewritten commits therefore show no note
   until they are re-admitted, which is correct.
-- **Next-push echo.** Lane A prints a one-line summary of unresolved Lane B failures for the
-  target ref, for example `remote: 3 unresolved admission errors on main@abc123 (gitctl admission
+- **Next-push echo.** Pre-receive validation prints a one-line summary of unresolved
+  post-receive admission failures for the target ref, for example
+  `remote: 3 unresolved admission errors on main@abc123 (gitctl admission
   show)`. Authors see deferred results in the same channel, without polling.
 
 ### 5. Lifecycle gates
@@ -298,8 +299,8 @@ antivirus and approval/attestation examples in ADR 0019 exercise distinct paths.
 
 | Service                         | Owns                                                                                                                                                                                                                                                                |
 |---------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **gitstore-git-service**        | Running the in-process Lane A pipeline and returning its rejection reason in receive-pack `report-status` (`ng <ref> <reason>`); forwarding push options; excluding and protecting `refs/notes/*`; writing notes only on API command. It holds **no hook registry** |
-| **gitstore-api**                | The registry (Git-admitted registrations, bounded by static safety limits); the admission `Chain`; Lane A and B execution; the decision cache; `AdmissionReport`; the journal; Function host                                                                        |
+| **gitstore-git-service**        | Running the in-process pre-receive validation pipeline and returning its rejection reason in receive-pack `report-status` (`ng <ref> <reason>`); forwarding push options; excluding and protecting `refs/notes/*`; writing notes only on API command. It holds **no hook registry** |
+| **gitstore-api**                | The registry (Git-admitted registrations, bounded by static safety limits); the admission `Chain`; pre-receive validation and post-receive admission execution; the decision cache; `AdmissionReport`; the journal; Function host                                                                        |
 | **gitstore-controller-manager** | Gate evaluation and condition patching; event subscription outboxes and delivery; notes projection requests; Function host for controller-side targets                                                                                                              |
 
 036's remaining Git-service extension scope is narrowed to Git-protocol and ref-level policy for
@@ -314,15 +315,16 @@ Positive:
   groups.
 - Git history stays the exact record of desired state, because no server-side mutation touches a
   Git-backed resource.
-- Push latency stays bounded. A slow or failing webhook can at worst defer its verdict to Lane B.
+- Push latency stays bounded. A slow or failing webhook can at worst defer its
+  verdict to post-receive admission.
 - Side effects run only after commit, from a durable, resumable log.
 
 Negative:
 
 - Git-backed authors can't rely on server-side defaulting to fix their files. Diagnostics must be
   good enough to make rejection cheap.
-- Lane B admits a ref move before every verdict is in. Readers must respect `AdmissionAccepted`
-  and the last accepted generation.
+- Post-receive admission runs after the ref has moved and some verdicts may still
+  be pending. Readers must respect `AdmissionAccepted` and the last accepted generation.
 - The API gains a WASM runtime and a registry, and the controller gains outbox delivery. Both add
   capacity and security testing surface.
 
