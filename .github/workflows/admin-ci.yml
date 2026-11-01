@@ -1,0 +1,31 @@
+name: Admin checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  admin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.6.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: gitstore-admin/pnpm-lock.yaml
+      - run: make install
+      - run: pnpm --dir gitstore-admin exec playwright install --with-deps chromium firefox webkit
+      - run: make pr-ready
+        env:
+          CI: true
+          STORYBOOK_DISABLE_TELEMETRY: 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: admin-browser-results
+          path: |
+            gitstore-admin/playwright-report
+            gitstore-admin/test-results
+          if-no-files-found: ignore

@@ -1,0 +1,7 @@
+src/routeTree.gen.ts
+docs/admin-prd.md
+public/
+dist/
+storybook-static/
+playwright-report/
+test-results/

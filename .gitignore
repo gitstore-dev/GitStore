@@ -1,99 +1,13 @@
-# Environment
-.env
-.env.local
-.env*
-!.env.example
-
-# Local auth config (static-users/rbac-local) — operator-provided, must never be
-# committed or built into an image; only the tracked *.example templates are.
-# Anchored to gitstore-api/ so a stray file there can never enter a CI build
-# context (docker/*.Dockerfile does `COPY gitstore-api/ ./`), while leaving
-# #410's tracked development fixtures under config/ unaffected.
-/gitstore-api/policy.yaml
-/gitstore-api/users.yaml
-!config/users.yaml
-
-# Rust
-target/
-**/*.rs.bk
-# Note: Cargo.lock should be committed for binary crates (applications)
-# and ignored for library crates. GitStore is an application, so we commit it.
-
-# Go
-/bin/
-/api/bin/
-/gitstore-api/bin/
-/gitstore-api/server
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.out
-*.prof
-vendor/
-coverage.out
-cover.out
-.coverprofile
-
-# Node.js
 node_modules/
 dist/
-.astro/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# IDE
-.vscode/*
-!.vscode/tasks.json
-!.vscode/go.code-snippets
-!.vscode/rust.code-snippets
-!.vscode/javascript-typescript.code-snippets
-.idea/
-*.swp
-*.swo
-*.tmp
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Docker
-docker-compose.override.yml
-
-# Generated files
-# Note: Committing generated files to avoid CI needing go generate step
-# api/internal/graph/generated/generated.go
-# api/internal/graph/model/models_gen.go
-
-# Test coverage
+storybook-static/
 coverage/
-**/coverage.txt
-*.cover
-
-# Logs
-*.log
-logs/
-.gitstore/
-
-.claude/settings.json
-test-repos/
-demo-catalog/
-demo-catalogue/
-catalog-work/
-catalogue-work/
-/gitstore-controller-manager/controller
-/out/
-.claude/
-
-# graphify local-machine state (not portable across clones)
-/graphify-out/
-
-# speckit extension catalog cache (downloaded from remote, machine-local)
-.specify/extensions/.cache/
-
-# Codex hook config embeds an absolute path to the local graphify binary
-.codex/hooks.json
+playwright-report/
+test-results/
+.tanstack/
+routeTree.gen.ts
+.DS_Store
+*.local
+.env*
+!.env.example
+graphify-out/

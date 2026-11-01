@@ -1,9 +1,0 @@
-enum NamespaceDeletionOutcome {
-  TERMINATION_STARTED
-  ALREADY_TERMINATING
-}
-
-type DeleteNamespacePayload {
-  deletedIdentifier: String!
-  outcome: NamespaceDeletionOutcome!
-}

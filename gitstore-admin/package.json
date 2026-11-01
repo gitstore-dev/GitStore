@@ -1,0 +1,59 @@
+{
+  "name": "gitstore-admin",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@12.6.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "generate": "tsr generate",
+    "build": "pnpm generate && tsc -b && vite build",
+    "typecheck": "pnpm generate && tsc -b --pretty false",
+    "lint": "eslint . && prettier --check src e2e .storybook *.json *.ts *.js",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    "storybook": "storybook dev -p 6006 --host 127.0.0.1 --no-open",
+    "storybook:build": "storybook build",
+    "storybook:preview": "vite preview --host 127.0.0.1 --port 6006 --strictPort --outDir storybook-static"
+  },
+  "dependencies": {
+    "@fontsource/archivo-narrow": "5.3.0",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@fontsource/ibm-plex-sans": "5.3.0",
+    "@tanstack/react-router": "1.170.46",
+    "lucide-react": "1.65.0",
+    "react": "19.3.1",
+    "react-aria-components": "1.22.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
+    "@storybook/addon-a11y": "10.6.5",
+    "@storybook/addon-docs": "10.6.5",
+    "@storybook/react-vite": "10.6.5",
+    "@tanstack/router-cli": "1.167.46",
+    "@tanstack/router-plugin": "1.168.48",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "eslint": "10.14.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
+    "jsdom": "30.1.3",
+    "prettier": "3.9.10",
+    "storybook": "10.6.5",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  }
+}

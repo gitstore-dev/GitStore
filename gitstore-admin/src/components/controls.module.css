@@ -1,0 +1,78 @@
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 120ms,
+    color 120ms,
+    transform 120ms;
+  white-space: nowrap;
+}
+.button[data-focus-visible] {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+.button[data-disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.primary {
+  background: var(--accent);
+  color: #162923;
+  border-color: var(--accent);
+}
+.primary[data-hovered] {
+  background: var(--accent-hover);
+}
+.secondary {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--line);
+}
+.secondary[data-hovered],
+.ghost[data-hovered] {
+  background: var(--hover);
+}
+.ghost {
+  background: transparent;
+  color: var(--ink);
+}
+.themes {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--canvas);
+}
+.theme {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 4px;
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 120ms;
+}
+.theme[data-selected] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 3px #0000000b;
+}
+.theme[data-focus-visible] {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

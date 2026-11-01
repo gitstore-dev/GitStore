@@ -1,0 +1,364 @@
+import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
+import {
+  Link,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useParams,
+  useRouter,
+} from '@tanstack/react-router'
+import {
+  Button,
+  DialogTrigger,
+  ModalOverlay,
+  Modal,
+  Dialog,
+  Heading,
+  MenuTrigger,
+  Menu,
+  MenuItem,
+  Popover,
+} from 'react-aria-components'
+import {
+  Grid2X2,
+  Search,
+  PanelsTopLeft,
+  ChevronRight,
+  X,
+  Minimize2,
+  ArrowUpRight,
+  PanelRightClose,
+} from 'lucide-react'
+import { Sidebar } from './Sidebar'
+import { Icon } from '../components/Icon'
+import { NamespacePicker } from '../components/NamespacePicker'
+import { WorkspaceLayout } from './WorkspaceLayout'
+import type { LayoutMode } from './WorkspaceLayout'
+import { usePreferences, useMediaQuery } from '../state/preferences'
+import { defaultNamespace, isDemoNamespace } from '../data/demo'
+import type { NamespaceId } from '../data/demo'
+import {
+  destinationAtPath,
+  destinations,
+  destinationById,
+} from '../navigation/registry'
+import type { NavigationDestination } from '../navigation/registry'
+import { ActionButton } from '../components/controls'
+import { CommandPalette } from '../components/CommandPalette'
+import styles from './shell.module.css'
+export function AppShell({ children }: { children?: ReactNode }) {
+  const preferences = usePreferences()
+  const setRememberedNamespace = preferences.setNamespace
+  const router = useRouter()
+  const navigate = useNavigate()
+  const pathname = useLocation({ select: (location) => location.pathname })
+  const params = useParams({ strict: false })
+  const routeNamespace = 'namespace' in params ? params.namespace : undefined
+  const namespace: NamespaceId =
+    routeNamespace && isDemoNamespace(routeNamespace)
+      ? routeNamespace
+      : preferences.namespace
+  const active = destinationAtPath(pathname)
+  const tablet = useMediaQuery('(max-width: 1100px)')
+  const [mode, setMode] = useState<LayoutMode>(
+    () => router.options.context.initialLayout ?? 'standard',
+  )
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const [commandOpen, setCommandOpen] = useState(false)
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setCommandOpen((open) => !open)
+      }
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [])
+  useEffect(() => {
+    if (routeNamespace && isDemoNamespace(routeNamespace))
+      setRememberedNamespace(routeNamespace)
+  }, [routeNamespace, setRememberedNamespace])
+  function go(destination: NavigationDestination) {
+    void navigate({ to: destination.to, params: { namespace } })
+    setMobileOpen(false)
+  }
+  function changeNamespace(id: NamespaceId) {
+    preferences.setNamespace(id)
+    if (active?.scope === 'namespace')
+      void navigate({ to: active.to, params: { namespace: id } })
+    else
+      void navigate({
+        to: '/w/$namespace/home/overview',
+        params: { namespace: id },
+      })
+    setMobileOpen(false)
+  }
+  function openPlatform() {
+    void navigate({ to: '/platform/namespaces' })
+    setMobileOpen(false)
+  }
+  const mobileDestinations = (
+    active?.scope === 'platform'
+      ? [
+          'control-plane.namespaces',
+          'control-plane.resource-explorer',
+          'control-plane.policies',
+        ]
+      : ['catalog.products', 'orders.all-orders', 'changes-releases.my-changes']
+  ).map(destinationById)
+  const inspector = (
+    <div className={styles.inspectorContent}>
+      <div className={styles.inspectorHeader}>
+        <span className={styles.eyebrow}>CONTEXT</span>
+        <ActionButton
+          variant="ghost"
+          aria-label="Close inspector"
+          onPress={() => setMode('standard')}
+        >
+          <PanelRightClose size={17} aria-hidden="true" />
+        </ActionButton>
+      </div>
+      <h2>{active?.label ?? 'Workspace'}</h2>
+      <p className={styles.muted}>A little room for the details.</p>
+      <dl className={styles.contextList}>
+        <div>
+          <dt>Section</dt>
+          <dd>{active?.groupLabel ?? '—'}</dd>
+        </div>
+        <div>
+          <dt>Scope</dt>
+          <dd>{active?.scope === 'platform' ? 'Platform' : namespace}</dd>
+        </div>
+        <div>
+          <dt>Page status</dt>
+          <dd>Not implemented</dd>
+        </div>
+      </dl>
+      <div className={styles.contextNote}>
+        <ArrowUpRight size={18} aria-hidden="true" />
+        <p>
+          Future pages can use this rail for contextual information without
+          leaving the workspace.
+        </p>
+      </div>
+      <span className={styles.contextDemo}>LOCAL DEMO CONTEXT</span>
+    </div>
+  )
+  return (
+    <div
+      className={styles.frame}
+      data-collapsed={preferences.collapsed || tablet || undefined}
+      data-focus={mode === 'focus' || undefined}
+    >
+      <a href="#main-content" className={styles.skipLink}>
+        Skip to content
+      </a>
+      {mode !== 'focus' && (
+        <aside className={styles.desktopSidebar} aria-label="Workspace sidebar">
+          <Sidebar
+            active={active}
+            namespace={namespace}
+            onNamespaceChange={changeNamespace}
+            onPlatformChange={openPlatform}
+            compact={preferences.collapsed || tablet}
+            collapsed={tablet}
+            onCollapse={() => preferences.setCollapsed(!preferences.collapsed)}
+          />
+        </aside>
+      )}
+      <header className={styles.header}>
+        {mode === 'focus' ? (
+          <>
+            <span className={styles.focusBrand}>
+              GitStore <span>/ FOCUS</span>
+            </span>
+            <ActionButton onPress={() => setMode('standard')}>
+              <Minimize2 size={16} aria-hidden="true" />
+              Exit Focus Mode
+            </ActionButton>
+          </>
+        ) : (
+          <>
+            <div className={styles.mobileContext}>
+              <NamespacePicker
+                value={namespace}
+                onChange={changeNamespace}
+                platform={active?.scope === 'platform'}
+                onPlatformChange={openPlatform}
+              />
+            </div>
+            <nav aria-label="Breadcrumb" className={styles.breadcrumbs}>
+              <ol>
+                {active && (
+                  <>
+                    <li>
+                      <Link
+                        to={
+                          destinations.find(
+                            (item) => item.groupId === active.groupId,
+                          )!.to
+                        }
+                        params={{ namespace }}
+                      >
+                        {active.groupLabel}
+                      </Link>
+                    </li>
+                    <li>
+                      <ChevronRight size={13} aria-hidden="true" />
+                    </li>
+                  </>
+                )}
+                <li aria-current="page">{active?.label ?? 'Not found'}</li>
+              </ol>
+            </nav>
+            <div className={styles.headerActions}>
+              <ActionButton
+                variant="ghost"
+                className={styles.searchTrigger}
+                onPress={() => setCommandOpen(true)}
+              >
+                <Search size={16} aria-hidden="true" />
+                <span>Search navigation</span> <kbd aria-hidden="true">⌘ K</kbd>
+              </ActionButton>
+              <span className={styles.headerDivider} />
+              <MenuTrigger>
+                <ActionButton variant="ghost" aria-label="Layout options">
+                  <PanelsTopLeft size={18} aria-hidden="true" />
+                  <span className={styles.layoutLabel}>Layout</span>
+                </ActionButton>
+                <Popover placement="bottom end" className={styles.popover}>
+                  <Menu
+                    aria-label="Layout"
+                    className={styles.menu}
+                    onAction={(id) => setMode(id as LayoutMode)}
+                  >
+                    <MenuItem id="standard" className={styles.menuItem}>
+                      Standard
+                    </MenuItem>
+                    <MenuItem id="inspector" className={styles.menuItem}>
+                      With inspector
+                    </MenuItem>
+                    <MenuItem id="focus" className={styles.menuItem}>
+                      Focus mode
+                    </MenuItem>
+                  </Menu>
+                </Popover>
+              </MenuTrigger>
+              <span className={styles.headerDemo}>DEMO</span>
+            </div>
+          </>
+        )}
+      </header>
+      {mode !== 'focus' && (
+        <nav aria-label="Quick navigation" className={styles.mobileBar}>
+          {mobileDestinations.map((destination, index) => (
+            <Link
+              key={destination.id}
+              to={destination.to}
+              params={{ namespace }}
+              aria-current={
+                (
+                  active?.scope === 'platform'
+                    ? active.id === destination.id
+                    : active?.groupId === destination.groupId
+                )
+                  ? 'page'
+                  : undefined
+              }
+              className={styles.mobileTab}
+            >
+              <Icon name={destination.icon} size={20} />
+              <span>
+                {active?.scope === 'platform'
+                  ? ['Namespaces', 'Resources', 'Policies'][index]
+                  : ['Catalog', 'Orders', 'Changes'][index]}
+              </span>
+            </Link>
+          ))}
+          <DialogTrigger isOpen={mobileOpen} onOpenChange={setMobileOpen}>
+            <Button
+              className={styles.mobileTab}
+              aria-label="Open navigation menu"
+            >
+              <Grid2X2 size={20} aria-hidden="true" />
+              <span>Menu</span>
+            </Button>
+            <ModalOverlay
+              isDismissable
+              className={`${styles.drawerOverlay} ${styles.navigationOverlay}`}
+            >
+              <Modal className={styles.navDrawer}>
+                <Dialog
+                  aria-label="Mobile navigation"
+                  className={styles.drawerDialog}
+                >
+                  <span className={styles.sheetHandle} aria-hidden="true" />
+                  <Button
+                    className={styles.drawerClose}
+                    aria-label="Close navigation"
+                    onPress={() => setMobileOpen(false)}
+                  >
+                    <X size={18} aria-hidden="true" />
+                  </Button>
+                  <Sidebar
+                    active={active}
+                    namespace={namespace}
+                    onNamespaceChange={changeNamespace}
+                    onPlatformChange={openPlatform}
+                    compact={false}
+                    collapsed={false}
+                    onCollapse={() => {}}
+                    onNavigate={() => setMobileOpen(false)}
+                    mobile
+                  />
+                </Dialog>
+              </Modal>
+            </ModalOverlay>
+          </DialogTrigger>
+        </nav>
+      )}
+      <div className={styles.workArea}>
+        <WorkspaceLayout
+          mode={tablet && mode === 'inspector' ? 'standard' : mode}
+          inspector={inspector}
+        >
+          {routeNamespace && !isDemoNamespace(routeNamespace) ? (
+            <div className={styles.unknownNamespace}>
+              <h1>Unknown demo workspace</h1>
+              <p>Choose one of the local demo workspaces to continue.</p>
+              <ActionButton onPress={() => changeNamespace(defaultNamespace)}>
+                Open Atelier Kyoto
+              </ActionButton>
+            </div>
+          ) : (
+            (children ?? <Outlet />)
+          )}
+        </WorkspaceLayout>
+      </div>
+      <ModalOverlay
+        isOpen={tablet && mode === 'inspector'}
+        onOpenChange={(open) => {
+          if (!open) setMode('standard')
+        }}
+        isDismissable
+        className={styles.drawerOverlay}
+      >
+        <Modal className={styles.inspectorDrawer}>
+          <Dialog aria-label="Page context" className={styles.drawerDialog}>
+            <Heading slot="title" className={styles.srOnly}>
+              Page context
+            </Heading>
+            {inspector}
+          </Dialog>
+        </Modal>
+      </ModalOverlay>
+      <CommandPalette
+        open={commandOpen}
+        onOpenChange={setCommandOpen}
+        onNavigate={go}
+      />
+    </div>
+  )
+}
