@@ -770,6 +770,12 @@ mod tests {
             let rpc_context = span.context().span().span_context().clone();
             let blocking_span_id = std::sync::Arc::new(std::sync::Mutex::new(None));
             let captured_span_id = blocking_span_id.clone();
+            let mut signing_key = [0u8; 32];
+            getrandom::fill(&mut signing_key).unwrap();
+            let signing_key: String = signing_key
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
             use tracing::Instrument;
             async {
                 let request = spawn_blocking(move || {
@@ -791,7 +797,7 @@ mod tests {
                         .contains("b71bb94adb59498d8a3a6f1079a3fdaa"));
                     auth::interceptor::sign_request(
                         grpc::server::proto::CreateRepositoryRequest::default(),
-                        "contract-signing-secret",
+                        &signing_key,
                         "gitstore-git",
                         "/gitstore.git.v1.GitService/CreateRepository",
                     )
