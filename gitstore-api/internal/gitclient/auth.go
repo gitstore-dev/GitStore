@@ -6,9 +6,11 @@ package gitclient
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync"
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/observability"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
@@ -34,6 +36,12 @@ func signedContext(ctx context.Context, secret, method string, request any) (con
 	md, _ := metadata.FromOutgoingContext(ctx)
 	md = md.Copy()
 	md.Delete("authorization")
+	md.Delete("baggage")
+	headers := http.Header{}
+	observability.Inject(ctx, headers)
+	for key, values := range headers {
+		md.Set(key, values...)
+	}
 	md.Set(auth.RPCSignatureMetadata, envelope)
 	return metadata.NewOutgoingContext(ctx, md), nil
 }

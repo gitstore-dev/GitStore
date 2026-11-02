@@ -259,7 +259,8 @@ Runtime pieces:
 - Quarantine for poison items after repeated failures.
 - Panic capture with stack traces.
 - Per-kind health statistics.
-- Prometheus metrics.
+- Collector-routed OTLP metrics, operational logs and traces when enabled.
+  See [telemetry configuration](configuration.md#collector-routed-telemetry).
 - List-then-watch bootstrap and `resourceVersion` checkpointing per registered kind (`internal/checkpoint`, `internal/listwatch`) — populates the informer cache on first start, resumes a watch stream from a persisted checkpoint after a restart, and recovers from a compacted watch cursor by re-listing (the `Runner[T]`/`ListWatcher[T]` wiring pattern); no concrete transport ships yet.
 
 HTTP surface on port `5001`:
@@ -267,7 +268,7 @@ HTTP surface on port `5001`:
 | Route                                                          | Purpose                                                              |
 |----------------------------------------------------------------|----------------------------------------------------------------------|
 | `GET /health`                                                  | Returns `ok` or `degraded` based on stalled workers and poison items |
-| `GET /metrics`                                                 | Prometheus metrics                                                   |
+| `GET /metrics`                                                 | Compatibility diagnostics; the collector topology does not scrape this route |
 | `GET /controller/v1/poison/{kind}`                             | List quarantined items for one kind                                  |
 | `GET /controller/v1/poison/_all`                               | List all quarantined items                                           |
 | `POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue` | Requeue one poison item                                              |

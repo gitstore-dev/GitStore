@@ -289,7 +289,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	})
 	gitHttpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Api.GitPort),
-		Handler:      gitHttpHandler,
+		Handler:      observability.HTTPHandler(gitHttpHandler, log),
 		ReadTimeout:  0,
 		WriteTimeout: 0,
 		IdleTimeout:  60 * time.Second,
@@ -301,7 +301,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("listen on catalog gRPC port %d: %w", cfg.Api.GrpcPort, err)
 	}
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(catalogTelemetry))
 	catalogv1.RegisterCatalogServiceServer(grpcServer, catalogServer)
 
 	return &Server{
@@ -407,7 +407,7 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	gqlServer.AroundFields(authorizeMiddleware.GraphQLFieldAuthorizer)
 	gqlServer.AroundResponses(authorizeMiddleware.GraphQLResponseAuthorizer)
 
-	operationHandler := observability.HTTPHandler(gqlServer)
+	operationHandler := observability.HTTPHandler(gqlServer, deps.Logger)
 	gqlHandler := gin.HandlerFunc(func(c *gin.Context) {
 		if !authenticateMiddleware.AuthenticateWebSocketUpgrade(c) {
 			return

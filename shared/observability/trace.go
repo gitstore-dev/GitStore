@@ -6,6 +6,7 @@ package observability
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
@@ -55,7 +56,7 @@ func Inject(ctx context.Context, header http.Header) {
 // HTTPHandler links finite API POST operations to their caller. It leaves the
 // response writer untouched and never holds a server span over a WebSocket
 // subscription or exports request paths, headers or bodies.
-func HTTPHandler(next http.Handler) http.Handler {
+func HTTPHandler(next http.Handler, loggers ...*zap.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			next.ServeHTTP(w, r)
@@ -64,12 +65,20 @@ func HTTPHandler(next http.Handler) http.Handler {
 		ctx := propagation.TraceContext{}.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 		ctx, span := otel.Tracer("gitstore/http-server").Start(ctx, "http.request",
 			trace.WithSpanKind(trace.SpanKindServer))
+		started := time.Now()
 		completed := false
 		defer func() {
+			result := "completed"
 			if !completed {
+				result = "panic"
 				span.SetStatus(codes.Error, "panic")
 			} else if ctx.Err() != nil {
+				result = "cancelled"
 				span.SetStatus(codes.Error, "cancelled")
+			}
+			if span.IsRecording() && len(loggers) > 0 && loggers[0] != nil {
+				Logger(ctx, loggers[0]).Info("HTTP request completed",
+					zap.String("result", result), zap.Duration("duration", time.Since(started)))
 			}
 			span.End()
 		}()

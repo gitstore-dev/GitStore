@@ -135,11 +135,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         grpc_port = cfg.git_service.grpc_port,
         "gRPC server starting on {}", grpc_addr
     );
-    let grpc_handle = tokio::spawn(async move {
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut grpc_handle = tokio::spawn(async move {
         if let Err(e) = tonic::transport::Server::builder()
             .trace_fn(|request| gitstore::rpc_span(request.headers(), request.uri().path()))
-            .add_service(GitServiceServer::new(grpc_service))
-            .serve(grpc_addr)
+            .add_service(gitstore::grpc::metrics::RpcMetricsService::new(
+                GitServiceServer::new(grpc_service),
+            ))
+            .serve_with_shutdown(grpc_addr, async {
+                let _ = shutdown_rx.await;
+            })
             .await
         {
             error!(error = %e, "gRPC server error");
@@ -149,7 +154,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     shutdown_signal().await?;
     info!("Shutting down...");
 
-    grpc_handle.abort();
+    let _ = shutdown_tx.send(());
+    if tokio::time::timeout(std::time::Duration::from_secs(10), &mut grpc_handle)
+        .await
+        .is_err()
+    {
+        grpc_handle.abort();
+        let _ = grpc_handle.await;
+    }
     tokio::task::spawn_blocking(move || telemetry.shutdown()).await??;
 
     Ok(())

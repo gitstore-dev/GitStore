@@ -19,7 +19,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/app"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/logger"
-	"github.com/gitstore-dev/gitstore/observability"
 	"go.uber.org/zap"
 )
 
@@ -47,10 +46,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = log.Sync() }()
-	log, shutdownTelemetry, err := observability.InitTelemetry(context.Background(), cfg.Observability.OTLP, observability.APIService, "development", log)
+	log, shutdownTelemetry, err := app.InitTelemetry(context.Background(), cfg.Observability.OTLP, log)
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "Failed to initialize telemetry")
-		return
+		os.Exit(1)
 	}
 	logger.Log = log
 	defer func() {

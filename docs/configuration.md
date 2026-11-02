@@ -1,5 +1,79 @@
 # Configuration Reference
 
+## Collector-routed telemetry
+
+Telemetry is opt-in for the three core services. Set
+`observability.otlp.uri` (environment: `GITSTORE_OBSERVABILITY__OTLP__URI`) to
+the **collector's OTLP/HTTP base URI**, for example `http://otel-collector:4318`.
+An empty URI disables all exporters and leaves local logging and existing API/
+controller diagnostic metrics endpoints unchanged. Credentials, query strings
+and fragments are rejected in the URI. Do not configure applications with
+Prometheus, Loki or Tempo addresses.
+
+`make compose OBSERVABILITY=otel` adds the pinned local observability stack and
+routes API, controller and Git metrics, logs and traces through the collector.
+Pass the same selector to `make ps`, `make logs`, `make stop` and `make down`.
+The shared Go module keeps existing Prometheus instruments and the OpenTelemetry
+SDK reader in one cumulative OTLP metrics stream; Rust exports its native
+registry over OTLP too. **Git service has only its gRPC listener: it does not
+start an HTTP metrics server.** Remove `git_service.metrics` settings and any
+Git-service metrics port/probe/scrape target copied from earlier configurations;
+those settings now fail with a migration message. Native gRPC operation and
+the API/controller readiness routes are unchanged.
+
+```text
+API / controller / singleton Git service
+             -- OTLP/HTTP --> otel-collector
+                                |-- metrics --> Prometheus (scrapes collector)
+                                |-- logs ----> Loki (OTLP)
+                                `-- traces --> Tempo (OTLP)
+```
+
+Applications export cumulative metrics every 10 seconds, with a final shutdown
+flush. Each snapshot admits at most 2,048 series and 2 MiB; only operational
+label names are accepted, so resource identifiers and arbitrary SDK attributes
+are omitted rather than converted to metric labels. Metrics have no retry
+backlog: a failed snapshot is dropped and the next cumulative snapshot retains
+counter/histogram totals. Transport requests time out after two seconds.
+Traces and logs use bounded 2,048-record queues, 256-record batches and
+one-second batching. Export is nonblocking for request/reconciliation work;
+full queues drop records. Normal shutdown allows five seconds for Go flushes.
+Rust flushes bounded batches using two-second exporter requests.
+
+`observability.otlp.trace_sample_ratio`
+(`GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO`) defaults to `0.05`, accepts
+`0` through `1`, and samples new roots; valid sampled W3C parents are honored.
+Only trace context is propagated, never baggage or authentication material.
+Each signal carries a fixed service name/version and a random process-scoped
+`service.instance.id`, distinguishing concurrent replicas and replacements.
+Correlated operational logs carry trace/span IDs. Formatted messages, resource
+bodies, errors and non-operational fields remain local rather than being
+forwarded; the exported body is `operational event`. Trace/span IDs are not
+ordinary metric labels. Loki indexes only `service.name`; process and trace
+identity remain structured metadata. Git service exports only its fixed-field
+RPC/work span factories; arbitrary local tracing spans and events stay local.
+
+The collector uses a 128 MiB memory limiter, batches at most 512 records and
+queues at most 128 batches per push exporter with two consumers, three-second
+timeouts and at most 30 seconds of retries. Its queues are in memory: backend
+outages beyond those bounds or collector restarts lose queued records. Monitor
+collector refused/dropped/failed export metrics and
+`gitstore_telemetry_records_total`; metric-stage counts represent snapshots,
+whereas span/log-stage counts represent records.
+
+The local stack scrapes only collector ports `8889` (application metrics) and
+`8888` (collector self-metrics) every 10 seconds. Diagnostic API/controller
+`/metrics` routes remain for compatibility, but are **not scrape targets** in
+this topology. Backend/query ports bind to loopback: Prometheus `9090`, Loki
+`3100`, Tempo `3200`, OTLP `4318`, collector health `13133`; override with
+`PROMETHEUS_PORT`, `LOKI_PORT`, `TEMPO_PORT`, `OTLP_PORT`, `OTEL_HEALTH_PORT`.
+Retention defaults to 24 hours; Prometheus additionally caps retained blocks at
+256 MB. Named volumes persist across `make down`; delete them only through an
+explicit operator-owned cleanup. For production, secure OTLP and backend
+networks, provision bounded storage and tune retention externally. This local
+stack does not provide production dashboards, alerts or host/database/identity
+collection.
+
 ## Authorization baseline (064)
 
 The shipped policy uses only `rbac.authorization.gitstore.dev/v1beta1`.

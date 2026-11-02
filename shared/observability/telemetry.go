@@ -30,6 +30,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -112,8 +113,8 @@ func (r *metricRegisterer) Register(c prometheus.Collector) error {
 }
 
 // InitTelemetry enables bounded OTLP export only when an endpoint is configured.
-// Prometheus remains the native metrics surface; baggage and message bodies are
-// deliberately excluded from trace propagation.
+// Native metrics and SDK instruments share the collector export path. Baggage
+// and message bodies are deliberately excluded from trace propagation.
 func InitTelemetry(ctx context.Context, cfg OTLPConfig, service, version string, logger *zap.Logger) (*zap.Logger, func(context.Context) error, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, err
@@ -152,7 +153,8 @@ func InitTelemetry(ctx context.Context, cfg OTLPConfig, service, version string,
 		ForceAttemptHTTP2: true, MaxIdleConns: 4, MaxIdleConnsPerHost: 2, MaxConnsPerHost: 2,
 		IdleConnTimeout: 30 * time.Second, TLSHandshakeTimeout: 2 * time.Second,
 	}
-	client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
+	client := &http.Client{Transport: transport, Timeout: 2 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	traceExporter, err := otlptracehttp.New(ctx,
 		otlptracehttp.WithEndpointURL(strings.TrimRight(endpoint, "/")+"/v1/traces"),
 		otlptracehttp.WithHeaders(map[string]string{}),
@@ -224,10 +226,15 @@ func InitTelemetry(ctx context.Context, cfg OTLPConfig, service, version string,
 		})
 	}))
 	enhanced.Info("local telemetry enabled", zap.Float64("trace_sampling_ratio", ratio))
+	metricResource := &resourcepb.Resource{}
+	for _, field := range res.Attributes() {
+		metricResource.Attributes = append(metricResource.Attributes, metricStringAttribute(string(field.Key), field.Value.AsString()))
+	}
+	shutdownMetrics := startMetricExport(client, endpoint, metricResource)
 	return enhanced, func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		err := errors.Join(traces.Shutdown(ctx), logs.Shutdown(ctx), metrics.Shutdown(ctx))
+		err := errors.Join(traces.Shutdown(ctx), logs.Shutdown(ctx), shutdownMetrics(ctx), metrics.Shutdown(ctx))
 		transport.CloseIdleConnections()
 		if registerer.collector != nil {
 			registerer.Unregister(registerer.collector)
@@ -282,5 +289,8 @@ func (c exportCore) Check(entry zapcore.Entry, checked *zapcore.CheckedEntry) *z
 }
 
 func (c exportCore) Write(entry zapcore.Entry, fields []zapcore.Field) error {
+	// Formatted messages may embed user-controlled errors or resource contents.
+	// Preserve them locally; export only severity, correlation and safe fields.
+	entry.Message = "operational event"
 	return c.Core.Write(entry, exportFields(fields))
 }

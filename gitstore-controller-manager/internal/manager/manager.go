@@ -807,7 +807,9 @@ func reconcileAttempt(ctx context.Context, reconciler types.Reconciler, key Work
 		trace.WithAttributes(attribute.String("kind", key.Kind)))
 	defer span.End()
 	result := safeReconcile(reconciler, key)(ctx)
-	observability.Logger(ctx, log).Debug("reconciliation attempt completed", zap.String("kind", key.Kind))
+	if span.IsRecording() {
+		observability.Logger(ctx, log).Info("reconciliation attempt completed", zap.String("kind", key.Kind))
+	}
 	return result
 }
 

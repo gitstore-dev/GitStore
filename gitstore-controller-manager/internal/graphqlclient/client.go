@@ -25,6 +25,7 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/time/rate"
 )
 
@@ -361,7 +362,10 @@ func (c *Client) Subscribe(ctx context.Context, subscriptionDoc string, vars map
 		header.Set("Authorization", "Bearer "+token)
 	}
 
-	conn, response, err := c.dialer.DialContext(ctx, wsURL, header)
+	dialCtx, span := otel.Tracer("gitstore/controller").Start(ctx, "websocket.dial")
+	observability.Inject(dialCtx, header)
+	conn, response, err := c.dialer.DialContext(dialCtx, wsURL, header)
+	span.End()
 	if err != nil {
 		if response != nil {
 			if response.StatusCode == http.StatusUnauthorized {

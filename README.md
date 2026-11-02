@@ -47,6 +47,9 @@ graph TD
 - **`gitstore-controller-manager`**: Go controller runtime that reconciles through the API and exposes health, metrics, and poison-item endpoints.
 
 The API, controller manager, and Git service are the three core services.
+Use `make compose OBSERVABILITY=otel` for collector-routed metrics, logs and
+traces with local Prometheus, Loki and Tempo. See
+[telemetry configuration](docs/configuration.md#collector-routed-telemetry).
 API/controller features must verify concurrent-replica behavior; this is not a
 blanket claim of production HA. **Git service is stateful and singleton-only**
 until repository sharding, placement-aware routing and writer safety are

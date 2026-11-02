@@ -23,7 +23,16 @@ if grep -Eq '^[[:space:]]*(api_token|signing_key)[[:space:]]*=' "$config_file"; 
   fail "shared config must reference isolated identity material, not contain tokens or signing keys"
 fi
 
-output=$(CONFIG_FILE="$config_file" docker compose --profile local \
+set -- --profile local
+case "${OBSERVABILITY:-none}" in
+  none) ;;
+  otel)
+    set -- "$@" --profile observability
+    export GITSTORE_OBSERVABILITY__OTLP__URI=http://otel-collector:4318
+    ;;
+  *) fail "OBSERVABILITY must be none or otel" ;;
+esac
+output=$(CONFIG_FILE="$config_file" docker compose "$@" \
   -f compose.yml -f compose.local.yml config --format json) || fail "cannot render configuration"
 config_path="$(cd "$(dirname "$config_file")" && pwd)/$(basename "$config_file")"
 
@@ -89,5 +98,17 @@ check '
   (.services["serviceaccount-enrollment"].command | index("--name") != null) and
   ([.services[].environment // {} | keys[] | select(contains("SERVICEACCOUNT__NAMESPACE"))] | length == 0)
 ' "enrollment and controller configuration must use cluster-scoped ServiceAccounts"
+
+if [ "${OBSERVABILITY:-none}" = otel ]; then
+  check '
+    [.services["git-service"], .services.api, .services["controller-manager"]] |
+    all(.[]; .environment.GITSTORE_OBSERVABILITY__OTLP__URI == "http://otel-collector:4318")
+  ' "all core telemetry must route to the collector"
+  check '
+    (.services["git-service"].ports | all(.[]; .target == 50051)) and
+    (.services["otel-collector"].depends_on | has("loki") and has("tempo")) and
+    (.services.prometheus.depends_on | has("otel-collector"))
+  ' "Git must not expose an HTTP scrape port; all backends must use the collector topology"
+fi
 
 echo "local Compose configuration is valid for $config_file"

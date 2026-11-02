@@ -33,6 +33,14 @@ assert_dispatch secret grpc-hmac _secret-grpc-hmac
 assert_dispatch generate authz _generate-authz
 assert_dispatch generate all _generate-all
 
+for target in compose ps logs stop down; do
+  output="$(make --no-print-directory -C "${repo_root}" -n "${target}" OBSERVABILITY=otel)"
+  [[ "${output}" == *"--profile observability"* ]]
+  [[ "${output}" == *"GITSTORE_OBSERVABILITY__OTLP__URI=http://otel-collector:4318"* ]]
+done
+output="$(make --no-print-directory -C "${repo_root}" -n compose)"
+[[ "${output}" != *"--profile observability"* ]]
+
 bootstrap_output="$(env -u NAMESPACE_TIER make --no-print-directory -C "${repo_root}" -np bootstrap TARGET=namespace | sed -n '/^NAMESPACE_TIER /p')"
 [[ "${bootstrap_output}" == "NAMESPACE_TIER = ORGANIZATION" ]]
 

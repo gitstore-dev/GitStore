@@ -112,6 +112,11 @@ hmac_secret = "local-development-grpc-hmac-secret"
 max_pack_size = "512MiB"
 max_file_size = "100MiB"
 
+[observability.otlp]
+# Empty disables telemetry export; all enabled signals go to this collector.
+uri = ""
+trace_sample_ratio = 0.05
+
 [log]
 level = "info"
 format = "json"

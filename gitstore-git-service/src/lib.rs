@@ -16,9 +16,12 @@ pub mod auth;
 pub mod config;
 pub mod git;
 pub mod grpc;
+mod log_export;
+mod metrics_export;
+mod otlp_http;
 
 use opentelemetry::trace::TracerProvider;
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::{logs::SdkLoggerProvider, trace::SdkTracerProvider, Resource};
 use std::{
     sync::atomic::{AtomicBool, Ordering},
@@ -35,7 +38,7 @@ fn telemetry_records(signal: &str, stage: &str, count: u64) {
         .get_or_init(|| {
             prometheus::register_int_counter_vec!(
                 "gitstore_telemetry_records_total",
-                "Telemetry records admitted, exported or failed; live differences include pending work and loss",
+                "Telemetry records admitted, exported or failed; admitted minus exported includes live queued work and loss.",
                 &["signal", "stage"]
             )
             .expect("register telemetry record counters")
@@ -162,13 +165,15 @@ impl<E: opentelemetry_sdk::logs::LogExporter> opentelemetry_sdk::logs::LogExport
 pub struct Telemetry {
     traces: Option<SdkTracerProvider>,
     logs: Option<SdkLoggerProvider>,
+    metrics: Option<metrics_export::MetricExport>,
 }
 
 impl Telemetry {
-    pub fn shutdown(&self) -> anyhow::Result<()> {
+    pub fn shutdown(self) -> anyhow::Result<()> {
         TELEMETRY_ENABLED.store(false, Ordering::Relaxed);
         let trace_result = self.traces.as_ref().map(|p| p.shutdown());
         let log_result = self.logs.as_ref().map(|p| p.shutdown());
+        let metric_result = self.metrics.map(|metrics| metrics.shutdown()).transpose();
         if let Some(Err(error)) = trace_result {
             return Err(anyhow::anyhow!(
                 "trace shutdown failed: {error}; log shutdown: {log_result:?}"
@@ -177,6 +182,7 @@ impl Telemetry {
         if let Some(Err(error)) = log_result {
             return Err(anyhow::anyhow!("log shutdown failed: {error}"));
         }
+        metric_result?;
         Ok(())
     }
 }
@@ -210,18 +216,26 @@ pub fn init_observability(
         return Ok(Telemetry {
             traces: None,
             logs: None,
+            metrics: None,
         });
     }
     let endpoint = cfg.uri.trim_end_matches('/');
     let resource = telemetry_resource()?;
+    let client = std::sync::Arc::new(otlp_http::CollectorClient::new()?);
     let trace_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
+        .with_shared_http_client(client.clone())
+        .with_retry_policy(opentelemetry_otlp::RetryPolicy::disabled())
+        .with_max_request_body_size(2 << 20)
         .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
         .with_endpoint(format!("{endpoint}/v1/traces"))
         .with_timeout(Duration::from_secs(2))
         .build()?;
     let log_exporter = opentelemetry_otlp::LogExporter::builder()
         .with_http()
+        .with_shared_http_client(client)
+        .with_retry_policy(opentelemetry_otlp::RetryPolicy::disabled())
+        .with_max_request_body_size(2 << 20)
         .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
         .with_endpoint(format!("{endpoint}/v1/logs"))
         .with_timeout(Duration::from_secs(2))
@@ -255,6 +269,7 @@ pub fn init_observability(
         .build();
     let logs = SdkLoggerProvider::builder()
         .with_resource(resource)
+        .with_log_processor(log_export::SafeLogs)
         .with_log_processor(TelemetryObserver)
         .with_log_processor(
             opentelemetry_sdk::logs::BatchLogProcessor::builder(TelemetryLogExporter(log_exporter))
@@ -268,14 +283,21 @@ pub fn init_observability(
                 .build(),
         )
         .build();
-    let trace_layer = tracing_opentelemetry::layer().with_tracer(traces.tracer("gitstore"));
+    // Export only factories with fixed operational fields, never arbitrary local spans/events.
+    let trace_layer = tracing_opentelemetry::layer()
+        .with_tracer(traces.tracer("gitstore"))
+        .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+            metadata.is_span()
+                && metadata.target() == module_path!()
+                && matches!(metadata.name(), "git.rpc" | "git.work")
+        }));
     let log_layer = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&logs)
         .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
             !metadata.target().starts_with("opentelemetry")
         }));
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| configured_filter(&log.level));
-    match log.format.as_str() {
+    match log.format.to_ascii_lowercase().as_str() {
         "json" => tracing_subscriber::registry()
             .with(filter)
             .with(trace_layer)
@@ -292,6 +314,10 @@ pub fn init_observability(
     }
     TELEMETRY_ENABLED.store(true, Ordering::Relaxed);
     Ok(Telemetry {
+        metrics: Some(metrics_export::MetricExport::start(
+            endpoint,
+            &telemetry_resource()?,
+        )),
         traces: Some(traces),
         logs: Some(logs),
     })
@@ -370,8 +396,7 @@ where
     tokio::task::spawn_blocking(move || {
         parent.in_scope(|| {
             let span = work_span("git.blocking");
-            let result = span.in_scope(work);
-            result
+            span.in_scope(work)
         })
     })
 }
@@ -419,6 +444,45 @@ fn ignore_already_initialized(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collector_smoke() {
+        use opentelemetry::trace::TraceContextExt;
+        let Ok(endpoint) = std::env::var("GITSTORE_TEST_OTLP_SMOKE_ENDPOINT") else {
+            return;
+        };
+        assert!(endpoint.starts_with("http://127.0.0.1:"));
+        let telemetry = init_observability(
+            &config::LogConfig {
+                level: "info".into(),
+                format: "json".into(),
+            },
+            &config::OtlpConfig {
+                uri: endpoint,
+                trace_sample_ratio: 1.0,
+            },
+        )
+        .unwrap();
+        let span = rpc_span(
+            &tonic::codegen::http::HeaderMap::new(),
+            "/gitstore.git.v1.GitService/GetFile",
+        );
+        span.in_scope(|| {
+            grpc::metrics::record_rpc("GetFile", "Ok", 0.01);
+            tracing::info!(
+                rpc.method = "GetFile",
+                token = "private",
+                "private payload must not be forwarded"
+            );
+        });
+        println!(
+            "OTEL_SMOKE service=gitstore-git-service trace_id={} instance_id={}",
+            span.context().span().span_context().trace_id(),
+            resource_attribute(&telemetry_resource().unwrap(), "service.instance.id")
+        );
+        drop(span);
+        telemetry.shutdown().unwrap();
+    }
 
     fn resource_attribute(resource: &Resource, key: &str) -> String {
         resource
@@ -617,6 +681,9 @@ mod tests {
                     "--nocapture",
                 ])
                 .env(CHILD, "1")
+                .env("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=private")
+                .env("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "X-Private=private")
+                .env("OTEL_EXPORTER_OTLP_LOGS_HEADERS", "X-Private=private")
                 .status()
                 .unwrap();
             assert!(status.success(), "isolated telemetry contract failed");
@@ -640,30 +707,44 @@ mod tests {
             let captured_logs = log_batches.clone();
             let app = axum::Router::new()
                 .route(
+                    "/v1/metrics",
+                    axum::routing::post(|| async { axum::http::StatusCode::OK }),
+                )
+                .route(
                     "/v1/traces",
-                    axum::routing::post(move |body: axum::body::Bytes| {
-                        let count = trace_count.clone();
-                        let captured = captured_traces.clone();
-                        async move {
-                            assert!(body.len() <= 256 * 1024);
-                            captured.lock().unwrap().push(body.to_vec());
-                            count.fetch_add(body.len(), Ordering::Relaxed);
-                            axum::http::StatusCode::OK
-                        }
-                    }),
+                    axum::routing::post(
+                        move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                            let count = trace_count.clone();
+                            let captured = captured_traces.clone();
+                            async move {
+                                assert!(!headers.contains_key("authorization"));
+                                assert!(!headers.contains_key("x-private"));
+                                assert_eq!(headers["content-type"], "application/x-protobuf");
+                                assert!(body.len() <= 256 * 1024);
+                                captured.lock().unwrap().push(body.to_vec());
+                                count.fetch_add(body.len(), Ordering::Relaxed);
+                                axum::http::StatusCode::OK
+                            }
+                        },
+                    ),
                 )
                 .route(
                     "/v1/logs",
-                    axum::routing::post(move |body: axum::body::Bytes| {
-                        let count = log_count.clone();
-                        let captured = captured_logs.clone();
-                        async move {
-                            assert!(body.len() <= 256 * 1024);
-                            captured.lock().unwrap().push(body.to_vec());
-                            count.fetch_add(body.len(), Ordering::Relaxed);
-                            axum::http::StatusCode::OK
-                        }
-                    }),
+                    axum::routing::post(
+                        move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                            let count = log_count.clone();
+                            let captured = captured_logs.clone();
+                            async move {
+                                assert!(!headers.contains_key("authorization"));
+                                assert!(!headers.contains_key("x-private"));
+                                assert_eq!(headers["content-type"], "application/x-protobuf");
+                                assert!(body.len() <= 256 * 1024);
+                                captured.lock().unwrap().push(body.to_vec());
+                                count.fetch_add(body.len(), Ordering::Relaxed);
+                                axum::http::StatusCode::OK
+                            }
+                        },
+                    ),
                 );
             let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
             let telemetry = init_observability(
@@ -729,6 +810,13 @@ mod tests {
                     .unwrap()
                     .contains("b71bb94adb59498d8a3a6f1079a3fdaa"));
                 tracing::info!("bounded telemetry contract log");
+                tracing::info_span!("private.span", resource_body = "private-resource-payload")
+                    .in_scope(|| {
+                        tracing::info!(
+                            token = "private-resource-payload",
+                            "private-resource-payload"
+                        )
+                    });
             }
             .instrument(span)
             .await;
@@ -740,6 +828,11 @@ mod tests {
             assert!(logs.load(Ordering::Relaxed) > 0);
             let trace_batches = trace_batches.lock().unwrap();
             let log_batches = log_batches.lock().unwrap();
+            for batches in [&*trace_batches, &*log_batches] {
+                assert!(batches.iter().all(|batch| !batch
+                    .windows(b"private-resource-payload".len())
+                    .any(|bytes| bytes == b"private-resource-payload")));
+            }
             let instance_key = b"service.instance.id";
             for batches in [&*trace_batches, &*log_batches] {
                 assert!(

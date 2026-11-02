@@ -37,6 +37,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 	logpb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	"go.uber.org/zap"
@@ -131,6 +132,10 @@ func TestResolvedZeroSamplingStillHonorsSampledParents(t *testing.T) {
 	t.Setenv("OTEL_TRACES_SAMPLER", "always_on")
 	var count atomic.Int64
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/traces" {
+			_, _ = io.Copy(io.Discard, r.Body)
+			return
+		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		require.NoError(t, err)
 		var batch tracepb.ExportTraceServiceRequest
@@ -288,6 +293,7 @@ func TestHTTPDeliveryIdentitiesBoundsAndContext(t *testing.T) {
 			var mu sync.Mutex
 			var spans tracepb.ExportTraceServiceRequest
 			var logs logpb.ExportLogsServiceRequest
+			var metrics metricspb.ExportMetricsServiceRequest
 			collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 				require.NoError(t, err)
@@ -296,6 +302,8 @@ func TestHTTPDeliveryIdentitiesBoundsAndContext(t *testing.T) {
 				mu.Lock()
 				defer mu.Unlock()
 				switch r.URL.Path {
+				case "/otlp/v1/metrics":
+					require.NoError(t, proto.Unmarshal(body, &metrics))
 				case "/otlp/v1/traces":
 					var batch tracepb.ExportTraceServiceRequest
 					require.NoError(t, proto.Unmarshal(body, &batch))
@@ -328,6 +336,12 @@ func TestHTTPDeliveryIdentitiesBoundsAndContext(t *testing.T) {
 				metric.WithExplicitBucketBoundaries(0.01, 0.1, 1))
 			require.NoError(t, err)
 			sdkHistogram.Record(ctx, 0.01)
+			secondHistogram, err := otel.Meter("correlation-second",
+				metric.WithInstrumentationVersion("test-v2"),
+				metric.WithSchemaURL("https://opentelemetry.io/schemas/1.26.0"),
+			).Float64Histogram("correlation_otel_duration_seconds")
+			require.NoError(t, err)
+			secondHistogram.Record(ctx, 0.02)
 			span.SetAttributes(attribute.String("bounded", strings.Repeat("a", 512)))
 			for i := range 50 {
 				span.SetAttributes(attribute.String("field."+strconv.Itoa(i), "bounded"))
@@ -335,6 +349,7 @@ func TestHTTPDeliveryIdentitiesBoundsAndContext(t *testing.T) {
 			Logger(ctx, logger.With(zap.String("Authorization", "private"))).Info("linked log",
 				zap.String("kind", "Product"), zap.String("operation", strings.Repeat("x", 512)),
 				zap.String("body", "private"), zap.Error(errors.New("private")))
+			logger.Info("private dynamic message must remain local")
 			logger.Debug("disabled debug")
 			logger.Info(strings.Repeat("x", 4095) + "\u20ac" + strings.Repeat("y", 100))
 			spanContext := span.SpanContext()
@@ -365,6 +380,33 @@ func TestHTTPDeliveryIdentitiesBoundsAndContext(t *testing.T) {
 			require.NotEmpty(t, spans.ResourceSpans)
 			instance := stringAttribute(spans.ResourceSpans[0].Resource.Attributes, "service.instance.id")
 			require.Len(t, instance, 32)
+			require.Len(t, metrics.ResourceMetrics, 1)
+			require.Equal(t, service, stringAttribute(metrics.ResourceMetrics[0].Resource.Attributes, "service.name"))
+			require.Equal(t, instance, stringAttribute(metrics.ResourceMetrics[0].Resource.Attributes, "service.instance.id"))
+			require.NotEmpty(t, metrics.ResourceMetrics[0].ScopeMetrics[0].Metrics)
+			sdkDelivered := make(map[string]bool)
+			for _, scope := range metrics.ResourceMetrics[0].ScopeMetrics {
+				for _, received := range scope.Metrics {
+					if received.Name != "correlation_otel_duration_seconds" {
+						continue
+					}
+					points := received.GetHistogram().GetDataPoints()
+					require.Len(t, points, 1)
+					require.Empty(t, points[0].Attributes, "reserved scope labels belong in OTLP scope metadata")
+					require.EqualValues(t, 1, points[0].Count)
+					require.Len(t, points[0].Exemplars, 1)
+					id, traceID := spanContext.SpanID(), spanContext.TraceID()
+					require.Equal(t, id[:], points[0].Exemplars[0].SpanId)
+					require.Equal(t, traceID[:], points[0].Exemplars[0].TraceId)
+					if scope.Scope.Name == "correlation-second" {
+						require.Equal(t, "test-v2", scope.Scope.Version)
+						require.Equal(t, "https://opentelemetry.io/schemas/1.26.0", scope.SchemaUrl)
+					}
+					sdkDelivered[scope.Scope.Name] = true
+				}
+			}
+			require.Equal(t, map[string]bool{"correlation-test": true, "correlation-second": true}, sdkDelivered,
+				"SDK instruments must reach OTLP without collapsing instrumentation scopes")
 			hostname, err := os.Hostname()
 			require.NoError(t, err)
 			require.Contains(t, response.Body.String(), `service_instance_id="`+instance+`"`)
@@ -397,7 +439,8 @@ func TestHTTPDeliveryIdentitiesBoundsAndContext(t *testing.T) {
 						require.True(t, utf8.ValidString(record.Body.GetStringValue()))
 						require.NotContains(t, record.String(), "private")
 						require.NotEqual(t, "disabled debug", record.Body.GetStringValue())
-						if record.Body.GetStringValue() == "linked log" {
+						require.Equal(t, "operational event", record.Body.GetStringValue())
+						if stringAttribute(record.Attributes, "kind") == "Product" {
 							linked = true
 							id, traceID := spanContext.SpanID(), spanContext.TraceID()
 							require.Equal(t, id[:], record.SpanId)

@@ -289,6 +289,8 @@ type legacyKey struct {
 // final merged state so a renamed/removed key never silently resolves to a
 // default. Ordered most-specific-first so the most helpful match wins.
 var legacyKeys = []legacyKey{
+	{"observability.otlp.endpoint", "observability.otlp.uri"},
+	{"git_service.metrics", "observability.otlp.uri (metrics use OTLP; remove the HTTP metrics listener)"},
 	// Shared-file validation must reject the removed identity selector before
 	// Compose starts any services, not only when the controller finally boots.
 	{"controller.serviceaccount.namespace", "controller.serviceaccount.name (ServiceAccounts are cluster-scoped; remove namespace)"},

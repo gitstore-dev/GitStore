@@ -16,7 +16,7 @@ CONFIG_FILE ?= ./config/config.toml
 AUTH_CONFIG_DIR ?= $(ROOT)/config
 POLICY_FILE ?= $(AUTH_CONFIG_DIR)/policy.yaml
 USERS_FILE ?= $(AUTH_CONFIG_DIR)/users.yaml
-LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
+LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" $(OBSERVABILITY_ENV) docker compose --profile local $(OBSERVABILITY_PROFILE) -f compose.yml -f compose.local.yml
 LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml $(IDENTITY_COMPOSE_FILE)
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
 GIT_GRPC_PORT ?= 50051
@@ -59,6 +59,9 @@ SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS ?= 2048
 SCYLLA_COMPOSE_FILE = $(if $(filter cluster,$(PROFILE)),compose.scylla.cluster.yml,compose.scylla.yml)
 DATASTORE_COMPOSE_FILE = $(if $(filter scylla,$(DATASTORE)),-f $(SCYLLA_COMPOSE_FILE),)
 IDENTITY_COMPOSE_FILE = $(if $(filter oidc,$(IDENTITY)),-f compose.oidc.yml,)
+OBSERVABILITY ?= none
+OBSERVABILITY_PROFILE = $(if $(filter otel,$(OBSERVABILITY)),--profile observability,)
+OBSERVABILITY_ENV = $(if $(filter otel,$(OBSERVABILITY)),GITSTORE_OBSERVABILITY__OTLP__URI=http://otel-collector:4318,)
 SCYLLA_SERVICES = $(if $(filter cluster,$(PROFILE)),scylla-1 scylla-2 scylla-3 scylla-init,scylla scylla-init)
 SCYLLA_LIFECYCLE_SERVICES = scylla scylla-1 scylla-2 scylla-3 scylla-init
 OIDC_SERVICES = hydra-postgres hydra-migrate hydra hydra-client-setup kratos-postgres kratos-migrate kratos kratos-selfservice-ui mailslurper oidc-bridge
@@ -192,6 +195,7 @@ help: ## Show available targets and common variables.
 	@printf "  DETACH=1                  Run compose start targets in the background\n"
 	@printf "  DATASTORE=%s              Compose datastore: memdb or scylla\n" "$(DATASTORE)"
 	@printf "  IDENTITY=%s               Compose identity stack: none or oidc (Hydra + Kratos reference provider)\n" "$(IDENTITY)"
+	@printf "  OBSERVABILITY=%s          Optional collector-routed metrics, logs and traces: none or otel\n" "$(OBSERVABILITY)"
 	@printf "  COMPOSE_BAKE=true         Compose build bake setting for Docker Compose\n"
 	@printf "  PROFILE=%s                Scylla profile: single or cluster\n" "$(PROFILE)"
 	@printf "  SERVICE=<name>            Limit logs/stop to one compose service; SERVICE=scylla includes all Scylla variants; SERVICE=oidc (with IDENTITY=oidc) covers the whole OIDC stack\n"
@@ -438,11 +442,12 @@ _check-local-config:
 			--config-file "$(abspath $(CONFIG_FILE))" --policy-file "$(abspath $(POLICY_FILE))"
 
 _check-compose-config: _check-local-config
-	@CONFIG_FILE="$(abspath $(CONFIG_FILE))" ./scripts/check-local-compose-config.sh
+	@CONFIG_FILE="$(abspath $(CONFIG_FILE))" OBSERVABILITY="$(OBSERVABILITY)" ./scripts/check-local-compose-config.sh
 
-compose: _check-local-config ## Run all core services; pass DATASTORE=scylla (optional PROFILE=cluster) and/or IDENTITY=oidc for optional stacks.
+compose: _check-local-config ## Run core services; optional DATASTORE=scylla, PROFILE=cluster, IDENTITY=oidc, OBSERVABILITY=otel.
 	@case "$(DATASTORE)" in memdb|scylla) ;; *) echo "DATASTORE must be 'memdb' or 'scylla'"; exit 2;; esac
 	@case "$(IDENTITY)" in none|oidc) ;; *) echo "IDENTITY must be 'none' or 'oidc'"; exit 2;; esac
+	@case "$(OBSERVABILITY)" in none|otel) ;; *) echo "OBSERVABILITY must be 'none' or 'otel'"; exit 2;; esac
 	@case "$(PROFILE)" in single|cluster) ;; *) echo "PROFILE must be 'single' or 'cluster'"; exit 2;; esac
 	@SCYLLA_CLUSTER_SMP="$(SCYLLA_CLUSTER_SMP)" SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS="$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)" $(LOCAL_COMPOSE) $(DATASTORE_COMPOSE_FILE) $(IDENTITY_COMPOSE_FILE) up --build $(DETACH_FLAG)
 
