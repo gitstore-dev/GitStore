@@ -41,7 +41,7 @@ type Diagnostic struct {
 	Field   string
 }
 
-// Code is the kind-neutral mutation error code.
+// Code is the kind-neutral domain error code.
 type Code string
 
 const (
@@ -58,7 +58,7 @@ const (
 // constraint has no specific mapping.
 const ReasonValidationFailed = "VALIDATION_FAILED"
 
-// Error is the kind-neutral mutation error. Its GraphQL form carries at most
+// Error is the kind-neutral domain error. Its GraphQL form carries at most
 // four extension keys: code (always), diagnostics, phase (only for
 // ADMISSION_REJECTED) and commit (only for POST_RECEIVE).
 type Error struct {
@@ -74,6 +74,17 @@ type Error struct {
 // NewError builds an error with a single FAILURE diagnostic.
 func NewError(code Code, reason, message string) *Error {
 	return &Error{Code: code, Diagnostics: []Diagnostic{{Reason: reason, Message: message, Level: LevelFailure}}}
+}
+
+// ResourceNotFound uses the same domain envelope at authorization and lookup boundaries.
+func ResourceNotFound(kind, message string) *gqlerror.Error {
+	switch strings.ToLower(kind) {
+	case "productvariant":
+		kind = "PRODUCT_VARIANT"
+	case "categorytaxonomy":
+		kind = "CATEGORY"
+	}
+	return NewError(CodeNotFound, strings.ToUpper(kind)+"_NOT_FOUND", message).ToGQLError()
 }
 
 // Rejected builds an ADMISSION_REJECTED error for the given phase.

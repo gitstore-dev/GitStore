@@ -93,7 +93,7 @@ func TestCategoryResolver_CategoryByNamespacePath_NotFound(t *testing.T) {
 	got, err := qr.Category(context.Background(), model.CategoryBy{
 		NamespacePath: &model.CategoryNamespacePath{Namespace: "test-ns", Name: "missing"},
 	})
-	require.NoError(t, err)
+	requireReadNotFoundEnvelope(t, err, nodeKindCategory)
 	assert.Nil(t, got)
 }
 
@@ -102,7 +102,7 @@ func TestCategoryResolver_CategoryByID_NotFound(t *testing.T) {
 	categoryID := mustEncodeNodeID(nodeKindCategory, uuid.New().String())
 
 	got, err := qr.Category(context.Background(), model.CategoryBy{ID: &categoryID})
-	require.NoError(t, err)
+	requireReadNotFoundEnvelope(t, err, nodeKindCategory)
 	assert.Nil(t, got)
 }
 

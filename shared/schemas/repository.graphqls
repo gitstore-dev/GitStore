@@ -108,7 +108,7 @@ type RepositoryConnection {
 extend type Query {
   """
   Look up a repository by its namespace identifier and name.
-  Returns null if not found.
+  Returns null with a NOT_FOUND error and a failure diagnostic if not found.
   """
   repository(by: RepositoryBy!): Repository
 

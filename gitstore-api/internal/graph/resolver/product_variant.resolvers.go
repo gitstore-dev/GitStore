@@ -7,10 +7,8 @@ package resolver
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
-	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 )
 
@@ -35,21 +33,15 @@ func (r *queryResolver) ProductVariant(ctx context.Context, by model.ProductVari
 			return nil, err
 		}
 		v, err := r.service.GetProductVariantByUID(ctx, uid)
-		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, nil
-		}
 		if err != nil {
-			return nil, fmt.Errorf("variant lookup by id: %w", err)
+			return nil, nodeLookupError(nodeKindProductVariant, err)
 		}
 		return DatastoreVariantToGraphQL(v), nil
 	}
 	if by.NamespacePath != nil {
 		v, err := r.service.GetProductVariantByName(ctx, by.NamespacePath.Namespace, by.NamespacePath.Name)
-		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, nil
-		}
 		if err != nil {
-			return nil, fmt.Errorf("variant lookup by name: %w", err)
+			return nil, nodeLookupError(nodeKindProductVariant, err)
 		}
 		return DatastoreVariantToGraphQL(v), nil
 	}
