@@ -125,29 +125,57 @@ export const ProfileMenuOpen: Story = {
     )
   },
 }
+async function waitForOverlayEntry(element: HTMLElement) {
+  const animations = new Set<Animation>()
+  for (
+    let node: HTMLElement | null = element;
+    node;
+    node = node.parentElement
+  ) {
+    node.getAnimations().forEach((animation) => animations.add(animation))
+  }
+  await Promise.all(
+    [...animations].map((animation) =>
+      animation.finished.catch(() => undefined),
+    ),
+  )
+  await expect(element).toBeVisible()
+}
+async function openMobileNavigation(canvasElement: HTMLElement) {
+  await userEvent.click(
+    await within(canvasElement).findByRole('button', {
+      name: 'Open navigation menu',
+    }),
+  )
+  const drawer = await within(canvasElement.ownerDocument.body).findByRole(
+    'dialog',
+    { name: 'Mobile navigation' },
+  )
+  await waitForOverlayEntry(drawer)
+  return drawer
+}
 export const MobileDrawerOpen: Story = {
   globals: { viewport: { value: 'mobile1', isRotated: false } },
   play: async ({ canvasElement }) => {
-    await userEvent.click(
-      within(canvasElement).getByRole('button', { name: 'Open navigation' }),
-    )
+    await openMobileNavigation(canvasElement)
   },
 }
 export const MobileProfileMenuOpen: Story = {
   args: { path: '/w/studio-berlin/settings/store-details' },
   globals: { viewport: { value: 'mobile1', isRotated: false } },
   play: async ({ canvasElement }) => {
-    await userEvent.click(
-      within(canvasElement).getByRole('button', {
-        name: 'Open navigation menu',
-      }),
+    const drawer = await openMobileNavigation(canvasElement)
+    const profile = within(drawer).getByRole('button', {
+      name: /Elena Rostova/,
+    })
+    profile.focus()
+    await userEvent.keyboard('{Enter}')
+    const menu = await within(canvasElement.ownerDocument.body).findByRole(
+      'menu',
     )
-    const drawer = await within(canvasElement.ownerDocument.body).findByRole(
-      'dialog',
-      { name: 'Mobile navigation' },
-    )
-    await userEvent.click(
-      within(drawer).getByRole('button', { name: /Elena Rostova/ }),
-    )
+    await waitForOverlayEntry(menu)
+    await expect(
+      within(menu).getByRole('menuitem', { name: 'Profile & preferences' }),
+    ).toBeVisible()
   },
 }
