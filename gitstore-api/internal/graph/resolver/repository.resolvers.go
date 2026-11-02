@@ -12,6 +12,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
@@ -216,6 +217,17 @@ func (r *mutationResolver) CompleteRepositoryDeletion(ctx context.Context, input
 
 // Repository is the resolver for the repository field.
 func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (*model.Repository, error) {
+	if repo, ns, ok := security.AuthorizedRepositoryRead(ctx, by); ok {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		r.logger.Info("lookup repository", zap.String("repo_id", repo.UID))
+		result, err := datastoreRepositoryToModelStrict(repo, ns, r.storageDataDir)
+		if err != nil {
+			return nil, gqlerror.Errorf("failed to hydrate repository: %v", err)
+		}
+		return result, nil
+	}
 	if by.ID != nil {
 		repoID, err := decodeNodeIDAs(nodeKindRepository, *by.ID)
 		if err != nil {
@@ -223,11 +235,11 @@ func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (
 		}
 		repo, err := r.service.GetRepository(ctx, repoID)
 		if err != nil {
-			return nil, err
+			return nil, nodeLookupError(nodeKindRepository, err)
 		}
 		ns, err := r.service.GetNamespaceByName(ctx, repo.Namespace)
 		if err != nil {
-			return nil, err
+			return nil, nodeLookupError(nodeKindNamespace, err)
 		}
 		r.logger.Info("lookup repository", zap.String("repo_id", repoID))
 		result, err := datastoreRepositoryToModelStrict(repo, ns, r.storageDataDir)
@@ -239,21 +251,15 @@ func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (
 	if by.NamespacePath != nil {
 		ns, err := r.service.GetNamespaceByName(ctx, by.NamespacePath.Namespace)
 		if err != nil {
-			return nil, err
+			return nil, nodeLookupError(nodeKindNamespace, err)
 		}
 		mapping, err := r.service.LookupRepository(ctx, ns.Name, by.NamespacePath.Name)
 		if err != nil {
-			if errors.Is(err, datastore.ErrNotFound) {
-				return nil, &gqlerror.Error{
-					Message:    "repository not found",
-					Extensions: map[string]any{"code": "NOT_FOUND"},
-				}
-			}
-			return nil, err
+			return nil, nodeLookupError(nodeKindRepository, err)
 		}
 		repo, err := r.service.GetRepository(ctx, mapping.RepositoryID)
 		if err != nil {
-			return nil, err
+			return nil, nodeLookupError(nodeKindRepository, err)
 		}
 		r.logger.Info("lookup repository",
 			zap.String("namespace", ns.Name),

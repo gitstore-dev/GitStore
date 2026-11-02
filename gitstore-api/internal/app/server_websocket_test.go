@@ -25,6 +25,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
 
@@ -299,12 +300,18 @@ func TestGraphQLFilePoolLookupAcceptsBoundedAliasesAndTypedProjection(t *testing
 					}
 				}
 			}
-			Errors json.RawMessage
+			Errors gqlerror.List
 		}
 		err = json.NewDecoder(response.Body).Decode(&result)
 		require.NoError(t, response.Body.Close())
 		require.NoError(t, err)
-		require.Empty(t, result.Errors, "%s", result.Errors)
+		require.Len(t, result.Errors, 1)
+		require.Equal(t, "missing", result.Errors[0].Path.String())
+		require.Len(t, result.Errors[0].Extensions, 2)
+		require.Equal(t, "NOT_FOUND", result.Errors[0].Extensions["code"])
+		diagnostics, err := json.Marshal(result.Errors[0].Extensions["diagnostics"])
+		require.NoError(t, err)
+		require.JSONEq(t, `[{"reason":"FILE_NOT_FOUND","message":"file not found","level":"FAILURE"}]`, string(diagnostics))
 		require.Nil(t, result.Data["missing"])
 		for index := range 10 {
 			file := result.Data[fmt.Sprintf("f%d", index)]

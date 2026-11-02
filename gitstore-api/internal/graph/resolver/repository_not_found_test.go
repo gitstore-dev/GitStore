@@ -4,22 +4,163 @@
 package resolver_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/99designs/gqlgen/graphql"
+	"github.com/99designs/gqlgen/graphql/handler"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
 
 const repositoryNotFoundTestNamespaceID = "01960000-0000-7000-8000-000000000140"
+
+func TestQueryRepositoryUsesOnlyItsFieldAuthorizedSnapshot(t *testing.T) {
+	const uid = "01960000-0000-7000-8000-000000000141"
+	id := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Repository/" + uid))
+	for _, selector := range []string{"id", "path"} {
+		t.Run(selector, func(t *testing.T) {
+			by := model.RepositoryBy{ID: &id}
+			if selector == "path" {
+				by = model.RepositoryBy{NamespacePath: &model.RepositoryNamespacePath{Namespace: "acme", Name: "catalog"}}
+			}
+			current := &datastore.Repository{
+				UID: uid, ID: uid, Name: "catalog", Namespace: "acme", DefaultBranch: "main",
+				ResourceVersion: "1", Generation: 1, CreationActor: "alice", Body: "first",
+			}
+			namespace := &datastore.Namespace{Name: "acme", CreationActor: "alice"}
+			repositoryReads, namespaceReads, mappingReads := 0, 0, 0
+			store := &testutil.StubStore{
+				GetRepositoryFunc: func(ctx context.Context, requested string) (*datastore.Repository, error) {
+					repositoryReads++
+					require.Equal(t, uid, requested)
+					require.NoError(t, ctx.Err())
+					copy := *current
+					return &copy, nil
+				},
+				GetNamespaceByNameFunc: func(_ context.Context, requested string) (*datastore.Namespace, error) {
+					namespaceReads++
+					require.Equal(t, namespace.Name, requested)
+					copy := *namespace
+					return &copy, nil
+				},
+				LookupRepositoryFunc: func(_ context.Context, requestedNamespace, requestedName string) (*datastore.NamespaceMapping, error) {
+					mappingReads++
+					require.Equal(t, "acme", requestedNamespace)
+					require.Equal(t, "catalog", requestedName)
+					return &datastore.NamespaceMapping{Namespace: "acme", Name: "catalog", RepositoryID: uid}, nil
+				},
+			}
+			root, err := resolver.NewResolver(resolver.ResolverDeps{Store: store, Logger: zap.NewNop()})
+			require.NoError(t, err)
+			provider := testutil.NewAllowAllAuthZ()
+			middleware := security.NewAuthorizeWithStore(auth.NewProviderRegistry(nil, provider, nil), store, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "alice", AuthMethod: "bearer"})
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+				Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: "repository"}},
+				Args: map[string]any{"by": by},
+			})
+			var firstContext context.Context
+			result, err := middleware.GraphQLFieldAuthorizer(ctx, func(next context.Context) (any, error) {
+				firstContext = next
+				nextVersion := *current
+				nextVersion.ResourceVersion, nextVersion.Body, nextVersion.CreationActor = "2", "second", "bob"
+				current = &nextVersion
+				return root.Query().Repository(next, by)
+			})
+			require.NoError(t, err)
+			first, ok := result.(*model.Repository)
+			require.True(t, ok)
+			require.Equal(t, "1", first.Metadata.ResourceVersion)
+			require.Equal(t, "first", *first.Body)
+			require.Equal(t, 1, repositoryReads)
+			require.Equal(t, 1, namespaceReads)
+			require.Equal(t, "repository.read", provider.Action)
+			require.Equal(t, "alice", provider.Resource.OwnerSub)
+
+			_, _, reused := security.AuthorizedRepositoryRead(firstContext, model.RepositoryBy{
+				NamespacePath: &model.RepositoryNamespacePath{Namespace: "other", Name: "catalog"},
+			})
+			require.False(t, reused)
+			otherID := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Repository/01960000-0000-7000-8000-000000000142"))
+			_, _, reused = security.AuthorizedRepositoryRead(firstContext, model.RepositoryBy{ID: &otherID})
+			require.False(t, reused)
+			sibling := graphql.WithFieldContext(firstContext, &graphql.FieldContext{
+				Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: "repository"}},
+				Args: map[string]any{"by": by},
+			})
+			_, _, reused = security.AuthorizedRepositoryRead(sibling, by)
+			require.False(t, reused, "even the same selector must not reuse another field's decision")
+			mutation := graphql.WithFieldContext(firstContext, &graphql.FieldContext{
+				Object: "Mutation", Field: graphql.CollectedField{Field: &ast.Field{Name: "updateRepository"}},
+			})
+			_, _, reused = security.AuthorizedRepositoryRead(mutation, by)
+			require.False(t, reused)
+			_, _, reused = security.AuthorizedRepositoryRead(ctx, by)
+			require.False(t, reused, "field records must not leak into the parent operation context")
+			canceled, cancel := context.WithCancel(firstContext)
+			cancel()
+			_, err = root.Query().Repository(canceled, by)
+			require.ErrorIs(t, err, context.Canceled)
+
+			result, err = middleware.GraphQLFieldAuthorizer(ctx, func(next context.Context) (any, error) {
+				return root.Query().Repository(next, by)
+			})
+			require.NoError(t, err)
+			second, ok := result.(*model.Repository)
+			require.True(t, ok)
+			require.Equal(t, "2", second.Metadata.ResourceVersion)
+			require.Equal(t, "second", *second.Body)
+			require.Equal(t, 2, repositoryReads)
+			require.Equal(t, 2, namespaceReads)
+			require.Equal(t, "bob", provider.Resource.OwnerSub)
+			if selector == "path" {
+				require.Equal(t, 2, mappingReads)
+			} else {
+				require.Zero(t, mappingReads)
+			}
+
+			server := handler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{Resolvers: root}))
+			server.AroundFields(middleware.GraphQLFieldAuthorizer)
+			payload, err := json.Marshal(map[string]any{
+				"query":     `query($by:RepositoryBy!){repository(by:$by){metadata{resourceVersion}}}`,
+				"variables": map[string]any{"by": by},
+			})
+			require.NoError(t, err)
+			request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(payload))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			require.Equal(t, http.StatusOK, response.Code)
+			require.JSONEq(t, `{"data":{"repository":{"metadata":{"resourceVersion":"2"}}}}`, response.Body.String())
+			require.Equal(t, 3, repositoryReads, "the generated transport must reuse the authorized field record")
+			require.Equal(t, 3, namespaceReads)
+			if selector == "path" {
+				require.Equal(t, 3, mappingReads)
+			} else {
+				require.Zero(t, mappingReads)
+			}
+		})
+	}
+}
 
 // lookupRepositoryErrStore wraps a Datastore and forces LookupRepository to
 // return an arbitrary, non-ErrNotFound error, simulating a genuine failure

@@ -7,9 +7,7 @@ package resolver
 
 import (
 	"context"
-	"errors"
 
-	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
@@ -20,11 +18,8 @@ func (r *queryResolver) File(ctx context.Context, namespace string, name string)
 		return nil, &gqlerror.Error{Message: "File namespace and name are required", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
 	}
 	file, err := r.store.GetFileByName(ctx, namespace, name)
-	if errors.Is(err, datastore.ErrNotFound) {
-		return nil, nil
-	}
 	if err != nil {
-		return nil, gqlerror.Errorf("retrieve File: %v", err)
+		return nil, nodeLookupError(nodeKindFile, err)
 	}
 	return DatastoreFileToGraphQL(file), nil
 }

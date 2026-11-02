@@ -56,7 +56,7 @@ func TestProductResolver_NamespacePath_ReturnsProduct(t *testing.T) {
 	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, p.UID), got.ID)
 }
 
-func TestProductResolver_NamespacePath_NotFound_ReturnsNil(t *testing.T) {
+func TestProductResolver_NamespacePath_NotFound_ReturnsError(t *testing.T) {
 	qr, _ := newProductResolverEnv(t)
 
 	by := model.ProductBy{NamespacePath: &model.ProductNamespacePath{
@@ -65,7 +65,7 @@ func TestProductResolver_NamespacePath_NotFound_ReturnsNil(t *testing.T) {
 	}}
 	got, err := qr.Product(context.Background(), by)
 	assert.Nil(t, got)
-	assert.NoError(t, err)
+	requireReadNotFoundEnvelope(t, err, nodeKindProduct)
 }
 
 // ── ProductBy.id arm ─────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ func TestProductResolver_ID_ReturnsProduct(t *testing.T) {
 	assert.Equal(t, encodedID, got.ID)
 }
 
-func TestProductResolver_ID_NotFound_ReturnsNil(t *testing.T) {
+func TestProductResolver_ID_NotFound_ReturnsError(t *testing.T) {
 	qr, _ := newProductResolverEnv(t)
 
 	nonExistent := mustEncodeNodeID(nodeKindProduct, uuid.New().String())
@@ -91,10 +91,10 @@ func TestProductResolver_ID_NotFound_ReturnsNil(t *testing.T) {
 
 	got, err := qr.Product(context.Background(), by)
 	assert.Nil(t, got)
-	assert.NoError(t, err)
+	requireReadNotFoundEnvelope(t, err, nodeKindProduct)
 }
 
-func TestProductResolver_ID_InvalidEncoding_ReturnsNil(t *testing.T) {
+func TestProductResolver_ID_InvalidEncoding_ReturnsError(t *testing.T) {
 	qr, _ := newProductResolverEnv(t)
 
 	invalid := "not-a-valid-global-id"
@@ -102,7 +102,7 @@ func TestProductResolver_ID_InvalidEncoding_ReturnsNil(t *testing.T) {
 
 	got, err := qr.Product(context.Background(), by)
 	assert.Nil(t, got)
-	assert.NoError(t, err)
+	require.ErrorContains(t, err, "invalid global ID")
 }
 
 // ── Default arm (no selector) ────────────────────────────────────────────────

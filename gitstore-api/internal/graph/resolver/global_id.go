@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/vektah/gqlparser/v2/gqlerror"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 )
 
 const (
@@ -105,11 +105,13 @@ func decodeNodeIDAs(kind, id string) (string, error) {
 		return "", invalidGlobalIDError(err)
 	}
 	if actualKind != kind {
-		return "", gqlerror.Errorf("invalid global ID kind: expected %s, got %s", kind, actualKind)
+		return "", invalidGlobalIDError(fmt.Errorf("expected %s, got %s", kind, actualKind))
 	}
 	return rawID, nil
 }
 
 func invalidGlobalIDError(err error) error {
-	return gqlerror.Errorf("invalid global ID: %v", err)
+	result := admission.NewError(admission.CodeBadUserInput, "INVALID_GLOBAL_ID", fmt.Sprintf("invalid global ID: %v", err)).ToGQLError()
+	result.Err = err
+	return result
 }
