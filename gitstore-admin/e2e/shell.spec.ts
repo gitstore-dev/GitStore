@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import { destinations, destinationHref } from '../src/navigation/registry'
 const home = '/w/atelier-kyoto/home/overview'
-test('all 79 destinations have real route placeholders and no backend calls', async ({
+test('all 79 destinations are reachable with a mock Overview and 78 placeholders', async ({
   page,
 }) => {
   test.setTimeout(120000)
@@ -19,9 +19,16 @@ test('all 79 destinations have real route placeholders and no backend calls', as
         level: 1,
       }),
     ).toBeVisible()
-    await expect(
-      page.getByText('PAGE NOT IMPLEMENTED', { exact: true }),
-    ).toBeVisible()
+    if (destination.implementation === 'mock') {
+      await expect(page.getByText('Demo data', { exact: true })).toBeVisible()
+      await expect(
+        page.getByRole('region', { name: 'Store summary' }),
+      ).toBeVisible()
+    } else {
+      await expect(
+        page.getByText('PAGE NOT IMPLEMENTED', { exact: true }),
+      ).toBeVisible()
+    }
   }
   expect(forbidden).toEqual([])
 })
@@ -136,11 +143,10 @@ test('layouts, accessibility, responsive overflow and screenshots', async ({
     path: testInfo.outputPath('desktop-dark.png'),
     fullPage: true,
   })
-  await page.getByRole('button', { name: 'Layout options' }).click()
-  await page.getByRole('menuitem', { name: 'With inspector' }).click()
+  await page.getByRole('button', { name: 'Inspector', exact: true }).click()
   await expect(
-    page.getByRole('menu', { name: 'Layout', exact: true }),
-  ).toBeHidden()
+    page.getByRole('button', { name: 'Inspector', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true')
   await expect(
     page.getByRole('complementary', { name: 'Page context' }),
   ).toBeVisible()
@@ -149,11 +155,7 @@ test('layouts, accessibility, responsive overflow and screenshots', async ({
     path: testInfo.outputPath('inspector.png'),
     fullPage: true,
   })
-  await page.getByRole('button', { name: 'Layout options' }).click()
-  await page.getByRole('menuitem', { name: 'Focus mode', exact: true }).click()
-  await expect(
-    page.getByRole('menu', { name: 'Layout', exact: true }),
-  ).toBeHidden()
+  await page.getByRole('button', { name: 'Focus mode', exact: true }).click()
   await expect(
     page.getByRole('button', { name: 'Exit Focus Mode' }),
   ).toBeVisible()

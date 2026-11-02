@@ -39,7 +39,11 @@ export function ProfileMenu({
       <MenuTrigger>
         <ActionButton
           className={styles.profileButton}
-          aria-label={compact ? 'Profile menu' : undefined}
+          aria-label={
+            compact
+              ? `${demoUser.initials} — Profile menu for ${demoUser.name}`
+              : undefined
+          }
           variant="ghost"
         >
           <span aria-hidden="true" className={styles.avatar}>
@@ -54,7 +58,9 @@ export function ProfileMenu({
             </>
           )}
         </ActionButton>
+        {/* The mobile drawer already owns modality and focus containment. */}
         <Popover
+          isNonModal={mobile}
           placement={mobile ? 'top start' : 'right bottom'}
           offset={8}
           containerPadding={12}

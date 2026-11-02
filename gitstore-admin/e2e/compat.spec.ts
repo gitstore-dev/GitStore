@@ -44,6 +44,7 @@ test('shell navigation and mobile drawer work across engines', async ({
     }),
   })
   await expect(menu).toBeVisible()
+  await expect(menu).toBeFocused()
   const bounds = (await menu.boundingBox())!
   expect(bounds.x).toBeGreaterThanOrEqual(0)
   expect(bounds.x + bounds.width).toBeLessThanOrEqual(390)

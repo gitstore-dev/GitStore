@@ -1,0 +1,165 @@
+/* Names exist only for this short, document-scoped transition. Normal navigation
+   and independently rendered stories don't acquire snapshot layers. */
+html[data-focus-transition] [data-focus-chrome='sidebar'] {
+  view-transition-name: gs-sidebar;
+}
+html[data-focus-transition] [data-focus-chrome='sidebar'] nav {
+  view-transition-name: gs-navigation;
+}
+html[data-focus-transition] [data-focus-chrome='header'] {
+  view-transition-name: gs-header;
+}
+html[data-focus-transition]
+  [data-focus-chrome='inspector']:not([aria-hidden='true']) {
+  view-transition-name: gs-inspector;
+}
+html[data-focus-transition] [data-focus-chrome='mobile'] {
+  view-transition-name: gs-mobile;
+}
+html[data-focus-transition] main {
+  view-transition-name: gs-working-page;
+}
+html[data-focus-transition]::view-transition {
+  pointer-events: none;
+}
+html[data-focus-transition]::view-transition-group(*) {
+  animation-duration: 420ms;
+  animation-timing-function: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+html[data-focus-transition]::view-transition-old(root),
+html[data-focus-transition]::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+html[data-focus-transition]::view-transition-old(gs-working-page) {
+  animation: none;
+  opacity: 0;
+}
+html[data-focus-transition]::view-transition-new(gs-working-page) {
+  animation: gs-page-settle 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  mix-blend-mode: normal;
+}
+
+html[data-focus-transition='enter']::view-transition-old(gs-sidebar) {
+  animation: gs-erase-left 260ms 70ms cubic-bezier(0.3, 0, 0.3, 1) both;
+}
+html[data-focus-transition='enter']::view-transition-old(gs-navigation) {
+  animation: gs-labels-out 160ms ease-in both;
+}
+html[data-focus-transition='enter']::view-transition-old(gs-header) {
+  animation: gs-erase-up 240ms ease-in both;
+}
+html[data-focus-transition='enter']::view-transition-old(gs-inspector) {
+  animation: gs-erase-right 260ms 40ms ease-in both;
+}
+html[data-focus-transition='enter']::view-transition-old(gs-mobile) {
+  animation: gs-erase-down 240ms ease-in both;
+}
+html[data-focus-transition='enter']::view-transition-new(gs-header) {
+  animation: gs-return 200ms 200ms ease-out both;
+}
+
+html[data-focus-transition='leave']::view-transition-old(gs-header) {
+  animation: gs-labels-out 100ms ease-in both;
+}
+html[data-focus-transition='leave']::view-transition-new(gs-header) {
+  animation: gs-return 260ms 100ms ease-out both;
+}
+html[data-focus-transition='leave']::view-transition-new(gs-sidebar) {
+  animation: gs-draw-left 300ms ease-out both;
+}
+html[data-focus-transition='leave']::view-transition-new(gs-navigation) {
+  animation: gs-labels-return 240ms 100ms ease-out both;
+}
+html[data-focus-transition='leave']::view-transition-new(gs-mobile) {
+  animation: gs-return 260ms 80ms ease-out both;
+}
+
+@keyframes gs-page-settle {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(0.985);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes gs-erase-left {
+  to {
+    clip-path: inset(0 100% 0 0);
+    transform: translateX(-24px);
+    opacity: 0;
+  }
+}
+@keyframes gs-erase-right {
+  to {
+    clip-path: inset(0 0 0 100%);
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+@keyframes gs-erase-up {
+  to {
+    clip-path: inset(0 0 100% 0);
+    transform: translateY(-16px);
+    opacity: 0;
+  }
+}
+@keyframes gs-erase-down {
+  to {
+    clip-path: inset(100% 0 0 0);
+    transform: translateY(16px);
+    opacity: 0;
+  }
+}
+@keyframes gs-labels-out {
+  to {
+    transform: translateX(-14px);
+    opacity: 0;
+  }
+}
+@keyframes gs-return {
+  from {
+    transform: translateY(-10px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes gs-labels-return {
+  from {
+    transform: translateX(-14px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes gs-draw-left {
+  from {
+    clip-path: inset(0 100% 0 0);
+    opacity: 0;
+  }
+  to {
+    clip-path: inset(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-focus-transition]::view-transition-group(*),
+  html[data-focus-transition]::view-transition-old(*),
+  html[data-focus-transition]::view-transition-new(*) {
+    animation: none !important;
+  }
+}
+html[data-motion='reduced']::view-transition-group(*),
+html[data-motion='reduced']::view-transition-old(*),
+html[data-motion='reduced']::view-transition-new(*) {
+  animation: none !important;
+}

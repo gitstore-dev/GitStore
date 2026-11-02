@@ -2,7 +2,7 @@
 
 ## Boundaries
 
-Only the shell, shared controls, layouts and navigation are implemented. Local typed fixtures describe two demo workspaces and one demo identity. No network transport, authentication, operational metrics, Apollo cache, GraphQL endpoint or API mock server is present. Demo menus do not enforce authorization.
+The shell, shared controls, layouts, navigation, and Home / Overview are implemented. Overview is a local demo with deterministic fixtures and simulated resolution; the other 78 destinations remain placeholders. Local typed fixtures describe two demo workspaces and one demo identity. No network transport, authentication, live operational metrics, Apollo cache, GraphQL endpoint or API mock server is present. Demo menus do not enforce authorization.
 
 The PRD covers future commerce capabilities. Source references in the copied PRD describe the backend's historical planning baseline, which is intentionally absent on this branch. Stitch project GitStore Admin II is visual reference, not production source code.
 
@@ -12,6 +12,7 @@ The PRD covers future commerce capabilities. Source references in the copied PRD
 - `src/routes`: thin TanStack file routes. Generated route-tree output is ignored and recreated by the router CLI/Vite plugin.
 - `src/components`: React Aria-backed interactions, navigation items, theme picker, workspace selector, profile menu and command palette.
 - `src/shell`: header/sidebar and standard, inspector and Focus Mode composition.
+- `src/features/home/overview`: page-local fixtures, selectors, reducer, controls, resource inspector, and presentation states. No transport or API contract is implied.
 - `src/pages`: shared placeholder and not-found UI. Future business screens belong in feature directories.
 - `src/state`: browser preferences only; never future API data or credentials.
 - `src/stories`: shared control and layout states, including themes, rail, reduced motion and responsive previews.
@@ -30,13 +31,53 @@ The workspace landing sidebar exposes five areas: Home, Commerce, Content, Opera
 
 Settings is a separate context entered through the anchored footer link; its sidebar contains only settings destinations and no duplicate Settings entry. Control plane is a platform workspace chosen from the namespace/platform selector. Choosing a namespace from platform scope opens that workspace's Home; switching namespaces within a workspace preserves the current page. The command palette continues to search all 79 destinations. These are navigation contexts, not permission checks or personalized filtering.
 
+## Overview demo lifecycle
+
+Atelier Kyoto starts with 14 resources across seven canonical kinds; Studio Berlin starts with an empty catalog and setup guidance. Counts and the health matrix derive from resource records. Confirmed demo actions update local readiness and activity; cancellation does not. Ready items remain accessible through the inspector selector and activity. State resets on route unmount, namespace change, reload, or Reset demo. Storybook scenarios are injected through router context, never URL parameters. Restricted and unavailable specimens are presentations, not permission enforcement or network behavior.
+
+Feature content registers with the shell-owned page inspector by route owner. Stable registration/open/close functions preserve the shell layout; owner checks and cleanup prevent resource details leaking across routes. The navigation registry marks only `home.overview` as `mock` and all other destinations as `placeholder`.
+
+### Merchant vocabulary
+
+Overview's `presentation.ts` maps canonical kinds and readiness values to merchant
+labels. These are display labels only: selectors, sorting, filters, shader colors,
+routes, and fixtures retain canonical keys. Primary sections read Updates and
+issues, Store status, and Store setup. Counts include store content and configuration,
+not only products. Canonical types and `.md` source paths remain available in the
+inspector's native Technical details disclosure; they do not appear on work cards.
+Keep future business-page copy aligned with the PRD's merchant language policy.
+
 ## Styling and motion
 
-Sidebar Up/Down and Home/End keys move focus among visible navigation links and section controls. They do not change the route; Enter activates the focused link. Tab retains its native behavior, and React Aria popover menus retain their own keyboard handling. The mobile profile menu opens above its footer trigger, aligned to its width and constrained to the viewport; Escape closes the menu and restores focus without dismissing the navigation drawer.
+Sidebar Up/Down and Home/End keys move focus among visible navigation links and section controls. They do not change the route; Enter activates the focused link. Tab retains its native behavior, and React Aria popover menus retain their own keyboard handling. The mobile profile menu opens above its footer trigger, aligned to its width and constrained to the viewport; Escape closes the menu and restores focus without dismissing the navigation drawer. Within that drawer, the profile popover is nonmodal: the drawer owns modality and focus containment, avoiding competing nested modal restoration in Chromium.
 
 Mobile uses a fixed bottom navigation bar with Catalog, Orders, Changes and Menu. Platform routes replace the shortcuts with Namespaces, Resources and Policies. Menu opens a bottom drawer; focus returns to its trigger on dismissal. Safe-area padding keeps content clear of the navigation. The mobile header contains the compact workspace context selector; desktop breadcrumbs start at the domain, without a redundant Workspace/Platform prefix. Expanded context menus open below their trigger within sidebar width. Selected indicators derive from React Aria selection state. The profile menu includes a disabled Log out item with an authentication-not-connected explanation; there is no simulated sign-out or session API.
 
-Concept-v2 assets are copied from the branding repository. Production SVG symbols remain flat; no generated Stitch logos are reused. Archivo Narrow, IBM Plex Sans and IBM Plex Mono are bundled through Fontsource; license copies are included under public/licenses. Palette, layout and motion use custom CSS Modules and shared CSS variables, not a preset theme. Light/dark/system and sidebar choices persist locally. Motion can follow the system or be reduced; system reduction is never overridden. No WebGPU or HTML-in-Canvas runtime is implemented.
+Concept-v2 assets are copied from the branding repository. Production SVG symbols remain flat; no generated Stitch logos are reused. Archivo Narrow, IBM Plex Sans and IBM Plex Mono are bundled through Fontsource; license copies are included under public/licenses. Palette, layout and motion use custom CSS Modules and shared CSS variables, not a preset theme. Light/dark/system and sidebar choices persist locally. Motion can follow the system or be reduced; system reduction is never overridden. Focus Mode uses a reversible 420 ms View Transition, with a Web Animations fallback. Its optional, lazy-loaded WebGPU enhancement captures decorative copies of shell regions through native HTML-in-Canvas; working controls and page content stay in the DOM. Reduced motion bypasses animation and GPU preparation. See the root README for capability detection and resource budgets. The motion boundary lives in `src/shell/motion`; its document-level pseudo-element stylesheet is scoped to `html[data-focus-transition]`, while layout and control styles remain CSS Modules.
+
+### Overview card choreography and lighting
+
+The feature's `motion/` directory owns measured grid movement and a demand-driven
+WebGPU light field. Filter/sort/reset/confirmed resolution capture card positions
+before changing state. Stable HTML cards move for 300 ms; inert, aria-hidden exits
+last 140 ms; arrivals settle for 220 ms with at most 96 ms stagger. The stage height
+animates with the grid. Interruptions start from the current visible positions;
+copies and animations are removed on completion, reduction, Focus, or unmount.
+
+One lazy-loaded canvas lights summary and queue card boundaries without capturing
+HTML. Its renderer caps dimensions to 2048 pixels and DPR to 1.5, draws only visible
+cards, and stops requesting frames after a bounded interaction or layout change.
+Hidden/offscreen scenes clear; route exit and reduced motion destroy the device.
+Device loss/initialization failure returns to CSS without changing page state.
+Readiness labels/icons remain authoritative. Theme/resize/scroll trigger redraws.
+The shell's `gitstore:focus-motion` boundary suspends this light field and finishes
+grid motion before Focus capture, resuming geometry updates after transition.
+HTML-in-Canvas remains exclusive to the existing optional shell capture path.
+
+Storybook's State Lighting, CSS State Lighting, Filter Choreography, and Reduced
+Motion Filtering specimens expose these behaviors; effects can be compared without
+changing browser flags. The decorative brand/workflow footer is removed from
+Overview. No backend, polling, persistence, or live state changes are introduced.
 
 ## Static deployment
 

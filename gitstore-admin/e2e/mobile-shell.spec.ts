@@ -24,8 +24,23 @@ test('context selection stays checked, fits inside the sidebar, and removes redu
     'Atelier Kyoto',
   ]) {
     await picker.click()
+    await expect(
+      page.getByRole('group', { name: 'Stores', exact: true }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole('group', { name: 'Platform', exact: true }),
+    ).toBeVisible()
     const option = page.getByRole('option', { name: new RegExp(name) })
-    await option.click()
+    if (name === 'Control plane') {
+      await page.keyboard.press('End')
+      await page.keyboard.press('Enter')
+    } else {
+      await option.click()
+    }
+    await expect(picker).toHaveAttribute(
+      'data-context',
+      name === 'Control plane' ? 'platform' : 'store',
+    )
     await picker.click()
     const selected = page.getByRole('option', { selected: true })
     await expect(selected).toContainText(name)
@@ -37,6 +52,13 @@ test('context selection stays checked, fits inside the sidebar, and removes redu
     const bounds = (await sidebar.boundingBox())!
     expect(popup.x).toBeGreaterThanOrEqual(bounds.x)
     expect(popup.x + popup.width).toBeLessThanOrEqual(bounds.x + bounds.width)
+    if (name === 'Control plane') {
+      await expect(picker).toContainText('Platform')
+      await page.screenshot({
+        path: testInfo.outputPath('platform-context-selector.png'),
+        fullPage: true,
+      })
+    }
     await page.keyboard.press('Escape')
     await expect(picker).toBeFocused()
   }

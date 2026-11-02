@@ -5,9 +5,11 @@ import {
   Popover,
   ListBox,
   ListBoxItem,
+  ListBoxSection,
+  Header,
   Label,
 } from 'react-aria-components'
-import { ChevronDown, Check, Layers } from 'lucide-react'
+import { ChevronDown, Check, Layers, SlidersHorizontal } from 'lucide-react'
 import { namespaces } from '../data/demo'
 import type { NamespaceId } from '../data/demo'
 import styles from '../shell/shell.module.css'
@@ -24,19 +26,9 @@ export function NamespacePicker({
   platform?: boolean
   onPlatformChange?: () => void
 }) {
-  const choices = onPlatformChange
-    ? [
-        ...namespaces,
-        {
-          id: 'platform',
-          name: 'Control plane',
-          description: 'Platform workspace · outside namespaces',
-        },
-      ]
-    : namespaces
   const selected =
-    choices.find((choice) => choice.id === (platform ? 'platform' : value)) ??
-    namespaces[0]
+    namespaces.find((choice) => choice.id === value) ?? namespaces[0]
+  const selectedName = platform ? 'Control plane' : selected.name
   return (
     <Select
       className={styles.workspaceSelect}
@@ -48,17 +40,25 @@ export function NamespacePicker({
       <Label className="sr-only">Workspace context</Label>
       <Button
         className={`${styles.workspaceButton} ${compact ? styles.workspaceCompact : ''}`}
+        data-context={platform ? 'platform' : 'store'}
       >
         <span aria-hidden="true" className={styles.workspaceAvatar}>
-          <Layers size={16} aria-hidden="true" />
+          {platform ? (
+            <SlidersHorizontal size={16} aria-hidden="true" />
+          ) : (
+            <Layers size={16} aria-hidden="true" />
+          )}
         </span>{' '}
         {compact && (
-          <SelectValue className="sr-only">{selected.name}</SelectValue>
+          <SelectValue className="sr-only">{selectedName}</SelectValue>
         )}
         {!compact && (
           <>
             <span className={styles.workspaceName}>
-              <SelectValue>{selected.name}</SelectValue>
+              <SelectValue>{selectedName}</SelectValue>
+              {platform && (
+                <small className={styles.scopeLabel}>Platform</small>
+              )}
             </span>
             <ChevronDown size={14} aria-hidden="true" />
           </>
@@ -69,29 +69,64 @@ export function NamespacePicker({
         offset={5}
         className={`${styles.popover} ${compact ? '' : styles.workspacePopover}`}
       >
-        <ListBox items={choices} className={styles.menu}>
-          {(namespace) => (
-            <ListBoxItem
-              id={namespace.id}
-              textValue={namespace.name}
-              className={styles.menuItem}
+        <ListBox className={styles.menu}>
+          <ListBoxSection className={styles.contextSection}>
+            <Header className={styles.scopeHeading}>Stores</Header>
+            {namespaces.map((namespace) => (
+              <ListBoxItem
+                key={namespace.id}
+                id={namespace.id}
+                textValue={namespace.name}
+                className={styles.menuItem}
+              >
+                {({ isSelected }) => (
+                  <>
+                    <Layers size={16} aria-hidden="true" />
+                    <span>
+                      <strong>{namespace.name}</strong>
+                      <small>{namespace.description}</small>
+                    </span>
+                    {isSelected && (
+                      <Check
+                        size={15}
+                        aria-hidden="true"
+                        data-selection-indicator
+                      />
+                    )}
+                  </>
+                )}
+              </ListBoxItem>
+            ))}
+          </ListBoxSection>
+          {onPlatformChange && (
+            <ListBoxSection
+              className={`${styles.contextSection} ${styles.platformSection}`}
             >
-              {({ isSelected }) => (
-                <>
-                  <span>
-                    <strong>{namespace.name}</strong>
-                    <small>{namespace.description}</small>
-                  </span>
-                  {isSelected && (
-                    <Check
-                      size={15}
-                      aria-hidden="true"
-                      data-selection-indicator
-                    />
-                  )}
-                </>
-              )}
-            </ListBoxItem>
+              <Header className={styles.scopeHeading}>Platform</Header>
+              <ListBoxItem
+                id="platform"
+                textValue="Control plane"
+                className={styles.menuItem}
+                data-context="platform"
+              >
+                {({ isSelected }) => (
+                  <>
+                    <SlidersHorizontal size={16} aria-hidden="true" />
+                    <span>
+                      <strong>Control plane</strong>
+                      <small>Manage across all stores</small>
+                    </span>
+                    {isSelected && (
+                      <Check
+                        size={15}
+                        aria-hidden="true"
+                        data-selection-indicator
+                      />
+                    )}
+                  </>
+                )}
+              </ListBoxItem>
+            </ListBoxSection>
           )}
         </ListBox>
       </Popover>

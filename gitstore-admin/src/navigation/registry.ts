@@ -183,6 +183,7 @@ export interface NavigationDestination {
   to: keyof FileRoutesByTo
   ordinal: number
   description: string
+  implementation: 'mock' | 'placeholder'
 }
 export function slug(value: string) {
   return value
@@ -206,7 +207,15 @@ export const destinations: readonly NavigationDestination[] = groups
       description: `The future home for ${label.toLowerCase()} in ${group.label.toLowerCase()}.`,
     })),
   )
-  .map((destination, index) => ({ ...destination, ordinal: index + 1 }))
+  .map((destination, index) => ({
+    ...destination,
+    ordinal: index + 1,
+    implementation: destination.id === 'home.overview' ? 'mock' : 'placeholder',
+    description:
+      destination.id === 'home.overview'
+        ? 'Resource work, readiness, and activity in your demo workspace.'
+        : destination.description,
+  }))
 export function destinationById(id: string) {
   const result = destinations.find((destination) => destination.id === id)
   if (!result) throw new Error(`Unknown navigation destination: ${id}`)

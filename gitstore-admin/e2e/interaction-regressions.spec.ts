@@ -1,5 +1,37 @@
 import { test, expect } from '@playwright/test'
 
+test('layout icons expose tooltips, keyboard selection, and focus restoration', async ({
+  page,
+}, testInfo) => {
+  await page.goto('/w/atelier-kyoto/home/overview')
+  const inspector = page.getByRole('button', { name: 'Inspector', exact: true })
+  const focus = page.getByRole('button', { name: 'Focus mode', exact: true })
+  await expect(
+    page.getByRole('group', { name: 'View controls' }).getByRole('button'),
+  ).toHaveCount(2)
+  await expect(inspector).toHaveAttribute('aria-pressed', 'false')
+  await expect(focus).toHaveAttribute('aria-pressed', 'false')
+  await inspector.focus()
+  await expect(page.getByRole('tooltip')).toHaveText('Inspector')
+  await inspector.press('Space')
+  await expect(inspector).toHaveAttribute('aria-pressed', 'true')
+  await expect(
+    page.getByRole('complementary', { name: 'Page context' }),
+  ).toBeVisible()
+  await inspector.press('Space')
+  await expect(inspector).toHaveAttribute('aria-pressed', 'false')
+  await expect(
+    page.getByRole('complementary', { name: 'Page context' }),
+  ).toBeHidden()
+  await page.screenshot({ path: testInfo.outputPath('layout-icons.png') })
+  await focus.press('Space')
+  const exit = page.getByRole('button', { name: 'Exit Focus Mode' })
+  await expect(exit).toBeFocused()
+  await exit.press('Enter')
+  await expect(focus).toHaveAttribute('aria-pressed', 'false')
+  await expect(focus).toBeFocused()
+})
+
 test('sidebar arrows move focus without navigation; Enter opens the focused destination', async ({
   page,
 }) => {

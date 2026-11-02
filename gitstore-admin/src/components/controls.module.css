@@ -27,7 +27,7 @@
 }
 .primary {
   background: var(--accent);
-  color: #162923;
+  color: #101b18;
   border-color: var(--accent);
 }
 .primary[data-hovered] {

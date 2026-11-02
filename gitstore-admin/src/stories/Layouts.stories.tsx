@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { RouterProvider } from '@tanstack/react-router'
 import type { Meta, StoryObj } from '@storybook/react-vite'
-import { userEvent, within } from 'storybook/test'
+import { expect, userEvent, within } from 'storybook/test'
 import { createAppRouter } from '../app/router'
 import type { LayoutMode } from '../shell/WorkspaceLayout'
 import type { Theme, MotionPreference } from '../state/preferences'
@@ -55,6 +55,23 @@ export const WithInspector: Story = {
   args: { mode: 'inspector', path: '/w/atelier-kyoto/catalog/products' },
 }
 export const FocusMode: Story = { args: { mode: 'focus' } }
+export const FocusTransition: Story = {
+  play: async ({ canvasElement }) => {
+    const screen = within(canvasElement)
+    await userEvent.click(screen.getByRole('button', { name: 'Focus mode' }))
+    await expect(
+      await screen.findByRole('button', { name: 'Exit Focus Mode' }),
+    ).toBeVisible()
+  },
+}
+export const FocusTransitionDark: Story = {
+  ...FocusTransition,
+  args: { theme: 'dark' },
+}
+export const FocusTransitionReducedMotion: Story = {
+  ...FocusTransition,
+  args: { motion: 'reduced' },
+}
 export const ReducedMotion: Story = { args: { motion: 'reduced' } }
 export const PlatformScope: Story = { args: { path: '/platform/namespaces' } }
 export const SettingsContext: Story = {
@@ -96,6 +113,10 @@ export const ContextSelectorOpen: Story = {
       within(canvasElement).getByRole('button', { name: /Workspace context/ }),
     )
   },
+}
+export const PlatformSelectorOpen: Story = {
+  ...ContextSelectorOpen,
+  args: { path: '/platform/namespaces' },
 }
 export const ProfileMenuOpen: Story = {
   play: async ({ canvasElement }) => {

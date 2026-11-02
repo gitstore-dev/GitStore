@@ -15,8 +15,14 @@ export function WorkspaceLayout({
       <main id="main-content" className={styles.main} tabIndex={-1}>
         {children}
       </main>
-      {mode === 'inspector' && inspector && (
-        <aside aria-label="Page context" className={styles.inspector}>
+      {inspector && (
+        <aside
+          aria-label="Page context"
+          data-focus-chrome="inspector"
+          className={styles.inspector}
+          inert={mode !== 'inspector'}
+          aria-hidden={mode !== 'inspector'}
+        >
           {inspector}
         </aside>
       )}

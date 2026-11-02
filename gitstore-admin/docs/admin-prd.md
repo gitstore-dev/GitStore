@@ -6,11 +6,11 @@
 
 **Audience:** Product, design, frontend, commerce backend, and platform contributors
 
-**Design reference:** [GitStore Admin in Stitch](https://stitch.withgoogle.com/projects/13975495090411370806)
+**Design reference:** [GitStore Admin II in Stitch](https://stitch.withgoogle.com/projects/12282348560453912861)
 
 **Brand reference:** [`gitstore-assets/branding/concept-v2`](../public/branding/)
 
-> Admin-only branch note: this PRD preserves the broader product plan. Backend source links point to the original GitStore checkout revision; backend services are intentionally absent here. Only the shell, navigation and layouts are implemented in this increment.
+> Admin-only branch note: this PRD preserves the broader product plan. Backend source links point to the original GitStore checkout revision; backend services are intentionally absent here. The shell, navigation, layouts, and a Home / Overview page with local demo fixtures are implemented. Other destinations remain placeholders; the mock Overview does not establish backend capabilities.
 
 ## 1. Product direction
 
@@ -202,6 +202,56 @@ data. Setup covers identity, namespace, repository, first catalog resource, and
 later channel/provider activation. Distinguish no data, no access, disconnected,
 and not yet configured.
 
+#### Merchant-facing language
+
+The daily Admin is for merchandisers and store owners. Describe their products,
+store setup, changes, and problems to fix. Kubernetes machinery and Git remain
+implementation foundations; users do not need their vocabulary to operate a store.
+Keep canonical resource kinds and state values in contracts and code. Translate
+presentation labels without changing their meaning, routing, filters, or counts.
+
+Home uses **Updates and issues**, **Store status**, and **Store setup** instead of
+Resource work, Resource health, and Your foundations. Remove decorative captions
+that do not help users understand or act. Use **View details** for item inspection.
+Use familiar kind labels such as Product variant, Category, and Media file; present
+Namespace as Workspace and Repository as Data source. This does not equate every
+namespace with a store or imply a source is connected. Home totals still include
+store content and configuration and must say so; they are not product/SKU totals.
+
+| Canonical readiness | Merchant-facing label |
+| --- | --- |
+| ready | Ready |
+| reconciling | Processing |
+| blocked | Needs review |
+| failed | Has errors |
+| stale | Out of date |
+
+Never relabel readiness as Published, Active, Connected, or Available for sale.
+Write diagnostics around the issue and the user's next action. Show related items
+rather than raw reference terminology. Keep source paths and canonical resource
+types behind the inspector's **Technical details** disclosure; leave them available
+for debugging and specialist workflows. The control plane may use technical terms
+where the user's task requires them. Carry this language policy into future pages.
+
+#### Deferred: store-status drill-down links
+
+Implement these links when the individual Resource index pages support filtering;
+keep the current Overview matrix noninteractive until those destinations are usable.
+
+- A resource-kind label and its Total count open that kind's index without a
+  readiness filter. In a shared index, retain the kind filter.
+- Ready and Processing counts open the same index with the corresponding
+  canonical readiness filter. Needs attention includes failed, blocked, and stale resources.
+- The Store status heading opens the shared Resource index without kind or
+  readiness filters, within the user's authorized scope.
+- Preserve the current namespace for namespace-scoped destinations. Respect
+  platform scope for platform resources rather than silently broadening scope.
+- Encode supported filters in the URL and display them on the destination;
+  verify direct links, reload, and browser Back/Forward.
+- Use real keyboard-accessible links with descriptive names, such as
+  “View 2 Products needing attention.” Keep zero counts and dashes as
+  plain text.
+
 ### Catalog and media
 
 Provide table/grid toggle, saved views, filters, sort, selection, and a persistent
@@ -346,6 +396,35 @@ condition referring to an older generation cannot establish readiness for new ed
 - Respect reduced motion and an explicit user motion setting. Disable parallax,
   tilt, sweeps and spatial travel; retain instant state/label updates. Pause all
   nonessential rendering in hidden tabs and offscreen scenes.
+
+### Home / Overview motion treatment (approved implementation)
+
+Home keeps resource cards and summary cards in semantic HTML. Filtering, sorting,
+reset, and confirmed local demo resolution animate the resource grid using measured
+before/after positions and the Web Animations API. Surviving cards travel for about
+300 ms; outgoing decorative copies fade/scale for 140 ms; arriving cards settle for
+220 ms with a capped 24 ms stagger. Animate the grid's height so the health section
+follows the change. Rapid input starts from current visual positions; cancel old
+animations and remove inert copies. Keep keyboard focus on the initiating control.
+These animations apply to explicit demo actions, not unsolicited live reordering.
+
+A single lazy-loaded WebGPU canvas draws a shared light field behind summary and
+work-queue cards. Card geometry and readiness colors drive soft perimeter halos;
+hover, keyboard focus and explicit changes produce a bounded directional settling
+effect. No perpetual pulsing or simulated progress. The HTML label/icon remains
+authoritative, and the halo describes readiness only, not reference/publication
+health. CSS state edges and halos remain available when WebGPU is absent or lost.
+HTML-in-Canvas capture is not needed for lighting or grid reflow; reserve it for
+future effects that manipulate actual card imagery and the existing Focus effect.
+
+The renderer follows card movement, resize, theme and scroll; it stops when idle,
+offscreen or hidden, caps resolution, and releases its device/buffers on unmount.
+Reduced motion uses static CSS lighting and immediate grid updates. Suspend Home
+lighting and finish grid choreography before the shell Focus transition; recalculate
+geometry afterward. Storybook includes interactive filter/sort choreography,
+state lighting, CSS fallback and reduced-motion specimens. Verify rapid changes,
+resolution/reset, inspector layouts, focus preservation and device-loss fallback.
+Overview does not include the decorative brand/workflow footer.
 
 ## 8. HTML-in-Canvas and WebGPU requirements
 

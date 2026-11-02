@@ -6,7 +6,7 @@ Never merge the backend deletions wholesale into the main GitStore branch; impor
 - Use Node 24 and the pinned pnpm version. The root Makefile is the canonical command interface.
 - Run `make check TARGET=all` and `make pr-ready` before handing off changes.
 - Keep app features, shared controls, navigation, and layouts separate. Read `gitstore-admin/docs/admin-prd.md` for product direction.
-- The current increment is shell-only: no commerce pages, API calls, authentication, Apollo, or fabricated operational telemetry.
+- The current increment includes the shell and Home / Overview with clearly labeled, typed local demo fixtures and simulated resource resolution. Keep the other 78 destinations as placeholders. No API calls, authentication, Apollo, live operational telemetry, or backend writes.
 - Use React Aria interactions, custom CSS Modules, semantic HTML, and reduced-motion support.
 - Add stories and focused tests for meaningful interactive behavior. Keep all 79 destinations reachable.
 - Use Conventional Commits. Do not push or create a PR unless requested.
