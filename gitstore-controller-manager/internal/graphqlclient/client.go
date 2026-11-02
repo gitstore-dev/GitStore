@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/gorilla/websocket"
 	"golang.org/x/time/rate"
 )
@@ -68,7 +69,7 @@ func NewWithRateLimit(baseURL string, credentials CredentialSource, requestsPerS
 	return &Client{
 		baseURL:     baseURL,
 		credentials: credentials,
-		http:        &http.Client{Transport: transport},
+		http:        &http.Client{Transport: observability.Transport(transport)},
 		dialer:      websocket.DefaultDialer,
 		limiter:     rate.NewLimiter(rate.Limit(requestsPerSecond), burst),
 	}, nil

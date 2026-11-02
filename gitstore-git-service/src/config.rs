@@ -6,7 +6,7 @@ use regex::Regex;
 use std::time::Duration;
 
 /// Config grouped by owning service. gitstore-git-service owns everything
-/// under `[git_service]`; `[log]`, `[grpc_auth]` and `[push_limits]` are
+/// under `[git_service]`; `[log]`, `[observability]`, `[grpc_auth]` and `[push_limits]` are
 /// shared with gitstore-api (and, for `log`, every service reading this
 /// file).
 #[derive(Debug, serde::Deserialize)]
@@ -15,6 +15,18 @@ pub struct AppConfig {
     pub log: LogConfig,
     pub grpc_auth: GrpcAuthConfig,
     pub push_limits: PushLimitsConfig,
+    pub observability: ObservabilityConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ObservabilityConfig {
+    pub otlp: OtlpConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct OtlpConfig {
+    pub uri: String,
+    pub trace_sample_ratio: f64,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -24,6 +36,43 @@ pub struct GitServiceConfig {
     pub catalog: CatalogConfig,
     pub validation: ValidationConfig,
     pub admission: AdmissionConfig,
+    pub metrics: MetricsConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct MetricsConfig {
+    pub uri: String,
+}
+
+impl MetricsConfig {
+    pub fn listen_address(&self) -> Result<Option<std::net::SocketAddr>, &'static str> {
+        if self.uri.is_empty() {
+            return Ok(None);
+        }
+        let invalid = "git_service.metrics.uri must be an HTTP URI with a literal IP and nonzero port, without credentials, base path, query or fragment";
+        let uri = self
+            .uri
+            .parse::<tonic::codegen::http::Uri>()
+            .map_err(|_| invalid)?;
+        if self.uri.len() > 256
+            || self.uri.contains('#')
+            || uri.scheme_str() != Some("http")
+            || uri.query().is_some()
+            || !matches!(uri.path(), "" | "/")
+        {
+            return Err(invalid);
+        }
+        let address = uri
+            .authority()
+            .ok_or(invalid)?
+            .as_str()
+            .parse::<std::net::SocketAddr>()
+            .map_err(|_| invalid)?;
+        if address.port() == 0 {
+            return Err(invalid);
+        }
+        Ok(Some(address))
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -143,6 +192,35 @@ impl AppConfig {
     /// Validate all fields and collect every failure into a single `ConfigErrors`.
     pub fn validate(&self) -> Result<(), ConfigErrors> {
         let mut errors = Vec::new();
+        if let Err(error) = self.git_service.metrics.listen_address() {
+            errors.push(error.to_string());
+        }
+
+        let otlp = &self.observability.otlp;
+        if !(0.0..=1.0).contains(&otlp.trace_sample_ratio) {
+            errors.push(
+                "observability.otlp.trace_sample_ratio must be between zero and one".to_string(),
+            );
+        }
+        let valid_endpoint = otlp.uri.len() <= 256
+            && !otlp.uri.contains('#')
+            && otlp
+                .uri
+                .parse::<tonic::codegen::http::Uri>()
+                .is_ok_and(|uri| {
+                    matches!(uri.scheme_str(), Some("http" | "https"))
+                        && uri.host().is_some_and(|host| !host.is_empty())
+                        && uri.query().is_none()
+                        && uri
+                            .authority()
+                            .is_some_and(|authority| !authority.as_str().contains('@'))
+                });
+        if !otlp.uri.is_empty() && !valid_endpoint {
+            errors.push(
+                "observability.otlp.uri must be an HTTP(S) URI without credentials, query or fragment"
+                    .to_string(),
+            );
+        }
 
         if self.git_service.grpc_port == 0 {
             errors.push(format!(
@@ -202,6 +280,8 @@ impl AppConfig {
 /// keys it used to own. Ordered most-specific-first so the most helpful
 /// match wins.
 const LEGACY_KEYS: &[(&str, &str)] = &[
+    ("observability.otlp.endpoint", "observability.otlp.uri"),
+    ("git_service.metrics.listen_addr", "git_service.metrics.uri"),
     ("grpc.port", "git_service.grpc_port"),
     ("grpc", "git_service.grpc_port"),
     ("git.data_dir", "git_service.data_dir"),
@@ -330,9 +410,16 @@ timeout = "10s"
 [git_service.admission]
 branch_pattern = "^refs/heads/main$"
 
+[git_service.metrics]
+uri = ""
+
 [log]
 level = "info"
 format = "json"
+
+[observability.otlp]
+uri = ""
+trace_sample_ratio = 0.05
 
 [grpc_auth]
 hmac_secret = ""
@@ -357,8 +444,13 @@ mod tests {
         let keys = [
             "GITSTORE_GIT_SERVICE__GRPC_PORT",
             "GITSTORE_GIT_SERVICE__DATA_DIR",
+            "GITSTORE_GIT_SERVICE__METRICS__LISTEN_ADDR",
+            "GITSTORE_GIT_SERVICE__METRICS__URI",
             "GITSTORE_LOG__LEVEL",
             "GITSTORE_LOG__FORMAT",
+            "GITSTORE_OBSERVABILITY__OTLP__ENDPOINT",
+            "GITSTORE_OBSERVABILITY__OTLP__URI",
+            "GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO",
             "GITSTORE_GIT_SERVICE__VALIDATION__TIMEOUT",
             "GITSTORE_GIT_SERVICE__ADMISSION__BRANCH_PATTERN",
             "GITSTORE_GIT_SERVICE__CATALOG__URI",
@@ -394,6 +486,8 @@ mod tests {
         assert_eq!(cfg.git_service.data_dir, "/var/lib/gitstore/repos");
         assert_eq!(cfg.log.level, "info");
         assert_eq!(cfg.log.format, "json");
+        assert!(cfg.observability.otlp.uri.is_empty());
+        assert_eq!(cfg.observability.otlp.trace_sample_ratio, 0.05);
         assert_eq!(cfg.push_limits.max_pack_size.0, 512 * 1024 * 1024);
         assert_eq!(cfg.push_limits.max_file_size.0, 100 * 1024 * 1024);
         assert_eq!(
@@ -462,6 +556,150 @@ mod tests {
         let path_str = stem.to_str().expect("path str");
         let cfg = load_config_from(Some(path_str)).expect("load_config failed");
         assert_eq!(cfg.git_service.grpc_port, 6666);
+        clear_env();
+    }
+
+    #[test]
+    fn test_observability_file_and_env_precedence() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("telemetry.toml");
+        std::fs::write(
+            &path,
+            "[observability.otlp]\nuri = \"http://collector:4318\"\ntrace_sample_ratio = 0.25\n[git_service.metrics]\nuri = \"http://127.0.0.1:50052\"\n",
+        )
+        .expect("write config");
+        let path = path.to_str().expect("path str");
+        let cfg = load_config_from(Some(path)).expect("load file");
+        assert_eq!(cfg.observability.otlp.uri, "http://collector:4318");
+        assert_eq!(cfg.git_service.metrics.uri, "http://127.0.0.1:50052");
+        assert_eq!(cfg.observability.otlp.trace_sample_ratio, 0.25);
+        env::set_var(
+            "GITSTORE_OBSERVABILITY__OTLP__URI",
+            "https://local-collector:4318/otlp",
+        );
+        env::set_var("GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "0");
+        env::set_var("GITSTORE_GIT_SERVICE__METRICS__URI", "http://[::1]:50053");
+        let cfg = load_config_from(Some(path)).expect("load overrides");
+        assert_eq!(
+            cfg.observability.otlp.uri,
+            "https://local-collector:4318/otlp"
+        );
+        assert_eq!(cfg.observability.otlp.trace_sample_ratio, 0.0);
+        assert_eq!(cfg.git_service.metrics.uri, "http://[::1]:50053");
+        clear_env();
+    }
+
+    #[test]
+    fn test_observability_validation() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        let mut cfg = load_config_from(None).expect("load defaults");
+        cfg.grpc_auth.hmac_secret = "test-hmac-secret".to_string();
+        for endpoint in ["http://collector:4318", "https://collector:4318/otlp", ""] {
+            cfg.observability.otlp.uri = endpoint.to_string();
+            cfg.validate().expect("valid endpoint");
+        }
+        for endpoint in [
+            "grpc://collector:4317",
+            "http://user:sensitive-value@collector:4318",
+            "http://collector:4318?token=sensitive-value",
+            "http://collector:4318#sensitive-value",
+            "http://collector:4318?",
+            "http://collector:4318#",
+            "http://:4318",
+        ] {
+            cfg.observability.otlp.uri = endpoint.to_string();
+            let err = cfg.validate().expect_err("invalid endpoint");
+            assert!(err.to_string().contains("observability.otlp.uri"));
+            assert!(!err.to_string().contains("sensitive-value"));
+        }
+        cfg.observability.otlp.uri.clear();
+        for ratio in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.1, 1.1] {
+            cfg.observability.otlp.trace_sample_ratio = ratio;
+            assert!(cfg.validate().is_err(), "invalid ratio {ratio}");
+        }
+        for ratio in [0.0, 0.05, 1.0] {
+            cfg.observability.otlp.trace_sample_ratio = ratio;
+            cfg.validate().expect("valid ratio");
+        }
+        clear_env();
+    }
+
+    #[test]
+    fn test_metrics_uri_listen_address() {
+        assert_eq!(
+            MetricsConfig { uri: String::new() }
+                .listen_address()
+                .unwrap(),
+            None
+        );
+        for (uri, expected) in [
+            ("http://127.0.0.1:50052", "127.0.0.1:50052"),
+            ("http://0.0.0.0:50052/", "0.0.0.0:50052"),
+            ("http://[::1]:50053", "[::1]:50053"),
+        ] {
+            let config = MetricsConfig { uri: uri.into() };
+            assert_eq!(
+                config.listen_address().unwrap(),
+                Some(expected.parse().unwrap())
+            );
+        }
+        for uri in [
+            "127.0.0.1:50052",
+            "https://127.0.0.1:50052",
+            "http://localhost:50052",
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:65536",
+            "http://127.0.0.1:50052/metrics",
+            "http://user:sensitive-value@127.0.0.1:50052",
+            "http://127.0.0.1:50052?",
+            "http://127.0.0.1:50052#",
+            "http://127.0.0.1:50052?token=sensitive-value",
+            "http://127.0.0.1:50052#sensitive-value",
+        ] {
+            let error = MetricsConfig { uri: uri.into() }
+                .listen_address()
+                .expect_err("invalid metrics URI");
+            assert!(error.contains("git_service.metrics.uri"));
+            assert!(!error.contains("sensitive-value"));
+        }
+    }
+
+    #[test]
+    fn test_renamed_telemetry_keys_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("legacy.toml");
+        for (section, key, replacement, variable, value) in [
+            (
+                "observability.otlp",
+                "endpoint",
+                "observability.otlp.uri",
+                "GITSTORE_OBSERVABILITY__OTLP__ENDPOINT",
+                "http://collector:4318",
+            ),
+            (
+                "git_service.metrics",
+                "listen_addr",
+                "git_service.metrics.uri",
+                "GITSTORE_GIT_SERVICE__METRICS__LISTEN_ADDR",
+                "127.0.0.1:50052",
+            ),
+        ] {
+            clear_env();
+            std::fs::write(&path, format!("[{section}]\n{key} = \"{value}\"\n"))
+                .expect("write legacy config");
+            let error = load_config_from(Some(path.to_str().unwrap()))
+                .expect_err("legacy file key must be rejected");
+            assert!(error.to_string().contains(replacement));
+            env::set_var(variable, value);
+            let error =
+                load_config_from(None).expect_err("legacy environment key must be rejected");
+            assert!(error.to_string().contains(replacement));
+        }
         clear_env();
     }
 

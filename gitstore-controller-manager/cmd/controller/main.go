@@ -34,6 +34,7 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/version"
+	"github.com/gitstore-dev/gitstore/observability"
 	"go.uber.org/zap"
 )
 
@@ -61,10 +62,21 @@ func main() {
 	}
 	defer log.Sync() //nolint:errcheck
 
-	mgr := manager.New().WithLogger(log)
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	log, shutdownTelemetry, err := observability.InitTelemetry(ctx, cfg.Observability.OTLP, observability.ControllerService, version.Version, log)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "Failed to initialize telemetry")
+		return
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(ctx); err != nil {
+			log.Error("telemetry shutdown failed")
+		}
+	}()
+	mgr := manager.New().WithLogger(log)
 
 	credentials, err := buildCredentialSource(ctx, cfg, log)
 	if err != nil {

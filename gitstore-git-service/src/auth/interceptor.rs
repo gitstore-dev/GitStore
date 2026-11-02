@@ -87,6 +87,7 @@ fn signed_at<T: Message>(
             .parse()
             .map_err(|_| Status::internal("invalid RPC signature metadata"))?,
     );
+    crate::inject_trace(request.metadata_mut());
     Ok(request)
 }
 

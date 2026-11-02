@@ -11,6 +11,26 @@ use std::sync::OnceLock;
 static HANDLED_TOTAL: OnceLock<IntCounterVec> = OnceLock::new();
 static HANDLING_SECONDS: OnceLock<HistogramVec> = OnceLock::new();
 
+pub fn rpc_method(path: &str) -> &'static str {
+    match path.rsplit('/').next().unwrap_or("") {
+        "CreateRepository" => "CreateRepository",
+        "DeleteRepository" => "DeleteRepository",
+        "GetFile" => "GetFile",
+        "GetFiles" => "GetFiles",
+        "GetFileStream" => "GetFileStream",
+        "ListFiles" => "ListFiles",
+        "CommitFile" => "CommitFile",
+        "DeleteFile" => "DeleteFile",
+        "CreateTag" => "CreateTag",
+        "ListTags" => "ListTags",
+        "GetLatestTag" => "GetLatestTag",
+        "InfoRefs" => "InfoRefs",
+        "ReceivePack" => "ReceivePack",
+        "UploadPack" => "UploadPack",
+        _ => "unknown",
+    }
+}
+
 pub fn handled_total() -> &'static IntCounterVec {
     HANDLED_TOTAL.get_or_init(|| {
         register_int_counter_vec!(

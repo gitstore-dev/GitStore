@@ -48,6 +48,7 @@ import (
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -406,13 +407,14 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	gqlServer.AroundFields(authorizeMiddleware.GraphQLFieldAuthorizer)
 	gqlServer.AroundResponses(authorizeMiddleware.GraphQLResponseAuthorizer)
 
+	operationHandler := observability.HTTPHandler(gqlServer)
 	gqlHandler := gin.HandlerFunc(func(c *gin.Context) {
 		if !authenticateMiddleware.AuthenticateWebSocketUpgrade(c) {
 			return
 		}
 		ctx := security.ContextWithRemoteAddr(c.Request.Context(), c.RemoteIP())
 		c.Request = c.Request.WithContext(ctx)
-		gqlServer.ServeHTTP(c.Writer, c.Request)
+		operationHandler.ServeHTTP(c.Writer, c.Request)
 	})
 
 	rateLimitPerSecond := deps.RateLimitPerSecond

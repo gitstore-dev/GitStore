@@ -14,6 +14,7 @@ import (
 	"time"
 
 	units "github.com/docker/go-units"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/go-playground/validator/v10"
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/joho/godotenv"
@@ -27,10 +28,11 @@ import (
 // [push_limits] are shared with gitstore-git-service (and, for log, every
 // service reading this file).
 type Config struct {
-	Api        ApiConfig        `mapstructure:"api"`
-	GrpcAuth   GrpcAuthConfig   `mapstructure:"grpc_auth"`
-	PushLimits PushLimitsConfig `mapstructure:"push_limits"`
-	Log        LogConfig        `mapstructure:"log"`
+	Api           ApiConfig            `mapstructure:"api"`
+	GrpcAuth      GrpcAuthConfig       `mapstructure:"grpc_auth"`
+	PushLimits    PushLimitsConfig     `mapstructure:"push_limits"`
+	Log           LogConfig            `mapstructure:"log"`
+	Observability observability.Config `mapstructure:"observability"`
 }
 
 // ApiConfig holds HTTP API server settings and everything gitstore-api owns.
@@ -382,6 +384,8 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("api.git_service.uri", "dns:///localhost:50051")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
+	v.SetDefault("observability.otlp.uri", "")
+	v.SetDefault("observability.otlp.trace_sample_ratio", 0.05)
 	v.SetDefault("grpc_auth.hmac_secret", "")
 	v.SetDefault("grpc_auth.hmac_secret_previous", "")
 	v.SetDefault("push_limits.max_pack_size", "512MiB")
@@ -519,6 +523,9 @@ func checkLegacyKeys(v *viper.Viper) error {
 
 // validateConfig runs all struct validations and returns a combined error.
 func validateConfig(cfg *Config) error {
+	if err := cfg.Observability.OTLP.Validate(); err != nil {
+		return err
+	}
 	validate := validator.New()
 	if err := validate.Struct(cfg); err != nil {
 		var ve validator.ValidationErrors

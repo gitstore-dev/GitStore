@@ -22,6 +22,10 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/retry"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/worker"
+	"github.com/gitstore-dev/gitstore/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -418,7 +422,7 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 	}
 
 	// Call reconciler via safeReconcile so panics are converted to TransientFailure.
-	result := safeReconcile(ks.reg.Reconciler, key)(ctx)
+	result := reconcileAttempt(ctx, ks.reg.Reconciler, key, log)
 
 	// Check for panic on the first call: emit structured log and increment the
 	// transient_failure metric immediately (FR-004). The metric is owned here so
@@ -542,7 +546,7 @@ func (m *Manager) handleTransient(
 
 	retryCfg.MaxAttempts = retryAttempts
 	res, attempts, lastErr := retry.RunWithRetry(ctx, key, retryCfg, 0, log, func(rctx context.Context) error {
-		inner := safeReconcile(ks.reg.Reconciler, key)(rctx)
+		inner := reconcileAttempt(rctx, ks.reg.Reconciler, key, log)
 		_ = m.logPanic(log, key, inner)
 		switch iv := inner.(type) {
 		case types.TransientFailure:
@@ -796,6 +800,15 @@ func (m *Manager) maintainDiskPage(ctx context.Context, ks *kindState) (bool, er
 	}
 	fanout, err := ks.reg.Disk.ProcessFanout(ctx)
 	return len(work) > 0 || fanout, err
+}
+
+func reconcileAttempt(ctx context.Context, reconciler types.Reconciler, key WorkItemKey, log *zap.Logger) types.ReconcileResult {
+	ctx, span := otel.Tracer("gitstore/controller").Start(ctx, "controller.reconcile",
+		trace.WithAttributes(attribute.String("kind", key.Kind)))
+	defer span.End()
+	result := safeReconcile(reconciler, key)(ctx)
+	observability.Logger(ctx, log).Debug("reconciliation attempt completed", zap.String("kind", key.Kind))
+	return result
 }
 
 func (m *Manager) logPanic(log *zap.Logger, key WorkItemKey, result types.ReconcileResult) bool {

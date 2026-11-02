@@ -19,6 +19,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/app"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/logger"
+	"github.com/gitstore-dev/gitstore/observability"
 	"go.uber.org/zap"
 )
 
@@ -46,6 +47,19 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = log.Sync() }()
+	log, shutdownTelemetry, err := observability.InitTelemetry(context.Background(), cfg.Observability.OTLP, observability.APIService, "development", log)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "Failed to initialize telemetry")
+		return
+	}
+	logger.Log = log
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(ctx); err != nil {
+			log.Error("telemetry shutdown failed")
+		}
+	}()
 
 	log.Info("Starting GitStore GraphQL API",
 		zap.Int("port", cfg.Api.Port),

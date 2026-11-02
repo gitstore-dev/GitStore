@@ -17,6 +17,23 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  observability-test:
+    name: Shared Observability Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./shared/observability
+    env:
+      GOWORK: 'off'
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: shared/observability/go.mod
+        cache: false
+    - name: Check, build and test independently
+      run: test -z "$(gofmt -l .)" && go build ./... && go vet ./... && go test -race -count=1 ./...
+
   secret-material-test:
     name: Shared Secret Material Tests
     runs-on: ubuntu-latest
