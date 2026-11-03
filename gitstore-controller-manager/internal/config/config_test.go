@@ -45,6 +45,28 @@ func TestShippedComposeConfigUsesClusterIdentity(t *testing.T) {
 	}
 }
 
+func TestProfilingConfigurationRequiresLoopbackAndToken(t *testing.T) {
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "enrolled-by-test")
+	t.Setenv("GITSTORE_CONTROLLER__PROFILING__URI", "http://127.0.0.1:6061")
+	_, err := config.LoadFrom("../../../config/config.toml")
+	if err == nil || !strings.Contains(err.Error(), "controller.profiling.token") {
+		t.Fatalf("expected profiling token validation, got %v", err)
+	}
+	t.Setenv("GITSTORE_CONTROLLER__PROFILING__TOKEN", strings.Repeat("x", 32))
+	cfg, err := config.LoadFrom("../../../config/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Controller.Profiling.URI != "http://127.0.0.1:6061" {
+		t.Fatal("profiling environment override was not decoded")
+	}
+	t.Setenv("GITSTORE_CONTROLLER__PROFILING__URI", "http://0.0.0.0:6061")
+	_, err = config.LoadFrom("../../../config/config.toml")
+	if err == nil || !strings.Contains(err.Error(), "controller.profiling.uri") || strings.Contains(err.Error(), cfg.Controller.Profiling.Token) {
+		t.Fatalf("expected safe loopback validation, got %v", err)
+	}
+}
+
 func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "shared.toml")
 	content := `[controller]

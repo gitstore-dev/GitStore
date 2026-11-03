@@ -76,6 +76,17 @@ func main() {
 			log.Error("telemetry shutdown failed")
 		}
 	}()
+	shutdownProfiler, err := observability.StartCapacityProfiler(cfg.Controller.Profiling, log)
+	if err != nil {
+		log.Fatal("Failed to initialize capacity profiler", zap.Error(err))
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownProfiler(ctx); err != nil {
+			log.Error("capacity profiler shutdown failed", zap.Error(err))
+		}
+	}()
 	mgr := manager.New().WithLogger(log)
 
 	credentials, err := buildCredentialSource(ctx, cfg, log)

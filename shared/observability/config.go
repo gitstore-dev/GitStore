@@ -6,6 +6,7 @@ package observability
 
 import (
 	"errors"
+	"net/netip"
 	"net/url"
 	"strings"
 )
@@ -22,6 +23,47 @@ type Config struct {
 type OTLPConfig struct {
 	URI              string  `mapstructure:"uri"`
 	TraceSampleRatio float64 `mapstructure:"trace_sample_ratio" validate:"gte=0,lte=1"`
+}
+
+type ProfilingConfig struct {
+	URI   string `mapstructure:"uri"`
+	Token string `mapstructure:"token"`
+}
+
+func (c ProfilingConfig) Validate() error {
+	if _, err := c.ListenAddress(); err != nil {
+		return err
+	}
+	if c.URI == "" {
+		return nil
+	}
+	if len(c.Token) < 32 || len(c.Token) > 256 {
+		return errors.New("profiling.token must contain 32..256 printable non-space ASCII bytes when profiling is enabled")
+	}
+	for _, char := range c.Token {
+		if char < 33 || char > 126 {
+			return errors.New("profiling.token must contain 32..256 printable non-space ASCII bytes when profiling is enabled")
+		}
+	}
+	return nil
+}
+
+func (c ProfilingConfig) ListenAddress() (string, error) {
+	if c.URI == "" {
+		return "", nil
+	}
+	invalid := errors.New("profiling.uri must be an HTTP URI with an explicit loopback host and nonzero port, without credentials, base path, query or fragment")
+	uri, err := url.Parse(c.URI)
+	if err != nil || len(c.URI) > 256 || uri == nil || uri.Scheme != "http" ||
+		uri.User != nil || (uri.Path != "" && uri.Path != "/") || uri.RawPath != "" ||
+		uri.ForceQuery || uri.RawQuery != "" || strings.Contains(c.URI, "#") {
+		return "", invalid
+	}
+	address, err := netip.ParseAddrPort(uri.Host)
+	if err != nil || !address.Addr().IsLoopback() || address.Port() == 0 {
+		return "", invalid
+	}
+	return uri.Host, nil
 }
 
 func (c OTLPConfig) Validate() error {

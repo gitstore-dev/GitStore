@@ -19,6 +19,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/app"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/logger"
+	"github.com/gitstore-dev/gitstore/observability"
 	"go.uber.org/zap"
 )
 
@@ -57,6 +58,18 @@ func main() {
 		defer cancel()
 		if err := shutdownTelemetry(ctx); err != nil {
 			log.Error("telemetry shutdown failed")
+		}
+	}()
+
+	shutdownProfiler, err := observability.StartCapacityProfiler(cfg.Api.Profiling, log)
+	if err != nil {
+		log.Fatal("Failed to initialize capacity profiler", zap.Error(err))
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownProfiler(ctx); err != nil {
+			log.Error("capacity profiler shutdown failed", zap.Error(err))
 		}
 	}()
 
