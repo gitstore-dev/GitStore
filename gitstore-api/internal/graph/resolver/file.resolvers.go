@@ -8,14 +8,17 @@ package resolver
 import (
 	"context"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
-	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 // File is the resolver for the file field.
 func (r *queryResolver) File(ctx context.Context, by model.FileBy) (*model.File, error) {
+	if (by.ID == nil) == (by.NamespacePath == nil) {
+		return nil, admission.NewError(admission.CodeBadUserInput, "INVALID_SELECTOR", "FileBy: exactly one selector required").ToGQLError()
+	}
 	if file, ok := security.AuthorizedFileRead(ctx); ok {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -37,8 +40,6 @@ func (r *queryResolver) File(ctx context.Context, by model.FileBy) (*model.File,
 		file, err = r.store.GetFile(ctx, uid)
 	case by.NamespacePath != nil:
 		file, err = r.store.GetFileByName(ctx, by.NamespacePath.Namespace, by.NamespacePath.Name)
-	default:
-		return nil, gqlerror.Errorf("FileBy: exactly one selector required")
 	}
 	if err != nil {
 		return nil, nodeLookupError(nodeKindFile, err)

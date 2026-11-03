@@ -4,13 +4,25 @@
 package resolver
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/99designs/gqlgen/graphql/handler"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
+	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"github.com/vektah/gqlparser/v2/validator/rules"
+	"go.uber.org/zap"
 )
 
 func TestLookupOneOfSelectorsValidateExactlyOneKey(t *testing.T) {
@@ -87,6 +99,68 @@ func TestLookupOneOfSelectorsValidateExactlyOneKey(t *testing.T) {
 	assertQueryValidation(t, schema, `query { file(namespace: "my-store", name: "hero") { id } }`, false)
 	assertQueryValidation(t, schema, `query { file(by: {namespacePath: {namespace: "my-store"}}) { id } }`, false)
 	assertQueryValidation(t, schema, `query { file(by: {namespacePath: {name: "hero"}}) { id } }`, false)
+}
+
+func TestFileLookupRejectsInvalidVariableSelectorsBeforeLookup(t *testing.T) {
+	id := mustEncodeNodeID(nodeKindFile, globalIDTestFileUID)
+	path := map[string]string{"namespace": "other-store", "name": "other-file"}
+	for name, by := range map[string]map[string]any{
+		"empty":            {},
+		"both":             {"id": id, "namespacePath": path},
+		"null id":          {"id": nil},
+		"null path":        {"namespacePath": nil},
+		"id and null path": {"id": id, "namespacePath": nil},
+		"null id and path": {"id": nil, "namespacePath": path},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, root := newGlobalIDTestResolver(t)
+			seedGlobalIDTestData(t, t.Context(), store)
+			counted := &globalIDCountedFileStore{Datastore: store}
+			root.store = counted
+			provider := testutil.NewAllowAllAuthZ()
+			middleware := security.NewAuthorizeWithStore(auth.NewProviderRegistry(nil, provider, nil), counted, zap.NewNop())
+			server := handler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{Resolvers: root}))
+			server.AroundFields(middleware.GraphQLFieldAuthorizer)
+			payload, err := json.Marshal(map[string]any{
+				"query":     `query($by: FileBy!) { detail: file(by: $by) { id } }`,
+				"variables": map[string]any{"by": by},
+			})
+			require.NoError(t, err)
+			request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(payload))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			var result struct {
+				Data   map[string]any
+				Errors gqlerror.List
+			}
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
+			require.Nil(t, result.Data["detail"])
+			require.Len(t, result.Errors, 1)
+			require.Equal(t, "BAD_USER_INPUT", result.Errors[0].Extensions["code"])
+			require.Zero(t, counted.reads.Load(), "invalid selectors must not perform either lookup")
+			require.Empty(t, provider.Calls)
+		})
+	}
+}
+
+func TestFileResolverRejectsAmbiguousAndEmptySelectorsBeforeLookup(t *testing.T) {
+	store, root := newGlobalIDTestResolver(t)
+	seedGlobalIDTestData(t, t.Context(), store)
+	counted := &globalIDCountedFileStore{Datastore: store}
+	root.store = counted
+	id := mustEncodeNodeID(nodeKindFile, globalIDTestFileUID)
+	for _, by := range []model.FileBy{
+		{},
+		{ID: &id, NamespacePath: &model.FileNamespacePath{Namespace: "other-store", Name: "other-file"}},
+	} {
+		file, err := root.Query().File(t.Context(), by)
+		require.Nil(t, file)
+		var structured *gqlerror.Error
+		require.ErrorAs(t, err, &structured)
+		require.Equal(t, "BAD_USER_INPUT", structured.Extensions["code"])
+	}
+	require.Zero(t, counted.reads.Load())
 }
 
 func assertQueryValidation(t *testing.T, schema *ast.Schema, query string, valid bool) {

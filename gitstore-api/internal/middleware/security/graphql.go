@@ -1264,6 +1264,20 @@ func isFileQueryField(fc *graphql.FieldContext) bool {
 }
 
 func (a *Authorize) authorizeFileRead(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) (context.Context, error) {
+	id, hasID := nestedStringPath(fc.Args, "by", "id")
+	namespace, namespaceOK := nestedStringPath(fc.Args, "by", "namespacePath", "namespace")
+	name, nameOK := nestedStringPath(fc.Args, "by", "namespacePath", "name")
+	validSelector := (hasID && !namespaceOK && !nameOK) || (!hasID && namespaceOK && nameOK)
+	// Variable coercion does not enforce @oneOf, and typed inputs lose explicit
+	// null members. Check the original variable's key count before any lookup.
+	if argument := fc.Field.Arguments.ForName("by"); argument != nil && argument.Value.Kind == ast.Variable && graphql.HasOperationContext(ctx) {
+		value, err := argument.Value.Value(graphql.GetOperationContext(ctx).Variables)
+		fields, ok := value.(map[string]any)
+		validSelector = validSelector && err == nil && ok && len(fields) == 1
+	}
+	if !validSelector {
+		return ctx, admission.NewError(admission.CodeBadUserInput, "INVALID_SELECTOR", "FileBy: exactly one selector required").ToGQLError()
+	}
 	if authz == nil || a.store == nil {
 		return ctx, gqlerror.Errorf("authorization service unavailable")
 	}
@@ -1276,20 +1290,13 @@ func (a *Authorize) authorizeFileRead(ctx context.Context, fc *graphql.FieldCont
 	}
 	var file *datastore.File
 	var err error
-	var namespace, name string
-	if id, ok := nestedStringPath(fc.Args, "by", "id"); ok {
+	if hasID {
 		uid, decodeErr := decodeGlobalIDAs("File", id)
 		if decodeErr != nil {
 			return ctx, decodeErr
 		}
 		file, err = store.GetFile(ctx, uid)
 	} else {
-		var namespaceOK, nameOK bool
-		namespace, namespaceOK = nestedStringPath(fc.Args, "by", "namespacePath", "namespace")
-		name, nameOK = nestedStringPath(fc.Args, "by", "namespacePath", "name")
-		if !namespaceOK || !nameOK {
-			return ctx, gqlerror.Errorf("invalid file selector")
-		}
 		file, err = store.GetFileByName(ctx, namespace, name)
 	}
 	if errors.Is(err, datastore.ErrNotFound) {
