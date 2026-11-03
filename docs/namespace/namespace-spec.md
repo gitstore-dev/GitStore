@@ -247,3 +247,11 @@ replicas. Repository creation against a terminating Namespace is rejected.
 
 Controller status updates merge their owned conditions with existing status and
 must preserve `AdmissionAccepted` and the admission revision.
+
+### Shared GraphQL metadata
+
+Namespace uses `ObjectMeta` and `ObjectMetaInput`, shared with other resources.
+Its output `metadata.namespace` is null. For GraphQL inputs and Git manifests,
+omit namespace or set it to null; any non-null value, including an empty string,
+is rejected with `NAMESPACE_FORBIDDEN`. See the
+[metadata contract and client migration guidance](../api-reference.md#resource-metadata-and-namespace-scope).

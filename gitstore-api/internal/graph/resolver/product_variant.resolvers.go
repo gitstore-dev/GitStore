@@ -17,7 +17,7 @@ func (r *productResolver) ProductVariants(ctx context.Context, obj *model.Produc
 	if obj == nil || obj.Metadata == nil {
 		return &model.ProductVariantConnection{Edges: []*model.ProductVariantEdge{}, PageInfo: &model.PageInfo{}}, nil
 	}
-	variants, err := r.service.GetProductVariantsByProductRef(ctx, obj.Metadata.Namespace, obj.Metadata.Name)
+	variants, err := r.service.GetProductVariantsByProductRef(ctx, namespaceValue(obj.Metadata.Namespace), obj.Metadata.Name)
 	if err != nil {
 		return nil, fmt.Errorf("product.productVariants: %w", err)
 	}

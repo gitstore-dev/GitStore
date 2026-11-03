@@ -177,7 +177,7 @@ spec:
 	assert.Equal(t, map[string]string{"new-key": ""}, updated.Labels)
 }
 
-func TestAdmitResourcesNamespaceMetadataUpdatePreservesSystemOwnerReferences(t *testing.T) {
+func TestAdmitResourcesObjectMetaUpdatePreservesSystemOwnerReferences(t *testing.T) {
 	ctx := context.Background()
 	store := newNamespacePolicyDatastore(t)
 	zero := strings.Repeat("0", 40)

@@ -87,3 +87,40 @@ func assertNamespaceSelectionValid(t *testing.T, schema *ast.Schema, query strin
 	}
 	require.NotEmpty(t, errs)
 }
+
+// This frozen projection of the previous metadata schema tests client/schema
+// compatibility. It does not emulate an old API binary's runtime validation.
+const legacyMetadataSchema = `
+schema { query: Query, mutation: Mutation }
+type Query { namespace: Namespace }
+type Mutation { createNamespace(input: CreateNamespaceInput!): CreateNamespacePayload! }
+type Namespace { metadata: NamespaceMetadata! }
+type NamespaceMetadata { name: String! }
+type ObjectMeta { name: String!, namespace: String! }
+input ObjectMetaInput { name: String!, namespace: String! = "" }
+input NamespaceMetadataInput { name: String! }
+input NamespaceSpecInput { tier: NamespaceTier! }
+enum NamespaceTier { USER ORGANIZATION }
+input CreateNamespaceInput { metadata: NamespaceMetadataInput!, spec: NamespaceSpecInput! }
+type CreateNamespacePayload { namespace: Namespace }
+`
+
+func TestMetadataClientRolloutRequiresFleetConvergence(t *testing.T) {
+	oldSchema, err := gqlparser.LoadSchema(&ast.Source{Name: "legacy-metadata.graphqls", Input: legacyMetadataSchema})
+	require.NoError(t, err)
+	newSchema := namespaceContractSchema(t)
+	for _, schema := range []*ast.Schema{oldSchema, newSchema} {
+		// Inline common fields and omission of cluster namespace work throughout rollout.
+		assertNamespaceSelectionValid(t, schema, `mutation { createNamespace(input:{metadata:{name:"acme"},spec:{tier:USER}}){namespace{metadata{name}}}}`, true)
+	}
+	legacyFragment := `mutation { createNamespace(input:{metadata:{name:"acme"},spec:{tier:USER}}){namespace{metadata{...meta}}}} fragment meta on NamespaceMetadata {name}`
+	sharedFragment := `mutation { createNamespace(input:{metadata:{name:"acme"},spec:{tier:USER}}){namespace{metadata{...meta}}}} fragment meta on ObjectMeta {name namespace}`
+	assertNamespaceSelectionValid(t, oldSchema, legacyFragment, true)
+	assertNamespaceSelectionValid(t, newSchema, legacyFragment, false)
+	assertNamespaceSelectionValid(t, oldSchema, sharedFragment, false)
+	assertNamespaceSelectionValid(t, newSchema, sharedFragment, true)
+	assert.NotNil(t, oldSchema.Types["ObjectMetaInput"].Fields.ForName("namespace").DefaultValue)
+	assert.Nil(t, newSchema.Types["ObjectMetaInput"].Fields.ForName("namespace").DefaultValue)
+	assert.Nil(t, newSchema.Types["NamespaceMetadata"])
+	assert.Nil(t, newSchema.Types["NamespaceMetadataInput"])
+}

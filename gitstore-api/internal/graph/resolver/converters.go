@@ -74,8 +74,9 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 		ID:         nodeID,
 		APIVersion: apiVersion,
 		Kind:       kind,
-		Metadata: &model.NamespaceMetadata{
+		Metadata: &model.ObjectMeta{
 			Name:              ns.Name,
+			DeletionTimestamp: ns.DeletionTimestamp,
 			Labels:            stringMapToJSONMap(ns.Labels),
 			Annotations:       stringMapToJSONMap(ns.Annotations),
 			UID:               nodeID,
@@ -389,7 +390,7 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 	gen := int32(p.Generation)
 	meta := &model.ObjectMeta{
 		Name:              p.Name,
-		Namespace:         p.Namespace,
+		Namespace:         stringPointer(p.Namespace),
 		Labels:            stringMapToJSONMap(p.Labels),
 		Annotations:       stringMapToJSONMap(p.Annotations),
 		UID:               mustEncodeNodeID(nodeKindProduct, p.UID),
@@ -490,7 +491,7 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 	rv := c.ResourceVersion
 	meta := &model.ObjectMeta{
 		Name:              c.Name,
-		Namespace:         c.Namespace,
+		Namespace:         stringPointer(c.Namespace),
 		Labels:            stringMapToJSONMap(c.Labels),
 		Annotations:       stringMapToJSONMap(c.Annotations),
 		UID:               mustEncodeNodeID(nodeKindCategory, c.UID),
@@ -563,7 +564,7 @@ func DatastoreFileToGraphQL(f *datastore.File) *model.File {
 		return nil
 	}
 	meta := &model.ObjectMeta{
-		Name: f.Name, Namespace: f.Namespace, Labels: stringMapToJSONMap(f.Labels),
+		Name: f.Name, Namespace: stringPointer(f.Namespace), Labels: stringMapToJSONMap(f.Labels),
 		Annotations: stringMapToJSONMap(f.Annotations), UID: mustEncodeNodeID(nodeKindFile, f.UID),
 		ResourceVersion: f.ResourceVersion, Generation: int32(f.Generation),
 		CreationTimestamp: f.CreationTimestamp, OwnerReferences: ownerRefs,
@@ -685,7 +686,7 @@ func DatastoreCollectionToGraphQL(c *datastore.Collection) *model.Collection {
 	gen := int32(c.Generation)
 	meta := &model.ObjectMeta{
 		Name:              c.Name,
-		Namespace:         c.Namespace,
+		Namespace:         stringPointer(c.Namespace),
 		Labels:            stringMapToJSONMap(c.Labels),
 		Annotations:       stringMapToJSONMap(c.Annotations),
 		UID:               mustEncodeNodeID(nodeKindCollection, c.UID),
@@ -864,7 +865,7 @@ func DatastoreVariantToGraphQL(v *datastore.ProductVariant) *model.ProductVarian
 	gen := int32(v.Generation)
 	meta := &model.ObjectMeta{
 		Name:              v.Name,
-		Namespace:         v.Namespace,
+		Namespace:         stringPointer(v.Namespace),
 		Labels:            stringMapToJSONMap(v.Labels),
 		Annotations:       stringMapToJSONMap(v.Annotations),
 		UID:               mustEncodeNodeID(nodeKindProductVariant, v.UID),
@@ -1200,7 +1201,7 @@ func datastoreRepositoryToModelStrict(r *datastore.Repository, ns *datastore.Nam
 		Kind:       kind,
 		Metadata: &model.ObjectMeta{
 			Name:              repository.Name,
-			Namespace:         namespace,
+			Namespace:         stringPointer(namespace),
 			Labels:            stringMapToJSONMap(repository.Labels),
 			Annotations:       stringMapToJSONMap(repository.Annotations),
 			UID:               nodeID,

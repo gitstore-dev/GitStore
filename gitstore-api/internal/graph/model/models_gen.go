@@ -335,10 +335,10 @@ type CreateCategoryPayload struct {
 
 // Declarative resource envelope for creating a namespace.
 type CreateNamespaceInput struct {
-	APIVersion string                  `json:"apiVersion"`
-	Kind       string                  `json:"kind"`
-	Metadata   *NamespaceMetadataInput `json:"metadata"`
-	Spec       *NamespaceSpecInput     `json:"spec"`
+	APIVersion string              `json:"apiVersion"`
+	Kind       string              `json:"kind"`
+	Metadata   *ObjectMetaInput    `json:"metadata"`
+	Spec       *NamespaceSpecInput `json:"spec"`
 }
 
 // Payload returned after successfully creating a namespace.
@@ -645,7 +645,7 @@ type Namespace struct {
 	// Resource kind discriminator.
 	Kind string `json:"kind"`
 	// Namespace identity and system metadata.
-	Metadata *NamespaceMetadata `json:"metadata"`
+	Metadata *ObjectMeta `json:"metadata"`
 	// Author-controlled desired state.
 	Spec *NamespaceSpec `json:"spec"`
 	// System-owned observed state.
@@ -679,29 +679,6 @@ type NamespaceEdge struct {
 	Cursor string `json:"cursor"`
 	// The namespace node.
 	Node *Namespace `json:"node"`
-}
-
-// Object metadata for the top-level Namespace kind.
-// Unlike ObjectMeta, this type intentionally has no namespace field.
-type NamespaceMetadata struct {
-	Name              string            `json:"name"`
-	Labels            map[string]any    `json:"labels,omitempty"`
-	Annotations       map[string]any    `json:"annotations,omitempty"`
-	UID               string            `json:"uid"`
-	ResourceVersion   string            `json:"resourceVersion"`
-	Generation        int32             `json:"generation"`
-	CreationTimestamp time.Time         `json:"creationTimestamp"`
-	Revision          *string           `json:"revision,omitempty"`
-	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
-	Owner             *ResourceOwner    `json:"owner"`
-	Finalizers        []string          `json:"finalizers"`
-}
-
-// Author-controlled metadata for Namespace mutations.
-type NamespaceMetadataInput struct {
-	Name        string         `json:"name"`
-	Labels      map[string]any `json:"labels,omitempty"`
-	Annotations map[string]any `json:"annotations,omitempty"`
 }
 
 type NamespacePushPolicyDefaults struct {
@@ -761,7 +738,7 @@ type NamespaceWatchEvent struct {
 // System-managed metadata shared by core catalog resources.
 type ObjectMeta struct {
 	Name              string            `json:"name"`
-	Namespace         string            `json:"namespace"`
+	Namespace         *string           `json:"namespace,omitempty"`
 	Labels            map[string]any    `json:"labels,omitempty"`
 	Annotations       map[string]any    `json:"annotations,omitempty"`
 	UID               string            `json:"uid"`
@@ -779,7 +756,7 @@ type ObjectMeta struct {
 type ObjectMetaInput struct {
 	Name string `json:"name"`
 	// Required by namespaced resources; omit for cluster-scoped resources.
-	Namespace   string         `json:"namespace"`
+	Namespace   *string        `json:"namespace,omitempty"`
 	Labels      map[string]any `json:"labels,omitempty"`
 	Annotations map[string]any `json:"annotations,omitempty"`
 }
@@ -1384,8 +1361,8 @@ type SelectedOptionDefinition struct {
 }
 
 // A cluster-scoped GitStore-issued non-human identity. Its global metadata.name
-// and immutable UID identify the account. metadata.namespace is unset on output;
-// nonempty metadata.namespace is rejected on every ServiceAccount operation.
+// and immutable UID identify the account. metadata.namespace is null on output;
+// any non-null metadata.namespace is rejected on every ServiceAccount operation.
 type ServiceAccount struct {
 	APIVersion string      `json:"apiVersion"`
 	Kind       string      `json:"kind"`
@@ -1517,10 +1494,10 @@ type UpdateCategoryStatusPayload struct {
 
 // Declarative resource envelope for updating a namespace.
 type UpdateNamespaceInput struct {
-	APIVersion string                  `json:"apiVersion"`
-	Kind       string                  `json:"kind"`
-	Metadata   *NamespaceMetadataInput `json:"metadata"`
-	Spec       *NamespaceSpecInput     `json:"spec"`
+	APIVersion string              `json:"apiVersion"`
+	Kind       string              `json:"kind"`
+	Metadata   *ObjectMetaInput    `json:"metadata"`
+	Spec       *NamespaceSpecInput `json:"spec"`
 }
 
 type UpdateNamespacePayload struct {

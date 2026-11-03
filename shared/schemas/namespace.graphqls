@@ -42,7 +42,7 @@ type Namespace implements Node {
   """
   Namespace identity and system metadata.
   """
-  metadata: NamespaceMetadata!
+  metadata: ObjectMeta!
 
   """
   Author-controlled desired state.
@@ -60,23 +60,6 @@ type Namespace implements Node {
   body: String
 }
 
-"""
-Object metadata for the top-level Namespace kind.
-Unlike ObjectMeta, this type intentionally has no namespace field.
-"""
-type NamespaceMetadata {
-  name: String!
-  labels: JSON
-  annotations: JSON
-  uid: ID!
-  resourceVersion: String!
-  generation: Int!
-  creationTimestamp: DateTime!
-  revision: String
-  ownerReferences: [OwnerReference!]!
-  owner: ResourceOwner!
-  finalizers: [String!]!
-}
 
 """
 Author-controlled desired state for a Namespace.
@@ -177,14 +160,6 @@ input NamespaceBy @oneOf {
   name: String
 }
 
-"""
-Author-controlled metadata for Namespace mutations.
-"""
-input NamespaceMetadataInput {
-  name: String!
-  labels: JSON
-  annotations: JSON
-}
 
 input NamespaceRepositoryDefaultsInput {
   visibility: RepositoryVisibility
@@ -209,7 +184,7 @@ Declarative resource envelope for creating a namespace.
 input CreateNamespaceInput {
   apiVersion: String! = "gitstore.dev/v1beta1"
   kind: String! = "Namespace"
-  metadata: NamespaceMetadataInput!
+  metadata: ObjectMetaInput!
   spec: NamespaceSpecInput!
 }
 
@@ -219,7 +194,7 @@ Declarative resource envelope for updating a namespace.
 input UpdateNamespaceInput {
   apiVersion: String! = "gitstore.dev/v1beta1"
   kind: String! = "Namespace"
-  metadata: NamespaceMetadataInput!
+  metadata: ObjectMetaInput!
   spec: NamespaceSpecInput!
 }
 

@@ -19,6 +19,9 @@ import (
 
 // CreateRepository is the resolver for the createRepository field.
 func (r *mutationResolver) CreateRepository(ctx context.Context, input model.CreateRepositoryInput) (*model.CreateRepositoryPayload, error) {
+	if err := validateMetadataScope("Repository", input.Metadata); err != nil {
+		return nil, err.ToGQLError()
+	}
 	if input.APIVersion != repositoryAPIVersion {
 		return nil, gqlerror.Errorf("apiVersion must be %q", repositoryAPIVersion)
 	}
@@ -34,7 +37,7 @@ func (r *mutationResolver) CreateRepository(ctx context.Context, input model.Cre
 	if _, err := r.service.CommitRepositoryManifest(ctx, input.APIVersion, input.Kind, input.Metadata, input.Spec, callerUsernameOrAnon(ctx, r), true); err != nil {
 		return nil, err
 	}
-	ns, err := r.service.GetNamespaceByName(ctx, input.Metadata.Namespace)
+	ns, err := r.service.GetNamespaceByName(ctx, namespaceValue(input.Metadata.Namespace))
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +50,7 @@ func (r *mutationResolver) CreateRepository(ctx context.Context, input model.Cre
 		return nil, err
 	}
 	r.logger.Info("lookup repository",
-		zap.String("namespace", input.Metadata.Namespace),
+		zap.String("namespace", namespaceValue(input.Metadata.Namespace)),
 		zap.String("name", input.Metadata.Name),
 		zap.String("repo_id", repo.ID),
 	)
@@ -62,10 +65,13 @@ func (r *mutationResolver) CreateRepository(ctx context.Context, input model.Cre
 
 // UpdateRepository is the resolver for the updateRepository field.
 func (r *mutationResolver) UpdateRepository(ctx context.Context, input model.UpdateRepositoryInput) (*model.UpdateRepositoryPayload, error) {
+	if err := validateMetadataScope("Repository", input.Metadata); err != nil {
+		return nil, err.ToGQLError()
+	}
 	if input.APIVersion != repositoryAPIVersion || input.Kind != repositoryKind || input.Metadata == nil || input.Spec == nil {
 		return nil, gqlerror.Errorf("invalid Repository resource envelope")
 	}
-	mapping, err := r.service.LookupRepository(ctx, input.Metadata.Namespace, input.Metadata.Name)
+	mapping, err := r.service.LookupRepository(ctx, namespaceValue(input.Metadata.Namespace), input.Metadata.Name)
 	if err != nil {
 		return nil, err
 	}

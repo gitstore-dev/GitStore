@@ -4,6 +4,7 @@
 package cataloggrpc_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -134,7 +135,7 @@ func TestAdmitResources_FileIdentityIsolatedAcrossNamespaces(t *testing.T) {
 			return []string{"files/hero.md"}, nil
 		},
 		readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
-			return makeFileWithBody("hero", "acme-other namespace body"), nil
+			return bytes.ReplaceAll(makeFileWithBody("hero", "acme-other namespace body"), []byte("namespace: gitstore"), []byte("namespace: acme-other")), nil
 		},
 	}
 	srvB := newCatalogServer(t, store, gitB)

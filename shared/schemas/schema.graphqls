@@ -302,7 +302,7 @@ System-managed metadata shared by core catalog resources.
 """
 type ObjectMeta {
   name: String!
-  namespace: String!
+  namespace: String
   labels: JSON
   annotations: JSON
   uid: ID!

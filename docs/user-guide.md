@@ -99,6 +99,7 @@ catalog-work/
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore-test
   name: macbook-pro
   labels:
     gitstore.dev/brand: apple
@@ -127,6 +128,7 @@ Portable workstation for demanding creative and engineering work.
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: ProductVariant
 metadata:
+  namespace: gitstore-test
   name: macbook-pro-16-m4-64gb-1tb
 spec:
   title: MacBook Pro 16 M4 Max 64GB 1TB
@@ -163,6 +165,7 @@ High-memory configuration for large builds, media pipelines, and local AI work.
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore-test
   name: laptops
 spec:
   title: Laptops

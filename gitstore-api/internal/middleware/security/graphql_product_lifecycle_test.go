@@ -57,7 +57,7 @@ func TestCategoryProductsRequiresProductListBeforeResolver(t *testing.T) {
 		return &datastore.Namespace{Name: "private", CreationActor: "owner"}, nil
 	}}, zap.NewNop())
 	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "denied", AuthMethod: "bearer"})
-	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Category", Result: &model.Category{Metadata: &model.ObjectMeta{Namespace: "private"}}})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Category", Result: &model.Category{Metadata: &model.ObjectMeta{Namespace: new("private")}}})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Category", Field: graphql.CollectedField{Field: &ast.Field{Name: "products"}}})
 	called := false
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
@@ -72,7 +72,7 @@ func TestCategoryProductsRequiresProductListBeforeResolver(t *testing.T) {
 
 func TestProductMutationAuthorizationMatrix(t *testing.T) {
 	productID := "Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC9wcm9kLXVpZA=="
-	metadata := &model.ObjectMetaInput{Namespace: "acme", Name: "widget"}
+	metadata := &model.ObjectMetaInput{Namespace: new("acme"), Name: "widget"}
 	store := &testutil.StubStore{
 		GetProductFunc: func(context.Context, string) (*datastore.Product, error) {
 			return &datastore.Product{UID: "prod-uid", Name: "widget", Namespace: "acme", CreationActor: "author"}, nil

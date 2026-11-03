@@ -508,7 +508,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 	assert.Equal(t, int64(2), notDemoted.Generation)
 }
 
-func TestAdmitResources_NamespaceMetadataAndBodyAdvanceGeneration(t *testing.T) {
+func TestAdmitResources_ObjectMetaAndBodyAdvanceGeneration(t *testing.T) {
 	store := newNamespacePolicyDatastore(t)
 	zero := strings.Repeat("0", 40)
 	a := strings.Repeat("a", 40)
@@ -873,11 +873,11 @@ func makeProduct(name string) []byte {
 }
 
 func makeFile(name string) []byte {
-	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/" + name + ".jpg\n---\nAlt text")
+	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  namespace: gitstore\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/" + name + ".jpg\n---\nAlt text")
 }
 
 func makeFileWithContentType(name, contentType string) []byte {
-	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: " + contentType + "\n  provider: s3\n  source:\n    uri: s3://bucket/" + name + "\n---\nAlt text")
+	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  namespace: gitstore\n  name: " + name + "\nspec:\n  contentType: " + contentType + "\n  provider: s3\n  source:\n    uri: s3://bucket/" + name + "\n---\nAlt text")
 }
 
 func TestValidateAndAdmitResources_File(t *testing.T) {
@@ -903,7 +903,7 @@ func TestValidateAndAdmitResources_File(t *testing.T) {
 	require.True(t, validation.Accepted)
 	invalid, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "files/bad.md", Content: []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: bad\nspec:\n  contentType: image/jpeg\n  provider: unsupported\n  source:\n    uri: s3://bucket/bad\n---\n")}}}},
+		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "files/bad.md", Content: []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  namespace: gitstore\n  name: bad\nspec:\n  contentType: image/jpeg\n  provider: unsupported\n  source:\n    uri: s3://bucket/bad\n---\n")}}}},
 	})
 	require.NoError(t, err)
 	require.False(t, invalid.Accepted)
@@ -962,7 +962,7 @@ func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
 	git := newTreeGitReader(&current, map[string]map[string][]byte{
 		a: {"files/hero.md": makeFileWithContentType("hero", "image/jpeg")},
 		b: {"files/hero.md": makeFileWithContentType("hero", "image/png")},
-		c: {"files/hero.md": []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/hero\n---\nUpdated alt text")},
+		c: {"files/hero.md": []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  namespace: gitstore\n  name: hero\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/hero\n---\nUpdated alt text")},
 	})
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
@@ -1391,6 +1391,7 @@ func TestValidateResources_CategoryTaxonomy_StatusKey_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -1674,6 +1675,7 @@ func TestValidateResourceDeletionsCategoryTaxonomyUsesProposedTree(t *testing.T)
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: implicit-parent
 spec:
   title: Parent
@@ -1683,6 +1685,7 @@ spec:
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: implicit-child
 spec:
   title: Child
@@ -2268,6 +2271,7 @@ func TestAdmitResources_CategoryTaxonomy_MediaPreservedInSpec(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -2322,6 +2326,7 @@ func TestAdmitResources_CategoryTaxonomy_RequiredMediaAdmitted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -2361,6 +2366,7 @@ func TestAdmitResources_CategoryTaxonomy_OptionalMediaAdmitted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics

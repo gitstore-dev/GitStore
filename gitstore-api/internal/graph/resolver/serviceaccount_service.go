@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -34,8 +35,8 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 		return nil, gqlerror.Errorf("authenticated principal is required")
 	}
 
-	if input.Metadata.Namespace != "" {
-		return nil, gqlerror.Errorf("ServiceAccount is cluster-scoped; omit metadata.namespace")
+	if err := admission.ValidateNamespaceScope("ServiceAccount", input.Metadata.Namespace); err != nil {
+		return nil, err.ToGQLError()
 	}
 	name := input.Metadata.Name
 
@@ -129,8 +130,8 @@ func (r *Resolver) RotateServiceAccountKey(ctx context.Context, input *model.Rot
 	if input == nil || input.Metadata == nil {
 		return nil, gqlerror.Errorf("metadata is required")
 	}
-	if input.Metadata.Namespace != "" {
-		return nil, gqlerror.Errorf("ServiceAccount is cluster-scoped; omit metadata.namespace")
+	if err := admission.ValidateNamespaceScope("ServiceAccount", input.Metadata.Namespace); err != nil {
+		return nil, err.ToGQLError()
 	}
 	name := input.Metadata.Name
 
@@ -171,8 +172,8 @@ func (r *Resolver) DeleteServiceAccount(ctx context.Context, input *model.Delete
 	if input == nil || input.Metadata == nil {
 		return nil, gqlerror.Errorf("metadata is required")
 	}
-	if input.Metadata.Namespace != "" {
-		return nil, gqlerror.Errorf("ServiceAccount is cluster-scoped; omit metadata.namespace")
+	if err := admission.ValidateNamespaceScope("ServiceAccount", input.Metadata.Namespace); err != nil {
+		return nil, err.ToGQLError()
 	}
 	name := input.Metadata.Name
 
@@ -222,8 +223,8 @@ func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.Is
 		return nil, gqlerror.Errorf("metadata and spec are required")
 	}
 
-	if input.Metadata.Namespace != "" {
-		return nil, gqlerror.Errorf("ServiceAccount is cluster-scoped; omit metadata.namespace")
+	if err := admission.ValidateNamespaceScope("ServiceAccount", input.Metadata.Namespace); err != nil {
+		return nil, err.ToGQLError()
 	}
 	name := input.Metadata.Name
 	principal := auth.PrincipalFromContext(ctx)

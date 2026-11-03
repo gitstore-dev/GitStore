@@ -8,7 +8,6 @@ import (
 	"math"
 	"strconv"
 	"sync/atomic"
-	"time"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -289,8 +288,8 @@ func (ec *executionContext) _Namespace_metadata(ctx context.Context, field graph
 			return obj.Metadata, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.NamespaceMetadata) graphql.Marshaler {
-			return ec.marshalNNamespaceMetadata2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceMetadata(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ObjectMeta) graphql.Marshaler {
+			return ec.marshalNObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMeta(ctx, selections, v)
 		},
 		true,
 		true,
@@ -303,7 +302,7 @@ func (ec *executionContext) fieldContext_Namespace_metadata(_ context.Context, f
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_NamespaceMetadata(ctx, field)
+			return ec.childFields_ObjectMeta(ctx, field)
 		},
 	}
 	return fc, nil
@@ -513,277 +512,6 @@ func (ec *executionContext) fieldContext_NamespaceEdge_node(_ context.Context, f
 		},
 	}
 	return fc, nil
-}
-
-func (ec *executionContext) _NamespaceMetadata_name(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_NamespaceMetadata_name(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Name, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_NamespaceMetadata_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("NamespaceMetadata", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _NamespaceMetadata_labels(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_NamespaceMetadata_labels(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Labels, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v map[string]any) graphql.Marshaler {
-			return ec.marshalOJSON2map(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_NamespaceMetadata_labels(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("NamespaceMetadata", field, false, false, errors.New("field of type JSON does not have child fields"))
-}
-
-func (ec *executionContext) _NamespaceMetadata_annotations(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_NamespaceMetadata_annotations(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Annotations, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v map[string]any) graphql.Marshaler {
-			return ec.marshalOJSON2map(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_NamespaceMetadata_annotations(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("NamespaceMetadata", field, false, false, errors.New("field of type JSON does not have child fields"))
-}
-
-func (ec *executionContext) _NamespaceMetadata_uid(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_NamespaceMetadata_uid(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.UID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNID2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_NamespaceMetadata_uid(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("NamespaceMetadata", field, false, false, errors.New("field of type ID does not have child fields"))
-}
-
-func (ec *executionContext) _NamespaceMetadata_resourceVersion(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_NamespaceMetadata_resourceVersion(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ResourceVersion, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_NamespaceMetadata_resourceVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("NamespaceMetadata", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _NamespaceMetadata_generation(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_NamespaceMetadata_generation(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Generation, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
-			return ec.marshalNInt2int32(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_NamespaceMetadata_generation(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("NamespaceMetadata", field, false, false, errors.New("field of type Int does not have child fields"))
-}
-
-func (ec *executionContext) _NamespaceMetadata_creationTimestamp(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_NamespaceMetadata_creationTimestamp(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.CreationTimestamp, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
-			return ec.marshalNDateTime2timeᚐTime(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_NamespaceMetadata_creationTimestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("NamespaceMetadata", field, false, false, errors.New("field of type DateTime does not have child fields"))
-}
-
-func (ec *executionContext) _NamespaceMetadata_revision(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_NamespaceMetadata_revision(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Revision, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_NamespaceMetadata_revision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("NamespaceMetadata", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _NamespaceMetadata_ownerReferences(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_NamespaceMetadata_ownerReferences(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.OwnerReferences, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*model.OwnerReference) graphql.Marshaler {
-			return ec.marshalNOwnerReference2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐOwnerReferenceᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_NamespaceMetadata_ownerReferences(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "NamespaceMetadata",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_OwnerReference(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _NamespaceMetadata_owner(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_NamespaceMetadata_owner(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Owner, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.ResourceOwner) graphql.Marshaler {
-			return ec.marshalNResourceOwner2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceOwner(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_NamespaceMetadata_owner(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "NamespaceMetadata",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_ResourceOwner(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _NamespaceMetadata_finalizers(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceMetadata) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_NamespaceMetadata_finalizers(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Finalizers, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
-			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_NamespaceMetadata_finalizers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("NamespaceMetadata", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _NamespacePushPolicyDefaults_maxPackSizeBytes(ctx context.Context, field graphql.CollectedField, obj *model.NamespacePushPolicyDefaults) (ret graphql.Marshaler) {
@@ -1718,7 +1446,7 @@ func (ec *executionContext) unmarshalInputCreateNamespaceInput(ctx context.Conte
 			it.Kind = data
 		case "metadata":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
-			data, err := ec.unmarshalNNamespaceMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceMetadataInput(ctx, v)
+			data, err := ec.unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -1797,50 +1525,6 @@ func (ec *executionContext) unmarshalInputNamespaceBy(ctx context.Context, obj a
 				return it, err
 			}
 			it.Name = data
-		}
-	}
-	return it, nil
-}
-
-func (ec *executionContext) unmarshalInputNamespaceMetadataInput(ctx context.Context, obj any) (model.NamespaceMetadataInput, error) {
-	var it model.NamespaceMetadataInput
-	if obj == nil {
-		return it, nil
-	}
-
-	asMap := map[string]any{}
-	for k, v := range obj.(map[string]any) {
-		asMap[k] = v
-	}
-
-	fieldsInOrder := [...]string{"name", "labels", "annotations"}
-	for _, k := range fieldsInOrder {
-		v, ok := asMap[k]
-		if !ok {
-			continue
-		}
-		switch k {
-		case "name":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
-			data, err := ec.unmarshalNString2string(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Name = data
-		case "labels":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("labels"))
-			data, err := ec.unmarshalOJSON2map(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Labels = data
-		case "annotations":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("annotations"))
-			data, err := ec.unmarshalOJSON2map(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Annotations = data
 		}
 	}
 	return it, nil
@@ -2079,7 +1763,7 @@ func (ec *executionContext) unmarshalInputUpdateNamespaceInput(ctx context.Conte
 			it.Kind = data
 		case "metadata":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
-			data, err := ec.unmarshalNNamespaceMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceMetadataInput(ctx, v)
+			data, err := ec.unmarshalNObjectMetaInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMetaInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -2483,86 +2167,6 @@ func (ec *executionContext) _NamespaceEdge(ctx context.Context, sel ast.Selectio
 			}
 		case "node":
 			out.Values[i] = ec._NamespaceEdge_node(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var namespaceMetadataImplementors = []string{"NamespaceMetadata"}
-
-func (ec *executionContext) _NamespaceMetadata(ctx context.Context, sel ast.SelectionSet, obj *model.NamespaceMetadata) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, namespaceMetadataImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("NamespaceMetadata")
-		case "name":
-			out.Values[i] = ec._NamespaceMetadata_name(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "labels":
-			out.Values[i] = ec._NamespaceMetadata_labels(ctx, field, obj)
-		case "annotations":
-			out.Values[i] = ec._NamespaceMetadata_annotations(ctx, field, obj)
-		case "uid":
-			out.Values[i] = ec._NamespaceMetadata_uid(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "resourceVersion":
-			out.Values[i] = ec._NamespaceMetadata_resourceVersion(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "generation":
-			out.Values[i] = ec._NamespaceMetadata_generation(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "creationTimestamp":
-			out.Values[i] = ec._NamespaceMetadata_creationTimestamp(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "revision":
-			out.Values[i] = ec._NamespaceMetadata_revision(ctx, field, obj)
-		case "ownerReferences":
-			out.Values[i] = ec._NamespaceMetadata_ownerReferences(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "owner":
-			out.Values[i] = ec._NamespaceMetadata_owner(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "finalizers":
-			out.Values[i] = ec._NamespaceMetadata_finalizers(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -3164,21 +2768,6 @@ func (ec *executionContext) marshalNNamespaceEdge2ᚖgithubᚗcomᚋgitstoreᚑd
 		return graphql.Null
 	}
 	return ec._NamespaceEdge(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNNamespaceMetadata2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceMetadata(ctx context.Context, sel ast.SelectionSet, v *model.NamespaceMetadata) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._NamespaceMetadata(ctx, sel, v)
-}
-
-func (ec *executionContext) unmarshalNNamespaceMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceMetadataInput(ctx context.Context, v any) (*model.NamespaceMetadataInput, error) {
-	res, err := ec.unmarshalInputNamespaceMetadataInput(ctx, v)
-	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalNNamespaceSpec2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceSpec(ctx context.Context, sel ast.SelectionSet, v *model.NamespaceSpec) graphql.Marshaler {

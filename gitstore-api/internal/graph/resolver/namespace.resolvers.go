@@ -19,6 +19,9 @@ import (
 
 // CreateNamespace is the resolver for the createNamespace field.
 func (r *mutationResolver) CreateNamespace(ctx context.Context, input model.CreateNamespaceInput) (*model.CreateNamespacePayload, error) {
+	if err := validateMetadataScope("Namespace", input.Metadata); err != nil {
+		return nil, err.ToGQLError()
+	}
 	ns, err := r.service.CreateNamespace(ctx, input, callerUsernameOrAnon(ctx, r))
 	if err != nil {
 		return nil, err
@@ -30,6 +33,9 @@ func (r *mutationResolver) CreateNamespace(ctx context.Context, input model.Crea
 
 // UpdateNamespace is the resolver for the updateNamespace field.
 func (r *mutationResolver) UpdateNamespace(ctx context.Context, input model.UpdateNamespaceInput) (*model.UpdateNamespacePayload, error) {
+	if err := validateMetadataScope("Namespace", input.Metadata); err != nil {
+		return nil, err.ToGQLError()
+	}
 	ns, err := r.service.UpdateNamespace(ctx, input, callerUsernameOrAnon(ctx, r))
 	if err != nil {
 		return nil, err
