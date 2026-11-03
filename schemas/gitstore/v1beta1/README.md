@@ -22,6 +22,7 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: my-product
+  namespace: acme-store
 spec:
   title: My Product
 ---
