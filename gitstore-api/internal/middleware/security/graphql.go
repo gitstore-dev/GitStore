@@ -323,6 +323,29 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isAdditionalCatalogField(fc) && !isNamespaceQueryField(fc) && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isCategoryProductsField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
 		return next(ctx)
 	}
+	if fc.Object == "Mutation" {
+		var kind string
+		switch fc.Field.Name {
+		case "createProduct", "updateProduct":
+			kind = "Product"
+		case "createCategory", "updateCategory":
+			kind = "CategoryTaxonomy"
+		case "createRepository", "updateRepository":
+			kind = "Repository"
+		case "createNamespace", "updateNamespace":
+			kind = "Namespace"
+		case "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount", "issueServiceAccountToken":
+			kind = "ServiceAccount"
+		}
+		value, present := nestedStringPath(fc.Args, "input", "metadata", "namespace")
+		var namespace *string
+		if present {
+			namespace = &value
+		}
+		if err := admission.ValidateNamespaceScope(kind, namespace); err != nil {
+			return nil, err.ToGQLError()
+		}
+	}
 	var authz auth.AuthZProvider
 	if a.registry != nil {
 		authz = a.registry.AuthZ()
@@ -840,10 +863,10 @@ func (a *Authorize) authorizeCategoryProductsField(ctx context.Context, fc *grap
 	if fc != nil && fc.Parent != nil {
 		category, _ = fc.Parent.Result.(*model.Category)
 	}
-	if category == nil || category.Metadata == nil || category.Metadata.Namespace == "" {
+	if category == nil || category.Metadata == nil || (category.Metadata.Namespace == nil || *category.Metadata.Namespace == "") {
 		return gqlerror.Errorf("authorization error")
 	}
-	namespace := category.Metadata.Namespace
+	namespace := *category.Metadata.Namespace
 	owner := ""
 	if a.store != nil {
 		ns, err := a.store.GetNamespaceByName(ctx, namespace)
@@ -889,20 +912,20 @@ func (a *Authorize) authorizeAdditionalCatalogField(ctx context.Context, fc *gra
 			return gqlerror.Errorf("authorization context is incomplete")
 		}
 		parent, ok := fc.Parent.Result.(*model.Collection)
-		if !ok || parent == nil || parent.Metadata == nil {
+		if !ok || parent == nil || parent.Metadata == nil || parent.Metadata.Namespace == nil {
 			return gqlerror.Errorf("authorization context is incomplete")
 		}
-		return list("product", parent.Metadata.Namespace)
+		return list("product", *parent.Metadata.Namespace)
 	}
 	if fc.Object == "Product" && fc.Field.Name == "productVariants" {
 		if fc.Parent == nil {
 			return gqlerror.Errorf("authorization context is incomplete")
 		}
 		parent, ok := fc.Parent.Result.(*model.Product)
-		if !ok || parent == nil || parent.Metadata == nil {
+		if !ok || parent == nil || parent.Metadata == nil || parent.Metadata.Namespace == nil {
 			return gqlerror.Errorf("authorization context is incomplete")
 		}
-		return list("productVariant", parent.Metadata.Namespace)
+		return list("productVariant", *parent.Metadata.Namespace)
 	}
 	if fc.Object != "Query" {
 		return nil
@@ -1925,6 +1948,19 @@ func nestedStringPath(args map[string]any, path ...string) (string, bool) {
 				return "", false
 			}
 			rv = rv.Elem()
+		}
+		if rv.Kind() == reflect.Map {
+			rv = rv.MapIndex(reflect.ValueOf(key))
+			if !rv.IsValid() {
+				return "", false
+			}
+			if rv.Kind() == reflect.Interface {
+				if rv.IsNil() {
+					return "", false
+				}
+				rv = rv.Elem()
+			}
+			continue
 		}
 		if rv.Kind() != reflect.Struct {
 			return "", false

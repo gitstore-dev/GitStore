@@ -267,7 +267,7 @@ func createNamespaceInput(name string, tier model.NamespaceTier) model.CreateNam
 	return model.CreateNamespaceInput{
 		APIVersion: "gitstore.dev/v1beta1",
 		Kind:       "Namespace",
-		Metadata:   &model.NamespaceMetadataInput{Name: name},
+		Metadata:   &model.ObjectMetaInput{Name: name},
 		Spec:       &model.NamespaceSpecInput{Tier: tier},
 	}
 }
@@ -276,7 +276,7 @@ func updateNamespaceInput(name string, tier model.NamespaceTier) model.UpdateNam
 	return model.UpdateNamespaceInput{
 		APIVersion: "gitstore.dev/v1beta1",
 		Kind:       "Namespace",
-		Metadata:   &model.NamespaceMetadataInput{Name: name},
+		Metadata:   &model.ObjectMetaInput{Name: name},
 		Spec:       &model.NamespaceSpecInput{Tier: tier},
 	}
 }

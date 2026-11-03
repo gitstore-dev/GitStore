@@ -360,20 +360,6 @@ type ComplexityRoot struct {
 		Node   func(childComplexity int) int
 	}
 
-	NamespaceMetadata struct {
-		Annotations       func(childComplexity int) int
-		CreationTimestamp func(childComplexity int) int
-		Finalizers        func(childComplexity int) int
-		Generation        func(childComplexity int) int
-		Labels            func(childComplexity int) int
-		Name              func(childComplexity int) int
-		Owner             func(childComplexity int) int
-		OwnerReferences   func(childComplexity int) int
-		ResourceVersion   func(childComplexity int) int
-		Revision          func(childComplexity int) int
-		UID               func(childComplexity int) int
-	}
-
 	NamespacePushPolicyDefaults struct {
 		AdmissionControl func(childComplexity int) int
 		MaxFileSizeBytes func(childComplexity int) int
@@ -2220,83 +2206,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.NamespaceEdge.Node(childComplexity), true
-
-	case "NamespaceMetadata.annotations":
-		if e.ComplexityRoot.NamespaceMetadata.Annotations == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceMetadata.Annotations(childComplexity), true
-
-	case "NamespaceMetadata.creationTimestamp":
-		if e.ComplexityRoot.NamespaceMetadata.CreationTimestamp == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceMetadata.CreationTimestamp(childComplexity), true
-
-	case "NamespaceMetadata.finalizers":
-		if e.ComplexityRoot.NamespaceMetadata.Finalizers == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceMetadata.Finalizers(childComplexity), true
-
-	case "NamespaceMetadata.generation":
-		if e.ComplexityRoot.NamespaceMetadata.Generation == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceMetadata.Generation(childComplexity), true
-
-	case "NamespaceMetadata.labels":
-		if e.ComplexityRoot.NamespaceMetadata.Labels == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceMetadata.Labels(childComplexity), true
-
-	case "NamespaceMetadata.name":
-		if e.ComplexityRoot.NamespaceMetadata.Name == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceMetadata.Name(childComplexity), true
-
-	case "NamespaceMetadata.owner":
-		if e.ComplexityRoot.NamespaceMetadata.Owner == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceMetadata.Owner(childComplexity), true
-
-	case "NamespaceMetadata.ownerReferences":
-		if e.ComplexityRoot.NamespaceMetadata.OwnerReferences == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceMetadata.OwnerReferences(childComplexity), true
-
-	case "NamespaceMetadata.resourceVersion":
-		if e.ComplexityRoot.NamespaceMetadata.ResourceVersion == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceMetadata.ResourceVersion(childComplexity), true
-
-	case "NamespaceMetadata.revision":
-		if e.ComplexityRoot.NamespaceMetadata.Revision == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceMetadata.Revision(childComplexity), true
-
-	case "NamespaceMetadata.uid":
-		if e.ComplexityRoot.NamespaceMetadata.UID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.NamespaceMetadata.UID(childComplexity), true
 
 	case "NamespacePushPolicyDefaults.admissionControl":
 		if e.ComplexityRoot.NamespacePushPolicyDefaults.AdmissionControl == nil {
@@ -4265,7 +4174,6 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputLoginInput,
 		ec.unmarshalInputMediaDefinitionInput,
 		ec.unmarshalInputNamespaceBy,
-		ec.unmarshalInputNamespaceMetadataInput,
 		ec.unmarshalInputNamespacePushPolicyDefaultsInput,
 		ec.unmarshalInputNamespaceRepositoryDefaultsInput,
 		ec.unmarshalInputNamespaceSpecInput,
@@ -5257,7 +5165,7 @@ type Namespace implements Node {
   """
   Namespace identity and system metadata.
   """
-  metadata: NamespaceMetadata!
+  metadata: ObjectMeta!
 
   """
   Author-controlled desired state.
@@ -5275,23 +5183,6 @@ type Namespace implements Node {
   body: String
 }
 
-"""
-Object metadata for the top-level Namespace kind.
-Unlike ObjectMeta, this type intentionally has no namespace field.
-"""
-type NamespaceMetadata {
-  name: String!
-  labels: JSON
-  annotations: JSON
-  uid: ID!
-  resourceVersion: String!
-  generation: Int!
-  creationTimestamp: DateTime!
-  revision: String
-  ownerReferences: [OwnerReference!]!
-  owner: ResourceOwner!
-  finalizers: [String!]!
-}
 
 """
 Author-controlled desired state for a Namespace.
@@ -5392,14 +5283,6 @@ input NamespaceBy @oneOf {
   name: String
 }
 
-"""
-Author-controlled metadata for Namespace mutations.
-"""
-input NamespaceMetadataInput {
-  name: String!
-  labels: JSON
-  annotations: JSON
-}
 
 input NamespaceRepositoryDefaultsInput {
   visibility: RepositoryVisibility
@@ -5424,7 +5307,7 @@ Declarative resource envelope for creating a namespace.
 input CreateNamespaceInput {
   apiVersion: String! = "gitstore.dev/v1beta1"
   kind: String! = "Namespace"
-  metadata: NamespaceMetadataInput!
+  metadata: ObjectMetaInput!
   spec: NamespaceSpecInput!
 }
 
@@ -5434,7 +5317,7 @@ Declarative resource envelope for updating a namespace.
 input UpdateNamespaceInput {
   apiVersion: String! = "gitstore.dev/v1beta1"
   kind: String! = "Namespace"
-  metadata: NamespaceMetadataInput!
+  metadata: ObjectMetaInput!
   spec: NamespaceSpecInput!
 }
 
@@ -6608,7 +6491,7 @@ extend type Mutation {
 input ObjectMetaInput {
   name: String!
   """Required by namespaced resources; omit for cluster-scoped resources."""
-  namespace: String! = ""
+  namespace: String
   labels: JSON
   annotations: JSON
 }
@@ -6997,7 +6880,7 @@ System-managed metadata shared by core catalog resources.
 """
 type ObjectMeta {
   name: String!
-  namespace: String!
+  namespace: String
   labels: JSON
   annotations: JSON
   uid: ID!
@@ -7125,8 +7008,8 @@ input ProductVariantNamespacePath {
 
 """
 A cluster-scoped GitStore-issued non-human identity. Its global metadata.name
-and immutable UID identify the account. metadata.namespace is unset on output;
-nonempty metadata.namespace is rejected on every ServiceAccount operation.
+and immutable UID identify the account. metadata.namespace is null on output;
+any non-null metadata.namespace is rejected on every ServiceAccount operation.
 """
 type ServiceAccount implements Actor {
   apiVersion: String!
@@ -7879,34 +7762,6 @@ func (ec *executionContext) childFields_NamespaceEdge(ctx context.Context, field
 		return ec.fieldContext_NamespaceEdge_node(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type NamespaceEdge", field.Name)
-}
-
-func (ec *executionContext) childFields_NamespaceMetadata(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "name":
-		return ec.fieldContext_NamespaceMetadata_name(ctx, field)
-	case "labels":
-		return ec.fieldContext_NamespaceMetadata_labels(ctx, field)
-	case "annotations":
-		return ec.fieldContext_NamespaceMetadata_annotations(ctx, field)
-	case "uid":
-		return ec.fieldContext_NamespaceMetadata_uid(ctx, field)
-	case "resourceVersion":
-		return ec.fieldContext_NamespaceMetadata_resourceVersion(ctx, field)
-	case "generation":
-		return ec.fieldContext_NamespaceMetadata_generation(ctx, field)
-	case "creationTimestamp":
-		return ec.fieldContext_NamespaceMetadata_creationTimestamp(ctx, field)
-	case "revision":
-		return ec.fieldContext_NamespaceMetadata_revision(ctx, field)
-	case "ownerReferences":
-		return ec.fieldContext_NamespaceMetadata_ownerReferences(ctx, field)
-	case "owner":
-		return ec.fieldContext_NamespaceMetadata_owner(ctx, field)
-	case "finalizers":
-		return ec.fieldContext_NamespaceMetadata_finalizers(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type NamespaceMetadata", field.Name)
 }
 
 func (ec *executionContext) childFields_NamespacePushPolicyDefaults(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

@@ -974,6 +974,45 @@ Git-backed catalogue resources are projected into GraphQL after post-receive adm
 
 Post-receive admission is asynchronous and cannot reject an already accepted Git push. DB-backed conflicts such as duplicate variant SKUs leave the existing stored resource unchanged and skip the conflicting incoming resource.
 
+## Resource metadata and namespace scope
+
+All resource envelopes use `ObjectMeta` and authoring inputs use `ObjectMetaInput`.
+Their `namespace` field is nullable (`String`), with no input default. Namespace
+and ServiceAccount responses return `metadata.namespace: null`; namespaced
+resources return their owning namespace.
+
+Namespaced metadata requires a nonblank namespace. Omitted, null, empty, and
+whitespace-only values return the same error before namespace-dependent
+authorization lookups or writes:
+
+```json
+{"errors":[{"message":"Product requires a nonblank metadata.namespace. Supply the owning namespace","extensions":{"code":"BAD_USER_INPUT","diagnostics":[{"reason":"NAMESPACE_REQUIRED","field":"metadata.namespace","level":"FAILURE","message":"Product requires a nonblank metadata.namespace. Supply the owning namespace"}]}}]}
+```
+
+Cluster-scoped metadata accepts omission or null. Every non-null value, including
+an empty string, returns `BAD_USER_INPUT` with reason `NAMESPACE_FORBIDDEN` and
+field `metadata.namespace`. Error paths retain mutation aliases. Git admission
+uses the same reasons through its existing validation/admission reports. Git
+manifests for namespaced kinds must explicitly supply the owning namespace;
+repository context does not supply a missing value.
+
+### Client migration and rolling upgrades
+
+Replace fragments on the removed `NamespaceMetadata` type with selections on
+shared `ObjectMeta`. The dedicated `NamespaceMetadataInput` type is also removed.
+Before upgrading, add explicit namespaces to namespaced Git manifests that
+previously relied on repository inference. During a rolling upgrade, keep Namespace metadata selections inline and omit
+`metadata.namespace` from Namespace inputs so requests remain valid on both
+schemas. Defer queries of Namespace's new namespace field and fragments on its
+new metadata type until all API replicas are upgraded. Clients must handle a
+null namespace for cluster-scoped responses.
+
+Older replicas retain their previous schema, empty-string output, and validation
+behavior. Deploy all replicas before relying on the new diagnostic reasons or
+stricter namespace presence checks; routing through mixed versions cannot
+provide those guarantees. Storage formats and persisted resource identities do
+not change.
+
 ## Types
 
 ### Namespace
@@ -983,14 +1022,14 @@ type Namespace implements Node {
   id: ID!
   apiVersion: String!
   kind: String!
-  metadata: NamespaceMetadata!
+  metadata: ObjectMeta!
   spec: NamespaceSpec!
   status: NamespaceStatus!
 }
 ```
 
-`NamespaceMetadata` intentionally omits `namespace` because Namespace is a
-top-level resource. Existing datastore rows hydrate with
+Namespace uses shared `ObjectMeta`; `metadata.namespace` is `null` because it is
+cluster-scoped. Existing datastore rows hydrate with
 `resourceVersion: "1"`, `generation: 1`, and an initial non-null status of
 `observedGeneration: 0`, `lastAppliedRevision: null`, and `conditions: []`.
 See [Namespace Resource Contract](namespace/namespace-spec.md).

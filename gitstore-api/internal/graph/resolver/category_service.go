@@ -86,11 +86,14 @@ func (s *Service) CommitCategoryManifest(ctx context.Context, input CategoryMani
 }
 
 func (s *Service) commitCategoryManifest(ctx context.Context, input CategoryManifestInput, caller string, create bool) (*datastore.CategoryTaxonomy, string, error) {
+	if err := validateMetadataScope("CategoryTaxonomy", input.Metadata); err != nil {
+		return nil, "", err
+	}
 	if s.gitWriter == nil || s.committedAdmitter == nil || s.manifestValidator == nil {
 		return nil, "", fmt.Errorf("category admission runtime is unavailable")
 	}
 	metadata, spec := input.Metadata, input.Spec
-	if metadata == nil || spec == nil || metadata.Name == "" || metadata.Namespace == "" {
+	if metadata == nil || spec == nil || metadata.Name == "" || namespaceValue(metadata.Namespace) == "" {
 		return nil, "", admission.Rejected(admission.PhasePreReceive, "", []admission.Diagnostic{{
 			Reason: "INVALID_ENVELOPE", Message: "metadata.name, metadata.namespace and spec are required", Level: admission.LevelFailure,
 		}})
@@ -112,7 +115,7 @@ func (s *Service) commitCategoryManifest(ctx context.Context, input CategoryMani
 	}
 
 	var repositoryID string
-	existing, lookupErr := s.store.GetCategoryTaxonomyByName(ctx, metadata.Namespace, metadata.Name)
+	existing, lookupErr := s.store.GetCategoryTaxonomyByName(ctx, namespaceValue(metadata.Namespace), metadata.Name)
 	switch {
 	case lookupErr != nil && !errors.Is(lookupErr, datastore.ErrNotFound):
 		return nil, "", fmt.Errorf("look up category: %w", lookupErr)
@@ -124,11 +127,11 @@ func (s *Service) commitCategoryManifest(ctx context.Context, input CategoryMani
 			fmt.Sprintf("category %q not found", metadata.Name))
 	}
 	if create {
-		mapping, err := s.store.LookupRepository(ctx, metadata.Namespace, SystemRepositoryName)
+		mapping, err := s.store.LookupRepository(ctx, namespaceValue(metadata.Namespace), SystemRepositoryName)
 		if err != nil {
 			if errors.Is(err, datastore.ErrNotFound) {
 				return nil, "", admission.NewError(admission.CodeNotFound, "NAMESPACE_NOT_FOUND",
-					fmt.Sprintf("namespace %q not found", metadata.Namespace))
+					fmt.Sprintf("namespace %q not found", namespaceValue(metadata.Namespace)))
 			}
 			return nil, "", fmt.Errorf("look up namespace system repository: %w", err)
 		}
@@ -206,14 +209,14 @@ func (s *Service) commitCategoryManifest(ctx context.Context, input CategoryMani
 		op = admission.OperationCreate
 	}
 	result, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{
-		RepositoryID: repositoryID, Namespace: metadata.Namespace, ActorSubject: caller,
+		RepositoryID: repositoryID, Namespace: namespaceValue(metadata.Namespace), ActorSubject: caller,
 		CommitSHA: commitSHA, RefName: categoryRefName, Path: path, Content: content, Operation: op,
 	})
 	if err != nil {
 		return nil, commitSHA, categoryAdmissionError(err, commitSHA)
 	}
 	category, err := convergeCommittedResource(result, func() (*datastore.CategoryTaxonomy, string, error) {
-		record, err := s.store.GetCategoryTaxonomyByName(ctx, metadata.Namespace, metadata.Name)
+		record, err := s.store.GetCategoryTaxonomyByName(ctx, namespaceValue(metadata.Namespace), metadata.Name)
 		if err != nil {
 			return nil, "", err
 		}
@@ -227,7 +230,7 @@ func (s *Service) commitCategoryManifest(ctx context.Context, input CategoryMani
 }
 
 func categoryManifestEnvelope(metadata *model.ObjectMetaInput, labels, annotations map[string]string, spec *model.CategorySpecInput) map[string]any {
-	meta := map[string]any{"name": metadata.Name, "namespace": metadata.Namespace}
+	meta := map[string]any{"name": metadata.Name, "namespace": namespaceValue(metadata.Namespace)}
 	if len(labels) > 0 {
 		meta["labels"] = labels
 	}
@@ -308,7 +311,7 @@ func (s *Service) observeCategoryMutation(operation string, metadata *model.Obje
 		zap.String("commit", commitSHA), zap.String("phase", phase), zap.Int("diagnostic_count", diagnosticCount),
 	}
 	if metadata != nil {
-		fields = append(fields, zap.String("namespace", metadata.Namespace), zap.String("name", metadata.Name))
+		fields = append(fields, zap.String("namespace", namespaceValue(metadata.Namespace)), zap.String("name", metadata.Name))
 	}
 	if err != nil {
 		s.logger.Warn("category mutation rejected", append(fields, zap.Error(err))...)
@@ -337,7 +340,7 @@ func (s *Service) DeleteCategoryManifest(ctx context.Context, uid, caller string
 	category, outcome, commitSHA, err := s.deleteCategoryManifest(ctx, uid, caller)
 	var metadata *model.ObjectMetaInput
 	if category != nil {
-		metadata = &model.ObjectMetaInput{Namespace: category.Namespace, Name: category.Name}
+		metadata = &model.ObjectMetaInput{Namespace: stringPointer(category.Namespace), Name: category.Name}
 	}
 	s.observeCategoryMutation("delete", metadata, commitSHA, started, err)
 	return category, outcome, err

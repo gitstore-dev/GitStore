@@ -288,7 +288,7 @@ func categoryInput(name, title string, parent string) CategoryManifestInput {
 	}
 	return CategoryManifestInput{
 		APIVersion: categoryAPIVersion, Kind: categoryKind,
-		Metadata: &model.ObjectMetaInput{Name: name, Namespace: lifecycleNamespace},
+		Metadata: &model.ObjectMetaInput{Name: name, Namespace: new(lifecycleNamespace)},
 		Spec:     spec,
 	}
 }
@@ -308,7 +308,7 @@ func TestManifestCreationInitializesUnbornRef(t *testing.T) {
 				_, err = env.service.CommitCategoryManifest(ctx, categoryInput("first", "First", ""), "alice", true)
 			} else {
 				_, err = env.service.CommitProductManifest(ctx, "catalog.gitstore.dev/v1beta1", kind,
-					&model.ObjectMetaInput{Name: "first", Namespace: lifecycleNamespace},
+					&model.ObjectMetaInput{Name: "first", Namespace: new(lifecycleNamespace)},
 					&model.ProductSpecInput{Title: "First"}, nil, "alice", true)
 			}
 			require.NoError(t, err)

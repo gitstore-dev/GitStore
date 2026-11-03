@@ -144,8 +144,8 @@ func TestCatalogBoundariesUseStoredOwnersAndNamespaceOwnerForCreate(t *testing.T
 		object, field, owner string
 		args                 map[string]any
 	}{
-		{"Mutation", "createProduct", "namespace-owner", map[string]any{"input": model.CreateProductInput{Metadata: &model.ObjectMetaInput{Name: "widget", Namespace: "acme"}}}},
-		{"Mutation", "createCategory", "namespace-owner", map[string]any{"input": model.CreateCategoryInput{Metadata: &model.ObjectMetaInput{Name: "category", Namespace: "acme"}}}},
+		{"Mutation", "createProduct", "namespace-owner", map[string]any{"input": model.CreateProductInput{Metadata: &model.ObjectMetaInput{Name: "widget", Namespace: new("acme")}}}},
+		{"Mutation", "createCategory", "namespace-owner", map[string]any{"input": model.CreateCategoryInput{Metadata: &model.ObjectMetaInput{Name: "category", Namespace: new("acme")}}}},
 		{"Query", "category", "category-owner", map[string]any{"by": struct {
 			NamespacePath *struct{ Namespace, Name string }
 		}{&struct{ Namespace, Name string }{"acme", "category"}}}},
@@ -569,8 +569,8 @@ func TestGraphQLAdditionalCatalogReadBoundaries(t *testing.T) {
 		{"Query", "productVariants", "productVariant.list", "", map[string]any{"namespace": "acme"}, nil},
 		{"Query", "node", "collection.read", "summer", map[string]any{"id": base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Collection/id"))}, nil},
 		{"Query", "nodes", "productVariant.read", "blue", map[string]any{"ids": []string{base64.StdEncoding.EncodeToString([]byte("gid://GitStore/ProductVariant/id"))}}, nil},
-		{"Collection", "products", "product.list", "", nil, &model.Collection{Metadata: &model.ObjectMeta{Namespace: "acme", Name: "summer"}}},
-		{"Product", "productVariants", "productVariant.list", "", nil, &model.Product{Metadata: &model.ObjectMeta{Namespace: "acme", Name: "widget"}}},
+		{"Collection", "products", "product.list", "", nil, &model.Collection{Metadata: &model.ObjectMeta{Namespace: new("acme"), Name: "summer"}}},
+		{"Product", "productVariants", "productVariant.list", "", nil, &model.Product{Metadata: &model.ObjectMeta{Namespace: new("acme"), Name: "widget"}}},
 	} {
 		t.Run(tc.object+"."+tc.field, func(t *testing.T) {
 			recorder := testutil.NewAllowAllAuthZ()
@@ -601,7 +601,7 @@ func TestGraphQLCanonicalNamespaceBoundaries(t *testing.T) {
 		{"Query", "namespaces", "namespace.list", "", nil},
 		{"Query", "node", "namespace.read", "alice", map[string]any{"id": id}},
 		{"Query", "nodes", "namespace.read", "alice", map[string]any{"ids": []string{id}}},
-		{"Mutation", "createNamespace", "namespace.create", "alice", map[string]any{"input": model.CreateNamespaceInput{Metadata: &model.NamespaceMetadataInput{Name: name}, Spec: &model.NamespaceSpecInput{Tier: model.NamespaceTierUser}}}},
+		{"Mutation", "createNamespace", "namespace.create", "alice", map[string]any{"input": model.CreateNamespaceInput{Metadata: &model.ObjectMetaInput{Name: name}, Spec: &model.NamespaceSpecInput{Tier: model.NamespaceTierUser}}}},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			recorder := testutil.NewAllowAllAuthZ()
@@ -646,8 +646,8 @@ func TestShippedPolicyGraphQLBoundaryBaseline(t *testing.T) {
 		{"watchProducts", "Subscription", "product.watch", map[string]any{"namespace": "acme"}, map[string]bool{"admin": true, "controller": true}},
 		{"updateProductStatus", "Mutation", "product.status.write", map[string]any{"input": model.UpdateProductStatusInput{Name: "widget", Namespace: "acme"}}, map[string]bool{"admin": true, "controller": true}},
 		{"completeNamespaceDeletion", "Mutation", "namespace.purge", map[string]any{"input": model.CompleteNamespaceDeletionInput{Name: "acme"}}, map[string]bool{"admin": true, "controller": true}},
-		{"createNamespace", "Mutation", "namespace.create", map[string]any{"input": model.CreateNamespaceInput{Metadata: &model.NamespaceMetadataInput{Name: "alice"}, Spec: &model.NamespaceSpecInput{Tier: model.NamespaceTierUser}}}, map[string]bool{"admin": true, "alice": true, "controller": true, "internal": true}},
-		{"createNamespace", "Mutation", "namespace.create", map[string]any{"input": model.CreateNamespaceInput{Metadata: &model.NamespaceMetadataInput{Name: "acme"}, Spec: &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization}}}, map[string]bool{"admin": true}},
+		{"createNamespace", "Mutation", "namespace.create", map[string]any{"input": model.CreateNamespaceInput{Metadata: &model.ObjectMetaInput{Name: "alice"}, Spec: &model.NamespaceSpecInput{Tier: model.NamespaceTierUser}}}, map[string]bool{"admin": true, "alice": true, "controller": true, "internal": true}},
+		{"createNamespace", "Mutation", "namespace.create", map[string]any{"input": model.CreateNamespaceInput{Metadata: &model.ObjectMetaInput{Name: "acme"}, Spec: &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization}}}, map[string]bool{"admin": true}},
 	} {
 		for name, principal := range principals {
 			t.Run(tc.field+"/"+tc.action+"/"+name+"/"+fmt.Sprint(tc.args), func(t *testing.T) {
@@ -794,7 +794,7 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationUsesPolicy(t *testing.
 			"input": model.CreateNamespaceInput{
 				APIVersion: "gitstore.dev/v1beta1",
 				Kind:       "Namespace",
-				Metadata:   &model.NamespaceMetadataInput{Name: "acme"},
+				Metadata:   &model.ObjectMetaInput{Name: "acme"},
 				Spec:       &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
 			},
 		},
@@ -822,7 +822,7 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationFailsWithoutAuthZ(t *t
 			"input": model.CreateNamespaceInput{
 				APIVersion: "gitstore.dev/v1beta1",
 				Kind:       "Namespace",
-				Metadata:   &model.NamespaceMetadataInput{Name: "acme"},
+				Metadata:   &model.ObjectMetaInput{Name: "acme"},
 				Spec:       &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
 			},
 		},
@@ -1244,8 +1244,8 @@ func TestGraphQLFieldAuthorizerRequiresAssertionForTokenIssuance(t *testing.T) {
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "issueServiceAccountToken"}},
 		Args: map[string]any{"input": map[string]any{"metadata": map[string]any{
-			"namespace": "controllers",
-			"name":      "manager",
+
+			"name": "manager",
 		}}},
 	})
 	called := false

@@ -59,7 +59,7 @@ func productDoc(name, title, body string) string {
 	return "---\n" +
 		"apiVersion: catalog.gitstore.dev/v1beta1\n" +
 		"kind: Product\n" +
-		"metadata:\n" +
+		"metadata:\n  namespace: gitstore\n" +
 		"  name: " + name + "\n" +
 		"spec:\n" +
 		"  title: " + title + "\n" +
@@ -71,7 +71,7 @@ func collectionDoc(name string) string {
 	return "---\n" +
 		"apiVersion: catalog.gitstore.dev/v1beta1\n" +
 		"kind: Collection\n" +
-		"metadata:\n" +
+		"metadata:\n  namespace: gitstore\n" +
 		"  name: " + name + "\n" +
 		"spec:\n" +
 		"  title: " + name + "\n" +

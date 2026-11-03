@@ -95,6 +95,7 @@ func TestValidateResourcesStructuralFailureSuppressesNamespacePolicyForWholeRequ
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: invalid
 spec: {}
 status:
@@ -143,6 +144,7 @@ spec:
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: invalid
 spec:
   title: [

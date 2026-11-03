@@ -219,7 +219,7 @@ extend type Mutation {
 input ObjectMetaInput {
   name: String!
   """Required by namespaced resources; omit for cluster-scoped resources."""
-  namespace: String! = ""
+  namespace: String
   labels: JSON
   annotations: JSON
 }

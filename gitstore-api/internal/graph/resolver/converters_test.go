@@ -187,7 +187,7 @@ func TestDatastoreRepositoryToModel_DeclarativeProjection(t *testing.T) {
 	assert.Equal(t, repositoryKind, got.Kind)
 	assert.Equal(t, got.ID, got.Metadata.UID)
 	assert.Equal(t, repo.Name, got.Metadata.Name)
-	assert.Equal(t, ns.Name, got.Metadata.Namespace)
+	assert.Equal(t, ns.Name, namespaceValue(got.Metadata.Namespace))
 	assert.Equal(t, repo.ResourceVersion, got.Metadata.ResourceVersion)
 	assert.Equal(t, int32(repo.Generation), got.Metadata.Generation)
 	assert.Equal(t, repo.CreationTimestamp, got.Metadata.CreationTimestamp)

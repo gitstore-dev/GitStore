@@ -23,7 +23,7 @@ func TestRepositoryDeletionRemovesAuthoringManifest(t *testing.T) {
 	e := newCategoryLifecycleEnv(t)
 	ctx := context.Background()
 	_, err := e.service.CommitRepositoryManifest(ctx, "gitstore.dev/v1beta1", "Repository",
-		&model.ObjectMetaInput{Name: "removable", Namespace: lifecycleNamespace}, &model.RepositorySpecInput{}, "alice", true)
+		&model.ObjectMetaInput{Name: "removable", Namespace: new(lifecycleNamespace)}, &model.RepositorySpecInput{}, "alice", true)
 	require.NoError(t, err)
 	mapping, err := e.store.LookupRepository(ctx, lifecycleNamespace, "removable")
 	require.NoError(t, err)
@@ -59,7 +59,7 @@ func (f infrastructureAdmitFunc) AdmitCommittedManifest(ctx context.Context, req
 func createInfrastructureRepository(t *testing.T, e *categoryLifecycleEnv, name string) *datastore.Repository {
 	t.Helper()
 	_, err := e.service.CommitRepositoryManifest(context.Background(), "gitstore.dev/v1beta1", "Repository",
-		&model.ObjectMetaInput{Name: name, Namespace: lifecycleNamespace}, &model.RepositorySpecInput{}, "alice", true)
+		&model.ObjectMetaInput{Name: name, Namespace: new(lifecycleNamespace)}, &model.RepositorySpecInput{}, "alice", true)
 	require.NoError(t, err)
 	mapping, err := e.store.LookupRepository(context.Background(), lifecycleNamespace, name)
 	require.NoError(t, err)
@@ -286,7 +286,7 @@ func TestInfrastructureNamespacePushRemovalStartsTermination(t *testing.T) {
 	require.NoError(t, e.store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "gitstore-system", Name: "gitstore-system", RepositoryID: author}))
 	ns, err := e.service.CreateNamespace(ctx, model.CreateNamespaceInput{
 		APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace",
-		Metadata: &model.NamespaceMetadataInput{Name: "pushed"},
+		Metadata: &model.ObjectMetaInput{Name: "pushed"},
 		Spec:     &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
 	}, "alice")
 	require.NoError(t, err)
@@ -325,7 +325,7 @@ func TestNamespaceDeletionRemovesManifestAndFinalizesEmptySystemRepository(t *te
 	require.NoError(t, e.store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "gitstore-system", Name: "gitstore-system", RepositoryID: bootstrapRepo}))
 	ns, err := e.service.CreateNamespace(ctx, model.CreateNamespaceInput{
 		APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace",
-		Metadata: &model.NamespaceMetadataInput{Name: "removable"},
+		Metadata: &model.ObjectMetaInput{Name: "removable"},
 		Spec:     &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
 	}, "alice")
 	require.NoError(t, err)

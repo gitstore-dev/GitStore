@@ -23,7 +23,7 @@ import (
 // body, used to prove which commit's content ultimately won an admission
 // race or handoff.
 func makeFileWithBody(name, body string) []byte {
-	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/" + name + "\n---\n" + body)
+	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  namespace: gitstore\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/" + name + "\n---\n" + body)
 }
 
 // TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent models two

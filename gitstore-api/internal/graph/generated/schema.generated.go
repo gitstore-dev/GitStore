@@ -2641,11 +2641,11 @@ func (ec *executionContext) _ObjectMeta_namespace(ctx context.Context, field gra
 			return obj.Namespace, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_ObjectMeta_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -5219,9 +5219,6 @@ func (ec *executionContext) _ObjectMeta(ctx context.Context, sel ast.SelectionSe
 			}
 		case "namespace":
 			out.Values[i] = ec._ObjectMeta_namespace(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "labels":
 			out.Values[i] = ec._ObjectMeta_labels(ctx, field, obj)
 		case "annotations":

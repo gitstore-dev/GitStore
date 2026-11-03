@@ -151,7 +151,7 @@ func serviceAccountCreateInput(t *testing.T, namespace, name, keyID string) *mod
 	return &model.CreateServiceAccountInput{
 		APIVersion: "gitstore.dev/v1beta1",
 		Kind:       "ServiceAccount",
-		Metadata:   &model.ObjectMetaInput{Namespace: namespace, Name: name},
+		Metadata:   &model.ObjectMetaInput{Namespace: serviceAccountTestNamespace(namespace), Name: name},
 		PublicKeys: []*model.ServiceAccountPublicKeyInput{serviceAccountPublicKeyInput(t, keyID)},
 	}
 }
@@ -161,7 +161,7 @@ func TestServiceAccountOperationsRejectNamespace(t *testing.T) {
 	ctx := serviceAccountAdminContext()
 	_, err := h.resolver.CreateServiceAccount(ctx, serviceAccountCreateInput(t, "legacy", "manager", "key"))
 	require.ErrorContains(t, err, "cluster-scoped")
-	metadata := &model.ObjectMetaInput{Namespace: "legacy", Name: "manager"}
+	metadata := &model.ObjectMetaInput{Namespace: new("legacy"), Name: "manager"}
 	_, err = h.resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{Metadata: metadata})
 	require.ErrorContains(t, err, "cluster-scoped")
 	_, err = h.resolver.DeleteServiceAccount(ctx, &model.DeleteServiceAccountInput{Metadata: metadata})
@@ -306,4 +306,11 @@ func TestIssueServiceAccountTokenRequiresMatchingAssertionIdentityAndClampsTTL(t
 		_, err := h.resolver.IssueServiceAccountToken(auth.ContextWithPrincipal(context.Background(), principal), input)
 		require.Error(t, err)
 	}
+}
+
+func serviceAccountTestNamespace(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }

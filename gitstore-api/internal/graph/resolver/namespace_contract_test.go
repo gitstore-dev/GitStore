@@ -50,16 +50,16 @@ func TestNamespaceDeclarativeSchemaContract(t *testing.T) {
 		"id":         "ID!",
 		"apiVersion": "String!",
 		"kind":       "String!",
-		"metadata":   "NamespaceMetadata!",
+		"metadata":   "ObjectMeta!",
 		"spec":       "NamespaceSpec!",
 		"status":     "NamespaceStatus!",
 	} {
 		requireGraphQLField(t, schema, "Namespace", field, fieldType)
 	}
 
-	metadata := schema.Types["NamespaceMetadata"]
+	metadata := schema.Types["ObjectMeta"]
 	require.NotNil(t, metadata)
-	assert.Nil(t, metadata.Fields.ForName("namespace"))
+	requireGraphQLField(t, schema, "ObjectMeta", "namespace", "String")
 	for field, fieldType := range map[string]string{
 		"name":              "String!",
 		"labels":            "JSON",
@@ -72,10 +72,10 @@ func TestNamespaceDeclarativeSchemaContract(t *testing.T) {
 		"ownerReferences":   "[OwnerReference!]!",
 		"finalizers":        "[String!]!",
 	} {
-		requireGraphQLField(t, schema, "NamespaceMetadata", field, fieldType)
+		requireGraphQLField(t, schema, "ObjectMeta", field, fieldType)
 	}
 
-	requireGraphQLField(t, schema, "ObjectMeta", "namespace", "String!")
+	requireGraphQLField(t, schema, "ObjectMeta", "namespace", "String")
 
 	for field, fieldType := range map[string]string{
 		"title":              "String",
@@ -106,41 +106,28 @@ func TestNamespaceDeclarativeSchemaContract(t *testing.T) {
 		for field, fieldType := range map[string]string{
 			"apiVersion": "String!",
 			"kind":       "String!",
-			"metadata":   "NamespaceMetadataInput!",
+			"metadata":   "ObjectMetaInput!",
 			"spec":       "NamespaceSpecInput!",
 		} {
 			requireGraphQLField(t, schema, inputName, field, fieldType)
 		}
 	}
-	requireGraphQLField(t, schema, "NamespaceMetadataInput", "name", "String!")
-	requireGraphQLField(t, schema, "NamespaceMetadataInput", "labels", "JSON")
-	requireGraphQLField(t, schema, "NamespaceMetadataInput", "annotations", "JSON")
+	requireGraphQLField(t, schema, "ObjectMetaInput", "name", "String!")
+	requireGraphQLField(t, schema, "ObjectMetaInput", "labels", "JSON")
+	requireGraphQLField(t, schema, "ObjectMetaInput", "annotations", "JSON")
 	requireGraphQLField(t, schema, "NamespaceSpecInput", "title", "String")
 	requireGraphQLField(t, schema, "NamespaceSpecInput", "tier", "NamespaceTier!")
 	requireGraphQLField(t, schema, "Mutation", "updateNamespace", "UpdateNamespacePayload!")
 }
 
-func TestNamespaceMetadataUsesSharedIdentityAndVersionTypes(t *testing.T) {
+func TestNamespaceUsesSharedMetadata(t *testing.T) {
 	schema := namespaceContractSchema(t)
-	for _, fieldName := range []string{
-		"name",
-		"labels",
-		"annotations",
-		"uid",
-		"resourceVersion",
-		"generation",
-		"creationTimestamp",
-		"revision",
-		"ownerReferences",
-	} {
-		namespaceField := schema.Types["NamespaceMetadata"].Fields.ForName(fieldName)
-		objectField := schema.Types["ObjectMeta"].Fields.ForName(fieldName)
-		require.NotNil(t, namespaceField)
-		require.NotNil(t, objectField)
-		assert.Equal(t, objectField.Type.String(), namespaceField.Type.String(), fieldName)
-	}
-	assert.Nil(t, schema.Types["NamespaceMetadata"].Fields.ForName("namespace"))
-	assert.Nil(t, schema.Types["NamespaceStatus"].Fields.ForName("resolved"))
+	requireGraphQLField(t, schema, "Namespace", "metadata", "ObjectMeta!")
+	requireGraphQLField(t, schema, "Repository", "metadata", "ObjectMeta!")
+	metadata := datastoreNamespaceToModel(namespaceContractFixture("00000000-0000-0000-0000-000000000001", "acme")).Metadata
+	require.NotNil(t, metadata)
+	assert.Nil(t, metadata.Namespace)
+	assert.Equal(t, "acme", metadata.Name)
 }
 
 func TestNamespaceHasNoDeprecatedLegacyFields(t *testing.T) {

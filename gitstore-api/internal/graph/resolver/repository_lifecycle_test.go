@@ -41,7 +41,7 @@ func TestRepositoryLifecycleSchemaContract(t *testing.T) {
 	}
 
 	requireGraphQLField(t, schema, "ObjectMetaInput", "name", "String!")
-	requireGraphQLField(t, schema, "ObjectMetaInput", "namespace", "String!")
+	requireGraphQLField(t, schema, "ObjectMetaInput", "namespace", "String")
 	assert.Nil(t, schema.Types["RepositoryMetadataInput"], "Repository must use the shared ObjectMetaInput envelope")
 	requireGraphQLField(t, schema, "Mutation", "updateRepository", "UpdateRepositoryPayload!")
 	requireGraphQLField(t, schema, "Mutation", "updateRepositoryStatus", "UpdateRepositoryStatusPayload!")
@@ -181,7 +181,7 @@ func TestRepositoryMutationsDelegateOneCommittedManifestToSharedAdmission(t *tes
 	service, err := NewService(ServiceDeps{Store: store, GitWriter: writer, Logger: zap.NewNop(), CommittedManifestAdmitter: admitter})
 	require.NoError(t, err)
 	mutation := &mutationResolver{Resolver: &Resolver{service: service, logger: zap.NewNop(), storageDataDir: "/data"}}
-	input := model.CreateRepositoryInput{APIVersion: repositoryAPIVersion, Kind: repositoryKind, Metadata: &model.ObjectMetaInput{Name: "catalog", Namespace: "acme"}, Spec: &model.RepositorySpecInput{}}
+	input := model.CreateRepositoryInput{APIVersion: repositoryAPIVersion, Kind: repositoryKind, Metadata: &model.ObjectMetaInput{Name: "catalog", Namespace: new("acme")}, Spec: &model.RepositorySpecInput{}}
 	created, err := mutation.CreateRepository(ctx, input)
 	require.NoError(t, err)
 	require.NotNil(t, created.Repository)
@@ -215,7 +215,7 @@ func TestRepositoryMutationPreflightRejectsDuplicateCreateAndStorageDowngradeBef
 	writer := &repositoryLifecycleWriter{}
 	service, err := NewService(ServiceDeps{Store: store, GitWriter: writer, Logger: zap.NewNop(), CommittedManifestAdmitter: &repositoryLifecycleAdmitter{store: store}})
 	require.NoError(t, err)
-	metadata := &model.ObjectMetaInput{Name: "catalog", Namespace: "acme"}
+	metadata := &model.ObjectMetaInput{Name: "catalog", Namespace: new("acme")}
 
 	_, err = service.CommitRepositoryManifest(ctx, repositoryAPIVersion, repositoryKind, metadata, &model.RepositorySpecInput{StorageClass: stringPointer("premium")}, "alice", true)
 	require.ErrorContains(t, err, "already exists")
@@ -228,9 +228,9 @@ func TestRepositoryMutationPreflightRejectsDuplicateCreateAndStorageDowngradeBef
 
 func TestRepositoryMutationRejectsEnvelopeMismatchAndBootstrapBeforeGitCommit(t *testing.T) {
 	mutation := &mutationResolver{Resolver: &Resolver{logger: zap.NewNop()}}
-	_, err := mutation.CreateRepository(context.Background(), model.CreateRepositoryInput{APIVersion: "wrong", Kind: repositoryKind, Metadata: &model.ObjectMetaInput{Name: "catalog", Namespace: "acme"}, Spec: &model.RepositorySpecInput{}})
+	_, err := mutation.CreateRepository(context.Background(), model.CreateRepositoryInput{APIVersion: "wrong", Kind: repositoryKind, Metadata: &model.ObjectMetaInput{Name: "catalog", Namespace: new("acme")}, Spec: &model.RepositorySpecInput{}})
 	require.ErrorContains(t, err, "apiVersion")
-	_, err = mutation.CreateRepository(context.Background(), model.CreateRepositoryInput{APIVersion: repositoryAPIVersion, Kind: repositoryKind, Metadata: &model.ObjectMetaInput{Name: SystemRepositoryName, Namespace: "acme"}, Spec: &model.RepositorySpecInput{}})
+	_, err = mutation.CreateRepository(context.Background(), model.CreateRepositoryInput{APIVersion: repositoryAPIVersion, Kind: repositoryKind, Metadata: &model.ObjectMetaInput{Name: SystemRepositoryName, Namespace: new("acme")}, Spec: &model.RepositorySpecInput{}})
 	require.ErrorContains(t, err, "system-managed")
 }
 
@@ -261,7 +261,7 @@ func TestRepositoryLifecycleResolverUsesRealCatalogAdmissionForStatusAndVersions
 	service, err := NewService(ServiceDeps{Store: store, GitWriter: writer, Logger: zap.NewNop(), CommittedManifestAdmitter: admitter})
 	require.NoError(t, err)
 	mutation := &mutationResolver{Resolver: &Resolver{service: service, logger: zap.NewNop(), storageDataDir: "/data"}}
-	input := model.CreateRepositoryInput{APIVersion: repositoryAPIVersion, Kind: repositoryKind, Metadata: &model.ObjectMetaInput{Name: "catalog", Namespace: "acme"}, Spec: &model.RepositorySpecInput{DefaultBranch: stringPointer("main"), StorageClass: stringPointer("standard")}}
+	input := model.CreateRepositoryInput{APIVersion: repositoryAPIVersion, Kind: repositoryKind, Metadata: &model.ObjectMetaInput{Name: "catalog", Namespace: new("acme")}, Spec: &model.RepositorySpecInput{DefaultBranch: stringPointer("main"), StorageClass: stringPointer("standard")}}
 	created, err := mutation.CreateRepository(ctx, input)
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), created.Repository.Metadata.Generation)

@@ -89,7 +89,7 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: example-product
-  namespace: example-store  # optional for current catalog resources; inferred from the repository when omitted
+  namespace: example-store  # required; must match the owning repository namespace
   labels:
     gitstore.dev/brand: example
   annotations:

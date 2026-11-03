@@ -171,8 +171,11 @@ func (s *Service) GetProductByName(ctx context.Context, namespace, name string) 
 // committed-admission boundary. GraphQL never writes Product desired state
 // directly to the datastore.
 func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind string, metadata *model.ObjectMetaInput, spec *model.ProductSpecInput, body *string, caller string, create bool) (*datastore.Product, error) {
+	if err := validateMetadataScope("Product", metadata); err != nil {
+		return nil, err
+	}
 	const productAPIVersion, productKind, productRef = "catalog.gitstore.dev/v1beta1", "Product", "refs/heads/main"
-	if metadata == nil || spec == nil || metadata.Name == "" || metadata.Namespace == "" || apiVersion != productAPIVersion || kind != productKind {
+	if metadata == nil || spec == nil || metadata.Name == "" || namespaceValue(metadata.Namespace) == "" || apiVersion != productAPIVersion || kind != productKind {
 		return nil, admission.Rejected(admission.PhasePreReceive, "", []admission.Diagnostic{{Reason: "INVALID_ENVELOPE", Message: "metadata.name, metadata.namespace, Product apiVersion/kind, and spec are required", Level: admission.LevelFailure}})
 	}
 	if s.gitWriter == nil || s.committedAdmitter == nil || s.manifestValidator == nil {
@@ -190,7 +193,7 @@ func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind st
 	var existing *datastore.Product
 	var lookupErr error
 	if create {
-		mapping, lookupErr := s.store.LookupRepository(ctx, metadata.Namespace, SystemRepositoryName)
+		mapping, lookupErr := s.store.LookupRepository(ctx, namespaceValue(metadata.Namespace), SystemRepositoryName)
 		if lookupErr != nil {
 			if errors.Is(lookupErr, datastore.ErrNotFound) {
 				return nil, admission.NewError(admission.CodeNotFound, "NAMESPACE_NOT_FOUND", "namespace system repository is unavailable")
@@ -199,7 +202,7 @@ func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind st
 		}
 		repositoryID, path = mapping.RepositoryID, fmt.Sprintf("products/%s.md", metadata.Name)
 	} else {
-		existing, lookupErr = s.store.GetProductByName(ctx, metadata.Namespace, metadata.Name)
+		existing, lookupErr = s.store.GetProductByName(ctx, namespaceValue(metadata.Namespace), metadata.Name)
 		if lookupErr != nil {
 			if errors.Is(lookupErr, datastore.ErrNotFound) {
 				return nil, admission.NewError(admission.CodeNotFound, "PRODUCT_NOT_FOUND", "product not found")
@@ -230,7 +233,7 @@ func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind st
 	} else if !create {
 		manifestBody = markdownBody(current)
 	}
-	content, err := renderManifest(map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"name": metadata.Name, "namespace": metadata.Namespace, "labels": labels, "annotations": annotations}, "spec": productManifestSpec(spec)}, manifestBody)
+	content, err := renderManifest(map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"name": metadata.Name, "namespace": namespaceValue(metadata.Namespace), "labels": labels, "annotations": annotations}, "spec": productManifestSpec(spec)}, manifestBody)
 	if err != nil {
 		return nil, admission.Rejected(admission.PhasePreReceive, "", []admission.Diagnostic{{Reason: "INVALID_FIELD", Message: err.Error(), Level: admission.LevelFailure, File: path}})
 	}
@@ -268,12 +271,12 @@ func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind st
 			return nil, fmt.Errorf("commit Product manifest: %w", err)
 		}
 	}
-	result, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{RepositoryID: repositoryID, Namespace: metadata.Namespace, ActorSubject: caller, CommitSHA: sha, RefName: productRef, Path: path, Content: content, Operation: operation})
+	result, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{RepositoryID: repositoryID, Namespace: namespaceValue(metadata.Namespace), ActorSubject: caller, CommitSHA: sha, RefName: productRef, Path: path, Content: content, Operation: operation})
 	if err != nil {
 		return nil, committedAdmissionError(err, sha, "Product")
 	}
 	product, err := convergeCommittedResource(result, func() (*datastore.Product, string, error) {
-		record, err := s.store.GetProductByName(ctx, metadata.Namespace, metadata.Name)
+		record, err := s.store.GetProductByName(ctx, namespaceValue(metadata.Namespace), metadata.Name)
 		if err != nil {
 			return nil, "", err
 		}
@@ -664,6 +667,9 @@ func (s *Service) UpdateCollection(ctx context.Context, uid string, input map[st
 // same admission function used by the post-receive pipeline.
 // Authorization is enforced in GraphQL middleware before this method is called.
 func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespaceInput, callerUsername string) (*datastore.Namespace, error) {
+	if err := validateMetadataScope("Namespace", input.Metadata); err != nil {
+		return nil, err
+	}
 	started := time.Now()
 	defer func() { s.namespaceMetrics.ObserveAdmissionStage("total", time.Since(started)) }()
 	resource, err := namespaceResourceFromCreateInput(input, s.pushLimits)
@@ -688,10 +694,13 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 // materializes that exact committed file through the shared admission runtime.
 // The post-receive batch path uses the same runtime asynchronously.
 func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind string, metadata *model.ObjectMetaInput, spec *model.RepositorySpecInput, callerUsername string, create bool) (*admission.CommittedManifestResult, error) {
+	if err := validateMetadataScope("Repository", metadata); err != nil {
+		return nil, err
+	}
 	if apiVersion != repositoryAPIVersion || kind != repositoryKind || metadata == nil || spec == nil {
 		return nil, gqlerror.Errorf("invalid Repository resource envelope")
 	}
-	if metadata.Name == "" || metadata.Namespace == "" || metadata.Name == SystemRepositoryName {
+	if metadata.Name == "" || namespaceValue(metadata.Namespace) == "" || metadata.Name == SystemRepositoryName {
 		return nil, gqlerror.Errorf("invalid Repository metadata")
 	}
 	if s.committedAdmitter == nil {
@@ -700,7 +709,7 @@ func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind
 	if s.gitWriter == nil {
 		return nil, gqlerror.Errorf("Repository Git writer is unavailable")
 	}
-	mapping, err := s.store.LookupRepository(ctx, metadata.Namespace, SystemRepositoryName)
+	mapping, err := s.store.LookupRepository(ctx, namespaceValue(metadata.Namespace), SystemRepositoryName)
 	if err != nil {
 		return nil, gqlerror.Errorf("namespace system repository is unavailable")
 	}
@@ -713,7 +722,7 @@ func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind
 	if err != nil {
 		return nil, gqlerror.Errorf("metadata.annotations: %v", err)
 	}
-	resource := catalog.RepositoryResource{APIVersion: apiVersion, Kind: kind, Metadata: catalog.ObjectMeta{Name: metadata.Name, Namespace: metadata.Namespace, Labels: labels, Annotations: annotations}, Spec: catalog.RepositorySpec{Visibility: model.RepositoryVisibilityPrivate.String()}}
+	resource := catalog.RepositoryResource{APIVersion: apiVersion, Kind: kind, Metadata: catalog.ObjectMeta{Name: metadata.Name, Namespace: namespaceValue(metadata.Namespace), Labels: labels, Annotations: annotations}, Spec: catalog.RepositorySpec{Visibility: model.RepositoryVisibilityPrivate.String()}}
 	if spec.DefaultBranch != nil {
 		resource.Spec.DefaultBranch = *spec.DefaultBranch
 	}
@@ -723,7 +732,7 @@ func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind
 	if spec.StorageClass != nil {
 		resource.Spec.StorageClass = *spec.StorageClass
 	}
-	if err := s.preflightRepositoryManifestOperation(ctx, metadata.Namespace, metadata.Name, resource.Spec.StorageClass, annotations, create); err != nil {
+	if err := s.preflightRepositoryManifestOperation(ctx, namespaceValue(metadata.Namespace), metadata.Name, resource.Spec.StorageClass, annotations, create); err != nil {
 		return nil, err
 	}
 	content, err := yaml.Marshal(resource)
@@ -745,7 +754,7 @@ func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind
 		op = admission.OperationCreate
 	}
 	result, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{
-		RepositoryID: mapping.RepositoryID, Namespace: metadata.Namespace, ActorSubject: callerUsername,
+		RepositoryID: mapping.RepositoryID, Namespace: namespaceValue(metadata.Namespace), ActorSubject: callerUsername,
 		CommitSHA: sha, RefName: "refs/heads/main", Path: path, Content: manifest, Operation: op,
 	})
 	if err != nil {
@@ -797,6 +806,9 @@ func repositoryStorageClassDowngrade(current, proposed string) bool {
 
 // UpdateNamespace commits and admits a replacement Namespace spec.
 func (s *Service) UpdateNamespace(ctx context.Context, input model.UpdateNamespaceInput, callerUsername string) (*datastore.Namespace, error) {
+	if err := validateMetadataScope("Namespace", input.Metadata); err != nil {
+		return nil, err
+	}
 	started := time.Now()
 	defer func() { s.namespaceMetrics.ObserveAdmissionStage("total", time.Since(started)) }()
 	resource, err := namespaceResourceFromUpdateInput(input, s.pushLimits)
@@ -1115,7 +1127,7 @@ func namespaceMarkdownBody(content, parsedBody []byte) []byte {
 	return nil
 }
 
-func namespaceInputName(metadata *model.NamespaceMetadataInput) string {
+func namespaceInputName(metadata *model.ObjectMetaInput) string {
 	if metadata == nil {
 		return ""
 	}
@@ -1167,7 +1179,10 @@ func namespaceResourceFromUpdateInput(input model.UpdateNamespaceInput, pushLimi
 	return namespaceResourceFromInput(input.APIVersion, input.Kind, input.Metadata, input.Spec, pushLimits)
 }
 
-func namespaceResourceFromInput(apiVersion, kind string, metadata *model.NamespaceMetadataInput, spec *model.NamespaceSpecInput, pushLimits config.PushLimitsConfig) (*catalog.NamespaceResource, error) {
+func namespaceResourceFromInput(apiVersion, kind string, metadata *model.ObjectMetaInput, spec *model.NamespaceSpecInput, pushLimits config.PushLimitsConfig) (*catalog.NamespaceResource, error) {
+	if err := validateMetadataScope("Namespace", metadata); err != nil {
+		return nil, err
+	}
 	if apiVersion != namespaceAPIVersion {
 		return nil, NewNamespaceStructuralError(namespaceadmission.ReasonInvalidEnvelope, fmt.Sprintf("apiVersion must be %q", namespaceAPIVersion))
 	}

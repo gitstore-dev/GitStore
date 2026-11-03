@@ -16,6 +16,7 @@ func TestParseFileResource(t *testing.T) {
 apiVersion: storage.gitstore.dev/v1beta1
 kind: File
 metadata:
+  namespace: gitstore
   name: product-hero
 spec:
   contentType: image/jpeg
@@ -57,6 +58,7 @@ func TestFileProviderContract(t *testing.T) {
 apiVersion: storage.gitstore.dev/v1beta1
 kind: File
 metadata:
+  namespace: gitstore
   name: hero
 spec:
   contentType: image/jpeg
@@ -83,6 +85,7 @@ func TestParseFileRejectsAuthorStatusAndInvalidSource(t *testing.T) {
 apiVersion: storage.gitstore.dev/v1beta1
 kind: File
 metadata:
+  namespace: gitstore
   name: bad
 spec:
   contentType: image/jpeg

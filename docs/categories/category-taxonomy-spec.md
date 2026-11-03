@@ -65,13 +65,17 @@ All spec fields are individually optional unless noted otherwise. Constraints ap
 
 ---
 
-## Namespace Inference
+## Namespace Scope
 
-All current Git-backed catalog resources (`Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`) treat `metadata.namespace` as optional in the committed file. When omitted, the namespace is resolved at admission time from the push context.
+Git-backed namespaced resources (`Product`, `ProductVariant`, `CategoryTaxonomy`,
+`Collection`, `File`, and `Repository`) require a nonblank `metadata.namespace`
+in the committed file. Omission, null, empty, and whitespace-only values are
+rejected with `NAMESPACE_REQUIRED` before namespace-dependent authorization or
+writes. The value must match the owning repository's namespace; it cannot select
+a different namespace.
 
-The raw repository UUID is never stored as the namespace. If the repository or its namespace cannot be resolved, the push admission is aborted and no resources are stored.
-
-Even when `metadata.namespace` is present in the file it is still validated to match the inferred namespace. The field exists to allow multiple repositories within the same namespace to push resources that cross-reference each other by name.
+The raw repository UUID is never stored as the namespace. If the repository or
+its namespace cannot be resolved, push admission aborts without storing resources.
 
 ---
 

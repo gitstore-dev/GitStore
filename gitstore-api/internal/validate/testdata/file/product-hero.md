@@ -2,6 +2,7 @@
 apiVersion: storage.gitstore.dev/v1beta1
 kind: File
 metadata:
+  namespace: acme-store
   name: product-hero
   labels:
     role: hero

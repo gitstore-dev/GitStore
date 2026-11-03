@@ -59,8 +59,8 @@ func TestCategoryMutationAuthorizationMatrix(t *testing.T) {
 	categoryID := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Category/cat-uid"))
 	// Caller-supplied fields deliberately differ from the stored record on
 	// update: authorization must scope by what is stored.
-	createMeta := &model.ObjectMetaInput{Namespace: "acme", Name: "laptops"}
-	updateMeta := &model.ObjectMetaInput{Namespace: "acme", Name: "laptops", Annotations: map[string]any{datastore.OwnerAnnotationKey: "caller-claimed"}}
+	createMeta := &model.ObjectMetaInput{Namespace: new("acme"), Name: "laptops"}
+	updateMeta := &model.ObjectMetaInput{Namespace: new("acme"), Name: "laptops", Annotations: map[string]any{datastore.OwnerAnnotationKey: "caller-claimed"}}
 	for _, tc := range []struct {
 		field, action, owner, repositoryID string
 		args                               map[string]any

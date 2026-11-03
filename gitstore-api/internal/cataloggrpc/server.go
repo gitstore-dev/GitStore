@@ -974,7 +974,11 @@ func errorToValidationError(filePath, msg string) *catalogv1.ValidationError {
 	constraint := ""
 
 	// Try to extract a field path from known message patterns.
-	if strings.HasPrefix(trimmed, "status") {
+	if strings.HasPrefix(trimmed, "metadata.namespace NAMESPACE_REQUIRED:") {
+		field, constraint = "metadata.namespace", "namespace-required"
+	} else if strings.HasPrefix(trimmed, "metadata.namespace NAMESPACE_FORBIDDEN:") {
+		field, constraint = "metadata.namespace", "namespace-forbidden"
+	} else if strings.HasPrefix(trimmed, "status") {
 		field = "status"
 		constraint = "system-managed"
 	} else if strings.Contains(trimmed, "duplicate resource identity") {

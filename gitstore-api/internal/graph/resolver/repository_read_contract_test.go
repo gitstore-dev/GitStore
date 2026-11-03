@@ -262,7 +262,7 @@ func assertRepositoryReadContract(
 	assert.Equal(t, "gitstore.dev/v1beta1", got.APIVersion)
 	assert.Equal(t, "Repository", got.Kind)
 	assert.Equal(t, expected.Name, got.Metadata.Name)
-	assert.Equal(t, namespace.Name, got.Metadata.Namespace)
+	assert.Equal(t, namespace.Name, *got.Metadata.Namespace)
 	assert.Equal(t, got.ID, got.Metadata.UID)
 	assert.Equal(t, expected.ResourceVersion, got.Metadata.ResourceVersion)
 	assert.Equal(t, int32(expected.Generation), got.Metadata.Generation)

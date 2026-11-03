@@ -197,6 +197,10 @@ func FromValidationErrors(errs []*catalogv1.ValidationError) []Diagnostic {
 // Unmapped constraints fall back to VALIDATION_FAILED.
 func ReasonForConstraint(field, constraint string) string {
 	switch constraint {
+	case "namespace-required":
+		return ReasonNamespaceRequired
+	case "namespace-forbidden":
+		return ReasonNamespaceForbidden
 	case "required":
 		return "REQUIRED_FIELD"
 	case "envelope":

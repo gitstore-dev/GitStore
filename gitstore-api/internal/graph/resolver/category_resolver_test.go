@@ -71,7 +71,7 @@ func TestCategoryResolver_CategoryByNamespacePath(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, mustEncodeNodeID(nodeKindCategory, c.UID), got.ID)
 	assert.Equal(t, c.Name, got.Metadata.Name)
-	assert.Equal(t, c.Namespace, got.Metadata.Namespace)
+	assert.Equal(t, c.Namespace, namespaceValue(got.Metadata.Namespace))
 }
 
 func TestCategoryResolver_CategoryByID(t *testing.T) {

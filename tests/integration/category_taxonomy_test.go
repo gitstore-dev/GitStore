@@ -24,13 +24,14 @@ func rootCategoryFixture(name string) string {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: %s
   name: %s
 spec:
   title: %s
 ---
 
 Category description for %s.
-`, name, name, name)
+`, getEnv("NAMESPACE", "gitstore-test"), name, name, name)
 }
 
 func childCategoryFixture(name, parentName string) string {
@@ -38,6 +39,7 @@ func childCategoryFixture(name, parentName string) string {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: %s
   name: %s
 spec:
   title: %s
@@ -47,7 +49,7 @@ spec:
 ---
 
 Category description for %s.
-`, name, name, parentName, name)
+`, getEnv("NAMESPACE", "gitstore-test"), name, name, parentName, name)
 }
 
 func selfRefCategoryFixture(name string) string {
@@ -55,6 +57,7 @@ func selfRefCategoryFixture(name string) string {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: %s
   name: %s
 spec:
   title: %s
@@ -62,7 +65,7 @@ spec:
     name: %s
     kind: CategoryTaxonomy
 ---
-`, name, name, name)
+`, getEnv("NAMESPACE", "gitstore-test"), name, name, name)
 }
 
 func missingTitleCategoryFixture(name string) string {
@@ -70,10 +73,11 @@ func missingTitleCategoryFixture(name string) string {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: %s
   name: %s
 spec: {}
 ---
-`, name)
+`, getEnv("NAMESPACE", "gitstore-test"), name)
 }
 
 func productWithCategoryRefFixture(name, ns, categoryName string) string {
@@ -419,6 +423,7 @@ func TestUpdateCategoryReparentsAcrossRepository(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: %s
   name: %s
 spec:
   title: %s
@@ -428,7 +433,7 @@ spec:
 ---
 
 %s
-`, laptops, laptops, oldParent, wantBody))
+`, ns, laptops, laptops, oldParent, wantBody))
 	push.commitCategory(gaming+".md", childCategoryFixture(gaming, laptops))
 	if out, err := push.push(); err != nil {
 		t.Fatalf("push hierarchy to %s/%s failed:\n%s", ns, repoName, out)
@@ -656,6 +661,7 @@ func TestCategoryCrossNamespaceParentRef_NoDisclosurePush(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: %s
   name: %s
 spec:
   title: %s
@@ -664,7 +670,7 @@ spec:
     namespace: %s
     kind: CategoryTaxonomy
 ---
-`, name, name, target, targetNS)
+`, ns, name, name, target, targetNS)
 	}
 	pushOutput := func(target string) string {
 		name := uniqueName("cross")

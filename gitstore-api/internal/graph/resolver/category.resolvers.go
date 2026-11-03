@@ -26,7 +26,7 @@ func (r *categoryResolver) Parent(ctx context.Context, obj *model.Category) (*mo
 	if !categoryConditionTrue(obj.Status.Conditions, catalog.ConditionParentResolved) {
 		return nil, nil
 	}
-	parent, err := r.store.GetCategoryTaxonomyByName(ctx, obj.Metadata.Namespace, obj.Spec.ParentRef.Name)
+	parent, err := r.store.GetCategoryTaxonomyByName(ctx, namespaceValue(obj.Metadata.Namespace), obj.Spec.ParentRef.Name)
 	if errors.Is(err, datastore.ErrNotFound) {
 		return nil, nil
 	}
@@ -42,7 +42,7 @@ func (r *categoryResolver) Children(ctx context.Context, obj *model.Category) ([
 		return []*model.Category{}, nil
 	}
 	maxDepth := int32(1)
-	conn, err := r.service.listCategoryDescendants(ctx, obj.Metadata.Namespace, &model.CategoryFilterInput{
+	conn, err := r.service.listCategoryDescendants(ctx, namespaceValue(obj.Metadata.Namespace), &model.CategoryFilterInput{
 		DescendantOf: obj.Metadata.Name, MaxDepth: &maxDepth,
 	}, datastore.PageParams{First: categoryFilterMaxPage})
 	if err != nil {
@@ -72,7 +72,7 @@ func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, fi
 	if !ok {
 		return nil, gqlerror.Errorf("category product projection is not ready")
 	}
-	result, err := index.ListCategoryProducts(ctx, obj.Metadata.Namespace, categoryUID, params)
+	result, err := index.ListCategoryProducts(ctx, namespaceValue(obj.Metadata.Namespace), categoryUID, params)
 	if err != nil {
 		if errors.Is(err, datastore.ErrProjectionNotReady) {
 			return nil, &gqlerror.Error{Message: "category product projection is rebuilding; retry shortly", Extensions: map[string]any{"code": "PROJECTION_NOT_READY", "retryable": true}}

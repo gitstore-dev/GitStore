@@ -1195,10 +1195,6 @@ func (ec *executionContext) unmarshalInputObjectMetaInput(ctx context.Context, o
 		asMap[k] = v
 	}
 
-	if _, present := asMap["namespace"]; !present {
-		asMap["namespace"] = ""
-	}
-
 	fieldsInOrder := [...]string{"name", "namespace", "labels", "annotations"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
@@ -1215,7 +1211,7 @@ func (ec *executionContext) unmarshalInputObjectMetaInput(ctx context.Context, o
 			it.Name = data
 		case "namespace":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
-			data, err := ec.unmarshalNString2string(ctx, v)
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
 			if err != nil {
 				return it, err
 			}
