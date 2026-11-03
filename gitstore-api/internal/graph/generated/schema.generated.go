@@ -61,7 +61,7 @@ type QueryResolver interface {
 	Categories(ctx context.Context, namespace string, filter *model.CategoryFilterInput, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error)
 	Collection(ctx context.Context, by model.CollectionBy) (*model.Collection, error)
 	Collections(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.CollectionConnection, error)
-	File(ctx context.Context, namespace string, name string) (*model.File, error)
+	File(ctx context.Context, by model.FileBy) (*model.File, error)
 	Namespace(ctx context.Context, by model.NamespaceBy) (*model.Namespace, error)
 	Namespaces(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.NamespaceConnection, error)
 	Product(ctx context.Context, by model.ProductBy) (*model.Product, error)
@@ -649,22 +649,14 @@ func (ec *executionContext) field_Query_collections_args(ctx context.Context, ra
 func (ec *executionContext) field_Query_file_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "namespace",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNString2string(ctx, v)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "by",
+		func(ctx context.Context, v any) (model.FileBy, error) {
+			return ec.unmarshalNFileBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐFileBy(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["namespace"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "name",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNString2string(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["name"] = arg1
+	args["by"] = arg0
 	return args, nil
 }
 
@@ -3289,7 +3281,7 @@ func (ec *executionContext) _Query_file(ctx context.Context, field graphql.Colle
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().File(ctx, fc.Args["namespace"].(string), fc.Args["name"].(string))
+			return ec.Resolvers.Query().File(ctx, fc.Args["by"].(model.FileBy))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.File) graphql.Marshaler {

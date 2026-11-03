@@ -30,6 +30,7 @@ type authorizedNamespaceDeleteContextKey struct{}
 type authorizedNamespaceTransferContextKey struct{}
 type authorizationLedgerContextKey struct{}
 type authorizedFileNodesContextKey struct{}
+type authorizedFileReadContextKey struct{}
 type authorizedRepositoryReadContextKey struct{}
 type authorizedMissingNodesContextKey struct{}
 
@@ -97,6 +98,21 @@ func AuthorizedFileNode(ctx context.Context, uid string) (*datastore.File, bool)
 	files, _ := ctx.Value(authorizedFileNodesContextKey{}).(map[string]*datastore.File)
 	file, ok := files[uid]
 	return file, ok
+}
+
+type authorizedFileRead struct {
+	file  *datastore.File
+	field *graphql.FieldContext
+}
+
+// AuthorizedFileRead preserves the exact record (including absence) checked
+// for this field, so concurrent replacement cannot expose an unchecked File.
+func AuthorizedFileRead(ctx context.Context) (*datastore.File, bool) {
+	read, ok := ctx.Value(authorizedFileReadContextKey{}).(*authorizedFileRead)
+	if !ok || read == nil || read.field != graphql.GetFieldContext(ctx) {
+		return nil, false
+	}
+	return read.file, true
 }
 
 // AuthorizedNamespaceTransfer carries the exact namespace record and encoded
@@ -359,9 +375,9 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		})
 	}
 	if isFileQueryField(fc) {
-		namespace, _ := directStringArg(fc.Args, "namespace")
-		name, _ := directStringArg(fc.Args, "name")
-		if err := a.authorizeFileRead(ctx, principal, authz, namespace, name); err != nil {
+		var err error
+		ctx, err = a.authorizeFileRead(ctx, fc, principal, authz)
+		if err != nil {
 			return nil, err
 		}
 	} else if isProductQueryField(fc) {
@@ -1247,25 +1263,52 @@ func isFileQueryField(fc *graphql.FieldContext) bool {
 	return fc != nil && fc.Object == "Query" && fc.Field.Name == "file"
 }
 
-func (a *Authorize) authorizeFileRead(ctx context.Context, principal *auth.Principal, authz auth.AuthZProvider, namespace, name string) error {
+func (a *Authorize) authorizeFileRead(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) (context.Context, error) {
 	if authz == nil || a.store == nil {
-		return gqlerror.Errorf("authorization service unavailable")
+		return ctx, gqlerror.Errorf("authorization service unavailable")
 	}
-	owner := ""
 	store, ok := a.store.(interface {
+		GetFile(context.Context, string) (*datastore.File, error)
 		GetFileByName(context.Context, string, string) (*datastore.File, error)
 	})
 	if !ok {
-		return gqlerror.Errorf("authorization service unavailable")
+		return ctx, gqlerror.Errorf("authorization service unavailable")
 	}
-	file, err := store.GetFileByName(ctx, namespace, name)
-	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
-		return gqlerror.Errorf("authorization error")
+	var file *datastore.File
+	var err error
+	var namespace, name string
+	if id, ok := nestedStringPath(fc.Args, "by", "id"); ok {
+		uid, decodeErr := decodeGlobalIDAs("File", id)
+		if decodeErr != nil {
+			return ctx, decodeErr
+		}
+		file, err = store.GetFile(ctx, uid)
+	} else {
+		var namespaceOK, nameOK bool
+		namespace, namespaceOK = nestedStringPath(fc.Args, "by", "namespacePath", "namespace")
+		name, nameOK = nestedStringPath(fc.Args, "by", "namespacePath", "name")
+		if !namespaceOK || !nameOK {
+			return ctx, gqlerror.Errorf("invalid file selector")
+		}
+		file, err = store.GetFileByName(ctx, namespace, name)
 	}
+	if errors.Is(err, datastore.ErrNotFound) {
+		file = nil
+	} else if err != nil || file == nil {
+		return ctx, gqlerror.Errorf("authorization error")
+	}
+	if ctx.Err() != nil {
+		return ctx, gqlerror.Errorf("authorization error")
+	}
+	owner := ""
 	if file != nil {
+		namespace, name = file.Namespace, file.Name
 		owner = file.EffectiveOwnerSub()
 	}
-	return authorizeFileReadResource(ctx, principal, authz, namespace, name, owner)
+	if err := authorizeFileReadResource(ctx, principal, authz, namespace, name, owner); err != nil {
+		return ctx, err
+	}
+	return context.WithValue(ctx, authorizedFileReadContextKey{}, &authorizedFileRead{file: file, field: fc}), nil
 }
 
 func authorizeFileReadResource(ctx context.Context, principal *auth.Principal, authz auth.AuthZProvider, namespace, name, owner string) error {

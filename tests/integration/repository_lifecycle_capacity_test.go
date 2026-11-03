@@ -1769,7 +1769,7 @@ func secretCapacityReadFileIDs(ctx context.Context, endpoint, token, namespace, 
 		variables := map[string]any{"namespace": namespace}
 		for index := range 10 {
 			fmt.Fprintf(&definitions, ",$name%d:String!", index)
-			fmt.Fprintf(&fields, "file%d:file(namespace:$namespace,name:$name%d){%s}\n", index, index, secretCapacityFileSelection)
+			fmt.Fprintf(&fields, "file%d:file(by:{namespacePath:{namespace:$namespace,name:$name%d}}){%s}\n", index, index, secretCapacityFileSelection)
 			variables[fmt.Sprintf("name%d", index)] = secretCapacityFileName(runID, offset+index)
 		}
 		query := "query(" + definitions.String() + "){" + fields.String() + "}"

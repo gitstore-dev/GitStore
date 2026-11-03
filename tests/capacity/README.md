@@ -40,7 +40,7 @@ on the one Git service to avoid client-side non-fast-forward contention, and
 offers real pushes through a queue capped at 256. Missed schedules and drops are
 counted rather than hidden by ticker coalescing or retries. Every acknowledged
 batch is checked through both APIs' existing `nodes` query. Initial IDs come
-from persisted `file(namespace:, name:)` lookups of the 100 known fixture names
+from persisted `file(by: {namespacePath: {namespace:, name:}})` lookups of the 100 known fixture names
 on each API: ten aliases per request, a five-second request timeout, and a
 30-second bootstrap deadline. This is not an inventory scan or a subscription
 snapshot; subscribing after seed pushes cannot discover already-existing Files.

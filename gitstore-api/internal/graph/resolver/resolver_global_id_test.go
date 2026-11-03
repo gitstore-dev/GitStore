@@ -50,13 +50,10 @@ func TestReadNotFoundUsesSharedEnvelopeOverTransport(t *testing.T) {
 		lookups = append(lookups, lookup{
 			"node/" + kind, fmt.Sprintf(`{ detail: node(id:%q) { id } }`, id), kind,
 		})
-		if kind == nodeKindFile {
-			lookups = append(lookups, lookup{"file/path", `{ detail: file(namespace:"acme-store",name:"laptops"){id} }`, kind})
-			continue
-		}
 		field := map[string]string{
 			nodeKindProduct: "product", nodeKindCategory: "category", nodeKindCollection: "collection",
 			nodeKindNamespace: "namespace", nodeKindRepository: "repository", nodeKindProductVariant: "productVariant",
+			nodeKindFile: "file",
 		}[kind]
 		lookups = append(lookups, lookup{
 			field + "/id", fmt.Sprintf(`{ detail: %s(by:{id:%q}) { id } }`, field, id), kind,
@@ -192,7 +189,7 @@ func TestNodeLookupErrorPreservesStructuredEnvelopeAndCause(t *testing.T) {
 }
 
 func TestInvalidReadIDsUseSharedEnvelopeOverTransport(t *testing.T) {
-	for _, field := range []string{"node", "namespace", "product", "category", "repository", "collection", "productVariant"} {
+	for _, field := range []string{"node", "namespace", "product", "category", "repository", "collection", "productVariant", "file"} {
 		t.Run(field, func(t *testing.T) {
 			store, root := newGlobalIDTestResolver(t)
 			middleware := security.NewAuthorizeWithStore(auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil), store, zap.NewNop())
@@ -338,9 +335,12 @@ func TestQueryNodeResolvesByGlobalID(t *testing.T) {
 	require.NoError(t, err)
 	file, ok := fileNode.(*model.File)
 	require.True(t, ok)
-	typedFile, err := query.File(ctx, "test-store", "file-1")
+	typedFile, err := query.File(ctx, model.FileBy{NamespacePath: &model.FileNamespacePath{Namespace: "test-store", Name: "file-1"}})
 	require.NoError(t, err)
 	require.Equal(t, typedFile, file)
+	idFile, err := query.File(ctx, model.FileBy{ID: &file.ID})
+	require.NoError(t, err)
+	require.Equal(t, typedFile, idFile)
 }
 
 func TestQueryNodesPreservesOrderAndReportsInvalidIDs(t *testing.T) {
@@ -415,6 +415,183 @@ type globalIDCountedFileStore struct {
 func (s *globalIDCountedFileStore) GetFile(ctx context.Context, uid string) (*datastore.File, error) {
 	s.reads.Add(1)
 	return s.Datastore.GetFile(ctx, uid)
+}
+
+func (s *globalIDCountedFileStore) GetFileByName(ctx context.Context, namespace, name string) (*datastore.File, error) {
+	s.reads.Add(1)
+	return s.Datastore.GetFileByName(ctx, namespace, name)
+}
+
+func TestFileNamedReadPreservesAuthorizedSnapshot(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		for _, selector := range []string{"id", "path"} {
+			t.Run(fmt.Sprintf("%s/missing=%t", selector, missing), func(t *testing.T) {
+				store, root := newGlobalIDTestResolver(t)
+				id := mustEncodeNodeID(nodeKindFile, globalIDTestFileUID)
+				by := model.FileBy{ID: &id}
+				if selector == "path" {
+					by = model.FileBy{NamespacePath: &model.FileNamespacePath{Namespace: "test-store", Name: "file-1"}}
+				}
+				if !missing {
+					seedGlobalIDTestData(t, t.Context(), store)
+				}
+				counted := &globalIDCountedFileStore{Datastore: store}
+				root.store = counted
+				provider := testutil.NewAllowAllAuthZ()
+				mw := security.NewAuthorizeWithStore(auth.NewProviderRegistry(nil, provider, nil), counted, zap.NewNop())
+				ctx := graphql.WithFieldContext(t.Context(), &graphql.FieldContext{
+					Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: "file"}},
+					Args: map[string]any{"by": by},
+				})
+				_, err := mw.GraphQLFieldAuthorizer(ctx, func(authorized context.Context) (any, error) {
+					if missing {
+						seedGlobalIDTestData(t, t.Context(), store)
+					} else {
+						current, err := store.GetFile(t.Context(), globalIDTestFileUID)
+						require.NoError(t, err)
+						current.Annotations = map[string]string{"sequence": "changed"}
+						current.CreationActor = "new-owner"
+						require.NoError(t, store.UpdateFile(t.Context(), current, current.ResourceVersion))
+					}
+					got, err := root.Query().File(authorized, by)
+					if missing {
+						require.Nil(t, got)
+						requireReadNotFoundEnvelope(t, err, nodeKindFile)
+					} else {
+						require.NoError(t, err)
+						require.Empty(t, got.Metadata.Annotations)
+					}
+					sibling := graphql.WithFieldContext(authorized, &graphql.FieldContext{Object: "Query"})
+					_, cached := security.AuthorizedFileRead(sibling)
+					require.False(t, cached)
+					return nil, nil
+				})
+				require.NoError(t, err)
+				require.EqualValues(t, 1, counted.reads.Load())
+				_, err = mw.GraphQLFieldAuthorizer(ctx, func(authorized context.Context) (any, error) {
+					got, err := root.Query().File(authorized, by)
+					require.NoError(t, err)
+					require.NotNil(t, got)
+					return nil, nil
+				})
+				require.NoError(t, err)
+				require.EqualValues(t, 2, counted.reads.Load())
+				if !missing {
+					require.Equal(t, "new-owner", provider.Resource.OwnerSub)
+				}
+			})
+		}
+	}
+}
+
+func TestFileLookupResourceEnvelopeAcrossReplicas(t *testing.T) {
+	store, _ := newGlobalIDTestResolver(t)
+	created := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	for index, namespace := range []string{"shop", "other-shop"} {
+		require.NoError(t, store.CreateFile(t.Context(), &datastore.File{
+			UID:        fmt.Sprintf("00000000-0000-0000-0000-%012d", index+800),
+			APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", Namespace: namespace, Name: "hero",
+			Generation: 3, ResourceVersion: "7", Revision: "authored-revision", CreationTimestamp: created,
+			Labels: map[string]string{"store": namespace}, Annotations: map[string]string{"description": "hero"},
+			CreationActor: "owner", Body: "Alt text", Finalizers: []string{"storage.example/retain"},
+			Spec:   json.RawMessage(`{"contentType":"image/jpeg","type":"gitstore.dev/media","provider":"s3","source":{"uri":"s3://bucket/hero","checksum":{"algorithm":"sha256","value":"digest"}},"processing":{"image":{"variants":[{"name":"thumb"}]}}}`),
+			Status: json.RawMessage(`{"observedGeneration":2,"lastAppliedRevision":"resolved-revision","conditions":[{"type":"Ready","status":"False","reason":"Pending","message":"Not resolved","lastTransitionTime":"2026-10-01T12:00:00Z"}],"resolved":{"name":"hero","url":"https://cdn/hero","contentType":"image/jpeg","resolvedVariants":[{"name":"thumb","url":"https://cdn/thumb"}]}}`),
+		}))
+	}
+	id := mustEncodeNodeID(nodeKindFile, "00000000-0000-0000-0000-000000000800")
+	selection := `id apiVersion kind metadata{uid name namespace generation resourceVersion revision creationTimestamp labels annotations finalizers} spec{contentType type provider source{uri checksum{algorithm value}} processing{image{variants{name}}}} status{observedGeneration lastAppliedRevision conditions{type status reason} resolved{name url contentType resolvedVariants{name url}}} body`
+	for range 2 {
+		root, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
+		require.NoError(t, err)
+		provider := testutil.NewAllowAllAuthZ()
+		mw := security.NewAuthorizeWithStore(auth.NewProviderRegistry(nil, provider, nil), store, zap.NewNop())
+		server := handler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{Resolvers: root}))
+		server.AroundFields(mw.GraphQLFieldAuthorizer)
+		query := fmt.Sprintf(`query($by:FileBy!){
+			named:file(by:$by){%s}
+			direct:file(by:{id:%q}){%s}
+			node(id:%q){... on File{%s}}
+			other:file(by:{namespacePath:{namespace:"other-shop",name:"hero"}}){%s}
+		}`, selection, id, selection, id, selection, selection)
+		payload, err := json.Marshal(map[string]any{"query": query, "variables": map[string]any{"by": map[string]any{"namespacePath": map[string]string{"namespace": "shop", "name": "hero"}}}})
+		require.NoError(t, err)
+		request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(payload))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		var result struct {
+			Data   map[string]map[string]any
+			Errors gqlerror.List
+		}
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
+		require.Empty(t, result.Errors, response.Body.String())
+		file := result.Data["named"]
+		require.Equal(t, result.Data["direct"], file)
+		require.Equal(t, result.Data["node"], file)
+		require.Equal(t, "storage.gitstore.dev/v1beta1", file["apiVersion"])
+		require.Equal(t, "File", file["kind"])
+		require.Equal(t, "Alt text", file["body"])
+		require.Equal(t, map[string]any{
+			"uid": id, "name": "hero", "namespace": "shop", "generation": float64(3), "resourceVersion": "7",
+			"revision": "authored-revision", "creationTimestamp": "2026-10-01T12:00:00.000Z",
+			"labels": map[string]any{"store": "shop"}, "annotations": map[string]any{"description": "hero"},
+			"finalizers": []any{"storage.example/retain"},
+		}, file["metadata"])
+		require.Equal(t, map[string]any{
+			"contentType": "image/jpeg", "type": "gitstore.dev/media", "provider": "s3",
+			"source":     map[string]any{"uri": "s3://bucket/hero", "checksum": map[string]any{"algorithm": "sha256", "value": "digest"}},
+			"processing": map[string]any{"image": map[string]any{"variants": []any{map[string]any{"name": "thumb"}}}},
+		}, file["spec"])
+		require.Equal(t, float64(2), file["status"].(map[string]any)["observedGeneration"])
+		require.Equal(t, []any{map[string]any{"type": "Ready", "status": "FALSE", "reason": "Pending"}}, file["status"].(map[string]any)["conditions"])
+		require.Equal(t, "resolved-revision", file["status"].(map[string]any)["lastAppliedRevision"])
+		require.Equal(t, map[string]any{"name": "hero", "url": "https://cdn/hero", "contentType": "image/jpeg", "resolvedVariants": []any{map[string]any{"name": "thumb", "url": "https://cdn/thumb"}}}, file["status"].(map[string]any)["resolved"])
+		require.NotEqual(t, file["id"], result.Data["other"]["id"])
+		require.Equal(t, "other-shop", result.Data["other"]["metadata"].(map[string]any)["namespace"])
+	}
+}
+
+func TestFileNamedReadDenialHidesExistenceOverTransport(t *testing.T) {
+	store, root := newGlobalIDTestResolver(t)
+	seedGlobalIDTestData(t, t.Context(), store)
+	for _, exists := range []bool{false, true} {
+		for _, selector := range []string{"id", "path"} {
+			t.Run(fmt.Sprintf("%s/exists=%t", selector, exists), func(t *testing.T) {
+				name, uid := "missing", "00000000-0000-0000-0000-000000000999"
+				if exists {
+					name, uid = "file-1", globalIDTestFileUID
+				}
+				by := map[string]any{"id": mustEncodeNodeID(nodeKindFile, uid)}
+				if selector == "path" {
+					by = map[string]any{"namespacePath": map[string]string{"namespace": "test-store", "name": name}}
+				}
+				provider := testutil.NewDenyAllAuthZ(t)
+				mw := security.NewAuthorizeWithStore(auth.NewProviderRegistry(nil, provider, nil), store, zap.NewNop())
+				server := handler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{Resolvers: root}))
+				server.AroundFields(mw.GraphQLFieldAuthorizer)
+				payload, err := json.Marshal(map[string]any{"query": `query($by:FileBy!){detail:file(by:$by){id spec{provider}}}`, "variables": map[string]any{"by": by}})
+				require.NoError(t, err)
+				request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(payload))
+				request.Header.Set("Content-Type", "application/json")
+				response := httptest.NewRecorder()
+				server.ServeHTTP(response, request)
+				var result struct {
+					Data   map[string]any
+					Errors gqlerror.List
+				}
+				require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
+				require.Nil(t, result.Data["detail"])
+				require.Len(t, result.Errors, 1)
+				require.Equal(t, map[string]any{"code": "FORBIDDEN"}, result.Errors[0].Extensions)
+				require.Equal(t, ast.Path{ast.PathName("detail")}, result.Errors[0].Path)
+				require.Equal(t, "file.read", provider.Action)
+				if exists || selector == "path" {
+					require.Equal(t, "test-store", provider.Resource.Attrs["namespace"])
+					require.Equal(t, name, provider.Resource.Name)
+				}
+			})
+		}
+	}
 }
 
 func TestFileNodeResolverReturnsExactAuthorizedFieldSnapshot(t *testing.T) {

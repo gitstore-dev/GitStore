@@ -59,6 +59,7 @@ func TestLookupOneOfSelectorsValidateExactlyOneKey(t *testing.T) {
 		selection string
 	}{
 		{field: "collection", natural: `namespacePath: {namespace: "my-store", name: "collection-1"}`, selection: "id"},
+		{field: "file", natural: `namespacePath: {namespace: "my-store", name: "hero"}`, selection: "id"},
 		{field: "namespace", natural: `name: "namespace-1"`, selection: "id"},
 	}
 
@@ -83,6 +84,9 @@ func TestLookupOneOfSelectorsValidateExactlyOneKey(t *testing.T) {
 			assertQueryValidation(t, schema, fmt.Sprintf(`query { %s(by: {id: null}) { %s } }`, tt.field, tt.selection), false)
 		})
 	}
+	assertQueryValidation(t, schema, `query { file(namespace: "my-store", name: "hero") { id } }`, false)
+	assertQueryValidation(t, schema, `query { file(by: {namespacePath: {namespace: "my-store"}}) { id } }`, false)
+	assertQueryValidation(t, schema, `query { file(by: {namespacePath: {name: "hero"}}) { id } }`, false)
 }
 
 func assertQueryValidation(t *testing.T, schema *ast.Schema, query string, valid bool) {

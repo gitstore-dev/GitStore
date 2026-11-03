@@ -271,9 +271,9 @@ func TestGraphQLFilePoolLookupAcceptsBoundedAliasesAndTypedProjection(t *testing
 		var query strings.Builder
 		query.WriteString("query {")
 		for index := range 10 {
-			fmt.Fprintf(&query, `f%d:file(namespace:"pool",name:"file-%d"){id metadata{name namespace annotations} spec{contentType type provider source{uri credentialsRef{kind type secretRef{kind name key namespace}}}}}`, index, offset+index)
+			fmt.Fprintf(&query, `f%d:file(by:{namespacePath:{namespace:"pool",name:"file-%d"}}){id metadata{name namespace annotations} spec{contentType type provider source{uri credentialsRef{kind type secretRef{kind name key namespace}}}}}`, index, offset+index)
 		}
-		query.WriteString(`missing:file(namespace:"other-namespace",name:"file-0"){id}}`)
+		query.WriteString(`missing:file(by:{namespacePath:{namespace:"other-namespace",name:"file-0"}}){id}}`)
 		body, err := json.Marshal(map[string]any{"query": query.String()})
 		require.NoError(t, err)
 		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, env.server.URL+"/graphql", strings.NewReader(string(body)))

@@ -478,6 +478,14 @@ func (File) IsNode() {}
 // Globally unique identifier (format: [type]_[base62])
 func (this File) GetID() string { return this.ID }
 
+// Selector for a single File lookup. Exactly one field must be set.
+type FileBy struct {
+	// Look up by globally unique Relay ID (encodes the File UID).
+	ID *string `json:"id,omitempty"`
+	// Look up by namespace identifier and metadata.name.
+	NamespacePath *FileNamespacePath `json:"namespacePath,omitempty"`
+}
+
 type FileChecksum struct {
 	Algorithm string `json:"algorithm"`
 	Value     string `json:"value"`
@@ -485,6 +493,12 @@ type FileChecksum struct {
 
 type FileImageProcessing struct {
 	Variants []*FileVariantRequest `json:"variants"`
+}
+
+// Composite selector for a File within a namespace.
+type FileNamespacePath struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
 }
 
 type FileProcessing struct {

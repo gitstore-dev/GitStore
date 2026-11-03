@@ -566,7 +566,7 @@ type ComplexityRoot struct {
 		Category        func(childComplexity int, by model.CategoryBy) int
 		Collection      func(childComplexity int, by model.CollectionBy) int
 		Collections     func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
-		File            func(childComplexity int, namespace string, name string) int
+		File            func(childComplexity int, by model.FileBy) int
 		Namespace       func(childComplexity int, by model.NamespaceBy) int
 		Namespaces      func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Node            func(childComplexity int, id string) int
@@ -3068,7 +3068,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.File(childComplexity, args["namespace"].(string), args["name"].(string)), true
+		return e.ComplexityRoot.Query.File(childComplexity, args["by"].(model.FileBy)), true
 
 	case "Query.namespace":
 		if e.ComplexityRoot.Query.Namespace == nil {
@@ -4167,6 +4167,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputDeleteProductInput,
 		ec.unmarshalInputDeleteRepositoryInput,
 		ec.unmarshalInputDeleteServiceAccountInput,
+		ec.unmarshalInputFileBy,
+		ec.unmarshalInputFileNamespacePath,
 		ec.unmarshalInputFileReferenceInput,
 		ec.unmarshalInputIssueServiceAccountTokenInput,
 		ec.unmarshalInputLabelSelectorInput,
@@ -5024,9 +5026,29 @@ type CollectionConnection {
 
 extend type Query {
   """
-  Read one persisted File by namespace and name. This does not subscribe to events.
+  Read one persisted File by Relay ID or namespace and name.
+  This does not subscribe to events.
   """
-  file(namespace: String!, name: String!): File
+  file(by: FileBy!): File
+}
+
+"""
+Selector for a single File lookup. Exactly one field must be set.
+"""
+input FileBy @oneOf {
+  """Look up by globally unique Relay ID (encodes the File UID)."""
+  id: ID
+
+  """Look up by namespace identifier and metadata.name."""
+  namespacePath: FileNamespacePath
+}
+
+"""
+Composite selector for a File within a namespace.
+"""
+input FileNamespacePath {
+  namespace: String!
+  name: String!
 }
 
 extend type Subscription {

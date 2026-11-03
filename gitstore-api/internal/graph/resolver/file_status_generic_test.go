@@ -74,7 +74,7 @@ func TestFileWatchUsesDurableJournalAcrossReplicasAndReplacement(t *testing.T) {
 		Spec: json.RawMessage(`{"contentType":"image/jpeg","provider":"s3","source":{"uri":"s3://fixture"}}`)}
 	require.NoError(t, store.CreateFile(t.Context(), file))
 	for _, replica := range []*Resolver{a, b} {
-		got, err := replica.Query().File(t.Context(), "ns", "hero")
+		got, err := replica.Query().File(t.Context(), model.FileBy{NamespacePath: &model.FileNamespacePath{Namespace: "ns", Name: "hero"}})
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		require.Equal(t, mustEncodeNodeID(nodeKindFile, file.UID), got.ID)

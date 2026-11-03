@@ -149,7 +149,7 @@ func TestCatalogBoundariesUseStoredOwnersAndNamespaceOwnerForCreate(t *testing.T
 		{"Query", "category", "category-owner", map[string]any{"by": struct {
 			NamespacePath *struct{ Namespace, Name string }
 		}{&struct{ Namespace, Name string }{"acme", "category"}}}},
-		{"Query", "file", "file-owner", map[string]any{"namespace": "acme", "name": "file"}},
+		{"Query", "file", "file-owner", map[string]any{"by": model.FileBy{NamespacePath: &model.FileNamespacePath{Namespace: "acme", Name: "file"}}}},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			recorder := testutil.NewAllowAllAuthZ()

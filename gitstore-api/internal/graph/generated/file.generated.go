@@ -1023,6 +1023,80 @@ func (ec *executionContext) fieldContext_SecretRef_namespace(_ context.Context, 
 
 // region    **************************** input.gotpl *****************************
 
+func (ec *executionContext) unmarshalInputFileBy(ctx context.Context, obj any) (model.FileBy, error) {
+	var it model.FileBy
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"id", "namespacePath"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
+		case "namespacePath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespacePath"))
+			data, err := ec.unmarshalOFileNamespacePath2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐFileNamespacePath(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.NamespacePath = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputFileNamespacePath(ctx context.Context, obj any) (model.FileNamespacePath, error) {
+	var it model.FileNamespacePath
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"namespace", "name"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		}
+	}
+	return it, nil
+}
+
 // endregion **************************** input.gotpl *****************************
 
 // region    ************************** interface.gotpl ***************************
@@ -1594,6 +1668,11 @@ func (ec *executionContext) _SecretRef(ctx context.Context, sel ast.SelectionSet
 
 // region    ***************************** type.gotpl *****************************
 
+func (ec *executionContext) unmarshalNFileBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐFileBy(ctx context.Context, v any) (model.FileBy, error) {
+	res, err := ec.unmarshalInputFileBy(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalNFileSource2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐFileSource(ctx context.Context, sel ast.SelectionSet, v *model.FileSource) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -1716,6 +1795,14 @@ func (ec *executionContext) marshalOFileImageProcessing2ᚖgithubᚗcomᚋgitsto
 		return graphql.Null
 	}
 	return ec._FileImageProcessing(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOFileNamespacePath2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐFileNamespacePath(ctx context.Context, v any) (*model.FileNamespacePath, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputFileNamespacePath(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalOFileProcessing2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐFileProcessing(ctx context.Context, sel ast.SelectionSet, v *model.FileProcessing) graphql.Marshaler {
