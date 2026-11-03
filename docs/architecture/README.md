@@ -111,7 +111,7 @@ Key consequences of this change:
 
 - **No native library dependency**: the service binary links only Rust crates; no libgit2 or OpenSSL linkage.
 - **Tree-editor writes**: `commit_file` and `delete_file` use gix's built-in tree-editor API to mutate bare repository trees directly, eliminating the previous clone-to-tmpdir pattern.
-- **MSRV 1.88**: required by `gix 0.89.0`; the Rust toolchain must be ≥ 1.88. Tree editing remains available without the removed `tree-editor` Cargo feature.
+- **Minimum Rust version 1.99.1**: enforced by `gitstore-git-service/Cargo.toml`, matching the pinned development, CI and container toolchain. This replaces the previously documented Rust 1.88 minimum: Rust 1.88 no longer satisfies the service's build requirements, and older compilers are not validated. Tree editing remains available without the removed `tree-editor` Cargo feature.
 
 ### Multi-Repository Hosting
 
