@@ -16,7 +16,6 @@ Use a whole-record reference:
 
 ```toml
 [controller.serviceaccount]
-namespace = "controllers"
 name = "gitstore-controller-manager"
 uid = "<enrolled-service-account-uid>"
 assertion_audience = "gitstore-api/serviceaccount-token"
@@ -46,20 +45,47 @@ provider-owned, not a Git-backed resource. Whole-record environment mode uses
 `type = "env"` and an explicit `env_variable` naming the variable holding the JSON.
 Environment changes require process replacement.
 
-Native `make controller` and `make dev` preserve the enrolled PEM key and use
-`gitctl generate-signing-key --private-key-path <absolute-pem-path>
---record-output-path <absolute-record-path> --key-id <enrolled-id>` to publish
-its private record atomically. Repeated generation preserves matching material;
-a differing existing record is refused rather than silently rotated.
+For separately started native services, prepare credentials before launching
+the controller. With a local API already listening, use this setup sequence:
+
+```bash
+make secret TARGET=signing-key
+make enroll-controller-serviceaccount
+make controller
+```
+
+Generation creates or preserves the matching controller PEM and JSON record;
+it needs no API connection. Enrollment uses the existing PEM, registers its
+public key and saves the API-assigned ServiceAccount UID. It does not generate
+private material or JSON. ServiceAccounts are cluster-scoped; do not configure
+a namespace.
+
+`make controller` is launch-only: it consumes the existing JSON record and
+enrolled UID (or an explicitly supplied `CONTROLLER_SERVICEACCOUNT_UID`) and
+fails if either is missing. Keep `CONTROLLER_*` overrides consistent across
+the sequence. `DESTINATION_PATH` and `RECORD_OUTPUT_PATH` affect generation
+only; they do not reconfigure enrollment or startup.
+
+`make dev` instead prepares the local files, starts Git and the API, waits for
+API health, and enrolls the controller before launching it. An explicit
+`CONTROLLER_SERVICEACCOUNT_UID` skips enrollment. These local workflows use
+development identity/policy fixtures, not a deployed rotation procedure.
+Repeated generation preserves matching material; a differing existing record
+is refused rather than silently rotated. For rotation, stage new material and
+follow the order below; do not generate over the active record.
 
 ## Safe rotation order
 
-1. Generate the new key in an operator-controlled private location and enroll
-   its public key with a **distinct** ID using the existing `gitctl
-   enroll-serviceaccount` flow. Keep the old public key enrolled during overlap.
+1. Generate a new PEM and matching JSON record with `make secret
+   TARGET=signing-key`, selecting fresh `DESTINATION_PATH` and
+   `RECORD_OUTPUT_PATH` values and a **distinct**
+   `CONTROLLER_SERVICEACCOUNT_KEY_ID`. Stage the new record in the same provider
+   directory as the active record. Enroll the new PEM's public key with that
+   same ID using the existing `gitctl enroll-serviceaccount` flow, preserving
+   the ServiceAccount UID. Keep the old public key enrolled during overlap.
    The ID is the enrolled identifier, not an inferred hash of private material.
-2. Write the complete new key/ID record to a mode-0600 temporary file in the
-   same provider directory, then atomically rename it over the old record.
+2. Verify the complete new record is mode `0600`, then atomically rename it
+   over the old record only after enrollment succeeds.
    Do not rewrite it in place or replace the pinned root directory. The
    provisioner writes; controllers retain read-only mounts.
 3. Observe successful renewal on every replica. A cached access token may
