@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.1.0-alpha.8](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.7...v0.1.0-alpha.8) (2026-11-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **file:** select storage with spec.provider ([#515](https://github.com/gitstore-dev/GitStore/issues/515))
+* **api:** Missing typed and Node resources return null with NOT_FOUND diagnostics instead of silent absence. Invalid batch IDs return indexed BAD_USER_INPUT errors while retaining other authorized results.
+
+### Features
+
+* **infra:** add DigitalOcean infrastructure provisioning ([#514](https://github.com/gitstore-dev/GitStore/issues/514)) ([5be0f8b](https://github.com/gitstore-dev/GitStore/commit/5be0f8bb4e930ac07ef0b4d40b44edb638bef1d2))
+* **observability:** extract private bounded Go profiling ([#513](https://github.com/gitstore-dev/GitStore/issues/513)) ([d5da686](https://github.com/gitstore-dev/GitStore/commit/d5da6860a4141d94598b6f98db58438e212e429a))
+* **observability:** route core signals through the collector ([#511](https://github.com/gitstore-dev/GitStore/issues/511)) ([5369cca](https://github.com/gitstore-dev/GitStore/commit/5369ccaab8fd0c126392fb730e5bad02614d26db))
+
+
+### Bug Fixes
+
+* **api:** unify GraphQL resource lookup error envelopes ([#510](https://github.com/gitstore-dev/GitStore/issues/510)) ([85f5994](https://github.com/gitstore-dev/GitStore/commit/85f599405aa1a5bae736716d132fc6ca1a788d49))
+* **makefile:** separate controller signing generation and enrollment ([#517](https://github.com/gitstore-dev/GitStore/issues/517)) ([07ec053](https://github.com/gitstore-dev/GitStore/commit/07ec0530c9d260694c222506bf3be26c5ef45bc7))
+
+
+### Documentation
+
+* **architecture:** define app capabilities and installation contracts ([#507](https://github.com/gitstore-dev/GitStore/issues/507)) ([8ee50fd](https://github.com/gitstore-dev/GitStore/commit/8ee50fdf7b2efbe6001862fee1c2bafd44d0e5f9))
+* **auth:** align workload assertions with reference OIDC and UserDir ([#508](https://github.com/gitstore-dev/GitStore/issues/508)) ([99a9d3a](https://github.com/gitstore-dev/GitStore/commit/99a9d3a32eb1f590e1d24ac68a3d3e59df93b6b5))
+* **authorization:** explain local RBAC policies and examples ([#518](https://github.com/gitstore-dev/GitStore/issues/518)) ([dafde0a](https://github.com/gitstore-dev/GitStore/commit/dafde0a16182aa94671b7a3237973f5206410c16))
+* restore GitStore branding assets and README banner ([#520](https://github.com/gitstore-dev/GitStore/issues/520)) ([242a769](https://github.com/gitstore-dev/GitStore/commit/242a76955799b97ecbb096b86f114deb7e91ece5))
+* scope contributor instructions and general guardrails ([#519](https://github.com/gitstore-dev/GitStore/issues/519)) ([5ee783d](https://github.com/gitstore-dev/GitStore/commit/5ee783d539b82065286cbc448b6ededb9fc3e595))
+
+
+### Code Refactoring
+
+* **file:** select storage with spec.provider ([#515](https://github.com/gitstore-dev/GitStore/issues/515)) ([0065b76](https://github.com/gitstore-dev/GitStore/commit/0065b76c9d49fcfb0f66ac90b022558cf1164496))
+
 ## [0.1.0-alpha.7](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.6...v0.1.0-alpha.7) (2026-10-11)
 
 
