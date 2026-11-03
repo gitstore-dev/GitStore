@@ -19,7 +19,7 @@ func TestFileCRUD(t *testing.T) {
 	store, err := New()
 	require.NoError(t, err)
 	defer store.Close()
-	spec := []byte(`{"contentType":"image/jpeg","type":"hero","source":{"type":"s3","uri":"s3://bucket/hero","checksum":{"algorithm":"sha256","value":"abc"}}}`)
+	spec := []byte(`{"contentType":"image/jpeg","type":"hero","provider":"s3","source":{"uri":"s3://bucket/hero","checksum":{"algorithm":"sha256","value":"abc"}}}`)
 	ownerRefs := []byte(`[{"kind":"Repository","name":"repo","uid":"owner","repositoryID":"repo-1"}]`)
 	file := &datastore.File{UID: "00000000-0000-0000-0000-000000000051", Namespace: "ns", Name: "hero", RepositoryID: "repo-1", APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", Spec: spec, OwnerReferences: ownerRefs}
 	require.NoError(t, store.CreateFile(context.Background(), file))

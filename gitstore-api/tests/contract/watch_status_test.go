@@ -114,7 +114,7 @@ func TestWatchFiles_DeliversTypedPayloadAndFiltersNamespace(t *testing.T) {
 	file := &datastore.File{
 		UID: "00000000-0000-0000-0000-000000000061", Namespace: "acme", Name: "hero",
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "7",
-		Spec: json.RawMessage(`{"ContentType":"image/jpeg","Source":{"Type":"s3","URI":"s3://bucket/hero"}}`),
+		Spec: json.RawMessage(`{"ContentType":"image/jpeg","Provider":"s3","Source":{"URI":"s3://bucket/hero"}}`),
 		Body: "alt text",
 	}
 	payload, err := json.Marshal(file)
@@ -313,7 +313,7 @@ func TestWatchResources_FileProjectsObject(t *testing.T) {
 	file := &datastore.File{
 		UID: "00000000-0000-0000-0000-000000000062", Namespace: "acme", Name: "hero",
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "8",
-		Spec: json.RawMessage(`{"ContentType":"image/png","Source":{"Type":"git","URI":"blob://hero"}}`),
+		Spec: json.RawMessage(`{"ContentType":"image/png","Provider":"git","Source":{"URI":"blob://hero"}}`),
 	}
 	payload, err := json.Marshal(file)
 	require.NoError(t, err)

@@ -873,11 +873,11 @@ func makeProduct(name string) []byte {
 }
 
 func makeFile(name string) []byte {
-	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/" + name + ".jpg\n---\nAlt text")
+	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/" + name + ".jpg\n---\nAlt text")
 }
 
 func makeFileWithContentType(name, contentType string) []byte {
-	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: " + contentType + "\n  source:\n    type: s3\n    uri: s3://bucket/" + name + "\n---\nAlt text")
+	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: " + contentType + "\n  provider: s3\n  source:\n    uri: s3://bucket/" + name + "\n---\nAlt text")
 }
 
 func TestValidateAndAdmitResources_File(t *testing.T) {
@@ -903,12 +903,12 @@ func TestValidateAndAdmitResources_File(t *testing.T) {
 	require.True(t, validation.Accepted)
 	invalid, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
-		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "files/bad.md", Content: []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: bad\nspec:\n  contentType: image/jpeg\n  source:\n    type: unsupported\n    uri: s3://bucket/bad\n---\n")}}}},
+		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "files/bad.md", Content: []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: bad\nspec:\n  contentType: image/jpeg\n  provider: unsupported\n  source:\n    uri: s3://bucket/bad\n---\n")}}}},
 	})
 	require.NoError(t, err)
 	require.False(t, invalid.Accepted)
 	require.NotEmpty(t, invalid.Errors)
-	assert.Contains(t, invalid.Errors[0].Message, "spec.source.type")
+	assert.Contains(t, invalid.Errors[0].Message, "spec.provider")
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
 		RepositoryId:  testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
@@ -926,7 +926,7 @@ func TestValidateAndAdmitResources_File(t *testing.T) {
 
 func TestValidateResources_FileDuplicateIdentityRejected(t *testing.T) {
 	srv := newCatalogServer(t, newTestDatastore(t), nil)
-	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/hero\n---\n")
+	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/hero\n---\n")
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
@@ -942,7 +942,7 @@ func TestValidateResources_FileDuplicateIdentityRejected(t *testing.T) {
 
 func TestValidateResources_FileAggregatesVariantAndCredentialsErrors(t *testing.T) {
 	srv := newCatalogServer(t, newTestDatastore(t), nil)
-	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: broken\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/broken\n    credentialsRef:\n      kind: CredentialsRef\n      type: aws-access-key/v1\n      secretRef:\n        kind: SecretRef\n        name: cloud\n        namespace: other\n  processing:\n    image:\n      variants:\n        - name: \"\"\n---\n")
+	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: broken\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/broken\n    credentialsRef:\n      kind: CredentialsRef\n      type: aws-access-key/v1\n      secretRef:\n        kind: SecretRef\n        name: cloud\n        namespace: other\n  processing:\n    image:\n      variants:\n        - name: \"\"\n---\n")
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "files/broken.md", Content: content}}}},
@@ -962,7 +962,7 @@ func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
 	git := newTreeGitReader(&current, map[string]map[string][]byte{
 		a: {"files/hero.md": makeFileWithContentType("hero", "image/jpeg")},
 		b: {"files/hero.md": makeFileWithContentType("hero", "image/png")},
-		c: {"files/hero.md": []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/hero\n---\nUpdated alt text")},
+		c: {"files/hero.md": []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/hero\n---\nUpdated alt text")},
 	})
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{

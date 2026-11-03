@@ -654,7 +654,7 @@ func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *tes
 	file := &datastore.File{UID: newID(), Namespace: "cdc-files", Name: "hero-" + newID()[:8],
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "1", Generation: 1,
 		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond), RepositoryID: newID(),
-		Labels: map[string]string{"team": "media"}, Spec: json.RawMessage(`{"contentType":"image/jpeg","source":{"type":"s3","uri":"s3://fixture"}}`)}
+		Labels: map[string]string{"team": "media"}, Spec: json.RawMessage(`{"contentType":"image/jpeg","provider":"s3","source":{"uri":"s3://fixture"}}`)}
 	next := func(eventType datastore.ResourceWatchEventType, version string) datastore.ResourceWatchEvent {
 		var found datastore.ResourceWatchEvent
 		require.Eventually(t, func() bool {

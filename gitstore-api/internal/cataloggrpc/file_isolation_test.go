@@ -33,7 +33,7 @@ func TestFileTypedCredentialsValidationAndAdmission(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newTestDatastore(t)
-			doc := []byte(fmt.Sprintf("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\n  namespace: gitstore\n  annotations:\n    rbac.authorization.gitstore.dev/owner: retained-owner\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/hero\n    credentialsRef: %s\n---\nAlt text", tc.ref))
+			doc := []byte(fmt.Sprintf("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\n  namespace: gitstore\n  annotations:\n    rbac.authorization.gitstore.dev/owner: retained-owner\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/hero\n    credentialsRef: %s\n---\nAlt text", tc.ref))
 			git := &mockGitReader{
 				listFilesFunc: func(context.Context, string, string, string) ([]string, error) {
 					return []string{"files/hero.md"}, nil
@@ -178,7 +178,7 @@ func TestAdmitResources_FileIdentityIsolatedAcrossNamespaces(t *testing.T) {
 func TestAdmitResources_FileCrossNamespaceCredentialsRefNeverPersistedAtAdmission(t *testing.T) {
 	store := newTestDatastore(t)
 	commit := "6666666666666666666666666666666666666666"
-	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: leaky\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/leaky\n    credentialsRef:\n      kind: CredentialsRef\n      type: aws-access-key/v1\n      secretRef:\n        kind: SecretRef\n        name: cloud-creds\n        namespace: acme-other\n---\nShould never be stored\n")
+	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: leaky\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/leaky\n    credentialsRef:\n      kind: CredentialsRef\n      type: aws-access-key/v1\n      secretRef:\n        kind: SecretRef\n        name: cloud-creds\n        namespace: acme-other\n---\nShould never be stored\n")
 	git := &mockGitReader{
 		listFilesFunc: func(context.Context, string, string, string) ([]string, error) {
 			return []string{"files/leaky.md"}, nil

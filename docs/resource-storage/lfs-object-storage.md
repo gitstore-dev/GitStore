@@ -34,8 +34,8 @@ metadata:
 spec:
   contentType: image/jpeg
   type: gitstore.dev/media
+  provider: git
   source:
-    type: git
     uri: git:///media/product-hero.jpg?ref=main
     checksum:
       algorithm: sha256
@@ -55,7 +55,7 @@ Alt text or file description.
 
 | Resource       | Scope         | Summary                                                                              | Initial spec shape                                               |
 |----------------|---------------|--------------------------------------------------------------------------------------|------------------------------------------------------------------|
-| `File`         | Core          | Generic file manifest with source URI, checksum, content type, and processing hints. | `spec: {contentType, type, source, processing}`                  |
+| `File`         | Core          | Generic file manifest with provider, source URI, checksum, content type, and processing hints. | `spec: {contentType, type, provider, source, processing}`       |
 | `MediaAsset`   | Core          | Catalog-facing semantic asset that points at a `File` and adds role/alt/focal metadata. | `spec: {fileRef, role, focalPoint, altTextRef}`                  |
 | `DigitalAsset` | Extension/CRD | Downloadable commerce asset controlled by entitlement or delivery rules.             | `spec: {fileRef, entitlementPolicyRef, deliveryPolicy, version}` |
 
@@ -80,11 +80,14 @@ referenced by `File`, `MediaAsset`, `DigitalAsset`, or datastore-only records.
 
 ## Object URI References
 
-Prefer explicit source types:
+`spec.provider` selects the storage provider: `git`, `lfs`, `s3`, or `gcs`.
+It is required and separate from the optional logical category `spec.type`.
+`spec.source` contains the URI, optional checksum, and optional credentials.
+For example, the following snippets belong inside `spec`:
 
 ```yaml
+provider: s3
 source:
-  type: s3
   uri: s3://catalog-assets/products/product-hero.jpg
   checksum:
     algorithm: sha256
@@ -92,8 +95,8 @@ source:
 ```
 
 ```yaml
+provider: git
 source:
-  type: git
   uri: git:///media/product-hero.jpg?ref=main
   checksum:
     algorithm: sha256
@@ -101,9 +104,9 @@ source:
 ```
 
 ```yaml
+provider: gcs
 source:
-  type: b2
-  uri: b2://catalog-assets/products/product-hero.jpg
+  uri: gs://catalog-assets/products/product-hero.jpg
   checksum:
     algorithm: sha256
     value: example
@@ -112,8 +115,8 @@ source:
 Credentials should be referenced indirectly:
 
 ```yaml
+provider: s3
 source:
-  type: s3
   uri: s3://catalog-assets/products/product-hero.jpg
   credentialsRef:
     kind: CredentialsRef

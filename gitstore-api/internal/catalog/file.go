@@ -22,12 +22,12 @@ type FileResource struct {
 type FileSpec struct {
 	ContentType string                    `yaml:"contentType" validate:"required"`
 	Type        string                    `yaml:"type,omitempty"`
+	Provider    string                    `yaml:"provider" validate:"required"`
 	Source      FileSourceDefinition      `yaml:"source" validate:"required"`
 	Processing  *FileProcessingDefinition `yaml:"processing,omitempty"`
 }
 
 type FileSourceDefinition struct {
-	Type           string                         `yaml:"type" validate:"required"`
 	URI            string                         `yaml:"uri" validate:"required"`
 	Checksum       *FileChecksum                  `yaml:"checksum,omitempty"`
 	CredentialsRef *secretmaterial.CredentialsRef `yaml:"credentialsRef,omitempty"`
@@ -81,10 +81,10 @@ type ResolvedFileVariant struct {
 }
 
 func (s FileSpec) Validate(resourceNamespace string) error {
-	switch s.Source.Type {
+	switch s.Provider {
 	case "git", "lfs", "s3", "gcs":
 	default:
-		return fmt.Errorf("validate: spec.source.type must be one of git, lfs, s3, gcs, got %q", s.Source.Type)
+		return fmt.Errorf("validate: spec.provider must be one of git, lfs, s3, gcs, got %q", s.Provider)
 	}
 	if s.ContentType == "" {
 		return fmt.Errorf("validate: spec.contentType is required")

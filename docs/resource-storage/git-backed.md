@@ -184,7 +184,7 @@ that references a `File` and adds presentation metadata such as `role`,
 
 | Resource       | Scope         | Summary                                                                                 | Initial spec shape                                               |
 |----------------|---------------|-----------------------------------------------------------------------------------------|------------------------------------------------------------------|
-| `File`         | Core          | Generic file manifest with content type, source URI, checksum, and processing hints.    | `spec: {contentType, type, source, processing}`                  |
+| `File`         | Core          | Generic file manifest with content type, provider, source URI, checksum, and processing hints. | `spec: {contentType, type, provider, source, processing}`       |
 | `MediaAsset`   | Core          | Catalog-facing semantic asset that points at a `File` and adds role/alt/focal metadata. | `spec: {fileRef, role, altTextRef, focalPoint}`                  |
 | `DigitalAsset` | Extension/CRD | Downloadable commercial asset such as software, ebook, warranty PDF, or license file.   | `spec: {fileRef, entitlementPolicyRef, deliveryPolicy, version}` |
 
@@ -200,8 +200,8 @@ metadata:
 spec:
   contentType: image/jpeg
   type: gitstore.dev/media
+  provider: git
   source:
-    type: git
     uri: git:///media/product-hero.jpg?ref=main
     checksum:
       algorithm: sha256
