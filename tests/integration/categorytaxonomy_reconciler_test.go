@@ -36,6 +36,7 @@ func categoryWithMediaFixture(name, parentName, fileName string, optional bool) 
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: %s
   name: %s
 spec:
   title: %s
@@ -47,7 +48,7 @@ spec:
 ---
 
 Category description for %s.
-`, name, name, parentRef, fileName, optional, name)
+`, getEnv("NAMESPACE", "gitstore-test"), name, name, parentRef, fileName, optional, name)
 }
 
 // ── GraphQL response shapes ──────────────────────────────────────────────────
