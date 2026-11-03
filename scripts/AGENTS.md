@@ -59,3 +59,21 @@ container wiring and configuration.
 - Provisioning prepares hosts and storage, not running application containers.
   Follow `../docs/runbooks/digitalocean-provisioning.md` for runtime handoff,
   state protection, singleton Git fencing and retained-volume recovery.
+
+## Signing and enrollment commands
+
+- `make secret TARGET=signing-key` generates the native controller's matching
+  PEM and JSON record. With `DESTINATION_PATH`, the default record is
+  `<DESTINATION_PATH>.json`; `RECORD_OUTPUT_PATH` overrides it, and an explicitly
+  empty value requests PEM only. Relative output paths resolve from the root.
+  Preserve existing keys and identical records; reject differing records.
+- `make enroll-controller-serviceaccount` explicitly enrolls the existing
+  public key and saves the API-assigned UID. It does not generate private
+  material or JSON. Development fixture credentials are for local APIs only.
+- `make controller` consumes the existing record and enrolled UID; it must
+  not regenerate credentials. Keep `CONTROLLER_*` overrides consistent across
+  generation, enrollment and startup.
+- `make dev` automates local generation/enrollment and starts all three native
+  core services with shutdown trapping. See `../docs/developer-guide.md`.
+- Extend the existing Makefile selector families; do not add feature-specific
+  public targets.
