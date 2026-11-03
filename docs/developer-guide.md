@@ -3,7 +3,14 @@
 **Date**: 2026-06-17
 
 **Audience**: Contributors, operators, and integration engineers
-**Prerequisites**: Docker, Git, Go, Rust, Make, curl, jq
+**Prerequisites**: Docker, Git, Go 1.27.2, Rust 1.99.1, Make, curl, jq
+
+Use Go 1.27.2 for the workspace and standalone modules. Rustup selects
+Rust 1.99.1 from the root `rust-toolchain.toml`, using the minimal profile
+with Clippy and rustfmt. The Cargo manifest declares the same minimum Rust
+version. CI and container builders use these compiler versions; when updating
+them, keep the workspace, module manifests, Rust toolchain file, Dockerfiles
+and CI setup steps aligned.
 
 This guide keeps implementation detail out of the user guide. It covers service topology, local development, datastore backends, hook/admission flow, controller-manager runtime, generated schema/proto workflow, and module responsibilities.
 

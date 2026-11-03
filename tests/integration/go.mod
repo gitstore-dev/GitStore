@@ -1,6 +1,6 @@
 module github.com/gitstore-dev/gitstore/tests/integration
 
-go 1.26.0
+go 1.27.2
 
 require (
 	github.com/gitstore-dev/gitstore/secretmaterial v0.0.0

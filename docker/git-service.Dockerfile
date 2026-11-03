@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
 # Multi-stage build for Git Server (Rust)
-# rust:1.94-alpine targets aarch64-unknown-linux-musl on ARM64 by default,
+# The Rust Alpine image targets aarch64-unknown-linux-musl on ARM64 by default,
 # producing a fully musl-linked binary that runs on Alpine without glibc.
-FROM rust:1.94-alpine AS builder
+FROM rust:1.99.1-alpine AS builder
 
 # Expose the BuildKit-provided TARGETARCH so we can key per-architecture caches.
 ARG TARGETARCH
