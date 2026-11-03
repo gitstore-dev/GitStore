@@ -81,8 +81,10 @@ follow the order below; do not generate over the active record.
    `RECORD_OUTPUT_PATH` values and a **distinct**
    `CONTROLLER_SERVICEACCOUNT_KEY_ID`. Stage the new record in the same provider
    directory as the active record. Enroll the new PEM's public key with that
-   same ID using the existing `gitctl enroll-serviceaccount` flow, preserving
-   the ServiceAccount UID. Keep the old public key enrolled during overlap.
+   same ID using `gitctl enroll-serviceaccount --replace-existing-key`, pointing
+   `--private-key-path` at the new PEM and `--key-id` at the distinct ID. This
+   updates the existing ServiceAccount without changing its UID; keep the old
+   public key enrolled during overlap.
    The ID is the enrolled identifier, not an inferred hash of private material.
 2. Verify the complete new record is mode `0600`, then atomically rename it
    over the old record only after enrollment succeeds.
