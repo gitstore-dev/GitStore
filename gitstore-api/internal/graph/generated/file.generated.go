@@ -404,29 +404,6 @@ func (ec *executionContext) fieldContext_FileProcessing_image(_ context.Context,
 	return fc, nil
 }
 
-func (ec *executionContext) _FileSource_type(ctx context.Context, field graphql.CollectedField, obj *model.FileSource) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_FileSource_type(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Type, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_FileSource_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("FileSource", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
 func (ec *executionContext) _FileSource_uri(ctx context.Context, field graphql.CollectedField, obj *model.FileSource) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -557,6 +534,29 @@ func (ec *executionContext) _FileSpec_type(ctx context.Context, field graphql.Co
 	)
 }
 func (ec *executionContext) fieldContext_FileSpec_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FileSpec", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _FileSpec_provider(ctx context.Context, field graphql.CollectedField, obj *model.FileSpec) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FileSpec_provider(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Provider, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FileSpec_provider(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("FileSpec", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
@@ -1273,11 +1273,6 @@ func (ec *executionContext) _FileSource(ctx context.Context, sel ast.SelectionSe
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("FileSource")
-		case "type":
-			out.Values[i] = ec._FileSource_type(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "uri":
 			out.Values[i] = ec._FileSource_uri(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -1328,6 +1323,11 @@ func (ec *executionContext) _FileSpec(ctx context.Context, sel ast.SelectionSet,
 			}
 		case "type":
 			out.Values[i] = ec._FileSpec_type(ctx, field, obj)
+		case "provider":
+			out.Values[i] = ec._FileSpec_provider(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "source":
 			out.Values[i] = ec._FileSpec_source(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

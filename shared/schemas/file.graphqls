@@ -42,12 +42,12 @@ type File implements Node {
 type FileSpec {
   contentType: String!
   type: String
+  provider: String!
   source: FileSource!
   processing: FileProcessing
 }
 
 type FileSource {
-  type: String!
   uri: String!
   checksum: FileChecksum
   credentialsRef: CredentialsRef

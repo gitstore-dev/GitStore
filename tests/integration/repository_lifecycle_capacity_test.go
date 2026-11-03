@@ -1630,8 +1630,8 @@ metadata:
 spec:
   contentType: image/jpeg
   type: gitstore.dev/media
+  provider: s3
   source:
-    type: s3
     uri: s3://capacity-fixture/%s.jpg
     credentialsRef:
       kind: CredentialsRef
@@ -1736,8 +1736,8 @@ type secretCapacityFileProjection struct {
 	Spec struct {
 		ContentType string `json:"contentType"`
 		Type        string `json:"type"`
+		Provider    string `json:"provider"`
 		Source      struct {
-			Type           string `json:"type"`
 			URI            string `json:"uri"`
 			CredentialsRef *struct {
 				Kind      string `json:"kind"`
@@ -1754,7 +1754,7 @@ type secretCapacityFileProjection struct {
 }
 
 const secretCapacityFileSelection = `id metadata { name namespace annotations }
-	spec { contentType type source { type uri credentialsRef { kind type secretRef { kind name key namespace } } } }`
+	spec { contentType type provider source { uri credentialsRef { kind type secretRef { kind name key namespace } } } }`
 
 func secretCapacityReadFileIDs(ctx context.Context, endpoint, token, namespace, runID string) (map[string]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -1808,7 +1808,7 @@ func validateSecretCapacityFile(file secretCapacityFileProjection, namespace, na
 	if file.ID == "" || file.Metadata.Namespace != namespace || file.Metadata.Name != name ||
 		file.Metadata.Annotations["secret-capacity.gitstore.dev/sequence"] != strconv.FormatInt(sequence, 10) ||
 		file.Spec.ContentType != "image/jpeg" || file.Spec.Type != "gitstore.dev/media" ||
-		file.Spec.Source.Type != "s3" || file.Spec.Source.URI != "s3://capacity-fixture/"+name+".jpg" ||
+		file.Spec.Provider != "s3" || file.Spec.Source.URI != "s3://capacity-fixture/"+name+".jpg" ||
 		secretmaterial.ValidateCredentialsRef(authoredRef, namespace) != nil ||
 		ref.Type != "aws-access-key/v1" || ref.SecretRef.Name != "capacity-media" ||
 		ref.SecretRef.Key != nil || ref.SecretRef.Namespace != nil {

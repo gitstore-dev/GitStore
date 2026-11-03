@@ -335,6 +335,13 @@ func preParseChecks(fmRaw []byte) error {
 	if raw["kind"] == "File" {
 		spec, _ := raw["spec"].(map[string]any)
 		source, _ := spec["source"].(map[string]any)
+		for field := range source {
+			switch field {
+			case "uri", "checksum", "credentialsRef":
+			default:
+				return fmt.Errorf("validate: unknown spec.source field %q", field)
+			}
+		}
 		if ref, present := source["credentialsRef"]; present {
 			if err := catalog.ValidateFileCredentialsInput(ref); err != nil {
 				return err

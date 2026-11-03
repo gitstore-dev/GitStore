@@ -40,7 +40,7 @@ processing hints.
 | Finalizers        | Datastore; controller-managed                                     |
 
 Git-authored fields: `apiVersion`, `kind`, `metadata.*` (non-system), `spec.contentType`,
-`spec.type`, `spec.source`, `spec.processing`, Markdown body (alt text).
+`spec.type`, `spec.provider`, `spec.source`, `spec.processing`, Markdown body (alt text).
 
 Controller-managed fields (not author-writable): `metadata.uid`,
 `metadata.resourceVersion`, `metadata.generation`, `metadata.ownerReferences`,
@@ -51,7 +51,7 @@ Controller-managed fields (not author-writable): `metadata.uid`,
 The `File` manifest is both a manifest and an object-storage pointer in the same
 resource:
 
-- **Manifest role**: declares `contentType`, `type`, source URI, checksum, and
+- **Manifest role**: declares `contentType`, logical `type`, storage `provider`, source URI, checksum, and
   processing hints in git. This is the desired state.
 - **Object-storage pointer role**: `spec.source.uri` is a pointer to the actual binary
   payload (a Git LFS URL, an `s3://` URI, or a `git:///` relative pointer to an
@@ -69,7 +69,7 @@ controller-managed and never authored in git.
 
 1. Author creates `files/<name>.md` in a repository and pushes.
 2. Pre-receive validates: envelope, `kind: File`, `spec.contentType` non-empty,
-   `spec.source.type` is a known value (`git`, `lfs`, `s3`, `gcs`),
+   `spec.provider` is a known value (`git`, `lfs`, `s3`, `gcs`),
    `spec.source.uri` non-empty.
 3. Post-receive admission:
    - Namespace and repository `Active`.
@@ -96,7 +96,7 @@ upload is an out-of-band operation.
 
 1. Author edits the file manifest and pushes, or issues `updateFile`.
 2. `updateFile` commits an updated manifest; waits for admission.
-3. Updating `spec.source.uri` or `spec.source.checksum` triggers controller
+3. Updating `spec.provider`, `spec.source.uri`, or `spec.source.checksum` triggers controller
    re-verification.
 4. Updating `spec.processing` triggers controller re-processing (Phase 2).
 5. Immutable fields in Phase 1: `metadata.name`, `metadata.namespace`.
@@ -154,8 +154,8 @@ metadata:
 spec:
   contentType: image/jpeg
   type: gitstore.dev/media
+  provider: s3
   source:
-    type: s3
     uri: s3://acme-assets/products/macbook-pro-hero.jpg
     checksum:
       algorithm: sha256
@@ -190,7 +190,7 @@ There is no direct datastore write path for `File` in Phase 1.
 
 | Phase       | Rule                                                                                                                                                                         |
 |-------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Pre-receive | Envelope valid; `kind: File`; `spec.contentType` non-empty; `spec.source.type` is a known value; `spec.source.uri` non-empty.                                                |
+| Pre-receive | Envelope valid; `kind: File`; `spec.contentType` non-empty; `spec.provider` is a known value; `spec.source.uri` non-empty.                                                |
 | Admission   | Namespace and repository `Active`; `spec.contentType` immutability check if updating; `credentialsRef` same-namespace rule (ADR-0001).                                       |
 | Controller  | Checksum verification against source URI (Phase 2); processing pipeline trigger (Phase 2); `fileRef` back-reference validation from referencing resources (Phase 2, GH#244). |
 

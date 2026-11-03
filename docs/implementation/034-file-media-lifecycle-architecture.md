@@ -25,7 +25,7 @@ brief) that is the single writer of `File.status`, backed by:
 - **A provider-neutral storage abstraction** with two initial backends:
   Git LFS (small-to-medium, versioned, catalog-owned assets) and
   S3-compatible object storage (generated/high-churn/large assets),
-  selected per-`File` via `spec.source.type`, matching the policy already
+  selected per-`File` via `spec.provider`, matching the policy already
   documented in `../resource-storage/lfs-object-storage.md`. This is not an
   either/or between GH#79 and GH#127 — GH#79 defines the manifest that
   points at whichever backend GH#127 provisions.
@@ -106,7 +106,7 @@ around `File`"):
 
 | Resource | Owns | Lifecycle driver | Exists today? |
 |---|---|---|---|
-| **`File`** | Technical source manifest: `contentType`, `source.{type,uri,checksum,credentialsRef}`, `processing`, resolved variants, status. | Storage/binary lifecycle (upload, checksum, processing). One `File` = one binary identity. | No — build first. |
+| **`File`** | Technical source manifest: `contentType`, `provider`, `source.{uri,checksum,credentialsRef}`, `processing`, resolved variants, status. | Storage/binary lifecycle (upload, checksum, processing). One `File` = one binary identity. | No — build first. |
 | **`MediaAsset`** | Catalog-facing semantic layer: `fileRef`, `role`, `altTextRef`, `focalPoint`, ordering. | Presentation lifecycle (a marketer changes alt text without touching the binary). | No — GH#316, correctly deferred. |
 | **Inline `spec.media[*].fileRef`** on Product/ProductVariant/CategoryTaxonomy/Collection | A typed pointer (`{name, kind, optional}`) to a `File` (today) or a `MediaAsset` (later). | Catalog resource's own lifecycle. | Yes — `FileReference` struct exists; it's the reference, not the referent. |
 
@@ -151,9 +151,9 @@ pointed at, never the pointer.
 |---|---|---|---|---|---|---|---|
 | **Git LFS pointer** | Multi-GB (LFS-server-limited); pointer is <1KB, always | None on primary repo (pointer only); LFS store grows separately | Yes — `oid` is `sha256:<hash>`, content-addressed by construction (verified: git-lfs.com, git-lfs spec) | Server-dependent (most LFS servers support resumable PUT) | Not standard; LFS uses its own auth handshake | Needs an LFS server (can run `git-lfs-test-server` or a Git host with LFS in Compose) | Use for **catalog-owned, versioned, low-churn** assets (product hero shots checked in with the catalog repo) |
 | **S3-compatible object storage** | Multi-TB via multipart (AWS: switch to multipart ≥100MB — verified, AWS mpuoverview) | Zero | Only if the app computes/stores a content hash itself; S3 has no built-in CAS | Yes — multipart upload never expires until completed/aborted; failed parts retransmit individually (verified, AWS) | Yes — presigned URLs are **bearer tokens** inheriting the signer's IAM permissions, no further identity check (verified, AWS docs ×2) | MinIO (AIStor-compatible, supports full multipart lifecycle: Create/UploadPart/UploadPartCopy/ListParts/Complete/Abort — verified, MinIO docs) runs cleanly in Compose | Use for **generated, high-churn, PII-bearing, or CDN-fronted** assets (renditions, customer uploads, invoices) |
-| **External URL only** | N/A (no ingestion) | None | None | N/A | N/A | Trivial | Insufficient alone: no checksum, no lifecycle, no revocation. Acceptable as `spec.source.type: url` for read-only external references, but MUST go through SSRF-safe admission (§10). |
+| **External URL only** | N/A (no ingestion) | None | None | N/A | N/A | Trivial | Insufficient alone: no checksum, no lifecycle, no revocation. Proposed as `spec.provider: url` for read-only external references, but MUST go through SSRF-safe admission (§10). |
 | **Direct Git blob (small file)** | A few hundred KB before repo bloat matters | Grows repo history permanently; clone time degrades | None | No | No | Trivial | Not recommended even for small files — `docs/ADRs/0008-file-lifecycle.md` explicitly rejects this ("Rejected. Git is not suited for large binary payloads... noisy repository history"). |
-| **Hybrid (provider abstraction)** | Backend-dependent | Backend-dependent | Backend-dependent, unified via File's own `checksum` field as the canonical CAS key regardless of backend | Backend-dependent | Backend-dependent | Both LFS and MinIO available locally | **Recommended.** `File.spec.source.type ∈ {git, lfs, s3, gcs, b2, url}` (already drafted in `../resource-storage/lfs-object-storage.md`) with a Go `SourceResolver` interface per type. |
+| **Hybrid (provider abstraction)** | Backend-dependent | Backend-dependent | Backend-dependent, unified via File's own `checksum` field as the canonical CAS key regardless of backend | Backend-dependent | Backend-dependent | Both LFS and MinIO available locally | **Recommended.** `File.spec.provider ∈ {git, lfs, s3, gcs}` with a Go `SourceResolver` interface per provider. `b2` and `url` are proposed additions, not accepted provider values. |
 
 **Reconciling GH#79 and GH#127**: they are not competing proposals. GH#79's
 `File` manifest is the control-plane record; GH#127's LFS/S3 work is one
@@ -186,8 +186,8 @@ metadata:
 spec:
   contentType: image/jpeg        # author-writable; IMMUTABLE after first AdmissionAccepted
   type: gitstore.dev/media        # author-writable
+  provider: s3                    # author-writable; changing provider or uri triggers re-verification
   source:
-    type: s3                     # author-writable; changing type or uri triggers re-verification
     uri: s3://acme-assets/products/macbook-pro-hero.jpg
     checksum:
       algorithm: sha256           # author-writable; changing triggers re-verification
@@ -223,7 +223,7 @@ instead — this preserves "a File update never silently swaps the binary
 identity out from under existing references"):
 - `metadata.name`, `metadata.namespace` — immutable (existing ADR-0008 rule).
 - `spec.contentType` — immutable after first successful admission (existing rule).
-- `spec.source.type`, `spec.source.uri`, `spec.source.checksum.value` —
+- `spec.provider`, `spec.source.uri`, `spec.source.checksum.value` —
   **mutable**, but any change resets `SourceResolved=Unknown` and
   `ProcessingComplete=Unknown` and re-triggers the controller. This is a
   new decision beyond ADR-0008 (which was silent on whether URI changes are
@@ -237,13 +237,13 @@ identity out from under existing references"):
 
 | Input | Behavior |
 |---|---|
-| Malformed source URI | Pre-receive rejection (structural: must parse as a URI for the declared `source.type`'s scheme). |
+| Malformed source URI | Pre-receive rejection (structural: must parse as a URI for the declared `spec.provider`'s scheme). |
 | Unsupported `content Type` | Pre-receive rejection against an admission-configured allowlist (not a hardcoded list — namespaces may need different allowlists). |
 | Checksum mismatch (post-fetch) | Controller sets `SourceResolved=False, reason=ChecksumMismatch`; does not retry the same checksum indefinitely — enters the poison/quarantine backoff class (§11). |
 | Missing object at source URI | Controller sets `SourceResolved=False, reason=SourceNotFound`; retries with exponential backoff (transient — object may not have propagated yet). |
 | Unsupported processing option | Admission-time rejection if the option is structurally unknown; controller-time `ProcessingComplete=False, reason=UnsupportedVariant` if the option is structurally valid but the processor can't satisfy it (e.g., requested format unsupported for content type). |
 | Cross-namespace `credentialsRef` | Rejected at admission (ADR-0001 same-namespace rule — no exception for File). |
-| Unsafe/private-network URL (`source.type: url`) | Rejected at admission via **allowlist**, not denylist (§10). |
+| Unsafe/private-network URL (proposed `spec.provider: url`) | Rejected at admission via **allowlist**, not denylist (§10). |
 | Duplicate `metadata.name` | Standard resource-identity conflict — rejected like any other Git-backed resource. |
 | Source replacement (URI/checksum change) | Allowed; re-triggers verification (see immutability rules above). |
 | Stale/conflicting update | Standard `resourceVersion` optimistic-concurrency rejection. |
@@ -282,7 +282,7 @@ sequenceDiagram
 
     Author->>Git: Push files/hero.md<br/>(kind: File, source URI not present yet)
     Git->>Admission: Run pre-receive validation
-    Admission->>Admission: Validate envelope, content type,<br/>source type, and non-empty source URI
+    Admission->>Admission: Validate envelope, content type,<br/>provider, and non-empty source URI
     Admission-->>Git: Accepted
     Git->>Admission: Run post-receive admission
     Admission->>Admission: Set AdmissionAccepted=True<br/>and owner reference to Repository
@@ -529,7 +529,7 @@ add, mirroring `ResolvedProductDefinition.Media`.
 
 | Threat                                                      | Mitigation                                                                                                                                                                                                                                                                                                                                                                      |
 |-------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| SSRF via `source.type: url` or misused S3 endpoint override | **Allowlist, not denylist**, of permitted hosts/schemes at admission (verified: OWASP SSRF cheat sheet explicitly frames denylisting as bypass-prone "last resort"; raw user-supplied URLs must not be parsed/validated ad hoc — use a structured allowlist check, not regex on the URL string).                                                                                |
+| SSRF via proposed `spec.provider: url` or misused S3 endpoint override | **Allowlist, not denylist**, of permitted hosts/schemes at admission (verified: OWASP SSRF cheat sheet explicitly frames denylisting as bypass-prone "last resort"; raw user-supplied URLs must not be parsed/validated ad hoc — use a structured allowlist check, not regex on the URL string).                                                                                |
 | Presigned URL misuse (bearer-token nature)                  | Scope to single object key, shortest workable TTL, single action (PUT-only for upload URLs, GET-only for download URLs) — verified: presigned URLs inherit exactly the signer's permissions and require no further identity check, so narrow scoping is the only real control.                                                                                                  |
 | Content-type spoofing                                       | Never trust client-supplied `Content-Type` for security decisions (verified, OWASP File Upload Cheat Sheet) — verify server-side via magic-byte sniffing before setting `spec.contentType` as confirmed.                                                                                                                                                                        |
 | Decompression bombs / oversized renditions                  | Bound *decompressed* output size in the processing pipeline, not just upload size (verified, CWE-409) — image/video processors must enforce a max-pixel-count or max-decoded-bytes ceiling before allocating buffers.                                                                                                                                                           |

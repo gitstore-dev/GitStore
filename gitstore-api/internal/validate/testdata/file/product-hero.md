@@ -8,8 +8,8 @@ metadata:
 spec:
   contentType: image/jpeg
   type: gitstore.dev/media
+  provider: s3
   source:
-    type: s3
     uri: s3://acme-assets/products/product-hero.jpg
     checksum:
       algorithm: sha256

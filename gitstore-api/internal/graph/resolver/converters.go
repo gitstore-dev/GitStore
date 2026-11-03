@@ -580,7 +580,8 @@ func DatastoreFileToGraphQL(f *datastore.File) *model.File {
 	}
 	fileSpec := &model.FileSpec{
 		ContentType: spec.ContentType,
-		Source:      &model.FileSource{Type: spec.Source.Type, URI: spec.Source.URI},
+		Provider:    spec.Provider,
+		Source:      &model.FileSource{URI: spec.Source.URI},
 	}
 	if spec.Type != "" {
 		fileSpec.Type = &spec.Type

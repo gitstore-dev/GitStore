@@ -504,7 +504,6 @@ type FileReferenceInput struct {
 }
 
 type FileSource struct {
-	Type           string          `json:"type"`
 	URI            string          `json:"uri"`
 	Checksum       *FileChecksum   `json:"checksum,omitempty"`
 	CredentialsRef *CredentialsRef `json:"credentialsRef,omitempty"`
@@ -513,6 +512,7 @@ type FileSource struct {
 type FileSpec struct {
 	ContentType string          `json:"contentType"`
 	Type        *string         `json:"type,omitempty"`
+	Provider    string          `json:"provider"`
 	Source      *FileSource     `json:"source"`
 	Processing  *FileProcessing `json:"processing,omitempty"`
 }

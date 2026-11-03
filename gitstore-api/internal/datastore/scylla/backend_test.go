@@ -560,7 +560,7 @@ func TestScylla_FileRoundTripAndIndexedLookup(t *testing.T) {
 		UID: newID(), Namespace: "test-ns", Name: "hero-" + newID()[:8],
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File",
 		Generation: 1, ResourceVersion: "1", CreationTimestamp: time.Now().UTC(),
-		Spec: json.RawMessage(`{"ContentType":"image/jpeg","Source":{"Type":"s3","URI":"s3://bucket/hero"}}`),
+		Spec: json.RawMessage(`{"ContentType":"image/jpeg","Provider":"s3","Source":{"URI":"s3://bucket/hero"}}`),
 		Body: "alt text", OwnerReferences: json.RawMessage(`[{"kind":"Repository","name":"repo","uid":"owner"}]`),
 		Status: json.RawMessage(`{"conditions":[]}`),
 	}

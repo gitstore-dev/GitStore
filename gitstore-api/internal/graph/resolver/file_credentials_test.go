@@ -19,12 +19,12 @@ func TestFileCredentialProjection(t *testing.T) {
 	}{
 		{
 			name: "legacy persisted Go-field spelling",
-			spec: `{"ContentType":"image/jpeg","Source":{"Type":"s3","URI":"s3://bucket/hero","CredentialsRef":{"Kind":"SecretRef","Name":"cloud","Key":"key","Namespace":"shop"}}}`,
+			spec: `{"ContentType":"image/jpeg","Provider":"s3","Source":{"URI":"s3://bucket/hero","CredentialsRef":{"Kind":"SecretRef","Name":"cloud","Key":"key","Namespace":"shop"}}}`,
 			want: nil,
 		},
 		{
 			name: "explicit wrapper",
-			spec: `{"ContentType":"image/jpeg","Source":{"Type":"s3","URI":"s3://bucket/hero","CredentialsRef":{"kind":"CredentialsRef","type":"aws-access-key/v1","secretRef":{"kind":"SecretRef","name":"cloud","namespace":"shop"}}}}`,
+			spec: `{"ContentType":"image/jpeg","Provider":"s3","Source":{"URI":"s3://bucket/hero","CredentialsRef":{"kind":"CredentialsRef","type":"aws-access-key/v1","secretRef":{"kind":"SecretRef","name":"cloud","namespace":"shop"}}}}`,
 			want: map[string]any{"kind": "CredentialsRef", "type": "aws-access-key/v1", "secretRef": map[string]any{"kind": "SecretRef", "name": "cloud", "key": nil, "namespace": "shop"}, "name": nil, "key": nil, "namespace": nil},
 		},
 	} {
@@ -38,6 +38,7 @@ func TestFileCredentialProjection(t *testing.T) {
 				return
 			}
 			require.NotNil(t, file)
+			require.Equal(t, "s3", file.Spec.Provider)
 			data, err := json.Marshal(file.Spec.Source.CredentialsRef)
 			require.NoError(t, err)
 			var got map[string]any

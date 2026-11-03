@@ -263,7 +263,7 @@ func TestGraphQLFilePoolLookupAcceptsBoundedAliasesAndTypedProjection(t *testing
 			UID: fmt.Sprintf("00000000-0000-0000-0000-%012d", i+1000), Namespace: "pool", Name: fmt.Sprintf("file-%d", i),
 			Kind: "File", APIVersion: "storage.gitstore.dev/v1beta1", ResourceVersion: "1",
 			Annotations: map[string]string{"secret-capacity.gitstore.dev/sequence": "0"},
-			Spec:        json.RawMessage(`{"contentType":"image/jpeg","type":"gitstore.dev/media","source":{"type":"s3","uri":"s3://fixture","credentialsRef":{"kind":"CredentialsRef","type":"aws-access-key/v1","secretRef":{"kind":"SecretRef","name":"capacity-media"}}}}`),
+			Spec:        json.RawMessage(`{"contentType":"image/jpeg","type":"gitstore.dev/media","provider":"s3","source":{"uri":"s3://fixture","credentialsRef":{"kind":"CredentialsRef","type":"aws-access-key/v1","secretRef":{"kind":"SecretRef","name":"capacity-media"}}}}`),
 		}
 		require.NoError(t, env.store.CreateFile(t.Context(), file))
 	}
@@ -271,7 +271,7 @@ func TestGraphQLFilePoolLookupAcceptsBoundedAliasesAndTypedProjection(t *testing
 		var query strings.Builder
 		query.WriteString("query {")
 		for index := range 10 {
-			fmt.Fprintf(&query, `f%d:file(namespace:"pool",name:"file-%d"){id metadata{name namespace annotations} spec{contentType type source{type uri credentialsRef{kind type secretRef{kind name key namespace}}}}}`, index, offset+index)
+			fmt.Fprintf(&query, `f%d:file(namespace:"pool",name:"file-%d"){id metadata{name namespace annotations} spec{contentType type provider source{uri credentialsRef{kind type secretRef{kind name key namespace}}}}}`, index, offset+index)
 		}
 		query.WriteString(`missing:file(namespace:"other-namespace",name:"file-0"){id}}`)
 		body, err := json.Marshal(map[string]any{"query": query.String()})
@@ -289,6 +289,7 @@ func TestGraphQLFilePoolLookupAcceptsBoundedAliasesAndTypedProjection(t *testing
 				Metadata struct{ Name, Namespace string }
 				Spec     struct {
 					ContentType string
+					Provider    string
 					Source      struct {
 						CredentialsRef *struct {
 							Type      string
@@ -320,6 +321,7 @@ func TestGraphQLFilePoolLookupAcceptsBoundedAliasesAndTypedProjection(t *testing
 			require.Equal(t, fmt.Sprintf("file-%d", offset+index), file.Metadata.Name)
 			require.Equal(t, "pool", file.Metadata.Namespace)
 			require.Equal(t, "image/jpeg", file.Spec.ContentType)
+			require.Equal(t, "s3", file.Spec.Provider)
 			require.NotNil(t, file.Spec.Source.CredentialsRef)
 			require.Equal(t, "aws-access-key/v1", file.Spec.Source.CredentialsRef.Type)
 			require.Equal(t, "capacity-media", file.Spec.Source.CredentialsRef.SecretRef.Name)

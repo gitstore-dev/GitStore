@@ -239,13 +239,13 @@ type ComplexityRoot struct {
 	FileSource struct {
 		Checksum       func(childComplexity int) int
 		CredentialsRef func(childComplexity int) int
-		Type           func(childComplexity int) int
 		URI            func(childComplexity int) int
 	}
 
 	FileSpec struct {
 		ContentType func(childComplexity int) int
 		Processing  func(childComplexity int) int
+		Provider    func(childComplexity int) int
 		Source      func(childComplexity int) int
 		Type        func(childComplexity int) int
 	}
@@ -1574,13 +1574,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.FileSource.CredentialsRef(childComplexity), true
 
-	case "FileSource.type":
-		if e.ComplexityRoot.FileSource.Type == nil {
-			break
-		}
-
-		return e.ComplexityRoot.FileSource.Type(childComplexity), true
-
 	case "FileSource.uri":
 		if e.ComplexityRoot.FileSource.URI == nil {
 			break
@@ -1601,6 +1594,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.FileSpec.Processing(childComplexity), true
+
+	case "FileSpec.provider":
+		if e.ComplexityRoot.FileSpec.Provider == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileSpec.Provider(childComplexity), true
 
 	case "FileSpec.source":
 		if e.ComplexityRoot.FileSpec.Source == nil {
@@ -5156,12 +5156,12 @@ type File implements Node {
 type FileSpec {
   contentType: String!
   type: String
+  provider: String!
   source: FileSource!
   processing: FileProcessing
 }
 
 type FileSource {
-  type: String!
   uri: String!
   checksum: FileChecksum
   credentialsRef: CredentialsRef
@@ -7703,8 +7703,6 @@ func (ec *executionContext) childFields_FileReference(ctx context.Context, field
 
 func (ec *executionContext) childFields_FileSource(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "type":
-		return ec.fieldContext_FileSource_type(ctx, field)
 	case "uri":
 		return ec.fieldContext_FileSource_uri(ctx, field)
 	case "checksum":
@@ -7721,6 +7719,8 @@ func (ec *executionContext) childFields_FileSpec(ctx context.Context, field grap
 		return ec.fieldContext_FileSpec_contentType(ctx, field)
 	case "type":
 		return ec.fieldContext_FileSpec_type(ctx, field)
+	case "provider":
+		return ec.fieldContext_FileSpec_provider(ctx, field)
 	case "source":
 		return ec.fieldContext_FileSpec_source(ctx, field)
 	case "processing":

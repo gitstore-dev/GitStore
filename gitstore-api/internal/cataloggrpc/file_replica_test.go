@@ -5,6 +5,7 @@ package cataloggrpc_test
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,7 +23,7 @@ import (
 // body, used to prove which commit's content ultimately won an admission
 // race or handoff.
 func makeFileWithBody(name, body string) []byte {
-	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/" + name + "\n---\n" + body)
+	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/" + name + "\n---\n" + body)
 }
 
 // TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent models two
@@ -74,6 +76,10 @@ func TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent(t *testing.
 	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
 	require.NoError(t, err)
 	assert.Equal(t, "Alt text", file.Body)
+	var spec catalog.FileSpec
+	require.NoError(t, json.Unmarshal(file.Spec, &spec))
+	assert.Equal(t, "s3", spec.Provider)
+	assert.Equal(t, "s3://bucket/hero.jpg", spec.Source.URI)
 	assert.Equal(t, "1", file.ResourceVersion, "an identical create collision must not manufacture an update")
 
 	controllerRevision := "controller-resolved"

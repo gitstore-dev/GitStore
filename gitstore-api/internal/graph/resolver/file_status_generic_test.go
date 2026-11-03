@@ -53,6 +53,14 @@ func TestUpdateResourceStatusFileResolvedAndConflict(t *testing.T) {
 	require.Contains(t, fmt.Sprint(graphErr.Extensions["diagnostics"]), "current resourceVersion is "+"2")
 }
 
+func TestFileProviderSchemaContract(t *testing.T) {
+	schema := productContractSchema(t)
+	requireGraphQLField(t, schema, "FileSpec", "provider", "String!")
+	requireGraphQLField(t, schema, "FileSpec", "source", "FileSource!")
+	requireGraphQLField(t, schema, "FileSource", "uri", "String!")
+	require.Nil(t, schema.Types["FileSource"].Fields.ForName("type"))
+}
+
 func TestFileWatchUsesDurableJournalAcrossReplicasAndReplacement(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -63,7 +71,7 @@ func TestFileWatchUsesDurableJournalAcrossReplicasAndReplacement(t *testing.T) {
 	require.NoError(t, err)
 	file := &datastore.File{UID: uuid.NewString(), Namespace: "ns", Name: "hero", Kind: "File",
 		ResourceVersion: "1", Labels: map[string]string{"team": "media"},
-		Spec: json.RawMessage(`{"contentType":"image/jpeg","source":{"type":"s3","uri":"s3://fixture"}}`)}
+		Spec: json.RawMessage(`{"contentType":"image/jpeg","provider":"s3","source":{"uri":"s3://fixture"}}`)}
 	require.NoError(t, store.CreateFile(t.Context(), file))
 	for _, replica := range []*Resolver{a, b} {
 		got, err := replica.Query().File(t.Context(), "ns", "hero")
