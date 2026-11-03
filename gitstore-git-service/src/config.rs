@@ -15,6 +15,18 @@ pub struct AppConfig {
     pub log: LogConfig,
     pub grpc_auth: GrpcAuthConfig,
     pub push_limits: PushLimitsConfig,
+    pub observability: ObservabilityConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ObservabilityConfig {
+    pub otlp: OtlpConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct OtlpConfig {
+    pub uri: String,
+    pub trace_sample_ratio: f64,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -143,6 +155,27 @@ impl AppConfig {
     /// Validate all fields and collect every failure into a single `ConfigErrors`.
     pub fn validate(&self) -> Result<(), ConfigErrors> {
         let mut errors = Vec::new();
+        let otlp = &self.observability.otlp;
+        if !(0.0..=1.0).contains(&otlp.trace_sample_ratio) {
+            errors
+                .push("observability.otlp.trace_sample_ratio must be between zero and one".into());
+        }
+        let valid_endpoint = otlp.uri.len() <= 256
+            && !otlp.uri.contains('#')
+            && otlp
+                .uri
+                .parse::<tonic::codegen::http::Uri>()
+                .is_ok_and(|uri| {
+                    matches!(uri.scheme_str(), Some("http" | "https"))
+                        && uri.host().is_some_and(|host| !host.is_empty())
+                        && uri.query().is_none()
+                        && uri
+                            .authority()
+                            .is_some_and(|authority| !authority.as_str().contains('@'))
+                });
+        if !otlp.uri.is_empty() && !valid_endpoint {
+            errors.push("observability.otlp.uri must be an HTTP(S) URI without credentials, query or fragment".into());
+        }
 
         if self.git_service.grpc_port == 0 {
             errors.push(format!(
@@ -202,6 +235,11 @@ impl AppConfig {
 /// keys it used to own. Ordered most-specific-first so the most helpful
 /// match wins.
 const LEGACY_KEYS: &[(&str, &str)] = &[
+    ("observability.otlp.endpoint", "observability.otlp.uri"),
+    (
+        "git_service.metrics",
+        "observability.otlp.uri (metrics use OTLP; remove the HTTP metrics listener)",
+    ),
     ("grpc.port", "git_service.grpc_port"),
     ("grpc", "git_service.grpc_port"),
     ("git.data_dir", "git_service.data_dir"),
@@ -330,6 +368,10 @@ timeout = "10s"
 [git_service.admission]
 branch_pattern = "^refs/heads/main$"
 
+[observability.otlp]
+uri = ""
+trace_sample_ratio = 0.05
+
 [log]
 level = "info"
 format = "json"
@@ -359,6 +401,9 @@ mod tests {
             "GITSTORE_GIT_SERVICE__DATA_DIR",
             "GITSTORE_LOG__LEVEL",
             "GITSTORE_LOG__FORMAT",
+            "GITSTORE_OBSERVABILITY__OTLP__URI",
+            "GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO",
+            "GITSTORE_GIT_SERVICE__METRICS__URI",
             "GITSTORE_GIT_SERVICE__VALIDATION__TIMEOUT",
             "GITSTORE_GIT_SERVICE__ADMISSION__BRANCH_PATTERN",
             "GITSTORE_GIT_SERVICE__CATALOG__URI",
@@ -383,6 +428,46 @@ mod tests {
         for k in &keys {
             env::remove_var(k);
         }
+    }
+
+    #[test]
+    fn telemetry_config_is_opt_in_and_rejects_removed_metrics_listener() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        let mut cfg = load_config_from(None).unwrap();
+        cfg.grpc_auth.hmac_secret = "test-key".into();
+        assert!(cfg.observability.otlp.uri.is_empty());
+        for endpoint in ["http://collector:4318", "https://collector:4318/otlp", ""] {
+            cfg.observability.otlp.uri = endpoint.into();
+            cfg.validate().unwrap();
+        }
+        for endpoint in [
+            "ftp://collector",
+            "http://collector:4318?private",
+            "http://collector:4318#private",
+        ] {
+            cfg.observability.otlp.uri = endpoint.into();
+            let error = cfg.validate().unwrap_err().to_string();
+            assert!(error.contains("observability.otlp.uri"));
+            assert!(!error.contains("private"));
+        }
+        cfg.observability.otlp.uri.clear();
+        cfg.observability.otlp.trace_sample_ratio = f64::NAN;
+        assert!(cfg.validate().is_err());
+        env::set_var("GITSTORE_OBSERVABILITY__OTLP__URI", "http://collector:4318");
+        env::set_var("GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "0.25");
+        let cfg = load_config_from(None).unwrap();
+        assert_eq!(cfg.observability.otlp.uri, "http://collector:4318");
+        assert_eq!(cfg.observability.otlp.trace_sample_ratio, 0.25);
+        env::set_var(
+            "GITSTORE_GIT_SERVICE__METRICS__URI",
+            "http://127.0.0.1:50052",
+        );
+        assert!(load_config_from(None)
+            .unwrap_err()
+            .to_string()
+            .contains("observability.otlp.uri"));
+        clear_env();
     }
 
     #[test]

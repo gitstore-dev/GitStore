@@ -10,8 +10,22 @@ import (
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/metadata"
 )
+
+func TestSignedRPCPropagatesOnlyTraceIdentityAlongsideItsSignature(t *testing.T) {
+	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("baggage", "private-resource"))
+	ctx = trace.ContextWithSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}, TraceFlags: trace.FlagsSampled,
+	}))
+	ctx, err := signedContext(ctx, "test-secret", gitv1.GitService_CreateRepository_FullMethodName, &gitv1.CreateRepositoryRequest{})
+	require.NoError(t, err)
+	md, _ := metadata.FromOutgoingContext(ctx)
+	require.Equal(t, []string{"00-01000000000000000000000000000000-0200000000000000-01"}, md.Get("traceparent"))
+	require.Empty(t, md.Get("baggage"))
+	require.Len(t, md.Get(auth.RPCSignatureMetadata), 1)
+}
 
 func TestSignedRequestNeverForwardsSigningKey(t *testing.T) {
 	request := &gitv1.CreateRepositoryRequest{RepositoryId: "repository"}

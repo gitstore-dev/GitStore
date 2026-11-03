@@ -48,6 +48,7 @@ import (
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -288,7 +289,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	})
 	gitHttpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Api.GitPort),
-		Handler:      gitHttpHandler,
+		Handler:      observability.HTTPHandler(gitHttpHandler, log),
 		ReadTimeout:  0,
 		WriteTimeout: 0,
 		IdleTimeout:  60 * time.Second,
@@ -300,7 +301,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("listen on catalog gRPC port %d: %w", cfg.Api.GrpcPort, err)
 	}
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(catalogTelemetry))
 	catalogv1.RegisterCatalogServiceServer(grpcServer, catalogServer)
 
 	return &Server{
@@ -406,13 +407,14 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	gqlServer.AroundFields(authorizeMiddleware.GraphQLFieldAuthorizer)
 	gqlServer.AroundResponses(authorizeMiddleware.GraphQLResponseAuthorizer)
 
+	operationHandler := observability.HTTPHandler(gqlServer, deps.Logger)
 	gqlHandler := gin.HandlerFunc(func(c *gin.Context) {
 		if !authenticateMiddleware.AuthenticateWebSocketUpgrade(c) {
 			return
 		}
 		ctx := security.ContextWithRemoteAddr(c.Request.Context(), c.RemoteIP())
 		c.Request = c.Request.WithContext(ctx)
-		gqlServer.ServeHTTP(c.Writer, c.Request)
+		operationHandler.ServeHTTP(c.Writer, c.Request)
 	})
 
 	rateLimitPerSecond := deps.RateLimitPerSecond

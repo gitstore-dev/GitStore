@@ -46,6 +46,19 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = log.Sync() }()
+	log, shutdownTelemetry, err := app.InitTelemetry(context.Background(), cfg.Observability.OTLP, log)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "Failed to initialize telemetry")
+		os.Exit(1)
+	}
+	logger.Log = log
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(ctx); err != nil {
+			log.Error("telemetry shutdown failed")
+		}
+	}()
 
 	log.Info("Starting GitStore GraphQL API",
 		zap.Int("port", cfg.Api.Port),
