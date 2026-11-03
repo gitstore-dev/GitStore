@@ -1,0 +1,20 @@
+# Generic examples only. Keep actual deployment settings in an ignored file.
+name             = "gitstore-production"
+region           = "ams3"
+base_domain      = "sandbox.example.com"
+certificate_name = "gitstore-ingress"
+ssh_key_ids      = ["12345678"]
+operator_cidrs   = ["203.0.113.10/32"]
+
+# Optional: an EXISTING DigitalOcean DNS zone; otherwise manage DNS separately.
+# dns_zone = "example.com"
+
+# Confirm the selected PostgreSQL layout is available for your account/region.
+postgres = {
+  engine  = "advanced_pg"
+  size    = "gd-2vcpu-8gb"
+  version = "16"
+}
+
+# Requires separate Spaces credentials. A destination is not a backup schedule.
+# backup_bucket = { name = "globally-unique-backup-bucket", region = "nyc3" }
