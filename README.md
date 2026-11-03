@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/branding/readme-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/branding/readme-light.png">
+  <img src="docs/branding/readme-light.png" alt="GitStore — Change boldly. Keep a way back. Git-backed catalogs for teams and AI agents." width="100%">
+</picture>
+
 # GitStore - Agent-safe Catalogue Operations
 
 > [!CAUTION]
