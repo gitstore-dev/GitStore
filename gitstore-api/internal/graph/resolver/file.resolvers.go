@@ -8,16 +8,39 @@ package resolver
 import (
 	"context"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"github.com/vektah/gqlparser/v2/gqlerror"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 )
 
 // File is the resolver for the file field.
-func (r *queryResolver) File(ctx context.Context, namespace string, name string) (*model.File, error) {
-	if namespace == "" || name == "" {
-		return nil, &gqlerror.Error{Message: "File namespace and name are required", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
+func (r *queryResolver) File(ctx context.Context, by model.FileBy) (*model.File, error) {
+	if (by.ID == nil) == (by.NamespacePath == nil) {
+		return nil, admission.NewError(admission.CodeBadUserInput, "INVALID_SELECTOR", "FileBy: exactly one selector required").ToGQLError()
 	}
-	file, err := r.store.GetFileByName(ctx, namespace, name)
+	if file, ok := security.AuthorizedFileRead(ctx); ok {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if file == nil {
+			return nil, nodeLookupError(nodeKindFile, datastore.ErrNotFound)
+		}
+		return DatastoreFileToGraphQL(file), nil
+	}
+	var file *datastore.File
+	var err error
+	switch {
+	case by.ID != nil:
+		var uid string
+		uid, err = decodeNodeIDAs(nodeKindFile, *by.ID)
+		if err != nil {
+			return nil, err
+		}
+		file, err = r.store.GetFile(ctx, uid)
+	case by.NamespacePath != nil:
+		file, err = r.store.GetFileByName(ctx, by.NamespacePath.Namespace, by.NamespacePath.Name)
+	}
 	if err != nil {
 		return nil, nodeLookupError(nodeKindFile, err)
 	}

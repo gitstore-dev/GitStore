@@ -139,7 +139,7 @@ mounts. Do not broaden mounts or disable ownership checks to work around path
 differences; see the [capacity guide](../../tests/capacity/README.md).
 
 File bootstrap in the capacity harness reads the known File names from persisted
-`file(namespace:, name:)` queries on both APIs before subscribing, because an
+`file(by: {namespacePath: {namespace:, name:}})` queries on both APIs before subscribing, because an
 empty watch cursor does not replay existing state. File subscriptions use the
 shared durable journal. Functional CDC coverage does not satisfy full
 production-readiness acceptance; that requires a complete production evidence

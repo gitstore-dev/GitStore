@@ -485,10 +485,19 @@ the typed `watchFiles` subscription and generic `watchResources(kind: "File")`
 subscription require `file.watch`; authorization receives the requested
 namespace as resource context and is evaluated before the event stream opens.
 
-Read an existing File with `file(namespace: String!, name: String!): File`.
-This uses the persisted name index, returns `null` when absent, and requires
-`file.read`. File access through `node` and `nodes` requires the same
-namespace-scoped permission, including the namespace owner context.
+Read an existing File with `file(by: FileBy!): File`, using exactly one selector:
+`by: {namespacePath: {namespace: "shop", name: "hero"}}` or
+`by: {id: "<Relay ID>"}`. The namespace/name selector uses the persisted name
+index; the ID selector uses the File UID. The result has the same resource
+envelope as the other catalog resources: `id`, `apiVersion`, `kind`, `metadata`,
+`spec`, optional `status`, and `body`. Source pointers and processing hints
+remain in `spec`; controller-derived values remain in `status.resolved`.
+No payload is fetched or readiness recomputed by a read.
+
+An absent File returns `null` with the shared `NOT_FOUND` diagnostic envelope.
+Reads require `file.read`, including access through `node` and `nodes`, scoped
+to the stored File's namespace and effective owner. A denied named lookup
+returns `FORBIDDEN` without exposing the resource.
 
 Both File watches use the shared durable resource journal: Scylla migration 014
 enables full preimage/postimage CDC on `files_by_namespace`, and the fenced

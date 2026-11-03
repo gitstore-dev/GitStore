@@ -2,9 +2,29 @@
 
 extend type Query {
   """
-  Read one persisted File by namespace and name. This does not subscribe to events.
+  Read one persisted File by Relay ID or namespace and name.
+  This does not subscribe to events.
   """
-  file(namespace: String!, name: String!): File
+  file(by: FileBy!): File
+}
+
+"""
+Selector for a single File lookup. Exactly one field must be set.
+"""
+input FileBy @oneOf {
+  """Look up by globally unique Relay ID (encodes the File UID)."""
+  id: ID
+
+  """Look up by namespace identifier and metadata.name."""
+  namespacePath: FileNamespacePath
+}
+
+"""
+Composite selector for a File within a namespace.
+"""
+input FileNamespacePath {
+  namespace: String!
+  name: String!
 }
 
 extend type Subscription {

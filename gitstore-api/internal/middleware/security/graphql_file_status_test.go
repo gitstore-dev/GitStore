@@ -162,7 +162,7 @@ func TestFileReadsAuthorizeLookupAndRelayNodesBeforeResolver(t *testing.T) {
 		t.Run(field, func(t *testing.T) {
 			authz := testutil.NewDenyAllAuthZ(t)
 			mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), store, zap.NewNop())
-			args := map[string]any{"namespace": "private", "name": "hero", "id": id, "ids": []string{id}}
+			args := map[string]any{"by": model.FileBy{NamespacePath: &model.FileNamespacePath{Namespace: "private", Name: "hero"}}, "id": id, "ids": []string{id}}
 			ctx := graphql.WithFieldContext(t.Context(), &graphql.FieldContext{
 				Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: field}}, Args: args,
 			})
