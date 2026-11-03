@@ -39,6 +39,8 @@ Traces and logs use bounded 2,048-record queues, 256-record batches and
 one-second batching. Export is nonblocking for request/reconciliation work;
 full queues drop records. Normal shutdown allows five seconds for Go flushes.
 Rust flushes bounded batches using two-second exporter requests.
+Collector failures during the final Git-service flush produce a local warning
+but do not turn a graceful gRPC shutdown into a failed process exit.
 
 `observability.otlp.trace_sample_ratio`
 (`GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO`) defaults to `0.05`, accepts
