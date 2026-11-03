@@ -23,6 +23,8 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__PORT",
 		"GITSTORE_API__GIT_PORT",
 		"GITSTORE_API__GRPC_PORT",
+		"GITSTORE_API__PROFILING__URI",
+		"GITSTORE_API__PROFILING__TOKEN",
 		"GITSTORE_API__RATE_LIMIT__PER_SECOND",
 		"GITSTORE_API__RATE_LIMIT__BURST",
 		"GITSTORE_API__GIT_SERVICE__URI",
@@ -100,6 +102,22 @@ func clearEnv(t *testing.T) func() {
 			}
 		}
 	}
+}
+
+func TestProfilingConfigurationRequiresLoopbackAndToken(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_API__PROFILING__URI", "http://127.0.0.1:6060")
+	_, err := Load()
+	require.ErrorContains(t, err, "api.profiling.token")
+	t.Setenv("GITSTORE_API__PROFILING__TOKEN", "profiling-test-token-at-least-32-bytes")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "http://127.0.0.1:6060", cfg.Api.Profiling.URI)
+	t.Setenv("GITSTORE_API__PROFILING__URI", "http://0.0.0.0:6060")
+	_, err = Load()
+	require.ErrorContains(t, err, "api.profiling.uri")
+	require.NotContains(t, err.Error(), cfg.Api.Profiling.Token)
 }
 
 // setRequiredAuth sets the required auth env vars including the gRPC HMAC secret.

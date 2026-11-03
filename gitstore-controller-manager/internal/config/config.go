@@ -29,14 +29,15 @@ type Config struct {
 }
 
 type ControllerConfig struct {
-	Port            int                   `mapstructure:"port"`
-	ApiURI          string                `mapstructure:"api_uri"`
-	APIClient       APIClientConfig       `mapstructure:"api_client"`
-	ServiceAccount  ServiceAccountConfig  `mapstructure:"serviceaccount"`
-	SecretProviders SecretProvidersConfig `mapstructure:"secret_providers"`
-	Checkpoint      CheckpointConfig      `mapstructure:"checkpoint"`
-	Reconcile       ReconcileConfig       `mapstructure:"reconcile"`
-	Watch           WatchConfig           `mapstructure:"watch"`
+	Port            int                           `mapstructure:"port"`
+	ApiURI          string                        `mapstructure:"api_uri"`
+	APIClient       APIClientConfig               `mapstructure:"api_client"`
+	ServiceAccount  ServiceAccountConfig          `mapstructure:"serviceaccount"`
+	SecretProviders SecretProvidersConfig         `mapstructure:"secret_providers"`
+	Checkpoint      CheckpointConfig              `mapstructure:"checkpoint"`
+	Reconcile       ReconcileConfig               `mapstructure:"reconcile"`
+	Watch           WatchConfig                   `mapstructure:"watch"`
+	Profiling       observability.ProfilingConfig `mapstructure:"profiling"`
 }
 
 type APIClientConfig struct {
@@ -83,6 +84,8 @@ type LogConfig struct {
 }
 
 var defaults = map[string]any{
+	"controller.profiling.uri":                           "",
+	"controller.profiling.token":                         "",
 	"observability.otlp.uri":                             "",
 	"observability.otlp.trace_sample_ratio":              0.05,
 	"controller.port":                                    5001,
@@ -325,6 +328,9 @@ func decodeValue(from, to reflect.Type, value any) (any, error) {
 }
 
 func validate(cfg *Config) error {
+	if err := cfg.Controller.Profiling.Validate(); err != nil {
+		return fmt.Errorf("controller.%w", err)
+	}
 	if err := cfg.Observability.OTLP.Validate(); err != nil {
 		return err
 	}

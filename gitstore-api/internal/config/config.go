@@ -41,11 +41,12 @@ type ApiConfig struct {
 	GitPort  int `mapstructure:"git_port"  validate:"min=1,max=65535"`
 	GrpcPort int `mapstructure:"grpc_port" validate:"min=1,max=65535"`
 
-	RateLimit  RateLimitConfig          `mapstructure:"rate_limit"`
-	GitService GitServiceEndpointConfig `mapstructure:"git_service"`
-	Auth       AuthConfig               `mapstructure:"auth"`
-	Datastore  DatastoreConfig          `mapstructure:"datastore"`
-	Watch      WatchConfig              `mapstructure:"watch"`
+	RateLimit  RateLimitConfig               `mapstructure:"rate_limit"`
+	GitService GitServiceEndpointConfig      `mapstructure:"git_service"`
+	Auth       AuthConfig                    `mapstructure:"auth"`
+	Datastore  DatastoreConfig               `mapstructure:"datastore"`
+	Watch      WatchConfig                   `mapstructure:"watch"`
+	Profiling  observability.ProfilingConfig `mapstructure:"profiling"`
 }
 
 // RateLimitConfig is the sustained per-client-IP request rate allowed on
@@ -388,6 +389,8 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("log.format", "json")
 	v.SetDefault("observability.otlp.uri", "")
 	v.SetDefault("observability.otlp.trace_sample_ratio", 0.05)
+	v.SetDefault("api.profiling.uri", "")
+	v.SetDefault("api.profiling.token", "")
 	v.SetDefault("grpc_auth.hmac_secret", "")
 	v.SetDefault("grpc_auth.hmac_secret_previous", "")
 	v.SetDefault("push_limits.max_pack_size", "512MiB")
@@ -525,6 +528,9 @@ func checkLegacyKeys(v *viper.Viper) error {
 
 // validateConfig runs all struct validations and returns a combined error.
 func validateConfig(cfg *Config) error {
+	if err := cfg.Api.Profiling.Validate(); err != nil {
+		return fmt.Errorf("api.%w", err)
+	}
 	if err := cfg.Observability.OTLP.Validate(); err != nil {
 		return err
 	}

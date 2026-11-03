@@ -22,6 +22,10 @@ port = 4000
 git_port = 9000
 grpc_port = 6000
 
+[api.profiling]
+uri = ""
+# Set token through GITSTORE_API__PROFILING__TOKEN before enabling a loopback URI.
+
 [api.rate_limit]
 per_second = 50
 burst = 100
@@ -73,6 +77,10 @@ policy_file = "/etc/gitstore/policy.yaml"
 [controller]
 port = 5001
 api_uri = "http://api:4000/graphql"
+
+[controller.profiling]
+uri = ""
+# Set token through GITSTORE_CONTROLLER__PROFILING__TOKEN before enabling a loopback URI.
 
 [controller.api_client.rate_limit]
 # Shared across all reconciliation kinds; leave room under the API's IP budget

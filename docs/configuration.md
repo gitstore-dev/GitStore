@@ -1,5 +1,57 @@
 # Configuration Reference
 
+## Private Go profiling
+
+The API and controller share an opt-in profiler, separate from their public
+routers and independent of OTLP export. `api.profiling.uri` and
+`controller.profiling.uri` default to empty (disabled). An enabled URI must
+be plain HTTP with an explicit loopback IP and nonzero port, for example
+`http://127.0.0.1:6060` or `http://[::1]:6061`. Hostnames, wildcard addresses,
+credentials, paths, queries and fragments are rejected. Give each process its
+own port; do not publish profiler ports or proxy them onto a public network.
+
+An enabled profiler also requires its own `profiling.token`: 32–256 printable,
+non-space ASCII bytes. Generate a random secret and inject it through
+`GITSTORE_API__PROFILING__TOKEN` or
+`GITSTORE_CONTROLLER__PROFILING__TOKEN`, rather than committing it to shared
+configuration. URI overrides are `GITSTORE_API__PROFILING__URI` and
+`GITSTORE_CONTROLLER__PROFILING__URI`. Every request requires exactly one
+`Authorization: Bearer <token>` header; query-string tokens are not accepted.
+These diagnostic credentials do not replace or alter application AuthN/AuthZ
+providers. Loopback and bearer authentication are both required; neither
+provides transport encryption.
+
+Supported GET routes are `/debug/pprof/profile?seconds=1..60`,
+`/debug/pprof/trace?seconds=1..5` and binary `heap`, `allocs`, `block`, `mutex`
+and `goroutine` profiles under `/debug/pprof/`. Text/debug output, delta
+snapshots, the index, command line and symbol routes are unavailable. Only
+one capture per process can run at a time; overlapping captures return 409.
+CPU captures temporarily enable block/mutex sampling, restore the previous
+mutex rate and disable block sampling afterward. Cancelling an execution
+capture stops it and clears its optional `sample_limit=0..64` budget.
+The shared sampling helper claims that budget only for sampled, recording
+OpenTelemetry spans during an active execution capture; configuring it alone
+does not enable datastore-native tracing.
+
+Capture from inside the service's network namespace. For example, with the
+API's URI and token already set in the environment:
+
+```sh
+umask 077
+printf 'Authorization: Bearer %s\n' "$GITSTORE_API__PROFILING__TOKEN" |
+  curl --fail --max-time 65 --header @- \
+    --output cpu.pprof \
+    "$GITSTORE_API__PROFILING__URI/debug/pprof/profile?seconds=30"
+```
+
+Keep tokens out of command arguments and shell tracing. Profiles can contain
+runtime data: retain them privately, never upload them to telemetry backends,
+and delete them when the investigation ends. Profiling adds overhead and is
+not uninstrumented capacity or availability evidence. Disable the URI and
+restart the process after diagnosis. Shutdown waits at most five seconds
+before forcibly closing the private listener; no public health, metrics,
+Git-service listener or singleton-storage behavior changes.
+
 ## Collector-routed telemetry
 
 Telemetry is opt-in for the three core services. Set
