@@ -317,6 +317,13 @@ limits, sustained projection mutation, and two independent clients. Add
 
 The API is the Git Smart HTTP front door. The Rust Git service is gRPC-only storage and transport.
 
+Fetch negotiation acknowledges known commits using the client's selected
+single-ACK, `multi_ack`, or `multi_ack_detailed` mode. Shallow clones and
+absolute-depth fetches (`--depth=N`), including `--unshallow`, preserve Git's
+shallow boundaries. A client's `shallow` declaration alone is not proof that
+it has a complete snapshot; the server still sends the required trees and
+blobs unless it has negotiated a common commit.
+
 1. A Git client clones, fetches, or pushes to `http://localhost:9000/{namespace}/{repo}.git`.
 2. `gitstore-api` resolves `{namespace}/{repo}` to the stable repository ID stored in the datastore.
 3. `gitstore-api` forwards Git transport work to `gitstore-git-service` through `GitService` gRPC.
