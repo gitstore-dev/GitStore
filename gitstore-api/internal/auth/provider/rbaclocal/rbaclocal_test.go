@@ -352,6 +352,8 @@ func TestV1Beta1ReloadRetainsSnapshotAndConcurrentDecisions(t *testing.T) {
 	deny, err := yaml.Marshal(fixture.Policies["empty"])
 	require.NoError(t, err)
 	p := newRBACProvider(t, string(allow))
+	allowDigest := p.snapshot.Load().digest
+	denyDigest := newRBACProvider(t, string(deny)).snapshot.Load().digest
 	principal := &authpkg.Principal{Subject: "reader", AuthMethod: "static-users", Groups: []string{"system:authenticated"}}
 	resource := authpkg.ResourceContext{Kind: "product", Name: "p"}
 	for _, invalid := range []string{"version: v1\nroles: {}", strings.Repeat("x", 4*1024*1024+1), "not: [valid"} {
@@ -360,6 +362,7 @@ func TestV1Beta1ReloadRetainsSnapshotAndConcurrentDecisions(t *testing.T) {
 		d, err := p.Authorize(t.Context(), principal, "product.read", resource)
 		require.NoError(t, err)
 		require.Equal(t, authpkg.OutcomeAllow, d.Outcome)
+		require.Equal(t, allowDigest, d.PolicyDigest)
 	}
 	var wg sync.WaitGroup
 	for range 8 {
@@ -369,6 +372,11 @@ func TestV1Beta1ReloadRetainsSnapshotAndConcurrentDecisions(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Contains(t, []authpkg.Outcome{authpkg.OutcomeAllow, authpkg.OutcomeDeny}, d.Outcome)
 				assert.NotEmpty(t, d.Reason)
+				if d.Outcome == authpkg.OutcomeAllow {
+					assert.Equal(t, allowDigest, d.PolicyDigest)
+				} else {
+					assert.Equal(t, denyDigest, d.PolicyDigest)
+				}
 			}
 		})
 	}
@@ -381,6 +389,10 @@ func TestV1Beta1ReloadRetainsSnapshotAndConcurrentDecisions(t *testing.T) {
 		require.NoError(t, p.Reload())
 	}
 	wg.Wait()
+	require.NoError(t, os.Remove(p.path))
+	d, err := p.Authorize(t.Context(), principal, "product.read", resource)
+	require.NoError(t, err)
+	require.Equal(t, allowDigest, d.PolicyDigest, "evaluation must use the loaded policy without I/O")
 }
 
 func TestV1Beta1InvalidRequestsFailClosedEvenMasters(t *testing.T) {
@@ -392,10 +404,16 @@ func TestV1Beta1InvalidRequestsFailClosedEvenMasters(t *testing.T) {
 		d, err := p.Authorize(t.Context(), principal, "product.read", authpkg.ResourceContext{Kind: "product"})
 		require.NoError(t, err)
 		assert.Equal(t, authpkg.OutcomeDeny, d.Outcome)
+		assert.Equal(t, p.snapshot.Load().digest, d.PolicyDigest)
 	}
 	d, err := p.Authorize(t.Context(), &authpkg.Principal{Subject: "admin", AuthMethod: "static-users", Groups: []string{"system:masters"}}, "repository.transfer", authpkg.ResourceContext{Kind: "repository"})
 	require.NoError(t, err)
 	assert.Equal(t, authpkg.OutcomeDeny, d.Outcome)
+	assert.Equal(t, p.snapshot.Load().digest, d.PolicyDigest)
+	d, err = p.Authorize(t.Context(), &authpkg.Principal{Subject: "admin", AuthMethod: "static-users", Groups: []string{"system:masters"}}, "product.read", authpkg.ResourceContext{Kind: "product"})
+	require.NoError(t, err)
+	assert.Equal(t, authpkg.OutcomeAllow, d.Outcome)
+	assert.Equal(t, p.snapshot.Load().digest, d.PolicyDigest)
 }
 
 func TestV1Beta1ReloadRetainsEffectiveUserPermission(t *testing.T) {

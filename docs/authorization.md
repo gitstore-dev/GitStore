@@ -230,3 +230,27 @@ denied operations with the intended identities, including access to another
 namespace and another resource name. A successful named read does not prove
 that a list, watch or Git push is authorized; those operations require their
 own grants.
+
+## Decision diagnostics
+
+Structured `authz decision` logs include outcome, reason, provider, request ID
+and provider-call latency (`latency_ns` and the existing `latency_ms`).
+For a loaded `rbac-local` policy, `policy_digest` identifies the immutable
+policy used for that decision, even if a reload finishes before logging.
+Compare this digest across replicas when investigating differing decisions;
+it is not a claim that the current policies still match.
+
+Log identity fields are bounded to 256 UTF-8 bytes and reasons to 2,048 bytes;
+`fields_truncated=true` marks truncation. Invalid UTF-8 is replaced with `?`.
+A malformed policy digest is omitted and marked `invalid_policy_digest=true`.
+Claims and resource attributes are not logged. Provider errors log an
+`error_class` (`provider_error`, `canceled` or `deadline_exceeded`), not the raw
+error text. Diagnostic formatting does not rewrite returned decisions or errors.
+
+`gitstore_authz_decision_duration_seconds` records provider-call duration and
+counts through the [existing telemetry configuration](configuration.md), even
+when decision logging is disabled. Its only labels are registered `action`
+(unregistered actions become `unknown`) and `outcome` (`allow`, `deny`,
+`challenge`, `invalid` or `error`). Subjects, resources, requests and policy
+digests are never metric labels. This is provider timing, not end-to-end request
+latency or a sustained-capacity result.
