@@ -34,6 +34,82 @@ func TestFileCRUD(t *testing.T) {
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
+func TestFileSnapshotsPreservePositionsAndIsolateCopies(t *testing.T) {
+	store, err := New()
+	require.NoError(t, err)
+	defer store.Close()
+	file := &datastore.File{
+		UID: "00000000-0000-0000-0000-000000000151", Namespace: "ns", Name: "hero",
+		ResourceVersion: "1", Labels: map[string]string{"team": "original"},
+		Spec: json.RawMessage(`{"type":"hero"}`), Finalizers: []string{"keep"},
+	}
+	require.NoError(t, store.CreateFile(t.Context(), file))
+	other := *file
+	other.UID = "00000000-0000-0000-0000-000000000152"
+	other.Namespace = "other"
+	require.NoError(t, store.CreateFile(t.Context(), &other))
+	for _, mode := range []string{"uid", "name"} {
+		t.Run(mode, func(t *testing.T) {
+			read := func() ([]*datastore.File, error) {
+				if mode == "uid" {
+					return store.GetFileSnapshots(t.Context(), []string{file.UID, "invalid", "00000000-0000-0000-0000-000000000153", file.UID})
+				}
+				return store.GetFileSnapshotsByName(t.Context(), "ns", []string{"hero", "absent", "missing", "hero"})
+			}
+			got, err := read()
+			require.NoError(t, err)
+			require.Len(t, got, 4)
+			require.Nil(t, got[1])
+			require.Nil(t, got[2])
+			require.Equal(t, "ns", got[0].Namespace)
+			require.Equal(t, file.UID, got[3].UID)
+			got[0].Labels["team"] = "changed"
+			got[0].Spec[0] = '!'
+			got[0].Finalizers[0] = "changed"
+			require.Equal(t, "original", got[3].Labels["team"])
+			require.JSONEq(t, `{"type":"hero"}`, string(got[3].Spec))
+			require.Equal(t, []string{"keep"}, got[3].Finalizers)
+			fresh, err := read()
+			require.NoError(t, err)
+			require.Equal(t, "original", fresh[0].Labels["team"])
+			require.JSONEq(t, `{"type":"hero"}`, string(fresh[0].Spec))
+		})
+	}
+	file.ResourceVersion, file.Body = "2", "updated"
+	require.NoError(t, store.UpdateFile(t.Context(), file, "1"))
+	for _, read := range []func() ([]*datastore.File, error){
+		func() ([]*datastore.File, error) { return store.GetFileSnapshots(t.Context(), []string{file.UID}) },
+		func() ([]*datastore.File, error) {
+			return store.GetFileSnapshotsByName(t.Context(), "ns", []string{"hero"})
+		},
+	} {
+		got, err := read()
+		require.NoError(t, err)
+		require.Equal(t, "2", got[0].ResourceVersion)
+		require.Equal(t, "updated", got[0].Body)
+	}
+}
+
+func TestFileSnapshotsRejectUnboundedAndCanceledReads(t *testing.T) {
+	store, err := New()
+	require.NoError(t, err)
+	defer store.Close()
+	_, err = store.GetFileSnapshots(t.Context(), make([]string, datastore.FileSnapshotBatchLimit+1))
+	require.ErrorIs(t, err, datastore.ErrInvalidArgument)
+	_, err = store.GetFileSnapshotsByName(t.Context(), "ns", make([]string, datastore.FileNameSnapshotBatchLimit+1))
+	require.ErrorIs(t, err, datastore.ErrInvalidArgument)
+	_, err = store.GetFileSnapshotsByName(t.Context(), "", nil)
+	require.ErrorIs(t, err, datastore.ErrInvalidArgument)
+	_, err = store.GetFileSnapshotsByName(t.Context(), "ns", []string{""})
+	require.ErrorIs(t, err, datastore.ErrInvalidArgument)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = store.GetFileSnapshots(ctx, []string{"00000000-0000-0000-0000-000000000151"})
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = store.GetFileSnapshotsByName(ctx, "ns", []string{"hero"})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestFileStatusUpdateUsesResourceVersionGuard(t *testing.T) {
 	store, err := New()
 	require.NoError(t, err)

@@ -188,6 +188,18 @@ func (d *InstrumentedDatastore) GetFile(ctx context.Context, id string) (*File, 
 	d.observe("GetFile", start, err)
 	return v, err
 }
+func (d *InstrumentedDatastore) GetFileSnapshots(ctx context.Context, uids []string) ([]*File, error) {
+	start := time.Now()
+	files, err := d.next.GetFileSnapshots(d.withFindingObserver(ctx), uids)
+	d.observe("GetFileSnapshots", start, err)
+	return files, err
+}
+func (d *InstrumentedDatastore) GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*File, error) {
+	start := time.Now()
+	files, err := d.next.GetFileSnapshotsByName(d.withFindingObserver(ctx), namespace, names)
+	d.observe("GetFileSnapshotsByName", start, err)
+	return files, err
+}
 func (d *InstrumentedDatastore) GetFileByName(ctx context.Context, namespace, name string) (*File, error) {
 	start := time.Now()
 	v, err := d.next.GetFileByName(d.withFindingObserver(ctx), namespace, name)

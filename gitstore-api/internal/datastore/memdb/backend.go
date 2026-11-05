@@ -352,6 +352,68 @@ func (m *memdbDatastore) GetFile(_ context.Context, uid string) (*datastore.File
 	return cloneFile(raw.(*datastore.File)), nil
 }
 
+func (m *memdbDatastore) GetFileSnapshots(ctx context.Context, uids []string) ([]*datastore.File, error) {
+	if len(uids) > datastore.FileSnapshotBatchLimit {
+		return nil, datastore.ErrInvalidArgument
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	files := make([]*datastore.File, len(uids))
+	for i, uid := range uids {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if len(uid) != 36 || uuid.Validate(uid) != nil {
+			continue
+		}
+		raw, err := txn.First("file", "id", uid)
+		if err != nil {
+			return nil, err
+		}
+		if raw != nil {
+			files[i] = cloneFile(raw.(*datastore.File))
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func (m *memdbDatastore) GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*datastore.File, error) {
+	if namespace == "" || len(names) > datastore.FileNameSnapshotBatchLimit {
+		return nil, datastore.ErrInvalidArgument
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	files := make([]*datastore.File, len(names))
+	for i, name := range names {
+		if name == "" {
+			return nil, datastore.ErrInvalidArgument
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		raw, err := txn.First("file", "name_namespace", namespace, name)
+		if err != nil {
+			return nil, err
+		}
+		if raw != nil {
+			files[i] = cloneFile(raw.(*datastore.File))
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
 func (m *memdbDatastore) GetFileByName(_ context.Context, namespace, name string) (*datastore.File, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()

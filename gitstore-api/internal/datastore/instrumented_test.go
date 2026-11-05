@@ -67,6 +67,12 @@ func (s *stubDatastore) CreateFile(_ context.Context, _ *datastore.File) error {
 func (s *stubDatastore) GetFile(_ context.Context, _ string) (*datastore.File, error) {
 	return nil, s.getProductErr
 }
+func (s *stubDatastore) GetFileSnapshots(_ context.Context, uids []string) ([]*datastore.File, error) {
+	return make([]*datastore.File, len(uids)), s.getProductErr
+}
+func (s *stubDatastore) GetFileSnapshotsByName(_ context.Context, _ string, names []string) ([]*datastore.File, error) {
+	return make([]*datastore.File, len(names)), s.getProductErr
+}
 func (s *stubDatastore) GetFileByName(_ context.Context, _, _ string) (*datastore.File, error) {
 	return nil, s.getProductErr
 }

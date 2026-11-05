@@ -7,7 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -117,6 +120,242 @@ func (s *scyllaDatastore) GetFile(ctx context.Context, uid string) (*datastore.F
 	}
 	return s.getFileByKey(ctx, idx.Namespace, idx.CreationTimestamp, idx.UID)
 }
+
+const fileSnapshotReadBatchLimit = 16
+
+func (s *scyllaDatastore) GetFileSnapshots(ctx context.Context, uids []string) ([]*datastore.File, error) {
+	if len(uids) > datastore.FileSnapshotBatchLimit {
+		return nil, datastore.ErrInvalidArgument
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	results := make([]*datastore.File, len(uids))
+	keys := make([]gocql.UUID, 0, len(uids))
+	positions := make(map[gocql.UUID][]int)
+	for i, uid := range uids {
+		key, err := gocql.ParseUUID(uid)
+		if err != nil {
+			continue
+		}
+		if _, seen := positions[key]; !seen {
+			keys = append(keys, key)
+		}
+		positions[key] = append(positions[key], i)
+	}
+	readSnapshots := func(namespace string, indices []fileIndexRow) error {
+		rows, err := s.getFileSnapshotRows(ctx, namespace, indices)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			for _, position := range positions[row.UID] {
+				results[position] = fileSnapshotFromRow(&row)
+			}
+		}
+		return nil
+	}
+	batches := make([][]fileIndexRow, (len(keys)+fileSnapshotReadBatchLimit-1)/fileSnapshotReadBatchLimit)
+	readLocator := func(batch int) (string, []fileIndexRow, error) {
+		start := batch * fileSnapshotReadBatchLimit
+		end := min(start+fileSnapshotReadBatchLimit, len(keys))
+		args := make([]any, end-start)
+		expected := make(map[gocql.UUID]bool, len(args))
+		for i, key := range keys[start:end] {
+			args[i], expected[key] = key, true
+		}
+		stmt := "SELECT " + strings.Join(s.fileByUIDTable.Metadata().Columns, ", ") +
+			" FROM files_by_uid WHERE uid IN (" + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + ")"
+		if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&batches[batch]); err != nil {
+			return "", nil, err
+		}
+		fullNamespaceBatch := len(batches[batch]) == fileSnapshotReadBatchLimit
+		for _, index := range batches[batch] {
+			if index.Namespace == "" || !expected[index.UID] {
+				return "", nil, fmt.Errorf("%w: invalid File UID locator", datastore.ErrRepairRequired)
+			}
+			delete(expected, index.UID)
+			if index.Namespace != batches[batch][0].Namespace {
+				fullNamespaceBatch = false
+			}
+		}
+		if fullNamespaceBatch {
+			indices := batches[batch]
+			batches[batch] = nil
+			return indices[0].Namespace, indices, nil
+		}
+		return "", nil, nil
+	}
+	locatorErrors, fullErrors := make([]error, len(batches)), make([]error, len(batches))
+	var authoritativeBatches [][]fileIndexRow
+	var authoritativeErrors []error
+	var nextLocator, nextAuthoritative atomic.Int64
+	var grouped sync.Once
+	var locators, workers sync.WaitGroup
+	locators.Add(len(batches))
+	for range min(8, len(keys)) {
+		workers.Go(func() {
+			for {
+				batch := int(nextLocator.Add(1) - 1)
+				if batch >= len(batches) {
+					break
+				}
+				if err := ctx.Err(); err != nil {
+					locatorErrors[batch] = err
+					locators.Done()
+					continue
+				}
+				namespace, indices, err := readLocator(batch)
+				locatorErrors[batch] = err
+				// Deferred reads must not wait on unrelated authoritative queries.
+				locators.Done()
+				if err == nil && len(indices) != 0 {
+					fullErrors[batch] = readSnapshots(namespace, indices)
+				}
+			}
+			locators.Wait()
+			if ctx.Err() != nil {
+				return
+			}
+			grouped.Do(func() {
+				if errors.Join(locatorErrors...) != nil {
+					return
+				}
+				groups := make(map[string][]fileIndexRow)
+				var order []string
+				for _, indices := range batches {
+					for _, index := range indices {
+						if _, seen := groups[index.Namespace]; !seen {
+							order = append(order, index.Namespace)
+						}
+						groups[index.Namespace] = append(groups[index.Namespace], index)
+					}
+				}
+				for _, namespace := range order {
+					indices := groups[namespace]
+					for start := 0; start < len(indices); start += fileSnapshotReadBatchLimit {
+						authoritativeBatches = append(authoritativeBatches, indices[start:min(start+fileSnapshotReadBatchLimit, len(indices))])
+					}
+				}
+				authoritativeErrors = make([]error, len(authoritativeBatches))
+			})
+			for ctx.Err() == nil {
+				i := int(nextAuthoritative.Add(1) - 1)
+				if i >= len(authoritativeBatches) {
+					return
+				}
+				indices := authoritativeBatches[i]
+				authoritativeErrors[i] = readSnapshots(indices[0].Namespace, indices)
+			}
+		})
+	}
+	workers.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := errors.Join(errors.Join(locatorErrors...), errors.Join(fullErrors...), errors.Join(authoritativeErrors...)); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (s *scyllaDatastore) getFileSnapshotRows(ctx context.Context, namespace string, indices []fileIndexRow) ([]fileRow, error) {
+	expected := make(map[gocql.UUID]time.Time, len(indices))
+	args := make([]any, 0, 1+2*len(indices))
+	args = append(args, namespace)
+	for _, index := range indices {
+		args = append(args, index.CreationTimestamp, index.UID)
+		expected[index.UID] = index.CreationTimestamp
+	}
+	stmt := "SELECT " + strings.Join(s.fileByNamespaceTable.Metadata().Columns, ", ") +
+		" FROM files_by_namespace WHERE namespace=? AND (creation_timestamp,uid) IN (" +
+		strings.TrimSuffix(strings.Repeat("(?,?),", len(indices)), ",") + ")"
+	var rows []fileRow
+	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&rows); err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		created, ok := expected[row.UID]
+		if !ok || row.Namespace != namespace || !row.CreationTimestamp.Equal(created) {
+			return nil, fmt.Errorf("%w: invalid File snapshot identity", datastore.ErrRepairRequired)
+		}
+	}
+	return rows, nil
+}
+
+func fileSnapshotFromRow(row *fileRow) *datastore.File {
+	file := fromFileRow(row)
+	file.Labels, file.Annotations = maps.Clone(file.Labels), maps.Clone(file.Annotations)
+	if file.DeletionTimestamp != nil {
+		deleted := *file.DeletionTimestamp
+		file.DeletionTimestamp = &deleted
+	}
+	return file
+}
+
+func (s *scyllaDatastore) GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*datastore.File, error) {
+	if namespace == "" || len(names) > datastore.FileNameSnapshotBatchLimit {
+		return nil, datastore.ErrInvalidArgument
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	results := make([]*datastore.File, len(names))
+	positions := make(map[string][]int, len(names))
+	args := []any{namespace}
+	for i, name := range names {
+		if name == "" {
+			return nil, datastore.ErrInvalidArgument
+		}
+		if _, seen := positions[name]; !seen {
+			args = append(args, name)
+		}
+		positions[name] = append(positions[name], i)
+	}
+	if len(names) == 0 {
+		return results, nil
+	}
+	stmt := "SELECT " + strings.Join(s.fileByNameTable.Metadata().Columns, ", ") +
+		" FROM files_by_name WHERE namespace=? AND name IN (" +
+		strings.TrimSuffix(strings.Repeat("?,", len(args)-1), ",") + ")"
+	var indices []fileIndexRow
+	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&indices); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(indices) == 0 {
+		return results, nil
+	}
+	expected := make(map[gocql.UUID]string, len(indices))
+	for _, index := range indices {
+		if _, ok := positions[index.Name]; !ok || index.Namespace != namespace {
+			return nil, fmt.Errorf("%w: invalid File name locator", datastore.ErrRepairRequired)
+		}
+		if _, duplicate := expected[index.UID]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate File name locator", datastore.ErrRepairRequired)
+		}
+		expected[index.UID] = index.Name
+	}
+	rows, err := s.getFileSnapshotRows(ctx, namespace, indices)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row.Name != expected[row.UID] {
+			return nil, fmt.Errorf("%w: invalid File snapshot name", datastore.ErrRepairRequired)
+		}
+		for _, position := range positions[row.Name] {
+			results[position] = fileSnapshotFromRow(&row)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 func (s *scyllaDatastore) GetFileByName(ctx context.Context, ns, name string) (*datastore.File, error) {
 	stmt, names := s.fileByNameTable.Get()
 	var idx fileIndexRow

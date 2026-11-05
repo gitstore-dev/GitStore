@@ -436,11 +436,18 @@ func ApplyCategoryTaxonomyStatusPatch(c *CategoryTaxonomy, patch CategoryTaxonom
 	return nil
 }
 
+const FileSnapshotBatchLimit = 250
+const FileNameSnapshotBatchLimit = 4
+
 // FileStore persists File resources.
 type FileStore interface {
 	// File operations
 	CreateFile(ctx context.Context, f *File) error
 	GetFile(ctx context.Context, uid string) (*File, error)
+	// Snapshot reads preserve positions, independently owned duplicates and nil
+	// for absent resources. Infrastructure errors fail the entire bounded read.
+	GetFileSnapshots(ctx context.Context, uids []string) ([]*File, error)
+	GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*File, error)
 	GetFileByName(ctx context.Context, namespace, name string) (*File, error)
 	ListFiles(ctx context.Context, namespace string, page PageParams) (*PageResult[File], error)
 	// UpdateFile replaces a File only when expectedResourceVersion still

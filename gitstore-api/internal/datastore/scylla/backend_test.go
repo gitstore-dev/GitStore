@@ -40,7 +40,7 @@ func TestMain(m *testing.M) {
 	if scyllaAddr == "" {
 		scyllaAddr = "127.0.0.1:9042"
 	}
-	scyllaKeyspace = fmt.Sprintf("gitstore_scylla_test_%d", os.Getpid())
+	scyllaKeyspace = fmt.Sprintf("gitstore_scylla_test_%d_%s", os.Getpid(), strings.ReplaceAll(uuid.NewString(), "-", "")[:16])
 
 	provisionKeyspace(scyllaAddr, scyllaKeyspace)
 	code := m.Run()
@@ -145,6 +145,61 @@ func openRootSession(addr string) (*gocql.Session, error) {
 
 func newTestStore(t *testing.T) datastore.Datastore {
 	return newTestStoreWithWatchBucket(t, 0)
+}
+
+func TestFileSnapshotsPreserveAuthoritativePositionsAndFreshness(t *testing.T) {
+	store := newTestStore(t)
+	file := &datastore.File{
+		UID: uuid.NewString(), Namespace: "snapshots-" + uuid.NewString(), Name: "hero",
+		ResourceVersion: "1", Labels: map[string]string{"team": "original"},
+		Spec: json.RawMessage(`{"type":"hero"}`), Finalizers: []string{"keep"},
+	}
+	require.NoError(t, store.CreateFile(t.Context(), file))
+	missing := uuid.NewString()
+	for _, mode := range []string{"uid", "name"} {
+		t.Run(mode, func(t *testing.T) {
+			read := func() ([]*datastore.File, error) {
+				if mode == "uid" {
+					return store.GetFileSnapshots(t.Context(), []string{file.UID, "invalid", missing, file.UID})
+				}
+				return store.GetFileSnapshotsByName(t.Context(), file.Namespace, []string{"hero", "absent", "missing", "hero"})
+			}
+			got, err := read()
+			require.NoError(t, err)
+			require.Len(t, got, 4)
+			require.Nil(t, got[1])
+			require.Nil(t, got[2])
+			require.Equal(t, file.UID, got[0].UID)
+			require.Equal(t, file.Namespace, got[0].Namespace)
+			got[0].Labels["team"] = "changed"
+			got[0].Spec[0] = '!'
+			got[0].Finalizers[0] = "changed"
+			require.Equal(t, "original", got[3].Labels["team"])
+			require.JSONEq(t, `{"type":"hero"}`, string(got[3].Spec))
+			require.Equal(t, []string{"keep"}, got[3].Finalizers)
+			fresh, err := read()
+			require.NoError(t, err)
+			require.Equal(t, "original", fresh[0].Labels["team"])
+		})
+	}
+	file.ResourceVersion, file.Body = "2", "updated"
+	require.NoError(t, store.UpdateFile(t.Context(), file, "1"))
+	got, err := store.GetFileSnapshots(t.Context(), []string{file.UID})
+	require.NoError(t, err)
+	require.Equal(t, "2", got[0].ResourceVersion)
+	require.Equal(t, "updated", got[0].Body)
+	got, err = store.GetFileSnapshotsByName(t.Context(), file.Namespace, []string{"hero"})
+	require.NoError(t, err)
+	require.Equal(t, "2", got[0].ResourceVersion)
+	require.Equal(t, "updated", got[0].Body)
+	_, err = store.GetFileSnapshots(t.Context(), make([]string, datastore.FileSnapshotBatchLimit+1))
+	require.ErrorIs(t, err, datastore.ErrInvalidArgument)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = store.GetFileSnapshots(ctx, []string{file.UID})
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = store.GetFileSnapshotsByName(ctx, file.Namespace, []string{"hero"})
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func newTestStoreWithWatchBucket(t *testing.T, watchBucketSize int) datastore.Datastore {
