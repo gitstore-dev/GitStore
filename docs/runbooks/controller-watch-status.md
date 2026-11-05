@@ -190,6 +190,10 @@ registration of the exercised kind on both controllers before load and after
 it. Startup polls within the configured wait timeout; post-run checks also
 require distinct process identities. A failed post-run check makes the command
 fail and marks existing run metadata `passed:false`, even if load itself passed.
+The lifecycle verifier also checks both controllers before authoring and when
+accepting reconciliation progress, including externally managed deployments.
+The connected secret scenario retains its bounded recovery wait before the
+initial readiness check.
 
 Credential acquisition failures are shared dependency failures, not evidence
 that an individual resource is invalid. The HTTP/WebSocket client shares a
