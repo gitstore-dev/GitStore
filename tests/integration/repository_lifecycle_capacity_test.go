@@ -302,8 +302,8 @@ func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
 	}
 
 	assertRepositoryCrossReplicaRead(t, cfg, poolPrefix+"1")
-	waitForRepositoryControllerAdvance(t, client, cfg.controllerA, controllerBeforeA)
-	waitForRepositoryControllerAdvance(t, client, cfg.controllerB, controllerBeforeB)
+	controllerAfterA := waitForRepositoryControllerAdvance(t, client, cfg.controllerA, controllerBeforeA)
+	controllerAfterB := waitForRepositoryControllerAdvance(t, client, cfg.controllerB, controllerBeforeB)
 	require.Empty(t, repositoryControllerPoison(t, client, cfg.controllerA))
 	require.Empty(t, repositoryControllerPoison(t, client, cfg.controllerB))
 	metricsEnd := map[string]capacityProcessMetrics{
@@ -348,6 +348,7 @@ func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
 			"adminAuthoringP95Ms": percentileDuration(load.latencies, .95).Milliseconds(), "apiRecoveryMs": recovery.duration.Milliseconds(),
 			"visibilityP95Ms": percentileDuration(latencies, .95).Milliseconds(), "visibilityP99Ms": percentileDuration(latencies, .99).Milliseconds(), "replayEvents": cfg.replayEvents, "replayP95Ms": replayP95.Milliseconds(),
 			"processesBefore": metricsStart, "processesAfter": metricsEnd, "apiInstancesBefore": []string{identityA, identityB},
+			"controllersBefore": []repositoryControllerSample{controllerBeforeA, controllerBeforeB}, "controllersAfter": []repositoryControllerSample{controllerAfterA, controllerAfterB},
 		}))
 	}
 }

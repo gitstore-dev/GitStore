@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -240,7 +241,12 @@ func waitForRepositoryReady(t *testing.T, token, namespace, name string) {
 	}
 }
 
-func requireRepositoryController(t *testing.T, client *http.Client, endpoint string) float64 {
+type repositoryControllerSample struct {
+	InstanceID string  `json:"instanceID"`
+	Successes  float64 `json:"successfulReconciles"`
+}
+
+func requireRepositoryController(t *testing.T, client *http.Client, endpoint string) repositoryControllerSample {
 	t.Helper()
 	response, err := client.Get(endpoint + "/health")
 	require.NoError(t, err)
@@ -257,48 +263,62 @@ func requireRepositoryController(t *testing.T, client *http.Client, endpoint str
 	require.NoError(t, json.Unmarshal(contents, &health))
 	require.True(t, health.CredentialReady, "%s credential source is not ready", endpoint)
 	require.True(t, health.Kinds["Repository"].Registered, "%s has no Repository registration", endpoint)
-	return repositoryControllerSuccessMetric(t, client, endpoint)
+	return readRepositoryControllerSample(t, client, endpoint)
 }
 
-func repositoryControllerSuccessMetric(t *testing.T, client *http.Client, endpoint string) float64 {
+func readRepositoryControllerSample(t *testing.T, client *http.Client, endpoint string) repositoryControllerSample {
 	t.Helper()
 	response, err := client.Get(endpoint + "/metrics")
 	require.NoError(t, err)
 	defer response.Body.Close()
 	require.Equal(t, http.StatusOK, response.StatusCode)
 	scanner := bufio.NewScanner(response.Body)
-	const prefix = `gitstore_controller_reconcile_total{kind="Repository",result="success"} `
+	const counter = `gitstore_controller_reconcile_total{kind="Repository",result="success"} `
+	const identity = `gitstore_controller_process_instance_info{instance_id="`
+	var sample repositoryControllerSample
 	for scanner.Scan() {
-		if strings.HasPrefix(scanner.Text(), prefix) {
-			value, parseErr := strconv.ParseFloat(strings.TrimPrefix(scanner.Text(), prefix), 64)
-			require.NoError(t, parseErr)
-			return value
+		line := scanner.Text()
+		if strings.HasPrefix(line, counter) {
+			sample.Successes, err = strconv.ParseFloat(strings.TrimPrefix(line, counter), 64)
+			require.NoError(t, err)
+		}
+		if strings.HasPrefix(line, identity) {
+			var found bool
+			sample.InstanceID, _, found = strings.Cut(strings.TrimPrefix(line, identity), `"}`)
+			require.True(t, found, "malformed controller process identity metric from %s", endpoint)
 		}
 	}
 	require.NoError(t, scanner.Err())
-	return 0
+	require.NotEmpty(t, sample.InstanceID, "%s does not expose controller process identity", endpoint)
+	return sample
 }
 
 func repositoryControllerIdentity(t *testing.T, client *http.Client, endpoint string) string {
 	t.Helper()
-	response, err := client.Get(endpoint + "/metrics")
-	require.NoError(t, err)
-	defer response.Body.Close()
-	require.Equal(t, http.StatusOK, response.StatusCode)
-	scanner := bufio.NewScanner(response.Body)
-	const prefix = `gitstore_controller_process_instance_info{instance_id="`
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, prefix) {
-			identity, _, found := strings.Cut(strings.TrimPrefix(line, prefix), `"}`)
-			require.True(t, found, "malformed controller process identity metric from %s", endpoint)
-			require.NotEmpty(t, identity)
-			return identity
+	return readRepositoryControllerSample(t, client, endpoint).InstanceID
+}
+
+func TestRepositoryControllerAdvanceAcrossReplacement(t *testing.T) {
+	t.Parallel()
+	var replaced atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/health" {
+			_, _ = io.WriteString(w, `{"credentialReady":true,"kinds":{"Repository":{"registered":true}}}`)
+			return
 		}
-	}
-	require.NoError(t, scanner.Err())
-	t.Fatalf("%s does not expose gitstore_controller_process_instance_info", endpoint)
-	return ""
+		identity, successes := "old-process", 1000
+		if replaced.Load() {
+			identity, successes = "new-process", 1
+		}
+		_, _ = fmt.Fprintf(w, "gitstore_controller_process_instance_info{instance_id=%q} 1\n"+
+			"gitstore_controller_reconcile_total{kind=\"Repository\",result=\"success\"} %d\n", identity, successes)
+	}))
+	defer server.Close()
+	before := requireRepositoryController(t, server.Client(), server.URL)
+	require.Equal(t, "old-process", before.InstanceID)
+	require.Equal(t, float64(1000), before.Successes)
+	replaced.Store(true)
+	waitForRepositoryControllerAdvance(t, server.Client(), server.URL, before)
 }
 
 func TestRepositoryControllerIdentityReadsCollisionSafeMetric(t *testing.T) {
@@ -312,12 +332,42 @@ func TestRepositoryControllerIdentityReadsCollisionSafeMetric(t *testing.T) {
 	require.Equal(t, "controller-process-a", repositoryControllerIdentity(t, server.Client(), server.URL))
 }
 
-func waitForRepositoryControllerAdvance(t *testing.T, client *http.Client, endpoint string, before float64) {
+func (after repositoryControllerSample) advancedFrom(before repositoryControllerSample) bool {
+	if after.InstanceID == "" || before.InstanceID == "" {
+		return false
+	}
+	if after.InstanceID != before.InstanceID {
+		return after.Successes > 0
+	}
+	return after.Successes > before.Successes
+}
+
+func TestRepositoryControllerProgressRequiresSuccessfulWork(t *testing.T) {
+	t.Parallel()
+	before := repositoryControllerSample{InstanceID: "old", Successes: 1000}
+	for _, test := range []struct {
+		name  string
+		after repositoryControllerSample
+		want  bool
+	}{
+		{"same process advanced", repositoryControllerSample{InstanceID: "old", Successes: 1001}, true},
+		{"same process unchanged", repositoryControllerSample{InstanceID: "old", Successes: 1000}, false},
+		{"same process counter reset", repositoryControllerSample{InstanceID: "old", Successes: 1}, false},
+		{"new process completed work", repositoryControllerSample{InstanceID: "new", Successes: 1}, true},
+		{"replacement alone is insufficient", repositoryControllerSample{InstanceID: "new"}, false},
+		{"missing identity", repositoryControllerSample{Successes: 1001}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) { require.Equal(t, test.want, test.after.advancedFrom(before)) })
+	}
+}
+
+func waitForRepositoryControllerAdvance(t *testing.T, client *http.Client, endpoint string, before repositoryControllerSample) repositoryControllerSample {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		if repositoryControllerSuccessMetric(t, client, endpoint) > before {
-			return
+		after := readRepositoryControllerSample(t, client, endpoint)
+		if after.advancedFrom(before) {
+			return after
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("%s did not record a successful Repository reconciliation after the push", endpoint)

@@ -23,6 +23,18 @@ retained dataset receipt contains `verified=true`, `products>=5000000`,
 `categories>=10000`, two distinct `targets` and a SHA-256 `digest`. Inspect actual
 processes and verify the dataset independently; a manifest alone is insufficient.
 
+Use a fresh test-owned native-push repository for a repeatable timed workload;
+retain the datastore baseline and all earlier repository histories. Record the
+repository identity and initial commit count with the configuration. Clones retain
+full history; do not use shallow clones or extend command deadlines to hide setup
+failures from an accumulated fixture.
+
+The default `make test` and `make pr-ready` suites include local endpoint receipt,
+bounded push scheduling and controller counter-reset regressions. Controller
+progress compares one scrape's process identity and success counter: an unchanged
+process must advance, while a replacement must record successful work. Restarting
+without successful work does not pass. Live workloads remain explicit opt-ins.
+
 Acceptance automatically runs the existing repository workload/oracle with its
 own endpoint profile: twenty durable observers and two authoring operations/s,
 plus eight k6 Admin probes/s. It preserves the larger `repository/lifecycle`
