@@ -4,12 +4,12 @@
 package scylla
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"sort"
 	"sync"
 	"time"
 
@@ -24,9 +24,13 @@ const categoryProductsByProductTable = "category_products_by_product"
 const categoryProductShardCount = 32
 
 func categoryProductShard(uid string) int8 {
+	return catalogUIDShard(uid, categoryProductShardCount)
+}
+
+func catalogUIDShard(uid string, count uint32) int8 {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(uid))
-	return int8(h.Sum32() % categoryProductShardCount)
+	return int8(h.Sum32() % count)
 }
 
 type categoryProductRow struct {
@@ -90,8 +94,14 @@ func (s *scyllaDatastore) upsertCategoryProductMembership(ctx context.Context, p
 		if err != nil && !errors.Is(err, gocql.ErrNotFound) {
 			return fmt.Errorf("scylla: read category membership fence: %w", err)
 		}
-		if err == nil && compareResourceVersions(current.ResourceVersion, product.ResourceVersion) >= 0 {
-			return nil
+		if err == nil {
+			switch compareResourceVersions(current.ResourceVersion, product.ResourceVersion) {
+			case 1:
+				return nil
+			case 0:
+				// The reverse write may have survived an interrupted forward write.
+				return s.upsertCategoryProductForward(ctx, product, uid, categoryUID, shard)
+			}
 		}
 		var applied bool
 		if errors.Is(err, gocql.ErrNotFound) {
@@ -139,18 +149,15 @@ func (s *scyllaDatastore) upsertCategoryProductForward(ctx context.Context, prod
 }
 
 func (s *scyllaDatastore) deleteCategoryProductMembership(ctx context.Context, product *datastore.Product, uid gocql.UUID, row categoryProductReverseRow) error {
-	if compareResourceVersions(row.ResourceVersion, product.ResourceVersion) >= 0 {
+	if compareResourceVersions(row.ResourceVersion, product.ResourceVersion) > 0 {
 		return nil
 	}
-	applied, err := s.session.Query("DELETE FROM "+categoryProductsByProductTable+" WHERE namespace=? AND product_uid=? AND category_uid=? IF resource_version=?", nil).WithContext(ctx).Bind(product.Namespace, uid, row.CategoryUID, row.ResourceVersion).ExecCASRelease()
-	if err != nil {
-		return fmt.Errorf("scylla: remove category reverse membership: %w", err)
-	}
-	if !applied {
-		return nil
-	}
+	// Retain the reverse row until forward removal succeeds so a retry can find it.
 	if _, err := s.session.Query("DELETE FROM "+categoryProductsByCategoryTable+" WHERE namespace=? AND category_uid=? AND shard=? AND creation_timestamp=? AND product_uid=? IF resource_version=?", nil).WithContext(ctx).Bind(product.Namespace, row.CategoryUID, row.Shard, product.CreationTimestamp, uid, row.ResourceVersion).ExecCASRelease(); err != nil {
 		return fmt.Errorf("scylla: remove category membership: %w", err)
+	}
+	if _, err := s.session.Query("DELETE FROM "+categoryProductsByProductTable+" WHERE namespace=? AND product_uid=? AND category_uid=? IF resource_version=?", nil).WithContext(ctx).Bind(product.Namespace, uid, row.CategoryUID, row.ResourceVersion).ExecCASRelease(); err != nil {
+		return fmt.Errorf("scylla: remove category reverse membership: %w", err)
 	}
 	return nil
 }
@@ -158,6 +165,13 @@ func (s *scyllaDatastore) deleteCategoryProductMembership(ctx context.Context, p
 func (s *scyllaDatastore) fenceCategoryProductMembership(ctx context.Context, product *datastore.Product, uid gocql.UUID, written map[string]struct{}) error {
 	latest, err := s.GetProduct(ctx, product.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
+		for categoryUID := range written {
+			if err := s.deleteCategoryProductMembership(ctx, product, uid, categoryProductReverseRow{
+				CategoryUID: categoryUID, Shard: categoryProductShard(product.UID), ResourceVersion: product.ResourceVersion,
+			}); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	if err != nil {
@@ -174,9 +188,13 @@ func (s *scyllaDatastore) fenceCategoryProductMembership(ctx context.Context, pr
 	if status.Resolved != nil && status.Resolved.Category != nil {
 		for _, name := range status.Resolved.Category.Path {
 			category, getErr := s.GetCategoryTaxonomyByName(ctx, latest.Namespace, name)
-			if getErr == nil {
-				current[category.UID] = struct{}{}
+			if errors.Is(getErr, datastore.ErrNotFound) {
+				continue
 			}
+			if getErr != nil {
+				return fmt.Errorf("scylla: resolve category for membership fence: %w", getErr)
+			}
+			current[category.UID] = struct{}{}
 		}
 	}
 	for categoryUID := range written {
@@ -204,82 +222,181 @@ func (s *scyllaDatastore) ListCategoryProducts(ctx context.Context, namespace, c
 	if page.Last > 0 {
 		order, relation, cursor = "ASC", ">", page.Before
 	}
-	rows := make([]categoryProductRow, 0, categoryProductShardCount*(limit+1))
-	var rowsMu sync.Mutex
-	var firstErr error
-	var wg sync.WaitGroup
-	var cursorTime time.Time
-	var cursorID gocql.UUID
+	var position *categoryProductRow
 	if cursor != "" {
 		c, err := parsePageCursor(cursor)
 		if err != nil {
 			return nil, datastore.ErrInvalidArgument
 		}
-		cursorID, err = gocql.ParseUUID(c.ID)
+		cursorID, err := gocql.ParseUUID(c.ID)
 		if err != nil {
 			return nil, datastore.ErrInvalidArgument
 		}
-		cursorTime = c.CreatedAt
+		position = &categoryProductRow{CreationTimestamp: c.CreatedAt, ProductUID: cursorID}
 	}
-	for shard := 0; shard < categoryProductShardCount; shard++ {
-		shard := int8(shard)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	items, err := collectCategoryProductPage(ctx, namespace, page.Last > 0, limit, position,
+		func(ctx context.Context, shard int8, position *categoryProductRow) ([]categoryProductRow, error) {
 			stmt := "SELECT creation_timestamp, product_uid FROM " + categoryProductsByCategoryTable + " WHERE namespace=? AND category_uid=? AND shard=?"
 			args := []any{namespace, categoryUID, shard}
-			if cursor != "" {
+			if position != nil {
 				stmt += " AND (creation_timestamp, product_uid) " + relation + " (?, ?)"
-				args = append(args, cursorTime, cursorID)
+				args = append(args, position.CreationTimestamp, position.ProductUID)
 			}
 			stmt += " ORDER BY creation_timestamp " + order + ", product_uid " + order + " LIMIT ?"
 			args = append(args, limit+1)
 			var shardRows []categoryProductRow
 			if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&shardRows); err != nil {
-				rowsMu.Lock()
+				return nil, fmt.Errorf("scylla: list category product shard: %w", err)
+			}
+			return shardRows, nil
+		}, s.GetProduct)
+	if err != nil {
+		return nil, err
+	}
+	return buildPageResult(items, limit, page), nil
+}
+
+func categoryProductRowBefore(left, right categoryProductRow) bool {
+	if left.CreationTimestamp.Equal(right.CreationTimestamp) {
+		return bytes.Compare(left.ProductUID[:], right.ProductUID[:]) < 0
+	}
+	return left.CreationTimestamp.Before(right.CreationTimestamp)
+}
+
+func collectCategoryProductPage(
+	ctx context.Context, namespace string, backward bool, limit int, position *categoryProductRow,
+	fetch func(context.Context, int8, *categoryProductRow) ([]categoryProductRow, error),
+	hydrate func(context.Context, string) (*datastore.Product, error),
+) ([]*datastore.Product, error) {
+	return collectProductProjectionPage(ctx, namespace, backward, limit, position, categoryProductShardCount, limit+1, fetch,
+		func(ctx context.Context, row categoryProductRow) (*datastore.Product, error) {
+			return hydrate(ctx, row.ProductUID.String())
+		})
+}
+
+const productProjectionHydrationConcurrency = 16
+
+func collectProductProjectionPage(
+	ctx context.Context, namespace string, backward bool, limit int, position *categoryProductRow, shardCount, shardPageSize int,
+	fetch func(context.Context, int8, *categoryProductRow) ([]categoryProductRow, error),
+	hydrate func(context.Context, categoryProductRow) (*datastore.Product, error),
+) ([]*datastore.Product, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	type shardPage struct {
+		rows []categoryProductRow
+		next int
+		end  bool
+	}
+	shards := make([]shardPage, shardCount)
+	var firstErr error
+	var errMu sync.Mutex
+	var wg sync.WaitGroup
+	for shard := range shards {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rows, err := fetch(ctx, int8(shard), position)
+			if err != nil {
+				errMu.Lock()
 				if firstErr == nil {
 					firstErr = err
 				}
-				rowsMu.Unlock()
+				errMu.Unlock()
 				return
 			}
-			rowsMu.Lock()
-			rows = append(rows, shardRows...)
-			rowsMu.Unlock()
+			shards[shard] = shardPage{rows: rows, end: len(rows) < shardPageSize}
 		}()
 	}
 	wg.Wait()
 	if firstErr != nil {
-		return nil, fmt.Errorf("scylla: list category products: %w", firstErr)
+		return nil, firstErr
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].CreationTimestamp.Equal(rows[j].CreationTimestamp) {
-			return rows[i].ProductUID.String() > rows[j].ProductUID.String()
-		}
-		return rows[i].CreationTimestamp.After(rows[j].CreationTimestamp)
-	})
-	if page.Last > 0 && len(rows) > limit+1 {
-		rows = rows[len(rows)-(limit+1):]
+	queries, lookups := shardCount, 0
+	items := make([]*datastore.Product, 0, limit+1)
+	seen := make(map[string]struct{}, limit+1)
+	type pendingHydration struct {
+		row     categoryProductRow
+		product *datastore.Product
+		err     error
+		ready   chan struct{}
 	}
-	if page.Last == 0 && len(rows) > limit+1 {
-		rows = rows[:limit+1]
-	}
-	items := make([]*datastore.Product, 0, len(rows))
-	for _, row := range rows {
-		p, err := s.GetProduct(ctx, row.ProductUID.String())
-		if err == nil && p.Namespace == namespace {
-			items = append(items, p)
-		} else if err != nil && err != datastore.ErrNotFound {
+	pending := make([]*pendingHydration, 0, productProjectionHydrationConcurrency)
+	exhausted := false
+	defer wg.Wait()
+	for len(items) < limit+1 {
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-	}
-	if page.Last > 0 {
-		sort.Slice(items, func(i, j int) bool {
-			if items[i].CreationTimestamp.Equal(items[j].CreationTimestamp) {
-				return items[i].UID > items[j].UID
+		// Pending rows reserve lookahead slots even when their lookups finish out of order.
+		for !exhausted && len(pending) < productProjectionHydrationConcurrency && len(items)+len(pending) < limit+1 {
+			selected := -1
+			for shard := range shards {
+				state := &shards[shard]
+				if state.next == len(state.rows) && !state.end {
+					if queries >= projectionListQueryBudget {
+						return nil, fmt.Errorf("%w: product projection listing exceeds query budget; repair stale projections", datastore.ErrProjectionNotReady)
+					}
+					last := state.rows[len(state.rows)-1]
+					rows, err := fetch(ctx, int8(shard), &last)
+					queries++
+					if err != nil {
+						return nil, err
+					}
+					*state = shardPage{rows: rows, end: len(rows) < shardPageSize}
+				}
+				if state.next == len(state.rows) {
+					continue
+				}
+				if selected < 0 ||
+					(backward && categoryProductRowBefore(state.rows[state.next], shards[selected].rows[shards[selected].next])) ||
+					(!backward && categoryProductRowBefore(shards[selected].rows[shards[selected].next], state.rows[state.next])) {
+					selected = shard
+				}
 			}
-			return items[i].CreationTimestamp.After(items[j].CreationTimestamp)
-		})
+			if selected < 0 {
+				exhausted = true
+				break
+			}
+			if lookups >= projectionListLookupBudget {
+				return nil, fmt.Errorf("%w: product projection listing exceeds lookup budget; repair stale projections", datastore.ErrProjectionNotReady)
+			}
+			state := &shards[selected]
+			work := &pendingHydration{row: state.rows[state.next], ready: make(chan struct{})}
+			state.next++
+			pending = append(pending, work)
+			lookups++
+			wg.Go(func() {
+				work.product, work.err = hydrate(ctx, work.row)
+				close(work.ready)
+			})
+		}
+		if len(pending) == 0 {
+			break
+		}
+		work := pending[0]
+		<-work.ready
+		copy(pending, pending[1:])
+		pending[len(pending)-1] = nil
+		pending = pending[:len(pending)-1]
+		product, err, row := work.product, work.err, work.row
+		if errors.Is(err, datastore.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("scylla: hydrate listed product: %w", err)
+		}
+		if product.UID == row.ProductUID.String() && product.Namespace == namespace && product.CreationTimestamp.Equal(row.CreationTimestamp) {
+			if _, duplicate := seen[product.UID]; duplicate {
+				return nil, fmt.Errorf("%w: duplicate product projection; repair stale projections", datastore.ErrProjectionNotReady)
+			}
+			seen[product.UID] = struct{}{}
+			items = append(items, product)
+		}
 	}
-	return buildPageResult(items, limit, page), nil
+	if backward {
+		reverseRows(items)
+	}
+	return items, nil
 }

@@ -63,8 +63,10 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 
 	// Verify representative lookup tables exist.
 	for _, expectedTable := range []string{
-		"products_by_namespace",
-		"products_by_name",
+		"products_by_key",
+		"products_by_identity",
+		"products_by_namespace_shard",
+		"namespace_catalog_fences_by_uid",
 		"products_by_uid",
 		"category_taxonomies_by_uid",
 		"namespaces_by_uid",
@@ -159,7 +161,7 @@ func TestRunMigrations_CanonicalEnvelopeColumnsMatch(t *testing.T) {
 	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), zap.NewNop()))
 
 	tables := []string{
-		"products_by_namespace",
+		"products_by_key",
 		"product_variants_by_namespace",
 		"collections_by_namespace",
 		"category_taxonomies_by_namespace",

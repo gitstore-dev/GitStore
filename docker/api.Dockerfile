@@ -12,6 +12,7 @@ ENV GOWORK=off
 COPY gitstore-api/go.mod gitstore-api/go.sum ./
 COPY shared/secretmaterial/go.mod /build/shared/secretmaterial/go.mod
 COPY shared/observability/go.mod /build/shared/observability/go.mod
+COPY shared/scylla-cdc-go/go.mod /build/shared/scylla-cdc-go/go.mod
 
 # Download dependencies
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -21,6 +22,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY gitstore-api/ ./
 COPY shared/secretmaterial/ /build/shared/secretmaterial/
 COPY shared/observability/ /build/shared/observability/
+COPY shared/scylla-cdc-go/ /build/shared/scylla-cdc-go/
 COPY shared/schemas /build/shared/schemas
 
 # Build application

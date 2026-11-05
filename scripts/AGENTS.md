@@ -9,6 +9,8 @@ container wiring and configuration.
 - Keep command documentation in the relevant README and scoped instructions
   synchronized with supported behavior. Do not describe a proposed command
   as implemented.
+- Existing `make build`, `make test`, `make lint` and `make pr-ready` include
+  the pinned `shared/scylla-cdc-go` reader patch alongside the other Go modules.
 - `make git`, `make api` and `make controller` run native services in the
   foreground. `make dev` uses the existing native startup helper and shutdown
   trapping. Follow its current credential prerequisites rather than

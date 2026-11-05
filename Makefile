@@ -9,7 +9,7 @@ CONTROLLER_MANAGER_DIR := $(ROOT)/gitstore-controller-manager
 GIT_SERVICE_DIR := $(ROOT)/gitstore-git-service
 OIDC_BRIDGE_DIR := $(ROOT)/gitstore-oidc-bridge
 SECRET_MATERIAL_DIR := $(ROOT)/shared/secretmaterial
-GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR) $(ROOT)/shared/observability
+GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR) $(ROOT)/shared/observability $(ROOT)/shared/scylla-cdc-go
 
 API_ENV_FILE ?= $(API_DIR)/.env
 CONFIG_FILE ?= ./config/config.toml

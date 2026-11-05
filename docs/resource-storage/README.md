@@ -50,6 +50,53 @@ projections and hydrate only the requested page. Connections do not expose a
 buckets, which this pagination model is specifically designed to avoid.
 Fetch-all-then-sort is not an accepted pagination implementation.
 
+### Product partitions and catalog fencing
+
+Product envelopes reside in `products_by_key`, with the complete
+`(namespace, creation_timestamp, uid)` key forming one partition. Names are
+reserved in resource-sized `products_by_identity` partitions.
+`products_by_namespace_shard` contains only listing keys distributed across
+64 stable shards; `products_by_uid` locates an envelope. Forward and backward
+pages merge these ordered shards and hydrate only a bounded window of at most
+16 rows, with at most 256 projection queries and 4096 envelope lookups.
+Missing or mismatched rows are skipped within those budgets. Errors and budget
+exhaustion fail the page, rather than returning a partial success.
+
+Product full-image CDC watches `products_by_key`. Every resource transition
+in a bounded multi-row CDC frame must enter the shared durable watch journal
+before its source position is checkpointed.
+The pinned CDC reader includes a minimal shutdown patch: cancellation and
+consumer errors stop the generation fetcher as well as stream workers, avoiding
+a queued-generation deadlock during reader replacement. Native and container
+API builds use the same local module; standalone race regressions cover its
+shutdown paths.
+
+Catalog and parent lifecycle mutations share a non-expiring, exact-epoch
+reservation in `namespace_catalog_fences_by_uid`. These coordination writes
+do not produce Namespace CDC. Repository creation retains its independent
+Namespace counter. Ambiguous outcomes retain the catalog reservation; repair
+requires quiescent writers and uses the audited epoch and pending value so a
+stale plan cannot clear a newer holder.
+
+Migration `013_product_partitions_and_catalog_fences.cql` adds the tables and
+disables CDC on the unused legacy Product table without changing checksums of
+`002_namespace.cql` or `005_product.cql`, deleting rows, or transferring data.
+Existing empty keyspaces can apply the incremental migration. A populated
+legacy Product keyspace requires an explicitly planned offline cutover to a
+fresh keyspace and reseeding from its preserved source data. API startup and
+projection repair refuse populated legacy Product tables before proceeding.
+Preserve the original keyspace and recovery backups; do not edit migration
+ledgers or discard an existing catalog to bypass this check.
+Keyspaces created from an edited `002`/`005` baseline also retain incompatible
+migration checksums, even if their Product table names match. Preserve those
+keyspaces unchanged and plan a separate explicit cutover rather than rewriting
+their recorded history.
+
+All old-schema API writers and CDC readers must stop before cutover. Mixing
+legacy Product writers or old Namespace-fence binaries with these writers is
+not supported. This change does not provide automatic data conversion,
+old-schema rolling upgrades, or production capacity acceptance.
+
 The resource list is anchored in the Kubernetes-style frontmatter initiative
 tracked by `gitstore-dev/GitStore#40`. That initiative currently covers
 `Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`, `Translation`,

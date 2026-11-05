@@ -68,6 +68,7 @@ type namespaceRepositoryFence struct {
 	PendingRepositoryCreations *int64     `db:"pending_repository_creations"`
 	DeletionTimestamp          *time.Time `db:"deletion_timestamp"`
 	Status                     *string    `db:"status"`
+	WatchCommitted             *bool      `db:"watch_committed"`
 }
 
 func (f namespaceRepositoryFence) hasDeletionIntent() bool {
@@ -166,6 +167,19 @@ func (s *scyllaDatastore) completeNamespaceRepositoryRepair(
 	repair NamespaceRepositoryFenceRepair,
 ) error {
 	uid := mustParseUUID(repair.UID)
+	if repair.Catalog {
+		applied, err := s.session.Query(
+			"UPDATE "+namespaceCatalogFencesTable+" SET pending=? WHERE uid=? IF epoch=? AND pending=?", nil,
+		).WithContext(ctx).Idempotent(false).RetryPolicy(&gocql.SimpleRetryPolicy{}).
+			Bind(int64(0), uid, repair.RepositoryCreationEpoch, repair.PendingRepositoryCreations).ExecCASRelease()
+		if err != nil {
+			return fmt.Errorf("scylla: complete namespace catalog repair: %w", err)
+		}
+		if !applied {
+			return datastore.ErrConflict
+		}
+		return nil
+	}
 	applied, err := s.session.Query(
 		"UPDATE namespaces_by_uid SET pending_repository_creations=? WHERE uid=? "+
 			"IF repository_creation_epoch=? AND pending_repository_creations=? AND deletion_timestamp=?",
@@ -193,13 +207,16 @@ func (s *scyllaDatastore) loadNamespaceRepositoryFence(ctx context.Context, name
 	}
 	var fence namespaceRepositoryFence
 	if err := s.session.Query(
-		"SELECT repository_creation_epoch, pending_repository_creations, deletion_timestamp, status FROM namespaces_by_uid WHERE uid=?",
+		"SELECT repository_creation_epoch, pending_repository_creations, deletion_timestamp, status, watch_committed FROM namespaces_by_uid WHERE uid=?",
 		nil,
 	).WithContext(ctx).Bind(uid).GetRelease(&fence); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return namespaceRepositoryFence{}, fmt.Errorf("%w: namespace uid %s", datastore.ErrNotFound, namespaceUID)
 		}
 		return namespaceRepositoryFence{}, fmt.Errorf("scylla: load namespace repository fence: %w", err)
+	}
+	if fence.RepositoryCreationEpoch == nil || fence.PendingRepositoryCreations == nil {
+		return namespaceRepositoryFence{}, fmt.Errorf("%w: namespace uid %s has an uninitialized repository fence", datastore.ErrRepairRequired, namespaceUID)
 	}
 	return fence, nil
 }
@@ -237,39 +254,59 @@ func (s *scyllaDatastore) reserveNamespaceRepository(ctx context.Context, namesp
 	return datastore.ErrConflict
 }
 
-// Catalog and repository lifecycle writes share an exclusive reservation of
-// the existing Namespace child fence. No expiry can release an in-flight
-// writer: ambiguous outcomes retain the reservation for projection repair.
-func (s *scyllaDatastore) reserveNamespaceCatalog(ctx context.Context, namespaceUID string, allowTerminating bool) error {
+// Coordination is separate from watched Namespace rows. No expiry can release
+// an in-flight writer: ambiguous outcomes retain the fence for offline repair.
+func (s *scyllaDatastore) reserveNamespaceCatalog(ctx context.Context, namespaceUID string, allowTerminating bool) (int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, namespaceCatalogReservationTimeout)
 	defer cancel()
 	uid := mustParseUUID(namespaceUID)
 	delay := 10 * time.Millisecond
 	for {
-		fence, err := s.loadNamespaceRepositoryFence(ctx, namespaceUID)
+		fence, err := s.loadNamespaceCatalogFence(ctx, uid)
 		if err != nil {
-			return err
+			return 0, err
 		}
-		if !allowTerminating && (fence.DeletionTimestamp != nil || fence.hasDeletionIntent()) {
-			return datastore.ErrNamespaceNotActive
-		}
-		if fence.pending() == 0 {
+		if fence.Pending == 0 {
 			applied, err := s.session.Query(
-				"UPDATE namespaces_by_uid SET repository_creation_epoch=?, pending_repository_creations=? WHERE uid=? "+
-					"IF repository_creation_epoch=? AND pending_repository_creations=? AND deletion_timestamp=? AND status=?", nil,
-			).WithContext(ctx).Bind(fence.epoch()+1, int64(1), uid, fence.expectedEpoch(), fence.expectedPending(), fence.DeletionTimestamp, fence.Status).ExecCASRelease()
+				"UPDATE "+namespaceCatalogFencesTable+" SET epoch=?,pending=? WHERE uid=? IF epoch=? AND pending=?", nil,
+			).WithContext(ctx).Idempotent(false).RetryPolicy(&gocql.SimpleRetryPolicy{}).
+				Bind(fence.Epoch+1, int64(1), uid, fence.Epoch, int64(0)).ExecCASRelease()
 			if err != nil {
-				return err
+				return 0, datastore.NewRepairRequiredError(datastore.MutationStep{
+					Operation: "catalog_lifecycle", ResourceKind: "Namespace", ResourceUID: namespaceUID,
+					Projection: namespaceCatalogFencesTable, Action: "reserve",
+				}, err, nil)
 			}
 			if applied {
-				return nil
+				parent, parentErr := s.loadNamespaceRepositoryFence(ctx, namespaceUID)
+				if parentErr == nil && parent.WatchCommitted != nil && !*parent.WatchCommitted {
+					parentErr = datastore.ErrNotFound
+				}
+				if parentErr == nil && !allowTerminating && (parent.DeletionTimestamp != nil || parent.hasDeletionIntent()) {
+					parentErr = datastore.ErrNamespaceNotActive
+				}
+				if parentErr == nil && parent.pending() == 0 {
+					return fence.Epoch + 1, nil
+				}
+				releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceRepositoryReleaseTimeout)
+				releaseErr := s.releaseNamespaceCatalog(releaseCtx, namespaceUID, fence.Epoch+1)
+				releaseCancel()
+				if releaseErr != nil {
+					return 0, datastore.NewRepairRequiredError(datastore.MutationStep{
+						Operation: "catalog_lifecycle", ResourceKind: "Namespace", ResourceUID: namespaceUID,
+						Projection: namespaceCatalogFencesTable, Action: "release_reservation",
+					}, parentErr, releaseErr)
+				}
+				if parentErr != nil {
+					return 0, parentErr
+				}
 			}
 		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return 0, ctx.Err()
 		case <-timer.C:
 		}
 		if delay < 100*time.Millisecond {
@@ -279,15 +316,22 @@ func (s *scyllaDatastore) reserveNamespaceCatalog(ctx context.Context, namespace
 }
 
 func (s *scyllaDatastore) withNamespaceCatalogFence(ctx context.Context, namespace string, allowTerminating bool, operation func() error) error {
-	ns, err := s.GetNamespaceByName(ctx, namespace)
+	uid, err := s.getNamespaceUIDByName(ctx, namespace)
 	if err != nil {
 		return err
 	}
+	var epoch int64
 	return executeNamespaceRepositoryReservation(ctx,
-		func() error { return s.reserveNamespaceCatalog(ctx, ns.UID, allowTerminating) },
-		func(releaseCtx context.Context) error { return s.releaseNamespaceRepository(releaseCtx, ns.UID) },
+		func() error {
+			var err error
+			epoch, err = s.reserveNamespaceCatalog(ctx, uid.String(), allowTerminating)
+			return err
+		},
+		func(releaseCtx context.Context) error {
+			return s.releaseNamespaceCatalog(releaseCtx, uid.String(), epoch)
+		},
 		operation,
-		datastore.MutationStep{Operation: "catalog_lifecycle", ResourceKind: "Namespace", ResourceUID: ns.UID, Projection: "namespaces_by_uid.pending_repository_creations", LookupKey: namespace},
+		datastore.MutationStep{Operation: "catalog_lifecycle", ResourceKind: "Namespace", ResourceUID: uid.String(), Projection: namespaceCatalogFencesTable, LookupKey: namespace},
 		"catalog lifecycle mutation committed",
 	)
 }

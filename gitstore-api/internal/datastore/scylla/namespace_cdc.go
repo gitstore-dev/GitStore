@@ -249,6 +249,7 @@ func (c *namespaceCDCConsumer) Empty(ctx context.Context, ackTime gocql.UUID) er
 
 type namespaceCDCSequenceRequest struct {
 	change        watchjournal.Change
+	changes       []watchjournal.Change
 	cdcTime       gocql.UUID
 	streamID      string
 	progressOnly  bool
@@ -319,6 +320,9 @@ func (s *namespaceCDCSequencer) Submit(ctx context.Context, request namespaceCDC
 	if s == nil || s.materializer == nil || request.markProgress == nil {
 		return fmt.Errorf("namespace CDC sequencer is not configured")
 	}
+	if len(request.changes) > catalogCDCMaxRowsPerChange {
+		return fmt.Errorf("%w: CDC frame exceeds %d resources", datastore.ErrNamespaceWatchDiscontinuity, catalogCDCMaxRowsPerChange)
+	}
 	return s.send(ctx, namespaceCDCSequenceMessage{kind: namespaceCDCEnqueue, streamID: request.streamID, request: request})
 }
 
@@ -367,6 +371,7 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 	active := make(map[string]int)
 	watermarks := make(map[string]gocql.UUID)
 	pending := make([]namespaceCDCSequenceRequest, 0, 256)
+	pendingRecords := 0
 	var arrivalNumber uint64
 	publishedThrough := s.publishedThrough
 	hasPublished := s.hasPublished
@@ -455,7 +460,8 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 					return err
 				}
 				pending = append(pending, message.request)
-				if len(pending) > namespaceCDCPendingLimit {
+				pendingRecords += max(1, len(message.request.changes))
+				if pendingRecords > namespaceCDCPendingLimit {
 					err := fmt.Errorf("namespace CDC sequencer exceeded %d pending records", namespaceCDCPendingLimit)
 					message.result <- err
 					return err
@@ -500,7 +506,11 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 				return err
 			}
 			if publish && !request.progressOnly {
-				changes = append(changes, request.change)
+				if len(request.changes) > 0 {
+					changes = append(changes, request.changes...)
+				} else {
+					changes = append(changes, request.change)
+				}
 				batchFrontier = request.cdcTime
 				batchHasPublished = true
 			}
@@ -542,6 +552,9 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 			}
 			publishedThrough = batchFrontier
 			hasPublished = batchHasPublished
+			for _, request := range pending[:published] {
+				pendingRecords -= max(1, len(request.changes))
+			}
 			pending = retainUnpublishedCDCRequests(pending, published)
 		}
 	}
