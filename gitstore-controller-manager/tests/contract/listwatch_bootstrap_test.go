@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,8 +17,13 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
+	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
+	repositorycontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/repository"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
 )
 
@@ -31,6 +37,93 @@ func widgetKey(w widget) types.WorkItemKey {
 }
 
 func widgetRevision(w widget) string { return w.ResourceVersion }
+
+func TestDiskConsumedSnapshotsAcrossReplicaReplacement(t *testing.T) {
+	for _, kind := range []string{"Namespace", "Repository"} {
+		for _, legacy := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/legacy=%t", kind, legacy), func(t *testing.T) {
+				for replica := range 2 {
+					key := types.WorkItemKey{Kind: kind, Name: "default"}
+					if kind == "Repository" {
+						key.Namespace, key.Name = "shop", repositorycontroller.SystemRepositoryName
+					}
+					snapshot := map[string]any{
+						"UID": "current-uid", "Name": key.Name, "Namespace": key.Namespace,
+						"ResourceVersion": "7", "Generation": 3,
+						"Status": map[string]any{"lastAppliedRevision": "not-authored"},
+					}
+					revision := "main@sha1:" + strings.Repeat("a", 40)
+					if !legacy {
+						snapshot["Revision"] = revision
+					}
+					dir := t.TempDir()
+					store, err := checkpoint.OpenDiskStore(dir, kind)
+					require.NoError(t, err)
+					generation, err := store.BeginSnapshot(t.Context())
+					require.NoError(t, err)
+					data, err := json.Marshal(snapshot)
+					require.NoError(t, err)
+					require.NoError(t, store.PutSnapshotPage(t.Context(), generation,
+						[]checkpoint.DiskItem{{Key: key, Version: "7", Value: data}}))
+					require.NoError(t, store.FinishSnapshot(t.Context(), generation, "cursor"))
+					require.NoError(t, store.Close())
+					store, err = checkpoint.OpenDiskStore(dir, kind)
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+					recorder := tracetest.NewSpanRecorder()
+					provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+					t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+					ctx, span := provider.Tracer("test").Start(t.Context(), "controller.reconcile")
+					var result types.ReconcileResult
+					if kind == "Namespace" {
+						gate := cache.New[namespacecontroller.Namespace]()
+						gate.MarkSynced()
+						runner := &listwatch.Runner[namespacecontroller.Namespace]{
+							Kind: kind, Disk: store, Cache: gate,
+							KeyFunc: func(n namespacecontroller.Namespace) types.WorkItemKey {
+								return types.WorkItemKey{Kind: kind, Name: n.Name}
+							},
+							RevisionFunc: func(n namespacecontroller.Namespace) string { return n.ResourceVersion },
+						}
+						result = namespacecontroller.NewReconcilerWithLookup(runner.Lookup, nil, nil, nil).Reconcile(ctx, key)
+					} else {
+						gate := cache.New[repositorycontroller.Repository]()
+						gate.MarkSynced()
+						runner := &listwatch.Runner[repositorycontroller.Repository]{
+							Kind: kind, Disk: store, Cache: gate,
+							KeyFunc: func(r repositorycontroller.Repository) types.WorkItemKey {
+								return types.WorkItemKey{Kind: kind, Namespace: r.Namespace, Name: r.Name}
+							},
+							RevisionFunc: func(r repositorycontroller.Repository) string { return r.ResourceVersion },
+						}
+						result = repositorycontroller.NewReconcilerWithLookup(runner.Lookup, nil, nil, nil).Reconcile(ctx, key)
+					}
+					span.End()
+					require.IsType(t, types.Success{}, result)
+					require.Len(t, recorder.Ended(), 1)
+					events := recorder.Ended()[0].Events()
+					require.Len(t, events, 1, "replica %d must observe its restored projection", replica)
+					require.Equal(t, "controller.reconcile.snapshot", events[0].Name)
+					got := make(map[string]attribute.Value)
+					for _, attr := range events[0].Attributes {
+						got[string(attr.Key)] = attr.Value
+					}
+					if legacy {
+						revision = ""
+					}
+					require.Equal(t, map[string]attribute.Value{
+						"resource.uid":              attribute.StringValue("current-uid"),
+						"resource.resource_version": attribute.StringValue("7"),
+						"resource.generation":       attribute.Int64Value(3),
+						"resource.revision":         attribute.StringValue(revision),
+						"resource.snapshot.exact":   attribute.BoolValue(!legacy),
+					}, got)
+				}
+			})
+		}
+	}
+}
 
 type streamedWidgetListWatcher struct {
 	*stubListWatcher[widget]
