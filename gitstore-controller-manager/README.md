@@ -34,6 +34,13 @@ status and lifecycle paths rely on API-side optimistic concurrency, conflict
 requeues and idempotent operations; those guarantees must be verified for each
 new reconciler and its downstream operations.
 
+Category status-version conflicts retain pending work and retry after a bounded
+delay, without consuming the failure budget while waiting for a newer watch
+snapshot. The persisted obligation and retry deadline survive replacement on
+the same replica's checkpoint root. Authorization denials and other status-write
+errors still use the normal retry/quarantine policy; conflict recovery never
+bypasses the API's version check.
+
 Use separate filesystem checkpoint roots per concurrent replica, as
 `compose.capacity.yml` does. Atomic rename prevents partial files; it is not
 cross-process checkpoint coordination or a monotonic compare-and-swap.
