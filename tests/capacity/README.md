@@ -378,6 +378,11 @@ replacement, evidence capture, and cleanup. Production mode does not create a
 local stack; point it at an externally managed topology with the documented
 `REPOSITORY_*` and `CAPACITY_*` variables. The managed alpha topology is
 defined in the shared `compose.capacity.yml` capacity overlay.
+Both controllers must report boolean readiness, credential readiness and
+registration of the exercised kind before load and after it. Startup polls
+within `REPOSITORY_CAPACITY_WAIT_SECONDS` (default 300 seconds). Failed post-run
+readiness or process-identity validation fails the command and marks existing
+`metadata.json` as failed, even when the load phase passed.
 
 When a load balancer or local container runtime buffers WebSocket traffic,
 point `REPOSITORY_OVERFLOW_API` at a reader-only API replica on the same

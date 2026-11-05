@@ -18,7 +18,40 @@ chmod +x "${test_dir}/bin/docker"
 cat >"${test_dir}/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 case "${*: -1}" in
-  */health) printf '%s\n' '{"credentialReady":true,"kinds":{"Repository":{"registered":true}}}' ;;
+  */health)
+    if [[ -n "${TEST_CAPACITY_HEALTH_DIR:-}" ]]; then
+      port="${*: -1}"
+      port="${port##*:}"
+      port="${port%%/*}"
+      phase=before
+      [[ ! -f "${TEST_CAPACITY_HEALTH_DIR}/after" ]] || phase=after
+      if [[ "${phase}" == before && -f "${TEST_CAPACITY_HEALTH_DIR}/recover-${port}" &&
+            ! -f "${TEST_CAPACITY_HEALTH_DIR}/seen-${port}" ]]; then
+        touch "${TEST_CAPACITY_HEALTH_DIR}/seen-${port}"
+        printf '%s\n' '{"ready":false,"credentialReady":true,"kinds":{"Repository":{"registered":true}}}'
+        exit 0
+      fi
+      cat "${TEST_CAPACITY_HEALTH_DIR}/${phase}-${port}.json"
+      [[ ! -f "${TEST_CAPACITY_HEALTH_DIR}/http-error-${phase}-${port}" ]] || exit 22
+      exit 0
+    fi
+    printf '%s\n' '{"ready":true,"credentialReady":true,"kinds":{"Repository":{"registered":true}}}'
+    ;;
+  */metrics)
+    port="${*: -1}"
+    port="${port##*:}"
+    port="${port%%/*}"
+    if [[ -n "${TEST_CAPACITY_HEALTH_DIR:-}" ]]; then
+      [[ ! -f "${TEST_CAPACITY_HEALTH_DIR}/identity-missing-after-${port}" ]] || exit 0
+      if [[ -f "${TEST_CAPACITY_HEALTH_DIR}/identity-same-after-${port}" ]]; then
+        printf 'gitstore_controller_process_instance_info{instance_id="shared-controller"} 1\n'
+        exit 0
+      fi
+    fi
+    printf 'gitstore_controller_process_instance_info{instance_id="controller-%s"} 1\n' "${port}"
+    [[ -z "${TEST_CAPACITY_HEALTH_DIR:-}" ||
+       ! -f "${TEST_CAPACITY_HEALTH_DIR}/metrics-error-after-${port}" ]] || exit 22
+    ;;
   *) printf '\n' ;;
 esac
 EOF
@@ -184,6 +217,107 @@ grep -q -- 'logs --no-color$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'down -v --remove-orphans$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 [[ -f "${test_dir}/failed-state/compose-failure-ps.log" ]]
 [[ -f "${test_dir}/failed-state/compose-failure.log" ]]
+
+cat >"${test_dir}/bin/healthy-capacity-runner" <<'EOF'
+#!/usr/bin/env bash
+until [[ -r "${REPOSITORY_CAPACITY_WATCHER_READY_FILE}" ]]; do sleep 0.01; done
+metadata_dir="${CAPACITY_EVIDENCE_DIR}/repository/lifecycle/alpha/${CAPACITY_RUN_ID}"
+mkdir -p "${metadata_dir}"
+printf '%s\n' '{"passed":true,"fixture":"preserved"}' >"${metadata_dir}/metadata.json"
+touch "${TEST_CAPACITY_HEALTH_DIR}/after"
+EOF
+chmod +x "${test_dir}/bin/healthy-capacity-runner"
+mkdir -p "${test_dir}/watcher-state"
+printf 'token\n' >"${test_dir}/watcher-state/token"
+healthy='{"ready":true,"credentialReady":true,"kinds":{"Repository":{"registered":true}}}'
+for port in 5001 5002; do
+  for readiness in false missing string credential registration malformed empty http-error metrics-error identity-missing identity-same; do
+    case "${readiness}" in
+      false) unhealthy='{"ready":false,"credentialReady":true,"kinds":{"Repository":{"registered":true}}}' ;;
+      missing) unhealthy='{"credentialReady":true,"kinds":{"Repository":{"registered":true}}}' ;;
+      string) unhealthy='{"ready":"true","credentialReady":true,"kinds":{"Repository":{"registered":true}}}' ;;
+      credential) unhealthy='{"ready":true,"credentialReady":false,"kinds":{"Repository":{"registered":true}}}' ;;
+      registration) unhealthy='{"ready":true,"credentialReady":true,"kinds":{"Repository":{"registered":false}}}' ;;
+      malformed) unhealthy='{' ;;
+      empty) unhealthy='' ;;
+      http-error|metrics-error|identity-missing|identity-same) unhealthy="${healthy}" ;;
+    esac
+    for phase in before after; do
+      case "${readiness}/${phase}" in
+        metrics-error/before|identity-missing/before|identity-same/before) continue ;;
+      esac
+      health_dir="${test_dir}/health-${port}-${readiness}-${phase}"
+      mkdir -p "${health_dir}"
+      for controller_port in 5001 5002; do
+        printf '%s\n' "${healthy}" >"${health_dir}/before-${controller_port}.json"
+        printf '%s\n' "${healthy}" >"${health_dir}/after-${controller_port}.json"
+      done
+      printf '%s\n' "${unhealthy}" >"${health_dir}/${phase}-${port}.json"
+      [[ "${readiness}" != http-error ]] || touch "${health_dir}/http-error-${phase}-${port}"
+      case "${readiness}" in
+        metrics-error|identity-missing) touch "${health_dir}/${readiness}-${phase}-${port}" ;;
+        identity-same)
+          touch "${health_dir}/identity-same-after-5001" "${health_dir}/identity-same-after-5002"
+          ;;
+      esac
+      action=wait
+      [[ "${phase}" != after ]] || action=alpha
+      if PATH="${test_dir}/bin:${PATH}" CAPACITY_RUN_ID=owned-run \
+        CAPACITY_GIT_REVISION=0123456789abcdef0123456789abcdef01234567 \
+        REPOSITORY_CAPACITY_HOST_MEMORY_BYTES=17179869184 \
+        REPOSITORY_CAPACITY_WAIT_SECONDS=0 \
+        REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/watcher-state" \
+        REPOSITORY_CAPACITY_PROJECT=capacity-test \
+        REPOSITORY_CAPACITY_RUNNER="${test_dir}/bin/healthy-capacity-runner" \
+        REPOSITORY_CAPACITY_REPLACEMENT_WATCHER="${test_dir}/bin/replacement-watcher" \
+        REPOSITORY_CAPACITY_WATCHER_PID_FILE="${health_dir}/watcher.pid" \
+        REPOSITORY_CAPACITY_WATCHER_READY_FILE="${health_dir}/watcher.ready" \
+        REPOSITORY_CAPACITY_WATCHER_STOP_FILE="${health_dir}/watcher.stopped" \
+        CAPACITY_EVIDENCE_DIR="${health_dir}/evidence" \
+        TEST_CAPACITY_HEALTH_DIR="${health_dir}" \
+        "${repo_root}/scripts/repository-capacity-stack.sh" "${action}" >"${health_dir}/result.log" 2>&1; then
+        echo "managed stack accepted ${readiness} readiness on controller port ${port} ${phase} load" >&2
+        exit 1
+      fi
+      if [[ "${phase}" == after ]]; then
+        jq -e '.passed == false and .fixture == "preserved"' \
+          "${health_dir}/evidence/repository/lifecycle/alpha/owned-run/metadata.json" >/dev/null || {
+          echo "post-run readiness failure left successful or damaged metadata on controller port ${port}" >&2
+          exit 1
+        }
+        [[ -f "${health_dir}/watcher.stopped" ]]
+      else
+        [[ ! -e "${health_dir}/after" && ! -e "${health_dir}/watcher.pid" ]]
+      fi
+    done
+  done
+done
+
+health_dir="${test_dir}/health-recovered"
+mkdir -p "${health_dir}"
+for controller_port in 5001 5002; do
+  printf '%s\n' "${healthy}" >"${health_dir}/before-${controller_port}.json"
+  printf '%s\n' "${healthy}" >"${health_dir}/after-${controller_port}.json"
+  touch "${health_dir}/recover-${controller_port}"
+done
+PATH="${test_dir}/bin:${PATH}" CAPACITY_RUN_ID=owned-run \
+  CAPACITY_GIT_REVISION=0123456789abcdef0123456789abcdef01234567 \
+  REPOSITORY_CAPACITY_HOST_MEMORY_BYTES=17179869184 \
+  REPOSITORY_CAPACITY_WAIT_SECONDS=5 \
+  REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/watcher-state" \
+  REPOSITORY_CAPACITY_PROJECT=capacity-test \
+  REPOSITORY_CAPACITY_RUNNER="${test_dir}/bin/healthy-capacity-runner" \
+  REPOSITORY_CAPACITY_REPLACEMENT_WATCHER="${test_dir}/bin/replacement-watcher" \
+  REPOSITORY_CAPACITY_WATCHER_PID_FILE="${health_dir}/watcher.pid" \
+  REPOSITORY_CAPACITY_WATCHER_READY_FILE="${health_dir}/watcher.ready" \
+  REPOSITORY_CAPACITY_WATCHER_STOP_FILE="${health_dir}/watcher.stopped" \
+  CAPACITY_EVIDENCE_DIR="${health_dir}/evidence" \
+  TEST_CAPACITY_HEALTH_DIR="${health_dir}" \
+  "${repo_root}/scripts/repository-capacity-stack.sh" alpha >"${health_dir}/result.log" 2>&1
+[[ -f "${health_dir}/seen-5001" && -f "${health_dir}/seen-5002" &&
+   -f "${health_dir}/after" && -f "${health_dir}/watcher.stopped" ]]
+jq -e '.passed == true and .fixture == "preserved"' \
+  "${health_dir}/evidence/repository/lifecycle/alpha/owned-run/metadata.json" >/dev/null
 
 alpha_recipe="$(make --no-print-directory -C "${repo_root}" -n capacity TARGET=repository PROFILE=lifecycle MODE=alpha)"
 grep -q 'repository-capacity-stack.sh local-alpha' <<<"${alpha_recipe}"

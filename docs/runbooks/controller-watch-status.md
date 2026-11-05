@@ -185,6 +185,12 @@ not that the pending reconciliation backlog is empty; also inspect queue depth
 and its drain rate. Load and final acceptance require readiness.
 No retry is counted as successful reconciliation.
 
+Managed alpha runs require boolean `ready:true`, `credentialReady:true` and
+registration of the exercised kind on both controllers before load and after
+it. Startup polls within the configured wait timeout; post-run checks also
+require distinct process identities. A failed post-run check makes the command
+fail and marks existing run metadata `passed:false`, even if load itself passed.
+
 Credential acquisition failures are shared dependency failures, not evidence
 that an individual resource is invalid. The HTTP/WebSocket client shares a
 cancellable cooldown before retrying acquisition, and the manager defers
