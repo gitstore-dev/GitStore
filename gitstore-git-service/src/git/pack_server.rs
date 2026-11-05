@@ -175,7 +175,7 @@ fn collect_refs(repo: &gix::Repository) -> Result<Vec<(String, String)>> {
     let mut refs: Vec<(String, String)> = Vec::new();
 
     // Explicitly resolve HEAD first so it always appears in the advertisement.
-    if let Ok(head_id) = repo.head_id() {
+    if let Some(head_id) = repo.head().ok().and_then(|head| head.id()) {
         refs.push(("HEAD".to_string(), head_id.to_string()));
     }
 
@@ -515,7 +515,7 @@ impl std::io::Read for ChannelReader {
 
 /// Write incoming pack data to a temporary quarantine directory from any `Read`.
 /// The pack and index files are NOT visible to the live ODB until
-/// `promote_quarantine` moves them into the real pack directory.
+/// `promote_quarantine` publishes accepted objects as loose files or retained packs.
 ///
 /// Pass `odb` to resolve base objects for thin packs sent by incremental pushes.
 pub fn stage_pack_from_reader<R: std::io::Read, O: gix_pack::Find + gix::prelude::Find>(
@@ -560,10 +560,65 @@ pub fn stage_pack_from_reader<R: std::io::Read, O: gix_pack::Find + gix::prelude
     })
 }
 
-/// Move quarantined pack/index files into the repository's live pack directory.
-/// Called only after the ref transaction has committed successfully.
-/// Falls back to copy+delete when rename fails across filesystem boundaries (e.g. Docker overlay).
+// Share the same finite decoding policy for request-local validation and
+// accepted small-pack publication. Keep larger packs on the disk-backed path.
+const SMALL_PACK_BYTES: u64 = 2 * 1024 * 1024;
+const SMALL_PACK_OBJECTS: u32 = 64;
+const SMALL_PACK_DECODED_BYTES: usize = 8 * 1024 * 1024;
+
+pub(crate) fn small_pack_objects(
+    path: &std::path::Path,
+) -> Option<Vec<(gix::ObjectId, gix::object::Kind, Vec<u8>)>> {
+    if std::fs::metadata(path).ok()?.len() > SMALL_PACK_BYTES {
+        return None;
+    }
+    let mut bundle = gix_pack::Bundle::at(path, gix::hash::Kind::Sha1).ok()?;
+    if bundle.index.num_objects() > SMALL_PACK_OBJECTS {
+        return None;
+    }
+    bundle.pack = bundle
+        .pack
+        .with_alloc_limit_bytes(Some(SMALL_PACK_DECODED_BYTES));
+    let mut output = Vec::new();
+    let mut inflate = gix::zlib::Inflate::default();
+    let mut total = 0usize;
+    let mut objects = Vec::new();
+    for entry in bundle.index.iter() {
+        let (object, _) = bundle
+            .find(
+                &entry.oid,
+                &mut output,
+                &mut inflate,
+                &mut gix_pack::cache::Never,
+            )
+            .ok()??;
+        total = total.checked_add(object.data.len())?;
+        if total > SMALL_PACK_DECODED_BYTES {
+            return None;
+        }
+        objects.push((entry.oid, object.kind, object.data.to_owned()));
+    }
+    Some(objects)
+}
+
+/// Publish accepted objects before committing the prepared ref transaction.
+/// Small packs become loose objects; larger packs keep their pack/index files.
+/// Cross-filesystem pack moves fall back to copy and deletion.
 pub fn promote_quarantine(repo: &gix::Repository, q: Quarantine) -> Result<()> {
+    if let Some(objects) = small_pack_objects(&q.pack_path) {
+        use gix::objs::Write;
+        for (id, kind, data) in objects {
+            repo.objects
+                .write_buf_with_known_id(kind, &data, id)
+                .context("publish accepted loose object")?;
+        }
+        info!(
+            objects_written = q.num_objects,
+            storage = "loose",
+            "pack promoted to object database"
+        );
+        return Ok(());
+    }
     let pack_dir = repo.objects.store_ref().path().join("pack");
     std::fs::create_dir_all(&pack_dir).context("ensure pack dir")?;
 
@@ -673,6 +728,84 @@ pub fn check_blob_sizes_in_quarantine_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn small_accepted_pack_is_visible_without_refreshing_cached_indexes() {
+        let (_source_directory, source) = make_test_repo();
+        let commit = make_commit(&source, "accepted incremental content", None);
+        let pack = build_pack_for_wants(&source, &[commit.to_string()], &[]).unwrap();
+        let quarantine =
+            stage_pack_from_reader(std::io::Cursor::new(pack), Some((*source.objects).clone()))
+                .unwrap();
+        let (directory, target) = make_test_repo();
+        let cached = crate::git::repo::open_repository(directory.path()).unwrap();
+        assert!(cached.find_object(commit).is_err());
+        let before = cached.objects.store_ref().metrics().num_refreshes;
+        promote_quarantine(&target, quarantine).unwrap();
+        assert_eq!(
+            std::fs::read_dir(directory.path().join("objects/pack"))
+                .unwrap()
+                .count(),
+            0,
+            "small accepted packs must not add another pack index"
+        );
+        assert!(cached.find_object(commit).is_ok());
+        assert_eq!(
+            cached.objects.store_ref().metrics().num_refreshes,
+            before,
+            "new loose objects must be visible without index discovery"
+        );
+    }
+
+    #[test]
+    fn larger_accepted_packs_keep_the_disk_backed_promotion() {
+        let (_source_directory, source) = make_test_repo();
+        let mut commit = None;
+        for n in 0..22 {
+            commit = Some(make_commit(&source, &format!("content {n}"), commit));
+        }
+        let commit = commit.unwrap();
+        let pack = build_pack_for_wants(&source, &[commit.to_string()], &[]).unwrap();
+        let quarantine =
+            stage_pack_from_reader(std::io::Cursor::new(pack), Some((*source.objects).clone()))
+                .unwrap();
+        assert!(quarantine.num_objects > 64);
+        let (directory, target) = make_test_repo();
+        promote_quarantine(&target, quarantine).unwrap();
+        assert_eq!(
+            std::fs::read_dir(directory.path().join("objects/pack"))
+                .unwrap()
+                .count(),
+            2
+        );
+        assert!(crate::git::repo::open_repository(directory.path())
+            .unwrap()
+            .find_object(commit)
+            .is_ok());
+    }
+
+    #[test]
+    fn advertisement_reads_head_as_a_ref_without_opening_its_object() {
+        let (directory, _repo) = make_test_repo();
+        let oid = "1234567890123456789012345678901234567890";
+        std::fs::create_dir_all(directory.path().join("refs/heads")).unwrap();
+        std::fs::write(directory.path().join("refs/heads/main"), format!("{oid}\n")).unwrap();
+        for head in ["ref: refs/heads/main\n".to_owned(), format!("{oid}\n")] {
+            std::fs::write(directory.path().join("HEAD"), head).unwrap();
+            let server = HttpPackServer::new(directory.path().to_path_buf(), 0);
+            for response in [
+                server.advertise_receive_pack_refs().unwrap(),
+                server.advertise_upload_pack_refs().unwrap(),
+            ] {
+                let text = String::from_utf8(response).unwrap();
+                assert!(
+                    text.contains(&format!("{oid} HEAD\0")),
+                    "HEAD advertisement must not require loading its object: {text}"
+                );
+                assert!(text.contains(&format!("{oid} refs/heads/main\n")));
+            }
+        }
+    }
 
     #[test]
     fn rejected_quarantine_is_not_retained_by_live_repository_cache() {

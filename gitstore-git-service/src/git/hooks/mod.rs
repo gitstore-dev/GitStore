@@ -445,12 +445,6 @@ pub(crate) fn with_quarantine_repo<T>(
     result
 }
 
-// Keep ordinary incremental packs in a request-local gix memory view. Larger
-// packs retain the existing isolated-store path; no limit changes admission.
-const QUARANTINE_VIEW_PACK_BYTES: u64 = 2 * 1024 * 1024;
-const QUARANTINE_VIEW_OBJECTS: u32 = 64;
-const QUARANTINE_VIEW_BYTES: usize = 8 * 1024 * 1024;
-
 fn small_quarantine_view(git_dir: &Path, quarantine: &Path) -> Option<gix::Repository> {
     use gix::objs::Write;
     let path = std::fs::read_dir(quarantine)
@@ -461,40 +455,16 @@ fn small_quarantine_view(git_dir: &Path, quarantine: &Path) -> Option<gix::Repos
             path.extension()
                 .is_some_and(|extension| extension == "pack")
         })?;
-    if std::fs::metadata(&path).ok()?.len() > QUARANTINE_VIEW_PACK_BYTES {
-        return None;
-    }
-    let mut bundle = gix_pack::Bundle::at(path, gix::hash::Kind::Sha1).ok()?;
-    if bundle.index.num_objects() > QUARANTINE_VIEW_OBJECTS {
-        return None;
-    }
-    bundle.pack = bundle
-        .pack
-        .with_alloc_limit_bytes(Some(QUARANTINE_VIEW_BYTES));
+    let objects = crate::git::pack_server::small_pack_objects(&path)?;
     let repository = crate::git::repo::open_repository(git_dir)
         .ok()?
         .with_object_memory();
-    let mut output = Vec::new();
-    let mut inflate = gix::zlib::Inflate::default();
-    let mut total = 0usize;
-    for entry in bundle.index.iter() {
-        let (object, _) = bundle
-            .find(
-                &entry.oid,
-                &mut output,
-                &mut inflate,
-                &mut gix_pack::cache::Never,
-            )
-            .ok()??;
-        total = total.checked_add(object.data.len())?;
-        if total > QUARANTINE_VIEW_BYTES {
-            return None;
-        }
+    for (id, kind, data) in objects {
         let actual = repository
             .objects
-            .write_buf_with_known_id(object.kind, object.data, entry.oid)
+            .write_buf_with_known_id(kind, &data, id)
             .ok()?;
-        if actual != entry.oid {
+        if actual != id {
             return None;
         }
     }
