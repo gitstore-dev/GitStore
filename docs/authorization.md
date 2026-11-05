@@ -254,3 +254,21 @@ when decision logging is disabled. Its only labels are registered `action`
 `challenge`, `invalid` or `error`). Subjects, resources, requests and policy
 digests are never metric labels. This is provider timing, not end-to-end request
 latency or a sustained-capacity result.
+
+## Reload diagnostics
+
+Complete provider-registry reload attempts emit `auth provider registry reload
+accepted` or `auth provider registry reload rejected`. These logs identify the
+active authorization provider, compiled action-catalog digest and, when supported,
+loaded policy digest. Rejected candidates retain the previous registry and its
+identity; raw candidate errors and policy contents are not logged. The caller
+still receives the original reload error. Duration includes time waiting for
+another reload, candidate construction, publication and retired-provider cleanup.
+
+`gitstore_authz_registry_reloads_total` exports through the existing native
+Prometheus and OTLP paths with only `outcome=accepted|rejected`. Startup and direct
+provider-only reloads are not complete registry reload attempts and do not
+increment it. Policy, catalog and provider identities are never metric labels.
+Snapshot diagnostics read immutable in-memory metadata without policy-file I/O
+or changing authorization decisions. Matching digests help compare replica
+configuration; they do not prove replacement recovery or sustained-load behavior.

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,39 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestProviderRegistryDiagnosticsAreAtomicAndDefensive(t *testing.T) {
+	newChain := func(name string) *authpkg.ChainedAuthN {
+		return authpkg.NewChainedAuthN(&stubProvider{name: name}, &stubProvider{name: name})
+	}
+	first := newChain("first")
+	second := newChain("second")
+	registry := authpkg.NewProviderRegistry(first, &staticAuthZProvider{name: "first"}, nil)
+	initial := registry.Diagnostics()
+	require.Equal(t, []string{"first"}, initial.AuthN)
+	require.Nil(t, initial.Policy)
+	require.Len(t, initial.CatalogDigest, 64)
+	initial.AuthN[0] = "modified"
+	require.Equal(t, []string{"first"}, registry.Diagnostics().AuthN)
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for range 1000 {
+			registry.Swap(second, &staticAuthZProvider{name: "second"}, nil)
+			registry.Swap(first, &staticAuthZProvider{name: "first"}, nil)
+		}
+	})
+	for range 1000 {
+		snapshot := registry.Diagnostics()
+		require.Len(t, snapshot.AuthN, 1)
+		require.Equal(t, snapshot.AuthN[0], snapshot.AuthZ, "diagnostics must describe one complete registry")
+		require.Equal(t, initial.CatalogDigest, snapshot.CatalogDigest)
+	}
+	wg.Wait()
+	registry.Swap(nil, authpkg.NewDecisionLogger(&staticAuthZProvider{name: "unsupported"}, zap.NewNop()), nil)
+	require.Empty(t, registry.Diagnostics().AuthN)
+	require.Nil(t, registry.Diagnostics().Policy, "decorators must preserve unsupported diagnostics")
+}
 
 func TestV1Beta1EffectivePermissionUsesSystemGroupAndSatisfiableConditions(t *testing.T) {
 	for _, tc := range []struct {

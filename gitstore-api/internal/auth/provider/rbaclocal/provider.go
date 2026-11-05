@@ -43,6 +43,7 @@ type compiledPolicy struct {
 	bySubject map[SubjectRef]bindingSet
 	bindings  []*compiledBinding
 	ruleCount int
+	roleCount int
 }
 
 // Bounds match policy validation. Bitsets make overlapping group bindings a
@@ -74,6 +75,17 @@ func New(cfg config.RBACConfig, logger *zap.Logger) (*RBACLocalProvider, error) 
 	return p, nil
 }
 func (p *RBACLocalProvider) Name() string { return "rbac-local" }
+
+func (p *RBACLocalProvider) AuthorizationSnapshot() (auth.AuthorizationSnapshot, bool) {
+	snapshot := p.snapshot.Load()
+	if snapshot == nil {
+		return auth.AuthorizationSnapshot{APIVersion: PolicyAPIVersion}, true
+	}
+	return auth.AuthorizationSnapshot{
+		Loaded: true, APIVersion: PolicyAPIVersion, Digest: snapshot.digest,
+		Roles: snapshot.roleCount, Bindings: len(snapshot.bindings), Rules: snapshot.ruleCount,
+	}, true
+}
 
 func (p *RBACLocalProvider) Reload() error {
 	p.reloadMu.Lock()
@@ -116,7 +128,10 @@ func (p *RBACLocalProvider) SetActiveUsers(users []*auth.UserProfile) error {
 }
 
 func compilePolicy(policy *Policy) *compiledPolicy {
-	snapshot := &compiledPolicy{digest: policy.digest, bySubject: map[SubjectRef]bindingSet{}}
+	snapshot := &compiledPolicy{
+		digest: policy.digest, bySubject: map[SubjectRef]bindingSet{},
+		roleCount: len(policy.ClusterRoles) + len(policy.Roles),
+	}
 	roles := map[RoleRef]*compiledRole{}
 	for _, tier := range []struct {
 		kind  string
