@@ -229,10 +229,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		}
 	}
 
-	// Any Apply failure -- including types.ErrConflict -- is retried: a
-	// conflict means the cache is stale and will be corrected on the next
-	// dispatch once the watch delivers the newer version (FR-014).
 	if err := r.statusClient.Apply(ctx, key, patch); err != nil {
+		if errors.Is(err, types.ErrConflict) {
+			// Keep the obligation pending while the watch catches up with
+			// the winning writer, without exhausting a stale retry budget.
+			health.ConflictRequeues.WithLabelValues(key.Kind).Inc()
+			return types.ResultAfter(categoryConflictRequeueDelay)
+		}
 		return types.ResultTransient(err)
 	}
 	if current.DeletionTimestamp != nil || slices.Contains(current.Finalizers, datastoreForegroundDeletionFinalizer) {
@@ -253,6 +256,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 
 const (
 	datastoreForegroundDeletionFinalizer = "gitstore.dev/foreground-deletion"
+	categoryConflictRequeueDelay         = 100 * time.Millisecond
 	categoryDeletionRetryInterval        = time.Second
 )
 

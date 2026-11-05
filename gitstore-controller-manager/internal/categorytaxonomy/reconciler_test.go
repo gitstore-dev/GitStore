@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -144,19 +145,31 @@ func TestReconcile_NoOpWhenPatchMatchesCurrentStatus(t *testing.T) {
 	}
 }
 
-func TestReconcile_ConflictMapsToTransientFailure(t *testing.T) {
-	root := CategoryTaxonomy{Namespace: "acme", Name: "electronics"}
-	c := seedCache(t, root)
-	sc := &fakeStatusClient{applyErr: types.ErrConflict}
-	r := NewReconciler(c, sc, noProducts, nil)
-
-	result := r.Reconcile(context.Background(), key("acme", "electronics"))
-	tf, ok := result.(types.TransientFailure)
-	if !ok {
-		t.Fatalf("Reconcile result = %T, want types.TransientFailure", result)
-	}
-	if !errors.Is(tf.Err, types.ErrConflict) {
-		t.Errorf("TransientFailure.Err = %v, want errors.Is(..., types.ErrConflict)", tf.Err)
+func TestReconcile_StatusConflictDefersButOtherFailuresConsumeRetryBudget(t *testing.T) {
+	for _, failure := range []error{
+		types.ErrConflict,
+		fmt.Errorf("another replica won: %w", types.ErrConflict),
+		errors.New("status update forbidden"),
+		errors.New("invalid status response"),
+	} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			root := CategoryTaxonomy{Namespace: "acme", Name: "electronics", ResourceVersion: "1"}
+			sc := &fakeStatusClient{applyErr: failure}
+			result := NewReconciler(seedCache(t, root), sc, noProducts, nil).
+				Reconcile(t.Context(), key("acme", "electronics"))
+			require.Len(t, sc.calls, 1)
+			require.Equal(t, "1", sc.calls[0].ResourceVersion, "conflict handling must preserve optimistic concurrency")
+			if errors.Is(failure, types.ErrConflict) {
+				requeue, ok := result.(types.RequeueAfter)
+				require.True(t, ok, "conflict must remain pending, got %T", result)
+				require.Positive(t, requeue.After)
+				require.LessOrEqual(t, requeue.After, time.Second)
+			} else {
+				transient, ok := result.(types.TransientFailure)
+				require.True(t, ok, "ordinary failures must retain retry/quarantine behavior, got %T", result)
+				require.ErrorIs(t, transient.Err, failure)
+			}
+		})
 	}
 }
 
