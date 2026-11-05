@@ -1,5 +1,7 @@
 # Git-Backed Resources
 
+[Storage group overview](README.md)
+
 Git-backed resources are desired-state documents. Git stores the author-written
 frontmatter and Markdown body. ScyllaDB or memDB stores hydrated records,
 indexes, Git provenance, resource versions, generated metadata, and
@@ -28,31 +30,14 @@ Optional Markdown body content.
 `status` is not author-writable. Controllers and admission write status to the
 datastore.
 
-### Product mutation admission
+Author files must not set `metadata.uid`, `metadata.resourceVersion`,
+`metadata.generation`, `metadata.creationTimestamp`, `metadata.revision`,
+`metadata.ownerReferences`, `metadata.finalizers`, or `status`.
 
-`createProduct` and `updateProduct` render the same manifest checks used by a
-Git push before writing a commit. A pre-receive rejection returns the shared
-`ADMISSION_REJECTED` error with `phase: PRE_RECEIVE` and does not move the
-ref. After a Product commit, the synchronous committed-admission result is
-authoritative: a denial or materialization failure returns
-`ADMISSION_REJECTED` with `phase: POST_RECEIVE` and the commit SHA; a
-concurrent replacement returns `CONFLICT`/`SUPERSEDED`. Retrying byte-identical
-content re-admits the existing tip without making another commit.
-
-`deleteProduct` has the same post-receive contract. If deleting the committed
-manifest is denied or fails admission, it does not report deletion success or
-start termination. For a rejected Product update, the previously accepted
-specification remains served and `status.conditions` records
-`AdmissionAccepted=False` with reason `AdmissionReportFailed`; a subsequent
-accepted admission clears that condition.
-
-For current built-in catalog resources (`Product`, `ProductVariant`,
-`CategoryTaxonomy`, `Collection`), resource identity is `apiVersion`, `kind`,
-resolved namespace, and `metadata.name`. The Markdown file path is stored as
-source provenance only. Moving a file preserves UID, spec/body edits increment
-`generation` and `resourceVersion`, path-only moves preserve `generation` and
-increment `resourceVersion`, deletes remove the stored identity, and a later
-delete/re-add receives a new UID.
+Resource identity and admission are resource-specific contracts, separate from
+storage placement. See the [Product contract](../products/product-spec.md#identity-deletion-and-lifecycle)
+for identity, foreground deletion, and
+[mutation admission](../products/product-spec.md#mutation-admission).
 
 ## Control Plane
 

@@ -499,7 +499,7 @@ cannot create an oversized catch-up batch.
 Product durable-watch rollout follows the same fenced reader/materializer
 configuration family as Namespace and Repository. Enable it only after the
 Product CDC migration and Product-aware API/controller rollout; see
-[`product-lifecycle.md`](runbooks/product-lifecycle.md) for the mixed-version
+[catalog lifecycle rollout](runbooks/catalog-lifecycle.md#rollout-and-rollback) for the mixed-version
 deny and rollback sequence.
 
 See [Namespace watch contract](namespace/namespace-watch.md) and the

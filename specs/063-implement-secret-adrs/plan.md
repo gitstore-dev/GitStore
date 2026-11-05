@@ -132,7 +132,7 @@ go.work
 .github/workflows/ci.yml
 docs/ADRs/
 docs/implementation/
-docs/resource-storage/
+docs/storage-groups/
 ```
 
 **Structure decision**: Put pure validation, classified failures, resolver

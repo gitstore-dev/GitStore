@@ -280,7 +280,7 @@ Namespace (ADR-0002)
 
 ### Repository as fully datastore-only
 
-Rejected. `../resource-storage/git-backed.md` classifies `Repository` under the Control
+Rejected. `../storage-groups/git-backed.md` classifies `Repository` under the Control
 Plane git-backed table. Keeping it datastore-only would diverge the implementation
 from the documented architecture and lose reviewability for repository configuration.
 

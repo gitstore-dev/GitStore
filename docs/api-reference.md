@@ -854,7 +854,7 @@ mutation DeleteCategory($input: DeleteCategoryInput!) {
 }
 ```
 
-`outcome` is `TERMINATION_STARTED`, or `ALREADY_TERMINATING` for a repeat request, which creates no commit. See the [deletion runbook](runbooks/categorytaxonomy-deletion.md).
+`outcome` is `TERMINATION_STARTED`, or `ALREADY_TERMINATING` for a repeat request, which creates no commit. See the [deletion runbook](runbooks/catalog-lifecycle.md#categorytaxonomy-deletion).
 
 ### completeCategoryDeletion
 

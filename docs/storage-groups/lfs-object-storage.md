@@ -1,5 +1,7 @@
 # LFS And Object Storage Resources
 
+[Storage group overview](README.md)
+
 This group covers binary or large payloads. GitStore should keep reviewable
 manifests in Git and hydrated metadata in the datastore, while payload bytes live
 in Git LFS or object storage.
