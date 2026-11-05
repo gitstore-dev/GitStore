@@ -160,7 +160,7 @@ profile does expose a normal basket and may add an exchange path after return.
 The following are proposed extension/CRD resources. They use the normal
 GitStore Markdown-envelope format and are admitted from the configured catalog
 branch. `WorkflowPolicy`, already described in
-[Git-backed resources](../resource-storage/git-backed.md), remains the generic
+[Git-backed resources](../storage-groups/git-backed.md), remains the generic
 policy for approvals and checks on Git changes; it is not renamed or replaced.
 
 | Resource                                                      | Storage                     | Purpose                                                                                                                                 |

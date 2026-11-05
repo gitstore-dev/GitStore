@@ -31,7 +31,7 @@ part in a resource's lifecycle. Several partial mechanisms already exist:
 - **036** proposes a generic extension registry in the Git service. **037** proposes
   workflow-specific gates and WASI actions.
 
-Resources live in four storage groups ([resource storage](../resource-storage/README.md)):
+Resources live in four storage groups ([resource storage](../storage-groups/README.md)):
 Git + datastore, datastore-only, LFS/object and transient. The groups differ in when a write
 becomes authoritative, and so in what a hook may safely do. A Git-backed write is authoritative
 once the ref moves, and it is authored by a human who reviews the diff. Changing that content

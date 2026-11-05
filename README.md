@@ -110,6 +110,8 @@ production acceptance remain separate operations.
 - **User Guide**: [docs/user-guide.md](docs/user-guide.md)
 - **Developer Guide**: [docs/developer-guide.md](docs/developer-guide.md)
 - **Architecture**: [docs/architecture/](docs/architecture/README.md)
+- **Resource Envelope Storage Groups**: [docs/storage-groups/](docs/storage-groups/README.md)
+- **Operations and Recovery**: [docs/runbooks/](docs/runbooks/README.md)
 - **API Reference**: [docs/api-reference.md](docs/api-reference.md)
 - **Configuration**: [docs/configuration.md](docs/configuration.md)
 - **Storefront**: [docs/storefront.md](docs/storefront.md)

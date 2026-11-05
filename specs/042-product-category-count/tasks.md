@@ -144,7 +144,7 @@ Two existing Go modules, each with `internal/` + `tests/{contract,integration}`:
 **Purpose**: Documentation and burst-collapse verification spanning all stories.
 
 - [X] T037 [P] Add a test verifying SC-006 (burst collapse): enqueue the same `CategoryTaxonomy` key many times in rapid succession via simulated Product churn and assert the work queue holds at most one pending item for that key at any time (research.md R5) — extend `gitstore-controller-manager/tests/contract/manager_dispatch_test.go` or add alongside it.
-- [X] T038 [P] Add a short "Product-driven fan-out" note to `docs/runbooks/controller-lag.md`'s `CategoryTaxonomy`-specific section, documenting that its queue depth can now also reflect Product-driven enqueues (plan.md Constitution Check, Principle IV).
+- [X] T038 [P] Add a short "Product-driven fan-out" note to `docs/runbooks/controller-recovery.md`'s `CategoryTaxonomy`-specific section, documenting that its queue depth can now also reflect Product-driven enqueues (plan.md Constitution Check, Principle IV).
 - [X] T039 Run `make pr-ready` (per AGENTS.md's PR-readiness gate) and resolve any lint/build/test failures before this feature is considered done.
 - [X] T040 Run through quickstart.md's "Verifying End-to-End" steps manually against a locally running `make api` + `make controller` to confirm documented behavior matches reality.
 

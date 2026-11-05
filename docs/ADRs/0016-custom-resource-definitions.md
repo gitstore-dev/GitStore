@@ -13,7 +13,7 @@
 Some commerce resources, such as pricing tables, workflow definitions
 ([037](../implementation/037-custom-commerce-workflows.md)) and marketplace-specific
 configuration, matter to specific deployments but should not grow the core API
-([resource storage: Core vs Extension/CRD](../resource-storage/README.md#core-vs-extensioncrd)).
+([resource storage: Core vs Extension/CRD](../storage-groups/README.md#resource-catalogue-scope)).
 GitStore needs a way to define new kinds that:
 
 - are authored and reviewed like core resources;

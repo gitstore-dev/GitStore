@@ -1,7 +1,11 @@
 # Production Readiness Testing Patterns
 
-The constitution's Principles VIII and X and Quality Gates require
-service-specific replica safety, load/soak, recovery and security/capacity
+This is a contributor validation guide, not an operator maintenance checklist.
+For deployment health and exceptional recovery, use the
+[operations index](../runbooks/README.md).
+
+Production-readiness validation requires service-specific replica safety,
+load/soak, recovery and security/capacity
 evidence before production readiness is claimed. API/controller changes must
 verify concurrent-replica behavior and rolling upgrades on affected paths.
 **Git service is stateful and singleton-only**, including in production-mode
@@ -12,16 +16,11 @@ unless implementing those capabilities is explicitly approved feature scope.
 Readiness claims must identify remaining limitations, including AuthN/AuthZ,
 checkpoint coordination and non-idempotent side effects.
 
-Every feature so far has independently reinvented the same
-four structural test patterns to satisfy that gate. There is no missing code
-infrastructure here — `go test`, build tags, and env-var gating are enough —
-what was missing was a written convention. This page is that convention.
-Production-readiness work for a feature should **reference this
-runbook** (`docs/runbooks/production-readiness-testing.md`) rather than
-re-deriving the approach, and should link to the concrete test file(s)
-added for each applicable pattern.
+Use these four structural test patterns with the existing `go test`, build tags,
+and environment-variable gating. Link the concrete tests for each applicable
+pattern rather than re-deriving the validation approach.
 
-Not every pattern applies to every spec. A leaf, read-only resource with no
+Not every pattern applies to every change. A leaf, read-only resource with no
 concurrent writers and no schema evolution may only need pattern 4. Judge
 applicability the same way `feedback_reconciler_fanin_check` judges
 reconciler fan-in: check what actually changed, don't skip a pattern just
@@ -68,7 +67,7 @@ two honest shapes, both of which model "two replicas" as strictly
   (`decouples == 2`, `completions == 1`). A final reconcile after the record
   is deleted from the cache asserts a `types.Success` (a queued key whose
   object is gone is already-reconciled, not an error — see
-  `docs/runbooks/controller-poisoned-item.md`'s note on cache-miss handling)
+  `docs/runbooks/controller-recovery.md`'s note on cache-miss handling)
   and that `completions` is still `1` — a stale requeue after completion
   must not run `CompleteDeletion` a second time. There are no `go func`
   goroutines in this test at all.
@@ -849,12 +848,10 @@ format as patterns 1-3 above.
 
 ## Related
 
-- `.specify/memory/constitution.md` — Principle 4 ("Production Readiness") and
-  the Quality Gates it drives.
-- [CategoryTaxonomy foreground deletion](categorytaxonomy-deletion.md) — the
+- [CategoryTaxonomy foreground deletion](../runbooks/catalog-lifecycle.md#categorytaxonomy-deletion) — the
   operational runbook for the resource pattern 1's worked example is drawn
   from.
-- [Scylla projection repair and capacity validation](scylla-projection-repair.md)
+- [Scylla projection repair and capacity validation](../runbooks/scylla-projection-repair.md)
 - `gitstore-controller-manager/tests/integration/categorytaxonomy_deletion_test.go`
 - `gitstore-controller-manager/tests/integration/reconcile_retry_resume_test.go`
 - `gitstore-api/internal/datastore/scylla/capacity_test.go`

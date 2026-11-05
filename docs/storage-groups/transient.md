@@ -1,5 +1,7 @@
 # Transient Resources
 
+[Storage group overview](README.md)
+
 Transient resources use Kubernetes-style shapes for consistency, but they are
 not stored as durable resources. They are request/response contracts for checks,
 quotes, previews, authorization decisions, signed URL creation, or dry runs.
