@@ -6,6 +6,7 @@ package cataloggrpc_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +25,84 @@ import (
 // race or handoff.
 func makeFileWithBody(name, body string) []byte {
 	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  namespace: gitstore\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/" + name + "\n---\n" + body)
+}
+
+type failedFileAdmissionStore struct {
+	datastore.Datastore
+	createErr, updateErr error
+	updateCalls          int
+}
+
+func (s *failedFileAdmissionStore) CreateFile(ctx context.Context, file *datastore.File) error {
+	if s.createErr != nil {
+		return s.createErr
+	}
+	return s.Datastore.CreateFile(ctx, file)
+}
+
+func (s *failedFileAdmissionStore) UpdateFile(ctx context.Context, file *datastore.File, expected string) error {
+	s.updateCalls++
+	if s.updateErr != nil {
+		return s.updateErr
+	}
+	return s.Datastore.UpdateFile(ctx, file, expected)
+}
+
+func TestAdmitResourcesFileWriteFailuresAreNotAcknowledgedAndCanBeRetried(t *testing.T) {
+	for _, mode := range []string{"create", "update", "conflict-budget"} {
+		t.Run(mode, func(t *testing.T) {
+			base := newTestDatastore(t)
+			oldCommit, newCommit := strings.Repeat("a", 40), strings.Repeat("b", 40)
+			current := oldCommit
+			path := "files/hero.md"
+			git := newTreeGitReader(&current, map[string]map[string][]byte{
+				oldCommit: {path: makeFileWithBody("hero", "original")},
+				newCommit: {path: makeFileWithBody("hero", "updated")},
+			})
+			request := &catalogv1.AdmitResourcesRequest{
+				Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+				RepositoryId:  testRepoID, RefName: "refs/heads/main", NewCommitSha: oldCommit,
+			}
+			if mode != "create" {
+				_, err := newCatalogServer(t, base, git).AdmitResources(t.Context(), request)
+				require.NoError(t, err)
+				request.OldCommitSha = oldCommit
+			}
+			store := &failedFileAdmissionStore{Datastore: base}
+			failure := errors.New("injected File write failure")
+			switch mode {
+			case "create":
+				store.createErr = failure
+			case "update":
+				store.updateErr = failure
+			case "conflict-budget":
+				store.updateErr = datastore.ErrConflict
+			}
+			current, request.NewCommitSha = newCommit, newCommit
+			server := newCatalogServer(t, store, git)
+			response, err := server.AdmitResources(t.Context(), request)
+			require.Error(t, err, "a failed durable File write must not become a successful callback")
+			require.Nil(t, response)
+			if mode == "conflict-budget" {
+				require.Equal(t, 3, store.updateCalls, "the existing conflict budget remains bounded")
+			}
+			file, readErr := base.GetFileByName(t.Context(), "gitstore", "hero")
+			if mode == "create" {
+				require.ErrorIs(t, readErr, datastore.ErrNotFound)
+			} else {
+				require.NoError(t, readErr)
+				require.Equal(t, "original", file.Body)
+				require.Equal(t, oldCommit, file.GitCommitSHA)
+			}
+			store.createErr, store.updateErr = nil, nil
+			_, err = server.AdmitResources(t.Context(), request)
+			require.NoError(t, err, "the identical delivery must converge after the store recovers")
+			file, err = base.GetFileByName(t.Context(), "gitstore", "hero")
+			require.NoError(t, err)
+			require.Equal(t, "updated", file.Body)
+			require.Equal(t, newCommit, file.GitCommitSHA)
+		})
+	}
 }
 
 // TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent models two

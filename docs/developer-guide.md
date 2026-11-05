@@ -346,6 +346,10 @@ does not replace optimistic-concurrency checks or cache authorization decisions.
 
 Post-receive admission cannot reject an already accepted Git push. DB-backed conflicts such as duplicate `ProductVariant.spec.sku` leave the existing resource unchanged, skip the conflicting incoming resource, and emit structured API logs with the operation, namespace, name, SKU, and conflicting identity.
 
+File admission callbacks report failed durable writes and exhausted conflict
+retries instead of reporting success. The same callback can be retried after
+the datastore recovers; this does not change the earlier Git acknowledgement.
+
 ## Controller Manager Runtime
 
 `gitstore-controller-manager` provides the shared runtime for level-triggered controllers.

@@ -1472,7 +1472,9 @@ func (s *Server) admitParsedEntries(
 		case "Namespace":
 			s.admitNamespace(ctx, e.parsed.Namespace, e.body, admCtx, e.path, op, existing)
 		case "File":
-			s.admitFile(ctx, e.parsed.File, e.body, admCtx, e.path, op, existing)
+			if err := s.admitFile(ctx, e.parsed.File, e.body, admCtx, e.path, op, existing); err != nil {
+				return decisions, err
+			}
 		case "Repository":
 			if err := s.admitRepository(ctx, e.parsed.Repository, e.body, admCtx, e.path, op, existing); err != nil {
 				return decisions, err
@@ -2352,14 +2354,14 @@ func (s *Server) admitFile(
 	sourcePath string,
 	op admission.Operation,
 	rawExisting any,
-) {
+) error {
 	if resource == nil {
-		return
+		return nil
 	}
 	specJSON, err := json.Marshal(resource.Spec)
 	if err != nil {
 		s.log.Error("admit_resources: marshal file spec failed", zap.Error(err))
-		return
+		return err
 	}
 	namespace := resource.Metadata.Namespace
 	if namespace == "" {
@@ -2369,7 +2371,7 @@ func (s *Server) admitFile(
 	if existing == nil || op == admission.OperationCreate {
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
 		if !ok {
-			return
+			return errors.New("file admission could not allocate a UID")
 		}
 		f := &datastore.File{
 			UID: uid, Namespace: namespace, Name: resource.Metadata.Name,
@@ -2382,29 +2384,29 @@ func (s *Server) admitFile(
 		}
 		f.Status = fileAdmissionStatus(1, admCtx.Revision, admCtx.Now)
 		if err := s.store.CreateFile(ctx, f); err == nil {
-			return
+			return nil
 		} else if !errors.Is(err, datastore.ErrAlreadyExists) {
 			s.log.Error("admit_resources: create file failed", zap.Error(err))
-			return
+			return err
 		}
 		// Another replica may have created this identity after operationForEntry
 		// observed it as absent. If this admission still owns the ref tip, reload
 		// the winner and converge through the resource-version-guarded update
 		// path below. A stale admission must leave the winner untouched.
 		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
-			return
+			return nil
 		}
 		existing, err = s.store.GetFileByName(ctx, namespace, resource.Metadata.Name)
 		if err != nil {
 			s.log.Error("admit_resources: reload File after create conflict failed", zap.Error(err))
-			return
+			return err
 		}
 	}
 	for range maxFileAdmissionUpdateAttempts {
 		entry := &parsedEntry{path: sourcePath, parsed: &validate.ParsedResource{Kind: "File", File: resource}, body: body}
 		if err := s.authorizeOperation(ctx, resourceIdentity{Kind: "File", Name: resource.Metadata.Name, Namespace: namespace}, admission.OperationUpdate, entry, existing); err != nil {
 			s.log.Warn("admit_resources: File retry authorization rejected", zap.Error(err))
-			return
+			return err
 		}
 		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
 		changedMetadata := existing.APIVersion != resource.APIVersion || existing.Kind != resource.Kind ||
@@ -2413,11 +2415,11 @@ func (s *Server) admitFile(
 		changedProvenance := existing.RepositoryID != admCtx.RepositoryID || existing.SourcePath != sourcePath ||
 			existing.GitCommitSHA != admCtx.CommitSHA || existing.GitRef != admCtx.RefName
 		if !changedSpecBody && !changedMetadata && !changedProvenance {
-			return
+			return nil
 		}
 		if existingSpecContentType(existing.Spec) != resource.Spec.ContentType {
 			s.log.Warn("admit_resources: File contentType is immutable", zap.String("name", resource.Metadata.Name))
-			return
+			return nil
 		}
 		expectedResourceVersion := existing.ResourceVersion
 		gen := existing.Generation
@@ -2433,24 +2435,25 @@ func (s *Server) admitFile(
 		existing.Status = fileAdmissionStatus(gen, admCtx.Revision, admCtx.Now)
 		err := s.store.UpdateFile(ctx, existing, expectedResourceVersion)
 		if err == nil {
-			return
+			return nil
 		}
 		if !errors.Is(err, datastore.ErrConflict) {
 			s.log.Error("admit_resources: update file failed", zap.Error(err))
-			return
+			return err
 		}
 		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
-			return
+			return nil
 		}
 		existing, err = s.store.GetFileByName(ctx, namespace, resource.Metadata.Name)
 		if err != nil {
 			s.log.Error("admit_resources: reload File after update conflict failed", zap.Error(err))
-			return
+			return err
 		}
 	}
 	s.log.Error("admit_resources: update File conflict retry budget exhausted",
 		zap.String("namespace", namespace), zap.String("name", resource.Metadata.Name),
 		zap.String("commit_sha", admCtx.CommitSHA))
+	return fmt.Errorf("file admission conflict retry budget exhausted: %w", datastore.ErrConflict)
 }
 
 func existingSpecContentType(raw []byte) string {
