@@ -240,62 +240,33 @@ type resourceAdmissionOperation struct {
 
 const namespaceConvergenceOperation admission.Operation = "CONVERGE"
 
-func namespaceConvergenceOperations(
-	operations []resourceAdmissionOperation,
-	requestedEntries []*parsedEntry,
-) []resourceAdmissionOperation {
-	requestedByPath := make(map[string]*parsedEntry, len(requestedEntries))
-	for _, entry := range requestedEntries {
-		if entry != nil {
-			requestedByPath[entry.path] = entry
-		}
-	}
-	converged := make([]resourceAdmissionOperation, 0, len(operations))
-	for _, operation := range operations {
-		if operation.newEntry == nil ||
-			operation.newEntry.parsed == nil ||
-			operation.newEntry.parsed.Namespace == nil {
-			continue
-		}
-		requested := requestedByPath[operation.newEntry.path]
-		if requested == nil ||
-			requested.identity.key() != operation.newEntry.identity.key() ||
-			requested.contentHash != operation.newEntry.contentHash {
-			continue
-		}
-		operation.operation = namespaceConvergenceOperation
-		converged = append(converged, operation)
-	}
-	return converged
-}
-
-func namespaceConvergencePaths(
-	currentEntries []*parsedEntry,
-	requestedEntries []*parsedEntry,
-) []string {
+// unchangedManifestOperations only replays the original actor's upserts whose
+// identity and complete author-owned content still match the live tip. Stale
+// deletions are excluded; absence at one path cannot prove identity absence.
+func unchangedManifestOperations(operations []resourceAdmissionOperation, currentEntries []*parsedEntry) []resourceAdmissionOperation {
 	currentByPath := make(map[string]*parsedEntry, len(currentEntries))
 	for _, entry := range currentEntries {
 		if entry != nil {
 			currentByPath[entry.path] = entry
 		}
 	}
-	paths := make([]string, 0, len(requestedEntries))
-	for _, requested := range requestedEntries {
-		if requested == nil ||
-			requested.parsed == nil ||
-			requested.parsed.Namespace == nil {
+	result := make([]resourceAdmissionOperation, 0, len(operations))
+	for _, op := range operations {
+		requested := op.newEntry
+		if requested == nil || requested.parsed == nil {
 			continue
 		}
 		current := currentByPath[requested.path]
-		if current == nil ||
-			current.identity.key() != requested.identity.key() ||
-			current.contentHash != requested.contentHash {
+		if current == nil || current.identity.key() != requested.identity.key() || current.contentHash != requested.contentHash {
 			continue
 		}
-		paths = append(paths, requested.path)
+		op.newEntry = current
+		if current.parsed.Namespace != nil {
+			op.operation = namespaceConvergenceOperation
+		}
+		result = append(result, op)
 	}
-	sort.Strings(paths)
-	return paths
+	return result
 }
 
 type comparableResource struct {

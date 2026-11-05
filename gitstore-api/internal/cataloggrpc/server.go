@@ -1181,41 +1181,32 @@ func (s *Server) AdmitResources(
 			return &catalogv1.AdmitResourcesResponse{}, nil
 		}
 		effectiveCommit := newCommit
-		convergeNamespacesOnly := false
-		if currentCommit != "" && currentCommit != newCommit {
+		if currentCommit != "" {
 			effectiveCommit = currentCommit
-			convergeNamespacesOnly = true
 		}
+		supersededSnapshot := effectiveCommit != newCommit
 		changedPaths := req.GetChangedPaths()
-		if convergeNamespacesOnly {
-			changedPaths = namespaceChangedPaths(changedPaths)
-			if len(changedPaths) == 0 {
-				return &catalogv1.AdmitResourcesResponse{}, nil
-			}
-		}
 		superseded := false
 		admCtx := AdmissionContext{
-			RepositoryID: req.RepositoryId,
-			Namespace:    repoNamespace,
-			ActorSubject: actorSubject,
-			CommitSHA:    effectiveCommit,
-			RefName:      req.RefName,
-			Revision:     branch + "@sha1:" + effectiveCommit,
-			Now:          now,
-			superseded:   &superseded,
+			RepositoryID: req.RepositoryId, Namespace: repoNamespace,
+			ActorSubject: actorSubject, CommitSHA: newCommit, RefName: req.RefName,
+			Revision: branch + "@sha1:" + newCommit, Now: now,
+			tipCommitSHA: effectiveCommit, superseded: &superseded,
 		}
-
-		oldEntries := s.loadParsedEntries(ctx, req.RepositoryId, req.GetOldCommitSha(), admCtx.Namespace, changedPaths)
-		newEntries := s.loadParsedEntries(ctx, req.RepositoryId, effectiveCommit, admCtx.Namespace, changedPaths)
-		var requestedEntries []*parsedEntry
-		if convergeNamespacesOnly {
-			requestedEntries = s.loadParsedEntries(ctx, req.RepositoryId, newCommit, admCtx.Namespace, changedPaths)
-			changedPaths = namespaceConvergencePaths(newEntries, requestedEntries)
-			if len(changedPaths) == 0 {
-				return &catalogv1.AdmitResourcesResponse{}, nil
+		oldEntries, err := s.loadParsedEntries(ctx, req.RepositoryId, req.GetOldCommitSha(), admCtx.Namespace, changedPaths)
+		if err != nil {
+			return nil, grpcstatus.Errorf(codes.Unavailable, "load admission snapshot: %v", err)
+		}
+		newEntries, err := s.loadParsedEntries(ctx, req.RepositoryId, effectiveCommit, admCtx.Namespace, changedPaths)
+		if err != nil {
+			return nil, grpcstatus.Errorf(codes.Unavailable, "load admission snapshot: %v", err)
+		}
+		requestedEntries := newEntries
+		if supersededSnapshot {
+			requestedEntries, err = s.loadParsedEntries(ctx, req.RepositoryId, newCommit, admCtx.Namespace, changedPaths)
+			if err != nil {
+				return nil, grpcstatus.Errorf(codes.Unavailable, "load admission snapshot: %v", err)
 			}
-			oldEntries = s.loadParsedEntries(ctx, req.RepositoryId, req.GetOldCommitSha(), admCtx.Namespace, changedPaths)
-			newEntries = s.loadParsedEntries(ctx, req.RepositoryId, effectiveCommit, admCtx.Namespace, changedPaths)
 		}
 		if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit) {
 			continue
@@ -1227,9 +1218,25 @@ func (s *Server) AdmitResources(
 				zap.String("commit_sha", effectiveCommit))
 			return nil, grpcstatus.Errorf(codes.FailedPrecondition, "Repository metadata.name and metadata.namespace are immutable at %s", immutablePaths[0])
 		}
-		ops := deriveResourceAdmissionOperations(oldEntries, newEntries, changedPaths)
-		if convergeNamespacesOnly {
-			ops = namespaceConvergenceOperations(ops, requestedEntries)
+		ops := deriveResourceAdmissionOperations(oldEntries, requestedEntries, changedPaths)
+		if supersededSnapshot {
+			ops = unchangedManifestOperations(ops, newEntries)
+			// A stale create may fill an absent row, but must never reassign or
+			// overwrite an identity that another admission has already materialized.
+			filtered := ops[:0]
+			for _, op := range ops {
+				if op.operation == admission.OperationCreate {
+					existing, err := s.lookupResourceByIdentity(ctx, op.identity)
+					if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+						return nil, grpcstatus.Errorf(codes.Unavailable, "lookup delayed create: %v", err)
+					}
+					if !reflectNil(existing) {
+						continue
+					}
+				}
+				filtered = append(filtered, op)
+			}
+			ops = filtered
 		}
 		if err := s.applyResourceOperations(ctx, ops, admCtx); err != nil {
 			s.log.Error("admit_resources: apply operations failed",
@@ -1252,57 +1259,62 @@ func (s *Server) AdmitResources(
 		}
 		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
-	s.log.Warn("admit_resources: Namespace convergence exhausted",
+	s.log.Warn("admit_resources: admission convergence exhausted",
 		zap.String("repository_id", req.RepositoryId),
 		zap.String("ref_name", req.RefName),
 		zap.String("requested_commit_sha", newCommit))
 	return &catalogv1.AdmitResourcesResponse{}, nil
 }
 
-func namespaceChangedPaths(paths []string) []string {
-	namespacePaths := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if strings.HasPrefix(path, "namespaces/") {
-			namespacePaths = append(namespacePaths, path)
-		}
-	}
-	return namespacePaths
-}
-
-func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, namespace string, changedPaths []string) []*parsedEntry {
+func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, namespace string, changedPaths []string) ([]*parsedEntry, error) {
 	if ref == "" || isZeroOID(ref) {
-		return nil
+		return nil, nil
 	}
-	paths, err := s.git.ListFiles(ctx, repositoryID, "", ref)
-	if err != nil {
-		s.log.Error("admit_resources: list files failed",
-			zap.String("repository_id", repositoryID),
-			zap.String("commit_sha", ref),
-			zap.Error(err))
-		return nil
-	}
+	var paths []string
 	if len(changedPaths) > 0 {
-		pathSet := make(map[string]struct{}, len(changedPaths))
+		// Signed deltas already identify the affected paths. Enumerating the whole
+		// tree makes each one-file push proportional to the accumulated catalog.
+		seen := make(map[string]bool, len(changedPaths))
 		for _, path := range changedPaths {
-			pathSet[path] = struct{}{}
-		}
-		filtered := paths[:0]
-		for _, path := range paths {
-			if _, ok := pathSet[path]; ok {
-				filtered = append(filtered, path)
+			if !seen[path] {
+				paths = append(paths, path)
+				seen[path] = true
 			}
 		}
-		paths = filtered
+		sort.Strings(paths)
+	} else {
+		var err error
+		paths, err = s.git.ListFiles(ctx, repositoryID, "", ref)
+		if err != nil {
+			return nil, fmt.Errorf("list files at %s: %w", ref, err)
+		}
 	}
 	entries := make([]*parsedEntry, 0, len(paths))
+	var readableFiles map[string]bool
 	for _, path := range paths {
 		content, err := s.git.ReadFile(ctx, repositoryID, path, ref)
-		if err != nil {
-			s.log.Error("admit_resources: read file failed",
-				zap.String("path", path),
-				zap.String("commit_sha", ref),
-				zap.Error(err))
+		if grpcstatus.Code(err) == codes.NotFound {
 			continue
+		}
+		if grpcstatus.Code(err) == codes.FailedPrecondition && len(changedPaths) > 0 {
+			// A blob-to-tree replacement is a removed manifest. Establish that from
+			// a readable tree; unavailable repositories/refs must not imply deletion.
+			if readableFiles == nil {
+				files, listErr := s.git.ListFiles(ctx, repositoryID, "", ref)
+				if listErr != nil {
+					return nil, fmt.Errorf("verify non-file path %s at %s: %w", path, ref, listErr)
+				}
+				readableFiles = make(map[string]bool, len(files))
+				for _, file := range files {
+					readableFiles[file] = true
+				}
+			}
+			if !readableFiles[path] {
+				continue
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read %s at %s: %w", path, ref, err)
 		}
 		parsed, body, err := s.parser.ParseResource(bytes.NewReader(content))
 		if err != nil || parsed == nil {
@@ -1326,7 +1338,7 @@ func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, names
 			entries = append(entries, entry)
 		}
 	}
-	return entries
+	return entries, nil
 }
 
 func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmissionOperation, admCtx AdmissionContext) error {
@@ -1349,8 +1361,16 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 	// child CategoryTaxonomy may be reparented in the same accepted push that
 	// removes its former parent; deleting first would consult a stale reverse
 	// owner-reference projection and reject after the ref has already advanced.
-	if _, err := s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps); err != nil {
+	decisions, err := s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps)
+	if err != nil {
 		return err
+	}
+	for _, decision := range decisions {
+		if decision.Outcome == admission.EntryFailed &&
+			(errors.Is(decision.Err, datastore.ErrConflict) || errors.Is(decision.Err, datastore.ErrAlreadyExists)) {
+			admCtx.markSuperseded()
+			return nil
+		}
 	}
 	for _, op := range deletes {
 		sourcePath := ""
@@ -1448,7 +1468,7 @@ func (s *Server) admitParsedEntries(
 		if err != nil {
 			return decisions, err
 		}
-		decisions = append(decisions, s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, e.path, op, existing, inPushAncestorPaths, catPushSet))
+		decisions = append(decisions, s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx.forEntry(e), e.path, op, existing, inPushAncestorPaths, catPushSet))
 	}
 	for _, e := range entries {
 		if e.parsed.Kind == "CategoryTaxonomy" {
@@ -1460,21 +1480,21 @@ func (s *Server) admitParsedEntries(
 		}
 		switch e.parsed.Kind {
 		case "Product":
-			decisions = append(decisions, s.admitProduct(ctx, e.parsed.Product, e.body, admCtx, e.path, op, existing))
+			decisions = append(decisions, s.admitProduct(ctx, e.parsed.Product, e.body, admCtx.forEntry(e), e.path, op, existing))
 		case "Collection":
-			if err := s.admitCollection(ctx, e.parsed.Collection, e.body, admCtx, e.path, op, existing); err != nil {
+			if err := s.admitCollection(ctx, e.parsed.Collection, e.body, admCtx.forEntry(e), e.path, op, existing); err != nil {
 				return decisions, err
 			}
 		case "ProductVariant":
-			if err := s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, admCtx, e.path, op, existing); err != nil {
+			if err := s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, admCtx.forEntry(e), e.path, op, existing); err != nil {
 				return decisions, err
 			}
 		case "Namespace":
-			s.admitNamespace(ctx, e.parsed.Namespace, e.body, admCtx, e.path, op, existing)
+			s.admitNamespace(ctx, e.parsed.Namespace, e.body, admCtx.forEntry(e), e.path, op, existing)
 		case "File":
-			s.admitFile(ctx, e.parsed.File, e.body, admCtx, e.path, op, existing)
+			s.admitFile(ctx, e.parsed.File, e.body, admCtx.forEntry(e), e.path, op, existing)
 		case "Repository":
-			if err := s.admitRepository(ctx, e.parsed.Repository, e.body, admCtx, e.path, op, existing); err != nil {
+			if err := s.admitRepository(ctx, e.parsed.Repository, e.body, admCtx.forEntry(e), e.path, op, existing); err != nil {
 				return decisions, err
 			}
 		}
@@ -1619,7 +1639,7 @@ func (s *Server) admitRepository(ctx context.Context, resource *catalog.Reposito
 		if existing.DeletionTimestamp != nil || intent != nil {
 			return admission.NewError(admission.CodeFailedPrecondition, "REPOSITORY_TERMINATING", "repository deletion is pending")
 		}
-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
 			admCtx.markSuperseded()
 			return nil
 		}
@@ -2150,7 +2170,7 @@ func (s *Server) admitNamespace(
 
 	for range namespaceadmission.AdmissionWriteAttempts {
 		refCheck := func(ctx context.Context) (bool, error) {
-			return s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA), nil
+			return s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()), nil
 		}
 		if namespaceadmission.RecheckAuthoringRef(ctx, refCheck) != nil {
 			admCtx.markSuperseded()
@@ -2391,7 +2411,7 @@ func (s *Server) admitFile(
 		// observed it as absent. If this admission still owns the ref tip, reload
 		// the winner and converge through the resource-version-guarded update
 		// path below. A stale admission must leave the winner untouched.
-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
 			return
 		}
 		existing, err = s.store.GetFileByName(ctx, namespace, resource.Metadata.Name)
@@ -2439,7 +2459,7 @@ func (s *Server) admitFile(
 			s.log.Error("admit_resources: update file failed", zap.Error(err))
 			return
 		}
-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
 			return
 		}
 		existing, err = s.store.GetFileByName(ctx, namespace, resource.Metadata.Name)
@@ -2538,8 +2558,14 @@ func (s *Server) admitProduct(
 		decision.Diagnostics = []admission.Diagnostic{{Reason: "POLICY_DENIED", Message: d.Reason, Level: admission.LevelFailure, File: sourcePath, Field: d.Field}}
 		ObserveAdmissionRejection("Product", admission.PhasePostReceive)
 		if existing != nil {
-			s.recordProductAdmissionDenied(ctx, existing, decision.Diagnostics, admCtx.Now)
+			s.recordProductAdmissionDenied(ctx, existing, decision.Diagnostics, admCtx)
 		}
+		return decision
+	}
+
+	if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
+		admCtx.markSuperseded()
+		decision.Outcome = admission.EntryNoOp
 		return decision
 	}
 
@@ -2623,14 +2649,18 @@ func (s *Server) admitProduct(
 	return decision
 }
 
-func (s *Server) recordProductAdmissionDenied(ctx context.Context, existing *datastore.Product, diagnostics []admission.Diagnostic, now time.Time) {
+func (s *Server) recordProductAdmissionDenied(ctx context.Context, existing *datastore.Product, diagnostics []admission.Diagnostic, admCtx AdmissionContext) {
 	current := existing
 	for range maxRepositoryAdmissionUpdateAttempts {
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
+			admCtx.markSuperseded()
+			return
+		}
 		var status catalog.ProductStatus
 		if len(current.Status) > 0 && json.Unmarshal(current.Status, &status) != nil {
 			return
 		}
-		denied := catalog.Condition{Type: catalog.ConditionAdmissionAccepted, Status: catalog.ConditionFalse, ObservedGeneration: current.Generation, LastTransitionTime: now, Reason: "AdmissionReportFailed", Message: admission.FormatRejection(diagnostics)}
+		denied := catalog.Condition{Type: catalog.ConditionAdmissionAccepted, Status: catalog.ConditionFalse, ObservedGeneration: current.Generation, LastTransitionTime: admCtx.Now, Reason: "AdmissionReportFailed", Message: admission.FormatRejection(diagnostics)}
 		conditions, replaced := make([]catalog.Condition, 0, len(status.Conditions)+1), false
 		for _, condition := range status.Conditions {
 			if condition.Type == catalog.ConditionAdmissionAccepted {
@@ -3109,7 +3139,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		}}
 		ObserveAdmissionRejection("CategoryTaxonomy", admission.PhasePostReceive)
 		if existing != nil {
-			s.recordCategoryAdmissionDenied(ctx, existing, decision.Diagnostics, admCtx.Now)
+			s.recordCategoryAdmissionDenied(ctx, existing, decision.Diagnostics, admCtx)
 		}
 		return decision
 	case admission.Allowed:
@@ -3150,6 +3180,12 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	// this push's topological order sees the correct full path for this node,
 	// regardless of whether the DB write below succeeds.
 	inPushAncestorPaths[name] = ancestorPath
+
+	if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
+		admCtx.markSuperseded()
+		decision.Outcome = admission.EntryNoOp
+		return decision
+	}
 
 	if op == admission.OperationCreate || existing == nil {
 		statusJSON := categoryAdmissionStatusFull(1, admCtx.Revision, admCtx.Now, parentResolved, inCycle)
@@ -3253,9 +3289,13 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 // recordCategoryAdmissionDenied marks an existing category's AdmissionAccepted
 // condition False without touching spec, body or generation, so the last
 // accepted generation stays served while the denial is visible.
-func (s *Server) recordCategoryAdmissionDenied(ctx context.Context, existing *datastore.CategoryTaxonomy, diagnostics []admission.Diagnostic, now time.Time) {
+func (s *Server) recordCategoryAdmissionDenied(ctx context.Context, existing *datastore.CategoryTaxonomy, diagnostics []admission.Diagnostic, admCtx AdmissionContext) {
 	current := existing
 	for range maxRepositoryAdmissionUpdateAttempts {
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
+			admCtx.markSuperseded()
+			return
+		}
 		var status catalog.CategoryTaxonomyStatus
 		if len(current.Status) > 0 {
 			if err := json.Unmarshal(current.Status, &status); err != nil {
@@ -3267,7 +3307,7 @@ func (s *Server) recordCategoryAdmissionDenied(ctx context.Context, existing *da
 			Type:               catalog.ConditionAdmissionAccepted,
 			Status:             catalog.ConditionFalse,
 			ObservedGeneration: current.Generation,
-			LastTransitionTime: now,
+			LastTransitionTime: admCtx.Now,
 			Reason:             "AdmissionReportFailed",
 			Message:            admission.FormatRejection(diagnostics),
 		}

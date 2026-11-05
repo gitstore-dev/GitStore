@@ -56,6 +56,18 @@ func categoryManifest(name, title string) string {
 		"---\n"
 }
 
+type decisionGitReader struct{}
+
+func (decisionGitReader) ResolveRef(context.Context, string, string) (string, error) {
+	return strings.Repeat("a", 40), nil
+}
+func (decisionGitReader) ListFiles(context.Context, string, string, string) ([]string, error) {
+	return nil, errors.New("unexpected listing in entry-decision test")
+}
+func (decisionGitReader) ReadFile(context.Context, string, string, string) ([]byte, error) {
+	return nil, errors.New("unexpected read in entry-decision test")
+}
+
 func newDecisionServer(t *testing.T, store datastore.Datastore) *Server {
 	t.Helper()
 	require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{UID: "00000000-0000-0000-0000-000000000002", Name: "gitstore"}))
@@ -64,6 +76,7 @@ func newDecisionServer(t *testing.T, store datastore.Datastore) *Server {
 	}))
 	srv, err := NewServer(ServerDeps{
 		Store:                   store,
+		GitReader:               decisionGitReader{},
 		Logger:                  zap.NewNop(),
 		ExtraValidatingPolicies: []admission.ValidatingAdmissionPolicy{denyCategoryTitlePolicy{}},
 	})

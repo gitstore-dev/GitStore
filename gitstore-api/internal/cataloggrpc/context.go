@@ -116,6 +116,8 @@ type AdmissionContext struct {
 	RefName      string    // fully-qualified ref, e.g. "refs/heads/main"
 	Revision     string    // human revision label, e.g. "main@sha1:abc123"
 	Now          time.Time // admission timestamp, set once for the entire push
+	// tipCommitSHA fences writes while CommitSHA retains the accepted source revision.
+	tipCommitSHA string
 	superseded   *bool
 }
 
@@ -127,4 +129,21 @@ func (c AdmissionContext) markSuperseded() {
 
 func (c AdmissionContext) wasSuperseded() bool {
 	return c.superseded != nil && *c.superseded
+}
+
+func (c AdmissionContext) guardCommitSHA() string {
+	if c.tipCommitSHA != "" {
+		return c.tipCommitSHA
+	}
+	return c.CommitSHA
+}
+
+func (c AdmissionContext) forEntry(entry *parsedEntry) AdmissionContext {
+	// Namespace's existing convergence contract records the live authoring tip.
+	// Other resources retain the commit that supplied their accepted content.
+	if entry != nil && entry.parsed != nil && entry.parsed.Namespace != nil && c.tipCommitSHA != "" {
+		c.CommitSHA = c.tipCommitSHA
+		c.Revision = strings.TrimPrefix(c.RefName, "refs/heads/") + "@sha1:" + c.tipCommitSHA
+	}
+	return c
 }
