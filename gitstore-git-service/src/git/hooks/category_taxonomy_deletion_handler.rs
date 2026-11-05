@@ -269,6 +269,8 @@ fn resource_removed_from_trees(
                 return true
             }
             (kind, Some((new_id, new_kind)))
+                if is_blob(kind) && is_blob(new_kind) && old.oid == new_id => {}
+            (kind, Some((new_id, new_kind)))
                 if is_blob(kind) && is_blob(new_kind) && old.oid != new_id =>
             {
                 if is_resource_blob(repo, old.oid) && !is_resource_blob(repo, new_id) {
@@ -469,6 +471,59 @@ mod tests {
             .unwrap()
             .detach()
             .to_string()
+    }
+
+    #[test]
+    fn adding_a_file_does_not_remove_an_unchanged_resource_sibling() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = make_bare_repo(directory.path());
+        let old = make_commit(
+            &path,
+            "---\nkind: CategoryTaxonomy\nmetadata:\n  name: preserved\n---\n",
+        );
+        let repo = gix::open(&path).unwrap();
+        let previous = repo.head_commit().unwrap();
+        let blob = repo
+            .write_blob(b"---\nkind: CategoryTaxonomy\nmetadata:\n  name: added\n---\n")
+            .unwrap()
+            .detach();
+        let tree = repo
+            .edit_tree(previous.tree_id().unwrap())
+            .unwrap()
+            .upsert("added.md", gix::object::tree::EntryKind::Blob, blob)
+            .unwrap()
+            .write()
+            .unwrap()
+            .detach();
+        let signature = gix::actor::SignatureRef {
+            name: "Test".into(),
+            email: "test@example.com".into(),
+            time: "0 +0000",
+        };
+        let new = repo
+            .commit_as(
+                signature,
+                signature,
+                "HEAD",
+                "add resource",
+                tree,
+                [previous.id().detach()],
+            )
+            .unwrap()
+            .detach();
+        let trees = collect_resource_deletion_trees(
+            &repo,
+            &[RefUpdate {
+                ref_name: "refs/heads/main".to_owned(),
+                old_oid: old,
+                new_oid: new.to_string(),
+            }],
+        )
+        .unwrap();
+        assert!(
+            trees.is_empty(),
+            "unchanged resources cannot turn an addition into a deletion validation"
+        );
     }
 
     #[tokio::test]
