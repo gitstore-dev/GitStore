@@ -42,7 +42,7 @@ curl -s http://localhost:5001/health | jq .
 Check GraphQL:
 
 ```bash
-curl -s http://localhost:4000/graphql \
+curl -s http://localhost:4000/admin/graphql \
   -H "Content-Type: application/json" \
   -d '{"query":"query { namespaces(first: 1) { pageInfo { hasNextPage } } }"}' | jq .
 ```
@@ -130,7 +130,7 @@ make logs SERVICE=api
 Confirm the namespace and repository exist:
 
 ```bash
-curl -s http://localhost:4000/graphql \
+curl -s http://localhost:4000/admin/graphql \
   -H "Content-Type: application/json" \
   -d '{"query":"query { repository(by: { namespacePath: { namespace: \"gitstore-test\", name: \"catalog\" } }) { id name } }"}' | jq .
 ```
@@ -175,13 +175,16 @@ make logs SERVICE=api
 make logs SERVICE=controller-manager
 ```
 
-The compose default is:
+Configure the Admin client with a complete browser-accessible Admin URL, such
+as `http://localhost:4000/admin/graphql`. A server-side client on the Compose
+network uses:
 
 ```text
-GITSTORE_GRAPHQL_URL=http://api:4000/graphql
+http://api:4000/admin/graphql
 ```
 
-For more admin-specific checks, see [docs/admin/quickstart.md](../admin/quickstart.md).
+Configure CORS to allow the browser origin if it differs from the API origin.
+The external Admin client's environment-variable name depends on its release.
 
 ## Log Commands
 

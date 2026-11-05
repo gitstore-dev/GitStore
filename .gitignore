@@ -78,6 +78,8 @@ coverage/
 *.log
 logs/
 .gitstore/
+__pycache__/
+*.py[cod]
 
 .claude/settings.json
 test-repos/

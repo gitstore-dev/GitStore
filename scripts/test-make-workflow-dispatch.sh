@@ -38,6 +38,11 @@ assert_dispatch secret signing-key _secret-signing-key
 assert_dispatch generate authz _generate-authz
 assert_dispatch generate all _generate-all
 
+api_default="$(make --no-print-directory -C "${repo_root}" -np bootstrap TARGET=token | sed -n '/^API_URL /p')"
+health_default="$(make --no-print-directory -C "${repo_root}" -np bootstrap TARGET=token | sed -n '/^API_HEALTH_URL /p')"
+[[ "${api_default}" == 'API_URL = http://localhost:4000/admin/graphql' ]]
+[[ "${health_default}" == 'API_HEALTH_URL = http://localhost:4000/health' ]]
+
 for target in compose ps logs stop down; do
   output="$(make --no-print-directory -C "${repo_root}" -n "${target}" OBSERVABILITY=otel)"
   [[ "${output}" == *"--profile observability"* ]]

@@ -1,5 +1,80 @@
 # GitStore capacity profiles
 
+`api/endpoint-split` measures Admin and the unavailable Storefront boundary:
+
+```sh
+CAPACITY_ADMIN_URLS=http://localhost:4000/admin/graphql \
+CAPACITY_STOREFRONT_URLS=http://localhost:4100/storefront/graphql \
+make capacity TARGET=api PROFILE=endpoint-split MODE=diagnostic
+```
+
+URLs are complete and may be comma-separated for two replicas. Diagnostics
+default to ten seconds at 100 public requests/s and ten Admin probes/s;
+`CAPACITY_DURATION` changes diagnostic duration only. Acceptance uses 30 minutes
+at baseline, five minutes at twice the public rate, then 30 seconds of recovery.
+Use the existing private `CAPACITY_TOKEN_FILE` mechanism for credentials.
+The probe is `__typename`; authoring/status/push/watch correctness needs the
+connected drivers as well. Never target an operator deployment implicitly.
+
+Acceptance requires existing API readiness manifests/process verification,
+`CAPACITY_OWNED_PROJECT`, two `CAPACITY_CONTROLLER_CONTAINERS`, one
+`CAPACITY_GIT_SERVICE_CONTAINER`, and `CAPACITY_DATASET_RECEIPT`. The verified
+retained dataset receipt contains `verified=true`, `products>=5000000`,
+`categories>=10000`, two distinct `targets` and a SHA-256 `digest`. Inspect actual
+processes and verify the dataset independently; a manifest alone is insufficient.
+
+Acceptance automatically runs the existing repository workload/oracle with its
+own endpoint profile: twenty durable observers and two authoring operations/s,
+plus eight k6 Admin probes/s. It preserves the larger `repository/lifecycle`
+acceptance gates. The public load remains 100 requests/s, then 200/s for overload.
+Native pushes run separately at one/s with one worker by default and a finite
+verification queue. Every acknowledged commit must appear with the same UID,
+revision and Ready state on both Admin APIs within sixty seconds; those oracle
+reads are measurement overhead in addition to the offered workload.
+Two additional measurement streams require the same UID/commit through the
+durable journal on both APIs and resume from their last cursor after disconnect.
+The Git fixtures use normal clones and `fetch.negotiationAlgorithm=noop`;
+the native service currently returns invalid responses to shallow and incremental
+have/ACK negotiation. This standard client setting fetches without have negotiation
+and can increase transferred pack data. These runs do not certify those unsupported
+negotiation paths. Existing command deadlines and output bounds still apply.
+Prepare an empty owned workload namespace separately from the preserved catalog
+baseline, and a separate native-push repository inside that namespace. This keeps
+baseline Git trees out of authoring measurements and avoids competing clients on
+one branch. Setup never clones the retained catalog repository. The HTTP runners
+preallocate their declared maximum pools (100 public and 20 Admin clients) before
+measurement; client allocation is not part of the offered workload.
+
+Supply the usual `REPOSITORY_API_A/B`, `REPOSITORY_CONTROLLER_A/B`, private
+`CAPACITY_TOKEN_FILE`, and an owned API-B replacement watcher with a fresh
+`REPOSITORY_REPLACEMENT_TRIGGER_FILE`. Provide `REPOSITORY_CAPACITY_NAMESPACE`
+and `CAPACITY_PUSH_NAMESPACE` as the same explicit `endpoint-split-*` namespace,
+plus its prepared `CAPACITY_PUSH_REMOTE` and `CAPACITY_PUSH_REPOSITORY`.
+Set `GIT_URL` explicitly for the connected Git deletion/push parity checks. Keep
+the retained baseline outside these writable fixtures. The namespace/repository
+must be provisioned through normal bootstrap before the test; the runner does
+not infer or mutate an existing catalog repository.
+
+`CAPACITY_PROMETHEUS_URL` is required for acceptance, with shared OTLP/SDK
+telemetry enabled on both APIs. Samples include effective runtime ceilings,
+HTTP/WebSocket in-flight work, limiter cardinality, connection counts and process
+CPU/RSS/GC. Construction/cleanup tests cover the same limits without relying on
+query timings. Connected artifacts remain under the run's `connected/` directory;
+background children own finite deadlines/process groups and are stopped on exit.
+Drivers finish setup behind a shared, run-specific barrier before offered load
+starts. Both driver receipts must cover the entire k6 window; late scheduled
+pushes are counted as drops rather than disappearing through timer coalescing.
+Receipts must match source/config/environment identity and the full load window.
+Missing receipts, failed/dropped work or a measured ceiling breach fail acceptance.
+Error rates are enforced separately per endpoint. Any public data or malformed
+unavailable response fails outright. The final ten seconds of the recovery
+allowance must restore Admin latency/success and unthrottled unavailable responses.
+
+Boundary, publication-fixture and published-catalog outcomes are separate.
+HTTP 503 throughput never counts as successful catalog reads. Publication/target
+support and adversarial WebSocket pre-decode allocation bounds remain open.
+A diagnostic pass is not production certification.
+
 Capacity scenarios use k6 or focused Go harnesses for reproducible offered
 load and threshold decisions. Run them only through the root Makefile:
 
@@ -8,7 +83,7 @@ make capacity TARGET=api PROFILE=readiness MODE=diagnostic \
   CAPACITY_BASE_URL=http://localhost:4000
 ```
 
-Valid target/profile pairs are `api/readiness`, `namespace/admission`,
+Valid target/profile pairs are `api/readiness`, `api/endpoint-split`, `namespace/admission`,
 `namespace/validation`, `namespace/watch`, `namespace/recovery`,
 `repository/lifecycle`, and `scylla/soak`. Admission is deployed k6 load; validation is the in-process
 two-replica soak. `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.

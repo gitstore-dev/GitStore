@@ -78,7 +78,7 @@ services:
       - /app/gitctl
       - enroll-serviceaccount
       - --api-url
-      - http://api:4000/graphql
+      - http://api:4000/admin/graphql
       - --name
       - gitstore-controller-manager
       - --key-id

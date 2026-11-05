@@ -430,12 +430,17 @@ func TestQuery_VariablesSentInRequestBody(t *testing.T) {
 // protocol (https://github.com/enisdenjo/graphql-ws/blob/master/PROTOCOL.md)
 // to exercise Client.Subscribe: connection_init -> connection_ack, then
 // subscribe -> a scripted sequence of next/error messages.
-func stubGraphQLWSServer(t *testing.T, messages []map[string]any) *httptest.Server {
+func stubGraphQLWSServer(t *testing.T, messages []map[string]any, paths ...string) *httptest.Server {
 	t.Helper()
 	upgrader := websocket.Upgrader{
 		Subprotocols: []string{"graphql-transport-ws"},
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(paths) > 0 && r.URL.Path != paths[0] {
+			t.Errorf("WebSocket path=%q, expected %q", r.URL.Path, paths[0])
+			w.WriteHeader(404)
+			return
+		}
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Errorf("upgrade failed: %v", err)
@@ -482,10 +487,10 @@ func TestSubscribe_HandshakeAndNextMessages(t *testing.T) {
 	srv := stubGraphQLWSServer(t, []map[string]any{
 		{"type": "next", "payload": map[string]any{"data": map[string]any{"watchCategories": map[string]any{"name": "electronics"}}}},
 		{"type": "next", "payload": map[string]any{"data": map[string]any{"watchCategories": map[string]any{"name": "furniture"}}}},
-	})
+	}, "/proxy/admin/graphql")
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	wsURL := srv.URL + "/proxy/admin/graphql"
 	c := graphqlclient.New(wsURL, graphqlclient.NewStaticToken("test-token"))
 	sub, err := c.Subscribe(context.Background(), `subscription { watchCategories { name } }`, nil)
 	if err != nil {

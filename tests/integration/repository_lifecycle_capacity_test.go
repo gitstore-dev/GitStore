@@ -48,6 +48,7 @@ const (
 )
 
 type repositoryCapacityConfig struct {
+	endpointSplit               bool
 	apiA, apiB                  string
 	overflowAPI                 string
 	controllerA, controllerB    string
@@ -83,17 +84,20 @@ type repositoryCapacityEvent struct {
 }
 
 type repositoryCapacitySubscriber struct {
-	endpoint string
-	cursor   string
-	seen     *capacityBitset
-	latency  []time.Duration
-	mu       sync.Mutex
+	endpoint  string
+	cursor    string
+	seen      *capacityBitset
+	latency   []time.Duration
+	mu        sync.Mutex
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
 type repositoryCapacityLoadResult struct {
 	produced, admitted, failed, backpressured int64
 	acknowledged                              *capacityBitset
 	maxSequence                               int
+	latencies                                 []time.Duration
 }
 
 func runRepositoryLifecycleCapacity(t *testing.T) {
@@ -104,7 +108,11 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	}
 	cfg := loadRepositoryCapacityConfig(t)
 	require.NoError(t, validateRepositoryCapacityScale(cfg))
+	runRepositoryCapacityWorkload(t, cfg)
+}
 
+func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
+	t.Helper()
 	client := &http.Client{Timeout: 20 * time.Second}
 	require.NotEqual(t, cfg.apiA, cfg.apiB, "API endpoints must identify distinct replicas")
 	require.NotEqual(t, cfg.controllerA, cfg.controllerB, "controller endpoints must identify distinct replicas")
@@ -173,7 +181,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	}
 	replayP95 := percentileDuration(replayDurations, .95)
 	if cfg.mode != capacityModeDiagnostic {
-		require.LessOrEqual(t, replayP95, 5*time.Second, "10,000-event Repository replay p95 must be <=5s")
+		require.LessOrEqual(t, replayP95, 5*time.Second, "%d-event Repository replay p95 must be <=5s", cfg.replayEvents)
 	}
 
 	livePrefix := "rcl-" + runID + "-"
@@ -181,6 +189,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		(int(cfg.duration/cfg.burstInterval)+2)*cfg.burstSize + 128
 	subscribers := openRepositoryCapacitySubscribers(t, cfg, maxTransitions)
 	readCtx, cancelReaders := context.WithCancel(context.Background())
+	t.Cleanup(cancelReaders)
 	readerErrors := make(chan error, len(subscribers))
 	var readers sync.WaitGroup
 	for _, subscriber := range subscribers {
@@ -191,6 +200,20 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 				readerErrors <- err
 			}
 		}(subscriber)
+	}
+	if cfg.endpointSplit {
+		// Prove every typed subscription executed before beginning the timed
+		// workload; merely launching reader goroutines is insufficient.
+		require.NoError(t, repositoryCapacityMutation(t.Context(), client, cfg.apiA, cfg.token, false, cfg.namespace, poolPrefix+"1", "setup-", 1, ""))
+		readyCtx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		for _, subscriber := range subscribers {
+			select {
+			case <-subscriber.ready:
+			case <-readyCtx.Done():
+				require.NoError(t, readyCtx.Err(), "all twenty observers must receive a durable event before load")
+			}
+		}
 	}
 
 	var secretControllersBefore [2]secretCapacityControllerSample
@@ -205,7 +228,14 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, secretLogs.stop()) })
 		require.NoError(t, secretLogs.capture(t.Context(), secretResourcesBefore))
 	}
+	if cfg.endpointSplit {
+		require.NoError(t, writeSecretCapacityPrivateJSON(os.Getenv("CAPACITY_CONNECTED_READY_FILE"), map[string]any{"runId": os.Getenv("CAPACITY_RUN_ID"), "subscribers": cfg.subscribers}))
+		require.NoError(t, awaitEndpointLoadStart(t.Context()))
+	}
 	soakStarted := time.Now()
+	if cfg.endpointSplit {
+		require.NoError(t, writeSecretCapacityPrivateJSON(os.Getenv("CAPACITY_CONNECTED_STARTED_FILE"), map[string]any{"runId": os.Getenv("CAPACITY_RUN_ID"), "startedAt": soakStarted.UTC().Format(time.RFC3339)}))
+	}
 	var fileLoad <-chan secretCapacityFileLoadResult
 	var secretFaults <-chan secretCapacityFaultResult
 	if fileWorkload != nil {
@@ -239,6 +269,11 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	require.Zero(t, load.failed, "Repository mutations failed under load")
 	require.Zero(t, load.backpressured, "bounded mutation queue shed load")
 	require.Equal(t, load.produced, load.admitted, "all offered Repository transitions must be admitted")
+	if cfg.endpointSplit {
+		sort.Slice(load.latencies, func(i, j int) bool { return load.latencies[i] < load.latencies[j] })
+		require.NotEmpty(t, load.latencies)
+		require.LessOrEqual(t, percentileDuration(load.latencies, .95), 2*time.Second, "Admin authoring p95 must include actual mutations")
+	}
 	recovery := <-replacementDone
 	require.NoError(t, recovery.err)
 	waitRepositoryCapacitySubscribers(t, subscribers, load.acknowledged, 60*time.Second)
@@ -304,6 +339,17 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		}))
 	}
 	t.Logf("Repository lifecycle capacity passed: mode=%s replay=%d replay_p95=%s subscribers=%d admitted=%d duration=%s", cfg.mode, cfg.replayEvents, replayP95, cfg.subscribers, load.admitted, time.Since(soakStarted))
+	if cfg.endpointSplit {
+		require.NoError(t, writeSecretCapacityPrivateJSON(filepath.Join(os.Getenv("CAPACITY_EVIDENCE_DIR"), "connected-result.json"), map[string]any{
+			"schemaVersion": 1, "component": "endpoint-split-connected/v1", "passed": true, "mode": cfg.mode, "runId": os.Getenv("CAPACITY_RUN_ID"),
+			"sourceStateSha256": os.Getenv("CAPACITY_SOURCE_STATE_SHA256"), "gitRevision": os.Getenv("CAPACITY_SOURCE_REVISION"), "configDigest": os.Getenv("CAPACITY_CONFIG_DIGEST"), "environmentDigest": os.Getenv("CAPACITY_ENVIRONMENT_DIGEST"),
+			"startedAt": soakStarted.UTC().Format(time.RFC3339), "completedAt": time.Now().UTC().Format(time.RFC3339), "subscribers": cfg.subscribers,
+			"durationSeconds": cfg.duration.Seconds(), "offered": load.produced, "admitted": load.admitted, "failed": load.failed, "dropped": load.backpressured,
+			"adminAuthoringP95Ms": percentileDuration(load.latencies, .95).Milliseconds(), "apiRecoveryMs": recovery.duration.Milliseconds(),
+			"visibilityP95Ms": percentileDuration(latencies, .95).Milliseconds(), "visibilityP99Ms": percentileDuration(latencies, .99).Milliseconds(), "replayEvents": cfg.replayEvents, "replayP95Ms": replayP95.Milliseconds(),
+			"processesBefore": metricsStart, "processesAfter": metricsEnd, "apiInstancesBefore": []string{identityA, identityB},
+		}))
+	}
 }
 
 func validateSecretCapacityAvailability(value string) error {
@@ -648,6 +694,8 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 	locks := make([]sync.Mutex, cfg.resourcePool)
 	var wg sync.WaitGroup
 	var produced, admitted, failed, backpressured atomic.Int64
+	var latencyMu sync.Mutex
+	loadStarted := time.Now()
 	for worker := 0; worker < cfg.mutationWorkers; worker++ {
 		wg.Add(1)
 		go func() {
@@ -659,7 +707,16 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 				if sequence%2 == 0 {
 					endpoint = cfg.apiB
 				}
+				started := time.Now()
+				if cfg.endpointSplit {
+					started = loadStarted.Add(time.Duration(sequence-1) * cfg.transitionInterval)
+				}
 				err := repositoryCapacityMutation(context.Background(), client, endpoint, cfg.token, false, cfg.namespace, poolPrefix+strconv.Itoa(index+1), eventPrefix, sequence, "")
+				if cfg.endpointSplit {
+					latencyMu.Lock()
+					result.latencies = append(result.latencies, time.Since(started))
+					latencyMu.Unlock()
+				}
 				locks[index].Unlock()
 				if err != nil {
 					failed.Add(1)
@@ -683,13 +740,33 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 			backpressured.Add(1)
 		}
 	}
-	for time.Since(started) < cfg.duration {
-		select {
-		case <-ticker.C:
+	if cfg.endpointSplit {
+		planned := int(cfg.duration / cfg.transitionInterval)
+		for offer := 0; offer < planned; offer++ {
+			scheduled := loadStarted.Add(time.Duration(offer) * cfg.transitionInterval)
+			if delay := time.Until(scheduled); delay > 0 {
+				time.Sleep(delay)
+			}
+			if time.Since(scheduled) >= cfg.transitionInterval {
+				sequence++
+				produced.Add(1)
+				backpressured.Add(1)
+				continue
+			}
 			enqueue()
-		case <-burst.C:
-			for i := 0; i < cfg.burstSize; i++ {
+		}
+		if delay := time.Until(loadStarted.Add(cfg.duration)); delay > 0 {
+			time.Sleep(delay)
+		}
+	} else {
+		for time.Since(started) < cfg.duration {
+			select {
+			case <-ticker.C:
 				enqueue()
+			case <-burst.C:
+				for i := 0; i < cfg.burstSize; i++ {
+					enqueue()
+				}
 			}
 		}
 	}
@@ -737,7 +814,7 @@ func repositoryCapacityMutation(ctx context.Context, client *http.Client, endpoi
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(endpoint, "/")+"/graphql", bytes.NewReader(payload))
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(endpoint, "/")+"/admin/graphql", bytes.NewReader(payload))
 		if reqErr != nil {
 			return reqErr
 		}
@@ -838,7 +915,7 @@ func TestDialRepositoryCapacityWatchRetriesTransientHandshake(t *testing.T) {
 }
 
 func dialRepositoryCapacityWatchSelection(endpoint string, cfg repositoryCapacityConfig, cursor, selection string) (*websocket.Conn, error) {
-	wsURL := strings.Replace(strings.TrimSuffix(endpoint, "/"), "http", "ws", 1) + "/graphql"
+	wsURL := strings.Replace(strings.TrimSuffix(endpoint, "/"), "http", "ws", 1) + "/admin/graphql"
 	header := http.Header{"Authorization": []string{"Bearer " + cfg.token}}
 	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}, HandshakeTimeout: 10 * time.Second}
 	conn, response, err := dialer.Dial(wsURL, header)
@@ -920,6 +997,9 @@ func openRepositoryCapacitySubscribers(t *testing.T, cfg repositoryCapacityConfi
 			endpoint = cfg.apiB
 		}
 		states = append(states, &repositoryCapacitySubscriber{endpoint: endpoint, cursor: repositoryCapacityBootstrapCursor(t, endpoint, cfg), seen: newCapacityBitset(maxTransitions + 1)})
+		if cfg.endpointSplit {
+			states[len(states)-1].ready = make(chan struct{})
+		}
 	}
 	return states
 }
@@ -931,14 +1011,22 @@ func (s *repositoryCapacitySubscriber) read(ctx context.Context, cfg repositoryC
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
+		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 		for ctx.Err() == nil {
-			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			timeout := 5 * time.Second
+			if cfg.endpointSplit {
+				timeout = 45 * time.Second
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(timeout))
 			event, readErr := readRepositoryCapacityEvent(conn)
 			if readErr != nil {
 				break
 			}
 			if event.ResourceVersion != "" {
 				s.cursor = event.ResourceVersion
+				if s.ready != nil {
+					s.readyOnce.Do(func() { close(s.ready) })
+				}
 			}
 			if sequence, ok := repositoryCapacitySequence(event, prefix); ok {
 				first := s.seen.mark(sequence)
@@ -953,6 +1041,7 @@ func (s *repositoryCapacitySubscriber) read(ctx context.Context, cfg repositoryC
 				}
 			}
 		}
+		stop()
 		conn.Close()
 	}
 	return ctx.Err()
@@ -1243,7 +1332,7 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 			_, err := newSecretCapacityGitWorker(ctx, directory, gitURL+"/"+cfg.namespace+"/gitstore-system.git", cfg.namespace, name, cfg.token, 0)
 			require.NoError(t, err)
 		} else {
-			_, err := secretCapacityGit(ctx, directory, cfg.token, "fetch", "--quiet", "--depth=1", "origin", "refs/heads/main")
+			_, err := secretCapacityGit(ctx, directory, cfg.token, "fetch", "--quiet", "origin", "refs/heads/main")
 			require.NoError(t, err)
 			_, err = secretCapacityGit(ctx, directory, "", "checkout", "--quiet", "--detach", "FETCH_HEAD")
 			require.NoError(t, err)
@@ -1265,7 +1354,7 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 			_, err = secretCapacityGit(ctx, directory, cfg.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
 			require.NoError(t, err)
 		}
-		_, err = secretCapacityGit(ctx, directory, cfg.token, "fetch", "--quiet", "--depth=1", "origin", "refs/heads/main")
+		_, err = secretCapacityGit(ctx, directory, cfg.token, "fetch", "--quiet", "origin", "refs/heads/main")
 		require.NoError(t, err)
 		contents, err = secretCapacityGit(ctx, directory, "", "ls-tree", "--name-only", "FETCH_HEAD", "--", path)
 		require.NoError(t, err)
@@ -1273,7 +1362,7 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 		require.Eventually(t, func() bool {
 			for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
 				read := gqlQueryWithURL(t, endpoint, cfg.token, `query($id: ID!) { node(id: $id) { id } }`, map[string]any{"id": current.Repository.ID})
-				if len(read.Errors) != 0 || !bytes.Contains(read.Data, []byte(`"node":null`)) {
+				if !repositoryCapacityDeletionObserved(read) {
 					return false
 				}
 			}
@@ -1282,6 +1371,38 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 		previousUID = current.Repository.ID
 	}
 	t.Log("repository deletion parity: mutation/push manifest removal, controller completion, name reuse and stale UID rejection verified")
+}
+
+func repositoryCapacityDeletionObserved(response gqlResponse) bool {
+	var data map[string]json.RawMessage
+	if json.Unmarshal(response.Data, &data) != nil || len(data) != 1 || string(data["node"]) != "null" || len(response.Errors) != 1 {
+		return false
+	}
+	var failure struct {
+		Path       []string `json:"path"`
+		Extensions struct {
+			Code        string                    `json:"code"`
+			Diagnostics []struct{ Reason string } `json:"diagnostics"`
+		} `json:"extensions"`
+	}
+	return json.Unmarshal(response.Errors[0], &failure) == nil && len(failure.Path) == 1 && failure.Path[0] == "node" &&
+		failure.Extensions.Code == "NOT_FOUND" && len(failure.Extensions.Diagnostics) == 1 && failure.Extensions.Diagnostics[0].Reason == "REPOSITORY_NOT_FOUND"
+}
+
+func TestRepositoryCapacityDeletionRequiresTheRepositoryNotFoundContract(t *testing.T) {
+	missing := gqlResponse{Data: json.RawMessage(`{"node":null}`), Errors: []json.RawMessage{json.RawMessage(`{"path":["node"],"extensions":{"code":"NOT_FOUND","diagnostics":[{"reason":"REPOSITORY_NOT_FOUND"}]}}`)}}
+	require.True(t, repositoryCapacityDeletionObserved(missing))
+	for _, response := range []gqlResponse{
+		{Data: json.RawMessage(`{"node":{"id":"still-present"}}`), Errors: missing.Errors},
+		{Data: json.RawMessage(`{}`), Errors: missing.Errors},
+		{Data: json.RawMessage(`null`), Errors: missing.Errors},
+		{Data: missing.Data},
+		{Data: missing.Data, Errors: []json.RawMessage{json.RawMessage(`{"path":["node"],"extensions":{"code":"FORBIDDEN"}}`)}},
+		{Data: missing.Data, Errors: []json.RawMessage{json.RawMessage(`{"path":["node"],"extensions":{"code":"NOT_FOUND","diagnostics":[{"reason":"PRODUCT_NOT_FOUND"}]}}`)}},
+		{Data: missing.Data, Errors: append(append([]json.RawMessage{}, missing.Errors...), missing.Errors...)},
+	} {
+		require.False(t, repositoryCapacityDeletionObserved(response))
+	}
 }
 
 func assertRepositoryCrossReplicaRead(t *testing.T, cfg repositoryCapacityConfig, name string) {
@@ -1582,12 +1703,13 @@ func newSecretCapacityGitWorker(ctx context.Context, directory, remote, namespac
 			return nil, errors.New("secret capacity: invalid namespace or File pool name")
 		}
 	}
-	if _, err := secretCapacityGit(ctx, filepath.Dir(directory), token, "clone", "--quiet", "--no-tags", "--depth=1", "--", remote, directory); err != nil {
+	if _, err := secretCapacityGit(ctx, filepath.Dir(directory), token, "clone", "--quiet", "--no-tags", "--", remote, directory); err != nil {
 		return nil, err
 	}
 	for _, setting := range [][2]string{
 		{"user.name", "GitStore Capacity"}, {"user.email", "capacity@gitstore.dev"},
 		{"commit.gpgSign", "false"}, {"core.hooksPath", os.DevNull},
+		{"fetch.negotiationAlgorithm", "noop"},
 	} {
 		if _, err := secretCapacityGit(ctx, directory, "", "config", setting[0], setting[1]); err != nil {
 			return nil, err
@@ -1830,7 +1952,7 @@ func secretCapacityGraphQLBounded(ctx context.Context, client *http.Client, endp
 	if err != nil {
 		return invalid
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/graphql", bytes.NewReader(data))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/admin/graphql", bytes.NewReader(data))
 	if err != nil {
 		return invalid
 	}

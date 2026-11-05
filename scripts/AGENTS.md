@@ -1,5 +1,11 @@
 # Workspace commands, configuration and helper instructions
 
+GraphQL clients use complete `/admin/graphql` URLs; operational URLs stay at the
+Admin root. Keep named Admin/Storefront ports explicit in replica mappings.
+The existing aggregate generated-source check covers both endpoint schemas.
+`api/endpoint-split` uses the capacity dispatcher and the connected-evidence
+prerequisites documented in `tests/capacity/README.md`.
+
 These instructions also apply to the root `Makefile`, Compose files,
 container wiring and configuration.
 

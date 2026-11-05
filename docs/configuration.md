@@ -284,11 +284,72 @@ for the full old-key → new-key mapping.
 
 | Key                          | Env Var                                 | Type    | Default | Required | Sensitive | Description                                                                 |
 |-------------------------------|------------------------------------------|---------|---------|----------|-----------|-------------------------------------------------------------------------------|
-| `api.port`                   | `GITSTORE_API__PORT`                    | integer | `4000`  | No       | No        | HTTP port the GraphQL API server listens on (1–65535)                       |
+| `api.admin_port`                   | `GITSTORE_API__ADMIN_PORT`                    | integer | `4000`  | No       | No        | Admin listener port (1–65535)                       |
+| `api.storefront_port` | `GITSTORE_API__STOREFRONT_PORT` | integer | `4001` | No | No | Storefront listener port, distinct from Admin/Git/catalog |
 | `api.git_port`               | `GITSTORE_API__GIT_PORT`                | integer | `9000`  | No       | No        | Git Smart HTTP port the API server listens on (1–65535)                     |
 | `api.grpc_port`              | `GITSTORE_API__GRPC_PORT`               | integer | `6000`  | No       | No        | CatalogService gRPC port called by gitstore-git-service                     |
-| `api.rate_limit.per_second`  | `GITSTORE_API__RATE_LIMIT__PER_SECOND`  | float   | `50`    | No       | No        | Sustained per-client-IP request rate allowed on `/graphql`                   |
+| `api.rate_limit.per_second`  | `GITSTORE_API__RATE_LIMIT__PER_SECOND`  | float   | `50`    | No       | No        | Sustained per-client-IP request rate on the Admin listener                   |
 | `api.rate_limit.burst`       | `GITSTORE_API__RATE_LIMIT__BURST`       | integer | `100`   | No       | No        | Per-client-IP token-bucket burst size on top of `api.rate_limit.per_second` |
+
+### Endpoint policies
+
+Admin always serves `/admin/graphql` on `api.admin_port`; Storefront always
+serves `/storefront/graphql` on `api.storefront_port`. `/graphql` is removed.
+Health, readiness and compatibility metrics stay at the Admin listener root.
+All four listener ports must be distinct and between 1 and 65535. Remove
+`api.port` and `GITSTORE_API__PORT`; their presence now fails startup.
+
+Each endpoint has an independent CORS policy. Empty origin lists allow
+same-origin browser use and deny cross-origin browser requests. CORS does not
+authenticate non-browser clients. For a playground on the other listener:
+
+```toml
+[api.admin.cors]
+allowed_origins = ["http://localhost:4001"]
+allow_credentials = false
+allowed_headers = ["Authorization", "Content-Type"]
+exposed_headers = ["X-Request-Id"]
+max_age = "10m"
+
+[api.storefront.cors]
+allowed_origins = ["http://localhost:4000"]
+allow_credentials = false
+```
+
+Both policies support the same fields. Environment names follow the nested
+configuration rule, for example `GITSTORE_API__ADMIN__CORS__ALLOWED_ORIGINS`.
+Origins must be HTTP(S) origins; wildcard origins cannot allow credentials.
+Admin WebSocket origins use the same policy. The playground switcher requires
+an explicit peer URL, keeps separate editor sessions, clears headers and closes
+subscriptions when switching, and omits browser credentials on fetches.
+
+Endpoint bounds live under `api.admin.limits` and `api.storefront.limits`.
+Defaults: `body_bytes=1048576`, `document_bytes=65536`, `parser_tokens=15000`,
+`depth=15`, `aliases=30`, `root_fields=20`, `directives=100`,
+`fragment_visits=1000`, `validation_errors=50`, `page_size=250`, `node_ids=50`,
+`complexity=1000`, `limiter_keys=10000`, `idle_ttl="10m"`, `deadline="10s"`.
+Omitted, null or zero pagination uses the existing 100-item datastore default.
+When `page_size` is below 100, request an explicit positive page within that
+bound; otherwise validation rejects the operation before datastore access.
+`in_flight` defaults to 128 for Admin and 32 for Storefront; admission has no
+waiting queue. Admin additionally bounds `ws_connections=1000` and
+`ws_operations=20` per principal. These document/parser controls do not bound
+WebSocket allocation before decoding; adversarial frame-size hardening remains
+open. Long-lived subscriptions are outside the operation deadline.
+
+Admin's `principal_per_second=50` and `principal_burst=1000` charge calculated
+operation cost before execution. Only the authenticated ServiceAccount JWT
+identity matching `api.admin.controller_subject` (default
+`system:serviceaccount:gitstore-controller-manager`) is exempt from that budget.
+Other bounds still apply. `api.rate_limit` is the Admin IP policy (50/s, burst
+100); `api.storefront_rate_limit` is independent (200/s, burst 400). Limits are
+finite per replica. `api.trusted_proxies` defaults to empty; forwarded client
+addresses are trusted only through explicitly configured proxies.
+
+Storefront always returns HTTP 503 with `STOREFRONT_UNAVAILABLE`, no `data`,
+and `Cache-Control: no-store` until real publication and target binding exist.
+Ingress rejection may precede it. There is no enablement flag or management
+fallback. Its execution-only limits are reserved for a future reader.
 
 ### Git Service Connection
 
@@ -686,7 +747,7 @@ format = "json"
 | Key                                                | Env Var                                                        | Type     | Default                             | Required         | Sensitive | Description                                                         |
 |----------------------------------------------------|------------------------------------------------------------------|----------|---------------------------------------|------------------|-----------|------------------------------------------------------------------------|
 | `controller.port`                                  | `GITSTORE_CONTROLLER__PORT`                                    | integer  | `5001`                              | No               | No        | HTTP port for `/health`, `/metrics`, and `/controller/v1/*`         |
-| `controller.api_uri`                               | `GITSTORE_CONTROLLER__API_URI`                                 | string   | `http://localhost:4000/graphql`     | No               | No        | GraphQL API URI used by reconcilers                                 |
+| `controller.api_uri`                               | `GITSTORE_CONTROLLER__API_URI`                                 | string   | `http://localhost:4000/admin/graphql`     | No               | No        | GraphQL API URI used by reconcilers                                 |
 | `controller.api_client.rate_limit.per_second` | `GITSTORE_CONTROLLER__API_CLIENT__RATE_LIMIT__PER_SECOND` | integer | `40` | No | No | Positive shared request rate across all kinds, queries, mutations and WebSocket upgrades |
 | `controller.api_client.rate_limit.burst` | `GITSTORE_CONTROLLER__API_CLIENT__RATE_LIMIT__BURST` | integer | `10` | No | No | Positive shared request burst; credential renewal uses its separate singleflight budget |
 | `controller.serviceaccount.name`                   | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME`                    | string   | `gitstore-controller-manager`       | **Yes**          | No        | Enrolled ServiceAccount name                                        |
@@ -712,7 +773,7 @@ Example:
 ```toml
 [controller]
 port = 5001
-api_uri = "http://localhost:4000/graphql"
+api_uri = "http://localhost:4000/admin/graphql"
 
 [controller.api_client.rate_limit]
 per_second = 40

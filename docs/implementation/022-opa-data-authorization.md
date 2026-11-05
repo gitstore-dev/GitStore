@@ -1,4 +1,6 @@
 # OPA Data-Aware Authorization for GraphQL Catalog Reads
+
+> **Endpoint boundary update (2026-11-04):** Admin uses the fixed `/admin/graphql` path on `api.admin_port`; Storefront uses `/storefront/graphql` on `api.storefront_port`. The coordinated pre-GA cutover removes the generic port and legacy route in one release. The identity-only Storefront schema currently returns a fixed unavailable response before authentication or data execution. Publication/target readers, buyer workflows and declarative authorization directives described below remain separate work; no enablement or compatibility layer is introduced.
 **Status**: 🟡 Proposed (architecture only; implementation requires a separate feature specification)
 
 > Extends `020-pluggable_auth_architecture.md` and `021-controller_service_account_auth.md`.

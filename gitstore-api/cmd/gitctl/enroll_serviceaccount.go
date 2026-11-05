@@ -73,7 +73,7 @@ func runEnrollServiceAccount(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("enroll-serviceaccount", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	enrollment := serviceAccountEnrollment{}
-	flags.StringVar(&enrollment.apiURL, "api-url", envOrDefault("API_URL", "http://localhost:4000/graphql"), "GitStore GraphQL API URL")
+	flags.StringVar(&enrollment.apiURL, "api-url", envOrDefault("API_URL", "http://localhost:4000/admin/graphql"), "GitStore GraphQL API URL")
 	flags.StringVar(&enrollment.adminToken, "admin-token", "", "authenticated administrator bearer token")
 	flags.StringVar(&enrollment.name, "name", "gitstore-controller-manager", "ServiceAccount name")
 	flags.StringVar(&enrollment.keyID, "key-id", "controller-key", "enrolled public key ID")

@@ -18,7 +18,8 @@ timeout = "10s"
 branch_pattern = "^refs/heads/main$"
 
 [api]
-port = 4000
+admin_port = 4000
+storefront_port = 4001
 git_port = 9000
 grpc_port = 6000
 
@@ -76,7 +77,7 @@ policy_file = "/etc/gitstore/policy.yaml"
 
 [controller]
 port = 5001
-api_uri = "http://api:4000/graphql"
+api_uri = "http://api:4000/admin/graphql"
 
 [controller.profiling]
 uri = ""

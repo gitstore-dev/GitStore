@@ -6,6 +6,7 @@ package integration
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ import (
 func TestNamespaceWatchCrossReplicaBootstrapAndResume(t *testing.T) {
 	apiA := os.Getenv("NAMESPACE_WATCH_API_A")
 	apiB := os.Getenv("NAMESPACE_WATCH_API_B")
-	token := os.Getenv("NAMESPACE_WATCH_TOKEN")
+	token := namespaceWatchToken(t)
 	if apiA == "" || apiB == "" || token == "" {
 		t.Skip("set NAMESPACE_WATCH_API_A, NAMESPACE_WATCH_API_B, and NAMESPACE_WATCH_TOKEN for the two-replica probe")
 	}
@@ -31,7 +32,7 @@ func TestNamespaceWatchCrossReplicaBootstrapAndResume(t *testing.T) {
 
 	firstName := uniqueName("watch-replica-b")
 	createNamespaceThrough(t, apiB, token, firstName)
-	added := readNamespaceWatchTransition(t, watchA)
+	added := readNamespaceWatchTransitionForName(t, watchA, firstName)
 	assert.Equal(t, "ADDED", added.Type)
 	assert.Equal(t, firstName, added.Name)
 	require.NotEmpty(t, added.ResourceVersion)
@@ -40,7 +41,7 @@ func TestNamespaceWatchCrossReplicaBootstrapAndResume(t *testing.T) {
 	watchB := openNamespaceWatch(t, apiB, token, added.ResourceVersion)
 	secondName := uniqueName("watch-replica-a")
 	createNamespaceThrough(t, apiA, token, secondName)
-	resumed := readNamespaceWatchTransition(t, watchB)
+	resumed := readNamespaceWatchTransitionForName(t, watchB, secondName)
 	assert.Equal(t, "ADDED", resumed.Type)
 	assert.Equal(t, secondName, resumed.Name)
 	assert.NotEqual(t, added.ResourceVersion, resumed.ResourceVersion)
@@ -55,7 +56,7 @@ type namespaceWatchWireEvent struct {
 
 func openNamespaceWatch(t *testing.T, apiURL, token, cursor string) *websocket.Conn {
 	t.Helper()
-	wsURL := strings.Replace(strings.TrimSuffix(apiURL, "/"), "http", "ws", 1) + "/graphql"
+	wsURL := strings.Replace(strings.TrimSuffix(apiURL, "/"), "http", "ws", 1) + "/admin/graphql"
 	header := http.Header{"Authorization": []string{"Bearer " + token}}
 	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
 	conn, _, err := dialer.Dial(wsURL, header)
@@ -106,6 +107,47 @@ func readNamespaceWatchTransition(t *testing.T, conn *websocket.Conn) namespaceW
 	}
 }
 
+// A resumed journal can legitimately replay status updates for an earlier
+// fixture. Keep reading until this probe's acknowledged creation is observed.
+func readNamespaceWatchTransitionForName(t *testing.T, conn *websocket.Conn, name string) namespaceWatchWireEvent {
+	t.Helper()
+	for range 10000 {
+		event := readNamespaceWatchEvent(t, conn)
+		if event.Type != "BOOKMARK" && event.Name == name {
+			return event
+		}
+	}
+	t.Fatal("named Namespace transition not observed within bounded event window")
+	return namespaceWatchWireEvent{}
+}
+
+func TestNamespaceWatchNamedTransitionAllowsEarlierStatusReplay(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for _, event := range []namespaceWatchWireEvent{
+			{Type: "BOOKMARK", ResourceVersion: "cursor-1"},
+			{Type: "MODIFIED", Name: "earlier-fixture", ResourceVersion: "cursor-2"},
+			{Type: "ADDED", Name: "target-fixture", ResourceVersion: "cursor-3"},
+		} {
+			if conn.WriteJSON(map[string]any{"type": "next", "payload": map[string]any{"data": map[string]any{"watchNamespaces": event}}}) != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(server.Close)
+	conn, _, err := websocket.DefaultDialer.Dial(strings.Replace(server.URL, "http", "ws", 1), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	event := readNamespaceWatchTransitionForName(t, conn, "target-fixture")
+	require.Equal(t, "ADDED", event.Type)
+	require.Equal(t, "cursor-3", event.ResourceVersion)
+}
+
 func createNamespaceThrough(t *testing.T, apiURL, token, name string) {
 	t.Helper()
 	response := gqlQueryWithURL(t, strings.TrimSuffix(apiURL, "/"), token, `
@@ -115,7 +157,9 @@ func createNamespaceThrough(t *testing.T, apiURL, token, name string) {
 		"apiVersion": "gitstore.dev/v1beta1",
 		"kind":       "Namespace",
 		"metadata":   map[string]any{"name": name},
-		"spec":       map[string]any{"title": name, "tier": "USER"},
+		// Arbitrarily named watch fixtures are organization namespaces. USER
+		// creation is reserved for the matching human's self-service identity.
+		"spec": map[string]any{"title": name, "tier": "ORGANIZATION"},
 	}})
 	require.Empty(t, response.Errors, namespaceContractErrors(response.Errors))
 }

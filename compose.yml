@@ -23,7 +23,8 @@ services:
     environment:
       - GITSTORE_OBSERVABILITY__OTLP__URI
     ports:
-      - "${GITSTORE_HOST_API_PORT:-4000}:4000"  # GraphQL API
+      - "${GITSTORE_HOST_API_PORT:-4000}:4000"  # Admin GraphQL API
+      - "${GITSTORE_HOST_STOREFRONT_PORT:-4100}:4001"  # Storefront GraphQL API
       - "${GITSTORE_HOST_GIT_HTTP_PORT:-9000}:9000"  # Git smart HTTP
       - "${GITSTORE_HOST_CATALOG_GRPC_PORT:-6000}:6000"  # CatalogService gRPC
     depends_on:

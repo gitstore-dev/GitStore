@@ -43,8 +43,8 @@ type Client struct {
 	subIDs atomic.Uint64
 }
 
-// New returns a Client targeting baseURL (e.g. "http://localhost:4000/graphql"
-// or "ws://localhost:4000/graphql" for a dedicated subscription dialer —
+// New returns a Client targeting baseURL (e.g. "http://localhost:4000/admin/graphql"
+// or "ws://localhost:4000/admin/graphql" for a dedicated subscription dialer —
 // Subscribe rewrites an http(s) baseURL to ws(s) automatically).
 // credentials must not be nil. NewStaticToken is available for isolated tests.
 func New(baseURL string, credentials CredentialSource) *Client {

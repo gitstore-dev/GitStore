@@ -6,14 +6,27 @@ Catalogue reads are GraphQL-first. Catalogue writes are Git-driven today: author
 
 ## Endpoint
 
+This page describes Admin. Storefront has an isolated schema at
+`http://localhost:4001/storefront/graphql` and a playground at
+`http://localhost:4001/storefront/playground`. Until publication and target
+binding are implemented, every accepted Storefront request returns HTTP 503
+with `STOREFRONT_UNAVAILABLE`, no data and `Cache-Control: no-store`.
+Admin/root operational paths are independent of that unavailability.
+These are native listener defaults; Compose publishes Storefront on host 4100.
+
 | Item         | Value                              |
 |--------------|------------------------------------|
-| GraphQL URL  | `http://localhost:4000/graphql`    |
-| Playground   | `http://localhost:4000/playground` |
+| GraphQL URL  | `http://localhost:4000/admin/graphql`    |
+| Playground   | `http://localhost:4000/admin/playground` |
 | Method       | `POST`                             |
 | Content type | `application/json`                 |
 
 ## Authentication
+
+Admin introspection requires an authenticated principal. The endpoint selector
+in either playground clears headers and closes subscriptions when changing
+endpoints; enter credentials again for the selected Admin URL. Cross-origin
+playground use requires the endpoint's configured CORS allow-list.
 
 Public read access depends on resolver and deployment policy. Protected mutations require a JWT bearer token:
 

@@ -84,6 +84,10 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
       -f "${repo_root}/compose.capacity.yml" config --format json >"${rendered}"
   jq -e '
     .services["scylla-1"].container_name == "gitstore-capacity-scylla-1" and
+    any(.services["api-a"].ports[]; .target==4000 and .published=="4000") and
+    any(.services["api-a"].ports[]; .target==4001 and .published=="4100") and
+    any(.services["api-b"].ports[]; .target==4000 and .published=="4001") and
+    any(.services["api-b"].ports[]; .target==4001 and .published=="4101") and
     .services["scylla-2"].container_name == "gitstore-capacity-scylla-2" and
     .services["scylla-3"].container_name == "gitstore-capacity-scylla-3" and
     ((.services["scylla-1"].ports // []) | length) == 0 and

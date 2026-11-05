@@ -679,7 +679,7 @@ proof:
 
 - **Resolver-level (unit), fake `AuthZProvider`, includes explicit
   cross-tenant read attempts by ID/path/node:**
-  `gitstore-api/internal/graph/resolver/repository_authorization_test.go`,
+  `gitstore-api/internal/admin/graph/resolver/repository_authorization_test.go`,
   `TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead`. It
   builds a `tenantOwnershipAuthz` fake implementing the real
   `auth.AuthZProvider` interface, guarded by a `sync.Mutex`-protected
@@ -857,7 +857,7 @@ format as patterns 1-3 above.
 - `gitstore-api/internal/datastore/scylla/capacity_test.go`
 - `gitstore-api/internal/datastore/memdb/owner_references_test.go`
 - `gitstore-api/internal/datastore/scylla/owner_references_test.go`
-- `gitstore-api/internal/graph/resolver/repository_authorization_test.go`
+- `gitstore-api/internal/admin/graph/resolver/repository_authorization_test.go`
 - `tests/integration/authz_repository_contract_test.go`
 - `gitstore-api/internal/cataloggrpc/server_test.go` (`TestValidateResources_FileAggregatesVariantAndCredentialsErrors`)
 - `gitstore-api/internal/catalog/file.go`, `gitstore-api/internal/catalog/file_test.go`

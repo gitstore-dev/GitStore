@@ -559,7 +559,7 @@ role_bindings:
 ```
 
 **Why `repository.create.any` rather than `repository.create.own`.**
-`Resolver.authorizeRepositoryTenant` (`gitstore-api/internal/graph/resolver/repository_authorization.go`)
+`Resolver.authorizeRepositoryTenant` (`gitstore-api/internal/admin/graph/resolver/repository_authorization.go`)
 picks the `.own`/`.any` suffix by comparing the target namespace's `CreationActor` to
 `principal.Subject`, and falls back to `.any` whenever they differ. A controller's subject
 (`serviceaccount:controllers:...`) never equals a human-created namespace's `CreationActor`, so

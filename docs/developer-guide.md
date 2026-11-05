@@ -1,5 +1,18 @@
 # GitStore Developer Guide
 
+Admin uses `/admin/graphql` on port 4000 and Storefront uses
+`/storefront/graphql` on port 4001. Configure `api.admin_port` and
+`api.storefront_port`; generic `api.port` is rejected. Health/readiness stay at
+the Admin root. The old `/graphql` and `/playground` paths are removed.
+`make generate TARGET=all` generates both explicit gqlgen configurations;
+aggregate checks verify deterministic output for both schemas.
+
+Playgrounds live at `/admin/playground` and `/storefront/playground`. Switching
+requires an explicit peer URL, closes subscriptions and clears headers; editor
+sessions are separate. Configure endpoint CORS for cross-origin use. Storefront
+currently returns a fixed unavailable response until publication/target support
+exists. See [configuration](configuration.md) for policies and resource bounds.
+
 **Date**: 2026-06-17
 
 **Audience**: Contributors, operators, and integration engineers
@@ -26,7 +39,7 @@ graph TD
     GraphQLClient["GraphQL clients\nstorefront / admin / scripts"]
     Controller["gitstore-controller-manager\nport 5001"]
 
-    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 9000 (host)\nCatalogService gRPC: 6000"]
+    API["gitstore-api\nAdmin GraphQL: 4000\nStorefront GraphQL: 4001\nGit Smart HTTP: 9000 (host)\nCatalogService gRPC: 6000"]
     GitService["gitstore-git-service\nGitService gRPC: 50051"]
     Datastore["Datastore\nmemdb or ScyllaDB"]
     Repos["Bare repositories\nlocal filesystem"]
@@ -126,7 +139,7 @@ Useful variables:
 
 | Variable          | Default                         | Purpose                                     |
 |-------------------|---------------------------------|---------------------------------------------|
-| `API_URL`         | `http://localhost:4000/graphql` | Bootstrap GraphQL endpoint                  |
+| `API_URL`         | `http://localhost:4000/admin/graphql` | Bootstrap GraphQL endpoint                  |
 | `ADMIN_USERNAME`  | `admin`                         | Login username                              |
 | `ADMIN_PASSWORD`  | unset                           | Login password for bootstrap token creation |
 | `BOOTSTRAP_TOKEN` | unset                           | Reuse an existing bearer token              |
@@ -159,7 +172,7 @@ preserves an existing key and identical record. A different record/key ID is
 rejected, not overwritten; follow the
 [rotation runbook](runbooks/secret-material-rotation.md) for rotation.
 
-Enrollment uses `API_URL` (default `http://localhost:4000/graphql`) and
+Enrollment uses `API_URL` (default `http://localhost:4000/admin/graphql`) and
 `DEV_ADMIN_USERNAME` / `DEV_ADMIN_PASSWORD` (local fixtures: `admin` / `admin123`).
 Use these fixture credentials only with local development APIs, never deployed
 environments. Enrollment re-enrolls the selected key ID with
@@ -364,7 +377,7 @@ Important directories:
 |------------------------|-------------------------------------|
 | `cmd/server`           | API entrypoint                      |
 | `internal/app`         | Runtime composition                 |
-| `internal/graph`       | gqlgen resolvers and generated code |
+| `internal/admin/graph`       | gqlgen resolvers and generated code |
 | `internal/githttp`     | Smart HTTP front door               |
 | `internal/gitclient`   | GitService gRPC client              |
 | `internal/cataloggrpc` | CatalogService gRPC implementation  |
@@ -450,7 +463,7 @@ Conditional recovery procedures are listed in the [operations index](runbooks/RE
 
 ### GraphQL
 
-Schema files live in [shared/schemas](../shared/schemas/). gqlgen configuration lives in [gitstore-api/gqlgen.yml](../gitstore-api/gqlgen.yml).
+Schema files live in [shared/schemas](../shared/schemas/). gqlgen configuration lives in [gitstore-api/gqlgen.admin.yml](../gitstore-api/gqlgen.admin.yml).
 
 When schema changes:
 
@@ -460,7 +473,7 @@ go generate ./...
 go test ./...
 ```
 
-Generated files are under `gitstore-api/internal/graph/generated` and `gitstore-api/internal/graph/model`.
+Generated files are under `gitstore-api/internal/admin/graph/generated` and `gitstore-api/internal/admin/graph/model`.
 
 ### Protobuf
 
@@ -518,7 +531,7 @@ Use Conventional Commits.
 
 | Env var                               | Default                  | Purpose                  |
 |---------------------------------------|--------------------------|--------------------------|
-| `GITSTORE_API__PORT`                  | `4000`                   | GraphQL HTTP port        |
+| `GITSTORE_API__ADMIN_PORT`                  | `4000`                   | GraphQL HTTP port        |
 | `GITSTORE_API__GIT_PORT`              | `9000`                   | Git Smart HTTP port      |
 | `GITSTORE_API__GRPC_PORT`             | `6000`                   | CatalogService gRPC port |
 | `GITSTORE_API__GIT_SERVICE__URI`      | `dns:///localhost:50051` | GitService gRPC target   |

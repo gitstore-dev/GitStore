@@ -109,7 +109,7 @@ func (h *serviceAccountAuthHarness) createServiceAccount(name, publicKeyPEM stri
 	bodyJSON, err := json.Marshal(body)
 	require.NoError(h.t, err)
 
-	req, err := http.NewRequest("POST", h.apiURL+"/graphql", bytes.NewReader(bodyJSON))
+	req, err := http.NewRequest("POST", h.apiURL+"/admin/graphql", bytes.NewReader(bodyJSON))
 	require.NoError(h.t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+h.token)
@@ -184,7 +184,7 @@ func (h *serviceAccountAuthHarness) issueServiceAccountToken(name, uid string, p
 	require.NoError(h.t, err)
 
 	// Issue the token with the assertion bearer
-	req, err := http.NewRequest("POST", h.apiURL+"/graphql", bytes.NewReader(bodyJSON))
+	req, err := http.NewRequest("POST", h.apiURL+"/admin/graphql", bytes.NewReader(bodyJSON))
 	require.NoError(h.t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+assertion)
@@ -259,7 +259,7 @@ func (h *serviceAccountAuthHarness) queryWithToken(query string, token string) (
 	bodyJSON, err := json.Marshal(body)
 	require.NoError(h.t, err)
 
-	req, err := http.NewRequest("POST", h.apiURL+"/graphql", bytes.NewReader(bodyJSON))
+	req, err := http.NewRequest("POST", h.apiURL+"/admin/graphql", bytes.NewReader(bodyJSON))
 	require.NoError(h.t, err)
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
@@ -461,7 +461,7 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 	}
 
 	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
-	conn, response, err := dialer.Dial(strings.Replace(h.apiURL, "http", "ws", 1)+"/graphql", nil)
+	conn, response, err := dialer.Dial(strings.Replace(h.apiURL, "http", "ws", 1)+"/admin/graphql", nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 	if response != nil {

@@ -114,10 +114,14 @@ func (a *Authorize) authorizeRepositoryTenant(ctx context.Context, principal *au
 }
 
 type RateLimit struct {
-	mu      sync.Mutex
-	limit   rate.Limit
-	burst   int
-	clients map[string]*client
+	maximum   int
+	ttl       time.Duration
+	nextSweep time.Time
+	closed    bool
+	mu        sync.Mutex
+	limit     rate.Limit
+	burst     int
+	clients   map[string]*client
 }
 
 type client struct {
@@ -207,31 +211,65 @@ func NewAuthorizeWithStore(registry *auth.ProviderRegistry, store datastoreGette
 }
 
 func NewRateLimit(r float64, b int) *RateLimit {
-	rl := &RateLimit{
-		clients: make(map[string]*client),
-		limit:   rate.Limit(r),
-		burst:   b,
-	}
-	go rl.cleanup()
-	return rl
+	return NewBoundedRateLimit(r, b, 10000, 10*time.Minute)
 }
 
-// cleanup evicts entries that have not been seen for 10 minutes. Runs forever;
-// the goroutine is intentionally leaked for the lifetime of the server process.
-func (r *RateLimit) cleanup() {
-	const ttl = 10 * time.Minute
-	ticker := time.NewTicker(ttl)
-	defer ticker.Stop()
-	for range ticker.C {
-		cutoff := time.Now().Add(-ttl)
-		r.mu.Lock()
-		for ip, c := range r.clients {
-			if c.lastSeen.Before(cutoff) {
-				delete(r.clients, ip)
+// NewBoundedRateLimit owns a finite table. Expiry is swept on admission once a
+// second; no per-handler lifetime goroutine or unbounded waiting queue is needed.
+func NewBoundedRateLimit(r float64, b, maximum int, ttl time.Duration) *RateLimit {
+	if maximum <= 0 {
+		maximum = 10000
+	}
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+	}
+	return &RateLimit{clients: make(map[string]*client), limit: rate.Limit(r), burst: b, maximum: maximum, ttl: ttl}
+}
+
+func (r *RateLimit) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	r.clients = make(map[string]*client)
+}
+
+// KeyCount exposes only cardinality, never IPs or principal identifiers.
+func (r *RateLimit) KeyCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.clients)
+}
+
+func (r *RateLimit) Allow(key string, cost int) bool {
+	now := time.Now()
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return false
+	}
+	if !now.Before(r.nextSweep) {
+		for key, c := range r.clients {
+			// Deleting an unrefilled bucket would reset its quota if an
+			// operator chooses a short TTL/low refill. Reclaim only idle,
+			// fully replenished buckets; the table remains finite either way.
+			if now.Sub(c.lastSeen) > r.ttl && c.limiter.TokensAt(now) >= float64(r.burst) {
+				delete(r.clients, key)
 			}
 		}
-		r.mu.Unlock()
+		r.nextSweep = now.Add(min(time.Second, r.ttl))
 	}
+	cl, ok := r.clients[key]
+	if !ok {
+		if len(r.clients) >= r.maximum {
+			r.mu.Unlock()
+			return false
+		}
+		cl = &client{limiter: rate.NewLimiter(r.limit, r.burst)}
+		r.clients[key] = cl
+	}
+	cl.lastSeen = now
+	r.mu.Unlock()
+	return cl.limiter.AllowN(now, cost)
 }
 
 func (a *Authenticate) authenticator(c *gin.Context, authenticator authenticatorFunc) {
@@ -519,17 +557,8 @@ func (r *RateLimit) RateLimiter(c *gin.Context) {
 			key += "|" + c.FullPath()
 		}
 	}
-	r.mu.Lock()
-	if _, exists := r.clients[key]; !exists {
-		r.clients[key] = &client{limiter: rate.NewLimiter(r.limit, r.burst)}
-	}
-	cl := r.clients[key]
-	cl.lastSeen = time.Now()
-	r.mu.Unlock()
-	if !cl.limiter.Allow() {
-		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
-			"error": "rate limit exceeded",
-		})
+	if !r.Allow(key, 1) {
+		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"errors": []gin.H{{"message": "request throttled", "extensions": gin.H{"code": "THROTTLED"}}}})
 		return
 	}
 

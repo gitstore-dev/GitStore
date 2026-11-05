@@ -50,6 +50,7 @@ COPY --from=builder /build/shared/schemas /app/schemas
 
 # Expose ports
 EXPOSE 4000
+EXPOSE 4001
 EXPOSE 9000
 EXPOSE 6000
 

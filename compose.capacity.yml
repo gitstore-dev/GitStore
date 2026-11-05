@@ -41,6 +41,7 @@ services:
       GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__MAX_LAG: 60s
     ports:
       - "4000:4000"
+      - "4100:4001"
       - "9000:9000"
       - "6000:6000"
     volumes:
@@ -80,6 +81,7 @@ services:
         condition: service_healthy
     ports:
       - "4001:4000"
+      - "4101:4001"
       - "9001:9000"
       - "6001:6000"
 
@@ -114,7 +116,7 @@ services:
       - /app/gitctl
       - enroll-serviceaccount
       - --api-url
-      - http://api-a:4000/graphql
+      - http://api-a:4000/admin/graphql
       - --name
       - gitstore-controller-manager
       - --key-id
@@ -170,7 +172,7 @@ services:
         export GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$serviceaccount_uid"
         exec /app/controller-manager --config-file /etc/gitstore/gitstore.toml
     environment:
-      GITSTORE_CONTROLLER__API_URI: http://api-a:4000/graphql
+      GITSTORE_CONTROLLER__API_URI: http://api-a:4000/admin/graphql
     ports:
       - "5001:5001"
     volumes:
@@ -194,7 +196,7 @@ services:
     <<: *capacity-controller
     container_name: gitstore-capacity-controller-manager-b
     environment:
-      GITSTORE_CONTROLLER__API_URI: http://api-b:4000/graphql
+      GITSTORE_CONTROLLER__API_URI: http://api-b:4000/admin/graphql
     ports:
       - "5002:5001"
     volumes:

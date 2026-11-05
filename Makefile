@@ -70,8 +70,8 @@ COMPOSE_SERVICE = $(if $(filter scylla,$(SERVICE)),$(SCYLLA_LIFECYCLE_SERVICES),
 DETACH_FLAG := $(if $(filter 1 true yes,$(DETACH)),-d,)
 SERVICE ?=
 
-API_URL ?= http://localhost:4000/graphql
-API_HEALTH_URL ?= $(patsubst %/graphql,%/health,$(API_URL))
+API_URL ?= http://localhost:4000/admin/graphql
+API_HEALTH_URL ?= http://localhost:4000/health
 ADMIN_USERNAME ?= admin
 ADMIN_PASSWORD ?=
 BOOTSTRAP_TOKEN ?=
@@ -470,6 +470,7 @@ _generate-all:
 
 _check-generated:
 	@cd "$(API_DIR)" && go run ./cmd/gitctl generate authz --root "$(ROOT)" --check
+	@bash ./scripts/check-graphql-generation.sh
 
 test: ## Run tests; TARGET=all (default), datastore, or secret-integration. Datastore tests use DATASTORE=memdb|scylla.
 ifeq ($(TEST_TARGET),secret-integration)

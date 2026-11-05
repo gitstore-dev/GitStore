@@ -36,26 +36,33 @@ type capacityPushConfig struct {
 	remote, tokenFile, namespace, repository, kind, runID, evidence string
 	duration, interval                                              time.Duration
 	workers                                                         int
+	verifyAPIA, verifyAPIB                                          string
 }
 
 // capacityPushEvidence is the evidence document. repository/pushes/failures/
 // firstPushMs/lastPushMs is the contract the category hierarchy verifier
 // reads; the remaining fields are diagnostic.
 type capacityPushEvidence struct {
-	Repository  string            `json:"repository"`
-	Namespace   string            `json:"namespace,omitempty"`
-	Kind        string            `json:"kind"`
-	RunID       string            `json:"runId"`
-	Workers     int               `json:"workers"`
-	IntervalMs  int64             `json:"intervalMs"`
-	Offered     int               `json:"offered"`
-	Pushes      int               `json:"pushes"`
-	Failures    int               `json:"failures"`
-	Dropped     int               `json:"dropped"`
-	Retries     int               `json:"retries"`
-	FirstPushMs int64             `json:"firstPushMs"`
-	LastPushMs  int64             `json:"lastPushMs"`
-	LatencyMs   capacityPushStats `json:"latencyMs"`
+	Repository     string            `json:"repository"`
+	Namespace      string            `json:"namespace,omitempty"`
+	Kind           string            `json:"kind"`
+	RunID          string            `json:"runId"`
+	Workers        int               `json:"workers"`
+	IntervalMs     int64             `json:"intervalMs"`
+	Offered        int               `json:"offered"`
+	Pushes         int               `json:"pushes"`
+	Failures       int               `json:"failures"`
+	Dropped        int               `json:"dropped"`
+	Retries        int               `json:"retries"`
+	FirstPushMs    int64             `json:"firstPushMs"`
+	LastPushMs     int64             `json:"lastPushMs"`
+	LatencyMs      capacityPushStats `json:"latencyMs"`
+	OracleVerified int               `json:"oracleVerified"`
+	OracleFailed   int               `json:"oracleFailed"`
+	OracleDropped  int               `json:"oracleDropped"`
+	OracleContract string            `json:"oracleContract,omitempty"`
+	StartedAt      string            `json:"startedAt"`
+	CompletedAt    string            `json:"completedAt"`
 }
 
 type capacityPushStats struct {
@@ -70,6 +77,8 @@ type capacityPushResult struct {
 	retried      bool
 	at           time.Time
 	latency      time.Duration
+	sequence     int
+	commit       string
 }
 
 func loadCapacityPushConfig() (capacityPushConfig, error) {
@@ -83,6 +92,7 @@ func loadCapacityPushConfig() (capacityPushConfig, error) {
 		evidence:   os.Getenv("CAPACITY_PUSH_EVIDENCE"),
 		interval:   time.Second,
 		workers:    1,
+		verifyAPIA: os.Getenv("CAPACITY_PUSH_VERIFY_API_A"), verifyAPIB: os.Getenv("CAPACITY_PUSH_VERIFY_API_B"),
 	}
 	var err error
 	if cfg.duration, err = time.ParseDuration(os.Getenv("CAPACITY_PUSH_DURATION")); err != nil {
@@ -145,40 +155,48 @@ func runCapacityPushSchedule(ctx context.Context, duration, interval time.Durati
 		mu sync.Mutex
 		wg sync.WaitGroup
 	)
-	deadline := time.NewTimer(duration)
-	defer deadline.Stop()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	offer := func() {
-		sequence := offered
+	started := time.Now()
+	waitUntil := func(at time.Time) bool {
+		if delay := time.Until(at); delay > 0 {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return false
+			case <-timer.C:
+			}
+		}
+		return ctx.Err() == nil
+	}
+	planned := int((duration-1)/interval) + 1
+	for sequence := 0; sequence < planned; sequence++ {
+		scheduled := started.Add(time.Duration(sequence) * interval)
+		if !waitUntil(scheduled) {
+			break
+		}
 		offered++
+		// Go tickers coalesce missed ticks. Account for each scheduled offer
+		// explicitly, including a producer stalled for more than one interval.
+		if time.Since(scheduled) >= interval {
+			dropped++
+			continue
+		}
 		select {
 		case slots <- struct{}{}:
 		default:
 			dropped++
-			return
+			continue
 		}
 		wg.Add(1)
-		go func() {
+		go func(sequence int) {
 			defer func() { <-slots; wg.Done() }()
 			result := push(ctx, sequence)
 			mu.Lock()
 			results = append(results, result)
 			mu.Unlock()
-		}()
+		}(sequence)
 	}
-	offer()
-loop:
-	for {
-		select {
-		case <-ctx.Done():
-			break loop
-		case <-deadline.C:
-			break loop
-		case <-ticker.C:
-			offer()
-		}
-	}
+	waitUntil(started.Add(duration))
 	wg.Wait()
 	return offered, dropped, results
 }
@@ -243,12 +261,13 @@ type capacityPushWorker struct {
 
 func newCapacityPushWorker(ctx context.Context, cfg capacityPushConfig, root, token string, index int) (*capacityPushWorker, error) {
 	directory := filepath.Join(root, fmt.Sprintf("worker-%02d", index))
-	if _, err := secretCapacityGit(ctx, root, token, "clone", "--quiet", "--no-tags", "--depth=1", "--", cfg.remote, directory); err != nil {
+	if _, err := secretCapacityGit(ctx, root, token, "clone", "--quiet", "--no-tags", "--", cfg.remote, directory); err != nil {
 		return nil, fmt.Errorf("clone %s: %w", cfg.repository, err)
 	}
 	for _, setting := range [][2]string{
 		{"user.name", "GitStore Capacity"}, {"user.email", "capacity@gitstore.dev"},
 		{"commit.gpgSign", "false"}, {"core.hooksPath", os.DevNull}, {"pull.rebase", "true"},
+		{"fetch.negotiationAlgorithm", "noop"},
 	} {
 		if _, err := secretCapacityGit(ctx, directory, "", "config", setting[0], setting[1]); err != nil {
 			return nil, err
@@ -283,6 +302,12 @@ func (w *capacityPushWorker) push(ctx context.Context, sequence int) capacityPus
 	result.acknowledged = err == nil
 	result.at = time.Now()
 	result.latency = time.Since(started)
+	result.sequence = sequence
+	if result.acknowledged && w.cfg.verifyAPIA != "" {
+		if commit, err := secretCapacityGit(ctx, w.directory, "", "rev-parse", "HEAD"); err == nil {
+			result.commit = strings.TrimSpace(string(commit))
+		}
+	}
 	return result
 }
 
@@ -302,8 +327,25 @@ func TestCapacityGitPushDriver(t *testing.T) {
 		}
 		token = strings.TrimSpace(string(raw))
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), cfg.duration+5*time.Minute)
+	setupAllowance := 5 * time.Minute
+	if os.Getenv("CAPACITY_LOAD_START_FILE") != "" {
+		setupAllowance += 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), cfg.duration+setupAllowance)
 	defer cancel()
+	var oracle *capacityPushOracle
+	if cfg.verifyAPIA != "" {
+		oracle, err = newCapacityPushOracle(ctx, cfg, token)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() {
+		if oracle != nil {
+			cancel()
+			oracle.finish()
+		}
+	}()
 
 	root := t.TempDir()
 	workers := make([]*capacityPushWorker, cfg.workers)
@@ -318,12 +360,36 @@ func TestCapacityGitPushDriver(t *testing.T) {
 	for _, worker := range workers {
 		free <- worker
 	}
+	if ready := os.Getenv("CAPACITY_PUSH_READY_FILE"); ready != "" {
+		if err := writeSecretCapacityPrivateJSON(ready, map[string]any{"runId": cfg.runID}); err != nil {
+			t.Fatal(err)
+		}
+		if err := awaitEndpointLoadStart(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	startedAt := time.Now()
+	if started := os.Getenv("CAPACITY_PUSH_STARTED_FILE"); started != "" {
+		if err := writeSecretCapacityPrivateJSON(started, map[string]any{"runId": cfg.runID, "startedAt": startedAt.UTC().Format(time.RFC3339)}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	offered, dropped, results := runCapacityPushSchedule(ctx, cfg.duration, cfg.interval, cfg.workers, func(ctx context.Context, sequence int) capacityPushResult {
 		worker := <-free
 		defer func() { free <- worker }()
-		return worker.push(ctx, sequence)
+		result := worker.push(ctx, sequence)
+		if oracle != nil && result.acknowledged {
+			oracle.offer(result)
+		}
+		return result
 	})
 	evidence := summarizeCapacityPushes(cfg, offered, dropped, results)
+	evidence.StartedAt = startedAt.UTC().Format(time.RFC3339)
+	if oracle != nil {
+		evidence.OracleVerified, evidence.OracleFailed, evidence.OracleDropped = oracle.finish()
+		evidence.OracleContract = "admin-and-durable-watch/v1"
+	}
+	evidence.CompletedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeCapacityPushEvidence(cfg.evidence, evidence); err != nil {
 		t.Fatalf("write push evidence: %v", err)
 	}
@@ -331,6 +397,9 @@ func TestCapacityGitPushDriver(t *testing.T) {
 		evidence.Offered, evidence.Pushes, evidence.Failures, evidence.Dropped, evidence.Retries, evidence.LatencyMs.P95)
 	if evidence.Pushes == 0 {
 		t.Fatal("no push was acknowledged")
+	}
+	if oracle != nil && (evidence.OracleVerified != evidence.Pushes || evidence.OracleFailed != 0 || evidence.OracleDropped != 0) {
+		t.Fatal("acknowledged pushes did not converge through both Admin APIs within the bounded oracle")
 	}
 }
 
@@ -353,6 +422,9 @@ func TestCapacityPushDriverScheduleBoundsWorkAndSummarizes(t *testing.T) {
 			mu.Unlock()
 			return capacityPushResult{acknowledged: sequence%5 != 0, retried: sequence%7 == 0, at: time.Now(), latency: time.Duration(sequence) * time.Millisecond}
 		})
+	if offered != 30 {
+		t.Fatalf("scheduled offers silently disappeared: %d != 30", offered)
+	}
 	if peak > 2 {
 		t.Fatalf("peak concurrency %d exceeds the worker bound", peak)
 	}

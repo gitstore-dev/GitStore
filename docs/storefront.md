@@ -1,5 +1,12 @@
 # Storefronts
 
+The dedicated Storefront API is at `/storefront/graphql` on port 4001 by
+default. Its public schema is isolated from Admin management types. Publication
+readers and trusted target binding are not implemented yet, so accepted
+requests return HTTP 503 `STOREFRONT_UNAVAILABLE`, with no data and no-store.
+The approaches below describe future storefront delivery, not available
+catalog-reading functionality. Admin remains at `/admin/graphql` on port 4000.
+
 Two ways to create a storefront:
 
 1. [Fully headless](#fully-headless)
