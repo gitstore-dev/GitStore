@@ -2,7 +2,7 @@
 
 **Feature Branch**: `050-namespace-watch-contract`
 **Created**: 2026-08-19
-**Status**: Draft
+**Status**: In progress
 **Input**: User description: "Namespace Watch Contract: Events and resourceVersion Resume (GH#174). Define namespace watch semantics for controllers and clients, including event model and resourceVersion resume behavior. Scope: define namespace watch event shapes (ADDED, MODIFIED, DELETED); define list-then-watch resume semantics using resourceVersion; define ordering and replay guarantees for namespace streams; provide subscription and query examples for namespace watch consumers. Parent initiative: #170. Blocked by GH#172 (shipped as spec 046). Related: #166 (shipped as spec 040)."
 
 ## Clarifications
