@@ -16,7 +16,7 @@ import (
 // bootstrap/list/drain/resume algorithm without relying on server internals.
 func TestNamespaceWatchDocumentedConsumer(t *testing.T) {
 	apiURL := strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_A"), "/")
-	token := os.Getenv("NAMESPACE_WATCH_TOKEN")
+	token := namespaceWatchToken(t)
 	if apiURL == "" || token == "" {
 		t.Skip("set NAMESPACE_WATCH_API_A and NAMESPACE_WATCH_TOKEN")
 	}
@@ -49,7 +49,7 @@ func TestNamespaceWatchDocumentedConsumer(t *testing.T) {
 
 	first := uniqueName("documented-consumer")
 	createNamespaceThrough(t, apiURL, token, first)
-	drained := readNamespaceWatchTransition(t, watch)
+	drained := readNamespaceWatchTransitionForName(t, watch, first)
 	require.Equal(t, "ADDED", drained.Type)
 	require.Equal(t, first, drained.Name)
 	cache[drained.Name] = true
@@ -59,7 +59,7 @@ func TestNamespaceWatchDocumentedConsumer(t *testing.T) {
 	resumed := openNamespaceWatch(t, apiURL, token, drained.ResourceVersion)
 	second := uniqueName("documented-resume")
 	createNamespaceThrough(t, apiURL, token, second)
-	next := readNamespaceWatchTransition(t, resumed)
+	next := readNamespaceWatchTransitionForName(t, resumed, second)
 	require.Equal(t, second, next.Name)
 	require.NotEqual(t, drained.ResourceVersion, next.ResourceVersion)
 }

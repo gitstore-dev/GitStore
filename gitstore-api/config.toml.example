@@ -2,7 +2,8 @@
 # Copy to /etc/gitstore/gitstore-api.toml and adjust for your deployment.
 
 [api]
-port = 4000
+admin_port = 4000
+storefront_port = 4001
 git_port = 9000
 grpc_port = 6000
 

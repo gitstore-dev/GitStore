@@ -41,7 +41,7 @@ export CAPACITY_GIT_REVISION="${revision}"
 # The nested dispatcher uses this identity for its evidence directory. Keep it
 # in the parent harness too, so the post-k6 Git/watch probe appends to that
 # same immutable run directory rather than a sibling with an empty name.
-export CAPACITY_RUN_ID="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+export CAPACITY_RUN_ID="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)}"
 if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]]; then
   export REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR="${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR:-${state_dir}/secret-fixtures/${CAPACITY_RUN_ID}}"
   export REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT=1
@@ -161,7 +161,7 @@ bootstrap_token() {
   local query payload response token
   query='mutation Login($username: String!, $password: String!) { login(input: { username: $username, password: $password }) { token { accessToken } } }'
   payload="$(jq -n --arg query "${query}" --arg username "${ADMIN_USERNAME:-admin}" --arg password "${ADMIN_PASSWORD:-admin123}" '{query:$query,variables:{username:$username,password:$password}}')"
-  response="$(curl -fsS --max-time 10 -H 'Content-Type: application/json' --data "${payload}" http://127.0.0.1:4000/graphql)"
+  response="$(curl -fsS --max-time 10 -H 'Content-Type: application/json' --data "${payload}" http://127.0.0.1:4000/admin/graphql)"
   token="$(jq -er 'if ((.errors // []) | length) == 0 then .data.login.token.accessToken else empty end' <<<"${response}")" || {
     jq -r '.errors[]?.message' <<<"${response}" >&2
     return 1
@@ -239,8 +239,8 @@ run_alpha() {
   CAPACITY_ENVIRONMENT_MANIFEST="${state_dir}/environment-manifest.json" \
   CAPACITY_API_A=http://127.0.0.1:4000 \
   CAPACITY_API_B=http://127.0.0.1:4001 \
-  PRODUCT_CAPACITY_API_A=http://api-a:4000/graphql \
-  PRODUCT_CAPACITY_API_B=http://api-b:4000/graphql \
+  PRODUCT_CAPACITY_API_A=http://api-a:4000/admin/graphql \
+  PRODUCT_CAPACITY_API_B=http://api-b:4000/admin/graphql \
   CAPACITY_DOCKER_NETWORK="${project}_gitstore-network" \
   CAPACITY_CONTROLLER_A=http://127.0.0.1:5001 \
   CAPACITY_CONTROLLER_B=http://127.0.0.1:5002 \

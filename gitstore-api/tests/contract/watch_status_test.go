@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/gqlerror"

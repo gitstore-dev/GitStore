@@ -23,6 +23,14 @@ output_dir="${evidence_dir}/prometheus"
 mkdir -p "${output_dir}"
 capacity_target="$(jq -r '[.target, (.scenario // .profile)] | join("/")' "${metadata}")"
 
+if [[ "${capacity_target}" == api/endpoint-split ]]; then
+  endpoint_query='{job="gitstore-api-capacity",__name__=~"up|gitstore_api_endpoint_.*|gitstore_api_process_instance_info|process_cpu_seconds_total|process_resident_memory_bytes|go_goroutines|go_gc_duration_seconds.*"}'
+  curl -fsS --max-time 120 --get --data-urlencode "query=${endpoint_query}" \
+    --data-urlencode "start=${started_at}" --data-urlencode "end=${completed_at}" \
+    --data-urlencode 'step=5s' "${prometheus_url%/}/api/v1/query_range" >"${output_dir}/endpoint-series.json"
+  jq -e '.status=="success" and .data.resultType=="matrix" and (.data.result|length)>0' "${output_dir}/endpoint-series.json" >/dev/null || { echo 'endpoint SDK/resource history is missing' >&2;exit 1; }
+fi
+
 controller_query=""
 if [[ -n "${CAPACITY_PROMETHEUS_CONTROLLER_TARGETS:-}" ]]; then
   controller_query='{job="gitstore-controller-capacity",__name__=~"up|gitstore_controller_.*|process_cpu_seconds_total|process_resident_memory_bytes|go_goroutines"}'

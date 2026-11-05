@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
@@ -90,7 +90,7 @@ type webSocketTestEnvironment struct {
 	connections *wsregistry.Registry
 }
 
-func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTestEnvironment {
+func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time, configure ...func(*config.EndpointConfig)) *webSocketTestEnvironment {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -112,6 +112,14 @@ func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTe
 		nil,
 	)
 	handler, err := NewGraphQLHandler(GraphQLHandlerDeps{
+		Endpoint: func() config.EndpointConfig {
+			p := config.DefaultEndpoint("admin")
+			p.ControllerSubject = datastore.ServiceAccountSubject(webSocketTestName)
+			for _, apply := range configure {
+				apply(&p)
+			}
+			return p
+		}(),
 		Store:           store,
 		Logger:          zap.NewNop(),
 		Registry:        registry,
@@ -129,10 +137,38 @@ func newWebSocketTestEnvironment(t *testing.T, expiresAt time.Time) *webSocketTe
 	return &webSocketTestEnvironment{server: server, store: store, connections: connections}
 }
 
+func TestAdminWebSocketOriginAndConnectionCapacity(t *testing.T) {
+	env := newWebSocketTestEnvironment(t, time.Now().Add(time.Minute), func(p *config.EndpointConfig) { p.Limits.WSConnections = 1 })
+	endpoint := strings.Replace(env.server.URL, "http", "ws", 1) + "/admin/graphql"
+	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
+	_, response, err := dialer.Dial(endpoint, http.Header{"Origin": []string{"https://untrusted.example"}})
+	require.Error(t, err)
+	require.Equal(t, 403, response.StatusCode)
+	_ = response.Body.Close()
+	first := env.dial(t)
+	require.Equal(t, "connection_ack", initWebSocket(t, first, map[string]any{"Authorization": "Bearer valid"})["type"])
+	_, response, err = dialer.Dial(endpoint, nil)
+	require.Error(t, err)
+	require.Equal(t, 429, response.StatusCode)
+	_ = response.Body.Close()
+	require.NoError(t, first.Close())
+	require.Eventually(t, func() bool {
+		conn, resp, err := dialer.Dial(endpoint, nil)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		if err != nil {
+			return false
+		}
+		_ = conn.Close()
+		return true
+	}, time.Second, 10*time.Millisecond)
+}
+
 func (e *webSocketTestEnvironment) dial(t *testing.T) *websocket.Conn {
 	t.Helper()
 	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
-	conn, response, err := dialer.Dial(strings.Replace(e.server.URL, "http", "ws", 1)+"/graphql", nil)
+	conn, response, err := dialer.Dial(strings.Replace(e.server.URL, "http", "ws", 1)+"/admin/graphql", nil)
 	status := "<nil>"
 	if response != nil {
 		status = response.Status
@@ -160,6 +196,20 @@ func initWebSocket(t *testing.T, conn *websocket.Conn, payload any) map[string]a
 	response, err := startWebSocketInit(t, conn, payload)
 	require.NoError(t, err)
 	return response
+}
+
+func TestAdminWebSocketKeepsAuthenticatedSchemaBoundary(t *testing.T) {
+	env := newWebSocketTestEnvironment(t, time.Now().Add(time.Minute))
+	conn := env.dial(t)
+	response := initWebSocket(t, conn, map[string]any{"Authorization": "Bearer valid"})
+	require.Equal(t, "connection_ack", response["type"])
+	require.NoError(t, conn.WriteJSON(map[string]any{"id": "schema", "type": "subscribe", "payload": map[string]any{"query": `{ __type(name:"StorefrontProduct") { name } }`}}))
+	var message map[string]any
+	require.NoError(t, conn.ReadJSON(&message))
+	require.Equal(t, "next", message["type"])
+	payload := message["payload"].(map[string]any)
+	require.NotContains(t, payload, "errors")
+	require.Nil(t, payload["data"].(map[string]any)["__type"])
 }
 
 func TestGraphQLWebSocketConnectionInitAuthenticates(t *testing.T) {
@@ -232,7 +282,7 @@ func TestGraphQLWebSocketUpgradeRejectsInvalidBearerBeforeHandshake(t *testing.T
 		t.Run(token, func(t *testing.T) {
 			env := newWebSocketTestEnvironment(t, time.Now().Add(time.Minute))
 			dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
-			conn, response, err := dialer.Dial("ws"+strings.TrimPrefix(env.server.URL, "http")+"/graphql", http.Header{"Authorization": []string{"Bearer " + token}})
+			conn, response, err := dialer.Dial("ws"+strings.TrimPrefix(env.server.URL, "http")+"/admin/graphql", http.Header{"Authorization": []string{"Bearer " + token}})
 			if conn != nil {
 				_ = conn.Close()
 			}
@@ -276,7 +326,7 @@ func TestGraphQLFilePoolLookupAcceptsBoundedAliasesAndTypedProjection(t *testing
 		query.WriteString(`missing:file(by:{namespacePath:{namespace:"other-namespace",name:"file-0"}}){id}}`)
 		body, err := json.Marshal(map[string]any{"query": query.String()})
 		require.NoError(t, err)
-		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, env.server.URL+"/graphql", strings.NewReader(string(body)))
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, env.server.URL+"/admin/graphql", strings.NewReader(string(body)))
 		require.NoError(t, err)
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Authorization", "Bearer file-pool-test")
@@ -359,6 +409,43 @@ func TestGraphQLWebSocketConnectionInitPrincipalAuthorizesSubscription(t *testin
 	assert.Equal(t, "next", response["type"])
 }
 
+func TestAdminWebSocketOperationCapacityAcrossConnections(t *testing.T) {
+	env := newWebSocketTestEnvironment(t, time.Now().Add(time.Minute), func(p *config.EndpointConfig) { p.Limits.WSOperations = 1 })
+	first := env.dial(t)
+	require.Equal(t, "connection_ack", initWebSocket(t, first, map[string]any{"Authorization": "Bearer valid"})["type"])
+	journal := env.store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	bounds, err := journal.Bounds(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, env.store.CreateFile(t.Context(), &datastore.File{UID: "00000000-0000-0000-0000-000000000102", Namespace: webSocketTestNamespace, Name: "active-watch"}))
+	require.NoError(t, first.WriteJSON(map[string]any{"id": "watch", "type": "subscribe", "payload": map[string]any{"query": `subscription($cursor:String!){watchFiles(namespace:"controllers",resourceVersion:$cursor){name}}`, "variables": map[string]any{"cursor": watchjournal.EncodeCursor(bounds.Epoch, bounds.HighWater)}}}))
+	var response map[string]any
+	require.NoError(t, first.ReadJSON(&response))
+	require.Equal(t, "next", response["type"])
+	second := env.dial(t)
+	require.Equal(t, "connection_ack", initWebSocket(t, second, map[string]any{"Authorization": "Bearer valid"})["type"])
+	request := func(id string) map[string]any {
+		require.NoError(t, second.WriteJSON(map[string]any{"id": id, "type": "subscribe", "payload": map[string]any{"query": "{__typename}"}}))
+		var next, complete map[string]any
+		require.NoError(t, second.ReadJSON(&next))
+		require.NoError(t, second.ReadJSON(&complete))
+		require.Equal(t, "complete", complete["type"])
+		return next
+	}
+	response = request("blocked")
+	encoded, err := json.Marshal(response)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), "THROTTLED")
+	require.NoError(t, first.Close())
+	attempt := 0
+	require.Eventually(t, func() bool {
+		attempt++
+		next := request(fmt.Sprintf("released-%d", attempt))
+		encoded, err := json.Marshal(next)
+		require.NoError(t, err)
+		return strings.Contains(string(encoded), `"__typename":"Query"`)
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestGraphQLWebSocketConnectionClosesWhenServiceAccountDisabled(t *testing.T) {
 	env := newWebSocketTestEnvironment(t, time.Now().Add(time.Minute))
 	conn := env.dial(t)
@@ -384,7 +471,7 @@ func TestGraphQLWebSocketConnectionClosesWhenServiceAccountDeleted(t *testing.T)
 	require.Equal(t, "connection_ack", initWebSocket(t, conn, map[string]any{"Authorization": "Bearer valid"})["type"])
 
 	body := strings.NewReader(`{"query":"mutation { deleteServiceAccount(input: {apiVersion: \"v1\", kind: \"ServiceAccount\", metadata: {name: \"controller\"}}) { serviceAccount { metadata { uid } } } }"}`)
-	request, err := http.NewRequest(http.MethodPost, env.server.URL+"/graphql", body)
+	request, err := http.NewRequest(http.MethodPost, env.server.URL+"/admin/graphql", body)
 	require.NoError(t, err)
 	request.Header.Set("Authorization", "Bearer valid")
 	request.Header.Set("Content-Type", "application/json")

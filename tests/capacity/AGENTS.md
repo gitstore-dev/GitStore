@@ -18,6 +18,12 @@ and evidence contracts; do not duplicate that catalogue in root instructions.
   Verify ownership before faults or cleanup. Preserve unrelated containers,
   storage, receipts and evidence; never target an operator deployment or use
   broad cleanup/pruning commands.
+- The expensive retained Product/Category baseline is a reusable test asset
+  through GA. Preserve its records, identities, Git storage, original refs/index
+  and recovery receipts; do not reseed it or use volume-removing cleanup.
+  Reuse waits for any current owner to finish its finite workload and restoration
+  checks. Verify terminal receipts and sole ownership before replacing processes;
+  keep private runtime identifiers outside versioned documentation.
 - Reuse existing runners, stack helpers and observability wiring. Check the
   current README and implementation before prescribing flags; a proposed
   selector or an experiment-local tool is not a contributor prerequisite.

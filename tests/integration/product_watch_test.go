@@ -202,7 +202,7 @@ type productWatchWireEvent struct {
 
 func openProductWatch(t *testing.T, apiURL, token, cursor string) *websocket.Conn {
 	t.Helper()
-	wsURL := strings.Replace(apiURL, "http", "ws", 1) + "/graphql"
+	wsURL := strings.Replace(apiURL, "http", "ws", 1) + "/admin/graphql"
 	header := http.Header{"Authorization": []string{"Bearer " + token}}
 	conn, _, err := (&websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}).Dial(wsURL, header)
 	require.NoError(t, err)

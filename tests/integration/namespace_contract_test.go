@@ -29,7 +29,6 @@ var namespaceContractServer struct {
 	refs   int
 	apiURL string
 	cmd    *exec.Cmd
-	logs   bytes.Buffer
 }
 
 type namespaceContractHarness struct {
@@ -112,10 +111,9 @@ func acquireNamespaceContractAPI(t *testing.T) string {
 	defer namespaceContractServer.mu.Unlock()
 
 	if namespaceContractServer.cmd == nil {
-		apiURL, cmd, logs := startNamespaceContractAPIServer(t)
+		apiURL, cmd, _ := startNamespaceContractAPIServer(t)
 		namespaceContractServer.apiURL = apiURL
 		namespaceContractServer.cmd = cmd
-		namespaceContractServer.logs = *logs
 	}
 	namespaceContractServer.refs++
 	t.Cleanup(func() {
@@ -142,7 +140,6 @@ func releaseNamespaceContractAPI(t *testing.T) {
 
 	namespaceContractServer.apiURL = ""
 	namespaceContractServer.cmd = nil
-	namespaceContractServer.logs.Reset()
 }
 
 func startNamespaceContractAPIServer(t *testing.T) (string, *exec.Cmd, *bytes.Buffer) {
@@ -511,7 +508,7 @@ func main() {
 
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(apiURL + "/playground")
+		resp, err := http.Get(apiURL + "/admin/playground")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -596,7 +593,7 @@ func gqlQueryWithURL(t *testing.T, apiURL, token, query string, vars map[string]
 		t.Fatalf("marshal gql request: %v", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, apiURL+"/admin/graphql", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("build graphql request: %v", err)
 	}

@@ -20,7 +20,8 @@ func clearEnv(t *testing.T) func() {
 	t.Helper()
 	keys := []string{
 		// Current schema.
-		"GITSTORE_API__PORT",
+		"GITSTORE_API__ADMIN_PORT",
+		"GITSTORE_API__STOREFRONT_PORT",
 		"GITSTORE_API__GIT_PORT",
 		"GITSTORE_API__GRPC_PORT",
 		"GITSTORE_API__PROFILING__URI",
@@ -139,7 +140,7 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
-	assert.Equal(t, 4000, cfg.Api.Port)
+	assert.Equal(t, 4000, cfg.Api.AdminPort)
 	assert.Equal(t, 9000, cfg.Api.GitPort)
 	assert.Equal(t, 6000, cfg.Api.GrpcPort)
 	assert.Equal(t, float64(50), cfg.Api.RateLimit.PerSecond)
@@ -329,7 +330,7 @@ func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	os.Setenv("GITSTORE_API__PORT", "8888")
+	os.Setenv("GITSTORE_API__ADMIN_PORT", "8888")
 	os.Setenv("GITSTORE_API__RATE_LIMIT__PER_SECOND", "5")
 	os.Setenv("GITSTORE_API__RATE_LIMIT__BURST", "15")
 	os.Setenv("GITSTORE_LOG__LEVEL", "debug")
@@ -340,7 +341,7 @@ func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
-	assert.Equal(t, 8888, cfg.Api.Port)
+	assert.Equal(t, 8888, cfg.Api.AdminPort)
 	assert.Equal(t, float64(5), cfg.Api.RateLimit.PerSecond)
 	assert.Equal(t, 15, cfg.Api.RateLimit.Burst)
 	assert.Equal(t, "debug", cfg.Log.Level)
@@ -359,7 +360,7 @@ level = "warn"
 format = "text"
 
 [api]
-port = 7777
+admin_port = 7777
 
 [api.auth.jwt]
 refresh_grace = "45s"
@@ -375,7 +376,7 @@ refresh_grace = "45s"
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
-	assert.Equal(t, 7777, cfg.Api.Port)
+	assert.Equal(t, 7777, cfg.Api.AdminPort)
 	assert.Equal(t, "warn", cfg.Log.Level)
 	assert.Equal(t, "text", cfg.Log.Format)
 	assert.Equal(t, 45*time.Second, cfg.Api.Auth.JWT.RefreshGrace)
@@ -387,20 +388,20 @@ func TestLoad_EnvVarOverridesConfigFile(t *testing.T) {
 	setRequiredAuth(t)
 
 	dir := t.TempDir()
-	content := "[api]\nport = 7777\n"
+	content := "[api]\nadmin_port = 7777\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0600))
 
 	orig, _ := os.Getwd()
 	require.NoError(t, os.Chdir(dir))
 	defer os.Chdir(orig)
 
-	os.Setenv("GITSTORE_API__PORT", "9999")
+	os.Setenv("GITSTORE_API__ADMIN_PORT", "9999")
 
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
-	assert.Equal(t, 9999, cfg.Api.Port)
+	assert.Equal(t, 9999, cfg.Api.AdminPort)
 }
 
 func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
@@ -408,7 +409,7 @@ func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
 	defer restore()
 	path := filepath.Join(t.TempDir(), "shared.toml")
 	content := `[api]
-port = 7111
+admin_port = 7111
 [api.auth.static_users]
 users_file = "users.yaml"
 [api.auth.jwt]
@@ -416,18 +417,18 @@ secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
 [controller]
-port = 5001
+admin_port = 5001
 [grpc]
-port = 50051
+admin_port = 50051
 [hooks.git_receive_pack]
 pre_receive = { enabled = true }
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
-	t.Setenv("GITSTORE_API__PORT", "7222")
+	t.Setenv("GITSTORE_API__ADMIN_PORT", "7222")
 
 	cfg, err := LoadFrom(path)
 	require.NoError(t, err)
-	assert.Equal(t, 7222, cfg.Api.Port)
+	assert.Equal(t, 7222, cfg.Api.AdminPort)
 }
 
 func TestLoadFrom_MissingExplicitFileFails(t *testing.T) {
@@ -462,7 +463,7 @@ func TestLoadFromFiles_OverlayMergesOnTopOfBase(t *testing.T) {
 	basePath := filepath.Join(dir, "base.toml")
 	base := `
 [api]
-port = 4000
+admin_port = 4000
 [api.git_service]
 uri = "dns:///localhost:50051"
 [api.auth.jwt]
@@ -490,14 +491,14 @@ keyspace = "gitstore"
 	assert.Equal(t, "scylla", cfg.Api.Datastore.Backend)
 	assert.Equal(t, []string{"scylla:9042"}, cfg.Api.Datastore.Scylla.Hosts)
 	// Base-only key is preserved, not wiped by the overlay.
-	assert.Equal(t, 4000, cfg.Api.Port)
+	assert.Equal(t, 4000, cfg.Api.AdminPort)
 	assert.Equal(t, "dns:///localhost:50051", cfg.Api.GitService.Uri)
 }
 
 func TestLoadFromFiles_MissingOverlayFails(t *testing.T) {
 	dir := t.TempDir()
 	basePath := filepath.Join(dir, "base.toml")
-	require.NoError(t, os.WriteFile(basePath, []byte("[api]\nport = 4000\n"), 0600))
+	require.NoError(t, os.WriteFile(basePath, []byte("[api]\nadmin_port = 4000\n"), 0600))
 
 	_, err := LoadFromFiles([]string{basePath, filepath.Join(dir, "missing-overlay.toml")})
 	require.Error(t, err)
@@ -586,7 +587,7 @@ func TestLoad_AbsentEnvFileIsNoOp(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
-	assert.Equal(t, 4000, cfg.Api.Port)
+	assert.Equal(t, 4000, cfg.Api.AdminPort)
 }
 
 // T019: validation tests (US2)
@@ -615,11 +616,11 @@ func TestLoad_InvalidPortReturnsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	os.Setenv("GITSTORE_API__PORT", "99999")
+	os.Setenv("GITSTORE_API__ADMIN_PORT", "99999")
 
 	_, err := Load()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Port")
+	assert.Contains(t, err.Error(), "admin_port")
 }
 
 func TestLoad_InvalidLogFormatReturnsError(t *testing.T) {

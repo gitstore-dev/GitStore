@@ -26,8 +26,8 @@ The core stack exposes:
 
 | Service | Local endpoint |
 |---|---|
-| GraphQL API | http://localhost:4000/graphql |
-| GraphQL Playground | http://localhost:4000/playground |
+| GraphQL API | http://localhost:4000/admin/graphql |
+| GraphQL Playground | http://localhost:4000/admin/playground |
 | Git Smart HTTP | http://localhost:9000 |
 | Controller manager health | http://localhost:5001/health |
 
@@ -225,7 +225,7 @@ Admission conflicts that require datastore state, such as a duplicate `ProductVa
 
 ## Query GraphQL
 
-Open http://localhost:4000/playground or use curl.
+Open http://localhost:4000/admin/playground or use curl.
 
 ### List Products
 
@@ -379,7 +379,7 @@ query ListCollections {
 ### Query With Curl
 
 ```bash
-curl -s http://localhost:4000/graphql \
+curl -s http://localhost:4000/admin/graphql \
   -H "Content-Type: application/json" \
   -d '{"query":"query { products(namespace: \"gitstore-test\", first: 5) { edges { node { metadata { name } } } } }"}' | jq .
 ```

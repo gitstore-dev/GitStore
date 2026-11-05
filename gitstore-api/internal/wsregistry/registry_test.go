@@ -29,3 +29,15 @@ func TestRegistryCancelAllCancelsActiveConnections(t *testing.T) {
 	registry.Unregister(registered)
 	newCancel()
 }
+
+func TestCloseCancelsAndRejectsRegistrations(t *testing.T) {
+	r := New()
+	ctx, cancel := context.WithCancel(context.Background())
+	r.Register(ctx, "user", cancel)
+	r.Close()
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+	ctx, cancel = context.WithCancel(context.Background())
+	r.Register(ctx, "later", cancel)
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+	assert.Empty(t, r.connections)
+}

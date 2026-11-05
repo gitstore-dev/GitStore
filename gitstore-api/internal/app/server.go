@@ -11,20 +11,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
-	"github.com/99designs/gqlgen/graphql/handler/extension"
-	"github.com/99designs/gqlgen/graphql/handler/lru"
-	"github.com/99designs/gqlgen/graphql/handler/transport"
-	"github.com/99designs/gqlgen/graphql/playground"
 	"github.com/gin-gonic/gin"
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
-	"github.com/gitstore-dev/gitstore/api/internal/admission"
-	"github.com/gitstore-dev/gitstore/api/internal/admissionreport"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
@@ -40,18 +32,13 @@ import (
 	dsfactory "github.com/gitstore-dev/gitstore/api/internal/datastore/factory"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/githttp"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/health"
-	"github.com/gitstore-dev/gitstore/api/internal/middleware"
-	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
 	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/vektah/gqlparser/v2/ast"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -84,13 +71,14 @@ type Server struct {
 	log              *zap.Logger
 	store            datastore.Datastore
 	gitClient        *gitclient.Client
-	httpServer       *http.Server
-	gitServer        *http.Server
+	httpServers      []httpEndpoint
+	connections      *wsregistry.Registry
 	grpcServer       *grpc.Server
 	grpcListener     net.Listener
 	authReloader     authReloader
 	providerShutdown []providerShutdowner
 	namespaceWatch   *namespaceWatchRuntime
+	endpointCleanup  []func()
 }
 
 type namespaceCDCRunner interface {
@@ -140,6 +128,16 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	}
 	if log == nil {
 		return nil, fmt.Errorf("app: logger is required")
+	}
+	if err := cfg.Api.ValidatePorts(); err != nil {
+		return nil, err
+	}
+	for kind, endpoint := range map[string]config.EndpointConfig{"admin": cfg.Api.Admin, "storefront": cfg.Api.Storefront} {
+		if endpoint.Limits.BodyBytes != 0 {
+			if err := endpoint.Validate(); err != nil {
+				return nil, fmt.Errorf("%s profile: %w", kind, err)
+			}
+		}
 	}
 	clock := apiruntime.SystemClock{}
 	instanceID := uuid.NewString()
@@ -214,6 +212,16 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("build auth provider registry: %w", err)
 	}
+	constructed := false
+	defer func() {
+		if !constructed {
+			for _, provider := range providerShutdowns {
+				provider.Shutdown()
+			}
+			_ = gitClient.Close()
+			_ = store.Close()
+		}
+	}()
 	log.Info("auth providers ready",
 		zap.Strings("authn_chain", cfg.Api.Auth.AuthN.Chain),
 		zap.String("authz_provider", cfg.Api.Auth.AuthZ.Provider),
@@ -222,11 +230,6 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	gitClient.Registry = registry
 	gitClient.Store = store
 	if err := ensureBootstrapResources(context.Background(), store, gitClient, clock, ids, log); err != nil {
-		for _, provider := range providerShutdowns {
-			provider.Shutdown()
-		}
-		_ = gitClient.Close()
-		_ = store.Close()
 		return nil, fmt.Errorf("bootstrap resources: %w", err)
 	}
 
@@ -243,11 +246,24 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		Clock:                 clock,
 	})
 	if err != nil {
-		_ = gitClient.Close()
-		_ = store.Close()
 		return nil, err
 	}
+	connections := wsregistry.New()
+	var endpointCleanup []func()
+	registerCleanup := func(close func()) { endpointCleanup = append(endpointCleanup, close) }
+	defer func() {
+		if !constructed {
+			connections.Close()
+			for _, close := range endpointCleanup {
+				close()
+			}
+		}
+	}()
 	gqlRouter, err := NewGraphQLHandler(GraphQLHandlerDeps{
+		RegisterCleanup:           registerCleanup,
+		ConnectionRegistry:        connections,
+		Endpoint:                  cfg.Api.Admin,
+		TrustedProxies:            cfg.Api.TrustedProxies,
 		Store:                     store,
 		GitWriter:                 gitClient,
 		Logger:                    log,
@@ -264,8 +280,6 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		PushLimits:                cfg.PushLimits,
 	})
 	if err != nil {
-		_ = gitClient.Close()
-		_ = store.Close()
 		return nil, err
 	}
 
@@ -273,7 +287,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	var graphQlHandler http.Handler = router
 
 	httpServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Api.Port),
+		Addr:         fmt.Sprintf(":%d", cfg.Api.AdminPort),
 		Handler:      graphQlHandler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
@@ -297,217 +311,37 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 
 	grpcListener, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Api.GrpcPort))
 	if err != nil {
-		_ = gitClient.Close()
-		_ = store.Close()
 		return nil, fmt.Errorf("listen on catalog gRPC port %d: %w", cfg.Api.GrpcPort, err)
+	}
+	publicRouter, err := NewStorefrontHandler(cfg.Api.Storefront, cfg.Api.StorefrontRateLimit, cfg.Api.TrustedProxies, registerCleanup)
+	if err != nil {
+		_ = grpcListener.Close()
+		return nil, err
+	}
+	publicServer := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Api.StorefrontPort), Handler: publicRouter, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	endpoints, err := bindHTTPServers([]httpEndpoint{{name: "admin", server: httpServer}, {name: "storefront", server: publicServer}, {name: "git-http", server: gitHttpServer}})
+	if err != nil {
+		_ = grpcListener.Close()
+		return nil, err
 	}
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(catalogTelemetry))
 	catalogv1.RegisterCatalogServiceServer(grpcServer, catalogServer)
+	constructed = true
 
 	return &Server{
 		cfg:              cfg,
 		log:              log,
 		store:            store,
 		gitClient:        gitClient,
-		httpServer:       httpServer,
-		gitServer:        gitHttpServer,
+		httpServers:      endpoints,
+		connections:      connections,
 		grpcServer:       grpcServer,
 		grpcListener:     grpcListener,
 		authReloader:     authReloader,
 		providerShutdown: providerShutdowns,
 		namespaceWatch:   namespaceWatch,
+		endpointCleanup:  endpointCleanup,
 	}, nil
-}
-
-// GraphQLHandlerDeps are the dependencies for NewGraphQLHandler.
-type GraphQLHandlerDeps struct {
-	Store                     datastore.Datastore
-	GitWriter                 resolver.GitWriter
-	Logger                    *zap.Logger
-	Registry                  *auth.ProviderRegistry
-	Clock                     apiruntime.Clock
-	IDs                       apiruntime.IDGenerator
-	CommittedManifestAdmitter admission.CommittedManifestAdmitter
-	ResourceJournal           datastore.ResourceWatchJournal
-	NamespaceWatch            config.WatchJournalConfig
-	NamespaceMetrics          *watchjournal.Metrics
-	// PushLimits is the shared static platform push-size ceiling; see
-	// config.PushLimitsConfig.
-	PushLimits config.PushLimitsConfig
-	// ServiceAccountAudience is the configured audience value that the server
-	// issues tokens for. Must be provided to the resolver (spec 061).
-	ServiceAccountAudience string
-	// RateLimitPerSecond/RateLimitBurst configure the per-client-IP token
-	// bucket guarding /graphql. A zero RateLimitPerSecond falls back to
-	// defaultRateLimitPerSecond/defaultRateLimitBurst (the same defaults
-	// config.Load applies), so callers that leave this zero-valued (e.g.
-	// tests) keep working unchanged.
-	RateLimitPerSecond float64
-	RateLimitBurst     int
-	// ConnectionRegistry tracks authenticated ServiceAccount WebSockets for
-	// immediate local revocation. A fresh registry is created when omitted.
-	ConnectionRegistry *wsregistry.Registry
-}
-
-// NewGraphQLHandler builds a GraphQL HTTP handler.
-func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
-	if deps.Registry == nil || deps.Registry.AuthN() == nil || deps.Registry.AuthZ() == nil {
-		return nil, fmt.Errorf("app: authn and authz provider registry is required")
-	}
-	connectionRegistry := deps.ConnectionRegistry
-	if connectionRegistry == nil {
-		connectionRegistry = wsregistry.New()
-	}
-	rootResolver, err := resolver.NewResolver(resolver.ResolverDeps{
-		Store:                     deps.Store,
-		GitWriter:                 deps.GitWriter,
-		Registry:                  deps.Registry,
-		Logger:                    deps.Logger,
-		Clock:                     deps.Clock,
-		IDGenerator:               deps.IDs,
-		CommittedManifestAdmitter: deps.CommittedManifestAdmitter,
-		ResourceJournal:           deps.ResourceJournal,
-		NamespaceWatch:            deps.NamespaceWatch,
-		NamespaceMetrics:          deps.NamespaceMetrics,
-		PushLimits:                deps.PushLimits,
-		ServiceAccountAudience:    deps.ServiceAccountAudience,
-		ConnectionRegistry:        connectionRegistry,
-	})
-	if err != nil {
-		return nil, err
-	}
-	schema := generated.NewExecutableSchema(generated.Config{Resolvers: rootResolver})
-	gqlServer := gqlhandler.New(schema)
-
-	gqlServer.AddTransport(transport.Websocket{
-		KeepAlivePingInterval: 10 * time.Second,
-		InitFunc:              webSocketInitFunc(deps.Registry, connectionRegistry, deps.Store),
-		CloseFunc: func(ctx context.Context, _ int) {
-			cancelWebSocketLifetime(ctx)
-			connectionRegistry.Unregister(ctx)
-		},
-	})
-	gqlServer.AddTransport(transport.Options{})
-	gqlServer.AddTransport(transport.GET{})
-	gqlServer.AddTransport(transport.POST{})
-	gqlServer.AddTransport(transport.MultipartForm{})
-
-	gqlServer.SetQueryCache(lru.New[*ast.QueryDocument](1000))
-
-	gqlServer.Use(extension.Introspection{})
-	gqlServer.Use(admissionreport.Extension{})
-	gqlServer.Use(extension.AutomaticPersistedQuery{
-		Cache: lru.New[string](100),
-	})
-
-	authenticateMiddleware := security.NewAuthenticate(deps.Registry, deps.Logger)
-	authorizeMiddleware := security.NewAuthorizeWithStore(deps.Registry, deps.Store, deps.Logger)
-	gqlServer.AroundOperations(authenticateMiddleware.GraphQLAuthenticator)
-	gqlServer.AroundOperations(authorizeMiddleware.GraphQLAuthorizer)
-	gqlServer.AroundFields(authorizeMiddleware.GraphQLFieldAuthorizer)
-	gqlServer.AroundResponses(authorizeMiddleware.GraphQLResponseAuthorizer)
-
-	operationHandler := observability.HTTPHandler(gqlServer, deps.Logger)
-	gqlHandler := gin.HandlerFunc(func(c *gin.Context) {
-		if !authenticateMiddleware.AuthenticateWebSocketUpgrade(c) {
-			return
-		}
-		ctx := security.ContextWithRemoteAddr(c.Request.Context(), c.RemoteIP())
-		c.Request = c.Request.WithContext(ctx)
-		operationHandler.ServeHTTP(c.Writer, c.Request)
-	})
-
-	rateLimitPerSecond := deps.RateLimitPerSecond
-	if rateLimitPerSecond <= 0 {
-		rateLimitPerSecond = defaultRateLimitPerSecond
-	}
-	rateLimitBurst := deps.RateLimitBurst
-	if rateLimitBurst <= 0 {
-		rateLimitBurst = defaultRateLimitBurst
-	}
-	rateLimitMiddleware := security.NewRateLimit(rateLimitPerSecond, rateLimitBurst)
-	requestIdMiddleware := middleware.NewRequestId(deps.IDs)
-
-	r := gin.New()
-	r.Use(gin.Recovery())
-	r.Use(requestIdMiddleware.RequestIdInserter)
-	r.Use(security.CorsConfiguration())
-	r.Use(rateLimitMiddleware.RateLimiter)
-	r.GET("/playground", playgroundHandler)
-	r.POST("/graphql", security.SecureHeaders, gqlHandler)
-	// GET /graphql serves the graphql-transport-ws WebSocket upgrade for
-	// subscriptions (spec 040) — transport.Websocket handles the upgrade
-	// itself; a plain GET without the Upgrade header falls through to
-	// gqlgen's own "must be POST" response.
-	r.GET("/graphql", security.SecureHeaders, gqlHandler)
-	return r, nil
-}
-
-type webSocketLifetimeCancelContextKey struct{}
-
-func webSocketInitFunc(registry *auth.ProviderRegistry, connectionRegistry *wsregistry.Registry, store datastore.Datastore) transport.WebsocketInitFunc {
-	return func(ctx context.Context, initPayload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
-		if registry == nil || registry.AuthN() == nil {
-			return nil, nil, errors.New("unauthorized")
-		}
-		authorization := initPayload.Authorization()
-		if authorization == "" {
-			return nil, nil, errors.New("unauthorized")
-		}
-		headers := make(http.Header)
-		headers.Set("Authorization", authorization)
-
-		authCtx := ctx
-		if bearer, ok := strings.CutPrefix(authorization, "Bearer "); ok {
-			authCtx = auth.ContextWithRawToken(authCtx, bearer)
-		}
-		principal, decision, err := registry.AuthN().Authenticate(authCtx, auth.AuthRequest{
-			Header:     headers,
-			RemoteAddr: security.RemoteAddrFromContext(authCtx),
-		})
-		if err != nil || decision.Outcome != auth.OutcomeAllow || principal == nil || principal.AuthMethod == "none" {
-			return nil, nil, errors.New("unauthorized")
-		}
-		if !principal.ExpiresAt.IsZero() && !principal.ExpiresAt.After(time.Now()) {
-			return nil, nil, errors.New("unauthorized")
-		}
-
-		if principal.ServiceAccountUID != "" {
-			var cancel context.CancelFunc
-			if principal.ExpiresAt.IsZero() {
-				authCtx, cancel = context.WithCancel(authCtx)
-			} else {
-				authCtx, cancel = context.WithDeadline(authCtx, principal.ExpiresAt)
-			}
-			authCtx = context.WithValue(authCtx, webSocketLifetimeCancelContextKey{}, cancel)
-			authCtx = connectionRegistry.Register(authCtx, principal.ServiceAccountUID, cancel)
-		}
-		if principal.ServiceAccountUID != "" {
-			if store == nil {
-				cancelWebSocketLifetime(authCtx)
-				connectionRegistry.Unregister(authCtx)
-				return nil, nil, errors.New("unauthorized")
-			}
-			account, err := store.GetServiceAccountByUID(authCtx, principal.ServiceAccountUID)
-			if err != nil || account == nil || account.Disabled || account.DeletionTimestamp != nil {
-				cancelWebSocketLifetime(authCtx)
-				connectionRegistry.Unregister(authCtx)
-				return nil, nil, errors.New("unauthorized")
-			}
-		}
-		return auth.ContextWithPrincipal(authCtx, principal), nil, nil
-	}
-}
-
-func cancelWebSocketLifetime(ctx context.Context) {
-	if cancel, ok := ctx.Value(webSocketLifetimeCancelContextKey{}).(context.CancelFunc); ok {
-		cancel()
-	}
-}
-
-func playgroundHandler(c *gin.Context) {
-	h := playground.Handler("GraphQL Playground", "/graphql")
-	h.ServeHTTP(c.Writer, c.Request)
 }
 
 func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock, namespaceWatch *namespaceWatchRuntime, instanceID string) *gin.Engine {
@@ -757,19 +591,14 @@ func (s *Server) Start() {
 		}()
 	}
 
-	go func() {
-		s.log.Info("GraphQL API server starting", zap.Int("port", s.cfg.Api.Port))
-		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.log.Fatal("Server error", zap.Error(err))
-		}
-	}()
-
-	go func() {
-		s.log.Info("Git smart HTTP server starting", zap.Int("port", s.cfg.Api.GitPort))
-		if err := s.gitServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.log.Error("Git HTTP server error", zap.Error(err))
-		}
-	}()
+	for _, endpoint := range s.httpServers {
+		go func() {
+			s.log.Info("HTTP listener starting", zap.String("listener", endpoint.name), zap.String("address", endpoint.listener.Addr().String()))
+			if err := endpoint.server.Serve(endpoint.listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				s.log.Error("HTTP server stopped", zap.String("listener", endpoint.name), zap.Error(err))
+			}
+		}()
+	}
 
 	go func() {
 		s.log.Info("CatalogService gRPC server starting", zap.Int("port", s.cfg.Api.GrpcPort))
@@ -779,10 +608,11 @@ func (s *Server) Start() {
 	}()
 
 	s.log.Info("Server ready",
-		zap.String("graphql", fmt.Sprintf("http://localhost:%d/graphql", s.cfg.Api.Port)),
-		zap.String("playground", fmt.Sprintf("http://localhost:%d/playground", s.cfg.Api.Port)),
-		zap.String("health", fmt.Sprintf("http://localhost:%d/health", s.cfg.Api.Port)),
-		zap.String("ready", fmt.Sprintf("http://localhost:%d/ready", s.cfg.Api.Port)),
+		zap.String("graphql", fmt.Sprintf("http://localhost:%d/admin/graphql", s.cfg.Api.AdminPort)),
+		zap.String("playground", fmt.Sprintf("http://localhost:%d/admin/playground", s.cfg.Api.AdminPort)),
+		zap.String("health", fmt.Sprintf("http://localhost:%d/health", s.cfg.Api.AdminPort)),
+		zap.String("ready", fmt.Sprintf("http://localhost:%d/ready", s.cfg.Api.AdminPort)),
+		zap.String("storefront", fmt.Sprintf("http://localhost:%d/storefront/graphql", s.cfg.Api.StorefrontPort)),
 		zap.String("git_http", fmt.Sprintf("http://localhost:%d", s.cfg.Api.GitPort)),
 		zap.String("catalog_grpc", fmt.Sprintf("localhost:%d", s.cfg.Api.GrpcPort)),
 	)
@@ -790,17 +620,46 @@ func (s *Server) Start() {
 
 // Shutdown gracefully stops all network servers.
 func (s *Server) Shutdown(ctx context.Context) {
-	if err := s.httpServer.Shutdown(ctx); err != nil {
-		s.log.Error("Server shutdown error", zap.Error(err))
+	if s.connections != nil {
+		s.connections.Close()
 	}
-	if err := s.gitServer.Shutdown(ctx); err != nil {
-		s.log.Error("Git HTTP server shutdown error", zap.Error(err))
+	var workers sync.WaitGroup
+	for _, endpoint := range s.httpServers {
+		workers.Go(func() {
+			if err := endpoint.server.Shutdown(ctx); err != nil {
+				_ = endpoint.server.Close()
+				s.log.Error("HTTP shutdown", zap.String("listener", endpoint.name), zap.Error(err))
+			}
+		})
 	}
-	s.grpcServer.GracefulStop()
+	if s.grpcServer != nil {
+		done := make(chan struct{})
+		go func() { s.grpcServer.GracefulStop(); close(done) }()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			s.grpcServer.Stop()
+			<-done
+		}
+	}
+	workers.Wait()
 }
 
 // Close releases non-server resources.
 func (s *Server) Close() {
+	for _, close := range s.endpointCleanup {
+		close()
+	}
+	if s.grpcServer != nil {
+		s.grpcServer.Stop()
+	}
+	if s.connections != nil {
+		s.connections.Close()
+	}
+	for _, endpoint := range s.httpServers {
+		_ = endpoint.server.Close()
+		_ = endpoint.listener.Close()
+	}
 	if s.namespaceWatch != nil && s.namespaceWatch.cancel != nil {
 		s.namespaceWatch.cancel()
 		if s.namespaceWatch.done != nil {

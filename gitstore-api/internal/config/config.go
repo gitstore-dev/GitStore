@@ -37,9 +37,14 @@ type Config struct {
 
 // ApiConfig holds HTTP API server settings and everything gitstore-api owns.
 type ApiConfig struct {
-	Port     int `mapstructure:"port"      validate:"min=1,max=65535"`
-	GitPort  int `mapstructure:"git_port"  validate:"min=1,max=65535"`
-	GrpcPort int `mapstructure:"grpc_port" validate:"min=1,max=65535"`
+	AdminPort           int             `mapstructure:"admin_port" validate:"min=1,max=65535"`
+	StorefrontPort      int             `mapstructure:"storefront_port" validate:"min=1,max=65535"`
+	Admin               EndpointConfig  `mapstructure:"admin"`
+	Storefront          EndpointConfig  `mapstructure:"storefront"`
+	StorefrontRateLimit RateLimitConfig `mapstructure:"storefront_rate_limit"`
+	TrustedProxies      []string        `mapstructure:"trusted_proxies"`
+	GitPort             int             `mapstructure:"git_port"  validate:"min=1,max=65535"`
+	GrpcPort            int             `mapstructure:"grpc_port" validate:"min=1,max=65535"`
 
 	RateLimit  RateLimitConfig               `mapstructure:"rate_limit"`
 	GitService GitServiceEndpointConfig      `mapstructure:"git_service"`
@@ -50,7 +55,7 @@ type ApiConfig struct {
 }
 
 // RateLimitConfig is the sustained per-client-IP request rate allowed on
-// /graphql before responses are rejected with HTTP 429, plus the token-bucket
+// /admin/graphql before responses are rejected with HTTP 429, plus the token-bucket
 // burst size layered on top of it.
 type RateLimitConfig struct {
 	PerSecond float64 `mapstructure:"per_second" validate:"gt=0"`
@@ -290,6 +295,7 @@ type legacyKey struct {
 // final merged state so a renamed/removed key never silently resolves to a
 // default. Ordered most-specific-first so the most helpful match wins.
 var legacyKeys = []legacyKey{
+	{"api.port", "api.admin_port and api.storefront_port"},
 	{"observability.otlp.endpoint", "observability.otlp.uri"},
 	{"git_service.metrics", "observability.otlp.uri (metrics use OTLP; remove the HTTP metrics listener)"},
 	// Shared-file validation must reject the removed identity selector before
@@ -379,7 +385,7 @@ func load(paths []string) (*Config, error) {
 
 	// Defaults — all known keys must have a default so AutomaticEnv populates them
 	// during Unmarshal, even if the default is an empty string.
-	v.SetDefault("api.port", 4000)
+	setEndpointDefaults(v)
 	v.SetDefault("api.git_port", 9000)
 	v.SetDefault("api.grpc_port", 6000)
 	v.SetDefault("api.rate_limit.per_second", 50)
@@ -528,6 +534,17 @@ func checkLegacyKeys(v *viper.Viper) error {
 
 // validateConfig runs all struct validations and returns a combined error.
 func validateConfig(cfg *Config) error {
+	if err := cfg.Api.ValidateRates(); err != nil {
+		return err
+	}
+	if err := cfg.Api.ValidatePorts(); err != nil {
+		return err
+	}
+	for _, policy := range []EndpointConfig{cfg.Api.Admin, cfg.Api.Storefront} {
+		if err := policy.Validate(); err != nil {
+			return err
+		}
+	}
 	if err := cfg.Api.Profiling.Validate(); err != nil {
 		return fmt.Errorf("api.%w", err)
 	}
@@ -830,7 +847,8 @@ func validateLogFormat(log *LogConfig) error {
 // MarshalLogObject implements zap.ObjectMarshaler for structured startup logging.
 // Sensitive fields are always redacted.
 func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	enc.AddInt("api.port", c.Api.Port)
+	enc.AddInt("api.admin_port", c.Api.AdminPort)
+	enc.AddInt("api.storefront_port", c.Api.StorefrontPort)
 	enc.AddInt("api.git_port", c.Api.GitPort)
 	enc.AddInt("api.grpc_port", c.Api.GrpcPort)
 	enc.AddString("api.git_service.uri", c.Api.GitService.Uri)

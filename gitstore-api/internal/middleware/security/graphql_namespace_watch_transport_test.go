@@ -14,10 +14,10 @@ import (
 
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/generated"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/google/uuid"

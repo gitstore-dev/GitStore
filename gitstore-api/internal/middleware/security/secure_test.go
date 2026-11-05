@@ -90,8 +90,8 @@ func TestRateLimiterIsolatesOperationalEndpointsWithoutExemptingThem(t *testing.
 	limiter := NewRateLimit(0.000001, 1)
 	router.Use(limiter.RateLimiter)
 	handler := func(c *gin.Context) { c.Status(http.StatusNoContent) }
-	router.POST("/graphql", handler)
-	router.GET("/graphql", handler)
+	router.POST("/admin/graphql", handler)
+	router.GET("/admin/graphql", handler)
 	router.GET("/playground", handler)
 	for _, path := range []string{"/metrics", "/health", "/ready"} {
 		router.GET(path, handler)
@@ -104,14 +104,14 @@ func TestRateLimiterIsolatesOperationalEndpointsWithoutExemptingThem(t *testing.
 		router.ServeHTTP(response, req)
 		require.Equal(t, want, response.Code, "%s %s", method, path)
 	}
-	request(http.MethodPost, "/graphql", http.StatusNoContent)
-	request(http.MethodGet, "/graphql", http.StatusTooManyRequests)
+	request(http.MethodPost, "/admin/graphql", http.StatusNoContent)
+	request(http.MethodGet, "/admin/graphql", http.StatusTooManyRequests)
 	request(http.MethodGet, "/playground", http.StatusTooManyRequests)
 	for _, path := range []string{"/metrics", "/health", "/ready"} {
 		request(http.MethodGet, path, http.StatusNoContent)
 		request(http.MethodGet, path, http.StatusTooManyRequests)
 	}
-	request(http.MethodPost, "/graphql", http.StatusTooManyRequests)
+	request(http.MethodPost, "/admin/graphql", http.StatusTooManyRequests)
 }
 
 func newTestRegistry(t *testing.T) (*auth.ProviderRegistry, *staticusers.StaticUsersProvider) {
@@ -147,7 +147,7 @@ func TestAuthenticatorValidBearerSetsPrincipal(t *testing.T) {
 	token, _, err := staticUsers.IssueSession(t.Context(), "admin")
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/graphql", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -169,7 +169,7 @@ func TestAuthenticatorValidBearerSetsPrincipal(t *testing.T) {
 func TestAuthenticatorNoCredentialsSetsAnonymousPrincipal(t *testing.T) {
 	registry, _ := newTestRegistry(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/graphql", nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = req
@@ -188,7 +188,7 @@ func TestAuthenticatorNoCredentialsSetsAnonymousPrincipal(t *testing.T) {
 func TestAuthenticatorInvalidCredentialsReturnUnauthorized(t *testing.T) {
 	registry, _ := newTestRegistry(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/graphql", nil)
 	req.Header.Set("Authorization", "Bearer invalid-token")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

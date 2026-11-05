@@ -83,7 +83,7 @@ Keep each binary paired with its matching configuration when replacing replicas.
 | Variable                                          | Default                         | Purpose                       |
 |---------------------------------------------------|---------------------------------|-------------------------------|
 | `GITSTORE_CONTROLLER__PORT`                       | `5001`                          | HTTP listen port              |
-| `GITSTORE_CONTROLLER__API_URI`                    | `http://localhost:4000/graphql` | API endpoint                  |
+| `GITSTORE_CONTROLLER__API_URI`                    | `http://localhost:4000/admin/graphql` | API endpoint                  |
 | `GITSTORE_CONTROLLER__RECONCILE__MAX_ATTEMPTS`    | `5`                             | Retry limit before quarantine |
 | `GITSTORE_CONTROLLER__RECONCILE__STALL_THRESHOLD` | `5m`                            | Worker stall threshold        |
 | `GITSTORE_LOG__LEVEL`                             | `info`                          | Log level                     |

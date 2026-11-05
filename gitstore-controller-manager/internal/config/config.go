@@ -89,7 +89,7 @@ var defaults = map[string]any{
 	"observability.otlp.uri":                             "",
 	"observability.otlp.trace_sample_ratio":              0.05,
 	"controller.port":                                    5001,
-	"controller.api_uri":                                 "http://localhost:4000/graphql",
+	"controller.api_uri":                                 "http://localhost:4000/admin/graphql",
 	"controller.api_client.rate_limit.per_second":        40,
 	"controller.api_client.rate_limit.burst":             10,
 	"controller.serviceaccount.name":                     "gitstore-controller-manager",

@@ -21,6 +21,7 @@ type registration struct {
 // active WebSocket connections. It is intentionally process-local; the
 // datastore remains the authoritative check for newly established connections.
 type Registry struct {
+	closed      bool
 	mu          sync.Mutex
 	connections map[string]map[uint64]context.CancelFunc
 	nextID      uint64
@@ -32,6 +33,20 @@ func New() *Registry {
 	}
 }
 
+// Count reports finite process-local bookkeeping without identity labels.
+func (r *Registry) Count() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	count := 0
+	for _, connections := range r.connections {
+		count += len(connections)
+	}
+	return count
+}
+
 // Register adds cancel to uid's active connections and returns a context that
 // CloseFunc can pass to Unregister.
 func (r *Registry) Register(ctx context.Context, uid string, cancel context.CancelFunc) context.Context {
@@ -40,6 +55,11 @@ func (r *Registry) Register(ctx context.Context, uid string, cancel context.Canc
 	}
 
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		cancel()
+		return ctx
+	}
 	r.nextID++
 	registration := registration{uid: uid, id: r.nextID}
 	if r.connections[uid] == nil {
@@ -49,6 +69,27 @@ func (r *Registry) Register(ctx context.Context, uid string, cancel context.Canc
 	r.mu.Unlock()
 
 	return context.WithValue(ctx, registrationContextKey{}, registration)
+}
+
+// Close cancels every owned connection and rejects new registrations during
+// shutdown. Callbacks run outside the lock and may unregister themselves.
+func (r *Registry) Close() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.closed = true
+	var cancels []context.CancelFunc
+	for _, connections := range r.connections {
+		for _, cancel := range connections {
+			cancels = append(cancels, cancel)
+		}
+	}
+	r.connections = make(map[string]map[uint64]context.CancelFunc)
+	r.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 }
 
 // Unregister removes the connection represented by ctx. It is safe to call

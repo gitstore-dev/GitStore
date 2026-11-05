@@ -10,7 +10,7 @@
   `internal/checkpoint.DiskStore` and error-returning
   `internal/cache.LookupFunc[T]`. Full-snapshot/memory adapters remain for
   compatibility fixtures, not production scale.
-- Use `internal/graphqlclient.Client` for `POST /graphql` and
+- Use `internal/graphqlclient.Client` for `POST /admin/graphql` and
   `graphql-transport-ws` subscriptions against the API's gqlgen
   `transport.Websocket`.
 - State belongs in `<Kind>.disk-v2` on the existing per-replica checkpoint

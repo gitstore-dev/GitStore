@@ -1,8 +1,13 @@
 # ADR 0012: Separate Admin and Storefront GraphQL Endpoints
 
-**Status**: Proposed
+**Status**: Accepted (2026-11-05)
 
 **Date**: 2026-09-30
+
+**Revision (2026-11-04)**: Use one pre-GA endpoint cutover with matching clients.
+Use separate named Admin/Storefront listeners with invariant prefixed paths, explicit
+generator/package names, configurable CORS and a playground endpoint switcher. No generic
+`api.port`, legacy path alias, staged compatibility releases or Storefront enablement flag.
 
 **Audience**: GitStore API, schema, storefront, admin UI, and controller authors.
 
@@ -43,52 +48,58 @@ The storefront and buyer surfaces don't exist yet, so this is the cheapest point
 
 ### 1. Two endpoints, two schemas, one binary
 
-| Endpoint           | Shared listener (`api.port`) | Dedicated listener                  | Schema            | Audience                                                                             |
-|--------------------|------------------------------|-------------------------------------|-------------------|--------------------------------------------------------------------------------------|
-| **Admin API**      | `/admin/graphql`             | `/graphql` on `api.admin.port`      | admin schema      | admin UI, `gitstore-controller-manager`, third-party apps and controllers, operators |
-| **Storefront API** | `/storefront/graphql`        | `/graphql` on `api.storefront.port` | storefront schema | storefront frontends (browser and server-side), buyers                               |
+| Endpoint | Named listener | Fixed path | Schema | Audience |
+| --- | --- | --- | --- | --- |
+| **Admin API** | `api.admin_port` (default 4000) | `/admin/graphql` | admin | admin UI, controllers, operators and third-party management clients |
+| **Storefront API** | `api.storefront_port` (default 4001) | `/storefront/graphql` | storefront | browser/server storefronts and buyers |
 
-- **Path rule.** When both APIs share one listener, the path prefix names the API. When an API has
-  its own listener, the port names it and the path is plain `/graphql`. A listener never serves
-  both schemas under the same path.
-  - The playground follows the same rule: `/admin/playground` or `/storefront/playground` on a
-    shared listener, `/playground` on a dedicated one.
-  - Setting `api.admin.port` or `api.storefront.port` to a value different from `api.port` moves
-    that API to its own listener. Leaving it unset (or equal to `api.port`) keeps it on the shared
-    listener.
+- **Path rule.** Each schema has one distinct listener and one invariant prefixed path.
+  There is no shared-listener mode, port-dependent path rewrite or generic `api.port`.
+  All named listener ports must be nonzero and distinct from `api.git_port` and
+  `api.grpc_port`. Reject the removed generic port setting with migration guidance.
+- Playgrounds use `/admin/playground` and `/storefront/playground` and include an
+  endpoint switcher with separate schema/editor sessions. The current endpoint has a
+  same-origin URL; a browser-accessible peer URL is explicitly entered rather than guessed
+  from internal bind addresses. Switching clears credentials/headers, closes the previous
+  subscription connection and never auto-executes a document. It does not bypass endpoint
+  authentication, CORS or Storefront unavailability, or publicly discover a private Admin URL.
+- Root operational routes remain on the Admin listener; no generic/operational listener is
+  added. New instrumentation uses OpenTelemetry Metrics through shared observability.
+  Existing compatibility export/scrape behavior is not a second instrumentation API.
 - Both endpoints are served by the existing `gitstore-api` process. They share:
   - the datastore;
   - the AuthN/AuthZ provider registry;
-  - `ratelimit.Limiter` (doc 038);
+  - existing limiting primitives with separate endpoint policies (doc 038);
   - the watch journal;
   - the transport/extension builder.
 - A separate storefront service or binary is deferred. The split is by schema, not by deployable.
-- `api.storefront.enabled` defaults to `false` until publication and storefront reads ship.
+- Both endpoint routes are part of normal startup; there is no separate Storefront enablement
+  flag. Until publication-backed reads and trusted target binding are available, Storefront
+  requests return HTTP 503 with a stable `STOREFRONT_UNAVAILABLE` diagnostic and no catalog
+  data. Missing prerequisites never fall back to Admin rows. Admin remains usable independently.
 - A dedicated admin listener lets operators keep the Admin API on an internal network only, as
   `api.git_port` already does for Git smart-HTTP.
 
-**Migration of today's `/graphql` (shared listener).** Today every client calls `/graphql` on
-`api.port`: the controller-manager (`GITSTORE_CONTROLLER__API_URI`), the admin UI, compose files,
+**Migration of today's `/graphql` and generic port.** Current clients call `/graphql` on
+the old `api.port`: the controller-manager (`GITSTORE_CONTROLLER__API_URI`), the admin UI, compose files,
 `make bootstrap` (`API_URL`), `gitctl`, and the capacity profiles.
 
-Migration takes three releases, so mixed-version API and controller-manager replicas always agree
-on a path:
+GitStore is pre-GA. Change the endpoints and in-repository client defaults in one release:
 
-| Release | API (shared listener)                                                    | In-repo client defaults    |
-|---------|--------------------------------------------------------------------------|----------------------------|
-| N       | serves `/admin/graphql`; `/graphql` becomes a **deprecated alias** of it | unchanged (`/graphql`)     |
-| N+1     | unchanged                                                                | switch to `/admin/graphql` |
-| N+2     | alias removed; `/graphql` on the shared listener returns 404             | unchanged                  |
-
-- **Why three releases.** New controller-manager replicas only move to `/admin/graphql` once every
-  API replica serves it, and the alias is only removed once no supported client still uses it.
-- **Alias responses** serve the admin schema and carry `Deprecation` and
-  `Link: </admin/graphql>; rel="successor-version"` headers.
-- **Enabling the storefront doesn't change the alias.** With `api.storefront.enabled = true` on a
-  shared listener, the alias still points to the Admin API.
-- **After removal, a shared listener has no `/graphql`**, so the path is never ambiguous between
-  the two schemas.
-- **Defaults that switch in N+1:**
+- Replace `api.port` with `api.admin_port` and `api.storefront_port`. Admin serves
+  `/admin/graphql`; Storefront serves `/storefront/graphql`. `/graphql` and the opposite
+  endpoint's path return 404 on each listener. No alias, redirect, deprecation middleware
+  or runtime migration mode is introduced.
+- Controllers use one complete Admin URL for both list/read/write and WebSocket watch;
+  endpoint separation does not change list/watch contracts or journal cursor semantics.
+  A reverse proxy can expose both fixed paths on a single public origin while preserving
+  the internal separate listeners.
+- Operators upgrade API replicas and clients as a coordinated version set, removing old API
+  replicas from routing before sending traffic to the new paths. A brief cutover is acceptable;
+  mixed pre-split/post-split traffic is not supported. Rollback restores the preceding API,
+  client configuration and routing together.
+- Concurrent replicas and rolling replacement within the new endpoint contract remain required.
+- **Client defaults that switch in this release:**
   - `GITSTORE_CONTROLLER__API_URI`;
   - `API_URL` in the Makefile;
   - `compose*.yml`;
@@ -126,7 +137,7 @@ shared/schemas/
 
   | Consumer | Schema globs |
   |---|---|
-  | `gitstore-api/gqlgen.yml` (admin exec package) | `../shared/schemas/admin/*.graphqls`, `../shared/schemas/common/*.graphqls` |
+  | `gitstore-api/gqlgen.admin.yml` (renamed admin config) | `../shared/schemas/admin/*.graphqls`, `../shared/schemas/common/*.graphqls` |
   | `gitstore-api/gqlgen.storefront.yml` (new, storefront exec package) | `../shared/schemas/storefront/*.graphqls`, `../shared/schemas/common/*.graphqls` |
   | `gitstore-admin/codegen.yml` | admin + common |
   | `docker/api.Dockerfile` | copies `shared/schemas` recursively (no change needed) |
@@ -226,13 +237,18 @@ union SearchResultItem = StorefrontProduct | StorefrontCollection | StorefrontCa
 | Introspection                  | authenticated only                    | enabled. The storefront schema is a public contract.                                                                                     |
 | Subscriptions                  | `watch*`, `watchResources`            | none initially. Storefront change events from Publication Lifecycle are a later, storefront-typed subscription.                          |
 | Caching                        | none                                  | GET + persisted queries. Responses are cacheable by target, active snapshot and document hash, with an `ETag` derived from the snapshot. |
-| CORS                           | as today                              | explicit origin allow-list per storefront token or target                                                                                |
+| CORS                           | configurable endpoint policy; empty origins deny cross-origin use | independently configurable endpoint policy; target/token-specific origin rules remain future work |
 
 - **Buyer IP header.** Server-side storefronts put all buyers behind one server IP. A
   `GitStore-Storefront-Buyer-IP` header (no `X-` prefix, as in doc 038 §10.2) keys L0 on the real
   buyer IP. It is honoured **only** on requests authenticated with a storefront access token, and
   otherwise ignored. That prevents the same spoofing as doc 038's `X-Forwarded-For` finding.
 - **Bots.** Bot and crawler protection is left to the operator's CDN or WAF in alpha.
+- **CORS configuration.** `api.admin.cors` and `api.storefront.cors` independently configure
+  allowed origins, credentials, allowed/exposed headers and preflight cache duration.
+  Defaults are empty origins and credentials disabled; same-origin playground access works
+  without an allow-list. Wildcard origins with credentials fail validation. Admin WebSocket
+  Origin checks use its configured policy. The playground picker never modifies CORS.
 
 ### 7. Server wiring
 
@@ -242,11 +258,10 @@ union SearchResultItem = StorefrontProduct | StorefrontCollection | StorefrontCa
   - the authentication interceptor;
   - the endpoint's authorizer;
   - doc 038's limit profile.
-- `internal/app/server.go` mounts the handlers by the §1 path rule:
-  - **shared listener:** `/admin/graphql` (plus the alias during releases N and N+1) and, when
-    enabled, `/storefront/graphql`;
-  - **dedicated listener:** `/graphql`.
-- Admin resolvers stay in `internal/graph/resolver`. Storefront resolvers live in
+- `internal/app/server.go` mounts `/admin/graphql` only on `api.admin_port` and
+  `/storefront/graphql` only on `api.storefront_port`. It pre-binds all named listeners
+  and owns cleanup/shutdown without any shared/dedicated routing branches.
+- Admin resolvers move to `internal/admin/graph/resolver`. Storefront resolvers live in
   `internal/storefront/graph/resolver` and import only snapshot-backed services. An import-boundary
   test enforces that.
 
@@ -261,26 +276,30 @@ union SearchResultItem = StorefrontProduct | StorefrontCollection | StorefrontCa
    - Doc 038 would have to pick a limit profile from an operation's root fields.
    - Operations mixing admin and storefront roots need an extra rule.
    - Admin and storefront can't be isolated at the network level.
-3. **Separate storefront service.** Deferred. The disjoint schemas, the import boundary (§7) and the
-   optional listener (§1) keep this a packaging change later.
+3. **Separate storefront service.** Deferred. Disjoint schemas, package boundaries and named
+   listeners keep this a packaging change later.
+4. **Shared/dedicated listener combinations with path changes.** Rejected. They add configuration,
+   client/example and route-test states without changing list/watch semantics. Fixed paths on
+   separate named listeners are sufficient; a reverse proxy handles public-origin consolidation.
 
 ## Consequences
 
 - The public/management split is enforced by package and schema structure instead of runtime scope
   checks. Missing the branch on one access path is no longer a possible bug.
-- Existing admin clients keep working through the `/graphql` alias until release N+2 (§1). The
-  storefront ships dark behind `api.storefront.enabled`.
+- Existing admin clients move to `/admin/graphql` in the implementing release (§1).
+  Storefront has a fixed route and fails closed while its prerequisites are unavailable.
 - Costs:
   - a second gqlgen target and schema tree;
-  - moving today's schema files to `shared/schemas/admin/` and updating `gqlgen.yml`,
+  - moving today's schema files to `shared/schemas/admin/`, renaming the Admin config to `gqlgen.admin.yml`,
     `gitstore-admin/codegen.yml`, the READMEs and the file-path comments in the controller-manager;
   - a small `common/` extraction from `schema.graphqls`;
   - storefront types that deliberately duplicate some admin fields;
-  - a second resolver package.
-- Multi-replica and rolling upgrade: `/admin/graphql` and `/storefront/graphql` are additive, and
-  the `/graphql` move follows §1's three-release sequence. Replicas without `/storefront/graphql`
-  return 404 until the rollout completes, and `api.storefront.enabled` is flipped only after every replica runs the
-  new version (Publication Lifecycle rollout step 5).
+  - moving Admin Go sources/imports to `internal/admin/graph/` and adding the separate Storefront package.
+- Multi-replica and rolling upgrade: the initial endpoint change is a coordinated breaking
+  cutover (§1), not a mixed-version compatibility rollout. Subsequent replacements within
+  the new contract preserve Admin operations, durable subscription resumption and Storefront
+  isolation across replicas. Publication prerequisites determine Storefront availability;
+  there is no additional enablement switch or release dedicated to removing an alias.
 - **Required amendments** (follow-up edits that reference this ADR):
   - **[Doc 022](../implementation/022-opa-data-authorization.md):**
     - The `PUBLIC`/`MANAGEMENT` decision scope is fixed by the endpoint, not emitted per request.
@@ -325,5 +344,5 @@ union SearchResultItem = StorefrontProduct | StorefrontCollection | StorefrontCa
 - Shopify, [Storefront API rate limits](https://shopify.dev/docs/api/storefront#rate_limits) and
   [API limits](https://shopify.dev/docs/api/usage/limits)
 - Saleor, single GraphQL API for dashboard and storefront (permission- and channel-filtered querysets)
-- Live wiring: `gitstore-api/internal/app/server.go`, `gitstore-api/gqlgen.yml`, `gitstore-admin/codegen.yml`,
+- Existing wiring to migrate: `gitstore-api/internal/app/server.go`, `gitstore-api/gqlgen.yml` → `gqlgen.admin.yml`, external Admin consumer codegen,
   `gitstore-api/internal/middleware/security/graphql.go` (`decodeGlobalID`)

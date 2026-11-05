@@ -89,8 +89,9 @@ jq -e --argjson expected "${config_replicas}" --arg revision "${source_revision}
   ([.[].id] | unique | length) == length and
   ([.[].name] | unique | length) == length and
   all(.[];
-    .revision == $revision and .executable == "/app/api" and
-    (.imageReference | test("@sha256:[0-9a-f]{64}$")))
+    .revision == $revision and
+    ((.imageReference | test("@sha256:[0-9a-f]{64}$")) or
+      (.imageReference == .imageID and (.imageID | test("^sha256:[0-9a-f]{64}$")))))
 ' <<<"${container_json}" >/dev/null || {
   echo "CAPACITY_API_CONTAINERS must identify distinct running digest-pinned release containers for the tested revision" >&2
   exit 1
@@ -99,6 +100,14 @@ identity_json='[]'
 for index in "${!api_endpoints[@]}"; do
   endpoint="${api_endpoints[$index]}"
   container="${api_containers[$index]}"
+  # The canonical Compose command reads a mounted signing key in a shell,
+  # then execs the release binary. Docker's configured Path stays /bin/sh;
+  # inspect the live PID 1 executable rather than trusting command text.
+  running_executable="$(docker exec "${container}" readlink /proc/1/exe)"
+  [[ "${running_executable}" == /app/api ]] || {
+    echo "API container PID 1 must run the release /app/api binary: ${container}" >&2
+    exit 1
+  }
   [[ "${endpoint}" =~ ^https?://[^[:space:],]+$ ]] || { echo "invalid live API endpoint: ${endpoint}" >&2; exit 2; }
   curl -fsS --max-time 5 "${endpoint%/}/health" >/dev/null || {
     echo "live API endpoint failed health probe: ${endpoint}" >&2

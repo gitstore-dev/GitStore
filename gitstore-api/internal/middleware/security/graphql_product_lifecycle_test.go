@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

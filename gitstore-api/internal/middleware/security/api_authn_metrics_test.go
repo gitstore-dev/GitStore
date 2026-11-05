@@ -36,7 +36,7 @@ func TestAuthenticator_RecordsAPIAuthNMetric_Allow(t *testing.T) {
 	promReg := prometheus.NewRegistry()
 	authMiddleware := NewAuthenticate(registry, zap.NewNop(), promReg)
 
-	req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/graphql", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -56,7 +56,7 @@ func TestAuthenticator_RecordsAPIAuthNMetric_Deny(t *testing.T) {
 	promReg := prometheus.NewRegistry()
 	authMiddleware := NewAuthenticate(registry, zap.NewNop(), promReg)
 
-	req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/graphql", nil)
 	req.Header.Set("Authorization", "Bearer not-a-real-token")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -81,7 +81,7 @@ func TestAuthenticator_NilMetrics_DoesNotPanic(t *testing.T) {
 	authMiddleware := NewAuthenticate(registry, zap.NewNop())
 	require.Nil(t, authMiddleware.apiAuthnCounts)
 
-	req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/graphql", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

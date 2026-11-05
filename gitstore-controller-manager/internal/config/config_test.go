@@ -71,7 +71,7 @@ func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "shared.toml")
 	content := `[controller]
 port = 6111
-api_uri = "http://api:4000/graphql"
+api_uri = "http://api:4000/admin/graphql"
 [controller.serviceaccount]
 name = "gitstore-controller-manager"
 uid = "sa-uid-1"
@@ -116,7 +116,7 @@ func TestLoadFromFiles_OverlayMergesOnTopOfBase(t *testing.T) {
 	basePath := filepath.Join(dir, "base.toml")
 	base := `[controller]
 port = 5001
-api_uri = "http://api:4000/graphql"
+api_uri = "http://api:4000/admin/graphql"
 [controller.serviceaccount]
 name = "gitstore-controller-manager"
 uid = "sa-uid-1"
@@ -131,7 +131,7 @@ format = "json"
 
 	overlayPath := filepath.Join(dir, "overlay.toml")
 	overlay := `[controller]
-api_uri = "http://overlay-api:4000/graphql"
+api_uri = "http://overlay-api:4000/admin/graphql"
 `
 	if err := os.WriteFile(overlayPath, []byte(overlay), 0600); err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ api_uri = "http://overlay-api:4000/graphql"
 	if err != nil {
 		t.Fatalf("LoadFromFiles() error: %v", err)
 	}
-	if cfg.Controller.ApiURI != "http://overlay-api:4000/graphql" {
+	if cfg.Controller.ApiURI != "http://overlay-api:4000/admin/graphql" {
 		t.Fatalf("ApiURI = %q, want overlay value", cfg.Controller.ApiURI)
 	}
 	// Base-only key must survive the merge.
@@ -189,8 +189,8 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Controller.Port != 5001 {
 		t.Errorf("Port = %d, want 5001", cfg.Controller.Port)
 	}
-	if cfg.Controller.ApiURI != "http://localhost:4000/graphql" {
-		t.Errorf("ApiURI = %q, want http://localhost:4000/graphql", cfg.Controller.ApiURI)
+	if cfg.Controller.ApiURI != "http://localhost:4000/admin/graphql" {
+		t.Errorf("ApiURI = %q, want http://localhost:4000/admin/graphql", cfg.Controller.ApiURI)
 	}
 	if cfg.Controller.Reconcile.MaxAttempts != 5 {
 		t.Errorf("DefaultMaxAttempts = %d, want 5", cfg.Controller.Reconcile.MaxAttempts)
@@ -221,7 +221,7 @@ func TestLoad_Defaults(t *testing.T) {
 func TestLoad_EnvOverrides(t *testing.T) {
 	setenv(t,
 		"GITSTORE_CONTROLLER__PORT", "8080",
-		"GITSTORE_CONTROLLER__API_URI", "http://api.example.com/graphql",
+		"GITSTORE_CONTROLLER__API_URI", "http://api.example.com/admin/graphql",
 		"GITSTORE_CONTROLLER__RECONCILE__MAX_ATTEMPTS", "10",
 		"GITSTORE_CONTROLLER__RECONCILE__STALL_THRESHOLD", "2m",
 		"GITSTORE_CONTROLLER__CHECKPOINT__DIR", "/tmp/checkpoints",
@@ -242,7 +242,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	if cfg.Controller.Port != 8080 {
 		t.Errorf("Port = %d, want 8080", cfg.Controller.Port)
 	}
-	if cfg.Controller.ApiURI != "http://api.example.com/graphql" {
+	if cfg.Controller.ApiURI != "http://api.example.com/admin/graphql" {
 		t.Errorf("ApiURI = %q", cfg.Controller.ApiURI)
 	}
 	if cfg.Controller.Reconcile.MaxAttempts != 10 {

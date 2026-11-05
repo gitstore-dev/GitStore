@@ -80,7 +80,7 @@ flush_interval_events = 1
 [controller.watch]
 resync_interval = "1s"
 max_backoff = "2s"
-`, port, api+"/graphql", name, uid, providerRoot, filepath.Join(root, "checkpoints"))
+`, port, api+"/admin/graphql", name, uid, providerRoot, filepath.Join(root, "checkpoints"))
 	require.NoError(t, os.WriteFile(c.config, []byte(config), 0600))
 	c.start(t, binary)
 	return c
@@ -180,7 +180,7 @@ func secretTestGraphQL(t *testing.T, api, token, query string, variables map[str
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, api+"/graphql", bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, api+"/admin/graphql", bytes.NewReader(data))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -604,7 +604,7 @@ func TestSecretCapacityFixtureProvision(t *testing.T) {
 		require.NoError(t, writeSecretCapacitySigningRecord(filepath.Join(provider, "controller.json"), fixture.Keys[i]))
 		config := fmt.Sprintf(`[controller]
 port = 5001
-api_uri = "http://api-%s:4000/graphql"
+api_uri = "http://api-%s:4000/admin/graphql"
 [controller.serviceaccount]
 name = "gitstore-controller-manager"
 uid = %q
@@ -905,7 +905,7 @@ func (driver *secretCapacityFaultDriver) issue(ctx context.Context, api string, 
 	if err != nil {
 		return errors.New("secret capacity: cannot encode issuance probe")
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(api, "/")+"/graphql", bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(api, "/")+"/admin/graphql", bytes.NewReader(payload))
 	if err != nil {
 		return errors.New("secret capacity: invalid issuance endpoint")
 	}

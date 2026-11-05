@@ -15,6 +15,7 @@ usage: make capacity TARGET=<target> PROFILE=<profile> MODE=<mode>
 
 valid target/profile combinations:
   api/readiness
+  api/endpoint-split
   api/authorization (diagnostic only until reload-soak evidence is implemented)
   namespace/admission
   namespace/validation
@@ -38,6 +39,10 @@ case "${target}/${profile}" in
   api/readiness)
     runner_kind=k6
     command=(make --no-print-directory _capacity-k6 CAPACITY_PROFILE=api-readiness "MODE=${mode}")
+    ;;
+  api/endpoint-split)
+    runner_kind=k6
+    command=(make --no-print-directory _capacity-k6 CAPACITY_PROFILE=api-endpoint-split "MODE=${mode}")
     ;;
   api/authorization)
     [[ "${mode}" == diagnostic ]] || {
@@ -129,7 +134,7 @@ if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == "1" ]]; then
     exit 2
   }
 fi
-run_id="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+run_id="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)}"
 evidence_root="${CAPACITY_EVIDENCE_DIR:-${repo_root}/.gitstore/capacity}"
 evidence_dir="${evidence_root}/${target}/${profile}/${mode}/${run_id}"
 mkdir -p "${evidence_dir}"

@@ -217,7 +217,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator(), CommittedManifestAdmitter: testCommittedManifestAdmitter{store: store}})
 	require.NoError(t, err)
 
-	loginReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+	loginReq := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(`{
 		"query": "mutation { login(input: { username: \"admin\", password: \"admin123\" }) { token { accessToken tokenType } } }"
 	}`))
 	loginReq.Header.Set("Content-Type", "application/json")
@@ -244,7 +244,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.NotEmpty(t, loginResponse.Data.Login.Token.AccessToken)
 	assert.Equal(t, "Bearer", loginResponse.Data.Login.Token.TokenType)
 
-	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: ORGANIZATION } }) { namespace { metadata { name } } } }"}`))
+	req := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(`{"query":"mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: ORGANIZATION } }) { namespace { metadata { name } } } }"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+loginResponse.Data.Login.Token.AccessToken)
 	w := httptest.NewRecorder()
@@ -270,7 +270,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.Empty(t, response.Errors)
 	assert.Equal(t, "alice", response.Data.CreateNamespace.Namespace.Metadata.Name)
 
-	listReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+	listReq := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(`{
 		"query": "query { namespaces(first: 10) { edges { cursor node { metadata { name } } } pageInfo { hasNextPage endCursor } } }"
 	}`))
 	listReq.Header.Set("Content-Type", "application/json")
@@ -310,7 +310,7 @@ func TestGraphQLHandlerRejectsLoginWithInvalidCredentials(t *testing.T) {
 	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(`{
 		"query": "mutation { login(input: { username: \"admin\", password: \"wrong\" }) { token { accessToken } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -335,7 +335,7 @@ func TestGraphQLHandlerRejectsNamespaceMutationWithoutBearerToken(t *testing.T) 
 
 	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
 	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(`{
 		"query": "mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { metadata { name } } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -361,7 +361,7 @@ func TestGraphQLHandlerRejectsMutationWithInvalidBearerToken(t *testing.T) {
 	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(`{
 		"query": "mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { metadata { name } } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")

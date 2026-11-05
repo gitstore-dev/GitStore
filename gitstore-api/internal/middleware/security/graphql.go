@@ -16,10 +16,10 @@ import (
 	"unicode"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
@@ -334,6 +334,22 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		return nil, &gqlerror.Error{
 			Message:    "service account assertions may only issue access tokens",
 			Extensions: map[string]any{"code": "FORBIDDEN"},
+		}
+	}
+	// A well-formed public identity is absent from the Admin type universe.
+	// Reject it before typed selector authorization can look up a current row
+	// or reinterpret it as a malformed management ID. nodes keeps its indexed
+	// per-entry presentation in the resolver rather than rejecting the batch.
+	if fc.Object == "Query" && fc.Field.Name != "nodes" {
+		id, _ := directStringArg(fc.Args, "id")
+		if id == "" {
+			id, _ = nestedStringPath(fc.Args, "by", "id")
+		}
+		if id != "" {
+			kind, _, err := decodeGlobalID(id)
+			if err == nil && kind == "StorefrontProduct" {
+				return nil, admission.ResourceNotFound(kind, "resource not found")
+			}
 		}
 	}
 	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isAdditionalCatalogField(fc) && !isNamespaceQueryField(fc) && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isCategoryProductsField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {

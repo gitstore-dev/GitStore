@@ -645,7 +645,7 @@ func dialCapacitySubscription(apiURL, token, subscriptionID, query string, varia
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		wsURL := strings.Replace(apiURL, "http", "ws", 1) + "/graphql"
+		wsURL := strings.Replace(apiURL, "http", "ws", 1) + "/admin/graphql"
 		dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, Subprotocols: []string{"graphql-transport-ws"}}
 		conn, response, err := dialer.Dial(wsURL, http.Header{"Authorization": []string{"Bearer " + token}})
 		if err != nil {
@@ -1326,7 +1326,7 @@ func createCapacityNamespaceContext(ctx context.Context, client *http.Client, ap
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/admin/graphql", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -1381,7 +1381,7 @@ func updateCapacityNamespaceContext(ctx context.Context, client *http.Client, ap
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/admin/graphql", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -1437,7 +1437,7 @@ func capacityNamespaceExistsContext(ctx context.Context, client *http.Client, ap
 	if err != nil {
 		return false
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/admin/graphql", bytes.NewReader(body))
 	if err != nil {
 		return false
 	}

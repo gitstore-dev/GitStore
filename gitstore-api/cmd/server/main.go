@@ -74,7 +74,8 @@ func main() {
 	}()
 
 	log.Info("Starting GitStore GraphQL API",
-		zap.Int("port", cfg.Api.Port),
+		zap.Int("admin_port", cfg.Api.AdminPort),
+		zap.Int("storefront_port", cfg.Api.StorefrontPort),
 		zap.String("api.git_service.uri", cfg.Api.GitService.Uri),
 		zap.String("datastore_backend", cfg.Api.Datastore.Backend),
 	)

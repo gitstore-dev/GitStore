@@ -2,7 +2,7 @@
 // Copyright (c) 2026 GitStore contributors
 
 // Package schemavalidate is a controller-manager test helper. It parses the
-// GraphQL schema gitstore-api actually serves (shared/schemas/*.graphqls)
+// GraphQL schema gitstore-api actually serves (shared/schemas/{admin,common}/*.graphqls)
 // and validates operation strings against it using the same
 // github.com/vektah/gqlparser/v2 rules gqlgen applies to every request
 // server-side.
@@ -15,7 +15,7 @@
 // call until the client's selection set was fixed. Every package that sends
 // GraphQL operations through internal/graphqlclient should have a
 // *_schema_test.go registering its operation strings here (see
-// internal/namespace/graphql_client_schema_test.go) so a future schema
+// internal/namespace/admin/graphql_client_schema_test.go) so a future schema
 // change that breaks a selection is caught by `go test` instead of only
 // discovered against a live API.
 package schemavalidate
@@ -40,7 +40,7 @@ var (
 	loadErr error
 )
 
-// Schema lazily parses every shared/schemas/*.graphqls file — located
+// Schema lazily parses every shared/schemas/{admin,common}/*.graphqls file — located
 // relative to this source file, so resolution does not depend on the test
 // binary's working directory — and caches the result for the process.
 func Schema() (*ast.Schema, error) {
@@ -59,16 +59,16 @@ func load() (*ast.Schema, error) {
 	// shared/schemas lives three directories above internal/schemavalidate,
 	// at the repository root.
 	root := filepath.Join(filepath.Dir(file), "..", "..", "..", "shared", "schemas")
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil, fmt.Errorf("schemavalidate: read schema dir %s: %w", root, err)
-	}
 	var names []string
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".graphqls" {
-			continue
+	for _, set := range []string{"admin", "common"} {
+		matches, err := filepath.Glob(filepath.Join(root, set, "*.graphqls"))
+		if err != nil {
+			return nil, err
 		}
-		names = append(names, entry.Name())
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("schemavalidate: empty %s schema source set", set)
+		}
+		names = append(names, matches...)
 	}
 	if len(names) == 0 {
 		return nil, fmt.Errorf("schemavalidate: no .graphqls files found under %s", root)
@@ -77,7 +77,7 @@ func load() (*ast.Schema, error) {
 
 	sources := make([]*ast.Source, 0, len(names))
 	for _, name := range names {
-		path := filepath.Join(root, name)
+		path := name
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("schemavalidate: read %s: %w", path, err)
