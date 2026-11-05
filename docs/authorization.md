@@ -231,6 +231,12 @@ namespace and another resource name. A successful named read does not prove
 that a list, watch or Git push is authorized; those operations require their
 own grants.
 
+Repeat these checks after policy reloads and API replacement, including a
+rejected policy reload. After an ownership transfer, verify ownership-derived
+access moves to the new owner on every replica. Exercise
+named reads, global-ID reads and mixed-resource batches separately from lists;
+an allowed read of one resource does not authorize a batch containing another.
+
 ## Decision diagnostics
 
 Structured `authz decision` logs include outcome, reason, provider, request ID
