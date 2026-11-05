@@ -55,7 +55,7 @@ func metricAttributes(labels []*dto.LabelPair) ([]*commonpb.KeyValue, bool) {
 	for _, label := range labels {
 		switch label.GetName() {
 		case "kind", "result", "stage", "phase", "operation", "backend", "resource_kind",
-			"projection", "finding_type", "code", "reason", "outcome", "path",
+			"projection", "finding_type", "code", "reason", "outcome", "action", "path",
 			"grpc_service", "grpc_method", "grpc_type", "grpc_code", "signal",
 			"version", "goversion", "otel_scope_name", "otel_scope_version", "otel_scope_schema_url":
 			if len(label.GetValue()) > 128 {
