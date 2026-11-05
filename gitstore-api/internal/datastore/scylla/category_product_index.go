@@ -208,6 +208,10 @@ func (s *scyllaDatastore) fenceCategoryProductMembership(ctx context.Context, pr
 }
 
 func (s *scyllaDatastore) ListCategoryProducts(ctx context.Context, namespace, categoryUID string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+	page, err := page.BoundedProductPage()
+	if err != nil {
+		return nil, err
+	}
 	if err := s.refreshCategoryProductProjectionReady(ctx); err != nil {
 		return nil, err
 	}
@@ -268,6 +272,10 @@ func collectCategoryProductPage(
 	fetch func(context.Context, int8, *categoryProductRow) ([]categoryProductRow, error),
 	hydrate func(context.Context, string) (*datastore.Product, error),
 ) ([]*datastore.Product, error) {
+	if limit <= 0 {
+		return nil, datastore.ErrInvalidArgument
+	}
+	limit = min(limit, datastore.MaxProductPageSize)
 	return collectProductProjectionPage(ctx, namespace, backward, limit, position, categoryProductShardCount, limit+1, fetch,
 		func(ctx context.Context, row categoryProductRow) (*datastore.Product, error) {
 			return hydrate(ctx, row.ProductUID.String())
@@ -281,6 +289,10 @@ func collectProductProjectionPage(
 	fetch func(context.Context, int8, *categoryProductRow) ([]categoryProductRow, error),
 	hydrate func(context.Context, categoryProductRow) (*datastore.Product, error),
 ) ([]*datastore.Product, error) {
+	if limit <= 0 {
+		return nil, datastore.ErrInvalidArgument
+	}
+	limit = min(limit, datastore.MaxProductPageSize)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

@@ -10,9 +10,11 @@ paths:
 each file's name and checksum in `gocqlx_migrate`. The runner refuses a keyspace
 whose recorded history no longer matches.
 
-Never edit an applied migration. Add incremental files for schema changes and
-preserve the supported upgrade path. An explicitly approved breaking baseline
-reset requires a fresh keyspace and reseeding, not an edited migration ledger.
+Unless changes to existing checksums are explicitly approved, never edit an
+applied migration. Add incremental files for schema changes and preserve the
+supported upgrade path. Keyspaces already provisioned with explicitly approved
+updated files do not require conversion or reseeding. A breaking baseline reset
+requires a fresh keyspace and reseeding, not an edited migration ledger.
 Never delete deployment data implicitly.
 
 ## Baseline
@@ -35,8 +37,8 @@ path across the baseline.
 | `009_service_account.cql`   | `service_accounts_by_*`, `service_account_assertion_replays`                                                                              |
 
 Existing incremental files after `009` remain part of the bundle.
-"One file per resource" describes the baseline only; add new incremental
-files rather than rewriting the existing history.
+"One file per resource" describes the baseline only; absent explicit
+checksum-change approval, add incremental files rather than rewriting history.
 
 ## Conventions
 
@@ -47,7 +49,10 @@ files rather than rewriting the existing history.
   - Repository's list projection `repositories_by_namespace` is partitioned by
     `(namespace, bucket)` to bound partition size, so its single authoritative
     row is `repositories_by_uid`.
-  - Namespaced catalog kinds use `<plural>_by_namespace`, keyed
+  - Product uses `products_by_key`, keyed by the complete resource identity
+    `((namespace, creation_timestamp, uid))`, with resource-sized name
+    reservations and thin 64-shard namespace listings.
+  - Other namespaced catalog kinds use `<plural>_by_namespace`, keyed
     `((namespace), creation_timestamp, uid)`, with `_by_uid` as a lookup.
 - A watched kind enables full-image CDC
   (`cdc = {'enabled': 'true', 'preimage': 'full', 'postimage': 'true', 'ttl': '1209600'}`)

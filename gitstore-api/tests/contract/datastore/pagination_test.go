@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"math"
 	"sort"
 	"testing"
 	"time"
@@ -32,6 +33,41 @@ func encodeCursor(createdAt time.Time, id string) string {
 // require a fresh in-memory store per run.
 func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 	t.Helper()
+
+	t.Run("Products/BoundedPagination", func(t *testing.T) {
+		ns := "bounded-products-" + newID()[:8]
+		created := time.Now().UTC().Truncate(time.Millisecond)
+		for i := range datastore.MaxProductPageSize + 1 {
+			product := newProductInNS(ns)
+			product.CreationTimestamp = created.Add(time.Duration(i) * time.Millisecond)
+			require.NoError(t, ds.CreateProduct(t.Context(), product))
+		}
+		for _, size := range []int{datastore.MaxProductPageSize, datastore.MaxProductPageSize + 1, math.MaxInt32, math.MaxInt} {
+			for _, backward := range []bool{false, true} {
+				t.Run(fmt.Sprintf("size=%d/backward=%t", size, backward), func(t *testing.T) {
+					page := datastore.PageParams{First: size}
+					if backward {
+						page = datastore.PageParams{Last: size}
+					}
+					result, err := ds.ListProducts(t.Context(), ns, page)
+					require.NoError(t, err)
+					require.Len(t, result.Items, datastore.MaxProductPageSize)
+					assert.Equal(t, !backward, result.HasNext)
+					assert.Equal(t, backward, result.HasPrevious)
+				})
+			}
+		}
+		for _, size := range []int{-1, math.MinInt32, math.MinInt} {
+			for _, page := range []datastore.PageParams{{First: size}, {Last: size}, {First: size, Last: 1}, {First: 1, Last: size}} {
+				_, err := ds.ListProducts(t.Context(), ns, page)
+				require.ErrorIs(t, err, datastore.ErrInvalidArgument)
+			}
+		}
+		result, err := ds.ListProducts(t.Context(), ns, datastore.PageParams{})
+		require.NoError(t, err)
+		require.Len(t, result.Items, datastore.DefaultPageSize)
+		assert.True(t, result.HasNext)
+	})
 
 	t.Run("Products/ForwardPagination", func(t *testing.T) {
 		ctx := context.Background()

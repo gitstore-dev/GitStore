@@ -159,8 +159,7 @@ func TestNamespaceMigrationUsesQueryFirstNamespaceTables(t *testing.T) {
 	assert.NotContains(t, schema, "TimeWindowCompactionStrategy")
 }
 
-// The schema is a single per-resource baseline; later changes are appended
-// as incremental migrations rather than edited into these files.
+// The schema retains its per-resource baseline and existing incremental files.
 func TestScyllaSchemaIsPerResourceBaseline(t *testing.T) {
 	entries, err := migrations.Files.ReadDir(".")
 	require.NoError(t, err)
@@ -185,7 +184,6 @@ func TestScyllaSchemaIsPerResourceBaseline(t *testing.T) {
 		"010_category_ancestor_index.cql",
 		"011_category_product_index.cql",
 		"012_repository_resource_membership.cql",
-		"013_product_partitions_and_catalog_fences.cql",
 	}, names)
 }
 

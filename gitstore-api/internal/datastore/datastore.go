@@ -47,6 +47,9 @@ var (
 // DefaultPageSize is used when First/Last is zero.
 const DefaultPageSize = 100
 
+// MaxProductPageSize bounds Product connections before backend allocation.
+const MaxProductPageSize = 250
+
 // MaxOwnerDependentPageSize is the hard upper bound for reverse-owner pages.
 // It prevents a caller from turning a controller continuation into an
 // unbounded datastore read.
@@ -143,6 +146,16 @@ func (p PageParams) Limit() int {
 		return p.First
 	}
 	return DefaultPageSize
+}
+
+// BoundedProductPage validates and bounds both pagination directions.
+func (p PageParams) BoundedProductPage() (PageParams, error) {
+	if p.First < 0 || p.Last < 0 {
+		return PageParams{}, ErrInvalidArgument
+	}
+	p.First = min(p.First, MaxProductPageSize)
+	p.Last = min(p.Last, MaxProductPageSize)
+	return p, nil
 }
 
 // PageCursor is a decoded keyset cursor position.

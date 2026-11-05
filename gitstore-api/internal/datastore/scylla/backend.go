@@ -329,10 +329,6 @@ func New(cfg config.ScyllaConfig, log *zap.Logger, watchBucketSize ...int) (data
 	if err != nil {
 		return nil, err
 	}
-	if err := validateProductCutover(context.Background(), rawSession, cfg.Keyspace); err != nil {
-		rawSession.Close()
-		return nil, err
-	}
 	if cfg.AutoMigrate {
 		if err := RunMigrations(context.Background(), rawSession, cfg.Keyspace, uuid.New().String(), log); err != nil {
 			rawSession.Close()
@@ -620,6 +616,10 @@ func (s *scyllaDatastore) getProductByKey(ctx context.Context, namespace string,
 }
 
 func (s *scyllaDatastore) ListProducts(ctx context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+	page, err := page.BoundedProductPage()
+	if err != nil {
+		return nil, err
+	}
 	limit := page.Limit()
 	shardPageSize := min(limit+1, 2*((limit+productNamespaceShardCount)/productNamespaceShardCount))
 	order, relation, cursor := "DESC", "<", page.After

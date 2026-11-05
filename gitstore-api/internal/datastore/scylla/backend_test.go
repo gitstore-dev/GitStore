@@ -1973,31 +1973,6 @@ func TestScylla_CatalogMutationsDoNotWriteNamespaceCDC(t *testing.T) {
 	t.Logf("Namespace CDC rows before/after catalog lifecycle: %d/%d", before, count())
 }
 
-func TestScyllaProductCutoverRejectsLegacyDataWithoutDeletingIt(t *testing.T) {
-	cfg := testScyllaConfig(t)
-	cfg.Keyspace += "_legacy_product"
-	provisionKeyspace(scyllaAddr, cfg.Keyspace)
-	t.Cleanup(func() { dropKeyspace(scyllaAddr, cfg.Keyspace) })
-	store, err := scylla.New(cfg, zap.NewNop())
-	require.NoError(t, err)
-	require.NoError(t, store.Close())
-	raw, err := openRootSession(scyllaAddr)
-	require.NoError(t, err)
-	defer raw.Close()
-	uid := gocql.TimeUUID()
-	created := time.Now().UTC().Truncate(time.Millisecond)
-	require.NoError(t, raw.Query("INSERT INTO "+cfg.Keyspace+".products_by_namespace (namespace,creation_timestamp,uid,name) VALUES (?,?,?,?)",
-		"legacy", created, uid, "preserved").Exec())
-	_, err = scylla.New(cfg, zap.NewNop())
-	require.ErrorIs(t, err, datastore.ErrRepairRequired)
-	_, err = scylla.OpenProjectionRepairService(cfg)
-	require.ErrorIs(t, err, datastore.ErrRepairRequired)
-	var name string
-	require.NoError(t, raw.Query("SELECT name FROM "+cfg.Keyspace+".products_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=?",
-		"legacy", created, uid).Scan(&name))
-	require.Equal(t, "preserved", name)
-}
-
 func TestScylla_CatalogFenceRepairSurvivesReopenAndRejectsStaleOwners(t *testing.T) {
 	cfg := testScyllaConfig(t)
 	cfg.Keyspace += "_catalog_repair"

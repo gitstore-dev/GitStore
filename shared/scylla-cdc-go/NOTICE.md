@@ -18,6 +18,8 @@ checkpoint, retry, schema or API semantics are changed. The API module uses a
 local Go module replacement; its container includes this directory. The module
 uses the API's existing Scylla gocql v1.18.0 replacement for consistent standalone
 and workspace tests, rather than upstream's older v1.17.3 replacement.
+The standalone compression dependency matches the API's v1.20.1 pin, avoiding
+the dictionary-processing integer overflow in v1.18.5 (CVE-2026-63209).
 An existing upstream `nolint:unused` annotation also has an equivalent
 `lint:ignore U1000` annotation for the root staticcheck command.
 

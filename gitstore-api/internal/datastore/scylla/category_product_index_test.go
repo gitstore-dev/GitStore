@@ -6,6 +6,7 @@ package scylla
 import (
 	"context"
 	"errors"
+	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,45 @@ func TestProductNamespaceShardsDistributeOneRepository(t *testing.T) {
 	for _, count := range counts {
 		require.Greater(t, count, 1200)
 		require.Less(t, count, 1900)
+	}
+}
+
+func TestProductProjectionCapsPageBeforeMergeAllocation(t *testing.T) {
+	created := time.Now().UTC().Truncate(time.Millisecond)
+	for _, size := range []int{datastore.MaxProductPageSize + 1, math.MaxInt32, math.MaxInt} {
+		for _, backward := range []bool{false, true} {
+			items, err := collectProductProjectionPage(t.Context(), "shop", backward, size, nil, productNamespaceShardCount, datastore.MaxProductPageSize+3,
+				func(_ context.Context, shard int8, _ *categoryProductRow) ([]categoryProductRow, error) {
+					if shard != 0 {
+						return nil, nil
+					}
+					rows := make([]categoryProductRow, datastore.MaxProductPageSize+2)
+					for i := range rows {
+						index := len(rows) - i
+						if backward {
+							index = i + 1
+						}
+						var uid gocql.UUID
+						uid[14], uid[15] = byte(index>>8), byte(index)
+						rows[i] = categoryProductRow{CreationTimestamp: created.Add(time.Duration(index) * time.Millisecond), ProductUID: uid}
+					}
+					return rows, nil
+				}, func(_ context.Context, row categoryProductRow) (*datastore.Product, error) {
+					return &datastore.Product{UID: row.ProductUID.String(), Namespace: "shop", CreationTimestamp: row.CreationTimestamp}, nil
+				})
+			require.NoError(t, err)
+			require.Len(t, items, datastore.MaxProductPageSize+1)
+		}
+	}
+}
+
+func TestProductPagesRejectNegativeSizesBeforeDatastoreAccess(t *testing.T) {
+	store := &scyllaDatastore{}
+	for _, page := range []datastore.PageParams{{First: -1}, {Last: math.MinInt}, {First: -1, Last: 1}, {First: 1, Last: -1}} {
+		_, err := store.ListProducts(t.Context(), "shop", page)
+		require.ErrorIs(t, err, datastore.ErrInvalidArgument)
+		_, err = store.ListCategoryProducts(t.Context(), "shop", "category", page)
+		require.ErrorIs(t, err, datastore.ErrInvalidArgument)
 	}
 }
 

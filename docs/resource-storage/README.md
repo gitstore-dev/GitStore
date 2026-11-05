@@ -59,6 +59,9 @@ reserved in resource-sized `products_by_identity` partitions.
 64 stable shards; `products_by_uid` locates an envelope. Forward and backward
 pages merge these ordered shards and hydrate only a bounded window of at most
 16 rows, with at most 256 projection queries and 4096 envelope lookups.
+Product connections retain the 100-row default and enforce a 250-row maximum
+in both directions before query sizing or merge allocation; negative sizes are
+rejected consistently by both datastore backends.
 Missing or mismatched rows are skipped within those budgets. Errors and budget
 exhaustion fail the page, rather than returning a partial success.
 
@@ -78,24 +81,16 @@ Namespace counter. Ambiguous outcomes retain the catalog reservation; repair
 requires quiescent writers and uses the audited epoch and pending value so a
 stale plan cannot clear a newer holder.
 
-Migration `013_product_partitions_and_catalog_fences.cql` adds the tables and
-disables CDC on the unused legacy Product table without changing checksums of
-`002_namespace.cql` or `005_product.cql`, deleting rows, or transferring data.
-Existing empty keyspaces can apply the incremental migration. A populated
-legacy Product keyspace requires an explicitly planned offline cutover to a
-fresh keyspace and reseeding from its preserved source data. API startup and
-projection repair refuse populated legacy Product tables before proceeding.
-Preserve the original keyspace and recovery backups; do not edit migration
-ledgers or discard an existing catalog to bypass this check.
-Keyspaces created from an edited `002`/`005` baseline also retain incompatible
-migration checksums, even if their Product table names match. Preserve those
-keyspaces unchanged and plan a separate explicit cutover rather than rewriting
-their recorded history.
+The schema changes update `002_namespace.cql` and `005_product.cql` directly,
+with explicitly approved checksum changes and no new migration. Keyspaces
+already provisioned from these files do not require conversion or reseeding.
+The existing read-only schema validation remains unchanged and rejects
+incompatible recorded histories. No deployment data reset, automatic data
+transfer, migration ledger rewrite or additional cutover guard is introduced.
 
-All old-schema API writers and CDC readers must stop before cutover. Mixing
-legacy Product writers or old Namespace-fence binaries with these writers is
-not supported. This change does not provide automatic data conversion,
-old-schema rolling upgrades, or production capacity acceptance.
+Binaries using the previous Product or Namespace-fence schema cannot be mixed
+with these writers. This change does not provide old-schema rolling upgrades
+or production capacity acceptance.
 
 The resource list is anchored in the Kubernetes-style frontmatter initiative
 tracked by `gitstore-dev/GitStore#40`. That initiative currently covers

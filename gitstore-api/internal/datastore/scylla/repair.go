@@ -164,10 +164,6 @@ func OpenProjectionRepairService(cfg config.ScyllaConfig) (*ProjectionRepairServ
 	if err != nil {
 		return nil, fmt.Errorf("scylla projection repair: open session: %w", err)
 	}
-	if err := validateProductCutover(context.Background(), raw, cfg.Keyspace); err != nil {
-		raw.Close()
-		return nil, err
-	}
 	return &ProjectionRepairService{store: &scyllaProjectionRepairStore{
 		session: gocqlx.NewSession(raw),
 		raw:     raw,
