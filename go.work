@@ -6,5 +6,6 @@ use (
 	./gitstore-oidc-bridge
 	./shared/secretmaterial
 	./shared/observability
+	./shared/scylla-cdc-go
 	./tests/integration
 )

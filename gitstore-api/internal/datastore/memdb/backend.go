@@ -236,6 +236,10 @@ func (m *memdbDatastore) ReplaceCategoryProductMembership(_ context.Context, pro
 }
 
 func (m *memdbDatastore) ListCategoryProducts(_ context.Context, namespace, categoryUID string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+	page, err := page.BoundedProductPage()
+	if err != nil {
+		return nil, err
+	}
 	if page.First > datastore.DefaultPageSize {
 		page.First = datastore.DefaultPageSize
 	}
@@ -549,11 +553,14 @@ func (m *memdbDatastore) GetProductByName(_ context.Context, namespace, name str
 }
 
 func (m *memdbDatastore) ListProducts(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+	page, err := page.BoundedProductPage()
+	if err != nil {
+		return nil, err
+	}
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
 	var it gomemdb.ResultIterator
-	var err error
 	if namespace != "" {
 		it, err = txn.Get("product", "namespace", namespace)
 	} else {

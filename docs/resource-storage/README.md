@@ -50,6 +50,48 @@ projections and hydrate only the requested page. Connections do not expose a
 buckets, which this pagination model is specifically designed to avoid.
 Fetch-all-then-sort is not an accepted pagination implementation.
 
+### Product partitions and catalog fencing
+
+Product envelopes reside in `products_by_key`, with the complete
+`(namespace, creation_timestamp, uid)` key forming one partition. Names are
+reserved in resource-sized `products_by_identity` partitions.
+`products_by_namespace_shard` contains only listing keys distributed across
+64 stable shards; `products_by_uid` locates an envelope. Forward and backward
+pages merge these ordered shards and hydrate only a bounded window of at most
+16 rows, with at most 256 projection queries and 4096 envelope lookups.
+Product connections retain the 100-row default and enforce a 250-row maximum
+in both directions before query sizing or merge allocation; negative sizes are
+rejected consistently by both datastore backends.
+Missing or mismatched rows are skipped within those budgets. Errors and budget
+exhaustion fail the page, rather than returning a partial success.
+
+Product full-image CDC watches `products_by_key`. Every resource transition
+in a bounded multi-row CDC frame must enter the shared durable watch journal
+before its source position is checkpointed.
+The pinned CDC reader includes a minimal shutdown patch: cancellation and
+consumer errors stop the generation fetcher as well as stream workers, avoiding
+a queued-generation deadlock during reader replacement. Native and container
+API builds use the same local module; standalone race regressions cover its
+shutdown paths.
+
+Catalog and parent lifecycle mutations share a non-expiring, exact-epoch
+reservation in `namespace_catalog_fences_by_uid`. These coordination writes
+do not produce Namespace CDC. Repository creation retains its independent
+Namespace counter. Ambiguous outcomes retain the catalog reservation; repair
+requires quiescent writers and uses the audited epoch and pending value so a
+stale plan cannot clear a newer holder.
+
+The schema changes update `002_namespace.cql` and `005_product.cql` directly,
+with explicitly approved checksum changes and no new migration. Keyspaces
+already provisioned from these files do not require conversion or reseeding.
+The existing read-only schema validation remains unchanged and rejects
+incompatible recorded histories. No deployment data reset, automatic data
+transfer, migration ledger rewrite or additional cutover guard is introduced.
+
+Binaries using the previous Product or Namespace-fence schema cannot be mixed
+with these writers. This change does not provide old-schema rolling upgrades
+or production capacity acceptance.
+
 The resource list is anchored in the Kubernetes-style frontmatter initiative
 tracked by `gitstore-dev/GitStore#40`. That initiative currently covers
 `Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`, `Translation`,

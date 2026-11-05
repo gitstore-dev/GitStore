@@ -46,16 +46,14 @@ func authoritativeColumns(includeNamespace, includeRepository bool, specific ...
 
 var (
 	ProductByNamespace = table.New(table.Metadata{
-		Name:    "products_by_namespace",
+		Name:    "products_by_key",
 		Columns: authoritativeColumns(true, true),
-		PartKey: []string{"namespace"},
-		SortKey: []string{"creation_timestamp", "uid"},
+		PartKey: []string{"namespace", "creation_timestamp", "uid"},
 	})
 	ProductByName = table.New(table.Metadata{
-		Name:    "products_by_name",
+		Name:    "products_by_identity",
 		Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
-		PartKey: []string{"namespace"},
-		SortKey: []string{"name"},
+		PartKey: []string{"namespace", "name"},
 	})
 	ProductByUID = table.New(table.Metadata{
 		Name:    "products_by_uid",

@@ -6,6 +6,8 @@ replace github.com/gitstore-dev/gitstore/secretmaterial => ../shared/secretmater
 
 replace github.com/gitstore-dev/gitstore/observability => ../shared/observability
 
+replace github.com/scylladb/scylla-cdc-go => ../shared/scylla-cdc-go
+
 require github.com/gitstore-dev/gitstore/observability v0.0.0
 
 require github.com/gitstore-dev/gitstore/secretmaterial v0.0.0

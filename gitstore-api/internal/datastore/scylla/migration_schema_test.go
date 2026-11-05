@@ -53,7 +53,7 @@ func TestWatchedKindsEnableAuthoritativeFullImageCDC(t *testing.T) {
 		{"002_namespace.cql", "namespaces_by_uid"},
 		{"003_repository.cql", "repositories_by_uid"},
 		{"004_category_taxonomy.cql", "category_taxonomies_by_namespace"},
-		{"005_product.cql", "products_by_namespace"},
+		{"005_product.cql", "products_by_key"},
 		{"008_file.cql", "files_by_namespace"},
 	} {
 		assert.Containsf(t, createStatement(t, tc.file, tc.table), fullImageCDC, "%s CDC", tc.table)
@@ -69,7 +69,30 @@ func TestOnlyWatchedAuthoritativeTablesEnableCDC(t *testing.T) {
 		require.NoError(t, err)
 		count += strings.Count(strings.ToLower(string(raw)), "cdc = {")
 	}
-	assert.Equal(t, 5, count, "every CDC-enabled table must be a registered watch source")
+	assert.Equal(t, 5, count, "only the five current watch sources enable CDC")
+}
+
+func TestProductPartitionsSeparateEnvelopesNamesAndListings(t *testing.T) {
+	const file = "005_product.cql"
+	authority := strings.Join(strings.Fields(createStatement(t, file, "products_by_key")), " ")
+	assert.Contains(t, authority, "primary key ((namespace, creation_timestamp, uid))")
+	name := strings.Join(strings.Fields(createStatement(t, file, "products_by_identity")), " ")
+	assert.Contains(t, name, "primary key ((namespace, name))")
+	listing := strings.Join(strings.Fields(createStatement(t, file, "products_by_namespace_shard")), " ")
+	assert.Contains(t, listing, "primary key ((namespace, shard), creation_timestamp, uid)")
+	assert.Contains(t, listing, "shard tinyint")
+	assert.NotContains(t, listing, "status")
+	assert.NotContains(t, listing, "spec")
+	assert.NotContains(t, listing, "cdc")
+}
+
+func TestNamespaceCatalogFenceIsNotAWatchedResource(t *testing.T) {
+	statement := strings.Join(strings.Fields(createStatement(t, "002_namespace.cql", "namespace_catalog_fences_by_uid")), " ")
+	assert.Contains(t, statement, "uid uuid primary key")
+	assert.Contains(t, statement, "epoch bigint")
+	assert.Contains(t, statement, "pending bigint")
+	assert.NotContains(t, statement, "cdc")
+	assert.NotContains(t, statement, "default_time_to_live")
 }
 
 func TestResourceWatchJournalIsSharedAcrossKinds(t *testing.T) {

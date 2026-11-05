@@ -13,6 +13,20 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
 
+func TestProductListingReservationIsNotDeletedBeforeAuthorityAppears(t *testing.T) {
+	projection := ProjectionRecord{
+		Table: productsByNamespaceShard, UID: "11111111-1111-1111-1111-111111111111",
+		Namespace: "shop", CreationTimestamp: time.Now().UTC(), Shard: 1,
+	}
+	plan, err := BuildRepairPlan(ProjectionSnapshot{Projections: []ProjectionRecord{projection}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 0 || len(plan.Findings) != 1 || plan.Findings[0].Repairable {
+		t.Fatalf("an in-flight pre-authoritative listing reservation must be retained: %+v", plan)
+	}
+}
+
 func TestRepositoryCatalogProjectionIsIncludedInRepair(t *testing.T) {
 	for _, kind := range []string{"Product", "ProductVariant", "CategoryTaxonomy", "Collection", "File"} {
 		t.Run(kind, func(t *testing.T) {
@@ -20,17 +34,21 @@ func TestRepositoryCatalogProjectionIsIncludedInRepair(t *testing.T) {
 				RepositoryID: "22222222-2222-2222-2222-222222222222", Namespace: "shop", Name: "product",
 				ResourceVersion: "1", CreationTimestamp: time.Now().UTC()}
 			projections := expectedProjections(resource)
-			if len(projections) != 3 {
-				t.Fatalf("got %d projections, want name, UID and repository index", len(projections))
+			expected := 3
+			if kind == "Product" {
+				expected++
 			}
-			index := projections[2]
+			if len(projections) != expected {
+				t.Fatalf("got %d projections, want %d", len(projections), expected)
+			}
+			index := projections[len(projections)-1]
 			if index.Table != repositoryResourcesTable || index.Kind != resource.Kind || index.RepositoryID != resource.RepositoryID || index.Shard != categoryProductShard(resource.UID) {
 				t.Fatalf("unexpected repository index: %+v", index)
 			}
 			if !index.Equal(index) || index.Key() == "" {
 				t.Fatal("repository index must be comparable and addressable")
 			}
-			plan, err := BuildRepairPlan(ProjectionSnapshot{Authoritative: []AuthoritativeResource{resource}, Projections: projections[:2]})
+			plan, err := BuildRepairPlan(ProjectionSnapshot{Authoritative: []AuthoritativeResource{resource}, Projections: projections[:len(projections)-1]})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -63,8 +81,9 @@ func TestProjectionTableKinds(t *testing.T) {
 		"repositories_by_bucket":             "Repository",
 		"namespace_mappings":                 "Repository",
 		"namespace_mappings_by_repository":   "Repository",
-		"products_by_name":                   "Product",
+		"products_by_identity":               "Product",
 		"products_by_uid":                    "Product",
+		productsByNamespaceShard:             "Product",
 		"category_products_by_category":      "Product",
 		"category_products_by_product":       "Product",
 		"category_taxonomies_by_name":        "CategoryTaxonomy",
@@ -281,6 +300,40 @@ func TestProjectionRepairServiceClearsRetainedRepositoryFence(t *testing.T) {
 	}
 }
 
+func TestCatalogFenceRepairValidation(t *testing.T) {
+	snapshot := missingNamespaceBucketSnapshot()
+	snapshot.Projections = expectedProjections(snapshot.Authoritative[0])
+	fence := NamespaceRepositoryFenceRepair{
+		Namespace: snapshot.Authoritative[0].Name, UID: snapshot.Authoritative[0].UID,
+		RepositoryCreationEpoch: 7, PendingRepositoryCreations: 1,
+	}
+	snapshot.NamespaceRepositoryFences = []NamespaceRepositoryFenceRepair{fence, fence}
+	snapshot.NamespaceRepositoryFences[1].Catalog = true
+	plan, err := BuildRepairPlan(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateRepairPlan(plan); err != nil {
+		t.Fatalf("independent Repository and catalog fences must coexist: %v", err)
+	}
+	plan.NamespaceRepositoryFences[1].PendingRepositoryCreations = 2
+	if err := ValidateRepairPlan(plan); err == nil {
+		t.Fatal("an exclusive catalog fence cannot have two holders")
+	}
+	plan.NamespaceRepositoryFences[1] = plan.NamespaceRepositoryFences[0]
+	if err := ValidateRepairPlan(plan); err == nil {
+		t.Fatal("duplicate fences of the same type must be rejected")
+	}
+	fence.Catalog = true
+	plan, err = BuildRepairPlan(ProjectionSnapshot{NamespaceRepositoryFences: []NamespaceRepositoryFenceRepair{fence}})
+	if err != nil {
+		t.Fatalf("a held fence must remain repairable after Namespace deletion: %v", err)
+	}
+	if err := ValidateRepairPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProjectionRepairServiceRetainsFenceWhenClearFails(t *testing.T) {
 	t.Parallel()
 	fence := NamespaceRepositoryFenceRepair{
@@ -421,7 +474,7 @@ func TestBuildRepairPlanDoesNotOverwriteValidCompetingOwner(t *testing.T) {
 func TestBuildRepairPlanDoesNotDeleteWriteReservation(t *testing.T) {
 	t.Parallel()
 	reservation := ProjectionRecord{
-		Table:             "products_by_name",
+		Table:             "products_by_identity",
 		UID:               "99999999-9999-9999-9999-999999999999",
 		Namespace:         "shop",
 		Name:              "pending-product",
@@ -453,7 +506,7 @@ func TestValidateRepairPlanRejectsReservationProjectionDelete(t *testing.T) {
 		UID:                   "11111111-1111-1111-1111-111111111111",
 		RequireAbsentResource: true,
 		Before: &ProjectionRecord{
-			Table: "products_by_name", UID: "11111111-1111-1111-1111-111111111111", Namespace: "shop", Name: "name",
+			Table: "products_by_identity", UID: "11111111-1111-1111-1111-111111111111", Namespace: "shop", Name: "name",
 		},
 	}}})
 	if err == nil || !strings.Contains(err.Error(), "reservation projection") {

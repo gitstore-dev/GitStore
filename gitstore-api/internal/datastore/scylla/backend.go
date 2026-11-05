@@ -68,7 +68,7 @@ type scyllaDatastore struct {
 
 // row structs mirror the CQL columns.
 
-// productRow mirrors the columns of products_by_namespace.
+// productRow mirrors the columns of products_by_key.
 type productRow struct {
 	Namespace         string            `db:"namespace"`
 	CreationTimestamp time.Time         `db:"creation_timestamp"`
@@ -96,7 +96,7 @@ type productRow struct {
 	Status            string            `db:"status"`
 }
 
-// productNameRow mirrors products_by_name (index only).
+// productNameRow mirrors products_by_identity (index only).
 type productNameRow struct {
 	Namespace         string     `db:"namespace"`
 	Name              string     `db:"name"`
@@ -455,20 +455,21 @@ func (s *scyllaDatastore) createProduct(ctx context.Context, p *datastore.Produc
 		existed      bool
 		nameReserved bool
 		uidReserved  bool
+		listCreated  bool
 	)
 	err = s.mutations.execute(ctx,
 		mutationAction{
-			Step: catalogueStep("create", "Product", p.UID, "products_by_name", p.Namespace+"/"+p.Name, "reserve-name"),
+			Step: catalogueStep("create", "Product", p.UID, "products_by_identity", p.Namespace+"/"+p.Name, "reserve-name"),
 			Apply: func(ctx context.Context) error {
 				var reserveErr error
-				nameReserved, reserveErr = s.reserveNameOwned(ctx, "Product", "products_by_name", row.Namespace, row.Name, uid, row.CreationTimestamp)
+				nameReserved, reserveErr = s.reserveNameOwned(ctx, "Product", "products_by_identity", row.Namespace, row.Name, uid, row.CreationTimestamp)
 				return reserveErr
 			},
 			Compensate: func(ctx context.Context) error {
 				if !nameReserved {
 					return nil
 				}
-				return s.releaseName(ctx, "products_by_name", row.Namespace, row.Name, uid)
+				return s.releaseName(ctx, "products_by_identity", row.Namespace, row.Name, uid)
 			},
 		},
 		mutationAction{
@@ -486,14 +487,29 @@ func (s *scyllaDatastore) createProduct(ctx context.Context, p *datastore.Produc
 			},
 		},
 		mutationAction{
-			Step: catalogueStep("create", "Product", p.UID, "products_by_namespace", p.UID, "write-authoritative"),
+			Step: catalogueStep("create", "Product", p.UID, productsByNamespaceShard, p.UID, "write-list"),
+			Apply: func(ctx context.Context) error {
+				var err error
+				listCreated, err = s.session.Query("INSERT INTO "+productsByNamespaceShard+" (namespace,shard,creation_timestamp,uid) VALUES (?,?,?,?) IF NOT EXISTS", nil).
+					WithContext(ctx).Bind(row.Namespace, productNamespaceShard(row.UID.String()), row.CreationTimestamp, row.UID).ExecCASRelease()
+				return err
+			},
+			Compensate: func(ctx context.Context) error {
+				if !listCreated {
+					return nil
+				}
+				return s.deleteProductListing(ctx, row)
+			},
+		},
+		mutationAction{
+			Step: catalogueStep("create", "Product", p.UID, "products_by_key", p.UID, "write-authoritative"),
 			Apply: func(ctx context.Context) error {
 				applied, applyErr := s.insertAuthoritative(ctx, s.productByNamespaceTable, row)
 				if applyErr != nil {
 					return applyErr
 				}
 				if !applied {
-					current, getErr := s.getProductByKey(row.Namespace, row.CreationTimestamp, uid)
+					current, getErr := s.getProductByKey(ctx, row.Namespace, row.CreationTimestamp, uid)
 					if getErr != nil {
 						return getErr
 					}
@@ -538,13 +554,13 @@ func (s *scyllaDatastore) GetProduct(ctx context.Context, uid string) (*datastor
 	// Step 1: uid -> (namespace, creation_timestamp)
 	getUID, names := s.productByUIDTable.Get()
 	var uidRow productUIDRow
-	if err := s.session.Query(getUID, names).BindMap(qb.M{"uid": parsedUID}).GetRelease(&uidRow); err != nil {
+	if err := s.session.Query(getUID, names).WithContext(ctx).BindMap(qb.M{"uid": parsedUID}).GetRelease(&uidRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, uid)
 		}
 		return nil, fmt.Errorf("scylla: get product (uid lookup): %w", err)
 	}
-	product, err := s.getProductByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
+	product, err := s.getProductByKey(ctx, uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "Product", ResourceUID: uid, Projection: "products_by_uid",
@@ -558,23 +574,23 @@ func (s *scyllaDatastore) GetProductByName(ctx context.Context, namespace, name 
 	// Step 1: (namespace, name) -> (uid, creation_timestamp)
 	getName, nameNames := s.productByNameTable.Get()
 	var nameRow productNameRow
-	if err := s.session.Query(getName, nameNames).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&nameRow); err != nil {
+	if err := s.session.Query(getName, nameNames).WithContext(ctx).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&nameRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product %s/%s", datastore.ErrNotFound, namespace, name)
 		}
 		return nil, fmt.Errorf("scylla: get product by name (name lookup): %w", err)
 	}
-	product, err := s.getProductByKey(nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
+	product, err := s.getProductByKey(ctx, nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "Product", ResourceUID: nameRow.UID.String(), Projection: "products_by_name",
+			ResourceKind: "Product", ResourceUID: nameRow.UID.String(), Projection: "products_by_identity",
 			LookupKey: namespace + "/" + name, Operation: "get_by_name", Type: datastore.FindingDangling,
 		})
 		return nil, err
 	}
 	if err == nil && (product.Name != name || product.Namespace != namespace) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
-			ResourceKind: "Product", ResourceUID: nameRow.UID.String(), Projection: "products_by_name",
+			ResourceKind: "Product", ResourceUID: nameRow.UID.String(), Projection: "products_by_identity",
 			LookupKey: namespace + "/" + name, Operation: "get_by_name", Type: datastore.FindingStale,
 		})
 		return nil, fmt.Errorf("%w: stale product name projection %s/%s", datastore.ErrNotFound, namespace, name)
@@ -582,15 +598,15 @@ func (s *scyllaDatastore) GetProductByName(ctx context.Context, namespace, name 
 	return product, err
 }
 
-// getProductByKey fetches a full product row from products_by_namespace by its complete primary key.
-func (s *scyllaDatastore) getProductByKey(namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.Product, error) {
+// getProductByKey fetches a full product row from products_by_key by its complete primary key.
+func (s *scyllaDatastore) getProductByKey(ctx context.Context, namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.Product, error) {
 	cols := strings.Join(s.productByNamespaceTable.Metadata().Columns, ", ")
 	stmt := fmt.Sprintf(
-		"SELECT %s FROM products_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
+		"SELECT %s FROM products_by_key WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
 		cols,
 	)
 	var row productRow
-	if err := s.session.Query(stmt, nil).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
+	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product namespace=%s uid=%s", datastore.ErrNotFound, namespace, uid)
 		}
@@ -599,25 +615,64 @@ func (s *scyllaDatastore) getProductByKey(namespace string, createdAt time.Time,
 	return fromProductRow(&row), nil
 }
 
-func (s *scyllaDatastore) ListProducts(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+func (s *scyllaDatastore) ListProducts(ctx context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+	page, err := page.BoundedProductPage()
+	if err != nil {
+		return nil, err
+	}
 	limit := page.Limit()
-	pq := buildPaginatedSelect(s.productByNamespaceTable, page, "namespace", namespace, productClusterKeys, nil, nil)
-
-	var rows []productRow
-	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
-		return nil, fmt.Errorf("scylla: list products: %w", err)
-	}
-
+	shardPageSize := min(limit+1, 2*((limit+productNamespaceShardCount)/productNamespaceShardCount))
+	order, relation, cursor := "DESC", "<", page.After
 	if page.Last > 0 {
-		reverseRows(rows)
+		order, relation, cursor = "ASC", ">", page.Before
 	}
-
-	products := make([]*datastore.Product, len(rows))
-	for i := range rows {
-		products[i] = fromProductRow(&rows[i])
+	var position *categoryProductRow
+	if cursor != "" {
+		parsed, err := parsePageCursor(cursor)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid product page cursor", datastore.ErrInvalidArgument)
+		}
+		position = &categoryProductRow{CreationTimestamp: parsed.CreatedAt, ProductUID: mustParseUUID(parsed.ID)}
 	}
+	items, err := collectProductProjectionPage(ctx, namespace, page.Last > 0, limit, position, productNamespaceShardCount, shardPageSize,
+		func(ctx context.Context, shard int8, position *categoryProductRow) ([]categoryProductRow, error) {
+			statement := "SELECT creation_timestamp,uid AS product_uid FROM " + productsByNamespaceShard + " WHERE namespace=? AND shard=?"
+			args := []any{namespace, shard}
+			if position != nil {
+				statement += " AND (creation_timestamp,uid) " + relation + " (?,?)"
+				args = append(args, position.CreationTimestamp, position.ProductUID)
+			}
+			statement += " ORDER BY creation_timestamp " + order + ",uid " + order + " LIMIT ?"
+			args = append(args, shardPageSize)
+			var rows []categoryProductRow
+			if err := s.session.Query(statement, nil).WithContext(ctx).Bind(args...).SelectRelease(&rows); err != nil {
+				return nil, fmt.Errorf("scylla: list product shard: %w", err)
+			}
+			return rows, nil
+		}, func(ctx context.Context, row categoryProductRow) (*datastore.Product, error) {
+			return s.getProductByKey(ctx, namespace, row.CreationTimestamp, row.ProductUID)
+		})
+	if err != nil {
+		return nil, err
+	}
+	return buildPageResult(items, limit, page), nil
+}
 
-	return buildPageResult(products, limit, page), nil
+const productsByNamespaceShard = "products_by_namespace_shard"
+const productNamespaceShardCount = 64
+
+func productNamespaceShard(uid string) int8 {
+	return catalogUIDShard(uid, productNamespaceShardCount)
+}
+
+func (s *scyllaDatastore) writeProductListing(ctx context.Context, row *productRow) error {
+	return s.session.Query("INSERT INTO "+productsByNamespaceShard+" (namespace,shard,creation_timestamp,uid) VALUES (?,?,?,?)", nil).
+		WithContext(ctx).Bind(row.Namespace, productNamespaceShard(row.UID.String()), row.CreationTimestamp, row.UID).ExecRelease()
+}
+
+func (s *scyllaDatastore) deleteProductListing(ctx context.Context, row *productRow) error {
+	return s.session.Query("DELETE FROM "+productsByNamespaceShard+" WHERE namespace=? AND shard=? AND creation_timestamp=? AND uid=?", nil).
+		WithContext(ctx).Bind(row.Namespace, productNamespaceShard(row.UID.String()), row.CreationTimestamp, row.UID).ExecRelease()
 }
 
 func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Product, expectedResourceVersion string) error {
@@ -644,7 +699,7 @@ func (s *scyllaDatastore) updateProduct(ctx context.Context, p *datastore.Produc
 	if p.CreationTimestamp.IsZero() {
 		existing, err = s.GetProduct(ctx, p.UID)
 	} else {
-		existing, err = s.getProductByKey(p.Namespace, p.CreationTimestamp, uid)
+		existing, err = s.getProductByKey(ctx, p.Namespace, p.CreationTimestamp, uid)
 	}
 	if err != nil {
 		return err
@@ -661,21 +716,27 @@ func (s *scyllaDatastore) updateProduct(ctx context.Context, p *datastore.Produc
 
 	err = s.mutations.executeUpdate(ctx, row.ResourceVersion,
 		mutationAction{
-			Step: catalogueStep("update", "Product", p.UID, "products_by_namespace", p.UID, "update-authoritative"),
+			Step: catalogueStep("update", "Product", p.UID, "products_by_key", p.UID, "update-authoritative"),
 			Apply: func(ctx context.Context) error {
 				return s.updateProductAuthoritative(ctx, row, expectedResourceVersion)
 			},
 		},
 		mutationAction{
-			Step: catalogueStep("update", "Product", p.UID, "products_by_name", p.Namespace+"/"+p.Name, "converge-name"),
+			Step: catalogueStep("update", "Product", p.UID, "products_by_identity", p.Namespace+"/"+p.Name, "converge-name"),
 			Apply: func(ctx context.Context) error {
-				return s.reserveName(ctx, "Product", "products_by_name", row.Namespace, row.Name, existingUID, row.CreationTimestamp)
+				return s.reserveName(ctx, "Product", "products_by_identity", row.Namespace, row.Name, existingUID, row.CreationTimestamp)
 			},
 		},
 		mutationAction{
 			Step: catalogueStep("update", "Product", p.UID, "products_by_uid", p.UID, "converge-uid"),
 			Apply: func(ctx context.Context) error {
 				return s.reserveUID(ctx, "Product", "products_by_uid", row.Namespace, existingUID, row.CreationTimestamp)
+			},
+		},
+		mutationAction{
+			Step: catalogueStep("update", "Product", p.UID, productsByNamespaceShard, p.UID, "converge-list"),
+			Apply: func(ctx context.Context) error {
+				return s.writeProductListing(ctx, row)
 			},
 		},
 		mutationAction{
@@ -708,13 +769,13 @@ func (s *scyllaDatastore) UpdateProductStatus(ctx context.Context, namespace, na
 		return nil, err
 	}
 	uid := mustParseUUID(existing.UID)
-	const statement = "UPDATE products_by_namespace SET resource_version=?, status=?, owner_references=? WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
+	const statement = "UPDATE products_by_key SET resource_version=?, status=?, owner_references=? WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
 	authoritative := mutationAction{
-		Step: catalogueStep("update-status", "Product", existing.UID, "products_by_namespace", existing.UID, "update-authoritative"),
+		Step: catalogueStep("update-status", "Product", existing.UID, "products_by_key", existing.UID, "update-authoritative"),
 		Apply: func(ctx context.Context) error {
 			applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(existing.ResourceVersion, existing.Status, existing.OwnerReferences, existing.Namespace, existing.CreationTimestamp, uid, expected).ExecCASRelease()
 			if err != nil {
-				return fmt.Errorf("scylla: update products_by_namespace status: %w", err)
+				return fmt.Errorf("scylla: update products_by_key status: %w", err)
 			}
 			if !applied {
 				return datastore.ErrConflict
@@ -738,7 +799,7 @@ func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 	if err != nil {
 		return err
 	}
-	return s.deleteProductWithResourceVersion(ctx, p, p.ResourceVersion, false)
+	return s.deleteProductWithResourceVersion(ctx, p, p.ResourceVersion)
 }
 
 func (s *scyllaDatastore) DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
@@ -746,26 +807,32 @@ func (s *scyllaDatastore) DeleteProductWithResourceVersion(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	return s.deleteProductWithResourceVersion(ctx, p, expectedResourceVersion, true)
+	return s.deleteProductWithResourceVersion(ctx, p, expectedResourceVersion)
 }
 
-func (s *scyllaDatastore) deleteProductWithResourceVersion(ctx context.Context, p *datastore.Product, expectedResourceVersion string, authoritativeFirst bool) error {
+func (s *scyllaDatastore) deleteProductWithResourceVersion(ctx context.Context, p *datastore.Product, expectedResourceVersion string) error {
 	return s.catalogMutation(ctx, "Product", p.Namespace, p.RepositoryID, p.UID, true, func() error {
-		return s.deleteProductFenced(ctx, p, expectedResourceVersion, authoritativeFirst)
+		return s.deleteProductFenced(ctx, p, expectedResourceVersion)
 	})
 }
 
-func (s *scyllaDatastore) deleteProductFenced(ctx context.Context, p *datastore.Product, expectedResourceVersion string, authoritativeFirst bool) error {
+func (s *scyllaDatastore) deleteProductFenced(ctx context.Context, p *datastore.Product, expectedResourceVersion string) error {
 	uid := p.UID
 	parsedUID := mustParseUUID(uid)
 
 	authoritative := mutationAction{
-		Step: catalogueStep("delete", "Product", uid, "products_by_namespace", uid, "delete-authoritative"),
+		Step: catalogueStep("delete", "Product", uid, "products_by_key", uid, "delete-authoritative"),
 		Apply: func(ctx context.Context) error {
 			return s.deleteProductAuthoritative(ctx, toProductRow(p), expectedResourceVersion)
 		},
 	}
 	projections := []mutationAction{
+		{
+			Step: catalogueStep("delete", "Product", uid, productsByNamespaceShard, uid, "delete-list"),
+			Apply: func(ctx context.Context) error {
+				return s.deleteProductListing(ctx, toProductRow(p))
+			},
+		},
 		{
 			Step:  catalogueStep("delete", "Product", uid, categoryProductsByProductTable, uid, "delete-category-memberships"),
 			Apply: func(ctx context.Context) error { return s.ReplaceCategoryProductMembership(ctx, p, nil) },
@@ -780,12 +847,12 @@ func (s *scyllaDatastore) deleteProductFenced(ctx context.Context, p *datastore.
 			},
 		},
 		{
-			Step: catalogueStep("delete", "Product", uid, "products_by_name", p.Namespace+"/"+p.Name, "delete-name"),
+			Step: catalogueStep("delete", "Product", uid, "products_by_identity", p.Namespace+"/"+p.Name, "delete-name"),
 			Apply: func(ctx context.Context) error {
-				return s.releaseName(ctx, "products_by_name", p.Namespace, p.Name, parsedUID)
+				return s.releaseName(ctx, "products_by_identity", p.Namespace, p.Name, parsedUID)
 			},
 			Compensate: func(ctx context.Context) error {
-				return s.reserveName(ctx, "Product", "products_by_name", p.Namespace, p.Name, parsedUID, p.CreationTimestamp)
+				return s.reserveName(ctx, "Product", "products_by_identity", p.Namespace, p.Name, parsedUID, p.CreationTimestamp)
 			},
 		},
 		{
@@ -798,12 +865,7 @@ func (s *scyllaDatastore) deleteProductFenced(ctx context.Context, p *datastore.
 			},
 		},
 	}
-	var err error
-	if authoritativeFirst {
-		err = s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
-	} else {
-		err = s.mutations.executeDelete(ctx, authoritative, projections...)
-	}
+	err := s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
 	if err != nil {
 		return fmt.Errorf("scylla: delete product: %w", err)
 	}
@@ -2130,7 +2192,7 @@ func (s *scyllaDatastore) insertProjection(ctx context.Context, target *table.Ta
 }
 
 func (s *scyllaDatastore) updateProductAuthoritative(ctx context.Context, row *productRow, expectedResourceVersion string) error {
-	const statement = "UPDATE products_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
+	const statement = "UPDATE products_by_key SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
 		"creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?," +
 		"repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=? " +
 		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
@@ -2215,7 +2277,7 @@ func (s *scyllaDatastore) updateProductVariantAuthoritative(ctx context.Context,
 
 func (s *scyllaDatastore) deleteProductAuthoritative(ctx context.Context, row *productRow, expectedResourceVersion string) error {
 	return s.deleteAuthoritative(ctx,
-		"DELETE FROM products_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
+		"DELETE FROM products_by_key WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
 		row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion,
 	)
 }
@@ -2308,6 +2370,10 @@ func (s *scyllaDatastore) CreateNamespace(ctx context.Context, ns *datastore.Nam
 	if !applied {
 		primary := fmt.Errorf("%w: namespace uid %s", datastore.ErrAlreadyExists, ns.UID)
 		return s.rollbackNamespaceCreate(ctx, row, primary, false, false)
+	}
+
+	if _, err := s.loadNamespaceCatalogFence(ctx, row.UID); err != nil {
+		return s.rollbackNamespaceCreate(ctx, row, fmt.Errorf("scylla: initialize namespace catalog fence: %w", err), true, false)
 	}
 
 	const insertIndex = "INSERT INTO namespaces_by_bucket (bucket, creation_timestamp, uid) VALUES (?, ?, ?)"
@@ -2562,17 +2628,25 @@ func (s *scyllaDatastore) GetNamespace(ctx context.Context, uidString string) (*
 	return fromNamespaceRow(&row), nil
 }
 
-func (s *scyllaDatastore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
+func (s *scyllaDatastore) getNamespaceUIDByName(ctx context.Context, name string) (gocql.UUID, error) {
 	stmt, names := s.namespaceByNameTable.Get()
 	var row namespaceNameRow
 	if err := s.session.Query(stmt, names).WithContext(ctx).
 		BindMap(qb.M{"name": name}).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, fmt.Errorf("%w: namespace name %s", datastore.ErrNotFound, name)
+			return gocql.UUID{}, fmt.Errorf("%w: namespace name %s", datastore.ErrNotFound, name)
 		}
-		return nil, fmt.Errorf("scylla: get namespace by name: %w", err)
+		return gocql.UUID{}, fmt.Errorf("scylla: get namespace by name: %w", err)
 	}
-	namespace, err := s.GetNamespace(ctx, row.UID.String())
+	return row.UID, nil
+}
+
+func (s *scyllaDatastore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
+	uid, err := s.getNamespaceUIDByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	namespace, err := s.GetNamespace(ctx, uid.String())
 	if errors.Is(err, datastore.ErrNotFound) {
 		return nil, fmt.Errorf("%w: namespace name %s", datastore.ErrNotFound, name)
 	}
@@ -2694,6 +2768,29 @@ func (s *scyllaDatastore) markNamespaceLifecycle(ctx context.Context, ns *datast
 	if ns == nil {
 		return fmt.Errorf("%w: namespace is nil", datastore.ErrInvalidArgument)
 	}
+	fence, err := s.loadNamespaceRepositoryFence(ctx, ns.UID)
+	if err != nil {
+		return err
+	}
+	if fence.pending() > 0 {
+		return datastore.ErrNamespaceNotEmpty
+	}
+	catalogFence, err := s.loadNamespaceCatalogFence(ctx, mustParseUUID(ns.UID))
+	if err != nil {
+		return err
+	}
+	if catalogFence.Pending != 0 {
+		return datastore.ErrNamespaceNotEmpty
+	}
+	return s.withNamespaceCatalogFence(ctx, ns.Name, true, func() error {
+		return s.markNamespaceLifecycleFenced(ctx, ns, expectedResourceVersion)
+	})
+}
+
+func (s *scyllaDatastore) markNamespaceLifecycleFenced(ctx context.Context, ns *datastore.Namespace, expectedResourceVersion string) error {
+	if ns == nil {
+		return fmt.Errorf("%w: namespace is nil", datastore.ErrInvalidArgument)
+	}
 	datastore.NormalizeNamespaceContract(ns)
 	if ns.UID == "" {
 		return fmt.Errorf("%w: namespace uid is required", datastore.ErrInvalidArgument)
@@ -2736,7 +2833,7 @@ func (s *scyllaDatastore) markNamespaceLifecycle(ctx context.Context, ns *datast
 		row.APIVersion, row.Kind, row.Name, row.Title, row.Tier, row.Generation, row.ResourceVersion, row.Revision,
 		row.CreationTimestamp, row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations, row.OwnerReferences,
 		row.Finalizers, row.DeletionTimestamp, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
-		row.UID, expectedResourceVersion, fence.expectedEpoch(), fence.expectedPending(), nil,
+		row.UID, expectedResourceVersion, fence.epoch(), fence.pending(), nil,
 	).ExecCASRelease()
 	if err != nil {
 		return fmt.Errorf("scylla: mark namespace deletion: %w", err)
@@ -2764,11 +2861,18 @@ func (s *scyllaDatastore) DeleteNamespace(ctx context.Context, uidString string)
 	if err != nil {
 		return err
 	}
+	return s.withNamespaceCatalogFence(ctx, ns.Name, true, func() error {
+		return s.deleteNamespace(ctx, ns)
+	})
+}
+
+func (s *scyllaDatastore) deleteNamespace(ctx context.Context, ns *datastore.Namespace) error {
+	uidString := ns.UID
 	uid := mustParseUUID(uidString)
 	// Commit the authoritative delete before touching list/name projections.
 	// Failed writes must leave the bootstrap list unchanged; CDC holds the
 	// resulting DELETED event until the projection cleanup below is visible.
-	_, err = s.session.Query("DELETE FROM namespaces_by_uid WHERE uid=? IF EXISTS", nil).
+	_, err := s.session.Query("DELETE FROM namespaces_by_uid WHERE uid=? IF EXISTS", nil).
 		WithContext(ctx).Bind(uid).ExecCASRelease()
 	if err != nil {
 		primary := fmt.Errorf("scylla: delete namespace: %w", err)
@@ -2784,6 +2888,8 @@ func (s *scyllaDatastore) DeleteNamespace(ctx context.Context, uidString string)
 }
 
 func (s *scyllaDatastore) DeleteNamespaceWithResourceVersion(ctx context.Context, uidString, expectedResourceVersion string) error {
+	// Termination already excludes new admissions. Completion retains its own
+	// resource-version CAS so peers can resolve and repair partial cleanup.
 	ns, err := s.GetNamespace(ctx, uidString)
 	if err != nil {
 		return err
