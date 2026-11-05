@@ -124,6 +124,12 @@ For Namespace and Repository, sampled reconciliation-attempt spans include a
 The revision is authored `metadata.revision`, not `status.lastAppliedRevision`.
 Missing resources and failed lookups emit no snapshot event.
 
+Category and Product controller projections also retain authored
+`metadata.revision` from list/watch responses, separately from
+`status.lastAppliedRevision`. When diagnosing a stale projection, compare the
+authored revision to the API postimage; a status revision can lag behind it.
+These two kinds do not emit the snapshot event described here.
+
 Use only events with `resource.snapshot.exact=true` for exact snapshot matching.
 Missing fields or nonpositive generation make it false. UID, resource version
 and revision are limited to 64, 128 and 256 UTF-8 bytes; an invalid or oversized
