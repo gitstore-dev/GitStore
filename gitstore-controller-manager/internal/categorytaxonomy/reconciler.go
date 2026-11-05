@@ -30,6 +30,7 @@ type CategoryTaxonomy struct {
 	Name              string
 	Generation        int64
 	ResourceVersion   string
+	Revision          string
 	OwnerReferences   []OwnerReference
 	Finalizers        []string
 	DeletionTimestamp *time.Time

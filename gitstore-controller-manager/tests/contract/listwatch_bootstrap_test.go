@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
@@ -37,6 +38,75 @@ func widgetKey(w widget) types.WorkItemKey {
 }
 
 func widgetRevision(w widget) string { return w.ResourceVersion }
+
+func TestDiskCatalogAuthoredRevisionsAcrossReplicaReplacement(t *testing.T) {
+	for _, kind := range []string{"CategoryTaxonomy", "Product"} {
+		for _, legacy := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/legacy=%t", kind, legacy), func(t *testing.T) {
+				for range 2 {
+					key := types.WorkItemKey{Kind: kind, Namespace: "shop", Name: "fixture"}
+					snapshot := map[string]any{
+						"UID": "current-uid", "Name": key.Name, "Namespace": key.Namespace,
+						"ResourceVersion": "7", "Generation": 3,
+						"Status": map[string]any{"lastAppliedRevision": "not-authored"},
+					}
+					revision := "main@sha1:" + strings.Repeat("a", 40)
+					if !legacy {
+						snapshot["Revision"] = revision
+					} else {
+						revision = ""
+					}
+					dir := t.TempDir()
+					store, err := checkpoint.OpenDiskStore(dir, kind)
+					require.NoError(t, err)
+					generation, err := store.BeginSnapshot(t.Context())
+					require.NoError(t, err)
+					data, err := json.Marshal(snapshot)
+					require.NoError(t, err)
+					require.NoError(t, store.PutSnapshotPage(t.Context(), generation,
+						[]checkpoint.DiskItem{{Key: key, Version: "7", Value: data}}))
+					require.NoError(t, store.FinishSnapshot(t.Context(), generation, "cursor"))
+					require.NoError(t, store.Close())
+					store, err = checkpoint.OpenDiskStore(dir, kind)
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+					if kind == "CategoryTaxonomy" {
+						gate := cache.New[categorytaxonomy.CategoryTaxonomy]()
+						gate.MarkSynced()
+						runner := &listwatch.Runner[categorytaxonomy.CategoryTaxonomy]{
+							Kind: kind, Disk: store, Cache: gate,
+							KeyFunc: func(c categorytaxonomy.CategoryTaxonomy) types.WorkItemKey {
+								return types.WorkItemKey{Kind: kind, Namespace: c.Namespace, Name: c.Name}
+							},
+							RevisionFunc: func(c categorytaxonomy.CategoryTaxonomy) string { return c.ResourceVersion },
+						}
+						got, found, err := runner.Lookup(t.Context(), key)
+						require.NoError(t, err)
+						require.True(t, found)
+						require.Equal(t, revision, got.Revision)
+						require.Equal(t, "not-authored", got.Status.LastAppliedRevision)
+					} else {
+						gate := cache.New[categorytaxonomy.Product]()
+						gate.MarkSynced()
+						runner := &listwatch.Runner[categorytaxonomy.Product]{
+							Kind: kind, Disk: store, Cache: gate,
+							KeyFunc: func(p categorytaxonomy.Product) types.WorkItemKey {
+								return types.WorkItemKey{Kind: kind, Namespace: p.Namespace, Name: p.Name}
+							},
+							RevisionFunc: func(p categorytaxonomy.Product) string { return p.ResourceVersion },
+						}
+						got, found, err := runner.Lookup(t.Context(), key)
+						require.NoError(t, err)
+						require.True(t, found)
+						require.Equal(t, revision, got.Revision)
+						require.Equal(t, "not-authored", got.Status.LastAppliedRevision)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestDiskConsumedSnapshotsAcrossReplicaReplacement(t *testing.T) {
 	for _, kind := range []string{"Namespace", "Repository"} {
