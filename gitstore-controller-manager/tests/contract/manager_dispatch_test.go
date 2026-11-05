@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
-	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -258,7 +258,7 @@ func TestManager_TerminalFailure_QuarantinesImmediately(t *testing.T) {
 		t.Errorf("expected exactly 1 reconcile call, got %d", r.calls.Load())
 	}
 
-	count := testutil.ToFloat64(health.ReconcileTotal.WithLabelValues("CategoryTaxonomy", "terminal_failure"))
+	count := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_reconcile_total", map[string]string{"kind": "CategoryTaxonomy", "result": "terminal_failure"})
 	if count < 1 {
 		t.Errorf("expected terminal_failure counter >= 1, got %v", count)
 	}
@@ -381,7 +381,7 @@ func TestManager_ReconcilerPanic_RecoveredAsTransient(t *testing.T) {
 		t.Fatal("expected panicking item to be quarantined")
 	}
 
-	count := testutil.ToFloat64(health.ReconcileTotal.WithLabelValues("CategoryTaxonomy", "transient_failure"))
+	count := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_reconcile_total", map[string]string{"kind": "CategoryTaxonomy", "result": "transient_failure"})
 	if count < 1 {
 		t.Errorf("expected transient_failure counter >= 1, got %v", count)
 	}

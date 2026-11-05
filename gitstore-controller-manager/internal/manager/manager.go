@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/cenkalti/backoff/v5"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
@@ -104,11 +106,11 @@ func (m *Manager) Register(reg ReconcilerRegistration) error {
 		leases:     make(map[WorkItemKey]uint64),
 	}
 	// Pre-initialise gauges so they appear in /metrics before the first poll.
-	health.ActiveWorkers.WithLabelValues(reg.Kind).Set(0)
-	health.QueueDepth.WithLabelValues(reg.Kind).Set(0)
-	health.PoisonItemsTotal.WithLabelValues(reg.Kind).Set(0)
-	health.StalledWorkers.WithLabelValues(reg.Kind).Set(0)
-	health.ConflictRequeues.WithLabelValues(reg.Kind).Add(0)
+	health.ActiveWorkers.Record(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
+	health.QueueDepth.Record(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
+	health.PoisonItemsTotal.Record(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
+	health.StalledWorkers.Record(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
+	health.ConflictRequeues.Add(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
 	return nil
 }
 
@@ -189,16 +191,16 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 			depth = max(0, int(counts.Pending)-poison-int(active))
 		}
 
-		health.ActiveWorkers.WithLabelValues(kind).Set(float64(active))
-		health.QueueDepth.WithLabelValues(kind).Set(float64(depth))
-		health.PoisonItemsTotal.WithLabelValues(kind).Set(float64(poison))
-		health.CheckpointReplayBacklog.WithLabelValues(kind).Set(float64(depth))
+		health.ActiveWorkers.Record(context.Background(), float64(active), metric.WithAttributes(attribute.String("kind", kind)))
+		health.QueueDepth.Record(context.Background(), float64(depth), metric.WithAttributes(attribute.String("kind", kind)))
+		health.PoisonItemsTotal.Record(context.Background(), float64(poison), metric.WithAttributes(attribute.String("kind", kind)))
+		health.CheckpointReplayBacklog.Record(context.Background(), float64(depth), metric.WithAttributes(attribute.String("kind", kind)))
 
 		ks.mu.Lock()
 		if ks.reg.Disk != nil {
 			lastWrite, failures := ks.reg.Disk.PersistenceStats()
-			health.CheckpointLastWriteTimestamp.WithLabelValues(kind).Set(float64(lastWrite))
-			health.CheckpointWriteFailuresTotal.WithLabelValues(kind).Add(float64(failures - ks.reportedWriteFailures))
+			health.CheckpointLastWriteTimestamp.Record(context.Background(), float64(lastWrite), metric.WithAttributes(attribute.String("kind", kind)))
+			health.CheckpointWriteFailuresTotal.Add(context.Background(), float64(failures-ks.reportedWriteFailures), metric.WithAttributes(attribute.String("kind", kind)))
 			ks.reportedWriteFailures = failures
 		}
 		lastSuccess := ks.lastSuccess
@@ -233,20 +235,20 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 		if recovery.Recovering {
 			recovering = 1
 		}
-		health.RecoveryInProgress.WithLabelValues(kind).Set(recovering)
-		health.RecoveryPages.WithLabelValues(kind).Set(float64(recovery.Pages))
-		health.RecoveryRows.WithLabelValues(kind).Set(float64(recovery.Rows))
+		health.RecoveryInProgress.Record(context.Background(), recovering, metric.WithAttributes(attribute.String("kind", kind)))
+		health.RecoveryPages.Record(context.Background(), float64(recovery.Pages), metric.WithAttributes(attribute.String("kind", kind)))
+		health.RecoveryRows.Record(context.Background(), float64(recovery.Rows), metric.WithAttributes(attribute.String("kind", kind)))
 		if !recovery.LastProgress.IsZero() {
-			health.RecoveryLastProgress.WithLabelValues(kind).Set(float64(recovery.LastProgress.Unix()))
+			health.RecoveryLastProgress.Record(context.Background(), float64(recovery.LastProgress.Unix()), metric.WithAttributes(attribute.String("kind", kind)))
 		}
 		if stalled {
-			health.StalledWorkers.WithLabelValues(kind).Set(1)
+			health.StalledWorkers.Record(context.Background(), 1, metric.WithAttributes(attribute.String("kind", kind)))
 		} else {
-			health.StalledWorkers.WithLabelValues(kind).Set(0)
+			health.StalledWorkers.Record(context.Background(), 0, metric.WithAttributes(attribute.String("kind", kind)))
 		}
 		if storageFailed {
 			stalled = true
-			health.StalledWorkers.WithLabelValues(kind).Set(1)
+			health.StalledWorkers.Record(context.Background(), 1, metric.WithAttributes(attribute.String("kind", kind)))
 		}
 
 		out[kind] = health.KindStat{
@@ -428,7 +430,7 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 	// transient_failure metric immediately (FR-004). The metric is owned here so
 	// it is never double-counted regardless of whether the retry loop succeeds.
 	if m.logPanic(log, key, result) {
-		health.ReconcileTotal.WithLabelValues(key.Kind, "transient_failure").Inc()
+		health.ReconcileTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", key.Kind), attribute.String("result", "transient_failure")))
 	}
 
 	switch r := result.(type) {
@@ -439,13 +441,13 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 		if !m.complete(ctx, ks, key) {
 			return
 		}
-		health.ReconcileTotal.WithLabelValues(key.Kind, "success").Inc()
+		health.ReconcileTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", key.Kind), attribute.String("result", "success")))
 		log.Debug("reconciled successfully")
 
 	case types.TerminalFailure:
 		log.Error("terminal reconcile failure — quarantining immediately", zap.Error(r.Err))
 		ks.q.Forget(key)
-		health.ReconcileTotal.WithLabelValues(key.Kind, "terminal_failure").Inc()
+		health.ReconcileTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", key.Kind), attribute.String("result", "terminal_failure")))
 		m.quarantine(ctx, ks, &retry.PoisonItem{
 			Key:       key,
 			Attempts:  1,
@@ -461,7 +463,7 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 }
 
 func (m *Manager) scheduleRequeue(ctx context.Context, ks *kindState, key WorkItemKey, after time.Duration) {
-	health.ReconcileTotal.WithLabelValues(key.Kind, "requeue_after").Inc()
+	health.ReconcileTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", key.Kind), attribute.String("result", "requeue_after")))
 	if ks.reg.Disk != nil {
 		_, err := ks.reg.Disk.DeferWork(ctx, key, m.lease(ks, key), max(0, after), "", 0)
 		m.storageError(ks, err)
@@ -482,7 +484,7 @@ func (m *Manager) requeueUnavailable(ctx context.Context, ks *kindState, key Wor
 		m.scheduleRequeue(ctx, ks, key, delay)
 		return
 	}
-	health.ReconcileTotal.WithLabelValues(key.Kind, "requeue_after").Inc()
+	health.ReconcileTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", key.Kind), attribute.String("result", "requeue_after")))
 	// Hold only the bounded worker slot, not a timer/goroutine per pending key.
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -535,7 +537,7 @@ func (m *Manager) handleTransient(
 	if retryAttempts <= 0 {
 		log.Error("reconciler quarantined after exhausting retries", zap.Int("attempts", 1))
 		ks.q.Forget(key)
-		health.ReconcileTotal.WithLabelValues(key.Kind, "transient_failure").Inc()
+		health.ReconcileTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", key.Kind), attribute.String("result", "transient_failure")))
 		lastErrStr := ""
 		if r.Err != nil {
 			lastErrStr = r.Err.Error()
@@ -590,7 +592,7 @@ func (m *Manager) handleTransient(
 	if errors.As(lastErr, &tdr) {
 		log.Error("terminal failure during retry — quarantining immediately", zap.Error(tdr.cause))
 		ks.q.Forget(key)
-		health.ReconcileTotal.WithLabelValues(key.Kind, "terminal_failure").Inc()
+		health.ReconcileTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", key.Kind), attribute.String("result", "terminal_failure")))
 		m.quarantine(ctx, ks, &retry.PoisonItem{
 			Key:       key,
 			Attempts:  attempts + 1, // +1 for the initial call before RunWithRetry
@@ -607,12 +609,12 @@ func (m *Manager) handleTransient(
 		if !m.complete(ctx, ks, key) {
 			return
 		}
-		health.ReconcileTotal.WithLabelValues(key.Kind, "success").Inc()
+		health.ReconcileTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", key.Kind), attribute.String("result", "success")))
 		log.Debug("reconciled successfully after retries", zap.Int("attempts", attempts+1))
 	case retry.ResultQuarantine:
 		log.Error("reconciler quarantined after exhausting retries", zap.Int("attempts", attempts+1))
 		ks.q.Forget(key)
-		health.ReconcileTotal.WithLabelValues(key.Kind, "transient_failure").Inc()
+		health.ReconcileTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", key.Kind), attribute.String("result", "transient_failure")))
 		lastErrStr := ""
 		if lastErr != nil {
 			lastErrStr = lastErr.Error()

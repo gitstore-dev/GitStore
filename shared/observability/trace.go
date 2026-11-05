@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
@@ -32,20 +32,13 @@ func Sampled(ctx context.Context) bool {
 	return sc.IsValid() && sc.IsSampled()
 }
 
-// Observe records a native metric with bounded exemplar metadata when sampled.
-// Span identity is never added to the metric's ordinary series labels. Observers
-// without exemplar support retain their original observation behavior.
-func Observe(ctx context.Context, observer prometheus.Observer, value float64) {
-	if Sampled(ctx) {
-		if exemplars, ok := observer.(prometheus.ExemplarObserver); ok {
-			sc := trace.SpanContextFromContext(ctx)
-			exemplars.ObserveWithExemplar(value, prometheus.Labels{
-				"trace_id": sc.TraceID().String(), "span_id": sc.SpanID().String(),
-			})
-			return
-		}
+// Observe records through the SDK so sampled span context can become an
+// exemplar without adding trace identities to ordinary series attributes.
+func Observe(ctx context.Context, observer metric.Float64Histogram, value float64, options ...metric.RecordOption) {
+	if !trace.SpanContextFromContext(ctx).IsValid() {
+		ctx = trace.ContextWithSpanContext(ctx, trace.SpanContext{})
 	}
-	observer.Observe(value)
+	observer.Record(ctx, value, options...)
 }
 
 // Inject propagates only W3C trace context, never baggage or credentials.

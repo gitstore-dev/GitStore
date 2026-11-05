@@ -7,8 +7,10 @@
   Keep its standalone `GOWORK=off` build/tests and the aggregate Go checks.
 - `observability` is shared by the API and controller: configuration
   validation, bounded OTLP trace/log export, Zap bridge, Prometheus SDK reader
-  and trace-context HTTP helpers. Keep fixed service identities and existing
-  native Prometheus metrics. Controller spans cover individual reconciliation
+  and trace-context HTTP helpers. All metrics, including runtime and gRPC
+  instrumentation, originate from SDK instruments; Prometheus is a derived
+  reader only. Keep fixed service identities and bounded operational attributes.
+  Controller spans cover individual reconciliation
   attempts, requests and WebSocket dials, not entire watches.
 - `scylla-cdc-go` is a production-source copy of the existing v1.2.1 dependency
   with a minimal reader-shutdown patch. Preserve its Apache-2.0 license and

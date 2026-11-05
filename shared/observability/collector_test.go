@@ -9,7 +9,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -27,19 +26,17 @@ func TestCollectorSmoke(t *testing.T) {
 	uri, err := url.Parse(endpoint)
 	require.NoError(t, err)
 	require.Contains(t, []string{"127.0.0.1", "::1"}, uri.Hostname())
-	counter := prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_observability_smoke_total", Help: "Owned telemetry delivery probe."})
-	prometheus.MustRegister(counter)
-	defer prometheus.Unregister(counter)
 	for _, service := range []string{APIService, ControllerService} {
 		preserveGlobals(t)
 		logger, shutdown, err := InitTelemetry(t.Context(), OTLPConfig{URI: endpoint, TraceSampleRatio: 1}, service, "smoke", discardLogger())
 		require.NoError(t, err)
 		ctx, span := otel.Tracer("gitstore/smoke").Start(t.Context(), "collector.smoke")
-		sdkCounter, err := otel.Meter("gitstore/smoke").Int64Counter("gitstore_observability_sdk_smoke")
+		sdkCounter, err := otel.Meter("gitstore/smoke").Int64Counter("gitstore_observability_sdk_smoke_total")
 		require.NoError(t, err)
 		sdkCounter.Add(ctx, 1)
 		instance, _ := span.(sdktrace.ReadOnlySpan).Resource().Set().Value(attribute.Key("service.instance.id"))
-		counter.Inc()
+		counter := MustInstrument(otel.Meter("gitstore/smoke").Int64Counter("gitstore_observability_smoke_total"))
+		counter.Add(ctx, 1)
 		Logger(ctx, logger).Info("private payload must not be forwarded", zap.String("kind", "Smoke"))
 		fmt.Printf("OTEL_SMOKE service=%s trace_id=%s instance_id=%s\n", service, span.SpanContext().TraceID(), instance.AsString())
 		span.End()

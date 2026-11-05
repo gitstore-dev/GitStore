@@ -8,12 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -103,12 +104,12 @@ func TestProductDeletionMetricsRecordIdempotentLifecycleOutcome(t *testing.T) {
 	service, err := NewService(ServiceDeps{Store: store, Logger: zap.NewNop()})
 	require.NoError(t, err)
 
-	before := testutil.ToFloat64(productDeletionOutcomes.WithLabelValues("ALREADY_TERMINATING"))
+	before := observabilitytest.Value(t, sdkTestMetrics, "gitstore_product_deletion_outcomes_total", map[string]string{"outcome": "ALREADY_TERMINATING"})
 	got, started, err := service.DeleteProductManifest(context.Background(), product.UID, "controller:product")
 	require.NoError(t, err)
 	assert.False(t, started)
 	assert.Equal(t, product.UID, got.UID)
-	assert.Equal(t, before+1, testutil.ToFloat64(productDeletionOutcomes.WithLabelValues("ALREADY_TERMINATING")))
+	assert.Equal(t, before+1, observabilitytest.Value(t, sdkTestMetrics, "gitstore_product_deletion_outcomes_total", map[string]string{"outcome": "ALREADY_TERMINATING"}))
 }
 
 func TestCompleteProductDeletionRejectsStaleIncarnation(t *testing.T) {

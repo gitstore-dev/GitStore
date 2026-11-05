@@ -66,7 +66,7 @@ func TestEndpointTelemetryDistinguishesIngressRejectionCompletionAndCancellation
 	observed := map[string]int64{}
 	for _, scope := range data.ScopeMetrics {
 		for _, metric := range scope.Metrics {
-			if metric.Name != "gitstore.api.endpoint.requests" {
+			if metric.Name != "gitstore.api.endpoint.requests_total" {
 				continue
 			}
 			for _, point := range metric.Data.(metricdata.Sum[int64]).DataPoints {
@@ -113,7 +113,7 @@ func TestEndpointTelemetryUsesSDKWithBoundedAttributes(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"gitstore.api.endpoint.requests", "gitstore.api.endpoint.in_flight", "gitstore.api.endpoint.duration"} {
+	for _, name := range []string{"gitstore.api.endpoint.requests_total", "gitstore.api.endpoint.in_flight", "gitstore.api.endpoint.duration_seconds"} {
 		require.True(t, seen[name], name)
 	}
 }

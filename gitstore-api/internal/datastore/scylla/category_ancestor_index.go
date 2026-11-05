@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"math/big"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gocql/gocql"
 )
@@ -89,7 +92,7 @@ func (s *scyllaDatastore) upsertCategoryAncestorRow(ctx context.Context, namespa
 			).ExecCASRelease()
 		} else {
 			if current.DescendantUID == uid && compareResourceVersions(current.ResourceVersion, resourceVersion) >= 0 {
-				datastore.CategoryAncestorIndexWritesTotal.WithLabelValues("skipped_newer").Inc()
+				datastore.CategoryAncestorIndexWritesTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", "skipped_newer")))
 				return nil
 			}
 			const update = `UPDATE category_ancestor_index SET descendant_uid=?, resource_version=?
@@ -102,7 +105,7 @@ func (s *scyllaDatastore) upsertCategoryAncestorRow(ctx context.Context, namespa
 			return fmt.Errorf("scylla: upsert category ancestor index: %w", err)
 		}
 		if applied {
-			datastore.CategoryAncestorIndexWritesTotal.WithLabelValues("applied").Inc()
+			datastore.CategoryAncestorIndexWritesTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", "applied")))
 			return nil
 		}
 	}
@@ -130,7 +133,7 @@ func (s *scyllaDatastore) deleteObsoleteCategoryAncestorRow(ctx context.Context,
 			return fmt.Errorf("scylla: delete category ancestor index: %w", err)
 		}
 		if applied {
-			datastore.CategoryAncestorIndexWritesTotal.WithLabelValues("applied").Inc()
+			datastore.CategoryAncestorIndexWritesTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", "applied")))
 			return nil
 		}
 	}
@@ -143,13 +146,13 @@ func (s *scyllaDatastore) syncCategoryAncestorRows(ctx context.Context, c *datas
 	uid := mustParseUUID(c.UID)
 	for _, row := range current {
 		if err := s.upsertCategoryAncestorRow(ctx, c.Namespace, row.Ancestor, row.Depth, c.Name, uid, c.ResourceVersion); err != nil {
-			datastore.CategoryAncestorIndexWritesTotal.WithLabelValues("failed").Inc()
+			datastore.CategoryAncestorIndexWritesTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", "failed")))
 			return err
 		}
 	}
 	for _, row := range obsolete {
 		if err := s.deleteObsoleteCategoryAncestorRow(ctx, c.Namespace, row.Ancestor, row.Depth, c.Name, uid, c.ResourceVersion); err != nil {
-			datastore.CategoryAncestorIndexWritesTotal.WithLabelValues("failed").Inc()
+			datastore.CategoryAncestorIndexWritesTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", "failed")))
 			return err
 		}
 	}
@@ -182,7 +185,7 @@ func (s *scyllaDatastore) fenceCategoryAncestorRows(ctx context.Context, c *data
 	uid := mustParseUUID(c.UID)
 	for _, row := range datastore.ObsoleteCategoryAncestorRows(written, latestRows) {
 		if err := s.deleteObsoleteCategoryAncestorRow(ctx, c.Namespace, row.Ancestor, row.Depth, c.Name, uid, latest.ResourceVersion); err != nil {
-			datastore.CategoryAncestorIndexWritesTotal.WithLabelValues("failed").Inc()
+			datastore.CategoryAncestorIndexWritesTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", "failed")))
 			return err
 		}
 	}

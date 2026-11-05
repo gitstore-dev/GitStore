@@ -1216,7 +1216,7 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomyStatus(ctx context.Context, name
 		},
 	); err != nil {
 		if errors.Is(err, datastore.ErrRepairRequired) {
-			datastore.CategoryAncestorIndexRepairRequiredTotal.Inc()
+			datastore.CategoryAncestorIndexRepairRequiredTotal.Add(context.Background(), 1)
 		}
 		return nil, err
 	}

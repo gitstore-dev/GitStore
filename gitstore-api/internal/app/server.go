@@ -38,7 +38,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
 	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -146,6 +146,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create datastore: %w", err)
 	}
+	constructed := false
 	var namespaceWatch *namespaceWatchRuntime
 	var resourceJournal datastore.ResourceWatchJournal
 	{
@@ -157,11 +158,16 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 			return nil, fmt.Errorf("create resource watch journal: %w", journalErr)
 		}
 		resourceJournal = journal
-		metrics, metricsErr := watchjournal.NewMetrics(prometheus.DefaultRegisterer)
+		metrics, metricsErr := watchjournal.NewMetrics(otel.Meter("gitstore/watchjournal"))
 		if metricsErr != nil {
 			_ = rawStore.Close()
 			return nil, fmt.Errorf("register Namespace watch metrics: %w", metricsErr)
 		}
+		defer func() {
+			if !constructed {
+				_ = metrics.Close()
+			}
+		}()
 		clock := apiruntime.SystemClock{}
 		namespaceWatch = &namespaceWatchRuntime{
 			journal: journal,
@@ -212,7 +218,6 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("build auth provider registry: %w", err)
 	}
-	constructed := false
 	defer func() {
 		if !constructed {
 			for _, provider := range providerShutdowns {
@@ -283,7 +288,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, err
 	}
 
-	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch, instanceID)
+	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch, instanceID, registerCleanup)
 	var graphQlHandler http.Handler = router
 
 	httpServer := &http.Server{
@@ -344,7 +349,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	}, nil
 }
 
-func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock, namespaceWatch *namespaceWatchRuntime, instanceID string) *gin.Engine {
+func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock, namespaceWatch *namespaceWatchRuntime, instanceID string, registerCleanup func(func())) *gin.Engine {
 	var resourceWatchReady func(context.Context) error
 	if namespaceWatch != nil {
 		resourceWatchReady = func(ctx context.Context) error {
@@ -358,6 +363,7 @@ func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logge
 		Clock:              clock,
 		ResourceWatchReady: resourceWatchReady,
 		InstanceID:         instanceID,
+		RegisterCleanup:    registerCleanup,
 	})
 
 	router.GET("/health", healthHandler.Health)
@@ -689,6 +695,9 @@ func (s *Server) Close() {
 				s.log.Warn("Resource watch materializer shutdown timed out")
 			}
 		}
+	}
+	if s.namespaceWatch != nil && s.namespaceWatch.metrics != nil {
+		_ = s.namespaceWatch.metrics.Close()
 	}
 	for _, p := range s.providerShutdown {
 		p.Shutdown()

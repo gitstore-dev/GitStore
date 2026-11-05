@@ -25,9 +25,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -114,17 +115,27 @@ func (rejectedMetrics) Register(prometheus.Collector) error {
 	return errors.New("metrics registration rejected")
 }
 
-func TestInitializationFailureDoesNotInstallPartialProviders(t *testing.T) {
+func TestDefaultPrometheusRegistrationCannotBreakSDKCollection(t *testing.T) {
 	preserveGlobals(t)
 	previous := prometheus.DefaultRegisterer
 	prometheus.DefaultRegisterer = rejectedMetrics{previous}
 	defer func() { prometheus.DefaultRegisterer = previous }()
-	traces, logs, metrics := otel.GetTracerProvider(), otel.GetLoggerProvider(), otel.GetMeterProvider()
-	_, _, err := InitTelemetry(t.Context(), OTLPConfig{URI: "http://localhost:4318"}, ControllerService, "test", discardLogger())
-	require.ErrorContains(t, err, "initialize telemetry metrics")
-	require.Same(t, traces, otel.GetTracerProvider())
-	require.Same(t, logs, otel.GetLoggerProvider())
-	require.Same(t, metrics, otel.GetMeterProvider())
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.Copy(io.Discard, r.Body) }))
+	defer collector.Close()
+	_, shutdown, err := InitTelemetry(t.Context(), OTLPConfig{URI: collector.URL}, ControllerService, "test", discardLogger())
+	require.NoError(t, err)
+	counter := MustInstrument(otel.Meter("sdk-isolation").Int64Counter("sdk_isolation_probe_total"))
+	counter.Add(t.Context(), 1)
+	response := httptest.NewRecorder()
+	MetricsHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Contains(t, response.Body.String(), "sdk_isolation_probe_total 1")
+	require.Contains(t, response.Body.String(), "promhttp_metric_handler_requests_in_flight 1")
+	require.Contains(t, response.Body.String(), "promhttp_metric_handler_requests_total{code=\"200\"} 0")
+	response = httptest.NewRecorder()
+	MetricsHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	require.Contains(t, response.Body.String(), "promhttp_metric_handler_requests_total{code=\"200\"} 1")
+	require.NoError(t, shutdown(t.Context()))
 }
 
 func TestResolvedZeroSamplingStillHonorsSampledParents(t *testing.T) {
@@ -192,6 +203,7 @@ func TestTelemetryProcessIdentity(t *testing.T) {
 			require.NoError(t, err, "disabled telemetry must not require entropy")
 			require.Same(t, logger, resolved)
 			require.NoError(t, shutdown(t.Context()))
+			providers[2] = otel.GetMeterProvider()
 			for range 2 {
 				resolved, shutdown, err = InitTelemetry(t.Context(), OTLPConfig{URI: "http://127.0.0.1:1"},
 					APIService, "test", logger)
@@ -328,9 +340,7 @@ func TestHTTPDeliveryIdentitiesBoundsAndContext(t *testing.T) {
 			})
 			ctx, span := otel.Tracer("test").Start(trace.ContextWithRemoteSpanContext(t.Context(), remote), "bounded-span")
 			require.True(t, span.IsRecording())
-			registry := prometheus.NewRegistry()
-			histogram := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "correlation_duration_seconds", Help: "test"})
-			registry.MustRegister(histogram)
+			histogram := MustInstrument(otel.Meter("correlation-native").Float64Histogram("correlation_duration_seconds"))
 			Observe(ctx, histogram, 0.01)
 			sdkHistogram, err := otel.Meter("correlation-test").Float64Histogram("correlation_otel_duration_seconds",
 				metric.WithExplicitBucketBoundaries(0.01, 0.1, 1))
@@ -341,7 +351,6 @@ func TestHTTPDeliveryIdentitiesBoundsAndContext(t *testing.T) {
 				metric.WithSchemaURL("https://opentelemetry.io/schemas/1.26.0"),
 			).Float64Histogram("correlation_otel_duration_seconds")
 			require.NoError(t, err)
-			secondHistogram.Record(ctx, 0.02)
 			span.SetAttributes(attribute.String("bounded", strings.Repeat("a", 512)))
 			for i := range 50 {
 				span.SetAttributes(attribute.String("field."+strconv.Itoa(i), "bounded"))
@@ -357,7 +366,7 @@ func TestHTTPDeliveryIdentitiesBoundsAndContext(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 			request.Header.Set("Accept", "application/openmetrics-text; version=1.0.0")
 			response := httptest.NewRecorder()
-			promhttp.HandlerFor(prometheus.Gatherers{registry, prometheus.DefaultGatherer},
+			promhttp.HandlerFor(metricHTTP.Load().gatherer,
 				promhttp.HandlerOpts{EnableOpenMetrics: true}).ServeHTTP(response, request)
 			require.Contains(t, response.Header().Get("Content-Type"), "application/openmetrics-text")
 			require.Contains(t, response.Body.String(), `trace_id="`+spanContext.TraceID().String()+`"`)
@@ -371,6 +380,10 @@ func TestHTTPDeliveryIdentitiesBoundsAndContext(t *testing.T) {
 					sdkExemplar = true
 				}
 			}
+			// OTLP supports same-named instruments in independent scopes. Flat
+			// compatibility scrapes deliberately omit scope labels, so record
+			// this scope after that scrape to test the OTLP scope contract.
+			secondHistogram.Record(ctx, 0.02)
 			require.True(t, sdkExemplar, "the shared SDK Prometheus reader must also retain context exemplars")
 			require.NoError(t, shutdown(t.Context()))
 			require.NotEmpty(t, local.FilterMessage("linked log").All(), "local logging is preserved")
@@ -472,10 +485,9 @@ func TestNativeExemplarsFollowParentSamplingAndPreserveSeries(t *testing.T) {
 				ctx, span := provider.Tracer("parent-test").Start(trace.ContextWithRemoteSpanContext(t.Context(), remote), "child")
 				require.Equal(t, sampled, span.IsRecording())
 				require.Equal(t, sampled, Sampled(ctx))
-				histogram := prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "sample_duration_seconds", Help: "test"}, []string{"kind"})
 				registry := prometheus.NewRegistry()
-				registry.MustRegister(histogram)
-				Observe(ctx, histogram.WithLabelValues("Namespace"), 0.01)
+				histogram := MustInstrument(observabilitytest.Meter(t, registry, "sample-test").Float64Histogram("sample_duration_seconds"))
+				Observe(ctx, histogram, 0.01, metric.WithAttributes(attribute.String("kind", "Namespace")))
 				span.End()
 				families, err := registry.Gather()
 				require.NoError(t, err)
@@ -523,9 +535,8 @@ func TestNativeExemplarsFollowParentSamplingAndPreserveSeries(t *testing.T) {
 	} {
 		ctx := trace.ContextWithSpanContext(t.Context(), sc)
 		require.False(t, Sampled(ctx))
-		histogram := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "invalid_context_duration_seconds", Help: "test"})
 		registry := prometheus.NewRegistry()
-		registry.MustRegister(histogram)
+		histogram := MustInstrument(observabilitytest.Meter(t, registry, "invalid-context").Float64Histogram("invalid_context_duration_seconds"))
 		Observe(ctx, histogram, 0.01)
 		families, err := registry.Gather()
 		require.NoError(t, err)
@@ -534,22 +545,22 @@ func TestNativeExemplarsFollowParentSamplingAndPreserveSeries(t *testing.T) {
 			require.Nil(t, bucket.Exemplar)
 		}
 	}
-	var observed float64
-	ctx := trace.ContextWithSpanContext(t.Context(), trace.NewSpanContext(trace.SpanContextConfig{
-		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{1}, TraceFlags: trace.FlagsSampled,
-	}))
-	Observe(ctx, prometheus.ObserverFunc(func(value float64) { observed += value }), 2)
-	require.Equal(t, float64(2), observed, "non-exemplar observers must retain observations")
+
 }
 
 func TestLogBodiesAndExportFailuresAreAccounted(t *testing.T) {
+	preserveGlobals(t)
+	_, stopMetrics, setupErr := InitTelemetry(t.Context(), OTLPConfig{}, APIService, "test", discardLogger())
+	require.NoError(t, setupErr)
+
 	record := sdklog.Record{}
 	record.SetBody(attribute.StringValue(strings.Repeat("x", 4095) + "\u20ac" + strings.Repeat("y", 100)))
-	before := testutil.ToFloat64(telemetryRecords.WithLabelValues("logs", "truncated"))
+	before := telemetryValue(t, "logs", "truncated")
 	require.NoError(t, (telemetryObserver{signal: "logs"}).OnEmit(t.Context(), &record))
 	require.Equal(t, 4095, len(record.Body().AsString()))
 	require.True(t, utf8.ValidString(record.Body().AsString()))
-	require.Equal(t, before+1, testutil.ToFloat64(telemetryRecords.WithLabelValues("logs", "truncated")))
+	require.Equal(t, before+1, telemetryValue(t, "logs", "truncated"))
+	require.NoError(t, stopMetrics(t.Context()))
 
 	preserveGlobals(t)
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -560,14 +571,15 @@ func TestLogBodiesAndExportFailuresAreAccounted(t *testing.T) {
 	core, local := observer.New(zap.DebugLevel)
 	logger, shutdown, err := InitTelemetry(t.Context(), OTLPConfig{URI: collector.URL, TraceSampleRatio: 1}, APIService, "test", zap.New(core))
 	require.NoError(t, err)
-	spansBefore := testutil.ToFloat64(telemetryRecords.WithLabelValues("spans", "failed"))
-	logsBefore := testutil.ToFloat64(telemetryRecords.WithLabelValues("logs", "failed"))
+	spansBefore := telemetryValue(t, "spans", "failed")
+	logsBefore := telemetryValue(t, "logs", "failed")
 	_, span := otel.Tracer("test").Start(t.Context(), "failed-export")
 	span.End()
 	logger.Info("local record survives export failure")
+	flushTelemetrySignals(t.Context())
+	require.Greater(t, telemetryValue(t, "spans", "failed"), spansBefore)
+	require.Greater(t, telemetryValue(t, "logs", "failed"), logsBefore)
 	require.Error(t, shutdown(t.Context()))
-	require.Greater(t, testutil.ToFloat64(telemetryRecords.WithLabelValues("spans", "failed")), spansBefore)
-	require.Greater(t, testutil.ToFloat64(telemetryRecords.WithLabelValues("logs", "failed")), logsBefore)
 	require.Equal(t, 1, local.FilterMessage("local record survives export failure").Len())
 	for _, entry := range local.All() {
 		require.NotContains(t, entry.ContextMap(), "private server detail")
@@ -583,12 +595,12 @@ func TestMetricsCardinalityAndShutdownCancellation(t *testing.T) {
 	defer collector.Close()
 	_, shutdown, err := InitTelemetry(t.Context(), OTLPConfig{URI: collector.URL}, ControllerService, "test", zap.NewNop())
 	require.NoError(t, err)
-	counter, err := otel.Meter("bounded-test").Int64Counter("observability_cardinality_test")
+	counter, err := otel.Meter("bounded-test").Int64Counter("observability_cardinality_test_total")
 	require.NoError(t, err)
 	for i := range 2200 {
 		counter.Add(t.Context(), 1, metric.WithAttributes(attribute.String("test_index", strconv.Itoa(i))))
 	}
-	families, err := prometheus.DefaultGatherer.Gather()
+	families, err := metricHTTP.Load().gatherer.Gather()
 	require.NoError(t, err)
 	found := false
 	for _, family := range families {
@@ -620,26 +632,27 @@ func TestLogQueueRemainsBoundedUnderSlowExport(t *testing.T) {
 	}()
 	logger, shutdown, err := InitTelemetry(t.Context(), OTLPConfig{URI: collector.URL, TraceSampleRatio: 1}, ControllerService, "test", discardLogger())
 	require.NoError(t, err)
-	before := testutil.ToFloat64(telemetryRecords.WithLabelValues("logs", "admitted"))
-	exported := testutil.ToFloat64(telemetryRecords.WithLabelValues("logs", "exported"))
-	spansBefore := testutil.ToFloat64(telemetryRecords.WithLabelValues("spans", "admitted"))
-	spansExported := testutil.ToFloat64(telemetryRecords.WithLabelValues("spans", "exported"))
+	before := telemetryValue(t, "logs", "admitted")
+	exported := telemetryValue(t, "logs", "exported")
+	spansBefore := telemetryValue(t, "spans", "admitted")
+	spansExported := telemetryValue(t, "spans", "exported")
 	const count = 10000
 	for range count {
 		logger.Info("bounded queue")
 		_, span := otel.Tracer("bounded-queue").Start(t.Context(), "bounded-span")
 		span.End()
 	}
-	require.Equal(t, float64(count), testutil.ToFloat64(telemetryRecords.WithLabelValues("logs", "admitted"))-before)
-	require.Equal(t, float64(count), testutil.ToFloat64(telemetryRecords.WithLabelValues("spans", "admitted"))-spansBefore)
+	require.Equal(t, float64(count), telemetryValue(t, "logs", "admitted")-before)
+	require.Equal(t, float64(count), telemetryValue(t, "spans", "admitted")-spansBefore)
 	once.Do(func() { close(release) })
-	require.NoError(t, shutdown(t.Context()))
-	delivered := testutil.ToFloat64(telemetryRecords.WithLabelValues("logs", "exported")) - exported
+	flushTelemetrySignals(t.Context())
+	delivered := telemetryValue(t, "logs", "exported") - exported
 	require.Positive(t, delivered)
 	require.LessOrEqual(t, delivered, float64(4096), "one bounded queue and in-flight batches, not an unbounded backlog")
-	deliveredSpans := testutil.ToFloat64(telemetryRecords.WithLabelValues("spans", "exported")) - spansExported
+	deliveredSpans := telemetryValue(t, "spans", "exported") - spansExported
 	require.Positive(t, deliveredSpans)
 	require.LessOrEqual(t, deliveredSpans, float64(4096))
+	require.NoError(t, shutdown(t.Context()))
 }
 
 func TestTransportParentPropagationAndCancellation(t *testing.T) {

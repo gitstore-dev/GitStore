@@ -13,6 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/admissionreport"
@@ -304,8 +307,8 @@ func (s *Service) observeCategoryMutation(operation string, metadata *model.Obje
 	default:
 		outcome = "error"
 	}
-	categoryMutationTotal.WithLabelValues(operation, outcome).Inc()
-	categoryMutationDuration.WithLabelValues(operation).Observe(time.Since(started).Seconds())
+	categoryMutationTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("operation", operation), attribute.String("outcome", outcome)))
+	categoryMutationDuration.Record(context.Background(), time.Since(started).Seconds(), metric.WithAttributes(attribute.String("operation", operation)))
 	fields := []zap.Field{
 		zap.String("operation", operation), zap.String("outcome", outcome),
 		zap.String("commit", commitSHA), zap.String("phase", phase), zap.Int("diagnostic_count", diagnosticCount),

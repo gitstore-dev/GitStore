@@ -357,6 +357,9 @@ Runtime pieces:
 - Per-kind health statistics.
 - Collector-routed OTLP metrics, operational logs and traces when enabled.
   See [telemetry configuration](configuration.md#collector-routed-telemetry).
+  Metrics originate from SDK instruments, including runtime and gRPC sources;
+  compatibility scrapes use SDK collection. See the contributor
+  [metrics inventory](implementation/041-sdk-native-metrics.md) for signal contracts.
 - List-then-watch bootstrap and `resourceVersion` checkpointing per registered kind (`internal/checkpoint`, `internal/listwatch`) — populates the informer cache on first start, resumes a watch stream from a persisted checkpoint after a restart, and recovers from a compacted watch cursor by re-listing (the `Runner[T]`/`ListWatcher[T]` wiring pattern); no concrete transport ships yet.
 
 HTTP surface on port `5001`:

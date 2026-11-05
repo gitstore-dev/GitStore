@@ -18,29 +18,18 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/contrib/bridges/otelzap"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
-
-var telemetryRecords = prometheus.NewCounterVec(prometheus.CounterOpts{
-	Name: "gitstore_telemetry_records_total",
-	Help: "Telemetry records admitted, exported or failed; admitted minus exported includes live queued work and loss.",
-}, []string{"signal", "stage"})
-
-func init() { prometheus.MustRegister(telemetryRecords) }
 
 var telemetryInstanceID = sync.OnceValues(func() (string, error) {
 	var id [16]byte
@@ -56,11 +45,11 @@ type telemetryObserver struct {
 
 func (o telemetryObserver) OnStart(context.Context, sdktrace.ReadWriteSpan) {}
 func (o telemetryObserver) OnEnd(sdktrace.ReadOnlySpan) {
-	telemetryRecords.WithLabelValues(o.signal, "admitted").Inc()
+	recordTelemetry(o.signal, "admitted", 1)
 }
 func (o telemetryObserver) Enabled(context.Context, sdklog.EnabledParameters) bool { return true }
 func (o telemetryObserver) OnEmit(_ context.Context, record *sdklog.Record) error {
-	telemetryRecords.WithLabelValues(o.signal, "admitted").Inc()
+	recordTelemetry(o.signal, "admitted", 1)
 	body := record.Body()
 	if body.Type() == attribute.STRING && len(body.AsString()) > 4096 {
 		value, n := body.AsString(), 4096
@@ -68,7 +57,7 @@ func (o telemetryObserver) OnEmit(_ context.Context, record *sdklog.Record) erro
 			n--
 		}
 		record.SetBody(attribute.StringValue(value[:n]))
-		telemetryRecords.WithLabelValues(o.signal, "truncated").Inc()
+		recordTelemetry(o.signal, "truncated", 1)
 	}
 	return nil
 }
@@ -83,7 +72,7 @@ func (e telemetryTraceExporter) ExportSpans(ctx context.Context, spans []sdktrac
 	if err != nil {
 		stage = "failed"
 	}
-	telemetryRecords.WithLabelValues("spans", stage).Add(float64(len(spans)))
+	recordTelemetry("spans", stage, float64(len(spans)))
 	return err
 }
 
@@ -95,25 +84,12 @@ func (e telemetryLogExporter) Export(ctx context.Context, records []sdklog.Recor
 	if err != nil {
 		stage = "failed"
 	}
-	telemetryRecords.WithLabelValues("logs", stage).Add(float64(len(records)))
+	recordTelemetry("logs", stage, float64(len(records)))
 	return err
 }
 
-type metricRegisterer struct {
-	prometheus.Registerer
-	collector prometheus.Collector
-}
-
-func (r *metricRegisterer) Register(c prometheus.Collector) error {
-	if err := r.Registerer.Register(c); err != nil {
-		return err
-	}
-	r.collector = c
-	return nil
-}
-
 // InitTelemetry enables bounded OTLP export only when an endpoint is configured.
-// Native metrics and SDK instruments share the collector export path. Baggage
+// SDK metrics share one provider for OTLP and Prometheus scraping. Baggage
 // and message bodies are deliberately excluded from trace propagation.
 func InitTelemetry(ctx context.Context, cfg OTLPConfig, service, version string, logger *zap.Logger) (*zap.Logger, func(context.Context) error, error) {
 	if err := cfg.Validate(); err != nil {
@@ -126,9 +102,23 @@ func InitTelemetry(ctx context.Context, cfg OTLPConfig, service, version string,
 		return nil, nil, errors.New("unsupported telemetry service identity")
 	}
 	endpoint := cfg.URI
-	if endpoint == "" {
-		return logger, func(context.Context) error { return nil }, nil
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
 	}
+	if endpoint == "" {
+		metrics, registry, err := newMetricProvider(ctx, "", nil, resource.NewSchemaless(attribute.String("service.name", service), attribute.String("service.version", version)))
+		if err != nil {
+			return nil, nil, err
+		}
+		otel.SetMeterProvider(metrics)
+		state := &metricHTTPState{gatherer: registry}
+		metricHTTP.Store(state)
+		return logger, func(ctx context.Context) error {
+			defer metricHTTP.CompareAndSwap(state, nil)
+			return metrics.Shutdown(ctx)
+		}, nil
+	}
+
 	ratio := cfg.TraceSampleRatio
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -201,16 +191,15 @@ func InitTelemetry(ctx context.Context, cfg OTLPConfig, service, version string,
 			sdklog.WithMaxQueueSize(2048), sdklog.WithExportMaxBatchSize(256),
 			sdklog.WithExportInterval(time.Second), sdklog.WithExportTimeout(3*time.Second))),
 	)
-	registerer := &metricRegisterer{Registerer: prometheus.DefaultRegisterer}
-	metricReader, err := otelprom.New(otelprom.WithRegisterer(registerer))
+	metrics, registry, err := newMetricProvider(ctx, endpoint, client, res)
 	if err != nil {
 		transport.CloseIdleConnections()
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		return nil, nil, errors.Join(fmt.Errorf("initialize telemetry metrics: %w", err),
-			traces.Shutdown(cleanupCtx), logs.Shutdown(cleanupCtx))
+		return nil, nil, errors.Join(fmt.Errorf("initialize telemetry metrics: %w", err), traces.Shutdown(cleanupCtx), logs.Shutdown(cleanupCtx))
 	}
-	metrics := sdkmetric.NewMeterProvider(sdkmetric.WithResource(res), sdkmetric.WithReader(metricReader), sdkmetric.WithCardinalityLimit(2048))
+	state := &metricHTTPState{gatherer: registry}
+	metricHTTP.Store(state)
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
 		// Exporter errors can contain endpoints or server responses.
 		logger.Error("telemetry export failed")
@@ -226,19 +215,12 @@ func InitTelemetry(ctx context.Context, cfg OTLPConfig, service, version string,
 		})
 	}))
 	enhanced.Info("local telemetry enabled", zap.Float64("trace_sampling_ratio", ratio))
-	metricResource := &resourcepb.Resource{}
-	for _, field := range res.Attributes() {
-		metricResource.Attributes = append(metricResource.Attributes, metricStringAttribute(string(field.Key), field.Value.AsString()))
-	}
-	shutdownMetrics := startMetricExport(client, endpoint, metricResource)
 	return enhanced, func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		err := errors.Join(traces.Shutdown(ctx), logs.Shutdown(ctx), shutdownMetrics(ctx), metrics.Shutdown(ctx))
+		err := errors.Join(traces.Shutdown(ctx), logs.Shutdown(ctx), metrics.Shutdown(ctx))
 		transport.CloseIdleConnections()
-		if registerer.collector != nil {
-			registerer.Unregister(registerer.collector)
-		}
+		metricHTTP.CompareAndSwap(state, nil)
 		return err
 	}, nil
 }

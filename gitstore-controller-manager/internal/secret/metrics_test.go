@@ -8,13 +8,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
 	"github.com/gitstore-dev/gitstore/secretmaterial"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestObserverUsesOnlyFixedCategories(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	otel.SetMeterProvider(observabilitytest.Provider(t, registry))
+
 	core, logs := observer.New(zap.DebugLevel)
 	sink := NewObserver(zap.New(core))
 	observation := secretmaterial.Observation{
@@ -30,7 +35,7 @@ func TestObserverUsesOnlyFixedCategories(t *testing.T) {
 		sink.Observe(observation, reason, time.Millisecond)
 	}
 	sink.Inflight(observation, -1)
-	families, err := prometheus.DefaultGatherer.Gather()
+	families, err := registry.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}

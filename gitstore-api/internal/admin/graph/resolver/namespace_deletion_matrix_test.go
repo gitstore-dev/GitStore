@@ -13,6 +13,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -164,7 +165,7 @@ func TestDeleteNamespaceRecordsBoundedOutcomesBlockersAndLogs(t *testing.T) {
 	eligible, err := seed.CreateNamespace(ctx, createNamespaceInput("observable-delete", model.NamespaceTierOrganization), "alice")
 	require.NoError(t, err)
 	registry := prometheus.NewRegistry()
-	metrics := namespaceadmission.NewMetrics(registry)
+	metrics := namespaceadmission.NewMetrics(observabilitytest.Meter(t, registry, "gitstore/namespace"))
 	core, logs := observer.New(zapcore.InfoLevel)
 	svc, err := resolver.NewService(resolver.ServiceDeps{
 		Store:                     store,

@@ -5,11 +5,12 @@ package app
 
 import (
 	"context"
+	"net/http"
+	"time"
+
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
-	"net/http"
-	"time"
 
 	"github.com/gitstore-dev/gitstore/observability"
 	"go.opentelemetry.io/otel"
@@ -68,9 +69,9 @@ func observeEndpointResources(endpoint string, limits config.GraphQLLimits, ip, 
 
 func newEndpointMetrics() endpointMetrics {
 	meter := otel.Meter("gitstore/api/endpoints")
-	requests, _ := meter.Int64Counter("gitstore.api.endpoint.requests", metric.WithDescription("Endpoint admission and terminal outcomes"))
+	requests, _ := meter.Int64Counter("gitstore.api.endpoint.requests_total", metric.WithDescription("Endpoint admission and terminal outcomes"))
 	inflight, _ := meter.Int64UpDownCounter("gitstore.api.endpoint.in_flight", metric.WithDescription("Admitted active endpoint requests/connections"))
-	duration, _ := meter.Float64Histogram("gitstore.api.endpoint.duration", metric.WithUnit("s"))
+	duration, _ := meter.Float64Histogram("gitstore.api.endpoint.duration_seconds", metric.WithUnit("s"))
 	return endpointMetrics{requests, inflight, duration}
 }
 

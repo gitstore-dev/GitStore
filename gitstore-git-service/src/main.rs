@@ -230,6 +230,9 @@ mod tests {
             },
         )
         .unwrap();
+        // SDK readers export observed instruments. Queue a real RPC
+        // measurement so this test exercises rejection of the final batch.
+        gitstore::grpc::metrics::record_rpc("GetFile", "Ok", 0.01);
         let export_failed = Arc::new(AtomicBool::new(false));
         let failure = export_failed.clone();
         tokio::time::timeout(

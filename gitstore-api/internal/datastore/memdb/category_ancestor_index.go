@@ -9,6 +9,9 @@ import (
 	"sort"
 	"strconv"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	gomemdb "github.com/hashicorp/go-memdb"
 )
@@ -53,10 +56,10 @@ func syncCategoryAncestorIndex(txn *gomemdb.Txn, category *datastore.CategoryTax
 			Descendant: category.Name, DescendantUID: category.UID, ResourceVersion: category.ResourceVersion,
 		}
 		if err := txn.Insert("category_ancestor_index", stored); err != nil {
-			datastore.CategoryAncestorIndexWritesTotal.WithLabelValues("failed").Inc()
+			datastore.CategoryAncestorIndexWritesTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", "failed")))
 			return fmt.Errorf("memdb: upsert category ancestor index: %w", err)
 		}
-		datastore.CategoryAncestorIndexWritesTotal.WithLabelValues("applied").Inc()
+		datastore.CategoryAncestorIndexWritesTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", "applied")))
 	}
 	return nil
 }

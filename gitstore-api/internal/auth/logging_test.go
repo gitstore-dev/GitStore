@@ -17,7 +17,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -157,7 +156,7 @@ clusterRoleBindings:
 
 func authorizationMetricSamples(t *testing.T, action, outcome string) uint64 {
 	t.Helper()
-	families, err := prometheus.DefaultGatherer.Gather()
+	families, err := sdkTestMetrics.Gather()
 	require.NoError(t, err)
 	for _, family := range families {
 		if family.GetName() != "gitstore_authz_decision_duration_seconds" {

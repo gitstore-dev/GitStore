@@ -18,7 +18,7 @@ import (
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	grpcprom "github.com/grpc-ecosystem/go-grpc-prometheus"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
@@ -41,11 +41,12 @@ func NewClientWithAddr(addr, hmacSecret string) (*Client, error) {
 	if strings.TrimSpace(hmacSecret) == "" {
 		return nil, fmt.Errorf("git RPC signing key is required")
 	}
+	metrics := newRPCMetrics(otel.Meter("gitstore/grpc-client"))
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDisableRetry(),
-		grpc.WithUnaryInterceptor(grpcprom.UnaryClientInterceptor),
-		grpc.WithStreamInterceptor(grpcprom.StreamClientInterceptor),
+		grpc.WithUnaryInterceptor(metrics.unary),
+		grpc.WithStreamInterceptor(metrics.stream),
 	}
 	conn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
