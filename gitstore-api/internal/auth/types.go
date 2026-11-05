@@ -133,6 +133,8 @@ type Decision struct {
 	RequestID string    `json:"request_id"`
 	At        time.Time `json:"at"`
 	Provider  string    `json:"provider"`
+	// PolicyDigest identifies the immutable policy used, not a later snapshot.
+	PolicyDigest string `json:"policy_digest,omitempty"`
 }
 
 func Allow(provider, reason string) Decision {
