@@ -29,6 +29,51 @@ import (
 
 type fileBatchContextKey struct{}
 
+func TestAdmitResourcesFileRefReadFailuresRemainRetryable(t *testing.T) {
+	for _, failAt := range []int64{1, 2, 3} {
+		t.Run(strconv.FormatInt(failAt, 10), func(t *testing.T) {
+			store := newTestDatastore(t)
+			commit := strings.Repeat("c", 40)
+			git := newTreeGitReader(&commit, map[string]map[string][]byte{
+				commit: {"files/hero.md": makeFileWithBody("hero", "accepted")},
+			})
+			var reads atomic.Int64
+			var unavailable atomic.Bool
+			unavailable.Store(true)
+			git.resolveRefFunc = func(context.Context, string, string) (string, error) {
+				if reads.Add(1) >= failAt && unavailable.Load() {
+					return "", errors.New("injected transient ref read failure")
+				}
+				return commit, nil
+			}
+			server := newCatalogServer(t, store, git)
+			request := &catalogv1.AdmitResourcesRequest{
+				Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+				RepositoryId:  testRepoID, RefName: "refs/heads/main", NewCommitSha: commit,
+			}
+			_, err := server.AdmitResources(t.Context(), request)
+			require.Equal(t, codes.Unavailable, status.Code(err), "a failed tip read is not proof of supersession")
+			before, readErr := store.GetFileByName(t.Context(), "gitstore", "hero")
+			if failAt < 3 {
+				require.ErrorIs(t, readErr, datastore.ErrNotFound)
+			} else {
+				require.NoError(t, readErr)
+			}
+			unavailable.Store(false)
+			_, err = server.AdmitResources(t.Context(), request)
+			require.NoError(t, err)
+			file, err := store.GetFileByName(t.Context(), "gitstore", "hero")
+			require.NoError(t, err)
+			require.Equal(t, commit, file.GitCommitSHA)
+			require.Equal(t, "accepted", file.Body)
+			require.Equal(t, "1", file.ResourceVersion)
+			if before != nil {
+				require.Equal(t, before.UID, file.UID, "retry after a completed write must preserve its identity")
+			}
+		})
+	}
+}
+
 type concurrentFileBatchStore struct {
 	datastore.Datastore
 	batches, snapshots, writes atomic.Int64

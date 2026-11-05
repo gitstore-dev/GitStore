@@ -1079,10 +1079,10 @@ func (s *Server) resolveNamespaceIdentifier(ctx context.Context, repositoryID st
 	return ns.Name, nil
 }
 
-func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, refName, commitSHA string) bool {
-	current, ok := s.currentAdmissionCommit(ctx, repositoryID, refName, commitSHA)
-	if !ok {
-		return false
+func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, refName, commitSHA string) (bool, error) {
+	current, ok, err := s.currentAdmissionCommit(ctx, repositoryID, refName, commitSHA)
+	if err != nil || !ok {
+		return false, err
 	}
 	if isZeroOID(commitSHA) {
 		if current != "" {
@@ -1090,9 +1090,9 @@ func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, ref
 				zap.String("repository_id", repositoryID),
 				zap.String("ref_name", refName),
 				zap.String("current_commit_sha", current))
-			return false
+			return false, nil
 		}
-		return true
+		return true, nil
 	}
 	if current != "" && current != commitSHA {
 		s.log.Info("admit_resources: stale admission snapshot superseded",
@@ -1100,14 +1100,14 @@ func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, ref
 			zap.String("ref_name", refName),
 			zap.String("admitted_commit_sha", commitSHA),
 			zap.String("current_commit_sha", current))
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
-func (s *Server) currentAdmissionCommit(ctx context.Context, repositoryID, refName, commitSHA string) (string, bool) {
+func (s *Server) currentAdmissionCommit(ctx context.Context, repositoryID, refName, commitSHA string) (string, bool, error) {
 	if refName == "" {
-		return commitSHA, true
+		return commitSHA, true, nil
 	}
 	current, err := s.git.ResolveRef(ctx, repositoryID, refName)
 	if err != nil {
@@ -1117,18 +1117,18 @@ func (s *Server) currentAdmissionCommit(ctx context.Context, repositoryID, refNa
 					zap.String("repository_id", repositoryID),
 					zap.String("ref_name", refName),
 					zap.String("new_commit_sha", commitSHA))
-				return "", false
+				return "", false, nil
 			}
-			return "", true
+			return "", true, nil
 		}
 		s.log.Error("admit_resources: resolve ref failed",
 			zap.String("repository_id", repositoryID),
 			zap.String("ref_name", refName),
 			zap.String("new_commit_sha", commitSHA),
 			zap.Error(err))
-		return "", false
+		return "", false, grpcstatus.Error(codes.Unavailable, "admission ref state unavailable")
 	}
-	return current, true
+	return current, true, nil
 }
 
 // AdmitResources fetches, parses, and stores catalog resources from an accepted push commit.
@@ -1174,7 +1174,10 @@ func (s *Server) AdmitResources(
 
 	branch := strings.TrimPrefix(req.RefName, "refs/heads/")
 	for range namespaceadmission.AdmissionWriteAttempts {
-		currentCommit, ok := s.currentAdmissionCommit(ctx, req.RepositoryId, req.RefName, newCommit)
+		currentCommit, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryId, req.RefName, newCommit)
+		if err != nil {
+			return nil, err
+		}
 		if !ok {
 			return &catalogv1.AdmitResourcesResponse{}, nil
 		}
@@ -1218,7 +1221,11 @@ func (s *Server) AdmitResources(
 			oldEntries = s.loadParsedEntries(ctx, req.RepositoryId, req.GetOldCommitSha(), admCtx.Namespace, changedPaths)
 			newEntries = s.loadParsedEntries(ctx, req.RepositoryId, effectiveCommit, admCtx.Namespace, changedPaths)
 		}
-		if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit) {
+		stillCurrent, err := s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit)
+		if err != nil {
+			return nil, err
+		}
+		if !stillCurrent {
 			continue
 		}
 		if immutablePaths := repositoryImmutablePathChanges(oldEntries, newEntries); len(immutablePaths) > 0 {
@@ -1237,7 +1244,7 @@ func (s *Server) AdmitResources(
 				zap.String("repository_id", req.RepositoryId),
 				zap.String("commit_sha", effectiveCommit),
 				zap.Error(err))
-			if grpcstatus.Code(err) == codes.PermissionDenied || grpcstatus.Code(err) == codes.Unauthenticated {
+			if grpcstatus.Code(err) == codes.PermissionDenied || grpcstatus.Code(err) == codes.Unauthenticated || grpcstatus.Code(err) == codes.Unavailable {
 				return nil, err
 			}
 			if errors.Is(err, errCategoryDeletionBlocked) {
@@ -1248,7 +1255,11 @@ func (s *Server) AdmitResources(
 		if admCtx.wasSuperseded() {
 			continue
 		}
-		if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit) {
+		stillCurrent, err = s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit)
+		if err != nil {
+			return nil, err
+		}
+		if !stillCurrent {
 			continue
 		}
 		return &catalogv1.AdmitResourcesResponse{}, nil
@@ -1665,7 +1676,9 @@ func (s *Server) admitRepository(ctx context.Context, resource *catalog.Reposito
 		if existing.DeletionTimestamp != nil || intent != nil {
 			return admission.NewError(admission.CodeFailedPrecondition, "REPOSITORY_TERMINATING", "repository deletion is pending")
 		}
-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
+		if current, err := s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA); err != nil {
+			return err
+		} else if !current {
 			admCtx.markSuperseded()
 			return nil
 		}
@@ -2196,7 +2209,7 @@ func (s *Server) admitNamespace(
 
 	for range namespaceadmission.AdmissionWriteAttempts {
 		refCheck := func(ctx context.Context) (bool, error) {
-			return s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA), nil
+			return s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA)
 		}
 		if namespaceadmission.RecheckAuthoringRef(ctx, refCheck) != nil {
 			admCtx.markSuperseded()
@@ -2437,7 +2450,9 @@ func (s *Server) admitFile(
 		// observed it as absent. If this admission still owns the ref tip, reload
 		// the winner and converge through the resource-version-guarded update
 		// path below. A stale admission must leave the winner untouched.
-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
+		if current, err := s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA); err != nil {
+			return err
+		} else if !current {
 			return nil
 		}
 		existing, err = s.store.GetFileByName(ctx, namespace, resource.Metadata.Name)
@@ -2485,7 +2500,9 @@ func (s *Server) admitFile(
 			s.log.Error("admit_resources: update file failed", zap.Error(err))
 			return err
 		}
-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
+		if current, err := s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA); err != nil {
+			return err
+		} else if !current {
 			return nil
 		}
 		existing, err = s.store.GetFileByName(ctx, namespace, resource.Metadata.Name)

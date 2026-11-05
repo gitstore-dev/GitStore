@@ -356,6 +356,9 @@ Post-receive admission cannot reject an already accepted Git push. DB-backed con
 File admission callbacks report failed durable writes and exhausted conflict
 retries instead of reporting success. The same callback can be retried after
 the datastore recovers; this does not change the earlier Git acknowledgement.
+Transient ref-read failures also return an unavailable error, rather than
+being mistaken for a superseded commit. Verified stale or missing refs retain
+their existing no-op behavior.
 
 ## Controller Manager Runtime
 

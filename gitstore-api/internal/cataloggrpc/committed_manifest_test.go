@@ -17,7 +17,39 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+func TestAdmitCommittedManifestRefReadFailureIsNotSupersession(t *testing.T) {
+	store := newTestDatastore(t)
+	commit := strings.Repeat("a", 40)
+	content := categoryManifestTitled("electronics", "Electronics")
+	git := newTreeGitReader(&commit, map[string]map[string][]byte{commit: {"categories/electronics.md": content}})
+	var reads atomic.Int64
+	var unavailable atomic.Bool
+	unavailable.Store(true)
+	git.resolveRefFunc = func(context.Context, string, string) (string, error) {
+		reads.Add(1)
+		if unavailable.Load() {
+			return "", errors.New("injected transient ref read failure")
+		}
+		return commit, nil
+	}
+	server := newCatalogServer(t, store, git)
+	_, err := admitCommittedCategory(t, server, commit, content, admission.OperationCreate)
+	require.Equal(t, codes.Unavailable, status.Code(err))
+	require.NotErrorIs(t, err, admission.ErrCommittedManifestSuperseded)
+	require.EqualValues(t, 4, reads.Load(), "failed tip reads must consume only the existing bounded repair budget")
+	_, err = store.GetCategoryTaxonomyByName(t.Context(), "gitstore", "electronics")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+	unavailable.Store(false)
+	_, err = admitCommittedCategory(t, server, commit, content, admission.OperationCreate)
+	require.NoError(t, err)
+	stored, err := store.GetCategoryTaxonomyByName(t.Context(), "gitstore", "electronics")
+	require.NoError(t, err)
+	require.Equal(t, commit, stored.GitCommitSHA)
+}
 
 type failCategoryCreateOnceStore struct {
 	datastore.Datastore

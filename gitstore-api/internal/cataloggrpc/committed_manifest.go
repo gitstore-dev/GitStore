@@ -111,7 +111,10 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 
 	content := append([]byte(nil), req.Content...)
 	commitSHA := req.CommitSHA
-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, ErrCommittedManifestSuperseded
 	}
@@ -165,7 +168,14 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 	if err != nil {
 		return nil, err
 	}
-	if admCtx.wasSuperseded() || !s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, commitSHA) {
+	if admCtx.wasSuperseded() {
+		return nil, ErrCommittedManifestSuperseded
+	}
+	stillCurrent, err := s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, commitSHA)
+	if err != nil {
+		return nil, err
+	}
+	if !stillCurrent {
 		return nil, ErrCommittedManifestSuperseded
 	}
 	result := &admission.CommittedManifestResult{Kind: entry.identity.Kind, Namespace: entry.identity.Namespace, Name: entry.identity.Name, CommitSHA: commitSHA}
@@ -219,7 +229,10 @@ func (s *Server) repairCommittedManifest(ctx context.Context, req admission.Comm
 		if ctx.Err() != nil {
 			return "budget_exhausted"
 		}
-		current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+		current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+		if err != nil {
+			continue
+		}
 		if !ok || current != req.CommitSHA {
 			return "superseded"
 		}
@@ -334,7 +347,10 @@ func errorText(err error) string {
 }
 
 func (s *Server) admitCommittedInfrastructureDeletion(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	if err != nil {
+		return nil, err
+	}
 	if !ok || current != req.CommitSHA {
 		return nil, ErrCommittedManifestSuperseded
 	}
@@ -385,7 +401,10 @@ func (s *Server) admitCommittedProductDeletion(ctx context.Context, req admissio
 	if req.Kind != "Product" || req.Name == "" {
 		return nil, fmt.Errorf("committed deletion requires a Product identity")
 	}
-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	if err != nil {
+		return nil, err
+	}
 	if !ok || current != req.CommitSHA {
 		return nil, ErrCommittedManifestSuperseded
 	}
@@ -413,7 +432,10 @@ func (s *Server) admitCommittedCategoryDeletion(ctx context.Context, req admissi
 	if req.Name == "" {
 		return nil, fmt.Errorf("committed deletion requires a CategoryTaxonomy name")
 	}
-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	if err != nil {
+		return nil, err
+	}
 	if !ok || current != req.CommitSHA {
 		return nil, ErrCommittedManifestSuperseded
 	}
