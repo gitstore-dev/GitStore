@@ -28,6 +28,19 @@ var authorizationDecisionDuration = promauto.NewHistogramVec(prometheus.Histogra
 	Buckets: []float64{.000001, .000005, .00001, .00005, .0001, .0005, .001, .005, .01, .05, .1, .5, 1},
 }, []string{"action", "outcome"})
 
+var authorizationRegistryReloads = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "gitstore_authz_registry_reloads_total",
+	Help: "Complete provider registry reload attempts by finite outcome.",
+}, []string{"outcome"})
+
+func ObserveProviderRegistryReload(accepted bool) {
+	outcome := "rejected"
+	if accepted {
+		outcome = "accepted"
+	}
+	authorizationRegistryReloads.WithLabelValues(outcome).Inc()
+}
+
 // NewDecisionLogger wraps inner with structured decision logging.
 func NewDecisionLogger(inner AuthZProvider, logger *zap.Logger) *DecisionLogger {
 	return &DecisionLogger{inner: inner, logger: logger}
@@ -35,6 +48,13 @@ func NewDecisionLogger(inner AuthZProvider, logger *zap.Logger) *DecisionLogger 
 
 // Name delegates to the wrapped provider.
 func (d *DecisionLogger) Name() string { return d.inner.Name() }
+
+func (d *DecisionLogger) AuthorizationSnapshot() (AuthorizationSnapshot, bool) {
+	if provider, ok := d.inner.(AuthorizationSnapshotProvider); ok {
+		return provider.AuthorizationSnapshot()
+	}
+	return AuthorizationSnapshot{}, false
+}
 
 // Authorize calls the wrapped provider and logs the decision.
 func (d *DecisionLogger) Authorize(ctx context.Context, p *Principal, action string, res ResourceContext) (Decision, error) {

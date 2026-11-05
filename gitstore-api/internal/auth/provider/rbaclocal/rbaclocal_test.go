@@ -353,7 +353,16 @@ func TestV1Beta1ReloadRetainsSnapshotAndConcurrentDecisions(t *testing.T) {
 	require.NoError(t, err)
 	p := newRBACProvider(t, string(allow))
 	allowDigest := p.snapshot.Load().digest
-	denyDigest := newRBACProvider(t, string(deny)).snapshot.Load().digest
+	allowSnapshot, supported := p.AuthorizationSnapshot()
+	require.True(t, supported)
+	require.True(t, allowSnapshot.Loaded)
+	require.Positive(t, allowSnapshot.Roles)
+	require.Positive(t, allowSnapshot.Bindings)
+	require.Positive(t, allowSnapshot.Rules)
+	denyProvider := newRBACProvider(t, string(deny))
+	denyDigest := denyProvider.snapshot.Load().digest
+	denySnapshot, supported := denyProvider.AuthorizationSnapshot()
+	require.True(t, supported)
 	principal := &authpkg.Principal{Subject: "reader", AuthMethod: "static-users", Groups: []string{"system:authenticated"}}
 	resource := authpkg.ResourceContext{Kind: "product", Name: "p"}
 	for _, invalid := range []string{"version: v1\nroles: {}", strings.Repeat("x", 4*1024*1024+1), "not: [valid"} {
@@ -363,11 +372,21 @@ func TestV1Beta1ReloadRetainsSnapshotAndConcurrentDecisions(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, authpkg.OutcomeAllow, d.Outcome)
 		require.Equal(t, allowDigest, d.PolicyDigest)
+		snapshot, supported := p.AuthorizationSnapshot()
+		require.True(t, supported)
+		require.Equal(t, allowSnapshot, snapshot)
 	}
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
 			for range 500 {
+				snapshot, supported := p.AuthorizationSnapshot()
+				assert.True(t, supported)
+				if snapshot.Digest == allowDigest {
+					assert.Equal(t, allowSnapshot, snapshot)
+				} else {
+					assert.Equal(t, denySnapshot, snapshot)
+				}
 				d, err := p.Authorize(t.Context(), principal, "product.read", resource)
 				assert.NoError(t, err)
 				assert.Contains(t, []authpkg.Outcome{authpkg.OutcomeAllow, authpkg.OutcomeDeny}, d.Outcome)
@@ -393,6 +412,13 @@ func TestV1Beta1ReloadRetainsSnapshotAndConcurrentDecisions(t *testing.T) {
 	d, err := p.Authorize(t.Context(), principal, "product.read", resource)
 	require.NoError(t, err)
 	require.Equal(t, allowDigest, d.PolicyDigest, "evaluation must use the loaded policy without I/O")
+	snapshot, supported := p.AuthorizationSnapshot()
+	require.True(t, supported)
+	require.Equal(t, allowSnapshot, snapshot, "diagnostics must not reopen the deleted policy file")
+	unloaded, supported := (&RBACLocalProvider{}).AuthorizationSnapshot()
+	require.True(t, supported)
+	require.False(t, unloaded.Loaded)
+	require.Empty(t, unloaded.Digest)
 }
 
 func TestV1Beta1InvalidRequestsFailClosedEvenMasters(t *testing.T) {

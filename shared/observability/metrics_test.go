@@ -45,13 +45,20 @@ func TestNativeMetricsPreserveCumulativeHistogramsAndRejectIdentifiers(t *testin
 	require.Equal(t, float64(4), metrics[1].GetSum().DataPoints[0].GetAsDouble())
 }
 
-func TestAuthorizationDecisionHistogramExportsBoundedActionLabels(t *testing.T) {
+func TestAuthorizationMetricsExportBoundedLabels(t *testing.T) {
 	histogram := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name: "gitstore_authz_decision_duration_seconds", Help: "test",
 		Buckets: []float64{0.001, 0.01},
 	}, []string{"action", "outcome"})
 	prometheus.MustRegister(histogram)
 	t.Cleanup(func() { prometheus.Unregister(histogram) })
+	reloads := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "gitstore_authz_registry_reloads_total", Help: "test",
+	}, []string{"outcome"})
+	prometheus.MustRegister(reloads)
+	t.Cleanup(func() { prometheus.Unregister(reloads) })
+	reloads.WithLabelValues("accepted").Add(2)
+	reloads.WithLabelValues("rejected").Inc()
 	histogram.WithLabelValues("namespace.read", "allow").Observe(0.002)
 	histogram.WithLabelValues("namespace.read", "allow").Observe(0.02)
 	histogram.WithLabelValues("unknown", "error").Observe(0.003)
@@ -74,14 +81,29 @@ func TestAuthorizationDecisionHistogramExportsBoundedActionLabels(t *testing.T) 
 	require.NoError(t, stop(t.Context()))
 	batch := <-batches
 	var exported *metricpb.Histogram
+	var exportedReloads *metricpb.Sum
 	for _, resource := range batch.ResourceMetrics {
 		for _, scope := range resource.ScopeMetrics {
 			for _, metric := range scope.Metrics {
 				if metric.Name == "gitstore_authz_decision_duration_seconds" {
 					exported = metric.GetHistogram()
 				}
+				if metric.Name == "gitstore_authz_registry_reloads_total" {
+					exportedReloads = metric.GetSum()
+				}
 			}
 		}
+	}
+	require.NotNil(t, exportedReloads, "registry reload counter must reach the OTLP collector")
+	require.True(t, exportedReloads.IsMonotonic)
+	require.Equal(t, metricpb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE, exportedReloads.AggregationTemporality)
+	require.Len(t, exportedReloads.DataPoints, 2)
+	for _, point := range exportedReloads.DataPoints {
+		require.Len(t, point.Attributes, 1)
+		require.Equal(t, "outcome", point.Attributes[0].Key)
+		outcome := point.Attributes[0].Value.GetStringValue()
+		require.Contains(t, map[string]float64{"accepted": 2, "rejected": 1}, outcome)
+		require.Equal(t, map[string]float64{"accepted": 2, "rejected": 1}[outcome], point.GetAsDouble())
 	}
 	require.NotNil(t, exported, "authorization histogram must reach the OTLP collector")
 	require.Equal(t, metricpb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE, exported.AggregationTemporality)
