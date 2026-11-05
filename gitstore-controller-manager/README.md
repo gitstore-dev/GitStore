@@ -41,6 +41,12 @@ the same replica's checkpoint root. Authorization denials and other status-write
 errors still use the normal retry/quarantine policy; conflict recovery never
 bypasses the API's version check.
 
+Repository storage-verification reuse is bound to the resource UID, not just
+namespace/name. Each process rechecks a recreated Repository even inside the
+normal revalidation window. The cache remains bounded to 4,096 keys and is empty
+after process replacement; failed verification is never cached. API-side
+authorization, status CAS and in-flight operation fencing remain separate checks.
+
 Use separate filesystem checkpoint roots per concurrent replica, as
 `compose.capacity.yml` does. Atomic rename prevents partial files; it is not
 cross-process checkpoint coordination or a monotonic compare-and-swap.

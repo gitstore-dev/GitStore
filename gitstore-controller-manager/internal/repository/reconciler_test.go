@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,7 +185,7 @@ func TestReconcileSkipsStorageProvisioningWhenRecentlyVerified(t *testing.T) {
 	key := repositoryKey("acme", "catalog")
 	// Simulate having already verified storage recently (e.g. the previous
 	// reconcile): storageVerificationDue must not fire again immediately.
-	r.lastStorageVerification.Store(key, time.Now())
+	r.lastStorageVerification.Store(key, current.UID, time.Now())
 
 	result := r.Reconcile(context.Background(), key)
 	if _, ok := result.(types.Success); !ok {
@@ -222,6 +224,90 @@ func TestReconcileRevalidatesStorageWhenNeverVerifiedByThisProcess(t *testing.T)
 	}
 }
 
+func TestReconcileReplacementCannotBorrowPreviousUIDVerificationAcrossReplicas(t *testing.T) {
+	for _, provisionErr := range []error{nil, errors.New("storage forbidden")} {
+		t.Run(fmt.Sprint(provisionErr), func(t *testing.T) {
+			current, resolvedJSON := repositoryFixtureAlreadyProvisioned(t)
+			var resolved ResolvedStorage
+			if err := json.Unmarshal(resolvedJSON, &resolved); err != nil {
+				t.Fatal(err)
+			}
+			key := repositoryKey(current.Namespace, current.Name)
+			views := [2]*cache.Cache[Repository]{cache.New[Repository](), cache.New[Repository]()}
+			var reconcilers [2]*Reconciler
+			var storages [2]*fakeStorageClient
+			var statuses [2]*fakeStatusClient
+			for replica := range reconcilers {
+				views[replica].Set(key, current)
+				storages[replica] = &fakeStorageClient{resolved: resolved}
+				statuses[replica] = &fakeStatusClient{}
+				reconcilers[replica] = NewReconciler(cache.AsReadOnly(views[replica]), statuses[replica],
+					storages[replica], &fakeCompletionClient{})
+				if result := reconcilers[replica].Reconcile(t.Context(), key); len(storages[replica].calls) != 1 {
+					t.Fatalf("replica %d did not verify the original incarnation: result=%T", replica, result)
+				}
+			}
+			current.UID = "replacement"
+			current.ResourceVersion = "3"
+			current.Status.ResourceVersion = "3"
+			for replica := range reconcilers {
+				views[replica].Set(key, current)
+				storages[replica].err = provisionErr
+			}
+			var results [2]types.ReconcileResult
+			var work sync.WaitGroup
+			work.Add(len(reconcilers))
+			for replica := range reconcilers {
+				go func() {
+					defer work.Done()
+					results[replica] = reconcilers[replica].Reconcile(t.Context(), key)
+				}()
+			}
+			work.Wait()
+			for replica, reconciler := range reconcilers {
+				storage, patches := storages[replica], statuses[replica].patches
+				if len(storage.calls) != 2 {
+					t.Fatalf("replica %d borrowed the retired UID's verification: calls=%d", replica, len(storage.calls))
+				}
+				if provisionErr == nil {
+					if _, ok := results[replica].(types.Success); !ok {
+						t.Fatalf("replica %d successful verification returned %T", replica, results[replica])
+					}
+				} else {
+					failure, ok := results[replica].(types.TransientFailure)
+					if !ok || !errors.Is(failure.Err, provisionErr) {
+						t.Fatalf("replica %d hid the replacement verification error: %#v", replica, results[replica])
+					}
+					if len(patches) != 1 || patches[0].ResourceVersion != "3" {
+						t.Fatalf("replica %d did not retain replacement status CAS: %#v", replica, patches)
+					}
+					if condition(t, patches[0].Conditions, conditionReady).Status != statusFalse {
+						t.Fatalf("replica %d left the unverified replacement ready", replica)
+					}
+				}
+				storage.err = nil
+				if result := reconciler.Reconcile(t.Context(), key); provisionErr != nil {
+					if _, ok := result.(types.Success); !ok || len(storage.calls) != 3 {
+						t.Fatalf("replica %d cached a failed verification: result=%T calls=%d", replica, result, len(storage.calls))
+					}
+				}
+				verifiedCalls := len(storage.calls)
+				reconciler.Reconcile(t.Context(), key)
+				if len(storage.calls) != verifiedCalls {
+					t.Fatalf("replica %d did not reuse its replacement's successful verification", replica)
+				}
+				freshStorage := &fakeStorageClient{resolved: resolved}
+				fresh := NewReconciler(cache.AsReadOnly(views[replica]), &fakeStatusClient{},
+					freshStorage, &fakeCompletionClient{})
+				fresh.Reconcile(t.Context(), key)
+				if len(freshStorage.calls) != 1 {
+					t.Fatalf("replica %d replacement process trusted a persisted status without verification", replica)
+				}
+			}
+		})
+	}
+}
+
 func TestReconcileRevalidatesStorageAfterRevalidationWindowElapses(t *testing.T) {
 	current, resolvedJSON := repositoryFixtureAlreadyProvisioned(t)
 	var gotResolved ResolvedStorage
@@ -232,7 +318,7 @@ func TestReconcileRevalidatesStorageAfterRevalidationWindowElapses(t *testing.T)
 	statuses := &fakeStatusClient{}
 	r := NewReconciler(seedRepositoryCache(t, current), statuses, storage, &fakeCompletionClient{})
 	key := repositoryKey("acme", "catalog")
-	r.lastStorageVerification.Store(key, time.Now().Add(-storageRevalidationInterval-time.Second))
+	r.lastStorageVerification.Store(key, current.UID, time.Now().Add(-storageRevalidationInterval-time.Second))
 
 	result := r.Reconcile(context.Background(), key)
 	if _, ok := result.(types.Success); !ok {
@@ -241,6 +327,38 @@ func TestReconcileRevalidatesStorageAfterRevalidationWindowElapses(t *testing.T)
 	if len(storage.calls) != 1 {
 		t.Fatalf("storage calls = %#v, want exactly one revalidation call once the window elapsed", storage.calls)
 	}
+}
+
+func TestStorageVerificationCacheKeepsBoundAndReplacesUIDInPlace(t *testing.T) {
+	var c storageVerificationCache
+	for i := range 4097 {
+		key := repositoryKey("acme", fmt.Sprint(i))
+		c.Store(key, "first", time.Now())
+		if len(c.entries) > 4096 {
+			t.Fatalf("verification cache exceeded its bound: %d", len(c.entries))
+		}
+	}
+	key := repositoryKey("acme", "4096")
+	c.Store(key, "replacement", time.Now())
+	if len(c.entries) != 4096 {
+		t.Fatalf("UID replacement changed the cache cardinality: %d", len(c.entries))
+	}
+	if _, ok := c.Load(key, "first"); ok {
+		t.Fatal("a retired UID borrowed the replacement's verification")
+	}
+	if _, ok := c.Load(key, "replacement"); !ok {
+		t.Fatal("replacement verification was not retained")
+	}
+	for i := range 4097 {
+		key := repositoryKey("acme", fmt.Sprint(i))
+		if _, retained := c.entries[key]; !retained {
+			if _, verified := c.Load(key, "first"); verified {
+				t.Fatal("eviction retained a trusted verification")
+			}
+			return
+		}
+	}
+	t.Fatal("bounded cache did not evict an entry")
 }
 
 func TestReconcileSkipsNamespaceBootstrapRepository(t *testing.T) {
