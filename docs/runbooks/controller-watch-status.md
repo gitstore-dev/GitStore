@@ -115,6 +115,30 @@ body, Git revision or finalizers with a cached full-resource snapshot. On
 conflict, reconcile again from current state; category deletion retains the
 Product for its next bounded cleanup continuation.
 
+## Diagnosing the snapshot consumed by reconciliation
+
+For Namespace and Repository, sampled reconciliation-attempt spans include a
+`controller.reconcile.snapshot` event after a successful lookup. Match its
+`resource.uid`, `resource.resource_version`, `resource.generation` and
+`resource.revision` to the expected API postimage and controller instance.
+The revision is authored `metadata.revision`, not `status.lastAppliedRevision`.
+Missing resources and failed lookups emit no snapshot event.
+
+Use only events with `resource.snapshot.exact=true` for exact snapshot matching.
+Missing fields or nonpositive generation make it false. UID, resource version
+and revision are limited to 64, 128 and 256 UTF-8 bytes; an invalid or oversized
+string replaces all three strings with `[invalid]`, without changing the
+resource used for reconciliation. Old persisted projections without authored
+revision remain readable but produce non-exact events until refreshed.
+
+A matching event proves which snapshot was read, not successful reconciliation
+or delivery of every intermediate version: queued keys can observe a newer
+snapshot. Check the attempt outcome and resulting status separately. Compare
+UIDs across same-name recreation and controller instance identities across
+replacement. Missing sampled or exporter-dropped events do not prove that work
+was skipped. These identities are trace attributes, never metric labels.
+When tracing is disabled or an attempt is not recording, this event is absent.
+
 ## Controller API throttling and recovery
 
 ### Expired-cursor recovery and readiness

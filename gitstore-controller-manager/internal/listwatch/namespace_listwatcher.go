@@ -15,7 +15,7 @@ import (
 )
 
 const namespaceFields = `
-  metadata { uid name resourceVersion generation finalizers }
+  metadata { uid name resourceVersion generation revision finalizers }
   status {
     observedGeneration
     lastAppliedRevision
@@ -51,6 +51,7 @@ type namespaceMetadataJSON struct {
 	UID             string   `json:"uid"`
 	Name            string   `json:"name"`
 	ResourceVersion string   `json:"resourceVersion"`
+	Revision        string   `json:"revision"`
 	Generation      int64    `json:"generation"`
 	Finalizers      []string `json:"finalizers"`
 }
@@ -72,6 +73,7 @@ func (n namespaceNodeJSON) toNamespace() namespacecontroller.Namespace {
 		Name:            n.Metadata.Name,
 		Generation:      n.Metadata.Generation,
 		ResourceVersion: n.Metadata.ResourceVersion,
+		Revision:        n.Metadata.Revision,
 		Finalizers:      n.Metadata.Finalizers,
 	}
 	if n.Status == nil {

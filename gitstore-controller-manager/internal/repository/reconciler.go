@@ -13,10 +13,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -62,6 +65,7 @@ type Repository struct {
 	StorageClass    string
 	Generation      int64
 	ResourceVersion string
+	Revision        string
 	Finalizers      []string
 	Status          status.ResourceStatus
 }
@@ -163,6 +167,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		// A queued key can outlive its object after watch replay, deletion, or a
 		// checkpointed controller restart. Absence is the reconciled state.
 		return types.ResultOK()
+	}
+	if span := trace.SpanFromContext(ctx); span.IsRecording() {
+		uid, rv, revision := current.UID, current.ResourceVersion, current.Revision
+		exact := uid != "" && rv != "" && revision != "" && current.Generation > 0
+		// Stay within the telemetry SDK's 256-character cap; never truncate evidence.
+		if len(uid) > 64 || len(rv) > 128 || len(revision) > 256 ||
+			!utf8.ValidString(uid) || !utf8.ValidString(rv) || !utf8.ValidString(revision) {
+			uid, rv, revision = "[invalid]", "[invalid]", "[invalid]"
+			exact = false
+		}
+		span.AddEvent("controller.reconcile.snapshot", trace.WithAttributes(
+			attribute.String("resource.uid", uid),
+			attribute.String("resource.resource_version", rv),
+			attribute.Int64("resource.generation", current.Generation),
+			attribute.String("resource.revision", revision),
+			attribute.Bool("resource.snapshot.exact", exact),
+		))
 	}
 	if current.Name == SystemRepositoryName {
 		return types.ResultOK()
