@@ -2,7 +2,7 @@
 
 **Feature Branch**: `070-admin-storefront-split`\
 **Created**: 2026-11-04\
-**Status**: Closed\
+**Status**: In progress\
 **Input**: User description: "storefront/admin split (#495). Use a worktree rebased against origin/main. Choose the least complex pre-GA implementation and amend ADR-0012; a staged compatibility transition is unnecessary."
 
 **Closure scope (2026-11-05)**: The implemented endpoint/schema/security boundary, local consumer migration and functional cutover/recovery checks are complete; the final full `make pr-ready` suite passed. This does not certify production capacity or complete external consumer release coordination. The sustained HTTP and Admin/watch components passed, but combined acceptance failed native-push scheduling/convergence, including sampled acknowledged manifests absent from both Admin replicas. The user directed keeping that work as a separate dependency; T060–T061 remain open with unchanged acceptance gates. Publication reads/target binding and adversarial WebSocket pre-decode bounds also remain unimplemented readiness dependencies. Closing this boundary does not mark those requirements passed.
