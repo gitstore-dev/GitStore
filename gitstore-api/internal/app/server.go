@@ -43,7 +43,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-const version = "0.1.0-alpha.8" // x-release-please-version
+const version = "0.1.0-alpha.9" // x-release-please-version
 
 // defaultRateLimitPerSecond/defaultRateLimitBurst mirror config.Load's
 // api.rate_limit_per_second/api.rate_limit_burst defaults, used as a

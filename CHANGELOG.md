@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.1.0-alpha.9](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.8...v0.1.0-alpha.9) (2026-11-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** replace /graphql and api.port with /admin/graphql on api.admin_port and /storefront/graphql on api.storefront_port; upgrade API clients and routing together.
+* **scylla:** partition Products and isolate namespace catalog fences ([#527](https://github.com/gitstore-dev/GitStore/issues/527))
+* **api:** File reads now use file(by: FileBy!); the flat namespace/name query arguments are removed.
+
+### Features
+
+* **api:** split Admin and Storefront GraphQL endpoints ([#531](https://github.com/gitstore-dev/GitStore/issues/531)) ([be97e94](https://github.com/gitstore-dev/GitStore/commit/be97e94223b8151b158c043260ced4fca75eea4f))
+* **api:** unify resource metadata with scope-aware namespace validation ([#521](https://github.com/gitstore-dev/GitStore/issues/521)) ([4751d4e](https://github.com/gitstore-dev/GitStore/commit/4751d4e842851aac0b05aa6fdb68b594207dcae3))
+* **auth:** bound authorization decision diagnostics ([#536](https://github.com/gitstore-dev/GitStore/issues/536)) ([21984ed](https://github.com/gitstore-dev/GitStore/commit/21984ed9d011a4839c1aaa8fc5e9ce6c65bf0e63))
+* **auth:** expose bounded registry reload diagnostics ([#537](https://github.com/gitstore-dev/GitStore/issues/537)) ([824bb96](https://github.com/gitstore-dev/GitStore/commit/824bb96b9321ae04caba464863f7fe1b5d27ecec))
+* **controller:** record consumed resource snapshots ([#533](https://github.com/gitstore-dev/GitStore/issues/533)) ([52498f3](https://github.com/gitstore-dev/GitStore/commit/52498f33cbd2687f6b8226bc5139c1152fa0b19e))
+
+
+### Bug Fixes
+
+* **api:** align File lookups with resource selectors ([#523](https://github.com/gitstore-dev/GitStore/issues/523)) ([50f2da6](https://github.com/gitstore-dev/GitStore/commit/50f2da6c3f1f1702d9baa543be7c8d6c91b0d1ca))
+* **controller:** bind repository storage verification to UID ([#530](https://github.com/gitstore-dev/GitStore/issues/530)) ([3f08b65](https://github.com/gitstore-dev/GitStore/commit/3f08b656cf414d592a1be29e47cc829b286b3655))
+* **controller:** preserve authored catalog revisions ([#534](https://github.com/gitstore-dev/GitStore/issues/534)) ([7e934fd](https://github.com/gitstore-dev/GitStore/commit/7e934fd882d8b420692eb79664f650d0e6de907d))
+* **controller:** preserve category work across status conflicts ([#529](https://github.com/gitstore-dev/GitStore/issues/529)) ([4648798](https://github.com/gitstore-dev/GitStore/commit/4648798eea4a4cfca21e8db7fbc9a903deef627a))
+* **scylla:** partition Products and isolate namespace catalog fences ([#527](https://github.com/gitstore-dev/GitStore/issues/527)) ([e84c66c](https://github.com/gitstore-dev/GitStore/commit/e84c66cb697cd63c554f5750d54ce0befa13205f))
+
+
+### Documentation
+
+* clarify resource storage groups and operational guidance ([#528](https://github.com/gitstore-dev/GitStore/issues/528)) ([b7645d9](https://github.com/gitstore-dev/GitStore/commit/b7645d99d1c31c7821b36f5bcd0689ad17a8a374))
+
 ## [0.1.0-alpha.8](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.7...v0.1.0-alpha.8) (2026-11-03)
 
 
