@@ -762,12 +762,9 @@ fn collect_tree_entries(
                         files,
                     )?;
                 } else {
-                    // non-recursive: don't descend unless this dir is within prefix
+                    // Non-recursive queries only traverse ancestors of the prefix.
                     let dir_path = format!("{}/", full_path);
-                    if prefix.is_empty()
-                        || dir_path.starts_with(prefix)
-                        || prefix.starts_with(&dir_path)
-                    {
+                    if prefix.starts_with(&dir_path) {
                         let subdir = format!("{}/", full_path);
                         collect_tree_entries(
                             repo,
@@ -2616,6 +2613,27 @@ mod tests {
             resource_name: String::new(),
             repository_id: repo_id.to_string(),
         })
+    }
+
+    #[test]
+    fn nonrecursive_root_listing_does_not_read_descendant_trees() {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = gix::init_bare(directory.path()).unwrap();
+        let tree = repo
+            .write_object(gix::objs::Tree {
+                entries: vec![gix::objs::tree::Entry {
+                    mode: gix::objs::tree::EntryKind::Tree.into(),
+                    filename: "not-requested".into(),
+                    oid: gix::ObjectId::from_hex(b"1111111111111111111111111111111111111111")
+                        .unwrap(),
+                }],
+            })
+            .unwrap()
+            .detach();
+        let mut files = Vec::new();
+        collect_tree_entries(&repo, tree, "", "", false, &mut files).unwrap();
+        assert!(files.is_empty());
+        assert!(collect_tree_entries(&repo, tree, "", "", true, &mut files).is_err());
     }
 
     #[test]

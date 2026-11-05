@@ -409,6 +409,11 @@ pub(crate) fn with_quarantine_repo<T>(
     quarantine_dir: Option<&Path>,
     operation: impl FnOnce(&gix::Repository) -> Result<T, String>,
 ) -> Result<T, String> {
+    if let Some(repository) =
+        quarantine_dir.and_then(|directory| small_quarantine_view(git_dir, directory))
+    {
+        return operation(&repository);
+    }
     let pack_dir = git_dir.join("objects").join("pack");
     let mut staged_files: Vec<std::path::PathBuf> = Vec::new();
     if let Some(q) = quarantine_dir {
@@ -440,13 +445,69 @@ pub(crate) fn with_quarantine_repo<T>(
     result
 }
 
+// Keep ordinary incremental packs in a request-local gix memory view. Larger
+// packs retain the existing isolated-store path; no limit changes admission.
+const QUARANTINE_VIEW_PACK_BYTES: u64 = 2 * 1024 * 1024;
+const QUARANTINE_VIEW_OBJECTS: u32 = 64;
+const QUARANTINE_VIEW_BYTES: usize = 8 * 1024 * 1024;
+
+fn small_quarantine_view(git_dir: &Path, quarantine: &Path) -> Option<gix::Repository> {
+    use gix::objs::Write;
+    let path = std::fs::read_dir(quarantine)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "pack")
+        })?;
+    if std::fs::metadata(&path).ok()?.len() > QUARANTINE_VIEW_PACK_BYTES {
+        return None;
+    }
+    let mut bundle = gix_pack::Bundle::at(path, gix::hash::Kind::Sha1).ok()?;
+    if bundle.index.num_objects() > QUARANTINE_VIEW_OBJECTS {
+        return None;
+    }
+    bundle.pack = bundle
+        .pack
+        .with_alloc_limit_bytes(Some(QUARANTINE_VIEW_BYTES));
+    let repository = crate::git::repo::open_repository(git_dir)
+        .ok()?
+        .with_object_memory();
+    let mut output = Vec::new();
+    let mut inflate = gix::zlib::Inflate::default();
+    let mut total = 0usize;
+    for entry in bundle.index.iter() {
+        let (object, _) = bundle
+            .find(
+                &entry.oid,
+                &mut output,
+                &mut inflate,
+                &mut gix_pack::cache::Never,
+            )
+            .ok()??;
+        total = total.checked_add(object.data.len())?;
+        if total > QUARANTINE_VIEW_BYTES {
+            return None;
+        }
+        let actual = repository
+            .objects
+            .write_buf_with_known_id(object.kind, object.data, entry.oid)
+            .ok()?;
+        if actual != entry.oid {
+            return None;
+        }
+    }
+    Some(repository)
+}
+
 /// Walk the commit trees for all ref updates and collect resource blobs (files
 /// beginning with `---`).
 ///
-/// `quarantine_dir` is the TempDir written by `stage_pack_from_reader`. When
-/// present its path is written to `{git_dir}/objects/info/alternates` so that
-/// gix-odb resolves pushed objects that are not yet promoted to the live ODB.
-/// The alternates entry is removed after extraction regardless of outcome.
+/// `quarantine_dir` is the TempDir written by `stage_pack_from_reader`.
+/// Small packs use bounded request-local object memory; larger packs use the
+/// isolated temporary-link view owned by `with_quarantine_repo`. Neither view
+/// publishes objects to the live repository after extraction.
 ///
 /// Returns an empty vec if git_dir is not a valid repo or any update fails.
 fn extract_resource_blobs(
@@ -454,78 +515,39 @@ fn extract_resource_blobs(
     updates: &[RefUpdate],
     quarantine_dir: Option<&Path>,
 ) -> Vec<ResourceBlob> {
-    let zero = "0".repeat(40);
-
-    // To make pushed objects visible before promote_quarantine runs, temporarily
-    // hard-link the quarantine pack/index files into the live objects/pack dir.
-    // Hard-links are instant and atomic; the files are removed after extraction.
-    // This mirrors what native git does with GIT_ALTERNATE_OBJECT_DIRECTORIES.
-    let pack_dir = git_dir.join("objects").join("pack");
-    let mut staged_files: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(q) = quarantine_dir {
-        let _ = std::fs::create_dir_all(&pack_dir);
-        if let Ok(entries) = std::fs::read_dir(q) {
-            for entry in entries.flatten() {
-                let src = entry.path();
-                let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if ext == "pack" || ext == "idx" {
-                    let dst = pack_dir.join(entry.file_name());
-                    if !dst.exists() {
-                        // Try hard link first (free); fall back to copy across filesystems.
-                        let ok = std::fs::hard_link(&src, &dst).is_ok()
-                            || std::fs::copy(&src, &dst).is_ok();
-                        if ok {
-                            staged_files.push(dst);
-                        }
-                    }
-                }
+    with_quarantine_repo(git_dir, quarantine_dir, |repo| {
+        let zero = "0".repeat(40);
+        let mut blobs = Vec::new();
+        for update in updates {
+            let new_oid_hex = &update.new_oid;
+            let old_oid_hex = &update.old_oid;
+            if new_oid_hex == &zero {
+                continue; // branch deletion — no blobs to extract
             }
-        }
-    }
-
-    let repo = match crate::git::repo::open_repository_uncached(git_dir) {
-        Ok(r) => r,
-        Err(_) => {
-            for f in &staged_files {
-                let _ = std::fs::remove_file(f);
-            }
-            return vec![];
-        }
-    };
-
-    let mut blobs = Vec::new();
-    for update in updates {
-        let new_oid_hex = &update.new_oid;
-        let old_oid_hex = &update.old_oid;
-        if new_oid_hex == &zero {
-            continue; // branch deletion — no blobs to extract
-        }
-        let new_oid = match gix::ObjectId::from_hex(new_oid_hex.as_bytes()) {
-            Ok(id) => id,
-            Err(_) => continue,
-        };
-        if old_oid_hex == &zero {
-            // New branch creation — scan the full new tree.
-            collect_blobs_from_commit(&repo, new_oid, &mut blobs);
-        } else {
-            // Ref update — only validate files changed in the push delta.
-            // This avoids re-validating files that already passed in prior commits.
-            let old_oid = match gix::ObjectId::from_hex(old_oid_hex.as_bytes()) {
+            let new_oid = match gix::ObjectId::from_hex(new_oid_hex.as_bytes()) {
                 Ok(id) => id,
-                Err(_) => {
-                    collect_blobs_from_commit(&repo, new_oid, &mut blobs);
-                    continue;
-                }
+                Err(_) => continue,
             };
-            collect_changed_blobs(&repo, old_oid, new_oid, &mut blobs);
+            if old_oid_hex == &zero {
+                // New branch creation — scan the full new tree.
+                collect_blobs_from_commit(repo, new_oid, &mut blobs);
+            } else {
+                // Ref update — only validate files changed in the push delta.
+                // This avoids re-validating files that already passed in prior commits.
+                let old_oid = match gix::ObjectId::from_hex(old_oid_hex.as_bytes()) {
+                    Ok(id) => id,
+                    Err(_) => {
+                        collect_blobs_from_commit(repo, new_oid, &mut blobs);
+                        continue;
+                    }
+                };
+                collect_changed_blobs(repo, old_oid, new_oid, &mut blobs);
+            }
         }
-    }
 
-    for f in &staged_files {
-        let _ = std::fs::remove_file(f);
-    }
-
-    blobs
+        Ok(blobs)
+    })
+    .unwrap_or_default()
 }
 
 fn collect_blobs_from_commit(

@@ -690,6 +690,13 @@ mod tests {
             Some(quarantine.dir.path()),
             |repository| {
                 assert!(repository.find_object(commit).is_ok());
+                assert_eq!(
+                    std::fs::read_dir(target_directory.path().join("objects/pack"))
+                        .unwrap()
+                        .count(),
+                    0,
+                    "small quarantine views must not publish temporary pack links"
+                );
                 Err("policy denied".to_owned())
             },
         );
@@ -699,6 +706,58 @@ mod tests {
             live.find_object(commit).is_err(),
             "rejected objects must not survive in a cached pack mapping"
         );
+    }
+
+    #[test]
+    fn large_quarantine_views_fall_back_without_changing_object_visibility() {
+        for size in [5 * 1024 * 1024, 9 * 1024 * 1024] {
+            let (_source_directory, source) = make_test_repo();
+            // The helper places contents in both blob and commit message: 5 MiB
+            // exercises the aggregate cap, and 9 MiB the decoder allocation cap.
+            let content = "x".repeat(size);
+            let commit = make_commit(&source, &content, None);
+            let pack = build_pack_for_wants(&source, &[commit.to_string()], &[]).unwrap();
+            let quarantine =
+                stage_pack_from_reader(std::io::Cursor::new(pack), Some((*source.objects).clone()))
+                    .unwrap();
+            let (directory, _target) = make_test_repo();
+            crate::git::hooks::with_quarantine_repo(
+                directory.path(),
+                Some(quarantine.dir.path()),
+                |repository| {
+                    assert!(
+                        std::fs::read_dir(directory.path().join("objects/pack"))
+                            .unwrap()
+                            .count()
+                            > 0,
+                        "large views retain the isolated disk-backed fallback"
+                    );
+                    let object = repository.find_object(commit).unwrap();
+                    assert_eq!(
+                        object
+                            .try_into_commit()
+                            .unwrap()
+                            .decode()
+                            .unwrap()
+                            .message
+                            .len(),
+                        size
+                    );
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::read_dir(directory.path().join("objects/pack"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+            assert!(crate::git::repo::open_repository(directory.path())
+                .unwrap()
+                .find_object(commit)
+                .is_err());
+        }
     }
 
     // -----------------------------------------------------------------------
