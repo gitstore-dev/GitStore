@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
@@ -1330,6 +1331,49 @@ func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, names
 }
 
 func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmissionOperation, admCtx AdmissionContext) error {
+	if batcher, ok := s.store.(datastore.CatalogMutationBatcher); ok &&
+		admCtx.RepositoryID != "" && admCtx.Namespace != "" &&
+		len(ops) > 1 && len(ops) <= datastore.FileNameSnapshotBatchLimit {
+		names := make([]string, 0, len(ops))
+		seen := make(map[string]bool, len(ops))
+		for _, op := range ops {
+			if op.identity.Kind != "File" || op.identity.Namespace != admCtx.Namespace ||
+				op.identity.Name == "" || seen[op.identity.Name] ||
+				(op.operation != admission.OperationCreate && op.operation != admission.OperationUpdate) ||
+				op.newEntry == nil || op.newEntry.parsed == nil || op.newEntry.parsed.File == nil {
+				break
+			}
+			seen[op.identity.Name] = true
+			names = append(names, op.identity.Name)
+		}
+		if len(names) == len(ops) {
+			return batcher.WithCatalogMutationBatch(ctx, admCtx.Namespace, func(ctx context.Context) error {
+				files, err := s.fileNameSnapshotFacts(ctx, admCtx.Namespace, names)
+				if err != nil {
+					return err
+				}
+				for i, op := range ops {
+					var existing any
+					if files[i] != nil {
+						existing = files[i]
+					}
+					if err := s.authorizeOperation(ctx, op.identity, op.operation, op.newEntry, existing); err != nil {
+						return err
+					}
+				}
+				errs := make([]error, len(ops))
+				var workers sync.WaitGroup
+				for i, op := range ops {
+					workers.Go(func() {
+						entry := op.newEntry
+						errs[i] = s.admitFile(ctx, entry.parsed.File, entry.body, admCtx, entry.path, op.operation, files[i])
+					})
+				}
+				workers.Wait()
+				return errors.Join(errs...)
+			})
+		}
+	}
 	upsertOps := make(map[string]resourceAdmissionOperation)
 	var upsertEntries []*parsedEntry
 	var deletes []resourceAdmissionOperation

@@ -19,6 +19,40 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
+type catalogBatchStub struct {
+	datastore.Datastore
+	run func(context.Context, string, func(context.Context) error) error
+}
+
+func (s *catalogBatchStub) WithCatalogMutationBatch(ctx context.Context, namespace string, operation func(context.Context) error) error {
+	return s.run(ctx, namespace, operation)
+}
+
+func TestInstrumentedDatastorePreservesOptionalCatalogBatches(t *testing.T) {
+	type contextKey struct{}
+	base := &stubDatastore{}
+	plain := datastore.NewInstrumentedDatastoreWithRegistry(base, "test", zap.NewNop(), prometheus.NewRegistry())
+	_, supported := plain.(datastore.CatalogMutationBatcher)
+	require.False(t, supported, "the decorator must not invent unsupported reservations")
+	backend := &catalogBatchStub{Datastore: base, run: func(ctx context.Context, namespace string, operation func(context.Context) error) error {
+		require.Equal(t, "acme", namespace)
+		require.Equal(t, "original", ctx.Value(contextKey{}))
+		return operation(ctx)
+	}}
+	wrapped := datastore.NewInstrumentedDatastoreWithRegistry(backend, "test", zap.NewNop(), prometheus.NewRegistry())
+	batcher, supported := wrapped.(datastore.CatalogMutationBatcher)
+	require.True(t, supported)
+	failure := errors.New("batch failed")
+	called := false
+	err := batcher.WithCatalogMutationBatch(context.WithValue(t.Context(), contextKey{}, "original"), "acme", func(ctx context.Context) error {
+		called = true
+		require.Equal(t, "original", ctx.Value(contextKey{}))
+		return failure
+	})
+	require.ErrorIs(t, err, failure)
+	require.True(t, called)
+}
+
 func TestInstrumentedDatastoreForwardsRepositoryCompletion(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)

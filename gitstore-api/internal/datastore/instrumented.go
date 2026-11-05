@@ -33,7 +33,23 @@ func NewInstrumentedDatastore(next Datastore, backend string, log *zap.Logger) D
 // NewInstrumentedDatastoreWithRegistry is like NewInstrumentedDatastore but
 // registers metrics on reg, enabling isolated registries in tests.
 func NewInstrumentedDatastoreWithRegistry(next Datastore, backend string, log *zap.Logger, reg prometheus.Registerer) Datastore {
-	return &InstrumentedDatastore{next: next, backend: backend, log: log, metrics: newMetrics(reg)}
+	wrapped := &InstrumentedDatastore{next: next, backend: backend, log: log, metrics: newMetrics(reg)}
+	if batcher, ok := next.(CatalogMutationBatcher); ok {
+		return &instrumentedCatalogBatchDatastore{InstrumentedDatastore: wrapped, batcher: batcher}
+	}
+	return wrapped
+}
+
+type instrumentedCatalogBatchDatastore struct {
+	*InstrumentedDatastore
+	batcher CatalogMutationBatcher
+}
+
+func (d *instrumentedCatalogBatchDatastore) WithCatalogMutationBatch(ctx context.Context, namespace string, operation func(context.Context) error) error {
+	start := time.Now()
+	err := d.batcher.WithCatalogMutationBatch(d.withFindingObserver(ctx), namespace, operation)
+	d.observe("WithCatalogMutationBatch", start, err)
+	return err
 }
 
 func (d *InstrumentedDatastore) observe(op string, start time.Time, err error) {

@@ -344,6 +344,13 @@ Invalid snapshot identities or incomplete responses fail closed. Every
 resource still requires the configured provider's approval, and batching
 does not replace optimistic-concurrency checks or cache authorization decisions.
 
+On Scylla, groups of two to four distinct File creates or updates also share
+one namespace catalog reservation. Fresh authorization facts are read inside
+that reservation before bounded, concurrent writes start. Admission waits for
+every write and reports their errors before releasing the reservation; this is
+not a multi-resource transaction. Single operations, deletes, mixed kinds,
+duplicate names and larger groups retain sequential admission.
+
 Post-receive admission cannot reject an already accepted Git push. DB-backed conflicts such as duplicate `ProductVariant.spec.sku` leave the existing resource unchanged, skip the conflicting incoming resource, and emit structured API logs with the operation, namespace, name, SKU, and conflicting identity.
 
 File admission callbacks report failed durable writes and exhausted conflict

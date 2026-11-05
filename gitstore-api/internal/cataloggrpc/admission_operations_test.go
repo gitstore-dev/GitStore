@@ -14,6 +14,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
@@ -22,6 +23,63 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+type catalogBatchSelectionStore struct {
+	datastore.Datastore
+	entered bool
+}
+
+func (s *catalogBatchSelectionStore) WithCatalogMutationBatch(context.Context, string, func(context.Context) error) error {
+	s.entered = true
+	return errors.New("unexpected catalog batch")
+}
+
+func TestFileMutationBatchPreservesSequentialFallback(t *testing.T) {
+	for _, shape := range []string{"single", "oversized", "mixed", "delete", "cross-namespace", "duplicate-physical-name", "unowned"} {
+		t.Run(shape, func(t *testing.T) {
+			count := 2
+			if shape == "single" {
+				count = 1
+			} else if shape == "oversized" {
+				count = datastore.FileNameSnapshotBatchLimit + 1
+			}
+			ops := make([]resourceAdmissionOperation, count)
+			for i := range ops {
+				identity := resourceIdentity{APIVersion: "v1", Kind: "File", Namespace: "gitstore", Name: strconv.Itoa(i)}
+				ops[i] = resourceAdmissionOperation{
+					operation: admission.OperationCreate, identity: identity,
+					newEntry: &parsedEntry{identity: identity, parsed: &validate.ParsedResource{Kind: "File", File: &catalog.FileResource{}}},
+				}
+			}
+			admCtx := AdmissionContext{Namespace: "gitstore", RepositoryID: "repository"}
+			switch shape {
+			case "mixed":
+				ops[1].identity.Kind = "Product"
+			case "delete":
+				ops[1].operation = admission.OperationDelete
+			case "cross-namespace":
+				ops[1].identity.Namespace = "other"
+			case "duplicate-physical-name":
+				ops[1].identity.Name, ops[1].identity.APIVersion = ops[0].identity.Name, "v2"
+			case "unowned":
+				admCtx.RepositoryID = ""
+			}
+			store := &catalogBatchSelectionStore{Datastore: &testutil.StubStore{
+				GetFileByNameFunc: func(context.Context, string, string) (*datastore.File, error) {
+					return nil, datastore.ErrNotFound
+				},
+				GetNamespaceByNameFunc: func(_ context.Context, name string) (*datastore.Namespace, error) {
+					return &datastore.Namespace{UID: "namespace", Name: name, CreationActor: "alice"}, nil
+				},
+			}}
+			server := &Server{store: store, registry: auth.NewProviderRegistry(nil, testutil.NewDenyAllAuthZ(t), nil)}
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "alice", AuthMethod: "static-users"})
+			err := server.applyResourceOperations(ctx, ops, admCtx)
+			require.Equal(t, codes.PermissionDenied, status.Code(err))
+			require.False(t, store.entered, "ordering-sensitive and unsupported groups must not share a reservation")
+		})
+	}
+}
 
 func TestFileAuthorizationUsesFreshBoundedSnapshots(t *testing.T) {
 	recorder := testutil.NewAllowAllAuthZ()

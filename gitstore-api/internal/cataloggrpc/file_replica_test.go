@@ -8,17 +8,156 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+type fileBatchContextKey struct{}
+
+type concurrentFileBatchStore struct {
+	datastore.Datastore
+	batches, snapshots, writes atomic.Int64
+	failSecond                 atomic.Bool
+	ready, release             chan struct{}
+}
+
+func (s *concurrentFileBatchStore) WithCatalogMutationBatch(ctx context.Context, _ string, operation func(context.Context) error) error {
+	s.batches.Add(1)
+	return operation(context.WithValue(ctx, fileBatchContextKey{}, true))
+}
+
+func (s *concurrentFileBatchStore) GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*datastore.File, error) {
+	if ctx.Value(fileBatchContextKey{}) != true {
+		return nil, errors.New("File snapshots read outside reservation")
+	}
+	s.snapshots.Add(1)
+	return s.Datastore.GetFileSnapshotsByName(ctx, namespace, names)
+}
+
+func (s *concurrentFileBatchStore) CreateFile(ctx context.Context, file *datastore.File) error {
+	if ctx.Value(fileBatchContextKey{}) != true {
+		return errors.New("File write outside reservation")
+	}
+	if s.writes.Add(1) == 2 {
+		close(s.ready)
+	}
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if file.Name == "second" && s.failSecond.Load() {
+		return errors.New("injected second File failure")
+	}
+	return s.Datastore.CreateFile(ctx, file)
+}
+
+func TestAdmitResourcesFileBatchOverlapsAndDrainsIndependentWrites(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(strconv.FormatBool(fail), func(t *testing.T) {
+			base := newTestDatastore(t)
+			store := &concurrentFileBatchStore{Datastore: base, ready: make(chan struct{}), release: make(chan struct{})}
+			store.failSecond.Store(fail)
+			commit := strings.Repeat("c", 40)
+			git := newTreeGitReader(&commit, map[string]map[string][]byte{commit: {
+				"files/first.md":  makeFileWithBody("first", "first"),
+				"files/second.md": makeFileWithBody("second", "second"),
+			}})
+			server := newCatalogServer(t, store, git)
+			request := &catalogv1.AdmitResourcesRequest{
+				Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+				RepositoryId:  testRepoID, RefName: "refs/heads/main", NewCommitSha: commit,
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { _, err := server.AdmitResources(ctx, request); done <- err }()
+			select {
+			case <-store.ready:
+				close(store.release)
+			case err := <-done:
+				close(store.release)
+				t.Fatalf("callback returned before both reserved writes started: %v", err)
+			case <-ctx.Done():
+				close(store.release)
+				t.Fatal("bounded writes did not overlap")
+			}
+			err := <-done
+			require.EqualValues(t, 1, store.batches.Load())
+			require.EqualValues(t, 1, store.snapshots.Load())
+			require.EqualValues(t, 2, store.writes.Load())
+			if fail {
+				require.Error(t, err)
+				first, readErr := base.GetFileByName(t.Context(), "gitstore", "first")
+				require.NoError(t, readErr, "successful siblings must finish before the failed callback returns")
+				require.Equal(t, commit, first.GitCommitSHA)
+				_, err = base.GetFileByName(t.Context(), "gitstore", "second")
+				require.ErrorIs(t, err, datastore.ErrNotFound)
+				store.failSecond.Store(false)
+				_, err = server.AdmitResources(t.Context(), request)
+			}
+			require.NoError(t, err)
+			for _, name := range []string{"first", "second"} {
+				file, err := base.GetFileByName(t.Context(), "gitstore", name)
+				require.NoError(t, err)
+				require.Equal(t, commit, file.GitCommitSHA)
+				require.Equal(t, name, file.Body)
+			}
+			nextCommit := strings.Repeat("d", 40)
+			server = newCatalogServer(t, store, newTreeGitReader(&nextCommit, map[string]map[string][]byte{
+				commit: {
+					"files/first.md": makeFileWithBody("first", "first"), "files/second.md": makeFileWithBody("second", "second"),
+				},
+				nextCommit: {
+					"files/first.md": makeFileWithBody("first", "updated first"), "files/second.md": makeFileWithBody("second", "updated second"),
+				},
+			}))
+			request.OldCommitSha, request.NewCommitSha = commit, nextCommit
+			_, err = server.AdmitResources(t.Context(), request)
+			require.NoError(t, err)
+			for _, name := range []string{"first", "second"} {
+				file, err := base.GetFileByName(t.Context(), "gitstore", name)
+				require.NoError(t, err)
+				require.Equal(t, nextCommit, file.GitCommitSHA)
+				require.Equal(t, "updated "+name, file.Body)
+				require.Equal(t, "2", file.ResourceVersion)
+			}
+		})
+	}
+}
+
+func TestAdmitResourcesFileBatchCannotBypassAuthorization(t *testing.T) {
+	store := &concurrentFileBatchStore{Datastore: newTestDatastore(t)}
+	commit := strings.Repeat("c", 40)
+	git := newTreeGitReader(&commit, map[string]map[string][]byte{commit: {
+		"files/first.md": makeFile("first"), "files/second.md": makeFile("second"),
+	}})
+	server := newCatalogServer(t, store, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.Registry = auth.NewProviderRegistry(nil, testutil.NewDenyAllAuthZ(t), nil)
+	})
+	_, err := server.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, RefName: "refs/heads/main", NewCommitSha: commit,
+	})
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.EqualValues(t, 1, store.batches.Load())
+	require.Zero(t, store.writes.Load())
+}
 
 // makeFileWithBody builds a File fixture with a distinguishable Markdown
 // body, used to prove which commit's content ultimately won an admission

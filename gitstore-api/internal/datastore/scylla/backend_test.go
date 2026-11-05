@@ -222,6 +222,95 @@ func newTestStoreWithWatchBucket(t *testing.T, watchBucketSize int) datastore.Da
 
 type fileSnapshotQueryObserver func(context.Context, gocql.ObservedQuery)
 
+func TestScyllaCatalogBatchReservationCannotEscapeItsScope(t *testing.T) {
+	store, peer := newTestStores(t)
+	batcher, supported := store.(datastore.CatalogMutationBatcher)
+	require.True(t, supported)
+	namespace := "batch-scope-" + newID()
+	uid := gocql.TimeUUID()
+	ns := &datastore.Namespace{UID: uid.String(), Name: namespace, ResourceVersion: "1", CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond)}
+	require.NoError(t, store.CreateNamespace(t.Context(), ns))
+	repository := &datastore.Repository{UID: newID(), Namespace: namespace, Name: "catalog", ResourceVersion: "1", CreationTimestamp: ns.CreationTimestamp}
+	repository.RepositoryID = repository.UID
+	require.NoError(t, store.CreateRepositoryInActiveNamespace(t.Context(), repository))
+	raw := newRawSession(t)
+	readFence := func() (int64, int64) {
+		t.Helper()
+		var epoch, pending int64
+		require.NoError(t, raw.Query("SELECT epoch,pending FROM namespace_catalog_fences_by_uid WHERE uid=?", uid).Scan(&epoch, &pending))
+		return epoch, pending
+	}
+	var captured context.Context
+	var reservedEpoch int64
+	err := batcher.WithCatalogMutationBatch(t.Context(), namespace, func(ctx context.Context) error {
+		captured = ctx
+		epoch, pending := readFence()
+		reservedEpoch = epoch
+		require.EqualValues(t, 1, pending)
+		require.NoError(t, scylla.WithNamespaceCatalogFenceForTest(ctx, store, namespace, func(context.Context) error {
+			epoch, pending := readFence()
+			require.Equal(t, reservedEpoch, epoch)
+			require.EqualValues(t, 1, pending)
+			return nil
+		}))
+		files := make([]*datastore.File, 2)
+		for i := range files {
+			files[i] = &datastore.File{
+				UID: newID(), Namespace: namespace, Name: fmt.Sprintf("file-%d", i),
+				RepositoryID: repository.UID, ResourceVersion: "1",
+				Kind: "File", APIVersion: "storage.gitstore.dev/v1beta1", Body: "initial",
+			}
+		}
+		for _, update := range []bool{false, true} {
+			errs := make([]error, len(files))
+			var workers sync.WaitGroup
+			for i, file := range files {
+				workers.Go(func() {
+					if update {
+						file.Body, file.ResourceVersion = "updated", "2"
+						errs[i] = store.UpdateFile(ctx, file, "1")
+					} else {
+						errs[i] = store.CreateFile(ctx, file)
+					}
+				})
+			}
+			workers.Wait()
+			require.NoError(t, errors.Join(errs...))
+			epoch, pending := readFence()
+			require.Equal(t, reservedEpoch, epoch, "nested File writes must reuse the reservation")
+			require.EqualValues(t, 1, pending)
+		}
+		for _, file := range files {
+			got, err := peer.GetFileByName(ctx, namespace, file.Name)
+			require.NoError(t, err)
+			require.Equal(t, "updated", got.Body)
+			require.Equal(t, "2", got.ResourceVersion)
+		}
+		peerCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+		defer cancel()
+		entered := false
+		err := scylla.WithNamespaceCatalogFenceForTest(peerCtx, peer, namespace, func(context.Context) error {
+			entered = true
+			return nil
+		})
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.False(t, entered, "another store cannot borrow the reservation")
+		return datastore.ErrConflict
+	})
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	epoch, pending := readFence()
+	require.Equal(t, reservedEpoch, epoch)
+	require.Zero(t, pending, "failed callbacks must release an unambiguous reservation")
+	require.NoError(t, scylla.WithNamespaceCatalogFenceForTest(captured, store, namespace, func(context.Context) error {
+		epoch, pending := readFence()
+		require.Greater(t, epoch, reservedEpoch, "an escaped context must acquire a new reservation")
+		require.EqualValues(t, 1, pending)
+		return nil
+	}))
+	_, pending = readFence()
+	require.Zero(t, pending)
+}
+
 func (observe fileSnapshotQueryObserver) ObserveQuery(ctx context.Context, query gocql.ObservedQuery) {
 	observe(ctx, query)
 }
@@ -324,7 +413,10 @@ func TestScyllaFileSnapshotsOverlapBoundedAuthoritativeBatches(t *testing.T) {
 	t.Logf("Native File snapshot query contract replication=%v", replication)
 	namespaces := []string{"snapshot-rows-" + newID()[:8], "snapshot-rows-" + newID()[:8]}
 	for _, namespace := range namespaces {
-		require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{UID: newID(), Name: namespace}))
+		require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{
+			UID: newID(), Name: namespace, ResourceVersion: "1",
+			CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+		}))
 	}
 	uids := make([]string, datastore.FileSnapshotBatchLimit)
 	for i := range uids {

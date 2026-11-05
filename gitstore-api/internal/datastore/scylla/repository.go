@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -315,7 +316,34 @@ func (s *scyllaDatastore) reserveNamespaceCatalog(ctx context.Context, namespace
 	}
 }
 
+type catalogFenceScopeKey struct{}
+
+type catalogFenceScope struct {
+	store     *scyllaDatastore
+	namespace string
+	active    atomic.Bool
+}
+
+func (s *scyllaDatastore) WithCatalogMutationBatch(ctx context.Context, namespace string, operation func(context.Context) error) error {
+	if operation == nil {
+		return datastore.ErrInvalidArgument
+	}
+	return s.withNamespaceCatalogFence(ctx, namespace, false, func() error {
+		scope := &catalogFenceScope{store: s, namespace: namespace}
+		scope.active.Store(true)
+		defer scope.active.Store(false)
+		return operation(context.WithValue(ctx, catalogFenceScopeKey{}, scope))
+	})
+}
+
 func (s *scyllaDatastore) withNamespaceCatalogFence(ctx context.Context, namespace string, allowTerminating bool, operation func() error) error {
+	if scope, _ := ctx.Value(catalogFenceScopeKey{}).(*catalogFenceScope); scope != nil &&
+		scope.store == s && scope.namespace == namespace && scope.active.Load() {
+		if allowTerminating {
+			return fmt.Errorf("%w: lifecycle writes cannot share a catalog admission batch", datastore.ErrInvalidArgument)
+		}
+		return operation()
+	}
 	uid, err := s.getNamespaceUIDByName(ctx, namespace)
 	if err != nil {
 		return err

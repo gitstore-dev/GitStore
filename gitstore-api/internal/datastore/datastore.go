@@ -663,6 +663,14 @@ type Closer interface {
 	Close() error
 }
 
+// CatalogMutationBatcher shares a parent reservation across bounded child
+// creates and updates, never lifecycle writes or deletions. The callback must
+// finish every mutation before returning. Individual CAS and projection errors
+// still apply; this is not an atomic transaction.
+type CatalogMutationBatcher interface {
+	WithCatalogMutationBatch(context.Context, string, func(context.Context) error) error
+}
+
 // Datastore is the aggregate persistence contract used only for backend
 // construction and application wiring. Consumers should depend on the smallest
 // focused contract above.
