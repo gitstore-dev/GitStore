@@ -45,6 +45,24 @@ The same Product can be updated through GraphQL after Git push: its stored
 repository and original source path are retained as provenance and determine
 where the commit is written.
 
+### Mutation admission
+
+`createProduct` and `updateProduct` render the same manifest checks used by a
+Git push before writing a commit. A pre-receive rejection returns the shared
+`ADMISSION_REJECTED` error with `phase: PRE_RECEIVE` and does not move the
+ref. After a Product commit, the synchronous committed-admission result is
+authoritative: a denial or materialization failure returns
+`ADMISSION_REJECTED` with `phase: POST_RECEIVE` and the commit SHA; a
+concurrent replacement returns `CONFLICT`/`SUPERSEDED`. Retrying byte-identical
+content re-admits the existing tip without making another commit.
+
+`deleteProduct` has the same post-receive contract. If deleting the committed
+manifest is denied or fails admission, it does not report deletion success or
+start termination. For a rejected Product update, the previously accepted
+specification remains served and `status.conditions` records
+`AdmissionAccepted=False` with reason `AdmissionReportFailed`; a subsequent
+accepted admission clears that condition.
+
 ---
 
 ## Spec Fields

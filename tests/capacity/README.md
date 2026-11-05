@@ -315,6 +315,43 @@ The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and
 set `CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE` to the corresponding byte value.
 
+## Historical controller observations (2026-10-05)
+
+These observations are relocated from the controller diagnostics runbook.
+They are **not production acceptance or the later six-hour laptop baseline**.
+The original summary did not record host sizing or the total Docker memory
+envelope, so use the complete original evidence before comparing hardware
+tiers or treating these numbers as a repeatable benchmark.
+
+The retained five-million-Product dataset was copied to a fresh baseline
+keyspace with authoritative-row and projection verification; the original
+keyspace was unchanged. Both APIs matched the acknowledged manifest through
+20,000 pages of 250 rows.
+
+| Observation | Result |
+| --- | --- |
+| Cold recovery, both controllers | 515.8 seconds; below the unchanged 600-second guard |
+| Persisted restart | 1.9-3.1 seconds; no Product relist |
+| Final hour-long load, controller cgroup peaks | About 352 / 464 MiB, including filesystem cache |
+| OOMs / automatic restarts in the final attempt | None |
+| Final File gate | Failed: 28,185 dropped offers, 548 failed completions, 636 projection failures |
+| Offered-to-push latency, including queue waiting | p95 about 160 seconds; p99 about 230 seconds |
+
+The recorded attempt was `441-overnight-production-20261005-1d3635f-retry`.
+Key overlap/retirement and scheduled controller replacement did not complete.
+A separate credential-outage check recovered controllers in about 24.6 / 20.9
+seconds. Cold recovery cgroup peaks were about 982 / 983 MiB; Docker allocation
+was not increased and integrated controllers had no individual memory cap.
+
+A separate 512-MiB-capped probe used 10,000 already-converged Products, made
+zero status writes, and used about 22 MiB of Go heap. It measured about
+2 million/s for memory lookup/reconciliation, 45,000/s for warm disk
+lookup/reconciliation, and 3,000/s for disk reconciliation with durable
+acknowledgement. These are small warm-working-set diagnostics, not
+five-million-row throughput extrapolations. The live dataset required initial
+status writes and drained at roughly 26-40/s, so that drain is not a pure
+cache benchmark either.
+
 ## Adding a profile
 
 1. Add `profiles/<name>.js`; import reusable helpers from `lib/`.

@@ -180,9 +180,9 @@ datastore at admission time.
 
 | Document                                    | Update needed                                                                                                                                                                        |
 |---------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `../resource-storage/README.md`                  | Add lifecycle states table per resource type; update storage group table to reflect hybrid classification for Namespace/Repository.                                                  |
+| `../storage-groups/README.md`                  | Add lifecycle states table per resource type; update storage group table to reflect hybrid classification for Namespace/Repository.                                                  |
 | `032-phased-implementation.md`           | Mark Wave 1–4 items complete as they land; update open issue links; add `gitstore-system` convention.                                                                                |
-| `../resource-storage/git-backed.md`              | Add "Deletion semantics" section citing foreground finalizer protocol; update Namespace/Repository entries to note hybrid classification.                                            |
+| `../storage-groups/git-backed.md`              | Add "Deletion semantics" section citing foreground finalizer protocol; update Namespace/Repository entries to note hybrid classification.                                            |
 | `docs/products/product-spec.md`             | Add lifecycle section on finalizer and deletion rejection rule.                                                                                                                      |
 | `docs/products/product-variant-spec.md`     | Add variant-first contract enforcement note; add `ProductResolved` condition docs.                                                                                                   |
 | `docs/categories/category-taxonomy-spec.md` | Add deletion rejection rules; add cycle detection section; resolve GH#244 deferral note once Phase 2 controller work is done.                                                        |

@@ -14,6 +14,10 @@ and CI setup steps aligned.
 
 This guide keeps implementation detail out of the user guide. It covers service topology, local development, datastore backends, hook/admission flow, controller-manager runtime, generated schema/proto workflow, and module responsibilities.
 
+Contributor procedures: [production-readiness testing](development/production-readiness-testing.md)
+and [release process](development/release-process.md). Deployment procedures and
+exceptional recovery are indexed separately in [Operations and Recovery](runbooks/README.md).
+
 ## Current Topology
 
 ```mermaid
@@ -77,7 +81,7 @@ Makefile. Use `make capacity TARGET=<target> PROFILE=<scenario>
 MODE=<diagnostic|alpha|production>` for offered-load and threshold
 evidence, and `make chaos CHAOS_PROFILE=<profile>
 CHAOS_TARGET=<gitstore-container> CHAOS_CONFIRM=1` for bounded container fault
-injection. See [Production readiness testing](runbooks/production-readiness-testing.md)
+injection. See [Production readiness testing](development/production-readiness-testing.md)
 for profile authoring, correctness-verifier, evidence, and safety requirements.
 
 ## Local Development
@@ -434,14 +438,13 @@ cd gitstore-controller-manager
 go test ./...
 ```
 
-Operations runbooks:
+Conditional recovery procedures are listed in the [operations index](runbooks/README.md):
 
-| Runbook                                                                              | Symptom                                                          |
-|--------------------------------------------------------------------------------------|------------------------------------------------------------------|
-| [`controller-lag`](runbooks/controller-lag.md)                                       | Queue depth growing, reconciles falling behind                   |
-| [`controller-replay-window-exceeded`](runbooks/controller-replay-window-exceeded.md) | Watch cursor expired / relist triggered                          |
-| [`controller-poisoned-item`](runbooks/controller-poisoned-item.md)                   | A resource repeatedly fails reconciliation                       |
-| [`controller-auth`](runbooks/controller-auth.md)                                     | Controller credential enrollment, renewal, or revocation failure |
+| Guide | Symptom |
+| --- | --- |
+| [Controller recovery](runbooks/controller-recovery.md) | Growing backlog, expired cursor, or quarantined work |
+| [Watch and status diagnostics](runbooks/controller-watch-status.md) | Watch disconnects, journal readiness, or sustained status conflicts |
+| [Controller authentication](runbooks/controller-auth.md) | Credential enrollment, renewal, or revocation failure |
 
 ## Generated Schema And Proto Workflow
 
@@ -547,5 +550,5 @@ environment variables, defaults, and bootstrap requirements.
 - [CategoryTaxonomy Spec](categories/category-taxonomy-spec.md)
 - [Collection Spec](collections/collection-spec.md)
 - [ProductVariant Spec](products/product-variant-spec.md)
-- [Release Process](runbooks/release-process.md)
-- [Production Readiness Testing](runbooks/production-readiness-testing.md)
+- [Release Process](development/release-process.md)
+- [Production Readiness Testing](development/production-readiness-testing.md)

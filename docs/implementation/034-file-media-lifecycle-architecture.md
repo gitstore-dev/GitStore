@@ -26,7 +26,7 @@ brief) that is the single writer of `File.status`, backed by:
   Git LFS (small-to-medium, versioned, catalog-owned assets) and
   S3-compatible object storage (generated/high-churn/large assets),
   selected per-`File` via `spec.provider`, matching the policy already
-  documented in `../resource-storage/lfs-object-storage.md`. This is not an
+  documented in `../storage-groups/lfs-object-storage.md`. This is not an
   either/or between GH#79 and GH#127 — GH#79 defines the manifest that
   points at whichever backend GH#127 provisions.
 - **A reverse-reference index** (`fileRef → [ObjectReference]`) maintained
@@ -101,7 +101,7 @@ satisfiable.
 ## 3. File/Media terminology and ownership model
 
 Confirmed as the right split — do not merge these, per `docs/ADRs/0008-file-lifecycle.md`
-and `../resource-storage/git-backed.md` ("Do not model `MediaAsset` as a wrapper
+and `../storage-groups/git-backed.md` ("Do not model `MediaAsset` as a wrapper
 around `File`"):
 
 | Resource | Owns | Lifecycle driver | Exists today? |
@@ -416,7 +416,7 @@ not derived by scanning all resources on every File event.
   indexes in this codebase).
 - **Delete/re-add**: deleting the referencing resource removes its index
   entries; deleting-then-re-adding a resource with the same name gets a new
-  UID (existing convention per `../resource-storage/git-backed.md`) and a fresh
+  UID (existing convention per `../storage-groups/git-backed.md`) and a fresh
   index entry — no stale-UID leakage.
 - **Namespace isolation**: index key is namespace-scoped; cross-namespace
   `fileRef` is already rejected at admission (ADR-0008), so the index never
@@ -496,7 +496,7 @@ add, mirroring `ResolvedProductDefinition.Media`.
 ## 11. GraphQL, datastore, and watch contracts
 
 - **File as a built-in GraphQL type**, not a generic CRD. Rationale: File
-  is core-scope per `../resource-storage/git-backed.md`'s own classification
+  is core-scope per `../storage-groups/git-backed.md`'s own classification
   table, and needs first-class mutations (`requestFileUpload` in particular)
   that a generic CRD surface would have to special-case anyway.
 - **Mutations**: `createFile`, `updateFile`, `deleteFile` (Phase 1, manifest
@@ -627,7 +627,7 @@ change itself is a one-file diff, trivially revertible).
 - Add a runbook entry for File-controller backlog/lag observability
   (mirrors the existing reconciliation-lag runbook pattern referenced in
   GH#244's acceptance criteria).
-- Update `../resource-storage/lfs-object-storage.md` with the finalized
+- Update `../storage-groups/lfs-object-storage.md` with the finalized
   `SourceResolver` provider list once implemented.
 
 ## 17. Open questions and explicit non-goals

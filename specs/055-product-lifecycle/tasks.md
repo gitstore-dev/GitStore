@@ -149,7 +149,7 @@ includes it or its child variant.
 
 ## Phase 9: Polish, rollout, and production evidence
 
-- [X] T048 [P] Add Product lifecycle/watch rollout, mixed-version deny, rollback, cursor recovery, and finalizer operator guidance in `docs/runbooks/product-lifecycle.md` and `docs/configuration.md`.
+- [X] T048 [P] Add Product lifecycle/watch rollout, mixed-version deny, rollback, cursor recovery, and finalizer operator guidance in `docs/runbooks/catalog-lifecycle.md` and `docs/configuration.md`.
 - [X] T049 [P] Complete bounded overload, observability, and alert assertions for Product journal/materializer/controller metrics in `tests/contract/product_observability_test.go`.
 - [X] T050 Implement the full two-API/two-controller Git-push/GraphQL/watch/deletion-race capacity verifier in `tests/capacity/profiles/product-lifecycle.js` and Makefile evidence export in `Makefile`.
 - [X] T051 Implement Product lifecycle replacement/materializer/mid-deletion chaos assertions in `tests/chaos/profiles/product-lifecycle.json`.

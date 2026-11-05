@@ -200,19 +200,22 @@ make logs SERVICE=api 2>&1 | grep '{' | jq .
 
 ## Clean Restart
 
-Stop and remove containers:
+Stop and remove containers while retaining persistent state:
 
 ```bash
 make down
 ```
 
-Remove volumes when you explicitly want to discard local repository and datastore state:
+Normal restarts do not require deleting volumes or re-bootstrapping existing
+state. The following is a destructive reset, only for disposable local fixtures
+you explicitly intend to discard. Never use it for an operator deployment or a
+retained capacity baseline:
 
 ```bash
 docker compose -f compose.yml -f compose.scylla.yml down --volumes
 ```
 
-Start again:
+Start again; bootstrap only when initializing fresh state:
 
 ```bash
 make compose DETACH=1

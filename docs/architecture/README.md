@@ -2,6 +2,10 @@
 
 This document describes the architecture of the AI-native commerce engine: the service topology, GraphQL API design principles, write pipeline proposals, and the controller-manager model for reconciling catalogue state.
 
+For resource placement, see [Resource Envelope Storage Groups](../storage-groups/README.md).
+For authoritative rows, query projections, Product pagination, CDC, and namespace
+fences, see [Datastore Resource Storage](datastore-resource-storage.md).
+
 ## System Goals
 
 - Keep catalogue history auditable and reversible.

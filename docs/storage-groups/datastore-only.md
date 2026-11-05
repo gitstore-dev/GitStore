@@ -1,5 +1,7 @@
 # Datastore-Only Resources
 
+[Storage group overview](README.md)
+
 Datastore-only resources are durable records but are not Git-authored. They are
 created by APIs, checkout flows, controllers, workers, identity providers,
 payment gateways, inventory systems, or webhooks.

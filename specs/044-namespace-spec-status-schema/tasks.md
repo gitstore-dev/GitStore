@@ -115,7 +115,7 @@
 
 **Purpose**: Publish the broader reference, validate generation consistency, and complete repository gates.
 
-- [X] T027 [P] Update the public Namespace query/type reference and Git-backed resource overview in `docs/api-reference.md` and `docs/resource-storage/README.md`
+- [X] T027 [P] Update the public Namespace query/type reference and Git-backed resource overview in `docs/api-reference.md` and `docs/storage-groups/README.md`
 - [X] T028 Verify the implementation steps, additive compatibility guidance, documentation path, and example query remain executable in `specs/044-namespace-spec-status-schema/quickstart.md`
 - [X] T029 Run formatting and code-generation consistency checks for `shared/schemas/namespace.graphqls`, `gitstore-api/internal/graph/scalar/scalars.go`, `gitstore-api/internal/graph/resolver/converters.go`, and generated GraphQL files
 - [X] T030 Run targeted and full API/integration validation for `gitstore-api/internal/graph/scalar`, `gitstore-api/internal/graph/resolver`, and `tests/integration`

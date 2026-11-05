@@ -107,7 +107,7 @@ capped at 30 seconds.
 5. If credential readiness is true but a watch still reconnects, diagnose the
    watch/replay layer with
    [controller-watch-status](controller-watch-status.md) and
-   [controller-replay-window-exceeded](controller-replay-window-exceeded.md).
+   [expired-cursor recovery](controller-recovery.md#expired-replay-cursor).
    Credential backoff and cursor-expiry recovery are separate failure modes.
 
 ## Controller public-key rotation and re-enrollment

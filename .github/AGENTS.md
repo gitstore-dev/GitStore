@@ -1,7 +1,7 @@
 # CI and release instructions
 
 - Releases use Release Please in `workflows/release-please.yml`. Read
-  `../docs/runbooks/release-process.md` for versioning, alpha/beta/stable
+  `../docs/development/release-process.md` for versioning, alpha/beta/stable
   graduation and troubleshooting.
 - PR titles must be Conventional Commits; `workflows/pr-title-lint.yml`
   enforces them because squash-merge titles drive Release Please.
