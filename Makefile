@@ -71,7 +71,8 @@ DETACH_FLAG := $(if $(filter 1 true yes,$(DETACH)),-d,)
 SERVICE ?=
 
 API_URL ?= http://localhost:4000/admin/graphql
-API_HEALTH_URL ?= http://localhost:4000/health
+# Override when a reverse proxy routes operational endpoints separately.
+API_HEALTH_URL ?= $(patsubst %/admin/graphql,%/health,$(API_URL))
 ADMIN_USERNAME ?= admin
 ADMIN_PASSWORD ?=
 BOOTSTRAP_TOKEN ?=

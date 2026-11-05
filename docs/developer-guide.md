@@ -140,6 +140,7 @@ Useful variables:
 | Variable          | Default                         | Purpose                                     |
 |-------------------|---------------------------------|---------------------------------------------|
 | `API_URL`         | `http://localhost:4000/admin/graphql` | Bootstrap GraphQL endpoint                  |
+| `API_HEALTH_URL`  | Admin-root `/health` derived from `API_URL` | Native startup health probe; override for separate operational routing |
 | `ADMIN_USERNAME`  | `admin`                         | Login username                              |
 | `ADMIN_PASSWORD`  | unset                           | Login password for bootstrap token creation |
 | `BOOTSTRAP_TOKEN` | unset                           | Reuse an existing bearer token              |

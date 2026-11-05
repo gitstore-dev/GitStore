@@ -39,9 +39,22 @@ assert_dispatch generate authz _generate-authz
 assert_dispatch generate all _generate-all
 
 api_default="$(make --no-print-directory -C "${repo_root}" -np bootstrap TARGET=token | sed -n '/^API_URL /p')"
-health_default="$(make --no-print-directory -C "${repo_root}" -np bootstrap TARGET=token | sed -n '/^API_HEALTH_URL /p')"
 [[ "${api_default}" == 'API_URL = http://localhost:4000/admin/graphql' ]]
-[[ "${health_default}" == 'API_HEALTH_URL = http://localhost:4000/health' ]]
+
+assert_dev_health_url() {
+  local expected="$1" output
+  shift
+  output="$(env -u API_URL -u API_HEALTH_URL make --no-print-directory -C "${repo_root}" -n dev "$@")"
+  if [[ "${output}" != *"curl --silent --fail --output /dev/null \"${expected}\""* ]]; then
+    echo "native startup did not poll the expected Admin health URL: ${expected}" >&2
+    exit 1
+  fi
+}
+assert_dev_health_url http://localhost:4000/health
+assert_dev_health_url http://localhost:4400/health API_URL=http://localhost:4400/admin/graphql
+assert_dev_health_url https://api.example.test/prefix/health API_URL=https://api.example.test/prefix/admin/graphql
+assert_dev_health_url https://ops.example.test/health \
+  API_URL=https://api.example.test/catalog/graphql API_HEALTH_URL=https://ops.example.test/health
 
 for target in compose ps logs stop down; do
   output="$(make --no-print-directory -C "${repo_root}" -n "${target}" OBSERVABILITY=otel)"
