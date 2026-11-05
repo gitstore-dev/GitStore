@@ -12,18 +12,20 @@ use tracing::{debug, info};
 // Share gix object-index state across short RPCs without retaining an
 // unbounded repository map. References remain disk-backed; authorization and
 // lifecycle locks stay at each caller. Config replacement invalidates a handle.
-const OPEN_REPOSITORY_CACHE_CAPACITY: usize = 8;
+const OPEN_REPOSITORY_CACHE_CAPACITY: usize = 64;
 
 type CachedRepository = (PathBuf, std::fs::Metadata, gix::ThreadSafeRepository);
-static OPEN_REPOSITORIES: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::VecDeque<CachedRepository>>,
-> = std::sync::OnceLock::new();
+type RepositoryCache = std::sync::Mutex<std::collections::VecDeque<CachedRepository>>;
+static OPEN_REPOSITORIES: std::sync::OnceLock<RepositoryCache> = std::sync::OnceLock::new();
 
 pub fn open_repository(path: &Path) -> Result<gix::Repository> {
+    open_cached_repository(path, OPEN_REPOSITORIES.get_or_init(Default::default))
+}
+
+fn open_cached_repository(path: &Path, cache: &RepositoryCache) -> Result<gix::Repository> {
     use std::os::unix::fs::MetadataExt;
     let metadata =
         std::fs::metadata(path.join("config")).context("read repository configuration identity")?;
-    let cache = OPEN_REPOSITORIES.get_or_init(Default::default);
     {
         let mut entries = cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(position) = entries.iter().position(|(p, old, repository)| {
@@ -52,16 +54,12 @@ pub fn open_repository(path: &Path) -> Result<gix::Repository> {
     Ok(result)
 }
 
-// Server repositories can accumulate many incremental packs. Reserve gix's
-// supported index-slot ceiling without an extra discovery scan at open time.
+// Size object-index slots from the repository working set using gix defaults.
+// A nearly exhausted cached store is reopened above so later packs remain visible.
 // Quarantine readers use an independent store so rejected objects cannot remain
 // mapped in the live cache after their temporary links are removed.
 pub fn open_repository_uncached(path: &Path) -> Result<gix::Repository> {
-    Ok(gix::open_opts(
-        path,
-        gix::open::Options::default()
-            .object_store_slots(gix::odb::store::init::Slots::Given(32767)),
-    )?)
+    Ok(gix::open(path)?)
 }
 
 pub fn forget_repository(path: &Path) {
@@ -221,6 +219,29 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn cached_repository_retains_the_declared_workload_working_set() {
+        let directory = TempDir::new().unwrap();
+        let cache = RepositoryCache::default();
+        let hot = directory.path().join("native.git");
+        create_repository(&hot).unwrap();
+        let first = open_cached_repository(&hot, &cache).unwrap();
+        for index in 0..20 {
+            let path = directory.path().join(format!("authoring-{index}.git"));
+            create_repository(&path).unwrap();
+            open_cached_repository(&path, &cache).unwrap();
+        }
+        let again = open_cached_repository(&hot, &cache).unwrap();
+        assert!(
+            std::ptr::eq(first.objects.store_ref(), again.objects.store_ref()),
+            "the native push store must survive the twenty-resource authoring working set"
+        );
+        assert!(
+            again.objects.store_ref().metrics().unused_slots < 1024,
+            "empty repositories must not reserve the pack-index ceiling"
+        );
+    }
 
     #[test]
     fn cached_repository_observes_external_ref_and_object_writes() {
