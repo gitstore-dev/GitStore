@@ -118,6 +118,7 @@ type AdmissionContext struct {
 	Now          time.Time // admission timestamp, set once for the entire push
 	// tipCommitSHA fences writes while CommitSHA retains the accepted source revision.
 	tipCommitSHA string
+	entry        *parsedEntry
 	superseded   *bool
 }
 
@@ -139,6 +140,7 @@ func (c AdmissionContext) guardCommitSHA() string {
 }
 
 func (c AdmissionContext) forEntry(entry *parsedEntry) AdmissionContext {
+	c.entry = entry
 	// Namespace's existing convergence contract records the live authoring tip.
 	// Other resources retain the commit that supplied their accepted content.
 	if entry != nil && entry.parsed != nil && entry.parsed.Namespace != nil && c.tipCommitSHA != "" {

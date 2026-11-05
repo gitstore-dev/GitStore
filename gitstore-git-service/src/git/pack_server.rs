@@ -99,7 +99,7 @@ impl HttpPackServer {
 // ---------------------------------------------------------------------------
 
 fn open_repo(path: &std::path::Path) -> Result<gix::Repository> {
-    gix::open(path).with_context(|| format!("open repo {}", path.display()))
+    crate::git::repo::open_repository(path).with_context(|| format!("open repo {}", path.display()))
 }
 
 fn emit_span(
@@ -673,6 +673,33 @@ pub fn check_blob_sizes_in_quarantine_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_quarantine_is_not_retained_by_live_repository_cache() {
+        let (_source_directory, source) = make_test_repo();
+        let commit = make_commit(&source, "rejected content", None);
+        let pack = build_pack_for_wants(&source, &[commit.to_string()], &[]).unwrap();
+        let quarantine =
+            stage_pack_from_reader(std::io::Cursor::new(pack), Some((*source.objects).clone()))
+                .unwrap();
+        let (target_directory, _target) = make_test_repo();
+        let cached = crate::git::repo::open_repository(target_directory.path()).unwrap();
+        assert!(cached.find_object(commit).is_err());
+        let rejected: Result<(), String> = crate::git::hooks::with_quarantine_repo(
+            target_directory.path(),
+            Some(quarantine.dir.path()),
+            |repository| {
+                assert!(repository.find_object(commit).is_ok());
+                Err("policy denied".to_owned())
+            },
+        );
+        assert!(rejected.is_err());
+        let live = crate::git::repo::open_repository(target_directory.path()).unwrap();
+        assert!(
+            live.find_object(commit).is_err(),
+            "rejected objects must not survive in a cached pack mapping"
+        );
+    }
 
     // -----------------------------------------------------------------------
     // Test helpers

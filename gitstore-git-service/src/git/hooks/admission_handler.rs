@@ -72,7 +72,7 @@ impl AdmissionHandler for AdmissionControlHandler {
         let repo = if git_dir.as_os_str().is_empty() {
             None
         } else {
-            match gix::open(git_dir) {
+            match crate::git::repo::open_repository(git_dir) {
                 Ok(r) => Some(r),
                 Err(e) => {
                     error!(git_dir = %git_dir.display(), error = %e, "compute_changed_paths: failed to open repo");

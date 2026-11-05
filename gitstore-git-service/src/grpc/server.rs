@@ -940,7 +940,7 @@ impl GitService for GitServiceImpl {
         let _guard = lock.read().await;
 
         tokio::task::spawn_blocking(move || {
-            let repo = gix::open(&repo_path)
+            let repo = crate::git::repo::open_repository(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
             let ref_str = if req.r#ref.is_empty() {
@@ -1014,7 +1014,7 @@ impl GitService for GitServiceImpl {
                 let _ = tx.blocking_send(chunk);
             };
 
-            let repo = match gix::open(&repo_path) {
+            let repo = match crate::git::repo::open_repository(&repo_path) {
                 Ok(r) => r,
                 Err(e) => {
                     send(Err(Status::internal(format!("failed to open repo: {}", e))));
@@ -1115,7 +1115,7 @@ impl GitService for GitServiceImpl {
         let _guard = lock.read().await;
 
         tokio::task::spawn_blocking(move || {
-            let repo = gix::open(&repo_path)
+            let repo = crate::git::repo::open_repository(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
             let ref_str = if req.r#ref.is_empty() {
@@ -1178,7 +1178,7 @@ impl GitService for GitServiceImpl {
                 Status::resource_exhausted(format!("acquire repository commit lock: {e}"))
             })?;
 
-            let object_repo = gix::open(&repo_path)
+            let object_repo = crate::git::repo::open_repository(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
             let author_name = if req.author_name.is_empty() {
@@ -1209,7 +1209,7 @@ impl GitService for GitServiceImpl {
                 // retry. The in-process repository lock coordinates callers
                 // of this service instance; the ref transaction coordinates
                 // multiple Git-service replicas and other writers.
-                let repo = gix::open(&repo_path)
+                let repo = crate::git::repo::open_repository(&repo_path)
                     .map_err(|e| Status::internal(format!("failed to reopen repo: {}", e)))?;
                 let maybe_head = repo.head_commit().ok();
                 let (new_tree_id, parents): (gix::ObjectId, Vec<gix::ObjectId>) =
@@ -1342,7 +1342,7 @@ impl GitService for GitServiceImpl {
                 )));
             }
 
-            let repo = gix::open(&repo_path)
+            let repo = crate::git::repo::open_repository(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
             let receipt_ref = precondition
@@ -1520,7 +1520,7 @@ impl GitService for GitServiceImpl {
         let _guard = lock.write().await;
 
         tokio::task::spawn_blocking(move || {
-            let repo = gix::open(&repo_path)
+            let repo = crate::git::repo::open_repository(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
             let target_id = if req.target_commit_sha.is_empty() {
@@ -1598,7 +1598,7 @@ impl GitService for GitServiceImpl {
         let _guard = lock.read().await;
 
         tokio::task::spawn_blocking(move || {
-            let repo = gix::open(&repo_path)
+            let repo = crate::git::repo::open_repository(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
             let all_tags = list_tags(&repo)
@@ -1806,8 +1806,8 @@ impl GitService for GitServiceImpl {
             drop(tx);
 
             // Open repo now to obtain ODB handle for thin pack resolution.
-            let repo_for_odb =
-                gix::open(&repo_path).map_err(|e| Status::internal(format!("open repo: {}", e)))?;
+            let repo_for_odb = crate::git::repo::open_repository(&repo_path)
+                .map_err(|e| Status::internal(format!("open repo: {}", e)))?;
             let odb = (*repo_for_odb.objects).clone();
 
             // T041: Use a LimitedReader that enforces max_pack_size_bytes.
@@ -1881,7 +1881,7 @@ impl GitService for GitServiceImpl {
         let ref_updates_clone = ref_updates.clone();
         let repo_path_nff = repo_path.clone();
         let (nff_rejected, pipeline_updates) = tokio::task::spawn_blocking(move || {
-            let repo = gix::open(&repo_path_nff)
+            let repo = crate::git::repo::open_repository(&repo_path_nff)
                 .map_err(|e| Status::internal(format!("open repo for nff: {}", e)))?;
             let mut rejected = Vec::new();
             let mut valid = Vec::new();
@@ -1937,7 +1937,7 @@ impl GitService for GitServiceImpl {
         tokio::task::spawn_blocking(move || {
             use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 
-            let repo = gix::open(&repo_path_commit)
+            let repo = crate::git::repo::open_repository(&repo_path_commit)
                 .map_err(|e| Status::internal(format!("open repo for commit: {}", e)))?;
 
             let mut ref_edits: Vec<RefEdit> = Vec::new();
@@ -2132,7 +2132,7 @@ impl GitService for GitServiceImpl {
         let _guard = lock.read().await;
 
         tokio::task::spawn_blocking(move || {
-            let repo = gix::open(&repo_path)
+            let repo = crate::git::repo::open_repository(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
             let all_tags = list_tags(&repo)

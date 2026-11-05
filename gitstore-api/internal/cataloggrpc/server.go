@@ -1104,6 +1104,47 @@ func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, ref
 	return true
 }
 
+// Independent catalog upserts do not require a globally idle branch. Each
+// write still verifies the complete manifest at the current tip. Deletion and
+// lifecycle convergence retain the stricter whole-snapshot fence.
+func independentCatalogUpserts(ops []resourceAdmissionOperation) bool {
+	for _, op := range ops {
+		if op.newEntry == nil || op.newEntry.parsed == nil || op.operation == admission.OperationDelete {
+			return false
+		}
+		switch op.newEntry.parsed.Kind {
+		case "Product", "CategoryTaxonomy":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) isAdmissionEntryCurrent(ctx context.Context, admCtx AdmissionContext) bool {
+	current, ok := s.currentAdmissionCommit(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA())
+	if !ok {
+		return false
+	}
+	if current == "" || current == admCtx.guardCommitSHA() {
+		return true
+	}
+	entry := admCtx.entry
+	if entry == nil || entry.parsed == nil || (entry.parsed.Kind != "Product" && entry.parsed.Kind != "CategoryTaxonomy") {
+		return false
+	}
+	content, err := s.git.ReadFile(ctx, admCtx.RepositoryID, entry.path, current)
+	if err != nil {
+		return false
+	}
+	parsed, body, err := s.parser.ParseResource(bytes.NewReader(content))
+	if err != nil {
+		return false
+	}
+	latest, valid, err := newParsedEntry(entry.path, parsed, body, admCtx.Namespace)
+	return err == nil && valid && latest.identity.key() == entry.identity.key() && latest.contentHash == entry.contentHash
+}
+
 func (s *Server) currentAdmissionCommit(ctx context.Context, repositoryID, refName, commitSHA string) (string, bool) {
 	if refName == "" {
 		return commitSHA, true
@@ -1208,9 +1249,6 @@ func (s *Server) AdmitResources(
 				return nil, grpcstatus.Errorf(codes.Unavailable, "load admission snapshot: %v", err)
 			}
 		}
-		if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit) {
-			continue
-		}
 		if immutablePaths := repositoryImmutablePathChanges(oldEntries, newEntries); len(immutablePaths) > 0 {
 			s.log.Warn("admit_resources: Repository immutable identity change rejected",
 				zap.Strings("paths", immutablePaths),
@@ -1238,6 +1276,10 @@ func (s *Server) AdmitResources(
 			}
 			ops = filtered
 		}
+		independent := independentCatalogUpserts(ops)
+		if !independent && !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit) {
+			continue
+		}
 		if err := s.applyResourceOperations(ctx, ops, admCtx); err != nil {
 			s.log.Error("admit_resources: apply operations failed",
 				zap.String("repository_id", req.RepositoryId),
@@ -1254,7 +1296,7 @@ func (s *Server) AdmitResources(
 		if admCtx.wasSuperseded() {
 			continue
 		}
-		if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit) {
+		if !independent && !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit) {
 			continue
 		}
 		return &catalogv1.AdmitResourcesResponse{}, nil
@@ -2563,7 +2605,7 @@ func (s *Server) admitProduct(
 		return decision
 	}
 
-	if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
+	if !s.isAdmissionEntryCurrent(ctx, admCtx) {
 		admCtx.markSuperseded()
 		decision.Outcome = admission.EntryNoOp
 		return decision
@@ -2652,7 +2694,7 @@ func (s *Server) admitProduct(
 func (s *Server) recordProductAdmissionDenied(ctx context.Context, existing *datastore.Product, diagnostics []admission.Diagnostic, admCtx AdmissionContext) {
 	current := existing
 	for range maxRepositoryAdmissionUpdateAttempts {
-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
 			admCtx.markSuperseded()
 			return
 		}
@@ -3181,7 +3223,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	// regardless of whether the DB write below succeeds.
 	inPushAncestorPaths[name] = ancestorPath
 
-	if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
+	if !s.isAdmissionEntryCurrent(ctx, admCtx) {
 		admCtx.markSuperseded()
 		decision.Outcome = admission.EntryNoOp
 		return decision
@@ -3292,7 +3334,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 func (s *Server) recordCategoryAdmissionDenied(ctx context.Context, existing *datastore.CategoryTaxonomy, diagnostics []admission.Diagnostic, admCtx AdmissionContext) {
 	current := existing
 	for range maxRepositoryAdmissionUpdateAttempts {
-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
 			admCtx.markSuperseded()
 			return
 		}

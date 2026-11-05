@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -224,8 +225,10 @@ func TestAdmitResourcesSupersededDenialCannotChangeNewerStatus(t *testing.T) {
 	for _, tc := range []struct {
 		kind, directory string
 		manifest        func(string) []byte
+		unchanged       bool
 	}{
-		{"Product", "products", makeProduct}, {"CategoryTaxonomy", "categories", makeCategoryTaxonomy},
+		{"Product", "products", makeProduct, false}, {"CategoryTaxonomy", "categories", makeCategoryTaxonomy, false},
+		{"ProductUnchanged", "products", makeProduct, true}, {"CategoryUnchanged", "categories", makeCategoryTaxonomy, true},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			store := newTestDatastore(t)
@@ -238,6 +241,14 @@ func TestAdmitResourcesSupersededDenialCannotChangeNewerStatus(t *testing.T) {
 				first:   {path: append(append([]byte{}, base...), []byte("older body")...)},
 				second:  {path: append(append([]byte{}, base...), []byte("newer body")...)},
 			})
+			if tc.unchanged {
+				reader.readFileFunc = func(_ context.Context, _, _, ref string) ([]byte, error) {
+					if ref == initial {
+						return base, nil
+					}
+					return append(append([]byte{}, base...), []byte("older body")...), nil
+				}
+			}
 			newer := newCatalogServer(t, store, reader)
 			admitDelta(t, newer, strings.Repeat("0", 40), initial)
 			older := newCatalogServer(t, store, reader, func(deps *cataloggrpc.ServerDeps) {
@@ -256,7 +267,7 @@ func TestAdmitResourcesSupersededDenialCannotChangeNewerStatus(t *testing.T) {
 			require.NoError(t, err)
 			var source string
 			var raw []byte
-			if tc.kind == "Product" {
+			if strings.HasPrefix(tc.kind, "Product") {
 				resource, err := store.GetProductByName(t.Context(), "gitstore", "guarded")
 				require.NoError(t, err)
 				source, raw = resource.GitCommitSHA, resource.Status
@@ -265,7 +276,11 @@ func TestAdmitResourcesSupersededDenialCannotChangeNewerStatus(t *testing.T) {
 				require.NoError(t, err)
 				source, raw = resource.GitCommitSHA, resource.Status
 			}
-			require.Equal(t, second, source)
+			expectedSource := second
+			if tc.unchanged {
+				expectedSource = initial
+			} // The newer callback has an empty content delta.
+			require.Equal(t, expectedSource, source)
 			var status struct{ Conditions []catalog.Condition }
 			require.NoError(t, json.Unmarshal(raw, &status))
 			found := false
@@ -278,4 +293,28 @@ func TestAdmitResourcesSupersededDenialCannotChangeNewerStatus(t *testing.T) {
 			require.True(t, found)
 		})
 	}
+}
+
+func TestAdmitResourcesUnrelatedPushesDoNotStarveUnchangedManifest(t *testing.T) {
+	store := newTestDatastore(t)
+	reads := 0
+	git := &mockGitReader{
+		listFilesFunc: func(context.Context, string, string, string) ([]string, error) {
+			return nil, errors.New("unexpected tree enumeration")
+		},
+		readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
+			return makeCategoryTaxonomy("continuous"), nil
+		},
+		resolveRefFunc: func(context.Context, string, string) (string, error) {
+			reads++
+			return fmt.Sprintf("%040x", reads+100), nil
+		},
+	}
+	server := newCatalogServer(t, store, git)
+	_, err := server.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, RefName: "refs/heads/main", NewCommitSha: strings.Repeat("a", 40), ChangedPaths: []string{"categories/continuous.md"}})
+	require.NoError(t, err)
+	resource, err := store.GetCategoryTaxonomyByName(t.Context(), "gitstore", "continuous")
+	require.NoError(t, err, "unrelated commits must not require a globally idle ref before admission")
+	require.Equal(t, strings.Repeat("a", 40), resource.GitCommitSHA)
+	require.Less(t, reads, 10, "unchanged manifests must converge with bounded work")
 }

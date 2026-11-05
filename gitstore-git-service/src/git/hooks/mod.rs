@@ -430,7 +430,7 @@ pub(crate) fn with_quarantine_repo<T>(
         }
     }
 
-    let result = gix::open(git_dir)
+    let result = crate::git::repo::open_repository_uncached(git_dir)
         .map_err(|e| format!("open repository: {e}"))
         .and_then(|repo| operation(&repo));
 
@@ -483,7 +483,7 @@ fn extract_resource_blobs(
         }
     }
 
-    let repo = match gix::open(git_dir) {
+    let repo = match crate::git::repo::open_repository_uncached(git_dir) {
         Ok(r) => r,
         Err(_) => {
             for f in &staged_files {
