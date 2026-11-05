@@ -331,6 +331,12 @@ The pre-receive phase is intentionally stateless and blocking. Admission can use
 
 Admission identity is `apiVersion`, `kind`, resolved namespace, and `metadata.name`; the Git file path is stored as provenance only. A path move with the same identity preserves `metadata.uid` and only increments `resourceVersion`. Spec/body edits increment both `generation` and `resourceVersion`. Deleting a resource file removes the stored identity; adding the same identity again later allocates a new UID.
 
+File admission groups of two to four resources in one namespace read fresh
+authorization facts together; other operations retain individual lookups.
+Invalid snapshot identities or incomplete responses fail closed. Every
+resource still requires the configured provider's approval, and batching
+does not replace optimistic-concurrency checks or cache authorization decisions.
+
 Post-receive admission cannot reject an already accepted Git push. DB-backed conflicts such as duplicate `ProductVariant.spec.sku` leave the existing resource unchanged, skip the conflicting incoming resource, and emit structured API logs with the operation, namespace, name, SKU, and conflicting identity.
 
 ## Controller Manager Runtime

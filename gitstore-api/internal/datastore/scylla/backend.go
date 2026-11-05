@@ -299,6 +299,7 @@ func openSession(cfg config.ScyllaConfig) (*gocql.Session, error) {
 	cluster.Consistency = gocql.Quorum
 	cluster.DisableShardAwarePort = cfg.DisableShardAwarePort
 	cluster.IgnorePeerAddr = cfg.IgnorePeerAddr
+	cluster.QueryObserver = cfg.QueryObserver
 	if at, ok := cfg.AddressTranslator.(gocql.AddressTranslator); ok {
 		cluster.AddressTranslator = at
 	}

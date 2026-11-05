@@ -5,7 +5,11 @@ package cataloggrpc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
@@ -15,7 +19,133 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+func TestFileAuthorizationUsesFreshBoundedSnapshots(t *testing.T) {
+	recorder := testutil.NewAllowAllAuthZ()
+	reads, pointReads := 0, 0
+	owner := "alice"
+	store := &testutil.StubStore{
+		GetFileSnapshotsByNameFunc: func(_ context.Context, namespace string, names []string) ([]*datastore.File, error) {
+			reads++
+			require.Equal(t, "gitstore", namespace)
+			require.Equal(t, []string{"first", "second"}, names)
+			return []*datastore.File{
+				{UID: "first-uid", Namespace: namespace, Name: names[0], CreationActor: owner},
+				{UID: "second-uid", Namespace: namespace, Name: names[1], CreationActor: "carol"},
+			}, nil
+		},
+		GetFileByNameFunc: func(context.Context, string, string) (*datastore.File, error) {
+			pointReads++
+			return nil, datastore.ErrNotFound
+		},
+	}
+	server := &Server{store: store, registry: auth.NewProviderRegistry(nil, recorder, nil)}
+	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
+	operations := []resourceAdmissionOperation{
+		{operation: admission.OperationUpdate, identity: resourceIdentity{Kind: "File", Namespace: "gitstore", Name: "first"}},
+		{operation: admission.OperationUpdate, identity: resourceIdentity{Kind: "File", Namespace: "gitstore", Name: "second"}},
+	}
+	require.NoError(t, server.authorizeOperations(ctx, operations))
+	owner = "new-owner"
+	require.NoError(t, server.authorizeOperations(ctx, operations))
+	require.Equal(t, 2, reads)
+	require.Zero(t, pointReads)
+	require.Len(t, recorder.Calls, 4)
+	require.Equal(t, "alice", recorder.Calls[0].Resource.OwnerSub)
+	require.Equal(t, "new-owner", recorder.Calls[2].Resource.OwnerSub)
+	require.Equal(t, "carol", recorder.Calls[1].Resource.OwnerSub)
+	require.Equal(t, "file.update", recorder.Calls[0].Action)
+}
+
+func TestFileAuthorizationRejectsInvalidSnapshotFacts(t *testing.T) {
+	for _, scenario := range []string{"cardinality", "namespace", "name", "uid", "error", "cancelled"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			recorder := testutil.NewAllowAllAuthZ()
+			store := &testutil.StubStore{GetFileSnapshotsByNameFunc: func(context.Context, string, []string) ([]*datastore.File, error) {
+				files := []*datastore.File{
+					{UID: "first-uid", Namespace: "gitstore", Name: "first"},
+					{UID: "second-uid", Namespace: "gitstore", Name: "second"},
+				}
+				switch scenario {
+				case "cardinality":
+					return files[:1], nil
+				case "namespace":
+					files[0].Namespace = "other"
+				case "name":
+					files[0].Name = "other"
+				case "uid":
+					files[0].UID = ""
+				case "error":
+					return nil, errors.New("unavailable")
+				case "cancelled":
+					cancel()
+				}
+				return files, nil
+			}}
+			server := &Server{store: store, registry: auth.NewProviderRegistry(nil, recorder, nil)}
+			ctx = auth.ContextWithPrincipal(ctx, &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
+			err := server.authorizeOperations(ctx, []resourceAdmissionOperation{
+				{operation: admission.OperationUpdate, identity: resourceIdentity{Kind: "File", Namespace: "gitstore", Name: "first"}},
+				{operation: admission.OperationUpdate, identity: resourceIdentity{Kind: "File", Namespace: "gitstore", Name: "second"}},
+			})
+			require.Equal(t, codes.Unavailable, status.Code(err))
+			require.Empty(t, recorder.Calls)
+		})
+	}
+}
+
+func TestFileAuthorizationSnapshotStillRequiresProviderApproval(t *testing.T) {
+	recorder := testutil.NewDenyAllAuthZ(t)
+	store := &testutil.StubStore{GetFileSnapshotsByNameFunc: func(_ context.Context, namespace string, names []string) ([]*datastore.File, error) {
+		return []*datastore.File{
+			{UID: "first-uid", Namespace: namespace, Name: names[0]},
+			{UID: "second-uid", Namespace: namespace, Name: names[1]},
+		}, nil
+	}}
+	server := &Server{store: store, registry: auth.NewProviderRegistry(nil, recorder, nil)}
+	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
+	err := server.authorizeOperations(ctx, []resourceAdmissionOperation{
+		{operation: admission.OperationUpdate, identity: resourceIdentity{Kind: "File", Namespace: "gitstore", Name: "first"}},
+		{operation: admission.OperationDelete, identity: resourceIdentity{Kind: "File", Namespace: "gitstore", Name: "second"}},
+	})
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.Len(t, recorder.Calls, 1)
+	require.Equal(t, "file.update", recorder.Calls[0].Action)
+}
+
+func TestFileAuthorizationKeepsPointReadsOutsideSnapshotScope(t *testing.T) {
+	for _, namespaces := range [][]string{{"one"}, {"one", "two"}, {"one", "one", "one", "one", "one"}} {
+		t.Run(strings.Join(namespaces, "-"), func(t *testing.T) {
+			reads := 0
+			store := &testutil.StubStore{
+				GetFileSnapshotsByNameFunc: func(context.Context, string, []string) ([]*datastore.File, error) {
+					t.Fatal("snapshot read outside bounded same-namespace scope")
+					return nil, nil
+				},
+				GetFileByNameFunc: func(_ context.Context, namespace, name string) (*datastore.File, error) {
+					reads++
+					return &datastore.File{UID: name + "-uid", Namespace: namespace, Name: name}, nil
+				},
+			}
+			server := &Server{store: store, registry: auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil)}
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
+			operations := make([]resourceAdmissionOperation, len(namespaces))
+			for i, namespace := range namespaces {
+				operations[i] = resourceAdmissionOperation{
+					operation: admission.OperationUpdate,
+					identity:  resourceIdentity{Kind: "File", Namespace: namespace, Name: strconv.Itoa(i)},
+				}
+			}
+			require.NoError(t, server.authorizeOperations(ctx, operations))
+			require.Equal(t, len(namespaces), reads)
+		})
+	}
+}
 
 func TestOwnerAnnotationRemovalRequiresTransferAuthorization(t *testing.T) {
 	recorder := testutil.NewAllowAllAuthZ()

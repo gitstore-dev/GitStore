@@ -198,16 +198,62 @@ func (s *Server) authorizeOperations(ctx context.Context, operations []resourceA
 	if removedUser && createdNamespace {
 		return status.Error(codes.PermissionDenied, "USER namespace rename is forbidden; delete and unrelated creation require separate pushes")
 	}
-	for _, op := range operations {
-		existing, err := s.lookupResourceByIdentity(ctx, op.identity)
-		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+	batchFiles := len(operations) > 1 && len(operations) <= datastore.FileNameSnapshotBatchLimit
+	var names []string
+	namespace := ""
+	if batchFiles {
+		namespace = operations[0].identity.Namespace
+		names = make([]string, 0, len(operations))
+		for _, op := range operations {
+			batchFiles = batchFiles && op.identity.Kind == "File" && namespace != "" && op.identity.Namespace == namespace
+			names = append(names, op.identity.Name)
+		}
+	}
+	var files []*datastore.File
+	if batchFiles {
+		var err error
+		files, err = s.fileNameSnapshotFacts(ctx, namespace, names)
+		if err != nil {
 			return status.Error(codes.Unavailable, "resource authorization facts unavailable")
+		}
+	}
+	for i, op := range operations {
+		var existing any
+		if batchFiles {
+			if files[i] != nil {
+				existing = files[i]
+			}
+		} else {
+			var err error
+			existing, err = s.lookupResourceByIdentity(ctx, op.identity)
+			if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+				return status.Error(codes.Unavailable, "resource authorization facts unavailable")
+			}
 		}
 		if err := s.authorizeOperation(ctx, op.identity, op.operation, op.newEntry, existing); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *Server) fileNameSnapshotFacts(ctx context.Context, namespace string, names []string) ([]*datastore.File, error) {
+	files, err := s.store.GetFileSnapshotsByName(ctx, namespace, names)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(files) != len(names) {
+		return nil, fmt.Errorf("%w: invalid File snapshot cardinality", datastore.ErrRepairRequired)
+	}
+	for i, file := range files {
+		if file != nil && (file.Namespace != namespace || file.Name != names[i] || file.UID == "") {
+			return nil, fmt.Errorf("%w: invalid File snapshot identity", datastore.ErrRepairRequired)
+		}
+	}
+	return files, nil
 }
 
 type resourceIdentity struct {

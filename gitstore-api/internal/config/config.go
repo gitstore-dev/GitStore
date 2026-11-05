@@ -17,6 +17,7 @@ import (
 	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/go-playground/validator/v10"
 	"github.com/go-viper/mapstructure/v2"
+	"github.com/gocql/gocql"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -280,6 +281,8 @@ type ScyllaConfig struct {
 	// AddressTranslator is an optional runtime-only field (not populated from config files).
 	// Set it when Scylla runs behind a NAT (e.g. Docker) to redirect peer addresses.
 	AddressTranslator interface{} `mapstructure:"-"`
+	// QueryObserver is runtime-only instrumentation, never loaded from configuration.
+	QueryObserver gocql.QueryObserver `mapstructure:"-"`
 }
 
 // legacyKey names a removed or renamed configuration path that must fail

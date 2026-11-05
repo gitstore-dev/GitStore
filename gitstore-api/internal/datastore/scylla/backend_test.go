@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,8 +32,9 @@ import (
 )
 
 var (
-	scyllaAddr     string
-	scyllaKeyspace string
+	scyllaAddr              string
+	scyllaKeyspace          string
+	scyllaReplicationFactor = 1
 )
 
 func TestMain(m *testing.M) {
@@ -40,7 +42,15 @@ func TestMain(m *testing.M) {
 	if scyllaAddr == "" {
 		scyllaAddr = "127.0.0.1:9042"
 	}
+	if raw := os.Getenv("GITSTORE_TEST_SCYLLA_REPLICATION_FACTOR"); raw != "" {
+		factor, err := strconv.Atoi(raw)
+		if err != nil || factor < 1 {
+			panic("GITSTORE_TEST_SCYLLA_REPLICATION_FACTOR must be a positive integer")
+		}
+		scyllaReplicationFactor = factor
+	}
 	scyllaKeyspace = fmt.Sprintf("gitstore_scylla_test_%d_%s", os.Getpid(), strings.ReplaceAll(uuid.NewString(), "-", "")[:16])
+	fmt.Fprintf(os.Stderr, "Scylla regression keyspace %s requested replication factor %d\n", scyllaKeyspace, scyllaReplicationFactor)
 
 	provisionKeyspace(scyllaAddr, scyllaKeyspace)
 	code := m.Run()
@@ -102,9 +112,9 @@ func provisionKeyspace(addr, keyspace string) {
 
 	stmt := fmt.Sprintf(
 		`CREATE KEYSPACE IF NOT EXISTS %s `+
-			`WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'} `+
+			`WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '%d'} `+
 			`AND durable_writes = true`,
-		keyspace,
+		keyspace, scyllaReplicationFactor,
 	)
 	if err := session.Query(stmt).Exec(); err != nil {
 		panic("provisionKeyspace: create keyspace: " + err.Error())
@@ -208,6 +218,250 @@ func newTestStoreWithWatchBucket(t *testing.T, watchBucketSize int) datastore.Da
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	return store
+}
+
+type fileSnapshotQueryObserver func(context.Context, gocql.ObservedQuery)
+
+func (observe fileSnapshotQueryObserver) ObserveQuery(ctx context.Context, query gocql.ObservedQuery) {
+	observe(ctx, query)
+}
+
+func TestScyllaFileSnapshotsOverlapBoundedAuthoritativeBatches(t *testing.T) {
+	type readKey struct{}
+	firstWave, release, canceledRead := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	partialFullWave, partialReady, partialRelease := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	mixedReady, mixedRelease := make(chan struct{}), make(chan struct{})
+	var cancelOnce sync.Once
+	var locators, authoritative, active, peak atomic.Int64
+	var partialFullReads, partialReads, mixedReads atomic.Int64
+	var invalidQuery atomic.Bool
+	cfg := testScyllaConfig(t)
+	cfg.QueryObserver = fileSnapshotQueryObserver(func(ctx context.Context, query gocql.ObservedQuery) {
+		mode, _ := ctx.Value(readKey{}).(string)
+		if mode == "" {
+			return
+		}
+		if strings.Contains(query.Statement, " FROM files_by_uid WHERE uid IN (") {
+			if len(query.Values) == 0 || len(query.Values) > 16 ||
+				(query.Err != nil && (mode != "cancel" || ctx.Err() == nil)) {
+				invalidQuery.Store(true)
+			}
+			locators.Add(1)
+			return
+		}
+		if !strings.Contains(query.Statement, " FROM files_by_namespace WHERE namespace=? AND (creation_timestamp,uid) IN (") ||
+			len(query.Values) < 3 || len(query.Values) > 33 || (len(query.Values)-1)%2 != 0 ||
+			strings.Contains(query.Statement, "ALLOW FILTERING") {
+			invalidQuery.Store(true)
+		}
+		current := active.Add(1)
+		defer active.Add(-1)
+		for previous := peak.Load(); current > previous; previous = peak.Load() {
+			if peak.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		if mode == "cancel" {
+			cancelOnce.Do(func() { close(canceledRead) })
+			<-ctx.Done()
+			return
+		}
+		if query.Err != nil {
+			invalidQuery.Store(true)
+		}
+		if mode == "mixed" {
+			if len(query.Values) != 17 {
+				invalidQuery.Store(true)
+			}
+			if mixedReads.Add(1) == 2 {
+				close(mixedReady)
+			}
+			select {
+			case <-mixedRelease:
+			case <-ctx.Done():
+			}
+			return
+		}
+		if mode == "partial" {
+			if len(query.Values) == 5 {
+				if partialReads.Add(1) == 1 {
+					close(partialReady)
+				}
+			} else {
+				if len(query.Values) != 33 {
+					invalidQuery.Store(true)
+				}
+				if partialFullReads.Add(1) == 3 {
+					close(partialFullWave)
+				}
+				select {
+				case <-partialRelease:
+				case <-ctx.Done():
+				}
+			}
+			return
+		}
+		if authoritative.Add(1) == 8 {
+			close(firstWave)
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+	})
+	store, err := scylla.New(cfg, zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	raw := newRawSession(t)
+	var replication map[string]string
+	require.NoError(t, raw.Query("SELECT replication FROM system_schema.keyspaces WHERE keyspace_name=?", scyllaKeyspace).Scan(&replication))
+	require.Contains(t, replication["class"], "NetworkTopologyStrategy")
+	for name, factor := range replication {
+		if name != "class" {
+			require.Equal(t, strconv.Itoa(scyllaReplicationFactor), factor)
+		}
+	}
+	t.Logf("Native File snapshot query contract replication=%v", replication)
+	namespaces := []string{"snapshot-rows-" + newID()[:8], "snapshot-rows-" + newID()[:8]}
+	for _, namespace := range namespaces {
+		require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{UID: newID(), Name: namespace}))
+	}
+	uids := make([]string, datastore.FileSnapshotBatchLimit)
+	for i := range uids {
+		uids[i] = newID()
+		namespace := namespaces[0]
+		if i >= 200 {
+			namespace = namespaces[1]
+		}
+		require.NoError(t, store.CreateFile(t.Context(), &datastore.File{
+			UID: uids[i], Namespace: namespace, Name: fmt.Sprintf("file-%d", i), ResourceVersion: "1",
+			CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+			Annotations:       map[string]string{"sequence": "1"},
+		}))
+	}
+	uids[17], uids[18] = uids[0], "invalid"
+	type readResult struct {
+		files []*datastore.File
+		err   error
+	}
+	completed := make(chan readResult, 1)
+	ctx, cancel := context.WithTimeout(context.WithValue(t.Context(), readKey{}, "overlap"), 5*time.Second)
+	defer cancel()
+	go func() {
+		files, err := store.GetFileSnapshots(ctx, uids)
+		completed <- readResult{files, err}
+	}()
+	select {
+	case <-firstWave:
+	case <-ctx.Done():
+	}
+	locatorsAtFirstAuthoritativeWave := locators.Load()
+	close(release)
+	result := <-completed
+	require.NoError(t, result.err, "eight bounded authoritative reads must overlap across exact Namespace tuple batches")
+	require.EqualValues(t, 8, locatorsAtFirstAuthoritativeWave,
+		"full single-Namespace batches must start fresh reads without waiting for unrelated locator batches")
+	require.EqualValues(t, 8, peak.Load(), "the reader ceiling is global across Namespace groups")
+	require.EqualValues(t, 16, locators.Load())
+	require.EqualValues(t, 17, authoritative.Load(), "198 and 50 exact tuple keys need thirteen and four bounded reads")
+	require.False(t, invalidQuery.Load(), "each authoritative query must retain the sixteen-key bound")
+	require.Len(t, result.files, len(uids))
+	for i, file := range result.files {
+		if i == 18 {
+			require.Nil(t, file)
+		} else {
+			require.NotNil(t, file)
+			require.Equal(t, uids[i], file.UID)
+		}
+	}
+	result.files[0].Annotations["sequence"] = "changed"
+	require.Equal(t, "1", result.files[17].Annotations["sequence"])
+
+	partialCtx, cancelPartial := context.WithTimeout(context.WithValue(t.Context(), readKey{}, "partial"), 5*time.Second)
+	defer cancelPartial()
+	go func() {
+		files, err := store.GetFileSnapshots(partialCtx, uids[20:70])
+		completed <- readResult{files, err}
+	}()
+	select {
+	case <-partialFullWave:
+	case <-partialCtx.Done():
+	}
+	partialStarted := false
+	select {
+	case <-partialReady:
+		partialStarted = true
+	case <-time.After(time.Second):
+	}
+	close(partialRelease)
+	result = <-completed
+	require.NoError(t, result.err)
+	require.True(t, partialStarted, "partial reads must not wait for unrelated authoritative batches after all locators finish")
+	require.EqualValues(t, 3, partialFullReads.Load())
+	require.EqualValues(t, 1, partialReads.Load(), "fifty same-Namespace keys retain four authoritative queries")
+	require.Len(t, result.files, 50)
+	for i, file := range result.files {
+		require.NotNil(t, file)
+		require.Equal(t, uids[20+i], file.UID)
+	}
+	require.Zero(t, active.Load())
+
+	mixedUIDs := append([]string{}, uids[20:28]...)
+	mixedUIDs = append(mixedUIDs, uids[200:208]...)
+	mixedCtx, cancelMixed := context.WithTimeout(context.WithValue(t.Context(), readKey{}, "mixed"), 5*time.Second)
+	defer cancelMixed()
+	go func() {
+		files, err := store.GetFileSnapshots(mixedCtx, mixedUIDs)
+		completed <- readResult{files, err}
+	}()
+	mixedStarted := false
+	select {
+	case <-mixedReady:
+		mixedStarted = true
+	case <-time.After(time.Second):
+	}
+	close(mixedRelease)
+	result = <-completed
+	require.NoError(t, result.err)
+	require.True(t, mixedStarted, "one locator batch must not serialize independent mixed-Namespace authoritative reads")
+	require.EqualValues(t, 2, mixedReads.Load())
+	require.Len(t, result.files, len(mixedUIDs))
+	for i, file := range result.files {
+		require.NotNil(t, file)
+		require.Equal(t, mixedUIDs[i], file.UID)
+	}
+	require.Zero(t, active.Load())
+
+	peer := newTestStore(t)
+	file, err := peer.GetFile(t.Context(), uids[0])
+	require.NoError(t, err)
+	file.ResourceVersion, file.Body = "2", "fresh"
+	require.NoError(t, peer.UpdateFile(t.Context(), file, "1"))
+	fresh, err := store.GetFileSnapshots(t.Context(), uids)
+	require.NoError(t, err)
+	require.Equal(t, "2", fresh[0].ResourceVersion)
+	require.Equal(t, "fresh", fresh[17].Body)
+
+	ctx, cancelRead := context.WithCancel(context.WithValue(t.Context(), readKey{}, "cancel"))
+	defer cancelRead()
+	go func() {
+		files, err := store.GetFileSnapshots(ctx, uids)
+		completed <- readResult{files, err}
+	}()
+	select {
+	case <-canceledRead:
+	case <-time.After(5 * time.Second):
+		cancelRead()
+		<-completed
+		t.Fatal("authoritative query did not reach the cancellation barrier")
+	}
+	cancelRead()
+	result = <-completed
+	require.ErrorIs(t, result.err, context.Canceled)
+	require.Nil(t, result.files, "cancellation must not expose partial authoritative snapshots")
+	require.Zero(t, active.Load(), "every authoritative reader must finish before returning")
+	require.EqualValues(t, 8, peak.Load())
+	require.False(t, invalidQuery.Load())
 }
 
 func testScyllaConfig(t *testing.T) config.ScyllaConfig {
