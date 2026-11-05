@@ -21,8 +21,9 @@ import (
 // The capacity push driver is the Git-push companion for capacity profiles
 // whose load generator cannot push (k6). It offers one commit per interval to
 // a bounded worker pool, pushes it to a single repository's main branch, and
-// writes push evidence for the profile's verifier. Offers that find every
-// worker busy are counted as dropped, never queued without bound.
+// writes push evidence for the profile's verifier. A finite pending budget
+// absorbs transient latency; full budgets and missed producer deadlines count
+// as dropped. Reported latency starts at the original scheduled offer.
 //
 // Run it next to a profile, for example the category hierarchy profile:
 //
@@ -32,6 +33,8 @@ import (
 //	CAPACITY_PUSH_DURATION=360s CAPACITY_PUSH_INTERVAL=1s \
 //	CAPACITY_PUSH_EVIDENCE=/abs/path/push-evidence.json \
 //	go test -run '^TestCapacityGitPushDriver$' -timeout 2h ./...
+const capacityPushPendingPerWorker = 3
+
 type capacityPushConfig struct {
 	remote, tokenFile, namespace, repository, kind, runID, evidence string
 	duration, interval                                              time.Duration
@@ -43,26 +46,30 @@ type capacityPushConfig struct {
 // firstPushMs/lastPushMs is the contract the category hierarchy verifier
 // reads; the remaining fields are diagnostic.
 type capacityPushEvidence struct {
-	Repository     string            `json:"repository"`
-	Namespace      string            `json:"namespace,omitempty"`
-	Kind           string            `json:"kind"`
-	RunID          string            `json:"runId"`
-	Workers        int               `json:"workers"`
-	IntervalMs     int64             `json:"intervalMs"`
-	Offered        int               `json:"offered"`
-	Pushes         int               `json:"pushes"`
-	Failures       int               `json:"failures"`
-	Dropped        int               `json:"dropped"`
-	Retries        int               `json:"retries"`
-	FirstPushMs    int64             `json:"firstPushMs"`
-	LastPushMs     int64             `json:"lastPushMs"`
-	LatencyMs      capacityPushStats `json:"latencyMs"`
-	OracleVerified int               `json:"oracleVerified"`
-	OracleFailed   int               `json:"oracleFailed"`
-	OracleDropped  int               `json:"oracleDropped"`
-	OracleContract string            `json:"oracleContract,omitempty"`
-	StartedAt      string            `json:"startedAt"`
-	CompletedAt    string            `json:"completedAt"`
+	Repository      string            `json:"repository"`
+	Namespace       string            `json:"namespace,omitempty"`
+	Kind            string            `json:"kind"`
+	RunID           string            `json:"runId"`
+	Workers         int               `json:"workers"`
+	PendingCapacity int               `json:"pendingCapacity"`
+	SchedulePolicy  string            `json:"schedulePolicy"`
+	LatencyClock    string            `json:"latencyClock"`
+	DispatchDelayMs capacityPushStats `json:"dispatchDelayMs"`
+	IntervalMs      int64             `json:"intervalMs"`
+	Offered         int               `json:"offered"`
+	Pushes          int               `json:"pushes"`
+	Failures        int               `json:"failures"`
+	Dropped         int               `json:"dropped"`
+	Retries         int               `json:"retries"`
+	FirstPushMs     int64             `json:"firstPushMs"`
+	LastPushMs      int64             `json:"lastPushMs"`
+	LatencyMs       capacityPushStats `json:"latencyMs"`
+	OracleVerified  int               `json:"oracleVerified"`
+	OracleFailed    int               `json:"oracleFailed"`
+	OracleDropped   int               `json:"oracleDropped"`
+	OracleContract  string            `json:"oracleContract,omitempty"`
+	StartedAt       string            `json:"startedAt"`
+	CompletedAt     string            `json:"completedAt"`
 }
 
 type capacityPushStats struct {
@@ -73,12 +80,13 @@ type capacityPushStats struct {
 }
 
 type capacityPushResult struct {
-	acknowledged bool
-	retried      bool
-	at           time.Time
-	latency      time.Duration
-	sequence     int
-	commit       string
+	acknowledged  bool
+	retried       bool
+	at            time.Time
+	latency       time.Duration
+	dispatchDelay time.Duration
+	sequence      int
+	commit        string
 }
 
 func loadCapacityPushConfig() (capacityPushConfig, error) {
@@ -150,11 +158,33 @@ func capacityPushManifest(kind, runID, namespace string, sequence int) (path str
 // most workers concurrent pushes and summarizes the outcome.
 func runCapacityPushSchedule(ctx context.Context, duration, interval time.Duration, workers int,
 	push func(ctx context.Context, sequence int) capacityPushResult) (offered, dropped int, results []capacityPushResult) {
-	slots := make(chan struct{}, workers)
+	type scheduledPush struct {
+		sequence int
+		at       time.Time
+	}
+	jobs := make(chan scheduledPush, workers*capacityPushPendingPerWorker)
 	var (
 		mu sync.Mutex
 		wg sync.WaitGroup
 	)
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				dispatchDelay := time.Since(job.at)
+				result := push(ctx, job.sequence)
+				if result.at.IsZero() {
+					result.at = time.Now()
+				}
+				result.latency = result.at.Sub(job.at)
+				result.dispatchDelay = dispatchDelay
+				mu.Lock()
+				results = append(results, result)
+				mu.Unlock()
+			}
+		}()
+	}
 	started := time.Now()
 	waitUntil := func(at time.Time) bool {
 		if delay := time.Until(at); delay > 0 {
@@ -182,21 +212,13 @@ func runCapacityPushSchedule(ctx context.Context, duration, interval time.Durati
 			continue
 		}
 		select {
-		case slots <- struct{}{}:
+		case jobs <- scheduledPush{sequence: sequence, at: scheduled}:
 		default:
 			dropped++
-			continue
 		}
-		wg.Add(1)
-		go func(sequence int) {
-			defer func() { <-slots; wg.Done() }()
-			result := push(ctx, sequence)
-			mu.Lock()
-			results = append(results, result)
-			mu.Unlock()
-		}(sequence)
 	}
 	waitUntil(started.Add(duration))
+	close(jobs)
 	wg.Wait()
 	return offered, dropped, results
 }
@@ -205,9 +227,11 @@ func summarizeCapacityPushes(cfg capacityPushConfig, offered, dropped int, resul
 	evidence := capacityPushEvidence{
 		Repository: cfg.repository, Namespace: cfg.namespace, Kind: cfg.kind, RunID: cfg.runID,
 		Workers: cfg.workers, IntervalMs: cfg.interval.Milliseconds(), Offered: offered, Dropped: dropped,
+		PendingCapacity: cfg.workers * capacityPushPendingPerWorker, SchedulePolicy: "bounded-pending/v1", LatencyClock: "scheduled-offer-to-ack",
 	}
-	var latencies []int64
+	var latencies, dispatchDelays []int64
 	for _, result := range results {
+		dispatchDelays = append(dispatchDelays, result.dispatchDelay.Milliseconds())
 		if result.retried {
 			evidence.Retries++
 		}
@@ -225,17 +249,22 @@ func summarizeCapacityPushes(cfg capacityPushConfig, offered, dropped int, resul
 		}
 		latencies = append(latencies, result.latency.Milliseconds())
 	}
-	if len(latencies) > 0 {
-		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	statistics := func(values []int64) capacityPushStats {
+		if len(values) == 0 {
+			return capacityPushStats{}
+		}
+		sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
 		quantile := func(q float64) int64 {
-			index := int(float64(len(latencies))*q+0.999999) - 1
+			index := int(float64(len(values))*q+0.999999) - 1
 			if index < 0 {
 				index = 0
 			}
-			return latencies[index]
+			return values[index]
 		}
-		evidence.LatencyMs = capacityPushStats{P50: quantile(0.50), P95: quantile(0.95), P99: quantile(0.99), Max: latencies[len(latencies)-1]}
+		return capacityPushStats{P50: quantile(.50), P95: quantile(.95), P99: quantile(.99), Max: values[len(values)-1]}
 	}
+	evidence.LatencyMs = statistics(latencies)
+	evidence.DispatchDelayMs = statistics(dispatchDelays)
 	return evidence
 }
 
@@ -405,6 +434,27 @@ func TestCapacityGitPushDriver(t *testing.T) {
 
 // In-process coverage of the driver's scheduling and evidence; no Git service
 // is needed.
+func TestCapacityPushScheduleAbsorbsJitterAndChargesWaiting(t *testing.T) {
+	interval := 50 * time.Millisecond
+	offered, dropped, results := runCapacityPushSchedule(t.Context(), 10*interval, interval, 1, func(_ context.Context, sequence int) capacityPushResult {
+		start := time.Now()
+		if sequence == 0 {
+			time.Sleep(130 * time.Millisecond)
+		} else {
+			time.Sleep(time.Millisecond)
+		}
+		return capacityPushResult{acknowledged: true, sequence: sequence, at: time.Now(), latency: time.Since(start)}
+	})
+	if offered != 10 || dropped != 0 || len(results) != 10 {
+		t.Fatalf("finite jitter lost scheduled work: offered=%d dropped=%d completed=%d", offered, dropped, len(results))
+	}
+	for _, result := range results {
+		if result.sequence == 1 && result.latency < interval {
+			t.Fatalf("latency omitted waiting since the scheduled offer: %s", result.latency)
+		}
+	}
+}
+
 func TestCapacityPushDriverScheduleBoundsWorkAndSummarizes(t *testing.T) {
 	var mu sync.Mutex
 	inFlight, peak := 0, 0
@@ -429,7 +479,7 @@ func TestCapacityPushDriverScheduleBoundsWorkAndSummarizes(t *testing.T) {
 		t.Fatalf("peak concurrency %d exceeds the worker bound", peak)
 	}
 	if dropped == 0 {
-		t.Fatal("offers faster than the workers can push must be dropped, not queued")
+		t.Fatal("sustained overload must exhaust the finite pending budget and drop work")
 	}
 	if offered != dropped+len(results) {
 		t.Fatalf("offered %d != dropped %d + completed %d", offered, dropped, len(results))
@@ -442,6 +492,9 @@ func TestCapacityPushDriverScheduleBoundsWorkAndSummarizes(t *testing.T) {
 	}
 	if evidence.FirstPushMs == 0 || evidence.LastPushMs < evidence.FirstPushMs {
 		t.Fatalf("push window not recorded: %+v", evidence)
+	}
+	if evidence.PendingCapacity != 6 || evidence.SchedulePolicy != "bounded-pending/v1" || evidence.LatencyClock != "scheduled-offer-to-ack" || evidence.DispatchDelayMs.Max == 0 {
+		t.Fatalf("pending budget and timing origin must be explicit: %+v", evidence)
 	}
 	if evidence.LatencyMs.P95 > evidence.LatencyMs.Max || evidence.LatencyMs.P50 > evidence.LatencyMs.P95 {
 		t.Fatalf("latency quantiles out of order: %+v", evidence.LatencyMs)
@@ -462,6 +515,24 @@ func TestCapacityPushDriverScheduleBoundsWorkAndSummarizes(t *testing.T) {
 	for _, key := range []string{"repository", "pushes", "failures", "firstPushMs", "lastPushMs"} {
 		if _, ok := decoded[key]; !ok {
 			t.Fatalf("evidence is missing verifier key %q", key)
+		}
+	}
+}
+
+func TestCapacityPushScheduleCancellationAccountsForPendingWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	time.AfterFunc(10*time.Millisecond, cancel)
+	offered, dropped, results := runCapacityPushSchedule(ctx, time.Second, time.Millisecond, 1, func(ctx context.Context, sequence int) capacityPushResult {
+		<-ctx.Done()
+		return capacityPushResult{sequence: sequence, at: time.Now()}
+	})
+	if offered != dropped+len(results) {
+		t.Fatalf("cancellation lost pending offers: offered=%d dropped=%d completed=%d", offered, dropped, len(results))
+	}
+	for _, result := range results {
+		if result.acknowledged {
+			t.Fatal("canceled pending work was counted as acknowledged")
 		}
 	}
 }

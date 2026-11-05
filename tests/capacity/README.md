@@ -27,8 +27,14 @@ Acceptance automatically runs the existing repository workload/oracle with its
 own endpoint profile: twenty durable observers and two authoring operations/s,
 plus eight k6 Admin probes/s. It preserves the larger `repository/lifecycle`
 acceptance gates. The public load remains 100 requests/s, then 200/s for overload.
-Native pushes run separately at one/s with one worker by default and a finite
-verification queue. Every acknowledged commit must appear with the same UID,
+Native pushes run separately at one/s with one worker by default and three
+pending offers per worker. Full pending budgets and missed producer deadlines
+count as dropped. Receipts identify `bounded-pending/v1`, the pending capacity
+and dispatch-delay distribution; push latency includes waiting from the original
+scheduled offer through acknowledgement. Pending work drains within the recorded
+completion window. A sustained rate above service capacity still exhausts the
+budget and fails the zero-drop gate. The acknowledgement verification queue is
+also finite. Every acknowledged commit must appear with the same UID,
 revision and Ready state on both Admin APIs within sixty seconds; those oracle
 reads are measurement overhead in addition to the offered workload.
 Two additional measurement streams require the same UID/commit through the
