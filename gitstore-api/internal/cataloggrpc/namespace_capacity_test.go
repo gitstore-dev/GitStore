@@ -626,12 +626,12 @@ spec:
 	invalidBlobs := append([]*catalogv1.ResourceBlob(nil), validBlobs...)
 	invalidBlobs[0] = namespaceBlob("namespaces/invalid.md", "Invalid Name", "ORGANIZATION")
 	return &catalogv1.ValidateResourcesRequest{
-		RepositoryId: testRepoID,
-		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: validBlobs}},
-	}, &catalogv1.ValidateResourcesRequest{
-		RepositoryId: testRepoID,
-		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: invalidBlobs}},
-	}
+			RepositoryId: testRepoID,
+			Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: validBlobs}},
+		}, &catalogv1.ValidateResourcesRequest{
+			RepositoryId: testRepoID,
+			Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: invalidBlobs}},
+		}
 }
 
 func startNamespaceCapacityReplica(t *testing.T, name string) *namespaceCapacityReplica {
