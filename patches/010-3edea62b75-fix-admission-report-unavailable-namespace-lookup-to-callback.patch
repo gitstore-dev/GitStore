@@ -1,0 +1,132 @@
+diff --git a/docs/products/push-validation.md b/docs/products/push-validation.md
+index b39e47786619180a31e84437dc23adb0ac6f5aba..6f0cc4cc1bd0d3efc18026a74f6e73b0e24cddf9 100644
+--- a/docs/products/push-validation.md
++++ b/docs/products/push-validation.md
+@@ -55,6 +55,11 @@ Supported `kind` values: `Product`, `ProductVariant`, `CategoryTaxonomy`, `Colle
+ 
+ Failures for individual resources are logged with operation, namespace, name, and conflict details where available. They do not block remaining resources and cannot reject a Git push that has already been accepted.
+ 
++An unavailable or missing repository or owning-Namespace lookup makes the
++admission callback return `UNAVAILABLE`; it does not count as successful storage.
++Once authoritative lookups recover, the callback can be retried, with
++authorization checked again. The accepted Git commit is not rolled back.
++
+ If `old_commit_sha` is absent because an older git service called the API, admission falls back to the legacy full-tree snapshot path and logs a warning.
+ 
+ ## Resource Identity and Lifecycle
+diff --git a/gitstore-api/internal/cataloggrpc/server.go b/gitstore-api/internal/cataloggrpc/server.go
+index 8f493fe20b849d743634384e7177f71cbde27c5a..050e19ec54cbff44fbee3a15d9cc2685b162db46 100644
+--- a/gitstore-api/internal/cataloggrpc/server.go
++++ b/gitstore-api/internal/cataloggrpc/server.go
+@@ -1163,7 +1163,7 @@ func (s *Server) AdmitResources(
+ 		s.log.Error("admit_resources: cannot resolve namespace for repository",
+ 			zap.String("repository_id", req.RepositoryId),
+ 			zap.Error(err))
+-		return &catalogv1.AdmitResourcesResponse{}, nil
++		return nil, grpcstatus.Error(codes.Unavailable, "admission namespace state unavailable")
+ 	}
+ 
+ 	now := s.clock.Now().UTC()
+diff --git a/gitstore-api/internal/cataloggrpc/server_test.go b/gitstore-api/internal/cataloggrpc/server_test.go
+index 8fa66374485882aa49b3c3ff959d221a65082f72..9bb2b1dd1e14e4792be29ff785f638cf13bb1bce 100644
+--- a/gitstore-api/internal/cataloggrpc/server_test.go
++++ b/gitstore-api/internal/cataloggrpc/server_test.go
+@@ -1126,6 +1126,98 @@ func TestValidateResources_FileContentTypeIsImmutable(t *testing.T) {
+ 	assert.Contains(t, resp.Errors[0].Message, "immutable")
+ }
+ 
++type namespaceResolutionFailOnceStore struct {
++	datastore.Datastore
++	repository bool
++	failure    error
++	pending    atomic.Bool
++}
++
++func (s *namespaceResolutionFailOnceStore) GetRepository(ctx context.Context, id string) (*datastore.Repository, error) {
++	if s.repository && s.pending.CompareAndSwap(true, false) {
++		return nil, s.failure
++	}
++	return s.Datastore.GetRepository(ctx, id)
++}
++
++func (s *namespaceResolutionFailOnceStore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
++	if !s.repository && s.pending.CompareAndSwap(true, false) {
++		return nil, s.failure
++	}
++	return s.Datastore.GetNamespaceByName(ctx, name)
++}
++
++func TestAdmitResourcesNamespaceResolutionFailureCanReplay(t *testing.T) {
++	backendFailure := fmt.Errorf("private backend lookup detail")
++	for _, tc := range []struct {
++		name       string
++		repository bool
++		failure    error
++		revoke     bool
++	}{
++		{"repository unavailable", true, backendFailure, false},
++		{"namespace unavailable", false, backendFailure, false},
++		{"repository missing response", true, nil, false},
++		{"namespace missing response", false, nil, false},
++		{"policy revoked before replay", true, backendFailure, true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			store := newTestDatastore(t)
++			failing := &namespaceResolutionFailOnceStore{Datastore: store, repository: tc.repository, failure: tc.failure}
++			failing.pending.Store(true)
++			var reads atomic.Int32
++			reader := &mockGitReader{
++				listFilesFunc: func(context.Context, string, string, string) ([]string, error) {
++					reads.Add(1)
++					return []string{"products/widget.md"}, nil
++				},
++				readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
++					return makeProduct("widget"), nil
++				},
++			}
++			registry := auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil)
++			var replicas []*catalogTestServer
++			for range 2 {
++				replicas = append(replicas, newCatalogServer(t, failing, reader, func(deps *cataloggrpc.ServerDeps) {
++					deps.Registry = registry
++				}))
++			}
++			req := &catalogv1.AdmitResourcesRequest{
++				RepositoryId: testRepoID,
++				NewCommitSha: strings.Repeat("a", 40),
++				RefName:      "refs/heads/main",
++				ChangedPaths: []string{"products/widget.md"},
++			}
++			response, err := replicas[0].AdmitResources(t.Context(), req)
++			require.Equal(t, codes.Unavailable, grpcstatus.Code(err))
++			require.Nil(t, response)
++			require.NotContains(t, err.Error(), backendFailure.Error())
++			require.NotContains(t, err.Error(), testRepoID)
++			require.Zero(t, reads.Load(), "unknown namespace must not start Git admission")
++			_, err = store.GetProductByName(t.Context(), "gitstore", "widget")
++			require.ErrorIs(t, err, datastore.ErrNotFound)
++
++			if tc.revoke {
++				registry.Swap(nil, testutil.NewDenyAllAuthZ(t), nil)
++			}
++			response, err = replicas[1].AdmitResources(t.Context(), req)
++			if tc.revoke {
++				require.Equal(t, codes.PermissionDenied, grpcstatus.Code(err))
++				require.Nil(t, response)
++				_, err = store.GetProductByName(t.Context(), "gitstore", "widget")
++				require.ErrorIs(t, err, datastore.ErrNotFound)
++				return
++			}
++			require.NoError(t, err)
++			require.NotNil(t, response)
++			product, err := store.GetProductByName(t.Context(), "gitstore", "widget")
++			require.NoError(t, err)
++			require.Equal(t, "gitstore", product.Namespace)
++			require.Equal(t, req.NewCommitSha, product.GitCommitSHA)
++		})
++	}
++}
++
+ // T020a: valid commit_sha with one product file → CreateProduct called with correct spec fields
+ func TestAdmitResources_NewProduct_Created(t *testing.T) {
+ 	memStore := newTestDatastore(t)

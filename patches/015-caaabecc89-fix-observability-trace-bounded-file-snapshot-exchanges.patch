@@ -1,0 +1,187 @@
+diff --git a/docs/runbooks/namespace-admission.md b/docs/runbooks/namespace-admission.md
+index d365e4c4e856076251690ac7947e28bb9bda9b4e..501c221f71fcb9ce8e75e7c64b9763395a8fa417 100644
+--- a/docs/runbooks/namespace-admission.md
++++ b/docs/runbooks/namespace-admission.md
+@@ -1093,6 +1093,15 @@ It is neither raw socket timing nor an independent server/Paxos duration.
+ Prepare traffic and incomplete responses must not be collapsed into one
+ wire interval.
+ 
++Sampled bulk File reads use the same bounded exchange tracing for UID and name
++locators and authoritative rows. The fixed `db.collection.name` values
++`files_by_uid`, `files_by_name` and `files_by_namespace` distinguish these
++stages without exporting query text, bound values or resource identities.
++Query attempts retain their exact exchange parent, so stream offsets can be
++correlated with the corresponding read rather than a concurrent mutation.
++Tracing does not add database queries or change the existing input, query-key
++or reader limits.
++
+ During a Go execution capture, the existing SDK task for a sampled
+ `scylla.exchange` carries its exact OTLP trace and span IDs. A complete task
+ with both annotations can identify its caller goroutine and scheduling
+diff --git a/gitstore-api/internal/datastore/scylla/backend.go b/gitstore-api/internal/datastore/scylla/backend.go
+index 5165c98a0bf90b4e127338cf6b1fedf05d208d24..9e877295dfdbc60fef082a967e24706ad1100ad6 100644
+--- a/gitstore-api/internal/datastore/scylla/backend.go
++++ b/gitstore-api/internal/datastore/scylla/backend.go
+@@ -372,13 +372,14 @@ func (s *cqlExchangeStream) StreamAbandoned(gocql.ObservedStream) {
+ 	s.exchange.mu.Unlock()
+ }
+ 
+-func startCQLExchange(ctx context.Context, tracer trace.Tracer) (context.Context, func(error)) {
++func startCQLExchange(ctx context.Context, tracer trace.Tracer, attrs ...attribute.KeyValue) (context.Context, func(error)) {
+ 	parent := trace.SpanFromContext(ctx)
+ 	if !parent.IsRecording() || !parent.SpanContext().IsSampled() {
+ 		return ctx, func(error) {}
+ 	}
+ 	start := time.Now()
+-	ctx, span := tracer.Start(ctx, "scylla.exchange", trace.WithSpanKind(trace.SpanKindClient), trace.WithTimestamp(start))
++	ctx, span := tracer.Start(ctx, "scylla.exchange", trace.WithSpanKind(trace.SpanKindClient), trace.WithTimestamp(start),
++		trace.WithAttributes(attrs...))
+ 	observability.AnnotateRuntimeSpan(ctx)
+ 	exchange := &cqlExchangeTrace{}
+ 	return context.WithValue(ctx, cqlExchangeKey{}, exchange), func(err error) {
+diff --git a/gitstore-api/internal/datastore/scylla/backend_test.go b/gitstore-api/internal/datastore/scylla/backend_test.go
+index 088c4f7e525f15355a074c94c2bc690894634b22..ae0300fd5e4de51c5b0ab252d937bf674b1c79c1 100644
+--- a/gitstore-api/internal/datastore/scylla/backend_test.go
++++ b/gitstore-api/internal/datastore/scylla/backend_test.go
+@@ -1184,6 +1184,14 @@ func TestScylla_FileRoundTripAndIndexedLookup(t *testing.T) {
+ }
+ 
+ func TestScylla_FilePointReadsPreserveAuthoritativeReadback(t *testing.T) {
++	recorder := tracetest.NewSpanRecorder()
++	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(recorder))
++	previous := otel.GetTracerProvider()
++	otel.SetTracerProvider(provider)
++	t.Cleanup(func() {
++		otel.SetTracerProvider(previous)
++		require.NoError(t, provider.Shutdown(context.Background()))
++	})
+ 	first, second := newTestStores(t)
+ 	readers := []datastore.Datastore{first, second}
+ 	readFiles := func(store datastore.Datastore, uids []string) []*datastore.File {
+@@ -1214,6 +1222,54 @@ func TestScylla_FilePointReadsPreserveAuthoritativeReadback(t *testing.T) {
+ 		require.NoError(t, first.CreateFile(t.Context(), files[i]))
+ 	}
+ 	uids := []string{files[6].UID, "invalid", files[3].UID, newID(), files[0].UID, files[3].UID, files[1].UID, files[5].UID}
++	for _, locator := range []string{"files_by_uid", "files_by_name"} {
++		t.Run(locator, func(t *testing.T) {
++			ctx, parent := provider.Tracer("test").Start(t.Context(), "file_snapshot_read")
++			var snapshots []*datastore.File
++			var err error
++			if locator == "files_by_uid" {
++				snapshots, err = second.GetFileSnapshots(ctx, []string{files[0].UID})
++			} else {
++				snapshots, err = second.GetFileSnapshotsByName(ctx, files[0].Namespace, []string{files[0].Name})
++			}
++			parent.End()
++			require.NoError(t, err)
++			require.Len(t, snapshots, 1)
++			require.Equal(t, files[0].UID, snapshots[0].UID)
++			collections := make(map[string]int)
++			exchanges := make(map[string]bool)
++			var attempts []sdktrace.ReadOnlySpan
++			for _, span := range recorder.Ended() {
++				if span.SpanContext().TraceID() != parent.SpanContext().TraceID() {
++					continue
++				}
++				if span.Name() == "scylla.query" {
++					attempts = append(attempts, span)
++				}
++				if span.Name() != "scylla.exchange" {
++					continue
++				}
++				require.Equal(t, parent.SpanContext().SpanID(), span.Parent().SpanID())
++				exchanges[span.SpanContext().SpanID().String()] = true
++				for _, attr := range span.Attributes() {
++					if attr.Key == "db.collection.name" {
++						collections[attr.Value.AsString()]++
++					}
++					if attr.Key == "gitstore.db.stream.completed" {
++						require.Positive(t, attr.Value.AsInt64())
++					}
++					if attr.Key == "gitstore.db.stream.overflow" {
++						require.Zero(t, attr.Value.AsInt64())
++					}
++				}
++			}
++			require.Equal(t, map[string]int{locator: 1, "files_by_namespace": 1}, collections)
++			require.Len(t, attempts, 2, "tracing must not add CQL queries")
++			for _, attempt := range attempts {
++				require.True(t, exchanges[attempt.Parent().SpanID().String()], "each attempt must belong to its exact read exchange")
++			}
++		})
++	}
+ 	for _, reader := range readers {
+ 		snapshots := readFiles(reader, uids)
+ 		bulk, err := reader.GetFileSnapshots(t.Context(), uids)
+diff --git a/gitstore-api/internal/datastore/scylla/file.go b/gitstore-api/internal/datastore/scylla/file.go
+index 8525e24719eb7a8198f9b8633adccea812021943..0564f6562087f02ed042cde82611653390a771ff 100644
+--- a/gitstore-api/internal/datastore/scylla/file.go
++++ b/gitstore-api/internal/datastore/scylla/file.go
+@@ -19,6 +19,7 @@ import (
+ 	"github.com/gocql/gocql"
+ 	"github.com/scylladb/gocqlx/v3/qb"
+ 	"go.opentelemetry.io/otel"
++	"go.opentelemetry.io/otel/attribute"
+ )
+ 
+ type fileRow struct {
+@@ -174,7 +175,11 @@ func (s *scyllaDatastore) GetFileSnapshots(ctx context.Context, uids []string) (
+ 		}
+ 		stmt := "SELECT " + strings.Join(s.fileByUIDTable.Metadata().Columns, ", ") +
+ 			" FROM files_by_uid WHERE uid IN (" + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + ")"
+-		if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&batches[batch]); err != nil {
++		queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"),
++			attribute.String("db.collection.name", "files_by_uid"))
++		err := s.session.Query(stmt, nil).WithContext(queryCtx).Bind(args...).SelectRelease(&batches[batch])
++		finish(err)
++		if err != nil {
+ 			return "", nil, err
+ 		}
+ 		fullNamespaceBatch := len(batches[batch]) == fileSnapshotReadBatchLimit
+@@ -279,7 +284,11 @@ func (s *scyllaDatastore) getFileSnapshotRows(ctx context.Context, namespace str
+ 		" FROM files_by_namespace WHERE namespace=? AND (creation_timestamp,uid) IN (" +
+ 		strings.TrimSuffix(strings.Repeat("(?,?),", len(indices)), ",") + ")"
+ 	var rows []fileRow
+-	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&rows); err != nil {
++	queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"),
++		attribute.String("db.collection.name", "files_by_namespace"))
++	err := s.session.Query(stmt, nil).WithContext(queryCtx).Bind(args...).SelectRelease(&rows)
++	finish(err)
++	if err != nil {
+ 		return nil, err
+ 	}
+ 	for _, row := range rows {
+@@ -327,7 +336,11 @@ func (s *scyllaDatastore) GetFileSnapshotsByName(ctx context.Context, namespace
+ 		" FROM files_by_name WHERE namespace=? AND name IN (" +
+ 		strings.TrimSuffix(strings.Repeat("?,", len(args)-1), ",") + ")"
+ 	var indices []fileIndexRow
+-	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&indices); err != nil {
++	queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"),
++		attribute.String("db.collection.name", "files_by_name"))
++	err := s.session.Query(stmt, nil).WithContext(queryCtx).Bind(args...).SelectRelease(&indices)
++	finish(err)
++	if err != nil {
+ 		return nil, err
+ 	}
+ 	if err := ctx.Err(); err != nil {
+diff --git a/gitstore-api/internal/datastore/scylla/query_observer_test.go b/gitstore-api/internal/datastore/scylla/query_observer_test.go
+index d0e309724177fc8dbaec12fb77b610831dc74ead..e32f4272c116220b6a528672fd06c2adb197c5fa 100644
+--- a/gitstore-api/internal/datastore/scylla/query_observer_test.go
++++ b/gitstore-api/internal/datastore/scylla/query_observer_test.go
+@@ -180,7 +180,7 @@ func TestCQLExchangeStreamTimingsHaveExactAttemptParent(t *testing.T) {
+ 	tracer := provider.Tracer("test")
+ 	ctx, parent := tracer.Start(context.Background(), "parent")
+ 	defer parent.End()
+-	queryCtx, finish := startCQLExchange(ctx, tracer)
++	queryCtx, finish := startCQLExchange(ctx, tracer, attribute.String("db.collection.name", "files_by_uid"))
+ 	observer := cqlTraceObserver{tracer: tracer}
+ 	stream := observer.StreamContext(queryCtx)
+ 	require.NotNil(t, stream)
+@@ -207,6 +207,7 @@ func TestCQLExchangeStreamTimingsHaveExactAttemptParent(t *testing.T) {
+ 		require.NotContains(t, item.Value.Emit(), "private-")
+ 	}
+ 	require.EqualValues(t, 1, attrs["gitstore.db.stream.reserved"].AsInt64())
++	require.Equal(t, "files_by_uid", attrs["db.collection.name"].AsString())
+ 	require.EqualValues(t, 1, attrs["gitstore.db.stream.started"].AsInt64())
+ 	require.EqualValues(t, 1, attrs["gitstore.db.stream.completed"].AsInt64())
+ 	require.Zero(t, attrs["gitstore.db.stream.abandoned"].AsInt64())

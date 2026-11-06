@@ -1,0 +1,1419 @@
+diff --git a/.gitignore b/.gitignore
+index 2e7765df24b25dc9157c7dd62808fb412e32ed37..f81a747df875fee65133278017f2ea7c33256f89 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -112,3 +112,5 @@ catalogue-work/
+ *.auto.tfvars.json
+ /deploy/digitalocean/backend.hcl
+ crash.log
++
++**/admin-prd.md
+diff --git a/docs/development/make-reference.md b/docs/development/make-reference.md
+index fedcf086e55df01569e8f5a3175043132bc6aca6..9212e1bbf21090873d0d1b1a0e0e5df00ba1116b 100644
+--- a/docs/development/make-reference.md
++++ b/docs/development/make-reference.md
+@@ -170,3 +170,30 @@ containers. Here `PROFILE` selects a scenario, not the Scylla startup topology.
+ Use the dedicated [capacity](../../tests/capacity/README.md) and
+ [chaos](../../tests/chaos/README.md) guides for supported combinations, explicit
+ ownership/confirmation requirements and evidence options before running them.
++
++The owned-catalog category diagnostic accepts a private plan with
++`preparationOnly: true` for a 15-minute mixed trial and full 30-minute
++confirmation at the first configured rates, followed by owned-stack shutdown.
++This preparation does not run the ramps or six-hour soak.
++After qualifying the same workload and deployment, `soakOnly: true` instead
++runs only the full six-hour mixed phase at those first rates. The flags are
++mutually exclusive; preflight, telemetry, correctness, restoration and
++owned-stack shutdown still apply. Allow additional wall time and credential
++lifetime for startup, drain and validation, with a matching watchdog deadline.
++Failed health scrapes stop the diagnostic and retain bounded, redacted endpoint,
++HTTP-status and controller-state evidence; they are not retried or ignored.
++
++Capacity characterization is distinct from an acceptance pass. For a
++five-million-Product characterization, retain the original catalog in one
++repository and include deliberately unbalanced category membership. Verify
++observed membership through both APIs before claiming membership-read or
++steady-state results; authored references alone do not prove reconciliation.
++Keep strictly more than 10 GiB of host disk free throughout characterization.
++This safety floor is not a storage-capacity result.
++
++Record actual hardware and container limits, source/configuration identities,
++cold versus warm preparation, offered and achieved rates, latency distributions,
++errors, missed offers, backlog, resource usage and recovery. Report an incomplete
++load schedule or unresolved backlog rather than inventing a passing latency,
++duration or throughput target. Existing acceptance profiles retain their own
++checks; diagnostic measurements do not establish an acceptance pass.
+diff --git a/scripts/AGENTS.md b/scripts/AGENTS.md
+index 9e089de6493704e85635a5afae3bb3aebeed5e9c..5f3a48d34ae4abbb351d632ff3e2a22b8963cea5 100644
+--- a/scripts/AGENTS.md
++++ b/scripts/AGENTS.md
+@@ -43,6 +43,15 @@ container wiring and configuration.
+ - For capacity, profiling, chaos and owned-deployment helpers, read
+   [../tests/capacity/AGENTS.md](../tests/capacity/AGENTS.md). Keep
+   scenario-specific command details in the existing scenario documentation.
++- `category/hierarchy` diagnostic mode accepts
++  `CAPACITY_CATEGORY_EXISTING_FIXTURE` for a private, explicitly owned catalog
++  plan. The runner must preserve baseline Products, validate pinned ownership,
++  enforce absolute deadlines and stop containers without deleting volumes.
++  A boolean `preparationOnly` plan runs a 15-minute trial and 30-minute
++  confirmation at the first configured rates, never the six-hour soak.
++  A mutually exclusive boolean `soakOnly` runs only the full six-hour mixed
++  phase at those first rates, after they have been independently qualified;
++  it retains preflight, correctness, telemetry, restoration and shutdown gates.
+ 
+ ## Infrastructure command instructions
+ 
+diff --git a/scripts/run-capacity-target.sh b/scripts/run-capacity-target.sh
+index d29c684820c204dc08d30002bf4804b7e23fa520..904cd6f7e1bba6f9182e5a2e33e9d24981046670 100755
+--- a/scripts/run-capacity-target.sh
++++ b/scripts/run-capacity-target.sh
+@@ -82,6 +82,23 @@ case "${target}/${profile}" in
+   *) usage; exit 2 ;;
+ esac
+ 
++if [[ -n "${CAPACITY_CATEGORY_EXISTING_FIXTURE:-}" ]]; then
++  [[ "${target}/${profile}/${mode}" == category/hierarchy/diagnostic ]] || {
++    echo "CAPACITY_CATEGORY_EXISTING_FIXTURE requires category/hierarchy diagnostic mode" >&2
++    exit 2
++  }
++  [[ -r "${CAPACITY_CATEGORY_EXISTING_FIXTURE}" ]] || {
++    echo "CAPACITY_CATEGORY_EXISTING_FIXTURE must identify a readable owned-fixture plan" >&2
++    exit 2
++  }
++  [[ -z "${CAPACITY_CHAOS_PROFILE:-}" ]] || {
++    echo "owned catalog characterization does not inject faults" >&2
++    exit 2
++  }
++  runner_kind=owned-catalog
++  command=(python3 "${repo_root}/scripts/run-existing-catalog-capacity.py" "${CAPACITY_CATEGORY_EXISTING_FIXTURE}")
++fi
++
+ case "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" in
+   0) ;;
+   1)
+@@ -236,13 +253,14 @@ capacity_source_state_sha256() {
+ }
+ source_state_sha256="$(capacity_source_state_sha256)"
+ jq -n \
++  --arg runner_kind "${runner_kind}" \
+   --arg target "${target}" --arg profile "${profile}" --arg mode "${mode}" \
+   --arg run_id "${run_id}" --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+   --arg git_revision "${git_revision}" --arg source_state_sha256 "${source_state_sha256}" \
+   --arg config_digest "$(if [[ -f "${evidence_dir}/config.json" ]]; then shasum -a 256 "${evidence_dir}/config.json" | awk '{print $1}'; fi)" \
+   --arg environment_digest "$(if [[ -f "${evidence_dir}/environment.json" ]]; then shasum -a 256 "${evidence_dir}/environment.json" | awk '{print $1}'; fi)" \
+   --argjson worktree_dirty "${worktree_dirty}" \
+-  '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,evidenceClass:$mode,productionTargets:{visibilityP95Seconds:1,visibilityP99Seconds:3},runId:$run_id,startedAt:$started_at,gitRevision:$git_revision,worktreeDirty:$worktree_dirty,sourceStateSha256:$source_state_sha256,verifier:{kind:"go-test"}} + (if $config_digest == "" then {} else {configDigest:$config_digest} end) + (if $environment_digest == "" then {} else {environmentDigest:$environment_digest} end)' \
++  '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,evidenceClass:$mode,productionTargets:{visibilityP95Seconds:1,visibilityP99Seconds:3},runId:$run_id,startedAt:$started_at,gitRevision:$git_revision,worktreeDirty:$worktree_dirty,sourceStateSha256:$source_state_sha256,verifier:{kind:$runner_kind}} + (if $config_digest == "" then {} else {configDigest:$config_digest} end) + (if $environment_digest == "" then {} else {environmentDigest:$environment_digest} end) | if $runner_kind == "owned-catalog" then del(.productionTargets) + {performanceAcceptanceClaimed:false} else . end' \
+   >"${metadata}"
+ 
+ source_status=0
+diff --git a/scripts/test-capacity-dispatch.sh b/scripts/test-capacity-dispatch.sh
+index 8a64a02e3b9ce3418522707a141c9f271495cde0..402a7b369b295c5b5e063a4a709d0e18f440671a 100755
+--- a/scripts/test-capacity-dispatch.sh
++++ b/scripts/test-capacity-dispatch.sh
+@@ -19,6 +19,18 @@ assert_dispatch() {
+ }
+ 
+ assert_dispatch api readiness '_capacity-k6'
++printf '{}\n' >"${test_dir}/owned-catalog.json"
++owned_output="$(CAPACITY_CATEGORY_EXISTING_FIXTURE="${test_dir}/owned-catalog.json" \
++  CAPACITY_DRY_RUN=1 "${dispatcher}" category hierarchy diagnostic)"
++[[ "${owned_output}" == *"run-existing-catalog-capacity.py"* ]]
++for arguments in 'category hierarchy alpha' 'category hierarchy production' 'api readiness diagnostic'; do
++  if CAPACITY_CATEGORY_EXISTING_FIXTURE="${test_dir}/owned-catalog.json" CAPACITY_DRY_RUN=1 \
++    "${dispatcher}" ${arguments} >/dev/null 2>&1; then
++    echo "owned catalog unexpectedly accepted ${arguments}" >&2
++    exit 1
++  fi
++done
++PYTHONDONTWRITEBYTECODE=1 python3 "${repo_root}/scripts/test-existing-catalog-capacity.py"
+ for workload in file combined; do
+   client_output="$(REPOSITORY_CAPACITY_CLIENT_TIMING=1 REPOSITORY_CAPACITY_WORKLOAD="${workload}" \
+     CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle diagnostic)"
+@@ -1161,6 +1173,12 @@ category_verify() {
+ for mode in diagnostic alpha production; do
+   category_verify "${mode}"
+ done
++for seeded in true false; do
++  jq --argjson seeded "${seeded}" '.seedCloneUsed = $seeded' \
++    "${test_dir}/category-verifier/valid-push.json" >"${test_dir}/category-verifier/push-input.json"
++  category_verify alpha
++done
++cp "${test_dir}/category-verifier/valid-push.json" "${test_dir}/category-verifier/push-input.json"
+ jq '.metrics.category_mutation_endpoint_callbacks.count = 1 |
+   .metrics.category_filtered_read_endpoint_callbacks.count = 1' \
+   "${test_dir}/category-verifier/native-summary.json" >"${test_dir}/category-verifier/summary.json"
+@@ -1309,6 +1327,9 @@ for mutation in \
+   '.namespace = "different"' \
+   '.runId = "other-run"' \
+   '.firstPushMs = 250000' \
++  '.seedCloneUsed = null' \
++  '.seedCloneUsed = "true"' \
++  '.seedCloneUsed = 1' \
+   '.token = "must-not-be-copied"'; do
+   jq "${mutation}" "${test_dir}/category-verifier/valid-push.json" >"${test_dir}/category-verifier/push-input.json"
+   if category_verify alpha >/dev/null 2>&1; then
+diff --git a/shared/schemas/collection.graphqls b/shared/schemas/collection.graphqls
+index f5c978513b9198344c913affb07d517e7b1951ce..69f35e4c248c1ddb76dc3365905676acbbb26df2 100644
+--- a/shared/schemas/collection.graphqls
++++ b/shared/schemas/collection.graphqls
+@@ -1,5 +1,4 @@
+ # Collection Entity GraphQL Types (Kubernetes-style resource envelope)
+-# Replaces the legacy flat collection schema.
+ 
+ extend type Query {
+   """
+diff --git a/shared/schemas/product.graphqls b/shared/schemas/product.graphqls
+index c8f1a2e6ace0907edff0d481268552cadbe48a83..25a47a7351a04b245a8120d7dfabcb675b64ee06 100644
+--- a/shared/schemas/product.graphqls
++++ b/shared/schemas/product.graphqls
+@@ -1,5 +1,4 @@
+ # Product Resource — Kubernetes-style GraphQL Schema
+-# Full rewrite: alpha software, no backwards compatibility required.
+ # All reads served from the datastore (fully hydrated view).
+ # Mutations are git-driven: GraphQL commits the canonical manifest and awaits
+ # the same admission path as a Git push.
+diff --git a/shared/schemas/product_variant.graphqls b/shared/schemas/product_variant.graphqls
+index 7378924a84fd54a1c4a06f0cb0070ff7d09b1546..545e5f4845b126f2cba19c3eb16fdb623511dfaf 100644
+--- a/shared/schemas/product_variant.graphqls
++++ b/shared/schemas/product_variant.graphqls
+@@ -1,6 +1,5 @@
+ # ProductVariant Entity GraphQL Types (Kubernetes-style resource envelope)
+ # ProductVariant is the purchasable SKU unit; Product is the non-sellable parent.
+-# All writes are via git push; query resolvers serve the fully-hydrated datastore view.
+ 
+ extend type Query {
+   """
+diff --git a/shared/schemas/repository.graphqls b/shared/schemas/repository.graphqls
+index 508e35469eceda72c492b256637d40b9ac9a9bfc..bbd443846a70d2bca4101dc58c3a1700a07f490a 100644
+--- a/shared/schemas/repository.graphqls
++++ b/shared/schemas/repository.graphqls
+@@ -1,9 +1,6 @@
+ # SPDX-License-Identifier: AGPL-3.0-or-later
+ # Copyright (c) 2026 GitStore contributors
+ 
+-# Repository and NamespaceMapping GraphQL schema additions
+-# Feature: 010-repo-storage-identity
+-
+ """
+ A namespace-scoped GitStore Repository resource.
+ """
+diff --git a/shared/scylla-cdc-go/NOTICE.md b/shared/scylla-cdc-go/NOTICE.md
+index ef5fc228404127b4f586e59e2c0cc6283e4d11b8..d18c979cfc55c9446e31c60e6eac56b70c440936 100644
+--- a/shared/scylla-cdc-go/NOTICE.md
++++ b/shared/scylla-cdc-go/NOTICE.md
+@@ -22,5 +22,8 @@ An existing upstream `nolint:unused` annotation also has an equivalent
+ `lint:ignore U1000` annotation for the root staticcheck command.
+ 
+ Remove the replacement and local copy when an upstream release includes the
+-same fix, after rerunning these regressions and live replacement tests. No
+-upstream issue, branch or release has been published by this change.
++same fix, after rerunning these regressions and live replacement tests. The
++shutdown deadlock and proposed deferred-stop fix are reported in
++[scylladb/scylla-cdc-go#86](https://github.com/scylladb/scylla-cdc-go/issues/86).
++No upstream fix branch, pull request or release has been published by this
++change.
+diff --git a/tests/capacity/AGENTS.md b/tests/capacity/AGENTS.md
+index 860ee26face7e4a1ad1d88588077bc234f529f62..604be93177915bb54ca8f316c4a5394301161411 100644
+--- a/tests/capacity/AGENTS.md
++++ b/tests/capacity/AGENTS.md
+@@ -18,6 +18,10 @@ and evidence contracts; do not duplicate that catalogue in root instructions.
+   Verify ownership before faults or cleanup. Preserve unrelated containers,
+   storage, receipts and evidence; never target an operator deployment or use
+   broad cleanup/pruning commands.
++- Reuse the preserved Product/Category capacity baseline for future capacity
++  tests until GitStore reaches GA. Cleanup must retain its authoritative data,
++  Category fixtures, Git provenance and verified recovery backup; reclaim
++  independently recoverable artifacts rather than discarding this baseline.
+ - Reuse existing runners, stack helpers and observability wiring. Check the
+   current README and implementation before prescribing flags; a proposed
+   selector or an experiment-local tool is not a contributor prerequisite.
+diff --git a/tests/capacity/README.md b/tests/capacity/README.md
+index e55ea5f4ec7fd45df4d8af5bf0ccc5e472d70f83..11915dbf1ac8a0c5b99ccd43bef453a8dfdbbb68 100644
+--- a/tests/capacity/README.md
++++ b/tests/capacity/README.md
+@@ -34,8 +34,255 @@ do not replace the under-load permission/fault matrix or any existing workload,
+ latency, retry, replacement or resource gate; diagnostics retain their existing
+ behavior.
+ 
++## Five-million-Product characterization
++
++These short diagnostics preceded the client-preparation fix described below;
++they are not sustainable throughput limits, soak results or acceptance passes.
++Keep workload correctness and resource
++safety separate from performance observations; do not select a passing
++latency or duration after observing the result.
++
++The measured deployment retained five million baseline Products in one Git
++repository. An additional 257 Products authored a deliberately unbalanced
++256:1:0 membership across hot, cold and empty categories in that same repository.
++Push load added one Category manifest per commit to its `main` branch.
++Both API replicas and both controllers shared three Scylla nodes and exactly
++one native Git service. The restored application images came from
++`34a7434c12778cebda2ffce906a3f473b707a9af`; these measurements do not benchmark
++subsequent application changes.
++
++The host was an Apple M3 Pro with 11 logical CPUs and 36 GiB RAM, running
++macOS 26.6.1. Docker exposed eight CPUs and 15.63 GiB RAM with the `overlayfs`
++storage driver. Each Scylla container had a 4 GiB memory limit and an 8 GiB
++memory-plus-swap limit. Clients used loopback HTTP through Docker, with local
++Git objects borrowed from a live-HEAD-verified owned seed. This excludes cold
++network-clone cost and does not measure a WAN, network bandwidth ceiling,
++GPU performance or a different storage device.
++
++Each campaign offered load for 120 seconds using the companion push driver,
++with a bounded worker pool and a 30-second drain. A busy pool dropped offers
++instead of accumulating an unbounded queue. Preparation was outside the offer
++window. No compilation or profiling ran alongside these campaigns; periodic
++Docker-stat, controller-metric and disk sampling still adds diagnostic overhead.
++
++| Measurement | One worker | Four workers |
++| --- | ---: | ---: |
++| Offered pushes/s | 2 | 8 |
++| Scheduled / offered | 240 / 240 | 960 / 960 |
++| Acknowledged | 74 | 66 |
++| Acknowledgements per declared load second | 0.617 | 0.550 |
++| Failed offers | 0 | 662 |
++| Dropped offers | 166 | 232 |
++| Successful ACK latency p50 / p95 / p99 | 1,041 / 2,692 / 16,195 ms | 1,077 / 1,913 / 20,060 ms |
++| Drain duration | 0.024 s | 1.162 s |
++| Elapsed including client preparation and observation | 159.6 s | 298.2 s |
++| Minimum sampled host free disk | 101.10 GiB | 95.76 GiB |
++
++Neither campaign missed scheduled offer times, was cancelled or exceeded its
++drain bound. Both nevertheless failed the driver's zero-failure/zero-drop
++acceptance assertions; retaining their evidence does not turn them into passes.
++The four-worker failures were local staging failures: three `add/deadline`
++and 659 `add/command_failure`. These are per-offer counts, not 662 independent
++server failures. Successful-ACK percentiles exclude failed and dropped offers.
++The observations therefore cannot establish a native Git throughput ceiling.
++
++The root cause was a configured sparse checkout retaining a 520 MB full
++on-disk index after cloning. Concurrent first staging operations exceeded
++their command bounds and left index locks; subsequent offers failed on those
++locks. Preparation now explicitly persists the sparse index within the same
++preparation deadline, without extending push-operation deadlines. A regression
++checks the on-disk index before a status command can normalize it. Bounded
++functional verification prepared four 301-byte indexes, staged concurrently
++twice and completed eight authenticated pushes, including rebases, with no
++failures, retained index locks or baseline Product-tree changes. This verifies
++the observed failure's correction, not sustained-load capacity.
++
++Post-restore reconciliation remained active, with roughly 4.7-4.9 million queued
++Products per replica at campaign boundaries. One replica's queue grew during
++the four-worker campaign despite completed reconciliations, so aggregate
++success counters do not prove backlog convergence. This is not a warm
++steady-state comparison. Runtime identities stayed fixed and no container
++restart or OOM kill occurred during either campaign.
++
++At the end of these campaigns, both APIs returned matching snapshots for all 257 fixture
++Products, with current Ready conditions and the expected resolved category
++references and paths. However, all three category-product connections on
++both replicas returned `PROJECTION_NOT_READY`; this was unavailable membership,
++not an empty result. An initially bounded audit was incomplete. A subsequent
++completed, category-scoped audit scanned 5,000,258 authoritative Products and
++verified matching expected/actual fingerprints for all 257 forward and reverse
++membership rows. Confirmed operator completion then published readiness.
++Both APIs now fully page the exact 256:1:0 memberships in both directions,
++with matching materialized counts and current Product readiness. The operator
++completion did not rewrite authoritative resources or restart core services.
++Requeuing one quarantined, owned category conflict also restored both
++controllers' healthy status. These functional recovery checks do not measure
++membership-read throughput or establish a warm steady state; the multi-million
++Product reconciliation backlog remains visible.
++
++For future characterization, retain this five-million, single-repository,
++unbalanced-membership workload and keep strictly more than 10 GiB host disk
++free. Record actual hardware, container limits, image/source/configuration
++identities and cold/warm state. Retain the full offered/ACK/failure/drop
++accounting, successful-ACK latency, preparation/drain time, client and service
++resource samples, queue movement and any recovery observations. The same
++resource envelope and client preparation are required for comparisons.
++Verify all fixture Products' current Ready generation and resolved references,
++then fully page category membership through both APIs before interpreting
++membership-read measurements. An authored skew or a consistent empty
++projection is insufficient. Report unavailable membership, client staging
++failures and unresolved recovery explicitly rather than inferring a passing
++capacity or soak target. Existing acceptance profiles remain separate.
++
++### Six-hour mixed-load comparison baseline
++
++The November 4-5, 2026 six-hour measurement is the recorded comparison
++baseline for future runs of this preserved catalog. **Benchmark recording and
++acceptance are separate outcomes:** the complete, correctness-verified
++measurement remains useful even though four dropped offers failed the
++zero-drop acceptance gate. Retain those drops in every comparison.
++
++The host was an Apple M3 Pro with 11 CPU cores and 36 GB RAM, rebooted before
++startup. The shared Docker memory envelope reported approximately 15.63 GiB;
++each of the three Scylla containers reported a 4 GiB limit. Topology was two
++APIs, two conflict-corrected controllers, one Git service and three Scylla
++nodes. The workload retained five million baseline Products, 257 owned
++fixtures and hot/cold/empty Category memberships of 256:1:0. It offered one
++complete membership walk per second across both APIs and one Category Git
++push every four seconds, with membership churn and correctness readbacks.
++One sparse publication clone served four bounded in-flight offers; this is
++not an independent multi-client push benchmark.
++
++| Measurement | Recorded baseline |
++| --- | --- |
++| Native push offered window | 21,600.000510 seconds |
++| Scheduled / acknowledged pushes | 5,400 / 5,396 |
++| Dropped offers / failed submitted pushes / missed schedules | 4 / 0 / 0 |
++| Offers requiring retry | 3 |
++| Acknowledgements per offered second | 0.249815 |
++| Successful push latency p50 / p95 / p99 / max | 1,830 / 4,849 / 7,813 / 26,319 ms |
++| Completed membership walks | 21,651; no failures, drops or missed schedules |
++| Membership-walk latency p50 / p95 / p99 | 10.567 / 96.428 / 176.075 ms |
++| Read offered window / phase elapsed | 21,651 / 21,662.158 seconds |
++| Both-API correctness and final fixture restoration | Verified |
++| Original Product-tree fence | Verified |
++
++The read window includes bounded push preparation and covers the complete
++native offered window. Successful-push latency excludes dropped offers and
++includes publication-gate waiting. The four drops occurred when the bounded
++client slots filled during slow publication/recovered non-fast-forward
++episodes; they are not four rejected or lost submitted Git pushes.
++Acknowledgements per offered second are measured throughput at this fixed
++setting, not a maximum sustainable capacity claim.
++
++Resource summaries below use 1,185 Docker samples over the mixed phase.
++Memory is Docker-reported usage, **not process RSS or configured allocation**.
++CPU is Docker's percentage, where 100% corresponds to one CPU core.
++Percentiles use nearest-rank sampled values, not request distributions.
++
++| Component | Memory p50 / p95 / max (MiB) | CPU p50 / p95 (%) |
++| --- | --- | --- |
++| API A | 126.3 / 130.1 / 135.1 | 18.05 / 27.56 |
++| API B | 63.4 / 65.2 / 71.8 | 1.63 / 7.31 |
++| Controller A | 186.9 / 207.1 / 217.3 | 33.27 / 109.73 |
++| Controller B | 162.2 / 183.6 / 195.9 | 33.47 / 104.67 |
++| Git service | 215.7 / 238.9 / 284.5 | 82.70 / 151.45 |
++| Scylla node 1 | 2,119.7 / 2,284.5 / 2,312.2 | 34.32 / 72.92 |
++| Scylla node 2 | 2,126.8 / 2,248.7 / 2,281.5 | 27.95 / 68.07 |
++| Scylla node 3 | 2,111.5 / 2,232.3 / 2,252.8 | 27.89 / 69.41 |
++
++The minimum sampled host free disk was approximately 43.24 GiB; maximum
++allocated swap was 4 GiB and maximum sampled swap use was approximately
++3.64 GiB. Product queues remained around 4.6-5.0 million per controller.
++Their first/last exported depths were 4,825,885 / 4,766,426 on A and
++4,822,506 / 4,773,432 on B. This is a **post-reboot mixed-load baseline with
++ongoing reconciliation**, not a drained, warm steady-state baseline.
++No quantitative thermal baseline was captured, and no HA/fault or credential
++rotation acceptance is inferred.
++
++Preserve the private machine-readable baseline with the original evidence.
++It records image/configuration, source and driver hashes, workload and
++hardware identities, independent benchmark/acceptance outcomes, sampled
++Docker usage and process RSS separately, queue/CDC observations and evidence
++checksums. Retain raw resource samples, request outcomes and Prometheus
++exports; the summary is not a substitute for their coverage and attribution.
++For future comparisons, reuse the Product/Category dataset through GA and
++match hardware/VM limits, topology, client preparation/concurrency, configured
++auth providers, diagnostic overhead and recovery state. Report intentional
++changes explicitly rather than treating unlike runs as a regression.
++
+ ## Local telemetry and live profiling
+ 
++For an explicitly owned, already populated catalog, the category diagnostic
++can consume a private JSON plan without seeding a second repository:
++
++```bash
++make capacity TARGET=category PROFILE=hierarchy MODE=diagnostic \
++  CAPACITY_CATEGORY_EXISTING_FIXTURE=/absolute/private/catalog-plan.json
++```
++
++The plan supplies loopback API/Git/Prometheus endpoints, the existing token
++file and seed/original clones, repository identity, fixture prefix, eight
++pinned core-container identities/configuration hashes, runner-source hashes,
++and a precompiled push-driver path/hash. It also supplies an absolute output
++directory, `launchByUnix` and `hardStopUnix` deadlines, four bounded read/push
++rates, and fixed phase budgets: 30-minute baseline, four 15-minute read steps,
++four 15-minute mixed steps, 30-minute confirmation and a six-hour soak.
++This path is diagnostic-only; it does not change existing acceptance gates.
++For finite preparation, set the plan's boolean `preparationOnly` to `true`.
++This runs the same preflight, a 15-minute mixed trial at the first configured
++read/push rates, and the full 30-minute confirmation at those rates, then
++restores the fixture and stops the owned stack. Both phases must be clean.
++The result explicitly records preparation scope; it does not run the ramps
++or six-hour soak and does not establish maximum sustainable capacity.
++For a setting already qualified by a successful preparation, set `soakOnly`
++to `true` instead. It runs only the full six-hour mixed phase at the first
++configured read/push rates, without repeating the baseline, ramps or
++confirmation. The flags are mutually exclusive. Preserve the preparation
++receipt and verify the same workload, binary and deployment pins before
++launch; never infer qualification from readiness alone. Both selections
++retain preflight, telemetry, both-API correctness, restoration and shutdown.
++Soak acceptance requires the full native offered window, every scheduled push
++acknowledged, complete read coverage and no failed, dropped or missed work.
++An entire measured window with verified correctness can still be retained as
++a comparison baseline when that acceptance gate fails; record both outcomes
++and preserve all failures and drops.
++Setup, drain and validation add wall time beyond the six offered-load hours.
++Omitting both flags retains the full benchmark sequence.
++Optional `configurationFilesSHA256` pins mounted configuration and identity
++file contents during runtime sampling. An `originalIndexSHA256` pin also
++protects the original clone's HEAD/index at the initial and final tree fences.
++Only the fixture's owned Product is reassigned, restored between phases, and
++checked through both APIs. The original Product tree is compared with the
++allowlisted fixture changes. Git preparation and drain are reported separately
++from its offered window; read traffic covers the full Git offered window.
++Per-offer push observations are retained in the verbose driver log.
++
++Offered-load requests are never retried; HTTP failures retain their status code
++in client evidence. Correctness queries and restoration readbacks retry HTTP
++429 within their existing operation deadlines, honoring `Retry-After` with
++bounded backoff when the header is unavailable. Mutations and permanent HTTP
++errors are not retried. Phase outcomes are saved before post-load validation;
++`correctnessVerified` becomes true only after both replicas pass. Exhausted
++recovery or failed correctness still stops the run, retaining the phase's
++measurements without qualifying that setting for the soak.
++
++Health-scrape failures remain fatal and record the failing endpoint and error
++class, plus the HTTP status when available. Error bodies are read at most once,
++up to 64 KiB plus a truncation sentinel. Only recognized health status values,
++readiness booleans and numeric/boolean state for Namespace, Repository,
++CategoryTaxonomy and Product are retained; response text, headers and arbitrary
++fields are omitted. Malformed or oversized error bodies still stop the run.
++
++The runner records client outcomes, correctness checks, bounded resource
++samples and 15-minute Prometheus exports outside version control. It stops
++before the disk floor, on ownership/source/runtime changes or at its deadline,
++then restores the owned reference and gracefully stops only the pinned core
++containers without removing volumes. A separately launched `--watchdog` process
++can enforce the same deadline if the runner stalls. The companion push driver
++accepts continuous durations up to six hours; operation deadlines and its
++30-second drain bound are unchanged. Keep the laptop powered and awake.
++
+ API decision histograms use finite action/outcome labels and preserve
+ sub-millisecond latency; their counts are provider calls, not HTTP throughput
+ or Git acknowledgements. Repository/category API histories include
+@@ -1421,12 +1668,43 @@ than truncated. An unset or empty setting retains its existing fallback.
+     `CAPACITY_PUSH_*` settings) pushes commits to the same `gitstore-system`
+     repository for the duration of the load. Set `CAPACITY_PUSH_NAMESPACE` to
+     the profile's namespace and give both producers the same `CAPACITY_RUN_ID`.
+-    Workers use shallow sparse clones with
++    The producer uses one shallow sparse publication clone with
+     [sparse indexes](https://github.blog/open-source/git/make-your-monorepo-feel-small-with-gits-sparse-index/)
+     to avoid checking out the existing catalog or keeping an index entry for
+     every unchanged file outside the checkout. Explicit sparse staging preserves the complete existing
+     tree while adding each new manifest, including after a rebase; command
+     deadlines and push-latency accounting are unchanged.
++    Category pushes include the `categories/` checkout cone before offering
++    work. Staging outside a root-only cone can transiently expand the full
++    catalog index even when the resulting index is sparse.
++    For large, already-owned catalogs, `CAPACITY_PUSH_SEED_CLONE` can name an
++    absolute path to an existing local clone. Before preparing the publisher,
++    its HEAD must match the authenticated live remote `main`. The publisher borrows
++    its object store, retains the normal sparse-index checkout,
++    and still pushes and rebases against the real remote. Keep the seed and its
++    borrowed objects available and do not prune them during the run.     Preparation explicitly persists the sparse index before any offered work;
++    configuring sparse checkout alone can leave a full index for the first
++    staging operation to rewrite. Seeded cloning and index preparation share
++    one two-minute bound; push commands retain their existing bounds.
++    Evidence records `seedCloneUsed`.
++    This measures warm-object client preparation, not a cold network clone.
++    Refresh the seed to the remote head between separate campaigns.
++    Each offer refreshes the publisher's branch before creating its commit.
++    All offers from this one producer coordinate their refresh/commit/publication
++    section on the shared clone, avoiding redundant fetches of this producer's
++    own commits across idle clones. Waiting consumes an in-flight slot and stays
++    inside offer latency and the per-offer deadline; offers are never paused or
++    queued beyond the worker bound. External API/controller writers remain
++    independent. Results describe a coordinated producer, not independent
++    multi-client push concurrency. Evidence records `publicationMode` and
++    `publisherClones`; `workers` bounds in-flight offers, including publication
++    waiters, rather than the number of publication clones.
++    Concurrent branch advances permit up to eight push attempts, rebasing
++    before each retry, within a 30-second total per-offer deadline. Capped
++    jitter precedes each refresh to avoid lockstep competing writers. Additional
++    retries beyond the first recovery attempt are limited to non-fast-forward
++    conflicts; other failures are not repeatedly retried. Exhaustion remains a
++    failed offer, and all retries remain inside latency and worker accounting.
+     The verifier consumes the driver's complete document, including `kind`,
+     `namespace`, `runId`, `offered`, `pushes`, `failures`, `dropped`, `retries`,
+     worker/interval bounds, latency statistics and first/last acknowledgement
+@@ -1443,8 +1721,10 @@ than truncated. An unset or empty setting retains its existing fallback.
+     and records `drainTimedOut`. Drain timing includes that cleanup, and the
+     verifier rejects canceled, over-bound or incomplete runs. Acknowledgement
+     latency includes schedule lateness and worker execution.
+-    Retries count jobs that retried, not individual HTTP attempts. Pass its path as
+-    `CAPACITY_CATEGORY_PUSH_EVIDENCE`; alpha/production require it and the
++    Retries count jobs that retried, not individual HTTP attempts.
++    Per-offer diagnostic records also retain capped command timings, resulting
++    index sizes and sanitized failure classes; they omit arguments and responses.
++    Pass its path as `CAPACITY_CATEGORY_PUSH_EVIDENCE`; alpha/production require it and the
+     verifier requires the push window to cover at least half of the load window.
+   - **Faults**: reuse `tests/chaos/profiles/controller-restart.json` and
+     `api-restart.json` via `CAPACITY_CHAOS_PROFILE` (one per run) with
+diff --git a/tests/capacity/verifiers/category-hierarchy.sh b/tests/capacity/verifiers/category-hierarchy.sh
+index 5b1a05bb3e2cc86e1b7beef4cfc44e4b1012e246..643e65911734e08af5c8a1eb6ae2f23642bdcd9b 100755
+--- a/tests/capacity/verifiers/category-hierarchy.sh
++++ b/tests/capacity/verifiers/category-hierarchy.sh
+@@ -167,7 +167,8 @@ if [[ "${mode}" != "diagnostic" ]]; then
+     (keys - ["repository","namespace","kind","runId","workers","intervalMs","offered",
+       "pushes","failures","dropped","retries","firstPushMs","lastPushMs","latencyMs",
+       "intervalNs","durationNs","scheduled","missedSchedules","offeredDurationNs",
+-      "drainDurationNs","drainTimeoutNs","drainTimedOut","cancelled"] | length) == 0 and
++      "drainDurationNs","drainTimeoutNs","drainTimedOut","cancelled","seedCloneUsed"] | length) == 0 and
++    ((has("seedCloneUsed") | not) or (.seedCloneUsed | type == "boolean")) and
+     .repository == "gitstore-system" and .namespace == $namespace and .kind == "category" and
+     $run != "" and .runId == $run and
+     ([.workers,.intervalMs,.offered,.pushes,.failures,.dropped,.retries,.firstPushMs,.lastPushMs,
+diff --git a/tests/integration/admission_operations_test.go b/tests/integration/admission_operations_test.go
+index f1a98e44c870b2ab05557ce271c78d482add35e1..4bc4e69575d40da346b391b2faf8045eade93341 100644
+--- a/tests/integration/admission_operations_test.go
++++ b/tests/integration/admission_operations_test.go
+@@ -15,21 +15,6 @@ import (
+ 
+ // ── helpers ───────────────────────────────────────────────────────────────────
+ 
+-// commitProductAt writes a product file at a repo-relative path (not forced
+-// under products/) and commits it. Useful for rename/move tests.
+-func (h *pushHelper) commitProductAt(repoRelPath, content string) {
+-	h.t.Helper()
+-	abs := filepath.Join(h.workDir, repoRelPath)
+-	if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
+-		h.t.Fatalf("mkdir %s: %v", filepath.Dir(abs), err)
+-	}
+-	if err := os.WriteFile(abs, []byte(content), 0644); err != nil {
+-		h.t.Fatalf("write %s: %v", abs, err)
+-	}
+-	run(h.t, h.workDir, "git", "add", abs)
+-	run(h.t, h.workDir, "git", "commit", "-m", "add "+repoRelPath)
+-}
+-
+ // removeFile stages a deletion of repoRelPath and commits it.
+ func (h *pushHelper) removeFile(repoRelPath string) {
+ 	h.t.Helper()
+diff --git a/tests/integration/capacity_push_driver_test.go b/tests/integration/capacity_push_driver_test.go
+index db4fa8d64839737aacf1da7f50453c6d2078060e..faaf2b39fe6183f047c9993bbcb12556f381d395 100644
+--- a/tests/integration/capacity_push_driver_test.go
++++ b/tests/integration/capacity_push_driver_test.go
+@@ -8,6 +8,7 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
++	"math/rand/v2"
+ 	"net/http"
+ 	"net/http/httptest"
+ 	"os"
+@@ -19,6 +20,8 @@ import (
+ 	"sync/atomic"
+ 	"testing"
+ 	"time"
++
++	"github.com/stretchr/testify/require"
+ )
+ 
+ // The capacity push driver is the Git-push companion for capacity profiles
+@@ -37,6 +40,7 @@ import (
+ //	go test -run '^TestCapacityGitPushDriver$' -timeout 2h ./...
+ type capacityPushConfig struct {
+ 	remote, tokenFile, namespace, repository, kind, runID, evidence string
++	seedClone                                                       string
+ 	duration, interval, drainTimeout                                time.Duration
+ 	workers                                                         int
+ }
+@@ -44,6 +48,9 @@ type capacityPushConfig struct {
+ // capacityPushEvidence binds complete offer/outcome accounting and timing to
+ // the category verifier's repository, namespace, kind and run identity.
+ type capacityPushEvidence struct {
++	SeedCloneUsed     bool              `json:"seedCloneUsed,omitempty"`
++	PublicationMode   string            `json:"publicationMode"`
++	PublisherClones   int               `json:"publisherClones"`
+ 	Repository        string            `json:"repository"`
+ 	Namespace         string            `json:"namespace,omitempty"`
+ 	Kind              string            `json:"kind"`
+@@ -82,6 +89,14 @@ type capacityPushResult struct {
+ 	failure      string
+ 	at           time.Time
+ 	latency      time.Duration
++	gitTimings   []capacityPushGitTiming
++}
++
++type capacityPushGitTiming struct {
++	Command    string `json:"command"`
++	DurationNS int64  `json:"durationNS"`
++	IndexBytes int64  `json:"indexBytes"`
++	Failure    string `json:"failure,omitempty"`
+ }
+ 
+ type capacityPushSchedule struct {
+@@ -95,6 +110,7 @@ func loadCapacityPushConfig() (capacityPushConfig, error) {
+ 	cfg := capacityPushConfig{
+ 		remote:       os.Getenv("CAPACITY_PUSH_REMOTE"),
+ 		tokenFile:    os.Getenv("CAPACITY_PUSH_TOKEN_FILE"),
++		seedClone:    os.Getenv("CAPACITY_PUSH_SEED_CLONE"),
+ 		namespace:    os.Getenv("CAPACITY_PUSH_NAMESPACE"),
+ 		repository:   getEnv("CAPACITY_PUSH_REPOSITORY", "gitstore-system"),
+ 		kind:         getEnv("CAPACITY_PUSH_KIND", "category"),
+@@ -123,8 +139,10 @@ func loadCapacityPushConfig() (capacityPushConfig, error) {
+ 		return cfg, errors.New("CAPACITY_PUSH_REMOTE is required")
+ 	case cfg.evidence == "" || !filepath.IsAbs(cfg.evidence):
+ 		return cfg, errors.New("CAPACITY_PUSH_EVIDENCE must be an absolute path")
+-	case cfg.duration <= 0 || cfg.duration > 2*time.Hour:
+-		return cfg, errors.New("CAPACITY_PUSH_DURATION must be within (0, 2h]")
++	case cfg.seedClone != "" && !filepath.IsAbs(cfg.seedClone):
++		return cfg, errors.New("CAPACITY_PUSH_SEED_CLONE must be an absolute path")
++	case cfg.duration <= 0 || cfg.duration > 6*time.Hour:
++		return cfg, errors.New("CAPACITY_PUSH_DURATION must be within (0, 6h]")
+ 	case cfg.interval < 50*time.Millisecond:
+ 		return cfg, errors.New("CAPACITY_PUSH_INTERVAL must be at least 50ms")
+ 	case int64(cfg.interval) > 9007199254740991:
+@@ -248,6 +266,8 @@ func summarizeCapacityPushes(cfg capacityPushConfig, schedule capacityPushSchedu
+ 		drainTimeout = capacityMutationDrainTimeout
+ 	}
+ 	evidence := capacityPushEvidence{
++		SeedCloneUsed:   cfg.seedClone != "",
++		PublicationMode: "coordinated-single-producer", PublisherClones: 1,
+ 		Repository: cfg.repository, Namespace: cfg.namespace, Kind: cfg.kind, RunID: cfg.runID,
+ 		Workers: cfg.workers, IntervalMs: cfg.interval.Milliseconds(), IntervalNs: int64(cfg.interval),
+ 		DurationNs: int64(cfg.duration), Scheduled: schedule.scheduled,
+@@ -300,19 +320,59 @@ func writeCapacityPushEvidence(path string, evidence capacityPushEvidence) error
+ 	return os.Rename(temporary, path)
+ }
+ 
+-// capacityPushWorker owns one clone. Every push is a single new file, so a
+-// rejected (non-fast-forward) push is retried once after rebasing onto the
+-// concurrent writer's commit.
++// capacityPushWorker owns one clone. Repeated ref advances require bounded
++// rebases because another writer can win again between pull and push.
+ type capacityPushWorker struct {
+ 	directory, token string
+ 	cfg              capacityPushConfig
++	publication      chan struct{}
+ }
+ 
+ func newCapacityPushWorker(ctx context.Context, cfg capacityPushConfig, root, token string, index int) (*capacityPushWorker, error) {
+ 	directory := filepath.Join(root, fmt.Sprintf("worker-%02d", index))
+-	if _, err := secretCapacityGit(ctx, root, token, "clone", "--quiet", "--sparse", "-c", "index.sparse=true", "--no-tags", "--depth=1", "--", cfg.remote, directory); err != nil {
++	cloneArgs := []string{"clone", "--quiet", "--sparse", "-c", "index.sparse=true", "--no-tags"}
++	source := cfg.remote
++	if cfg.seedClone == "" {
++		cloneArgs = append(cloneArgs, "--depth=1")
++	} else {
++		head, err := secretCapacityGit(ctx, cfg.seedClone, "", "rev-parse", "HEAD")
++		if err != nil {
++			return nil, fmt.Errorf("seed clone HEAD: %w", err)
++		}
++		remoteHead, err := secretCapacityGit(ctx, root, token, "ls-remote", "--exit-code", "--heads", "--", cfg.remote, "main")
++		if err != nil {
++			return nil, fmt.Errorf("seed clone remote verification: %w", err)
++		}
++		fields := strings.Fields(string(remoteHead))
++		if len(fields) != 2 || fields[0] != strings.TrimSpace(string(head)) || fields[1] != "refs/heads/main" {
++			return nil, errors.New("seed clone HEAD must match the live remote main branch")
++		}
++		source = cfg.seedClone
++		cloneArgs = append(cloneArgs, "--shared")
++	}
++	cloneArgs = append(cloneArgs, "--", source, directory)
++	cloneTimeout := 30 * time.Second
++	if cfg.seedClone != "" {
++		cloneTimeout = 2 * time.Minute
++	}
++	cloneCtx, cancelClone := context.WithTimeout(ctx, cloneTimeout)
++	defer cancelClone()
++	if _, err := secretCapacityGitInspectWithTimeout(cloneCtx, cloneTimeout, root, token, nil, cloneArgs...); err != nil {
+ 		return nil, fmt.Errorf("clone %s: %w", cfg.repository, err)
+ 	}
++	// Sparse staging outside the cone can expand the entire catalog transiently.
++	sparseArgs := []string{"sparse-checkout", "reapply", "--sparse-index"}
++	if cfg.kind == "category" {
++		sparseArgs = []string{"sparse-checkout", "set", "--cone", "--sparse-index", "categories"}
++	}
++	if _, err := secretCapacityGitInspectWithTimeout(cloneCtx, cloneTimeout, directory, "", nil, sparseArgs...); err != nil {
++		return nil, fmt.Errorf("prepare sparse index %s: %w", cfg.repository, err)
++	}
++	if cfg.seedClone != "" {
++		if _, err := secretCapacityGit(ctx, directory, "", "remote", "set-url", "origin", cfg.remote); err != nil {
++			return nil, err
++		}
++	}
+ 	for _, setting := range [][2]string{
+ 		{"user.name", "GitStore Capacity"}, {"user.email", "capacity@gitstore.dev"},
+ 		{"commit.gpgSign", "false"}, {"core.hooksPath", os.DevNull}, {"pull.rebase", "true"},
+@@ -324,9 +384,150 @@ func newCapacityPushWorker(ctx context.Context, cfg capacityPushConfig, root, to
+ 	return &capacityPushWorker{directory: directory, token: token, cfg: cfg}, nil
+ }
+ 
++func TestCapacityPushWorkerSeedClone(t *testing.T) {
++	root := t.TempDir()
++	seed := filepath.Join(root, "seed")
++	require.NoError(t, os.Mkdir(seed, 0o700))
++	require.NoError(t, os.Mkdir(filepath.Join(seed, "products"), 0o700))
++	require.NoError(t, os.WriteFile(filepath.Join(seed, "products", "original.md"), []byte("original\n"), 0o600))
++	for _, args := range [][]string{
++		{"init", "--quiet", "-b", "main"},
++		{"add", "products/original.md"},
++		{"-c", "user.name=GitStore Capacity", "-c", "user.email=capacity@gitstore.dev",
++			"commit", "--quiet", "--allow-empty", "-m", "test(capacity): seed push worker",
++			"-m", "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"},
++	} {
++		_, err := secretCapacityGit(t.Context(), seed, "", args...)
++		require.NoError(t, err)
++	}
++	head, err := secretCapacityGit(t.Context(), seed, "", "rev-parse", "HEAD")
++	require.NoError(t, err)
++	remote := filepath.Join(root, "remote.git")
++	_, err = secretCapacityGit(t.Context(), root, "", "clone", "--quiet", "--bare", "--", seed, remote)
++	require.NoError(t, err)
++	cfg := capacityPushConfig{remote: remote, seedClone: seed, kind: "category", runID: "seeded"}
++	worker, err := newCapacityPushWorker(t.Context(), cfg, root, "", 0)
++	require.NoError(t, err)
++	indexData, err := os.ReadFile(filepath.Join(worker.directory, ".git", "index"))
++	require.NoError(t, err)
++	require.Contains(t, string(indexData), "sdir", "preparation must persist a sparse index before status or staging")
++	workerHead, err := secretCapacityGit(t.Context(), worker.directory, "", "rev-parse", "HEAD")
++	require.NoError(t, err)
++	require.Equal(t, string(head), string(workerHead))
++	origin, err := secretCapacityGit(t.Context(), worker.directory, "", "remote", "get-url", "origin")
++	require.NoError(t, err)
++	require.Equal(t, remote, strings.TrimSpace(string(origin)))
++	status, err := secretCapacityGit(t.Context(), worker.directory, "", "status", "--porcelain")
++	require.NoError(t, err)
++	require.Empty(t, string(status))
++	files, err := secretCapacityGit(t.Context(), worker.directory, "", "ls-files", "--sparse")
++	require.NoError(t, err)
++	require.Equal(t, "products/\n", string(files))
++	result := worker.push(t.Context(), 0)
++	require.True(t, result.acknowledged, result.failure)
++	original, err := secretCapacityGit(t.Context(), remote, "", "show", "main:products/original.md")
++	require.NoError(t, err)
++	require.Equal(t, "original\n", string(original))
++	_, err = secretCapacityGit(t.Context(), seed, "", "-c", "user.name=GitStore Capacity",
++		"-c", "user.email=capacity@gitstore.dev", "commit", "--quiet", "--allow-empty",
++		"-m", "test(capacity): advance seed", "-m", "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>")
++	require.NoError(t, err)
++	_, err = newCapacityPushWorker(t.Context(), cfg, root, "", 1)
++	require.ErrorContains(t, err, "must match the live remote")
++}
++
++func TestCapacityPushWorkerRepeatedNonFastForward(t *testing.T) {
++	for _, test := range []struct {
++		name               string
++		advances, attempts int
++		acknowledged       bool
++	}{
++		{"recovers", 2, 3, true},
++		{"bounded", 8, 8, false},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
++			defer cancel()
++			root := t.TempDir()
++			git := func(directory string, args ...string) string {
++				t.Helper()
++				output, err := secretCapacityGit(ctx, directory, "", args...)
++				require.NoError(t, err)
++				return strings.TrimSpace(string(output))
++			}
++			seed, remote := filepath.Join(root, "seed"), filepath.Join(root, "remote.git")
++			require.NoError(t, os.Mkdir(seed, 0o700))
++			git(seed, "init", "--quiet", "-b", "main")
++			git(seed, "-c", "user.name=GitStore Capacity", "-c", "user.email=capacity@gitstore.dev",
++				"commit", "--quiet", "--allow-empty", "-m", "Seed")
++			git(root, "clone", "--quiet", "--bare", "--", seed, remote)
++			cfg := capacityPushConfig{remote: remote, kind: "category", runID: "repeated"}
++			worker, err := newCapacityPushWorker(ctx, cfg, root, "", 0)
++			require.NoError(t, err)
++			tree, parent := git(remote, "rev-parse", "main^{tree}"), git(remote, "rev-parse", "main")
++			var cases []string
++			for index := range test.advances {
++				parent = git(remote, "-c", "user.name=GitStore Capacity", "-c", "user.email=capacity@gitstore.dev",
++					"commit-tree", tree, "-p", parent, "-m", fmt.Sprintf("Concurrent update %d", index))
++				cases = append(cases, fmt.Sprintf("%d) next=%s ;;", index, parent))
++			}
++			counter, receivePack := filepath.Join(root, "attempts"), filepath.Join(root, "receive-pack")
++			require.NoError(t, os.WriteFile(counter, []byte("0\n"), 0o600))
++			// Advance after each fetch, before receive-pack advertises its refs.
++			script := fmt.Sprintf("#!/bin/sh\nset -eu\ncount=$(cat %q)\nnext=\ncase \"$count\" in\n%s\nesac\nif [ -n \"$next\" ]; then git --git-dir=%q update-ref refs/heads/main \"$next\"; fi\nprintf '%%s\\n' \"$((count + 1))\" > %q\nexec git-receive-pack \"$@\"\n",
++				counter, strings.Join(cases, "\n"), remote, counter)
++			require.NoError(t, os.WriteFile(receivePack, []byte(script), 0o700))
++			git(worker.directory, "config", "remote.origin.receivepack", receivePack)
++			result := worker.push(ctx, 0)
++			require.Equal(t, test.acknowledged, result.acknowledged, result.failure)
++			require.True(t, result.retried)
++			attempts, err := os.ReadFile(counter)
++			require.NoError(t, err)
++			require.Equal(t, strconv.Itoa(test.attempts), strings.TrimSpace(string(attempts)))
++			if test.acknowledged {
++				path, content := capacityPushManifest(cfg.kind, cfg.runID, cfg.namespace, 0)
++				require.Equal(t, strings.TrimSpace(string(content)), git(remote, "show", "main:"+path))
++				git(remote, "merge-base", "--is-ancestor", parent, "main")
++			} else {
++				require.Equal(t, "retry_push/non_fast_forward", result.failure)
++			}
++		})
++	}
++}
++
+ func (w *capacityPushWorker) push(ctx context.Context, sequence int) capacityPushResult {
++	ctx, cancel := context.WithTimeout(ctx, capacityMutationDrainTimeout)
++	defer cancel()
+ 	started := time.Now()
+ 	result := capacityPushResult{}
++	if w.publication != nil {
++		select {
++		case w.publication <- struct{}{}:
++			defer func() { <-w.publication }()
++		case <-ctx.Done():
++			result.failure = "publication/" + secretCapacityFailureClass(ctx.Err())
++			return result
++		}
++	}
++	git := func(token string, args ...string) error {
++		start := time.Now()
++		_, err := secretCapacityGit(ctx, w.directory, token, args...)
++		timing := capacityPushGitTiming{Command: args[0], DurationNS: time.Since(start).Nanoseconds()}
++		if index, statErr := os.Stat(filepath.Join(w.directory, ".git", "index")); statErr == nil {
++			timing.IndexBytes = index.Size()
++		}
++		if err != nil {
++			timing.Failure = secretCapacityFailureClass(err)
++		}
++		if len(result.gitTimings) < 20 {
++			result.gitTimings = append(result.gitTimings, timing)
++		}
++		return err
++	}
++	if err := git(w.token, "pull", "--quiet", "--rebase", "origin", "main"); err != nil {
++		result.failure = "pull/" + secretCapacityFailureClass(err)
++		return result
++	}
+ 	path, content := capacityPushManifest(w.cfg.kind, w.cfg.runID, w.cfg.namespace, sequence)
+ 	full := filepath.Join(w.directory, path)
+ 	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+@@ -338,20 +539,35 @@ func (w *capacityPushWorker) push(ctx context.Context, sequence int) capacityPus
+ 		return result
+ 	}
+ 	for _, args := range [][]string{{"add", "--sparse", "--", path}, {"commit", "--quiet", "-m", fmt.Sprintf("capacity push %s %d", w.cfg.runID, sequence)}} {
+-		if _, err := secretCapacityGit(ctx, w.directory, "", args...); err != nil {
++		if err := git("", args...); err != nil {
+ 			result.failure = args[0] + "/" + secretCapacityFailureClass(err)
+ 			return result
+ 		}
+ 	}
+-	_, err := secretCapacityGit(ctx, w.directory, w.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
++	err := git(w.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+ 	stage := "push"
+-	if err != nil && ctx.Err() == nil {
++	for attempt := 1; err != nil && ctx.Err() == nil && attempt < 8; attempt++ {
++		if attempt > 1 && secretCapacityFailureClass(err) != "non_fast_forward" {
++			break
++		}
++		// Jitter before refreshing so competing writers do not stay in lockstep.
++		timer := time.NewTimer(rand.N(min(time.Second, 100*time.Millisecond<<(attempt-1))))
++		select {
++		case <-ctx.Done():
++			timer.Stop()
++		case <-timer.C:
++		}
++		if ctx.Err() != nil {
++			err = ctx.Err()
++			break
++		}
+ 		result.retried = true
+-		if _, pullErr := secretCapacityGit(ctx, w.directory, w.token, "pull", "--quiet", "--rebase", "origin", "main"); pullErr != nil {
++		if pullErr := git(w.token, "pull", "--quiet", "--rebase", "origin", "main"); pullErr != nil {
+ 			stage, err = "pull", pullErr
++			break
+ 		} else {
+ 			stage = "retry_push"
+-			_, err = secretCapacityGit(ctx, w.directory, w.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
++			err = git(w.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+ 		}
+ 	}
+ 	if err != nil {
+@@ -363,6 +579,21 @@ func (w *capacityPushWorker) push(ctx context.Context, sequence int) capacityPus
+ 	return result
+ }
+ 
++func TestCapacityPushWorkerPublicationWaitIsBounded(t *testing.T) {
++	publication := make(chan struct{}, 1)
++	publication <- struct{}{}
++	worker := capacityPushWorker{directory: t.TempDir(), publication: publication}
++	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
++	defer cancel()
++	result := worker.push(ctx, 0)
++	require.False(t, result.acknowledged)
++	require.Equal(t, "publication/deadline", result.failure)
++	require.Len(t, publication, 1, "a canceled waiter must not release another offer's publication slot")
++	entries, err := os.ReadDir(worker.directory)
++	require.NoError(t, err)
++	require.Empty(t, entries)
++}
++
+ func TestCapacityGitPushDriver(t *testing.T) {
+ 	if os.Getenv("CAPACITY_PUSH_DRIVER") != "1" {
+ 		t.Skip("set CAPACITY_PUSH_DRIVER=1 to run the capacity Git push driver")
+@@ -379,26 +610,30 @@ func TestCapacityGitPushDriver(t *testing.T) {
+ 		}
+ 		token = strings.TrimSpace(string(raw))
+ 	}
+-	ctx, cancel := context.WithTimeout(t.Context(), cfg.duration+5*time.Minute)
++	ctx, cancel := context.WithTimeout(t.Context(), cfg.duration+time.Duration(cfg.workers)*2*time.Minute+time.Minute)
+ 	defer cancel()
+ 
+ 	root := t.TempDir()
+-	workers := make([]*capacityPushWorker, cfg.workers)
+-	for i := range workers {
+-		if workers[i], err = newCapacityPushWorker(ctx, cfg, root, token, i); err != nil {
+-			t.Fatal(err)
+-		}
+-	}
+-	// Each in-flight push holds one slot; a slot maps to one clone, so a
+-	// clone is never used by two pushes at once.
+-	free := make(chan *capacityPushWorker, len(workers))
+-	for _, worker := range workers {
+-		free <- worker
++	worker, err := newCapacityPushWorker(ctx, cfg, root, token, 0)
++	if err != nil {
++		t.Fatal(err)
+ 	}
++	// Serialize this producer's bounded in-flight offers on one warm clone.
++	worker.publication = make(chan struct{}, 1)
+ 	schedule := runCapacityPushSchedule(ctx, cfg, func(ctx context.Context, sequence int) capacityPushResult {
+-		worker := <-free
+-		defer func() { free <- worker }()
+-		return worker.push(ctx, sequence)
++		started := time.Now()
++		result := worker.push(ctx, sequence)
++		completed := time.Now()
++		observation, _ := json.Marshal(struct {
++			Sequence     int                     `json:"sequence"`
++			Acknowledged bool                    `json:"acknowledged"`
++			Failure      string                  `json:"failure,omitempty"`
++			LatencyNS    int64                   `json:"latencyNS"`
++			CompletedNS  int64                   `json:"completedNS"`
++			GitTimings   []capacityPushGitTiming `json:"gitTimings"`
++		}{sequence, result.acknowledged, result.failure, completed.Sub(started).Nanoseconds(), completed.UnixNano(), result.gitTimings})
++		t.Logf("capacity-push-offer %s", observation)
++		return result
+ 	})
+ 	evidence := summarizeCapacityPushes(cfg, schedule)
+ 	if err := writeCapacityPushEvidence(cfg.evidence, evidence); err != nil {
+@@ -503,106 +738,113 @@ func TestCapacityPushDriverCanceledScheduleOffersNothing(t *testing.T) {
+ }
+ 
+ func TestCapacityPushWorkerSparseClonePreservesExistingFilesAcrossRebase(t *testing.T) {
+-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+-	defer cancel()
+-	git := func(directory string, args ...string) string {
+-		t.Helper()
+-		output, err := secretCapacityGit(ctx, directory, "", args...)
+-		if err != nil {
+-			t.Fatalf("git %s: %v", args[0], err)
+-		}
+-		return strings.TrimSpace(string(output))
+-	}
+-	root := t.TempDir()
+-	remote, seed := filepath.Join(root, "remote.git"), filepath.Join(root, "seed")
+-	git(root, "init", "--quiet", "--bare", "--initial-branch=main", remote)
+-	git(root, "init", "--quiet", "--initial-branch=main", seed)
+-	for _, setting := range [][2]string{
+-		{"user.name", "GitStore Capacity"}, {"user.email", "capacity@gitstore.dev"},
+-		{"commit.gpgSign", "false"}, {"core.hooksPath", os.DevNull},
+-	} {
+-		git(seed, "config", setting[0], setting[1])
+-	}
+-	existing := map[string]string{
+-		"README.md":            "Root file\n",
+-		"products/existing.md": "Existing Product\n",
+-		"files/existing.md":    "Existing File\n",
+-	}
+-	expected := make([]string, 0, len(existing)+2)
+-	for path, content := range existing {
+-		full := filepath.Join(seed, path)
+-		if err := os.MkdirAll(filepath.Dir(full), 0700); err != nil {
+-			t.Fatal(err)
+-		}
+-		if err := os.WriteFile(full, []byte(content), 0600); err != nil {
+-			t.Fatal(err)
+-		}
+-		expected = append(expected, path)
+-	}
+-	git(seed, "add", "--", ".")
+-	git(seed, "commit", "--quiet", "-m", "Seed existing tree")
+-	git(seed, "push", "--quiet", remote, "HEAD:refs/heads/main")
+-	cfg := capacityPushConfig{remote: remote, kind: "product", namespace: "acme", repository: "fixture", runID: "sparse"}
+-	workers := make([]*capacityPushWorker, 2)
+-	for index := range workers {
+-		worker, err := newCapacityPushWorker(ctx, cfg, root, "", index)
+-		if err != nil {
+-			t.Fatal(err)
+-		}
+-		workers[index] = worker
+-		if git(worker.directory, "config", "--bool", "index.sparse") != "true" {
+-			t.Fatal("worker did not enable the sparse index")
+-		}
+-		entries := strings.Fields(git(worker.directory, "ls-files", "--sparse", "--stage", "--", "products"))
+-		if len(entries) != 4 || entries[0] != "040000" || entries[3] != "products/" {
+-			t.Fatalf("existing Products are not a sparse directory entry: %v", entries)
+-		}
+-		if git(worker.directory, "rev-parse", "HEAD^{tree}") != git(worker.directory, "write-tree") {
+-			t.Fatal("sparse checkout changed the existing tree")
+-		}
+-		if _, err := os.Stat(filepath.Join(worker.directory, "products", "existing.md")); !errors.Is(err, os.ErrNotExist) {
+-			t.Fatalf("existing Product was materialized: %v", err)
+-		}
+-	}
+-	for index, worker := range workers {
+-		result := worker.push(ctx, index)
+-		if !result.acknowledged || result.failure != "" || result.retried != (index == 1) {
+-			t.Fatalf("sparse push/rebase %d: %+v", index, result)
+-		}
+-		path, content := capacityPushManifest(cfg.kind, cfg.runID, cfg.namespace, index)
+-		expected = append(expected, path)
+-		if git(remote, "show", "main:"+path) != strings.TrimSpace(string(content)) {
+-			t.Fatalf("pushed content changed for %s", path)
+-		}
+-	}
+-	for path, content := range existing {
+-		if git(remote, "show", "main:"+path) != strings.TrimSpace(content) {
+-			t.Fatalf("existing content changed for %s", path)
+-		}
+-	}
+-	sort.Strings(expected)
+-	if actual := git(remote, "ls-tree", "-r", "--name-only", "main"); actual != strings.Join(expected, "\n") {
+-		t.Fatalf("sparse push/rebase lost or added paths: %s", actual)
++	for _, kind := range []string{"product", "category"} {
++		t.Run(kind, func(t *testing.T) {
++			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
++			defer cancel()
++			git := func(directory string, args ...string) string {
++				t.Helper()
++				output, err := secretCapacityGit(ctx, directory, "", args...)
++				if err != nil {
++					t.Fatalf("git %s: %v", args[0], err)
++				}
++				return strings.TrimSpace(string(output))
++			}
++			root := t.TempDir()
++			remote, seed := filepath.Join(root, "remote.git"), filepath.Join(root, "seed")
++			git(root, "init", "--quiet", "--bare", "--initial-branch=main", remote)
++			git(root, "init", "--quiet", "--initial-branch=main", seed)
++			for _, setting := range [][2]string{
++				{"user.name", "GitStore Capacity"}, {"user.email", "capacity@gitstore.dev"},
++				{"commit.gpgSign", "false"}, {"core.hooksPath", os.DevNull},
++			} {
++				git(seed, "config", setting[0], setting[1])
++			}
++			existing := map[string]string{
++				"README.md":              "Root file\n",
++				"products/existing.md":   "Existing Product\n",
++				"files/existing.md":      "Existing File\n",
++				"categories/existing.md": "Existing Category\n",
++			}
++			expected := make([]string, 0, len(existing)+4)
++			for path, content := range existing {
++				full := filepath.Join(seed, path)
++				if err := os.MkdirAll(filepath.Dir(full), 0700); err != nil {
++					t.Fatal(err)
++				}
++				if err := os.WriteFile(full, []byte(content), 0600); err != nil {
++					t.Fatal(err)
++				}
++				expected = append(expected, path)
++			}
++			git(seed, "add", "--", ".")
++			git(seed, "commit", "--quiet", "-m", "Seed existing tree")
++			git(seed, "push", "--quiet", remote, "HEAD:refs/heads/main")
++			cfg := capacityPushConfig{remote: remote, kind: kind, namespace: "acme", repository: "fixture", runID: "sparse"}
++			worker, err := newCapacityPushWorker(ctx, cfg, root, "", 0)
++			require.NoError(t, err)
++			worker.publication = make(chan struct{}, 1)
++			if git(worker.directory, "config", "--bool", "index.sparse") != "true" {
++				t.Fatal("worker did not enable the sparse index")
++			}
++			entries := strings.Fields(git(worker.directory, "ls-files", "--sparse", "--stage", "--", "products"))
++			if len(entries) != 4 || entries[0] != "040000" || entries[3] != "products/" {
++				t.Fatalf("existing Products are not a sparse directory entry: %v", entries)
++			}
++			if git(worker.directory, "rev-parse", "HEAD^{tree}") != git(worker.directory, "write-tree") {
++				t.Fatal("sparse checkout changed the existing tree")
++			}
++			if _, err := os.Stat(filepath.Join(worker.directory, "products", "existing.md")); !errors.Is(err, os.ErrNotExist) {
++				t.Fatalf("existing Product was materialized: %v", err)
++			}
++			if kind == "category" {
++				content, err := os.ReadFile(filepath.Join(worker.directory, "categories", "existing.md"))
++				require.NoError(t, err, "Category staging must stay inside the checkout cone")
++				require.Equal(t, existing["categories/existing.md"], string(content))
++			}
++			results := make([]capacityPushResult, 4)
++			var pushes sync.WaitGroup
++			for index := range results {
++				pushes.Go(func() { results[index] = worker.push(ctx, index) })
++			}
++			pushes.Wait()
++			for index, result := range results {
++				if !result.acknowledged || result.failure != "" || result.retried {
++					t.Fatalf("sparse push/rebase %d: %+v", index, result)
++				}
++				path, content := capacityPushManifest(cfg.kind, cfg.runID, cfg.namespace, index)
++				expected = append(expected, path)
++				if git(remote, "show", "main:"+path) != strings.TrimSpace(string(content)) {
++					t.Fatalf("pushed content changed for %s", path)
++				}
++			}
++			for path, content := range existing {
++				if git(remote, "show", "main:"+path) != strings.TrimSpace(content) {
++					t.Fatalf("existing content changed for %s", path)
++				}
++			}
++			sort.Strings(expected)
++			if actual := git(remote, "ls-tree", "-r", "--name-only", "main"); actual != strings.Join(expected, "\n") {
++				t.Fatalf("sparse push/rebase lost or added paths: %s", actual)
++			}
++		})
+ 	}
+ }
+ 
+ func TestCapacityPushWorkerRetainsFailedPullClass(t *testing.T) {
+ 	for _, test := range []struct {
+-		name               string
+-		pushCode, pullCode int
+-		want               string
++		name string
++		code int
++		want string
+ 	}{
+-		{"authentication", http.StatusServiceUnavailable, http.StatusForbidden, "pull/authentication"},
+-		{"transport", http.StatusForbidden, http.StatusServiceUnavailable, "pull/transport"},
++		{"authentication", http.StatusForbidden, "pull/authentication"},
++		{"transport", http.StatusServiceUnavailable, "pull/transport"},
+ 	} {
+ 		t.Run(test.name, func(t *testing.T) {
+ 			var requests atomic.Int32
+ 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+-				code := test.pushCode
+-				if requests.Add(1) > 1 {
+-					code = test.pullCode
+-				}
+-				http.Error(w, "private fixture response must not appear in failure evidence", code)
++				requests.Add(1)
++				http.Error(w, "private fixture response must not appear in failure evidence", test.code)
+ 			}))
+ 			defer server.Close()
+ 			directory := t.TempDir()
+@@ -621,7 +863,7 @@ func TestCapacityPushWorkerRetainsFailedPullClass(t *testing.T) {
+ 			worker := capacityPushWorker{directory: directory,
+ 				cfg: capacityPushConfig{kind: "category", runID: "failure-class", namespace: "acme"}}
+ 			result := worker.push(t.Context(), 0)
+-			if result.acknowledged || !result.retried || result.failure != test.want || requests.Load() != 2 {
++			if result.acknowledged || result.retried || result.failure != test.want || requests.Load() != 1 {
+ 				t.Fatalf("failed pull was hidden or exposed raw output: %+v requests=%d", result, requests.Load())
+ 			}
+ 		})
+@@ -747,6 +989,22 @@ func TestCapacityPushDriverConfigRejectsInexactDurationEvidence(t *testing.T) {
+ 	}
+ }
+ 
++func TestCapacityPushDriverConfigBoundsContinuousSoak(t *testing.T) {
++	t.Setenv("CAPACITY_PUSH_REMOTE", "http://localhost/acme/gitstore-system.git")
++	t.Setenv("CAPACITY_PUSH_EVIDENCE", filepath.Join(t.TempDir(), "push-evidence.json"))
++	t.Setenv("CAPACITY_PUSH_INTERVAL", "1s")
++	t.Setenv("CAPACITY_RUN_ID", "soak-contract")
++	for _, duration := range []string{"6h", "6h1ns", "0s"} {
++		t.Setenv("CAPACITY_PUSH_DURATION", duration)
++		_, err := loadCapacityPushConfig()
++		if duration == "6h" {
++			require.NoError(t, err)
++		} else {
++			require.ErrorContains(t, err, "(0, 6h]")
++		}
++	}
++}
++
+ func TestCapacityPushManifestsAreUniqueAndBounded(t *testing.T) {
+ 	seen := map[string]bool{}
+ 	for _, kind := range []string{"category", "product"} {
+diff --git a/tests/integration/collection_test.go b/tests/integration/collection_test.go
+index 26097c7eb6dd61cbc1dba7838998b16ff433790e..314c77bd17107cccf64ed1efa37769cfdfb0f973 100644
+--- a/tests/integration/collection_test.go
++++ b/tests/integration/collection_test.go
+@@ -543,11 +543,9 @@ func TestCollection_DeterministicMembership(t *testing.T) {
+ 	// Seed products with a unique label to isolate this test run.
+ 	labelKey := "gitstore.dev/det-test"
+ 	labelVal := fmt.Sprintf("run-%d", ts)
+-	var productNames []string
+ 	h := newPushHelper(t)
+ 	for i := 0; i < 4; i++ {
+ 		pName := fmt.Sprintf("det-prod-%d-%d", ts, i)
+-		productNames = append(productNames, pName)
+ 		h.commitProduct(pName+".md", productWithLabel(pName, ns, labelKey, labelVal))
+ 	}
+ 	if out, err := h.push(); err != nil {
+diff --git a/tests/integration/githelper_test.go b/tests/integration/githelper_test.go
+index abd628714954bae46651910640a390d08c83c39e..8672b0b943cec39e36ba79fffce5466e4b9d047b 100644
+--- a/tests/integration/githelper_test.go
++++ b/tests/integration/githelper_test.go
+@@ -482,20 +482,6 @@ func TestWatchMetadataProvenancePathOnlyPreparation(t *testing.T) {
+ 	}
+ }
+ 
+-// pushTag pushes an annotated tag to the remote.
+-func (h *pushHelper) pushTag(tag string) (string, error) {
+-	h.t.Helper()
+-	run(h.t, h.workDir, "git", "tag", "-a", tag, "-m", fmt.Sprintf("integration test tag %s", tag))
+-	if h.token != "" {
+-		out, err := secretCapacityGit(h.t.Context(), h.workDir, h.token, "push", "origin", tag)
+-		return string(out), err
+-	}
+-	cmd := exec.Command("git", "push", "origin", tag)
+-	cmd.Dir = h.workDir
+-	out, err := cmd.CombinedOutput()
+-	return string(out), err
+-}
+-
+ // run executes a command and fails the test on error.
+ func run(t *testing.T, dir string, args ...string) {
+ 	t.Helper()
+diff --git a/tests/integration/namespace_watch_capacity_test.go b/tests/integration/namespace_watch_capacity_test.go
+index 40d560631ca7edbc8913f5173673d7897701d256..4b2876793d11348735e81eba8c11c17906b92f46 100644
+--- a/tests/integration/namespace_watch_capacity_test.go
++++ b/tests/integration/namespace_watch_capacity_test.go
+@@ -1817,28 +1817,6 @@ func capacityCreateAlreadyExists(err error) bool {
+ 	return errors.As(err, &graphqlErr) && strings.Contains(graphqlErr.raw, `"reason":"NAMESPACE_ALREADY_EXISTS"`)
+ }
+ 
+-func confirmCapacityNamespaceExists(cfg capacityConfig, name string, timeout time.Duration) bool {
+-	return confirmCapacityNamespaceExistsContext(context.Background(), cfg, name, timeout)
+-}
+-
+-func confirmCapacityNamespaceExistsContext(ctx context.Context, cfg capacityConfig, name string, timeout time.Duration) bool {
+-	deadline := time.Now().Add(timeout)
+-	client := &http.Client{Timeout: 250 * time.Millisecond}
+-	for time.Now().Before(deadline) {
+-		if capacityNamespaceExistsContext(ctx, client, cfg.apiA, cfg.token, name) || capacityNamespaceExistsContext(ctx, client, cfg.apiB, cfg.token, name) {
+-			return true
+-		}
+-		timer := time.NewTimer(25 * time.Millisecond)
+-		select {
+-		case <-ctx.Done():
+-			timer.Stop()
+-			return false
+-		case <-timer.C:
+-		}
+-	}
+-	return false
+-}
+-
+ func TestCapacityNamespaceMutationsPreserveOrganizationTier(t *testing.T) {
+ 	tiers := make(chan string, 2)
+ 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+@@ -1884,10 +1862,6 @@ func TestCapacityNamespaceMutationsPreserveOrganizationTier(t *testing.T) {
+ 	require.Equal(t, "ORGANIZATION", <-tiers, "workload updates must not attempt a tier demotion")
+ }
+ 
+-func createCapacityNamespace(client *http.Client, apiURL, token, name string) error {
+-	return createCapacityNamespaceContext(context.Background(), client, apiURL, token, name)
+-}
+-
+ func createCapacityNamespaceContext(ctx context.Context, client *http.Client, apiURL, token, name string) error {
+ 	body, err := json.Marshal(gqlRequest{
+ 		Query: `mutation($input: CreateNamespaceInput!) { createNamespace(input: $input) { namespace { metadata { name } } } }`,
+@@ -1999,42 +1973,6 @@ func updateCapacityNamespaceContext(ctx context.Context, client *http.Client, ap
+ 	return nil
+ }
+ 
+-func capacityNamespaceExists(client *http.Client, apiURL, token, name string) bool {
+-	return capacityNamespaceExistsContext(context.Background(), client, apiURL, token, name)
+-}
+-
+-func capacityNamespaceExistsContext(ctx context.Context, client *http.Client, apiURL, token, name string) bool {
+-	body, err := json.Marshal(gqlRequest{
+-		Query:     `query($name: String!) { namespace(by: {name: $name}) { id } }`,
+-		Variables: map[string]any{"name": name},
+-	})
+-	if err != nil {
+-		return false
+-	}
+-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
+-	if err != nil {
+-		return false
+-	}
+-	req.Header.Set("Content-Type", "application/json")
+-	req.Header.Set("Authorization", "Bearer "+token)
+-	response, err := client.Do(req)
+-	if err != nil {
+-		return false
+-	}
+-	defer response.Body.Close()
+-	if response.StatusCode/100 != 2 {
+-		return false
+-	}
+-	var result struct {
+-		Data struct {
+-			Namespace *struct {
+-				ID string `json:"id"`
+-			} `json:"namespace"`
+-		} `json:"data"`
+-	}
+-	return json.NewDecoder(response.Body).Decode(&result) == nil && result.Data.Namespace != nil && result.Data.Namespace.ID != ""
+-}
+-
+ func TestCapacityReplayCreateRetriesOnlyConflicts(t *testing.T) {
+ 	t.Run("conflict alternates to peer", func(t *testing.T) {
+ 		var primaryCalls, peerCalls atomic.Int64
+diff --git a/tests/integration/repository_lifecycle_capacity_test.go b/tests/integration/repository_lifecycle_capacity_test.go
+index a815a7d263b4c5db9a4ce94e66b37e3cab3423a9..be011e883c9e0acf8200a8fc30521d9ec627153b 100644
+--- a/tests/integration/repository_lifecycle_capacity_test.go
++++ b/tests/integration/repository_lifecycle_capacity_test.go
+@@ -594,7 +594,7 @@ func (s repositoryCapacityAuthorizationSnapshot) equal(other repositoryCapacityA
+ 		s.Userdir == other.Userdir && s.CatalogDigest == other.CatalogDigest && s.Policy == other.Policy
+ }
+ 
+-var repositoryCapacityAuthorizationUnavailable = errors.New("capacity authorization endpoint unavailable (details redacted)")
++var errRepositoryCapacityAuthorizationUnavailable = errors.New("capacity authorization endpoint unavailable (details redacted)")
+ 
+ func repositoryCapacityAuthorizationProbes(ctx context.Context, client *http.Client, endpoints []string, token string) ([]repositoryCapacityAuthorizationReplica, error) {
+ 	invalid := errors.New("capacity authorization probes failed exact response, snapshot or replica checks (details redacted)")
+@@ -625,7 +625,7 @@ func repositoryCapacityAuthorizationProbes(ctx context.Context, client *http.Cli
+ 			if ctx.Err() != nil {
+ 				return 0, fmt.Errorf("capacity authorization probe canceled: %w", ctx.Err())
+ 			}
+-			return 0, repositoryCapacityAuthorizationUnavailable
++			return 0, errRepositoryCapacityAuthorizationUnavailable
+ 		}
+ 		defer response.Body.Close()
+ 		data, err := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
+@@ -636,12 +636,12 @@ func repositoryCapacityAuthorizationProbes(ctx context.Context, client *http.Cli
+ 			response.StatusCode == http.StatusGatewayTimeout {
+ 			var envelope map[string]json.RawMessage
+ 			if path != "/graphql" || json.Unmarshal(data, &envelope) != nil {
+-				return response.StatusCode, repositoryCapacityAuthorizationUnavailable
++				return response.StatusCode, errRepositoryCapacityAuthorizationUnavailable
+ 			}
+ 			_, hasData := envelope["data"]
+ 			_, hasErrors := envelope["errors"]
+ 			if !hasData && !hasErrors {
+-				return response.StatusCode, repositoryCapacityAuthorizationUnavailable
++				return response.StatusCode, errRepositoryCapacityAuthorizationUnavailable
+ 			}
+ 		}
+ 		if json.Unmarshal(data, destination) != nil {
+@@ -772,7 +772,7 @@ func repositoryCapacityAuthorizationUnderLoad(ctx context.Context, client *http.
+ 			}
+ 			return unavailable, nil
+ 		}
+-		if !errors.Is(err, repositoryCapacityAuthorizationUnavailable) {
++		if !errors.Is(err, errRepositoryCapacityAuthorizationUnavailable) {
+ 			return unavailable, err
+ 		}
+ 		unavailable++
+@@ -5569,7 +5569,11 @@ func secretCapacityPushTrace(ctx context.Context, entropy io.Reader) (context.Co
+ }
+ 
+ func secretCapacityGitInspect(ctx context.Context, directory, token string, inspect func([]byte), args ...string) ([]byte, error) {
+-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
++	return secretCapacityGitInspectWithTimeout(ctx, 30*time.Second, directory, token, inspect, args...)
++}
++
++func secretCapacityGitInspectWithTimeout(ctx context.Context, timeout time.Duration, directory, token string, inspect func([]byte), args ...string) ([]byte, error) {
++	ctx, cancel := context.WithTimeout(ctx, timeout)
+ 	defer cancel()
+ 	command := exec.CommandContext(ctx, "git", args...)
+ 	command.Dir = directory

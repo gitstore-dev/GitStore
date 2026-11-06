@@ -1,0 +1,87 @@
+diff --git a/docs/runbooks/production-readiness-testing.md b/docs/runbooks/production-readiness-testing.md
+index f1e1ebb491fa964b1b3058f7f28167f76c8f81c6..37ff0f2dc2e4ebc2390dad6cb1efd0f943686351 100644
+--- a/docs/runbooks/production-readiness-testing.md
++++ b/docs/runbooks/production-readiness-testing.md
+@@ -302,8 +302,12 @@ to the internal container scrape. Start time remains the replacement signal;
+ legitimate same-tick starts remain valid while aliases cannot satisfy the
+ topology. The workload
+ `CAPACITY_BASE_URL` must be one of those verified endpoints, and every live API
+-container must have a digest-pinned image, `/app/api` executable, and OCI
+-revision matching the tested checkout.
++container must have a digest-pinned image and OCI revision matching the tested
++checkout. The executable must be `/app/api` or the capacity Compose stack's
++`/bin/sh -ec` signing-key wrapper, which reads the mounted issuer key and
++executes `/app/api --config-file /etc/gitstore/gitstore.toml`. Preflight records
++the approved executable shape and argument count without retaining raw
++startup arguments or key material.
+ Namespace recovery requires a fresh
+ `NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE`; the deployment harness replaces the
+ selected endpoint when the file appears. The verifier records an actual
+diff --git a/scripts/test-capacity-dispatch.sh b/scripts/test-capacity-dispatch.sh
+index 2d92d45abce1532d29708f9e174a94abdc7ecb1c..374145c90bb9745be2c97fcee0feae8c44c4105d 100755
+--- a/scripts/test-capacity-dispatch.sh
++++ b/scripts/test-capacity-dispatch.sh
+@@ -250,6 +250,29 @@ if MOCK_READINESS_CONTAINERS_FILE="${test_dir}/unverified-readiness-containers.j
+   exit 1
+ fi
+ 
++jq 'map(.Path = "/bin/sh" | .Args = ["-ec",
++  "export GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY=\"$(cat /run/secrets/serviceaccount-signing-key)\"\nexec /app/api --config-file /etc/gitstore/gitstore.toml\n"])' \
++  "${test_dir}/readiness-containers.json" >"${test_dir}/wrapped-readiness-containers.json"
++MOCK_READINESS_CONTAINERS_FILE="${test_dir}/wrapped-readiness-containers.json" \
++  PATH="${test_dir}/bin:${PATH}" MODE=alpha CAPACITY_BASE_URL=http://api-a.internal \
++  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
++  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
++  "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid"
++jq -e 'all(.artifacts.apiContainers[]; .approvedExecutable == true and .argumentCount == 2 and (has("arguments") | not))' \
++  "${test_dir}/readiness-valid/preflight-environment.json" >/dev/null
++for mutation in '.[0].Path = "/bin/bash"' '.[0].Args[0] = "-c"' \
++  '.[0].Args[1] = "exec /app/api"' '.[0].Args += ["unexpected"]'; do
++  jq "${mutation}" "${test_dir}/wrapped-readiness-containers.json" >"${test_dir}/invalid-wrapped-readiness-containers.json"
++  if MOCK_READINESS_CONTAINERS_FILE="${test_dir}/invalid-wrapped-readiness-containers.json" \
++    PATH="${test_dir}/bin:${PATH}" MODE=alpha CAPACITY_BASE_URL=http://api-a.internal \
++    CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
++    CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
++    "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid" >/dev/null 2>&1; then
++    echo "API readiness unexpectedly accepted an unapproved startup wrapper: ${mutation}" >&2
++    exit 1
++  fi
++done
++
+ make_output="$(make --no-print-directory -C "${repo_root}" capacity TARGET=namespace PROFILE=watch MODE=alpha CAPACITY_DRY_RUN=1)"
+ [[ "${make_output}" == *"target=namespace profile=watch mode=alpha"* ]]
+ 
+diff --git a/tests/capacity/preflight/api-readiness.sh b/tests/capacity/preflight/api-readiness.sh
+index 3e4a0b88cd05a44bb40791489d9a4e356098dcd6..04aa9245a1cf3680ca29bcdb1ec7ac7cd29bf8ab 100755
+--- a/tests/capacity/preflight/api-readiness.sh
++++ b/tests/capacity/preflight/api-readiness.sh
+@@ -82,19 +82,27 @@ inspection="$(docker inspect "${api_containers[@]}")" || {
+ source_revision="$(git rev-parse HEAD)"
+ container_json="$(jq -c '[.[] | {
+   id:.Id,name:(.Name | ltrimstr("/")),running:.State.Running,
+-  imageReference:.Config.Image,imageID:.Image,revision:(.Config.Labels["org.opencontainers.image.revision"] // ""),executable:.Path
++  imageReference:.Config.Image,imageID:.Image,revision:(.Config.Labels["org.opencontainers.image.revision"] // ""),executable:.Path,
++  arguments:(.Args // [])
+ }]' <<<"${inspection}")"
+ jq -e --argjson expected "${config_replicas}" --arg revision "${source_revision}" '
+   length == $expected and all(.[]; .running) and
+   ([.[].id] | unique | length) == length and
+   ([.[].name] | unique | length) == length and
+   all(.[];
+-    .revision == $revision and .executable == "/app/api" and
++    .revision == $revision and
++    (.executable == "/app/api" or
++      (.executable == "/bin/sh" and
++       (.arguments | length) == 2 and
++       .arguments[0] == "-ec" and
++       (.arguments[1] | contains("cat /run/secrets/serviceaccount-signing-key")) and
++       (.arguments[1] | contains("exec /app/api --config-file /etc/gitstore/gitstore.toml")))) and
+     (.imageReference | test("@sha256:[0-9a-f]{64}$")))
+ ' <<<"${container_json}" >/dev/null || {
+   echo "CAPACITY_API_CONTAINERS must identify distinct running digest-pinned release containers for the tested revision" >&2
+   exit 1
+ }
++container_json="$(jq -c 'map(. + {argumentCount:(.arguments | length),approvedExecutable:true} | del(.arguments))' <<<"${container_json}")"
+ identity_json='[]'
+ for index in "${!api_endpoints[@]}"; do
+   endpoint="${api_endpoints[$index]}"

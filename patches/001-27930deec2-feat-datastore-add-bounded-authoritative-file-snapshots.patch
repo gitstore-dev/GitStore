@@ -1,0 +1,603 @@
+diff --git a/gitstore-api/internal/datastore/datastore.go b/gitstore-api/internal/datastore/datastore.go
+index 86632c9e64afe2b49b53c15ae56acf70bedd93b8..529a03fd45ac4788273168c1a9b7eed68191a47c 100644
+--- a/gitstore-api/internal/datastore/datastore.go
++++ b/gitstore-api/internal/datastore/datastore.go
+@@ -436,11 +436,18 @@ func ApplyCategoryTaxonomyStatusPatch(c *CategoryTaxonomy, patch CategoryTaxonom
+ 	return nil
+ }
+ 
++const FileSnapshotBatchLimit = 250
++const FileNameSnapshotBatchLimit = 4
++
+ // FileStore persists File resources.
+ type FileStore interface {
+ 	// File operations
+ 	CreateFile(ctx context.Context, f *File) error
+ 	GetFile(ctx context.Context, uid string) (*File, error)
++	// Snapshot reads preserve positions, independently owned duplicates and nil
++	// for absent resources. Infrastructure errors fail the entire bounded read.
++	GetFileSnapshots(ctx context.Context, uids []string) ([]*File, error)
++	GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*File, error)
+ 	GetFileByName(ctx context.Context, namespace, name string) (*File, error)
+ 	ListFiles(ctx context.Context, namespace string, page PageParams) (*PageResult[File], error)
+ 	// UpdateFile replaces a File only when expectedResourceVersion still
+diff --git a/gitstore-api/internal/datastore/instrumented.go b/gitstore-api/internal/datastore/instrumented.go
+index 97195db3fdf3aced4630b9da5c07600e927da280..95d1cf26ec0fec4c51c490013a92576d38e51b9b 100644
+--- a/gitstore-api/internal/datastore/instrumented.go
++++ b/gitstore-api/internal/datastore/instrumented.go
+@@ -188,6 +188,18 @@ func (d *InstrumentedDatastore) GetFile(ctx context.Context, id string) (*File,
+ 	d.observe("GetFile", start, err)
+ 	return v, err
+ }
++func (d *InstrumentedDatastore) GetFileSnapshots(ctx context.Context, uids []string) ([]*File, error) {
++	start := time.Now()
++	files, err := d.next.GetFileSnapshots(d.withFindingObserver(ctx), uids)
++	d.observe("GetFileSnapshots", start, err)
++	return files, err
++}
++func (d *InstrumentedDatastore) GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*File, error) {
++	start := time.Now()
++	files, err := d.next.GetFileSnapshotsByName(d.withFindingObserver(ctx), namespace, names)
++	d.observe("GetFileSnapshotsByName", start, err)
++	return files, err
++}
+ func (d *InstrumentedDatastore) GetFileByName(ctx context.Context, namespace, name string) (*File, error) {
+ 	start := time.Now()
+ 	v, err := d.next.GetFileByName(d.withFindingObserver(ctx), namespace, name)
+diff --git a/gitstore-api/internal/datastore/instrumented_test.go b/gitstore-api/internal/datastore/instrumented_test.go
+index 590800979feab74f6d6545b740b5f65f854a0dc8..1b33a3389f11a78c83e9e220ca46442a8661ab02 100644
+--- a/gitstore-api/internal/datastore/instrumented_test.go
++++ b/gitstore-api/internal/datastore/instrumented_test.go
+@@ -67,6 +67,12 @@ func (s *stubDatastore) CreateFile(_ context.Context, _ *datastore.File) error {
+ func (s *stubDatastore) GetFile(_ context.Context, _ string) (*datastore.File, error) {
+ 	return nil, s.getProductErr
+ }
++func (s *stubDatastore) GetFileSnapshots(_ context.Context, uids []string) ([]*datastore.File, error) {
++	return make([]*datastore.File, len(uids)), s.getProductErr
++}
++func (s *stubDatastore) GetFileSnapshotsByName(_ context.Context, _ string, names []string) ([]*datastore.File, error) {
++	return make([]*datastore.File, len(names)), s.getProductErr
++}
+ func (s *stubDatastore) GetFileByName(_ context.Context, _, _ string) (*datastore.File, error) {
+ 	return nil, s.getProductErr
+ }
+diff --git a/gitstore-api/internal/datastore/memdb/backend.go b/gitstore-api/internal/datastore/memdb/backend.go
+index 3db5d6a77e225b54558a47bd55d3e7585f2dbdca..77eb383cb07e19a20cacdeb8d96095c85c09369c 100644
+--- a/gitstore-api/internal/datastore/memdb/backend.go
++++ b/gitstore-api/internal/datastore/memdb/backend.go
+@@ -352,6 +352,68 @@ func (m *memdbDatastore) GetFile(_ context.Context, uid string) (*datastore.File
+ 	return cloneFile(raw.(*datastore.File)), nil
+ }
+ 
++func (m *memdbDatastore) GetFileSnapshots(ctx context.Context, uids []string) ([]*datastore.File, error) {
++	if len(uids) > datastore.FileSnapshotBatchLimit {
++		return nil, datastore.ErrInvalidArgument
++	}
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
++	txn := m.db.Txn(false)
++	defer txn.Abort()
++	files := make([]*datastore.File, len(uids))
++	for i, uid := range uids {
++		if err := ctx.Err(); err != nil {
++			return nil, err
++		}
++		if len(uid) != 36 || uuid.Validate(uid) != nil {
++			continue
++		}
++		raw, err := txn.First("file", "id", uid)
++		if err != nil {
++			return nil, err
++		}
++		if raw != nil {
++			files[i] = cloneFile(raw.(*datastore.File))
++		}
++	}
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
++	return files, nil
++}
++
++func (m *memdbDatastore) GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*datastore.File, error) {
++	if namespace == "" || len(names) > datastore.FileNameSnapshotBatchLimit {
++		return nil, datastore.ErrInvalidArgument
++	}
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
++	txn := m.db.Txn(false)
++	defer txn.Abort()
++	files := make([]*datastore.File, len(names))
++	for i, name := range names {
++		if name == "" {
++			return nil, datastore.ErrInvalidArgument
++		}
++		if err := ctx.Err(); err != nil {
++			return nil, err
++		}
++		raw, err := txn.First("file", "name_namespace", namespace, name)
++		if err != nil {
++			return nil, err
++		}
++		if raw != nil {
++			files[i] = cloneFile(raw.(*datastore.File))
++		}
++	}
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
++	return files, nil
++}
++
+ func (m *memdbDatastore) GetFileByName(_ context.Context, namespace, name string) (*datastore.File, error) {
+ 	txn := m.db.Txn(false)
+ 	defer txn.Abort()
+diff --git a/gitstore-api/internal/datastore/memdb/file_test.go b/gitstore-api/internal/datastore/memdb/file_test.go
+index be779d883eba9c4d076e329a06009a10ef180fc1..dfe7d59669405030099b95dbea4097fcd78ae5b6 100644
+--- a/gitstore-api/internal/datastore/memdb/file_test.go
++++ b/gitstore-api/internal/datastore/memdb/file_test.go
+@@ -34,6 +34,82 @@ func TestFileCRUD(t *testing.T) {
+ 	require.ErrorIs(t, err, datastore.ErrNotFound)
+ }
+ 
++func TestFileSnapshotsPreservePositionsAndIsolateCopies(t *testing.T) {
++	store, err := New()
++	require.NoError(t, err)
++	defer store.Close()
++	file := &datastore.File{
++		UID: "00000000-0000-0000-0000-000000000151", Namespace: "ns", Name: "hero",
++		ResourceVersion: "1", Labels: map[string]string{"team": "original"},
++		Spec: json.RawMessage(`{"type":"hero"}`), Finalizers: []string{"keep"},
++	}
++	require.NoError(t, store.CreateFile(t.Context(), file))
++	other := *file
++	other.UID = "00000000-0000-0000-0000-000000000152"
++	other.Namespace = "other"
++	require.NoError(t, store.CreateFile(t.Context(), &other))
++	for _, mode := range []string{"uid", "name"} {
++		t.Run(mode, func(t *testing.T) {
++			read := func() ([]*datastore.File, error) {
++				if mode == "uid" {
++					return store.GetFileSnapshots(t.Context(), []string{file.UID, "invalid", "00000000-0000-0000-0000-000000000153", file.UID})
++				}
++				return store.GetFileSnapshotsByName(t.Context(), "ns", []string{"hero", "absent", "missing", "hero"})
++			}
++			got, err := read()
++			require.NoError(t, err)
++			require.Len(t, got, 4)
++			require.Nil(t, got[1])
++			require.Nil(t, got[2])
++			require.Equal(t, "ns", got[0].Namespace)
++			require.Equal(t, file.UID, got[3].UID)
++			got[0].Labels["team"] = "changed"
++			got[0].Spec[0] = '!'
++			got[0].Finalizers[0] = "changed"
++			require.Equal(t, "original", got[3].Labels["team"])
++			require.JSONEq(t, `{"type":"hero"}`, string(got[3].Spec))
++			require.Equal(t, []string{"keep"}, got[3].Finalizers)
++			fresh, err := read()
++			require.NoError(t, err)
++			require.Equal(t, "original", fresh[0].Labels["team"])
++			require.JSONEq(t, `{"type":"hero"}`, string(fresh[0].Spec))
++		})
++	}
++	file.ResourceVersion, file.Body = "2", "updated"
++	require.NoError(t, store.UpdateFile(t.Context(), file, "1"))
++	for _, read := range []func() ([]*datastore.File, error){
++		func() ([]*datastore.File, error) { return store.GetFileSnapshots(t.Context(), []string{file.UID}) },
++		func() ([]*datastore.File, error) {
++			return store.GetFileSnapshotsByName(t.Context(), "ns", []string{"hero"})
++		},
++	} {
++		got, err := read()
++		require.NoError(t, err)
++		require.Equal(t, "2", got[0].ResourceVersion)
++		require.Equal(t, "updated", got[0].Body)
++	}
++}
++
++func TestFileSnapshotsRejectUnboundedAndCanceledReads(t *testing.T) {
++	store, err := New()
++	require.NoError(t, err)
++	defer store.Close()
++	_, err = store.GetFileSnapshots(t.Context(), make([]string, datastore.FileSnapshotBatchLimit+1))
++	require.ErrorIs(t, err, datastore.ErrInvalidArgument)
++	_, err = store.GetFileSnapshotsByName(t.Context(), "ns", make([]string, datastore.FileNameSnapshotBatchLimit+1))
++	require.ErrorIs(t, err, datastore.ErrInvalidArgument)
++	_, err = store.GetFileSnapshotsByName(t.Context(), "", nil)
++	require.ErrorIs(t, err, datastore.ErrInvalidArgument)
++	_, err = store.GetFileSnapshotsByName(t.Context(), "ns", []string{""})
++	require.ErrorIs(t, err, datastore.ErrInvalidArgument)
++	ctx, cancel := context.WithCancel(t.Context())
++	cancel()
++	_, err = store.GetFileSnapshots(ctx, []string{"00000000-0000-0000-0000-000000000151"})
++	require.ErrorIs(t, err, context.Canceled)
++	_, err = store.GetFileSnapshotsByName(ctx, "ns", []string{"hero"})
++	require.ErrorIs(t, err, context.Canceled)
++}
++
+ func TestFileStatusUpdateUsesResourceVersionGuard(t *testing.T) {
+ 	store, err := New()
+ 	require.NoError(t, err)
+diff --git a/gitstore-api/internal/datastore/scylla/backend_test.go b/gitstore-api/internal/datastore/scylla/backend_test.go
+index 1ae796f8be9c731c4225924d87443c83fa6a9874..c08f17941986fccb85af3bbafe5a05684dc3c97f 100644
+--- a/gitstore-api/internal/datastore/scylla/backend_test.go
++++ b/gitstore-api/internal/datastore/scylla/backend_test.go
+@@ -40,7 +40,7 @@ func TestMain(m *testing.M) {
+ 	if scyllaAddr == "" {
+ 		scyllaAddr = "127.0.0.1:9042"
+ 	}
+-	scyllaKeyspace = fmt.Sprintf("gitstore_scylla_test_%d", os.Getpid())
++	scyllaKeyspace = fmt.Sprintf("gitstore_scylla_test_%d_%s", os.Getpid(), strings.ReplaceAll(uuid.NewString(), "-", "")[:16])
+ 
+ 	provisionKeyspace(scyllaAddr, scyllaKeyspace)
+ 	code := m.Run()
+@@ -147,6 +147,61 @@ func newTestStore(t *testing.T) datastore.Datastore {
+ 	return newTestStoreWithWatchBucket(t, 0)
+ }
+ 
++func TestFileSnapshotsPreserveAuthoritativePositionsAndFreshness(t *testing.T) {
++	store := newTestStore(t)
++	file := &datastore.File{
++		UID: uuid.NewString(), Namespace: "snapshots-" + uuid.NewString(), Name: "hero",
++		ResourceVersion: "1", Labels: map[string]string{"team": "original"},
++		Spec: json.RawMessage(`{"type":"hero"}`), Finalizers: []string{"keep"},
++	}
++	require.NoError(t, store.CreateFile(t.Context(), file))
++	missing := uuid.NewString()
++	for _, mode := range []string{"uid", "name"} {
++		t.Run(mode, func(t *testing.T) {
++			read := func() ([]*datastore.File, error) {
++				if mode == "uid" {
++					return store.GetFileSnapshots(t.Context(), []string{file.UID, "invalid", missing, file.UID})
++				}
++				return store.GetFileSnapshotsByName(t.Context(), file.Namespace, []string{"hero", "absent", "missing", "hero"})
++			}
++			got, err := read()
++			require.NoError(t, err)
++			require.Len(t, got, 4)
++			require.Nil(t, got[1])
++			require.Nil(t, got[2])
++			require.Equal(t, file.UID, got[0].UID)
++			require.Equal(t, file.Namespace, got[0].Namespace)
++			got[0].Labels["team"] = "changed"
++			got[0].Spec[0] = '!'
++			got[0].Finalizers[0] = "changed"
++			require.Equal(t, "original", got[3].Labels["team"])
++			require.JSONEq(t, `{"type":"hero"}`, string(got[3].Spec))
++			require.Equal(t, []string{"keep"}, got[3].Finalizers)
++			fresh, err := read()
++			require.NoError(t, err)
++			require.Equal(t, "original", fresh[0].Labels["team"])
++		})
++	}
++	file.ResourceVersion, file.Body = "2", "updated"
++	require.NoError(t, store.UpdateFile(t.Context(), file, "1"))
++	got, err := store.GetFileSnapshots(t.Context(), []string{file.UID})
++	require.NoError(t, err)
++	require.Equal(t, "2", got[0].ResourceVersion)
++	require.Equal(t, "updated", got[0].Body)
++	got, err = store.GetFileSnapshotsByName(t.Context(), file.Namespace, []string{"hero"})
++	require.NoError(t, err)
++	require.Equal(t, "2", got[0].ResourceVersion)
++	require.Equal(t, "updated", got[0].Body)
++	_, err = store.GetFileSnapshots(t.Context(), make([]string, datastore.FileSnapshotBatchLimit+1))
++	require.ErrorIs(t, err, datastore.ErrInvalidArgument)
++	ctx, cancel := context.WithCancel(t.Context())
++	cancel()
++	_, err = store.GetFileSnapshots(ctx, []string{file.UID})
++	require.ErrorIs(t, err, context.Canceled)
++	_, err = store.GetFileSnapshotsByName(ctx, file.Namespace, []string{"hero"})
++	require.ErrorIs(t, err, context.Canceled)
++}
++
+ func newTestStoreWithWatchBucket(t *testing.T, watchBucketSize int) datastore.Datastore {
+ 	t.Helper()
+ 	store, err := scylla.New(testScyllaConfig(t), zap.NewNop(), watchBucketSize)
+diff --git a/gitstore-api/internal/datastore/scylla/file.go b/gitstore-api/internal/datastore/scylla/file.go
+index 6e2b0f64448a1c206be39816a4647be79c267333..98d954ae716346c0c84ff91aa7f8de2e20109dbe 100644
+--- a/gitstore-api/internal/datastore/scylla/file.go
++++ b/gitstore-api/internal/datastore/scylla/file.go
+@@ -7,7 +7,10 @@ import (
+ 	"context"
+ 	"errors"
+ 	"fmt"
++	"maps"
+ 	"strings"
++	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+@@ -117,6 +120,242 @@ func (s *scyllaDatastore) GetFile(ctx context.Context, uid string) (*datastore.F
+ 	}
+ 	return s.getFileByKey(ctx, idx.Namespace, idx.CreationTimestamp, idx.UID)
+ }
++
++const fileSnapshotReadBatchLimit = 16
++
++func (s *scyllaDatastore) GetFileSnapshots(ctx context.Context, uids []string) ([]*datastore.File, error) {
++	if len(uids) > datastore.FileSnapshotBatchLimit {
++		return nil, datastore.ErrInvalidArgument
++	}
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
++	results := make([]*datastore.File, len(uids))
++	keys := make([]gocql.UUID, 0, len(uids))
++	positions := make(map[gocql.UUID][]int)
++	for i, uid := range uids {
++		key, err := gocql.ParseUUID(uid)
++		if err != nil {
++			continue
++		}
++		if _, seen := positions[key]; !seen {
++			keys = append(keys, key)
++		}
++		positions[key] = append(positions[key], i)
++	}
++	readSnapshots := func(namespace string, indices []fileIndexRow) error {
++		rows, err := s.getFileSnapshotRows(ctx, namespace, indices)
++		if err != nil {
++			return err
++		}
++		for _, row := range rows {
++			for _, position := range positions[row.UID] {
++				results[position] = fileSnapshotFromRow(&row)
++			}
++		}
++		return nil
++	}
++	batches := make([][]fileIndexRow, (len(keys)+fileSnapshotReadBatchLimit-1)/fileSnapshotReadBatchLimit)
++	readLocator := func(batch int) (string, []fileIndexRow, error) {
++		start := batch * fileSnapshotReadBatchLimit
++		end := min(start+fileSnapshotReadBatchLimit, len(keys))
++		args := make([]any, end-start)
++		expected := make(map[gocql.UUID]bool, len(args))
++		for i, key := range keys[start:end] {
++			args[i], expected[key] = key, true
++		}
++		stmt := "SELECT " + strings.Join(s.fileByUIDTable.Metadata().Columns, ", ") +
++			" FROM files_by_uid WHERE uid IN (" + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + ")"
++		if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&batches[batch]); err != nil {
++			return "", nil, err
++		}
++		fullNamespaceBatch := len(batches[batch]) == fileSnapshotReadBatchLimit
++		for _, index := range batches[batch] {
++			if index.Namespace == "" || !expected[index.UID] {
++				return "", nil, fmt.Errorf("%w: invalid File UID locator", datastore.ErrRepairRequired)
++			}
++			delete(expected, index.UID)
++			if index.Namespace != batches[batch][0].Namespace {
++				fullNamespaceBatch = false
++			}
++		}
++		if fullNamespaceBatch {
++			indices := batches[batch]
++			batches[batch] = nil
++			return indices[0].Namespace, indices, nil
++		}
++		return "", nil, nil
++	}
++	locatorErrors, fullErrors := make([]error, len(batches)), make([]error, len(batches))
++	var authoritativeBatches [][]fileIndexRow
++	var authoritativeErrors []error
++	var nextLocator, nextAuthoritative atomic.Int64
++	var grouped sync.Once
++	var locators, workers sync.WaitGroup
++	locators.Add(len(batches))
++	for range min(8, len(keys)) {
++		workers.Go(func() {
++			for {
++				batch := int(nextLocator.Add(1) - 1)
++				if batch >= len(batches) {
++					break
++				}
++				if err := ctx.Err(); err != nil {
++					locatorErrors[batch] = err
++					locators.Done()
++					continue
++				}
++				namespace, indices, err := readLocator(batch)
++				locatorErrors[batch] = err
++				// Deferred reads must not wait on unrelated authoritative queries.
++				locators.Done()
++				if err == nil && len(indices) != 0 {
++					fullErrors[batch] = readSnapshots(namespace, indices)
++				}
++			}
++			locators.Wait()
++			if ctx.Err() != nil {
++				return
++			}
++			grouped.Do(func() {
++				if errors.Join(locatorErrors...) != nil {
++					return
++				}
++				groups := make(map[string][]fileIndexRow)
++				var order []string
++				for _, indices := range batches {
++					for _, index := range indices {
++						if _, seen := groups[index.Namespace]; !seen {
++							order = append(order, index.Namespace)
++						}
++						groups[index.Namespace] = append(groups[index.Namespace], index)
++					}
++				}
++				for _, namespace := range order {
++					indices := groups[namespace]
++					for start := 0; start < len(indices); start += fileSnapshotReadBatchLimit {
++						authoritativeBatches = append(authoritativeBatches, indices[start:min(start+fileSnapshotReadBatchLimit, len(indices))])
++					}
++				}
++				authoritativeErrors = make([]error, len(authoritativeBatches))
++			})
++			for ctx.Err() == nil {
++				i := int(nextAuthoritative.Add(1) - 1)
++				if i >= len(authoritativeBatches) {
++					return
++				}
++				indices := authoritativeBatches[i]
++				authoritativeErrors[i] = readSnapshots(indices[0].Namespace, indices)
++			}
++		})
++	}
++	workers.Wait()
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
++	if err := errors.Join(errors.Join(locatorErrors...), errors.Join(fullErrors...), errors.Join(authoritativeErrors...)); err != nil {
++		return nil, err
++	}
++	return results, nil
++}
++
++func (s *scyllaDatastore) getFileSnapshotRows(ctx context.Context, namespace string, indices []fileIndexRow) ([]fileRow, error) {
++	expected := make(map[gocql.UUID]time.Time, len(indices))
++	args := make([]any, 0, 1+2*len(indices))
++	args = append(args, namespace)
++	for _, index := range indices {
++		args = append(args, index.CreationTimestamp, index.UID)
++		expected[index.UID] = index.CreationTimestamp
++	}
++	stmt := "SELECT " + strings.Join(s.fileByNamespaceTable.Metadata().Columns, ", ") +
++		" FROM files_by_namespace WHERE namespace=? AND (creation_timestamp,uid) IN (" +
++		strings.TrimSuffix(strings.Repeat("(?,?),", len(indices)), ",") + ")"
++	var rows []fileRow
++	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&rows); err != nil {
++		return nil, err
++	}
++	for _, row := range rows {
++		created, ok := expected[row.UID]
++		if !ok || row.Namespace != namespace || !row.CreationTimestamp.Equal(created) {
++			return nil, fmt.Errorf("%w: invalid File snapshot identity", datastore.ErrRepairRequired)
++		}
++	}
++	return rows, nil
++}
++
++func fileSnapshotFromRow(row *fileRow) *datastore.File {
++	file := fromFileRow(row)
++	file.Labels, file.Annotations = maps.Clone(file.Labels), maps.Clone(file.Annotations)
++	if file.DeletionTimestamp != nil {
++		deleted := *file.DeletionTimestamp
++		file.DeletionTimestamp = &deleted
++	}
++	return file
++}
++
++func (s *scyllaDatastore) GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*datastore.File, error) {
++	if namespace == "" || len(names) > datastore.FileNameSnapshotBatchLimit {
++		return nil, datastore.ErrInvalidArgument
++	}
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
++	results := make([]*datastore.File, len(names))
++	positions := make(map[string][]int, len(names))
++	args := []any{namespace}
++	for i, name := range names {
++		if name == "" {
++			return nil, datastore.ErrInvalidArgument
++		}
++		if _, seen := positions[name]; !seen {
++			args = append(args, name)
++		}
++		positions[name] = append(positions[name], i)
++	}
++	if len(names) == 0 {
++		return results, nil
++	}
++	stmt := "SELECT " + strings.Join(s.fileByNameTable.Metadata().Columns, ", ") +
++		" FROM files_by_name WHERE namespace=? AND name IN (" +
++		strings.TrimSuffix(strings.Repeat("?,", len(args)-1), ",") + ")"
++	var indices []fileIndexRow
++	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&indices); err != nil {
++		return nil, err
++	}
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
++	if len(indices) == 0 {
++		return results, nil
++	}
++	expected := make(map[gocql.UUID]string, len(indices))
++	for _, index := range indices {
++		if _, ok := positions[index.Name]; !ok || index.Namespace != namespace {
++			return nil, fmt.Errorf("%w: invalid File name locator", datastore.ErrRepairRequired)
++		}
++		if _, duplicate := expected[index.UID]; duplicate {
++			return nil, fmt.Errorf("%w: duplicate File name locator", datastore.ErrRepairRequired)
++		}
++		expected[index.UID] = index.Name
++	}
++	rows, err := s.getFileSnapshotRows(ctx, namespace, indices)
++	if err != nil {
++		return nil, err
++	}
++	for _, row := range rows {
++		if row.Name != expected[row.UID] {
++			return nil, fmt.Errorf("%w: invalid File snapshot name", datastore.ErrRepairRequired)
++		}
++		for _, position := range positions[row.Name] {
++			results[position] = fileSnapshotFromRow(&row)
++		}
++	}
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
++	return results, nil
++}
++
+ func (s *scyllaDatastore) GetFileByName(ctx context.Context, ns, name string) (*datastore.File, error) {
+ 	stmt, names := s.fileByNameTable.Get()
+ 	var idx fileIndexRow
+diff --git a/gitstore-api/internal/testutil/stubstore.go b/gitstore-api/internal/testutil/stubstore.go
+index cf3b9446c326c811e2a4d1b1cbeb1c64c994bf96..2c7290aff49ba183e100911130b69c578b54b5d0 100644
+--- a/gitstore-api/internal/testutil/stubstore.go
++++ b/gitstore-api/internal/testutil/stubstore.go
+@@ -16,6 +16,8 @@ import (
+ // githttp and security middleware tests have override hooks; all other methods
+ // are no-ops that satisfy the full datastore.Datastore interface.
+ type StubStore struct {
++	GetFileSnapshotsFunc          func(context.Context, []string) ([]*datastore.File, error)
++	GetFileSnapshotsByNameFunc    func(context.Context, string, []string) ([]*datastore.File, error)
+ 	GetFileByNameFunc             func(context.Context, string, string) (*datastore.File, error)
+ 	GetProductVariantFunc         func(context.Context, string) (*datastore.ProductVariant, error)
+ 	GetProductVariantByNameFunc   func(context.Context, string, string) (*datastore.ProductVariant, error)
+@@ -37,6 +39,18 @@ func (s *StubStore) CreateFile(_ context.Context, _ *datastore.File) error { ret
+ func (s *StubStore) GetFile(_ context.Context, _ string) (*datastore.File, error) {
+ 	return nil, datastore.ErrNotFound
+ }
++func (s *StubStore) GetFileSnapshots(ctx context.Context, uids []string) ([]*datastore.File, error) {
++	if s.GetFileSnapshotsFunc != nil {
++		return s.GetFileSnapshotsFunc(ctx, uids)
++	}
++	return make([]*datastore.File, len(uids)), nil
++}
++func (s *StubStore) GetFileSnapshotsByName(ctx context.Context, namespace string, names []string) ([]*datastore.File, error) {
++	if s.GetFileSnapshotsByNameFunc != nil {
++		return s.GetFileSnapshotsByNameFunc(ctx, namespace, names)
++	}
++	return make([]*datastore.File, len(names)), nil
++}
+ func (s *StubStore) GetFileByName(ctx context.Context, namespace, name string) (*datastore.File, error) {
+ 	if s.GetFileByNameFunc != nil {
+ 		return s.GetFileByNameFunc(ctx, namespace, name)
+diff --git a/scripts/test-secret-config.sh b/scripts/test-secret-config.sh
+index 681b79dbfe191d4a8d1f740e144c4dafd9d63f66..b08359b7325e5e142bcfdfbf6ee83d0ae2402da4 100755
+--- a/scripts/test-secret-config.sh
++++ b/scripts/test-secret-config.sh
+@@ -81,8 +81,9 @@ echo "secret configuration isolation checks passed"
+ # Both Scylla overlays must allow baseline migration/schema agreement before
+ # treating a not-yet-listening API as unhealthy. The base memdb grace is short.
+ for overlay in compose.scylla.yml compose.scylla.cluster.yml; do
++  # Drain the pipe so a successful match cannot SIGPIPE awk under pipefail.
+   awk '/^  api:/{api=1; next} api && /^  [a-zA-Z]/{api=0} api{print}' "$repo_root/$overlay" |
+-    grep -q 'start_period: 5m' || {
++    grep 'start_period: 5m' >/dev/null || {
+       echo "missing first-boot migration health grace: $overlay" >&2
+       exit 1
+     }

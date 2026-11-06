@@ -1,0 +1,238 @@
+diff --git a/tests/capacity/README.md b/tests/capacity/README.md
+index 1fac0201166e046798fb85516f518b88b94a7e41..436bf099c40d7a869ece4a8db171f78da9994a7f 100644
+--- a/tests/capacity/README.md
++++ b/tests/capacity/README.md
+@@ -271,6 +271,14 @@ Repository replacement uses one 30-second budget from trigger through outage,
+ health/readiness and complete metrics from a changed process identity.
+ Cancellation prevents pending triggers and stops in-flight observations;
+ missing identities and late observations cannot count as recovery.
++Namespace watch coverage counts logical mutations separately from journal
++deliveries. Distinct status events do not count as duplicates, but replaying
++the same journal cursor on a subscription does, including after intervening
++status events. Subscribers share a bounded cursor-digest index and keep
++independent delivery bitsets. Missing/oversized cursors, conflicting sequences
++or more than 1,048,576 matching live versions fail the observer rather than
++evicting duplicate history. ACK coverage and first-observation latency are
++unchanged.
+ 
+ The default runner uses the pinned container image declared in the Makefile.
+ Set `K6_BIN` to an explicit executable when container networking is unsuitable,
+diff --git a/tests/integration/namespace_watch_capacity_test.go b/tests/integration/namespace_watch_capacity_test.go
+index 94a7ff89d0cbe2853926c13eacf22320b8b9f3b7..7749cedb1aee152c8204f436c84edcd9196238e6 100644
+--- a/tests/integration/namespace_watch_capacity_test.go
++++ b/tests/integration/namespace_watch_capacity_test.go
+@@ -7,6 +7,7 @@ import (
+ 	"bufio"
+ 	"bytes"
+ 	"context"
++	"crypto/sha256"
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
+@@ -477,20 +478,167 @@ func TestCapacityResumeCursorAdvancesAcrossReplayReconnects(t *testing.T) {
+ 	require.Equal(t, "next", capacityResumeCursor("next", capacityWireEvent{}))
+ }
+ 
++func TestCapacitySubscriberDistinguishesStatusEventsFromDuplicateDelivery(t *testing.T) {
++	for _, tc := range []struct {
++		name       string
++		versions   []string
++		duplicates int64
++	}{
++		{"status update", []string{"mutation", "status"}, 0},
++		{"same event repeated", []string{"mutation", "mutation"}, 1},
++		{"earlier event replayed after status", []string{"mutation", "status", "mutation"}, 1},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			serverErrors := make(chan error, 1)
++			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
++				if err != nil {
++					serverErrors <- err
++					return
++				}
++				defer conn.Close()
++				for _, version := range tc.versions {
++					if err := conn.WriteJSON(map[string]any{
++						"type": "next", "payload": map[string]any{"data": map[string]any{"watchNamespaces": map[string]any{
++							"type": "MODIFIED", "name": "pool-1", "resourceVersion": version,
++							"namespace": map[string]any{"spec": map[string]any{"title": capacityName("live-", 1)}},
++						}}},
++					}); err != nil {
++						serverErrors <- err
++						return
++					}
++				}
++				serverErrors <- conn.WriteJSON(map[string]any{"type": "complete"})
++			}))
++			defer server.Close()
++			deliveryIndex := newCapacityDeliveryIndex(2)
++			for range 2 {
++				conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
++				require.NoError(t, err)
++				defer conn.Close()
++				subscriber := &capacitySubscriber{
++					conn: conn, received: newCapacityBitset(2),
++					deliveryIndex: deliveryIndex, delivered: newCapacityBitset(2),
++				}
++				var latencyMu sync.Mutex
++				err = subscriber.read(t.Context(), "live-", false, &latencyMu, nil)
++				require.ErrorContains(t, err, "GraphQL watch completed")
++				require.NoError(t, <-serverErrors)
++				require.Equal(t, 1, subscriber.received.count())
++				require.Equal(t, tc.duplicates, subscriber.duplicates.Load())
++			}
++		})
++	}
++}
++
++const capacityMaxDeliveryVersions = 1 << 20
++
++type capacityDeliveryIdentity struct {
++	index    int
++	sequence int
++}
++
++type capacityDeliveryIndex struct {
++	mu       sync.Mutex
++	versions map[[sha256.Size]byte]capacityDeliveryIdentity
++	limit    int
++}
++
++func newCapacityDeliveryIndex(limit int) *capacityDeliveryIndex {
++	return &capacityDeliveryIndex{versions: make(map[[sha256.Size]byte]capacityDeliveryIdentity), limit: limit}
++}
++
++func (d *capacityDeliveryIndex) record(version string, sequence int) (int, error) {
++	if version == "" || len(version) > 4096 {
++		return 0, errors.New("capacity delivery requires a nonempty journal cursor of at most 4096 bytes")
++	}
++	digest := sha256.Sum256([]byte(version))
++	d.mu.Lock()
++	defer d.mu.Unlock()
++	if existing, ok := d.versions[digest]; ok {
++		if existing.sequence != sequence {
++			return 0, errors.New("capacity journal cursor identifies different mutation sequences")
++		}
++		return existing.index, nil
++	}
++	if len(d.versions) >= d.limit {
++		return 0, fmt.Errorf("capacity observer exceeded %d distinct live journal versions", d.limit)
++	}
++	index := len(d.versions) + 1
++	d.versions[digest] = capacityDeliveryIdentity{index: index, sequence: sequence}
++	return index, nil
++}
++
++func TestCapacityDeliveryIndexIsSharedAndBounded(t *testing.T) {
++	index := newCapacityDeliveryIndex(2)
++	for _, tc := range []struct {
++		version  string
++		sequence int
++		want     int
++	}{
++		{"mutation", 1, 1}, {"status", 1, 2}, {"mutation", 1, 1},
++	} {
++		actual, err := index.record(tc.version, tc.sequence)
++		require.NoError(t, err)
++		require.Equal(t, tc.want, actual)
++	}
++	_, err := index.record("overflow", 2)
++	require.ErrorContains(t, err, "exceeded 2")
++	_, err = index.record("mutation", 2)
++	require.ErrorContains(t, err, "different mutation sequences")
++	_, err = index.record("", 1)
++	require.ErrorContains(t, err, "nonempty journal cursor")
++	_, err = index.record(strings.Repeat("x", 4097), 1)
++	require.ErrorContains(t, err, "at most 4096")
++}
++
++func TestCapacityDeliveryIndexConcurrentSubscribers(t *testing.T) {
++	const versions = 200
++	index := newCapacityDeliveryIndex(versions)
++	errs := make(chan error, 8)
++	var wg sync.WaitGroup
++	for range cap(errs) {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			for sequence := 1; sequence <= versions; sequence++ {
++				actual, err := index.record(strconv.Itoa(sequence), sequence)
++				if err != nil {
++					errs <- err
++					return
++				}
++				if actual != sequence {
++					errs <- fmt.Errorf("sequence %d has inconsistent delivery index %d", sequence, actual)
++					return
++				}
++			}
++		}()
++	}
++	wg.Wait()
++	close(errs)
++	for err := range errs {
++		require.NoError(t, err)
++	}
++	require.Len(t, index.versions, versions)
++}
++
+ type capacitySubscriber struct {
+-	mu         sync.Mutex
+-	conn       *websocket.Conn
+-	endpoint   string
+-	token      string
+-	cursor     string
+-	received   *capacityBitset
+-	duplicates atomic.Int64
++	mu            sync.Mutex
++	conn          *websocket.Conn
++	endpoint      string
++	token         string
++	cursor        string
++	received      *capacityBitset
++	deliveryIndex *capacityDeliveryIndex
++	delivered     *capacityBitset
++	duplicates    atomic.Int64
+ }
+ 
+ func openCapacitySubscribers(t *testing.T, cfg capacityConfig, maxTransitions int) []*capacitySubscriber {
+ 	t.Helper()
+ 	states := make([]*capacitySubscriber, cfg.subscribers)
+ 	errs := make(chan error, cfg.subscribers)
++	deliveryIndex := newCapacityDeliveryIndex(capacityMaxDeliveryVersions)
+ 	var wg sync.WaitGroup
+ 	for i := range states {
+ 		wg.Add(1)
+@@ -513,7 +661,8 @@ func openCapacitySubscribers(t *testing.T, cfg capacityConfig, maxTransitions in
+ 			}
+ 			states[index] = &capacitySubscriber{
+ 				conn: conn, endpoint: endpoint, token: cfg.token, cursor: event.ResourceVersion,
+-				received: newCapacityBitset(maxTransitions + 2),
++				received:      newCapacityBitset(maxTransitions + 2),
++				deliveryIndex: deliveryIndex, delivered: newCapacityBitset(capacityMaxDeliveryVersions),
+ 			}
+ 		}(i)
+ 	}
+@@ -555,10 +704,20 @@ func (s *capacitySubscriber) read(ctx context.Context, prefix string, sampleLate
+ 		if !ok {
+ 			continue
+ 		}
+-		if !s.received.mark(sequence) {
++		if (sequence-1)/64 >= len(s.received.words) {
++			return fmt.Errorf("capacity mutation sequence %d exceeds the observer bitset", sequence)
++		}
++		delivery, err := s.deliveryIndex.record(event.ResourceVersion, sequence)
++		if err != nil {
++			return err
++		}
++		if !s.delivered.mark(delivery) {
+ 			s.duplicates.Add(1)
+ 			continue
+ 		}
++		if !s.received.mark(sequence) {
++			continue
++		}
+ 		if sampleLatency && !event.CreatedAt.IsZero() {
+ 			latency := time.Since(event.CreatedAt)
+ 			if latency < 0 {

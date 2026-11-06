@@ -1,0 +1,834 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index f71c2fc082dcc42d0f0931604811f6ad6b8d6d69..f682b2b6846ee65a459ad57a2355a1551c302e1d 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -66,6 +66,7 @@ Deltas not covered above: 028 (branch-deletion admission, no new Go deps), 029 (
+ - `make chaos CHAOS_PROFILE=api-invalid-policy-reload CHAOS_TARGET=<container> CHAOS_COMPOSE_PROJECT=<owned-project> CHAOS_POLICY_DIR=<absolute-private-directory> CHAOS_CONFIRM=1` — reject malformed policy on one explicitly owned API and restore the original file and active snapshot. Requires a dedicated read-only directory bind and matching `owned-policy.json`; see `tests/chaos/README.md`. Set `CAPACITY_CHAOS_PROFILE=api-invalid-policy-reload` and `CAPACITY_CHAOS_POLICY_DIR` with the existing capacity fault selectors to run inside a declared k6 or Go Repository lifecycle load window. Other Go capacity profiles and overlapping the full secret scenario's managed faults are rejected.
+ - `make capacity TARGET=repository PROFILE=lifecycle MODE=diagnostic REPOSITORY_CAPACITY_WORKLOAD=<repository|file|combined> REPOSITORY_CAPACITY_SKIP_REPLACEMENT=1` — compare controlled offered loads on a provisioned owned deployment with equally seeded Repository/File pools. Requires the existing private run-matched fixture, endpoint/token/Git settings. No full secret scenario, replay, scheduled faults or alpha/production acceptance.
+ - Add `REPOSITORY_CAPACITY_TRACE_CORRELATION=1` to File/combined comparisons or the full secret scenario to attach a fresh sampled W3C parent to each File push and export its `traceID` in bounded timelines. Default is off; Repository-only selections are rejected. Headers remain command-scoped alongside bearer authentication, with no new module/dependency. This correlates instrumented Git HTTP/admission/RPC spans, not client queue/provider work or shared projection batches; verify actual trace/log/exemplar joins against the deployed backends.
++- Add `REPOSITORY_CAPACITY_CLIENT_TIMING=1` to diagnostic File/combined comparisons for bounded command wall/CPU and in-memory Trace2 startup/HTTP-helper timestamps in the existing File timelines. Default is off; full scenarios, Repository-only and alpha/production runs reject it. Raw trace events, argv, paths and configuration are never exported. This adds measurement overhead, not a new acceptance mode or a change to workers, checks or deadlines.
+ - `make capacity TARGET=repository PROFILE=lifecycle MODE=diagnostic CAPACITY_STACK_ACTION=<up|resume|wait|token|verify-owned|down|config>` — manage an explicitly named owned two-API/two-controller/singleton-Git/three-Scylla diagnostic deployment through the existing capacity stack helper. `up` refuses existing project containers/volumes; `resume` only completes owned secret startup interrupted before private fixture provisioning; `down` stops only verified owned services and retains volumes.
+ - Add `REPOSITORY_CAPACITY_VERIFY_STORAGE=1 REPOSITORY_CAPACITY_PROJECT=<owned-project>` to Repository lifecycle diagnostics for read-only UID-bound Git directory/tombstone checks through the owned singleton container. Alpha/production default this on and reject disabled inspection. Inspection preserves all files, receipts, tombstones and volumes; it does not replace the remaining deletion/fault/capacity gates.
+ - Add `REPOSITORY_CAPACITY_VERIFY_FINALIZERS=1 CAPACITY_SCYLLA_KEYSPACE=<owned-keyspace>` alongside physical-storage verification to exercise all five catalog kinds as simulated terminating blockers, plus real API/controller-initiated Namespace, system Repository and ordinary Repository termination held by an unrelated finalizer. Alpha/production require this check and default it on. The test-only fixture uses bounded exact-UID/resource-version CQL CAS against newly created probe records and verifies both owned APIs use the selected keyspace. Catalog simulations are restored before real Git removal; parent probes add/remove only their own finalizer without changing deletion intent, timestamp or generation. Both APIs must preserve held storage and reject completion; terminating ordinary Repositories must continue blocking Namespace deletion. These probes do not establish real catalog-child deletion initiation or production acceptance.
+diff --git a/Makefile b/Makefile
+index f22d5900b8ad21d0b0f83ed8c118050fe1ab07ec..6ad2b593e71e720184c46c69276464a294e3090c 100644
+--- a/Makefile
++++ b/Makefile
+@@ -126,6 +126,7 @@ REPOSITORY_CAPACITY_BASELINE_STABILIZATION ?=5m
+ REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION ?=10m
+ REPOSITORY_CAPACITY_SKIP_REPLACEMENT ?=0
+ REPOSITORY_CAPACITY_TRACE_CORRELATION ?=0
++REPOSITORY_CAPACITY_CLIENT_TIMING ?=0
+ REPOSITORY_CAPACITY_VERIFY_STORAGE ?=$(if $(filter alpha production,$(MODE)),1,0)
+ REPOSITORY_CAPACITY_VERIFY_FINALIZERS ?=$(if $(filter alpha production,$(MODE)),1,0)
+ export CAPACITY_SCYLLA_KEYSPACE
+@@ -719,6 +720,7 @@ _capacity-repository-lifecycle:
+ 	@cd "$(ROOT)/tests/integration" && \
+ 		REPOSITORY_CAPACITY_WORKLOAD="$(REPOSITORY_CAPACITY_WORKLOAD)" \
+ 		REPOSITORY_CAPACITY_TRACE_CORRELATION="$(REPOSITORY_CAPACITY_TRACE_CORRELATION)" \
++		REPOSITORY_CAPACITY_CLIENT_TIMING="$(REPOSITORY_CAPACITY_CLIENT_TIMING)" \
+ 		REPOSITORY_CAPACITY_SECRET_SCENARIO="$(REPOSITORY_CAPACITY_SECRET_SCENARIO)" \
+ 		REPOSITORY_API_A="$(REPOSITORY_API_A)" \
+ 		REPOSITORY_API_B="$(REPOSITORY_API_B)" \
+diff --git a/docs/runbooks/namespace-admission.md b/docs/runbooks/namespace-admission.md
+index 69ea1a8f77a8326e6a3a425bbedf52dffb11f82f..d61af7d0b5e669da0c76d18914d45f629241bb70 100644
+--- a/docs/runbooks/namespace-admission.md
++++ b/docs/runbooks/namespace-admission.md
+@@ -811,6 +811,30 @@ spans or reciprocal server links to each original Git push.
+ Read counters and retained trace records are captured together, including
+ when a worker's deadline interrupts an outstanding round.
+ The offered rates, queue, deadlines and acceptance gates are unchanged.
++For client-side attribution, add `REPOSITORY_CAPACITY_CLIENT_TIMING=1` to an
++explicitly diagnostic File/combined comparison. It defaults off and is rejected
++for Repository-only comparisons, full lifecycle scenarios and alpha/production.
++The existing bounded timelines then include `clientGit` records for each local
++`add`/`commit` and authenticated `push`: host `startedAt`, command `wall`,
++`userCPU` and `systemCPU` (including children accounted by the operating system),
++and the main Git Trace2 start/exit timestamps. HTTP pushes additionally retain
++the remote-curl helper's command-name and exit timestamps as
++`remoteHTTPStartedAt`/`remoteHTTPExitedAt`. These delimit helper execution,
++not just network time; the helper includes packing, protocol and server waits.
++Compare these timestamps with the correlated server HTTP spans to localize
++gaps. Do not call wall-minus-CPU time disk or network time: scheduling and
++other waits can contribute, and child CPU can overlap.
++
++Trace2 events are consumed in memory, with a 16 KiB line bound and 128 KiB
++trace budget per command. Only fixed command classes, timestamps, durations
++and bounded failure classes enter evidence; raw events, argv, paths and
++configuration do not. Ordinary output retains its separate 128 KiB bound.
++Unsupported, malformed, truncated or incomplete traces invalidate the diagnostic
++without changing whether the Git command itself was acknowledged. At most
++three commands per push and the existing 2,048 timeline prefix are retained.
++Trace2 and CPU accounting add overhead, so compare against an uninstrumented
++control rather than treating this diagnostic as an acceptance result.
++
+ Its
+ `projection_visibility` stage includes verifier scheduling and polling as well
+ as reads. `projection_read` reports the cumulative wall time of completed
+diff --git a/scripts/run-capacity-target.sh b/scripts/run-capacity-target.sh
+index b1978a76f859249f8875e9d74402793d288ee023..d29c684820c204dc08d30002bf4804b7e23fa520 100755
+--- a/scripts/run-capacity-target.sh
++++ b/scripts/run-capacity-target.sh
+@@ -120,6 +120,20 @@ if [[ -n "${REPOSITORY_CAPACITY_WORKLOAD:-}" ]]; then
+   command+=("REPOSITORY_CAPACITY_WORKLOAD=${REPOSITORY_CAPACITY_WORKLOAD}")
+ fi
+ 
++case "${REPOSITORY_CAPACITY_CLIENT_TIMING:-0}" in
++  0) ;;
++  1)
++    if [[ "${target}/${profile}" != repository/lifecycle || "${mode}" != diagnostic ||
++          ( "${REPOSITORY_CAPACITY_WORKLOAD:-}" != file && "${REPOSITORY_CAPACITY_WORKLOAD:-}" != combined ) ||
++          "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" != 0 ]]; then
++      echo "REPOSITORY_CAPACITY_CLIENT_TIMING=1 requires a diagnostic File/combined comparison" >&2
++      exit 2
++    fi
++    command+=("REPOSITORY_CAPACITY_CLIENT_TIMING=1")
++    ;;
++  *) echo "REPOSITORY_CAPACITY_CLIENT_TIMING must be 0 or 1" >&2; exit 2 ;;
++esac
++
+ export CAPACITY_TARGET="${target}"
+ export CAPACITY_SCENARIO="${profile}"
+ 
+diff --git a/scripts/test-capacity-dispatch.sh b/scripts/test-capacity-dispatch.sh
+index 752e24ec6097f94463594f79694a4d4d96758bdd..2d92d45abce1532d29708f9e174a94abdc7ecb1c 100755
+--- a/scripts/test-capacity-dispatch.sh
++++ b/scripts/test-capacity-dispatch.sh
+@@ -19,6 +19,26 @@ assert_dispatch() {
+ }
+ 
+ assert_dispatch api readiness '_capacity-k6'
++for workload in file combined; do
++  client_output="$(REPOSITORY_CAPACITY_CLIENT_TIMING=1 REPOSITORY_CAPACITY_WORKLOAD="${workload}" \
++    CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle diagnostic)"
++  [[ "${client_output}" == *"REPOSITORY_CAPACITY_CLIENT_TIMING=1"* ]]
++done
++for value in 1 true 2; do
++  for arguments in 'repository lifecycle diagnostic' 'repository lifecycle alpha' \
++    'repository lifecycle production' 'api readiness diagnostic'; do
++    if REPOSITORY_CAPACITY_CLIENT_TIMING="${value}" CAPACITY_DRY_RUN=1 \
++      "${dispatcher}" ${arguments} >/dev/null 2>&1; then
++      echo "invalid client timing scope unexpectedly passed: ${value} ${arguments}" >&2
++      exit 1
++    fi
++  done
++done
++if REPOSITORY_CAPACITY_CLIENT_TIMING=1 REPOSITORY_CAPACITY_WORKLOAD=repository CAPACITY_DRY_RUN=1 \
++  "${dispatcher}" repository lifecycle diagnostic >/dev/null 2>&1; then
++  echo "client timing unexpectedly accepted a Repository-only comparison" >&2
++  exit 1
++fi
+ for workload in repository file combined; do
+   workload_output="$(REPOSITORY_CAPACITY_WORKLOAD="${workload}" CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle diagnostic)"
+   [[ "${workload_output}" == *"REPOSITORY_CAPACITY_WORKLOAD=${workload}"* ]]
+diff --git a/tests/capacity/README.md b/tests/capacity/README.md
+index 2a302f4e7397bfe4df0b0f8895233df3c471eed1..9cb93bca641180a0cc100f893dc43d4f1f6ba5ee 100644
+--- a/tests/capacity/README.md
++++ b/tests/capacity/README.md
+@@ -851,6 +851,22 @@ Ordinary runs do not inject a parent or export trace IDs. This links instrumente
+ Git HTTP/admission/native RPC telemetry, not client queue/provider spans or shared
+ projection batches. Verify matching retained traces, logs and exemplars in the
+ deployment; sampled propagation alone does not prove a three-signal join.
++Add `REPOSITORY_CAPACITY_CLIENT_TIMING=1` only to diagnostic File/combined
++comparisons to retain `clientTiming: true` and up to three `clientGit` command
++records per existing timeline. These include host command start/wall time,
++user/system CPU (including OS-accounted children), Git Trace2 start/exit, and
++remote-curl helper command-name/exit timestamps when HTTP is used. Helper time
++includes client, protocol and server work; it is not pure network time.
++Raw Trace2 is filtered in memory, never written to disk or returned as command
++output: argv, paths, configuration and arbitrary event fields are not exported.
++The parser bounds lines to 16 KiB and total trace data to 128 KiB per command;
++ordinary command output retains its independent existing limit. Incomplete or
++over-limit tracing explicitly fails the diagnostic without reclassifying an
++actual Git ACK as a rejected push. Worker count, arrival schedule, queue,
++deadlines and attached verification are unchanged. The default is `0`; invalid
++values, Repository-only, full scenarios and alpha/production are rejected.
++Capture overhead is part of the measured time: use an uninstrumented control,
++and combine with `REPOSITORY_CAPACITY_TRACE_CORRELATION=1` for server joins.
+ The Category Product oracle records classified transport interruptions separately
+ and retries its reads only within the existing convergence deadline. It does not
+ count those attempts as verified membership windows or suppress failed HTTP
+diff --git a/tests/integration/repository_lifecycle_capacity_test.go b/tests/integration/repository_lifecycle_capacity_test.go
+index 46ad0782b83359fbcf385ff08f20c01649b246cd..2dc556e4aa66b19e8085c0308f678ed438996bbf 100644
+--- a/tests/integration/repository_lifecycle_capacity_test.go
++++ b/tests/integration/repository_lifecycle_capacity_test.go
+@@ -77,6 +77,7 @@ type repositoryCapacityConfig struct {
+ 	project                     string
+ 	workload                    string
+ 	traceCorrelation            string
++	clientTiming                string
+ 	acknowledgements            *atomic.Int64
+ }
+ 
+@@ -996,6 +997,7 @@ func loadRepositoryCapacityConfig(t *testing.T) repositoryCapacityConfig {
+ 		mode:                     mode, skipReplacement: os.Getenv("REPOSITORY_CAPACITY_SKIP_REPLACEMENT") == "1",
+ 		workload:         os.Getenv("REPOSITORY_CAPACITY_WORKLOAD"),
+ 		traceCorrelation: os.Getenv("REPOSITORY_CAPACITY_TRACE_CORRELATION"),
++		clientTiming:     os.Getenv("REPOSITORY_CAPACITY_CLIENT_TIMING"),
+ 		verifyStorage:    verifyStorage == "1", project: os.Getenv("REPOSITORY_CAPACITY_PROJECT"),
+ 		verifyFinalizers: verifyFinalizers == "1", keyspace: os.Getenv("CAPACITY_SCYLLA_KEYSPACE"),
+ 	}
+@@ -1047,6 +1049,9 @@ func validateRepositoryCapacityTraceCorrelation(value, workload string, secret b
+ }
+ 
+ func validateRepositoryCapacityScale(cfg repositoryCapacityConfig) error {
++	if err := validateRepositoryCapacityClientTiming(cfg.clientTiming, cfg.workload, cfg.mode); err != nil {
++		return err
++	}
+ 	if err := validateRepositoryCapacityTraceCorrelation(cfg.traceCorrelation, cfg.workload, secretCapacityRequested()); err != nil {
+ 		return err
+ 	}
+@@ -4022,6 +4027,7 @@ type secretCapacityPushBatch struct {
+ }
+ 
+ type secretCapacityPushResult struct {
++	clientGit                                          []secretCapacityGitTiming
+ 	traceID                                            string
+ 	gitAttempted, acknowledged                         bool
+ 	files, bytes                                       int
+@@ -4043,6 +4049,7 @@ type secretCapacityPushResult struct {
+ }
+ 
+ type secretCapacityPushMeasurements struct {
++	clientTiming, clientTimingFailed                                                       bool
+ 	traceCorrelation                                                                       bool
+ 	sustainedOffered, missedSchedules, completed, dropped, gitPushes, acknowledged, failed int64
+ 	queuePeak, workersPeak, maxFiles, maxBytes                                             int
+@@ -4064,6 +4071,7 @@ type secretCapacityPushMeasurements struct {
+ const secretCapacityTimelineLimit = 2048
+ 
+ type secretCapacityPushTimeline struct {
++	ClientGit                   []secretCapacityGitTiming           `json:"clientGit,omitempty"`
+ 	TraceID                     string                              `json:"traceID,omitempty"`
+ 	Sequence                    int64                               `json:"sequence"`
+ 	Burst                       int                                 `json:"burst"`
+@@ -4153,8 +4161,9 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
+ 		for item := range results {
+ 			r := item.result
+ 			completed.recordTimeline(secretCapacityPushTimeline{
+-				TraceID:  r.traceID,
+-				Sequence: item.batch.sequence, Burst: item.batch.burst, Worker: item.worker,
++				ClientGit: r.clientGit,
++				TraceID:   r.traceID,
++				Sequence:  item.batch.sequence, Burst: item.batch.burst, Worker: item.worker,
+ 				OfferedAt: item.batch.offeredAt.UTC(), QueueWait: item.queueWait, ACK: r.ackLatency,
+ 				WorkerOccupied: item.at.Sub(item.batch.offeredAt) - item.queueWait,
+ 				LocalGit:       r.localGitLatency, GitHTTP: r.gitHTTPLatency,
+@@ -4163,6 +4172,11 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
+ 				ProjectionReadTraces: r.projectionReadTraces, ProjectionReadTracesOmitted: r.projectionReadTracesOmitted,
+ 				Acknowledged: r.acknowledged, ProjectionFailed: r.projectionFailed,
+ 			})
++			for _, timing := range r.clientGit {
++				if validateSecretCapacityGitTiming(timing) != nil {
++					completed.clientTimingFailed = true
++				}
++			}
+ 			completed.completed++
+ 			completed.queueLatencies = append(completed.queueLatencies, item.queueWait)
+ 			if r.localGitLatency > 0 {
+@@ -4325,6 +4339,7 @@ func runSecretCapacityPushes(ctx context.Context, cfg secretCapacityLoadConfig,
+ 	measured.projectionReadPeakLatencies = completed.projectionReadPeakLatencies
+ 	measured.failureClasses = completed.failureClasses
+ 	measured.timelines = completed.timelines
++	measured.clientTimingFailed = completed.clientTimingFailed
+ 	slowBurst := false
+ 	for i := range measured.bursts {
+ 		if !burstCompleted[i].IsZero() {
+@@ -4577,6 +4592,169 @@ func secretCapacityGit(ctx context.Context, directory, token string, args ...str
+ 
+ type secretCapacityTraceKey struct{}
+ 
++type secretCapacityGitTimingKey struct{}
++
++type secretCapacityGitTiming struct {
++	Command             string        `json:"command"`
++	StartedAt           time.Time     `json:"startedAt"`
++	Wall                time.Duration `json:"wall"`
++	UserCPU             time.Duration `json:"userCPU"`
++	SystemCPU           time.Duration `json:"systemCPU"`
++	TraceStartedAt      time.Time     `json:"traceStartedAt"`
++	TraceExitedAt       time.Time     `json:"traceExitedAt"`
++	RemoteHTTPStartedAt time.Time     `json:"remoteHTTPStartedAt,omitzero"`
++	RemoteHTTPExitedAt  time.Time     `json:"remoteHTTPExitedAt,omitzero"`
++	Failure             string        `json:"failure,omitempty"`
++}
++
++func validateRepositoryCapacityClientTiming(value, workload string, mode capacityMode) error {
++	switch value {
++	case "", "0":
++		return nil
++	case "1":
++		if mode == capacityModeDiagnostic && (workload == "file" || workload == "combined") {
++			return nil
++		}
++		return errors.New("REPOSITORY_CAPACITY_CLIENT_TIMING=1 requires a diagnostic File/combined comparison")
++	default:
++		return errors.New("REPOSITORY_CAPACITY_CLIENT_TIMING must be 0 or 1")
++	}
++}
++
++func validateSecretCapacityGitTiming(timing secretCapacityGitTiming) error {
++	if timing.Failure != "" || timing.StartedAt.IsZero() || timing.Wall <= 0 ||
++		timing.UserCPU < 0 || timing.SystemCPU < 0 || timing.TraceStartedAt.IsZero() ||
++		timing.TraceExitedAt.Before(timing.TraceStartedAt) || timing.TraceStartedAt.Before(timing.StartedAt) ||
++		timing.TraceExitedAt.After(timing.StartedAt.Add(timing.Wall)) ||
++		timing.RemoteHTTPStartedAt.IsZero() != timing.RemoteHTTPExitedAt.IsZero() {
++		return errors.New("secret capacity: incomplete client Git timing")
++	}
++	if !timing.RemoteHTTPStartedAt.IsZero() && (timing.RemoteHTTPStartedAt.Before(timing.TraceStartedAt) ||
++		timing.RemoteHTTPExitedAt.Before(timing.RemoteHTTPStartedAt) || timing.RemoteHTTPExitedAt.After(timing.TraceExitedAt)) {
++		return errors.New("secret capacity: inconsistent client HTTP helper timing")
++	}
++	switch timing.Command {
++	case "add", "commit", "push", "other":
++		return nil
++	default:
++		return errors.New("secret capacity: invalid client Git command class")
++	}
++}
++
++// Trace2 can contain argv, paths and configuration. Consume only fixed timing
++// fields in memory; never pass raw events to command output or evidence.
++type secretCapacityGitTraceWriter struct {
++	output               *secretCapacityGitOutput
++	pending              []byte
++	discard, passthrough bool
++	traceBytes           int
++	root, remote         string
++	timing               secretCapacityGitTiming
++}
++
++func (writer *secretCapacityGitTraceWriter) Write(data []byte) (int, error) {
++	size := len(data)
++	for len(data) > 0 {
++		end := bytes.IndexByte(data, '\n')
++		length := len(data)
++		if end >= 0 {
++			length = end + 1
++		}
++		part := data[:length]
++		switch {
++		case writer.discard:
++		case writer.passthrough:
++			_, _ = writer.output.Write(part)
++		case len(writer.pending)+len(part) <= 16*1024:
++			if writer.pending == nil {
++				writer.pending = make([]byte, 0, 16*1024)
++			}
++			writer.pending = append(writer.pending, part...)
++		default:
++			prefix := writer.pending
++			if len(prefix) < len(`{"event":`) {
++				prefix = append(prefix, part[:min(len(part), len(`{"event":`)-len(prefix))]...)
++			}
++			if bytes.HasPrefix(prefix, []byte(`{"event":`)) {
++				writer.fail("event_limit")
++				writer.discard = true
++			} else {
++				_, _ = writer.output.Write(writer.pending)
++				_, _ = writer.output.Write(part)
++				writer.passthrough = true
++			}
++			writer.pending = writer.pending[:0]
++		}
++		if end >= 0 {
++			if len(writer.pending) > 0 {
++				writer.line(writer.pending)
++				writer.pending = writer.pending[:0]
++			}
++			writer.discard, writer.passthrough = false, false
++		}
++		data = data[length:]
++	}
++	return size, nil
++}
++
++func (writer *secretCapacityGitTraceWriter) fail(class string) {
++	if writer.timing.Failure == "" {
++		writer.timing.Failure = class
++	}
++}
++
++func (writer *secretCapacityGitTraceWriter) line(line []byte) {
++	if !bytes.HasPrefix(line, []byte(`{"event":`)) {
++		_, _ = writer.output.Write(line)
++		return
++	}
++	if writer.traceBytes > 128*1024-len(line) {
++		writer.fail("trace_limit")
++		return
++	}
++	writer.traceBytes += len(line)
++	var event struct {
++		Event, SID, Name string
++		Time             time.Time
++	}
++	if json.Unmarshal(line, &event) != nil || len(event.SID) > 1024 {
++		writer.fail("invalid_event")
++		return
++	}
++	switch event.Event {
++	case "start":
++		if writer.root == "" && event.SID != "" {
++			writer.root, writer.timing.TraceStartedAt = event.SID, event.Time
++		}
++	case "cmd_name":
++		if event.Name == "remote-curl" && strings.HasPrefix(event.SID, writer.root+"/") {
++			if writer.remote != "" {
++				writer.fail("multiple_http_helpers")
++			} else {
++				writer.remote, writer.timing.RemoteHTTPStartedAt = event.SID, event.Time
++			}
++		}
++	case "exit":
++		if event.SID == writer.root {
++			writer.timing.TraceExitedAt = event.Time
++		}
++		if writer.remote != "" && event.SID == writer.remote {
++			writer.timing.RemoteHTTPExitedAt = event.Time
++		}
++	}
++}
++
++func (writer *secretCapacityGitTraceWriter) finish() {
++	if len(writer.pending) > 0 {
++		if bytes.HasPrefix(writer.pending, []byte(`{"event":`)) {
++			writer.fail("incomplete_event")
++		} else {
++			_, _ = writer.output.Write(writer.pending)
++		}
++		writer.pending = writer.pending[:0]
++	}
++}
++
+ var secretCapacityTraceIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+ 
+ func secretCapacityPushTrace(ctx context.Context, entropy io.Reader) (context.Context, string, error) {
+@@ -4627,7 +4805,39 @@ func secretCapacityGitInspect(ctx context.Context, directory, token string, insp
+ 	}
+ 	var output secretCapacityGitOutput
+ 	command.Stdout, command.Stderr = &output, &output
++	timings, traced := ctx.Value(secretCapacityGitTimingKey{}).(*[]secretCapacityGitTiming)
++	var trace secretCapacityGitTraceWriter
++	if traced {
++		trace.output = &output
++		command.Stdout, command.Stderr = &trace, &trace
++		command.Env = append(command.Env, "GIT_TRACE2_EVENT=2")
++	}
++	var started time.Time
++	if traced {
++		started = time.Now()
++	}
+ 	err := command.Run()
++	if traced {
++		trace.timing.StartedAt, trace.timing.Wall = started.UTC(), time.Since(started)
++		trace.finish()
++		trace.timing.Command = "other"
++		if len(args) > 0 && slices.Contains([]string{"add", "commit", "push"}, args[0]) {
++			trace.timing.Command = args[0]
++		}
++		if command.ProcessState != nil {
++			trace.timing.UserCPU, trace.timing.SystemCPU = command.ProcessState.UserTime(), command.ProcessState.SystemTime()
++		} else {
++			trace.fail("process_start")
++		}
++		if validateSecretCapacityGitTiming(trace.timing) != nil {
++			trace.fail("incomplete_trace")
++		}
++		if len(*timings) < 3 {
++			*timings = append(*timings, trace.timing)
++		} else {
++			(*timings)[2].Failure = "command_limit"
++		}
++	}
+ 	if ctx.Err() != nil {
+ 		return nil, ctx.Err()
+ 	}
+@@ -5477,6 +5687,7 @@ func (workload *secretCapacityFileWorkload) run(ctx context.Context, duration ti
+ 	cfg := secretCapacityProductionLoadConfig()
+ 	cfg.duration = duration
+ 	traceCorrelation := os.Getenv("REPOSITORY_CAPACITY_TRACE_CORRELATION") == "1"
++	clientTiming := os.Getenv("REPOSITORY_CAPACITY_CLIENT_TIMING") == "1"
+ 	verificationCtx, stopVerification := context.WithCancel(ctx)
+ 	requests := make(chan secretCapacityProjectionRequest, cfg.workers)
+ 	verificationDone := make(chan struct{})
+@@ -5501,7 +5712,12 @@ func (workload *secretCapacityFileWorkload) run(ctx context.Context, duration ti
+ 		}
+ 		resolution, resolutionErr := workload.runtime.resolve(ctx)
+ 		worker := workload.workers[index]
++		var timings []secretCapacityGitTiming
++		if clientTiming {
++			ctx = context.WithValue(ctx, secretCapacityGitTimingKey{}, &timings)
++		}
+ 		result := worker.push(ctx, batch)
++		result.clientGit = timings
+ 		result.traceID = traceID
+ 		result.resolutionLatency, result.resolutionFailed = resolution, resolutionErr != nil
+ 		if result.acknowledged {
+@@ -5537,6 +5753,10 @@ func (workload *secretCapacityFileWorkload) run(ctx context.Context, duration ti
+ 		return result
+ 	})
+ 	measurements.traceCorrelation = traceCorrelation
++	measurements.clientTiming = clientTiming
++	if measurements.clientTimingFailed {
++		err = errors.Join(err, errors.New("secret capacity: client Git timing capture is incomplete"))
++	}
+ 	return secretCapacityFileLoadResult{measurements, err}
+ }
+ 
+@@ -5686,6 +5906,7 @@ func writeSecretCapacityFileObservations(directory, runID string, mode capacityM
+ 		Timelines:         m.timelines,
+ 		TimelineLimit:     secretCapacityTimelineLimit,
+ 		TraceCorrelation:  m.traceCorrelation,
++		ClientTiming:      m.clientTiming,
+ 	}
+ 	if observations.FailureClasses == nil {
+ 		observations.FailureClasses = map[string]int64{}
+@@ -5694,6 +5915,7 @@ func writeSecretCapacityFileObservations(directory, runID string, mode capacityM
+ }
+ 
+ type secretCapacityFileObservations struct {
++	ClientTiming                bool                             `json:"clientTiming,omitempty"`
+ 	TraceCorrelation            bool                             `json:"traceCorrelation,omitempty"`
+ 	Timelines                   []secretCapacityPushTimeline     `json:"timelines"`
+ 	TimelineLimit               int                              `json:"timelineLimit"`
+diff --git a/tests/integration/secret_capacity_contract_test.go b/tests/integration/secret_capacity_contract_test.go
+index b217e66eb4233e4387faab97b4942ec7dac59d79..1eb1c1d8fee8828d9ce29367f6bbd6f4932de3ed 100644
+--- a/tests/integration/secret_capacity_contract_test.go
++++ b/tests/integration/secret_capacity_contract_test.go
+@@ -22,6 +22,7 @@ import (
+ 	"path/filepath"
+ 	"reflect"
+ 	"regexp"
++	"slices"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -1634,6 +1635,227 @@ func TestSecretCapacityGitFailureNeverEchoesOutput(t *testing.T) {
+ 	require.False(t, errors.Is(err, context.Canceled))
+ }
+ 
++func TestRepositoryCapacityClientTimingScope(t *testing.T) {
++	for _, tc := range []struct {
++		value, workload string
++		mode            capacityMode
++		valid           bool
++	}{
++		{"", "repository", capacityModeProduction, true},
++		{"0", "", capacityModeAlpha, true},
++		{"1", "file", capacityModeDiagnostic, true},
++		{"1", "combined", capacityModeDiagnostic, true},
++		{"1", "repository", capacityModeDiagnostic, false},
++		{"1", "", capacityModeDiagnostic, false},
++		{"1", "file", capacityModeAlpha, false},
++		{"1", "combined", capacityModeProduction, false},
++		{"true", "file", capacityModeDiagnostic, false},
++	} {
++		err := validateRepositoryCapacityClientTiming(tc.value, tc.workload, tc.mode)
++		if tc.valid {
++			require.NoError(t, err)
++		} else {
++			require.Error(t, err)
++		}
++	}
++}
++
++func TestSecretCapacityGitClientTiming(t *testing.T) {
++	root := t.TempDir()
++	remote := filepath.Join(root, "remote.git")
++	_, err := secretCapacityGit(t.Context(), root, "", "init", "--bare", "--initial-branch=main", remote)
++	require.NoError(t, err)
++	worker, err := newSecretCapacityGitWorker(t.Context(), filepath.Join(root, "work"), remote, "capacity-test", "fixture", "", 0)
++	require.NoError(t, err)
++	var timings []secretCapacityGitTiming
++	ctx := context.WithValue(t.Context(), secretCapacityGitTimingKey{}, &timings)
++	for sequence := int64(1); sequence <= 2; sequence++ {
++		timings = nil
++		result := worker.push(ctx, secretCapacityPushBatch{sequence: sequence})
++		require.NoError(t, result.err)
++		require.True(t, result.acknowledged)
++		expected := []string{"commit", "push"}
++		if sequence == 1 {
++			expected = append([]string{"add"}, expected...)
++		}
++		var commands []string
++		for _, timing := range timings {
++			commands = append(commands, timing.Command)
++			require.NoError(t, validateSecretCapacityGitTiming(timing))
++			require.False(t, timing.StartedAt.After(timing.TraceStartedAt))
++			require.False(t, timing.TraceExitedAt.After(timing.StartedAt.Add(timing.Wall)))
++			require.True(t, timing.RemoteHTTPStartedAt.IsZero(), "local transport is not an HTTP helper")
++			require.GreaterOrEqual(t, timing.UserCPU, time.Duration(0))
++			require.GreaterOrEqual(t, timing.SystemCPU, time.Duration(0))
++		}
++		require.Equal(t, expected, commands)
++	}
++}
++
++func TestSecretCapacityGitClientTimingHTTPFailure(t *testing.T) {
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		require.Equal(t, "Bearer private-client-timing-token", r.Header.Get("Authorization"))
++		time.Sleep(40 * time.Millisecond)
++		http.Error(w, "private-server-error-marker", http.StatusForbidden)
++	}))
++	defer server.Close()
++	var timings []secretCapacityGitTiming
++	ctx := context.WithValue(t.Context(), secretCapacityGitTimingKey{}, &timings)
++	_, err := secretCapacityGit(ctx, t.TempDir(), "private-client-timing-token", "ls-remote", server.URL+"/private-path-marker")
++	require.Error(t, err)
++	require.NotContains(t, err.Error(), "private-")
++	require.Len(t, timings, 1)
++	require.NoError(t, validateSecretCapacityGitTiming(timings[0]))
++	require.Equal(t, "other", timings[0].Command)
++	require.False(t, timings[0].RemoteHTTPStartedAt.IsZero())
++	require.GreaterOrEqual(t, timings[0].RemoteHTTPExitedAt.Sub(timings[0].RemoteHTTPStartedAt), 40*time.Millisecond)
++	body, err := json.Marshal(timings)
++	require.NoError(t, err)
++	require.NotContains(t, string(body), "private-")
++	require.NotContains(t, string(body), server.URL)
++}
++
++func TestSecretCapacityGitClientTimingCancellation(t *testing.T) {
++	entered := make(chan struct{}, 1)
++	release := make(chan struct{})
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		entered <- struct{}{}
++		select {
++		case <-r.Context().Done():
++		case <-release:
++		}
++	}))
++	defer server.Close()
++	defer close(release)
++	var timings []secretCapacityGitTiming
++	ctx, cancel := context.WithCancel(context.WithValue(t.Context(), secretCapacityGitTimingKey{}, &timings))
++	defer cancel()
++	done := make(chan error, 1)
++	directory := t.TempDir()
++	go func() {
++		_, err := secretCapacityGit(ctx, directory, "", "ls-remote", server.URL+"/repo")
++		done <- err
++	}()
++	select {
++	case <-entered:
++		cancel()
++	case <-time.After(5 * time.Second):
++		t.Fatal("Git did not reach the HTTP server")
++	}
++	select {
++	case err := <-done:
++		require.ErrorIs(t, err, context.Canceled)
++	case <-time.After(2 * time.Second):
++		t.Fatal("cancelled Git did not drain")
++	}
++	require.Len(t, timings, 1)
++	require.Error(t, validateSecretCapacityGitTiming(timings[0]))
++	require.Equal(t, "incomplete_trace", timings[0].Failure)
++}
++
++func TestSecretCapacityGitClientTimingBoundsAndEnvironment(t *testing.T) {
++	root := t.TempDir()
++	privateTrace := filepath.Join(root, "inherited-trace")
++	t.Setenv("GIT_TRACE2_EVENT", privateTrace)
++	t.Setenv("GIT_TRACE2_ENV_VARS", "GIT_CONFIG_VALUE_1")
++	t.Setenv("GIT_TRACE2_CONFIG_PARAMS", "http.extraHeader")
++	var timings []secretCapacityGitTiming
++	ctx := context.WithValue(t.Context(), secretCapacityGitTimingKey{}, &timings)
++	for range 4 {
++		output, err := secretCapacityGit(ctx, root, "private-client-marker", "version")
++		require.NoError(t, err)
++		require.Contains(t, string(output), "git version")
++		require.NotContains(t, string(output), "private-")
++		require.NotContains(t, string(output), `{"event":`)
++	}
++	require.NoFileExists(t, privateTrace)
++	require.Len(t, timings, 3)
++	require.Equal(t, "command_limit", timings[2].Failure)
++	require.NoError(t, validateSecretCapacityGitTiming(timings[0]))
++	_, err := secretCapacityGit(t.Context(), root, "", "version")
++	require.NoError(t, err)
++	require.NoFileExists(t, privateTrace, "default commands still strip inherited tracing")
++}
++
++func TestSecretCapacityGitTraceWriter(t *testing.T) {
++	events := `{"event":"start","sid":"root","time":"2026-10-17T16:00:00.010Z","argv":["private-token"]}
++{"event":"start","sid":"root/child","time":"2026-10-17T16:00:00.020Z"}
++{"event":"cmd_name","sid":"root/child","time":"2026-10-17T16:00:00.030Z","name":"remote-curl"}
++{"event":"exit","sid":"root/child","time":"2026-10-17T16:00:00.040Z"}
++{"event":"exit","sid":"root","time":"2026-10-17T16:00:00.050Z"}
++`
++	for _, chunk := range []int{1, 17, len(events)} {
++		t.Run(strconv.Itoa(chunk), func(t *testing.T) {
++			var output secretCapacityGitOutput
++			writer := secretCapacityGitTraceWriter{output: &output}
++			data := []byte("ordinary output\n" + events + "unterminated output")
++			for len(data) > 0 {
++				size := min(len(data), chunk)
++				n, err := writer.Write(data[:size])
++				require.NoError(t, err)
++				require.Equal(t, size, n)
++				data = data[size:]
++			}
++			writer.finish()
++			require.Equal(t, "ordinary output\nunterminated output", output.buffer.String())
++			require.Empty(t, writer.timing.Failure)
++			require.Equal(t, "2026-10-17T16:00:00.01Z", writer.timing.TraceStartedAt.Format(time.RFC3339Nano))
++			require.Equal(t, "2026-10-17T16:00:00.03Z", writer.timing.RemoteHTTPStartedAt.Format(time.RFC3339Nano))
++			require.Equal(t, "2026-10-17T16:00:00.04Z", writer.timing.RemoteHTTPExitedAt.Format(time.RFC3339Nano))
++			require.Equal(t, "2026-10-17T16:00:00.05Z", writer.timing.TraceExitedAt.Format(time.RFC3339Nano))
++		})
++	}
++	for _, tc := range []struct {
++		name, input, failure string
++	}{
++		{"malformed", "{\"event\":invalid-private-marker}\n", "invalid_event"},
++		{"long-event", "{\"event\":\"private-" + strings.Repeat("x", 32*1024) + "\"}\n", "event_limit"},
++		{"partial", `{"event":"start"`, "incomplete_event"},
++		{"byte-limit", strings.Repeat("{\"event\":\"ignored\"}\n", 10000), "trace_limit"},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			var output secretCapacityGitOutput
++			writer := secretCapacityGitTraceWriter{output: &output}
++			_, err := writer.Write([]byte(tc.input))
++			require.NoError(t, err)
++			writer.finish()
++			require.Equal(t, tc.failure, writer.timing.Failure)
++			require.Empty(t, output.buffer.String(), "raw trace events must never become command output")
++			require.LessOrEqual(t, cap(writer.pending), 16*1024)
++		})
++	}
++	t.Run("long-normal-output", func(t *testing.T) {
++		var output secretCapacityGitOutput
++		writer := secretCapacityGitTraceWriter{output: &output}
++		data := strings.Repeat("x", 256*1024)
++		_, err := writer.Write([]byte(data))
++		require.NoError(t, err)
++		writer.finish()
++		require.True(t, output.overflow)
++		require.Equal(t, strings.Repeat("x", 128*1024), output.buffer.String())
++		require.Empty(t, writer.timing.Failure)
++	})
++}
++
++func TestSecretCapacityClientTimingFailurePreservesACKs(t *testing.T) {
++	cfg := secretCapacityLoadConfig{
++		duration: 40 * time.Millisecond, interval: 10 * time.Millisecond,
++		burstInterval: 40 * time.Millisecond, burstSize: 1, burstWindow: time.Millisecond,
++		workers: 1, queueLimit: 8, drainTimeout: time.Second,
++	}
++	measured, err := runSecretCapacityPushes(t.Context(), cfg, func(context.Context, int, secretCapacityPushBatch) secretCapacityPushResult {
++		return secretCapacityPushResult{
++			gitAttempted: true, acknowledged: true, ackLatency: time.Millisecond,
++			clientGit: []secretCapacityGitTiming{{Command: "push", Failure: "trace_limit"}},
++		}
++	})
++	require.NoError(t, err)
++	require.True(t, measured.clientTimingFailed, "capture failure must survive collector merging")
++	require.Equal(t, measured.completed, measured.acknowledged)
++	require.Zero(t, measured.failed, "diagnostic capture must not invent rejected pushes")
++	require.Empty(t, measured.failureClasses)
++}
++
+ func TestSecretCapacityGitInspectChecksFailureWithoutReturningOutput(t *testing.T) {
+ 	inspected := false
+ 	output, err := secretCapacityGitInspect(t.Context(), t.TempDir(), "", func(data []byte) {
+@@ -2948,10 +3170,32 @@ func validateSecretCapacityFileStages(workload secretCapacityFileObservations) e
+ 	}
+ 	timelineSequences := make(map[int64]bool, len(workload.Timelines))
+ 	traceIDs := make(map[string]bool, len(workload.Timelines))
+-	if workload.TraceCorrelation && len(workload.Timelines) == 0 {
++	if (workload.TraceCorrelation || workload.ClientTiming) && len(workload.Timelines) == 0 {
++		return invalid
++	}
++	if workload.ClientTiming && workload.Mode != capacityModeDiagnostic {
+ 		return invalid
+ 	}
+ 	for _, row := range workload.Timelines {
++		if workload.ClientTiming != (len(row.ClientGit) > 0) || len(row.ClientGit) > 3 {
++			return invalid
++		}
++		for _, timing := range row.ClientGit {
++			if validateSecretCapacityGitTiming(timing) != nil ||
++				timing.StartedAt.Before(row.OfferedAt.Add(row.QueueWait)) ||
++				timing.StartedAt.Add(timing.Wall).After(row.OfferedAt.Add(row.QueueWait+row.WorkerOccupied)) {
++				return invalid
++			}
++		}
++		if workload.ClientTiming && row.Acknowledged {
++			commands := make([]string, 0, len(row.ClientGit))
++			for _, timing := range row.ClientGit {
++				commands = append(commands, timing.Command)
++			}
++			if !slices.Equal(commands, []string{"commit", "push"}) && !slices.Equal(commands, []string{"add", "commit", "push"}) {
++				return invalid
++			}
++		}
+ 		if workload.TraceCorrelation != (row.TraceID != "") {
+ 			return invalid
+ 		}
+@@ -3529,6 +3773,65 @@ func TestSecretCapacityFileTimelineEvidenceBounds(t *testing.T) {
+ 	}
+ }
+ 
++func TestSecretCapacityClientTimingEvidence(t *testing.T) {
++	base, _, _, _ := secretCapacityComponentFixture(t, t.TempDir())
++	base.Mode, base.ClientTiming = capacityModeDiagnostic, true
++	start := time.Now().UTC()
++	command := secretCapacityGitTiming{
++		Command: "commit", StartedAt: start, Wall: time.Millisecond,
++		UserCPU: time.Microsecond, SystemCPU: time.Microsecond,
++		TraceStartedAt: start.Add(time.Microsecond), TraceExitedAt: start.Add(999 * time.Microsecond),
++	}
++	push := command
++	push.Command = "push"
++	push.StartedAt = start.Add(time.Millisecond)
++	push.TraceStartedAt = push.StartedAt.Add(time.Microsecond)
++	push.TraceExitedAt = push.StartedAt.Add(999 * time.Microsecond)
++	row := secretCapacityPushTimeline{
++		Sequence: 1, Burst: -1, OfferedAt: start, Acknowledged: true,
++		ACK: 2 * time.Millisecond, WorkerOccupied: 3 * time.Millisecond,
++		ClientGit: []secretCapacityGitTiming{command, push},
++	}
++	base.Timelines = []secretCapacityPushTimeline{row}
++	require.NoError(t, validateSecretCapacityFileStages(base))
++	for _, fault := range []string{"undeclared", "production", "missing", "commands", "incomplete",
++		"negative cpu", "worker bounds", "http bounds", "http missing exit", "private class", "overflow"} {
++		t.Run(fault, func(t *testing.T) {
++			workload := base
++			workload.Timelines = []secretCapacityPushTimeline{row}
++			workload.Timelines[0].ClientGit = slices.Clone(row.ClientGit)
++			timing := &workload.Timelines[0].ClientGit[0]
++			switch fault {
++			case "undeclared":
++				workload.ClientTiming = false
++			case "production":
++				workload.Mode = capacityModeProduction
++			case "missing":
++				workload.Timelines[0].ClientGit = nil
++			case "commands":
++				timing.Command = "other"
++			case "incomplete":
++				timing.TraceExitedAt = time.Time{}
++			case "negative cpu":
++				timing.UserCPU = -time.Nanosecond
++			case "worker bounds":
++				timing.StartedAt = start.Add(-time.Second)
++				timing.TraceStartedAt = timing.StartedAt
++				timing.TraceExitedAt = timing.StartedAt
++			case "http bounds":
++				timing.RemoteHTTPStartedAt, timing.RemoteHTTPExitedAt = start.Add(-time.Second), start
++			case "http missing exit":
++				timing.RemoteHTTPStartedAt = start
++			case "private class":
++				timing.Command = "private-path-marker"
++			case "overflow":
++				timing.Failure = "trace_limit"
++			}
++			require.Error(t, validateSecretCapacityFileStages(workload))
++		})
++	}
++}
++
+ func TestSecretCapacityFileTraceEvidenceFailsClosed(t *testing.T) {
+ 	base, _, _, _ := secretCapacityComponentFixture(t, t.TempDir())
+ 	base.TraceCorrelation = true

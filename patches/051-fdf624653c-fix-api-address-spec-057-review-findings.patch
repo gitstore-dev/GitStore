@@ -1,0 +1,86 @@
+diff --git a/gitstore-api/internal/datastore/datastore.go b/gitstore-api/internal/datastore/datastore.go
+index 83ad4b24d7f9650d576960dc15e5c7fb9114ff6b..15980ac8e9949923bcce4cbb9d546417d9f6e3aa 100644
+--- a/gitstore-api/internal/datastore/datastore.go
++++ b/gitstore-api/internal/datastore/datastore.go
+@@ -194,9 +194,11 @@ type CategoryTaxonomyDeletionStore interface {
+ 	CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*CategoryTaxonomy, error)
+ }
+ 
+-// MaxCategoryHierarchyDepth bounds category hierarchy depth and therefore the
+-// ancestor index depth range.
+-const MaxCategoryHierarchyDepth = 128
++// MaxCategoryHierarchyDepth is the deepest relative depth an ancestor index
++// row can hold. The controller resolves paths of at most 128 categories, so
++// depth (len(path)-1) is at most 127, which is also the range of the
++// status.resolved.depth field and the index's tinyint depth column.
++const MaxCategoryHierarchyDepth = 127
+ 
+ // CategoryDescendant is one row of an ancestor's subtree.
+ type CategoryDescendant struct {
+diff --git a/gitstore-api/internal/graph/resolver/category_lifecycle_test.go b/gitstore-api/internal/graph/resolver/category_lifecycle_test.go
+index 02a1340a0a25d6f9e93acbaac7c238fcfa11dd15..32c3ffcb723ea43020c98b6881be4f4a75970496 100644
+--- a/gitstore-api/internal/graph/resolver/category_lifecycle_test.go
++++ b/gitstore-api/internal/graph/resolver/category_lifecycle_test.go
+@@ -388,6 +388,18 @@ func TestUpdateCategoryRejections(t *testing.T) {
+ 		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "PROVENANCE_UNAVAILABLE")
+ 		assert.Zero(t, env.git.commitCount())
+ 	})
++	t.Run("admitted from another ref", func(t *testing.T) {
++		env := newCategoryLifecycleEnv(t)
++		record := env.pushCategory(t, lifecycleSystemRepoID, "categories/laptops.md", "laptops", "Laptops", "", "")
++		record.GitRef = "refs/heads/feature"
++		require.NoError(t, env.store.UpdateCategoryTaxonomy(context.Background(), record))
++		_, err := env.service.CommitCategoryManifest(context.Background(), categoryInput("laptops", "Laptops 2", ""), "bob", false)
++		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "PROVENANCE_UNAVAILABLE")
++		_, _, err = env.service.DeleteCategoryManifest(context.Background(), record.UID, "bob")
++		requireCategoryError(t, err, admission.CodeFailedPrecondition, "", "PROVENANCE_UNAVAILABLE")
++		assert.Zero(t, env.git.commitCount())
++		assert.Empty(t, env.git.deletes)
++	})
+ 	t.Run("owner annotation change", func(t *testing.T) {
+ 		env := newCategoryLifecycleEnv(t)
+ 		env.pushCategory(t, lifecycleSystemRepoID, "categories/laptops.md", "laptops", "Laptops", "", "")
+diff --git a/gitstore-api/policy.yaml.example b/gitstore-api/policy.yaml.example
+index b645a510e26dedcb0253b0fe793d98568233029b..692bb4af47bf0c5906a7e4e6c9299cad6c77ea3a 100644
+--- a/gitstore-api/policy.yaml.example
++++ b/gitstore-api/policy.yaml.example
+@@ -38,23 +38,21 @@ roles:
+       - repository.transfer.own
+       - repository.delete.own
+       - repository.read.own
+-      - categoryTaxonomy.create
+-      - categoryTaxonomy.update
+-      - categoryTaxonomy.delete
+       - categoryTaxonomy.list
+       - categoryTaxonomy.read
+     deny:
+       - namespace.delete.any     # cannot delete other owners' namespaces
+ 
++  # Category mutations (categoryTaxonomy.create|update|delete) are not granted
++  # to these shared roles: rbac-local grants are global, not namespace-scoped.
++  # Grant them to a per-tenant role, or use a provider that scopes decisions by
++  # the request's namespace attribute.
+   developer:
+     allow:
+       - namespace.read
+       - repository.read
+       - repository.write
+       - repository.read.any
+-      - categoryTaxonomy.create
+-      - categoryTaxonomy.update
+-      - categoryTaxonomy.delete
+       - categoryTaxonomy.list
+       - categoryTaxonomy.read
+     deny: []
+diff --git a/tests/integration/category_taxonomy_test.go b/tests/integration/category_taxonomy_test.go
+index f77d18628b2cc766a795ff6830b07618b8f57bfb..93308f65e2869c5d4b798604174617a33c3b379f 100644
+--- a/tests/integration/category_taxonomy_test.go
++++ b/tests/integration/category_taxonomy_test.go
+@@ -644,7 +644,6 @@ func TestCategoryCrossNamespaceParentRef_NoDisclosurePush(t *testing.T) {
+ 	otherNS := uniqueName("cat-other")
+ 	createNamespaceAsUser(t, h, token, otherNS)
+ 	t.Cleanup(func() { h.cleanupNamespace(otherNS) })
+-	waitForRepositoryReady(t, token, otherNS, "gitstore-system")
+ 
+ 	known := uniqueName("known")
+ 	created := gqlQueryWithURL(t, apiURL, token, `

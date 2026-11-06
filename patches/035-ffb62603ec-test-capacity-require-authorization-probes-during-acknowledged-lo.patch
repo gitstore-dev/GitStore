@@ -1,0 +1,599 @@
+diff --git a/docs/runbooks/namespace-admission.md b/docs/runbooks/namespace-admission.md
+index 8aefb4fc1ac2cf298e20af7c420f01e06363ac97..bb0053bbbef1ee0df8539b80e713d51c34db6e95 100644
+--- a/docs/runbooks/namespace-admission.md
++++ b/docs/runbooks/namespace-admission.md
+@@ -957,21 +957,35 @@ weakening durable replay protection.
+ ### Authorization evidence
+ 
+ Alpha and production Repository lifecycle runs require exact authorization
+-checks on both APIs before lifecycle work and again after load, recovery and
+-replacement. The configured credential must successfully list at most one
++checks on both APIs before lifecycle work, at the start of each existing
++under-load metadata cycle, and again after load, recovery and replacement.
++The configured credential must successfully list at most one
+ Namespace; an unauthenticated request must return the expected authorization
+ error without partial resource data. When anonymous authentication is enabled,
+ that error is `FORBIDDEN`; otherwise it is `UNAUTHENTICATED`. Expected denials
+ are separate from unexpected HTTP or domain failures.
+ 
+ Both replicas must expose matching loaded policy, provider and compiled catalog
+-identities, unchanged across the two checks. Local RBAC metadata must identify
++identities, unchanged across these checks. Local RBAC metadata must identify
+ the v1beta1 policy format. Evidence is bounded, excludes credentials and response
+ bodies, and starts incomplete; an interrupted or failed run cannot supply a
+ passing authorization result. The verifier also binds it to the run and the
+ distinct API endpoints observed at preflight.
+ 
+-These before/after checks do not establish uninterrupted authorization behavior
++The bounded summary retains successful cycle counts per replica, the first/last
++cycle timestamps, the actual load scheduling window and advancing mutation ACKs
++over each complete metadata cycle containing the authorization checks. It does
++not claim an ACK occurred during every individual HTTP exchange. Cycles must
++finish before the scheduling window ends; idle periods and drain cannot count.
++The current evidence format rejects older before/after-only results.
++
++During-load checks allow at most 30 seconds for endpoint availability recovery,
++with bounded backoff and a separate unavailable-attempt count. Gateway
++502/503/504 responses without a GraphQL result may be retried; unexpected
++decisions, partial data, malformed responses and snapshot changes fail without
++retry. The before/after checks remain one-shot.
++
++These sampled checks do not establish uninterrupted authorization behavior
+ during faults, the full permission matrix or successful sustained Git pushes.
+ Existing load, retry, deadline, watch, replacement and resource gates remain
+ required. This additional harness coverage is not a completed deployment
+diff --git a/scripts/test-capacity-dispatch.sh b/scripts/test-capacity-dispatch.sh
+index 1606023b54b27e1f82f89ab0167a3281a938ff4f..9d55502c5e54c1a2472d4085cf9e49b2830d0ab2 100755
+--- a/scripts/test-capacity-dispatch.sh
++++ b/scripts/test-capacity-dispatch.sh
+@@ -337,6 +337,17 @@ jq '
+   {schemaVersion:1,component:"repository-lifecycle-authorization",runID:"lifecycle-semantics",
+    mode:"diagnostic",passed:true,before:replicas,after:replicas}
+ ' "${test_dir}/original-readiness-probes.json" >"${lifecycle_semantic_dir}/authorization-probes.json"
++if CAPACITY_RUN_ID=lifecycle-semantics "${repo_root}/scripts/validate-capacity-evidence.sh" \
++  "${lifecycle_semantic_dir}" repository lifecycle diagnostic postflight >/dev/null 2>&1; then
++  echo "Repository lifecycle accepted before/after-only evidence without acknowledged-load coverage" >&2
++  exit 1
++fi
++jq '.schemaVersion = 2 | .underLoad = {
++  cycles:1,allowed:[1,1],denied:[1,1],firstStartedMS:100010,lastCompletedMS:100100,
++  loadStartMS:100000,loadEndMS:700000,acknowledgedBefore:1,acknowledgedAfter:2,
++  minimumAcknowledgedAdvance:1,unavailableAttempts:0
++}' "${lifecycle_semantic_dir}/authorization-probes.json" >"${lifecycle_semantic_dir}/authorization.next.json"
++mv "${lifecycle_semantic_dir}/authorization.next.json" "${lifecycle_semantic_dir}/authorization-probes.json"
+ CAPACITY_RUN_ID=lifecycle-semantics "${repo_root}/scripts/validate-capacity-evidence.sh" \
+   "${lifecycle_semantic_dir}" repository lifecycle diagnostic postflight
+ cp "${lifecycle_semantic_dir}/authorization-probes.json" "${test_dir}/original-lifecycle-probes.json"
+@@ -348,6 +359,15 @@ for mutation in \
+   '.before[].endpoint = "http://other-api.internal"' \
+   '.after[1].endpoint = .after[0].endpoint' \
+   '.before[0].auth.policy.loaded = false' '.after[0].token = "private-token-marker"' \
++  '.schemaVersion = 1' 'del(.underLoad)' '.underLoad = null' \
++  '.underLoad.cycles = 0' '.underLoad.cycles = 0.5' '.underLoad.allowed[0] = 0' \
++  '.underLoad.denied[1] = 0' '.underLoad.minimumAcknowledgedAdvance = 0' \
++  '.underLoad.acknowledgedAfter = .underLoad.acknowledgedBefore' \
++  '.underLoad.firstStartedMS = (.underLoad.loadStartMS - 1)' \
++  '.underLoad.lastCompletedMS = .underLoad.loadEndMS' \
++  '.underLoad.lastCompletedMS = .underLoad.firstStartedMS' \
++  '.underLoad.unavailableAttempts = -1' '.underLoad.cycles = 9007199254740992' \
++  '.underLoad.minimumAcknowledgedAdvance = 2' '.underLoad.token = "private-token-marker"' \
+   '.token = "private-token-marker"'; do
+   jq "${mutation}" "${test_dir}/original-lifecycle-probes.json" >"${lifecycle_semantic_dir}/authorization-probes.json"
+   if CAPACITY_RUN_ID=lifecycle-semantics "${repo_root}/scripts/validate-capacity-evidence.sh" \
+@@ -390,8 +410,11 @@ if [[ "$*" == *"_capacity-repository-lifecycle"* && "${MODE:-}" != diagnostic ]]
+   jq --arg run "${CAPACITY_RUN_ID}" --slurpfile fixture "${MOCK_LIFECYCLE_AUTH_FILE}" '
+     def replicas: [.topology.liveApiReplicas[] |
+       {endpoint,auth:$fixture[0].replicas[0].auth,allowed:true,denied:true,denialCode:"FORBIDDEN"}];
+-    {schemaVersion:1,component:"repository-lifecycle-authorization",runID:$run,
+-     mode:.mode,passed:true,before:replicas,after:replicas}
++    {schemaVersion:2,component:"repository-lifecycle-authorization",runID:$run,
++     mode:.mode,passed:true,before:replicas,after:replicas,
++     underLoad:{cycles:1,allowed:[1,1],denied:[1,1],firstStartedMS:100010,lastCompletedMS:100100,
++       loadStartMS:100000,loadEndMS:700000,acknowledgedBefore:1,acknowledgedAfter:2,
++       minimumAcknowledgedAdvance:1,unavailableAttempts:0}}
+   ' "${CAPACITY_EVIDENCE_DIR}/preflight-environment.json" >"${CAPACITY_EVIDENCE_DIR}/authorization-probes.json"
+ fi
+ [[ "${FAIL_MAKE:-0}" != "1" ]]
+diff --git a/scripts/validate-capacity-evidence.sh b/scripts/validate-capacity-evidence.sh
+index 44833e03eb9ccfe43d7691b84989d3eb6467e4e7..b412d659e0a8aefe978366b188817b1ac52e70e4 100755
+--- a/scripts/validate-capacity-evidence.sh
++++ b/scripts/validate-capacity-evidence.sh
+@@ -240,9 +240,23 @@ if [[ "${target}/${profile}" == repository/lifecycle && "${phase}" == postflight
+         (.endpoint | type == "string" and test("^https?://[^@\\s,?#]+$")) and
+         (.auth | snapshot) and .allowed == true and .denied == true and
+         .denialCode == (if (.auth.authn | index("anonymous")) != null then "FORBIDDEN" else "UNAUTHENTICATED" end));
+-    keys == ["after","before","component","mode","passed","runID","schemaVersion"] and
+-    .schemaVersion == 1 and .component == "repository-lifecycle-authorization" and
++    def bounded_count:
++      type == "number" and isfinite and . == floor and . >= 0 and . <= 9007199254740991;
++    def under_load:
++      keys == ["acknowledgedAfter","acknowledgedBefore","allowed","cycles","denied","firstStartedMS",
++        "lastCompletedMS","loadEndMS","loadStartMS","minimumAcknowledgedAdvance","unavailableAttempts"] and
++      all([.cycles,.firstStartedMS,.lastCompletedMS,.loadStartMS,.loadEndMS,
++        .acknowledgedBefore,.acknowledgedAfter,.minimumAcknowledgedAdvance,.unavailableAttempts][]; bounded_count) and
++      .cycles > 0 and .allowed == [.cycles,.cycles] and .denied == [.cycles,.cycles] and
++      .loadStartMS > 0 and .loadEndMS > .loadStartMS and
++      .firstStartedMS >= .loadStartMS and .lastCompletedMS > .firstStartedMS and .lastCompletedMS < .loadEndMS and
++      .acknowledgedBefore > 0 and .acknowledgedAfter > .acknowledgedBefore and
++      .minimumAcknowledgedAdvance > 0 and
++      .minimumAcknowledgedAdvance * .cycles <= (.acknowledgedAfter - .acknowledgedBefore);
++    keys == ["after","before","component","mode","passed","runID","schemaVersion","underLoad"] and
++    .schemaVersion == 2 and .component == "repository-lifecycle-authorization" and
+     .mode == $mode and .runID == $run and .passed == true and
++    (.underLoad | under_load) and
+     (.before | replicas) and (.after | replicas) and
+     ([.before[].auth, .after[].auth] | unique | length) == 1 and
+     ([.before[].endpoint] | sort) == ([.after[].endpoint] | sort) and
+diff --git a/specs/064-authz-action-vocabulary/quickstart.md b/specs/064-authz-action-vocabulary/quickstart.md
+index 9497726b386baf496df7dab1187609250ac7c082..1ef5f44df4cc7960c2c76cb3957e54df8184def5 100644
+--- a/specs/064-authz-action-vocabulary/quickstart.md
++++ b/specs/064-authz-action-vocabulary/quickstart.md
+@@ -104,6 +104,20 @@ pass. Their broader workload/domain/fault obligations remain unchecked.
+ Existing load, retry, deadline, replacement and resource gates are unchanged;
+ the before/after probes do not establish the under-load authorization matrix.
+ 
++The follow-up adds sampled baseline probes at the start of each existing
++acknowledged-load metadata cycle. Schema version 2 retains constant-space
++per-replica successful cycle counts, ordered cycle timestamps, the orchestrator's
++actual scheduling window and advancing ACKs across each complete metadata cycle,
++not each HTTP exchange. Postflight rejects old before/after-only proof and
++missing, unsafe or inconsistent counts/time/ACK bounds. Only endpoint
++availability failures receive bounded 30-second recovery with backoff and a
++separate unavailable-attempt count; unexpected domain results, partial data and
++changed snapshots fail immediately. Before/after probes remain one-shot.
++The full standalone integration `TestSecretCapacity` race suite, metadata
++window/overlap tests, integration vet and isolated dispatcher regression passed.
++This remains partial T066/T068 coverage: neither task is checked, the ledger
++remains 72/82, and no new deployed acceptance or Git contention fix is claimed.
++
+ ### Bounded authorization diagnostics (2026-10-19)
+ 
+ T067 implementation is complete. A decision carries its evaluated immutable
+diff --git a/tests/capacity/README.md b/tests/capacity/README.md
+index 36913235ee4863175f044c6bde5cda65030ac21a..731b13eaffcb06d34887d1c1402c7a4de6663c2f 100644
+--- a/tests/capacity/README.md
++++ b/tests/capacity/README.md
+@@ -15,12 +15,21 @@ two-replica soak. `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
+ The dispatcher is the only public capacity entry point.
+ 
+ Repository lifecycle alpha/production now also emits bounded
+-`authorization-probes.json`: exact authenticated Namespace-list allow and
+-unauthenticated deny checks on both APIs before work and after the completed
++`authorization-probes.json` schema version 2: exact authenticated Namespace-list
++allow and unauthenticated deny checks on both APIs before work, at the start of
++each existing under-load metadata cycle, and after the completed
+ load/recovery/replacement path, with matching unchanged provider/policy/catalog
+-snapshots. The artifact starts incomplete and the postflight verifier requires
++snapshots. A constant-space summary retains successful per-replica cycle counts,
++cycle time bounds, the actual scheduling window and minimum/overall ACK
++advancement over the complete metadata cycles containing the checks, not over
++each individual HTTP exchange. Idle/drain cycles and older before/after-only
++proofs are rejected. Endpoint availability recovery during load is bounded to
++30 seconds with backoff and separately counted unavailable attempts; unexpected
++decisions, partial data and snapshot changes are never retried. Before/after
++probes remain one-shot.
++The artifact starts incomplete and the postflight verifier requires
+ a passing run-bound result tied to the distinct preflight API endpoints.
+-Expected denials do not count as unexpected HTTP/domain failures. These checks
++Expected denials do not count as unexpected HTTP/domain failures. These sampled checks
+ do not replace the under-load permission/fault matrix or any existing workload,
+ latency, retry, replacement or resource gate; diagnostics retain their existing
+ behavior.
+diff --git a/tests/integration/namespace_watch_capacity_test.go b/tests/integration/namespace_watch_capacity_test.go
+index d0bbdb510e50234a3f448fc17696fff90c457f95..df7701819b97b625b19dd5d9bcd50d401056b5b3 100644
+--- a/tests/integration/namespace_watch_capacity_test.go
++++ b/tests/integration/namespace_watch_capacity_test.go
+@@ -1043,8 +1043,9 @@ func TestCapacityMetadataNextCycleReservesObservedProbeDuration(t *testing.T) {
+ 	}
+ }
+ 
+-func runCapacityMetadataUnderLoad(t *testing.T, duration time.Duration, load func(*testing.T, *atomic.Int64), probe func(*testing.T, *atomic.Int64)) {
++func runCapacityMetadataUnderLoad(t *testing.T, duration time.Duration, load func(*testing.T, *atomic.Int64), probe func(*testing.T, *atomic.Int64)) (time.Time, time.Time) {
+ 	t.Helper()
++	var windowStart, windowEnd time.Time
+ 	var progress atomic.Int64
+ 	window := make(chan time.Time, 1)
+ 	done := make(chan struct{})
+@@ -1062,6 +1063,7 @@ func runCapacityMetadataUnderLoad(t *testing.T, duration time.Duration, load fun
+ 		t.Run("metadata", func(t *testing.T) {
+ 			start := <-window
+ 			end := start.Add(duration)
++			windowStart, windowEnd = start, end
+ 			for progress.Load() == 0 {
+ 				select {
+ 				case <-done:
+@@ -1094,13 +1096,14 @@ func runCapacityMetadataUnderLoad(t *testing.T, duration time.Duration, load fun
+ 			}
+ 		})
+ 	})
++	return windowStart, windowEnd
+ }
+ 
+ func TestCapacityMetadataUnderLoadJoinsOwnedLoad(t *testing.T) {
+ 	var joined atomic.Bool
+ 	var cycles atomic.Int64
+ 	duration := 200 * time.Millisecond
+-	runCapacityMetadataUnderLoad(t, duration, func(t *testing.T, progress *atomic.Int64) {
++	windowStart, windowEnd := runCapacityMetadataUnderLoad(t, duration, func(t *testing.T, progress *atomic.Int64) {
+ 		deadline := time.NewTimer(duration)
+ 		defer deadline.Stop()
+ 		ticker := time.NewTicker(5 * time.Millisecond)
+@@ -1122,6 +1125,9 @@ func TestCapacityMetadataUnderLoadJoinsOwnedLoad(t *testing.T) {
+ 	})
+ 	require.True(t, joined.Load(), "orchestrator must join the owned load test")
+ 	require.EqualValues(t, 1, cycles.Load())
++	require.False(t, windowStart.IsZero())
++	require.Equal(t, duration, windowEnd.Sub(windowStart))
++	require.False(t, windowEnd.After(time.Now()), "returned bounds describe the joined scheduling window, not drain")
+ }
+ 
+ func TestCapacityMetadataOverlapRequiresActiveAcknowledgedLoad(t *testing.T) {
+diff --git a/tests/integration/repository_lifecycle_capacity_test.go b/tests/integration/repository_lifecycle_capacity_test.go
+index 2c30c0cc38064fd10ca333d1f4a44637de19cacd..f56cc7fd4832aee4e753c61f4630f6903ae42b39 100644
+--- a/tests/integration/repository_lifecycle_capacity_test.go
++++ b/tests/integration/repository_lifecycle_capacity_test.go
+@@ -185,24 +185,25 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
+ 	}
+ 
+ 	var authorization repositoryCapacityAuthorizationEvidence
++	var persistAuthorization func()
+ 	if cfg.mode != capacityModeDiagnostic {
+ 		authorization = repositoryCapacityAuthorizationEvidence{
+-			SchemaVersion: 1, Component: "repository-lifecycle-authorization", RunID: os.Getenv("CAPACITY_RUN_ID"), Mode: cfg.mode,
++			SchemaVersion: 2, Component: "repository-lifecycle-authorization", RunID: os.Getenv("CAPACITY_RUN_ID"), Mode: cfg.mode,
+ 		}
+ 		directory := os.Getenv("CAPACITY_EVIDENCE_DIR")
+ 		require.NotEmpty(t, directory, "authorization acceptance requires a dispatcher evidence directory")
+-		persist := func() {
++		persistAuthorization = func() {
+ 			if t.Failed() {
+ 				authorization.Passed = false
+ 			}
+ 			require.NoError(t, writeSecretCapacityPrivateJSON(filepath.Join(directory, "authorization-probes.json"), authorization))
+ 		}
+-		persist()
+-		t.Cleanup(persist)
++		persistAuthorization()
++		t.Cleanup(persistAuthorization)
+ 		var err error
+ 		authorization.Before, err = repositoryCapacityAuthorizationProbes(t.Context(), client, []string{cfg.apiA, cfg.apiB}, cfg.token)
+ 		require.NoError(t, err, "both replicas must pass exact authorization probes before lifecycle work")
+-		persist()
++		persistAuthorization()
+ 	}
+ 
+ 	var dataset secretCapacityDatasetObservations
+@@ -307,11 +308,19 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
+ 		go func() { replacementDone <- runRepositoryCapacityReplacement(t.Context(), cfg, client, soakStarted) }()
+ 	}
+ 	var load repositoryCapacityLoadResult
+-	runCapacityMetadataUnderLoad(t, cfg.duration, func(loadTest *testing.T, progress *atomic.Int64) {
++	loadStart, loadEnd := runCapacityMetadataUnderLoad(t, cfg.duration, func(loadTest *testing.T, progress *atomic.Int64) {
+ 		loadCfg := cfg
+ 		loadCfg.acknowledgements = progress
+ 		load = runRepositoryCapacityLoad(loadTest, client, loadCfg, poolPrefix, livePrefix, maxTransitions)
+ 	}, func(probeTest *testing.T, progress *atomic.Int64) {
++		authorizationStarted, authorizationBefore := time.Now(), progress.Load()
++		var unavailable uint64
++		if cfg.mode != capacityModeDiagnostic {
++			var err error
++			unavailable, err = repositoryCapacityAuthorizationUnderLoad(probeTest.Context(), client,
++				[]string{cfg.apiA, cfg.apiB}, cfg.token, authorization.Before)
++			require.NoError(probeTest, err, "under-load decisions must match the baseline on both replicas")
++		}
+ 		probeCfg := runRepositoryWatchMetadataGenerationAndSelectorReplay(probeTest, cfg)
+ 		probeCfg.acknowledgements = progress
+ 		started, before := time.Now(), progress.Load()
+@@ -327,7 +336,16 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
+ 		require.True(probeTest, probeTest.Run("namespace_deletion", func(t *testing.T) {
+ 			assertNamespaceCapacityDeletionLifecycle(t, client, probeCfg)
+ 		}))
++		if cfg.mode != capacityModeDiagnostic {
++			require.NoError(probeTest, authorization.UnderLoad.record(authorizationStarted, time.Now(),
++				authorizationBefore, progress.Load(), unavailable))
++			persistAuthorization()
++		}
+ 	})
++	if cfg.mode != capacityModeDiagnostic {
++		require.NoError(t, authorization.UnderLoad.bindWindow(loadStart, loadEnd))
++		persistAuthorization()
++	}
+ 	if fileLoad != nil {
+ 		result := <-fileLoad
+ 		assertSecretCapacityFileLoad(t, cfg.mode, result)
+@@ -520,6 +538,55 @@ type repositoryCapacityAuthorizationEvidence struct {
+ 	Passed        bool                                     `json:"passed"`
+ 	Before        []repositoryCapacityAuthorizationReplica `json:"before"`
+ 	After         []repositoryCapacityAuthorizationReplica `json:"after"`
++	UnderLoad     repositoryCapacityAuthorizationLoad      `json:"underLoad"`
++}
++
++type repositoryCapacityAuthorizationLoad struct {
++	Cycles                     int64    `json:"cycles"`
++	Allowed                    [2]int64 `json:"allowed"`
++	Denied                     [2]int64 `json:"denied"`
++	FirstStartedMS             int64    `json:"firstStartedMS"`
++	LastCompletedMS            int64    `json:"lastCompletedMS"`
++	LoadStartMS                int64    `json:"loadStartMS"`
++	LoadEndMS                  int64    `json:"loadEndMS"`
++	AcknowledgedBefore         int64    `json:"acknowledgedBefore"`
++	AcknowledgedAfter          int64    `json:"acknowledgedAfter"`
++	MinimumAcknowledgedAdvance int64    `json:"minimumAcknowledgedAdvance"`
++	UnavailableAttempts        uint64   `json:"unavailableAttempts"`
++}
++
++func (s *repositoryCapacityAuthorizationLoad) record(started, completed time.Time, before, after int64, unavailable uint64) error {
++	const maxSafeInteger = 1<<53 - 1
++	first, last := started.UnixMilli(), completed.UnixMilli()
++	if first <= 0 || last <= first || last > maxSafeInteger ||
++		before <= 0 || after <= before || after > maxSafeInteger ||
++		s.Cycles < 0 || s.Cycles >= maxSafeInteger || s.UnavailableAttempts > maxSafeInteger ||
++		unavailable > maxSafeInteger-s.UnavailableAttempts ||
++		(s.Cycles > 0 && (first < s.LastCompletedMS || before < s.AcknowledgedAfter)) {
++		return errors.New("under-load authorization requires ordered acknowledged cycles and bounded timestamps/counts")
++	}
++	if s.Cycles == 0 {
++		s.FirstStartedMS, s.AcknowledgedBefore = first, before
++		s.MinimumAcknowledgedAdvance = after - before
++	} else if after-before < s.MinimumAcknowledgedAdvance {
++		s.MinimumAcknowledgedAdvance = after - before
++	}
++	s.Cycles++
++	s.Allowed, s.Denied = [2]int64{s.Cycles, s.Cycles}, [2]int64{s.Cycles, s.Cycles}
++	s.LastCompletedMS, s.AcknowledgedAfter = last, after
++	s.UnavailableAttempts += unavailable
++	return nil
++}
++
++func (s *repositoryCapacityAuthorizationLoad) bindWindow(start, end time.Time) error {
++	const maxSafeInteger = 1<<53 - 1
++	first, last := start.UnixMilli(), end.UnixMilli()
++	if s.Cycles <= 0 || first <= 0 || last <= first || last > maxSafeInteger ||
++		s.FirstStartedMS < first || s.LastCompletedMS >= last {
++		return errors.New("authorization cycles must finish inside the actual sustained scheduling window, never drain")
++	}
++	s.LoadStartMS, s.LoadEndMS = first, last
++	return nil
+ }
+ 
+ func (s repositoryCapacityAuthorizationSnapshot) equal(other repositoryCapacityAuthorizationSnapshot) bool {
+@@ -527,6 +594,8 @@ func (s repositoryCapacityAuthorizationSnapshot) equal(other repositoryCapacityA
+ 		s.Userdir == other.Userdir && s.CatalogDigest == other.CatalogDigest && s.Policy == other.Policy
+ }
+ 
++var repositoryCapacityAuthorizationUnavailable = errors.New("capacity authorization endpoint unavailable (details redacted)")
++
+ func repositoryCapacityAuthorizationProbes(ctx context.Context, client *http.Client, endpoints []string, token string) ([]repositoryCapacityAuthorizationReplica, error) {
+ 	invalid := errors.New("capacity authorization probes failed exact response, snapshot or replica checks (details redacted)")
+ 	if client == nil || len(endpoints) != 2 || endpoints[0] == endpoints[1] || strings.TrimSpace(token) == "" {
+@@ -556,11 +625,26 @@ func repositoryCapacityAuthorizationProbes(ctx context.Context, client *http.Cli
+ 			if ctx.Err() != nil {
+ 				return 0, fmt.Errorf("capacity authorization probe canceled: %w", ctx.Err())
+ 			}
+-			return 0, invalid
++			return 0, repositoryCapacityAuthorizationUnavailable
+ 		}
+ 		defer response.Body.Close()
+ 		data, err := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
+-		if err != nil || len(data) > 64<<10 || json.Unmarshal(data, destination) != nil {
++		if err != nil || len(data) > 64<<10 {
++			return 0, invalid
++		}
++		if response.StatusCode == http.StatusBadGateway || response.StatusCode == http.StatusServiceUnavailable ||
++			response.StatusCode == http.StatusGatewayTimeout {
++			var envelope map[string]json.RawMessage
++			if path != "/graphql" || json.Unmarshal(data, &envelope) != nil {
++				return response.StatusCode, repositoryCapacityAuthorizationUnavailable
++			}
++			_, hasData := envelope["data"]
++			_, hasErrors := envelope["errors"]
++			if !hasData && !hasErrors {
++				return response.StatusCode, repositoryCapacityAuthorizationUnavailable
++			}
++		}
++		if json.Unmarshal(data, destination) != nil {
+ 			return 0, invalid
+ 		}
+ 		return response.StatusCode, nil
+@@ -660,8 +744,55 @@ func repositoryCapacityAuthorizationProbes(ctx context.Context, client *http.Cli
+ 	return replicas, nil
+ }
+ 
++func repositoryCapacityAuthorizationUnderLoad(ctx context.Context, client *http.Client, endpoints []string, token string, expected []repositoryCapacityAuthorizationReplica) (uint64, error) {
++	invalid := errors.New("under-load authorization outcomes, endpoints or snapshots differ from the baseline (details redacted)")
++	if len(expected) != 2 || len(endpoints) != 2 {
++		return 0, invalid
++	}
++	for i := range expected {
++		if expected[i].Endpoint != endpoints[i] || !expected[i].Allowed || !expected[i].Denied {
++			return 0, invalid
++		}
++	}
++	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
++	defer cancel()
++	var unavailable uint64
++	delay := 250 * time.Millisecond
++	for {
++		replicas, err := repositoryCapacityAuthorizationProbes(ctx, client, endpoints, token)
++		if err == nil {
++			if len(replicas) != len(expected) {
++				return unavailable, invalid
++			}
++			for i := range replicas {
++				if replicas[i].Endpoint != expected[i].Endpoint || !replicas[i].Auth.equal(expected[i].Auth) ||
++					replicas[i].DenialCode != expected[i].DenialCode || !replicas[i].Allowed || !replicas[i].Denied {
++					return unavailable, invalid
++				}
++			}
++			return unavailable, nil
++		}
++		if !errors.Is(err, repositoryCapacityAuthorizationUnavailable) {
++			return unavailable, err
++		}
++		unavailable++
++		timer := time.NewTimer(delay)
++		select {
++		case <-ctx.Done():
++			timer.Stop()
++			return unavailable, fmt.Errorf("under-load authorization availability recovery expired: %w", ctx.Err())
++		case <-timer.C:
++		}
++		if delay < 2*time.Second {
++			delay *= 2
++		}
++	}
++}
++
+ func TestSecretCapacityRepositoryAuthorizationProbes(t *testing.T) {
+ 	for _, mutation := range []string{"", "alternate-provider", "no-anonymous", "wrong-denial", "partial-data", "multiple-errors", "empty-allow",
++		"during-load", "during-recovery", "during-graphql-recovery", "during-persistent",
++		"during-policy-change", "during-wrong-denial", "during-http-denial", "during-partial-data",
+ 		"missing-snapshot", "missing-counts", "null-counts", "different-policy", "different-provider", "http-failure", "oversized"} {
+ 		t.Run(mutation, func(t *testing.T) {
+ 			auth := repositoryCapacityAuthorizationSnapshot{
+@@ -683,7 +814,16 @@ func TestSecretCapacityRepositoryAuthorizationProbes(t *testing.T) {
+ 					calls[replica].Add(1)
+ 					switch r.URL.Path {
+ 					case "/ready":
++						if replica == 1 && (mutation == "during-persistent" ||
++							(mutation == "during-recovery" && calls[replica].Load() == 1)) {
++							w.WriteHeader(http.StatusServiceUnavailable)
++							_, _ = io.WriteString(w, "private-gateway-marker")
++							return
++						}
+ 						snapshot := auth
++						if mutation == "during-policy-change" {
++							snapshot.Policy.Digest = strings.Repeat("c", 64)
++						}
+ 						if replica == 1 && mutation == "different-policy" {
+ 							snapshot.Policy.Digest = strings.Repeat("c", 64)
+ 						}
+@@ -704,7 +844,13 @@ func TestSecretCapacityRepositoryAuthorizationProbes(t *testing.T) {
+ 							require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"auth": snapshot}))
+ 						}
+ 					case "/graphql":
+-						if mutation == "http-failure" {
++						if mutation == "during-http-denial" {
++							w.WriteHeader(http.StatusServiceUnavailable)
++							_, _ = io.WriteString(w, `{"errors":[{"extensions":{"code":"FORBIDDEN"}}]}`)
++						} else if replica == 1 && mutation == "during-graphql-recovery" && calls[replica].Load() == 2 {
++							w.WriteHeader(http.StatusBadGateway)
++							_, _ = io.WriteString(w, `{"message":"private-gateway-marker"}`)
++						} else if mutation == "http-failure" {
+ 							w.WriteHeader(http.StatusForbidden)
+ 							_, _ = io.WriteString(w, "private-response-marker")
+ 						} else if mutation == "oversized" {
+@@ -719,9 +865,9 @@ func TestSecretCapacityRepositoryAuthorizationProbes(t *testing.T) {
+ 							require.Empty(t, r.Header.Get("Authorization"), "anonymous probes must not forward the allowed credential")
+ 							body := `{"data":null,"errors":[{"message":"private-response-marker","extensions":{"code":"FORBIDDEN"}}]}`
+ 							switch mutation {
+-							case "wrong-denial":
++							case "wrong-denial", "during-wrong-denial":
+ 								body = strings.ReplaceAll(body, "FORBIDDEN", "NOT_FOUND")
+-							case "partial-data":
++							case "partial-data", "during-partial-data":
+ 								body = strings.Replace(body, `"data":null`, `"data":{"namespaces":{"edges":[]}}`, 1)
+ 							case "multiple-errors":
+ 								body = `{"errors":[{"extensions":{"code":"FORBIDDEN"}},{"extensions":{"code":"FORBIDDEN"}}]}`
+@@ -739,6 +885,34 @@ func TestSecretCapacityRepositoryAuthorizationProbes(t *testing.T) {
+ 				t.Cleanup(server.Close)
+ 				servers = append(servers, server)
+ 			}
++			if strings.HasPrefix(mutation, "during-") {
++				expected := make([]repositoryCapacityAuthorizationReplica, 2)
++				for i := range expected {
++					expected[i] = repositoryCapacityAuthorizationReplica{
++						Endpoint: servers[i].URL, Auth: auth, Allowed: true, Denied: true, DenialCode: "FORBIDDEN",
++					}
++				}
++				ctx := t.Context()
++				if mutation == "during-persistent" {
++					var cancel context.CancelFunc
++					ctx, cancel = context.WithTimeout(ctx, 75*time.Millisecond)
++					defer cancel()
++				}
++				retries, err := repositoryCapacityAuthorizationUnderLoad(ctx, http.DefaultClient,
++					[]string{servers[0].URL, servers[1].URL}, "private-token-marker", expected)
++				if mutation == "during-persistent" {
++					require.ErrorIs(t, err, context.DeadlineExceeded)
++					require.Positive(t, retries)
++				} else if mutation == "during-load" || mutation == "during-recovery" || mutation == "during-graphql-recovery" {
++					require.NoError(t, err)
++					require.Equal(t, mutation != "during-load", retries > 0)
++				} else {
++					require.Error(t, err)
++					require.NotContains(t, err.Error(), "private-")
++					require.Zero(t, retries, "unexpected decisions/snapshots must never be retried")
++				}
++				return
++			}
+ 			result, err := repositoryCapacityAuthorizationProbes(t.Context(), http.DefaultClient,
+ 				[]string{servers[0].URL, servers[1].URL}, "private-token-marker")
+ 			if mutation == "" || mutation == "alternate-provider" || mutation == "no-anonymous" {
+@@ -793,6 +967,66 @@ func TestSecretCapacityRepositoryAuthorizationProbeBounds(t *testing.T) {
+ 	require.ErrorIs(t, err, context.Canceled)
+ }
+ 
++func TestSecretCapacityRepositoryAuthorizationLoadEvidence(t *testing.T) {
++	start := time.Unix(1700000000, 0)
++	var proof repositoryCapacityAuthorizationLoad
++	for i := range 10000 {
++		begin := start.Add(time.Duration(i) * 3 * time.Millisecond)
++		require.NoError(t, proof.record(begin, begin.Add(time.Millisecond), int64(i+1), int64(i+2), 1))
++	}
++	require.NoError(t, proof.bindWindow(start, start.Add(time.Minute)))
++	require.EqualValues(t, 10000, proof.Cycles)
++	require.Equal(t, [2]int64{10000, 10000}, proof.Allowed)
++	require.Equal(t, proof.Allowed, proof.Denied)
++	require.EqualValues(t, 10000, proof.UnavailableAttempts)
++	require.EqualValues(t, 1, proof.MinimumAcknowledgedAdvance)
++	data, err := json.Marshal(proof)
++	require.NoError(t, err)
++	require.Less(t, len(data), 1024, "evidence must use constant space regardless of cycle count")
++	before := proof
++	for _, tc := range []struct {
++		name             string
++		begin, end       time.Time
++		ackBefore, after int64
++		unavailable      uint64
++	}{
++		{"zero-clock", time.Unix(0, 0), time.Unix(0, 1), 10001, 10002, 0},
++		{"clock-order", start, start.Add(-time.Second), 10001, 10002, 0},
++		{"sub-millisecond", start, start.Add(time.Nanosecond), 10001, 10002, 0},
++		{"out-of-order-cycle", start, start.Add(time.Second), 10001, 10002, 0},
++		{"no-baseline-ack", start.Add(time.Minute), start.Add(2 * time.Minute), 0, 1, 0},
++		{"no-progress", start.Add(time.Minute), start.Add(2 * time.Minute), 10001, 10001, 0},
++		{"regressed-ack", start.Add(time.Minute), start.Add(2 * time.Minute), 10000, 10002, 0},
++		{"unsafe-ack", start.Add(time.Minute), start.Add(2 * time.Minute), 10001, 1 << 53, 0},
++		{"unsafe-attempts", start.Add(time.Minute), start.Add(2 * time.Minute), 10001, 10002, 1 << 53},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			require.Error(t, proof.record(tc.begin, tc.end, tc.ackBefore, tc.after, tc.unavailable))
++			require.Equal(t, before, proof, "failed samples must not mutate passing counters")
++		})
++	}
++	for _, window := range [][2]time.Time{
++		{start.Add(time.Millisecond), start.Add(time.Minute)},
++		{start, time.UnixMilli(proof.LastCompletedMS)},
++		{start, start},
++	} {
++		require.Error(t, proof.bindWindow(window[0], window[1]))
++		require.Equal(t, before, proof)
++	}
++	var empty repositoryCapacityAuthorizationLoad
++	require.Error(t, empty.bindWindow(start, start.Add(time.Minute)))
++	saturated := proof
++	saturated.Cycles = 1<<53 - 1
++	require.Error(t, saturated.record(start.Add(time.Minute), start.Add(2*time.Minute), 10001, 10002, 0))
++	for _, malformed := range []repositoryCapacityAuthorizationLoad{
++		{Cycles: -1}, {UnavailableAttempts: 1 << 53},
++	} {
++		original := malformed
++		require.Error(t, malformed.record(start, start.Add(time.Second), 1, 2, 0))
++		require.Equal(t, original, malformed)
++	}
++}
++
+ func validateRepositoryCapacityWorkload(workload string, mode capacityMode, secretScenario bool) error {
+ 	if workload == "" {
+ 		return nil

@@ -1,0 +1,94 @@
+diff --git a/docs/runbooks/namespace-admission.md b/docs/runbooks/namespace-admission.md
+index 1847bc0c1564beb5e50a3d08977f57623f4ff052..d2f06d6686f8afedd988c745282589c03a5e6259 100644
+--- a/docs/runbooks/namespace-admission.md
++++ b/docs/runbooks/namespace-admission.md
+@@ -2767,6 +2767,23 @@ visibility p95 still exceeded 1s; neither short run exercised replacement or
+ established sustained provenance success. Any longer direct-route result must
+ declare that routing explicitly rather than imply the earlier route passed.
+ 
++The subsequent full-length, clean-source direct-route attempt passed **19**
++cycles, then failed cycle **20** with seven client-advertised-ref rejections and
++one remote-ref-update rejection. It was canceled before rolling replacement.
++In the failed cycle, native logs show intervening ref publications between fetch
++and push advertisements for all seven client-side rejections; for the remote
++rejection, a publication occurred after the push advertisement and before
++receive-pack started. This is consistent with genuine concurrent branch
++advancement in the actual workload, not just the standalone rebase probe.
++It does not establish the latency regression's root cause or exonerate earlier
++changes. **Direct routing did not resolve the sustained gate.**
++
++Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
++declaration is not a negotiated `have`. A stock-Git control still sent the
++complete tree and blob for a depth-limited request without any `have` lines;
++omitting that snapshot merely because its boundary was declared is not a
++validated optimization.
++
+ Full production acceptance and per-operation sustainable ceilings remain
+ unestablished. Fixed offered rates, short diagnostics and evaluator-only
+ decisions must not be advertised as those ceilings.
+diff --git a/gitstore-git-service/src/git/pack_server.rs b/gitstore-git-service/src/git/pack_server.rs
+index b470f9039e341316fa363b2eef7bebab38af81ff..d84edde89265dfbcbba44cb764f0c3e7588ba4cd 100644
+--- a/gitstore-git-service/src/git/pack_server.rs
++++ b/gitstore-git-service/src/git/pack_server.rs
+@@ -2888,6 +2888,61 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn shallow_boundary_without_have_still_sends_the_complete_snapshot() {
++        let (_dir, repo) = make_test_repo();
++        let parent = make_commit(&repo, "known shallow snapshot", None);
++        let tree = repo
++            .find_commit(parent)
++            .unwrap()
++            .tree_id()
++            .unwrap()
++            .detach();
++        let sig = gix::actor::SignatureRef {
++            name: "Test".into(),
++            email: "test@example.com".into(),
++            time: "1 +0000",
++        };
++        let tip = repo
++            .commit_as(sig, sig, "refs/heads/main", "same tree", tree, [parent])
++            .unwrap()
++            .detach();
++        for depth in [1, 2] {
++            let want = format!("want {tip} side-band-64k shallow\n");
++            let shallow = format!("shallow {parent}\n");
++            let deepen = format!("deepen {depth}\n");
++            let mut request = pkt_lines(&[want.as_bytes(), shallow.as_bytes(), deepen.as_bytes()]);
++            flush(&mut request);
++            request.extend_from_slice(&pkt_lines(&[b"done\n"]));
++            let server = HttpPackServer::new(repo.path().to_path_buf(), 64 * 1024 * 1024);
++            let response = server.handle_upload_pack(&request).unwrap();
++            let mut pack = Vec::new();
++            let mut position = 0;
++            while position < response.len() {
++                let length = usize::from_str_radix(
++                    std::str::from_utf8(&response[position..position + 4]).unwrap(),
++                    16,
++                )
++                .unwrap();
++                if length == 0 {
++                    position += 4;
++                    continue;
++                }
++                let payload = &response[position + 4..position + length];
++                if payload.first() == Some(&1) {
++                    pack.extend_from_slice(&payload[1..]);
++                }
++                position += length;
++            }
++            assert!(pack.starts_with(b"PACK"));
++            assert_eq!(
++                u32::from_be_bytes(pack[8..12].try_into().unwrap()),
++                depth + 2,
++                "a shallow declaration is not a negotiated have; include the tree and blob"
++            );
++        }
++    }
++
+     #[test]
+     fn incremental_pack_does_not_resend_unchanged_snapshot() {
+         let (_dir, repo) = make_test_repo();

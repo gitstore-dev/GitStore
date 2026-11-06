@@ -1,0 +1,37 @@
+diff --git a/docs/runbooks/controller-watch-status.md b/docs/runbooks/controller-watch-status.md
+index f47c2e83bc2953edd814b1fdcc269771e043610d..e7d26f2410e918a0a393a1aba41766d4850c7f91 100644
+--- a/docs/runbooks/controller-watch-status.md
++++ b/docs/runbooks/controller-watch-status.md
+@@ -179,6 +179,9 @@ when generation, annotations and Git revision match. Git-only provenance probes
+ match the pushed commit and require the resource version to change; selector
+ exits retain their null payload. These checks establish watch delivery, not
+ reconciliation of that specific version by a controller.
++Provenance-only clones fetch the latest commit without tags and check out only
++the target manifest, including outside capacity runs; they do not need the
++deployment's full Git history.
+ 
+ Credential acquisition failures are shared dependency failures, not evidence
+ that an individual resource is invalid. The HTTP/WebSocket client shares a
+diff --git a/tests/integration/githelper_test.go b/tests/integration/githelper_test.go
+index f3780d1c10a1df01b54d33ce00e0ab952c64b821..5aeb7fd6a2d9adb95e11bb5533dbb5e4b03e5f0d 100644
+--- a/tests/integration/githelper_test.go
++++ b/tests/integration/githelper_test.go
+@@ -74,7 +74,7 @@ func newPushHelperForRemoteWithToken(t *testing.T, remoteURL, token string, prov
+ 		t.Fatalf("PREREQUISITE: Git repository unreachable at %s: %v", remoteURL, err)
+ 	}
+ 	cloneArgs := []string{"clone"}
+-	if os.Getenv("REPOSITORY_LIFECYCLE_CAPACITY_RUN") == "1" || os.Getenv("NAMESPACE_WATCH_CAPACITY_RUN") == "1" {
++	if len(provenancePaths) != 0 || os.Getenv("REPOSITORY_LIFECYCLE_CAPACITY_RUN") == "1" || os.Getenv("NAMESPACE_WATCH_CAPACITY_RUN") == "1" {
+ 		cloneArgs = append(cloneArgs, "--no-tags", "--depth=1")
+ 	}
+ 	if len(provenancePaths) != 0 {
+@@ -342,7 +342,8 @@ func TestWatchMetadataProvenanceRebasesOnlyConcurrentAuthoring(t *testing.T) {
+ }
+ 
+ func TestWatchMetadataProvenancePathOnlyPreparation(t *testing.T) {
+-	t.Setenv("NAMESPACE_WATCH_CAPACITY_RUN", "1")
++	t.Setenv("NAMESPACE_WATCH_CAPACITY_RUN", "")
++	t.Setenv("REPOSITORY_LIFECYCLE_CAPACITY_RUN", "")
+ 	const manifest = "---\nkind: Namespace\nmetadata:\n  name: probe\nspec:\n  title: Probe\n---\n"
+ 	const rewrite = "---\n# provenance-only rewrite\nkind: Namespace\nmetadata:\n  name: probe\nspec:\n  title: Probe\n---\n"
+ 	for _, scenario := range []string{"unrelated authoring", "manifest edited", "manifest deleted", "extra local change"} {

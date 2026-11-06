@@ -1,0 +1,932 @@
+diff --git a/config/policy.yaml b/config/policy.yaml
+index 7038932e19988bfd4e20ec377b969b809ece64f5..e31715215b603e0c853a193f47a430603d31398b 100644
+--- a/config/policy.yaml
++++ b/config/policy.yaml
+@@ -25,6 +25,7 @@ roles:
+       # mutations it resolves to the canonical `product.read` action.
+       - "product.read"
+       - "product.purge"
++      - "product.list"
+       - "product.watch"
+       # Legacy deletion-completion grant retained for one release so older API
+       # replicas stay compatible during rolling upgrades; remove next release.
+diff --git a/gitstore-api/internal/datastore/memdb/backend.go b/gitstore-api/internal/datastore/memdb/backend.go
+index 5c5d12c4ecbf4b59db5cf1144b6734e41d11c8c8..d95aadac62904fa73b8d8be2db2702b8ef62bf8e 100644
+--- a/gitstore-api/internal/datastore/memdb/backend.go
++++ b/gitstore-api/internal/datastore/memdb/backend.go
+@@ -163,6 +163,13 @@ type memdbDatastore struct {
+ 	namespaceWatchRetention time.Duration
+ 	sessionRevocationMu     sync.RWMutex
+ 	sessionRevocations      map[string]time.Time
++	// categoryProducts is a projection, not an alternate product store. Keys
++	// are namespace/category UID and values are product UIDs. Keeping it
++	// alongside memdb makes the development backend exercise the same bounded
++	// lookup contract as Scylla.
++	categoryProductsMu sync.RWMutex
++	categoryProducts   map[string]map[string]struct{}
++	productCategories  map[string][]string
+ }
+ 
+ // New creates an empty in-memory datastore backed by go-memdb.
+@@ -181,9 +188,80 @@ func New(watchRetention ...time.Duration) (datastore.Datastore, error) {
+ 		namespaceWatchProgress:  make(map[string]datastore.NamespaceCDCProgress),
+ 		namespaceWatchRetention: retention,
+ 		sessionRevocations:      make(map[string]time.Time),
++		categoryProducts:        make(map[string]map[string]struct{}),
++		productCategories:       make(map[string][]string),
+ 	}, nil
+ }
+ 
++func categoryProductKey(namespace, categoryUID string) string {
++	return namespace + "\x00" + categoryUID
++}
++
++// ReplaceCategoryProductMembership atomically replaces a Product's resolved
++// category/ancestor memberships. It is called after the authoritative status
++// CAS succeeds, so retries are idempotent.
++func (m *memdbDatastore) ReplaceCategoryProductMembership(_ context.Context, product *datastore.Product, categoryUIDs []string) error {
++	if product == nil {
++		return fmt.Errorf("%w: product is nil", datastore.ErrInvalidArgument)
++	}
++	m.categoryProductsMu.Lock()
++	defer m.categoryProductsMu.Unlock()
++	for _, key := range m.productCategories[product.UID] {
++		if members := m.categoryProducts[key]; members != nil {
++			delete(members, product.UID)
++			if len(members) == 0 {
++				delete(m.categoryProducts, key)
++			}
++		}
++	}
++	keys := make([]string, 0, len(categoryUIDs))
++	seen := make(map[string]struct{}, len(categoryUIDs))
++	for _, uid := range categoryUIDs {
++		if uid == "" {
++			continue
++		}
++		key := categoryProductKey(product.Namespace, uid)
++		if _, ok := seen[key]; ok {
++			continue
++		}
++		seen[key] = struct{}{}
++		if m.categoryProducts[key] == nil {
++			m.categoryProducts[key] = make(map[string]struct{})
++		}
++		m.categoryProducts[key][product.UID] = struct{}{}
++		keys = append(keys, key)
++	}
++	m.productCategories[product.UID] = keys
++	return nil
++}
++
++func (m *memdbDatastore) ListCategoryProducts(_ context.Context, namespace, categoryUID string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
++	if page.First > datastore.DefaultPageSize {
++		page.First = datastore.DefaultPageSize
++	}
++	if page.Last > datastore.DefaultPageSize {
++		page.Last = datastore.DefaultPageSize
++	}
++	m.categoryProductsMu.RLock()
++	ids := make([]string, 0, len(m.categoryProducts[categoryProductKey(namespace, categoryUID)]))
++	for uid := range m.categoryProducts[categoryProductKey(namespace, categoryUID)] {
++		ids = append(ids, uid)
++	}
++	m.categoryProductsMu.RUnlock()
++	txn := m.db.Txn(false)
++	defer txn.Abort()
++	items := make([]*datastore.Product, 0, len(ids))
++	for _, uid := range ids {
++		if raw, _ := txn.First("product", "id", uid); raw != nil {
++			p := raw.(*datastore.Product)
++			if p.Namespace == namespace {
++				items = append(items, cloneProduct(p))
++			}
++		}
++	}
++	return paginateSlice(items, page, func(p *datastore.Product) (time.Time, string) { return p.CreationTimestamp, p.UID }), nil
++}
++
+ // RevokeSession records a revoked JTI until the caller-provided expiry.
+ func (m *memdbDatastore) RevokeSession(_ context.Context, jti string, expiresAt time.Time) error {
+ 	m.sessionRevocationMu.Lock()
+@@ -613,6 +691,9 @@ func (m *memdbDatastore) deleteProduct(uid, expectedResourceVersion string, chec
+ 		return fmt.Errorf("memdb: delete product: %w", err)
+ 	}
+ 	txn.Commit()
++	// Removal is intentionally idempotent; a retry after a partially completed
++	// API mutation cannot leave a deleted Product visible in a category.
++	_ = m.ReplaceCategoryProductMembership(context.Background(), raw.(*datastore.Product), nil)
+ 	m.recordCommittedProduct(datastore.ResourceWatchDeleted, raw.(*datastore.Product), nil)
+ 	return nil
+ }
+diff --git a/gitstore-api/internal/datastore/memdb/category_product_index_test.go b/gitstore-api/internal/datastore/memdb/category_product_index_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..52e3b3d6ce4f470444eae6b05943eb1cdefcd893
+--- /dev/null
++++ b/gitstore-api/internal/datastore/memdb/category_product_index_test.go
+@@ -0,0 +1,37 @@
++package memdb
++
++import (
++	"context"
++	"testing"
++	"time"
++
++	"github.com/gitstore-dev/gitstore/api/internal/datastore"
++)
++
++func TestCategoryProductIndex_ReplacesAncestorMembership(t *testing.T) {
++	ds, err := New()
++	if err != nil {
++		t.Fatal(err)
++	}
++	index := ds.(datastore.CategoryProductIndex)
++	p := &datastore.Product{UID: "00000000-0000-0000-0000-000000000001", Namespace: "shop", Name: "p", CreationTimestamp: time.Now()}
++	if err := ds.CreateProduct(context.Background(), p); err != nil {
++		t.Fatal(err)
++	}
++	if err := index.ReplaceCategoryProductMembership(context.Background(), p, []string{"root", "leaf"}); err != nil {
++		t.Fatal(err)
++	}
++	for _, category := range []string{"root", "leaf"} {
++		page, err := index.ListCategoryProducts(context.Background(), "shop", category, datastore.PageParams{First: 10})
++		if err != nil || len(page.Items) != 1 || page.Items[0].UID != p.UID {
++			t.Fatalf("%s membership = %#v, %v", category, page, err)
++		}
++	}
++	if err := index.ReplaceCategoryProductMembership(context.Background(), p, []string{"other"}); err != nil {
++		t.Fatal(err)
++	}
++	page, err := index.ListCategoryProducts(context.Background(), "shop", "root", datastore.PageParams{First: 10})
++	if err != nil || len(page.Items) != 0 {
++		t.Fatalf("stale root membership = %#v, %v", page, err)
++	}
++}
+diff --git a/gitstore-api/internal/datastore/scylla/backend.go b/gitstore-api/internal/datastore/scylla/backend.go
+index 4b031917d4a31be3e95d9ebd82807b7483471fa4..e94e9d96b1abf61f93d9fa5f68414b1bd76c8cdc 100644
+--- a/gitstore-api/internal/datastore/scylla/backend.go
++++ b/gitstore-api/internal/datastore/scylla/backend.go
+@@ -63,7 +63,8 @@ type scyllaDatastore struct {
+ 	mutations                         *mutationExecutor
+ 	// namespaceWatchBucketSize starts at the configured constant and adopts the
+ 	// journal's persisted bucket size on first clock read.
+-	namespaceWatchBucketSize atomic.Int64
++	namespaceWatchBucketSize       atomic.Int64
++	categoryProductProjectionReady atomic.Bool
+ }
+ 
+ // row structs mirror the CQL columns.
+@@ -380,6 +381,12 @@ func New(cfg config.ScyllaConfig, log *zap.Logger, watchBucketSize ...int) (data
+ 		mutations:                         newMutationExecutor(nil),
+ 	}
+ 	ds.namespaceWatchBucketSize.Store(bucketSize)
++	var ready struct {
++		Ready bool `db:"ready"`
++	}
++	if err := ds.session.Query("SELECT ready FROM category_product_projection_state WHERE projection=?", nil).Bind("category-products").GetRelease(&ready); err == nil && ready.Ready {
++		ds.categoryProductProjectionReady.Store(true)
++	}
+ 	return ds, nil
+ }
+ 
+@@ -718,6 +725,10 @@ func (s *scyllaDatastore) deleteProductWithResourceVersion(ctx context.Context,
+ 		},
+ 	}
+ 	projections := []mutationAction{
++		{
++			Step:  catalogueStep("delete", "Product", uid, categoryProductsByProductTable, uid, "delete-category-memberships"),
++			Apply: func(ctx context.Context) error { return s.ReplaceCategoryProductMembership(ctx, p, nil) },
++		},
+ 		{
+ 			Step: catalogueStep("delete", "Product", uid, ownerReferenceDependentsTable, uid, "delete-owner-references"),
+ 			Apply: func(ctx context.Context) error {
+diff --git a/gitstore-api/internal/datastore/scylla/category_product_index.go b/gitstore-api/internal/datastore/scylla/category_product_index.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..7873839df9d8d987b574096ce4f934a23e7ac4c4
+--- /dev/null
++++ b/gitstore-api/internal/datastore/scylla/category_product_index.go
+@@ -0,0 +1,170 @@
++package scylla
++
++import (
++	"context"
++	"fmt"
++	"hash/fnv"
++	"sort"
++	"sync"
++	"time"
++
++	"github.com/gitstore-dev/gitstore/api/internal/datastore"
++	"github.com/gocql/gocql"
++)
++
++const categoryProductsByCategoryTable = "category_products_by_category"
++const categoryProductsByProductTable = "category_products_by_product"
++
++const categoryProductShardCount = 32
++
++func categoryProductShard(uid string) int8 {
++	h := fnv.New32a()
++	_, _ = h.Write([]byte(uid))
++	return int8(h.Sum32() % categoryProductShardCount)
++}
++
++type categoryProductRow struct {
++	CreationTimestamp time.Time  `db:"creation_timestamp"`
++	ProductUID        gocql.UUID `db:"product_uid"`
++}
++type categoryProductReverseRow struct {
++	CategoryUID string `db:"category_uid"`
++	Shard       int8   `db:"shard"`
++}
++
++// ReplaceCategoryProductMembership replaces the small, resolved ancestor set
++// for one Product. Product status is the authoritative fenced write; this
++// projection operation is idempotent and repairable after a partial failure.
++func (s *scyllaDatastore) ReplaceCategoryProductMembership(ctx context.Context, product *datastore.Product, categoryUIDs []string) error {
++	if product == nil {
++		return fmt.Errorf("%w: product is nil", datastore.ErrInvalidArgument)
++	}
++	uid, err := gocql.ParseUUID(product.UID)
++	if err != nil {
++		return fmt.Errorf("%w: invalid product uid", datastore.ErrInvalidArgument)
++	}
++	var old []categoryProductReverseRow
++	if err := s.session.Query("SELECT category_uid FROM "+categoryProductsByProductTable+" WHERE namespace=? AND product_uid=?", nil).WithContext(ctx).Bind(product.Namespace, uid).SelectRelease(&old); err != nil {
++		return fmt.Errorf("scylla: list product category memberships: %w", err)
++	}
++	for _, row := range old {
++		if err := s.session.Query("DELETE FROM "+categoryProductsByCategoryTable+" WHERE namespace=? AND category_uid=? AND shard=? AND creation_timestamp=? AND product_uid=?", nil).WithContext(ctx).Bind(product.Namespace, row.CategoryUID, row.Shard, product.CreationTimestamp, uid).ExecRelease(); err != nil {
++			return fmt.Errorf("scylla: remove category membership: %w", err)
++		}
++	}
++	if len(old) > 0 {
++		if err := s.session.Query("DELETE FROM "+categoryProductsByProductTable+" WHERE namespace=? AND product_uid=?", nil).WithContext(ctx).Bind(product.Namespace, uid).ExecRelease(); err != nil {
++			return fmt.Errorf("scylla: remove category reverse membership: %w", err)
++		}
++	}
++	seen := make(map[string]struct{}, len(categoryUIDs))
++	shard := categoryProductShard(product.UID)
++	for _, categoryUID := range categoryUIDs {
++		if categoryUID == "" {
++			continue
++		}
++		if _, ok := seen[categoryUID]; ok {
++			continue
++		}
++		seen[categoryUID] = struct{}{}
++		if err := s.session.Query("INSERT INTO "+categoryProductsByCategoryTable+" (namespace, category_uid, shard, creation_timestamp, product_uid) VALUES (?, ?, ?, ?, ?)", nil).WithContext(ctx).Bind(product.Namespace, categoryUID, shard, product.CreationTimestamp, uid).ExecRelease(); err != nil {
++			return fmt.Errorf("scylla: add category membership: %w", err)
++		}
++		if err := s.session.Query("INSERT INTO "+categoryProductsByProductTable+" (namespace, product_uid, category_uid, shard) VALUES (?, ?, ?, ?)", nil).WithContext(ctx).Bind(product.Namespace, uid, categoryUID, shard).ExecRelease(); err != nil {
++			return fmt.Errorf("scylla: add category reverse membership: %w", err)
++		}
++	}
++	return nil
++}
++
++func (s *scyllaDatastore) ListCategoryProducts(ctx context.Context, namespace, categoryUID string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
++	if !s.categoryProductProjectionReady.Load() {
++		return nil, datastore.ErrProjectionNotReady
++	}
++	limit := page.Limit()
++	if limit > datastore.DefaultPageSize {
++		limit = datastore.DefaultPageSize
++	}
++	order, relation, cursor := "DESC", "<", page.After
++	if page.Last > 0 {
++		order, relation, cursor = "ASC", ">", page.Before
++	}
++	rows := make([]categoryProductRow, 0, categoryProductShardCount*(limit+1))
++	var rowsMu sync.Mutex
++	var firstErr error
++	var wg sync.WaitGroup
++	var cursorTime time.Time
++	var cursorID gocql.UUID
++	if cursor != "" {
++		c, err := parsePageCursor(cursor)
++		if err != nil {
++			return nil, datastore.ErrInvalidArgument
++		}
++		cursorID, err = gocql.ParseUUID(c.ID)
++		if err != nil {
++			return nil, datastore.ErrInvalidArgument
++		}
++		cursorTime = c.CreatedAt
++	}
++	for shard := 0; shard < categoryProductShardCount; shard++ {
++		shard := int8(shard)
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			stmt := "SELECT creation_timestamp, product_uid FROM " + categoryProductsByCategoryTable + " WHERE namespace=? AND category_uid=? AND shard=?"
++			args := []any{namespace, categoryUID, shard}
++			if cursor != "" {
++				stmt += " AND (creation_timestamp, product_uid) " + relation + " (?, ?)"
++				args = append(args, cursorTime, cursorID)
++			}
++			stmt += " ORDER BY creation_timestamp " + order + ", product_uid " + order + " LIMIT ?"
++			args = append(args, limit+1)
++			var shardRows []categoryProductRow
++			if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&shardRows); err != nil {
++				rowsMu.Lock()
++				if firstErr == nil {
++					firstErr = err
++				}
++				rowsMu.Unlock()
++				return
++			}
++			rowsMu.Lock()
++			rows = append(rows, shardRows...)
++			rowsMu.Unlock()
++		}()
++	}
++	wg.Wait()
++	if firstErr != nil {
++		return nil, fmt.Errorf("scylla: list category products: %w", firstErr)
++	}
++	sort.Slice(rows, func(i, j int) bool {
++		if rows[i].CreationTimestamp.Equal(rows[j].CreationTimestamp) {
++			return rows[i].ProductUID.String() > rows[j].ProductUID.String()
++		}
++		return rows[i].CreationTimestamp.After(rows[j].CreationTimestamp)
++	})
++	if page.Last > 0 && len(rows) > limit+1 {
++		rows = rows[len(rows)-(limit+1):]
++	}
++	if page.Last == 0 && len(rows) > limit+1 {
++		rows = rows[:limit+1]
++	}
++	items := make([]*datastore.Product, 0, len(rows))
++	for _, row := range rows {
++		p, err := s.GetProduct(ctx, row.ProductUID.String())
++		if err == nil && p.Namespace == namespace {
++			items = append(items, p)
++		} else if err != nil && err != datastore.ErrNotFound {
++			return nil, err
++		}
++	}
++	if page.Last > 0 {
++		sort.Slice(items, func(i, j int) bool {
++			if items[i].CreationTimestamp.Equal(items[j].CreationTimestamp) {
++				return items[i].UID > items[j].UID
++			}
++			return items[i].CreationTimestamp.After(items[j].CreationTimestamp)
++		})
++	}
++	return buildPageResult(items, limit, page), nil
++}
+diff --git a/gitstore-api/internal/datastore/scylla/category_product_index_test.go b/gitstore-api/internal/datastore/scylla/category_product_index_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..dd92f17a97f737f2b9d2a05c64009865948b6ac4
+--- /dev/null
++++ b/gitstore-api/internal/datastore/scylla/category_product_index_test.go
+@@ -0,0 +1,14 @@
++package scylla
++
++import "testing"
++
++func TestCategoryProductShardIsStableAndBounded(t *testing.T) {
++	uid := "00000000-0000-0000-0000-000000000001"
++	got := categoryProductShard(uid)
++	if got != categoryProductShard(uid) {
++		t.Fatal("category product shard is not stable")
++	}
++	if got < 0 || got >= categoryProductShardCount {
++		t.Fatalf("shard %d outside [0,%d)", got, categoryProductShardCount)
++	}
++}
+diff --git a/gitstore-api/internal/datastore/scylla/migrations/011_category_product_index.cql b/gitstore-api/internal/datastore/scylla/migrations/011_category_product_index.cql
+new file mode 100644
+index 0000000000000000000000000000000000000000..1649363612ee29333377fd4d7a9ed3997e939e91
+--- /dev/null
++++ b/gitstore-api/internal/datastore/scylla/migrations/011_category_product_index.cql
+@@ -0,0 +1,23 @@
++CREATE TABLE IF NOT EXISTS category_products_by_category (
++    namespace text,
++    category_uid text,
++	shard tinyint,
++    creation_timestamp timestamp,
++    product_uid uuid,
++    PRIMARY KEY ((namespace, category_uid, shard), creation_timestamp, product_uid)
++) WITH CLUSTERING ORDER BY (creation_timestamp DESC, product_uid DESC)
++  AND gc_grace_seconds = 864000;
++
++CREATE TABLE IF NOT EXISTS category_products_by_product (
++    namespace text,
++    product_uid uuid,
++    category_uid text,
++    shard tinyint,
++    PRIMARY KEY ((namespace, product_uid), category_uid)
++) WITH CLUSTERING ORDER BY (category_uid ASC)
++  AND gc_grace_seconds = 864000;
++
++CREATE TABLE IF NOT EXISTS category_product_projection_state (
++    projection text PRIMARY KEY,
++    ready boolean
++) WITH gc_grace_seconds = 864000;
+diff --git a/gitstore-api/internal/datastore/scylla/namespace_model_test.go b/gitstore-api/internal/datastore/scylla/namespace_model_test.go
+index a2efa064a5744dc570d4b11b80c2c33ddede7006..7aaf4ae62b41733bc91ed6148f0bf1d1cdceafc8 100644
+--- a/gitstore-api/internal/datastore/scylla/namespace_model_test.go
++++ b/gitstore-api/internal/datastore/scylla/namespace_model_test.go
+@@ -183,6 +183,7 @@ func TestScyllaSchemaIsPerResourceBaseline(t *testing.T) {
+ 		"008_file.cql",
+ 		"009_service_account.cql",
+ 		"010_category_ancestor_index.cql",
++		"011_category_product_index.cql",
+ 	}, names)
+ }
+ 
+diff --git a/gitstore-api/internal/datastore/scylla/repair.go b/gitstore-api/internal/datastore/scylla/repair.go
+index a60c1fcba70583be31a20358873757e4a595015b..725bee481145319b5f67a6a63210b5c1b252e667 100644
+--- a/gitstore-api/internal/datastore/scylla/repair.go
++++ b/gitstore-api/internal/datastore/scylla/repair.go
+@@ -5,6 +5,7 @@ package scylla
+ 
+ import (
+ 	"context"
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"net"
+@@ -13,6 +14,7 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+ 	"github.com/gitstore-dev/gitstore/api/internal/config"
+ 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+ 	"github.com/gocql/gocql"
+@@ -48,6 +50,7 @@ type AuthoritativeResource struct {
+ 	// ResolvedPath is a CategoryTaxonomy's status.resolved.path (root to
+ 	// self); it derives the category_ancestor_index rows.
+ 	ResolvedPath []string `json:"resolvedPath,omitempty"`
++	CategoryUIDs []string `json:"categoryUIDs,omitempty"`
+ }
+ 
+ type ProjectionRecord struct {
+@@ -65,6 +68,8 @@ type ProjectionRecord struct {
+ 	Ancestor        string `json:"ancestor,omitempty"`
+ 	Depth           int    `json:"depth,omitempty"`
+ 	ResourceVersion string `json:"resourceVersion,omitempty"`
++	CategoryUID     string `json:"categoryUID,omitempty"`
++	Shard           int8   `json:"shard,omitempty"`
+ }
+ 
+ type ProjectionSnapshot struct {
+@@ -255,6 +260,11 @@ func (s *ProjectionRepairService) Apply(ctx context.Context, plan RepairPlan) (R
+ 			len(verification.NamespaceRepositoryFences),
+ 		)
+ 	}
++	if marker, ok := s.store.(interface{ MarkCategoryProductProjectionReady(context.Context) error }); ok {
++		if err := marker.MarkCategoryProductProjectionReady(ctx); err != nil {
++			return result, fmt.Errorf("mark category product projection ready: %w", err)
++		}
++	}
+ 	return result, nil
+ }
+ 
+@@ -557,7 +567,14 @@ func expectedProjections(resource AuthoritativeResource) []ProjectionRecord {
+ 		reverse.Table = "namespace_mappings_by_repository"
+ 		return []ProjectionRecord{namespace, global, forward, reverse}
+ 	case "Product":
+-		return catalogProjections(base, "products_by_name", "products_by_uid")
++		result := catalogProjections(base, "products_by_name", "products_by_uid")
++		for _, categoryUID := range resource.CategoryUIDs {
++			forward, reverse := base, base
++			forward.Table, forward.CategoryUID, forward.Shard = "category_products_by_category", categoryUID, categoryProductShard(resource.UID)
++			reverse.Table, reverse.CategoryUID, reverse.Shard = "category_products_by_product", categoryUID, categoryProductShard(resource.UID)
++			result = append(result, forward, reverse)
++		}
++		return result
+ 	case "CategoryTaxonomy":
+ 		result := catalogProjections(base, "category_taxonomies_by_name", "category_taxonomies_by_uid")
+ 		rows, err := datastore.CategoryAncestorRows(resource.Name, resource.ResolvedPath)
+@@ -625,6 +642,10 @@ func (p ProjectionRecord) Key() string {
+ 		return strings.Join([]string{p.Namespace, p.ProductRefName, ts, p.UID}, "/")
+ 	case "category_ancestor_index":
+ 		return strings.Join([]string{p.Namespace, p.Ancestor, strconv.Itoa(p.Depth), p.Name}, "/")
++	case "category_products_by_category":
++		return strings.Join([]string{p.Namespace, p.CategoryUID, strconv.Itoa(int(p.Shard)), ts, p.UID}, "/")
++	case "category_products_by_product":
++		return strings.Join([]string{p.Namespace, p.UID, p.CategoryUID}, "/")
+ 	default:
+ 		return ""
+ 	}
+@@ -655,6 +676,10 @@ func (p ProjectionRecord) Equal(other ProjectionRecord) bool {
+ 		return p.Namespace == other.Namespace && p.ProductRefName == other.ProductRefName && p.CreationTimestamp.Equal(other.CreationTimestamp)
+ 	case "category_ancestor_index":
+ 		return p.Namespace == other.Namespace && p.Ancestor == other.Ancestor && p.Depth == other.Depth && p.Name == other.Name
++	case "category_products_by_category":
++		return p.Namespace == other.Namespace && p.CategoryUID == other.CategoryUID && p.Shard == other.Shard && p.CreationTimestamp.Equal(other.CreationTimestamp)
++	case "category_products_by_product":
++		return p.Namespace == other.Namespace && p.CategoryUID == other.CategoryUID && p.Shard == other.Shard
+ 	default:
+ 		return false
+ 	}
+@@ -672,6 +697,8 @@ var projectionTableKinds = map[string]string{
+ 	"category_taxonomies_by_name":      "CategoryTaxonomy",
+ 	"category_taxonomies_by_uid":       "CategoryTaxonomy",
+ 	"category_ancestor_index":          "CategoryTaxonomy",
++	"category_products_by_category":    "Product",
++	"category_products_by_product":     "Product",
+ 	"collections_by_name":              "Collection",
+ 	"collections_by_uid":               "Collection",
+ 	"product_variants_by_name":         "ProductVariant",
+@@ -833,6 +860,8 @@ type auditRow struct {
+ 	Depth                      int8       `db:"depth"`
+ 	Descendant                 string     `db:"descendant"`
+ 	DescendantUID              gocql.UUID `db:"descendant_uid"`
++	CategoryUID                string     `db:"category_uid"`
++	Shard                      int8       `db:"shard"`
+ 	RepositoryCreationEpoch    *int64     `db:"repository_creation_epoch"`
+ 	PendingRepositoryCreations *int64     `db:"pending_repository_creations"`
+ }
+@@ -846,7 +875,7 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
+ 	}{
+ 		{"Namespace", "namespaces_by_uid", "repository_creation_epoch,pending_repository_creations,"},
+ 		{"Repository", "repositories_by_uid", "namespace,"},
+-		{"Product", "products_by_namespace", "namespace,"},
++		{"Product", "products_by_namespace", "namespace,status,"},
+ 		{"CategoryTaxonomy", "category_taxonomies_by_namespace", "namespace,status,"},
+ 		{"Collection", "collections_by_namespace", "namespace,"},
+ 		{"ProductVariant", "product_variants_by_namespace", "namespace,sku,product_ref_name,"},
+@@ -873,6 +902,18 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
+ 				}
+ 				resource.ResolvedPath = path
+ 			}
++			if source.kind == "Product" && row.Status != "" {
++				var status catalog.ProductStatus
++				if err := json.Unmarshal([]byte(row.Status), &status); err != nil {
++					return ProjectionSnapshot{}, fmt.Errorf("audit Product %s/%s status: %w", row.Namespace, row.Name, err)
++				}
++				if status.Resolved != nil && status.Resolved.Category != nil {
++					resource.ResolvedPath = append([]string(nil), status.Resolved.Category.Path...)
++					if len(resource.ResolvedPath) == 0 {
++						resource.ResolvedPath = []string{status.Resolved.Category.Name}
++					}
++				}
++			}
+ 			snapshot.Authoritative = append(snapshot.Authoritative, resource)
+ 			if source.kind == "Namespace" && row.PendingRepositoryCreations != nil && *row.PendingRepositoryCreations > 0 {
+ 				if row.RepositoryCreationEpoch == nil {
+@@ -891,6 +932,24 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
+ 			}
+ 		}
+ 	}
++	// Resolve Product category paths after all categories have been scanned.
++	categories := make(map[string]string)
++	for _, resource := range snapshot.Authoritative {
++		if resource.Kind == "CategoryTaxonomy" {
++			categories[resource.Namespace+"\x00"+resource.Name] = resource.UID
++		}
++	}
++	for i := range snapshot.Authoritative {
++		resource := &snapshot.Authoritative[i]
++		if resource.Kind != "Product" || len(resource.ResolvedPath) == 0 {
++			continue
++		}
++		for _, name := range resource.ResolvedPath {
++			if uid := categories[resource.Namespace+"\x00"+name]; uid != "" {
++				resource.CategoryUIDs = append(resource.CategoryUIDs, uid)
++			}
++		}
++	}
+ 
+ 	projections := []struct {
+ 		table   string
+@@ -914,6 +973,8 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
+ 		{"product_variants_by_sku", "namespace,sku,uid,creation_timestamp", rowUID},
+ 		{"product_variants_by_product_ref", "namespace,product_ref_name,creation_timestamp,uid", rowUID},
+ 		{"category_ancestor_index", "namespace,ancestor,depth,descendant,descendant_uid,resource_version", func(row auditRow) gocql.UUID { return row.DescendantUID }},
++		{"category_products_by_category", "namespace,category_uid,shard,creation_timestamp,product_uid AS uid", rowUID},
++		{"category_products_by_product", "namespace,category_uid,shard,product_uid AS uid", rowUID},
+ 	}
+ 	for _, source := range projections {
+ 		rows, err := s.scanAuditRows(ctx, "SELECT "+source.columns+" FROM "+source.table)
+@@ -931,6 +992,9 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
+ 				record.Name = row.Descendant
+ 				record.Ancestor, record.Depth, record.ResourceVersion = row.Ancestor, int(row.Depth), row.ResourceVersion
+ 			}
++			if source.table == "category_products_by_category" || source.table == "category_products_by_product" {
++				record.CategoryUID, record.Shard = row.CategoryUID, row.Shard
++			}
+ 			snapshot.Projections = append(snapshot.Projections, record)
+ 		}
+ 	}
+@@ -1067,6 +1131,10 @@ func (s *scyllaProjectionRepairStore) CompleteRepositoryRepairs(
+ 	return nil
+ }
+ 
++func (s *scyllaProjectionRepairStore) MarkCategoryProductProjectionReady(ctx context.Context) error {
++	return s.session.Query("INSERT INTO category_product_projection_state (projection,ready) VALUES (?,?)", nil).WithContext(ctx).Bind("category-products", true).ExecRelease()
++}
++
+ func repairDeleteResourceMatches(action RepairAction, resource *AuthoritativeResource) bool {
+ 	if action.RequireAbsentResource {
+ 		return resource == nil
+@@ -1104,6 +1172,10 @@ func (s *scyllaProjectionRepairStore) insertProjection(ctx context.Context, row
+ 	case "category_ancestor_index":
+ 		statement = "INSERT INTO category_ancestor_index (namespace,ancestor,depth,descendant,descendant_uid,resource_version) VALUES (?,?,?,?,?,?) IF NOT EXISTS"
+ 		args = []any{row.Namespace, row.Ancestor, int8(row.Depth), row.Name, uid, row.ResourceVersion}
++	case "category_products_by_category":
++		statement, args = "INSERT INTO category_products_by_category (namespace,category_uid,shard,creation_timestamp,product_uid) VALUES (?,?,?,?,?) IF NOT EXISTS", []any{row.Namespace, row.CategoryUID, row.Shard, row.CreationTimestamp, uid}
++	case "category_products_by_product":
++		statement, args = "INSERT INTO category_products_by_product (namespace,product_uid,category_uid,shard) VALUES (?,?,?,?) IF NOT EXISTS", []any{row.Namespace, uid, row.CategoryUID, row.Shard}
+ 	default:
+ 		return false, fmt.Errorf("unsupported projection table %q", row.Table)
+ 	}
+@@ -1163,6 +1235,10 @@ func (s *scyllaProjectionRepairStore) deleteProjection(ctx context.Context, row
+ 		statement, args = "DELETE FROM product_variants_by_product_ref WHERE namespace=? AND product_ref_name=? AND creation_timestamp=? AND uid=? IF EXISTS", []any{row.Namespace, row.ProductRefName, row.CreationTimestamp, uid}
+ 	case "category_ancestor_index":
+ 		statement, args = "DELETE FROM category_ancestor_index WHERE namespace=? AND ancestor=? AND depth=? AND descendant=? IF descendant_uid=?", []any{row.Namespace, row.Ancestor, int8(row.Depth), row.Name, uid}
++	case "category_products_by_category":
++		statement, args = "DELETE FROM category_products_by_category WHERE namespace=? AND category_uid=? AND shard=? AND creation_timestamp=? AND product_uid=? IF EXISTS", []any{row.Namespace, row.CategoryUID, row.Shard, row.CreationTimestamp, uid}
++	case "category_products_by_product":
++		statement, args = "DELETE FROM category_products_by_product WHERE namespace=? AND product_uid=? AND category_uid=? IF EXISTS", []any{row.Namespace, uid, row.CategoryUID}
+ 	default:
+ 		return false, fmt.Errorf("unsupported projection table %q", row.Table)
+ 	}
+diff --git a/gitstore-api/internal/datastore/scylla/repair_test.go b/gitstore-api/internal/datastore/scylla/repair_test.go
+index 57caf2525499885602eb34e5b2da562606197252..bc5b42400aa91a2dfb9d63c0346771646b205991 100644
+--- a/gitstore-api/internal/datastore/scylla/repair_test.go
++++ b/gitstore-api/internal/datastore/scylla/repair_test.go
+@@ -24,6 +24,8 @@ func TestProjectionTableKinds(t *testing.T) {
+ 		"namespace_mappings_by_repository": "Repository",
+ 		"products_by_name":                 "Product",
+ 		"products_by_uid":                  "Product",
++		"category_products_by_category":    "Product",
++		"category_products_by_product":     "Product",
+ 		"category_taxonomies_by_name":      "CategoryTaxonomy",
+ 		"category_taxonomies_by_uid":       "CategoryTaxonomy",
+ 		"category_ancestor_index":          "CategoryTaxonomy",
+@@ -58,6 +60,29 @@ func TestProjectionTableKinds(t *testing.T) {
+ 	}
+ }
+ 
++func TestExpectedProductCategoryMembershipProjectionsAreSharded(t *testing.T) {
++	resource := AuthoritativeResource{
++		Kind: "Product", UID: "00000000-0000-0000-0000-000000000001", Namespace: "shop", Name: "widget",
++		CreationTimestamp: time.Unix(100, 0).UTC(), CategoryUIDs: []string{"cat-a", "cat-b"},
++	}
++	rows := expectedProjections(resource)
++	var forward, reverse int
++	for _, row := range rows {
++		switch row.Table {
++		case "category_products_by_category":
++			forward++
++			if row.Shard != categoryProductShard(resource.UID) {
++				t.Fatalf("forward shard = %d", row.Shard)
++			}
++		case "category_products_by_product":
++			reverse++
++		}
++	}
++	if forward != 2 || reverse != 2 {
++		t.Fatalf("membership projections = forward %d reverse %d, want 2 each", forward, reverse)
++	}
++}
++
+ func TestBuildRepairPlanDeterministicFindings(t *testing.T) {
+ 	t.Parallel()
+ 	created := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+diff --git a/gitstore-api/internal/graph/resolver/category.resolvers.go b/gitstore-api/internal/graph/resolver/category.resolvers.go
+index c421a1f39b6676ee59dc1215977d12dc6666f026..00ed3326a5c54cda77beb4507aba48fc50848cf6 100644
+--- a/gitstore-api/internal/graph/resolver/category.resolvers.go
++++ b/gitstore-api/internal/graph/resolver/category.resolvers.go
+@@ -7,8 +7,10 @@ package resolver
+ 
+ import (
+ 	"context"
++	"encoding/base64"
+ 	"errors"
+ 	"fmt"
++	"strings"
+ 
+ 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+ 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+@@ -57,18 +59,59 @@ func (r *categoryResolver) Children(ctx context.Context, obj *model.Category) ([
+ 
+ // Products is the resolver for the products field.
+ func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
+-	_, err := decodeNodeIDAs(nodeKindCategory, obj.ID)
++	categoryUID, err := decodeNodeIDAs(nodeKindCategory, obj.ID)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	// TODO: Add category-scoped product listing to the datastore interface.
+-	// For now, return all products paginated (filter by category will be added later).
+ 	params := toPageParams(first, after, last, before)
+-	result, err := r.service.GetProducts(ctx, "", params)
++	if params.After, err = decodeCategoryProductCursor(categoryUID, params.After); err != nil {
++		return nil, gqlerror.Errorf("invalid category products cursor")
++	}
++	if params.Before, err = decodeCategoryProductCursor(categoryUID, params.Before); err != nil {
++		return nil, gqlerror.Errorf("invalid category products cursor")
++	}
++	index, ok := r.store.(datastore.CategoryProductIndex)
++	if !ok {
++		return nil, gqlerror.Errorf("category product projection is not ready")
++	}
++	result, err := index.ListCategoryProducts(ctx, obj.Metadata.Namespace, categoryUID, params)
++	if err != nil {
++		if errors.Is(err, datastore.ErrProjectionNotReady) {
++			return nil, &gqlerror.Error{Message: "category product projection is rebuilding; retry shortly", Extensions: map[string]any{"code": "PROJECTION_NOT_READY", "retryable": true}}
++		}
++		return nil, fmt.Errorf("list category products: %w", err)
++	}
++	return buildCategoryProductConnection(categoryUID, result), nil
++}
++
++func encodeCategoryProductCursor(categoryUID, cursor string) string {
++	return base64.RawURLEncoding.EncodeToString([]byte("category-product\x00" + categoryUID + "\x00" + cursor))
++}
++func decodeCategoryProductCursor(categoryUID, cursor string) (string, error) {
++	if cursor == "" {
++		return "", nil
++	}
++	b, err := base64.RawURLEncoding.DecodeString(cursor)
+ 	if err != nil {
+-		return nil, fmt.Errorf("failed to get products: %w", err)
++		return "", err
++	}
++	prefix := "category-product\x00" + categoryUID + "\x00"
++	if !strings.HasPrefix(string(b), prefix) {
++		return "", fmt.Errorf("cursor belongs to another category")
++	}
++	return strings.TrimPrefix(string(b), prefix), nil
++}
++func buildCategoryProductConnection(categoryUID string, result *datastore.PageResult[datastore.Product]) *model.ProductConnection {
++	edges := make([]*model.ProductEdge, len(result.Items))
++	for i, p := range result.Items {
++		edges[i] = &model.ProductEdge{Cursor: encodeCategoryProductCursor(categoryUID, EncodeKeysetCursor(p.CreationTimestamp, p.UID)), Node: DatastoreProductToGraphQL(p)}
++	}
++	pi := &model.PageInfo{HasNextPage: result.HasNext, HasPreviousPage: result.HasPrevious}
++	if len(edges) > 0 {
++		start, end := edges[0].Cursor, edges[len(edges)-1].Cursor
++		pi.StartCursor, pi.EndCursor = &start, &end
+ 	}
+-	return BuildProductConnection(result), nil
++	return &model.ProductConnection{Edges: edges, PageInfo: pi}
+ }
+ 
+ // CreateCategory is the resolver for the createCategory field.
+diff --git a/gitstore-api/internal/graph/resolver/product.resolvers.go b/gitstore-api/internal/graph/resolver/product.resolvers.go
+index e123207cb06c90378fdb8315906bfedf10800b43..3e1f34ea0a4eb4698773e112a8134bf1dc69a4d8 100644
+--- a/gitstore-api/internal/graph/resolver/product.resolvers.go
++++ b/gitstore-api/internal/graph/resolver/product.resolvers.go
+@@ -93,6 +93,7 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
+ 			status.Resolved.Category = &catalog.ResolvedCategoryDefinition{
+ 				Name: input.Resolved.Category.Name,
+ 				UID:  input.Resolved.Category.UID,
++				Path: append([]string(nil), input.Resolved.Category.Path...),
+ 			}
+ 		} else if status.Resolved != nil {
+ 			status.Resolved.Category = nil
+@@ -128,9 +129,39 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
+ 		}
+ 		return nil, gqlerror.Errorf("update product status: %v", err)
+ 	}
++	if index, ok := r.store.(datastore.CategoryProductIndex); ok {
++		memberUIDs, err := r.categoryMembershipUIDs(ctx, product.Namespace, status.Resolved)
++		if err != nil {
++			return nil, gqlerror.Errorf("resolve category membership: %v", err)
++		}
++		if err := index.ReplaceCategoryProductMembership(ctx, product, memberUIDs); err != nil {
++			return nil, gqlerror.Errorf("update category product membership: %v", err)
++		}
++	}
+ 	return &model.UpdateProductStatusPayload{Product: DatastoreProductToGraphQL(product)}, nil
+ }
+ 
++func (r *mutationResolver) categoryMembershipUIDs(ctx context.Context, namespace string, resolved *catalog.ResolvedProductDefinition) ([]string, error) {
++	if resolved == nil || resolved.Category == nil {
++		return nil, nil
++	}
++	path := resolved.Category.Path
++	if len(path) == 0 {
++		path = []string{resolved.Category.Name}
++	}
++	uids := make([]string, 0, len(path))
++	for _, name := range path {
++		category, err := r.store.GetCategoryTaxonomyByName(ctx, namespace, name)
++		if err != nil {
++			return nil, err
++		}
++		// Projection keys are datastore identities. Relay IDs are API-boundary
++		// encodings and must never be persisted into a Scylla index.
++		uids = append(uids, category.UID)
++	}
++	return uids, nil
++}
++
+ // CompleteProductDeletion is the resolver for the completeProductDeletion field.
+ func (r *mutationResolver) CompleteProductDeletion(ctx context.Context, input model.CompleteProductDeletionInput) (*model.CompleteProductDeletionPayload, error) {
+ 	deleted, err := r.service.CompleteProductDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
+diff --git a/gitstore-api/internal/middleware/security/graphql.go b/gitstore-api/internal/middleware/security/graphql.go
+index ac2bdf84ed0b40a573de626dd85923b66738f4a2..85b25dcf2a1a23a32396f9002570ce154e341f53 100644
+--- a/gitstore-api/internal/middleware/security/graphql.go
++++ b/gitstore-api/internal/middleware/security/graphql.go
+@@ -236,7 +236,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
+ 			Extensions: map[string]any{"code": "FORBIDDEN"},
+ 		}
+ 	}
+-	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
++	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isCategoryProductsField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
+ 		return next(ctx)
+ 	}
+ 	var authz auth.AuthZProvider
+@@ -261,6 +261,10 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
+ 		if err := a.authorizeProductQueryField(ctx, fc, principal, authz); err != nil {
+ 			return nil, err
+ 		}
++	} else if isCategoryProductsField(fc) {
++		if err := authorizeProductAction(ctx, authz, principal, "product.list", "", "", ""); err != nil {
++			return nil, err
++		}
+ 	} else if isCategoryQueryField(fc) {
+ 		if err := a.authorizeCategoryQueryField(ctx, fc, principal, authz); err != nil {
+ 			return nil, err
+@@ -711,6 +715,14 @@ func isProductQueryField(fc *graphql.FieldContext) bool {
+ 	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "product" || fc.Field.Name == "products")
+ }
+ 
++// The parent Category has already been authorized for read. gqlgen field
++// middleware does not expose its hydrated parent value, so this action check
++// deliberately uses the global list scope; resource-aware Category scoping is
++// enforced at the parent read boundary.
++func isCategoryProductsField(fc *graphql.FieldContext) bool {
++	return fc != nil && fc.Object == "Category" && fc.Field.Name == "products"
++}
++
+ func isCategoryQueryField(fc *graphql.FieldContext) bool {
+ 	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "category" || fc.Field.Name == "categories")
+ }
+@@ -974,7 +986,7 @@ func (a *Authorize) authorizeProductQueryField(ctx context.Context, fc *graphql.
+ 				owner = ns.EffectiveOwnerSub()
+ 			}
+ 		}
+-		return authorizeProductAction(ctx, authz, principal, "product.read", "", namespace, owner)
++		return authorizeProductAction(ctx, authz, principal, "product.list", "", namespace, owner)
+ 	}
+ 	if a.store == nil {
+ 		return gqlerror.Errorf("authorization service unavailable")
+diff --git a/gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go b/gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go
+index 8e001a15c5ac0167ea74aec7fb1091c483423427..2f6845fc853aaff2527b17a2622e1251feffff0a 100644
+--- a/gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go
++++ b/gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go
+@@ -51,6 +51,18 @@ func TestProductWatchAuthorizationRunsBeforeCursorHandling(t *testing.T) {
+ 	}
+ }
+ 
++func TestCategoryProductsRequiresProductListBeforeResolver(t *testing.T) {
++	authz := testutil.NewDenyAllAuthZ(t)
++	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
++	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "denied", AuthMethod: "bearer"})
++	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Category", Field: graphql.CollectedField{Field: &ast.Field{Name: "products"}}})
++	called := false
++	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
++	require.Error(t, err)
++	assert.False(t, called)
++	assert.Equal(t, "product.list", authz.Action)
++}
++
+ func TestProductMutationAuthorizationMatrix(t *testing.T) {
+ 	productID := "Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC9wcm9kLXVpZA=="
+ 	metadata := &model.ObjectMetaInput{Namespace: "acme", Name: "widget"}
+@@ -117,7 +129,7 @@ func TestProductListAuthorizationDoesNotDiscloseCrossNamespaceExistence(t *testi
+ 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
+ 	require.Error(t, err)
+ 	assert.False(t, called, "the list resolver must not reveal whether private Products exist")
+-	assert.Equal(t, "product.read", authz.Action)
++	assert.Equal(t, "product.list", authz.Action)
+ 	assert.Equal(t, "private", authz.Resource.Attrs["namespace"])
+ 	assert.Equal(t, "namespace-owner", authz.Resource.OwnerSub)
+ }
+diff --git a/gitstore-git-service/Cargo.lock b/gitstore-git-service/Cargo.lock
+index f13f5b34d7b20e312d833b1e54d1e421a8f53635..c957919eedf35d95616eb4bfe0890983b868f9d1 100644
+--- a/gitstore-git-service/Cargo.lock
++++ b/gitstore-git-service/Cargo.lock
+@@ -581,7 +581,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "git-service"
+-version = "0.1.0-alpha.5"
++version = "0.1.0-alpha.6"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+diff --git a/shared/schemas/product.graphqls b/shared/schemas/product.graphqls
+index 3759adf24f2914099657453840bf681c6038405e..49b0e1ecb5d2a2d876683d3dc9ec2f1c1baade19 100644
+--- a/shared/schemas/product.graphqls
++++ b/shared/schemas/product.graphqls
+@@ -229,6 +229,9 @@ that category), never the category's raw internal identifier.
+ input ResolvedCategoryRefInput {
+   name: String!
+   uid: ID!
++
++  """Resolved root-to-self category names, maintained by the controller."""
++  path: [String!]
+ }
+ 
+ type UpdateProductStatusPayload {

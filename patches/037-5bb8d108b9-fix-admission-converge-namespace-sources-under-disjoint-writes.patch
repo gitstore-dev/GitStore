@@ -1,0 +1,136 @@
+diff --git a/docs/runbooks/namespace-admission.md b/docs/runbooks/namespace-admission.md
+index 6e5302994e355e3f0b9b375417bb4d03d1053850..5e6a336ada1fd38a47a3b8d01835a5824762147e 100644
+--- a/docs/runbooks/namespace-admission.md
++++ b/docs/runbooks/namespace-admission.md
+@@ -2914,6 +2914,26 @@ sampled trace exporter, add no metric labels, and preserve authorization,
+ publication locking and cancellation behavior. Older traces do not contain
+ these measurements; span idle time cannot substitute for them.
+ 
++A subsequent instrumented diagnostic captured all **21** actual Git exchanges
++with no missing advertisement measurements. Maximum snapshot acquisition,
++worker queue and advertisement execution were **0.001208ms**, **0.588ms**
++and **0.944292ms**, respectively. These samples do not reproduce or explain
++the earlier exhausted cycle. Eight metadata cycles passed; the ninth push
++succeeded on its first attempt in **44.54ms**, but its exact-provenance watch
++timed out. The API logged exhausted Namespace convergence for that accepted
++commit. This is a different failure from push retry exhaustion; there is no
++complete throughput, replacement or visibility result for this diagnostic.
++
++Namespace-only convergence uses the existing per-manifest ancestry and exact
++source-byte proofs before its resource-version CAS, rather than requiring the
++entire branch to stop advancing between admission reads. This prevents
++unrelated publications from starving an unchanged Namespace source. Same-path
++rewrites, deletion/recreation and failed history proofs remain fail-closed;
++authorization and optimistic concurrency are unchanged. Mixed-resource
++admission and readers without history-proof support retain their whole-ref
++checks. This correction does not establish that the separate sustained Git
++retry regression or production capacity gate has been resolved.
++
+ Preserve wire-protocol correctness when optimizing these fetches: a `shallow`
+ declaration is not a negotiated `have`. A stock-Git control still sent the
+ complete tree and blob for a depth-limited request without any `have` lines;
+diff --git a/gitstore-api/internal/cataloggrpc/namespace_descendant_test.go b/gitstore-api/internal/cataloggrpc/namespace_descendant_test.go
+index 0f03f374201eb08491fac9692aff3408f2c075cd..68addf64d3e80800f0bd39ce9c9ff3bf107121ff 100644
+--- a/gitstore-api/internal/cataloggrpc/namespace_descendant_test.go
++++ b/gitstore-api/internal/cataloggrpc/namespace_descendant_test.go
+@@ -131,6 +131,7 @@ func TestRawNamespaceDisjointProvenanceRetainsAcceptedCommit(t *testing.T) {
+ 		proofError     error
+ 		differentBytes bool
+ 		withoutHistory bool
++		continuousTip  bool
+ 		advanceAt      int
+ 		superseded     bool
+ 		expectedCode   codes.Code
+@@ -140,6 +141,10 @@ func TestRawNamespaceDisjointProvenanceRetainsAcceptedCommit(t *testing.T) {
+ 		{name: "advance at second ref check", advanceAt: 2},
+ 		{name: "advance at third ref check", advanceAt: 3},
+ 		{name: "advance at fourth ref check", advanceAt: 4},
++		{name: "continuously advancing disjoint tip", continuousTip: true},
++		{name: "continuous tip without history reader", continuousTip: true, withoutHistory: true, superseded: true},
++		{name: "continuous tip with later same-path rewrite", continuousTip: true, differentBytes: true, superseded: true},
++		{name: "continuous tip with unavailable history", continuousTip: true, proofError: grpcstatus.Error(codes.Unavailable, "Git unavailable"), expectedCode: codes.Unavailable},
+ 		{name: "same-path edit", proofError: grpcstatus.Error(codes.Aborted, "path was edited"), superseded: true},
+ 		{name: "deleted and restored", proofError: grpcstatus.Error(codes.Aborted, "path was deleted"), superseded: true},
+ 		{name: "missing path", proofError: grpcstatus.Error(codes.NotFound, "path absent"), superseded: true},
+@@ -173,7 +178,9 @@ func TestRawNamespaceDisjointProvenanceRetainsAcceptedCommit(t *testing.T) {
+ 				require.Equal(t, testRepoID, repository)
+ 				require.Equal(t, path, requestedPath)
+ 				require.Equal(t, mine, ancestor)
+-				require.Equal(t, theirs, tip)
++				if !tc.continuousTip {
++					require.Equal(t, theirs, tip)
++				}
+ 				return files[tip][path], tc.proofError
+ 			}
+ 			var gitReader cataloggrpc.GitReader = reader
+@@ -194,21 +201,30 @@ func TestRawNamespaceDisjointProvenanceRetainsAcceptedCommit(t *testing.T) {
+ 			require.NoError(t, err)
+ 			current = theirs
+ 			checks := 0
+-			if tc.advanceAt != 0 {
++			if tc.advanceAt != 0 || tc.continuousTip {
+ 				current = mine
+ 				reader.resolveRefFunc = func(context.Context, string, string) (string, error) {
+ 					checks++
+-					if checks >= tc.advanceAt {
++					if tc.continuousTip {
++						current = fmt.Sprintf("%040x", checks)
++						files[current] = files[theirs]
++					} else if checks >= tc.advanceAt {
+ 						current = theirs
+ 					}
+ 					return current, nil
+ 				}
+ 			}
++			if tc.continuousTip {
++				srv = newCatalogServer(t, store, gitReader)
++			}
+ 			request.OldCommitSha, request.NewCommitSha = seed, mine
+ 			request.Authorization.Actor.Subject = "bob"
+ 			_, err = srv.AdmitResources(ctx, request)
+ 			require.Equal(t, tc.expectedCode, grpcstatus.Code(err))
+ 			require.GreaterOrEqual(t, checks, tc.advanceAt)
++			if tc.continuousTip {
++				require.Greater(t, checks, 1)
++			}
+ 			stored, readErr := store.GetNamespaceByName(ctx, "raw-provenance")
+ 			require.NoError(t, readErr)
+ 			if tc.superseded || tc.expectedCode != codes.OK {
+diff --git a/gitstore-api/internal/cataloggrpc/server.go b/gitstore-api/internal/cataloggrpc/server.go
+index ff71ed1b2129ea484aa0254e71861e75f7c7d912..870d4b20cf0e41fc78d0c7794d32962eb7df0236 100644
+--- a/gitstore-api/internal/cataloggrpc/server.go
++++ b/gitstore-api/internal/cataloggrpc/server.go
+@@ -1305,7 +1305,11 @@ func (s *Server) AdmitResources(
+ 				return nil, err
+ 			}
+ 		}
+-		if !refChecked {
++		_, namespaceHistoryAvailable := s.git.(committedManifestHistoryReader)
++		namespaceOnlySourceProof := convergeNamespacesOnly && namespaceHistoryAvailable
++		// Namespace convergence checks each accepted source's ancestry and bytes
++		// before its CAS; unrelated publications need not leave the whole ref idle.
++		if !refChecked && !namespaceOnlySourceProof {
+ 			current, err := s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit)
+ 			if err != nil {
+ 				return nil, admissionGitReadError("recheck ref", err)
+@@ -1344,12 +1348,14 @@ func (s *Server) AdmitResources(
+ 		if admCtx.wasSuperseded() {
+ 			continue
+ 		}
+-		current, err := s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit)
+-		if err != nil {
+-			return nil, admissionGitReadError("recheck ref", err)
+-		}
+-		if !current {
+-			continue
++		if !namespaceOnlySourceProof {
++			current, err := s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit)
++			if err != nil {
++				return nil, admissionGitReadError("recheck ref", err)
++			}
++			if !current {
++				continue
++			}
+ 		}
+ 		return &catalogv1.AdmitResourcesResponse{}, nil
+ 	}

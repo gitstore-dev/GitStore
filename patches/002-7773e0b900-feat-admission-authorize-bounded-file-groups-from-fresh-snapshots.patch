@@ -1,0 +1,576 @@
+diff --git a/docs/developer-guide.md b/docs/developer-guide.md
+index a85f70d7c0420eb21f837fc813ac66f26f25f75b..b37f852f433b8e143ade05f55493aefcaa0b95a0 100644
+--- a/docs/developer-guide.md
++++ b/docs/developer-guide.md
+@@ -331,6 +331,12 @@ The pre-receive phase is intentionally stateless and blocking. Admission can use
+ 
+ Admission identity is `apiVersion`, `kind`, resolved namespace, and `metadata.name`; the Git file path is stored as provenance only. A path move with the same identity preserves `metadata.uid` and only increments `resourceVersion`. Spec/body edits increment both `generation` and `resourceVersion`. Deleting a resource file removes the stored identity; adding the same identity again later allocates a new UID.
+ 
++File admission groups of two to four resources in one namespace read fresh
++authorization facts together; other operations retain individual lookups.
++Invalid snapshot identities or incomplete responses fail closed. Every
++resource still requires the configured provider's approval, and batching
++does not replace optimistic-concurrency checks or cache authorization decisions.
++
+ Post-receive admission cannot reject an already accepted Git push. DB-backed conflicts such as duplicate `ProductVariant.spec.sku` leave the existing resource unchanged, skip the conflicting incoming resource, and emit structured API logs with the operation, namespace, name, SKU, and conflicting identity.
+ 
+ ## Controller Manager Runtime
+diff --git a/gitstore-api/internal/cataloggrpc/admission_operations.go b/gitstore-api/internal/cataloggrpc/admission_operations.go
+index b7110e691108d18fc6c535446533286837794dc2..8624044c2d49a90d8e29f16fd4fa1f0cdee3cb63 100644
+--- a/gitstore-api/internal/cataloggrpc/admission_operations.go
++++ b/gitstore-api/internal/cataloggrpc/admission_operations.go
+@@ -198,11 +198,38 @@ func (s *Server) authorizeOperations(ctx context.Context, operations []resourceA
+ 	if removedUser && createdNamespace {
+ 		return status.Error(codes.PermissionDenied, "USER namespace rename is forbidden; delete and unrelated creation require separate pushes")
+ 	}
+-	for _, op := range operations {
+-		existing, err := s.lookupResourceByIdentity(ctx, op.identity)
+-		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
++	batchFiles := len(operations) > 1 && len(operations) <= datastore.FileNameSnapshotBatchLimit
++	var names []string
++	namespace := ""
++	if batchFiles {
++		namespace = operations[0].identity.Namespace
++		names = make([]string, 0, len(operations))
++		for _, op := range operations {
++			batchFiles = batchFiles && op.identity.Kind == "File" && namespace != "" && op.identity.Namespace == namespace
++			names = append(names, op.identity.Name)
++		}
++	}
++	var files []*datastore.File
++	if batchFiles {
++		var err error
++		files, err = s.fileNameSnapshotFacts(ctx, namespace, names)
++		if err != nil {
+ 			return status.Error(codes.Unavailable, "resource authorization facts unavailable")
+ 		}
++	}
++	for i, op := range operations {
++		var existing any
++		if batchFiles {
++			if files[i] != nil {
++				existing = files[i]
++			}
++		} else {
++			var err error
++			existing, err = s.lookupResourceByIdentity(ctx, op.identity)
++			if err != nil && !errors.Is(err, datastore.ErrNotFound) {
++				return status.Error(codes.Unavailable, "resource authorization facts unavailable")
++			}
++		}
+ 		if err := s.authorizeOperation(ctx, op.identity, op.operation, op.newEntry, existing); err != nil {
+ 			return err
+ 		}
+@@ -210,6 +237,25 @@ func (s *Server) authorizeOperations(ctx context.Context, operations []resourceA
+ 	return nil
+ }
+ 
++func (s *Server) fileNameSnapshotFacts(ctx context.Context, namespace string, names []string) ([]*datastore.File, error) {
++	files, err := s.store.GetFileSnapshotsByName(ctx, namespace, names)
++	if err != nil {
++		return nil, err
++	}
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
++	if len(files) != len(names) {
++		return nil, fmt.Errorf("%w: invalid File snapshot cardinality", datastore.ErrRepairRequired)
++	}
++	for i, file := range files {
++		if file != nil && (file.Namespace != namespace || file.Name != names[i] || file.UID == "") {
++			return nil, fmt.Errorf("%w: invalid File snapshot identity", datastore.ErrRepairRequired)
++		}
++	}
++	return files, nil
++}
++
+ type resourceIdentity struct {
+ 	APIVersion string
+ 	Kind       string
+diff --git a/gitstore-api/internal/cataloggrpc/admission_operations_test.go b/gitstore-api/internal/cataloggrpc/admission_operations_test.go
+index d8cf651a07aa89a7404cb0c69728d7e41db4a4aa..a1b06f1e4c8230584e3349067763d9efbdb4bf7f 100644
+--- a/gitstore-api/internal/cataloggrpc/admission_operations_test.go
++++ b/gitstore-api/internal/cataloggrpc/admission_operations_test.go
+@@ -5,7 +5,11 @@ package cataloggrpc
+ 
+ import (
+ 	"bytes"
++	"context"
+ 	"encoding/json"
++	"errors"
++	"strconv"
++	"strings"
+ 	"testing"
+ 
+ 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+@@ -15,8 +19,134 @@ import (
+ 	"github.com/gitstore-dev/gitstore/api/internal/validate"
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/stretchr/testify/require"
++	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/status"
+ )
+ 
++func TestFileAuthorizationUsesFreshBoundedSnapshots(t *testing.T) {
++	recorder := testutil.NewAllowAllAuthZ()
++	reads, pointReads := 0, 0
++	owner := "alice"
++	store := &testutil.StubStore{
++		GetFileSnapshotsByNameFunc: func(_ context.Context, namespace string, names []string) ([]*datastore.File, error) {
++			reads++
++			require.Equal(t, "gitstore", namespace)
++			require.Equal(t, []string{"first", "second"}, names)
++			return []*datastore.File{
++				{UID: "first-uid", Namespace: namespace, Name: names[0], CreationActor: owner},
++				{UID: "second-uid", Namespace: namespace, Name: names[1], CreationActor: "carol"},
++			}, nil
++		},
++		GetFileByNameFunc: func(context.Context, string, string) (*datastore.File, error) {
++			pointReads++
++			return nil, datastore.ErrNotFound
++		},
++	}
++	server := &Server{store: store, registry: auth.NewProviderRegistry(nil, recorder, nil)}
++	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
++	operations := []resourceAdmissionOperation{
++		{operation: admission.OperationUpdate, identity: resourceIdentity{Kind: "File", Namespace: "gitstore", Name: "first"}},
++		{operation: admission.OperationUpdate, identity: resourceIdentity{Kind: "File", Namespace: "gitstore", Name: "second"}},
++	}
++	require.NoError(t, server.authorizeOperations(ctx, operations))
++	owner = "new-owner"
++	require.NoError(t, server.authorizeOperations(ctx, operations))
++	require.Equal(t, 2, reads)
++	require.Zero(t, pointReads)
++	require.Len(t, recorder.Calls, 4)
++	require.Equal(t, "alice", recorder.Calls[0].Resource.OwnerSub)
++	require.Equal(t, "new-owner", recorder.Calls[2].Resource.OwnerSub)
++	require.Equal(t, "carol", recorder.Calls[1].Resource.OwnerSub)
++	require.Equal(t, "file.update", recorder.Calls[0].Action)
++}
++
++func TestFileAuthorizationRejectsInvalidSnapshotFacts(t *testing.T) {
++	for _, scenario := range []string{"cardinality", "namespace", "name", "uid", "error", "cancelled"} {
++		t.Run(scenario, func(t *testing.T) {
++			ctx, cancel := context.WithCancel(t.Context())
++			defer cancel()
++			recorder := testutil.NewAllowAllAuthZ()
++			store := &testutil.StubStore{GetFileSnapshotsByNameFunc: func(context.Context, string, []string) ([]*datastore.File, error) {
++				files := []*datastore.File{
++					{UID: "first-uid", Namespace: "gitstore", Name: "first"},
++					{UID: "second-uid", Namespace: "gitstore", Name: "second"},
++				}
++				switch scenario {
++				case "cardinality":
++					return files[:1], nil
++				case "namespace":
++					files[0].Namespace = "other"
++				case "name":
++					files[0].Name = "other"
++				case "uid":
++					files[0].UID = ""
++				case "error":
++					return nil, errors.New("unavailable")
++				case "cancelled":
++					cancel()
++				}
++				return files, nil
++			}}
++			server := &Server{store: store, registry: auth.NewProviderRegistry(nil, recorder, nil)}
++			ctx = auth.ContextWithPrincipal(ctx, &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
++			err := server.authorizeOperations(ctx, []resourceAdmissionOperation{
++				{operation: admission.OperationUpdate, identity: resourceIdentity{Kind: "File", Namespace: "gitstore", Name: "first"}},
++				{operation: admission.OperationUpdate, identity: resourceIdentity{Kind: "File", Namespace: "gitstore", Name: "second"}},
++			})
++			require.Equal(t, codes.Unavailable, status.Code(err))
++			require.Empty(t, recorder.Calls)
++		})
++	}
++}
++
++func TestFileAuthorizationSnapshotStillRequiresProviderApproval(t *testing.T) {
++	recorder := testutil.NewDenyAllAuthZ(t)
++	store := &testutil.StubStore{GetFileSnapshotsByNameFunc: func(_ context.Context, namespace string, names []string) ([]*datastore.File, error) {
++		return []*datastore.File{
++			{UID: "first-uid", Namespace: namespace, Name: names[0]},
++			{UID: "second-uid", Namespace: namespace, Name: names[1]},
++		}, nil
++	}}
++	server := &Server{store: store, registry: auth.NewProviderRegistry(nil, recorder, nil)}
++	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
++	err := server.authorizeOperations(ctx, []resourceAdmissionOperation{
++		{operation: admission.OperationUpdate, identity: resourceIdentity{Kind: "File", Namespace: "gitstore", Name: "first"}},
++		{operation: admission.OperationDelete, identity: resourceIdentity{Kind: "File", Namespace: "gitstore", Name: "second"}},
++	})
++	require.Equal(t, codes.PermissionDenied, status.Code(err))
++	require.Len(t, recorder.Calls, 1)
++	require.Equal(t, "file.update", recorder.Calls[0].Action)
++}
++
++func TestFileAuthorizationKeepsPointReadsOutsideSnapshotScope(t *testing.T) {
++	for _, namespaces := range [][]string{{"one"}, {"one", "two"}, {"one", "one", "one", "one", "one"}} {
++		t.Run(strings.Join(namespaces, "-"), func(t *testing.T) {
++			reads := 0
++			store := &testutil.StubStore{
++				GetFileSnapshotsByNameFunc: func(context.Context, string, []string) ([]*datastore.File, error) {
++					t.Fatal("snapshot read outside bounded same-namespace scope")
++					return nil, nil
++				},
++				GetFileByNameFunc: func(_ context.Context, namespace, name string) (*datastore.File, error) {
++					reads++
++					return &datastore.File{UID: name + "-uid", Namespace: namespace, Name: name}, nil
++				},
++			}
++			server := &Server{store: store, registry: auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil)}
++			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
++			operations := make([]resourceAdmissionOperation, len(namespaces))
++			for i, namespace := range namespaces {
++				operations[i] = resourceAdmissionOperation{
++					operation: admission.OperationUpdate,
++					identity:  resourceIdentity{Kind: "File", Namespace: namespace, Name: strconv.Itoa(i)},
++				}
++			}
++			require.NoError(t, server.authorizeOperations(ctx, operations))
++			require.Equal(t, len(namespaces), reads)
++		})
++	}
++}
++
+ func TestOwnerAnnotationRemovalRequiresTransferAuthorization(t *testing.T) {
+ 	recorder := testutil.NewAllowAllAuthZ()
+ 	server := &Server{registry: auth.NewProviderRegistry(nil, recorder, nil)}
+diff --git a/gitstore-api/internal/config/config.go b/gitstore-api/internal/config/config.go
+index 968faab5cb7929135fc2a7fd0579fbc54ab4552a..35d656fd6014061efa7bf30abb83b9abece710aa 100644
+--- a/gitstore-api/internal/config/config.go
++++ b/gitstore-api/internal/config/config.go
+@@ -17,6 +17,7 @@ import (
+ 	"github.com/gitstore-dev/gitstore/observability"
+ 	"github.com/go-playground/validator/v10"
+ 	"github.com/go-viper/mapstructure/v2"
++	"github.com/gocql/gocql"
+ 	"github.com/joho/godotenv"
+ 	"github.com/spf13/viper"
+ 	"go.uber.org/zap"
+@@ -280,6 +281,8 @@ type ScyllaConfig struct {
+ 	// AddressTranslator is an optional runtime-only field (not populated from config files).
+ 	// Set it when Scylla runs behind a NAT (e.g. Docker) to redirect peer addresses.
+ 	AddressTranslator interface{} `mapstructure:"-"`
++	// QueryObserver is runtime-only instrumentation, never loaded from configuration.
++	QueryObserver gocql.QueryObserver `mapstructure:"-"`
+ }
+ 
+ // legacyKey names a removed or renamed configuration path that must fail
+diff --git a/gitstore-api/internal/datastore/scylla/backend.go b/gitstore-api/internal/datastore/scylla/backend.go
+index 1c96aae440b65de463403577f2475fdde3ba980c..d70ad8f94dfdd415ab02f907143aa37fb468011a 100644
+--- a/gitstore-api/internal/datastore/scylla/backend.go
++++ b/gitstore-api/internal/datastore/scylla/backend.go
+@@ -299,6 +299,7 @@ func openSession(cfg config.ScyllaConfig) (*gocql.Session, error) {
+ 	cluster.Consistency = gocql.Quorum
+ 	cluster.DisableShardAwarePort = cfg.DisableShardAwarePort
+ 	cluster.IgnorePeerAddr = cfg.IgnorePeerAddr
++	cluster.QueryObserver = cfg.QueryObserver
+ 	if at, ok := cfg.AddressTranslator.(gocql.AddressTranslator); ok {
+ 		cluster.AddressTranslator = at
+ 	}
+diff --git a/gitstore-api/internal/datastore/scylla/backend_test.go b/gitstore-api/internal/datastore/scylla/backend_test.go
+index c08f17941986fccb85af3bbafe5a05684dc3c97f..203c7f98d4d288015381d902883ce8c41f1c41a1 100644
+--- a/gitstore-api/internal/datastore/scylla/backend_test.go
++++ b/gitstore-api/internal/datastore/scylla/backend_test.go
+@@ -16,6 +16,7 @@ import (
+ 	"strconv"
+ 	"strings"
+ 	"sync"
++	"sync/atomic"
+ 	"testing"
+ 	"time"
+ 
+@@ -31,8 +32,9 @@ import (
+ )
+ 
+ var (
+-	scyllaAddr     string
+-	scyllaKeyspace string
++	scyllaAddr              string
++	scyllaKeyspace          string
++	scyllaReplicationFactor = 1
+ )
+ 
+ func TestMain(m *testing.M) {
+@@ -40,7 +42,15 @@ func TestMain(m *testing.M) {
+ 	if scyllaAddr == "" {
+ 		scyllaAddr = "127.0.0.1:9042"
+ 	}
++	if raw := os.Getenv("GITSTORE_TEST_SCYLLA_REPLICATION_FACTOR"); raw != "" {
++		factor, err := strconv.Atoi(raw)
++		if err != nil || factor < 1 {
++			panic("GITSTORE_TEST_SCYLLA_REPLICATION_FACTOR must be a positive integer")
++		}
++		scyllaReplicationFactor = factor
++	}
+ 	scyllaKeyspace = fmt.Sprintf("gitstore_scylla_test_%d_%s", os.Getpid(), strings.ReplaceAll(uuid.NewString(), "-", "")[:16])
++	fmt.Fprintf(os.Stderr, "Scylla regression keyspace %s requested replication factor %d\n", scyllaKeyspace, scyllaReplicationFactor)
+ 
+ 	provisionKeyspace(scyllaAddr, scyllaKeyspace)
+ 	code := m.Run()
+@@ -102,9 +112,9 @@ func provisionKeyspace(addr, keyspace string) {
+ 
+ 	stmt := fmt.Sprintf(
+ 		`CREATE KEYSPACE IF NOT EXISTS %s `+
+-			`WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'} `+
++			`WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '%d'} `+
+ 			`AND durable_writes = true`,
+-		keyspace,
++		keyspace, scyllaReplicationFactor,
+ 	)
+ 	if err := session.Query(stmt).Exec(); err != nil {
+ 		panic("provisionKeyspace: create keyspace: " + err.Error())
+@@ -210,6 +220,250 @@ func newTestStoreWithWatchBucket(t *testing.T, watchBucketSize int) datastore.Da
+ 	return store
+ }
+ 
++type fileSnapshotQueryObserver func(context.Context, gocql.ObservedQuery)
++
++func (observe fileSnapshotQueryObserver) ObserveQuery(ctx context.Context, query gocql.ObservedQuery) {
++	observe(ctx, query)
++}
++
++func TestScyllaFileSnapshotsOverlapBoundedAuthoritativeBatches(t *testing.T) {
++	type readKey struct{}
++	firstWave, release, canceledRead := make(chan struct{}), make(chan struct{}), make(chan struct{})
++	partialFullWave, partialReady, partialRelease := make(chan struct{}), make(chan struct{}), make(chan struct{})
++	mixedReady, mixedRelease := make(chan struct{}), make(chan struct{})
++	var cancelOnce sync.Once
++	var locators, authoritative, active, peak atomic.Int64
++	var partialFullReads, partialReads, mixedReads atomic.Int64
++	var invalidQuery atomic.Bool
++	cfg := testScyllaConfig(t)
++	cfg.QueryObserver = fileSnapshotQueryObserver(func(ctx context.Context, query gocql.ObservedQuery) {
++		mode, _ := ctx.Value(readKey{}).(string)
++		if mode == "" {
++			return
++		}
++		if strings.Contains(query.Statement, " FROM files_by_uid WHERE uid IN (") {
++			if len(query.Values) == 0 || len(query.Values) > 16 ||
++				(query.Err != nil && (mode != "cancel" || ctx.Err() == nil)) {
++				invalidQuery.Store(true)
++			}
++			locators.Add(1)
++			return
++		}
++		if !strings.Contains(query.Statement, " FROM files_by_namespace WHERE namespace=? AND (creation_timestamp,uid) IN (") ||
++			len(query.Values) < 3 || len(query.Values) > 33 || (len(query.Values)-1)%2 != 0 ||
++			strings.Contains(query.Statement, "ALLOW FILTERING") {
++			invalidQuery.Store(true)
++		}
++		current := active.Add(1)
++		defer active.Add(-1)
++		for previous := peak.Load(); current > previous; previous = peak.Load() {
++			if peak.CompareAndSwap(previous, current) {
++				break
++			}
++		}
++		if mode == "cancel" {
++			cancelOnce.Do(func() { close(canceledRead) })
++			<-ctx.Done()
++			return
++		}
++		if query.Err != nil {
++			invalidQuery.Store(true)
++		}
++		if mode == "mixed" {
++			if len(query.Values) != 17 {
++				invalidQuery.Store(true)
++			}
++			if mixedReads.Add(1) == 2 {
++				close(mixedReady)
++			}
++			select {
++			case <-mixedRelease:
++			case <-ctx.Done():
++			}
++			return
++		}
++		if mode == "partial" {
++			if len(query.Values) == 5 {
++				if partialReads.Add(1) == 1 {
++					close(partialReady)
++				}
++			} else {
++				if len(query.Values) != 33 {
++					invalidQuery.Store(true)
++				}
++				if partialFullReads.Add(1) == 3 {
++					close(partialFullWave)
++				}
++				select {
++				case <-partialRelease:
++				case <-ctx.Done():
++				}
++			}
++			return
++		}
++		if authoritative.Add(1) == 8 {
++			close(firstWave)
++		}
++		select {
++		case <-release:
++		case <-ctx.Done():
++		}
++	})
++	store, err := scylla.New(cfg, zap.NewNop())
++	require.NoError(t, err)
++	t.Cleanup(func() { require.NoError(t, store.Close()) })
++	raw := newRawSession(t)
++	var replication map[string]string
++	require.NoError(t, raw.Query("SELECT replication FROM system_schema.keyspaces WHERE keyspace_name=?", scyllaKeyspace).Scan(&replication))
++	require.Contains(t, replication["class"], "NetworkTopologyStrategy")
++	for name, factor := range replication {
++		if name != "class" {
++			require.Equal(t, strconv.Itoa(scyllaReplicationFactor), factor)
++		}
++	}
++	t.Logf("Native File snapshot query contract replication=%v", replication)
++	namespaces := []string{"snapshot-rows-" + newID()[:8], "snapshot-rows-" + newID()[:8]}
++	for _, namespace := range namespaces {
++		require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{UID: newID(), Name: namespace}))
++	}
++	uids := make([]string, datastore.FileSnapshotBatchLimit)
++	for i := range uids {
++		uids[i] = newID()
++		namespace := namespaces[0]
++		if i >= 200 {
++			namespace = namespaces[1]
++		}
++		require.NoError(t, store.CreateFile(t.Context(), &datastore.File{
++			UID: uids[i], Namespace: namespace, Name: fmt.Sprintf("file-%d", i), ResourceVersion: "1",
++			CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
++			Annotations:       map[string]string{"sequence": "1"},
++		}))
++	}
++	uids[17], uids[18] = uids[0], "invalid"
++	type readResult struct {
++		files []*datastore.File
++		err   error
++	}
++	completed := make(chan readResult, 1)
++	ctx, cancel := context.WithTimeout(context.WithValue(t.Context(), readKey{}, "overlap"), 5*time.Second)
++	defer cancel()
++	go func() {
++		files, err := store.GetFileSnapshots(ctx, uids)
++		completed <- readResult{files, err}
++	}()
++	select {
++	case <-firstWave:
++	case <-ctx.Done():
++	}
++	locatorsAtFirstAuthoritativeWave := locators.Load()
++	close(release)
++	result := <-completed
++	require.NoError(t, result.err, "eight bounded authoritative reads must overlap across exact Namespace tuple batches")
++	require.EqualValues(t, 8, locatorsAtFirstAuthoritativeWave,
++		"full single-Namespace batches must start fresh reads without waiting for unrelated locator batches")
++	require.EqualValues(t, 8, peak.Load(), "the reader ceiling is global across Namespace groups")
++	require.EqualValues(t, 16, locators.Load())
++	require.EqualValues(t, 17, authoritative.Load(), "198 and 50 exact tuple keys need thirteen and four bounded reads")
++	require.False(t, invalidQuery.Load(), "each authoritative query must retain the sixteen-key bound")
++	require.Len(t, result.files, len(uids))
++	for i, file := range result.files {
++		if i == 18 {
++			require.Nil(t, file)
++		} else {
++			require.NotNil(t, file)
++			require.Equal(t, uids[i], file.UID)
++		}
++	}
++	result.files[0].Annotations["sequence"] = "changed"
++	require.Equal(t, "1", result.files[17].Annotations["sequence"])
++
++	partialCtx, cancelPartial := context.WithTimeout(context.WithValue(t.Context(), readKey{}, "partial"), 5*time.Second)
++	defer cancelPartial()
++	go func() {
++		files, err := store.GetFileSnapshots(partialCtx, uids[20:70])
++		completed <- readResult{files, err}
++	}()
++	select {
++	case <-partialFullWave:
++	case <-partialCtx.Done():
++	}
++	partialStarted := false
++	select {
++	case <-partialReady:
++		partialStarted = true
++	case <-time.After(time.Second):
++	}
++	close(partialRelease)
++	result = <-completed
++	require.NoError(t, result.err)
++	require.True(t, partialStarted, "partial reads must not wait for unrelated authoritative batches after all locators finish")
++	require.EqualValues(t, 3, partialFullReads.Load())
++	require.EqualValues(t, 1, partialReads.Load(), "fifty same-Namespace keys retain four authoritative queries")
++	require.Len(t, result.files, 50)
++	for i, file := range result.files {
++		require.NotNil(t, file)
++		require.Equal(t, uids[20+i], file.UID)
++	}
++	require.Zero(t, active.Load())
++
++	mixedUIDs := append([]string{}, uids[20:28]...)
++	mixedUIDs = append(mixedUIDs, uids[200:208]...)
++	mixedCtx, cancelMixed := context.WithTimeout(context.WithValue(t.Context(), readKey{}, "mixed"), 5*time.Second)
++	defer cancelMixed()
++	go func() {
++		files, err := store.GetFileSnapshots(mixedCtx, mixedUIDs)
++		completed <- readResult{files, err}
++	}()
++	mixedStarted := false
++	select {
++	case <-mixedReady:
++		mixedStarted = true
++	case <-time.After(time.Second):
++	}
++	close(mixedRelease)
++	result = <-completed
++	require.NoError(t, result.err)
++	require.True(t, mixedStarted, "one locator batch must not serialize independent mixed-Namespace authoritative reads")
++	require.EqualValues(t, 2, mixedReads.Load())
++	require.Len(t, result.files, len(mixedUIDs))
++	for i, file := range result.files {
++		require.NotNil(t, file)
++		require.Equal(t, mixedUIDs[i], file.UID)
++	}
++	require.Zero(t, active.Load())
++
++	peer := newTestStore(t)
++	file, err := peer.GetFile(t.Context(), uids[0])
++	require.NoError(t, err)
++	file.ResourceVersion, file.Body = "2", "fresh"
++	require.NoError(t, peer.UpdateFile(t.Context(), file, "1"))
++	fresh, err := store.GetFileSnapshots(t.Context(), uids)
++	require.NoError(t, err)
++	require.Equal(t, "2", fresh[0].ResourceVersion)
++	require.Equal(t, "fresh", fresh[17].Body)
++
++	ctx, cancelRead := context.WithCancel(context.WithValue(t.Context(), readKey{}, "cancel"))
++	defer cancelRead()
++	go func() {
++		files, err := store.GetFileSnapshots(ctx, uids)
++		completed <- readResult{files, err}
++	}()
++	select {
++	case <-canceledRead:
++	case <-time.After(5 * time.Second):
++		cancelRead()
++		<-completed
++		t.Fatal("authoritative query did not reach the cancellation barrier")
++	}
++	cancelRead()
++	result = <-completed
++	require.ErrorIs(t, result.err, context.Canceled)
++	require.Nil(t, result.files, "cancellation must not expose partial authoritative snapshots")
++	require.Zero(t, active.Load(), "every authoritative reader must finish before returning")
++	require.EqualValues(t, 8, peak.Load())
++	require.False(t, invalidQuery.Load())
++}
++
+ func testScyllaConfig(t *testing.T) config.ScyllaConfig {
+ 	t.Helper()
+ 	host, portStr, splitErr := net.SplitHostPort(scyllaAddr)

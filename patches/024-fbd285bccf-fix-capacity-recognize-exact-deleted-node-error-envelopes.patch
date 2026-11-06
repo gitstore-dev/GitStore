@@ -1,0 +1,142 @@
+diff --git a/tests/capacity/README.md b/tests/capacity/README.md
+index 9ad95c0edf2a888b902f0ce8bd4b3a609dece0c9..799aa9f79d46b819414d8a71f054755ff49d02a4 100644
+--- a/tests/capacity/README.md
++++ b/tests/capacity/README.md
+@@ -658,6 +658,11 @@ Repository lifecycle has separate minimum scales for the two evidence tiers:
+ | `alpha`      |      10m |               500ms |         100 |         1,000 |              5 |        20 |                  256 |    20 | p95 ≤2s, p99 ≤3s |    <80% | <75% growth and <256 MiB per API |
+ | `production` |      60m |               100ms |       1,000 |        10,000 |             20 |        50 |                1,000 |   100 | p95 ≤1s, p99 ≤3s |    <80% | <10% growth                      |
+ 
++Deletion completion reads require a null node on both replicas. When GraphQL
++returns errors, only the single exact kind-specific `NOT_FOUND` diagnostic on
++the `node` field is accepted; authorization, transport and other failures
++cannot count as completed deletion.
++
+ Both modes require two real API processes, two real controller-manager
+ processes, shared durable storage, an observed replacement of the selected API
+ process, cursor-resumed recovery, and zero event loss. Alpha is intentionally
+diff --git a/tests/integration/repository_lifecycle_capacity_test.go b/tests/integration/repository_lifecycle_capacity_test.go
+index ba7f3124868d66065d2d5f5a56322b9c4f6d09fe..4e50079bd3f76148b94b4cc4c1cd0aa4e763b3aa 100644
+--- a/tests/integration/repository_lifecycle_capacity_test.go
++++ b/tests/integration/repository_lifecycle_capacity_test.go
+@@ -4002,7 +4002,7 @@ func TestCapacityRepositoryStoragePathRejectsUnownedPaths(t *testing.T) {
+ 	}
+ }
+ 
+-func capacityNodeDeleted(data json.RawMessage, expectedID string) (bool, error) {
++func capacityNodeDeleted(data json.RawMessage, expectedID string, graphErrors ...json.RawMessage) (bool, error) {
+ 	var observed struct {
+ 		Node json.RawMessage `json:"node"`
+ 	}
+@@ -4012,6 +4012,51 @@ func capacityNodeDeleted(data json.RawMessage, expectedID string) (bool, error)
+ 	if len(observed.Node) == 0 {
+ 		return false, errors.New("deletion read omitted node")
+ 	}
++	if len(graphErrors) != 0 {
++		if len(graphErrors) != 1 || !bytes.Equal(bytes.TrimSpace(observed.Node), []byte("null")) {
++			return false, errors.New("deletion read returned unexpected errors or a non-null node")
++		}
++		decoded, err := base64.StdEncoding.DecodeString(expectedID)
++		if err != nil {
++			return false, fmt.Errorf("decode deletion resource ID: %w", err)
++		}
++		identity, err := url.Parse(string(decoded))
++		if err != nil {
++			return false, fmt.Errorf("parse deletion resource ID: %w", err)
++		}
++		parts := strings.Split(strings.TrimPrefix(identity.Path, "/"), "/")
++		if identity.Scheme != "gid" || identity.Host != "GitStore" || identity.User != nil ||
++			identity.RawQuery != "" || identity.Fragment != "" || len(parts) != 2 || parts[1] == "" {
++			return false, errors.New("deletion read requires a typed resource ID")
++		}
++		reasons := map[string]string{
++			"Namespace": "NAMESPACE_NOT_FOUND", "Repository": "REPOSITORY_NOT_FOUND",
++			"Product": "PRODUCT_NOT_FOUND", "ProductVariant": "PRODUCT_VARIANT_NOT_FOUND",
++			"Category": "CATEGORY_NOT_FOUND", "Collection": "COLLECTION_NOT_FOUND", "File": "FILE_NOT_FOUND",
++		}
++		reason, supported := reasons[parts[0]]
++		if !supported {
++			return false, errors.New("deletion read returned an unsupported resource kind")
++		}
++		var envelope struct {
++			Path       []string `json:"path"`
++			Extensions struct {
++				Code        string `json:"code"`
++				Diagnostics []struct {
++					Reason string `json:"reason"`
++					Level  string `json:"level"`
++				} `json:"diagnostics"`
++			} `json:"extensions"`
++		}
++		if err := json.Unmarshal(graphErrors[0], &envelope); err != nil {
++			return false, fmt.Errorf("decode deletion read error: %w", err)
++		}
++		if len(envelope.Path) != 1 || envelope.Path[0] != "node" || envelope.Extensions.Code != "NOT_FOUND" ||
++			len(envelope.Extensions.Diagnostics) != 1 || envelope.Extensions.Diagnostics[0].Reason != reason ||
++			envelope.Extensions.Diagnostics[0].Level != "FAILURE" {
++			return false, errors.New("deletion read did not return the exact kind-specific node absence envelope")
++		}
++	}
+ 	if bytes.Equal(bytes.TrimSpace(observed.Node), []byte("null")) {
+ 		return true, nil
+ 	}
+@@ -4040,8 +4085,7 @@ func waitCapacityNodesDeleted(t *testing.T, cfg repositoryCapacityConfig, ids ..
+ 				require.NotEmpty(t, id)
+ 				read := secretTestGraphQLContext(t, ctx, endpoint, cfg.token, `query($id: ID!) { node(id: $id) { id } }`, map[string]any{"id": id})
+ 				require.Equal(t, http.StatusOK, read.Status)
+-				require.Empty(t, read.Errors)
+-				deleted, err := capacityNodeDeleted(read.Data, id)
++				deleted, err := capacityNodeDeleted(read.Data, id, read.Errors...)
+ 				require.NoError(t, err)
+ 				completed = completed && deleted
+ 			}
+@@ -4080,6 +4124,50 @@ func TestCapacityNodeDeletedRequiresExactResponse(t *testing.T) {
+ 			} else {
+ 				require.Error(t, err)
+ 			}
++
++		})
++	}
++}
++
++func TestCapacityNodeDeletedRequiresExactNotFoundEnvelope(t *testing.T) {
++	for kind, reason := range map[string]string{
++		"Namespace": "NAMESPACE_NOT_FOUND", "Repository": "REPOSITORY_NOT_FOUND",
++		"Product": "PRODUCT_NOT_FOUND", "ProductVariant": "PRODUCT_VARIANT_NOT_FOUND",
++		"Category": "CATEGORY_NOT_FOUND", "Collection": "COLLECTION_NOT_FOUND", "File": "FILE_NOT_FOUND",
++	} {
++		t.Run(kind, func(t *testing.T) {
++			id := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/" + kind + "/00000000-0000-0000-0000-000000000001"))
++			raw := fmt.Sprintf(`{"path":["node"],"extensions":{"code":"NOT_FOUND","diagnostics":[{"reason":%q,"level":"FAILURE"}]}}`, reason)
++			deleted, err := capacityNodeDeleted(json.RawMessage(`{"node":null}`), id, json.RawMessage(raw))
++			require.NoError(t, err)
++			require.True(t, deleted)
++			for name, invalid := range map[string]string{
++				"forbidden":        strings.Replace(raw, `"NOT_FOUND"`, `"FORBIDDEN"`, 1),
++				"unavailable":      strings.Replace(raw, `"NOT_FOUND"`, `"UNAVAILABLE"`, 1),
++				"wrong_path":       strings.Replace(raw, `"node"`, `"other"`, 1),
++				"wrong_kind":       strings.Replace(raw, reason, "OTHER_NOT_FOUND", 1),
++				"missing_reason":   `{"path":["node"],"extensions":{"code":"NOT_FOUND"}}`,
++				"wrong_level":      strings.Replace(raw, `"FAILURE"`, `"WARNING"`, 1),
++				"malformed":        `{`,
++				"missing_envelope": `null`,
++			} {
++				t.Run(name, func(t *testing.T) {
++					deleted, err := capacityNodeDeleted(json.RawMessage(`{"node":null}`), id, json.RawMessage(invalid))
++					require.Error(t, err)
++					require.False(t, deleted)
++				})
++			}
++			for _, data := range []string{`{}`, `null`, `{"node":{"id":"` + id + `"}}`} {
++				deleted, err := capacityNodeDeleted(json.RawMessage(data), id, json.RawMessage(raw))
++				require.Error(t, err)
++				require.False(t, deleted)
++			}
++			deleted, err = capacityNodeDeleted(json.RawMessage(`{"node":null}`), id, json.RawMessage(raw), json.RawMessage(raw))
++			require.Error(t, err)
++			require.False(t, deleted)
++			deleted, err = capacityNodeDeleted(json.RawMessage(`{"node":null}`), "invalid", json.RawMessage(raw))
++			require.Error(t, err)
++			require.False(t, deleted)
+ 		})
+ 	}
+ }

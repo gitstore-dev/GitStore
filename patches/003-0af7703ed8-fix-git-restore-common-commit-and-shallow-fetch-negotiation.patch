@@ -1,0 +1,1017 @@
+diff --git a/docs/developer-guide.md b/docs/developer-guide.md
+index b37f852f433b8e143ade05f55493aefcaa0b95a0..84ada9dc2c2c79575fcd4617c37a399a4244ae60 100644
+--- a/docs/developer-guide.md
++++ b/docs/developer-guide.md
+@@ -317,6 +317,13 @@ limits, sustained projection mutation, and two independent clients. Add
+ 
+ The API is the Git Smart HTTP front door. The Rust Git service is gRPC-only storage and transport.
+ 
++Fetch negotiation acknowledges known commits using the client's selected
++single-ACK, `multi_ack`, or `multi_ack_detailed` mode. Shallow clones and
++absolute-depth fetches (`--depth=N`), including `--unshallow`, preserve Git's
++shallow boundaries. A client's `shallow` declaration alone is not proof that
++it has a complete snapshot; the server still sends the required trees and
++blobs unless it has negotiated a common commit.
++
+ 1. A Git client clones, fetches, or pushes to `http://localhost:9000/{namespace}/{repo}.git`.
+ 2. `gitstore-api` resolves `{namespace}/{repo}` to the stable repository ID stored in the datastore.
+ 3. `gitstore-api` forwards Git transport work to `gitstore-git-service` through `GitService` gRPC.
+diff --git a/gitstore-git-service/src/git/pack_server.rs b/gitstore-git-service/src/git/pack_server.rs
+index 9f6308925a3ebd428cb6fbea4309c6fdb191d0a0..55136f80ea70f2ac1a8c17e52f592f5c2f5f030d 100644
+--- a/gitstore-git-service/src/git/pack_server.rs
++++ b/gitstore-git-service/src/git/pack_server.rs
+@@ -1,8 +1,9 @@
+ // SPDX-License-Identifier: AGPL-3.0-or-later
+ // Copyright (c) 2026 GitStore contributors
+ 
++use std::collections::{HashSet, VecDeque};
+ use std::path::PathBuf;
+-use std::sync::atomic::AtomicBool;
++use std::sync::atomic::{AtomicBool, Ordering};
+ use std::time::Instant;
+ 
+ use anyhow::{Context, Result};
+@@ -47,27 +48,68 @@ impl HttpPackServer {
+ 
+     /// Replaces: `git upload-pack --stateless-rpc`
+     pub fn handle_upload_pack(&self, body: &[u8]) -> Result<Vec<u8>> {
++        self.handle_upload_pack_with_interrupt(body, &AtomicBool::new(false))
++    }
++
++    pub(crate) fn handle_upload_pack_with_interrupt(
++        &self,
++        body: &[u8],
++        interrupt: &AtomicBool,
++    ) -> Result<Vec<u8>> {
+         let start = Instant::now();
++        check_upload_pack_interrupt(interrupt)?;
+         let repo = open_repo(&self.repo_path)?;
+-        let (wants, haves, done_seen) = parse_wants_and_haves(body);
++        let request = parse_upload_pack_request(body)?;
++        // Existing gRPC callers use zero for an unspecified output limit.
++        let max_pack_size = if self.max_pack_size == 0 {
++            u64::MAX
++        } else {
++            self.max_pack_size
++        };
+         let mut response = Vec::new();
+-
+-        if wants.is_empty() || !done_seen {
+-            // NAK — nothing requested or negotiation still in progress
+-            write_pkt_line(&mut response, b"NAK\n")?;
++        let history = if let Some(depth) = request.depth {
++            anyhow::ensure!(!request.wants.is_empty(), "deepen requires wanted commits");
++            let (commits, boundaries) =
++                shallow_history(&repo, &request.wants, depth, max_pack_size, interrupt)?;
++            for boundary in &boundaries {
++                check_upload_pack_interrupt(interrupt)?;
++                write_pkt_line(&mut response, format!("shallow {boundary}\n").as_bytes())?;
++            }
++            for shallow in &request.shallows {
++                check_upload_pack_interrupt(interrupt)?;
++                if commits.contains(shallow) && !boundaries.contains(shallow) {
++                    write_pkt_line(&mut response, format!("unshallow {shallow}\n").as_bytes())?;
++                }
++            }
+             response.extend_from_slice(b"0000");
++            Some(commits)
++        } else {
++            None
++        };
++
++        if request.wants.is_empty() || !request.done_seen {
++            if history.is_none() || !request.haves.is_empty() {
++                write_upload_pack_acknowledgements(&repo, &request, &mut response, interrupt)?;
++            }
+             emit_span("upload-pack-rpc", &self.repo_path, start, "ok", 0);
+             return Ok(response);
+         }
+ 
+-        // NAK then pack stream
+-        write_pkt_line(&mut response, b"NAK\n")?;
++        write_upload_pack_acknowledgements(&repo, &request, &mut response, interrupt)?;
+ 
+-        let pack_data = build_pack_for_wants(&repo, &wants, &haves)?;
++        let pack_data = build_pack_with_commits(
++            &repo,
++            &request.wants,
++            &request.haves,
++            history.as_deref(),
++            max_pack_size,
++            interrupt,
++        )?;
+         // Chunk pack into sideband pkt-lines: pkt-line max data = 65512 bytes,
+         // minus 1 sideband-channel byte leaves 65511 bytes of pack per packet.
+         const SIDEBAND_CHUNK: usize = 65511;
+         for chunk in pack_data.chunks(SIDEBAND_CHUNK) {
++            check_upload_pack_interrupt(interrupt)?;
+             let mut sideband = vec![0x01u8]; // channel 1 = data
+             sideband.extend_from_slice(chunk);
+             write_pkt_line(&mut response, &sideband)?;
+@@ -234,53 +276,174 @@ fn collect_refs(repo: &gix::Repository) -> Result<Vec<(String, String)>> {
+     Ok(refs)
+ }
+ 
+-/// Parse `want`, `have`, and `done` lines from a pkt-line upload-pack request body.
+-///
+-/// Returns `(wants, haves, done_seen)`. `done_seen` is `true` when the client sent
+-/// `done`, signalling it has finished negotiation and expects a pack in response.
++#[derive(Clone, Copy, Default)]
++enum UploadPackAckMode {
++    #[default]
++    Single,
++    Multi,
++    Detailed,
++}
++
++#[derive(Default)]
++struct UploadPackNegotiation {
++    wants: Vec<String>,
++    haves: Vec<String>,
++    shallows: Vec<gix::ObjectId>,
++    depth: Option<u32>,
++    done_seen: bool,
++    ack_mode: UploadPackAckMode,
++}
++
++/// Compatibility wrapper; transport handlers use the fallible parser directly.
+ pub fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>, bool) {
+-    let mut wants = Vec::new();
+-    let mut haves = Vec::new();
+-    let mut done_seen = false;
++    let request = parse_upload_pack_request(body).unwrap_or_default();
++    (request.wants, request.haves, request.done_seen)
++}
++
++fn parse_upload_pack_request(body: &[u8]) -> Result<UploadPackNegotiation> {
++    let mut request = UploadPackNegotiation::default();
+     let mut pos = 0;
+ 
+-    while pos + 4 <= body.len() {
+-        let len_str = match std::str::from_utf8(&body[pos..pos + 4]) {
+-            Ok(s) => s,
+-            Err(_) => break,
+-        };
+-        let len = match usize::from_str_radix(len_str, 16) {
+-            Ok(l) => l,
+-            Err(_) => break,
+-        };
++    while pos < body.len() {
++        anyhow::ensure!(pos + 4 <= body.len(), "truncated upload-pack packet");
++        let len = usize::from_str_radix(std::str::from_utf8(&body[pos..pos + 4])?, 16)
++            .context("invalid upload-pack packet length")?;
+         if len == 0 {
+             pos += 4;
+             continue;
+         }
+-        if pos + len > body.len() {
+-            break;
++        anyhow::ensure!(
++            (4..=65520).contains(&len) && len <= body.len() - pos,
++            "invalid upload-pack packet bounds"
++        );
++        let line = std::str::from_utf8(&body[pos + 4..pos + len])?;
++        let line = line.trim_end_matches('\n');
++        let (line, nul_caps) = line.split_once('\0').unwrap_or((line, ""));
++        if let Some(rest) = line.strip_prefix("want ") {
++            let mut fields = rest.split_whitespace();
++            let oid = fields.next().context("missing want ID")?;
++            gix::ObjectId::from_hex(oid.as_bytes()).context("invalid want ID")?;
++            if request.wants.is_empty() {
++                for capability in fields.chain(nul_caps.split_whitespace()) {
++                    match capability {
++                        "multi_ack_detailed" => request.ack_mode = UploadPackAckMode::Detailed,
++                        "multi_ack" if !matches!(request.ack_mode, UploadPackAckMode::Detailed) => {
++                            request.ack_mode = UploadPackAckMode::Multi;
++                        }
++                        _ => {}
++                    }
++                }
++            }
++            request.wants.push(oid.to_owned());
++        } else if let Some(rest) = line.strip_prefix("have ") {
++            let oid = rest.split_whitespace().next().context("missing have ID")?;
++            gix::ObjectId::from_hex(oid.as_bytes()).context("invalid have ID")?;
++            request.haves.push(oid.to_owned());
++        } else if let Some(rest) = line.strip_prefix("shallow ") {
++            request
++                .shallows
++                .push(gix::ObjectId::from_hex(rest.as_bytes()).context("invalid shallow ID")?);
++        } else if let Some(rest) = line.strip_prefix("deepen ") {
++            let depth: u32 = rest.parse().context("invalid deepen depth")?;
++            anyhow::ensure!(
++                depth > 0 && request.depth.is_none(),
++                "invalid deepen request"
++            );
++            request.depth = Some(depth);
++        } else if line == "done" {
++            request.done_seen = true;
++        } else {
++            anyhow::bail!("unsupported upload-pack negotiation line");
+         }
++        pos += len;
++    }
++    Ok(request)
++}
+ 
+-        let line = &body[pos + 4..pos + len];
+-        if let Ok(s) = std::str::from_utf8(line) {
+-            let s = s.trim_end_matches('\n').split('\0').next().unwrap_or("");
+-            if let Some(rest) = s.strip_prefix("want ") {
+-                let oid = rest.split_whitespace().next().unwrap_or("").to_string();
+-                if !oid.is_empty() {
+-                    wants.push(oid);
+-                }
+-            } else if let Some(rest) = s.strip_prefix("have ") {
+-                let oid = rest.split_whitespace().next().unwrap_or("").to_string();
+-                if !oid.is_empty() {
+-                    haves.push(oid);
++fn write_upload_pack_acknowledgements(
++    repo: &gix::Repository,
++    request: &UploadPackNegotiation,
++    response: &mut Vec<u8>,
++    interrupt: &AtomicBool,
++) -> Result<()> {
++    check_upload_pack_interrupt(interrupt)?;
++    let mut common = None;
++    if !request.wants.is_empty() {
++        for have in &request.haves {
++            check_upload_pack_interrupt(interrupt)?;
++            let id = gix::ObjectId::from_hex(have.as_bytes())?;
++            let object = repo
++                .try_find_object(id)
++                .context("resolve offered fetch common commit")?;
++            if object.is_none_or(|object| object.kind != gix::object::Kind::Commit) {
++                continue;
++            }
++            common = Some(id);
++            let status = match request.ack_mode {
++                UploadPackAckMode::Single => {
++                    write_pkt_line(response, format!("ACK {id}\n").as_bytes())?;
++                    return Ok(());
+                 }
+-            } else if s == "done" {
+-                done_seen = true;
++                UploadPackAckMode::Multi => "continue",
++                UploadPackAckMode::Detailed => "common",
++            };
++            if !request.done_seen {
++                write_pkt_line(response, format!("ACK {id} {status}\n").as_bytes())?;
+             }
+         }
+-        pos += len;
+     }
+-    (wants, haves, done_seen)
++    if let Some(id) = common.filter(|_| request.done_seen) {
++        write_pkt_line(response, format!("ACK {id}\n").as_bytes())?;
++    } else {
++        // Common ancestry alone is not proof that every wanted history is complete.
++        write_pkt_line(response, b"NAK\n")?;
++    }
++    Ok(())
++}
++
++fn check_upload_pack_interrupt(interrupt: &AtomicBool) -> Result<()> {
++    anyhow::ensure!(!interrupt.load(Ordering::Acquire), "upload-pack cancelled");
++    Ok(())
++}
++
++fn shallow_history(
++    repo: &gix::Repository,
++    wants: &[String],
++    depth: u32,
++    max_pack_size: u64,
++    interrupt: &AtomicBool,
++) -> Result<(Vec<gix::ObjectId>, Vec<gix::ObjectId>)> {
++    let mut queue = VecDeque::new();
++    for want in wants {
++        check_upload_pack_interrupt(interrupt)?;
++        let oid = gix::ObjectId::from_hex(want.as_bytes())?;
++        let commit = repo.find_object(oid)?.peel_to_commit()?;
++        queue.push_back((commit.id, 1));
++    }
++    let mut seen = HashSet::new();
++    let mut commits = Vec::new();
++    let mut boundaries = Vec::new();
++    while let Some((oid, level)) = queue.pop_front() {
++        check_upload_pack_interrupt(interrupt)?;
++        if !seen.insert(oid) {
++            continue;
++        }
++        anyhow::ensure!(
++            seen.len() as u64 <= max_pack_size / 20,
++            "shallow traversal exceeds configured pack size"
++        );
++        let commit = repo.find_commit(oid)?;
++        let mut parents = commit.parent_ids().map(|id| id.detach());
++        if level == depth {
++            if parents.next().is_some() {
++                boundaries.push(oid);
++            }
++        } else {
++            queue.extend(parents.map(|parent| (parent, level + 1)));
++        }
++        commits.push(oid);
++    }
++    Ok((commits, boundaries))
+ }
+ 
+ /// Build a pack file containing objects reachable from `wants` but not from `haves`.
+@@ -291,28 +454,45 @@ pub fn build_pack_for_wants(
+     repo: &gix::Repository,
+     wants: &[String],
+     haves: &[String],
++) -> Result<Vec<u8>> {
++    build_pack_with_commits(repo, wants, haves, None, u64::MAX, &AtomicBool::new(false))
++}
++
++fn build_pack_with_commits(
++    repo: &gix::Repository,
++    wants: &[String],
++    haves: &[String],
++    commits: Option<&[gix::ObjectId]>,
++    max_pack_size: u64,
++    interrupt: &AtomicBool,
+ ) -> Result<Vec<u8>> {
+     use gix::object::Kind;
+     use gix_pack::data::output;
+     use gix_pack::data::output::count::objects::ObjectExpansion;
+ 
++    check_upload_pack_interrupt(interrupt)?;
+     let want_ids: Vec<gix::ObjectId> = wants
+         .iter()
+-        .filter_map(|h| gix::ObjectId::from_hex(h.as_bytes()).ok())
+-        .collect();
++        .map(|h| gix::ObjectId::from_hex(h.as_bytes()))
++        .collect::<Result<_, _>>()?;
+ 
+     if want_ids.is_empty() {
+         return Ok(Vec::new());
+     }
+ 
+-    // Resolve have OIDs; unknown/invalid ones are silently ignored.
+-    let have_ids: Vec<gix::ObjectId> = haves
+-        .iter()
+-        .filter_map(|h| gix::ObjectId::from_hex(h.as_bytes()).ok())
+-        .filter(|id| repo.find_object(*id).is_ok())
+-        .collect();
+-
+-    let interrupt = AtomicBool::new(false);
++    anyhow::ensure!(max_pack_size >= 32, "pack exceeds configured pack size");
++    let mut have_ids = Vec::new();
++    for have in haves {
++        check_upload_pack_interrupt(interrupt)?;
++        let id = gix::ObjectId::from_hex(have.as_bytes())?;
++        if repo
++            .try_find_object(id)
++            .context("resolve offered fetch common commit")?
++            .is_some_and(|object| object.kind == Kind::Commit)
++        {
++            have_ids.push(id);
++        }
++    }
+ 
+     // Clone and prepare ODB handle: prevent_pack_unload ensures pack location data
+     // remains valid during the entire pack generation pipeline.
+@@ -325,6 +505,7 @@ pub fn build_pack_for_wants(
+     let mut commit_tips: Vec<gix::ObjectId> = Vec::new();
+     let mut extra_objects: Vec<gix::ObjectId> = Vec::new();
+     for oid in &want_ids {
++        check_upload_pack_interrupt(interrupt)?;
+         let obj = repo
+             .find_object(*oid)
+             .with_context(|| format!("find want object {oid}"))?;
+@@ -344,13 +525,27 @@ pub fn build_pack_for_wants(
+ 
+     // Walk commits from wants, stopping at have boundaries so only the
+     // incremental delta is included rather than the full history.
+-    let walk_ids: Vec<gix::ObjectId> = repo
+-        .rev_walk(commit_tips.iter().copied())
+-        .with_boundary(have_ids.iter().copied())
+-        .all()
+-        .context("rev walk for pack generation")?
+-        .filter_map(|r| r.ok().map(|info| info.id))
+-        .collect();
++    let walk_ids = if let Some(commits) = commits {
++        commits.to_vec()
++    } else {
++        let walk = repo
++            .rev_walk(commit_tips.iter().copied())
++            .with_boundary(have_ids.iter().copied())
++            // A common commit proves an ancestry boundary, not a timestamp cutoff.
++            .sorting(gix::revision::walk::Sorting::BreadthFirst)
++            .all()
++            .context("rev walk for pack generation")?;
++        let mut ids = Vec::new();
++        for result in walk {
++            check_upload_pack_interrupt(interrupt)?;
++            ids.push(result.context("walking pack commits")?.id);
++            anyhow::ensure!(
++                ids.len() as u64 <= max_pack_size / 20,
++                "pack traversal exceeds configured pack size"
++            );
++        }
++        ids
++    };
+ 
+     if walk_ids.is_empty() && extra_objects.is_empty() {
+         anyhow::bail!(
+@@ -367,7 +562,7 @@ pub fn build_pack_for_wants(
+         &odb,
+         &mut ids_iter,
+         &gix::progress::Discard,
+-        &interrupt,
++        interrupt,
+         ObjectExpansion::TreeContents,
+     )
+     .context("counting pack objects")?;
+@@ -379,7 +574,7 @@ pub fn build_pack_for_wants(
+             &odb,
+             &mut tag_iter,
+             &gix::progress::Discard,
+-            &interrupt,
++            interrupt,
+             ObjectExpansion::AsIs,
+         )
+         .context("counting tag objects")?;
+@@ -401,33 +596,56 @@ pub fn build_pack_for_wants(
+     )
+     .context("resolving pack entry locations")?;
+ 
+-    // Collect all entries first so we know the exact count before creating
+-    // FromEntriesIter. Passing an incorrect count causes an index-out-of-bounds
+-    // panic in gix-pack 0.71.0 when delta expansion inflates the entry count
+-    // beyond counts.len().
++    // Collect actual entry counts: never assume reused delta expansion matches counts.len().
+     type BatchResult = Result<Vec<output::Entry>, gix::Error>;
++    let mut minimum_pack_bytes = 32u64;
+     let all_entries: Vec<Vec<output::Entry>> = entries_iter
+         .into_iter()
+-        .map(|r| -> BatchResult { r.map(|(_seq, entries)| entries) })
++        .map(|r| -> BatchResult {
++            let checked = (|| -> Result<_> {
++                check_upload_pack_interrupt(interrupt)?;
++                let (_sequence, entries) = r?;
++                for entry in &entries {
++                    check_upload_pack_interrupt(interrupt)?;
++                    anyhow::ensure!(!entry.is_invalid(), "counted pack object is unavailable");
++                    minimum_pack_bytes = minimum_pack_bytes
++                        .checked_add(entry.compressed_data.len() as u64)
++                        .and_then(|size| size.checked_add(1))
++                        .context("pack size accounting overflow")?;
++                    anyhow::ensure!(
++                        minimum_pack_bytes <= max_pack_size,
++                        "pack exceeds configured pack size"
++                    );
++                }
++                Ok(entries)
++            })();
++            checked.map_err(|error| gix::Error::from_boxed(error.into_boxed_dyn_error()))
++        })
+         .collect::<Result<_, _>>()
+         .map_err(|e| anyhow::anyhow!("pack entry collection error: {e}"))?;
+-    let num_entries: u32 = all_entries.iter().map(|b| b.len() as u32).sum();
++    let num_entries = u32::try_from(all_entries.iter().map(Vec::len).sum::<usize>())
++        .context("too many pack entries")?;
+ 
+     if num_entries == 0 {
+         return Ok(Vec::new());
+     }
+ 
+-    let mut pack_bytes: Vec<u8> = Vec::new();
++    let mut writer = LimitedPackWriter {
++        bytes: Vec::new(),
++        limit: max_pack_size,
++        interrupt,
++    };
+     type EntryBatch = Vec<output::Entry>;
+     let mut bytes_iter = gix_pack::data::output::bytes::FromEntriesIter::new(
+         all_entries.into_iter().map(Ok::<EntryBatch, gix::Error>),
+-        &mut pack_bytes,
++        &mut writer,
+         num_entries,
+         gix_pack::data::Version::V2,
+         gix::hash::Kind::Sha1,
+     );
+ 
+     loop {
++        check_upload_pack_interrupt(interrupt)?;
+         match bytes_iter.next() {
+             Some(Ok(_)) => {}
+             Some(Err(e)) => return Err(anyhow::anyhow!("pack generation error: {e}")),
+@@ -435,7 +653,33 @@ pub fn build_pack_for_wants(
+         }
+     }
+ 
+-    Ok(pack_bytes)
++    drop(bytes_iter);
++    Ok(writer.bytes)
++}
++
++struct LimitedPackWriter<'a> {
++    bytes: Vec<u8>,
++    limit: u64,
++    interrupt: &'a AtomicBool,
++}
++
++impl std::io::Write for LimitedPackWriter<'_> {
++    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
++        check_upload_pack_interrupt(self.interrupt)
++            .map_err(|error| std::io::Error::other(error.to_string()))?;
++        if buffer.len() as u64 > self.limit.saturating_sub(self.bytes.len() as u64) {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::FileTooLarge,
++                "pack exceeds configured pack size",
++            ));
++        }
++        self.bytes.extend_from_slice(buffer);
++        Ok(buffer.len())
++    }
++
++    fn flush(&mut self) -> std::io::Result<()> {
++        self.write(&[]).map(|_| ())
++    }
+ }
+ 
+ pub struct Quarantine {
+@@ -798,7 +1042,7 @@ mod tests {
+     // -----------------------------------------------------------------------
+ 
+     #[test]
+-    fn t054_handle_upload_pack_empty_wants_returns_nak_flush() {
++    fn t054_handle_upload_pack_empty_wants_returns_nak() {
+         let (_dir, repo) = make_test_repo();
+         let server = HttpPackServer {
+             repo_path: repo.path().to_path_buf(),
+@@ -808,11 +1052,9 @@ mod tests {
+         let body = b""; // no wants, no done
+         let resp = server.handle_upload_pack(body).expect("handle_upload_pack");
+ 
+-        // Expected: pkt-line("NAK\n") + "0000"
+         let mut expected = Vec::new();
+         write_pkt_line(&mut expected, b"NAK\n").unwrap();
+-        expected.extend_from_slice(b"0000");
+-        assert_eq!(resp, expected, "empty-wants must return NAK+0000");
++        assert_eq!(resp, expected, "NAK terminates a negotiation response");
+     }
+ 
+     #[test]
+@@ -880,7 +1122,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn t056_handle_upload_pack_wants_no_done_returns_nak_flush() {
++    fn t056_handle_upload_pack_wants_no_done_returns_nak() {
+         let (_dir, repo) = make_test_repo();
+         let commit_oid = make_commit(&repo, "initial", None);
+ 
+@@ -900,14 +1142,447 @@ mod tests {
+ 
+         let mut expected = Vec::new();
+         write_pkt_line(&mut expected, b"NAK\n").unwrap();
+-        expected.extend_from_slice(b"0000");
+-        assert_eq!(resp, expected, "wants without done must return NAK+0000");
++        assert_eq!(resp, expected, "NAK terminates a negotiation response");
+     }
+ 
+     // -----------------------------------------------------------------------
+     // T057 – T059: build_pack_for_wants
+     // -----------------------------------------------------------------------
+ 
++    #[test]
++    fn shallow_negotiation_rejects_malformed_packets_and_depths() {
++        let (_dir, repo) = make_test_repo();
++        let server = HttpPackServer::new(repo.path().to_path_buf(), 64 * 1024 * 1024);
++        for body in [
++            b"0001".to_vec(),
++            b"0009x".to_vec(),
++            b"000".to_vec(),
++            pkt_lines(&[b"deepen 0\n"]),
++            pkt_lines(&[b"deepen -1\n"]),
++            pkt_lines(&[b"deepen 1\n", b"deepen 2\n"]),
++            pkt_lines(&[b"shallow not-an-object-id\n"]),
++            pkt_lines(&[b"want not-an-object-id\n"]),
++            pkt_lines(&[b"have not-an-object-id\n"]),
++        ] {
++            assert!(server.handle_upload_pack(&body).is_err(), "{body:?}");
++        }
++    }
++
++    #[test]
++    fn shallow_handshake_precedes_ack_and_bounds_history() {
++        let (_dir, repo) = make_test_repo();
++        let root = make_commit(&repo, "root", None);
++        let parent = make_commit(&repo, "parent", Some(root));
++        let tip = make_commit(&repo, "tip", Some(parent));
++        let server = HttpPackServer::new(repo.path().to_path_buf(), 64 * 1024 * 1024);
++        let want = format!("want {tip} side-band-64k shallow\n");
++        let mut first = pkt_lines(&[want.as_bytes(), b"deepen 1\n"]);
++        flush(&mut first);
++        let mut expected = pkt_lines(&[format!("shallow {tip}\n").as_bytes()]);
++        flush(&mut expected);
++        assert_eq!(server.handle_upload_pack(&first).unwrap(), expected);
++        let interrupt = AtomicBool::new(false);
++        let (commits, boundaries) = shallow_history(
++            &repo,
++            &[tip.to_string()],
++            2,
++            server.max_pack_size,
++            &interrupt,
++        )
++        .unwrap();
++        assert_eq!(commits, vec![tip, parent]);
++        assert_eq!(boundaries, vec![parent]);
++        let (commits, boundaries) = shallow_history(
++            &repo,
++            &[tip.to_string()],
++            3,
++            server.max_pack_size,
++            &interrupt,
++        )
++        .unwrap();
++        assert_eq!(commits, vec![tip, parent, root]);
++        assert!(boundaries.is_empty());
++        assert!(shallow_history(&repo, &[tip.to_string()], 3, 20, &interrupt).is_err());
++        first.extend_from_slice(&pkt_lines(&[b"done\n"]));
++        let packed = server.handle_upload_pack(&first).unwrap();
++        assert!(packed.starts_with(&expected));
++        assert!(packed[expected.len()..].starts_with(b"0008NAK\n"));
++    }
++
++    #[test]
++    fn upload_pack_preserves_output_limits_and_cancellation() {
++        let (_dir, repo) = make_test_repo();
++        let tip = make_commit(&repo, "snapshot", None);
++        for depth in ["", "deepen 1\n"] {
++            let mut request =
++                pkt_lines(&[format!("want {tip} side-band-64k shallow\n").as_bytes()]);
++            if !depth.is_empty() {
++                request.extend(pkt_lines(&[depth.as_bytes()]));
++            }
++            flush(&mut request);
++            request.extend(pkt_lines(&[b"done\n"]));
++            let pack = build_pack_for_wants(&repo, &[tip.to_string()], &[]).unwrap();
++            let exact = HttpPackServer::new(repo.path().to_path_buf(), pack.len() as u64);
++            let response = exact.handle_upload_pack(&request).unwrap();
++            let too_small = HttpPackServer::new(repo.path().to_path_buf(), pack.len() as u64 - 1);
++            let error = too_small.handle_upload_pack(&request).unwrap_err();
++            assert!(
++                format!("{error:#}").contains("pack exceeds configured pack size"),
++                "{error:#}"
++            );
++            let unspecified = HttpPackServer::new(repo.path().to_path_buf(), 0);
++            assert_eq!(unspecified.handle_upload_pack(&request).unwrap(), response);
++            assert!(unspecified
++                .handle_upload_pack_with_interrupt(&request, &AtomicBool::new(true))
++                .unwrap_err()
++                .to_string()
++                .contains("upload-pack cancelled"));
++        }
++    }
++
++    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++    async fn real_git_shallow_clone_deepen_and_common_commit_fetch() {
++        use axum::extract::State;
++        use axum::http::HeaderMap;
++        use axum::routing::{get, post};
++        use std::io::Write;
++        use std::process::{Command, Stdio};
++        use std::sync::atomic::AtomicUsize;
++        use std::sync::Arc;
++
++        type Fixture = (PathBuf, Arc<AtomicUsize>);
++        async fn advertise(State((path, _)): State<Fixture>) -> impl axum::response::IntoResponse {
++            (
++                [(
++                    "content-type",
++                    "application/x-git-upload-pack-advertisement",
++                )],
++                HttpPackServer::new(path, 64 * 1024 * 1024)
++                    .advertise_upload_pack_refs()
++                    .unwrap(),
++            )
++        }
++        async fn upload(
++            State((path, negotiations)): State<Fixture>,
++            headers: HeaderMap,
++            body: axum::body::Bytes,
++        ) -> impl axum::response::IntoResponse {
++            negotiations.fetch_add(1, Ordering::Relaxed);
++            let body = if headers
++                .get("content-encoding")
++                .is_some_and(|value| value == "gzip")
++            {
++                let mut decoder = Command::new("gzip")
++                    .arg("-dc")
++                    .stdin(Stdio::piped())
++                    .stdout(Stdio::piped())
++                    .spawn()
++                    .unwrap();
++                decoder.stdin.take().unwrap().write_all(&body).unwrap();
++                let decoded = decoder.wait_with_output().unwrap();
++                assert!(decoded.status.success() && decoded.stdout.len() <= 65536);
++                decoded.stdout
++            } else {
++                body.to_vec()
++            };
++            (
++                [("content-type", "application/x-git-upload-pack-result")],
++                HttpPackServer::new(path, 64 * 1024 * 1024)
++                    .handle_upload_pack(&body)
++                    .unwrap(),
++            )
++        }
++        let git = |directory: &std::path::Path, args: &[&str]| {
++            let output = Command::new("git")
++                .env("GIT_CONFIG_COUNT", "0")
++                .env("GIT_CONFIG_GLOBAL", "/dev/null")
++                .env("GIT_CONFIG_NOSYSTEM", "1")
++                .args(["-C"])
++                .arg(directory)
++                .args(args)
++                .output()
++                .expect("standard Git client");
++            assert!(
++                output.status.success(),
++                "Git {args:?}: {}",
++                String::from_utf8_lossy(&output.stderr)
++            );
++            String::from_utf8(output.stdout).unwrap().trim().to_owned()
++        };
++        let (_dir, repo) = make_test_repo();
++        git(repo.path(), &["symbolic-ref", "HEAD", "refs/heads/main"]);
++        let root = make_commit(&repo, "root", None);
++        let parent = make_commit(&repo, "parent", Some(root));
++        let mut tip = make_commit(&repo, "tip", Some(parent));
++        let negotiations = Arc::new(AtomicUsize::new(0));
++        let router = axum::Router::new()
++            .route("/fixture.git/info/refs", get(advertise))
++            .route("/fixture.git/git-upload-pack", post(upload))
++            .with_state((repo.path().to_path_buf(), Arc::clone(&negotiations)));
++        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++        let remote = format!("http://{}/fixture.git", listener.local_addr().unwrap());
++        let worker = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
++        struct StopFixture(tokio::task::JoinHandle<()>);
++        impl Drop for StopFixture {
++            fn drop(&mut self) {
++                self.0.abort();
++            }
++        }
++        let fixture = StopFixture(worker);
++        let shallow = tempfile::TempDir::new().unwrap();
++        git(
++            shallow.path(),
++            &["clone", "--quiet", "--depth=1", &remote, "."],
++        );
++        assert_eq!(git(shallow.path(), &["rev-list", "--count", "HEAD"]), "1");
++        assert_eq!(
++            std::fs::read_to_string(shallow.path().join(".git/shallow"))
++                .unwrap()
++                .trim(),
++            tip.to_string()
++        );
++        git(
++            shallow.path(),
++            &["fetch", "--quiet", "--depth=2", "origin", "main"],
++        );
++        assert_eq!(git(shallow.path(), &["rev-list", "--count", "HEAD"]), "2");
++        assert_eq!(
++            std::fs::read_to_string(shallow.path().join(".git/shallow"))
++                .unwrap()
++                .trim(),
++            parent.to_string()
++        );
++        git(
++            shallow.path(),
++            &["fetch", "--quiet", "--unshallow", "origin", "main"],
++        );
++        assert_eq!(git(shallow.path(), &["rev-list", "--count", "HEAD"]), "3");
++        assert!(!shallow.path().join(".git/shallow").exists());
++        for index in 0..96 {
++            tip = make_commit(&repo, &format!("history {index}"), Some(tip));
++        }
++        git(shallow.path(), &["fetch", "--quiet", "origin", "main"]);
++        negotiations.store(0, Ordering::Relaxed);
++        tip = make_commit(&repo, "after long common history", Some(tip));
++        git(shallow.path(), &["fetch", "--quiet", "origin", "main"]);
++        assert_eq!(
++            git(shallow.path(), &["rev-parse", "FETCH_HEAD"]),
++            tip.to_string()
++        );
++        let rounds = negotiations.load(Ordering::Relaxed);
++        eprintln!("one-commit fetch after long shared history: {rounds} HTTP negotiation requests");
++        assert!(
++            (1..=2).contains(&rounds),
++            "redundant common-commit negotiation rounds"
++        );
++        git(shallow.path(), &["fsck", "--full", "--no-reflogs"]);
++
++        git(repo.path(), &["gc", "--aggressive", "--prune=now"]);
++        let repacked = tempfile::TempDir::new().unwrap();
++        git(
++            repacked.path(),
++            &["clone", "--quiet", "--depth=1", &remote, "."],
++        );
++        assert_eq!(git(repacked.path(), &["rev-list", "--count", "HEAD"]), "1");
++        let tree = repo.find_commit(tip).unwrap().tree_id().unwrap().detach();
++        let sig = gix::actor::SignatureRef {
++            name: "Test".into(),
++            email: "test@example.com".into(),
++            time: "1 +0000",
++        };
++        tip = repo
++            .commit_as(sig, sig, "refs/heads/main", "same snapshot", tree, [tip])
++            .unwrap()
++            .detach();
++        git(
++            repacked.path(),
++            &["fetch", "--quiet", "--depth=1", "origin", "main"],
++        );
++        assert_eq!(
++            git(repacked.path(), &["rev-parse", "FETCH_HEAD"]),
++            tip.to_string()
++        );
++        assert_eq!(
++            git(repacked.path(), &["show", "FETCH_HEAD:file.txt"]),
++            "after long common history"
++        );
++        git(repacked.path(), &["fsck", "--full", "--no-reflogs"]);
++        git(
++            repacked.path(),
++            &["fetch", "--quiet", "--unshallow", "origin", "main"],
++        );
++        assert_eq!(
++            git(repacked.path(), &["rev-list", "--count", "FETCH_HEAD"]),
++            "101"
++        );
++        git(repacked.path(), &["fsck", "--full", "--no-reflogs"]);
++        fixture.0.abort();
++    }
++
++    #[test]
++    fn upload_pack_acknowledges_only_known_commits_in_the_negotiated_mode() {
++        let (_dir, repo) = make_test_repo();
++        let root = make_commit(&repo, "root", None);
++        let parent = make_commit(&repo, "parent", Some(root));
++        let tip = make_commit(&repo, "tip", Some(parent));
++        let blob = repo.write_blob("not a common commit").unwrap().detach();
++        let unknown = "f".repeat(40);
++        let server = HttpPackServer::new(repo.path().to_path_buf(), 64 * 1024 * 1024);
++        for (capabilities, status, final_common) in [
++            ("multi_ack_detailed thin-pack", Some("common"), parent),
++            ("multi_ack multi_ack_detailed", Some("common"), parent),
++            ("multi_ack_detailed multi_ack", Some("common"), parent),
++            ("thin-pack multi_ack", Some("continue"), parent),
++            ("thin-pack", None, root),
++        ] {
++            let want = format!("want {tip} {capabilities}\n");
++            let mut request = pkt_lines(&[want.as_bytes()]);
++            flush(&mut request);
++            for have in [
++                &unknown,
++                &blob.to_string(),
++                &root.to_string(),
++                &parent.to_string(),
++            ] {
++                request.extend_from_slice(&pkt_lines(&[format!("have {have}\n").as_bytes()]));
++            }
++            let mut negotiation = request.clone();
++            flush(&mut negotiation);
++            let mut expected = Vec::new();
++            if let Some(status) = status {
++                for common in [root, parent] {
++                    write_pkt_line(&mut expected, format!("ACK {common} {status}\n").as_bytes())
++                        .unwrap();
++                }
++                write_pkt_line(&mut expected, b"NAK\n").unwrap();
++            } else {
++                write_pkt_line(&mut expected, format!("ACK {root}\n").as_bytes()).unwrap();
++            }
++            assert_eq!(
++                server.handle_upload_pack(&negotiation).unwrap(),
++                expected,
++                "{capabilities}: known commits must not disappear between stateless rounds"
++            );
++            request.extend_from_slice(&pkt_lines(&[b"done\n"]));
++            let response = server.handle_upload_pack(&request).unwrap();
++            let mut final_ack = Vec::new();
++            write_pkt_line(&mut final_ack, format!("ACK {final_common}\n").as_bytes()).unwrap();
++            assert!(
++                response.starts_with(&final_ack),
++                "{capabilities}: missing final ACK"
++            );
++            assert_eq!(
++                &response[final_ack.len() + 4..final_ack.len() + 9],
++                b"\x01PACK"
++            );
++        }
++        let want = format!("want {tip} multi_ack_detailed\n");
++        let mut request = pkt_lines(&[want.as_bytes()]);
++        flush(&mut request);
++        for have in [unknown, blob.to_string()] {
++            request.extend_from_slice(&pkt_lines(&[format!("have {have}\n").as_bytes()]));
++        }
++        flush(&mut request);
++        assert_eq!(server.handle_upload_pack(&request).unwrap(), b"0008NAK\n");
++    }
++
++    #[test]
++    fn upload_pack_does_not_infer_ack_capabilities_from_later_wants_or_substrings() {
++        let (_dir, repo) = make_test_repo();
++        let root = make_commit(&repo, "root", None);
++        let tip = make_commit(&repo, "tip", Some(root));
++        let server = HttpPackServer::new(repo.path().to_path_buf(), 0);
++        let request = pkt_lines(&[
++            format!("want {tip} no-multi_ack_detailed\n").as_bytes(),
++            format!("want {tip} multi_ack_detailed\n").as_bytes(),
++            format!("have {root}\n").as_bytes(),
++        ]);
++        let expected = pkt_lines(&[format!("ACK {root}\n").as_bytes()]);
++        assert_eq!(server.handle_upload_pack(&request).unwrap(), expected);
++    }
++
++    #[test]
++    fn upload_pack_does_not_hide_object_lookup_failures() {
++        let (_dir, repo) = make_test_repo();
++        let tip = make_commit(&repo, "tip", None);
++        let corrupt = "f".repeat(40);
++        let object_dir = repo.objects.store_ref().path().join(&corrupt[..2]);
++        std::fs::create_dir_all(&object_dir).unwrap();
++        std::fs::write(object_dir.join(&corrupt[2..]), b"not a compressed object").unwrap();
++        let server = HttpPackServer::new(repo.path().to_path_buf(), 0);
++        for done in [false, true] {
++            let mut request = pkt_lines(&[
++                format!("want {tip} multi_ack_detailed\n").as_bytes(),
++                format!("have {corrupt}\n").as_bytes(),
++            ]);
++            if done {
++                request.extend(pkt_lines(&[b"done\n"]));
++            } else {
++                flush(&mut request);
++            }
++            assert!(server
++                .handle_upload_pack(&request)
++                .unwrap_err()
++                .to_string()
++                .contains("resolve offered fetch common commit"));
++        }
++    }
++
++    #[test]
++    fn shallow_boundary_without_have_still_sends_the_complete_snapshot() {
++        let (_dir, repo) = make_test_repo();
++        let parent = make_commit(&repo, "known shallow snapshot", None);
++        let tree = repo
++            .find_commit(parent)
++            .unwrap()
++            .tree_id()
++            .unwrap()
++            .detach();
++        let sig = gix::actor::SignatureRef {
++            name: "Test".into(),
++            email: "test@example.com".into(),
++            time: "1 +0000",
++        };
++        let tip = repo
++            .commit_as(sig, sig, "refs/heads/main", "same tree", tree, [parent])
++            .unwrap()
++            .detach();
++        for depth in [1, 2] {
++            let want = format!("want {tip} side-band-64k shallow\n");
++            let shallow = format!("shallow {parent}\n");
++            let deepen = format!("deepen {depth}\n");
++            let mut request = pkt_lines(&[want.as_bytes(), shallow.as_bytes(), deepen.as_bytes()]);
++            flush(&mut request);
++            request.extend_from_slice(&pkt_lines(&[b"done\n"]));
++            let server = HttpPackServer::new(repo.path().to_path_buf(), 64 * 1024 * 1024);
++            let response = server.handle_upload_pack(&request).unwrap();
++            let mut pack = Vec::new();
++            let mut position = 0;
++            while position < response.len() {
++                let length = usize::from_str_radix(
++                    std::str::from_utf8(&response[position..position + 4]).unwrap(),
++                    16,
++                )
++                .unwrap();
++                if length == 0 {
++                    position += 4;
++                    continue;
++                }
++                let payload = &response[position + 4..position + length];
++                if payload.first() == Some(&1) {
++                    pack.extend_from_slice(&payload[1..]);
++                }
++                position += length;
++            }
++            assert!(pack.starts_with(b"PACK"));
++            assert_eq!(
++                u32::from_be_bytes(pack[8..12].try_into().unwrap()),
++                depth + 2,
++                "a shallow declaration is not a negotiated have; include the tree and blob"
++            );
++        }
++    }
++
+     #[test]
+     fn t057_build_pack_for_wants_fresh_clone_non_empty() {
+         let (_dir, repo) = make_test_repo();

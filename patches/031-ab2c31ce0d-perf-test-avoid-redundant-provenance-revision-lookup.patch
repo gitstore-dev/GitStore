@@ -1,0 +1,63 @@
+diff --git a/tests/capacity/README.md b/tests/capacity/README.md
+index 3e1e9c897786e0a787e31ee2000c622cf40b1ddc..712463c24b3f48557aa6159700d56ff19279f8bf 100644
+--- a/tests/capacity/README.md
++++ b/tests/capacity/README.md
+@@ -1018,7 +1018,13 @@ Set `GIT_URL` to the reachable singleton Git endpoint for Namespace watch runs;
+ Repository lifecycle continues to use `REPOSITORY_GIT_URL`. Provenance pushes
+ retry only non-fast-forward races, refreshing the current tree at depth one and
+ rebasing only the single probe comment commit without force within a 30-second,
+-eight-attempt bound. Other Git failures remain fatal.
++eight-attempt bound. The path-only refresh verifies that only the probe manifest
++changed locally and refuses a concurrent edit or deletion of that manifest.
++It preserves unrelated fetched tree entries without checking out the catalog.
++A successful soft reset records the original commit in `ORIG_HEAD`; reusing its
++author and message avoids a separate Git process to rediscover that commit.
++This reduces local preparation, not the fast-forward requirement or retry bound.
++Other Git failures remain fatal.
+ Metadata mutations use the existing transient GraphQL classification with a
+ 30-second total deadline and explicit retry records. Every returned error must
+ qualify; a concurrent conflict cannot mask a companion authorization/domain
+diff --git a/tests/integration/githelper_test.go b/tests/integration/githelper_test.go
+index 5aeb7fd6a2d9adb95e11bb5533dbb5e4b03e5f0d..9039f5bf9192340d8b8bb5e0311fb1146f37940f 100644
+--- a/tests/integration/githelper_test.go
++++ b/tests/integration/githelper_test.go
+@@ -296,17 +296,14 @@ func refreshWatchMetadataProvenancePath(ctx context.Context, h *pushHelper) erro
+ 	if _, err := secretCapacityGit(ctx, h.workDir, "", "diff", "--quiet", "HEAD^", "FETCH_HEAD", "--", h.provenancePath); err != nil {
+ 		return fmt.Errorf("provenance manifest changed concurrently; refusing to overwrite it: %w", err)
+ 	}
+-	revision, err := secretCapacityGit(ctx, h.workDir, "", "rev-parse", "HEAD")
+-	if err != nil {
+-		return err
+-	}
+ 	// Move only our local parent, retaining the comment rewrite in the one
+ 	// checked-out file. --only preserves FETCH_HEAD's unrelated tree entries
+ 	// without checking out or rebasing the deployment's full resource tree.
++	// Successful reset records our previous commit in ORIG_HEAD.
+ 	if _, err := secretCapacityGit(ctx, h.workDir, "", "reset", "--soft", "FETCH_HEAD"); err != nil {
+ 		return err
+ 	}
+-	_, err = secretCapacityGit(ctx, h.workDir, "", "commit", "--quiet", "--only", "--reuse-message="+strings.TrimSpace(string(revision)), "--", h.provenancePath)
++	_, err = secretCapacityGit(ctx, h.workDir, "", "commit", "--quiet", "--only", "--reuse-message=ORIG_HEAD", "--", h.provenancePath)
+ 	return err
+ }
+ 
+@@ -397,9 +394,19 @@ func TestWatchMetadataProvenancePathOnlyPreparation(t *testing.T) {
+ 				require.Equal(t, remoteBefore, strings.TrimSpace(string(git(remote, "rev-parse", "main"))))
+ 				return
+ 			}
++			metadataArgs := []string{"show", "--no-patch", "--format=%an%x00%ae%x00%aI%x00%B", "HEAD"}
++			originalMetadata := git(h.workDir, metadataArgs...)
++			git(h.workDir, "config", "user.name", "Retry Committer")
++			git(h.workDir, "config", "user.email", "retry@gitstore.dev")
+ 			for round := range 2 {
++				previousHead := git(h.workDir, "rev-parse", "HEAD")
++				git(h.workDir, "update-ref", "ORIG_HEAD", "HEAD^")
+ 				git(h.workDir, "fetch", "--quiet", "--depth=1", "origin", "main")
+ 				require.NoError(t, refreshWatchMetadataProvenancePath(t.Context(), h))
++				require.Equal(t, previousHead, git(h.workDir, "rev-parse", "ORIG_HEAD"),
++					"reset must replace a stale ORIG_HEAD with this attempt's original commit")
++				require.Equal(t, originalMetadata, git(h.workDir, metadataArgs...),
++					"each refresh must preserve the original author, author date and full message")
+ 				require.Equal(t, remoteBefore, strings.TrimSpace(string(git(h.workDir, "rev-parse", "HEAD^"))))
+ 				peerHelper.commitProduct("untouched.md", fmt.Sprintf("concurrent catalog content %d\n", round))
+ 				git(peer, "push", "origin", "main")

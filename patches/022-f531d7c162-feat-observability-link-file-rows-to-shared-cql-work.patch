@@ -1,0 +1,558 @@
+diff --git a/docs/runbooks/namespace-admission.md b/docs/runbooks/namespace-admission.md
+index 8c3beb143eaf240c94895175f948b2842a1ee82b..6ec5931fa373f01c4a553de2da1d332d5bebcde3 100644
+--- a/docs/runbooks/namespace-admission.md
++++ b/docs/runbooks/namespace-admission.md
+@@ -1879,6 +1879,35 @@ durations. The final accounting uses actual counts and interval unions.
+ No optimization was selected or deployed from this census; the unchanged
+ queue-inclusive ACK gate remains open.
+ 
++The same retained sample has 36 instrumented exchanges, each with one
++completed stream and no abandoned or overflowing stream records. Stream
++intervals account for 96.9% of their summed exchange time, but no native
++server-trace events were retained. A stream interval includes transport,
++database service and scheduling; it cannot identify which of those is slow.
++Exchange sums are not a mutation-wall-time union. These records do not support
++attributing the observed delay to JSON processing or preparation outside the
++stream.
++
++To close the row-correlation gap for future recorded requests, File update
++operation spans now start before backend execution. Internal mutation phases
++and individual query attempts are children of the corresponding update rather
++than siblings under the admission request. Shared conditional writes and
++post-write readback exchanges carry reciprocal links to their participating
++recorded update spans. Link collection is bounded to 16 input operations,
++deduplicates repeated span identities and explicitly marks overflow. Unrecorded
++or unsampled parents do not enable group-link collection. Resource names, UIDs,
++versions, bodies and query literals are not added to spans or metric labels.
++
++Readback exchanges also retain the existing bounded stream timing, and File
++conditional exchanges identify their table. Metrics still record one sample
++per operation or phase; the change does not introduce an extra File-update
++completion span, increase queue/cohort bounds, or alter admission, cancellation
++or independent-error handling. These additive trace relationships do not change
++the stored schema or require replicas to upgrade together. They cannot repair
++old traces, enable native tracing without the existing explicit profiling
++controls, or establish an ACK improvement. No capacity acceptance follows from
++this instrumentation change.
++
+ For the running Scylla engine revision, native duration is foreground elapsed
+ time measured with a steady clock, not CPU time. Execution tracing begins
+ inside request processing and stops before subsequent response queuing/writing.
+diff --git a/gitstore-api/internal/datastore/instrumented.go b/gitstore-api/internal/datastore/instrumented.go
+index fb0989ebfb121bac289823fd12943871cac1263c..c8a1c5871ed837812a00700e92f8d5f3d04fb4a3 100644
+--- a/gitstore-api/internal/datastore/instrumented.go
++++ b/gitstore-api/internal/datastore/instrumented.go
+@@ -44,6 +44,10 @@ func NewInstrumentedDatastoreWithRegistry(next Datastore, backend string, log *z
+ func (d *InstrumentedDatastore) observe(ctx context.Context, op string, start time.Time, err error) {
+ 	elapsed := time.Since(start)
+ 	ctx = d.traceOperation(ctx, op, start, err)
++	d.observeResult(ctx, op, elapsed, err)
++}
++
++func (d *InstrumentedDatastore) observeResult(ctx context.Context, op string, elapsed time.Duration, err error) {
+ 	observability.Observe(ctx, d.metrics.duration.WithLabelValues(op, d.backend), elapsed.Seconds())
+ 	if err != nil {
+ 		if errors.Is(err, ErrNotFound) {
+@@ -71,12 +75,24 @@ func (d *InstrumentedDatastore) observe(ctx context.Context, op string, start ti
+ }
+ 
+ func (d *InstrumentedDatastore) traceOperation(ctx context.Context, operation string, start time.Time, err error) context.Context {
++	ctx, span := d.startOperationSpan(ctx, operation, start)
++	endOperationSpan(span, err)
++	return ctx
++}
++
++func (d *InstrumentedDatastore) startOperationSpan(ctx context.Context, operation string, start time.Time) (context.Context, trace.Span) {
+ 	if !trace.SpanFromContext(ctx).IsRecording() {
+-		return ctx
++		return ctx, nil
+ 	}
+-	ctx, span := otel.Tracer("gitstore/datastore").Start(ctx, "datastore."+operation,
++	return otel.Tracer("gitstore/datastore").Start(ctx, "datastore."+operation,
+ 		trace.WithTimestamp(start),
+ 		trace.WithAttributes(attribute.String("db.system.name", d.backend)))
++}
++
++func endOperationSpan(span trace.Span, err error) {
++	if span == nil {
++		return
++	}
+ 	outcome := "success"
+ 	if errors.Is(err, ErrNotFound) {
+ 		outcome = "absent"
+@@ -86,7 +102,6 @@ func (d *InstrumentedDatastore) traceOperation(ctx context.Context, operation st
+ 	}
+ 	span.SetAttributes(attribute.String("outcome", outcome))
+ 	span.End()
+-	return ctx
+ }
+ 
+ func (d *InstrumentedDatastore) observeFinding(finding ProjectionFinding) {
+@@ -363,8 +378,11 @@ func (d *InstrumentedDatastore) ListFiles(ctx context.Context, namespace string,
+ }
+ func (d *InstrumentedDatastore) UpdateFile(ctx context.Context, f *File, expectedResourceVersion string) error {
+ 	start := time.Now()
++	ctx, span := d.startOperationSpan(ctx, "UpdateFile", start)
+ 	err := d.next.UpdateFile(d.withFindingObserver(ctx), f, expectedResourceVersion)
+-	d.observe(ctx, "UpdateFile", start, err)
++	elapsed := time.Since(start)
++	endOperationSpan(span, err)
++	d.observeResult(ctx, "UpdateFile", elapsed, err)
+ 	return err
+ }
+ func (d *InstrumentedDatastore) DeleteFile(ctx context.Context, id string) error {
+diff --git a/gitstore-api/internal/datastore/instrumented_test.go b/gitstore-api/internal/datastore/instrumented_test.go
+index bf905135e74012d97d5fd72693b05d1b87511b29..b565ecb58e8434e0d5336457639c1b5da02626a6 100644
+--- a/gitstore-api/internal/datastore/instrumented_test.go
++++ b/gitstore-api/internal/datastore/instrumented_test.go
+@@ -10,6 +10,7 @@ import (
+ 	"net/http"
+ 	"net/http/httptest"
+ 	"strings"
++	"sync"
+ 	"testing"
+ 	"time"
+ 
+@@ -140,6 +141,125 @@ type batchForwardingStore struct {
+ 	phases    []datastore.NamespaceFencePhase
+ }
+ 
++type fileUpdateTracingStore struct {
++	datastore.Datastore
++	update func(context.Context, *datastore.File, string) error
++}
++
++func (s *fileUpdateTracingStore) UpdateFile(ctx context.Context, file *datastore.File, expected string) error {
++	return s.update(ctx, file, expected)
++}
++
++func TestInstrumentedDatastoreUpdateFileOwnsConcurrentPhases(t *testing.T) {
++	previous := otel.GetTracerProvider()
++	defer otel.SetTracerProvider(previous)
++	for _, sampled := range []bool{false, true} {
++		t.Run(fmt.Sprint(sampled), func(t *testing.T) {
++			recorder := tracetest.NewSpanRecorder()
++			sampler := sdktrace.NeverSample()
++			if sampled {
++				sampler = sdktrace.AlwaysSample()
++			}
++			provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sampler), sdktrace.WithSpanProcessor(recorder))
++			defer provider.Shutdown(t.Context())
++			otel.SetTracerProvider(provider)
++			ctx, root := provider.Tracer("test").Start(t.Context(), "admission")
++			type rowKey struct{}
++			deadline := time.Now().Add(time.Minute)
++			ctx, cancel := context.WithDeadline(ctx, deadline)
++			defer cancel()
++			files := []*datastore.File{{UID: "private-first"}, {UID: "private-second"}}
++			ready := make(chan struct{}, 2)
++			release := make(chan struct{})
++			stub := &fileUpdateTracingStore{update: func(ctx context.Context, file *datastore.File, expected string) error {
++				index, ok := ctx.Value(rowKey{}).(int)
++				assert.True(t, ok)
++				assert.Same(t, files[index], file)
++				assert.Equal(t, "private-version", expected)
++				gotDeadline, hasDeadline := ctx.Deadline()
++				assert.True(t, hasDeadline)
++				assert.Equal(t, deadline, gotDeadline)
++				assert.NoError(t, ctx.Err())
++				return datastore.MeasureCatalogMutationPhase(ctx, datastore.FileMutationAuthoritativeCAS, func() error {
++					_, query := provider.Tracer("test").Start(ctx, "scylla.query")
++					defer query.End()
++					ready <- struct{}{}
++					<-release
++					if index == 1 {
++						return datastore.ErrConflict
++					}
++					return nil
++				})
++			}}
++			wrapped, logs, registry := newTestInstrumented(t, stub)
++			errs := make([]error, 2)
++			var workers sync.WaitGroup
++			for i, file := range files {
++				workers.Go(func() {
++					errs[i] = wrapped.UpdateFile(context.WithValue(ctx, rowKey{}, i), file, "private-version")
++				})
++			}
++			<-ready
++			<-ready
++			close(release)
++			workers.Wait()
++			root.End()
++			require.NoError(t, errs[0])
++			require.ErrorIs(t, errs[1], datastore.ErrConflict)
++			require.EqualValues(t, 2, histogramObservationCount(t, registry, "UpdateFile", "test-backend"))
++			require.EqualValues(t, 2, histogramObservationCount(t, registry, "FileAuthoritativeCAS", "test-backend"))
++			require.Equal(t, float64(1), counterValue(t, registry, "UpdateFile", "test-backend"))
++			require.Equal(t, 1, logs.FilterMessage("datastore operation failed").Len())
++			if !sampled {
++				require.Empty(t, recorder.Ended())
++				return
++			}
++			updates := map[trace.SpanID]sdktrace.ReadOnlySpan{}
++			for _, span := range recorder.Ended() {
++				if span.Name() == "datastore.UpdateFile" {
++					require.Equal(t, root.SpanContext().SpanID(), span.Parent().SpanID())
++					updates[span.SpanContext().SpanID()] = span
++				}
++				for _, attr := range span.Attributes() {
++					require.NotContains(t, attr.Value.Emit(), "private-")
++				}
++				require.NotContains(t, span.Status().Description, "private-")
++			}
++			require.Len(t, updates, 2, "one operation span per row, not an additional completion span")
++			children := map[trace.SpanID]int{}
++			for _, span := range recorder.Ended() {
++				if span.Name() != "datastore.FileAuthoritativeCAS" && span.Name() != "scylla.query" {
++					continue
++				}
++				update := updates[span.Parent().SpanID()]
++				require.NotNil(t, update, "concurrent phases must identify their exact row operation")
++				require.False(t, span.StartTime().Before(update.StartTime()))
++				require.False(t, span.EndTime().After(update.EndTime()))
++				children[span.Parent().SpanID()]++
++			}
++			require.Len(t, children, 2)
++			for _, count := range children {
++				require.Equal(t, 2, count)
++			}
++		})
++	}
++}
++
++func TestInstrumentedDatastoreUpdateFilePreservesCancellationAndAbsence(t *testing.T) {
++	ctx, cancel := context.WithCancel(t.Context())
++	cancel()
++	wrapped, logs, registry := newTestInstrumented(t, &fileUpdateTracingStore{update: func(received context.Context, file *datastore.File, expected string) error {
++		require.ErrorIs(t, received.Err(), context.Canceled)
++		require.Nil(t, file)
++		require.Equal(t, "private-version", expected)
++		return datastore.ErrNotFound
++	}})
++	require.ErrorIs(t, wrapped.UpdateFile(ctx, nil, "private-version"), datastore.ErrNotFound)
++	require.EqualValues(t, 1, histogramObservationCount(t, registry, "UpdateFile", "test-backend"))
++	require.Zero(t, counterValue(t, registry, "UpdateFile", "test-backend"))
++	require.Zero(t, logs.Len())
++}
++
+ func TestInstrumentedDatastoreFileCohortsLinkExactOwnerAndPhysicalPhases(t *testing.T) {
+ 	previous := otel.GetTracerProvider()
+ 	defer otel.SetTracerProvider(previous)
+diff --git a/gitstore-api/internal/datastore/scylla/backend.go b/gitstore-api/internal/datastore/scylla/backend.go
+index ed79a76d53a92854f1540dd4bbccef4754dfd06b..dcab4e2fbd5a1213d7fa0667ea6bd2bc5a1fa0d9 100644
+--- a/gitstore-api/internal/datastore/scylla/backend.go
++++ b/gitstore-api/internal/datastore/scylla/backend.go
+@@ -8,6 +8,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"net"
++	"slices"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -341,6 +342,34 @@ type cqlTraceObserver struct {
+ 
+ type cqlExchangeKey struct{}
+ 
++type cqlRequestGroupKey struct{}
++type cqlRequestGroupTrace struct {
++	members  []trace.Span
++	count    int
++	overflow bool
++}
++
++func withCQLRequestGroup(ctx context.Context, contexts []context.Context) context.Context {
++	parent := trace.SpanFromContext(ctx)
++	if !parent.IsRecording() || !parent.SpanContext().IsSampled() {
++		return ctx
++	}
++	group := &cqlRequestGroupTrace{count: len(contexts), overflow: len(contexts) > fileSnapshotReadBatchLimit}
++	for _, memberCtx := range contexts[:min(len(contexts), fileSnapshotReadBatchLimit)] {
++		member := trace.SpanFromContext(memberCtx)
++		if !member.IsRecording() || !member.SpanContext().IsSampled() {
++			continue
++		}
++		if slices.ContainsFunc(group.members, func(previous trace.Span) bool {
++			return previous.SpanContext().Equal(member.SpanContext())
++		}) {
++			continue
++		}
++		group.members = append(group.members, member)
++	}
++	return context.WithValue(ctx, cqlRequestGroupKey{}, group)
++}
++
+ type cqlServerTrace struct {
+ 	span      trace.Span
+ 	callbacks atomic.Int32
+@@ -418,8 +447,27 @@ func startCQLExchange(ctx context.Context, tracer trace.Tracer, attrs ...attribu
+ 		return ctx, func(error) {}
+ 	}
+ 	start := time.Now()
++	group, _ := ctx.Value(cqlRequestGroupKey{}).(*cqlRequestGroupTrace)
++	var links []trace.Link
++	if group != nil {
++		for _, member := range group.members {
++			links = append(links, trace.Link{SpanContext: member.SpanContext()})
++		}
++	}
+ 	ctx, span := tracer.Start(ctx, "scylla.exchange", trace.WithSpanKind(trace.SpanKindClient), trace.WithTimestamp(start),
+-		trace.WithAttributes(attrs...))
++		trace.WithAttributes(attrs...), trace.WithLinks(links...))
++	if group != nil && span.IsRecording() {
++		span.SetAttributes(
++			attribute.Int("gitstore.db.group.member_count", group.count),
++			attribute.Int("gitstore.db.group.linked_member_count", len(links)),
++			attribute.Bool("gitstore.db.group.links_overflow", group.overflow),
++		)
++		for _, member := range group.members {
++			member.AddLink(trace.Link{SpanContext: span.SpanContext(), Attributes: []attribute.KeyValue{
++				attribute.Int("gitstore.db.group.member_count", group.count),
++			}})
++		}
++	}
+ 	observability.AnnotateRuntimeSpan(ctx)
+ 	exchange := &cqlExchangeTrace{}
+ 	return context.WithValue(ctx, cqlExchangeKey{}, exchange), func(err error) {
+diff --git a/gitstore-api/internal/datastore/scylla/file.go b/gitstore-api/internal/datastore/scylla/file.go
+index c731d2c672a23a732df83c90baebfa0c98e5c0d4..ed007e126373d55c87d7de54badcea3b5d5809cb 100644
+--- a/gitstore-api/internal/datastore/scylla/file.go
++++ b/gitstore-api/internal/datastore/scylla/file.go
+@@ -799,9 +799,11 @@ func (reader *fileProjectionReader) execute(group []*fileProjectionRequest) {
+ 	defer cancel()
+ 	var records []*ProjectionRecord
+ 	phase := datastore.FileProjectionReadBatch1 + datastore.CatalogMutationPhase(len(keys)-1)
+-	err := datastore.MeasureCatalogMutationPhase(ctx, phase, func() error {
+-		var err error
+-		records, err = reader.read(ctx, keys)
++	err := datastore.MeasureCatalogMutationPhase(ctx, phase, func() (err error) {
++		queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"),
++			attribute.String("db.collection.name", "files_by_namespace"))
++		defer func() { finish(err) }()
++		records, err = reader.read(queryCtx, keys)
+ 		if err == nil && len(records) != len(keys) {
+ 			return fmt.Errorf("%w: incomplete File projection read results", datastore.ErrRepairRequired)
+ 		}
+@@ -1187,6 +1189,7 @@ func (writer *fileCASWriter) execute(group []*fileCASRequest) {
+ 
+ func fileRequestGroupContext(contexts []context.Context) (context.Context, context.CancelFunc) {
+ 	ctx, cancel := context.WithCancel(context.WithoutCancel(contexts[0]))
++	ctx = withCQLRequestGroup(ctx, contexts)
+ 	var live atomic.Int64
+ 	live.Store(int64(len(contexts)))
+ 	stops := make([]func() bool, 0, len(contexts))
+@@ -1217,7 +1220,8 @@ func (s *scyllaDatastore) executeFileCAS(request *fileCASRequest) error {
+ 		return err
+ 	}
+ 	return datastore.MeasureCatalogMutationPhase(request.ctx, datastore.FileMutationConditionalSingle, func() (err error) {
+-		ctx, finish := startCQLExchange(request.ctx, otel.Tracer("gitstore/datastore/scylla"))
++		ctx, finish := startCQLExchange(request.ctx, otel.Tracer("gitstore/datastore/scylla"),
++			attribute.String("db.collection.name", "files_by_namespace"))
+ 		defer func() { finish(err) }()
+ 		query := s.session.Query(fileUpdateStatement, nil).WithContext(ctx).Bind(request.values...)
+ 		if tracer := sampleCQLServerTrace(ctx); tracer != nil {
+@@ -1238,7 +1242,8 @@ func (s *scyllaDatastore) executeFileCASBatch(ctx context.Context, group []*file
+ 	phase := datastore.FileMutationConditionalBatch2 + datastore.CatalogMutationPhase(len(group)-2)
+ 	var applied bool
+ 	err := datastore.MeasureCatalogMutationPhase(ctx, phase, func() (err error) {
+-		queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"))
++		queryCtx, finish := startCQLExchange(ctx, otel.Tracer("gitstore/datastore/scylla"),
++			attribute.String("db.collection.name", "files_by_namespace"))
+ 		defer func() { finish(err) }()
+ 		batch := s.session.Batch(gocql.LoggedBatch).WithContext(queryCtx).RetryPolicy(&gocql.SimpleRetryPolicy{})
+ 		if tracer := sampleCQLServerTrace(queryCtx); tracer != nil {
+diff --git a/gitstore-api/internal/datastore/scylla/query_observer_test.go b/gitstore-api/internal/datastore/scylla/query_observer_test.go
+index f4eef096d0afeaddeeeb736bf8b8a3390ba658ad..1232c16c20aa7a524b971711ab1440f4c1a4bf39 100644
+--- a/gitstore-api/internal/datastore/scylla/query_observer_test.go
++++ b/gitstore-api/internal/datastore/scylla/query_observer_test.go
+@@ -19,6 +19,7 @@ import (
+ 	"github.com/gocql/gocql"
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/stretchr/testify/require"
++	"go.opentelemetry.io/otel"
+ 	"go.opentelemetry.io/otel/attribute"
+ 	"go.opentelemetry.io/otel/codes"
+ 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+@@ -334,6 +335,181 @@ func TestCQLExchangeStreamTimingsHaveExactAttemptParent(t *testing.T) {
+ 	require.LessOrEqual(t, finishes[0], attrs["gitstore.db.exchange.duration_ns"].AsInt64())
+ }
+ 
++func TestCQLRequestGroupLinksExactRowsWithoutChangingCancellation(t *testing.T) {
++	recorder := tracetest.NewSpanRecorder()
++	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(recorder))
++	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
++	tracer := provider.Tracer("test")
++	type callerKey struct{}
++	first, firstSpan := tracer.Start(context.WithValue(t.Context(), callerKey{}, "private-value"), "datastore.UpdateFile")
++	second, secondSpan := tracer.Start(t.Context(), "datastore.UpdateFile")
++	first, cancelFirst := context.WithCancel(first)
++	defer cancelFirst()
++	second, cancelSecond := context.WithCancel(second)
++	defer cancelSecond()
++	group, cancelGroup := fileRequestGroupContext([]context.Context{first, second})
++	defer cancelGroup()
++	require.Equal(t, "private-value", group.Value(callerKey{}))
++	cancelFirst()
++	require.NoError(t, group.Err(), "one canceled row must not cancel accepted work for its live peer")
++	queryCtx, finish := startCQLExchange(group, tracer)
++	observer := cqlTraceObserver{tracer: tracer}
++	stream := observer.StreamContext(queryCtx)
++	require.NotNil(t, stream)
++	stream.StreamStarted(gocql.ObservedStream{})
++	stream.StreamFinished(gocql.ObservedStream{})
++	start := time.Now()
++	observer.ObserveBatch(queryCtx, gocql.ObservedBatch{Start: start, End: time.Now()})
++	finish(nil)
++	cancelSecond()
++	select {
++	case <-group.Done():
++	case <-time.After(time.Second):
++		t.Fatal("all-caller cancellation must still reach accepted physical work")
++	}
++	firstSpan.End()
++	secondSpan.End()
++	var exchange sdktrace.ReadOnlySpan
++	rows := map[trace.SpanID]sdktrace.ReadOnlySpan{}
++	for _, span := range recorder.Ended() {
++		if span.Name() == "scylla.exchange" {
++			exchange = span
++		} else if span.Name() == "datastore.UpdateFile" {
++			rows[span.SpanContext().SpanID()] = span
++		}
++		for _, attr := range span.Attributes() {
++			require.NotContains(t, attr.Value.Emit(), "private-")
++		}
++	}
++	require.NotNil(t, exchange)
++	require.Len(t, rows, 2)
++	require.Len(t, exchange.Links(), 2)
++	for _, link := range exchange.Links() {
++		row := rows[link.SpanContext.SpanID()]
++		require.NotNil(t, row)
++		require.Equal(t, row.SpanContext(), link.SpanContext)
++		require.Len(t, row.Links(), 1)
++		require.Equal(t, exchange.SpanContext(), row.Links()[0].SpanContext)
++	}
++	for _, span := range recorder.Ended() {
++		if span.Name() == "scylla.batch" {
++			require.Equal(t, exchange.SpanContext().SpanID(), span.Parent().SpanID())
++		}
++	}
++}
++
++func TestCQLRequestGroupBoundsAndDeduplicatesLinks(t *testing.T) {
++	for _, count := range []int{2, 16, 17} {
++		t.Run(fmt.Sprint(count), func(t *testing.T) {
++			recorder := tracetest.NewSpanRecorder()
++			provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(recorder))
++			t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
++			tracer := provider.Tracer("test")
++			var contexts []context.Context
++			var members []trace.Span
++			for range count {
++				ctx, span := tracer.Start(t.Context(), "row")
++				contexts = append(contexts, ctx)
++				members = append(members, span)
++			}
++			group := withCQLRequestGroup(contexts[0], contexts)
++			_, finish := startCQLExchange(group, tracer)
++			finish(nil)
++			exchange := recorder.Ended()[0]
++			require.Len(t, exchange.Links(), min(count, 16))
++			values := map[attribute.Key]attribute.Value{}
++			for _, attr := range exchange.Attributes() {
++				values[attr.Key] = attr.Value
++			}
++			require.EqualValues(t, count, values["gitstore.db.group.member_count"].AsInt64())
++			require.EqualValues(t, min(count, 16), values["gitstore.db.group.linked_member_count"].AsInt64())
++			require.Equal(t, count > 16, values["gitstore.db.group.links_overflow"].AsBool())
++			for _, member := range members {
++				member.End()
++			}
++			repeated := []context.Context{contexts[0], contexts[0], contexts[1]}
++			// Ended spans and remote sampled parents are not live row operations.
++			require.Equal(t, contexts[0], withCQLRequestGroup(contexts[0], repeated))
++			first, firstSpan := tracer.Start(t.Context(), "first")
++			defer firstSpan.End()
++			remote := trace.ContextWithRemoteSpanContext(t.Context(), firstSpan.SpanContext())
++			_, finish = startCQLExchange(withCQLRequestGroup(first, []context.Context{first, first, remote}), tracer)
++			finish(nil)
++			exchanges := recorder.Ended()
++			require.Len(t, exchanges[len(exchanges)-1].Links(), 1)
++		})
++	}
++}
++
++func TestCQLRequestGroupDisabledDoesNotAllocate(t *testing.T) {
++	ctx := t.Context()
++	contexts := []context.Context{ctx, ctx}
++	var result context.Context
++	require.Zero(t, testing.AllocsPerRun(100, func() {
++		result = withCQLRequestGroup(ctx, contexts)
++	}))
++	require.Equal(t, ctx, result)
++	require.Nil(t, result.Value(cqlRequestGroupKey{}))
++}
++
++func TestCQLRequestGroupDoesNotLinkUnrecordedExchange(t *testing.T) {
++	recorder := tracetest.NewSpanRecorder()
++	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(recorder))
++	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
++	ctx, row := provider.Tracer("test").Start(t.Context(), "row")
++	group := withCQLRequestGroup(ctx, []context.Context{ctx})
++	_, finish := startCQLExchange(group, trace.NewNoopTracerProvider().Tracer("test"))
++	finish(nil)
++	row.End()
++	require.Len(t, recorder.Ended(), 1)
++	require.Empty(t, recorder.Ended()[0].Links(), "an unrecorded physical exchange must not create a dangling or self link")
++}
++
++func TestFileProjectionReaderExchangeLinksEveryAcceptedRow(t *testing.T) {
++	previous := otel.GetTracerProvider()
++	defer otel.SetTracerProvider(previous)
++	recorder := tracetest.NewSpanRecorder()
++	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(recorder))
++	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
++	otel.SetTracerProvider(provider)
++	tracer := provider.Tracer("test")
++	var requests []*fileProjectionRequest
++	var rowSpans []trace.Span
++	for range 2 {
++		ctx, span := tracer.Start(t.Context(), "datastore.UpdateFile")
++		rowSpans = append(rowSpans, span)
++		requests = append(requests, &fileProjectionRequest{ctx: ctx, reply: make(chan fileProjectionResult, 1)})
++	}
++	reader := &fileProjectionReader{read: func(ctx context.Context, keys []fileProjectionKey) ([]*ProjectionRecord, error) {
++		require.Len(t, keys, 2)
++		observer := cqlTraceObserver{tracer: tracer}
++		stream := observer.StreamContext(ctx)
++		require.NotNil(t, stream)
++		stream.StreamStarted(gocql.ObservedStream{})
++		stream.StreamFinished(gocql.ObservedStream{})
++		start := time.Now()
++		observer.ObserveQuery(ctx, gocql.ObservedQuery{Start: start, End: time.Now(), Statement: "SELECT private-columns"})
++		return []*ProjectionRecord{{}, {}}, nil
++	}}
++	reader.execute(requests)
++	for _, request := range requests {
++		require.NoError(t, (<-request.reply).err)
++	}
++	for _, row := range rowSpans {
++		row.End()
++	}
++	spans := recorder.Ended()
++	require.Len(t, spans, 4)
++	require.Equal(t, "scylla.query", spans[0].Name())
++	require.Equal(t, "scylla.exchange", spans[1].Name())
++	require.Equal(t, spans[1].SpanContext().SpanID(), spans[0].Parent().SpanID())
++	require.Len(t, spans[1].Links(), 2)
++	for _, row := range spans[2:] {
++		require.Len(t, row.Links(), 1)
++		require.Equal(t, spans[1].SpanContext(), row.Links()[0].SpanContext)
++	}
++}
++
+ func TestCQLExchangeBoundsConcurrentStreamsAndLateCallbacks(t *testing.T) {
+ 	recorder := tracetest.NewSpanRecorder()
+ 	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(recorder))

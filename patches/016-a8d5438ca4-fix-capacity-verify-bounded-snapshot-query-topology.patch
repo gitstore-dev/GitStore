@@ -1,0 +1,69 @@
+diff --git a/docs/runbooks/namespace-admission.md b/docs/runbooks/namespace-admission.md
+index 501c221f71fcb9ce8e75e7c64b9763395a8fa417..6b601c91ed6ec1d1282decdf72dec3bc7b56b5e2 100644
+--- a/docs/runbooks/namespace-admission.md
++++ b/docs/runbooks/namespace-admission.md
+@@ -1416,15 +1416,20 @@ the API never sends a 250-key cross-partition `IN` query. This reduces repeated
+ client/coordinator request setup, not the number of locator partitions read.
+ Canonical records are fetched by exact `(creation_timestamp, uid)` tuples within
+ each Namespace, with at most eight Namespace reads active. All locator reads
+-finish before authoritative reads begin, preserving the eight-query concurrency
+-bound across both phases. Neither lookup uses
++and authoritative reads share one pool of at most eight readers. A full
++sixteen-key, single-Namespace locator batch can proceed directly to its
++authoritative read. Remaining locator results are grouped after all locators
++finish, without waiting for unrelated full-batch authoritative reads.
++Neither lookup uses
+ filtering or full-partition scans. Duplicate positions receive
+ independent copies; stale locators remain absent and storage failures fail the
+ whole read. Authorization checks each record's stored owner and reuses that exact
+ snapshot for hydration, without a second read or cross-request cache. Existing
+ public request limits are unchanged; singular node reads remain point reads.
+ The native hydration diagnostic checks the physical query and returned-row
+-counts at the maximum request size, compares against bounded point reads, and
++counts and maximum keys per query at the maximum request size. A 250-File,
++single-Namespace request uses sixteen locator and sixteen authoritative queries,
++returning 500 rows in total. The diagnostic compares against bounded point reads and
+ preserves cross-replica update, deletion/recreation and stale-locator readback.
+ Its isolated timings do not establish a combined-load acknowledgement benefit.
+ 
+diff --git a/gitstore-api/internal/datastore/scylla/capacity_test.go b/gitstore-api/internal/datastore/scylla/capacity_test.go
+index 437417e7d98e9f525df3eeefad2252d7339035c8..202aa3f668e0de59dd603b70ebca4c28a8af202d 100644
+--- a/gitstore-api/internal/datastore/scylla/capacity_test.go
++++ b/gitstore-api/internal/datastore/scylla/capacity_test.go
+@@ -230,6 +230,8 @@ type capacityQueryEvidence struct {
+ 	fileCASAttempts             int
+ 	fileProjectionReads         int
+ 	fileProjectionKeys          int
++	fileSnapshotLocatorMaxKeys  int
++	fileSnapshotRowMaxKeys      int
+ 	namespaceFenceReads         int
+ 	namespaceReleaseCASAttempts int
+ 	categoryProductQueries      int
+@@ -288,6 +290,12 @@ func (capacityQueryObserver) ObserveQuery(ctx context.Context, query gocql.Obser
+ 	for i, field := range fields {
+ 		if field == "from" && i+1 < len(fields) {
+ 			evidence.tables[fields[i+1]]++
++			switch fields[i+1] {
++			case "files_by_uid":
++				evidence.fileSnapshotLocatorMaxKeys = max(evidence.fileSnapshotLocatorMaxKeys, len(query.Values))
++			case "files_by_namespace":
++				evidence.fileSnapshotRowMaxKeys = max(evidence.fileSnapshotRowMaxKeys, (len(query.Values)-1)/2)
++			}
+ 			if fields[i+1] == "category_products_by_category" {
+ 				evidence.categoryProductQueries++
+ 				evidence.categoryProductRows += query.Rows
+@@ -1031,8 +1039,12 @@ func TestScylla_FileSnapshotHydrationTopology(t *testing.T) {
+ 		require.Equal(t, allUIDs[i], file.UID)
+ 	}
+ 	evidence.mu.Lock()
+-	require.Equal(t, (datastore.FileSnapshotBatchLimit+15)/16, evidence.tables["files_by_uid"])
+-	require.Equal(t, 1, evidence.tables["files_by_namespace"])
++	queriesPerStage := (datastore.FileSnapshotBatchLimit + 15) / 16
++	require.Equal(t, queriesPerStage, evidence.tables["files_by_uid"])
++	require.Equal(t, queriesPerStage, evidence.tables["files_by_namespace"])
++	require.Equal(t, 2*queriesPerStage, evidence.attempts)
++	require.Equal(t, 16, evidence.fileSnapshotLocatorMaxKeys)
++	require.Equal(t, 16, evidence.fileSnapshotRowMaxKeys)
+ 	require.Equal(t, 2*datastore.FileSnapshotBatchLimit, evidence.rows)
+ 	require.Zero(t, evidence.retries)
+ 	require.Zero(t, evidence.errors)

@@ -1,0 +1,235 @@
+diff --git a/docs/developer-guide.md b/docs/developer-guide.md
+index 3fe6e649f0e149d1b52250bea04ff04a827797a5..85a04381746e1ea0059df6594301ae88193f1a38 100644
+--- a/docs/developer-guide.md
++++ b/docs/developer-guide.md
+@@ -353,7 +353,11 @@ duplicate names and larger groups retain sequential admission.
+ 
+ Post-receive admission cannot reject an already accepted Git push. DB-backed conflicts such as duplicate `ProductVariant.spec.sku` leave the existing resource unchanged, skip the conflicting incoming resource, and emit structured API logs with the operation, namespace, name, SKU, and conflicting identity.
+ 
+-File admission callbacks report failed durable writes and exhausted conflict
++Product updates make at most three write attempts on resource-version conflicts.
++Each retry reloads the current identity and checks the ref tip, authorization and
++admission policy again. A superseded callback leaves the newer admission untouched.
++
++File and Product admission callbacks report failed durable writes and exhausted conflict
+ retries instead of reporting success. The same callback can be retried after
+ the datastore recovers; this does not change the earlier Git acknowledgement.
+ Transient ref-read failures also return an unavailable error, rather than
+diff --git a/gitstore-api/internal/cataloggrpc/server.go b/gitstore-api/internal/cataloggrpc/server.go
+index bfce475e3dd0f5024befea007843800557f2d82a..8f493fe20b849d743634384e7177f71cbde27c5a 100644
+--- a/gitstore-api/internal/cataloggrpc/server.go
++++ b/gitstore-api/internal/cataloggrpc/server.go
+@@ -1404,7 +1404,17 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
+ 	// child CategoryTaxonomy may be reparented in the same accepted push that
+ 	// removes its former parent; deleting first would consult a stale reverse
+ 	// owner-reference projection and reject after the ref has already advanced.
+-	if _, err := s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps); err != nil {
++	decisions, err := s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps)
++	if err != nil {
++		return err
++	}
++	var productFailures []error
++	for _, decision := range decisions {
++		if decision.Kind == "Product" && decision.Outcome == admission.EntryFailed {
++			productFailures = append(productFailures, decision.Err)
++		}
++	}
++	if err := errors.Join(productFailures...); err != nil {
+ 		return err
+ 	}
+ 	for _, op := range deletes {
+@@ -2525,6 +2535,8 @@ func existingSpecContentType(raw []byte) string {
+ 	return spec.ContentType
+ }
+ 
++const maxProductAdmissionUpdateAttempts = 3
++
+ func (s *Server) admitProduct(
+ 	ctx context.Context,
+ 	resource *catalog.ProductResource,
+@@ -2533,6 +2545,47 @@ func (s *Server) admitProduct(
+ 	sourcePath string,
+ 	op admission.Operation,
+ 	rawExisting any,
++) admission.EntryDecision {
++	namespace := resource.Metadata.Namespace
++	if namespace == "" {
++		namespace = admCtx.Namespace
++	}
++	for attempt := 1; ; attempt++ {
++		decision := s.admitProductAttempt(ctx, resource, body, admCtx, sourcePath, op, rawExisting)
++		if decision.Outcome != admission.EntryFailed || !errors.Is(decision.Err, datastore.ErrConflict) ||
++			attempt >= maxProductAdmissionUpdateAttempts {
++			return decision
++		}
++		existing, loadErr := s.store.GetProductByName(ctx, namespace, resource.Metadata.Name)
++		if current, err := s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA); err != nil {
++			decision.Err = err
++			return decision
++		} else if !current {
++			admCtx.markSuperseded()
++			decision.Outcome, decision.Err = admission.EntryNoOp, nil
++			return decision
++		}
++		if loadErr != nil {
++			decision.Err = fmt.Errorf("reload product after conflict: %w", loadErr)
++			return decision
++		}
++		entry := &parsedEntry{path: sourcePath, parsed: &validate.ParsedResource{Kind: "Product", Product: resource}, body: body}
++		if err := s.authorizeOperation(ctx, resourceIdentity{Kind: "Product", Name: resource.Metadata.Name, Namespace: namespace}, admission.OperationUpdate, entry, existing); err != nil {
++			decision.Err = err
++			return decision
++		}
++		rawExisting, op = existing, admission.OperationUpdate
++	}
++}
++
++func (s *Server) admitProductAttempt(
++	ctx context.Context,
++	resource *catalog.ProductResource,
++	body []byte,
++	admCtx AdmissionContext,
++	sourcePath string,
++	op admission.Operation,
++	rawExisting any,
+ ) admission.EntryDecision {
+ 	decision := admission.EntryDecision{Kind: "Product", Path: sourcePath}
+ 	if resource != nil {
+diff --git a/gitstore-api/internal/cataloggrpc/server_test.go b/gitstore-api/internal/cataloggrpc/server_test.go
+index 8539a41f9f819c8392595829b0bd13eb6f20502f..8fa66374485882aa49b3c3ff959d221a65082f72 100644
+--- a/gitstore-api/internal/cataloggrpc/server_test.go
++++ b/gitstore-api/internal/cataloggrpc/server_test.go
+@@ -12,6 +12,7 @@ import (
+ 	"sort"
+ 	"strings"
+ 	"sync"
++	"sync/atomic"
+ 	"testing"
+ 	"time"
+ 
+@@ -846,6 +847,125 @@ func TestValidateResources_EmptyBlobs_Accepted(t *testing.T) {
+ // ---------------------------------------------------------------------------
+ 
+ // mockGitReader is a test double for the GitReader interface used by AdmitResources.
++type conflictingProductStore struct {
++	datastore.Datastore
++	conflicts, writes atomic.Int64
++	afterConflict     func()
++}
++
++func (s *conflictingProductStore) UpdateProduct(ctx context.Context, product *datastore.Product, expected string) error {
++	s.writes.Add(1)
++	if s.conflicts.Add(-1) >= 0 {
++		current, err := s.Datastore.GetProductByName(ctx, product.Namespace, product.Name)
++		if err != nil {
++			return err
++		}
++		_, err = s.Datastore.UpdateProductStatus(ctx, product.Namespace, product.Name, datastore.ProductStatusPatch{
++			ResourceVersion: current.ResourceVersion,
++			Conditions: []catalog.Condition{{
++				Type: "Ready", Status: catalog.ConditionFalse, ObservedGeneration: current.Generation,
++				LastTransitionTime: time.Now().UTC(), Reason: "Reconciling",
++			}},
++		})
++		if err != nil {
++			return err
++		}
++		if s.afterConflict != nil {
++			s.afterConflict()
++		}
++	}
++	return s.Datastore.UpdateProduct(ctx, product, expected)
++}
++
++func TestAdmitResourcesProductStatusConflicts(t *testing.T) {
++	for _, tc := range []struct {
++		name      string
++		conflicts int64
++		wantError bool
++		writes    int64
++		supersede bool
++		revoke    bool
++	}{
++		{name: "reload and retry", conflicts: 1, writes: 2},
++		{name: "bounded failure remains retryable", conflicts: 20, wantError: true, writes: 3},
++		{name: "superseded callback preserves newer admission", conflicts: 1, writes: 1, supersede: true},
++		{name: "retry respects live authorization revocation", conflicts: 1, wantError: true, writes: 1, revoke: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			store := newTestDatastore(t)
++			first, second := strings.Repeat("a", 40), strings.Repeat("b", 40)
++			third := strings.Repeat("c", 40)
++			current := first
++			manifest := func(title string) []byte {
++				return fmt.Appendf(nil, "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: contested\n  namespace: gitstore\nspec:\n  title: %s\n---\n", title)
++			}
++			git := newTreeGitReader(&current, map[string]map[string][]byte{
++				first: {"product.md": manifest("First Title")}, second: {"product.md": manifest("Second Title")},
++				third: {"product.md": manifest("Third Title")},
++			})
++			request := &catalogv1.AdmitResourcesRequest{
++				Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
++				RepositoryId:  testRepoID, RefName: "refs/heads/main", NewCommitSha: first,
++			}
++			_, err := newCatalogServer(t, store, git).AdmitResources(t.Context(), request)
++			require.NoError(t, err)
++			before, err := store.GetProductByName(t.Context(), "gitstore", "contested")
++			require.NoError(t, err)
++
++			contended := &conflictingProductStore{Datastore: store}
++			contended.conflicts.Store(tc.conflicts)
++			registry := auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil)
++			replica := newCatalogServer(t, contended, git, func(deps *cataloggrpc.ServerDeps) {
++				deps.Registry = registry
++			})
++			if tc.revoke {
++				contended.afterConflict = func() {
++					registry.Swap(nil, testutil.NewDenyAllAuthZ(t), nil)
++				}
++			}
++			if tc.supersede {
++				contended.afterConflict = func() {
++					current = third
++					newer := &catalogv1.AdmitResourcesRequest{
++						Authorization: request.Authorization, RepositoryId: testRepoID,
++						RefName: request.RefName, OldCommitSha: second, NewCommitSha: third,
++					}
++					_, err := newCatalogServer(t, store, git).AdmitResources(t.Context(), newer)
++					require.NoError(t, err)
++				}
++			}
++			current, request.OldCommitSha, request.NewCommitSha = second, first, second
++			_, err = replica.AdmitResources(t.Context(), request)
++			if tc.wantError {
++				require.Error(t, err, "a failed update must not be acknowledged as applied")
++				if tc.revoke {
++					require.Equal(t, codes.PermissionDenied, grpcstatus.Code(err))
++				}
++				require.Equal(t, tc.writes, contended.writes.Load())
++				contended.conflicts.Store(0)
++				registry.Swap(nil, testutil.NewAllowAllAuthZ(), nil)
++				_, err = replica.AdmitResources(t.Context(), request)
++				require.NoError(t, err)
++			} else {
++				require.NoError(t, err)
++				require.Equal(t, tc.writes, contended.writes.Load())
++			}
++			product, err := store.GetProductByName(t.Context(), "gitstore", "contested")
++			require.NoError(t, err)
++			var spec catalog.ProductSpec
++			require.NoError(t, json.Unmarshal(product.Spec, &spec))
++			wantTitle, wantCommit := "Second Title", second
++			if tc.supersede {
++				wantTitle, wantCommit = "Third Title", third
++			}
++			require.Equal(t, wantTitle, spec.Title)
++			require.Equal(t, before.UID, product.UID)
++			require.EqualValues(t, 2, product.Generation, "status conflicts must not repeatedly increment the desired-state generation")
++			require.Equal(t, wantCommit, product.GitCommitSHA)
++		})
++	}
++}
++
+ type mockGitReader struct {
+ 	listFilesFunc  func(ctx context.Context, repositoryID, prefix, ref string) ([]string, error)
+ 	readFileFunc   func(ctx context.Context, repositoryID, path, ref string) ([]byte, error)

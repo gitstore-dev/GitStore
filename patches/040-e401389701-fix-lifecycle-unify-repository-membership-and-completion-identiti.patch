@@ -1,0 +1,784 @@
+diff --git a/docs/runbooks/namespace-admission.md b/docs/runbooks/namespace-admission.md
+index 7f725723a9e4a1e24f5f740f744aa066b907c9ad..881be970d73b3b2680db92eed5f8fa15d5a9940c 100644
+--- a/docs/runbooks/namespace-admission.md
++++ b/docs/runbooks/namespace-admission.md
+@@ -9,21 +9,76 @@ policy, lifecycle, or blocker details are returned.
+ 
+ ## Repository lifecycle fence
+ 
+-### Git-backed deletion rollout
+-
+-The deletion protocol requires a coordinated writer transition, distinct from
+-the older fence-only rollout below. Quiesce infrastructure deletes and old
+-controllers, upgrade the singleton Git service with retained storage and
+-non-overlapping replacement, upgrade all API writers, then upgrade controllers.
+-Resume deletion only after old writers are drained. An old Git service ignores
+-additive deletion preconditions; an old API can still bypass Git removal.
+-Do not roll back to either while new-format deletion operations exist.
+-
+-Scylla deployments must also apply migration `012_repository_catalog_index.cql`
+-and backfill the catalog blocker index before resuming deletion. After draining
+-old API writers, keep catalog writes, repository creation/rename/transfer,
+-lifecycle transitions, and controller writes quiesced throughout repair and
+-verification. Run the existing commands from `gitstore-api/`:
++### Git-backed deletion safety
++
++Use matching current Git service, API, and controller builds. GitStore is under
++active development; mixed-version writers and upgrade compatibility with older
++binaries are not supported. Concurrent current-version API/controller replicas
++and restart recovery must remain correct. Keep exactly one active Git service,
++with retained storage and non-overlapping replacement.
++
++All implemented `complete*Deletion` inputs require the resource's GraphQL
++`id: ID!`, its current `resourceVersion`, and its existing name/namespace scope.
++A conflict requires a fresh resource read, never retrying stale work against a
++same-name replacement. The check applies equally to Namespace, Repository,
++Product, and CategoryTaxonomy.
++
++An empty, verified system repository does not block Namespace initiation.
++Contained resources, including Files, do, as do all ordinary repositories
++(including terminating ones). Completion cleans up system storage by UID before
++releasing the Namespace. Neither path cascades resources or ordinary repositories.
++
++### Repository membership index
++
++Repository emptiness uses one polymorphic `resources_by_repository` table:
++`PRIMARY KEY ((repository_id, shard), kind, uid)`. A new kind adds rows, not a new
++table or another per-kind query. Product, ProductVariant, CategoryTaxonomy,
++Collection, and File use the same membership-write and deletion-fence protocol.
++Namespace/Repository child checks continue using their existing indexed
++relationships; no parallel per-kind membership tables are needed.
++
++Membership is distinct from optional semantic owner references: a Product
++without a Category owner still occupies its repository, and a nonblocking owner
++reference must not permit deletion of its backing repository. Membership cannot
++be removed by editing `ownerReferences`. The existing owner-dependent index
++continues to answer its different, owner-specific queries.
++
++An emptiness check performs at most 32 partition-key lookups with `LIMIT 1`,
++short-circuiting on the first member. It never enumerates kinds, uses
++`ALLOW FILTERING`, or performs a live count. Membership is written conservatively
++before authoritative admission and removed only after authoritative removal is
++confirmed; errors cannot be interpreted as emptiness. The shared fence excludes
++admission while the parent transitions to deletion.
++
++These are separate bounds: table count and query fan-out are independent of
++kind count, but index storage necessarily grows with resource count. Fixed hash
++sharding spreads rows; it does **not** impose a hard partition-size limit, and
++`LIMIT 1` bounds returned rows, not tombstone or SSTable read work. Request
++deadlines and datastore errors fail closed. Capacity acceptance must measure
++worst-case partition size, skew, churn/tombstones, and empty-check latency.
++Do not claim unlimited-cardinality performance or introduce an undocumented
++resource quota. More buckets or adaptive partitioning require measured evidence.
++
++The design follows Cassandra's
++[partition sizing and bucketing guidance](https://github.com/apache/cassandra/blob/trunk/doc/modules/cassandra/pages/developing/data-modeling/data-modeling_refining.adoc)
++and [CQL key restrictions, limits, and filtering semantics](https://github.com/apache/cassandra/blob/trunk/doc/modules/cassandra/pages/developing/cql/dml.adoc).
++ScyllaDB's engineering discussion of
++[hot partitions and goodput](https://www.scylladb.com/2024/04/17/per-partition-query-rate-limiting/)
++explains why a single large, hot parent partition is not an adequate alternative.
++A native counter or asynchronously materialized total is not deletion proof:
++an ambiguous update or lagging projection must never authorize storage removal.
++
++Migration history is immutable and non-destructive. The older per-kind tables
++remain historical schema artifacts, but no runtime reads or writes use them.
++The membership table and its per-repository readiness/tombstone metadata are
++fixed schema, not a template for adding more tables per resource kind.
++
++### Repairing incomplete projections
++
++Missing membership readiness fails closed. Fresh repositories initialize it
++when their empty authoritative record is created. For retained development data
++or a damaged projection, stop relevant mutations and controller writes while
++running the existing maintenance commands from `gitstore-api/`:
+ 
+ ```bash
+ go run ./cmd/gitctl scylla-projection-audit --hosts "$HOSTS" --keyspace "$KEYSPACE"
+@@ -33,29 +88,17 @@ go run ./cmd/gitctl scylla-projection-audit --hosts "$HOSTS" --keyspace "$KEYSPA
+ ```
+ 
+ Supply database passwords through `GITSTORE_API__DATASTORE__SCYLLA__PASSWORD`.
+-The repair commands cover all projections, not just the catalog blocker index.
+-Pre-existing repositories without a readiness marker fail closed rather than
+-appearing empty. Repair publishes readiness only after complete verification;
++The repair commands cover all projections, not just repository membership.
++Repair publishes readiness only after complete verification;
+ an interrupted repair can be retried with a fresh audit and confirmed repair.
+-These markers guard initial backfill, not subsequent manual index corruption.
+-Resume writers and upgraded controllers only after the final audit is clean.
+-
+-Controller `completeNamespaceDeletion` and `completeRepositoryDeletion` inputs
+-must carry the current GraphQL `metadata.uid` as `uid`, in addition to
+-`resourceVersion` and name. The schema field is additive/nullable for discovery,
+-but upgraded servers reject omission. A conflict requires a fresh resource read,
+-never retrying stale work against a same-name replacement.
+-
+-An empty, verified system repository does not block Namespace initiation. Its
+-catalog resources do, as do all ordinary repositories (including terminating
+-ones). Completion cleans up system storage by UID before releasing the Namespace.
+-Neither path cascades catalog resources or ordinary repositories.
++Readiness is not a detector of subsequent manual index corruption.
++Resume writers only after the final audit is clean.
+ 
+ `DeletionPending=True` records recoverable mutation work before the Git call.
+ Controllers resume that work after API replacement. `SUPERSEDED` means the
+ manifest content changed: do not overwrite it or clear the operation blindly.
+-`DELETION_REPAIR_REQUIRED` blocks legacy termination without removal evidence.
+-Inventory retained manifests and terminating rows before the transition, compare
++`DELETION_REPAIR_REQUIRED` blocks termination without removal evidence.
++Inspect retained manifests and terminating rows, compare
+ their UID, admitted path/ref/revision and current tree, and resolve ambiguous
+ ownership before allowing cleanup. A missing file alone is not proof of a
+ successful authorized mutation.
+@@ -75,7 +118,7 @@ Unprovable interrupted publication, restored files, legacy unmarked receipts, an
+ ancestry exceeding the bounded recovery walk fail closed and require operator
+ reconciliation; retrying an arbitrary absent path is not sufficient.
+ 
+-For a legacy terminating resource with a retained manifest, use an authenticated
++For a terminating resource with a retained manifest, use an authenticated
+ Git checkout of the canonical authoring repository as the maintenance surface.
+ Record the GraphQL `metadata.uid` and `resourceVersion`, fetch `main`, and compare
+ the exact file against its admitted revision. Re-read the resource to confirm
+@@ -94,32 +137,6 @@ enabled on every backend; it is not configurable and has no rollout gate.
+ `deleteNamespace`, `completeNamespaceDeletion`, and `createRepository` always
+ enforce it.
+ 
+-### Upgrading from a release with the fence rollout setting
+-
+-Earlier releases controlled the fence with `features.namespace_repository_fence`.
+-Remove that key, and the `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE`
+-environment variable, before deploying. The API refuses to start while either is
+-present.
+-
+-A fence-only rolling upgrade needs no extra quiescing (this does not apply to
+-the Git-backed deletion protocol above):
+-
+-- Older replicas with the fence disabled (the `auto` default on Scylla) do not
+-  run the three mutations unfenced. They reject them with
+-  `NAMESPACE_REPOSITORY_FENCE_DISABLED`.
+-- Older replicas with the fence enabled, and all upgraded replicas, enforce it.
+-
+-No replica can therefore let repository creation race namespace deletion. Until
+-the last older replica is replaced, requests that reach one fail and can be
+-retried. Rolling back to such a release has the same effect: the three
+-mutations are rejected until the fence is enabled on the older fleet.
+-
+-A binary built before the per-resource schema baseline is **not** a supported
+-rollback artifact. gocqlx correctly rejects a keyspace whose migration history
+-it does not recognise. Reverting an API replica before disabling `outcome`
+-selections also causes GraphQL validation failures on requests routed to the old
+-schema.
+-
+ ## Stable response codes
+ 
+ Namespace mutations use the shared mutation error envelope: `extensions.code`,
+diff --git a/gitstore-api/internal/datastore/scylla/migrations/013_repository_resource_membership.cql b/gitstore-api/internal/datastore/scylla/migrations/013_repository_resource_membership.cql
+new file mode 100644
+index 0000000000000000000000000000000000000000..00798549631b0f400b0455bc8330d40f178720e5
+--- /dev/null
++++ b/gitstore-api/internal/datastore/scylla/migrations/013_repository_resource_membership.cql
+@@ -0,0 +1,12 @@
++CREATE TABLE IF NOT EXISTS resources_by_repository (
++    repository_id uuid,
++    shard tinyint,
++    kind text,
++    uid uuid,
++    namespace text,
++    name text,
++    creation_timestamp timestamp,
++    PRIMARY KEY ((repository_id, shard), kind, uid)
++) WITH gc_grace_seconds = 864000;
++
++ALTER TABLE repository_catalog_projection_state ADD membership_ready boolean;
+diff --git a/gitstore-api/internal/datastore/scylla/namespace_model_test.go b/gitstore-api/internal/datastore/scylla/namespace_model_test.go
+index ee29c1310665b2c698c737da1a383ee7f454519b..f26cc202f9ff496e726fe8a78d105e6b3a38e765 100644
+--- a/gitstore-api/internal/datastore/scylla/namespace_model_test.go
++++ b/gitstore-api/internal/datastore/scylla/namespace_model_test.go
+@@ -185,6 +185,7 @@ func TestScyllaSchemaIsPerResourceBaseline(t *testing.T) {
+ 		"010_category_ancestor_index.cql",
+ 		"011_category_product_index.cql",
+ 		"012_repository_catalog_index.cql",
++		"013_repository_resource_membership.cql",
+ 	}, names)
+ }
+ 
+diff --git a/gitstore-api/internal/datastore/scylla/repair.go b/gitstore-api/internal/datastore/scylla/repair.go
+index fbc378f60b68369d6b4bb647fa4f77a0fd6556a7..29abbe4fdfc8e1ce25fb4eb9773e5acc98dd9e9c 100644
+--- a/gitstore-api/internal/datastore/scylla/repair.go
++++ b/gitstore-api/internal/datastore/scylla/repair.go
+@@ -55,6 +55,7 @@ type AuthoritativeResource struct {
+ }
+ 
+ type ProjectionRecord struct {
++	Kind              string    `json:"kind,omitempty"`
+ 	RepositoryID      string    `json:"repositoryID,omitempty"`
+ 	Table             string    `json:"table"`
+ 	UID               string    `json:"uid"`
+@@ -317,7 +318,7 @@ func BuildRepairPlan(snapshot ProjectionSnapshot) (RepairPlan, error) {
+ 
+ 	plan := RepairPlan{NamespaceRepositoryFences: fences}
+ 	for key, expected := range expectedByKey {
+-		resource := resources[resourceKey(projectionKind(expected.Table), expected.UID)]
++		resource := resources[resourceKey(expected.resourceKind(), expected.UID)]
+ 		actual, exists := actualByKey[key]
+ 		switch {
+ 		case !exists:
+@@ -327,7 +328,7 @@ func BuildRepairPlan(snapshot ProjectionSnapshot) (RepairPlan, error) {
+ 			plan.Findings = append(plan.Findings, finding(FindingStale, resource.Kind, expected.UID, expected, actual, true, "projection values do not match the authoritative row"))
+ 			plan.Actions = append(plan.Actions, updateAction(resource, actual, expected))
+ 		case actual.UID != expected.UID:
+-			competingKind := projectionKind(actual.Table)
++			competingKind := actual.resourceKind()
+ 			competing, competingExists := resources[resourceKey(competingKind, actual.UID)]
+ 			competingClaimsKey := false
+ 			if competingExists {
+@@ -364,7 +365,7 @@ func BuildRepairPlan(snapshot ProjectionSnapshot) (RepairPlan, error) {
+ 			}
+ 			continue
+ 		}
+-		kind := projectionKind(actual.Table)
++		kind := actual.resourceKind()
+ 		resource, exists := resources[resourceKey(kind, actual.UID)]
+ 		if !exists {
+ 			repairable := projectionDeleteRepairable(actual.Table)
+@@ -487,7 +488,7 @@ func ValidateRepairPlan(plan RepairPlan) error {
+ 		if projection.UID != action.UID {
+ 			return fmt.Errorf("action %d uid does not match its projection owner", i)
+ 		}
+-		if projectionKind(projection.Table) != action.Kind {
++		if projection.resourceKind() != action.Kind {
+ 			return fmt.Errorf("action %d kind does not match projection table %s", i, projection.Table)
+ 		}
+ 	}
+@@ -523,6 +524,14 @@ func validateSnapshot(snapshot ProjectionSnapshot) error {
+ 		if _, err := gocql.ParseUUID(projection.UID); err != nil {
+ 			return fmt.Errorf("projection %d has invalid uid %q", i, projection.UID)
+ 		}
++		if projection.Table == repositoryResourcesTable {
++			if projection.Kind == "" || projection.Shard < 0 || projection.Shard >= categoryProductShardCount {
++				return fmt.Errorf("projection %d has invalid membership kind or shard", i)
++			}
++			if _, err := gocql.ParseUUID(projection.RepositoryID); err != nil {
++				return fmt.Errorf("projection %d has invalid repository uid", i)
++			}
++		}
+ 	}
+ 	seenFences := make(map[string]struct{}, len(snapshot.NamespaceRepositoryFences))
+ 	for i, fence := range snapshot.NamespaceRepositoryFences {
+@@ -559,9 +568,9 @@ func validateNamespaceRepositoryFence(fence NamespaceRepositoryFenceRepair) erro
+ 
+ func expectedProjections(resource AuthoritativeResource) (result []ProjectionRecord) {
+ 	defer func() {
+-		if resource.RepositoryID != "" && catalogRepositoryTable(resource.Kind) != "" {
++		if resource.RepositoryID != "" && authoritativeTable(resource.Kind) != "" {
+ 			result = append(result, ProjectionRecord{
+-				Table: catalogRepositoryTable(resource.Kind), UID: resource.UID, RepositoryID: resource.RepositoryID,
++				Table: repositoryResourcesTable, Kind: resource.Kind, UID: resource.UID, RepositoryID: resource.RepositoryID,
+ 				Namespace: resource.Namespace, Name: resource.Name, CreationTimestamp: resource.CreationTimestamp, Shard: categoryProductShard(resource.UID),
+ 			})
+ 		}
+@@ -610,6 +619,8 @@ func expectedProjections(resource AuthoritativeResource) (result []ProjectionRec
+ 		return result
+ 	case "Collection":
+ 		return catalogProjections(base, "collections_by_name", "collections_by_uid")
++	case "File":
++		return catalogProjections(base, "files_by_name", "files_by_uid")
+ 	case "ProductVariant":
+ 		result := catalogProjections(base, "product_variants_by_name", "product_variants_by_uid")
+ 		if resource.SKU != "" {
+@@ -637,8 +648,8 @@ func catalogProjections(base ProjectionRecord, nameTable, uidTable string) []Pro
+ 
+ func (p ProjectionRecord) Key() string {
+ 	ts := p.CreationTimestamp.UTC().Format(time.RFC3339Nano)
+-	if strings.HasSuffix(p.Table, "_by_repository") && p.Table != "namespace_mappings_by_repository" {
+-		return strings.Join([]string{p.RepositoryID, strconv.Itoa(int(p.Shard)), p.UID}, "/")
++	if p.Table == repositoryResourcesTable {
++		return strings.Join([]string{p.RepositoryID, strconv.Itoa(int(p.Shard)), p.Kind, p.UID}, "/")
+ 	}
+ 	switch p.Table {
+ 	case "namespaces_by_name":
+@@ -653,9 +664,9 @@ func (p ProjectionRecord) Key() string {
+ 		return p.Namespace + "/" + p.Name
+ 	case "namespace_mappings_by_repository":
+ 		return p.UID
+-	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name":
++	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name", "files_by_name":
+ 		return p.Namespace + "/" + p.Name
+-	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid":
++	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid", "files_by_uid":
+ 		return p.UID
+ 	case "product_variants_by_sku":
+ 		return p.Namespace + "/" + p.SKU
+@@ -676,8 +687,8 @@ func (p ProjectionRecord) Equal(other ProjectionRecord) bool {
+ 	if p.Table != other.Table || p.UID != other.UID {
+ 		return false
+ 	}
+-	if strings.HasSuffix(p.Table, "_by_repository") && p.Table != "namespace_mappings_by_repository" {
+-		return p.RepositoryID == other.RepositoryID && p.Shard == other.Shard && p.Namespace == other.Namespace &&
++	if p.Table == repositoryResourcesTable {
++		return p.Kind == other.Kind && p.RepositoryID == other.RepositoryID && p.Shard == other.Shard && p.Namespace == other.Namespace &&
+ 			p.Name == other.Name && p.CreationTimestamp.Equal(other.CreationTimestamp)
+ 	}
+ 	switch p.Table {
+@@ -691,9 +702,9 @@ func (p ProjectionRecord) Equal(other ProjectionRecord) bool {
+ 		return p.Bucket == other.Bucket && p.CreationTimestamp.Equal(other.CreationTimestamp)
+ 	case "namespace_mappings", "namespace_mappings_by_repository":
+ 		return p.Namespace == other.Namespace && p.Name == other.Name
+-	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name":
++	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name", "files_by_name":
+ 		return p.Namespace == other.Namespace && p.Name == other.Name && p.CreationTimestamp.Equal(other.CreationTimestamp)
+-	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid":
++	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid", "files_by_uid":
+ 		return p.Namespace == other.Namespace && p.CreationTimestamp.Equal(other.CreationTimestamp)
+ 	case "product_variants_by_sku":
+ 		return p.Namespace == other.Namespace && p.SKU == other.SKU && p.CreationTimestamp.Equal(other.CreationTimestamp)
+@@ -711,36 +722,44 @@ func (p ProjectionRecord) Equal(other ProjectionRecord) bool {
+ }
+ 
+ var projectionTableKinds = map[string]string{
+-	"products_by_repository":            "Product",
+-	"product_variants_by_repository":    "ProductVariant",
+-	"category_taxonomies_by_repository": "CategoryTaxonomy",
+-	"collections_by_repository":         "Collection",
+-	"namespaces_by_name":                "Namespace",
+-	"namespaces_by_bucket":              "Namespace",
+-	"repositories_by_namespace":         "Repository",
+-	"repositories_by_bucket":            "Repository",
+-	"namespace_mappings":                "Repository",
+-	"namespace_mappings_by_repository":  "Repository",
+-	"products_by_name":                  "Product",
+-	"products_by_uid":                   "Product",
+-	"category_taxonomies_by_name":       "CategoryTaxonomy",
+-	"category_taxonomies_by_uid":        "CategoryTaxonomy",
+-	"category_ancestor_index":           "CategoryTaxonomy",
+-	"category_products_by_category":     "Product",
+-	"category_products_by_product":      "Product",
+-	"collections_by_name":               "Collection",
+-	"collections_by_uid":                "Collection",
+-	"product_variants_by_name":          "ProductVariant",
+-	"product_variants_by_uid":           "ProductVariant",
+-	"product_variants_by_sku":           "ProductVariant",
+-	"product_variants_by_product_ref":   "ProductVariant",
++	"files_by_name":                    "File",
++	"files_by_uid":                     "File",
++	"namespaces_by_name":               "Namespace",
++	"namespaces_by_bucket":             "Namespace",
++	"repositories_by_namespace":        "Repository",
++	"repositories_by_bucket":           "Repository",
++	"namespace_mappings":               "Repository",
++	"namespace_mappings_by_repository": "Repository",
++	"products_by_name":                 "Product",
++	"products_by_uid":                  "Product",
++	"category_taxonomies_by_name":      "CategoryTaxonomy",
++	"category_taxonomies_by_uid":       "CategoryTaxonomy",
++	"category_ancestor_index":          "CategoryTaxonomy",
++	"category_products_by_category":    "Product",
++	"category_products_by_product":     "Product",
++	"collections_by_name":              "Collection",
++	"collections_by_uid":               "Collection",
++	"product_variants_by_name":         "ProductVariant",
++	"product_variants_by_uid":          "ProductVariant",
++	"product_variants_by_sku":          "ProductVariant",
++	"product_variants_by_product_ref":  "ProductVariant",
+ }
+ 
+ func projectionKind(table string) string {
+ 	return projectionTableKinds[table]
+ }
+ 
++func (p ProjectionRecord) resourceKind() string {
++	if p.Table == repositoryResourcesTable {
++		return p.Kind
++	}
++	return projectionKind(p.Table)
++}
++
+ func knownProjectionTable(table string) bool {
++	if table == repositoryResourcesTable {
++		return true
++	}
+ 	_, known := projectionTableKinds[table]
+ 	return known
+ }
+@@ -875,6 +894,7 @@ func (s *scyllaProjectionRepairStore) Close() {
+ }
+ 
+ type auditRow struct {
++	Kind                       string     `db:"kind"`
+ 	UID                        gocql.UUID `db:"uid"`
+ 	RepositoryID               gocql.UUID `db:"repository_id"`
+ 	Namespace                  string     `db:"namespace"`
+@@ -908,6 +928,7 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
+ 		{"CategoryTaxonomy", "category_taxonomies_by_namespace", "namespace,status,repository_id,"},
+ 		{"Collection", "collections_by_namespace", "namespace,repository_id,"},
+ 		{"ProductVariant", "product_variants_by_namespace", "namespace,sku,product_ref_name,repository_id,"},
++		{"File", "files_by_namespace", "namespace,repository_id,"},
+ 	}
+ 	for _, source := range authoritative {
+ 		statement := fmt.Sprintf(
+@@ -1000,10 +1021,9 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
+ 		columns string
+ 		uid     func(auditRow) gocql.UUID
+ 	}{
+-		{"products_by_repository", "repository_id,shard,uid,namespace,name,creation_timestamp", rowUID},
+-		{"product_variants_by_repository", "repository_id,shard,uid,namespace,name,creation_timestamp", rowUID},
+-		{"category_taxonomies_by_repository", "repository_id,shard,uid,namespace,name,creation_timestamp", rowUID},
+-		{"collections_by_repository", "repository_id,shard,uid,namespace,name,creation_timestamp", rowUID},
++		{repositoryResourcesTable, "repository_id,shard,kind,uid,namespace,name,creation_timestamp", rowUID},
++		{"files_by_name", "namespace,name,uid,creation_timestamp", rowUID},
++		{"files_by_uid", "uid,namespace,creation_timestamp", rowUID},
+ 		{"namespaces_by_name", "name,uid", rowUID},
+ 		{"namespaces_by_bucket", "bucket,creation_timestamp,uid", rowUID},
+ 		{"repositories_by_namespace", "namespace,bucket,creation_timestamp,uid", rowUID},
+@@ -1039,8 +1059,8 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
+ 			if row.RepositoryID != (gocql.UUID{}) {
+ 				record.RepositoryID = row.RepositoryID.String()
+ 			}
+-			if catalogRepositoryTable(projectionKind(source.table)) == source.table {
+-				record.Shard = row.Shard
++			if source.table == repositoryResourcesTable {
++				record.Kind, record.Shard = row.Kind, row.Shard
+ 			}
+ 			if source.table == "category_ancestor_index" {
+ 				record.Name = row.Descendant
+@@ -1124,6 +1144,8 @@ func authoritativeTable(kind string) string {
+ 		return "collections_by_namespace"
+ 	case "ProductVariant":
+ 		return "product_variants_by_namespace"
++	case "File":
++		return "files_by_namespace"
+ 	default:
+ 		return ""
+ 	}
+@@ -1197,7 +1219,7 @@ func (s *scyllaProjectionRepairStore) MarkRepositoryCatalogProjectionReady(ctx c
+ 		UID gocql.UUID `db:"uid"`
+ 	}
+ 	for iter.StructScan(&row) {
+-		if err := s.session.Query("INSERT INTO repository_catalog_projection_state (repository_id,ready) VALUES (?,?)", nil).
++		if err := s.session.Query("INSERT INTO repository_catalog_projection_state (repository_id,membership_ready) VALUES (?,?)", nil).
+ 			WithContext(ctx).Bind(row.UID, true).ExecRelease(); err != nil {
+ 			_ = iter.Close()
+ 			return err
+@@ -1217,9 +1239,9 @@ func repairDeleteResourceMatches(action RepairAction, resource *AuthoritativeRes
+ 
+ func (s *scyllaProjectionRepairStore) insertProjection(ctx context.Context, row ProjectionRecord) (bool, error) {
+ 	uid := mustRepairUUID(row.UID)
+-	if catalogRepositoryTable(projectionKind(row.Table)) == row.Table {
+-		return s.session.Query("INSERT INTO "+row.Table+" (repository_id,shard,uid,namespace,name,creation_timestamp) VALUES (?,?,?,?,?,?) IF NOT EXISTS", nil).
+-			WithContext(ctx).Bind(mustRepairUUID(row.RepositoryID), row.Shard, uid, row.Namespace, row.Name, row.CreationTimestamp).ExecCASRelease()
++	if row.Table == repositoryResourcesTable {
++		return s.session.Query("INSERT INTO "+row.Table+" (repository_id,shard,kind,uid,namespace,name,creation_timestamp) VALUES (?,?,?,?,?,?,?) IF NOT EXISTS", nil).
++			WithContext(ctx).Bind(mustRepairUUID(row.RepositoryID), row.Shard, row.Kind, uid, row.Namespace, row.Name, row.CreationTimestamp).ExecCASRelease()
+ 	}
+ 	var statement string
+ 	var args []any
+@@ -1236,9 +1258,9 @@ func (s *scyllaProjectionRepairStore) insertProjection(ctx context.Context, row
+ 		statement, args = "INSERT INTO namespace_mappings (namespace,name,repository_id) VALUES (?,?,?) IF NOT EXISTS", []any{row.Namespace, row.Name, uid}
+ 	case "namespace_mappings_by_repository":
+ 		statement, args = "INSERT INTO namespace_mappings_by_repository (repository_id,namespace,name) VALUES (?,?,?) IF NOT EXISTS", []any{uid, row.Namespace, row.Name}
+-	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name":
++	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name", "files_by_name":
+ 		statement, args = fmt.Sprintf("INSERT INTO %s (namespace,name,uid,creation_timestamp) VALUES (?,?,?,?) IF NOT EXISTS", row.Table), []any{row.Namespace, row.Name, uid, row.CreationTimestamp}
+-	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid":
++	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid", "files_by_uid":
+ 		statement, args = fmt.Sprintf("INSERT INTO %s (uid,namespace,creation_timestamp) VALUES (?,?,?) IF NOT EXISTS", row.Table), []any{uid, row.Namespace, row.CreationTimestamp}
+ 	case "product_variants_by_sku":
+ 		statement, args = "INSERT INTO product_variants_by_sku (namespace,sku,uid,creation_timestamp) VALUES (?,?,?,?) IF NOT EXISTS", []any{row.Namespace, row.SKU, uid, row.CreationTimestamp}
+@@ -1259,9 +1281,9 @@ func (s *scyllaProjectionRepairStore) insertProjection(ctx context.Context, row
+ 
+ func (s *scyllaProjectionRepairStore) updateProjection(ctx context.Context, before, after ProjectionRecord) (bool, error) {
+ 	uid := mustRepairUUID(after.UID)
+-	if catalogRepositoryTable(projectionKind(after.Table)) == after.Table {
+-		return s.session.Query("UPDATE "+after.Table+" SET namespace=?,name=?,creation_timestamp=? WHERE repository_id=? AND shard=? AND uid=? IF namespace=? AND name=? AND creation_timestamp=?", nil).
+-			WithContext(ctx).Bind(after.Namespace, after.Name, after.CreationTimestamp, mustRepairUUID(after.RepositoryID), after.Shard, uid, before.Namespace, before.Name, before.CreationTimestamp).ExecCASRelease()
++	if after.Table == repositoryResourcesTable {
++		return s.session.Query("UPDATE "+after.Table+" SET namespace=?,name=?,creation_timestamp=? WHERE repository_id=? AND shard=? AND kind=? AND uid=? IF namespace=? AND name=? AND creation_timestamp=?", nil).
++			WithContext(ctx).Bind(after.Namespace, after.Name, after.CreationTimestamp, mustRepairUUID(after.RepositoryID), after.Shard, after.Kind, uid, before.Namespace, before.Name, before.CreationTimestamp).ExecCASRelease()
+ 	}
+ 	var statement string
+ 	var args []any
+@@ -1272,10 +1294,10 @@ func (s *scyllaProjectionRepairStore) updateProjection(ctx context.Context, befo
+ 		statement, args = "UPDATE namespace_mappings SET repository_id=? WHERE namespace=? AND name=? IF repository_id=?", []any{uid, after.Namespace, after.Name, mustRepairUUID(before.UID)}
+ 	case "namespace_mappings_by_repository":
+ 		statement, args = "UPDATE namespace_mappings_by_repository SET namespace=?,name=? WHERE repository_id=? IF namespace=? AND name=?", []any{after.Namespace, after.Name, uid, before.Namespace, before.Name}
+-	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name":
++	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name", "files_by_name":
+ 		statement = fmt.Sprintf("UPDATE %s SET uid=?,creation_timestamp=? WHERE namespace=? AND name=? IF uid=? AND creation_timestamp=?", after.Table)
+ 		args = []any{uid, after.CreationTimestamp, after.Namespace, after.Name, mustRepairUUID(before.UID), before.CreationTimestamp}
+-	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid":
++	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid", "files_by_uid":
+ 		statement = fmt.Sprintf("UPDATE %s SET namespace=?,creation_timestamp=? WHERE uid=? IF namespace=? AND creation_timestamp=?", after.Table)
+ 		args = []any{after.Namespace, after.CreationTimestamp, uid, before.Namespace, before.CreationTimestamp}
+ 	case "product_variants_by_sku":
+@@ -1288,9 +1310,9 @@ func (s *scyllaProjectionRepairStore) updateProjection(ctx context.Context, befo
+ }
+ 
+ func (s *scyllaProjectionRepairStore) deleteProjection(ctx context.Context, row ProjectionRecord) (bool, error) {
+-	if catalogRepositoryTable(projectionKind(row.Table)) == row.Table {
+-		return s.session.Query("DELETE FROM "+row.Table+" WHERE repository_id=? AND shard=? AND uid=? IF EXISTS", nil).
+-			WithContext(ctx).Bind(mustRepairUUID(row.RepositoryID), row.Shard, mustRepairUUID(row.UID)).ExecCASRelease()
++	if row.Table == repositoryResourcesTable {
++		return s.session.Query("DELETE FROM "+row.Table+" WHERE repository_id=? AND shard=? AND kind=? AND uid=? IF EXISTS", nil).
++			WithContext(ctx).Bind(mustRepairUUID(row.RepositoryID), row.Shard, row.Kind, mustRepairUUID(row.UID)).ExecCASRelease()
+ 	}
+ 	uid := mustRepairUUID(row.UID)
+ 	var statement string
+@@ -1308,9 +1330,9 @@ func (s *scyllaProjectionRepairStore) deleteProjection(ctx context.Context, row
+ 		statement, args = "DELETE FROM namespace_mappings WHERE namespace=? AND name=? IF repository_id=?", []any{row.Namespace, row.Name, uid}
+ 	case "namespace_mappings_by_repository":
+ 		statement, args = "DELETE FROM namespace_mappings_by_repository WHERE repository_id=? IF namespace=? AND name=?", []any{uid, row.Namespace, row.Name}
+-	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name":
++	case "products_by_name", "category_taxonomies_by_name", "collections_by_name", "product_variants_by_name", "files_by_name":
+ 		statement, args = fmt.Sprintf("DELETE FROM %s WHERE namespace=? AND name=? IF uid=?", row.Table), []any{row.Namespace, row.Name, uid}
+-	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid":
++	case "products_by_uid", "category_taxonomies_by_uid", "collections_by_uid", "product_variants_by_uid", "files_by_uid":
+ 		statement, args = fmt.Sprintf("DELETE FROM %s WHERE uid=? IF namespace=? AND creation_timestamp=?", row.Table), []any{uid, row.Namespace, row.CreationTimestamp}
+ 	case "product_variants_by_sku":
+ 		statement, args = "DELETE FROM product_variants_by_sku WHERE namespace=? AND sku=? IF uid=?", []any{row.Namespace, row.SKU, uid}
+diff --git a/gitstore-api/internal/datastore/scylla/repair_test.go b/gitstore-api/internal/datastore/scylla/repair_test.go
+index 26c5e98e94982cd456fbff27954c14900c6242f8..6dbe00ed0e3ffb5828fdb69f8cbf9a0b31e77ee2 100644
+--- a/gitstore-api/internal/datastore/scylla/repair_test.go
++++ b/gitstore-api/internal/datastore/scylla/repair_test.go
+@@ -14,55 +14,66 @@ import (
+ )
+ 
+ func TestRepositoryCatalogProjectionIsIncludedInRepair(t *testing.T) {
+-	resource := AuthoritativeResource{Kind: "Product", UID: "11111111-1111-1111-1111-111111111111",
+-		RepositoryID: "22222222-2222-2222-2222-222222222222", Namespace: "shop", Name: "product",
+-		ResourceVersion: "1", CreationTimestamp: time.Now().UTC()}
+-	projections := expectedProjections(resource)
+-	if len(projections) != 3 {
+-		t.Fatalf("got %d projections, want name, UID and repository index", len(projections))
+-	}
+-	index := projections[2]
+-	if index.Table != "products_by_repository" || index.RepositoryID != resource.RepositoryID || index.Shard != categoryProductShard(resource.UID) {
+-		t.Fatalf("unexpected repository index: %+v", index)
+-	}
+-	if !index.Equal(index) || index.Key() == "" {
+-		t.Fatal("repository index must be comparable and addressable")
+-	}
+-	plan, err := BuildRepairPlan(ProjectionSnapshot{Authoritative: []AuthoritativeResource{resource}, Projections: projections[:2]})
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	if len(plan.Actions) != 1 || actionTable(plan.Actions[0]) != "products_by_repository" {
+-		t.Fatalf("missing repository index not repaired: %+v", plan)
++	for _, kind := range []string{"Product", "ProductVariant", "CategoryTaxonomy", "Collection", "File"} {
++		t.Run(kind, func(t *testing.T) {
++			resource := AuthoritativeResource{Kind: kind, UID: "11111111-1111-1111-1111-111111111111",
++				RepositoryID: "22222222-2222-2222-2222-222222222222", Namespace: "shop", Name: "product",
++				ResourceVersion: "1", CreationTimestamp: time.Now().UTC()}
++			projections := expectedProjections(resource)
++			if len(projections) != 3 {
++				t.Fatalf("got %d projections, want name, UID and repository index", len(projections))
++			}
++			index := projections[2]
++			if index.Table != repositoryResourcesTable || index.Kind != resource.Kind || index.RepositoryID != resource.RepositoryID || index.Shard != categoryProductShard(resource.UID) {
++				t.Fatalf("unexpected repository index: %+v", index)
++			}
++			if !index.Equal(index) || index.Key() == "" {
++				t.Fatal("repository index must be comparable and addressable")
++			}
++			plan, err := BuildRepairPlan(ProjectionSnapshot{Authoritative: []AuthoritativeResource{resource}, Projections: projections[:2]})
++			if err != nil {
++				t.Fatal(err)
++			}
++			if len(plan.Actions) != 1 || actionTable(plan.Actions[0]) != repositoryResourcesTable {
++				t.Fatalf("missing repository index not repaired: %+v", plan)
++			}
++			other := index
++			other.Kind = "FutureResource"
++			if other.Key() == index.Key() || index.Equal(other) || other.resourceKind() != "FutureResource" {
++				t.Fatal("membership identity must include the kind without adding a table")
++			}
++			requirePlanErr := ValidateRepairPlan(plan)
++			if requirePlanErr != nil {
++				t.Fatal(requirePlanErr)
++			}
++		})
+ 	}
+ }
+ 
+ func TestProjectionTableKinds(t *testing.T) {
+ 	t.Parallel()
+ 	tests := map[string]string{
+-		"products_by_repository":            "Product",
+-		"product_variants_by_repository":    "ProductVariant",
+-		"category_taxonomies_by_repository": "CategoryTaxonomy",
+-		"collections_by_repository":         "Collection",
+-		"namespaces_by_name":                "Namespace",
+-		"namespaces_by_bucket":              "Namespace",
+-		"repositories_by_namespace":         "Repository",
+-		"repositories_by_bucket":            "Repository",
+-		"namespace_mappings":                "Repository",
+-		"namespace_mappings_by_repository":  "Repository",
+-		"products_by_name":                  "Product",
+-		"products_by_uid":                   "Product",
+-		"category_products_by_category":     "Product",
+-		"category_products_by_product":      "Product",
+-		"category_taxonomies_by_name":       "CategoryTaxonomy",
+-		"category_taxonomies_by_uid":        "CategoryTaxonomy",
+-		"category_ancestor_index":           "CategoryTaxonomy",
+-		"collections_by_name":               "Collection",
+-		"collections_by_uid":                "Collection",
+-		"product_variants_by_name":          "ProductVariant",
+-		"product_variants_by_uid":           "ProductVariant",
+-		"product_variants_by_sku":           "ProductVariant",
+-		"product_variants_by_product_ref":   "ProductVariant",
++		"files_by_name":                    "File",
++		"files_by_uid":                     "File",
++		"namespaces_by_name":               "Namespace",
++		"namespaces_by_bucket":             "Namespace",
++		"repositories_by_namespace":        "Repository",
++		"repositories_by_bucket":           "Repository",
++		"namespace_mappings":               "Repository",
++		"namespace_mappings_by_repository": "Repository",
++		"products_by_name":                 "Product",
++		"products_by_uid":                  "Product",
++		"category_products_by_category":    "Product",
++		"category_products_by_product":     "Product",
++		"category_taxonomies_by_name":      "CategoryTaxonomy",
++		"category_taxonomies_by_uid":       "CategoryTaxonomy",
++		"category_ancestor_index":          "CategoryTaxonomy",
++		"collections_by_name":              "Collection",
++		"collections_by_uid":               "Collection",
++		"product_variants_by_name":         "ProductVariant",
++		"product_variants_by_uid":          "ProductVariant",
++		"product_variants_by_sku":          "ProductVariant",
++		"product_variants_by_product_ref":  "ProductVariant",
+ 	}
+ 	if len(tests) != len(projectionTableKinds) {
+ 		t.Fatalf("projection table test coverage = %d tables, registry = %d", len(tests), len(projectionTableKinds))
+diff --git a/gitstore-api/internal/graph/resolver/product_lifecycle_test.go b/gitstore-api/internal/graph/resolver/product_lifecycle_test.go
+index c72fd24e33a6d910392fa6aca427563b175fc869..098c4433f195862a56cc3e18abff867cb152c283 100644
+--- a/gitstore-api/internal/graph/resolver/product_lifecycle_test.go
++++ b/gitstore-api/internal/graph/resolver/product_lifecycle_test.go
+@@ -106,3 +106,39 @@ func TestProductDeletionMetricsRecordIdempotentLifecycleOutcome(t *testing.T) {
+ 	assert.Equal(t, product.UID, got.UID)
+ 	assert.Equal(t, before+1, testutil.ToFloat64(productDeletionOutcomes.WithLabelValues("ALREADY_TERMINATING")))
+ }
++
++func TestCompleteProductDeletionRejectsStaleIncarnation(t *testing.T) {
++	ctx := context.Background()
++	store, err := memdb.New()
++	require.NoError(t, err)
++	service, err := NewService(ServiceDeps{Store: store, Logger: zap.NewNop()})
++	require.NoError(t, err)
++	mutation := &mutationResolver{Resolver: &Resolver{service: service}}
++	old := productLifecycleFixture("acme", "widget")
++	now := time.Now().UTC()
++	old.DeletionTimestamp = &now
++	old.Finalizers = []string{"gitstore.dev/foreground-deletion"}
++	require.NoError(t, store.CreateProduct(ctx, old))
++	_, err = service.CompleteProductDeletion(ctx, old.Namespace, old.Name, old.ResourceVersion, old.UID)
++	require.NoError(t, err)
++
++	replacement := *old
++	replacement.UID = uuid.NewString()
++	require.NoError(t, store.CreateProduct(ctx, &replacement))
++	_, err = mutation.CompleteProductDeletion(ctx, model.CompleteProductDeletionInput{
++		ID: mustEncodeNodeID(nodeKindProduct, old.UID), Namespace: old.Namespace, Name: old.Name, ResourceVersion: old.ResourceVersion,
++	})
++	require.Error(t, err)
++	current, err := store.GetProductByName(ctx, replacement.Namespace, replacement.Name)
++	require.NoError(t, err)
++	require.Equal(t, replacement.UID, current.UID)
++	require.Equal(t, replacement.Finalizers, current.Finalizers)
++	require.Equal(t, replacement.ResourceVersion, current.ResourceVersion)
++	_, err = service.CompleteProductDeletion(ctx, replacement.Namespace, replacement.Name, replacement.ResourceVersion, old.UID)
++	require.ErrorIs(t, err, datastore.ErrConflict)
++	payload, err := mutation.CompleteProductDeletion(ctx, model.CompleteProductDeletionInput{
++		ID: mustEncodeNodeID(nodeKindProduct, replacement.UID), Namespace: replacement.Namespace, Name: replacement.Name, ResourceVersion: replacement.ResourceVersion,
++	})
++	require.NoError(t, err)
++	require.Equal(t, mustEncodeNodeID(nodeKindProduct, replacement.UID), *payload.ID)
++}
+diff --git a/gitstore-api/internal/graph/resolver/resolver_global_id_test.go b/gitstore-api/internal/graph/resolver/resolver_global_id_test.go
+index e7ea781380bdf8035d1c63d672f53aa362c67d27..53a80ecce11af67ecd8c6d5090cd5b6f49b5504b 100644
+--- a/gitstore-api/internal/graph/resolver/resolver_global_id_test.go
++++ b/gitstore-api/internal/graph/resolver/resolver_global_id_test.go
+@@ -28,6 +28,28 @@ const (
+ 	globalIDTestFileUID      = "00000000-0000-0000-0000-000000000007"
+ )
+ 
++func TestCompletionResolversRejectInvalidNodeIDs(t *testing.T) {
++	mutation := &mutationResolver{}
++	for _, kind := range []string{nodeKindNamespace, nodeKindRepository, nodeKindProduct, nodeKindCategory} {
++		t.Run(kind, func(t *testing.T) {
++			for _, id := range []string{"", "not-a-node-id", globalIDTestProductUID, mustEncodeNodeID(nodeKindFile, globalIDTestFileUID)} {
++				var err error
++				switch kind {
++				case nodeKindNamespace:
++					_, err = mutation.CompleteNamespaceDeletion(t.Context(), model.CompleteNamespaceDeletionInput{ID: id, Name: "acme", ResourceVersion: "1"})
++				case nodeKindRepository:
++					_, err = mutation.CompleteRepositoryDeletion(t.Context(), model.CompleteRepositoryDeletionInput{ID: id, Namespace: "acme", Name: "item", ResourceVersion: "1"})
++				case nodeKindProduct:
++					_, err = mutation.CompleteProductDeletion(t.Context(), model.CompleteProductDeletionInput{ID: id, Namespace: "acme", Name: "item", ResourceVersion: "1"})
++				case nodeKindCategory:
++					_, err = mutation.CompleteCategoryDeletion(t.Context(), model.CompleteCategoryDeletionInput{ID: id, Namespace: "acme", Name: "item", ResourceVersion: "1"})
++				}
++				require.ErrorContains(t, err, "invalid global ID", "completion must reject invalid or wrong-kind IDs before accessing storage")
++			}
++		})
++	}
++}
++
+ func TestQueryNodeResolvesByGlobalID(t *testing.T) {
+ 	ctx := context.Background()
+ 	store, resolver := newGlobalIDTestResolver(t)
+diff --git a/shared/schemas/category.graphqls b/shared/schemas/category.graphqls
+index 72938e79a0c4a4e545e1f7f5f207395828972be5..b2e070a24af3064019e1dd4673a22bde24df8719 100644
+--- a/shared/schemas/category.graphqls
++++ b/shared/schemas/category.graphqls
+@@ -315,6 +315,8 @@ type UpdateCategoryPayload {
+ }
+ 
+ input CompleteCategoryDeletionInput {
++  """Relay Node ID of the exact category incarnation being finalized."""
++  id: ID!
+   namespace: String!
+   name: String!
+ 
+diff --git a/shared/schemas/namespace.graphqls b/shared/schemas/namespace.graphqls
+index cf1f472ebb36c7beff6d81e9c73a8833b859ec52..6db974cda263d4aaa3789890527cf185252e74e6 100644
+--- a/shared/schemas/namespace.graphqls
++++ b/shared/schemas/namespace.graphqls
+@@ -240,8 +240,8 @@ input DeleteNamespaceInput {
+ Controller-only finalizer completion for a terminating namespace.
+ """
+ input CompleteNamespaceDeletionInput {
+-  """Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers."""
+-  uid: ID
++  """Relay Node ID of the exact namespace incarnation being finalized."""
++  id: ID!
+   """
+   Name of the terminating namespace.
+   """
+diff --git a/shared/schemas/product.graphqls b/shared/schemas/product.graphqls
+index 49b0e1ecb5d2a2d876683d3dc9ec2f1c1baade19..c8f1a2e6ace0907edff0d481268552cadbe48a83 100644
+--- a/shared/schemas/product.graphqls
++++ b/shared/schemas/product.graphqls
+@@ -239,6 +239,8 @@ type UpdateProductStatusPayload {
+ }
+ 
+ input CompleteProductDeletionInput {
++  """Relay Node ID of the exact product incarnation being finalized."""
++  id: ID!
+   namespace: String!
+   name: String!
+   resourceVersion: String!
+diff --git a/shared/schemas/repository.graphqls b/shared/schemas/repository.graphqls
+index a91ae505962b2bd90a85ca13fc5f07c6ce9effc0..a87d632bd984d6984f85e73536e8035764ed0e53 100644
+--- a/shared/schemas/repository.graphqls
++++ b/shared/schemas/repository.graphqls
+@@ -292,8 +292,8 @@ type DeleteRepositoryPayload {
+ }
+ 
+ input CompleteRepositoryDeletionInput {
+-  """Immutable metadata.uid of the resource being finalized. Required by deletion-safe servers."""
+-  uid: ID
++  """Relay Node ID of the exact repository incarnation being finalized."""
++  id: ID!
+   namespace: String!
+   name: String!
+   resourceVersion: String!

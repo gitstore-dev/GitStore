@@ -1,0 +1,631 @@
+diff --git a/docs/runbooks/namespace-admission.md b/docs/runbooks/namespace-admission.md
+index d2f06d6686f8afedd988c745282589c03a5e6259..45ac8f036dc6e014fb8d9a1b974822e3d7be795d 100644
+--- a/docs/runbooks/namespace-admission.md
++++ b/docs/runbooks/namespace-admission.md
+@@ -954,6 +954,29 @@ weakening durable replay protection.
+ 
+ ## Repository lifecycle fence
+ 
++### Authorization evidence
++
++Alpha and production Repository lifecycle runs require exact authorization
++checks on both APIs before lifecycle work and again after load, recovery and
++replacement. The configured credential must successfully list at most one
++Namespace; an unauthenticated request must return the expected authorization
++error without partial resource data. When anonymous authentication is enabled,
++that error is `FORBIDDEN`; otherwise it is `UNAUTHENTICATED`. Expected denials
++are separate from unexpected HTTP or domain failures.
++
++Both replicas must expose matching loaded policy, provider and compiled catalog
++identities, unchanged across the two checks. Local RBAC metadata must identify
++the v1beta1 policy format. Evidence is bounded, excludes credentials and response
++bodies, and starts incomplete; an interrupted or failed run cannot supply a
++passing authorization result. The verifier also binds it to the run and the
++distinct API endpoints observed at preflight.
++
++These before/after checks do not establish uninterrupted authorization behavior
++during faults, the full permission matrix or successful sustained Git pushes.
++Existing load, retry, deadline, watch, replacement and resource gates remain
++required. This additional harness coverage is not a completed deployment
++acceptance result.
++
+ ### Git-backed deletion safety
+ 
+ Use matching current Git service, API, and controller builds. GitStore is under
+diff --git a/scripts/test-capacity-dispatch.sh b/scripts/test-capacity-dispatch.sh
+index 057069a90f6fd4d81a7682b1cad18ed93d4c2605..1606023b54b27e1f82f89ab0167a3281a938ff4f 100755
+--- a/scripts/test-capacity-dispatch.sh
++++ b/scripts/test-capacity-dispatch.sh
+@@ -306,6 +306,7 @@ for mutation in \
+   'del(.replicas[1].denied)' '.replicas = [.replicas[0]]' \
+   '.replicas[1].endpoint = .replicas[0].endpoint' \
+   '.replicas[0].auth.policy.loaded = false' '.replicas[0].auth.policy.roles = 201' \
++  '.replicas[].auth.policy.apiVersion = "v1"' \
+   '.replicas[0].auth.catalogDigest = ("b"*64)' \
+   '.replicas[].auth.policy.digest = ("b"*64)' \
+   '.replicas[0].token = "forbidden-material"' '.token = "forbidden-material"'; do
+@@ -327,6 +328,45 @@ fi
+ rm "${test_dir}/readiness-valid/authorization-probes.json"
+ mv "${test_dir}/saved-readiness-probes.json" "${test_dir}/readiness-valid/authorization-probes.json"
+ 
++lifecycle_semantic_dir="${test_dir}/lifecycle-semantics"
++mkdir -p "${lifecycle_semantic_dir}"
++jq '.mode = "diagnostic" | .topology.liveApiReplicas = .topology.liveReplicas' \
++  "${test_dir}/readiness-valid/preflight-environment.json" >"${lifecycle_semantic_dir}/preflight-environment.json"
++jq '
++  def replicas: [.replicas[] | {endpoint,auth,allowed:true,denied:true,denialCode:"FORBIDDEN"}];
++  {schemaVersion:1,component:"repository-lifecycle-authorization",runID:"lifecycle-semantics",
++   mode:"diagnostic",passed:true,before:replicas,after:replicas}
++' "${test_dir}/original-readiness-probes.json" >"${lifecycle_semantic_dir}/authorization-probes.json"
++CAPACITY_RUN_ID=lifecycle-semantics "${repo_root}/scripts/validate-capacity-evidence.sh" \
++  "${lifecycle_semantic_dir}" repository lifecycle diagnostic postflight
++cp "${lifecycle_semantic_dir}/authorization-probes.json" "${test_dir}/original-lifecycle-probes.json"
++for mutation in \
++  '.passed = false' '.runID = "another-run"' '.mode = "alpha"' \
++  '.before = []' '.after = null' '.after[1].denied = false' '.after[0].allowed = false' \
++  '.after[0].denialCode = "NOT_FOUND"' '.after[0].auth.policy.digest = ("c"*64)' \
++  '.before[].auth.policy.apiVersion = "v1" | .after[].auth.policy.apiVersion = "v1"' \
++  '.before[].endpoint = "http://other-api.internal"' \
++  '.after[1].endpoint = .after[0].endpoint' \
++  '.before[0].auth.policy.loaded = false' '.after[0].token = "private-token-marker"' \
++  '.token = "private-token-marker"'; do
++  jq "${mutation}" "${test_dir}/original-lifecycle-probes.json" >"${lifecycle_semantic_dir}/authorization-probes.json"
++  if CAPACITY_RUN_ID=lifecycle-semantics "${repo_root}/scripts/validate-capacity-evidence.sh" \
++    "${lifecycle_semantic_dir}" repository lifecycle diagnostic postflight >/dev/null 2>&1; then
++    echo "Repository lifecycle accepted invalid authorization evidence: ${mutation}" >&2
++    exit 1
++  fi
++done
++cp "${test_dir}/original-lifecycle-probes.json" "${lifecycle_semantic_dir}/authorization-probes.json"
++mv "${lifecycle_semantic_dir}/authorization-probes.json" "${test_dir}/saved-lifecycle-probes.json"
++ln -s "${test_dir}/saved-lifecycle-probes.json" "${lifecycle_semantic_dir}/authorization-probes.json"
++if CAPACITY_RUN_ID=lifecycle-semantics "${repo_root}/scripts/validate-capacity-evidence.sh" \
++  "${lifecycle_semantic_dir}" repository lifecycle diagnostic postflight >/dev/null 2>&1; then
++  echo "Repository lifecycle accepted symlink authorization evidence" >&2
++  exit 1
++fi
++rm "${lifecycle_semantic_dir}/authorization-probes.json"
++mv "${test_dir}/saved-lifecycle-probes.json" "${lifecycle_semantic_dir}/authorization-probes.json"
++
+ for removed_target in capacity-observability capacity-observability-down test-scylla-capacity test-namespace-admission-capacity test-namespace-watch-capacity test-namespace-watch-recovery; do
+   if rg -q "^${removed_target}:" "${repo_root}/Makefile"; then
+     echo "removed public target ${removed_target} is still defined" >&2
+@@ -335,7 +375,27 @@ for removed_target in capacity-observability capacity-observability-down test-sc
+ done
+ 
+ mkdir -p "${test_dir}/evidence"
+-printf '#!/usr/bin/env bash\necho "mock capacity command: $*"\nif [[ -n "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE:-}" ]]; then cp "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE}" "${MOCK_SERVICE_CONTAINERS_FILE}"; fi\nif [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" ]]; then touch "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}"; fi\n[[ "${FAIL_MAKE:-0}" != "1" ]]\n' >"${test_dir}/bin/make"
++export MOCK_LIFECYCLE_AUTH_FILE="${test_dir}/original-readiness-probes.json"
++cat >"${test_dir}/bin/make" <<'EOF'
++#!/usr/bin/env bash
++set -euo pipefail
++echo "mock capacity command: $*"
++if [[ -n "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE:-}" ]]; then
++  cp "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE}" "${MOCK_SERVICE_CONTAINERS_FILE}"
++fi
++if [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" ]]; then
++  touch "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}"
++fi
++if [[ "$*" == *"_capacity-repository-lifecycle"* && "${MODE:-}" != diagnostic ]]; then
++  jq --arg run "${CAPACITY_RUN_ID}" --slurpfile fixture "${MOCK_LIFECYCLE_AUTH_FILE}" '
++    def replicas: [.topology.liveApiReplicas[] |
++      {endpoint,auth:$fixture[0].replicas[0].auth,allowed:true,denied:true,denialCode:"FORBIDDEN"}];
++    {schemaVersion:1,component:"repository-lifecycle-authorization",runID:$run,
++     mode:.mode,passed:true,before:replicas,after:replicas}
++  ' "${CAPACITY_EVIDENCE_DIR}/preflight-environment.json" >"${CAPACITY_EVIDENCE_DIR}/authorization-probes.json"
++fi
++[[ "${FAIL_MAKE:-0}" != "1" ]]
++EOF
+ cat >"${test_dir}/bin/docker" <<'EOF'
+ #!/usr/bin/env bash
+ if [[ "$1" == exec ]]; then
+diff --git a/scripts/validate-capacity-evidence.sh b/scripts/validate-capacity-evidence.sh
+index dec8f473a7dab5d534590695fe2301f9adc57e09..44833e03eb9ccfe43d7691b84989d3eb6467e4e7 100755
+--- a/scripts/validate-capacity-evidence.sh
++++ b/scripts/validate-capacity-evidence.sh
+@@ -143,6 +143,26 @@ if [[ "${target}/${profile}" == api/authorization && "${phase}" == postflight ]]
+   exit 0
+ fi
+ 
++readonly authorization_snapshot_filter='
++  def integer: type == "number" and floor == .;
++  def digest: type == "string" and test("^[0-9a-f]{64}$");
++  def snapshot:
++    keys == ["authn","authz","catalogDigest","policy","userdir"] and
++    (.catalogDigest | digest) and
++    (.authn | type == "array" and length > 0 and length <= 5 and (unique | length) == length) and
++    all(.authn[]; . == "static-users" or . == "anonymous" or . == "oidc-jwt" or
++      . == "serviceaccount-assertion" or . == "serviceaccount-jwt") and
++    (.authz | type == "string" and length > 0 and length <= 64) and
++    (.userdir | type == "string" and length > 0 and length <= 64) and
++    (.authz != "rbac-local" or .policy.apiVersion == "rbac.authorization.gitstore.dev/v1beta1") and
++    (.policy |
++      keys == ["apiVersion","bindings","digest","loaded","roles","rules"] and .loaded == true and
++      (.apiVersion | type == "string" and length > 0 and length <= 128) and
++      (.digest | digest) and (.roles | integer) and .roles >= 0 and .roles <= 200 and
++      (.bindings | integer) and .bindings >= 0 and .bindings <= 1000 and
++      (.rules | integer) and .rules >= 0 and .rules <= 2000);
++'
++
+ if [[ "${target}/${profile}" == api/readiness && "${phase}" == postflight &&
+       ("${mode}" != diagnostic || -n "${CAPACITY_TOKEN_FILE:-}${CAPACITY_TOKEN:-}" ||
+        -e "${evidence_dir}/authorization-probes.json" || -L "${evidence_dir}/authorization-probes.json") ]]; then
+@@ -159,23 +179,7 @@ if [[ "${target}/${profile}" == api/readiness && "${phase}" == postflight &&
+     }
+     preflight="$(jq -c . "${evidence_dir}/preflight-environment.json")"
+   fi
+-  jq -e --arg mode "${mode}" --arg run "${CAPACITY_RUN_ID:-}" --argjson preflight "${preflight}" '
+-    def integer: type == "number" and floor == .;
+-    def digest: type == "string" and test("^[0-9a-f]{64}$");
+-    def snapshot:
+-      keys == ["authn","authz","catalogDigest","policy","userdir"] and
+-      (.catalogDigest | digest) and
+-      (.authn | type == "array" and length > 0 and length <= 5 and (unique | length) == length) and
+-      all(.authn[]; . == "static-users" or . == "anonymous" or . == "oidc-jwt" or
+-        . == "serviceaccount-assertion" or . == "serviceaccount-jwt") and
+-      (.authz | type == "string" and length > 0 and length <= 64) and
+-      (.userdir | type == "string" and length > 0 and length <= 64) and
+-      (.policy |
+-        keys == ["apiVersion","bindings","digest","loaded","roles","rules"] and .loaded == true and
+-        (.apiVersion | type == "string" and length > 0 and length <= 128) and
+-        (.digest | digest) and (.roles | integer) and .roles >= 0 and .roles <= 200 and
+-        (.bindings | integer) and .bindings >= 0 and .bindings <= 1000 and
+-        (.rules | integer) and .rules >= 0 and .rules <= 2000);
++  jq -e --arg mode "${mode}" --arg run "${CAPACITY_RUN_ID:-}" --argjson preflight "${preflight}" "${authorization_snapshot_filter}"'
+     keys == ["component","denialCode","deniedIdentity","droppedIterations","duration","maxVUs","measurementSeconds","mismatches",
+       "mode","passed","preAllocatedVUs","rate","replicas","runID","schemaVersion"] and
+     .schemaVersion == 1 and .component == "api-readiness-authorization" and
+@@ -215,6 +219,44 @@ if [[ "${target}/${profile}" == api/readiness && "${phase}" == postflight &&
+   exit 0
+ fi
+ 
++if [[ "${target}/${profile}" == repository/lifecycle && "${phase}" == postflight &&
++      ("${mode}" != diagnostic || -e "${evidence_dir}/authorization-probes.json" ||
++       -L "${evidence_dir}/authorization-probes.json") ]]; then
++  path="${evidence_dir}/authorization-probes.json"
++  preflight="${evidence_dir}/preflight-environment.json"
++  for artifact in "${path}" "${preflight}"; do
++    [[ -f "${artifact}" && ! -L "${artifact}" && "$(wc -c <"${artifact}")" -le 1048576 ]] || {
++      echo "Repository lifecycle requires regular bounded authorization and preflight evidence" >&2
++      exit 2
++    }
++  done
++  jq -e --arg mode "${mode}" --arg run "${CAPACITY_RUN_ID:-}" --slurpfile preflight "${preflight}" \
++    "${authorization_snapshot_filter}"'
++    def replicas:
++      type == "array" and length == 2 and
++      ([.[].endpoint] | unique | length) == 2 and
++      all(.[];
++        keys == ["allowed","auth","denialCode","denied","endpoint"] and
++        (.endpoint | type == "string" and test("^https?://[^@\\s,?#]+$")) and
++        (.auth | snapshot) and .allowed == true and .denied == true and
++        .denialCode == (if (.auth.authn | index("anonymous")) != null then "FORBIDDEN" else "UNAUTHENTICATED" end));
++    keys == ["after","before","component","mode","passed","runID","schemaVersion"] and
++    .schemaVersion == 1 and .component == "repository-lifecycle-authorization" and
++    .mode == $mode and .runID == $run and .passed == true and
++    (.before | replicas) and (.after | replicas) and
++    ([.before[].auth, .after[].auth] | unique | length) == 1 and
++    ([.before[].endpoint] | sort) == ([.after[].endpoint] | sort) and
++    $preflight[0].passed == true and $preflight[0].mode == $mode and
++    ([.before[].endpoint] | sort) == ([$preflight[0].topology.liveApiReplicas[].endpoint] | sort) and
++    ($preflight[0].topology.liveApiReplicas | length) == 2 and
++    all($preflight[0].topology.liveApiReplicas[]; .instanceID | type == "string" and length > 0) and
++    ([$preflight[0].topology.liveApiReplicas[].instanceID] | unique | length) == 2
++  ' "${path}" >/dev/null || {
++    echo "Repository lifecycle authorization evidence failed exact outcomes, snapshot or replica checks" >&2
++    exit 1
++  }
++fi
++
+ if [[ "${mode}" == "diagnostic" ]]; then
+   jq -n --arg target "${target}" --arg profile "${profile}" --arg mode "${mode}" \
+     '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,passed:true}' \
+diff --git a/specs/064-authz-action-vocabulary/quickstart.md b/specs/064-authz-action-vocabulary/quickstart.md
+index e80985973f6aedb863d33cef2bca7ec3e433e7e4..cf7be529a3c6ca12f52a7fdbc2601ac841820568 100644
+--- a/specs/064-authz-action-vocabulary/quickstart.md
++++ b/specs/064-authz-action-vocabulary/quickstart.md
+@@ -87,6 +87,23 @@ gate. In particular, the later full Namespace runs failed provenance contention
+ before replacement; the short direct-routing diagnostic was not a fix or an
+ acceptance pass. T078 and the overall specification remain open.
+ 
++### Lifecycle semantic-harness follow-up (2026-10-19)
++
++Repository lifecycle alpha/production now requires bounded before/after
++authorization evidence from both APIs: authenticated Namespace-list allow,
++exact unauthenticated deny without partial data, and matching unchanged loaded
++provider/policy/catalog snapshots. The artifact starts incomplete, is persisted
++atomically and cannot pass after a failed/incomplete lifecycle path. Postflight
++ties its run/mode/endpoints to distinct preflight processes and rejects missing,
++partial, legacy local-policy, mismatched or secret-bearing evidence.
++The Go probe rejects redirects, bounds response sizes/time and preserves
++pluggable provider identity and anonymous-disabled denial semantics.
++
++This is additional T066/T068 implementation coverage, not a new deployed alpha
++pass. Their broader workload/domain/fault obligations remain unchecked.
++Existing load, retry, deadline, replacement and resource gates are unchanged;
++the before/after probes do not establish the under-load authorization matrix.
++
+ ### Non-capacity completion pass (2026-10-11, after `eff9e28`)
+ 
+ - Added exact allow/deny watch/status recorder coverage and all-five-kind typed/
+diff --git a/tests/capacity/README.md b/tests/capacity/README.md
+index a5085b61465144e1612030db0943b028694ff1dd..9d8db210da1c241087f4a22b89275fdb7246f069 100644
+--- a/tests/capacity/README.md
++++ b/tests/capacity/README.md
+@@ -14,6 +14,17 @@ Valid target/profile pairs are `api/readiness`, `api/authorization`, `namespace/
+ two-replica soak. `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
+ The dispatcher is the only public capacity entry point.
+ 
++Repository lifecycle alpha/production now also emits bounded
++`authorization-probes.json`: exact authenticated Namespace-list allow and
++unauthenticated deny checks on both APIs before work and after the completed
++load/recovery/replacement path, with matching unchanged provider/policy/catalog
++snapshots. The artifact starts incomplete and the postflight verifier requires
++a passing run-bound result tied to the distinct preflight API endpoints.
++Expected denials do not count as unexpected HTTP/domain failures. These checks
++do not replace the under-load permission/fault matrix or any existing workload,
++latency, retry, replacement or resource gate; diagnostics retain their existing
++behavior.
++
+ ## Local telemetry and live profiling
+ 
+ `CAPACITY_OBSERVABILITY=full` extends the existing Prometheus selector with an
+diff --git a/tests/integration/repository_lifecycle_capacity_test.go b/tests/integration/repository_lifecycle_capacity_test.go
+index bcb5d413a6b3c35fe82969f06ef289bfbca0e538..2c30c0cc38064fd10ca333d1f4a44637de19cacd 100644
+--- a/tests/integration/repository_lifecycle_capacity_test.go
++++ b/tests/integration/repository_lifecycle_capacity_test.go
+@@ -184,6 +184,27 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
+ 		return
+ 	}
+ 
++	var authorization repositoryCapacityAuthorizationEvidence
++	if cfg.mode != capacityModeDiagnostic {
++		authorization = repositoryCapacityAuthorizationEvidence{
++			SchemaVersion: 1, Component: "repository-lifecycle-authorization", RunID: os.Getenv("CAPACITY_RUN_ID"), Mode: cfg.mode,
++		}
++		directory := os.Getenv("CAPACITY_EVIDENCE_DIR")
++		require.NotEmpty(t, directory, "authorization acceptance requires a dispatcher evidence directory")
++		persist := func() {
++			if t.Failed() {
++				authorization.Passed = false
++			}
++			require.NoError(t, writeSecretCapacityPrivateJSON(filepath.Join(directory, "authorization-probes.json"), authorization))
++		}
++		persist()
++		t.Cleanup(persist)
++		var err error
++		authorization.Before, err = repositoryCapacityAuthorizationProbes(t.Context(), client, []string{cfg.apiA, cfg.apiB}, cfg.token)
++		require.NoError(t, err, "both replicas must pass exact authorization probes before lifecycle work")
++		persist()
++	}
++
+ 	var dataset secretCapacityDatasetObservations
+ 	var secretFaultDriver *secretCapacityFaultDriver
+ 	if secretCapacityRequested() {
+@@ -393,6 +414,15 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
+ 			ControllersBefore: secretControllersBefore[:], ControllersAfter: secretControllersAfter[:], RepositoryLifecyclePassed: true,
+ 		}))
+ 	}
++	if cfg.mode != capacityModeDiagnostic {
++		var err error
++		authorization.After, err = repositoryCapacityAuthorizationProbes(t.Context(), client, []string{cfg.apiA, cfg.apiB}, cfg.token)
++		require.NoError(t, err, "both replicas must retain exact authorization outcomes after lifecycle work and replacement")
++		for i := range authorization.Before {
++			require.True(t, authorization.Before[i].Auth.equal(authorization.After[i].Auth), "lifecycle work changed the active provider, policy or catalog snapshot")
++		}
++		authorization.Passed = true
++	}
+ 	t.Logf("Repository lifecycle capacity passed: mode=%s replay=%d replay_p95=%s subscribers=%d admitted=%d duration=%s", cfg.mode, cfg.replayEvents, replayP95, cfg.subscribers, load.admitted, time.Since(soakStarted))
+ }
+ 
+@@ -459,6 +489,310 @@ func (repositoryCapacityWindowErrorWriter) Write([]byte) (int, error) {
+ 	return 0, io.ErrClosedPipe
+ }
+ 
++type repositoryCapacityAuthorizationSnapshot struct {
++	Authn         []string `json:"authn"`
++	Authz         string   `json:"authz"`
++	Userdir       string   `json:"userdir"`
++	CatalogDigest string   `json:"catalogDigest"`
++	Policy        struct {
++		Loaded     bool   `json:"loaded"`
++		APIVersion string `json:"apiVersion"`
++		Digest     string `json:"digest"`
++		Roles      int    `json:"roles"`
++		Bindings   int    `json:"bindings"`
++		Rules      int    `json:"rules"`
++	} `json:"policy"`
++}
++
++type repositoryCapacityAuthorizationReplica struct {
++	Endpoint   string                                  `json:"endpoint"`
++	Auth       repositoryCapacityAuthorizationSnapshot `json:"auth"`
++	Allowed    bool                                    `json:"allowed"`
++	Denied     bool                                    `json:"denied"`
++	DenialCode string                                  `json:"denialCode"`
++}
++
++type repositoryCapacityAuthorizationEvidence struct {
++	SchemaVersion int                                      `json:"schemaVersion"`
++	Component     string                                   `json:"component"`
++	RunID         string                                   `json:"runID"`
++	Mode          capacityMode                             `json:"mode"`
++	Passed        bool                                     `json:"passed"`
++	Before        []repositoryCapacityAuthorizationReplica `json:"before"`
++	After         []repositoryCapacityAuthorizationReplica `json:"after"`
++}
++
++func (s repositoryCapacityAuthorizationSnapshot) equal(other repositoryCapacityAuthorizationSnapshot) bool {
++	return slices.Equal(s.Authn, other.Authn) && s.Authz == other.Authz &&
++		s.Userdir == other.Userdir && s.CatalogDigest == other.CatalogDigest && s.Policy == other.Policy
++}
++
++func repositoryCapacityAuthorizationProbes(ctx context.Context, client *http.Client, endpoints []string, token string) ([]repositoryCapacityAuthorizationReplica, error) {
++	invalid := errors.New("capacity authorization probes failed exact response, snapshot or replica checks (details redacted)")
++	if client == nil || len(endpoints) != 2 || endpoints[0] == endpoints[1] || strings.TrimSpace(token) == "" {
++		return nil, invalid
++	}
++	probeClient := *client
++	probeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
++	readJSON := func(endpoint, path, credential string, destination any) (int, error) {
++		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
++		defer cancel()
++		method := http.MethodGet
++		var body io.Reader
++		if path == "/graphql" {
++			method = http.MethodPost
++			body = strings.NewReader(`{"query":"query { namespaces(first: 1) { edges { node { id } } } }","variables":{}}`)
++		}
++		request, err := http.NewRequestWithContext(ctx, method, endpoint+path, body)
++		if err != nil {
++			return 0, invalid
++		}
++		request.Header.Set("Content-Type", "application/json")
++		if credential != "" {
++			request.Header.Set("Authorization", "Bearer "+credential)
++		}
++		response, err := probeClient.Do(request)
++		if err != nil {
++			if ctx.Err() != nil {
++				return 0, fmt.Errorf("capacity authorization probe canceled: %w", ctx.Err())
++			}
++			return 0, invalid
++		}
++		defer response.Body.Close()
++		data, err := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
++		if err != nil || len(data) > 64<<10 || json.Unmarshal(data, destination) != nil {
++			return 0, invalid
++		}
++		return response.StatusCode, nil
++	}
++	digest := func(value string) bool {
++		_, err := hex.DecodeString(value)
++		return len(value) == 64 && value == strings.ToLower(value) && err == nil
++	}
++	replicas := make([]repositoryCapacityAuthorizationReplica, 0, 2)
++	for _, endpoint := range endpoints {
++		parsed, err := url.Parse(endpoint)
++		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
++			parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
++			strings.HasSuffix(endpoint, "/") {
++			return nil, invalid
++		}
++		var ready struct {
++			Auth json.RawMessage `json:"auth"`
++		}
++		status, err := readJSON(endpoint, "/ready", "", &ready)
++		if err != nil {
++			return nil, err
++		}
++		auth := new(repositoryCapacityAuthorizationSnapshot)
++		var shape struct {
++			Policy map[string]json.RawMessage
++		}
++		if json.Unmarshal(ready.Auth, auth) != nil || json.Unmarshal(ready.Auth, &shape) != nil ||
++			status != http.StatusOK || !auth.Policy.Loaded ||
++			!digest(auth.CatalogDigest) || !digest(auth.Policy.Digest) ||
++			auth.Authz == "" || len(auth.Authz) > 64 || auth.Userdir == "" || len(auth.Userdir) > 64 ||
++			len(auth.Authn) == 0 || len(auth.Authn) > 5 ||
++			auth.Policy.APIVersion == "" || len(auth.Policy.APIVersion) > 128 ||
++			auth.Policy.Roles < 0 || auth.Policy.Roles > 200 ||
++			auth.Policy.Bindings < 0 || auth.Policy.Bindings > 1000 || auth.Policy.Rules < 0 || auth.Policy.Rules > 2000 ||
++			(auth.Authz == "rbac-local" && auth.Policy.APIVersion != "rbac.authorization.gitstore.dev/v1beta1") {
++			return nil, invalid
++		}
++		for _, field := range []string{"roles", "bindings", "rules"} {
++			value := bytes.TrimSpace(shape.Policy[field])
++			if len(value) == 0 || bytes.Equal(value, []byte("null")) {
++				return nil, invalid
++			}
++		}
++		for i, provider := range auth.Authn {
++			if provider == "" || len(provider) > 64 || slices.Contains(auth.Authn[:i], provider) {
++				return nil, invalid
++			}
++		}
++		if len(replicas) != 0 && !auth.equal(replicas[0].Auth) {
++			return nil, invalid
++		}
++		var allow gqlResponse
++		status, err = readJSON(endpoint, "/graphql", token, &allow)
++		if err != nil {
++			return nil, err
++		}
++		var data struct {
++			Namespaces *struct {
++				Edges []struct {
++					Node *struct{ ID string }
++				}
++			}
++		}
++		if status != http.StatusOK || len(allow.Errors) != 0 || json.Unmarshal(allow.Data, &data) != nil ||
++			data.Namespaces == nil || data.Namespaces.Edges == nil || len(data.Namespaces.Edges) > 1 {
++			return nil, invalid
++		}
++		for _, edge := range data.Namespaces.Edges {
++			if edge.Node == nil || edge.Node.ID == "" {
++				return nil, invalid
++			}
++		}
++		denialCode := "UNAUTHENTICATED"
++		if slices.Contains(auth.Authn, "anonymous") {
++			denialCode = "FORBIDDEN"
++		}
++		var deny gqlResponse
++		status, err = readJSON(endpoint, "/graphql", "", &deny)
++		if err != nil {
++			return nil, err
++		}
++		if (status != http.StatusOK && !(denialCode == "UNAUTHENTICATED" && status == http.StatusUnauthorized)) ||
++			(len(deny.Data) != 0 && !bytes.Equal(bytes.TrimSpace(deny.Data), []byte("null"))) || len(deny.Errors) != 1 {
++			return nil, invalid
++		}
++		var operationError struct {
++			Extensions struct{ Code string }
++		}
++		if json.Unmarshal(deny.Errors[0], &operationError) != nil || operationError.Extensions.Code != denialCode {
++			return nil, invalid
++		}
++		replicas = append(replicas, repositoryCapacityAuthorizationReplica{
++			Endpoint: endpoint, Auth: *auth, Allowed: true, Denied: true, DenialCode: denialCode,
++		})
++	}
++	return replicas, nil
++}
++
++func TestSecretCapacityRepositoryAuthorizationProbes(t *testing.T) {
++	for _, mutation := range []string{"", "alternate-provider", "no-anonymous", "wrong-denial", "partial-data", "multiple-errors", "empty-allow",
++		"missing-snapshot", "missing-counts", "null-counts", "different-policy", "different-provider", "http-failure", "oversized"} {
++		t.Run(mutation, func(t *testing.T) {
++			auth := repositoryCapacityAuthorizationSnapshot{
++				Authn: []string{"static-users", "anonymous"}, Authz: "rbac-local",
++				Userdir: "static-users", CatalogDigest: strings.Repeat("a", 64),
++			}
++			auth.Policy.Loaded, auth.Policy.APIVersion, auth.Policy.Digest = true, "rbac.authorization.gitstore.dev/v1beta1", strings.Repeat("b", 64)
++			auth.Policy.Roles, auth.Policy.Bindings, auth.Policy.Rules = 1, 1, 1
++			if mutation == "alternate-provider" {
++				auth.Authz, auth.Policy.APIVersion = "another-provider", "provider-policy/v1"
++			}
++			if mutation == "no-anonymous" {
++				auth.Authn = []string{"static-users"}
++			}
++			var calls [2]atomic.Int64
++			var servers []*httptest.Server
++			for replica := range 2 {
++				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++					calls[replica].Add(1)
++					switch r.URL.Path {
++					case "/ready":
++						snapshot := auth
++						if replica == 1 && mutation == "different-policy" {
++							snapshot.Policy.Digest = strings.Repeat("c", 64)
++						}
++						if replica == 1 && mutation == "different-provider" {
++							snapshot.Authz = "another-provider"
++						}
++						if mutation == "missing-snapshot" {
++							_, _ = io.WriteString(w, `{"ready":true}`)
++						} else if mutation == "missing-counts" || mutation == "null-counts" {
++							counts := ""
++							if mutation == "null-counts" {
++								counts = `,"roles":null,"bindings":null,"rules":null`
++							}
++							_, _ = io.WriteString(w, `{"auth":{"authn":["anonymous"],"authz":"rbac-local","userdir":"static-users","catalogDigest":"`+
++								auth.CatalogDigest+`","policy":{"loaded":true,"apiVersion":"rbac.authorization.gitstore.dev/v1beta1","digest":"`+
++								auth.Policy.Digest+`"`+counts+`}}}`)
++						} else {
++							require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"auth": snapshot}))
++						}
++					case "/graphql":
++						if mutation == "http-failure" {
++							w.WriteHeader(http.StatusForbidden)
++							_, _ = io.WriteString(w, "private-response-marker")
++						} else if mutation == "oversized" {
++							_, _ = io.WriteString(w, strings.Repeat("private-response-marker", 4096))
++						} else if r.Header.Get("Authorization") == "Bearer private-token-marker" {
++							body := `{"data":{"namespaces":{"edges":[]}}}`
++							if mutation == "empty-allow" {
++								body = `{"data":{"namespaces":null}}`
++							}
++							_, _ = io.WriteString(w, body)
++						} else {
++							require.Empty(t, r.Header.Get("Authorization"), "anonymous probes must not forward the allowed credential")
++							body := `{"data":null,"errors":[{"message":"private-response-marker","extensions":{"code":"FORBIDDEN"}}]}`
++							switch mutation {
++							case "wrong-denial":
++								body = strings.ReplaceAll(body, "FORBIDDEN", "NOT_FOUND")
++							case "partial-data":
++								body = strings.Replace(body, `"data":null`, `"data":{"namespaces":{"edges":[]}}`, 1)
++							case "multiple-errors":
++								body = `{"errors":[{"extensions":{"code":"FORBIDDEN"}},{"extensions":{"code":"FORBIDDEN"}}]}`
++							case "no-anonymous":
++								body = strings.ReplaceAll(body, "FORBIDDEN", "UNAUTHENTICATED")
++								w.WriteHeader(http.StatusUnauthorized)
++							}
++							_, _ = io.WriteString(w, body)
++						}
++					default:
++						t.Errorf("unexpected authorization probe path %s", r.URL.Path)
++						w.WriteHeader(http.StatusNotFound)
++					}
++				}))
++				t.Cleanup(server.Close)
++				servers = append(servers, server)
++			}
++			result, err := repositoryCapacityAuthorizationProbes(t.Context(), http.DefaultClient,
++				[]string{servers[0].URL, servers[1].URL}, "private-token-marker")
++			if mutation == "" || mutation == "alternate-provider" || mutation == "no-anonymous" {
++				require.NoError(t, err)
++				require.Len(t, result, 2)
++				for i, replica := range result {
++					require.Equal(t, int64(3), calls[i].Load())
++					require.Equal(t, servers[i].URL, replica.Endpoint)
++					require.Equal(t, auth, replica.Auth)
++					require.True(t, replica.Allowed)
++					require.True(t, replica.Denied)
++					if mutation == "no-anonymous" {
++						require.Equal(t, "UNAUTHENTICATED", replica.DenialCode)
++					} else {
++						require.Equal(t, "FORBIDDEN", replica.DenialCode)
++					}
++				}
++				data, err := json.Marshal(result)
++				require.NoError(t, err)
++				require.NotContains(t, string(data), "private-")
++			} else {
++				require.Error(t, err)
++				require.NotContains(t, err.Error(), "private-")
++			}
++		})
++	}
++}
++
++func TestSecretCapacityRepositoryAuthorizationProbeBounds(t *testing.T) {
++	var redirected atomic.Int64
++	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		redirected.Add(1)
++		_, _ = io.WriteString(w, `{"ready":true}`)
++	}))
++	t.Cleanup(sink.Close)
++	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		http.Redirect(w, r, sink.URL, http.StatusTemporaryRedirect)
++	}))
++	t.Cleanup(source.Close)
++	_, err := repositoryCapacityAuthorizationProbes(t.Context(), http.DefaultClient, []string{source.URL, sink.URL}, "private-token-marker")
++	require.Error(t, err)
++	require.Zero(t, redirected.Load(), "probes must not follow redirects to a different process or credential recipient")
++	for _, endpoints := range [][]string{{}, {source.URL}, {source.URL, source.URL}, {"http://user:password@localhost", sink.URL}} {
++		_, err := repositoryCapacityAuthorizationProbes(t.Context(), http.DefaultClient, endpoints, "private-token-marker")
++		require.Error(t, err)
++		require.NotContains(t, err.Error(), "private-")
++		require.NotContains(t, err.Error(), "password")
++	}
++	ctx, cancel := context.WithCancel(t.Context())
++	cancel()
++	_, err = repositoryCapacityAuthorizationProbes(ctx, http.DefaultClient, []string{source.URL, sink.URL}, "private-token-marker")
++	require.ErrorIs(t, err, context.Canceled)
++}
++
+ func validateRepositoryCapacityWorkload(workload string, mode capacityMode, secretScenario bool) error {
+ 	if workload == "" {
+ 		return nil

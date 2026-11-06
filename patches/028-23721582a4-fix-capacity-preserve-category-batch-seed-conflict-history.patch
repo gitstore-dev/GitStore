@@ -1,0 +1,170 @@
+diff --git a/docs/runbooks/namespace-admission.md b/docs/runbooks/namespace-admission.md
+index e93f91a0350c9f93b1c025b89e0b1d6f16722daa..0fa06593a4b0002d3c83420a06ae3c7f40afd679 100644
+--- a/docs/runbooks/namespace-admission.md
++++ b/docs/runbooks/namespace-admission.md
+@@ -2178,7 +2178,12 @@ against deployed API replicas or capacity acceptance.
+ 
+ Category capacity acknowledgements require successful, error-free responses
+ carrying the expected name, title and commit revision, including after conflict
+-confirmation. Batch seeding verifies every response before counting admitted
++confirmation. Create-conflict confirmation also checks the intended parent.
++Batch seeding preserves an initial uniformly classified conflict across its
++existing bounded retry; a subsequent already-existing result still requires
++that exact-record confirmation. An already-existing result alone, mixed error
++codes or an HTTP failure cannot authorize confirmation.
++Batch seeding verifies every response before counting admitted
+ nodes. Convergence cannot use partial error data or a different category's path;
+ a valid zero-millisecond sample remains distinct from timeout. Filtered reads
+ reject malformed or duplicate identities and incomplete pagination metadata.
+diff --git a/scripts/test-capacity-dispatch.sh b/scripts/test-capacity-dispatch.sh
+index 374145c90bb9745be2c97fcee0feae8c44c4105d..057069a90f6fd4d81a7682b1cad18ed93d4c2605 100755
+--- a/scripts/test-capacity-dispatch.sh
++++ b/scripts/test-capacity-dispatch.sh
+@@ -1537,6 +1537,7 @@ for (const invalid of [
+   ...[null, 'invalid', { data: { category: null } },
+     { data: { category: { ...ownCategory, metadata: { ...ownCategory.metadata, name: 'different-name' } } } },
+     { data: { category: { ...ownCategory, metadata: { ...ownCategory.metadata, revision: '' } } } },
++    { data: { category: { ...ownCategory, spec: { ...ownCategory.spec, parentRef: { name: 'different-parent' } } } } },
+     { data: { category: { ...ownCategory, spec: { title: 'different-title' } } } }].map((body) =>
+     ({ response: { status: 200 }, body })),
+ ]) {
+@@ -1575,6 +1576,23 @@ for (const result of [
+   assert.equal(category.submit('create', 'fixture-category', 'fixture-title', '', 0, {}), null);
+   assert.equal(calls, 1);
+ }
++for (const initialResult of [undefined, classifiedConflict,
++  { response: { status: 503 }, body: classifiedConflict.body }]) {
++  observedCounters = {};
++  calls = 0;
++  request = () => { calls++; return classifiedConflict; };
++  assert.equal(category.submit('create', 'fixture-category', 'fixture-title', '', 0, {}, initialResult), null);
++  assert.equal(calls, 4, 'batch history must not enlarge the four-attempt retry bound');
++  assert.equal(observedCounters.category_mutation_conflicts, initialResult === classifiedConflict ? 5 : 4);
++}
++for (const initialResult of [undefined, { response: { status: 503 }, body: classifiedConflict.body }]) {
++  observedCounters = {};
++  calls = 0;
++  request = () => { calls++; return { response: { status: 200 },
++    body: { errors: [{ extensions: { code: 'ALREADY_EXISTS' } }] } }; };
++  assert.equal(category.submit('create', 'fixture-category', 'fixture-title', '', 0, {}, initialResult), null);
++  assert.equal(calls, 1, 'AlreadyExists without a uniform successful-HTTP conflict must fail');
++}
+ 
+ let now = 1000;
+ context.Date = { now: () => now, parse: Date.parse };
+@@ -1699,6 +1717,53 @@ for (const incomplete of [[], [categoryResponse({ metadata: { name: 'incomplete'
+ }
+ 
+ const fixtureRequest = request;
++for (const outcome of ['committed', 'wrong-parent', 'wrong-title', 'invalid-revision', 'denied', 'mixed']) {
++  observedCounters = {};
++  now = 1000;
++  const retriedSeeds = new Map();
++  let confirmations = 0;
++  request = (...args) => {
++    const [, , , variables, tags] = args;
++    if (tags.operation === 'createCategory' && /-n[12]$/.test(variables.input.metadata.name)) {
++      retriedSeeds.set(variables.input.metadata.name, variables.input);
++      return { response: { status: 200 }, body: {
++        errors: [{ extensions: { code: 'ALREADY_EXISTS' } }],
++      } };
++    }
++    if (tags.operation === 'confirmCategory') {
++      confirmations++;
++      const input = retriedSeeds.get(variables.name);
++      assert.ok(input, 'confirmation must follow this seed request');
++      const record = categoryResponse(input).json().data.createCategory.category;
++      record.spec = { ...input.spec };
++      if (outcome === 'wrong-parent') record.spec.parentRef = { name: 'different-parent' };
++      if (outcome === 'wrong-title') record.spec.title = 'different-title';
++      if (outcome === 'invalid-revision') record.metadata.revision = '';
++      return { response: { status: 200 }, body: { data: { category: record } } };
++    }
++    return fixtureRequest(...args);
++  };
++  batches = (requests) => requests.map(() => ({
++    status: 200, json: () => ({ errors: [
++      { extensions: { code: outcome === 'denied' ? 'FORBIDDEN' : 'CONFLICT' } },
++      ...(outcome === 'mixed' ? [{ extensions: { code: 'FORBIDDEN' } }] : []),
++    ] }),
++  }));
++  if (outcome === 'committed') {
++    seedCategory.setup();
++    assert.equal(observedCounters.category_seed_created, 2,
++      'a committed batch conflict must retain its history through the bounded seed retry');
++    assert.equal(observedCounters.category_mutation_conflicts, 2);
++    assert.equal(confirmations, 2);
++    assert.equal(retriedSeeds.size, 2);
++  } else {
++    assert.throws(seedCategory.setup, /cannot seed/);
++    assert.equal(observedCounters.category_seed_created, 0);
++    assert.equal(confirmations, outcome === 'denied' || outcome === 'mixed' ? 0 : 1,
++      'only a uniform conflict permits exact-record confirmation');
++  }
++}
++request = fixtureRequest;
+ const initialProductData = JSON.parse(JSON.stringify(seededProductData));
+ const productRoot = Object.keys(initialProductData.categories).find((name) => name.endsWith('-n0'));
+ const productLeaf = productRoot.replace(/-n0$/, '-n2');
+diff --git a/tests/capacity/README.md b/tests/capacity/README.md
+index 993cb397e3cffbaba4f781af5879a46d909098bc..3e1e9c897786e0a787e31ee2000c622cf40b1ddc 100644
+--- a/tests/capacity/README.md
++++ b/tests/capacity/README.md
+@@ -348,7 +348,12 @@ acknowledged by creation, not merely a same-name resource. Every offered
+ Product iteration must finish admission and deletion-race checks, with all six
+ checks sampled and zero dropped iterations.
+ Category mutation and conflict confirmations validate the expected name, title
+-and commit revision. Batch seeds require a response for every request and
++and commit revision; create-conflict confirmation also verifies the intended
++parent. Batch seeding carries an initial uniformly classified conflict into its
++existing four-attempt retry, so a committed create followed by `ALREADY_EXISTS`
++is confirmed rather than losing its conflict history. `ALREADY_EXISTS` alone,
++mixed error codes and HTTP failures do not authorize confirmation.
++Batch seeds require a response for every request and
+ cannot trust payloads from HTTP failures. Convergence probes require successful,
+ error-free reads of the requested category and a well-formed path; a valid
+ zero-millisecond convergence is not a timeout. Filtered reads reject malformed
+diff --git a/tests/capacity/profiles/category-hierarchy.js b/tests/capacity/profiles/category-hierarchy.js
+index d7e8a2a1bc4e6b730085f6b2f460228e90e88196..a3e38ba963c2189922c3112bdbd80589cde0f728 100644
+--- a/tests/capacity/profiles/category-hierarchy.js
++++ b/tests/capacity/profiles/category-hierarchy.js
+@@ -543,11 +543,12 @@ function categoryRecord(result, field, name, title) {
+ 
+ // submit runs one create/update, retrying retryable CONFLICTs alternately
+ // across both replicas. It returns the admitted record or null.
+-function submit(kind, name, title, parent, seq, tags) {
++function submit(kind, name, title, parent, seq, tags, initialResult) {
+   const mutation = kind === 'create' ? createMutation : updateMutation;
+   const field = kind === 'create' ? 'createCategory' : 'updateCategory';
+   const endpoints = seq % 2 === 0 ? [apiA, apiB] : [apiB, apiA];
+-  let sawConflict = false;
++  let sawConflict = kind === 'create' && graphqlErrorCode(initialResult) === 'CONFLICT';
++  if (sawConflict) conflicts.add(1);
+   for (let attempt = 0; attempt < 4; attempt += 1) {
+     const endpoint = endpoints[attempt % 2];
+     const result = graphql(endpoint, token, mutation, { input: inputFor(name, title, parent) },
+@@ -561,7 +562,11 @@ function submit(kind, name, title, parent, seq, tags) {
+     } else if (code === 'ALREADY_EXISTS' && kind === 'create' && sawConflict) {
+       // A superseded attempt may have committed: accept only our own record.
+       const read = graphql(endpoint, token, readQuery, { namespace, name }, { operation: 'confirmCategory' });
+-      return categoryRecord(read, 'category', name, title);
++      const confirmed = categoryRecord(read, 'category', name, title);
++      if (!confirmed) return null;
++      const parentRef = confirmed.spec.parentRef;
++      return (parent ? parentRef && parentRef.name === parent : parentRef === undefined || parentRef === null)
++        ? confirmed : null;
+     } else {
+       return null;
+     }
+@@ -621,8 +626,9 @@ export function setup() {
+       responses.forEach((response, n) => {
+         let body;
+         try { body = response.json(); } catch (_) { body = null; }
+-        const ok = categoryRecord({ response, body }, 'createCategory', nodeName(chunk[n]), `seed-${nodeName(chunk[n])}`);
+-        if (!ok && !submit('create', nodeName(chunk[n]), `seed-${nodeName(chunk[n])}`, nodeName(parentIndex(chunk[n])), n, { traffic: 'seed' })) {
++        const initialResult = { response, body };
++        const ok = categoryRecord(initialResult, 'createCategory', nodeName(chunk[n]), `seed-${nodeName(chunk[n])}`);
++        if (!ok && !submit('create', nodeName(chunk[n]), `seed-${nodeName(chunk[n])}`, nodeName(parentIndex(chunk[n])), n, { traffic: 'seed' }, initialResult)) {
+           throw new Error(`cannot seed ${nodeName(chunk[n])}`);
+         }
+         seeded.add(1);

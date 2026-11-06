@@ -1,0 +1,294 @@
+diff --git a/docs/runbooks/namespace-admission.md b/docs/runbooks/namespace-admission.md
+index 4285cb99f9883a8a0d17fc6103a7f0cfc590b32f..d365e4c4e856076251690ac7947e28bb9bda9b4e 100644
+--- a/docs/runbooks/namespace-admission.md
++++ b/docs/runbooks/namespace-admission.md
+@@ -702,8 +702,10 @@ exact authoritative row reads use at most sixteen keys per physical query.
+ Locator and authoritative batches from all Namespaces share one eight-reader
+ ceiling; there is no nested per-Namespace pool. Full, single-Namespace locator
+ batches start their authoritative reads without waiting for unrelated locator
+-batches. Partial and mixed-Namespace batches are regrouped to preserve query
+-packing, without extra readers or authoritative queries. Cancellation joins those readers and
++batches. Partial and mixed-Namespace batches are regrouped as soon as all
++locators finish, without waiting for unrelated authoritative reads to finish.
++The same workers preserve query packing without extra readers or authoritative
++queries. Cancellation joins those readers and
+ returns an error without exposing partial snapshots. The four-name snapshot
+ path retains its two physical reads. Neither path scans partitions or retains
+ authoritative facts across reservations.
+diff --git a/gitstore-api/internal/datastore/scylla/backend_test.go b/gitstore-api/internal/datastore/scylla/backend_test.go
+index 4ff77be17a04417a4af12c45577736f3da2e92a5..088c4f7e525f15355a074c94c2bc690894634b22 100644
+--- a/gitstore-api/internal/datastore/scylla/backend_test.go
++++ b/gitstore-api/internal/datastore/scylla/backend_test.go
+@@ -1991,8 +1991,12 @@ func TestScylla_FileSnapshotsOverlapBoundedLocatorBatches(t *testing.T) {
+ func TestScylla_FileSnapshotsOverlapBoundedAuthoritativeBatches(t *testing.T) {
+ 	type readKey struct{}
+ 	firstWave, release, canceledRead := make(chan struct{}), make(chan struct{}), make(chan struct{})
++	partialFullWave, partialReady, partialRelease := make(chan struct{}), make(chan struct{}), make(chan struct{})
++	mixedReady, mixedRelease := make(chan struct{}), make(chan struct{})
+ 	var cancelOnce sync.Once
+ 	var locators, authoritative, active, peak atomic.Int64
++	var partialFullReads, partialReads atomic.Int64
++	var mixedReads atomic.Int64
+ 	var invalidQuery atomic.Bool
+ 	cfg := testScyllaConfig(t)
+ 	cfg.QueryObserver = namespaceReservationObserver(func(ctx context.Context, query gocql.ObservedQuery) {
+@@ -2028,6 +2032,38 @@ func TestScylla_FileSnapshotsOverlapBoundedAuthoritativeBatches(t *testing.T) {
+ 		if query.Err != nil {
+ 			invalidQuery.Store(true)
+ 		}
++		if mode == "mixed" {
++			if len(query.Values) != 17 {
++				invalidQuery.Store(true)
++			}
++			if mixedReads.Add(1) == 2 {
++				close(mixedReady)
++			}
++			select {
++			case <-mixedRelease:
++			case <-ctx.Done():
++			}
++			return
++		}
++		if mode == "partial" {
++			if len(query.Values) == 5 {
++				if partialReads.Add(1) == 1 {
++					close(partialReady)
++				}
++			} else {
++				if len(query.Values) != 33 {
++					invalidQuery.Store(true)
++				}
++				if partialFullReads.Add(1) == 3 {
++					close(partialFullWave)
++				}
++				select {
++				case <-partialRelease:
++				case <-ctx.Done():
++				}
++			}
++			return
++		}
+ 		if authoritative.Add(1) == 8 {
+ 			close(firstWave)
+ 		}
+@@ -2094,6 +2130,61 @@ func TestScylla_FileSnapshotsOverlapBoundedAuthoritativeBatches(t *testing.T) {
+ 	result.files[0].Annotations["sequence"] = "changed"
+ 	require.Equal(t, "1", result.files[17].Annotations["sequence"])
+ 
++	partialCtx, cancelPartial := context.WithTimeout(context.WithValue(t.Context(), readKey{}, "partial"), 5*time.Second)
++	defer cancelPartial()
++	go func() {
++		files, err := store.GetFileSnapshots(partialCtx, uids[20:70])
++		completed <- readResult{files, err}
++	}()
++	select {
++	case <-partialFullWave:
++	case <-partialCtx.Done():
++	}
++	partialStarted := false
++	select {
++	case <-partialReady:
++		partialStarted = true
++	case <-time.After(time.Second):
++	}
++	close(partialRelease)
++	result = <-completed
++	require.NoError(t, result.err)
++	require.True(t, partialStarted, "partial reads must not wait for unrelated authoritative batches after all locators finish")
++	require.EqualValues(t, 3, partialFullReads.Load())
++	require.EqualValues(t, 1, partialReads.Load(), "fifty same-Namespace keys retain four authoritative queries")
++	require.Len(t, result.files, 50)
++	for i, file := range result.files {
++		require.NotNil(t, file)
++		require.Equal(t, uids[20+i], file.UID)
++	}
++	require.Zero(t, active.Load())
++
++	mixedUIDs := append([]string{}, uids[20:28]...)
++	mixedUIDs = append(mixedUIDs, uids[200:208]...)
++	mixedCtx, cancelMixed := context.WithTimeout(context.WithValue(t.Context(), readKey{}, "mixed"), 5*time.Second)
++	defer cancelMixed()
++	go func() {
++		files, err := store.GetFileSnapshots(mixedCtx, mixedUIDs)
++		completed <- readResult{files, err}
++	}()
++	mixedStarted := false
++	select {
++	case <-mixedReady:
++		mixedStarted = true
++	case <-time.After(time.Second):
++	}
++	close(mixedRelease)
++	result = <-completed
++	require.NoError(t, result.err)
++	require.True(t, mixedStarted, "one locator batch must not serialize independent mixed-Namespace authoritative reads")
++	require.EqualValues(t, 2, mixedReads.Load())
++	require.Len(t, result.files, len(mixedUIDs))
++	for i, file := range result.files {
++		require.NotNil(t, file)
++		require.Equal(t, mixedUIDs[i], file.UID)
++	}
++	require.Zero(t, active.Load())
++
+ 	peer := newTestStore(t)
+ 	file, err := peer.GetFile(t.Context(), uids[0])
+ 	require.NoError(t, err)
+diff --git a/gitstore-api/internal/datastore/scylla/file.go b/gitstore-api/internal/datastore/scylla/file.go
+index c76cdc010d14367f6894b98eac56ef81f9bfaa92..8525e24719eb7a8198f9b8633adccea812021943 100644
+--- a/gitstore-api/internal/datastore/scylla/file.go
++++ b/gitstore-api/internal/datastore/scylla/file.go
+@@ -163,29 +163,8 @@ func (s *scyllaDatastore) GetFileSnapshots(ctx context.Context, uids []string) (
+ 		}
+ 		return nil
+ 	}
+-	run := func(count int, read func(int) error) error {
+-		errs := make([]error, count)
+-		var next atomic.Int64
+-		var workers sync.WaitGroup
+-		for range min(8, count) {
+-			workers.Go(func() {
+-				for {
+-					i := int(next.Add(1) - 1)
+-					if i >= count || ctx.Err() != nil {
+-						return
+-					}
+-					errs[i] = read(i)
+-				}
+-			})
+-		}
+-		workers.Wait()
+-		if err := ctx.Err(); err != nil {
+-			return err
+-		}
+-		return errors.Join(errs...)
+-	}
+ 	batches := make([][]fileIndexRow, (len(keys)+fileSnapshotReadBatchLimit-1)/fileSnapshotReadBatchLimit)
+-	err := run(len(batches), func(batch int) error {
++	readLocator := func(batch int) (string, []fileIndexRow, error) {
+ 		start := batch * fileSnapshotReadBatchLimit
+ 		end := min(start+fileSnapshotReadBatchLimit, len(keys))
+ 		args := make([]any, end-start)
+@@ -196,53 +175,93 @@ func (s *scyllaDatastore) GetFileSnapshots(ctx context.Context, uids []string) (
+ 		stmt := "SELECT " + strings.Join(s.fileByUIDTable.Metadata().Columns, ", ") +
+ 			" FROM files_by_uid WHERE uid IN (" + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + ")"
+ 		if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&batches[batch]); err != nil {
+-			return err
++			return "", nil, err
+ 		}
+ 		fullNamespaceBatch := len(batches[batch]) == fileSnapshotReadBatchLimit
+ 		for _, index := range batches[batch] {
+ 			if index.Namespace == "" || !expected[index.UID] {
+-				return fmt.Errorf("%w: invalid File UID locator", datastore.ErrRepairRequired)
++				return "", nil, fmt.Errorf("%w: invalid File UID locator", datastore.ErrRepairRequired)
+ 			}
+ 			delete(expected, index.UID)
+ 			if index.Namespace != batches[batch][0].Namespace {
+ 				fullNamespaceBatch = false
+ 			}
+ 		}
+-		// Full single-Namespace batches cannot merge with later locators.
+-		// Read them now without increasing query counts or the worker ceiling.
+ 		if fullNamespaceBatch {
+-			if err := readSnapshots(batches[batch][0].Namespace, batches[batch]); err != nil {
+-				return err
+-			}
++			indices := batches[batch]
+ 			batches[batch] = nil
++			return indices[0].Namespace, indices, nil
+ 		}
+-		return nil
+-	})
+-	if err != nil {
+-		return nil, err
++		return "", nil, nil
+ 	}
+-	groups := make(map[string][]fileIndexRow)
+-	order := make([]string, 0)
+-	for _, indices := range batches {
+-		for _, index := range indices {
+-			if _, seen := groups[index.Namespace]; !seen {
+-				order = append(order, index.Namespace)
++	locatorErrors, fullErrors := make([]error, len(batches)), make([]error, len(batches))
++	var authoritativeBatches [][]fileIndexRow
++	var authoritativeErrors []error
++	var nextLocator, nextAuthoritative atomic.Int64
++	var grouped sync.Once
++	var locators, workers sync.WaitGroup
++	locators.Add(len(batches))
++	for range min(8, len(keys)) {
++		workers.Go(func() {
++			for {
++				batch := int(nextLocator.Add(1) - 1)
++				if batch >= len(batches) {
++					break
++				}
++				if err := ctx.Err(); err != nil {
++					locatorErrors[batch] = err
++					locators.Done()
++					continue
++				}
++				namespace, indices, err := readLocator(batch)
++				locatorErrors[batch] = err
++				// Publish locators before any unrelated authoritative read can block.
++				locators.Done()
++				if err == nil && len(indices) != 0 {
++					fullErrors[batch] = readSnapshots(namespace, indices)
++				}
+ 			}
+-			groups[index.Namespace] = append(groups[index.Namespace], index)
+-		}
++			locators.Wait()
++			if ctx.Err() != nil {
++				return
++			}
++			grouped.Do(func() {
++				if errors.Join(locatorErrors...) != nil {
++					return
++				}
++				groups := make(map[string][]fileIndexRow)
++				order := make([]string, 0)
++				for _, indices := range batches {
++					for _, index := range indices {
++						if _, seen := groups[index.Namespace]; !seen {
++							order = append(order, index.Namespace)
++						}
++						groups[index.Namespace] = append(groups[index.Namespace], index)
++					}
++				}
++				for _, namespace := range order {
++					indices := groups[namespace]
++					for start := 0; start < len(indices); start += fileSnapshotReadBatchLimit {
++						authoritativeBatches = append(authoritativeBatches, indices[start:min(start+fileSnapshotReadBatchLimit, len(indices))])
++					}
++				}
++				authoritativeErrors = make([]error, len(authoritativeBatches))
++			})
++			for ctx.Err() == nil {
++				i := int(nextAuthoritative.Add(1) - 1)
++				if i >= len(authoritativeBatches) {
++					return
++				}
++				indices := authoritativeBatches[i]
++				authoritativeErrors[i] = readSnapshots(indices[0].Namespace, indices)
++			}
++		})
+ 	}
+-	var authoritativeBatches [][]fileIndexRow
+-	for _, namespace := range order {
+-		indices := groups[namespace]
+-		for start := 0; start < len(indices); start += fileSnapshotReadBatchLimit {
+-			authoritativeBatches = append(authoritativeBatches, indices[start:min(start+fileSnapshotReadBatchLimit, len(indices))])
+-		}
++	workers.Wait()
++	if err := ctx.Err(); err != nil {
++		return nil, err
+ 	}
+-	err = run(len(authoritativeBatches), func(i int) error {
+-		indices := authoritativeBatches[i]
+-		return readSnapshots(indices[0].Namespace, indices)
+-	})
+-	if err != nil {
++	if err := errors.Join(errors.Join(locatorErrors...), errors.Join(fullErrors...), errors.Join(authoritativeErrors...)); err != nil {
+ 		return nil, err
+ 	}
+ 	return results, nil

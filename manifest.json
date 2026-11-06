@@ -1,0 +1,2533 @@
+{
+  "format": "gitstore-abandoned-patch-archive-v1",
+  "purpose": "Recovery-only patch archive, not a runnable checkout or merge candidate.",
+  "main_reviewed": "b5c3f97471961c1e9c066f883d18eedea197113b",
+  "protected_implementation_and_proposals": {
+    "054-repository-ownerreferences-backfill": "d2bf323034605f7cd439c54d15952e3737ccddbc",
+    "056-file-reference-safety": "7cfccc383802b20fd857826047446f6871b7a513",
+    "065-kratos-user-directory": "9306c732904d67d9810f241e0d29fb759177fe22",
+    "066-git-backed-rbac": "d5e607ee050443e63253b1c1b3d56c2924693e98",
+    "067-product-variant-lifecycle": "2cab0b302256889cf1e5521d3f281274022cb86b",
+    "068-collection-lifecycle": "bb8478032a19b7d4401857592c31e75618965108",
+    "admin/ui": "d08267266fe76f453827f36f5afb2b8f31b61b64",
+    "codex/fix-push-admission-convergence": "0cd61a1f28725f9e6d61efdde7ef748436bf0b44",
+    "codex/migrate-metrics-to-otel": "9634f6b811fa69ca06a82f1f7847abca3df58152"
+  },
+  "policy": [
+    "Retain C1-C4 and historical deltas not certified superseded.",
+    "Exclude C5, its evaluation branch, rejected experiments, performance tuning and historical threshold/evidence chains.",
+    "Exclude delivered feature families and superseded aggregate checkpoints.",
+    "Exact postimages and reverse-applicable patches in main or retained implementations are deduplicated.",
+    "Patches retain their original context and may overlap newer implementations; no production readiness is asserted.",
+    "No original abandoned commit is an ancestor of this archive."
+  ],
+  "entries": [
+    {
+      "archive_path": "patches/001-27930deec2-feat-datastore-add-bounded-authoritative-file-snapshots.patch",
+      "category": "C1-C2/latest-draft",
+      "source": "27930deec21e4f9a9059fac0f821f3cdce5f50b2",
+      "base": "d3fc1a6ef4ce90c983590f155547752e04b00cd0",
+      "subject": "feat(datastore): add bounded authoritative File snapshots",
+      "paths": [
+        "gitstore-api/internal/datastore/datastore.go",
+        "gitstore-api/internal/datastore/instrumented.go",
+        "gitstore-api/internal/datastore/instrumented_test.go",
+        "gitstore-api/internal/datastore/memdb/backend.go",
+        "gitstore-api/internal/datastore/memdb/file_test.go",
+        "gitstore-api/internal/datastore/scylla/backend_test.go",
+        "gitstore-api/internal/datastore/scylla/file.go",
+        "gitstore-api/internal/testutil/stubstore.go",
+        "scripts/test-secret-config.sh"
+      ],
+      "sha256": "81591b384d7fe3325ba1e558d8f2afe9ec7571bfa9848801d09953ece47f0a3b",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/002-7773e0b900-feat-admission-authorize-bounded-file-groups-from-fresh-snapshots.patch",
+      "category": "C1-C2/latest-draft",
+      "source": "7773e0b900352469f8f43dd5a07adf1e7f706f53",
+      "base": "27930deec21e4f9a9059fac0f821f3cdce5f50b2",
+      "subject": "feat(admission): authorize bounded File groups from fresh snapshots",
+      "paths": [
+        "docs/developer-guide.md",
+        "gitstore-api/internal/cataloggrpc/admission_operations.go",
+        "gitstore-api/internal/cataloggrpc/admission_operations_test.go",
+        "gitstore-api/internal/config/config.go",
+        "gitstore-api/internal/datastore/scylla/backend.go",
+        "gitstore-api/internal/datastore/scylla/backend_test.go"
+      ],
+      "sha256": "3a4d128ab7890d70433645b1614f91c0af794882585824d8f559598d0082ac09",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/003-0af7703ed8-fix-git-restore-common-commit-and-shallow-fetch-negotiation.patch",
+      "category": "C1-C2/latest-draft",
+      "source": "0af7703ed866eb3381a962da94f8509cc4307029",
+      "base": "7773e0b900352469f8f43dd5a07adf1e7f706f53",
+      "subject": "fix(git): restore common-commit and shallow fetch negotiation",
+      "paths": [
+        "docs/developer-guide.md",
+        "gitstore-git-service/src/git/pack_server.rs"
+      ],
+      "sha256": "34ebe73fb47e6a7b74fa6892b426eeda7f7a1b0d19f4ddb5d7810d9adda29f32",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/004-bd16335bd5-fix-admission-report-failed-durable-file-writes-to-callbacks.patch",
+      "category": "C1-C2/latest-draft",
+      "source": "bd16335bd5d8fb7f045bababd1facd1cb7ba52f7",
+      "base": "0af7703ed866eb3381a962da94f8509cc4307029",
+      "subject": "fix(admission): report failed durable File writes to callbacks",
+      "paths": [
+        "docs/developer-guide.md",
+        "gitstore-api/internal/cataloggrpc/file_replica_test.go",
+        "gitstore-api/internal/cataloggrpc/server.go"
+      ],
+      "sha256": "bf8bba0a1c13712adca27803958ac9ee6b4825a1c30d0aa92972a78381657a38",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/005-7b65541361-feat-admission-fence-bounded-concurrent-file-mutations.patch",
+      "category": "C1-C2/latest-draft",
+      "source": "7b6554136126e41efa26c1aaa889b53b76fd9d9b",
+      "base": "bd16335bd5d8fb7f045bababd1facd1cb7ba52f7",
+      "subject": "feat(admission): fence bounded concurrent File mutations",
+      "paths": [
+        "docs/developer-guide.md",
+        "gitstore-api/internal/cataloggrpc/admission_operations_test.go",
+        "gitstore-api/internal/cataloggrpc/file_replica_test.go",
+        "gitstore-api/internal/cataloggrpc/server.go",
+        "gitstore-api/internal/datastore/datastore.go",
+        "gitstore-api/internal/datastore/instrumented.go",
+        "gitstore-api/internal/datastore/instrumented_test.go",
+        "gitstore-api/internal/datastore/scylla/backend_test.go",
+        "gitstore-api/internal/datastore/scylla/namespace_catalog_test.go",
+        "gitstore-api/internal/datastore/scylla/repository.go"
+      ],
+      "sha256": "52d71559791862c48bb362bd72fdf017a6ae355f5f6f79b7863e570735059977",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/006-7e9c2cc1b8-fix-admission-distinguish-unavailable-refs-from-supersession.patch",
+      "category": "C1-C2/latest-draft",
+      "source": "7e9c2cc1b84259f88dacffce484e4e5eb2a5eca1",
+      "base": "7b6554136126e41efa26c1aaa889b53b76fd9d9b",
+      "subject": "fix(admission): distinguish unavailable refs from supersession",
+      "paths": [
+        "docs/developer-guide.md",
+        "gitstore-api/internal/cataloggrpc/committed_manifest.go",
+        "gitstore-api/internal/cataloggrpc/committed_manifest_test.go",
+        "gitstore-api/internal/cataloggrpc/file_replica_test.go",
+        "gitstore-api/internal/cataloggrpc/server.go"
+      ],
+      "sha256": "861fef84270be0a117fe79911a4d412c619fb119f6edda4cb1597807ec7dbc7a",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/007-b3ec2abcc3-fix-admission-retry-product-status-conflicts.patch",
+      "category": "C1-C2/latest-draft",
+      "source": "b3ec2abcc3245f04a6280def5442543387ebb992",
+      "base": "7e9c2cc1b84259f88dacffce484e4e5eb2a5eca1",
+      "subject": "fix(admission): retry Product status conflicts",
+      "paths": [
+        "docs/developer-guide.md",
+        "gitstore-api/internal/cataloggrpc/server.go",
+        "gitstore-api/internal/cataloggrpc/server_test.go"
+      ],
+      "sha256": "83e13a93a40a0310c2fff12d134dd3148b117f9b05b2b3a58ccdd5fcb42d0387",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/008-528cca4a6a-fix-capacity-bound-repository-replacement-to-one-deadline.patch",
+      "category": "C1-C2/latest-draft",
+      "source": "528cca4a6a06536072d152da71d369c0c61527a0",
+      "base": "20e8eb93de70de6caadd2023c1fc504c09d73484",
+      "subject": "fix(capacity): bound Repository replacement to one deadline",
+      "paths": [
+        "tests/capacity/README.md",
+        "tests/integration/namespace_watch_capacity_test.go",
+        "tests/integration/repository_lifecycle_capacity_test.go"
+      ],
+      "sha256": "5de10283d50d6321a545d8e0ca015409072d25c0f5abef44388922f3e7fd6aa1",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/009-7171b0db68-fix-capacity-distinguish-journal-replay-from-status-updates.patch",
+      "category": "C1-C2/latest-draft",
+      "source": "7171b0db6812148311284e1eb5a0f5311bcf4d41",
+      "base": "528cca4a6a06536072d152da71d369c0c61527a0",
+      "subject": "fix(capacity): distinguish journal replay from status updates",
+      "paths": [
+        "tests/capacity/README.md",
+        "tests/integration/namespace_watch_capacity_test.go"
+      ],
+      "sha256": "27d4d75284f4470aee5fd4c4eb04fab10b6def1b0337a4d3c9efbcb68b07f969",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/010-3edea62b75-fix-admission-report-unavailable-namespace-lookup-to-callback.patch",
+      "category": "C1-C2/latest-draft",
+      "source": "3edea62b751e30c713f55cda3e41ac657b58ca0a",
+      "base": "26f65f96abc34d153cab0c3d75e0429744cd0b1c",
+      "subject": "fix(admission): report unavailable namespace lookup to callback",
+      "paths": [
+        "docs/products/push-validation.md",
+        "gitstore-api/internal/cataloggrpc/server.go",
+        "gitstore-api/internal/cataloggrpc/server_test.go"
+      ],
+      "sha256": "f23c39d5c5d15febf6a431b9fc5caeb7cc186c24f7a0f3e554c0c494e2f6594d",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/011-33a68be990-fix-scylla-unblock-deferred-snapshots-within-the-reader-budget.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "33a68be990daee8afaae4faa9289a7c2480780a9",
+      "base": "adc3d111f6004c1fc8a39f0afbabafd6e95ae4d0",
+      "subject": "fix(scylla): unblock deferred snapshots within the reader budget",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/datastore/scylla/backend_test.go",
+        "gitstore-api/internal/datastore/scylla/file.go"
+      ],
+      "sha256": "d462bcb5eb6654fe5699a21539730a2e35e670500b2a7b4abd9e6cea9d784933",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/012-88af79a8ac-fix-capacity-bound-api-replacement-observations-to-one-deadline.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "88af79a8ac729b861ccb4a103bbf020dbb25d598",
+      "base": "f1c27ac74214201142b301cbd750e9bf0e0829d9",
+      "subject": "fix(capacity): bound API replacement observations to one deadline",
+      "paths": [
+        "docs/runbooks/controller-watch-status.md",
+        "tests/capacity/README.md",
+        "tests/integration/repository_lifecycle_capacity_test.go"
+      ],
+      "sha256": "0e36c442058d2d2e43fe07ef4a4b0e81b0901867fd116ede2f109f5deee315df",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/013-02f6d80880-fix-capacity-match-watch-postimages-to-acknowledged-versions.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "02f6d8088090fad3cbb25c6a5b8821157c41195b",
+      "base": "d2d6df072cd30fe968452d2735be75ff61a91dfc",
+      "subject": "fix(capacity): match watch postimages to acknowledged versions",
+      "paths": [
+        "docs/runbooks/controller-watch-status.md",
+        "tests/integration/namespace_watch_test.go",
+        "tests/integration/repository_lifecycle_test.go"
+      ],
+      "sha256": "bb4fadb9792dfca53420d4eeacd20acf2d1ec6ad503667f10dcda42927ab113f",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/014-6412081f0c-fix-capacity-bound-standalone-provenance-clones.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "6412081f0cf21c9609daa2f4adb9a4d0bddaaeac",
+      "base": "02f6d8088090fad3cbb25c6a5b8821157c41195b",
+      "subject": "fix(capacity): bound standalone provenance clones",
+      "paths": [
+        "docs/runbooks/controller-watch-status.md",
+        "tests/integration/githelper_test.go"
+      ],
+      "sha256": "c91d454d0cc76dce096bb9840ab5265fb0a473b66d0173807365e4ed1f4f7142",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/015-caaabecc89-fix-observability-trace-bounded-file-snapshot-exchanges.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "caaabecc891ba5627fdbf79abc9e34c8771ebb0c",
+      "base": "6412081f0cf21c9609daa2f4adb9a4d0bddaaeac",
+      "subject": "fix(observability): trace bounded File snapshot exchanges",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/datastore/scylla/backend.go",
+        "gitstore-api/internal/datastore/scylla/backend_test.go",
+        "gitstore-api/internal/datastore/scylla/file.go",
+        "gitstore-api/internal/datastore/scylla/query_observer_test.go"
+      ],
+      "sha256": "ba82fedacf804c470168fd45efb7f37c761da5683c47a2f6f30dcbfbf1831d14",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/016-a8d5438ca4-fix-capacity-verify-bounded-snapshot-query-topology.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "a8d5438ca4df24a4f3cc71c8161bc2dc6089857b",
+      "base": "caaabecc891ba5627fdbf79abc9e34c8771ebb0c",
+      "subject": "fix(capacity): verify bounded snapshot query topology",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/datastore/scylla/capacity_test.go"
+      ],
+      "sha256": "e59534ccaba93106c1657454a4571c332b60e829f7a00bc2fb796403c181f86d",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/017-f78083db81-test-capacity-measure-bounded-file-locator-query-packing.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "f78083db81034472f59ff7cb8030787b620074a5",
+      "base": "a8d5438ca4df24a4f3cc71c8161bc2dc6089857b",
+      "subject": "test(capacity): measure bounded File locator query packing",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/datastore/scylla/capacity_test.go"
+      ],
+      "sha256": "9fdbbf2cc1423e2ff98050a55096d16c0eba3f8b23b523c912f6a4a536c0cf53",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/018-9bb529f452-test-capacity-attribute-native-git-client-cpu-and-startup-waits.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "9bb529f4522324c6981dd54b801eeab88bdc7649",
+      "base": "c7ac70858fff5a3fae1c8cdd93721dc5a7430be0",
+      "subject": "test(capacity): attribute native Git client CPU and startup waits",
+      "paths": [
+        "AGENTS.md",
+        "Makefile",
+        "docs/runbooks/namespace-admission.md",
+        "scripts/run-capacity-target.sh",
+        "scripts/test-capacity-dispatch.sh",
+        "tests/capacity/README.md",
+        "tests/integration/repository_lifecycle_capacity_test.go",
+        "tests/integration/secret_capacity_contract_test.go"
+      ],
+      "sha256": "ac92c06629b3ad2fbc99542a33d04cac98f9fe2de61cf42da35b75277bbc8235",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/019-20a28fe66a-test-capacity-capture-native-git-resource-pressure.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "20a28fe66a3cc67342e1ffb0473ac909cf7b18e9",
+      "base": "9bb529f4522324c6981dd54b801eeab88bdc7649",
+      "subject": "test(capacity): capture native Git resource pressure",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "tests/capacity/README.md",
+        "tests/integration/repository_lifecycle_capacity_test.go",
+        "tests/integration/secret_capacity_contract_test.go"
+      ],
+      "sha256": "ba2e369b1d4cda9c5ac38f38a89013745656f3ef00ff554fbe4de2dd90a350ab",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/020-90f3a3b0aa-feat-observability-bound-native-file-tracing-during-explicit-prof.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "90f3a3b0aa92914768b069f79a92ed6993ea6c71",
+      "base": "f05aa9b8e1705946a4e369b002b0b05b88a447c4",
+      "subject": "feat(observability): bound native File tracing during explicit profiles",
+      "paths": [
+        "AGENTS.md",
+        "Makefile",
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/datastore/scylla/backend.go",
+        "gitstore-api/internal/datastore/scylla/file.go",
+        "gitstore-api/internal/datastore/scylla/query_observer_test.go",
+        "tests/capacity/README.md",
+        "tests/integration/repository_lifecycle_capacity_test.go"
+      ],
+      "sha256": "114f34e8458b57c81b2999236da0e3a2dd24ed97cdbbb3b6c557c70dea4150b2",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/021-e940a64819-test-scylla-verify-sampled-file-server-trace-round-trips.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "e940a648198f394bdf8bbd784f71cd806958a1b0",
+      "base": "efaa2851756e21b6d4e018fd93fe9ca59a0099d5",
+      "subject": "test(scylla): verify sampled File server trace round-trips",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/datastore/scylla/backend_test.go",
+        "gitstore-api/internal/datastore/scylla/capacity_test.go",
+        "tests/capacity/README.md"
+      ],
+      "sha256": "23d3127d9ee3574615f352ef530e08ed5062ea8e21585142390033e1afcb149f",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/022-f531d7c162-feat-observability-link-file-rows-to-shared-cql-work.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "f531d7c162c1d92f057b0b6f40e7a41bc09234ef",
+      "base": "f975395be44995850444304be3ec97da1e67c2df",
+      "subject": "feat(observability): link File rows to shared CQL work",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/datastore/instrumented.go",
+        "gitstore-api/internal/datastore/instrumented_test.go",
+        "gitstore-api/internal/datastore/scylla/backend.go",
+        "gitstore-api/internal/datastore/scylla/file.go",
+        "gitstore-api/internal/datastore/scylla/query_observer_test.go"
+      ],
+      "sha256": "82dd36290a7d5ec96ed5281a8f4f1c03901f6ad5671ba7dbe2c975fd12c6abcb",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/023-05f17f04d1-test-observability-verify-real-file-row-and-cql-joins.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "05f17f04d15430f26801b578a5199c9744e83185",
+      "base": "f531d7c162c1d92f057b0b6f40e7a41bc09234ef",
+      "subject": "test(observability): verify real File row and CQL joins",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/datastore/scylla/backend_test.go"
+      ],
+      "sha256": "c687d57f6f0b706c79af89e533a5af529a898ee181cebe30dbe97b5b90ee562a",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/024-fbd285bccf-fix-capacity-recognize-exact-deleted-node-error-envelopes.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "fbd285bccf5a660f62f727ddd17305fc9c4533cb",
+      "base": "964fc3f446bd6882ff3a3e219e3d297b1e846038",
+      "subject": "fix(capacity): recognize exact deleted-node error envelopes",
+      "paths": [
+        "tests/capacity/README.md",
+        "tests/integration/repository_lifecycle_capacity_test.go"
+      ],
+      "sha256": "989a1c357153fa2d411542c4881641de79be97cd844cb6c53e5f7eaf01459137",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/025-86afd42431-fix-capacity-wait-for-catalog-uid-fixture-publication.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "86afd4243181159b58296f7b923b35e551a06979",
+      "base": "fbd285bccf5a660f62f727ddd17305fc9c4533cb",
+      "subject": "fix(capacity): wait for catalog UID fixture publication",
+      "paths": [
+        "tests/capacity/README.md",
+        "tests/integration/repository_lifecycle_capacity_test.go"
+      ],
+      "sha256": "a830346e4ba28e639f3362dc2fb752825f159656c19c8703713d08d0a2ae8eec",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/026-c85e1d355c-fix-capacity-admit-approved-readiness-signing-key-wrapper.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "c85e1d355c7bf1c1ea88222f68f0acecfe3cf98b",
+      "base": "79e684112065f2a2490e1db2e1af8cecd95d30f6",
+      "subject": "fix(capacity): admit approved readiness signing-key wrapper",
+      "paths": [
+        "docs/runbooks/production-readiness-testing.md",
+        "scripts/test-capacity-dispatch.sh",
+        "tests/capacity/preflight/api-readiness.sh"
+      ],
+      "sha256": "2dfe00ba44919abc0f8a4191318a6ed81b1a69a478d706c4b2d686c37c0c33be",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/027-fe8d5921f3-test-observability-replace-deprecated-opentelemetry-test-apis.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "fe8d5921f3f382f47d3a379bb7e9da392a16551d",
+      "base": "c85e1d355c7bf1c1ea88222f68f0acecfe3cf98b",
+      "subject": "test(observability): replace deprecated OpenTelemetry test APIs",
+      "paths": [
+        "gitstore-api/internal/datastore/instrumented_test.go",
+        "gitstore-api/internal/datastore/scylla/query_observer_test.go"
+      ],
+      "sha256": "85d440b9868a78cc62c3ef7a2a120eb1837ba4ea1f26f525a6815f90ec6d8412",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/028-23721582a4-fix-capacity-preserve-category-batch-seed-conflict-history.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "23721582a48d6d83ece1340392e9f37197e9dad2",
+      "base": "887d6bc763f2d4f3ee261bcc5c06ac1e9b1cc9de",
+      "subject": "fix(capacity): preserve Category batch seed conflict history",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "scripts/test-capacity-dispatch.sh",
+        "tests/capacity/README.md",
+        "tests/capacity/profiles/category-hierarchy.js"
+      ],
+      "sha256": "2d8b784b29150c4565afadc53d1e0363ee5e21782ab005a67fc782867d9c4f02",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/029-807d10354d-fix-api-preserve-unchanged-catalog-admission-across-branch-advanc.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "807d10354d6549c95337f760c571487c06c4ddbe",
+      "base": "23721582a48d6d83ece1340392e9f37197e9dad2",
+      "subject": "fix(api): preserve unchanged catalog admission across branch advances",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/cataloggrpc/committed_manifest.go",
+        "gitstore-api/internal/cataloggrpc/committed_manifest_test.go"
+      ],
+      "sha256": "841396e97255c78b7daa7f2ff6b9a990c8ef314caf7807f13fd4815c000c1480",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/030-0f8a97fcc9-test-capacity-retain-terminal-git-push-failure-classes.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "0f8a97fcc984fd53c8489995cd24868fd712e80a",
+      "base": "8d36f797ee50753c84efe829168009b6f79dc84f",
+      "subject": "test(capacity): retain terminal Git push failure classes",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "tests/integration/capacity_push_driver_test.go"
+      ],
+      "sha256": "c9ba4fe82af13e35eb0380fec153c4542461216fe3ec7693719930889f9138f7",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/031-ab2c31ce0d-perf-test-avoid-redundant-provenance-revision-lookup.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "ab2c31ce0d79400d68e74f87c4586c882c79e49f",
+      "base": "da7b14606edd5e5333084f2fab2e12ed1c2c4c81",
+      "subject": "perf(test): avoid redundant provenance revision lookup",
+      "paths": [
+        "tests/capacity/README.md",
+        "tests/integration/githelper_test.go"
+      ],
+      "sha256": "072dc4dfe833812b0bb8bbfb94bb77bb6f646ec7bd8e75931486e8409c755213",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/032-f4cf1ee84e-fix-capacity-distinguish-journal-deliveries-from-status-updates.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "f4cf1ee84eda50c5bbf303e807a2987352b8889d",
+      "base": "a01308516281d4e50d72df56634785069c6c3dab",
+      "subject": "fix(capacity): distinguish journal deliveries from status updates",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "tests/capacity/README.md",
+        "tests/integration/namespace_watch_capacity_test.go"
+      ],
+      "sha256": "2f434d45dfbc2afb1a75b96290a86eb181da14d243d0661f0911c33188f46cf7",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/033-f1671e1ccf-test-git-preserve-shallow-refresh-wire-semantics.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "f1671e1ccfe0185d718fcb6cf45807c9075d9a0f",
+      "base": "32526baf7953881454fbb503e99089aa1f19528f",
+      "subject": "test(git): preserve shallow refresh wire semantics",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-git-service/src/git/pack_server.rs"
+      ],
+      "sha256": "a0afad3ce3718b2d2e6aa51c7e52dd6bf78dddfeca0727bbe79cd8701c995ca2",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/034-ce1a9ba66e-test-capacity-require-lifecycle-authorization-evidence.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "ce1a9ba66ecfa5d7e2ee71d557f531c6f0dc0c56",
+      "base": "a0cd9d841caa98a28b18b40b7f5d485ecf6cbba6",
+      "subject": "test(capacity): require lifecycle authorization evidence",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "scripts/test-capacity-dispatch.sh",
+        "scripts/validate-capacity-evidence.sh",
+        "specs/064-authz-action-vocabulary/quickstart.md",
+        "tests/capacity/README.md",
+        "tests/integration/repository_lifecycle_capacity_test.go"
+      ],
+      "sha256": "3e1aa030cab26e342648b5433faa83e45c065ec36788e279f8c8ef9ab6fd1948",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/035-ffb62603ec-test-capacity-require-authorization-probes-during-acknowledged-lo.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "ffb62603ecc6510fcf60ef372c20af00820ff420",
+      "base": "7c37dc0627ecf2499967d1e1e72d704fbf00b59b",
+      "subject": "test(capacity): require authorization probes during acknowledged load",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "scripts/test-capacity-dispatch.sh",
+        "scripts/validate-capacity-evidence.sh",
+        "specs/064-authz-action-vocabulary/quickstart.md",
+        "tests/capacity/README.md",
+        "tests/integration/namespace_watch_capacity_test.go",
+        "tests/integration/repository_lifecycle_capacity_test.go"
+      ],
+      "sha256": "caadfbd6a859e96dcdb4e533ee19f6d4a20882825b31f226ded6ac2b96cee1f2",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/036-f3960caee4-feat-observability-measure-git-advertisement-phase-delays.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "f3960caee44a9266964f36bc599596c2090aeec6",
+      "base": "2829a5a0860671ec5e44a1edd7be2cbd67ffe7fd",
+      "subject": "feat(observability): measure Git advertisement phase delays",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-git-service/src/grpc/server.rs"
+      ],
+      "sha256": "618aa8c43038435e954b6fdc0326be313be4d599c801883ddc6163d299ddd7b8",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/037-5bb8d108b9-fix-admission-converge-namespace-sources-under-disjoint-writes.patch",
+      "category": "C1-C2/original-candidate",
+      "source": "5bb8d108b9c988de4bae4a305890d6d337902322",
+      "base": "f3960caee44a9266964f36bc599596c2090aeec6",
+      "subject": "fix(admission): converge Namespace sources under disjoint writes",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/cataloggrpc/namespace_descendant_test.go",
+        "gitstore-api/internal/cataloggrpc/server.go"
+      ],
+      "sha256": "d65f8653986de2b79e515b07663102dbbf56427facb5a4d1d4820f80de29f7e8",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/038-1fd3ebb57d-fix-lifecycle-allow-first-manifest-creation-on-unborn-refs.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "1fd3ebb57d9d63d094afeacda620a6fc49a814b4",
+      "base": "d640f2981203d1578229db547af60daa26d27515",
+      "subject": "fix(lifecycle): allow first manifest creation on unborn refs",
+      "paths": [
+        "gitstore-api/internal/graph/resolver/category_lifecycle_test.go",
+        "gitstore-api/internal/graph/resolver/category_service.go"
+      ],
+      "sha256": "d34214fac5f23e986ee150d6ac380e95c0cf83a57d2a966891af60b8bf015740",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/039-d640f29812-fix-lifecycle-fail-closed-on-unavailable-deletion-sources.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "d640f2981203d1578229db547af60daa26d27515",
+      "base": "d1744349720a8951c09745fad14a9a5b8028a3e6",
+      "subject": "fix(lifecycle): fail closed on unavailable deletion sources",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/gitclient/read.go",
+        "gitstore-api/tests/contract/datastore/contract_test.go",
+        "gitstore-git-service/src/grpc/server.rs",
+        "gitstore-git-service/tests/integration/mod.rs"
+      ],
+      "sha256": "702093c08ebd0e8f8a077460f6d4c898e059eaf83ba53a44033050408ec6192a",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/040-e401389701-fix-lifecycle-unify-repository-membership-and-completion-identiti.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "base": "d3625a7310c4ad92143d5ab3aeccac50cbf813a4",
+      "subject": "fix(lifecycle): unify repository membership and completion identities",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/datastore/scylla/migrations/013_repository_resource_membership.cql",
+        "gitstore-api/internal/datastore/scylla/namespace_model_test.go",
+        "gitstore-api/internal/datastore/scylla/repair.go",
+        "gitstore-api/internal/datastore/scylla/repair_test.go",
+        "gitstore-api/internal/graph/resolver/product_lifecycle_test.go",
+        "gitstore-api/internal/graph/resolver/resolver_global_id_test.go",
+        "shared/schemas/category.graphqls",
+        "shared/schemas/namespace.graphqls",
+        "shared/schemas/product.graphqls",
+        "shared/schemas/repository.graphqls"
+      ],
+      "sha256": "87187f2191a83f7177a2f2aa4c4c8b735c8cee2d82f3988e350f65db4d05ffdb",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/041-d3625a7310-fix-lifecycle-preserve-deletion-retries-and-wait-for-catalog-fenc.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "d3625a7310c4ad92143d5ab3aeccac50cbf813a4",
+      "base": "a804caad9227454715d6798e82e75fdb306c895f",
+      "subject": "fix(lifecycle): preserve deletion retries and wait for catalog fences",
+      "paths": [
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/internal/datastore/scylla/repository.go",
+        "gitstore-api/internal/graph/resolver/service.go"
+      ],
+      "sha256": "7ef24875af4d86d69e81630264a18aa3eeeba0aab008f0d43e15526491a956fd",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/042-a804caad92-fix-lifecycle-align-namespace-and-repository-git-backed-deletion.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "base": "9eb0f6b4aa21fb55e397ada65f461ea88d45b2e7",
+      "subject": "fix(lifecycle): align namespace and repository Git-backed deletion",
+      "paths": [
+        "docs/namespace/namespace-spec.md",
+        "docs/repository/repository-spec.md",
+        "docs/runbooks/namespace-admission.md",
+        "gitstore-api/gen/gitstore/git/v1/git_service.pb.go",
+        "gitstore-api/internal/cataloggrpc/committed_manifest.go",
+        "gitstore-api/internal/cataloggrpc/namespace_replica_test.go",
+        "gitstore-api/internal/cataloggrpc/server.go",
+        "gitstore-api/internal/datastore/instrumented_test.go",
+        "gitstore-api/internal/datastore/memdb/backend.go",
+        "gitstore-api/internal/datastore/memdb/namespace_contract_test.go",
+        "gitstore-api/internal/datastore/scylla/backend.go",
+        "gitstore-api/internal/datastore/scylla/backend_test.go",
+        "gitstore-api/internal/datastore/scylla/file.go",
+        "gitstore-api/internal/datastore/scylla/migrations/012_repository_catalog_index.cql",
+        "gitstore-api/internal/datastore/scylla/namespace_model_test.go",
+        "gitstore-api/internal/datastore/scylla/repair.go",
+        "gitstore-api/internal/datastore/scylla/repair_test.go",
+        "gitstore-api/internal/datastore/scylla/repository.go",
+        "gitstore-api/internal/datastore/scylla/repository_recovery_test.go",
+        "gitstore-api/internal/graph/generated/namespace.generated.go",
+        "gitstore-api/internal/graph/generated/repository.generated.go",
+        "gitstore-api/internal/graph/generated/root_.generated.go",
+        "gitstore-api/internal/graph/model/models_gen.go",
+        "gitstore-api/internal/graph/resolver/category.resolvers.go",
+        "gitstore-api/internal/graph/resolver/category_service.go",
+        "gitstore-api/internal/graph/resolver/infrastructure_deletion_test.go",
+        "gitstore-api/internal/graph/resolver/namespace.resolvers.go",
+        "gitstore-api/internal/graph/resolver/namespace_deletion_matrix_test.go",
+        "gitstore-api/internal/graph/resolver/namespace_service_test.go",
+        "gitstore-api/internal/graph/resolver/product.resolvers.go",
+        "gitstore-api/internal/graph/resolver/repository.resolvers.go",
+        "gitstore-api/internal/graph/resolver/service.go",
+        "gitstore-api/internal/namespace/admission.go",
+        "gitstore-controller-manager/internal/namespace/graphql_client.go",
+        "gitstore-controller-manager/internal/namespace/graphql_client_test.go",
+        "gitstore-controller-manager/internal/repository/graphql_client.go",
+        "gitstore-controller-manager/internal/repository/graphql_client_test.go",
+        "gitstore-git-service/src/grpc/server.rs",
+        "gitstore-git-service/tests/integration/mod.rs",
+        "shared/schemas/namespace.graphqls",
+        "shared/schemas/repository.graphqls",
+        "tests/integration/namespace_contract_test.go",
+        "tests/integration/repository_lifecycle_capacity_test.go"
+      ],
+      "sha256": "1a91993c9b79bd599ca24f14be29d05c9d55167adffa7f000824de10f1116c51",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/043-01fd2ac313-fix-category-address-projection-review-findings.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "01fd2ac3133f416358149ef5f63e4a19bc62759d",
+      "base": "1a8ee64af3ef38bd78368f5d3f954f8529a150e3",
+      "subject": "fix(category): address projection review findings",
+      "paths": [
+        "gitstore-api/internal/datastore/scylla/category_product_index.go",
+        "gitstore-api/internal/datastore/scylla/category_product_index_test.go",
+        "gitstore-api/internal/datastore/scylla/migration_test.go",
+        "gitstore-api/internal/datastore/scylla/repair.go",
+        "gitstore-api/internal/middleware/security/graphql.go",
+        "gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go"
+      ],
+      "sha256": "f7f4dd4a4ee33d7437e145e7d7d6e4a64844967ea123f919e8868b256ea5c94c",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/044-d647b67fd1-feat-category-scope-products-to-resolved-subtree.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "d647b67fd15a827209bccc0718b3069a53157641",
+      "base": "aa839a6463297b1c33531aef47bfca81861679cf",
+      "subject": "feat(category): scope products to resolved subtree",
+      "paths": [
+        "config/policy.yaml",
+        "gitstore-api/internal/datastore/memdb/backend.go",
+        "gitstore-api/internal/datastore/memdb/category_product_index_test.go",
+        "gitstore-api/internal/datastore/scylla/backend.go",
+        "gitstore-api/internal/datastore/scylla/category_product_index.go",
+        "gitstore-api/internal/datastore/scylla/category_product_index_test.go",
+        "gitstore-api/internal/datastore/scylla/migrations/011_category_product_index.cql",
+        "gitstore-api/internal/datastore/scylla/namespace_model_test.go",
+        "gitstore-api/internal/datastore/scylla/repair.go",
+        "gitstore-api/internal/datastore/scylla/repair_test.go",
+        "gitstore-api/internal/graph/resolver/category.resolvers.go",
+        "gitstore-api/internal/graph/resolver/product.resolvers.go",
+        "gitstore-api/internal/middleware/security/graphql.go",
+        "gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go",
+        "gitstore-git-service/Cargo.lock",
+        "shared/schemas/product.graphqls"
+      ],
+      "sha256": "3a356467027cd30c4ea9e53a3dd4bba5e05bd0110387dbe17d7e91f0f70a1f98",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/045-a0351e1a26-feat-category-scope-products-to-resolved-subtree.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "a0351e1a26eb4692ed4e0f213ee63620e87285fb",
+      "base": "b004f34625178c2e450b53a86f086eecea43fa32",
+      "subject": "feat(category): scope products to resolved subtree",
+      "paths": [
+        "config/policy.yaml",
+        "gitstore-api/internal/datastore/memdb/backend.go",
+        "gitstore-api/internal/datastore/memdb/category_product_index_test.go",
+        "gitstore-api/internal/datastore/scylla/backend.go",
+        "gitstore-api/internal/datastore/scylla/category_product_index.go",
+        "gitstore-api/internal/datastore/scylla/category_product_index_test.go",
+        "gitstore-api/internal/datastore/scylla/migrations/011_category_product_index.cql",
+        "gitstore-api/internal/datastore/scylla/namespace_model_test.go",
+        "gitstore-api/internal/datastore/scylla/repair.go",
+        "gitstore-api/internal/datastore/scylla/repair_test.go",
+        "gitstore-api/internal/graph/resolver/category.resolvers.go",
+        "gitstore-api/internal/graph/resolver/product.resolvers.go",
+        "gitstore-api/internal/middleware/security/graphql.go",
+        "gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go",
+        "shared/schemas/product.graphqls"
+      ],
+      "sha256": "102dc6b23ef5bf919e10829cb974659512a9725864a922cb0551146b7784de67",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/046-f64e32f07c-fix-api-close-product-admission-races.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "f64e32f07ceb64e13147c240e1323009098fcced",
+      "base": "f5b7c3499a9261cd70c0fb6a4e1aa431d324cb1f",
+      "subject": "fix(api): close Product admission races",
+      "paths": [
+        "gitstore-api/internal/datastore/scylla/backend.go"
+      ],
+      "sha256": "1e1ff46fb37ac268e7195c10fd69dbf388deb55308947535171c77f6ad90c4da",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/047-f5b7c3499a-fix-api-align-product-git-mutations-with-admission.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "f5b7c3499a9261cd70c0fb6a4e1aa431d324cb1f",
+      "base": "04b523deb3048959232fe4fc8b4655425e1ea82b",
+      "subject": "fix(api): align Product Git mutations with admission",
+      "paths": [
+        "docs/resource-storage/git-backed.md",
+        "gitstore-api/internal/cataloggrpc/server.go",
+        "gitstore-api/internal/datastore/datastore.go",
+        "gitstore-api/internal/datastore/instrumented_test.go",
+        "gitstore-api/internal/datastore/memdb/backend.go",
+        "gitstore-api/internal/datastore/memdb/backend_test.go",
+        "gitstore-api/internal/datastore/scylla/backend.go",
+        "gitstore-api/internal/graph/resolver/service.go",
+        "gitstore-api/internal/testutil/stubstore.go"
+      ],
+      "sha256": "cd3e1bfc16393d1ba3eb13d86ca90055adc0adc4ac31472df072545416f01b6e",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/048-d6c70f4198-fix-scylla-correct-projection-kind-attribution.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "d6c70f4198fd8ba512eea365085d8e0097ab065c",
+      "base": "7cbb06a1503c0584e2d7d224d62434301345a4ec",
+      "subject": "fix(scylla): correct projection kind attribution",
+      "paths": [
+        "gitstore-api/internal/datastore/scylla/repair.go",
+        "gitstore-api/internal/datastore/scylla/repair_test.go"
+      ],
+      "sha256": "11da123e84c65eed230eca120537629f956667528715369300166d8b9b820ffd",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/049-544bb87220-fix-api-harden-committed-admission-repair.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "544bb872200bc8d9fd235e91900bb315104f964f",
+      "base": "ed58c77124e74d0ad10f5fd28e72b5ff307a57b8",
+      "subject": "fix(api): harden committed admission repair",
+      "paths": [
+        "gitstore-api/internal/cataloggrpc/committed_manifest.go"
+      ],
+      "sha256": "f26d8414d710d61bb39b10d1d1dfafcea1c4060a55918f582793f9cc08d4fba3",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/050-ed58c77124-fix-api-repair-admission-after-api-commits.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "ed58c77124e74d0ad10f5fd28e72b5ff307a57b8",
+      "base": "d5f4d2aa4dccb42f4c9a4ffc4fd07cf024c033bd",
+      "subject": "fix(api): repair admission after API commits",
+      "paths": [
+        "gitstore-api/internal/cataloggrpc/committed_manifest.go",
+        "gitstore-api/internal/cataloggrpc/committed_manifest_test.go"
+      ],
+      "sha256": "7cd157ac945beb2a3886769795f5bab0cca80073f6bbd9ad2c1ca82554b55c85",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/051-fdf624653c-fix-api-address-spec-057-review-findings.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "fdf624653cd6a9b6d5ef9c83677dfb9744d28ee8",
+      "base": "825e32e03d6e2d49404e97c6d77b074784f37ac4",
+      "subject": "fix(api): address spec 057 review findings",
+      "paths": [
+        "gitstore-api/internal/datastore/datastore.go",
+        "gitstore-api/internal/graph/resolver/category_lifecycle_test.go",
+        "gitstore-api/policy.yaml.example",
+        "tests/integration/category_taxonomy_test.go"
+      ],
+      "sha256": "1249a5621f888f1ed59b82a0adec1b64ba79567b2cb85a9db801043c254df89b",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/052-f303901efc-feat-api-git-backed-category-mutations-subtree-filter-and-shared-.patch",
+      "category": "H1/unresolved-historical-delta",
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "base": "c97528d673d23512473ebf3f3a5671d66227dbf2",
+      "subject": "feat(api)!: Git-backed category mutations, subtree filter and shared mutation error envelope",
+      "paths": [
+        "AGENTS.md",
+        "config/policy.yaml",
+        "docs/api-reference.md",
+        "docs/runbooks/categorytaxonomy-deletion.md",
+        "docs/runbooks/namespace-admission.md",
+        "docs/runbooks/release-process.md",
+        "docs/runbooks/scylla-projection-repair.md",
+        "gitstore-api/go.mod",
+        "gitstore-api/gqlgen.yml",
+        "gitstore-api/internal/admission/error.go",
+        "gitstore-api/internal/app/server.go",
+        "gitstore-api/internal/cataloggrpc/category_admission_decision_test.go",
+        "gitstore-api/internal/cataloggrpc/committed_manifest.go",
+        "gitstore-api/internal/cataloggrpc/committed_manifest_test.go",
+        "gitstore-api/internal/cataloggrpc/manifest_validator.go",
+        "gitstore-api/internal/cataloggrpc/namespace_replica_test.go",
+        "gitstore-api/internal/cataloggrpc/server.go",
+        "gitstore-api/internal/datastore/datastore.go",
+        "gitstore-api/internal/datastore/memdb/category_ancestor_index.go",
+        "gitstore-api/internal/datastore/memdb/schema.go",
+        "gitstore-api/internal/datastore/scylla/category_ancestor_index.go",
+        "gitstore-api/internal/datastore/scylla/migration_test.go",
+        "gitstore-api/internal/datastore/scylla/namespace_model_test.go",
+        "gitstore-api/internal/datastore/scylla/repair.go",
+        "gitstore-api/internal/graph/generated/category.generated.go",
+        "gitstore-api/internal/graph/generated/root_.generated.go",
+        "gitstore-api/internal/graph/generated/schema.generated.go",
+        "gitstore-api/internal/graph/model/models_gen.go",
+        "gitstore-api/internal/graph/resolver/category.resolvers.go",
+        "gitstore-api/internal/graph/resolver/category_filter_test.go",
+        "gitstore-api/internal/graph/resolver/category_lifecycle_test.go",
+        "gitstore-api/internal/graph/resolver/category_replica_test.go",
+        "gitstore-api/internal/graph/resolver/category_schema_contract_test.go",
+        "gitstore-api/internal/graph/resolver/category_service.go",
+        "gitstore-api/internal/graph/resolver/file_status_generic_test.go",
+        "gitstore-api/internal/graph/resolver/file_status_isolation_test.go",
+        "gitstore-api/internal/graph/resolver/manifest_helpers.go",
+        "gitstore-api/internal/graph/resolver/namespace_deletion_resolver_test.go",
+        "gitstore-api/internal/graph/resolver/namespace_error_test.go",
+        "gitstore-api/internal/graph/resolver/status_conflict_test.go",
+        "gitstore-api/internal/graph/resolver/status_generic.go",
+        "gitstore-api/internal/middleware/security/graphql.go",
+        "gitstore-api/internal/middleware/security/graphql_category_lifecycle_test.go",
+        "gitstore-api/internal/namespace/admission.go",
+        "gitstore-api/internal/testutil/stubstore.go",
+        "gitstore-api/policy.yaml.example",
+        "gitstore-api/tests/contract/datastore/contract_test.go",
+        "gitstore-controller-manager/internal/categorytaxonomy/deletion_client.go",
+        "gitstore-controller-manager/internal/categorytaxonomy/deletion_client_test.go",
+        "gitstore-git-service/Cargo.lock",
+        "gitstore-git-service/Cargo.toml",
+        "shared/schemas/category.graphqls",
+        "specs/057-categorytaxonomy-path-freshness/tasks.md",
+        "tests/integration/capacity_push_driver_test.go",
+        "tests/integration/category_taxonomy_test.go",
+        "tests/integration/namespace_contract_test.go"
+      ],
+      "sha256": "4e59fabc3a4a5f01cace783ee4f15e1582d78d4ec5f127a64ec36b9d0efea533",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/053-ec3d71e93d-on-perf-capacity-preserve-abandoned-capacity-working-edits-before.patch",
+      "category": "C3-C4/latest-working-edits",
+      "source": "ec3d71e93dc532e56a9a528730e9e6a8d4366ac6",
+      "base": "487ea7108bad3d6bfb66427cbdd8241ebf551d31",
+      "subject": "On perf/capacity: preserve abandoned capacity working edits before main-based salvage",
+      "paths": [
+        ".gitignore",
+        "docs/development/make-reference.md",
+        "scripts/AGENTS.md",
+        "scripts/run-capacity-target.sh",
+        "scripts/test-capacity-dispatch.sh",
+        "shared/schemas/collection.graphqls",
+        "shared/schemas/product.graphqls",
+        "shared/schemas/product_variant.graphqls",
+        "shared/schemas/repository.graphqls",
+        "shared/scylla-cdc-go/NOTICE.md",
+        "tests/capacity/AGENTS.md",
+        "tests/capacity/README.md",
+        "tests/capacity/verifiers/category-hierarchy.sh",
+        "tests/integration/admission_operations_test.go",
+        "tests/integration/capacity_push_driver_test.go",
+        "tests/integration/collection_test.go",
+        "tests/integration/githelper_test.go",
+        "tests/integration/namespace_watch_capacity_test.go",
+        "tests/integration/repository_lifecycle_capacity_test.go"
+      ],
+      "sha256": "ef72d69c2fee153e5b8004cc9201aac9ccca723e4ce2acd8023216948f50f7d8",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "patches/054-ec3d71e93d-on-perf-capacity-preserve-abandoned-capacity-working-edits-before.patch",
+      "category": "C4/API-outage-regression",
+      "source": "ec3d71e93dc532e56a9a528730e9e6a8d4366ac6",
+      "base": "b5c3f97471961c1e9c066f883d18eedea197113b",
+      "subject": "On perf/capacity: preserve abandoned capacity working edits before main-based salvage",
+      "paths": [
+        "gitstore-controller-manager/tests/contract/retry_quarantine_test.go"
+      ],
+      "sha256": "b74c6b8c43169cb5cc4088925daf2bf9360a43e13ef0d3c3c7f0bcbcf9b9a833",
+      "verified": "Applied to original base; every resulting blob matches source"
+    },
+    {
+      "archive_path": "untracked/scripts/run-existing-catalog-capacity.py",
+      "category": "C3/untracked-script",
+      "source": "ec3d71e93dc532e56a9a528730e9e6a8d4366ac6^3",
+      "source_path": "scripts/run-existing-catalog-capacity.py",
+      "source_blob": "dca227830964ee609e8cd969c8d28fe10ff63850",
+      "sha256": "995a305039fa813c588bc7a57d5e07701e00d915053bd46ca8e1746986abe3bb",
+      "verified": "Original Git blob, Python syntax parsed"
+    },
+    {
+      "archive_path": "untracked/scripts/test-existing-catalog-capacity.py",
+      "category": "C3/untracked-script",
+      "source": "ec3d71e93dc532e56a9a528730e9e6a8d4366ac6^3",
+      "source_path": "scripts/test-existing-catalog-capacity.py",
+      "source_blob": "84b6beedfdf7593285605c6d9bdbe069bd168350",
+      "sha256": "78219fdcb377bf5a455c6ae43c02d0977e852fa586c22bb201b7f4ffdc0ee7d6",
+      "verified": "Original Git blob, Python syntax parsed"
+    }
+  ],
+  "omissions": [
+    {
+      "source": "d3fc1a6ef4ce90c983590f155547752e04b00cd0",
+      "reason": "Controller readiness delivered by #541"
+    },
+    {
+      "source": "20e8eb93de70de6caadd2023c1fc504c09d73484",
+      "reason": "Metric identity correctness delivered by #544"
+    },
+    {
+      "source": "26f65f96abc34d153cab0c3d75e0429744cd0b1c",
+      "reason": "C5: historical ACK threshold adjustment"
+    },
+    {
+      "source": "984b46a798c5af2318cee1e2345914d456b2d86a",
+      "reason": "Overlaps delivered main work; compare residuals"
+    },
+    {
+      "source": "01ff54d57e5944874a82181d1cc2ef1f8bbd262d",
+      "reason": "Mixed checkpoint or integration glue; decompose"
+    },
+    {
+      "source": "adc3d111f6004c1fc8a39f0afbabafd6e95ae4d0",
+      "reason": "Mixed checkpoint or integration glue; decompose"
+    },
+    {
+      "source": "df93508269b136bf8a11a616ee0a85ad02850949",
+      "reason": "Overlaps delivered main work; compare residuals"
+    },
+    {
+      "source": "f1c27ac74214201142b301cbd750e9bf0e0829d9",
+      "reason": "Overlaps delivered main work; compare residuals"
+    },
+    {
+      "source": "d2d6df072cd30fe968452d2735be75ff61a91dfc",
+      "reason": "Overlaps delivered main work; compare residuals"
+    },
+    {
+      "source": "9a3bdaf15154eace742b05c56b27a74b0ef3d4f2",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "c7ac70858fff5a3fae1c8cdd93721dc5a7430be0",
+      "reason": "Dependency-sensitive optimization; benefit unestablished"
+    },
+    {
+      "source": "57faf16ae35bfeaecbba23a68203b9e14e1a3116",
+      "reason": "Rejected, non-winning or reverted experiment; do not promote"
+    },
+    {
+      "source": "18b301c17e15b2c1709cb309f68ebafffe4a7091",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "63252de1c728c35a4664988c7361c206bed1d334",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "60d664f515373c377cd5e3ecb4e12daeb9ad70d1",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "f05aa9b8e1705946a4e369b002b0b05b88a447c4",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "efaa2851756e21b6d4e018fd93fe9ca59a0099d5",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "bcf8cf6cd9df111c2adb7949647832be5fbdd666",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "9e3bee7004dd81a68b60815b3febe271ca4201be",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "7790447330da02a156b613e1c6d0672437bb76dd",
+      "reason": "Rejected, non-winning or reverted experiment; do not promote"
+    },
+    {
+      "source": "1e2c9b0e7156c0febd7fa2e3db52630e2951b032",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "97c58094cf62049744203538d9dc7f3a5c9f3ed6",
+      "reason": "Rejected, non-winning or reverted experiment; do not promote"
+    },
+    {
+      "source": "585af4a6d7ee95e63b2babcb9e2219b290ddbbbb",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "cbf94ea511062f3d310c248e0b1aa14bc527cb16",
+      "reason": "Rejected, non-winning or reverted experiment; do not promote"
+    },
+    {
+      "source": "27525df9c1129b5ec9c71bb0850627dc2a90bd93",
+      "reason": "Rejected, non-winning or reverted experiment; do not promote"
+    },
+    {
+      "source": "40f0cfbd597512be9cb7144d921ee807ab2934bc",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "f975395be44995850444304be3ec97da1e67c2df",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "8fb2fc62b54ad1d5eadbc4edbf7386fd70a24eae",
+      "reason": "Superseded threshold chain; review final mode contract"
+    },
+    {
+      "source": "a3cd4e95534512673bbb07c51125edac8a6d287d",
+      "reason": "Superseded threshold chain; review final mode contract"
+    },
+    {
+      "source": "a53fb8f7b7826d9f4492851003b385c8e034c0ca",
+      "reason": "Superseded threshold chain; review final mode contract"
+    },
+    {
+      "source": "964fc3f446bd6882ff3a3e219e3d297b1e846038",
+      "reason": "Superseded threshold chain; review final mode contract"
+    },
+    {
+      "source": "79e684112065f2a2490e1db2e1af8cecd95d30f6",
+      "reason": "Metric identity correctness delivered by #544"
+    },
+    {
+      "source": "887d6bc763f2d4f3ee261bcc5c06ac1e9b1cc9de",
+      "reason": "Overlaps delivered main work; compare residuals"
+    },
+    {
+      "source": "8d36f797ee50753c84efe829168009b6f79dc84f",
+      "reason": "Dependency-sensitive optimization; benefit unestablished"
+    },
+    {
+      "source": "c67d8157428212d851de5b430bd33bb8d4508702",
+      "reason": "Common-commit ACK fix delivered by #544; shallow residual retained from latest draft"
+    },
+    {
+      "source": "47b8d8fae8b482686197a01a0c89a7111800fae2",
+      "reason": "Dependency-sensitive optimization; benefit unestablished"
+    },
+    {
+      "source": "e370718145970b765044bdb46e97d0f398ee2a52",
+      "reason": "Dependency-sensitive optimization; benefit unestablished"
+    },
+    {
+      "source": "da7b14606edd5e5333084f2fab2e12ed1c2c4c81",
+      "reason": "Dependency-sensitive optimization; benefit unestablished"
+    },
+    {
+      "source": "a01308516281d4e50d72df56634785069c6c3dab",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "b1856f139db67eb8f69115d8cbad139df2cd7258",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "a197faa777c58e340dfea8a3cd9e3aaed79a8940",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "100c1e72bd4c236686e9ee3dc98f9acce763472c",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "084fff7950919e3fdcac514e8d283ea5fca966cb",
+      "reason": "Dependency-sensitive optimization; benefit unestablished"
+    },
+    {
+      "source": "8025dd48d0a10ffea6ab43e9bebb1c844c485a46",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "b98bbd2ee2c47b2ba78e1655a4efa17b56c9553d",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "f99aa1d1616ee084a797522e905c0ac1f846931f",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "d3259b30f96c29cd5c268e4c467ca6bd5426d05a",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "5e71bcc32bf656426ac997a61f610a0b288109e8",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "0cbec1b859d6d5df1c481275b86724ed5378517f",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "4046807942694f8ed1ea26dcd906123bc13be0d2",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "32526baf7953881454fbb503e99089aa1f19528f",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "d4cf064b66c3eeaf3e5ec09e9611b5351982e9b1",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "a0cd9d841caa98a28b18b40b7f5d485ecf6cbba6",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "7c37dc0627ecf2499967d1e1e72d704fbf00b59b",
+      "reason": "Overlaps delivered main work; compare residuals"
+    },
+    {
+      "source": "e6da5021c660c0096c1c9d87196303d5005399e9",
+      "reason": "Overlaps delivered main work; compare residuals"
+    },
+    {
+      "source": "f528c24e9e72f1bc1798f597d8fee6a19f0ad342",
+      "reason": "Overlaps delivered main work; compare residuals"
+    },
+    {
+      "source": "ee34906e0ca741e6ae35e2b0d4d9328be59963cf",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "2829a5a0860671ec5e44a1edd7be2cbd67ffe7fd",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "7e1136ca0e5579af64e963dd829c106841f6c3e1",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "d728abcd398eb7c5b6ed6ef2ad4c4a4b27b1ffda",
+      "reason": "Rejected, non-winning or reverted experiment; do not promote"
+    },
+    {
+      "source": "66006b223da605a1140c7d70ea004d35677f436c",
+      "reason": "Rejected, non-winning or reverted experiment; do not promote"
+    },
+    {
+      "source": "07d6576bc653311c6552d346dedb2ffba53afc84",
+      "reason": "Dependency-sensitive optimization; benefit unestablished"
+    },
+    {
+      "source": "c8d5e0ca8beec87ba46cc93a600caaca4bf97d64",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "60d2db38fdc1e79e054b54725d248740314b2170",
+      "reason": "Dependency-sensitive optimization; benefit unestablished"
+    },
+    {
+      "source": "4b03af152ba243f690a8129c12ebcf76f755ffec",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "83651ffb34e35d154cfd77b1bfb72214ab1ffbaf",
+      "reason": "Historical documentation/evidence only"
+    },
+    {
+      "source": "8a07faa7e0ea9664fe32b2c6dd4fd2d82d0dceba",
+      "reason": "Mixed checkpoint or integration glue; decompose"
+    },
+    {
+      "source": "f245d5e6971f8cedd35051e9fdbd359b5d3488c8",
+      "reason": "Overlaps delivered main work; compare residuals"
+    },
+    {
+      "source": "0f37fe6e21accb181f1505c893e133cb8762bdc4",
+      "reason": "Overlaps delivered main work; compare residuals"
+    },
+    {
+      "source": "5ad807270d1112178ca82e8e1695432d64e47994",
+      "reason": "Mixed checkpoint or integration glue; decompose"
+    },
+    {
+      "source": "79377f33984af231823c0d9b6c6ba5257097473f",
+      "reason": "Mixed checkpoint or integration glue; decompose"
+    },
+    {
+      "source": "960992931350cceb02a458c012e4a7c6ad015695",
+      "reason": "Mixed checkpoint or integration glue; decompose"
+    },
+    {
+      "source": "487ea7108bad3d6bfb66427cbdd8241ebf551d31",
+      "reason": "Mixed checkpoint or integration glue; decompose"
+    },
+    {
+      "source": "dbbd6b131c45aebb0d0bbc467893f724af8019df",
+      "reason": "Superseded OTel rewrite, delivered auth design, or historical task-status draft"
+    },
+    {
+      "source": "14231143842a5953a6dfdc816316b6735917ff2a",
+      "reason": "Superseded OTel rewrite, delivered auth design, or historical task-status draft"
+    },
+    {
+      "source": "825e32e03d6e2d49404e97c6d77b074784f37ac4",
+      "reason": "Superseded OTel rewrite, delivered auth design, or historical task-status draft"
+    },
+    {
+      "source": "88af79a8ac729b861ccb4a103bbf020dbb25d598",
+      "path": "tests/integration/namespace_watch_capacity_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "3edea62b751e30c713f55cda3e41ac657b58ca0a"
+    },
+    {
+      "source": "90f3a3b0aa92914768b069f79a92ed6993ea6c71",
+      "path": "shared/observability/profiling.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "90f3a3b0aa92914768b069f79a92ed6993ea6c71",
+      "path": "shared/observability/profiling_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "1fd3ebb57d9d63d094afeacda620a6fc49a814b4",
+      "path": "docs/runbooks/namespace-admission.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "1fd3ebb57d9d63d094afeacda620a6fc49a814b4",
+      "path": "gitstore-api/internal/graph/resolver/manifest_helpers.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "1fd3ebb57d9d63d094afeacda620a6fc49a814b4",
+      "path": "gitstore-api/internal/graph/resolver/service.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d640f2981203d1578229db547af60daa26d27515",
+      "path": "gitstore-api/internal/cataloggrpc/category_admission_decision_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d640f2981203d1578229db547af60daa26d27515",
+      "path": "gitstore-api/internal/cataloggrpc/server_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d640f2981203d1578229db547af60daa26d27515",
+      "path": "gitstore-api/internal/datastore/memdb/backend.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d640f2981203d1578229db547af60daa26d27515",
+      "path": "gitstore-api/internal/datastore/product_lifecycle_contract_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d640f2981203d1578229db547af60daa26d27515",
+      "path": "gitstore-api/internal/graph/resolver/infrastructure_deletion_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d640f2981203d1578229db547af60daa26d27515",
+      "path": "gitstore-api/internal/graph/resolver/product_lifecycle_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d640f2981203d1578229db547af60daa26d27515",
+      "path": "gitstore-api/internal/graph/resolver/product_status_contract_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d640f2981203d1578229db547af60daa26d27515",
+      "path": "gitstore-api/internal/graph/resolver/service.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d640f2981203d1578229db547af60daa26d27515",
+      "path": "gitstore-controller-manager/internal/namespace/graphql_client.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d640f2981203d1578229db547af60daa26d27515",
+      "path": "gitstore-controller-manager/internal/namespace/graphql_client_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d1744349720a8951c09745fad14a9a5b8028a3e6",
+      "path": "docs/runbooks/namespace-admission.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d1744349720a8951c09745fad14a9a5b8028a3e6",
+      "path": "gitstore-api/internal/datastore/scylla/migrations/012_repository_catalog_index.cql",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d1744349720a8951c09745fad14a9a5b8028a3e6",
+      "path": "gitstore-api/internal/datastore/scylla/migrations/012_repository_resource_membership.cql",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d1744349720a8951c09745fad14a9a5b8028a3e6",
+      "path": "gitstore-api/internal/datastore/scylla/namespace_model_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "docs/api-reference.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "docs/namespace/namespace-spec.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "docs/repository/repository-spec.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/datastore.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/instrumented.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/instrumented_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/memdb/backend.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/memdb/category_taxonomy_journal_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/memdb/owner_references.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/memdb/owner_references_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/scylla/backend.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/scylla/backend_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/scylla/file.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/scylla/namespace_watch_integration_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/scylla/owner_references.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/scylla/owner_references_integration_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/datastore/scylla/repository.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/generated/category.generated.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/generated/namespace.generated.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/generated/product.generated.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/generated/repository.generated.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/generated/root_.generated.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/model/models_gen.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/resolver/category.resolvers.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/resolver/category_lifecycle_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/resolver/category_schema_contract_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/resolver/category_service.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/resolver/namespace.resolvers.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/resolver/product.resolvers.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/resolver/repository.resolvers.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/resolver/repository_authorization_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/graph/resolver/service.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/middleware/security/graphql_category_lifecycle_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/internal/middleware/security/graphql_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-api/tests/contract/datastore/contract_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/internal/categorytaxonomy/deletion_client.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/internal/categorytaxonomy/deletion_client_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/internal/categorytaxonomy/reconciler.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/internal/categorytaxonomy/reconciler_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/internal/namespace/graphql_client.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/internal/namespace/graphql_client_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/internal/product/graphql_client.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/internal/product/graphql_client_schema_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/internal/product/reconciler.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/internal/product/reconciler_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/internal/repository/graphql_client.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/internal/repository/graphql_client_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/tests/integration/categorytaxonomy_deletion_capacity_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/tests/integration/categorytaxonomy_deletion_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/tests/integration/product_category_resolution_race_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "gitstore-controller-manager/tests/integration/product_deletion_lifecycle_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "tests/integration/namespace_contract_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "e4013897012f2ea1bb276ee6646c1b8e53a7988e",
+      "path": "tests/integration/repository_lifecycle_capacity_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d3625a7310c4ad92143d5ab3aeccac50cbf813a4",
+      "path": "gitstore-api/internal/datastore/scylla/backend_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d3625a7310c4ad92143d5ab3aeccac50cbf813a4",
+      "path": "gitstore-api/internal/datastore/scylla/migration_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d3625a7310c4ad92143d5ab3aeccac50cbf813a4",
+      "path": "gitstore-api/internal/datastore/scylla/namespace_watch_integration_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d3625a7310c4ad92143d5ab3aeccac50cbf813a4",
+      "path": "gitstore-api/internal/datastore/scylla/owner_references_integration_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d3625a7310c4ad92143d5ab3aeccac50cbf813a4",
+      "path": "gitstore-api/internal/datastore/scylla/repository_recovery_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d3625a7310c4ad92143d5ab3aeccac50cbf813a4",
+      "path": "gitstore-api/internal/graph/resolver/infrastructure_deletion_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d3625a7310c4ad92143d5ab3aeccac50cbf813a4",
+      "path": "gitstore-api/tests/contract/datastore/contract_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "docs/ADRs/0002-namespace-lifecycle.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "docs/ADRs/0003-repository-lifecycle.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "docs/api-reference.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/admission/committed_manifest.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/admission/infrastructure_deletion.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/cataloggrpc/namespace_validation_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/cataloggrpc/repository_admission_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/cataloggrpc/server_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/datastore/datastore.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/datastore/instrumented.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/datastore/memdb/schema.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/datastore/namespace_contract.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/datastore/namespace_contract_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/datastore/repository_contract.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/datastore/scylla/namespace_mapping.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/gitclient/write.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/gitclient/write_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/graph/resolver/category_lifecycle_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/graph/resolver/infrastructure_deletion.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/graph/resolver/namespace_deletion_resolver_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/graph/resolver/product_status.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/graph/resolver/repository_resolver_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-api/internal/graph/resolver/service_mutations_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-controller-manager/internal/namespace/reconciler.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-controller-manager/internal/namespace/reconciler_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-controller-manager/internal/repository/reconciler.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-controller-manager/internal/repository/reconciler_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-git-service/gen/gitstore/git/v1/gitstore.git.v1.rs",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "gitstore-git-service/src/git/pack_server.rs",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a804caad9227454715d6798e82e75fdb306c895f",
+      "path": "shared/proto/gitstore/git/v1/git_service.proto",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "01fd2ac3133f416358149ef5f63e4a19bc62759d",
+      "path": "gitstore-api/internal/datastore/memdb/category_product_index_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "01fd2ac3133f416358149ef5f63e4a19bc62759d",
+      "path": "gitstore-api/internal/datastore/scylla/backend.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "01fd2ac3133f416358149ef5f63e4a19bc62759d",
+      "path": "gitstore-api/internal/datastore/scylla/migrations/011_category_product_index.cql",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d647b67fd15a827209bccc0718b3069a53157641",
+      "path": "docs/api-reference.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d647b67fd15a827209bccc0718b3069a53157641",
+      "path": "docs/runbooks/scylla-projection-repair.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d647b67fd15a827209bccc0718b3069a53157641",
+      "path": "gitstore-api/internal/datastore/datastore.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d647b67fd15a827209bccc0718b3069a53157641",
+      "path": "gitstore-api/internal/graph/generated/product.generated.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d647b67fd15a827209bccc0718b3069a53157641",
+      "path": "gitstore-api/internal/graph/generated/root_.generated.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d647b67fd15a827209bccc0718b3069a53157641",
+      "path": "gitstore-api/internal/graph/model/models_gen.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "d647b67fd15a827209bccc0718b3069a53157641",
+      "path": "gitstore-controller-manager/internal/product/reconciler.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a0351e1a26eb4692ed4e0f213ee63620e87285fb",
+      "path": "docs/api-reference.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a0351e1a26eb4692ed4e0f213ee63620e87285fb",
+      "path": "docs/runbooks/scylla-projection-repair.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a0351e1a26eb4692ed4e0f213ee63620e87285fb",
+      "path": "gitstore-api/internal/datastore/datastore.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a0351e1a26eb4692ed4e0f213ee63620e87285fb",
+      "path": "gitstore-api/internal/graph/generated/product.generated.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a0351e1a26eb4692ed4e0f213ee63620e87285fb",
+      "path": "gitstore-api/internal/graph/generated/root_.generated.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a0351e1a26eb4692ed4e0f213ee63620e87285fb",
+      "path": "gitstore-api/internal/graph/model/models_gen.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "a0351e1a26eb4692ed4e0f213ee63620e87285fb",
+      "path": "gitstore-controller-manager/internal/product/reconciler.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f64e32f07ceb64e13147c240e1323009098fcced",
+      "path": "gitstore-api/internal/datastore/memdb/backend.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f64e32f07ceb64e13147c240e1323009098fcced",
+      "path": "gitstore-api/internal/datastore/memdb/backend_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f64e32f07ceb64e13147c240e1323009098fcced",
+      "path": "gitstore-api/internal/graph/resolver/service.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f5b7c3499a9261cd70c0fb6a4e1aa431d324cb1f",
+      "path": "docs/runbooks/namespace-admission.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f5b7c3499a9261cd70c0fb6a4e1aa431d324cb1f",
+      "path": "gitstore-api/internal/cataloggrpc/deletion_metrics.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f5b7c3499a9261cd70c0fb6a4e1aa431d324cb1f",
+      "path": "gitstore-api/internal/datastore/instrumented.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f5b7c3499a9261cd70c0fb6a4e1aa431d324cb1f",
+      "path": "gitstore-api/internal/graph/resolver/category_service.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f5b7c3499a9261cd70c0fb6a4e1aa431d324cb1f",
+      "path": "gitstore-api/internal/graph/resolver/product.resolvers.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "544bb872200bc8d9fd235e91900bb315104f964f",
+      "path": "gitstore-api/internal/cataloggrpc/committed_manifest_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "ed58c77124e74d0ad10f5fd28e72b5ff307a57b8",
+      "path": "docs/architecture/README.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "fdf624653cd6a9b6d5ef9c83677dfb9744d28ee8",
+      "path": "docs/api-reference.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "fdf624653cd6a9b6d5ef9c83677dfb9744d28ee8",
+      "path": "gitstore-api/internal/datastore/memdb/category_ancestor_index.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "fdf624653cd6a9b6d5ef9c83677dfb9744d28ee8",
+      "path": "gitstore-api/internal/datastore/scylla/category_ancestor_index.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "fdf624653cd6a9b6d5ef9c83677dfb9744d28ee8",
+      "path": "gitstore-api/internal/graph/resolver/category_filter_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "fdf624653cd6a9b6d5ef9c83677dfb9744d28ee8",
+      "path": "gitstore-api/internal/graph/resolver/category_service.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "fdf624653cd6a9b6d5ef9c83677dfb9744d28ee8",
+      "path": "gitstore-api/internal/graph/resolver/manifest_helpers.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "docs/ADRs/0006-category-taxonomy-lifecycle.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "docs/ADRs/README.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "docs/categories/category-taxonomy-spec.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/admission/committed_manifest.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/admission/error_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/admission/manifest_validator.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/admissionreport/extension.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/admissionreport/extension_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/deletion_metrics.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/manifest_validator_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/namespace_validation_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/server_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/testdata/category/README.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/testdata/category/cross-namespace-parent.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/testdata/category/invalid-envelope.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/testdata/category/media-missing-file-name.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/testdata/category/missing-title.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/testdata/category/self-parent.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/testdata/category/terminating-parent.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/testdata/category/valid-child.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/cataloggrpc/testdata/category/valid-root.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/datastore/category_ancestor_index.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/datastore/category_ancestor_index_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/datastore/instrumented.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/datastore/memdb/backend.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/datastore/memdb/owner_references.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/datastore/scylla/backend.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/datastore/scylla/migration_schema_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/datastore/scylla/migrations/010_category_ancestor_index.cql",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/datastore/scylla/repair_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/graph/generated/prelude.generated.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/graph/resolver/category_metrics.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/graph/resolver/category_resolver_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/graph/resolver/converters.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/graph/resolver/namespace_deletion_matrix_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/graph/resolver/namespace_error.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/graph/resolver/repository.resolvers.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/graph/resolver/repository_lifecycle_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/graph/resolver/service.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/graph/resolver/status_generic_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/middleware/security/graphql_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/middleware/security/secure.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/namespace/decision.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/namespace/decision_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/namespace/metrics.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/internal/namespace/metrics_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/tests/contract/datastore/pagination_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-api/tests/contract/watch_status_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-controller-manager/internal/categorytaxonomy/graphql_client_schema_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "gitstore-git-service/src/git/hooks/validation_handler.rs",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "scripts/run-capacity-target.sh",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "scripts/test-capacity-dispatch.sh",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "specs/057-categorytaxonomy-path-freshness/spec.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "tests/capacity/README.md",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "tests/capacity/preflight/category-hierarchy.sh",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "tests/capacity/profiles/category-hierarchy.js",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "tests/capacity/profiles/namespace-admission.js",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "tests/capacity/verifiers/category-hierarchy.sh",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "tests/fixtures/admission-rejection-golden.json",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "tests/integration/namespace_watch_capacity_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "f303901efc07eb5f01bbc08c3c62da17131bac25",
+      "path": "tests/integration/product_category_readiness_test.go",
+      "reason": "Exact postimage or reverse-applicable patch already retained",
+      "retained_in": "b5c3f97471961c1e9c066f883d18eedea197113b"
+    },
+    {
+      "source": "ec3d71e93dc532e56a9a528730e9e6a8d4366ac6",
+      "path": "docs/runbooks/controller-poisoned-item.md",
+      "reason": "Category conflict behavior/tests and runbook superseded by main, or workspace checksum bookkeeping"
+    },
+    {
+      "source": "ec3d71e93dc532e56a9a528730e9e6a8d4366ac6",
+      "path": "gitstore-controller-manager/internal/categorytaxonomy/reconciler.go",
+      "reason": "Category conflict behavior/tests and runbook superseded by main, or workspace checksum bookkeeping"
+    },
+    {
+      "source": "ec3d71e93dc532e56a9a528730e9e6a8d4366ac6",
+      "path": "gitstore-controller-manager/internal/categorytaxonomy/reconciler_test.go",
+      "reason": "Category conflict behavior/tests and runbook superseded by main, or workspace checksum bookkeeping"
+    },
+    {
+      "source": "ec3d71e93dc532e56a9a528730e9e6a8d4366ac6",
+      "path": "go.work.sum",
+      "reason": "Category conflict behavior/tests and runbook superseded by main, or workspace checksum bookkeeping"
+    }
+  ],
+  "entry_count": 56,
+  "payload_bytes": 1676585
+}

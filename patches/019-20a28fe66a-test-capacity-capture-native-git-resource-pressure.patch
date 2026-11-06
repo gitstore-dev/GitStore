@@ -1,0 +1,223 @@
+diff --git a/docs/runbooks/namespace-admission.md b/docs/runbooks/namespace-admission.md
+index d61af7d0b5e669da0c76d18914d45f629241bb70..20a99fb914412c78a9374a608a17c7f5dd298a3a 100644
+--- a/docs/runbooks/namespace-admission.md
++++ b/docs/runbooks/namespace-admission.md
+@@ -825,10 +825,20 @@ Compare these timestamps with the correlated server HTTP spans to localize
+ gaps. Do not call wall-minus-CPU time disk or network time: scheduling and
+ other waits can contribute, and child CPU can overlap.
+ 
++New captures additionally include `resourceUsage`: `minorFaults`, `majorFaults`,
++`voluntaryContextSwitches` and `involuntaryContextSwitches`, taken from the same
++OS process-exit accounting without an additional sampling process. Accounted
++children are included; older evidence can omit this object. Zero counters are
++explicit, while missing accounting invalidates the diagnostic without changing
++the actual Git ACK. Minor faults do not necessarily involve disk I/O, and
++context-switch counts alone cannot separate CPU contention from other waits.
++Compare them with host/VM CPU and pressure observations rather than interpreting
++them as per-command disk latency or an optimal worker-count measurement.
++
+ Trace2 events are consumed in memory, with a 16 KiB line bound and 128 KiB
+-trace budget per command. Only fixed command classes, timestamps, durations
+-and bounded failure classes enter evidence; raw events, argv, paths and
+-configuration do not. Ordinary output retains its separate 128 KiB bound.
++trace budget per command. Only fixed command classes, timestamps, durations,
++bounded resource counters and failure classes enter evidence; raw events, argv,
++paths and configuration do not. Ordinary output retains its separate 128 KiB bound.
+ Unsupported, malformed, truncated or incomplete traces invalidate the diagnostic
+ without changing whether the Git command itself was acknowledged. At most
+ three commands per push and the existing 2,048 timeline prefix are retained.
+diff --git a/tests/capacity/README.md b/tests/capacity/README.md
+index 9cb93bca641180a0cc100f893dc43d4f1f6ba5ee..1a4cf058a5091e24863fd20049ea3973a9c91155 100644
+--- a/tests/capacity/README.md
++++ b/tests/capacity/README.md
+@@ -857,6 +857,14 @@ records per existing timeline. These include host command start/wall time,
+ user/system CPU (including OS-accounted children), Git Trace2 start/exit, and
+ remote-curl helper command-name/exit timestamps when HTTP is used. Helper time
+ includes client, protocol and server work; it is not pure network time.
++New captures also retain a fixed `resourceUsage` object from the existing
++process-exit accounting: `minorFaults`, `majorFaults`,
++`voluntaryContextSwitches` and `involuntaryContextSwitches`, including children
++accounted by the operating system. These counters require no additional
++sampling process. Zero counts are explicit; older evidence may omit the object.
++Minor faults do not imply disk reads, and neither fault nor context-switch
++counts prove which resource caused a wait. Missing process accounting fails
++the diagnostic without changing the Git command's actual ACK.
+ Raw Trace2 is filtered in memory, never written to disk or returned as command
+ output: argv, paths, configuration and arbitrary event fields are not exported.
+ The parser bounds lines to 16 KiB and total trace data to 128 KiB per command;
+diff --git a/tests/integration/repository_lifecycle_capacity_test.go b/tests/integration/repository_lifecycle_capacity_test.go
+index 2dc556e4aa66b19e8085c0308f678ed438996bbf..0cba67d9b93436e206853153e2eec83542ed0f94 100644
+--- a/tests/integration/repository_lifecycle_capacity_test.go
++++ b/tests/integration/repository_lifecycle_capacity_test.go
+@@ -4594,17 +4594,25 @@ type secretCapacityTraceKey struct{}
+ 
+ type secretCapacityGitTimingKey struct{}
+ 
++type secretCapacityGitResourceUsage struct {
++	MinorFaults                int64 `json:"minorFaults"`
++	MajorFaults                int64 `json:"majorFaults"`
++	VoluntaryContextSwitches   int64 `json:"voluntaryContextSwitches"`
++	InvoluntaryContextSwitches int64 `json:"involuntaryContextSwitches"`
++}
++
+ type secretCapacityGitTiming struct {
+-	Command             string        `json:"command"`
+-	StartedAt           time.Time     `json:"startedAt"`
+-	Wall                time.Duration `json:"wall"`
+-	UserCPU             time.Duration `json:"userCPU"`
+-	SystemCPU           time.Duration `json:"systemCPU"`
+-	TraceStartedAt      time.Time     `json:"traceStartedAt"`
+-	TraceExitedAt       time.Time     `json:"traceExitedAt"`
+-	RemoteHTTPStartedAt time.Time     `json:"remoteHTTPStartedAt,omitzero"`
+-	RemoteHTTPExitedAt  time.Time     `json:"remoteHTTPExitedAt,omitzero"`
+-	Failure             string        `json:"failure,omitempty"`
++	Command             string                          `json:"command"`
++	StartedAt           time.Time                       `json:"startedAt"`
++	Wall                time.Duration                   `json:"wall"`
++	UserCPU             time.Duration                   `json:"userCPU"`
++	SystemCPU           time.Duration                   `json:"systemCPU"`
++	ResourceUsage       *secretCapacityGitResourceUsage `json:"resourceUsage,omitempty"`
++	TraceStartedAt      time.Time                       `json:"traceStartedAt"`
++	TraceExitedAt       time.Time                       `json:"traceExitedAt"`
++	RemoteHTTPStartedAt time.Time                       `json:"remoteHTTPStartedAt,omitzero"`
++	RemoteHTTPExitedAt  time.Time                       `json:"remoteHTTPExitedAt,omitzero"`
++	Failure             string                          `json:"failure,omitempty"`
+ }
+ 
+ func validateRepositoryCapacityClientTiming(value, workload string, mode capacityMode) error {
+@@ -4629,6 +4637,10 @@ func validateSecretCapacityGitTiming(timing secretCapacityGitTiming) error {
+ 		timing.RemoteHTTPStartedAt.IsZero() != timing.RemoteHTTPExitedAt.IsZero() {
+ 		return errors.New("secret capacity: incomplete client Git timing")
+ 	}
++	if usage := timing.ResourceUsage; usage != nil && (usage.MinorFaults < 0 || usage.MajorFaults < 0 ||
++		usage.VoluntaryContextSwitches < 0 || usage.InvoluntaryContextSwitches < 0) {
++		return errors.New("secret capacity: invalid client Git resource usage")
++	}
+ 	if !timing.RemoteHTTPStartedAt.IsZero() && (timing.RemoteHTTPStartedAt.Before(timing.TraceStartedAt) ||
+ 		timing.RemoteHTTPExitedAt.Before(timing.RemoteHTTPStartedAt) || timing.RemoteHTTPExitedAt.After(timing.TraceExitedAt)) {
+ 		return errors.New("secret capacity: inconsistent client HTTP helper timing")
+@@ -4826,6 +4838,14 @@ func secretCapacityGitInspect(ctx context.Context, directory, token string, insp
+ 		}
+ 		if command.ProcessState != nil {
+ 			trace.timing.UserCPU, trace.timing.SystemCPU = command.ProcessState.UserTime(), command.ProcessState.SystemTime()
++			if usage, ok := command.ProcessState.SysUsage().(*syscall.Rusage); ok && usage != nil {
++				trace.timing.ResourceUsage = &secretCapacityGitResourceUsage{
++					MinorFaults: usage.Minflt, MajorFaults: usage.Majflt,
++					VoluntaryContextSwitches: usage.Nvcsw, InvoluntaryContextSwitches: usage.Nivcsw,
++				}
++			} else {
++				trace.fail("process_usage")
++			}
+ 		} else {
+ 			trace.fail("process_start")
+ 		}
+diff --git a/tests/integration/secret_capacity_contract_test.go b/tests/integration/secret_capacity_contract_test.go
+index 1eb1c1d8fee8828d9ce29367f6bbd6f4932de3ed..26f8e0c08f34e9db4e01b28d786bf8fe385e052d 100644
+--- a/tests/integration/secret_capacity_contract_test.go
++++ b/tests/integration/secret_capacity_contract_test.go
+@@ -1687,6 +1687,11 @@ func TestSecretCapacityGitClientTiming(t *testing.T) {
+ 			require.True(t, timing.RemoteHTTPStartedAt.IsZero(), "local transport is not an HTTP helper")
+ 			require.GreaterOrEqual(t, timing.UserCPU, time.Duration(0))
+ 			require.GreaterOrEqual(t, timing.SystemCPU, time.Duration(0))
++			require.NotNil(t, timing.ResourceUsage)
++			require.GreaterOrEqual(t, timing.ResourceUsage.MinorFaults, int64(0))
++			require.GreaterOrEqual(t, timing.ResourceUsage.MajorFaults, int64(0))
++			require.GreaterOrEqual(t, timing.ResourceUsage.VoluntaryContextSwitches, int64(0))
++			require.GreaterOrEqual(t, timing.ResourceUsage.InvoluntaryContextSwitches, int64(0))
+ 		}
+ 		require.Equal(t, expected, commands)
+ 	}
+@@ -1706,6 +1711,7 @@ func TestSecretCapacityGitClientTimingHTTPFailure(t *testing.T) {
+ 	require.NotContains(t, err.Error(), "private-")
+ 	require.Len(t, timings, 1)
+ 	require.NoError(t, validateSecretCapacityGitTiming(timings[0]))
++	require.NotNil(t, timings[0].ResourceUsage)
+ 	require.Equal(t, "other", timings[0].Command)
+ 	require.False(t, timings[0].RemoteHTTPStartedAt.IsZero())
+ 	require.GreaterOrEqual(t, timings[0].RemoteHTTPExitedAt.Sub(timings[0].RemoteHTTPStartedAt), 40*time.Millisecond)
+@@ -1843,17 +1849,21 @@ func TestSecretCapacityClientTimingFailurePreservesACKs(t *testing.T) {
+ 		burstInterval: 40 * time.Millisecond, burstSize: 1, burstWindow: time.Millisecond,
+ 		workers: 1, queueLimit: 8, drainTimeout: time.Second,
+ 	}
+-	measured, err := runSecretCapacityPushes(t.Context(), cfg, func(context.Context, int, secretCapacityPushBatch) secretCapacityPushResult {
+-		return secretCapacityPushResult{
+-			gitAttempted: true, acknowledged: true, ackLatency: time.Millisecond,
+-			clientGit: []secretCapacityGitTiming{{Command: "push", Failure: "trace_limit"}},
+-		}
+-	})
+-	require.NoError(t, err)
+-	require.True(t, measured.clientTimingFailed, "capture failure must survive collector merging")
+-	require.Equal(t, measured.completed, measured.acknowledged)
+-	require.Zero(t, measured.failed, "diagnostic capture must not invent rejected pushes")
+-	require.Empty(t, measured.failureClasses)
++	for _, failure := range []string{"trace_limit", "process_usage"} {
++		t.Run(failure, func(t *testing.T) {
++			measured, err := runSecretCapacityPushes(t.Context(), cfg, func(context.Context, int, secretCapacityPushBatch) secretCapacityPushResult {
++				return secretCapacityPushResult{
++					gitAttempted: true, acknowledged: true, ackLatency: time.Millisecond,
++					clientGit: []secretCapacityGitTiming{{Command: "push", Failure: failure}},
++				}
++			})
++			require.NoError(t, err)
++			require.True(t, measured.clientTimingFailed, "capture failure must survive collector merging")
++			require.Equal(t, measured.completed, measured.acknowledged)
++			require.Zero(t, measured.failed, "diagnostic capture must not invent rejected pushes")
++			require.Empty(t, measured.failureClasses)
++		})
++	}
+ }
+ 
+ func TestSecretCapacityGitInspectChecksFailureWithoutReturningOutput(t *testing.T) {
+@@ -3794,8 +3804,36 @@ func TestSecretCapacityClientTimingEvidence(t *testing.T) {
+ 	}
+ 	base.Timelines = []secretCapacityPushTimeline{row}
+ 	require.NoError(t, validateSecretCapacityFileStages(base))
++	t.Run("legacy resource counters absent", func(t *testing.T) {
++		body, err := json.Marshal(command)
++		require.NoError(t, err)
++		require.NotContains(t, string(body), "resourceUsage")
++		var decoded secretCapacityGitTiming
++		require.NoError(t, json.Unmarshal(body, &decoded))
++		require.Nil(t, decoded.ResourceUsage)
++		require.NoError(t, validateSecretCapacityGitTiming(decoded))
++	})
++	t.Run("resource counters round trip", func(t *testing.T) {
++		withUsage := command
++		withUsage.ResourceUsage = &secretCapacityGitResourceUsage{
++			MinorFaults: 123, MajorFaults: 4, VoluntaryContextSwitches: 56, InvoluntaryContextSwitches: 7,
++		}
++		body, err := json.Marshal(withUsage)
++		require.NoError(t, err)
++		var decoded secretCapacityGitTiming
++		require.NoError(t, json.Unmarshal(body, &decoded))
++		require.Equal(t, withUsage.ResourceUsage, decoded.ResourceUsage)
++		require.NoError(t, validateSecretCapacityGitTiming(decoded))
++		zero := command
++		zero.ResourceUsage = &secretCapacityGitResourceUsage{}
++		body, err = json.Marshal(zero)
++		require.NoError(t, err)
++		require.Contains(t, string(body), `"resourceUsage":{"minorFaults":0,"majorFaults":0,"voluntaryContextSwitches":0,"involuntaryContextSwitches":0}`)
++		require.NoError(t, validateSecretCapacityGitTiming(zero))
++	})
+ 	for _, fault := range []string{"undeclared", "production", "missing", "commands", "incomplete",
+-		"negative cpu", "worker bounds", "http bounds", "http missing exit", "private class", "overflow"} {
++		"negative cpu", "minor faults", "major faults", "voluntary switches", "involuntary switches",
++		"worker bounds", "http bounds", "http missing exit", "private class", "overflow"} {
+ 		t.Run(fault, func(t *testing.T) {
+ 			workload := base
+ 			workload.Timelines = []secretCapacityPushTimeline{row}
+@@ -3814,6 +3852,14 @@ func TestSecretCapacityClientTimingEvidence(t *testing.T) {
+ 				timing.TraceExitedAt = time.Time{}
+ 			case "negative cpu":
+ 				timing.UserCPU = -time.Nanosecond
++			case "minor faults":
++				timing.ResourceUsage = &secretCapacityGitResourceUsage{MinorFaults: -1}
++			case "major faults":
++				timing.ResourceUsage = &secretCapacityGitResourceUsage{MajorFaults: -1}
++			case "voluntary switches":
++				timing.ResourceUsage = &secretCapacityGitResourceUsage{VoluntaryContextSwitches: -1}
++			case "involuntary switches":
++				timing.ResourceUsage = &secretCapacityGitResourceUsage{InvoluntaryContextSwitches: -1}
+ 			case "worker bounds":
+ 				timing.StartedAt = start.Add(-time.Second)
+ 				timing.TraceStartedAt = timing.StartedAt

@@ -1,0 +1,357 @@
+diff --git a/docs/developer-guide.md b/docs/developer-guide.md
+index c775753910e2831b4a40776a5595366ca43e7ed4..3fe6e649f0e149d1b52250bea04ff04a827797a5 100644
+--- a/docs/developer-guide.md
++++ b/docs/developer-guide.md
+@@ -356,6 +356,9 @@ Post-receive admission cannot reject an already accepted Git push. DB-backed con
+ File admission callbacks report failed durable writes and exhausted conflict
+ retries instead of reporting success. The same callback can be retried after
+ the datastore recovers; this does not change the earlier Git acknowledgement.
++Transient ref-read failures also return an unavailable error, rather than
++being mistaken for a superseded commit. Verified stale or missing refs retain
++their existing no-op behavior.
+ 
+ ## Controller Manager Runtime
+ 
+diff --git a/gitstore-api/internal/cataloggrpc/committed_manifest.go b/gitstore-api/internal/cataloggrpc/committed_manifest.go
+index d49468d30f4767b48c4420175653c6171841315f..8359dc4cd6c2f84b5235aee124d93cb866a54039 100644
+--- a/gitstore-api/internal/cataloggrpc/committed_manifest.go
++++ b/gitstore-api/internal/cataloggrpc/committed_manifest.go
+@@ -111,7 +111,10 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
+ 
+ 	content := append([]byte(nil), req.Content...)
+ 	commitSHA := req.CommitSHA
+-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
++	current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
++	if err != nil {
++		return nil, err
++	}
+ 	if !ok {
+ 		return nil, ErrCommittedManifestSuperseded
+ 	}
+@@ -165,7 +168,14 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	if admCtx.wasSuperseded() || !s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, commitSHA) {
++	if admCtx.wasSuperseded() {
++		return nil, ErrCommittedManifestSuperseded
++	}
++	stillCurrent, err := s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, commitSHA)
++	if err != nil {
++		return nil, err
++	}
++	if !stillCurrent {
+ 		return nil, ErrCommittedManifestSuperseded
+ 	}
+ 	result := &admission.CommittedManifestResult{Kind: entry.identity.Kind, Namespace: entry.identity.Namespace, Name: entry.identity.Name, CommitSHA: commitSHA}
+@@ -219,7 +229,10 @@ func (s *Server) repairCommittedManifest(ctx context.Context, req admission.Comm
+ 		if ctx.Err() != nil {
+ 			return "budget_exhausted"
+ 		}
+-		current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
++		current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
++		if err != nil {
++			continue
++		}
+ 		if !ok || current != req.CommitSHA {
+ 			return "superseded"
+ 		}
+@@ -334,7 +347,10 @@ func errorText(err error) string {
+ }
+ 
+ func (s *Server) admitCommittedInfrastructureDeletion(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
++	current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
++	if err != nil {
++		return nil, err
++	}
+ 	if !ok || current != req.CommitSHA {
+ 		return nil, ErrCommittedManifestSuperseded
+ 	}
+@@ -385,7 +401,10 @@ func (s *Server) admitCommittedProductDeletion(ctx context.Context, req admissio
+ 	if req.Kind != "Product" || req.Name == "" {
+ 		return nil, fmt.Errorf("committed deletion requires a Product identity")
+ 	}
+-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
++	current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
++	if err != nil {
++		return nil, err
++	}
+ 	if !ok || current != req.CommitSHA {
+ 		return nil, ErrCommittedManifestSuperseded
+ 	}
+@@ -413,7 +432,10 @@ func (s *Server) admitCommittedCategoryDeletion(ctx context.Context, req admissi
+ 	if req.Name == "" {
+ 		return nil, fmt.Errorf("committed deletion requires a CategoryTaxonomy name")
+ 	}
+-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
++	current, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
++	if err != nil {
++		return nil, err
++	}
+ 	if !ok || current != req.CommitSHA {
+ 		return nil, ErrCommittedManifestSuperseded
+ 	}
+diff --git a/gitstore-api/internal/cataloggrpc/committed_manifest_test.go b/gitstore-api/internal/cataloggrpc/committed_manifest_test.go
+index 6b84e062a9864095e52cc31e85ab22432face253..4ee74b9bd21b64ba1af6ffd0524162516eb55bdd 100644
+--- a/gitstore-api/internal/cataloggrpc/committed_manifest_test.go
++++ b/gitstore-api/internal/cataloggrpc/committed_manifest_test.go
+@@ -17,8 +17,40 @@ import (
+ 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/stretchr/testify/require"
++	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/status"
+ )
+ 
++func TestAdmitCommittedManifestRefReadFailureIsNotSupersession(t *testing.T) {
++	store := newTestDatastore(t)
++	commit := strings.Repeat("a", 40)
++	content := categoryManifestTitled("electronics", "Electronics")
++	git := newTreeGitReader(&commit, map[string]map[string][]byte{commit: {"categories/electronics.md": content}})
++	var reads atomic.Int64
++	var unavailable atomic.Bool
++	unavailable.Store(true)
++	git.resolveRefFunc = func(context.Context, string, string) (string, error) {
++		reads.Add(1)
++		if unavailable.Load() {
++			return "", errors.New("injected transient ref read failure")
++		}
++		return commit, nil
++	}
++	server := newCatalogServer(t, store, git)
++	_, err := admitCommittedCategory(t, server, commit, content, admission.OperationCreate)
++	require.Equal(t, codes.Unavailable, status.Code(err))
++	require.NotErrorIs(t, err, admission.ErrCommittedManifestSuperseded)
++	require.EqualValues(t, 4, reads.Load(), "failed tip reads must consume only the existing bounded repair budget")
++	_, err = store.GetCategoryTaxonomyByName(t.Context(), "gitstore", "electronics")
++	require.ErrorIs(t, err, datastore.ErrNotFound)
++	unavailable.Store(false)
++	_, err = admitCommittedCategory(t, server, commit, content, admission.OperationCreate)
++	require.NoError(t, err)
++	stored, err := store.GetCategoryTaxonomyByName(t.Context(), "gitstore", "electronics")
++	require.NoError(t, err)
++	require.Equal(t, commit, stored.GitCommitSHA)
++}
++
+ type failCategoryCreateOnceStore struct {
+ 	datastore.Datastore
+ 	remaining atomic.Int32
+diff --git a/gitstore-api/internal/cataloggrpc/file_replica_test.go b/gitstore-api/internal/cataloggrpc/file_replica_test.go
+index ea4dfca9490cb3ceebddad7de742bc31dc87cbe7..bcbf2e5b8c1324fc3d4ef8dafca858964548d087 100644
+--- a/gitstore-api/internal/cataloggrpc/file_replica_test.go
++++ b/gitstore-api/internal/cataloggrpc/file_replica_test.go
+@@ -29,6 +29,51 @@ import (
+ 
+ type fileBatchContextKey struct{}
+ 
++func TestAdmitResourcesFileRefReadFailuresRemainRetryable(t *testing.T) {
++	for _, failAt := range []int64{1, 2, 3} {
++		t.Run(strconv.FormatInt(failAt, 10), func(t *testing.T) {
++			store := newTestDatastore(t)
++			commit := strings.Repeat("c", 40)
++			git := newTreeGitReader(&commit, map[string]map[string][]byte{
++				commit: {"files/hero.md": makeFileWithBody("hero", "accepted")},
++			})
++			var reads atomic.Int64
++			var unavailable atomic.Bool
++			unavailable.Store(true)
++			git.resolveRefFunc = func(context.Context, string, string) (string, error) {
++				if reads.Add(1) >= failAt && unavailable.Load() {
++					return "", errors.New("injected transient ref read failure")
++				}
++				return commit, nil
++			}
++			server := newCatalogServer(t, store, git)
++			request := &catalogv1.AdmitResourcesRequest{
++				Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
++				RepositoryId:  testRepoID, RefName: "refs/heads/main", NewCommitSha: commit,
++			}
++			_, err := server.AdmitResources(t.Context(), request)
++			require.Equal(t, codes.Unavailable, status.Code(err), "a failed tip read is not proof of supersession")
++			before, readErr := store.GetFileByName(t.Context(), "gitstore", "hero")
++			if failAt < 3 {
++				require.ErrorIs(t, readErr, datastore.ErrNotFound)
++			} else {
++				require.NoError(t, readErr)
++			}
++			unavailable.Store(false)
++			_, err = server.AdmitResources(t.Context(), request)
++			require.NoError(t, err)
++			file, err := store.GetFileByName(t.Context(), "gitstore", "hero")
++			require.NoError(t, err)
++			require.Equal(t, commit, file.GitCommitSHA)
++			require.Equal(t, "accepted", file.Body)
++			require.Equal(t, "1", file.ResourceVersion)
++			if before != nil {
++				require.Equal(t, before.UID, file.UID, "retry after a completed write must preserve its identity")
++			}
++		})
++	}
++}
++
+ type concurrentFileBatchStore struct {
+ 	datastore.Datastore
+ 	batches, snapshots, writes atomic.Int64
+diff --git a/gitstore-api/internal/cataloggrpc/server.go b/gitstore-api/internal/cataloggrpc/server.go
+index b5a6507cce7d12cc31b3878ae5e3cfb7b8efbc6e..bfce475e3dd0f5024befea007843800557f2d82a 100644
+--- a/gitstore-api/internal/cataloggrpc/server.go
++++ b/gitstore-api/internal/cataloggrpc/server.go
+@@ -1079,10 +1079,10 @@ func (s *Server) resolveNamespaceIdentifier(ctx context.Context, repositoryID st
+ 	return ns.Name, nil
+ }
+ 
+-func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, refName, commitSHA string) bool {
+-	current, ok := s.currentAdmissionCommit(ctx, repositoryID, refName, commitSHA)
+-	if !ok {
+-		return false
++func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, refName, commitSHA string) (bool, error) {
++	current, ok, err := s.currentAdmissionCommit(ctx, repositoryID, refName, commitSHA)
++	if err != nil || !ok {
++		return false, err
+ 	}
+ 	if isZeroOID(commitSHA) {
+ 		if current != "" {
+@@ -1090,9 +1090,9 @@ func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, ref
+ 				zap.String("repository_id", repositoryID),
+ 				zap.String("ref_name", refName),
+ 				zap.String("current_commit_sha", current))
+-			return false
++			return false, nil
+ 		}
+-		return true
++		return true, nil
+ 	}
+ 	if current != "" && current != commitSHA {
+ 		s.log.Info("admit_resources: stale admission snapshot superseded",
+@@ -1100,14 +1100,14 @@ func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, ref
+ 			zap.String("ref_name", refName),
+ 			zap.String("admitted_commit_sha", commitSHA),
+ 			zap.String("current_commit_sha", current))
+-		return false
++		return false, nil
+ 	}
+-	return true
++	return true, nil
+ }
+ 
+-func (s *Server) currentAdmissionCommit(ctx context.Context, repositoryID, refName, commitSHA string) (string, bool) {
++func (s *Server) currentAdmissionCommit(ctx context.Context, repositoryID, refName, commitSHA string) (string, bool, error) {
+ 	if refName == "" {
+-		return commitSHA, true
++		return commitSHA, true, nil
+ 	}
+ 	current, err := s.git.ResolveRef(ctx, repositoryID, refName)
+ 	if err != nil {
+@@ -1117,18 +1117,18 @@ func (s *Server) currentAdmissionCommit(ctx context.Context, repositoryID, refNa
+ 					zap.String("repository_id", repositoryID),
+ 					zap.String("ref_name", refName),
+ 					zap.String("new_commit_sha", commitSHA))
+-				return "", false
++				return "", false, nil
+ 			}
+-			return "", true
++			return "", true, nil
+ 		}
+ 		s.log.Error("admit_resources: resolve ref failed",
+ 			zap.String("repository_id", repositoryID),
+ 			zap.String("ref_name", refName),
+ 			zap.String("new_commit_sha", commitSHA),
+ 			zap.Error(err))
+-		return "", false
++		return "", false, grpcstatus.Error(codes.Unavailable, "admission ref state unavailable")
+ 	}
+-	return current, true
++	return current, true, nil
+ }
+ 
+ // AdmitResources fetches, parses, and stores catalog resources from an accepted push commit.
+@@ -1174,7 +1174,10 @@ func (s *Server) AdmitResources(
+ 
+ 	branch := strings.TrimPrefix(req.RefName, "refs/heads/")
+ 	for range namespaceadmission.AdmissionWriteAttempts {
+-		currentCommit, ok := s.currentAdmissionCommit(ctx, req.RepositoryId, req.RefName, newCommit)
++		currentCommit, ok, err := s.currentAdmissionCommit(ctx, req.RepositoryId, req.RefName, newCommit)
++		if err != nil {
++			return nil, err
++		}
+ 		if !ok {
+ 			return &catalogv1.AdmitResourcesResponse{}, nil
+ 		}
+@@ -1218,7 +1221,11 @@ func (s *Server) AdmitResources(
+ 			oldEntries = s.loadParsedEntries(ctx, req.RepositoryId, req.GetOldCommitSha(), admCtx.Namespace, changedPaths)
+ 			newEntries = s.loadParsedEntries(ctx, req.RepositoryId, effectiveCommit, admCtx.Namespace, changedPaths)
+ 		}
+-		if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit) {
++		stillCurrent, err := s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit)
++		if err != nil {
++			return nil, err
++		}
++		if !stillCurrent {
+ 			continue
+ 		}
+ 		if immutablePaths := repositoryImmutablePathChanges(oldEntries, newEntries); len(immutablePaths) > 0 {
+@@ -1237,7 +1244,7 @@ func (s *Server) AdmitResources(
+ 				zap.String("repository_id", req.RepositoryId),
+ 				zap.String("commit_sha", effectiveCommit),
+ 				zap.Error(err))
+-			if grpcstatus.Code(err) == codes.PermissionDenied || grpcstatus.Code(err) == codes.Unauthenticated {
++			if grpcstatus.Code(err) == codes.PermissionDenied || grpcstatus.Code(err) == codes.Unauthenticated || grpcstatus.Code(err) == codes.Unavailable {
+ 				return nil, err
+ 			}
+ 			if errors.Is(err, errCategoryDeletionBlocked) {
+@@ -1248,7 +1255,11 @@ func (s *Server) AdmitResources(
+ 		if admCtx.wasSuperseded() {
+ 			continue
+ 		}
+-		if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit) {
++		stillCurrent, err = s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit)
++		if err != nil {
++			return nil, err
++		}
++		if !stillCurrent {
+ 			continue
+ 		}
+ 		return &catalogv1.AdmitResourcesResponse{}, nil
+@@ -1665,7 +1676,9 @@ func (s *Server) admitRepository(ctx context.Context, resource *catalog.Reposito
+ 		if existing.DeletionTimestamp != nil || intent != nil {
+ 			return admission.NewError(admission.CodeFailedPrecondition, "REPOSITORY_TERMINATING", "repository deletion is pending")
+ 		}
+-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
++		if current, err := s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA); err != nil {
++			return err
++		} else if !current {
+ 			admCtx.markSuperseded()
+ 			return nil
+ 		}
+@@ -2196,7 +2209,7 @@ func (s *Server) admitNamespace(
+ 
+ 	for range namespaceadmission.AdmissionWriteAttempts {
+ 		refCheck := func(ctx context.Context) (bool, error) {
+-			return s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA), nil
++			return s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA)
+ 		}
+ 		if namespaceadmission.RecheckAuthoringRef(ctx, refCheck) != nil {
+ 			admCtx.markSuperseded()
+@@ -2437,7 +2450,9 @@ func (s *Server) admitFile(
+ 		// observed it as absent. If this admission still owns the ref tip, reload
+ 		// the winner and converge through the resource-version-guarded update
+ 		// path below. A stale admission must leave the winner untouched.
+-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
++		if current, err := s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA); err != nil {
++			return err
++		} else if !current {
+ 			return nil
+ 		}
+ 		existing, err = s.store.GetFileByName(ctx, namespace, resource.Metadata.Name)
+@@ -2485,7 +2500,9 @@ func (s *Server) admitFile(
+ 			s.log.Error("admit_resources: update file failed", zap.Error(err))
+ 			return err
+ 		}
+-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
++		if current, err := s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA); err != nil {
++			return err
++		} else if !current {
+ 			return nil
+ 		}
+ 		existing, err = s.store.GetFileByName(ctx, namespace, resource.Metadata.Name)
