@@ -44,8 +44,9 @@ spec:
 
 type repositoryConflictOnceStore struct {
 	datastore.Datastore
-	remaining atomic.Int32
-	newOwner  string
+	remaining     atomic.Int32
+	newOwner      string
+	afterConflict func()
 }
 
 func (s *repositoryConflictOnceStore) UpdateRepository(ctx context.Context, repository *datastore.Repository, expectedResourceVersion string) error {
@@ -61,6 +62,9 @@ func (s *repositoryConflictOnceStore) UpdateRepository(ctx context.Context, repo
 			if err := s.Datastore.UpdateRepository(ctx, current, expected); err != nil {
 				return err
 			}
+		}
+		if s.afterConflict != nil {
+			s.afterConflict()
 		}
 		return datastore.ErrConflict
 	}
@@ -554,5 +558,72 @@ clusterRoleBindings:
 			assert.NotContains(t, body, "Changed body")
 			assert.Equal(t, a, commit)
 		})
+	}
+}
+
+func TestRepositoryCommittedUpsertFencesItsManifestAcrossRefAdvance(t *testing.T) {
+	for _, stage := range []string{"before admission", "during CAS retry"} {
+		for _, change := range []string{"independent path", "changed content", "changed identity", "removed manifest", "unavailable manifest"} {
+			t.Run(stage+"/"+change, func(t *testing.T) {
+				ctx := context.Background()
+				base, err := memdb.New()
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = base.Close() })
+				require.NoError(t, base.CreateNamespace(ctx, &datastore.Namespace{UID: "00000000-0000-0000-0000-000000000171", Name: "acme", Tier: datastore.NamespaceTierUser}))
+				require.NoError(t, base.CreateRepository(ctx, &datastore.Repository{UID: testRepoID, ID: testRepoID, RepositoryID: testRepoID, Namespace: "acme", Name: "gitstore-system"}))
+				uid := "00000000-0000-0000-0000-000000000172"
+				require.NoError(t, base.CreateRepository(ctx, &datastore.Repository{UID: uid, ID: uid, RepositoryID: uid, Namespace: "acme", NamespaceID: "acme", Name: "catalog", APIVersion: "gitstore.dev/v1beta1", Kind: "Repository", DefaultBranch: "main", StorageClass: "standard", Generation: 1, ResourceVersion: "1"}))
+				require.NoError(t, base.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "acme", Name: "catalog", RepositoryID: uid}))
+				mine, theirs := strings.Repeat("c", 40), strings.Repeat("d", 40)
+				path := "repositories/catalog.md"
+				content := repositoryManifestFor("catalog", "acme", "trunk", "premium")
+				latest := append([]byte(nil), content...)
+				if change == "changed content" {
+					latest = repositoryManifestFor("catalog", "acme", "other", "premium")
+				}
+				if change == "changed identity" {
+					latest = repositoryManifestFor("other", "acme", "trunk", "premium")
+				}
+				trees := map[string]map[string][]byte{mine: {path: content}, theirs: {path: latest}}
+				if change == "removed manifest" {
+					delete(trees[theirs], path)
+				}
+				current := theirs
+				store := &repositoryConflictOnceStore{Datastore: base}
+				if stage == "during CAS retry" {
+					current = mine
+					store.remaining.Store(1)
+					store.afterConflict = func() { current = theirs }
+				}
+				reader := newTreeGitReader(&current, trees)
+				if change == "unavailable manifest" {
+					read := reader.readFileFunc
+					reader.readFileFunc = func(ctx context.Context, repositoryID, p, ref string) ([]byte, error) {
+						if ref == theirs {
+							return nil, grpcstatus.Error(codes.Unavailable, "read unavailable")
+						}
+						return read(ctx, repositoryID, p, ref)
+					}
+				}
+				srv := newCatalogServer(t, store, reader)
+				result, err := srv.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{RepositoryID: testRepoID, Namespace: "acme", ActorSubject: "alice", CommitSHA: mine, RefName: "refs/heads/main", Path: path, Content: content, Operation: admission.OperationUpdate})
+				stored, getErr := base.GetRepository(ctx, uid)
+				require.NoError(t, getErr)
+				if change == "independent path" {
+					require.NoError(t, err)
+					require.Equal(t, mine, result.CommitSHA)
+					require.Equal(t, "trunk", stored.DefaultBranch)
+					require.Equal(t, mine, stored.GitCommitSHA)
+					require.Equal(t, "main@sha1:"+mine, stored.Revision)
+				} else {
+					require.ErrorIs(t, err, admission.ErrCommittedManifestSuperseded)
+					require.Equal(t, "main", stored.DefaultBranch)
+					require.Empty(t, stored.GitCommitSHA)
+				}
+				if stage == "during CAS retry" {
+					require.Zero(t, store.remaining.Load(), "the race must reach the CAS conflict")
+				}
+			})
+		}
 	}
 }

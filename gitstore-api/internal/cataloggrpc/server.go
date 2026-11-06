@@ -1130,7 +1130,7 @@ func (s *Server) isAdmissionEntryCurrent(ctx context.Context, admCtx AdmissionCo
 		return true
 	}
 	entry := admCtx.entry
-	if entry == nil || entry.parsed == nil || (entry.parsed.Kind != "Product" && entry.parsed.Kind != "CategoryTaxonomy") {
+	if entry == nil || entry.parsed == nil || (entry.parsed.Kind != "Product" && entry.parsed.Kind != "CategoryTaxonomy" && entry.parsed.Kind != "Repository") {
 		return false
 	}
 	content, err := s.git.ReadFile(ctx, admCtx.RepositoryID, entry.path, current)
@@ -1669,6 +1669,12 @@ func (s *Server) admitRepository(ctx context.Context, resource *catalog.Reposito
 	if isRepositoryStorageClassDowngrade(existing.StorageClass, resource.Spec.StorageClass) {
 		return nil
 	}
+	isCurrent := func() bool {
+		if op == admission.OperationUpdate {
+			return s.isAdmissionEntryCurrent(ctx, admCtx)
+		}
+		return s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA())
+	}
 	for range maxRepositoryAdmissionUpdateAttempts {
 		entry := &parsedEntry{path: sourcePath, parsed: &validate.ParsedResource{Kind: "Repository", Repository: resource}, body: body}
 		if err := s.authorizeOperation(ctx, resourceIdentity{Kind: "Repository", Name: resource.Metadata.Name, Namespace: resource.Metadata.Namespace}, admission.OperationUpdate, entry, existing); err != nil {
@@ -1681,7 +1687,7 @@ func (s *Server) admitRepository(ctx context.Context, resource *catalog.Reposito
 		if existing.DeletionTimestamp != nil || intent != nil {
 			return admission.NewError(admission.CodeFailedPrecondition, "REPOSITORY_TERMINATING", "repository deletion is pending")
 		}
-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
+		if !isCurrent() {
 			admCtx.markSuperseded()
 			return nil
 		}

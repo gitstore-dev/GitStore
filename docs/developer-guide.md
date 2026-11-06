@@ -333,6 +333,14 @@ The pre-receive phase is intentionally stateless and blocking. Admission can use
 
 Admission identity is `apiVersion`, `kind`, resolved namespace, and `metadata.name`; the Git file path is stored as provenance only. A path move with the same identity preserves `metadata.uid` and only increments `resourceVersion`. Spec/body edits increment both `generation` and `resourceVersion`. Deleting a resource file removes the stored identity; adding the same identity again later allocates a new UID.
 
+Synchronous `updateRepository` authoring uses the same complete-manifest fence
+when another path advances the namespace system branch. Its status-conflict
+retries recheck authorization and the current manifest, retain the accepted
+source revision, and reject changed, removed or unreadable content. Updating
+one Repository therefore does not require other Repository authors to leave
+the shared branch idle. Creates and deletions retain their existing stricter
+revision checks.
+
 Post-receive admission cannot reject an already accepted Git push. DB-backed conflicts such as duplicate `ProductVariant.spec.sku` leave the existing resource unchanged, skip the conflicting incoming resource, and emit structured API logs with the operation, namespace, name, SKU, and conflicting identity.
 
 ## Controller Manager Runtime
