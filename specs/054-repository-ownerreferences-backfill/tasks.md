@@ -88,7 +88,7 @@
 - [X] T022 [P] Extend the existing repository lifecycle capacity correctness oracle for owner metadata, blocking deletion, and orphan preservation in `tests/integration/repository_lifecycle_capacity_test.go`
 - [X] T023 Update `specs/054-repository-ownerreferences-backfill/quickstart.md` with the implemented `gitctl` syntax, status output, rollout order, verification steps, and failure handling
 - [ ] T024 Run the supported production Repository lifecycle capacity scenario and record the actual owner-reference correctness result in `specs/054-repository-ownerreferences-backfill/quickstart.md` using `make capacity TARGET=repository PROFILE=lifecycle MODE=production`
-- [ ] T025 Run the existing controller-restart fault profile against an explicitly test-owned environment and record the measured recovery result in `specs/054-repository-ownerreferences-backfill/quickstart.md` using `CHAOS_TARGET=<test-owned-controller-container> make chaos CHAOS_PROFILE=controller-restart`
+- [X] T025 Run the existing controller-restart fault profile against an explicitly test-owned environment and record the measured recovery result in `specs/054-repository-ownerreferences-backfill/quickstart.md` using `CHAOS_TARGET=<test-owned-controller-container> make chaos CHAOS_PROFILE=controller-restart`
 - [ ] T026 Validate API and controller replica safety, rolling-upgrade behavior, AuthN/AuthZ isolation, and bounded backfill under the applicable integration suites; record any unverified deployed paths in `specs/054-repository-ownerreferences-backfill/quickstart.md`
 
 ## Dependencies & Execution Order

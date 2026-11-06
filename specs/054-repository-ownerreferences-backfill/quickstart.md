@@ -108,6 +108,22 @@ CHAOS_TARGET=<test-owned-controller-container> \
 make chaos CHAOS_PROFILE=controller-restart
 ```
 
+The test-owned controller-restart run on 2026-11-06 completed the injected
+restart successfully. The replacement process became ready 21.4 seconds after
+startup, within the profile's 60-second recovery objective. The Product work
+queue was still about 4.67 million with active workers at the observation point;
+this measures controller recovery, not completion of the retained dataset's
+reconciliation backlog.
+
+The retained-data owner-reference backfill remains incomplete: Namespace
+scanned 41 rows, repaired 2, and has 0 unresolved relationships; Repository
+scanned 639 rows, repaired 21, and has 0 unresolved relationships but is not
+complete. Product scanning has not started. A keyspace-wide projection audit
+was OOM-killed before producing output, so its repair dry-run was not reached
+and no projection repair was applied. Rerun the audit from a controlled
+operator host with enough memory for the retained dataset before attempting
+repair or claiming T024/T026 complete.
+
 Use the actual owned-deployment configuration and receipts required by the
 capacity and chaos guides. A diagnostic or local test pass is not production
 certification. Git remains one active process with retained storage and
