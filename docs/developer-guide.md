@@ -402,6 +402,12 @@ Purpose:
 - Serve GitService gRPC operations for repository lifecycle, ref advertisement, receive-pack, upload-pack, file reads, commits, deletes, and tags.
 - Run receive hook phases and call the API CatalogService.
 
+Fetch negotiation acknowledges only offered commit objects present in the
+repository, using the client's single-ACK, `multi_ack`, or
+`multi_ack_detailed` mode. Unknown objects and non-commit objects are not
+common commits. Negotiation responses end at their ACK/NAK packet; a completed
+negotiation sends a final ACK before the pack when a common commit is known.
+
 Important directories:
 
 | Path                | Purpose                                               |

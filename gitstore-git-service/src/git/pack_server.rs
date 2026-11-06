@@ -49,19 +49,21 @@ impl HttpPackServer {
     pub fn handle_upload_pack(&self, body: &[u8]) -> Result<Vec<u8>> {
         let start = Instant::now();
         let repo = open_repo(&self.repo_path)?;
-        let (wants, haves, done_seen) = parse_wants_and_haves(body);
+        let (wants, haves, done_seen, ack_mode) = parse_upload_pack_request(body);
         let mut response = Vec::new();
 
-        if wants.is_empty() || !done_seen {
-            // NAK — nothing requested or negotiation still in progress
+        if wants.is_empty() {
             write_pkt_line(&mut response, b"NAK\n")?;
             response.extend_from_slice(b"0000");
             emit_span("upload-pack-rpc", &self.repo_path, start, "ok", 0);
             return Ok(response);
         }
 
-        // NAK then pack stream
-        write_pkt_line(&mut response, b"NAK\n")?;
+        write_upload_pack_acknowledgements(&repo, &haves, done_seen, ack_mode, &mut response)?;
+        if !done_seen {
+            emit_span("upload-pack-rpc", &self.repo_path, start, "ok", 0);
+            return Ok(response);
+        }
 
         let pack_data = build_pack_for_wants(&repo, &wants, &haves)?;
         // Chunk pack into sideband pkt-lines: pkt-line max data = 65512 bytes,
@@ -239,9 +241,23 @@ fn collect_refs(repo: &gix::Repository) -> Result<Vec<(String, String)>> {
 /// Returns `(wants, haves, done_seen)`. `done_seen` is `true` when the client sent
 /// `done`, signalling it has finished negotiation and expects a pack in response.
 pub fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>, bool) {
+    let (wants, haves, done_seen, _) = parse_upload_pack_request(body);
+    (wants, haves, done_seen)
+}
+
+#[derive(Clone, Copy, Default)]
+enum UploadPackAckMode {
+    #[default]
+    Single,
+    Multi,
+    Detailed,
+}
+
+fn parse_upload_pack_request(body: &[u8]) -> (Vec<String>, Vec<String>, bool, UploadPackAckMode) {
     let mut wants = Vec::new();
     let mut haves = Vec::new();
     let mut done_seen = false;
+    let mut ack_mode = UploadPackAckMode::default();
     let mut pos = 0;
 
     while pos + 4 <= body.len() {
@@ -265,8 +281,20 @@ pub fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>, bool) {
         if let Ok(s) = std::str::from_utf8(line) {
             let s = s.trim_end_matches('\n').split('\0').next().unwrap_or("");
             if let Some(rest) = s.strip_prefix("want ") {
-                let oid = rest.split_whitespace().next().unwrap_or("").to_string();
+                let mut fields = rest.split_whitespace();
+                let oid = fields.next().unwrap_or("").to_string();
                 if !oid.is_empty() {
+                    if wants.is_empty() {
+                        for capability in fields {
+                            match capability {
+                                "multi_ack_detailed" => ack_mode = UploadPackAckMode::Detailed,
+                                "multi_ack" if !matches!(ack_mode, UploadPackAckMode::Detailed) => {
+                                    ack_mode = UploadPackAckMode::Multi;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     wants.push(oid);
                 }
             } else if let Some(rest) = s.strip_prefix("have ") {
@@ -280,7 +308,47 @@ pub fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>, bool) {
         }
         pos += len;
     }
-    (wants, haves, done_seen)
+    (wants, haves, done_seen, ack_mode)
+}
+
+fn write_upload_pack_acknowledgements(
+    repo: &gix::Repository,
+    haves: &[String],
+    done_seen: bool,
+    mode: UploadPackAckMode,
+    response: &mut Vec<u8>,
+) -> Result<()> {
+    let mut common = None;
+    for have in haves {
+        let Ok(id) = gix::ObjectId::from_hex(have.as_bytes()) else {
+            continue;
+        };
+        let object = repo
+            .try_find_object(id)
+            .context("resolve offered fetch common commit")?;
+        if object.is_none_or(|object| object.kind != gix::object::Kind::Commit) {
+            continue;
+        }
+        common = Some(id);
+        let status = match mode {
+            UploadPackAckMode::Single => {
+                write_pkt_line(response, format!("ACK {id}\n").as_bytes())?;
+                return Ok(());
+            }
+            UploadPackAckMode::Multi => "continue",
+            UploadPackAckMode::Detailed => "common",
+        };
+        if !done_seen {
+            write_pkt_line(response, format!("ACK {id} {status}\n").as_bytes())?;
+        }
+    }
+    if let Some(id) = common.filter(|_| done_seen) {
+        write_pkt_line(response, format!("ACK {id}\n").as_bytes())?;
+    } else {
+        // A common commit does not prove that every wanted history is complete.
+        write_pkt_line(response, b"NAK\n")?;
+    }
+    Ok(())
 }
 
 /// Build a pack file containing objects reachable from `wants` but not from `haves`.
@@ -880,7 +948,7 @@ mod tests {
     }
 
     #[test]
-    fn t056_handle_upload_pack_wants_no_done_returns_nak_flush() {
+    fn t056_handle_upload_pack_wants_no_done_returns_nak() {
         let (_dir, repo) = make_test_repo();
         let commit_oid = make_commit(&repo, "initial", None);
 
@@ -900,8 +968,185 @@ mod tests {
 
         let mut expected = Vec::new();
         write_pkt_line(&mut expected, b"NAK\n").unwrap();
-        expected.extend_from_slice(b"0000");
-        assert_eq!(resp, expected, "wants without done must return NAK+0000");
+        assert_eq!(
+            resp, expected,
+            "negotiation ends at NAK without an extra flush"
+        );
+    }
+
+    #[test]
+    fn upload_pack_acknowledges_only_known_commits_in_the_negotiated_mode() {
+        let (_dir, repo) = make_test_repo();
+        let root = make_commit(&repo, "root", None);
+        let parent = make_commit(&repo, "parent", Some(root));
+        let tip = make_commit(&repo, "tip", Some(parent));
+        let blob = repo.write_blob("not a common commit").unwrap().detach();
+        let unknown = "f".repeat(40);
+        let server = HttpPackServer::new(repo.path().to_path_buf(), 64 * 1024 * 1024);
+        for (capabilities, status, final_common) in [
+            ("multi_ack_detailed thin-pack", Some("common"), parent),
+            ("thin-pack multi_ack", Some("continue"), parent),
+            ("multi_ack multi_ack_detailed", Some("common"), parent),
+            ("multi_ack_detailed multi_ack", Some("common"), parent),
+            ("thin-pack", None, root),
+        ] {
+            let want = format!("want {tip} {capabilities}\n");
+            let mut request = pkt_lines(&[want.as_bytes()]);
+            flush(&mut request);
+            for have in [
+                &unknown,
+                &blob.to_string(),
+                &root.to_string(),
+                &parent.to_string(),
+            ] {
+                request.extend_from_slice(&pkt_lines(&[format!("have {have}\n").as_bytes()]));
+            }
+            let mut negotiation = request.clone();
+            flush(&mut negotiation);
+            let mut expected = Vec::new();
+            if let Some(status) = status {
+                for common in [root, parent] {
+                    write_pkt_line(&mut expected, format!("ACK {common} {status}\n").as_bytes())
+                        .unwrap();
+                }
+                write_pkt_line(&mut expected, b"NAK\n").unwrap();
+            } else {
+                write_pkt_line(&mut expected, format!("ACK {root}\n").as_bytes()).unwrap();
+            }
+            assert_eq!(
+                server.handle_upload_pack(&negotiation).unwrap(),
+                expected,
+                "{capabilities}: known commits must not disappear between stateless rounds"
+            );
+            request.extend_from_slice(&pkt_lines(&[b"done\n"]));
+            let response = server.handle_upload_pack(&request).unwrap();
+            let mut final_ack = Vec::new();
+            write_pkt_line(&mut final_ack, format!("ACK {final_common}\n").as_bytes()).unwrap();
+            assert!(
+                response.starts_with(&final_ack),
+                "{capabilities}: missing final ACK"
+            );
+            assert_eq!(
+                &response[final_ack.len() + 4..final_ack.len() + 9],
+                b"\x01PACK"
+            );
+        }
+        let want = format!("want {tip} multi_ack_detailed\n");
+        let mut request = pkt_lines(&[want.as_bytes()]);
+        flush(&mut request);
+        for have in [unknown, blob.to_string()] {
+            request.extend_from_slice(&pkt_lines(&[format!("have {have}\n").as_bytes()]));
+        }
+        flush(&mut request);
+        assert_eq!(server.handle_upload_pack(&request).unwrap(), b"0008NAK\n");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stock_git_fetch_bounds_common_history_negotiation() {
+        use axum::routing::{get, post};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        async fn git(directory: &std::path::Path, args: &[&str]) -> String {
+            let output = tokio::time::timeout(
+                Duration::from_secs(30),
+                tokio::process::Command::new("git")
+                    .args([
+                        "-c",
+                        "protocol.version=0",
+                        "-c",
+                        "fetch.negotiationAlgorithm=consecutive",
+                        "-c",
+                        "credential.helper=",
+                    ])
+                    .args(args)
+                    .current_dir(directory)
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                    .env("GIT_TERMINAL_PROMPT", "0")
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await
+            .expect("Git client command timed out")
+            .expect("run Git client");
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        }
+
+        let (_dir, repo) = make_test_repo();
+        let mut tip = make_commit(&repo, "root", None);
+        for index in 0..128 {
+            tip = make_commit(&repo, &format!("shared {index}"), Some(tip));
+        }
+        let native = Arc::new(HttpPackServer::new(
+            repo.path().to_path_buf(),
+            64 * 1024 * 1024,
+        ));
+        let advertisements = Arc::clone(&native);
+        let negotiations = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::clone(&negotiations);
+        let router = axum::Router::new()
+            .route(
+                "/repo.git/info/refs",
+                get(move || {
+                    let server = Arc::clone(&advertisements);
+                    async move {
+                        (
+                            [(
+                                "content-type",
+                                "application/x-git-upload-pack-advertisement",
+                            )],
+                            server.advertise_upload_pack_refs().unwrap(),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/repo.git/git-upload-pack",
+                post(move |body: axum::body::Bytes| {
+                    let server = Arc::clone(&native);
+                    let requests = Arc::clone(&requests);
+                    async move {
+                        requests.fetch_add(1, Ordering::Relaxed);
+                        (
+                            [("content-type", "application/x-git-upload-pack-result")],
+                            server.handle_upload_pack(&body).unwrap(),
+                        )
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let serving = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let client = tempfile::TempDir::new().unwrap();
+        let remote = format!("http://{address}/repo.git");
+        git(
+            client.path(),
+            &["clone", "--quiet", "--branch", "main", &remote, "."],
+        )
+        .await;
+        negotiations.store(0, Ordering::Relaxed);
+        tip = make_commit(&repo, "after shared history", Some(tip));
+        git(client.path(), &["fetch", "--quiet", "origin", "main"]).await;
+        assert_eq!(
+            git(client.path(), &["rev-parse", "origin/main"]).await,
+            tip.to_string()
+        );
+        let rounds = negotiations.load(Ordering::Relaxed);
+        serving.abort();
+        let _ = serving.await;
+        assert!(
+            (1..=2).contains(&rounds),
+            "common history must not cause repeated negotiation rounds: {rounds}"
+        );
     }
 
     // -----------------------------------------------------------------------
