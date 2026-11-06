@@ -18,9 +18,11 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
-	"github.com/prometheus/client_golang/prometheus"
+	"github.com/gitstore-dev/gitstore/observability"
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -28,6 +30,11 @@ import (
 )
 
 func TestProviderRegistryReloadPreservesUsableBindingInvariant(t *testing.T) {
+	previous := otel.GetMeterProvider()
+	_, shutdownTelemetry, err := observability.InitTelemetry(t.Context(), observability.OTLPConfig{}, observability.APIService, "test", zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = shutdownTelemetry(context.Background()); otel.SetMeterProvider(previous) })
+	metrics := observabilitytest.HTTPGatherer(observability.MetricsHandler())
 	dir := t.TempDir()
 	usersPath := filepath.Join(dir, "users.yaml")
 	policyPath := filepath.Join(dir, "policy.yaml")
@@ -78,7 +85,7 @@ func TestProviderRegistryReloadPreservesUsableBindingInvariant(t *testing.T) {
 	}
 	require.Equal(t, diagnostics, peer.Diagnostics())
 	reloadCount := func(outcome string) float64 {
-		families, err := prometheus.DefaultGatherer.Gather()
+		families, err := metrics.Gather()
 		require.NoError(t, err)
 		for _, family := range families {
 			if family.GetName() != "gitstore_authz_registry_reloads_total" {

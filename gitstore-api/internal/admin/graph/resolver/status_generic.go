@@ -9,6 +9,9 @@ import (
 	"errors"
 	"fmt"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
@@ -55,7 +58,7 @@ func (r *mutationResolver) updateCategoryTaxonomyStatusGeneric(ctx context.Conte
 	updated, err := r.store.UpdateCategoryTaxonomyStatus(ctx, input.Namespace, input.Name, patch)
 	if err != nil {
 		if errors.Is(err, datastore.ErrConflict) {
-			StatusWriteConflictsTotal.WithLabelValues(input.Kind).Inc()
+			StatusWriteConflictsTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", input.Kind)))
 			r.logger.Info("status write conflict",
 				zap.String("kind", input.Kind),
 				zap.String("namespace", input.Namespace),

@@ -15,6 +15,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/vektah/gqlparser/v2/gqlerror"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 )
 
@@ -156,7 +158,7 @@ func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model
 	updated, err := r.store.UpdateCategoryTaxonomyStatus(ctx, input.Namespace, input.Name, patch)
 	if err != nil {
 		if errors.Is(err, datastore.ErrConflict) {
-			StatusWriteConflictsTotal.WithLabelValues("CategoryTaxonomy").Inc()
+			StatusWriteConflictsTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", "CategoryTaxonomy")))
 			r.logger.Info("status write conflict",
 				zap.String("kind", "CategoryTaxonomy"),
 				zap.String("namespace", input.Namespace),

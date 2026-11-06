@@ -107,35 +107,21 @@ fn count_pack_files(repo_path: &Path) -> usize {
 // Schema validation metrics (T015)
 // ---------------------------------------------------------------------------
 
-use prometheus::{IntCounterVec, Opts, Registry};
-use std::sync::OnceLock;
-
-static SCHEMA_VALIDATION_TOTAL: OnceLock<IntCounterVec> = OnceLock::new();
-
-fn schema_validation_counter() -> &'static IntCounterVec {
-    SCHEMA_VALIDATION_TOTAL.get_or_init(|| {
-        IntCounterVec::new(
-            Opts::new(
-                "gitstore_schema_validation_total",
-                "Pre-receive schema validation callout outcomes",
-            ),
-            &["result"],
-        )
-        .expect("failed to create schema_validation_total counter")
-    })
-}
-
-/// Increment `gitstore_schema_validation_total` with the given result label.
-/// Labels: `accepted`, `rejected`, `timeout`, `service_unavailable`.
+/// Schema validation outcomes use a fixed attribute vocabulary and the same SDK
+/// provider/lifecycle as RPC and exporter-health metrics.
 pub fn increment_schema_validation_total(result: &str) {
-    schema_validation_counter()
-        .with_label_values(&[result])
-        .inc();
-}
-
-/// Register the schema validation counter with a Prometheus registry.
-pub fn register_schema_validation_metrics(registry: &Registry) -> prometheus::Result<()> {
-    registry.register(Box::new(schema_validation_counter().clone()))
+    let result = match result {
+        "accepted" => "accepted",
+        "rejected" => "rejected",
+        "timeout" => "timeout",
+        "service_unavailable" => "service_unavailable",
+        _ => "unknown",
+    };
+    opentelemetry::global::meter("gitstore/schema-validation")
+        .u64_counter("gitstore_schema_validation_total")
+        .with_description("Pre-receive schema validation callout outcomes")
+        .build()
+        .add(1, &[opentelemetry::KeyValue::new("result", result)]);
 }
 
 // ---------------------------------------------------------------------------

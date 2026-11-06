@@ -1919,12 +1919,12 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 		blocked, checkErr := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{
 			Namespace: r.Namespace, RepositoryID: r.RepositoryID,
 		}, r.UID)
-		productDeletionDependentLookupDuration.Observe(time.Since(lookupStarted).Seconds())
+		productDeletionDependentLookupDuration.Record(context.Background(), time.Since(lookupStarted).Seconds())
 		if checkErr != nil {
 			return fmt.Errorf("check product deletion dependents: %w", checkErr)
 		}
 		if blocked {
-			productDeletionBlockedTotal.Inc()
+			productDeletionBlockedTotal.Add(context.Background(), 1)
 			s.log.Info("Product deletion blocked by ProductVariant owner reference", zap.String("namespace", r.Namespace), zap.String("name", r.Name), zap.String("uid", r.UID))
 			return fmt.Errorf("product %s/%s has blocking ProductVariants", r.Namespace, r.Name)
 		}
@@ -1946,7 +1946,7 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 		hasChildren, lookupErr := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{
 			Namespace: r.Namespace, RepositoryID: r.RepositoryID,
 		}, r.UID)
-		categoryDeletionDependentLookupDuration.Observe(time.Since(lookupStarted).Seconds())
+		categoryDeletionDependentLookupDuration.Record(context.Background(), time.Since(lookupStarted).Seconds())
 		if lookupErr != nil {
 			s.log.Warn("category deletion dependent lookup failed",
 				zap.String("namespace", r.Namespace),
@@ -1955,7 +1955,7 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 			return fmt.Errorf("check category deletion dependents: %w", lookupErr)
 		}
 		if hasChildren {
-			categoryDeletionBlockedTotal.Inc()
+			categoryDeletionBlockedTotal.Add(context.Background(), 1)
 			s.log.Info("category deletion blocked by child owner reference",
 				zap.String("namespace", r.Namespace),
 				zap.String("name", r.Name),

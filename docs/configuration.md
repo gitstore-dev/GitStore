@@ -65,9 +65,10 @@ Prometheus, Loki or Tempo addresses.
 `make compose OBSERVABILITY=otel` adds the pinned local observability stack and
 routes API, controller and Git metrics, logs and traces through the collector.
 Pass the same selector to `make ps`, `make logs`, `make stop` and `make down`.
-The shared Go module keeps existing Prometheus instruments and the OpenTelemetry
-SDK reader in one cumulative OTLP metrics stream; Rust exports its native
-registry over OTLP too. **Git service has only its gRPC listener: it does not
+Go and Rust record all application, runtime and RPC metrics through native
+OpenTelemetry SDK instruments. The Go compatibility scrape routes collect from
+the same SDK provider as OTLP; neither runtime nor third-party metrics use a
+Prometheus recording registry or bridge. **Git service has only its gRPC listener: it does not
 start an HTTP metrics server.** Remove `git_service.metrics` settings and any
 Git-service metrics port/probe/scrape target copied from earlier configurations;
 those settings now fail with a migration message. Native gRPC operation and
@@ -82,15 +83,33 @@ API / controller / singleton Git service
 ```
 
 Applications export cumulative metrics every 10 seconds, with a final shutdown
-flush. Each snapshot admits at most 2,048 series and 2 MiB; only operational
-label names are accepted, so resource identifiers and arbitrary SDK attributes
-are omitted rather than converted to metric labels. Metrics have no retry
+flush. Each instrument admits at most 2,048 attribute sets; additional sets use
+the SDK overflow series. Metric requests are limited to 2 MiB and replies to
+64 KiB. Instrumentation uses fixed operational attribute vocabularies, never
+principal, IP, resource or repository identifiers. Metrics have no retry
 backlog: a failed snapshot is dropped and the next cumulative snapshot retains
 counter/histogram totals. Transport requests time out after two seconds.
 Traces and logs use bounded 2,048-record queues, 256-record batches and
 one-second batching. Export is nonblocking for request/reconciliation work;
 full queues drop records. Normal shutdown allows five seconds for Go flushes.
 Rust flushes bounded batches using two-second exporter requests.
+An empty OTLP URI disables network export; API/controller compatibility scrapes
+continue collecting SDK metrics locally. The collector's Prometheus exporter
+uses `UnderscoreEscapingWithoutSuffixes`: instrument names already include
+their stable unit and counter suffixes. Deploy that configuration with the
+application update to avoid duplicated suffixes. Runtime GC quantiles export as
+gauges, with separate cumulative count and sum instruments under the existing
+names; no synthetic observations reconstruct summaries.
+When upgrading from Prometheus-recorded metrics, stop the Collector while
+rolling the API/controller application update and replacing the singleton Git
+process without overlap, preserving its repository volume. Start the Collector
+with the new translation configuration after every exporting application uses
+SDK instruments. Its in-memory metric-type cache cannot combine the old GC
+summary with the new same-named gauges; starting it between application
+replacements can drop those series. Verify fresh backend series for each
+service and process after the upgrade. Quantile gauges use `0.0`/`1.0` at the
+endpoints; update direct-scrape or older-backend queries that matched `0`/`1`.
+
 Collector failures during the final Git-service flush produce a local warning
 but do not turn a graceful gRPC shutdown into a failed process exit.
 

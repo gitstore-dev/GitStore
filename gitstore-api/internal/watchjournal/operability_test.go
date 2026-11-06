@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -17,8 +19,9 @@ import (
 
 func TestNamespaceWatchMetricsRegisterBoundedSignals(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics, err := NewMetrics(registry)
+	metrics, err := NewMetrics(observabilitytest.Meter(t, registry, "gitstore/watchjournal"))
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, metrics.Close()) })
 	metrics.SetLeader(true)
 	metrics.SetSubscribers("typed", 2)
 	metrics.IncExpiry(ReasonRetentionExpired)
@@ -26,20 +29,23 @@ func TestNamespaceWatchMetricsRegisterBoundedSignals(t *testing.T) {
 	metrics.ObserveMaterializerStage("journal_append", 25*time.Millisecond)
 	metrics.ObserveMaterializerBatchSize(8)
 
-	assert.Equal(t, 6, testutil.CollectAndCount(metrics,
+	count, err := testutil.GatherAndCount(registry,
 		"gitstore_resource_watch_materializer_leader",
 		"gitstore_resource_watch_subscribers",
 		"gitstore_resource_watch_expired_total",
 		"gitstore_resource_watch_cdc_discovery_seconds",
 		"gitstore_resource_watch_materializer_stage_duration_seconds",
 		"gitstore_resource_watch_materializer_batch_size",
-	))
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 6, count)
 }
 
 func TestNamespaceWatchDuplicateMetricCountsNewCursorOnce(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics, err := NewMetrics(registry)
+	metrics, err := NewMetrics(observabilitytest.Meter(t, registry, "gitstore/watchjournal"))
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, metrics.Close()) })
 	now := time.Now().UTC()
 	first := datastore.NamespaceWatchEvent{
 		Type: datastore.NamespaceWatchAdded, Sequence: 10, DeduplicationKey: "stream:position", At: now,
@@ -52,18 +58,19 @@ func TestNamespaceWatchDuplicateMetricCountsNewCursorOnce(t *testing.T) {
 	metrics.ObserveDelivery(duplicate, now)
 	metrics.ObserveDelivery(duplicate, now)
 
-	assert.Equal(t, float64(1), testutil.ToFloat64(metrics.duplicates))
+	assert.Equal(t, float64(1), observabilitytest.Value(t, registry, "gitstore_resource_watch_duplicates_total", nil))
 }
 
 func TestNamespaceWatchCDCLagAdvancesBetweenScrapes(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics, err := NewMetrics(registry)
+	metrics, err := NewMetrics(observabilitytest.Meter(t, registry, "gitstore/watchjournal"))
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, metrics.Close()) })
 	metrics.ObserveCDCProgress(time.Now().Add(-time.Second))
 
-	first := testutil.ToFloat64(metrics.cdcLag)
+	first := observabilitytest.Value(t, registry, "gitstore_resource_watch_cdc_lag_seconds", nil)
 	time.Sleep(20 * time.Millisecond)
-	second := testutil.ToFloat64(metrics.cdcLag)
+	second := observabilitytest.Value(t, registry, "gitstore_resource_watch_cdc_lag_seconds", nil)
 
 	assert.GreaterOrEqual(t, first, 1.0)
 	assert.Greater(t, second, first)
@@ -71,8 +78,9 @@ func TestNamespaceWatchCDCLagAdvancesBetweenScrapes(t *testing.T) {
 
 func TestNamespaceWatchCDCLagDoesNotRegressForLateStream(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics, err := NewMetrics(registry)
+	metrics, err := NewMetrics(observabilitytest.Meter(t, registry, "gitstore/watchjournal"))
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, metrics.Close()) })
 	newer := time.Now().Add(-time.Second)
 
 	metrics.ObserveCDCProgress(newer)
@@ -83,22 +91,24 @@ func TestNamespaceWatchCDCLagDoesNotRegressForLateStream(t *testing.T) {
 
 func TestNamespaceWatchMissingProgressAndBookmarkAreStale(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics, err := NewMetrics(registry)
+	metrics, err := NewMetrics(observabilitytest.Meter(t, registry, "gitstore/watchjournal"))
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, metrics.Close()) })
 
-	assert.True(t, math.IsInf(testutil.ToFloat64(metrics.cdcLag), 1))
-	assert.True(t, math.IsInf(testutil.ToFloat64(metrics.bookmarkAge), 1))
+	assert.True(t, math.IsInf(observabilitytest.Value(t, registry, "gitstore_resource_watch_cdc_lag_seconds", nil), 1))
+	assert.True(t, math.IsInf(observabilitytest.Value(t, registry, "gitstore_resource_watch_bookmark_age_seconds", nil), 1))
 }
 
 func TestNamespaceWatchBookmarkAgeAdvancesBetweenScrapes(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics, err := NewMetrics(registry)
+	metrics, err := NewMetrics(observabilitytest.Meter(t, registry, "gitstore/watchjournal"))
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, metrics.Close()) })
 	metrics.ObserveBookmark(time.Now().Add(-time.Second))
 
-	first := testutil.ToFloat64(metrics.bookmarkAge)
+	first := observabilitytest.Value(t, registry, "gitstore_resource_watch_bookmark_age_seconds", nil)
 	time.Sleep(20 * time.Millisecond)
-	second := testutil.ToFloat64(metrics.bookmarkAge)
+	second := observabilitytest.Value(t, registry, "gitstore_resource_watch_bookmark_age_seconds", nil)
 
 	assert.GreaterOrEqual(t, first, 1.0)
 	assert.Greater(t, second, first)
@@ -106,19 +116,20 @@ func TestNamespaceWatchBookmarkAgeAdvancesBetweenScrapes(t *testing.T) {
 
 func TestNamespaceWatchBoundsTrackOnlyActualBookmarks(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics, err := NewMetrics(registry)
+	metrics, err := NewMetrics(observabilitytest.Meter(t, registry, "gitstore/watchjournal"))
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, metrics.Close()) })
 	bookmarkAt := time.Now().Add(-time.Minute)
 
 	metrics.SetBounds(datastore.NamespaceWatchBounds{
 		UpdatedAt: time.Now(), BookmarkAt: bookmarkAt, ProgressAt: time.Now(),
 	}, time.Now())
-	first := testutil.ToFloat64(metrics.bookmarkAge)
+	first := observabilitytest.Value(t, registry, "gitstore_resource_watch_bookmark_age_seconds", nil)
 	time.Sleep(20 * time.Millisecond)
 	metrics.SetBounds(datastore.NamespaceWatchBounds{
 		UpdatedAt: time.Now(), BookmarkAt: bookmarkAt, ProgressAt: time.Now(),
 	}, time.Now())
-	second := testutil.ToFloat64(metrics.bookmarkAge)
+	second := observabilitytest.Value(t, registry, "gitstore_resource_watch_bookmark_age_seconds", nil)
 
 	assert.GreaterOrEqual(t, first, 60.0)
 	assert.Greater(t, second, first)

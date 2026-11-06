@@ -15,9 +15,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 const (
@@ -368,43 +371,26 @@ func (s *ServiceAccountSource) Close() error {
 }
 
 type credentialMetrics struct {
-	exchanges                        *prometheus.CounterVec
-	duration                         prometheus.Histogram
-	inflight, peakInflight, maxRetry prometheus.Gauge
+	exchanges                        metric.Float64Counter
+	duration                         metric.Float64Histogram
+	inflight, peakInflight, maxRetry metric.Float64Gauge
 	mu                               sync.Mutex
 	active, peak                     int
 	retryPeak                        time.Duration
 }
 
-var defaultCredentialMetrics = newCredentialMetrics(prometheus.DefaultRegisterer)
+var defaultCredentialMetrics = newCredentialMetrics(otel.Meter("gitstore/credentials"))
 
-func newCredentialMetrics(registerer prometheus.Registerer) *credentialMetrics {
-	factory := promauto.With(registerer)
+func newCredentialMetrics(meter metric.Meter) *credentialMetrics {
 	metrics := &credentialMetrics{
-		exchanges: factory.NewCounterVec(prometheus.CounterOpts{
-			Name: "gitstore_controller_credential_exchange_total",
-			Help: "Actual assertion/signing/token exchange outcomes; excludes token-cache and backoff reuse.",
-		}, []string{"result"}),
-		duration: factory.NewHistogram(prometheus.HistogramOpts{
-			Name:    "gitstore_controller_credential_exchange_duration_seconds",
-			Help:    "Time spent resolving, signing and exchanging a controller assertion.",
-			Buckets: []float64{.001, .005, .01, .05, .1, .5, 1, 2, 5, 10},
-		}),
-		inflight: factory.NewGauge(prometheus.GaugeOpts{
-			Name: "gitstore_controller_credential_exchange_inflight",
-			Help: "Active token exchanges across this process's credential sources.",
-		}),
-		peakInflight: factory.NewGauge(prometheus.GaugeOpts{
-			Name: "gitstore_controller_credential_exchange_peak_inflight",
-			Help: "Maximum simultaneous token exchanges observed since process start.",
-		}),
-		maxRetry: factory.NewGauge(prometheus.GaugeOpts{
-			Name: "gitstore_controller_credential_retry_max_seconds",
-			Help: "Maximum actual jittered retry delay scheduled since process start.",
-		}),
+		exchanges:    observability.MustInstrument(meter.Float64Counter("gitstore_controller_credential_exchange_total", metric.WithDescription("Actual assertion/signing/token exchange outcomes; excludes token-cache and backoff reuse."))),
+		duration:     observability.MustInstrument(meter.Float64Histogram("gitstore_controller_credential_exchange_duration_seconds", metric.WithDescription("Time spent resolving, signing and exchanging a controller assertion."), metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(.001, .005, .01, .05, .1, .5, 1, 2, 5, 10))),
+		inflight:     observability.MustInstrument(meter.Float64Gauge("gitstore_controller_credential_exchange_inflight", metric.WithDescription("Active token exchanges across this process's credential sources."))),
+		peakInflight: observability.MustInstrument(meter.Float64Gauge("gitstore_controller_credential_exchange_peak_inflight", metric.WithDescription("Maximum simultaneous token exchanges observed since process start."))),
+		maxRetry:     observability.MustInstrument(meter.Float64Gauge("gitstore_controller_credential_retry_max_seconds", metric.WithDescription("Maximum actual jittered retry delay scheduled since process start."), metric.WithUnit("s"))),
 	}
 	for _, outcome := range []string{"success", "failed", "canceled", "deadline_exceeded"} {
-		metrics.exchanges.WithLabelValues(outcome)
+		metrics.exchanges.Add(context.Background(), 0, metric.WithAttributes(attribute.String("result", outcome)))
 	}
 	return metrics
 }
@@ -414,8 +400,8 @@ func (m *credentialMetrics) start() {
 	defer m.mu.Unlock()
 	m.active++
 	m.peak = max(m.peak, m.active)
-	m.inflight.Set(float64(m.active))
-	m.peakInflight.Set(float64(m.peak))
+	m.inflight.Record(context.Background(), float64(m.active))
+	m.peakInflight.Record(context.Background(), float64(m.peak))
 }
 
 func (m *credentialMetrics) finish(err error, duration time.Duration) {
@@ -428,17 +414,17 @@ func (m *credentialMetrics) finish(err error, duration time.Duration) {
 	case err != nil:
 		outcome = "failed"
 	}
-	m.exchanges.WithLabelValues(outcome).Inc()
-	m.duration.Observe(duration.Seconds())
+	m.exchanges.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", outcome)))
+	m.duration.Record(context.Background(), duration.Seconds())
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.active--
-	m.inflight.Set(float64(m.active))
+	m.inflight.Record(context.Background(), float64(m.active))
 }
 
 func (m *credentialMetrics) retry(delay time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.retryPeak = max(m.retryPeak, delay)
-	m.maxRetry.Set(m.retryPeak.Seconds())
+	m.maxRetry.Record(context.Background(), m.retryPeak.Seconds())
 }

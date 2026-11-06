@@ -15,6 +15,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	yaml "gopkg.in/yaml.v3"
+
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/admissionreport"
@@ -27,20 +33,13 @@ import (
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"gopkg.in/yaml.v3"
 )
 
-var productDeletionOutcomes = prometheus.NewCounterVec(prometheus.CounterOpts{
-	Name: "gitstore_product_deletion_outcomes_total",
-	Help: "Product foreground deletion outcomes at the admitted lifecycle boundary.",
-}, []string{"outcome"})
-
-func init() { prometheus.MustRegister(productDeletionOutcomes) }
+var productDeletionOutcomes = observability.MustInstrument(otel.Meter("gitstore/resolver").Float64Counter("gitstore_product_deletion_outcomes_total", metric.WithDescription("Product foreground deletion outcomes at the admitted lifecycle boundary.")))
 
 // SystemRepositoryName is the well-known repository auto-provisioned for
 // every namespace on creation (ADR-0002/ADR-0003). It is the authoring
@@ -295,7 +294,7 @@ func (s *Service) DeleteProductManifest(ctx context.Context, uid, caller string)
 		return nil, false, gqlerror.Errorf("product not found")
 	}
 	if product.DeletionTimestamp != nil {
-		productDeletionOutcomes.WithLabelValues("ALREADY_TERMINATING").Inc()
+		productDeletionOutcomes.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", "ALREADY_TERMINATING")))
 		return product, false, nil
 	}
 	owners, ok := s.store.(datastore.OwnerReferenceStore)
@@ -309,7 +308,7 @@ func (s *Service) DeleteProductManifest(ctx context.Context, uid, caller string)
 		return nil, false, gqlerror.Errorf("check Product deletion blockers: %v", err)
 	}
 	if blocked {
-		productDeletionOutcomes.WithLabelValues("BLOCKED").Inc()
+		productDeletionOutcomes.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", "BLOCKED")))
 		s.logger.Info("product deletion blocked", zap.String("namespace", product.Namespace), zap.String("name", product.Name), zap.String("actor", caller))
 		return product, false, gqlerror.Errorf("Product %q still has blocking ProductVariants", product.Name)
 	}
@@ -327,7 +326,7 @@ func (s *Service) DeleteProductManifest(ctx context.Context, uid, caller string)
 	if _, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{RepositoryID: product.RepositoryID, Namespace: product.Namespace, ActorSubject: caller, CommitSHA: sha, RefName: refName, Path: product.SourcePath, Operation: admission.OperationDelete, Kind: "Product", Name: product.Name}); err != nil {
 		return nil, false, committedAdmissionError(err, sha, "Product")
 	}
-	productDeletionOutcomes.WithLabelValues("TERMINATION_STARTED").Inc()
+	productDeletionOutcomes.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", "TERMINATION_STARTED")))
 	s.logger.Info("product deletion termination started", zap.String("namespace", product.Namespace), zap.String("name", product.Name), zap.String("actor", caller))
 	updated, err := s.store.GetProduct(ctx, uid)
 	if err != nil {
@@ -359,7 +358,7 @@ func (s *Service) CompleteProductDeletion(ctx context.Context, namespace, name, 
 		return product, err
 	}
 	if blocked {
-		productDeletionOutcomes.WithLabelValues("BLOCKED_AT_COMPLETION").Inc()
+		productDeletionOutcomes.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", "BLOCKED_AT_COMPLETION")))
 		return product, gqlerror.Errorf("Product %q still has blocking ProductVariants", name)
 	}
 	lifecycle, ok := s.store.(datastore.ProductLifecycleStore)
@@ -369,7 +368,7 @@ func (s *Service) CompleteProductDeletion(ctx context.Context, namespace, name, 
 	if err := lifecycle.CompleteProductDeletion(ctx, product.UID, expectedResourceVersion); err != nil {
 		return product, err
 	}
-	productDeletionOutcomes.WithLabelValues("COMPLETED").Inc()
+	productDeletionOutcomes.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", "COMPLETED")))
 	s.logger.Info("product deletion completed", zap.String("namespace", product.Namespace), zap.String("name", product.Name))
 	return product, nil
 }

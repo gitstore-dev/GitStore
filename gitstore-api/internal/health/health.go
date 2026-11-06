@@ -10,11 +10,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gin-gonic/gin"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
@@ -43,13 +46,14 @@ type Check struct {
 
 // Handler provides health check endpoints
 type Handler struct {
-	store              datastore.Datastore
-	logger             *zap.Logger
-	version            string
-	startTime          time.Time
-	clock              apiruntime.Clock
-	resourceWatchReady func(context.Context) error
-	metricsHandler     http.Handler
+	store               datastore.Datastore
+	logger              *zap.Logger
+	version             string
+	startTime           time.Time
+	clock               apiruntime.Clock
+	resourceWatchReady  func(context.Context) error
+	metricsHandler      http.Handler
+	metricsRegistration metric.Registration
 }
 
 // HandlerDeps contains dependencies for Handler.
@@ -60,6 +64,7 @@ type HandlerDeps struct {
 	Clock              apiruntime.Clock
 	ResourceWatchReady func(context.Context) error
 	InstanceID         string
+	RegisterCleanup    func(func())
 }
 
 // NewHandler creates a new health check handler
@@ -72,26 +77,35 @@ func NewHandler(deps HandlerDeps) *Handler {
 	if clock == nil {
 		clock = apiruntime.SystemClock{}
 	}
-	metricsHandler := promhttp.Handler()
+	metricsHandler := observability.MetricsHandler()
+	var registration metric.Registration
 	if deps.InstanceID != "" {
-		instanceRegistry := prometheus.NewRegistry()
-		instanceRegistry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Name: "gitstore_api_process_instance_info",
-			Help: "Static identity of this GitStore API process.",
-			ConstLabels: prometheus.Labels{
-				"instance_id": deps.InstanceID,
-			},
-		}, func() float64 { return 1 }))
-		metricsHandler = promhttp.HandlerFor(prometheus.Gatherers{prometheus.DefaultGatherer, instanceRegistry}, promhttp.HandlerOpts{})
+		meter := otel.Meter("gitstore/health")
+		identity := observability.MustInstrument(meter.Float64ObservableGauge("gitstore_api_process_instance_info", metric.WithDescription("Static identity of this GitStore API process.")))
+		registration = observability.MustInstrument(meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
+			observer.ObserveFloat64(identity, 1, metric.WithAttributes(attribute.String("instance_id", deps.InstanceID)))
+			return nil
+		}, identity))
+		if deps.RegisterCleanup != nil {
+			deps.RegisterCleanup(func() { _ = registration.Unregister() })
+		}
 	}
 	return &Handler{
-		store:              deps.Store,
-		logger:             logger,
-		version:            deps.Version,
-		startTime:          clock.Now(),
-		clock:              clock,
-		resourceWatchReady: deps.ResourceWatchReady,
-		metricsHandler:     metricsHandler,
+		store:               deps.Store,
+		logger:              logger,
+		version:             deps.Version,
+		startTime:           clock.Now(),
+		clock:               clock,
+		resourceWatchReady:  deps.ResourceWatchReady,
+		metricsHandler:      metricsHandler,
+		metricsRegistration: registration,
+	}
+}
+
+// Close releases this handler's SDK observation callback.
+func (h *Handler) Close() {
+	if h.metricsRegistration != nil {
+		_ = h.metricsRegistration.Unregister()
 	}
 }
 

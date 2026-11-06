@@ -23,7 +23,7 @@ import (
 
 func TestOperationalRoutesStayOnAdminWhileStorefrontIsUnavailable(t *testing.T) {
 	env := newWebSocketTestEnvironment(t, time.Now().Add(time.Minute))
-	healthHandler(env.server.Config.Handler.(*gin.Engine), env.store, zap.NewNop(), apiruntime.SystemClock{}, nil, "route-fixture")
+	healthHandler(env.server.Config.Handler.(*gin.Engine), env.store, zap.NewNop(), apiruntime.SystemClock{}, nil, "route-fixture", t.Cleanup)
 	public, err := NewStorefrontHandler(config.DefaultEndpoint("storefront"), config.RateLimitConfig{}, nil)
 	require.NoError(t, err)
 	s := httptest.NewServer(public)

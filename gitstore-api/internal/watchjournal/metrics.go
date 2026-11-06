@@ -4,41 +4,47 @@
 package watchjournal
 
 import (
+	"context"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Metrics contains bounded-cardinality Namespace watch signals.
 type Metrics struct {
-	leader           prometheus.Gauge
-	cdcLag           prometheus.GaugeFunc
+	leader           metric.Float64Gauge
+	cdcLag           metric.Float64ObservableGauge
 	cdcProgressNanos atomic.Int64
-	journalOldest    prometheus.Gauge
-	journalHigh      prometheus.Gauge
-	subscribers      *prometheus.GaugeVec
-	expired          *prometheus.CounterVec
-	overflow         prometheus.Counter
-	appendErrors     prometheus.Counter
-	duplicates       prometheus.Counter
-	replayEvents     prometheus.Counter
-	replayLatency    prometheus.Histogram
-	bookmarkAge      prometheus.GaugeFunc
+	journalOldest    metric.Float64Gauge
+	journalHigh      metric.Float64Gauge
+	subscribers      metric.Int64ObservableGauge
+	expired          metric.Float64Counter
+	overflow         metric.Float64Counter
+	appendErrors     metric.Float64Counter
+	duplicates       metric.Float64Counter
+	replayEvents     metric.Float64Counter
+	replayLatency    metric.Float64Histogram
+	bookmarkAge      metric.Float64ObservableGauge
 	bookmarkNanos    atomic.Int64
-	deliveryLatency  prometheus.Histogram
-	cdcDiscovery     prometheus.Histogram
-	materialize      *prometheus.HistogramVec
-	batchSize        prometheus.Histogram
+	deliveryLatency  metric.Float64Histogram
+	cdcDiscovery     metric.Float64Histogram
+	materialize      metric.Float64Histogram
+	batchSize        metric.Float64Histogram
 	duplicateMu      sync.Mutex
 	duplicateSeen    map[deliveryIdentity]struct{}
 	duplicateKeys    map[string]int
 	duplicateOrder   []deliveryIdentity
 	duplicateCursor  int
-	collectors       []prometheus.Collector
+	registration     metric.Registration
+	subscriberCounts [3]atomic.Int64
+	subscriberSeen   [3]atomic.Bool
 }
 
 type deliveryIdentity struct {
@@ -51,102 +57,109 @@ const duplicateTrackingLimit = 100000
 
 var capacityLatencyBuckets = []float64{.001, .005, .01, .025, .05, .1, .25, .5, .75, 1, 1.5, 2, 3, 5}
 
-func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
+func NewMetrics(meter metric.Meter) (*Metrics, error) {
 	m := &Metrics{
-		leader:          prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_resource_watch_materializer_leader", Help: "Whether this replica owns the fenced resource watch CDC materializer lease."}),
-		journalOldest:   prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_resource_watch_journal_oldest_sequence", Help: "Oldest retained resource watch journal sequence."}),
-		journalHigh:     prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_resource_watch_journal_high_water_sequence", Help: "Current resource watch journal high-water sequence."}),
-		subscribers:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "gitstore_resource_watch_subscribers", Help: "Active resource watch subscribers."}, []string{"path"}),
-		expired:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: "gitstore_resource_watch_expired_total", Help: "Resource watches terminated because continuity was not provable."}, []string{"reason"}),
-		overflow:        prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_resource_watch_overflow_total", Help: "Resource watch subscriber buffer overflows."}),
-		appendErrors:    prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_resource_watch_append_errors_total", Help: "Resource watch journal append failures."}),
-		duplicates:      prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_resource_watch_duplicates_total", Help: "Distinct resource watch journal cursors delivered with a previously observed deduplication key."}),
-		replayEvents:    prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_resource_watch_replay_events_total", Help: "Resource watch journal events replayed."}),
-		replayLatency:   prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_resource_watch_replay_duration_seconds", Help: "Resource watch journal replay duration.", Buckets: capacityLatencyBuckets}),
-		deliveryLatency: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_resource_watch_delivery_latency_seconds", Help: "Resource watch CDC-to-subscriber delivery latency.", Buckets: capacityLatencyBuckets}),
-		cdcDiscovery:    prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_resource_watch_cdc_discovery_seconds", Help: "Time from the authoritative CDC timestamp until materialization begins.", Buckets: capacityLatencyBuckets}),
-		materialize: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name: "gitstore_resource_watch_materializer_stage_duration_seconds", Help: "Resource watch materializer latency at bounded stages.", Buckets: capacityLatencyBuckets,
-		}, []string{"stage"}),
-		batchSize: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_resource_watch_materializer_batch_size", Help: "Number of public resource watch events in each materializer batch.", Buckets: []float64{1, 2, 4, 8, 16, 32, 64, 128, 256}}),
+		leader:          observability.MustInstrument(meter.Float64Gauge("gitstore_resource_watch_materializer_leader", metric.WithDescription("Whether this replica owns the fenced resource watch CDC materializer lease."))),
+		journalOldest:   observability.MustInstrument(meter.Float64Gauge("gitstore_resource_watch_journal_oldest_sequence", metric.WithDescription("Oldest retained resource watch journal sequence."))),
+		journalHigh:     observability.MustInstrument(meter.Float64Gauge("gitstore_resource_watch_journal_high_water_sequence", metric.WithDescription("Current resource watch journal high-water sequence."))),
+		subscribers:     observability.MustInstrument(meter.Int64ObservableGauge("gitstore_resource_watch_subscribers", metric.WithDescription("Active resource watch subscribers."))),
+		expired:         observability.MustInstrument(meter.Float64Counter("gitstore_resource_watch_expired_total", metric.WithDescription("Resource watches terminated because continuity was not provable."))),
+		overflow:        observability.MustInstrument(meter.Float64Counter("gitstore_resource_watch_overflow_total", metric.WithDescription("Resource watch subscriber buffer overflows."))),
+		appendErrors:    observability.MustInstrument(meter.Float64Counter("gitstore_resource_watch_append_errors_total", metric.WithDescription("Resource watch journal append failures."))),
+		duplicates:      observability.MustInstrument(meter.Float64Counter("gitstore_resource_watch_duplicates_total", metric.WithDescription("Distinct resource watch journal cursors delivered with a previously observed deduplication key."))),
+		replayEvents:    observability.MustInstrument(meter.Float64Counter("gitstore_resource_watch_replay_events_total", metric.WithDescription("Resource watch journal events replayed."))),
+		replayLatency:   observability.MustInstrument(meter.Float64Histogram("gitstore_resource_watch_replay_duration_seconds", metric.WithDescription("Resource watch journal replay duration."), metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(capacityLatencyBuckets...))),
+		deliveryLatency: observability.MustInstrument(meter.Float64Histogram("gitstore_resource_watch_delivery_latency_seconds", metric.WithDescription("Resource watch CDC-to-subscriber delivery latency."), metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(capacityLatencyBuckets...))),
+		cdcDiscovery:    observability.MustInstrument(meter.Float64Histogram("gitstore_resource_watch_cdc_discovery_seconds", metric.WithDescription("Time from the authoritative CDC timestamp until materialization begins."), metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(capacityLatencyBuckets...))),
+		materialize:     observability.MustInstrument(meter.Float64Histogram("gitstore_resource_watch_materializer_stage_duration_seconds", metric.WithDescription("Resource watch materializer latency at bounded stages."), metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(capacityLatencyBuckets...))),
+		batchSize:       observability.MustInstrument(meter.Float64Histogram("gitstore_resource_watch_materializer_batch_size", metric.WithDescription("Number of public resource watch events in each materializer batch."), metric.WithExplicitBucketBoundaries(1, 2, 4, 8, 16, 32, 64, 128, 256))),
 	}
-	m.cdcLag = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "gitstore_resource_watch_cdc_lag_seconds", Help: "Age of the latest observed resource watch CDC position."}, func() float64 {
-		nanos := m.cdcProgressNanos.Load()
-		if nanos == 0 {
-			return math.Inf(1)
+	m.cdcLag = observability.MustInstrument(meter.Float64ObservableGauge("gitstore_resource_watch_cdc_lag_seconds", metric.WithUnit("s"), metric.WithDescription("Age of the latest observed resource watch CDC position.")))
+	m.bookmarkAge = observability.MustInstrument(meter.Float64ObservableGauge("gitstore_resource_watch_bookmark_age_seconds", metric.WithUnit("s"), metric.WithDescription("Age of the latest durable resource watch bookmark.")))
+	registration, err := meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
+		age := func(nanos int64) float64 {
+			if nanos == 0 {
+				return math.Inf(1)
+			}
+			return max(0, time.Since(time.Unix(0, nanos)).Seconds())
 		}
-		age := time.Since(time.Unix(0, nanos)).Seconds()
-		if age < 0 {
-			return 0
+		observer.ObserveFloat64(m.cdcLag, age(m.cdcProgressNanos.Load()))
+		observer.ObserveFloat64(m.bookmarkAge, age(m.bookmarkNanos.Load()))
+		for i, path := range []string{"typed", "generic", "internal"} {
+			if m.subscriberSeen[i].Load() {
+				observer.ObserveInt64(m.subscribers, m.subscriberCounts[i].Load(), metric.WithAttributes(attribute.String("path", path)))
+			}
 		}
-		return age
-	})
-	m.bookmarkAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "gitstore_resource_watch_bookmark_age_seconds", Help: "Age of the latest durable resource watch bookmark."}, func() float64 {
-		nanos := m.bookmarkNanos.Load()
-		if nanos == 0 {
-			return math.Inf(1)
-		}
-		age := time.Since(time.Unix(0, nanos)).Seconds()
-		if age < 0 {
-			return 0
-		}
-		return age
-	})
+		return nil
+	}, m.cdcLag, m.bookmarkAge, m.subscribers)
+	if err != nil {
+		return nil, err
+	}
+	m.registration = registration
 	m.duplicateSeen = make(map[deliveryIdentity]struct{}, duplicateTrackingLimit)
 	m.duplicateKeys = make(map[string]int, duplicateTrackingLimit)
 	m.duplicateOrder = make([]deliveryIdentity, 0, duplicateTrackingLimit)
-	m.collectors = []prometheus.Collector{m.leader, m.cdcLag, m.journalOldest, m.journalHigh, m.subscribers, m.expired, m.overflow, m.appendErrors, m.duplicates, m.replayEvents, m.replayLatency, m.bookmarkAge, m.deliveryLatency, m.cdcDiscovery, m.materialize, m.batchSize}
-	for _, collector := range m.collectors {
-		if err := registerer.Register(collector); err != nil {
-			return nil, err
-		}
-	}
 	return m, nil
 }
 
-func (m *Metrics) Describe(ch chan<- *prometheus.Desc) {
-	for _, collector := range m.collectors {
-		collector.Describe(ch)
-	}
-}
-func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
-	for _, collector := range m.collectors {
-		collector.Collect(ch)
-	}
-}
+// Close releases the SDK observation callback owned by this watch runtime.
+func (m *Metrics) Close() error { return m.registration.Unregister() }
+
 func (m *Metrics) SetLeader(active bool) {
 	if active {
-		m.leader.Set(1)
+		m.leader.Record(context.Background(), 1)
 	} else {
-		m.leader.Set(0)
+		m.leader.Record(context.Background(), 0)
+	}
+}
+func subscriberPathIndex(path string) int {
+	switch path {
+	case "typed":
+		return 0
+	case "generic":
+		return 1
+	default:
+		return 2
 	}
 }
 func (m *Metrics) SetSubscribers(path string, count float64) {
-	m.subscribers.WithLabelValues(path).Set(count)
+	i := subscriberPathIndex(path)
+	m.subscriberCounts[i].Store(int64(count))
+	m.subscriberSeen[i].Store(true)
 }
-func (m *Metrics) IncSubscribers(path string) { m.subscribers.WithLabelValues(path).Inc() }
-func (m *Metrics) DecSubscribers(path string) { m.subscribers.WithLabelValues(path).Dec() }
-func (m *Metrics) IncExpiry(reason Reason)    { m.expired.WithLabelValues(string(reason)).Inc() }
-func (m *Metrics) IncOverflow()               { m.overflow.Inc() }
-func (m *Metrics) IncAppendError()            { m.appendErrors.Inc() }
+func (m *Metrics) IncSubscribers(path string) {
+	i := subscriberPathIndex(path)
+	m.subscriberCounts[i].Add(1)
+	m.subscriberSeen[i].Store(true)
+}
+func (m *Metrics) DecSubscribers(path string) {
+	i := subscriberPathIndex(path)
+	m.subscriberCounts[i].Add(-1)
+	m.subscriberSeen[i].Store(true)
+}
+func (m *Metrics) IncExpiry(reason Reason) {
+	m.expired.Add(context.Background(), 1, metric.WithAttributes(attribute.String("reason", string(reason))))
+}
+func (m *Metrics) IncOverflow()    { m.overflow.Add(context.Background(), 1) }
+func (m *Metrics) IncAppendError() { m.appendErrors.Add(context.Background(), 1) }
 func (m *Metrics) ObserveReplay(events int, elapsed time.Duration) {
-	m.replayEvents.Add(float64(events))
-	m.replayLatency.Observe(elapsed.Seconds())
+	m.replayEvents.Add(context.Background(), float64(events))
+	m.replayLatency.Record(context.Background(), elapsed.Seconds())
 }
 func (m *Metrics) ObserveCDCDiscovery(at, now time.Time) {
 	if !at.IsZero() && !now.Before(at) {
-		m.cdcDiscovery.Observe(now.Sub(at).Seconds())
+		m.cdcDiscovery.Record(context.Background(), now.Sub(at).Seconds())
 	}
 }
 func (m *Metrics) ObserveMaterializerStage(stage string, elapsed time.Duration) {
-	m.materialize.WithLabelValues(stage).Observe(elapsed.Seconds())
+	m.materialize.Record(context.Background(), elapsed.Seconds(), metric.WithAttributes(attribute.String("stage", stage)))
 }
 func (m *Metrics) ObserveMaterializerBatchSize(size int) {
-	m.batchSize.Observe(float64(size))
+	m.batchSize.Record(context.Background(), float64(size))
 }
 func (m *Metrics) ObserveDelivery(event datastore.NamespaceWatchEvent, now time.Time) {
 	if !event.At.IsZero() && !now.Before(event.At) {
-		m.deliveryLatency.Observe(now.Sub(event.At).Seconds())
+		m.deliveryLatency.Record(context.Background(), now.Sub(event.At).Seconds())
 	}
 	m.observeDuplicateDelivery(event)
 }
@@ -162,7 +175,7 @@ func (m *Metrics) observeDuplicateDelivery(event datastore.NamespaceWatchEvent) 
 		return
 	}
 	if m.duplicateKeys[identity.key] > 0 {
-		m.duplicates.Inc()
+		m.duplicates.Add(context.Background(), 1)
 	}
 	if len(m.duplicateOrder) < duplicateTrackingLimit {
 		m.duplicateOrder = append(m.duplicateOrder, identity)
@@ -180,8 +193,8 @@ func (m *Metrics) observeDuplicateDelivery(event datastore.NamespaceWatchEvent) 
 	m.duplicateKeys[identity.key]++
 }
 func (m *Metrics) SetBounds(bounds datastore.NamespaceWatchBounds, now time.Time) {
-	m.journalOldest.Set(float64(bounds.Oldest))
-	m.journalHigh.Set(float64(bounds.HighWater))
+	m.journalOldest.Record(context.Background(), float64(bounds.Oldest))
+	m.journalHigh.Record(context.Background(), float64(bounds.HighWater))
 	if !bounds.ProgressAt.IsZero() && !now.Before(bounds.ProgressAt) {
 		m.ObserveCDCProgress(bounds.ProgressAt)
 	}
@@ -190,14 +203,14 @@ func (m *Metrics) SetBounds(bounds datastore.NamespaceWatchBounds, now time.Time
 	}
 }
 func (m *Metrics) ObserveMaterialized(event datastore.NamespaceWatchEvent, now time.Time) {
-	m.journalHigh.Set(float64(event.Sequence))
+	m.journalHigh.Record(context.Background(), float64(event.Sequence))
 	if event.Type == datastore.NamespaceWatchBookmark && !event.At.IsZero() && !now.Before(event.At) {
 		m.ObserveBookmark(event.At)
 	}
 }
 
 // ObserveBookmark records the latest durable bookmark timestamp. The
-// GaugeFunc derives age at scrape time so a stalled bookmark producer is
+// SDK callback derives age at collection time so a stalled bookmark producer is
 // visible even when no subscriber opens and refreshes journal bounds.
 func (m *Metrics) ObserveBookmark(at time.Time) {
 	if !at.IsZero() {
@@ -205,8 +218,8 @@ func (m *Metrics) ObserveBookmark(at time.Time) {
 	}
 }
 
-// ObserveCDCProgress records the persisted progress timestamp. The GaugeFunc
-// computes its age when Prometheus scrapes, so an idle or stuck reader's lag
+// ObserveCDCProgress records the persisted progress timestamp. The SDK callback
+// computes its age at collection time, so an idle or stuck reader's lag
 // continues increasing instead of freezing at the last observation.
 func (m *Metrics) ObserveCDCProgress(at time.Time) {
 	if at.IsZero() {

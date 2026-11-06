@@ -11,13 +11,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
@@ -26,13 +29,13 @@ import (
 type Authenticate struct {
 	registry   *auth.ProviderRegistry
 	logger     *zap.Logger
-	authCounts *prometheus.CounterVec
+	authCounts metric.Float64Counter
 	// apiAuthnCounts backs gitstore_api_authn_requests_total{provider,outcome}
 	// (spec 061 T013) — a per-provider, per-outcome counter for the generic
 	// bearer-token AuthN path (GraphQL and other non-git-http API traffic),
 	// distinct from authCounts' git-smart-HTTP-specific {outcome,service}
 	// shape above.
-	apiAuthnCounts *prometheus.CounterVec
+	apiAuthnCounts metric.Float64Counter
 }
 
 type Authorize struct {
@@ -158,34 +161,16 @@ func (a *Authenticate) AuthenticateWebSocketUpgrade(c *gin.Context) bool {
 }
 
 // NewAuthenticate creates a new Authenticate middleware.
-// Pass a non-nil prometheus.Registerer to enable auth outcome metrics.
-// Pass nil to skip metric registration (useful in tests that don't need counters).
-func NewAuthenticate(registry *auth.ProviderRegistry, logger *zap.Logger, opts ...prometheus.Registerer) Authenticate {
-	var counts *prometheus.CounterVec
-	var apiCounts *prometheus.CounterVec
+// Pass a non-nil SDK meter to enable auth outcome metrics.
+// Omit the meter to skip recording in isolated authentication tests.
+func NewAuthenticate(registry *auth.ProviderRegistry, logger *zap.Logger, opts ...metric.Meter) Authenticate {
+	var counts metric.Float64Counter
+	var apiCounts metric.Float64Counter
 	if len(opts) > 0 && opts[0] != nil {
-		counts = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "gitstore_git_http_auth_requests_total",
-			Help: "Total Git smart-HTTP authentication requests by outcome and service.",
-		}, []string{"outcome", "service"})
-		if err := opts[0].Register(counts); err != nil {
-			// Already registered (e.g. multiple NewMux calls in tests or hot-reload) — reuse existing.
-			var are prometheus.AlreadyRegisteredError
-			if errors.As(err, &are) {
-				counts = are.ExistingCollector.(*prometheus.CounterVec)
-			}
-		}
-		apiCounts = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "gitstore_api_authn_requests_total",
-			Help: "Total bearer-token API authentication requests by provider and outcome.",
-		}, []string{"provider", "outcome"})
-		if err := opts[0].Register(apiCounts); err != nil {
-			var are prometheus.AlreadyRegisteredError
-			if errors.As(err, &are) {
-				apiCounts = are.ExistingCollector.(*prometheus.CounterVec)
-			}
-		}
+		counts = observability.MustInstrument(opts[0].Float64Counter("gitstore_git_http_auth_requests_total", metric.WithDescription("Total Git smart-HTTP authentication requests by outcome and service.")))
+		apiCounts = observability.MustInstrument(opts[0].Float64Counter("gitstore_api_authn_requests_total", metric.WithDescription("Total bearer-token API authentication requests by provider and outcome.")))
 	}
+
 	return Authenticate{
 		registry:       registry,
 		logger:         logger,
@@ -358,7 +343,7 @@ func (a *Authenticate) recordAuthService(outcome, service string) {
 	if a.authCounts == nil {
 		return
 	}
-	a.authCounts.WithLabelValues(outcome, service).Inc()
+	a.authCounts.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome), attribute.String("service", service)))
 }
 
 // recordAPIAuthN increments gitstore_api_authn_requests_total{provider,outcome}
@@ -370,7 +355,7 @@ func (a *Authenticate) recordAPIAuthN(provider, outcome string) {
 	if a.apiAuthnCounts == nil {
 		return
 	}
-	a.apiAuthnCounts.WithLabelValues(provider, outcome).Inc()
+	a.apiAuthnCounts.Add(context.Background(), 1, metric.WithAttributes(attribute.String("provider", provider), attribute.String("outcome", outcome)))
 }
 
 // Authenticator authenticates a request through the active provider chain.

@@ -12,6 +12,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,7 +24,7 @@ func TestInstrumentedDatastoreForwardsRepositoryCompletion(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	wrapped := datastore.NewInstrumentedDatastoreWithRegistry(store, "memdb", zap.NewNop(), prometheus.NewRegistry())
+	wrapped := datastore.NewInstrumentedDatastoreWithMeter(store, "memdb", zap.NewNop(), observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/datastore"))
 	completion, ok := any(wrapped).(datastore.RepositoryDeletionStore)
 	require.True(t, ok)
 	require.ErrorIs(t, completion.CompleteRepositoryDeletion(context.Background(), "00000000-0000-0000-0000-000000000299", "1"), datastore.ErrNotFound)
@@ -41,7 +42,7 @@ func TestInstrumentedDatastoreForwardsCategoryCompletionIdentity(t *testing.T) {
 		Finalizers: []string{datastore.CategoryTaxonomyForegroundDeletionFinalizer},
 	}
 	require.NoError(t, store.CreateCategoryTaxonomy(ctx, category))
-	wrapped := datastore.NewInstrumentedDatastoreWithRegistry(store, "memdb", zap.NewNop(), prometheus.NewRegistry())
+	wrapped := datastore.NewInstrumentedDatastoreWithMeter(store, "memdb", zap.NewNop(), observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/datastore"))
 	completion := wrapped.(datastore.CategoryTaxonomyDeletionStore)
 	_, err = completion.CompleteCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion,
 		"00000000-0000-0000-0000-000000000297")
@@ -121,7 +122,7 @@ func TestInstrumentedDatastorePreservesProductLifecycleCapability(t *testing.T) 
 		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "Product", ResourceVersion: "1", Generation: 1,
 	}
 	require.NoError(t, store.CreateProduct(context.Background(), product))
-	wrapped := datastore.NewInstrumentedDatastoreWithRegistry(store, "memdb", zap.NewNop(), prometheus.NewRegistry())
+	wrapped := datastore.NewInstrumentedDatastoreWithMeter(store, "memdb", zap.NewNop(), observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/datastore"))
 	lifecycle, ok := wrapped.(datastore.ProductLifecycleStore)
 	require.True(t, ok, "instrumentation must not erase Product deletion capability")
 
@@ -300,7 +301,7 @@ func newTestInstrumented(t *testing.T, stub datastore.Datastore) (datastore.Data
 	core, logs := observer.New(zap.DebugLevel)
 	log := zap.New(core)
 	reg := prometheus.NewRegistry()
-	return datastore.NewInstrumentedDatastoreWithRegistry(stub, "test-backend", log, reg), logs, reg
+	return datastore.NewInstrumentedDatastoreWithMeter(stub, "test-backend", log, observabilitytest.Meter(t, reg, "gitstore/datastore")), logs, reg
 }
 
 func counterValue(t *testing.T, reg *prometheus.Registry, op, backend string) float64 {

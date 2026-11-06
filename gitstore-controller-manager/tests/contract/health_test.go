@@ -12,13 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestHealth_JSONFieldsPresent(t *testing.T) {
@@ -214,14 +215,14 @@ func TestHealth_CheckpointLastWriteTimestamp_UpdatesOnSave(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	before := testutil.ToFloat64(health.CheckpointLastWriteTimestamp.WithLabelValues("HealthWidgetA"))
+	before := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_checkpoint_last_write_timestamp_seconds", map[string]string{"kind": "HealthWidgetA"})
 
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx) }()
 
 	deadline := time.After(400 * time.Millisecond)
 	for {
-		if testutil.ToFloat64(health.CheckpointLastWriteTimestamp.WithLabelValues("HealthWidgetA")) > before {
+		if observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_checkpoint_last_write_timestamp_seconds", map[string]string{"kind": "HealthWidgetA"}) > before {
 			break
 		}
 		select {
@@ -249,14 +250,14 @@ func TestHealth_CheckpointWriteFailuresTotal_IncrementsOnFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	before := testutil.ToFloat64(health.CheckpointWriteFailuresTotal.WithLabelValues("HealthWidgetB"))
+	before := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_checkpoint_write_failures_total", map[string]string{"kind": "HealthWidgetB"})
 
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx) }()
 
 	deadline := time.After(800 * time.Millisecond)
 	for {
-		if testutil.ToFloat64(health.CheckpointWriteFailuresTotal.WithLabelValues("HealthWidgetB"))-before >= 3 {
+		if observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_checkpoint_write_failures_total", map[string]string{"kind": "HealthWidgetB"})-before >= 3 {
 			break
 		}
 		select {
@@ -317,7 +318,7 @@ func TestHealth_CheckpointReplayBacklog_TracksQueueDepth(t *testing.T) {
 		}
 	}
 
-	got := testutil.ToFloat64(health.CheckpointReplayBacklog.WithLabelValues("HealthWidgetC"))
+	got := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_checkpoint_replay_backlog", map[string]string{"kind": "HealthWidgetC"})
 	want := float64(stats["HealthWidgetC"].QueueDepth)
 	if got != want {
 		t.Errorf("CheckpointReplayBacklog = %v, want %v (KindStats().QueueDepth)", got, want)

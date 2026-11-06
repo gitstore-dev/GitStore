@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -87,7 +89,7 @@ func TestTypedAndGenericNamespaceWatchShareBootstrapAndEvents(t *testing.T) {
 
 func TestNamespaceWatchOutputUsesBoundedDelivery(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics, err := watchjournal.NewMetrics(registry)
+	metrics, err := watchjournal.NewMetrics(observabilitytest.Meter(t, registry, "gitstore/watchjournal"))
 	require.NoError(t, err)
 	err = sendNamespaceWatchOutput(context.Background(), make(chan int), 1, time.Millisecond, metrics)
 	terminal, ok := watchjournal.AsTerminal(err)

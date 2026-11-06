@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/api"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
-	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/retry"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // TestIntegration_PoisonedItem_SurfacedAsTerminalFailure covers FR-007: an
@@ -49,7 +49,7 @@ func TestIntegration_PoisonedItem_SurfacedAsTerminalFailure(t *testing.T) {
 			t.Fatalf("Register failed: %v", err)
 		}
 
-		before := testutil.ToFloat64(health.PoisonItemsTotal.WithLabelValues(kind))
+		before := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_poison_items_total", map[string]string{"kind": kind})
 
 		go func() { _ = mgr.Start(ctx) }()
 
@@ -86,12 +86,12 @@ func TestIntegration_PoisonedItem_SurfacedAsTerminalFailure(t *testing.T) {
 			t.Error("expected quarantined key to appear in Manager.ListPoisonPage()")
 		}
 
-		after := testutil.ToFloat64(health.PoisonItemsTotal.WithLabelValues(kind))
+		after := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_poison_items_total", map[string]string{"kind": kind})
 		if after != before+1 {
 			// KindStats() must be called to refresh the gauge (it does not
 			// self-update); trigger it directly, matching how health.NewMetricsHandler does.
 			mgr.KindStats()
-			after = testutil.ToFloat64(health.PoisonItemsTotal.WithLabelValues(kind))
+			after = observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_poison_items_total", map[string]string{"kind": kind})
 		}
 		if after != before+1 {
 			t.Errorf("PoisonItemsTotal{%s} = %v, want %v", kind, after, before+1)

@@ -26,7 +26,7 @@ on:
       - 'config/policy.yaml'
       - '.github/workflows/ci-integration.yml'
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'codex/**' ]
     paths:
       - 'gitstore-api/**'
       - 'gitstore-git-service/**'

@@ -27,8 +27,8 @@
 - Reuse `internal/admission` diagnostics/`RejectedError` and
   `internal/admissionreport` response extensions.
 - API/controller telemetry uses `../shared/observability`; read its scoped
-  instructions before changing exporters or instrumentation. Preserve native
-  Prometheus metrics.
+  instructions before changing exporters or instrumentation. Record metrics
+  through SDK instruments and derive compatibility scraping from SDK collection.
 - Run `make generate TARGET=<authz|all>` for committed authorization
   catalogs or all API generation directives. Changes to GraphQL schema
   docstrings require `go generate ./...` in this module because generated

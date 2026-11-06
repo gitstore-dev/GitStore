@@ -15,6 +15,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -121,7 +122,7 @@ status:
 
 func TestValidateResourcesCountsOnlyMalformedNamespaceParserFailures(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics := namespaceadmission.NewMetrics(registry)
+	metrics := namespaceadmission.NewMetrics(observabilitytest.Meter(t, registry, "gitstore/namespace"))
 	srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil, func(deps *cataloggrpc.ServerDeps) {
 		deps.NamespaceMetrics = metrics
 	})
@@ -205,7 +206,7 @@ func TestAdmitResourcesNamespaceUpdateMissingAfterConflictDoesNotCreate(t *testi
 	base := newNamespacePolicyDatastore(t)
 	store := &namespaceDeletedDuringUpdateStore{Datastore: base, name: "other"}
 	registry := prometheus.NewRegistry()
-	metrics := namespaceadmission.NewMetrics(registry)
+	metrics := namespaceadmission.NewMetrics(observabilitytest.Meter(t, registry, "gitstore/namespace"))
 	a := strings.Repeat("a", 40)
 	b := strings.Repeat("b", 40)
 	current := b
@@ -244,7 +245,7 @@ func TestAdmitResourcesNamespaceUpdateMissingInitiallyDoesNotCreate(t *testing.T
 
 	store := &namespaceDeletedDuringUpdateStore{Datastore: base, name: "other"}
 	registry := prometheus.NewRegistry()
-	metrics := namespaceadmission.NewMetrics(registry)
+	metrics := namespaceadmission.NewMetrics(observabilitytest.Meter(t, registry, "gitstore/namespace"))
 	a := strings.Repeat("c", 40)
 	b := strings.Repeat("d", 40)
 	current := b

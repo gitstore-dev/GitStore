@@ -14,8 +14,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gitstore-dev/gitstore/api/internal/health"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // T014: GET /metrics returns 200 and content-type text/plain (Prometheus exposition format).
@@ -37,8 +39,13 @@ func TestMetricsEndpoint(t *testing.T) {
 }
 
 func TestMetricsEndpointExposesProcessInstanceIdentity(t *testing.T) {
+	_, shutdown, err := observability.InitTelemetry(t.Context(), observability.OTLPConfig{}, observability.APIService, "test", zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, shutdown(context.Background())) })
+
 	gin.SetMode(gin.TestMode)
 	h := health.NewHandler(health.HandlerDeps{InstanceID: "replica-unique-id"})
+	t.Cleanup(h.Close)
 	router := gin.New()
 	router.GET("/metrics", h.Metrics)
 	w := httptest.NewRecorder()

@@ -19,6 +19,7 @@ pub mod grpc;
 mod log_export;
 mod metrics_export;
 mod otlp_http;
+mod runtime_metrics;
 
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
@@ -33,18 +34,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
 
 fn telemetry_records(signal: &str, stage: &str, count: u64) {
-    static RECORDS: std::sync::OnceLock<prometheus::IntCounterVec> = std::sync::OnceLock::new();
-    RECORDS
-        .get_or_init(|| {
-            prometheus::register_int_counter_vec!(
-                "gitstore_telemetry_records_total",
-                "Telemetry records admitted, exported or failed; admitted minus exported includes live queued work and loss.",
-                &["signal", "stage"]
-            )
-            .expect("register telemetry record counters")
-        })
-        .with_label_values(&[signal, stage])
-        .inc_by(count);
+    opentelemetry::global::meter("gitstore/telemetry")
+        .u64_counter("gitstore_telemetry_records_total")
+        .with_description("Telemetry records admitted, exported or failed; admitted minus exported includes live queued work and loss.")
+        .build().add(count, &[opentelemetry::KeyValue::new("signal", signal.to_owned()), opentelemetry::KeyValue::new("stage", stage.to_owned())]);
 }
 
 #[derive(Debug)]
@@ -221,6 +214,7 @@ pub fn init_observability(
     }
     let endpoint = cfg.uri.trim_end_matches('/');
     let resource = telemetry_resource()?;
+    let metrics = metrics_export::MetricExport::start(endpoint, &resource)?;
     let client = std::sync::Arc::new(otlp_http::CollectorClient::new()?);
     let trace_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
@@ -314,10 +308,7 @@ pub fn init_observability(
     }
     TELEMETRY_ENABLED.store(true, Ordering::Relaxed);
     Ok(Telemetry {
-        metrics: Some(metrics_export::MetricExport::start(
-            endpoint,
-            &telemetry_resource()?,
-        )),
+        metrics: Some(metrics),
         traces: Some(traces),
         logs: Some(logs),
     })
@@ -558,22 +549,10 @@ mod tests {
     }
 
     fn telemetry_count(signal: &str, stage: &str) -> u64 {
-        prometheus::gather()
-            .iter()
-            .filter(|family| family.name() == "gitstore_telemetry_records_total")
-            .flat_map(|family| family.get_metric())
-            .find(|metric| {
-                metric
-                    .get_label()
-                    .iter()
-                    .any(|label| label.name() == "signal" && label.value() == signal)
-                    && metric
-                        .get_label()
-                        .iter()
-                        .any(|label| label.name() == "stage" && label.value() == stage)
-            })
-            .map(|metric| metric.get_counter().value() as u64)
-            .unwrap_or(0)
+        crate::metrics_export::test_observer::count(
+            "gitstore_telemetry_records_total",
+            &[("signal", signal), ("stage", stage)],
+        )
     }
 
     #[derive(Debug)]
@@ -629,6 +608,7 @@ mod tests {
             logs::{AnyValue, LogRecord, Logger, LoggerProvider},
             trace::{Span, Tracer},
         };
+        crate::metrics_export::test_observer::ensure_provider();
         for failed in [false, true] {
             let traces = SdkTracerProvider::builder()
                 .with_span_processor(TelemetryObserver)

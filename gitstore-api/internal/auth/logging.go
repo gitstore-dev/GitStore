@@ -9,9 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 )
 
@@ -22,23 +25,15 @@ type DecisionLogger struct {
 	logger *zap.Logger
 }
 
-var authorizationDecisionDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-	Name:    "gitstore_authz_decision_duration_seconds",
-	Help:    "Provider decision latency and counts by registered action and outcome.",
-	Buckets: []float64{.000001, .000005, .00001, .00005, .0001, .0005, .001, .005, .01, .05, .1, .5, 1},
-}, []string{"action", "outcome"})
-
-var authorizationRegistryReloads = promauto.NewCounterVec(prometheus.CounterOpts{
-	Name: "gitstore_authz_registry_reloads_total",
-	Help: "Complete provider registry reload attempts by finite outcome.",
-}, []string{"outcome"})
+var authorizationDecisionDuration = observability.MustInstrument(otel.Meter("gitstore/auth").Float64Histogram("gitstore_authz_decision_duration_seconds", metric.WithDescription("Provider decision latency and counts by registered action and outcome."), metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(.000001, .000005, .00001, .00005, .0001, .0005, .001, .005, .01, .05, .1, .5, 1)))
 
 func ObserveProviderRegistryReload(accepted bool) {
+	authorizationRegistryReloads := observability.MustInstrument(otel.Meter("gitstore/auth").Float64Counter("gitstore_authz_registry_reloads_total", metric.WithDescription("Complete provider registry reload attempts by finite outcome.")))
 	outcome := "rejected"
 	if accepted {
 		outcome = "accepted"
 	}
-	authorizationRegistryReloads.WithLabelValues(outcome).Inc()
+	authorizationRegistryReloads.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
 
 // NewDecisionLogger wraps inner with structured decision logging.
@@ -94,7 +89,7 @@ func (d *DecisionLogger) Authorize(ctx context.Context, p *Principal, action str
 	if err != nil {
 		metricOutcome = "error"
 	}
-	authorizationDecisionDuration.WithLabelValues(metricAction, metricOutcome).Observe(latency.Seconds())
+	authorizationDecisionDuration.Record(ctx, latency.Seconds(), metric.WithAttributes(attribute.String("action", metricAction), attribute.String("outcome", metricOutcome)))
 
 	level, message := zap.InfoLevel, "authz decision"
 	if err != nil {
