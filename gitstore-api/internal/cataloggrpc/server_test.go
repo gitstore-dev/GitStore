@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -846,6 +847,125 @@ func TestValidateResources_EmptyBlobs_Accepted(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // mockGitReader is a test double for the GitReader interface used by AdmitResources.
+type conflictingProductStore struct {
+	datastore.Datastore
+	conflicts, writes atomic.Int64
+	afterConflict     func()
+}
+
+func (s *conflictingProductStore) UpdateProduct(ctx context.Context, product *datastore.Product, expected string) error {
+	s.writes.Add(1)
+	if s.conflicts.Add(-1) >= 0 {
+		current, err := s.Datastore.GetProductByName(ctx, product.Namespace, product.Name)
+		if err != nil {
+			return err
+		}
+		_, err = s.Datastore.UpdateProductStatus(ctx, product.Namespace, product.Name, datastore.ProductStatusPatch{
+			ResourceVersion: current.ResourceVersion,
+			Conditions: []catalog.Condition{{
+				Type: "Ready", Status: catalog.ConditionFalse, ObservedGeneration: current.Generation,
+				LastTransitionTime: time.Now().UTC(), Reason: "Reconciling",
+			}},
+		})
+		if err != nil {
+			return err
+		}
+		if s.afterConflict != nil {
+			s.afterConflict()
+		}
+	}
+	return s.Datastore.UpdateProduct(ctx, product, expected)
+}
+
+func TestAdmitResourcesProductStatusConflicts(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		conflicts int64
+		wantError bool
+		writes    int64
+		supersede bool
+		revoke    bool
+	}{
+		{name: "reload and retry", conflicts: 1, writes: 2},
+		{name: "bounded failure remains retryable", conflicts: 20, wantError: true, writes: 3},
+		{name: "superseded callback preserves newer admission", conflicts: 1, writes: 1, supersede: true},
+		{name: "retry respects live authorization revocation", conflicts: 1, wantError: true, writes: 1, revoke: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestDatastore(t)
+			first, second := strings.Repeat("a", 40), strings.Repeat("b", 40)
+			third := strings.Repeat("c", 40)
+			current := first
+			manifest := func(title string) []byte {
+				return fmt.Appendf(nil, "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: contested\n  namespace: gitstore\nspec:\n  title: %s\n---\n", title)
+			}
+			git := newTreeGitReader(&current, map[string]map[string][]byte{
+				first: {"product.md": manifest("First Title")}, second: {"product.md": manifest("Second Title")},
+				third: {"product.md": manifest("Third Title")},
+			})
+			request := &catalogv1.AdmitResourcesRequest{
+				Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+				RepositoryId:  testRepoID, RefName: "refs/heads/main", NewCommitSha: first,
+			}
+			_, err := newCatalogServer(t, store, git).AdmitResources(t.Context(), request)
+			require.NoError(t, err)
+			before, err := store.GetProductByName(t.Context(), "gitstore", "contested")
+			require.NoError(t, err)
+
+			contended := &conflictingProductStore{Datastore: store}
+			contended.conflicts.Store(tc.conflicts)
+			registry := auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil)
+			replica := newCatalogServer(t, contended, git, func(deps *cataloggrpc.ServerDeps) {
+				deps.Registry = registry
+			})
+			if tc.revoke {
+				contended.afterConflict = func() {
+					registry.Swap(nil, testutil.NewDenyAllAuthZ(t), nil)
+				}
+			}
+			if tc.supersede {
+				contended.afterConflict = func() {
+					current = third
+					newer := &catalogv1.AdmitResourcesRequest{
+						Authorization: request.Authorization, RepositoryId: testRepoID,
+						RefName: request.RefName, OldCommitSha: second, NewCommitSha: third,
+					}
+					_, err := newCatalogServer(t, store, git).AdmitResources(t.Context(), newer)
+					require.NoError(t, err)
+				}
+			}
+			current, request.OldCommitSha, request.NewCommitSha = second, first, second
+			_, err = replica.AdmitResources(t.Context(), request)
+			if tc.wantError {
+				require.Error(t, err, "a failed update must not be acknowledged as applied")
+				if tc.revoke {
+					require.Equal(t, codes.PermissionDenied, grpcstatus.Code(err))
+				}
+				require.Equal(t, tc.writes, contended.writes.Load())
+				contended.conflicts.Store(0)
+				registry.Swap(nil, testutil.NewAllowAllAuthZ(), nil)
+				_, err = replica.AdmitResources(t.Context(), request)
+				require.NoError(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.writes, contended.writes.Load())
+			}
+			product, err := store.GetProductByName(t.Context(), "gitstore", "contested")
+			require.NoError(t, err)
+			var spec catalog.ProductSpec
+			require.NoError(t, json.Unmarshal(product.Spec, &spec))
+			wantTitle, wantCommit := "Second Title", second
+			if tc.supersede {
+				wantTitle, wantCommit = "Third Title", third
+			}
+			require.Equal(t, wantTitle, spec.Title)
+			require.Equal(t, before.UID, product.UID)
+			require.EqualValues(t, 2, product.Generation, "status conflicts must not repeatedly increment the desired-state generation")
+			require.Equal(t, wantCommit, product.GitCommitSHA)
+		})
+	}
+}
+
 type mockGitReader struct {
 	listFilesFunc  func(ctx context.Context, repositoryID, prefix, ref string) ([]string, error)
 	readFileFunc   func(ctx context.Context, repositoryID, path, ref string) ([]byte, error)

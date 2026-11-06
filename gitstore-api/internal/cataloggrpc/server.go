@@ -1404,7 +1404,17 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 	// child CategoryTaxonomy may be reparented in the same accepted push that
 	// removes its former parent; deleting first would consult a stale reverse
 	// owner-reference projection and reject after the ref has already advanced.
-	if _, err := s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps); err != nil {
+	decisions, err := s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps)
+	if err != nil {
+		return err
+	}
+	var productFailures []error
+	for _, decision := range decisions {
+		if decision.Kind == "Product" && decision.Outcome == admission.EntryFailed {
+			productFailures = append(productFailures, decision.Err)
+		}
+	}
+	if err := errors.Join(productFailures...); err != nil {
 		return err
 	}
 	for _, op := range deletes {
@@ -2525,7 +2535,50 @@ func existingSpecContentType(raw []byte) string {
 	return spec.ContentType
 }
 
+const maxProductAdmissionUpdateAttempts = 3
+
 func (s *Server) admitProduct(
+	ctx context.Context,
+	resource *catalog.ProductResource,
+	body []byte,
+	admCtx AdmissionContext,
+	sourcePath string,
+	op admission.Operation,
+	rawExisting any,
+) admission.EntryDecision {
+	namespace := resource.Metadata.Namespace
+	if namespace == "" {
+		namespace = admCtx.Namespace
+	}
+	for attempt := 1; ; attempt++ {
+		decision := s.admitProductAttempt(ctx, resource, body, admCtx, sourcePath, op, rawExisting)
+		if decision.Outcome != admission.EntryFailed || !errors.Is(decision.Err, datastore.ErrConflict) ||
+			attempt >= maxProductAdmissionUpdateAttempts {
+			return decision
+		}
+		existing, loadErr := s.store.GetProductByName(ctx, namespace, resource.Metadata.Name)
+		if current, err := s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA); err != nil {
+			decision.Err = err
+			return decision
+		} else if !current {
+			admCtx.markSuperseded()
+			decision.Outcome, decision.Err = admission.EntryNoOp, nil
+			return decision
+		}
+		if loadErr != nil {
+			decision.Err = fmt.Errorf("reload product after conflict: %w", loadErr)
+			return decision
+		}
+		entry := &parsedEntry{path: sourcePath, parsed: &validate.ParsedResource{Kind: "Product", Product: resource}, body: body}
+		if err := s.authorizeOperation(ctx, resourceIdentity{Kind: "Product", Name: resource.Metadata.Name, Namespace: namespace}, admission.OperationUpdate, entry, existing); err != nil {
+			decision.Err = err
+			return decision
+		}
+		rawExisting, op = existing, admission.OperationUpdate
+	}
+}
+
+func (s *Server) admitProductAttempt(
 	ctx context.Context,
 	resource *catalog.ProductResource,
 	body []byte,

@@ -353,7 +353,11 @@ duplicate names and larger groups retain sequential admission.
 
 Post-receive admission cannot reject an already accepted Git push. DB-backed conflicts such as duplicate `ProductVariant.spec.sku` leave the existing resource unchanged, skip the conflicting incoming resource, and emit structured API logs with the operation, namespace, name, SKU, and conflicting identity.
 
-File admission callbacks report failed durable writes and exhausted conflict
+Product updates make at most three write attempts on resource-version conflicts.
+Each retry reloads the current identity and checks the ref tip, authorization and
+admission policy again. A superseded callback leaves the newer admission untouched.
+
+File and Product admission callbacks report failed durable writes and exhausted conflict
 retries instead of reporting success. The same callback can be retried after
 the datastore recovers; this does not change the earlier Git acknowledgement.
 Transient ref-read failures also return an unavailable error, rather than
