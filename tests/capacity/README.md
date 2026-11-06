@@ -271,6 +271,14 @@ Repository replacement uses one 30-second budget from trigger through outage,
 health/readiness and complete metrics from a changed process identity.
 Cancellation prevents pending triggers and stops in-flight observations;
 missing identities and late observations cannot count as recovery.
+Namespace watch coverage counts logical mutations separately from journal
+deliveries. Distinct status events do not count as duplicates, but replaying
+the same journal cursor on a subscription does, including after intervening
+status events. Subscribers share a bounded cursor-digest index and keep
+independent delivery bitsets. Missing/oversized cursors, conflicting sequences
+or more than 1,048,576 matching live versions fail the observer rather than
+evicting duplicate history. ACK coverage and first-observation latency are
+unchanged.
 
 The default runner uses the pinned container image declared in the Makefile.
 Set `K6_BIN` to an explicit executable when container networking is unsuitable,
