@@ -1,5 +1,56 @@
 import { test, expect } from '@playwright/test'
 
+test('keyboard focus rings fit inside the sidebar navigation scrollport', async ({
+  page,
+}, testInfo) => {
+  for (const theme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: theme })
+    for (const destination of [
+      { path: 'home/overview', label: 'Recent activity' },
+      { path: 'pricing-promotions/promotions', label: 'Discount codes' },
+    ]) {
+      await page.goto(`/w/atelier-kyoto/${destination.path}`)
+      const nav = page.getByRole('navigation', {
+        name: 'Main navigation',
+        exact: true,
+      })
+      const link = nav.getByRole('link', {
+        name: destination.label,
+        exact: true,
+      })
+      await link.focus()
+      await page.keyboard.press('ArrowUp')
+      await page.keyboard.press('ArrowDown')
+      await expect(link).toBeFocused()
+      const ring = await link.evaluate((element) => {
+        const style = getComputedStyle(element)
+        const bounds = element.getBoundingClientRect()
+        const nav = element.closest('nav')!
+        const viewport = nav.getBoundingClientRect()
+        const extent =
+          parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset)
+        return {
+          visible: element.matches(':focus-visible'),
+          width: parseFloat(style.outlineWidth),
+          left: bounds.left - extent,
+          right: bounds.right + extent,
+          viewportLeft: viewport.left,
+          viewportRight: viewport.left + nav.clientWidth,
+        }
+      })
+      expect(ring.visible).toBe(true)
+      expect(ring.width).toBeGreaterThanOrEqual(2)
+      expect(ring.left).toBeGreaterThanOrEqual(ring.viewportLeft)
+      expect(ring.right).toBeLessThanOrEqual(ring.viewportRight)
+      await page.screenshot({
+        path: testInfo.outputPath(
+          `sidebar-focus-${theme}-${destination.label}.png`,
+        ),
+      })
+    }
+  }
+})
+
 test('layout icons expose tooltips, keyboard selection, and focus restoration', async ({
   page,
 }, testInfo) => {

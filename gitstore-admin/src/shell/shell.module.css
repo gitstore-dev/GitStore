@@ -183,6 +183,11 @@
   scrollbar-color: var(--line) transparent;
   padding: 0 0 16px;
 }
+/* Keep keyboard rings inside the navigation's scrolling viewport. */
+.navigation :is(a, button):focus-visible,
+.navigation [data-focus-visible] {
+  outline-offset: -2px;
+}
 .navCaption {
   font: 8px var(--mono);
   letter-spacing: 0.13em;
