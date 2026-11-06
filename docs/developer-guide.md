@@ -27,7 +27,8 @@ and CI setup steps aligned.
 
 This guide keeps implementation detail out of the user guide. It covers service topology, local development, datastore backends, hook/admission flow, controller-manager runtime, generated schema/proto workflow, and module responsibilities.
 
-Contributor procedures: [production-readiness testing](development/production-readiness-testing.md)
+Contributor procedures: [Make command reference](development/make-reference.md),
+[production-readiness testing](development/production-readiness-testing.md)
 and [release process](development/release-process.md). Deployment procedures and
 exceptional recovery are indexed separately in [Operations and Recovery](runbooks/README.md).
 
@@ -401,6 +402,12 @@ Purpose:
 - Own bare repository storage.
 - Serve GitService gRPC operations for repository lifecycle, ref advertisement, receive-pack, upload-pack, file reads, commits, deletes, and tags.
 - Run receive hook phases and call the API CatalogService.
+
+Fetch negotiation acknowledges only offered commit objects present in the
+repository, using the client's single-ACK, `multi_ack`, or
+`multi_ack_detailed` mode. Unknown objects and non-commit objects are not
+common commits. Negotiation responses end at their ACK/NAK packet; a completed
+negotiation sends a final ACK before the pack when a common commit is known.
 
 Important directories:
 

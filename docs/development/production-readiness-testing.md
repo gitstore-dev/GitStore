@@ -308,6 +308,14 @@ Namespace recovery requires a fresh
 selected endpoint when the file appears. The verifier records an actual
 outage, requires a changed `process_start_time_seconds`, and resumes delivery
 from the pre-replacement cursor.
+
+Capacity baseline and post-load resource samples use the process-instance UUID
+when either sample provides one. Both samples must be available and identify
+the same process; a missing or different UUID invalidates the pair even when
+start times match. Start-time jitter tolerance applies only when neither sample
+has a UUID. This sample-matching rule does not relax replacement or recovery
+requirements.
+
 The materializer persists each appended batch's frontier together with its
 per-stream resume positions before it advances source checkpoints. A new
 leader reconciles lagging checkpoints from that bounded manifest, closing the
