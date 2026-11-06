@@ -82,7 +82,8 @@ echo "secret configuration isolation checks passed"
 # treating a not-yet-listening API as unhealthy. The base memdb grace is short.
 for overlay in compose.scylla.yml compose.scylla.cluster.yml; do
   awk '/^  api:/{api=1; next} api && /^  [a-zA-Z]/{api=0} api{print}' "$repo_root/$overlay" |
-    grep -q 'start_period: 5m' || {
+    # Consume all input: grep -q can SIGPIPE awk under pipefail after a match.
+    grep 'start_period: 5m' >/dev/null || {
       echo "missing first-boot migration health grace: $overlay" >&2
       exit 1
     }

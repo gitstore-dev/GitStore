@@ -211,15 +211,13 @@ for invalid in check/unknown clean/all bootstrap/unknown secret/hmac generate/un
 done
 
 for public_target in check clean bootstrap secret generate; do
-  output="$(make --no-print-directory -C "${repo_root}" "${public_target}" TARGET="$({
-    case "${public_target}" in
-      check) printf all ;;
-      clean) printf git-data ;;
-      bootstrap) printf all ;;
-      secret) printf jwt ;;
-      generate) printf authz ;;
-    esac
-  })" WORKFLOW_DRY_RUN=1)"
+  case "${public_target}" in
+    check|bootstrap) selector=all ;;
+    clean) selector=git-data ;;
+    secret) selector=jwt ;;
+    generate) selector=authz ;;
+  esac
+  output="$(make --no-print-directory -C "${repo_root}" "${public_target}" TARGET="${selector}" WORKFLOW_DRY_RUN=1)"
   [[ "${output}" == *"family=${public_target}"* ]]
 done
 
