@@ -970,6 +970,18 @@
       "source_blob": "84b6beedfdf7593285605c6d9bdbe069bd168350",
       "sha256": "78219fdcb377bf5a455c6ae43c02d0977e852fa586c22bb201b7f4ffdc0ee7d6",
       "verified": "Original Git blob, Python syntax parsed"
+    },
+    {
+      "archive_path": "patches/057-91e513041a-category-convergence-query-failures.patch",
+      "category": "C2/earlier-backup-residual",
+      "source": "91e513041a8e903a1add5c42214119c73514c3c6",
+      "base": "5924c69a29c47dd8b74558969cef75488e40565d",
+      "subject": "fix(test): distinguish category convergence from query failures",
+      "paths": [
+        "tests/integration/categorytaxonomy_reconciler_test.go"
+      ],
+      "sha256": "862970e355c256f8366b3b3599452979a342567b7abf5c34375d939f3b08a2f3",
+      "verified": "Applied to original base; every resulting blob matches source"
     }
   ],
   "omissions": [
@@ -2528,6 +2540,16 @@
       "reason": "Category conflict behavior/tests and runbook superseded by main, or workspace checksum bookkeeping"
     }
   ],
-  "entry_count": 56,
-  "payload_bytes": 1676585
+  "entry_count": 57,
+  "payload_bytes": 1682185,
+  "internal_backups_reviewed": {
+    "refs": {
+      "refs/backup/perf-capacity-before-main-sync-20261103": "1465aa9414ad87a94b328c20935726db57f1956a",
+      "refs/backup/perf-capacity-rebased-private-20261103": "960992931350cceb02a458c012e4a7c6ad015695",
+      "refs/backup/perf-capacity-user-edits-before-main-sync-20261103": "382c8f3ff02ba9d8ddb2964932910af1d02254e5"
+    },
+    "autostash": "All five edited-file patches exactly match the retained latest WIP patches.",
+    "rebased_private": "Ancestor of the reviewed canonical capacity archive.",
+    "before_main_sync": "Earlier same-title source revisions superseded by canonical rebased candidates; separately checked the only unmatched verifier commit."
+  }
 }
