@@ -178,6 +178,24 @@ func newTestStores(t *testing.T) (datastore.Datastore, datastore.Datastore) {
 	return newTestStore(t), newTestStore(t)
 }
 
+func markOwnerReferenceBackfillCompleteForTest(t *testing.T, store datastore.Datastore) {
+	t.Helper()
+	backfill := store.(datastore.OwnerReferenceBackfillStore)
+	now := time.Now().UTC()
+	lease, acquired, err := backfill.AcquireOwnerReferenceBackfillLease(t.Context(), "test-operator-"+newID(), now, time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	progress := datastore.OwnerReferenceBackfillProgress{
+		Kinds:     make(map[string]datastore.OwnerReferenceBackfillKindProgress),
+		Completed: true, UpdatedAt: now,
+	}
+	for _, kind := range datastore.OwnerReferenceBackfillKinds() {
+		progress.Kinds[kind] = datastore.OwnerReferenceBackfillKindProgress{Complete: true}
+	}
+	require.NoError(t, backfill.SaveOwnerReferenceBackfillProgress(t.Context(), lease, progress))
+	require.NoError(t, backfill.ReleaseOwnerReferenceBackfillLease(t.Context(), lease))
+}
+
 func TestServiceAccountClusterConcurrentIdentityAndRepair(t *testing.T) {
 	first, second := newTestStores(t)
 	raw := newRawSession(t)
@@ -576,6 +594,7 @@ func TestScylla_FileRoundTripAndIndexedLookup(t *testing.T) {
 
 func TestScylla_FileOwnerReferenceProjectionUsesOwnerRepositoryScope(t *testing.T) {
 	store := newTestStore(t)
+	markOwnerReferenceBackfillCompleteForTest(t, store)
 	ctx := context.Background()
 	file := &datastore.File{
 		UID: newID(), Namespace: "file-owner-" + newID()[:8], Name: "owned-" + newID()[:8],

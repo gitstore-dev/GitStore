@@ -114,6 +114,9 @@ func (s *scyllaDatastore) deleteOwnerReferenceDependent(
 }
 
 func (s *scyllaDatastore) HasBlockingOwnerDependents(ctx context.Context, scope datastore.OwnerReferenceScope, ownerUID string) (bool, error) {
+	if err := s.requireOwnerReferenceBackfillComplete(ctx); err != nil {
+		return false, err
+	}
 	const stmt = `SELECT dependent_uid FROM owner_reference_dependents
 		WHERE namespace=? AND repository_id=? AND owner_uid=? AND block_owner_deletion=? LIMIT 1`
 	var row struct {
@@ -131,6 +134,9 @@ func (s *scyllaDatastore) HasBlockingOwnerDependents(ctx context.Context, scope 
 }
 
 func (s *scyllaDatastore) ListBlockingOwnerDependents(ctx context.Context, scope datastore.OwnerReferenceScope, ownerUID, after string, limit int) (datastore.OwnerDependentPage, error) {
+	if err := s.requireOwnerReferenceBackfillComplete(ctx); err != nil {
+		return datastore.OwnerDependentPage{}, err
+	}
 	if limit <= 0 {
 		limit = datastore.DefaultPageSize
 	}
@@ -166,6 +172,9 @@ func (s *scyllaDatastore) ListNonBlockingProductOwnerDependents(
 	ownerUID, after string,
 	limit int,
 ) (datastore.OwnerDependentPage, error) {
+	if err := s.requireOwnerReferenceBackfillComplete(ctx); err != nil {
+		return datastore.OwnerDependentPage{}, err
+	}
 	if limit <= 0 {
 		limit = datastore.DefaultPageSize
 	}
@@ -200,6 +209,20 @@ func (s *scyllaDatastore) ListNonBlockingProductOwnerDependents(
 		page.NextCursor = page.Items[len(page.Items)-1].DependentUID
 	}
 	return page, nil
+}
+
+func (s *scyllaDatastore) requireOwnerReferenceBackfillComplete(ctx context.Context) error {
+	progress, err := s.LoadOwnerReferenceBackfillProgress(ctx)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return fmt.Errorf("%w: owner-reference backfill has no durable completion marker", datastore.ErrProjectionNotReady)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: owner-reference backfill progress is unavailable: %w", datastore.ErrProjectionNotReady, err)
+	}
+	if !progress.Completed {
+		return fmt.Errorf("%w: owner-reference backfill is incomplete", datastore.ErrProjectionNotReady)
+	}
+	return nil
 }
 
 func (s *scyllaDatastore) MarkCategoryTaxonomyDeletion(

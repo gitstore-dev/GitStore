@@ -1534,12 +1534,18 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 	ctx := context.Background()
 	gitURL := strings.TrimRight(os.Getenv("GIT_URL"), "/")
 	require.NoError(t, validateSecretCapacityGitEndpoint(gitURL))
+	assertRepositoryCapacityOwnerReferenceDeletionParity(t, client, cfg, name)
 	var previousUID string
 	directory := filepath.Join(t.TempDir(), "authoring")
 	for _, mode := range []string{"mutation", "push"} {
 		require.NoError(t, repositoryCapacityMutation(ctx, client, cfg.apiA, cfg.token, true, cfg.namespace, name, "deletion", 0, ""))
 		response := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
-			repository(by: {namespacePath: {namespace: $namespace, name: $name}}) { id metadata { resourceVersion } }
+			repository(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+				id metadata {
+					resourceVersion
+					ownerReferences { apiVersion kind name uid blockOwnerDeletion }
+				}
+			}
 		}`, map[string]any{"namespace": cfg.namespace, "name": name})
 		require.Empty(t, response.Errors)
 		var current struct {
@@ -1547,11 +1553,24 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 				ID       string `json:"id"`
 				Metadata struct {
 					ResourceVersion string `json:"resourceVersion"`
+					OwnerReferences []struct {
+						APIVersion         string `json:"apiVersion"`
+						Kind               string `json:"kind"`
+						Name               string `json:"name"`
+						UID                string `json:"uid"`
+						BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+					} `json:"ownerReferences"`
 				} `json:"metadata"`
 			} `json:"repository"`
 		}
 		require.NoError(t, json.Unmarshal(response.Data, &current))
 		require.NotEmpty(t, current.Repository.ID)
+		require.Len(t, current.Repository.Metadata.OwnerReferences, 1, "Repository must report its Namespace owner")
+		namespaceOwner := current.Repository.Metadata.OwnerReferences[0]
+		require.Equal(t, "Namespace", namespaceOwner.Kind)
+		require.Equal(t, cfg.namespace, namespaceOwner.Name)
+		require.NotEmpty(t, namespaceOwner.UID)
+		require.True(t, namespaceOwner.BlockOwnerDeletion)
 		if previousUID != "" {
 			require.NotEqual(t, previousUID, current.Repository.ID)
 			stale := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($ns: String!, $name: String!, $uid: ID!, $rv: String!) {
@@ -1610,6 +1629,212 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 		previousUID = current.Repository.ID
 	}
 	t.Log("repository deletion parity: mutation/push manifest removal, controller completion, name reuse and stale UID rejection verified")
+}
+
+func assertRepositoryCapacityOwnerReferenceDeletionParity(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, runID string) {
+	t.Helper()
+
+	createCategory := func(name string, parent string) string {
+		t.Helper()
+		var parentRef any
+		if parent != "" {
+			parentRef = map[string]any{"name": parent}
+		}
+		created := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($namespace: String!, $name: String!, $parent: CatalogObjectReferenceInput) {
+			createCategory(input: {
+				metadata: {namespace: $namespace, name: $name}
+				spec: {title: $name, parentRef: $parent}
+			}) {
+				category { id metadata { ownerReferences { kind name uid blockOwnerDeletion } } }
+			}
+		}`, map[string]any{"namespace": cfg.namespace, "name": name, "parent": parentRef})
+		require.Empty(t, created.Errors, string(created.Data))
+		var data struct {
+			CreateCategory struct {
+				Category struct {
+					ID       string `json:"id"`
+					Metadata struct {
+						OwnerReferences []struct {
+							Kind               string `json:"kind"`
+							Name               string `json:"name"`
+							UID                string `json:"uid"`
+							BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+						} `json:"ownerReferences"`
+					} `json:"metadata"`
+				} `json:"category"`
+			} `json:"createCategory"`
+		}
+		require.NoError(t, json.Unmarshal(created.Data, &data))
+		require.NotEmpty(t, data.CreateCategory.Category.ID)
+		return data.CreateCategory.Category.ID
+	}
+	categoryExists := func(name string) bool {
+		t.Helper()
+		response := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
+			category(by: {namespacePath: {namespace: $namespace, name: $name}}) { id }
+		}`, map[string]any{"namespace": cfg.namespace, "name": name})
+		var data struct {
+			Category json.RawMessage `json:"category"`
+		}
+		if json.Unmarshal(response.Data, &data) != nil {
+			return true
+		}
+		return len(data.Category) != 0 && string(data.Category) != "null"
+	}
+	productOwnerReferences := func(name string) (bool, string, []struct {
+		Kind               string `json:"kind"`
+		Name               string `json:"name"`
+		UID                string `json:"uid"`
+		BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+	}) {
+		t.Helper()
+		response := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
+			product(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+				id
+				metadata { ownerReferences { kind name uid blockOwnerDeletion } }
+			}
+		}`, map[string]any{"namespace": cfg.namespace, "name": name})
+		if len(response.Errors) != 0 {
+			return false, "", nil
+		}
+		var data struct {
+			Product *struct {
+				ID       string `json:"id"`
+				Metadata struct {
+					OwnerReferences []struct {
+						Kind               string `json:"kind"`
+						Name               string `json:"name"`
+						UID                string `json:"uid"`
+						BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+					} `json:"ownerReferences"`
+				} `json:"metadata"`
+			} `json:"product"`
+		}
+		if json.Unmarshal(response.Data, &data) != nil || data.Product == nil {
+			return false, "", nil
+		}
+		return true, data.Product.ID, data.Product.Metadata.OwnerReferences
+	}
+
+	blockingParent := "rcb-" + runID
+	blockingChild := blockingParent + "-child"
+	parentID := createCategory(blockingParent, "")
+	childID := createCategory(blockingChild, blockingParent)
+	child := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
+		category(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+			metadata { ownerReferences { kind name uid blockOwnerDeletion } }
+		}
+	}`, map[string]any{"namespace": cfg.namespace, "name": blockingChild})
+	require.Empty(t, child.Errors, string(child.Data))
+	var childData struct {
+		Category struct {
+			Metadata struct {
+				OwnerReferences []struct {
+					Kind               string `json:"kind"`
+					Name               string `json:"name"`
+					UID                string `json:"uid"`
+					BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+				} `json:"ownerReferences"`
+			} `json:"metadata"`
+		} `json:"category"`
+	}
+	require.NoError(t, json.Unmarshal(child.Data, &childData))
+	var blocksParent bool
+	for _, reference := range childData.Category.Metadata.OwnerReferences {
+		if reference.Kind == "CategoryTaxonomy" && reference.Name == blockingParent {
+			require.True(t, reference.BlockOwnerDeletion)
+			blocksParent = true
+		}
+	}
+	require.True(t, blocksParent, "child category must carry a blocking owner reference")
+	blocked := gqlQueryWithURL(t, cfg.apiB, cfg.token, `mutation($id: ID!) {
+		deleteCategory(input: {id: $id}) { outcome }
+	}`, map[string]any{"id": parentID})
+	require.NotEmpty(t, blocked.Errors, "a live blocking child must reject parent deletion")
+	require.Eventually(t, func() bool {
+		return categoryExists(blockingParent) && categoryExists(blockingChild)
+	}, 10*time.Second, 250*time.Millisecond, "blocked deletion must preserve owner and dependent")
+
+	for _, id := range []string{childID, parentID} {
+		deleted := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($id: ID!) {
+			deleteCategory(input: {id: $id}) { outcome }
+		}`, map[string]any{"id": id})
+		require.Empty(t, deleted.Errors, string(deleted.Data))
+		require.Eventually(t, func() bool {
+			name := blockingParent
+			if id == childID {
+				name = blockingChild
+			}
+			return !categoryExists(name)
+		}, 60*time.Second, 250*time.Millisecond, "category deletion must finalize")
+	}
+
+	orphanOwner := "rco-" + runID
+	orphanProduct := orphanOwner + "-product"
+	orphanID := createCategory(orphanOwner, "")
+	createdProduct := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($namespace: String!, $name: String!, $category: String!) {
+		createProduct(input: {
+			metadata: {namespace: $namespace, name: $name}
+			spec: {title: $name, categoryRef: {name: $category}}
+		}) {
+			product { metadata { ownerReferences { kind name uid blockOwnerDeletion } } }
+		}
+	}`, map[string]any{"namespace": cfg.namespace, "name": orphanProduct, "category": orphanOwner})
+	require.Empty(t, createdProduct.Errors, string(createdProduct.Data))
+	var initialProduct struct {
+		CreateProduct struct {
+			Product struct {
+				Metadata struct {
+					OwnerReferences []struct {
+						Kind               string `json:"kind"`
+						Name               string `json:"name"`
+						UID                string `json:"uid"`
+						BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+					} `json:"ownerReferences"`
+				} `json:"metadata"`
+			} `json:"product"`
+		} `json:"createProduct"`
+	}
+	require.NoError(t, json.Unmarshal(createdProduct.Data, &initialProduct))
+	var orphanReferenceFound bool
+	var orphanCategoryUID string
+	for _, reference := range initialProduct.CreateProduct.Product.Metadata.OwnerReferences {
+		if reference.Kind == "CategoryTaxonomy" && reference.Name == orphanOwner {
+			require.False(t, reference.BlockOwnerDeletion)
+			orphanReferenceFound = true
+			orphanCategoryUID = reference.UID
+		}
+	}
+	require.True(t, orphanReferenceFound, "Product must expose its non-blocking category owner")
+	require.NotEmpty(t, orphanCategoryUID)
+
+	deletedOrphanOwner := gqlQueryWithURL(t, cfg.apiB, cfg.token, `mutation($id: ID!) {
+		deleteCategory(input: {id: $id}) { outcome }
+	}`, map[string]any{"id": orphanID})
+	require.Empty(t, deletedOrphanOwner.Errors, string(deletedOrphanOwner.Data))
+	var orphanProductID string
+	require.Eventually(t, func() bool {
+		exists, id, references := productOwnerReferences(orphanProduct)
+		if !exists {
+			return false
+		}
+		orphanProductID = id
+		for _, reference := range references {
+			if reference.Kind == "CategoryTaxonomy" && reference.UID == orphanCategoryUID {
+				return false
+			}
+		}
+		return !categoryExists(orphanOwner)
+	}, 60*time.Second, 250*time.Millisecond, "non-blocking owner removal must preserve Product and clear its stale owner reference")
+	require.NotEmpty(t, orphanProductID)
+	deletedProduct := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($id: ID!) {
+		deleteProduct(input: {id: $id}) { outcome }
+	}`, map[string]any{"id": orphanProductID})
+	require.Empty(t, deletedProduct.Errors)
+	require.Eventually(t, func() bool {
+		exists, _, _ := productOwnerReferences(orphanProduct)
+		return !exists
+	}, 60*time.Second, 250*time.Millisecond, "capacity orphan fixture must be cleaned up")
 }
 
 func repositoryCapacityDeletionObserved(response gqlResponse) bool {

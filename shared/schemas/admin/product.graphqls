@@ -261,6 +261,12 @@ type CatalogObjectReference {
   fieldPath: String
 }
 
+"""
+A system-managed relationship to another resource. When
+blockOwnerDeletion is true, the referenced owner cannot be deleted while this
+resource exists. When false, the owner may be deleted and this resource
+survives as an orphan. Neither value cascades deletion.
+"""
 type OwnerReference {
   apiVersion: String!
   kind: String!

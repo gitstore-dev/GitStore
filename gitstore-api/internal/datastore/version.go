@@ -35,6 +35,24 @@ func AdvanceCollectionSystemVersion(collection *Collection) {
 	collection.ResourceVersion = nextResourceVersion(collection.ResourceVersion)
 }
 
+// AdvanceFileSystemVersion advances File lifecycle metadata without changing
+// author-controlled generation.
+func AdvanceFileSystemVersion(file *File) {
+	if file == nil {
+		return
+	}
+	file.ResourceVersion = nextResourceVersion(file.ResourceVersion)
+}
+
+// AdvanceProductVariantSystemVersion advances ProductVariant lifecycle
+// metadata without changing author-controlled generation.
+func AdvanceProductVariantSystemVersion(variant *ProductVariant) {
+	if variant == nil {
+		return
+	}
+	variant.ResourceVersion = nextResourceVersion(variant.ResourceVersion)
+}
+
 // nextResourceVersion advances a positive decimal resourceVersion. Invalid,
 // empty, and non-positive values normalize to the initial version.
 func nextResourceVersion(current string) string {

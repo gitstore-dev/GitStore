@@ -163,6 +163,9 @@ type memdbDatastore struct {
 	namespaceWatchRetention time.Duration
 	sessionRevocationMu     sync.RWMutex
 	sessionRevocations      map[string]time.Time
+	ownerBackfillMu         sync.Mutex
+	ownerBackfillLease      datastore.OwnerReferenceBackfillLease
+	ownerBackfillProgress   *datastore.OwnerReferenceBackfillProgress
 	// categoryProducts is a projection, not an alternate product store. Keys
 	// are namespace/category UID and values are product UIDs. Keeping it
 	// alongside memdb makes the development backend exercise the same bounded
@@ -1106,6 +1109,10 @@ func (m *memdbDatastore) CreateCollection(_ context.Context, c *datastore.Collec
 		txn.Abort()
 		return fmt.Errorf("memdb: insert collection: %w", err)
 	}
+	if err := syncOwnerReferenceProjections(txn, stored.Namespace, stored.RepositoryID, "Collection", stored.UID, stored.Name, stored.ResourceVersion, stored.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
+	}
 	txn.Commit()
 	return nil
 }
@@ -1172,6 +1179,10 @@ func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collec
 		txn.Abort()
 		return fmt.Errorf("memdb: update collection: %w", err)
 	}
+	if err := syncOwnerReferenceProjections(txn, c.Namespace, c.RepositoryID, "Collection", c.UID, c.Name, c.ResourceVersion, c.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
+	}
 	txn.Commit()
 	return nil
 }
@@ -1194,6 +1205,10 @@ func (m *memdbDatastore) deleteCollection(uid, expectedResourceVersion string, c
 	if checkResourceVersion && raw.(*datastore.Collection).ResourceVersion != expectedResourceVersion {
 		txn.Abort()
 		return datastore.ErrConflict
+	}
+	if err := deleteOwnerReferenceProjections(txn, "Collection", uid); err != nil {
+		txn.Abort()
+		return err
 	}
 	if err := txn.Delete("collection", raw); err != nil {
 		txn.Abort()

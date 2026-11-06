@@ -26,6 +26,10 @@ import (
 )
 
 func newRawSession(t *testing.T) *gocql.Session {
+	return newRawSessionForKeyspace(t, scyllaKeyspace)
+}
+
+func newRawSessionForKeyspace(t *testing.T, keyspace string) *gocql.Session {
 	t.Helper()
 	host, portStr, err := net.SplitHostPort(scyllaAddr)
 	if err != nil {
@@ -37,7 +41,7 @@ func newRawSession(t *testing.T) *gocql.Session {
 	if port > 0 {
 		cluster.Port = port
 	}
-	cluster.Keyspace = scyllaKeyspace // keyspace provisioned by TestMain in backend_test.go
+	cluster.Keyspace = keyspace
 	cluster.Consistency = gocql.Quorum
 	cluster.DisableShardAwarePort = true
 	cluster.IgnorePeerAddr = true
@@ -77,6 +81,7 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 		"service_account_assertion_replays",
 		"service_accounts_by_cluster_bucket",
 		"category_ancestor_index",
+		"owner_reference_backfill_by_job",
 	} {
 		var tblName string
 		err = session.Query(

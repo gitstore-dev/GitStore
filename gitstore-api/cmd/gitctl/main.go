@@ -98,6 +98,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "scylla-projection-repair":
 		return runProjectionRepair(args[1:], stdout, stderr)
 
+	case "owner-reference-backfill":
+		return runOwnerReferenceBackfill(args[1:], stdout, stderr)
+
 	case "enroll-serviceaccount":
 		return runEnrollServiceAccount(args[1:], stdout, stderr)
 
@@ -127,6 +130,7 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  scylla-projection-audit [Scylla flags]")
 	fmt.Fprintln(output, "  migrate [Scylla flags] [--timeout 5m] (prepare an existing keyspace without starting the API)")
 	fmt.Fprintln(output, "  scylla-projection-repair (--dry-run | --confirm) [Scylla flags]")
+	fmt.Fprintln(output, "  owner-reference-backfill <run|status> --hosts <endpoints> --keyspace <name> [--confirm]")
 	fmt.Fprintln(output, "  enroll-serviceaccount --api-url <url> --admin-token <token> --namespace <namespace> --name <name> --key-id <id> --private-key-path <path> [--replace-existing-key]")
 	fmt.Fprintln(output, "  generate-signing-key --private-key-path <path> [--record-output-path <path> --key-id <id>]")
 	fmt.Fprintln(output, "  validate-local-config --config-file <config.toml> --policy-file <policy.yaml>")

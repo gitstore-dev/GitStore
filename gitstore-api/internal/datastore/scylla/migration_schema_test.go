@@ -95,6 +95,19 @@ func TestNamespaceCatalogFenceIsNotAWatchedResource(t *testing.T) {
 	assert.NotContains(t, statement, "default_time_to_live")
 }
 
+func TestOwnerReferenceBackfillStateIsAdditiveAndFenced(t *testing.T) {
+	statement := strings.Join(strings.Fields(createStatement(t, "013_owner_reference_backfill.cql", "owner_reference_backfill_by_job")), " ")
+	assert.Contains(t, statement, "job_id text primary key")
+	for _, column := range []string{
+		"lease_holder text",
+		"fencing_token bigint",
+		"lease_expiration_timestamp timestamp",
+		"progress_json text",
+	} {
+		assert.Contains(t, statement, column)
+	}
+}
+
 func TestResourceWatchJournalIsSharedAcrossKinds(t *testing.T) {
 	events := createStatement(t, "001_infra.cql", "resource_watch_events")
 	for _, column := range []string{"kind text", "namespace text", "labels map<text, text>", "previous_labels map<text, text>", "event_timestamp timestamp"} {

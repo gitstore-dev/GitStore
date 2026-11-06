@@ -2018,10 +2018,16 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 	require.NoError(t, err)
 	var references []catalog.OwnerReference
 	require.NoError(t, json.Unmarshal(child.OwnerReferences, &references))
-	require.Len(t, references, 1)
-	assert.Equal(t, parent.UID, references[0].UID)
-	assert.Equal(t, "CategoryTaxonomy", references[0].Kind)
-	assert.True(t, references[0].BlockOwnerDeletion)
+	require.Len(t, references, 2)
+	assert.Contains(t, references, catalog.OwnerReference{
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy",
+		Name: parent.Name, UID: parent.UID, BlockOwnerDeletion: true,
+		RepositoryID: parent.RepositoryID,
+	})
+	assert.Contains(t, references, catalog.OwnerReference{
+		APIVersion: "gitstore.dev/v1beta1", Kind: "Repository",
+		Name: "catalog", UID: testRepoID, BlockOwnerDeletion: true, RepositoryID: testRepoID,
+	})
 }
 
 func TestAdmitResources_CoCreation_ParentAndChildInSamePush(t *testing.T) {
@@ -2704,9 +2710,101 @@ func TestAdmitResources_ProductVariantProjectsBlockingProductOwner(t *testing.T)
 	require.NoError(t, err)
 	var refs []catalog.OwnerReference
 	require.NoError(t, json.Unmarshal(variant.OwnerReferences, &refs))
-	require.Len(t, refs, 1)
-	assert.Equal(t, product.UID, refs[0].UID)
-	assert.True(t, refs[0].BlockOwnerDeletion)
+	require.Len(t, refs, 2)
+	assert.Contains(t, refs, catalog.OwnerReference{
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "Product",
+		Name: product.Name, UID: product.UID, BlockOwnerDeletion: true,
+		RepositoryID: product.RepositoryID,
+	})
+	assert.Contains(t, refs, catalog.OwnerReference{
+		APIVersion: "gitstore.dev/v1beta1", Kind: "Repository",
+		Name: "catalog", UID: testRepoID, BlockOwnerDeletion: true, RepositoryID: testRepoID,
+	})
+}
+
+func TestAdmitResources_ProjectsRepositoryOwnerForCatalogResources(t *testing.T) {
+	store := newTestDatastore(t)
+	repository, err := store.GetRepository(t.Context(), testRepoID)
+	require.NoError(t, err)
+
+	zero, commit := strings.Repeat("0", 40), strings.Repeat("a", 40)
+	current := commit
+	git := newTreeGitReader(&current, map[string]map[string][]byte{commit: {
+		"products/widget.md":  makeProductWithCategoryRef("widget", "root"),
+		"variants/red.md":     makeProductVariant("red", "SKU-1"),
+		"categories/root.md":  makeCategoryTaxonomy("root"),
+		"collections/sale.md": []byte(strings.Replace(string(makeProduct("sale")), "kind: Product", "kind: Collection", 1)),
+		"files/manual.md":     makeFile("manual"),
+	}})
+	srv := newCatalogServer(t, store, git)
+	admitDelta(t, srv, zero, commit)
+
+	for _, resource := range []struct {
+		kind, name string
+		get        func() (json.RawMessage, error)
+	}{
+		{kind: "Product", name: "widget", get: func() (json.RawMessage, error) {
+			got, getErr := store.GetProductByName(t.Context(), "gitstore", "widget")
+			if getErr != nil {
+				return nil, getErr
+			}
+			return got.OwnerReferences, nil
+		}},
+		{kind: "ProductVariant", name: "red", get: func() (json.RawMessage, error) {
+			got, getErr := store.GetProductVariantByName(t.Context(), "gitstore", "red")
+			if getErr != nil {
+				return nil, getErr
+			}
+			return got.OwnerReferences, nil
+		}},
+		{kind: "CategoryTaxonomy", name: "root", get: func() (json.RawMessage, error) {
+			got, getErr := store.GetCategoryTaxonomyByName(t.Context(), "gitstore", "root")
+			if getErr != nil {
+				return nil, getErr
+			}
+			return got.OwnerReferences, nil
+		}},
+		{kind: "Collection", name: "sale", get: func() (json.RawMessage, error) {
+			got, getErr := store.GetCollectionByName(t.Context(), "gitstore", "sale")
+			if getErr != nil {
+				return nil, getErr
+			}
+			return got.OwnerReferences, nil
+		}},
+		{kind: "File", name: "manual", get: func() (json.RawMessage, error) {
+			got, getErr := store.GetFileByName(t.Context(), "gitstore", "manual")
+			if getErr != nil {
+				return nil, getErr
+			}
+			return got.OwnerReferences, nil
+		}},
+	} {
+		t.Run(resource.kind, func(t *testing.T) {
+			raw, getErr := resource.get()
+			require.NoError(t, getErr)
+			var references []catalog.OwnerReference
+			if len(raw) > 0 {
+				require.NoError(t, json.Unmarshal(raw, &references))
+			}
+			require.Contains(t, references, catalog.OwnerReference{
+				APIVersion: "gitstore.dev/v1beta1", Kind: "Repository",
+				Name: repository.Name, UID: repository.UID, BlockOwnerDeletion: true,
+				RepositoryID: repository.UID,
+			})
+		})
+	}
+
+	product, err := store.GetProductByName(t.Context(), "gitstore", "widget")
+	require.NoError(t, err)
+	category, err := store.GetCategoryTaxonomyByName(t.Context(), "gitstore", "root")
+	require.NoError(t, err)
+	var productReferences []catalog.OwnerReference
+	require.NoError(t, json.Unmarshal(product.OwnerReferences, &productReferences))
+	require.Contains(t, productReferences, catalog.OwnerReference{
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy",
+		Name: category.Name, UID: category.UID,
+		BlockOwnerDeletion: false, RepositoryID: repository.UID,
+	})
 }
 
 func TestAdmitResources_ProductVariantUpdateRejectsTerminatingProductTarget(t *testing.T) {
