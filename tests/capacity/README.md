@@ -267,6 +267,10 @@ Baseline and post-load stabilization match exported process instance identities
 when present; legacy samples without identities retain the bounded start-time
 comparison. A changed or missing identity, unavailable sample, or failed scrape
 invalidates that endpoint's stabilization. CPU and RSS limits are unchanged.
+Repository replacement uses one 30-second budget from trigger through outage,
+health/readiness and complete metrics from a changed process identity.
+Cancellation prevents pending triggers and stops in-flight observations;
+missing identities and late observations cannot count as recovery.
 
 The default runner uses the pinned container image declared in the Makefile.
 Set `K6_BIN` to an explicit executable when container networking is unsuitable,
