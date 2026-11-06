@@ -177,7 +177,7 @@ separately scraped. The following table describes the Go sources.
 | --- | --- | --- | --- |
 | `go_goroutines`, `go_threads`, `go_sched_gomaxprocs_threads`, `go_gc_gogc_percent`, `go_gc_gomemlimit_bytes` (same) | Int64ObservableGauge | count, percent, bytes as named | — |
 | `go_info` (same) | Int64ObservableGauge | 1 | version |
-| `go_gc_duration_seconds` summary → same-named quantile gauge | Float64ObservableGauge | s | quantile: 0, .25, .5, .75, 1 |
+| `go_gc_duration_seconds` summary → same-named quantile gauge | Float64ObservableGauge | s | quantile: 0.0, 0.25, 0.5, 0.75, 1.0 |
 | GC summary count → `go_gc_duration_seconds_count` | Int64ObservableCounter / monotonic sum | count | — |
 | GC summary sum → `go_gc_duration_seconds_sum` | Float64ObservableCounter / monotonic sum | s | — |
 | `go_memstats_alloc_bytes_total`, `go_memstats_mallocs_total`, `go_memstats_frees_total` (same) | Float64ObservableCounter / monotonic sum | bytes or count as named | — |
@@ -212,6 +212,13 @@ retain the former collector's whole-second resolution. Native OS snapshots
 are cached for one second, descriptor enumeration has a two-second deadline,
 and failed/overdue observations are omitted rather than fabricated. macOS and
 Windows native Git did not previously export these process signals.
+GC quantile gauges explicitly use label values `0.0`, `0.25`, `0.5`, `0.75`
+and `1.0`, preserving the former summary's ingested series in Prometheus 3.0
+and newer. Those versions normalize summary quantile labels on ingestion, but that
+normalization does not apply after the metric becomes a gauge
+([Prometheus parser](https://github.com/prometheus/prometheus/blob/main/model/textparse/openmetricsparse.go)).
+Direct scrape consumers and older backend queries that matched `0`/`1` must
+use `0.0`/`1.0`; existing canonical PromQL selectors remain valid.
 GC summary conversion is intentionally a schema change to gauges plus two
 counters: there is no SDK summary instrument and no replay of synthetic
 histogram samples.

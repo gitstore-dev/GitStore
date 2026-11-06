@@ -180,6 +180,30 @@ func TestSDKRuntimePreservesLegacySignalNames(t *testing.T) {
 	require.True(t, names["go_gc_duration_seconds_sum"])
 }
 
+func TestSDKGCQuantileGaugesPreserveCanonicalBackendLabels(t *testing.T) {
+	provider, registry, err := newMetricProvider(t.Context(), "", nil, resource.Empty())
+	require.NoError(t, err)
+	defer provider.Shutdown(t.Context())
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	var quantiles []string
+	for _, family := range families {
+		if family.GetName() != "go_gc_duration_seconds" {
+			continue
+		}
+		for _, point := range family.Metric {
+			require.NotNil(t, point.Gauge)
+			for _, label := range point.Label {
+				if label.GetName() == "quantile" {
+					quantiles = append(quantiles, label.GetValue())
+				}
+			}
+		}
+	}
+	require.ElementsMatch(t, []string{"0.0", "0.25", "0.5", "0.75", "1.0"}, quantiles,
+		"gauge labels must preserve existing PromQL selectors after summary normalization no longer applies")
+}
+
 func TestSDKMetricsRejectCollectorFailuresAndBoundResponses(t *testing.T) {
 	for _, body := range []string{"reject", "partial", strings.Repeat("x", 65537)} {
 		t.Run(body[:6], func(t *testing.T) {

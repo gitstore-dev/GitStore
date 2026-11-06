@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	runtimemetrics "runtime/metrics"
-	"strconv"
 	"sync"
 	"time"
 
@@ -82,6 +81,8 @@ func registerRuntimeMetrics(provider metric.MeterProvider) error {
 	var lastRead time.Time
 	var memory runtime.MemStats
 	gc := debug.GCStats{PauseQuantiles: make([]time.Duration, 5)}
+	// Gauges retain the canonical labels previously normalized for summaries.
+	quantileLabels := [...]string{"0.0", "0.25", "0.5", "0.75", "1.0"}
 	samples := []runtimemetrics.Sample{{Name: "/gc/gogc:percent"}, {Name: "/gc/gomemlimit:bytes"}}
 	_, err := meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
 		if err := ctx.Err(); err != nil {
@@ -112,7 +113,7 @@ func registerRuntimeMetrics(provider metric.MeterProvider) error {
 		observer.ObserveInt64(gcCount, gc.NumGC)
 		observer.ObserveFloat64(gcSum, gc.PauseTotal.Seconds())
 		for i, pause := range gc.PauseQuantiles {
-			observer.ObserveFloat64(gcQuantile, pause.Seconds(), metric.WithAttributes(attribute.String("quantile", strconv.FormatFloat(float64(i)/4, 'g', -1, 64))))
+			observer.ObserveFloat64(gcQuantile, pause.Seconds(), metric.WithAttributes(attribute.String("quantile", quantileLabels[i])))
 		}
 		observer.ObserveFloat64(lastGC, float64(gc.LastGC.UnixNano())/1e9)
 		observer.ObserveInt64(info, 1, metric.WithAttributes(attribute.String("version", runtime.Version())))
