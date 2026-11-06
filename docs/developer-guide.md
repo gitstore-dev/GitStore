@@ -27,7 +27,8 @@ and CI setup steps aligned.
 
 This guide keeps implementation detail out of the user guide. It covers service topology, local development, datastore backends, hook/admission flow, controller-manager runtime, generated schema/proto workflow, and module responsibilities.
 
-Contributor procedures: [production-readiness testing](development/production-readiness-testing.md)
+Contributor procedures: [Make command reference](development/make-reference.md),
+[production-readiness testing](development/production-readiness-testing.md)
 and [release process](development/release-process.md). Deployment procedures and
 exceptional recovery are indexed separately in [Operations and Recovery](runbooks/README.md).
 
