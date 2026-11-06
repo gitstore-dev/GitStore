@@ -119,7 +119,7 @@ mod process {
         let entries = std::fs::read_dir("/proc/self/fd").ok()?;
         let mut count = 0_u64;
         for entry in entries {
-            if count % 256 == 0 && std::time::Instant::now() >= deadline {
+            if count.is_multiple_of(256) && std::time::Instant::now() >= deadline {
                 return None;
             }
             entry.ok()?;
