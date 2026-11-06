@@ -211,15 +211,13 @@ for invalid in check/unknown clean/all bootstrap/unknown secret/hmac generate/un
 done
 
 for public_target in check clean bootstrap secret generate; do
-  output="$(make --no-print-directory -C "${repo_root}" "${public_target}" TARGET="$({
-    case "${public_target}" in
-      check) printf all ;;
-      clean) printf git-data ;;
-      bootstrap) printf all ;;
-      secret) printf jwt ;;
-      generate) printf authz ;;
-    esac
-  })" WORKFLOW_DRY_RUN=1)"
+  case "${public_target}" in
+    check|bootstrap) selector=all ;;
+    clean) selector=git-data ;;
+    secret) selector=jwt ;;
+    generate) selector=authz ;;
+  esac
+  output="$(make --no-print-directory -C "${repo_root}" "${public_target}" TARGET="${selector}" WORKFLOW_DRY_RUN=1)"
   [[ "${output}" == *"family=${public_target}"* ]]
 done
 
@@ -232,7 +230,9 @@ done
 
 all_tests="$(env -u TARGET -u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES make --no-print-directory -C "${repo_root}" -n test)"
 [[ "${all_tests}" == *"cargo test"* && "${all_tests}" == *"test-secret-config.sh"* &&
-   "${all_tests}" == *"test-repository-capacity-stack.sh"* && "${all_tests}" == *"TestSecretCapacity"* ]]
+   "${all_tests}" == *"test-repository-capacity-stack.sh"* && "${all_tests}" == *"TestSecretCapacity"* &&
+   "${all_tests}" == *"CapacityPush"* && "${all_tests}" == *"EndpointSplit"* &&
+   "${all_tests}" == *"RepositoryController"* ]]
 [[ "${all_tests}" != *"SECRET_TEST_RUN=1"* && "${all_tests}" != *"-tags scylla"* ]]
 explicit_all="$(env -u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES make --no-print-directory -C "${repo_root}" -n test TARGET=all)"
 [[ "${all_tests}" == "${explicit_all}" ]]

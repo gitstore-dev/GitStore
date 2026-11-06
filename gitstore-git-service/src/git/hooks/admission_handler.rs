@@ -67,26 +67,38 @@ impl AdmissionHandler for AdmissionControlHandler {
             repository_id,
             "admission_control: admit called"
         );
-        // Open the repository once for all matching updates so we don't pay
-        // a gix::open (config read + ODB setup) per ref update in a multi-ref push.
-        let repo = if git_dir.as_os_str().is_empty() {
-            None
-        } else {
-            match gix::open(git_dir) {
-                Ok(r) => Some(r),
-                Err(e) => {
-                    error!(git_dir = %git_dir.display(), error = %e, "compute_changed_paths: failed to open repo");
-                    None
+        let matching_updates: Vec<_> = updates
+            .iter()
+            .filter(|update| self.branch_pattern.is_match(&update.ref_name))
+            .cloned()
+            .collect();
+        if matching_updates.is_empty() {
+            return Ok(AdmissionDecision::Accept);
+        }
+        // Index discovery and tree reads can block for a retained repository.
+        // Keep that work off the async executor that serves RPC streams.
+        let git_dir = git_dir.to_path_buf();
+        let path_updates = matching_updates.clone();
+        let paths = crate::spawn_blocking(move || {
+            let repo = if git_dir.as_os_str().is_empty() {
+                None
+            } else {
+                match crate::git::repo::open_repository(&git_dir) {
+                    Ok(repo) => Some(repo),
+                    Err(error) => {
+                        error!(git_dir = %git_dir.display(), error = %error, "compute_changed_paths: failed to open repo");
+                        None
+                    }
                 }
-            }
-        };
+            };
+            path_updates.iter().map(|update| {
+                repo.as_ref()
+                    .map(|repo| compute_changed_paths_in_repo(repo, &update.old_oid, &update.new_oid))
+                    .unwrap_or_default()
+            }).collect::<Vec<_>>()
+        }).await?;
 
-        for update in updates {
-            if !self.branch_pattern.is_match(&update.ref_name) {
-                // Ref does not match branch pattern — skip, no gRPC call.
-                continue;
-            }
-
+        for (update, changed_paths) in matching_updates.iter().zip(paths) {
             let old_commit_sha = update.old_oid.clone();
             let new_commit_sha = update.new_oid.clone();
             let ref_name = update.ref_name.clone();
@@ -94,10 +106,6 @@ impl AdmissionHandler for AdmissionControlHandler {
             let repository_id = repository_id.to_string();
             let authorization = Some(hook_ctx.callback_authorization(vec![update.into()]));
             let service_token = self.service_token.clone();
-            let changed_paths = repo
-                .as_ref()
-                .map(|r| compute_changed_paths_in_repo(r, &update.old_oid, &update.new_oid))
-                .unwrap_or_default();
 
             tokio::spawn(async move {
                 let req = AdmitResourcesRequest {
@@ -204,6 +212,39 @@ fn compute_changed_paths_in_repo(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_receive_filesystem_work_waits_for_a_blocking_worker() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (release, wait) = std::sync::mpsc::channel();
+            let (occupied, ready) = tokio::sync::oneshot::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                occupied.send(()).unwrap();
+                wait.recv().unwrap();
+            });
+            ready.await.unwrap();
+            let directory = tempfile::TempDir::new().unwrap();
+            gix::init_bare(directory.path()).unwrap();
+            let handler = AdmissionControlHandler::connect("http://127.0.0.1:1", "refs/heads/main".to_owned()).await.unwrap();
+            let updates = [RefUpdate { ref_name: "refs/heads/main".to_owned(), old_oid: "0".repeat(40), new_oid: "1".repeat(40) }];
+            let context = make_hook_context("test-actor");
+            let admission = handler.admit("post-receive", &updates, "repo-1", directory.path(), &context);
+            tokio::pin!(admission);
+            let queued = tokio::select! {
+                _ = &mut admission => false,
+                _ = tokio::time::sleep(Duration::from_millis(10)) => true,
+            };
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            assert!(queued, "filesystem preparation must use the blocking pool instead of running on the async executor");
+            assert!(matches!(admission.await.unwrap(), AdmissionDecision::Accept));
+        });
+    }
 
     // Thin wrapper so existing unit tests keep the same call site.
     fn compute_changed_paths(

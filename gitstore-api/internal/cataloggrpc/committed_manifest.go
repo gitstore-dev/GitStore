@@ -111,14 +111,6 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 
 	content := append([]byte(nil), req.Content...)
 	commitSHA := req.CommitSHA
-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
-	if !ok {
-		return nil, ErrCommittedManifestSuperseded
-	}
-	if current != req.CommitSHA {
-		return nil, ErrCommittedManifestSuperseded
-	}
-
 	parsed, body, err := s.parser.ParseResource(bytes.NewReader(content))
 	if err != nil || parsed == nil {
 		if err == nil {
@@ -156,6 +148,23 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 		Now:          now,
 		superseded:   &superseded,
 	}
+	// Independent Repository updates share one system branch. A different
+	// path advancing HEAD must not force another durable commit of this same
+	// manifest. Retain the accepted source revision and fence the complete
+	// live manifest, including identity, on every write and before success.
+	isCurrent := func() bool {
+		current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, commitSHA)
+		if !ok || current == "" {
+			return false
+		}
+		if current == commitSHA {
+			return true
+		}
+		return req.Operation == admission.OperationUpdate && entry.parsed.Repository != nil && s.isAdmissionEntryCurrent(ctx, admCtx.forEntry(entry))
+	}
+	if !isCurrent() {
+		return nil, ErrCommittedManifestSuperseded
+	}
 	ops := map[string]resourceAdmissionOperation{entry.identity.key(): {
 		operation: req.Operation,
 		newEntry:  entry,
@@ -165,7 +174,7 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 	if err != nil {
 		return nil, err
 	}
-	if admCtx.wasSuperseded() || !s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, commitSHA) {
+	if admCtx.wasSuperseded() || !isCurrent() {
 		return nil, ErrCommittedManifestSuperseded
 	}
 	result := &admission.CommittedManifestResult{Kind: entry.identity.Kind, Namespace: entry.identity.Namespace, Name: entry.identity.Name, CommitSHA: commitSHA}

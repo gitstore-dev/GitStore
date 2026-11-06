@@ -98,6 +98,15 @@ type repositoryCapacityLoadResult struct {
 	acknowledged                              *capacityBitset
 	maxSequence                               int
 	latencies                                 []time.Duration
+	queueFull, missedSchedules                int64
+	slowMutations                             []repositoryCapacitySlowMutation
+}
+
+type repositoryCapacitySlowMutation struct {
+	Sequence        int   `json:"sequence"`
+	DispatchDelayMs int64 `json:"dispatchDelayMs"`
+	ExecutionMs     int64 `json:"executionMs"`
+	Failed          bool  `json:"failed"`
 }
 
 func runRepositoryLifecycleCapacity(t *testing.T) {
@@ -266,6 +275,15 @@ func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
 		secretResourcesLoadEnd = captureSecretCapacityResources(t, cfg, "load-end")
 		require.NoError(t, secretLogs.capture(t.Context(), secretResourcesLoadEnd))
 	}
+	if cfg.endpointSplit {
+		// Persist diagnostic accounting before assertions: a failed load must
+		// retain why work was dropped without producing a passing receipt.
+		require.NoError(t, writeSecretCapacityPrivateJSON(filepath.Join(os.Getenv("CAPACITY_EVIDENCE_DIR"), "connected-load.json"), map[string]any{
+			"component": "endpoint-split-load/v1", "runId": os.Getenv("CAPACITY_RUN_ID"),
+			"offered": load.produced, "admitted": load.admitted, "failed": load.failed, "dropped": load.backpressured,
+			"queueFull": load.queueFull, "missedSchedules": load.missedSchedules, "slowMutations": load.slowMutations,
+		}))
+	}
 	require.Zero(t, load.failed, "Repository mutations failed under load")
 	require.Zero(t, load.backpressured, "bounded mutation queue shed load")
 	require.Equal(t, load.produced, load.admitted, "all offered Repository transitions must be admitted")
@@ -302,8 +320,8 @@ func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
 	}
 
 	assertRepositoryCrossReplicaRead(t, cfg, poolPrefix+"1")
-	waitForRepositoryControllerAdvance(t, client, cfg.controllerA, controllerBeforeA)
-	waitForRepositoryControllerAdvance(t, client, cfg.controllerB, controllerBeforeB)
+	controllerAfterA := waitForRepositoryControllerAdvance(t, client, cfg.controllerA, controllerBeforeA)
+	controllerAfterB := waitForRepositoryControllerAdvance(t, client, cfg.controllerB, controllerBeforeB)
 	require.Empty(t, repositoryControllerPoison(t, client, cfg.controllerA))
 	require.Empty(t, repositoryControllerPoison(t, client, cfg.controllerB))
 	metricsEnd := map[string]capacityProcessMetrics{
@@ -348,6 +366,7 @@ func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
 			"adminAuthoringP95Ms": percentileDuration(load.latencies, .95).Milliseconds(), "apiRecoveryMs": recovery.duration.Milliseconds(),
 			"visibilityP95Ms": percentileDuration(latencies, .95).Milliseconds(), "visibilityP99Ms": percentileDuration(latencies, .99).Milliseconds(), "replayEvents": cfg.replayEvents, "replayP95Ms": replayP95.Milliseconds(),
 			"processesBefore": metricsStart, "processesAfter": metricsEnd, "apiInstancesBefore": []string{identityA, identityB},
+			"controllersBefore": []repositoryControllerSample{controllerBeforeA, controllerBeforeB}, "controllersAfter": []repositoryControllerSample{controllerAfterA, controllerAfterB},
 		}))
 	}
 }
@@ -693,7 +712,7 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 	jobs := make(chan int, repositoryCapacityQueueDepth(cfg.mutationWorkers, cfg.burstSize))
 	locks := make([]sync.Mutex, cfg.resourcePool)
 	var wg sync.WaitGroup
-	var produced, admitted, failed, backpressured atomic.Int64
+	var produced, admitted, failed, backpressured, queueFull atomic.Int64
 	var latencyMu sync.Mutex
 	loadStarted := time.Now()
 	for worker := 0; worker < cfg.mutationWorkers; worker++ {
@@ -711,10 +730,18 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 				if cfg.endpointSplit {
 					started = loadStarted.Add(time.Duration(sequence-1) * cfg.transitionInterval)
 				}
+				dispatched := time.Now()
 				err := repositoryCapacityMutation(context.Background(), client, endpoint, cfg.token, false, cfg.namespace, poolPrefix+strconv.Itoa(index+1), eventPrefix, sequence, "")
 				if cfg.endpointSplit {
+					elapsed := time.Since(started)
 					latencyMu.Lock()
-					result.latencies = append(result.latencies, time.Since(started))
+					result.latencies = append(result.latencies, elapsed)
+					if elapsed > 2*time.Second && len(result.slowMutations) < 32 {
+						result.slowMutations = append(result.slowMutations, repositoryCapacitySlowMutation{
+							Sequence: sequence, DispatchDelayMs: dispatched.Sub(started).Milliseconds(),
+							ExecutionMs: time.Since(dispatched).Milliseconds(), Failed: err != nil,
+						})
+					}
 					latencyMu.Unlock()
 				}
 				locks[index].Unlock()
@@ -738,6 +765,7 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 		case jobs <- sequence:
 		default:
 			backpressured.Add(1)
+			queueFull.Add(1)
 		}
 	}
 	if cfg.endpointSplit {
@@ -776,7 +804,29 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 	wg.Wait()
 	result.produced, result.admitted, result.failed, result.backpressured = produced.Load(), admitted.Load(), failed.Load(), backpressured.Load()
 	result.maxSequence = sequence
+	result.queueFull = queueFull.Load()
+	result.missedSchedules = result.backpressured - result.queueFull
 	return result
+}
+
+func TestEndpointCapacityLoadAccountsForQueueSaturation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(20 * time.Millisecond)
+		_, _ = io.WriteString(w, `{"data":{}}`)
+	}))
+	defer server.Close()
+	cfg := repositoryCapacityConfig{
+		apiA: server.URL, apiB: server.URL, endpointSplit: true,
+		duration: 400 * time.Millisecond, transitionInterval: 5 * time.Millisecond,
+		burstInterval: time.Hour, mutationWorkers: 2, resourcePool: 20,
+	}
+	load := runRepositoryCapacityLoad(t, server.Client(), cfg, "pool-", "event-", 100)
+	require.EqualValues(t, 80, load.produced)
+	require.Zero(t, load.failed)
+	require.Positive(t, load.queueFull)
+	require.Equal(t, load.backpressured, load.queueFull+load.missedSchedules)
+	require.Equal(t, load.produced, load.admitted+load.failed+load.backpressured)
+	require.LessOrEqual(t, len(load.slowMutations), 32)
 }
 
 func repositoryCapacityQueueDepth(workers, burstSize int) int {

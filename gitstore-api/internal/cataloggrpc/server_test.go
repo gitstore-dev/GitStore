@@ -589,22 +589,14 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 
 	var mu sync.Mutex
 	current := a
-	blockFirstAListing := true
-	olderListingStarted := make(chan struct{})
+	blockFirstARead := true
+	olderReadStarted := make(chan struct{})
 	releaseOlder := make(chan struct{})
 	git := &mockGitReader{
 		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
 			mu.Lock()
-			block := ref == a && blockFirstAListing
-			if block {
-				blockFirstAListing = false
-			}
 			tree := files[ref]
 			mu.Unlock()
-			if block {
-				close(olderListingStarted)
-				<-releaseOlder
-			}
 			paths := make([]string, 0, len(tree))
 			for filePath := range tree {
 				paths = append(paths, filePath)
@@ -614,8 +606,16 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 		},
 		readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
 			mu.Lock()
+			block := ref == a && blockFirstARead
+			if block {
+				blockFirstARead = false
+			}
 			content := files[ref][path]
 			mu.Unlock()
+			if block {
+				close(olderReadStarted)
+				<-releaseOlder
+			}
 			return content, nil
 		},
 		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
@@ -641,9 +641,9 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 	}()
 
 	select {
-	case <-olderListingStarted:
+	case <-olderReadStarted:
 	case <-time.After(time.Second):
-		t.Fatal("older admission did not verify and begin loading its commit")
+		t.Fatal("older admission did not verify and begin reading its commit")
 	}
 
 	mu.Lock()
@@ -2893,32 +2893,20 @@ func TestAdmitResources_DuplicateSKUCreateSkipped(t *testing.T) {
 	assert.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
-func TestAdmitResources_StaleAdmissionSkipped(t *testing.T) {
+// A delayed callback may not use the original actor's authority for content
+// changed by a later push. Only unchanged surviving manifests can converge.
+func TestAdmitResources_StaleChangedManifestSkipped(t *testing.T) {
 	store := newTestDatastore(t)
-	zero := strings.Repeat("0", 40)
-	a := strings.Repeat("a", 40)
-	newer := strings.Repeat("c", 40)
+	first, newer := strings.Repeat("a", 40), strings.Repeat("c", 40)
 	current := newer
-	listCalled := false
-	git := &mockGitReader{
-		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
-			listCalled = true
-			return []string{"variants/red.md"}, nil
-		},
-		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
-			return makeProductVariant("red", "SKU-1"), nil
-		},
-		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
-			return current, nil
-		},
-	}
-	srv := newCatalogServer(t, store, git)
-
-	admitDelta(t, srv, zero, a)
-
-	assert.False(t, listCalled)
-	_, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
-	assert.ErrorIs(t, err, datastore.ErrNotFound)
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		first: {"variants/red.md": makeProductVariant("red", "SKU-1")},
+		newer: {"variants/red.md": makeProductVariant("red", "SKU-2")},
+	})
+	server := newCatalogServer(t, store, git)
+	admitDelta(t, server, strings.Repeat("0", 40), first)
+	_, err := store.GetProductVariantByName(t.Context(), "gitstore", "red")
+	require.ErrorIs(t, err, datastore.ErrNotFound, "neither stale nor another actor's changed content may be applied")
 }
 
 // TestAdmitResources_EmptySHAFromResolveRef_AdmissionProceeds verifies that when
