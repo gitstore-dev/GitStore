@@ -45,6 +45,7 @@ const (
 	repositoryCapacitySentAtAnnotation    = "capacity.gitstore.dev/sent-at"
 	repositoryCapacityPaddingAnnotation   = "capacity.gitstore.dev/padding"
 	repositoryCapacityMinimumOverflowWait = 31 * time.Second
+	repositoryCapacityResponseLimit       = 1 << 20
 )
 
 type repositoryCapacityConfig struct {
@@ -100,6 +101,7 @@ type repositoryCapacityLoadResult struct {
 	latencies                                 []time.Duration
 	queueFull, missedSchedules                int64
 	slowMutations                             []repositoryCapacitySlowMutation
+	windowComplete                            bool
 }
 
 type repositoryCapacitySlowMutation struct {
@@ -286,7 +288,17 @@ func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
 	}
 	require.Zero(t, load.failed, "Repository mutations failed under load")
 	require.Zero(t, load.backpressured, "bounded mutation queue shed load")
+	require.Zero(t, load.missedSchedules, "Repository load producer missed scheduled transitions")
 	require.Equal(t, load.produced, load.admitted, "all offered Repository transitions must be admitted")
+	firstSustained := cfg.transitionInterval
+	includeBursts := !cfg.endpointSplit
+	if cfg.endpointSplit {
+		firstSustained = 0
+	}
+	require.True(t, load.windowComplete, "Repository load did not cover its complete offered window")
+	require.Equal(t, repositoryCapacityExpectedOffers(cfg.duration, cfg.transitionInterval,
+		cfg.burstInterval, cfg.burstSize, firstSustained, includeBursts),
+		load.produced, "Repository load must cover the complete scheduled window")
 	if cfg.endpointSplit {
 		sort.Slice(load.latencies, func(i, j int) bool { return load.latencies[i] < load.latencies[j] })
 		require.NotEmpty(t, load.latencies)
@@ -356,13 +368,15 @@ func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
 			ControllersBefore: secretControllersBefore[:], ControllersAfter: secretControllersAfter[:], RepositoryLifecyclePassed: true,
 		}))
 	}
-	t.Logf("Repository lifecycle capacity passed: mode=%s replay=%d replay_p95=%s subscribers=%d admitted=%d duration=%s", cfg.mode, cfg.replayEvents, replayP95, cfg.subscribers, load.admitted, time.Since(soakStarted))
+	t.Logf("Repository lifecycle capacity passed: mode=%s replay=%d replay_p95=%s subscribers=%d admitted=%d missed_schedules=%d queue_drops=%d duration=%s",
+		cfg.mode, cfg.replayEvents, replayP95, cfg.subscribers, load.admitted, load.missedSchedules, load.backpressured, time.Since(soakStarted))
 	if cfg.endpointSplit {
 		require.NoError(t, writeSecretCapacityPrivateJSON(filepath.Join(os.Getenv("CAPACITY_EVIDENCE_DIR"), "connected-result.json"), map[string]any{
 			"schemaVersion": 1, "component": "endpoint-split-connected/v1", "passed": true, "mode": cfg.mode, "runId": os.Getenv("CAPACITY_RUN_ID"),
 			"sourceStateSha256": os.Getenv("CAPACITY_SOURCE_STATE_SHA256"), "gitRevision": os.Getenv("CAPACITY_SOURCE_REVISION"), "configDigest": os.Getenv("CAPACITY_CONFIG_DIGEST"), "environmentDigest": os.Getenv("CAPACITY_ENVIRONMENT_DIGEST"),
 			"startedAt": soakStarted.UTC().Format(time.RFC3339), "completedAt": time.Now().UTC().Format(time.RFC3339), "subscribers": cfg.subscribers,
 			"durationSeconds": cfg.duration.Seconds(), "offered": load.produced, "admitted": load.admitted, "failed": load.failed, "dropped": load.backpressured,
+			"missedSchedules":     load.missedSchedules,
 			"adminAuthoringP95Ms": percentileDuration(load.latencies, .95).Milliseconds(), "apiRecoveryMs": recovery.duration.Milliseconds(),
 			"visibilityP95Ms": percentileDuration(latencies, .95).Milliseconds(), "visibilityP99Ms": percentileDuration(latencies, .99).Milliseconds(), "replayEvents": cfg.replayEvents, "replayP95Ms": replayP95.Milliseconds(),
 			"processesBefore": metricsStart, "processesAfter": metricsEnd, "apiInstancesBefore": []string{identityA, identityB},
@@ -755,12 +769,16 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 		}()
 	}
 	started := time.Now()
-	ticker := time.NewTicker(cfg.transitionInterval)
-	burst := time.NewTicker(cfg.burstInterval)
 	sequence := 0
-	enqueue := func() {
+	var missedSchedules atomic.Int64
+	recordOffer := func(missed bool) {
 		sequence++
 		produced.Add(1)
+		if missed {
+			missedSchedules.Add(1)
+			backpressured.Add(1)
+			return
+		}
 		select {
 		case jobs <- sequence:
 		default:
@@ -768,44 +786,37 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 			queueFull.Add(1)
 		}
 	}
+	firstSustained := cfg.transitionInterval
+	includeBursts := true
 	if cfg.endpointSplit {
-		planned := int(cfg.duration / cfg.transitionInterval)
-		for offer := 0; offer < planned; offer++ {
-			scheduled := loadStarted.Add(time.Duration(offer) * cfg.transitionInterval)
-			if delay := time.Until(scheduled); delay > 0 {
-				time.Sleep(delay)
-			}
-			if time.Since(scheduled) >= cfg.transitionInterval {
-				sequence++
-				produced.Add(1)
-				backpressured.Add(1)
-				continue
-			}
-			enqueue()
+		firstSustained = 0
+		includeBursts = false
+	}
+	waitUntil := func(target time.Time) bool {
+		delay := time.Until(target)
+		if delay <= 0 {
+			return t.Context().Err() == nil
 		}
-		if delay := time.Until(loadStarted.Add(cfg.duration)); delay > 0 {
-			time.Sleep(delay)
-		}
-	} else {
-		for time.Since(started) < cfg.duration {
-			select {
-			case <-ticker.C:
-				enqueue()
-			case <-burst.C:
-				for i := 0; i < cfg.burstSize; i++ {
-					enqueue()
-				}
-			}
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-t.Context().Done():
+			return false
+		case <-timer.C:
+			return true
 		}
 	}
-	ticker.Stop()
-	burst.Stop()
+	schedule := runRepositoryCapacitySchedule(
+		started, cfg.duration, cfg.transitionInterval, cfg.burstInterval, cfg.burstSize,
+		firstSustained, includeBursts, time.Now, waitUntil, recordOffer,
+	)
 	close(jobs)
 	wg.Wait()
 	result.produced, result.admitted, result.failed, result.backpressured = produced.Load(), admitted.Load(), failed.Load(), backpressured.Load()
+	result.missedSchedules = schedule.missed
+	result.windowComplete = schedule.windowComplete
 	result.maxSequence = sequence
 	result.queueFull = queueFull.Load()
-	result.missedSchedules = result.backpressured - result.queueFull
 	return result
 }
 
@@ -827,6 +838,78 @@ func TestEndpointCapacityLoadAccountsForQueueSaturation(t *testing.T) {
 	require.Equal(t, load.backpressured, load.queueFull+load.missedSchedules)
 	require.Equal(t, load.produced, load.admitted+load.failed+load.backpressured)
 	require.LessOrEqual(t, len(load.slowMutations), 32)
+	require.True(t, load.windowComplete)
+}
+
+type repositoryCapacityScheduleResult struct {
+	scheduled, missed int64
+	windowComplete    bool
+}
+
+func repositoryCapacityExpectedOffers(
+	duration, interval, burstInterval time.Duration,
+	burstSize int,
+	firstSustained time.Duration,
+	includeBursts bool,
+) int64 {
+	if duration <= 0 {
+		return 0
+	}
+	var sustained int64
+	if firstSustained < duration {
+		sustained = 1 + int64((duration-1-firstSustained)/interval)
+	}
+	var bursts int64
+	if includeBursts {
+		bursts = int64((duration - 1) / burstInterval)
+	}
+	return sustained + bursts*int64(burstSize)
+}
+
+func runRepositoryCapacitySchedule(
+	start time.Time,
+	duration, interval, burstInterval time.Duration,
+	burstSize int,
+	firstSustained time.Duration,
+	includeBursts bool,
+	now func() time.Time,
+	waitUntil func(time.Time) bool,
+	offer func(missed bool),
+) repositoryCapacityScheduleResult {
+	var result repositoryCapacityScheduleResult
+	sustainedAt, burstAt := firstSustained, burstInterval
+	for sustainedAt < duration || (includeBursts && burstAt < duration) {
+		if sustainedAt < duration && (!includeBursts || burstAt >= duration || sustainedAt <= burstAt) {
+			scheduled := start.Add(sustainedAt)
+			if !waitUntil(scheduled) {
+				return result
+			}
+			missed := now().Sub(scheduled) >= interval
+			result.scheduled++
+			if missed {
+				result.missed++
+			}
+			offer(missed)
+			sustainedAt += interval
+			continue
+		}
+
+		scheduled := start.Add(burstAt)
+		if !waitUntil(scheduled) {
+			return result
+		}
+		missed := now().Sub(scheduled) >= interval
+		for i := 0; i < burstSize; i++ {
+			result.scheduled++
+			if missed {
+				result.missed++
+			}
+			offer(missed)
+		}
+		burstAt += burstInterval
+	}
+	result.windowComplete = waitUntil(start.Add(duration))
+	return result
 }
 
 func repositoryCapacityQueueDepth(workers, burstSize int) int {
@@ -838,6 +921,111 @@ func repositoryCapacityQueueDepth(workers, burstSize int) int {
 func TestRepositoryCapacityQueueDepthIncludesOneFullBurst(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, 180, repositoryCapacityQueueDepth(20, 100))
+}
+
+func TestRepositoryCapacityScheduleCountsMissedOffersAndCoversWindow(t *testing.T) {
+	t.Parallel()
+	start := time.Unix(1, 0)
+	now := start
+	var offered, missed int
+	result := runRepositoryCapacitySchedule(
+		start, 50*time.Millisecond, 10*time.Millisecond, 20*time.Millisecond, 2,
+		10*time.Millisecond, true,
+		func() time.Time { return now },
+		func(target time.Time) bool {
+			if target.After(now) {
+				now = target
+			}
+			return true
+		},
+		func(wasMissed bool) {
+			if wasMissed {
+				missed++
+				return
+			}
+			offered++
+			if offered == 1 {
+				now = start.Add(31 * time.Millisecond)
+			}
+		},
+	)
+
+	require.EqualValues(t, 8, result.scheduled)
+	require.EqualValues(t, 3, result.missed)
+	require.Equal(t, 5, offered)
+	require.Equal(t, 3, missed)
+	require.True(t, result.windowComplete)
+	require.EqualValues(t, 8, repositoryCapacityExpectedOffers(
+		50*time.Millisecond, 10*time.Millisecond, 20*time.Millisecond, 2, 10*time.Millisecond, true))
+
+	start = time.Unix(2, 0)
+	now = start
+	var connectedOffers int
+	connected := runRepositoryCapacitySchedule(
+		start, 50*time.Millisecond, 10*time.Millisecond, 20*time.Millisecond, 2,
+		0, false,
+		func() time.Time { return now },
+		func(target time.Time) bool {
+			if target.After(now) {
+				now = target
+			}
+			return true
+		},
+		func(wasMissed bool) {
+			require.False(t, wasMissed)
+			connectedOffers++
+		},
+	)
+	require.EqualValues(t, 5, connected.scheduled)
+	require.Equal(t, 5, connectedOffers)
+	require.EqualValues(t, 5, repositoryCapacityExpectedOffers(
+		50*time.Millisecond, 10*time.Millisecond, 20*time.Millisecond, 2, 0, false))
+}
+
+func TestRepositoryCapacityScheduleReportsIncompleteWindow(t *testing.T) {
+	t.Parallel()
+	start := time.Unix(1, 0)
+	waitCalls := 0
+	result := runRepositoryCapacitySchedule(
+		start, time.Second, 500*time.Millisecond, time.Second, 1,
+		500*time.Millisecond, false,
+		func() time.Time { return start.Add(500 * time.Millisecond) },
+		func(time.Time) bool {
+			waitCalls++
+			return waitCalls == 1
+		},
+		func(bool) {},
+	)
+	require.EqualValues(t, 1, result.scheduled)
+	require.False(t, result.windowComplete)
+}
+
+func TestRepositoryCapacityMutationDoesNotRetryOrExposeResponseBody(t *testing.T) {
+	for _, response := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "rate limited", status: http.StatusTooManyRequests, body: "private response content"},
+		{name: "GraphQL error", status: http.StatusOK, body: `{"errors":[{"message":"private response content"}]}`},
+		{name: "oversized response", status: http.StatusOK, body: strings.Repeat("x", repositoryCapacityResponseLimit+1)},
+	} {
+		t.Run(response.name, func(t *testing.T) {
+			var requests atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(response.status)
+				_, _ = io.WriteString(w, response.body)
+			}))
+			defer server.Close()
+
+			err := repositoryCapacityMutation(context.Background(), server.Client(), server.URL,
+				"test-token", false, "capacity-test", "product", "", 1, "")
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "private response content")
+			require.EqualValues(t, 1, requests.Load(), "failed writes must not be retried")
+		})
+	}
 }
 
 func repositoryCapacityMutation(ctx context.Context, client *http.Client, endpoint, token string, create bool, namespace, name, prefix string, sequence int, padding string) error {
@@ -862,37 +1050,38 @@ func repositoryCapacityMutation(ctx context.Context, client *http.Client, endpoi
 	if err != nil {
 		return err
 	}
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(endpoint, "/")+"/admin/graphql", bytes.NewReader(payload))
-		if reqErr != nil {
-			return reqErr
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+token)
-		response, doErr := client.Do(req)
-		if doErr == nil {
-			contents, readErr := io.ReadAll(response.Body)
-			response.Body.Close()
-			if readErr == nil && response.StatusCode == http.StatusOK {
-				var result struct {
-					Errors []json.RawMessage `json:"errors"`
-				}
-				if json.Unmarshal(contents, &result) == nil && len(result.Errors) == 0 {
-					return nil
-				}
-				doErr = fmt.Errorf("GraphQL errors: %s", result.Errors)
-			} else if readErr != nil {
-				doErr = readErr
-			} else {
-				doErr = fmt.Errorf("HTTP %s: %s", response.Status, contents)
-			}
-		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			return doErr
-		}
-		time.Sleep(100 * time.Millisecond)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimSuffix(endpoint, "/")+"/admin/graphql", bytes.NewReader(payload))
+	if err != nil {
+		return err
 	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	response, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	contents, err := io.ReadAll(io.LimitReader(response.Body, repositoryCapacityResponseLimit+1))
+	if err != nil {
+		return err
+	}
+	if len(contents) > repositoryCapacityResponseLimit {
+		return errors.New("capacity GraphQL response exceeded capture bound")
+	}
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %s", response.Status)
+	}
+	var result struct {
+		Errors []json.RawMessage `json:"errors"`
+	}
+	if err := json.Unmarshal(contents, &result); err != nil {
+		return errors.New("invalid capacity GraphQL response")
+	}
+	if len(result.Errors) != 0 {
+		return fmt.Errorf("GraphQL returned %d operation errors", len(result.Errors))
+	}
+	return nil
 }
 
 func repositoryCapacityBootstrapCursor(t *testing.T, endpoint string, cfg repositoryCapacityConfig) string {
