@@ -97,9 +97,19 @@ An empty OTLP URI disables network export; API/controller compatibility scrapes
 continue collecting SDK metrics locally. The collector's Prometheus exporter
 uses `UnderscoreEscapingWithoutSuffixes`: instrument names already include
 their stable unit and counter suffixes. Deploy that configuration with the
-application update to avoid duplicated suffixes. Runtime GC quantiles remain
+application update to avoid duplicated suffixes. Runtime GC quantiles export as
 gauges, with separate cumulative count and sum instruments under the existing
 names; no synthetic observations reconstruct summaries.
+When upgrading from Prometheus-recorded metrics, stop the Collector while
+rolling the API/controller application update and replacing the singleton Git
+process without overlap, preserving its repository volume. Start the Collector
+with the new translation configuration after every exporting application uses
+SDK instruments. Its in-memory metric-type cache cannot combine the old GC
+summary with the new same-named gauges; starting it between application
+replacements can drop those series. Verify fresh backend series for each
+service and process after the upgrade. Quantile gauges use `0.0`/`1.0` at the
+endpoints; update direct-scrape or older-backend queries that matched `0`/`1`.
+
 Collector failures during the final Git-service flush produce a local warning
 but do not turn a graceful gRPC shutdown into a failed process exit.
 
