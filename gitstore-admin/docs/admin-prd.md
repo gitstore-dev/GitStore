@@ -10,7 +10,7 @@
 
 **Brand reference:** [`gitstore-assets/branding/concept-v2`](../public/branding/)
 
-> Admin-only branch note: this PRD preserves the broader product plan. Backend source links point to the original GitStore checkout revision; backend services are intentionally absent here. The shell, navigation, layouts, and a Home / Overview page with local demo fixtures are implemented. Other destinations remain placeholders; the mock Overview does not establish backend capabilities.
+> Admin-only branch note: this PRD preserves the broader product plan. Backend source links point to the original GitStore checkout revision; backend services are intentionally absent here. The shell, navigation, layouts, and Home / Overview and My work pages with independent local demo fixtures are implemented. The other 77 destinations remain placeholders; mock behavior does not establish backend capabilities.
 
 ## 1. Product direction
 
@@ -201,6 +201,50 @@ and setup progress rather than sales widgets populated with zero or fabricated
 data. Setup covers identity, namespace, repository, first catalog resource, and
 later channel/provider activation. Distinguish no data, no access, disconnected,
 and not yet configured.
+
+#### My work: implemented local demo
+
+Visual reference: [P02 Home — My work, GitStore Admin II](https://stitch.withgoogle.com/projects/12282348560453912861?node-id=4bc79cb5c65045cba3bbe9a3c29b4e9e).
+Use P02's personal work list and adjacent change preview within the existing shell.
+Its Git commands, mesh claims, staging workflows, offline storage, and invented
+production controls are not requirements for this increment.
+
+- Four counted views: **Drafts**, **Submitted**, **Assigned to me**, **Completed**.
+  Search product names within the selected view and sort by last updated or name.
+  Counts always describe the complete view, independent of search.
+- Atelier Kyoto: two drafts, two submitted changes, two assigned reviews, one
+  completed review. Studio Berlin: empty workspace with a link to Overview.
+  Product identities match Overview examples; their mutable state is independent.
+- Inspector: author/reviewer, fixed update time, field-by-field Before/After values,
+  outcome/review note, and `.md` source path under Technical details.
+- Draft editing is limited to product name and description. Names must contain
+  non-whitespace text; descriptions may be empty. Save updates only the local
+  draft; cancel restores saved text. No pricing, inventory, variants, or creation.
+- Confirm before discarding unsaved edits for selection, inspector close, tab
+  changes, or reset. Page exit intentionally resets the disclosed demo. Submit
+  only saved, changed drafts; confirmed submission moves them to Submitted.
+  Confirmed discard removes the draft.
+- Assigned reviews can be approved or returned with a required review note after
+  confirmation. Both move to Completed with the actual review outcome. Approval
+  does not mean publication or readiness. Submitted/completed items are read-only.
+- Clearly disclose Demo data and provide Reset demo. State resets on page exit,
+  namespace switch, reload, or reset. Announce outcomes and restore keyboard
+  focus. No persistence, authentication, network traffic, or backend writes.
+- Reuse the Home card choreography and demand-driven decorative lighting, with
+  CSS fallback and reduced-motion support. Workflow colors are decoration, not
+  resource-readiness claims. State specimens belong in Storybook.
+
+#### Shared Home composition
+
+Overview and My work share the same responsive content frame, namespace/Home
+context mark, title treatment, Demo data badge, reset action, and plain reset
+notice without a “Demo workspace” prefix. Summary cards share their count,
+state edge, description, and interaction lighting; My work retains tab semantics.
+Work cards show merchant-facing resource types and share title/body spacing,
+footer divider placement and View details controls. Sort triggers retain their
+size when selected values change. Confirmation dialogs must remain above the
+inspector at desktop, tablet and mobile sizes and accept keyboard and pointer
+input without obstruction.
 
 #### Merchant-facing language
 

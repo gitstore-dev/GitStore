@@ -1,0 +1,39 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-modal);
+  background: var(--overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  backdrop-filter: blur(4px);
+}
+.modal {
+  width: min(460px, 100%);
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 30px 90px #00000030;
+}
+.dialog {
+  padding: 28px;
+  outline: none;
+}
+.dialog h2 {
+  font: 500 30px var(--display);
+  margin: 14px 0;
+}
+.dialog p {
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+@media (max-width: 480px) {
+  .dialog {
+    padding: 22px;
+  }
+}

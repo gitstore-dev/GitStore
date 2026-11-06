@@ -11,7 +11,6 @@ import {
   GitBranch,
   Layers,
   RefreshCw,
-  RotateCcw,
   TriangleAlert,
 } from 'lucide-react'
 import { ActionButton } from '../../../components/controls'
@@ -29,13 +28,16 @@ import {
   healthMatrix,
 } from './model'
 import type { OverviewScenario, QueueFilter, SortOrder } from './model'
-import { ChoiceSelect } from './ChoiceSelect'
+import { ChoiceSelect } from '../../../components/ChoiceSelect'
 import { ResourceInspector } from './ResourceInspector'
 import { StatusBadge } from './StatusBadge'
 import { kindLabels, readinessLabels } from './presentation'
-import { useGridMotion } from './motion/useGridMotion'
-import { useResourceLighting } from './motion/useResourceLighting'
+import { useGridMotion } from '../shared/motion/useGridMotion'
+import { useResourceLighting } from '../shared/motion/useResourceLighting'
 import styles from './overview.module.css'
+import { HomePage, HomePageHeader, DemoNotice } from '../shared/HomePage'
+import { ResourceCard, SummaryCard } from '../shared/HomeCards'
+import homeStyles from '../shared/home.module.css'
 
 const filters: readonly { id: QueueFilter; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -149,7 +151,7 @@ export function OverviewPage({
     },
   ]
   return (
-    <div className={styles.page} ref={lighting}>
+    <HomePage ref={lighting}>
       <div
         className="sr-only"
         role="status"
@@ -158,39 +160,13 @@ export function OverviewPage({
       >
         {announcement}
       </div>
-      <header className={styles.pageHeading}>
-        <div>
-          <div className={styles.kicker}>
-            <span className={styles.headingMark} />
-            {name}
-            <span className={styles.headingSlash}>/</span>HOME
-          </div>
-          <h1>
-            Overview
-            <span aria-hidden="true" className={styles.titleDot}>
-              .
-            </span>
-          </h1>
-          <p>Your store at a glance.</p>
-        </div>
-        <div className={styles.headingActions}>
-          <span className={styles.demoLabel}>
-            <CircleDot size={12} aria-hidden="true" />
-            Demo data
-          </span>
-          <ActionButton variant="ghost" onPress={reset}>
-            <RotateCcw size={14} aria-hidden="true" />
-            Reset demo
-          </ActionButton>
-        </div>
-      </header>
-      <div className={styles.demoNotice}>
-        <span>DEMO WORKSPACE</span>
-        <p>
-          Changes stay in this demo and reset when you leave Overview, switch
-          workspace, or reload.
-        </p>
-      </div>
+      <HomePageHeader
+        namespace={name}
+        title="Overview"
+        description="Your store at a glance."
+        onReset={reset}
+      />
+      <DemoNotice page="Overview" />
       {presentation === 'loading' ? (
         <section className={styles.statePanel} aria-label="Loading overview">
           <h2>Loading your store overview.</h2>
@@ -236,28 +212,17 @@ export function OverviewPage({
               </span>
             </div>
           )}
-          <section aria-label="Store summary" className={styles.metrics}>
+          <section aria-label="Store summary" className={homeStyles.metrics}>
             {cards.map(({ label, value, detail, Icon, state: readiness }) => (
-              <article
+              <SummaryCard
                 key={label}
-                className={styles.metric}
-                data-halo-card=""
-                data-readiness={readiness}
-              >
-                <div className={styles.metricLabel}>
-                  {label}
-                  <Icon size={17} aria-hidden="true" />
-                </div>
-                <strong>{value.toLocaleString('en')}</strong>
-                <p>{detail}</p>
-                <div className={styles.metricFoot} aria-hidden="true">
-                  <span
-                    style={{
-                      width: `${summary.total ? (value / summary.total) * 100 : 0}%`,
-                    }}
-                  />
-                </div>
-              </article>
+                label={label}
+                value={value}
+                detail={detail}
+                Icon={Icon}
+                state={readiness}
+                ratio={summary.total ? value / summary.total : 0}
+              />
             ))}
           </section>
           {state.resources.length === 0 ? (
@@ -272,7 +237,7 @@ export function OverviewPage({
               <div>
                 <h2 id="first-resource">
                   Your catalog starts here
-                  <span aria-hidden="true" className={styles.titleDot}>
+                  <span aria-hidden="true" className={homeStyles.titleDot}>
                     .
                   </span>
                 </h2>
@@ -361,38 +326,20 @@ export function OverviewPage({
                   </ActionButton>
                 )}
               </div>
-              <div ref={gridStageRef} className={styles.resourceStage}>
+              <div ref={gridStageRef} className={homeStyles.resourceStage}>
                 {queue.length ? (
-                  <div className={styles.resourceGrid}>
+                  <div className={homeStyles.resourceGrid}>
                     {queue.map((item) => (
-                      <article
+                      <ResourceCard
                         key={item.id}
-                        className={styles.resourceCard}
-                        data-resource-id={item.id}
-                        data-halo-card=""
-                        data-readiness={item.readiness}
-                      >
-                        <div className={styles.cardTop}>
-                          <span className={styles.kind}>
-                            {kindLabels[item.kind].singular}
-                          </span>
-                          <StatusBadge state={item.readiness} />
-                        </div>
-                        <h3>{item.name}</h3>
-                        <p>{item.diagnostic}</p>
-                        <div className={styles.cardBottom}>
-                          <Button
-                            className={styles.inspectButton}
-                            aria-label={`View details for ${item.name}`}
-                            onPress={(event) =>
-                              inspect(item.id, event.target as HTMLElement)
-                            }
-                          >
-                            View details
-                            <ArrowUpRight size={14} aria-hidden="true" />
-                          </Button>
-                        </div>
-                      </article>
+                        id={item.id}
+                        title={item.name}
+                        kind={kindLabels[item.kind].singular}
+                        badge={<StatusBadge state={item.readiness} />}
+                        description={item.diagnostic}
+                        state={item.readiness}
+                        onInspect={(trigger) => inspect(item.id, trigger)}
+                      />
                     ))}
                   </div>
                 ) : (
@@ -592,6 +539,6 @@ export function OverviewPage({
           </div>
         </>
       )}
-    </div>
+    </HomePage>
   )
 }

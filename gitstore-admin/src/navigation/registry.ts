@@ -210,7 +210,9 @@ export const destinations: readonly NavigationDestination[] = groups
   .map((destination, index) => ({
     ...destination,
     ordinal: index + 1,
-    implementation: destination.id === 'home.overview' ? 'mock' : 'placeholder',
+    implementation: ['home.overview', 'home.my-work'].includes(destination.id)
+      ? 'mock'
+      : 'placeholder',
     description:
       destination.id === 'home.overview'
         ? 'Resource work, readiness, and activity in your demo workspace.'

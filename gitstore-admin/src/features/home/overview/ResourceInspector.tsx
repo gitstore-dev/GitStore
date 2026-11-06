@@ -1,16 +1,19 @@
 import { useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ModalOverlay, Modal, Dialog, Heading } from 'react-aria-components'
-import { ArrowUpRight, FileCode2, Check } from 'lucide-react'
+import { Heading } from 'react-aria-components'
+import { ArrowUpRight, Check } from 'lucide-react'
 import { ActionButton } from '../../../components/controls'
 import { destinationById } from '../../../navigation/registry'
 import type { NamespaceId } from '../../../data/demo'
 import type { DemoResource } from './model'
 import { demoAction, resourceDestinations } from './model'
-import { ChoiceSelect } from './ChoiceSelect'
+import { ChoiceSelect } from '../../../components/ChoiceSelect'
 import { StatusBadge } from './StatusBadge'
 import { kindLabels } from './presentation'
 import styles from './overview.module.css'
+import homeStyles from '../shared/home.module.css'
+import { TechnicalDetails } from '../../../components/TechnicalDetails'
+import { ConfirmationDialog } from '../../../components/ConfirmationDialog'
 
 export function ResourceInspector({
   resource,
@@ -38,7 +41,7 @@ export function ResourceInspector({
         options={resources.map((item) => ({ id: item.id, label: item.name }))}
       />
       <div className={styles.detailIdentity}>
-        <span className={styles.kicker}>
+        <span className={homeStyles.kicker}>
           {kindLabels[resource.kind].singular}
         </span>
         <h2 ref={heading} tabIndex={-1}>
@@ -112,60 +115,43 @@ export function ResourceInspector({
         Open {destination.label.toLowerCase()}
         <ArrowUpRight size={13} aria-hidden="true" />
       </Link>
-      <details className={styles.technicalDetails}>
-        <summary>Technical details</summary>
-        <dl>
-          <dt>Resource type</dt>
-          <dd>{resource.kind}</dd>
-        </dl>
-        <div className={styles.detailPath}>
-          <FileCode2 size={15} aria-hidden="true" />
-          <span>Source file</span>
-          <code>{resource.path}</code>
-        </div>
-      </details>
+      <TechnicalDetails
+        resourceType={resource.kind}
+        sourcePath={resource.path}
+      />
       <p className={styles.disclaimer}>
         Demo only. Your store and saved files are not changed.
       </p>
-      <ModalOverlay
-        isOpen={confirming}
-        onOpenChange={setConfirming}
-        isDismissable
-        className={styles.confirmOverlay}
-      >
-        <Modal className={styles.confirmModal}>
-          <Dialog className={styles.confirmDialog}>
-            <span className={styles.kicker}>LOCAL DEMO ACTION</span>
-            <Heading slot="title">{action}?</Heading>
-            <p>
-              Mark <strong>{resource.name}</strong> as ready in this demo.
-            </p>
-            <div className={styles.confirmNote}>
-              This removes the item from Updates and issues and updates the demo
-              totals and activity. No changes are sent to GitStore.
-            </div>
-            <p className={styles.disclaimer}>
-              Leaving Overview, changing workspace, reloading, or resetting the
-              demo restores the original example.
-            </p>
-            <div className={styles.confirmActions}>
-              <ActionButton autoFocus onPress={() => setConfirming(false)}>
-                Cancel
-              </ActionButton>
-              <ActionButton
-                variant="primary"
-                onPress={() => {
-                  setConfirming(false)
-                  onResolve(resource.id)
-                  requestAnimationFrame(() => heading.current?.focus())
-                }}
-              >
-                Confirm demo change
-              </ActionButton>
-            </div>
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
+      <ConfirmationDialog isOpen={confirming} onOpenChange={setConfirming}>
+        <span className={homeStyles.kicker}>LOCAL DEMO ACTION</span>
+        <Heading slot="title">{action}?</Heading>
+        <p>
+          Mark <strong>{resource.name}</strong> as ready in this demo.
+        </p>
+        <div className={styles.confirmNote}>
+          This removes the item from Updates and issues and updates the demo
+          totals and activity. No changes are sent to GitStore.
+        </div>
+        <p className={styles.disclaimer}>
+          Leaving Overview, changing workspace, reloading, or resetting the demo
+          restores the original example.
+        </p>
+        <div className={styles.confirmActions}>
+          <ActionButton autoFocus onPress={() => setConfirming(false)}>
+            Cancel
+          </ActionButton>
+          <ActionButton
+            variant="primary"
+            onPress={() => {
+              setConfirming(false)
+              onResolve(resource.id)
+              requestAnimationFrame(() => heading.current?.focus())
+            }}
+          >
+            Confirm demo change
+          </ActionButton>
+        </div>
+      </ConfirmationDialog>
     </div>
   )
 }

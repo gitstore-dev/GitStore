@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import { destinations, destinationHref } from '../src/navigation/registry'
 const home = '/w/atelier-kyoto/home/overview'
-test('all 79 destinations are reachable with a mock Overview and 78 placeholders', async ({
+test('all 79 destinations are reachable with two mock Home pages and 77 placeholders', async ({
   page,
 }) => {
   test.setTimeout(120000)
@@ -21,9 +21,14 @@ test('all 79 destinations are reachable with a mock Overview and 78 placeholders
     ).toBeVisible()
     if (destination.implementation === 'mock') {
       await expect(page.getByText('Demo data', { exact: true })).toBeVisible()
-      await expect(
-        page.getByRole('region', { name: 'Store summary' }),
-      ).toBeVisible()
+      if (destination.id === 'home.overview')
+        await expect(
+          page.getByRole('region', { name: 'Store summary' }),
+        ).toBeVisible()
+      else
+        await expect(
+          page.getByRole('tablist', { name: 'My work views' }),
+        ).toBeVisible()
     } else {
       await expect(
         page.getByText('PAGE NOT IMPLEMENTED', { exact: true }),

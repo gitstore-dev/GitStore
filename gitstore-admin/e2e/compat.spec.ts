@@ -57,3 +57,38 @@ test('shell navigation and mobile drawer work across engines', async ({
     page.getByRole('dialog', { name: 'Mobile navigation' }),
   ).toBeHidden()
 })
+
+test('My work mobile editor confirms unsaved dismissal across engines', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/w/atelier-kyoto/home/my-work')
+  await page
+    .getByRole('button', { name: 'View details for Kanso Stone Basin' })
+    .click()
+  await page
+    .getByRole('button', { name: 'Edit demo draft', exact: true })
+    .click()
+  const name = page.getByRole('textbox', { name: 'Product name', exact: true })
+  await name.fill('Mobile basin')
+  await page.keyboard.press('Escape')
+  const confirmation = page.getByRole('dialog', {
+    name: 'Discard unsaved edits?',
+  })
+  await expect(confirmation).toBeVisible()
+  await confirmation
+    .getByRole('button', { name: 'Cancel', exact: true })
+    .click()
+  await expect(name).toHaveValue('Mobile basin')
+  await page.getByRole('button', { name: 'Save demo draft' }).click()
+  await expect(
+    page
+      .getByRole('dialog', { name: 'Page context', exact: true })
+      .getByRole('heading', { name: 'Mobile basin', exact: true }),
+  ).toBeFocused()
+  await page.getByRole('button', { name: 'Close inspector' }).click()
+  await expect(
+    page.getByRole('button', { name: 'View details for Mobile basin' }),
+  ).toBeFocused()
+})

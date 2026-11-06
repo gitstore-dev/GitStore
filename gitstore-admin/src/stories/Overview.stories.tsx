@@ -132,3 +132,12 @@ export const CssStateLighting: Story = {
     },
   },
 }
+
+export const TabletConfirmation: Story = {
+  globals: { viewport: { value: 'tablet', isRotated: false } },
+  play: Confirmation.play,
+}
+export const MobileConfirmation: Story = {
+  globals: { viewport: { value: 'mobile1', isRotated: false } },
+  play: Confirmation.play,
+}

@@ -6,6 +6,14 @@
 @import '@fontsource/ibm-plex-mono/400.css';
 :root,
 [data-theme='light'] {
+  --layer-drawer: 1000;
+  --layer-modal: 1200;
+  --layer-popover: 1300;
+  --status-ready: #286249;
+  --status-blocked: #855509;
+  --status-failed: #aa3525;
+  --status-reconciling: #245b89;
+  --status-stale: #5d6a63;
   color-scheme: light;
   --canvas: #f4f2e9;
   --surface: #fdfcf8;
@@ -32,6 +40,11 @@
   --mono: 'IBM Plex Mono', monospace;
 }
 [data-theme='dark'] {
+  --status-ready: #9ecab0;
+  --status-blocked: #e0b45b;
+  --status-failed: #f8967c;
+  --status-reconciling: #91b8e5;
+  --status-stale: #b1bcaf;
   color-scheme: dark;
   --canvas: #101b18;
   --surface: #172620;

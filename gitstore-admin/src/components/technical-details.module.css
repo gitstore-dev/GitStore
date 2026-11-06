@@ -1,0 +1,48 @@
+.details {
+  margin-top: 24px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 14px;
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+}
+.details summary {
+  cursor: pointer;
+  color: var(--ink);
+  border-radius: 2px;
+}
+.details summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+.details dl {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0 0;
+}
+.details dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.source {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 22px 0;
+  color: var(--muted);
+  font-size: 10px;
+  align-items: center;
+}
+.source svg {
+  flex-shrink: 0;
+}
+.source code {
+  flex-basis: 100%;
+  min-width: 0;
+  font: 10px/1.8 var(--mono);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}

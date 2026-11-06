@@ -2,7 +2,7 @@
 
 ## Boundaries
 
-The shell, shared controls, layouts, navigation, and Home / Overview are implemented. Overview is a local demo with deterministic fixtures and simulated resolution; the other 78 destinations remain placeholders. Local typed fixtures describe two demo workspaces and one demo identity. No network transport, authentication, live operational metrics, Apollo cache, GraphQL endpoint or API mock server is present. Demo menus do not enforce authorization.
+The shell, shared controls, layouts, navigation, Home / Overview, and Home / My work are implemented. Overview simulates resource resolution; My work provides limited product text editing and personal draft/review demo actions. The other 77 destinations remain placeholders. Local typed fixtures describe two demo workspaces and one demo identity. No network transport, authentication, live operational metrics, Apollo cache, GraphQL endpoint or API mock server is present. Demo menus do not enforce authorization.
 
 The PRD covers future commerce capabilities. Source references in the copied PRD describe the backend's historical planning baseline, which is intentionally absent on this branch. Stitch project GitStore Admin II is visual reference, not production source code.
 
@@ -13,6 +13,9 @@ The PRD covers future commerce capabilities. Source references in the copied PRD
 - `src/components`: React Aria-backed interactions, navigation items, theme picker, workspace selector, profile menu and command palette.
 - `src/shell`: header/sidebar and standard, inspector and Focus Mode composition.
 - `src/features/home/overview`: page-local fixtures, selectors, reducer, controls, resource inspector, and presentation states. No transport or API contract is implied.
+- `src/features/home/my-work`: independent page-local work fixtures, selectors, reducer, product text editor, change preview, confirmations, and presentation states.
+- `src/features/home/shared`: common Home page frame, context trail/header, demo controls/notice, summary content, and resource cards. Overview and My work share their responsive spacing and card anatomy.
+- `src/features/home/shared/motion`: shared card choreography and decorative GPU lighting.
 - `src/pages`: shared placeholder and not-found UI. Future business screens belong in feature directories.
 - `src/state`: browser preferences only; never future API data or credentials.
 - `src/stories`: shared control and layout states, including themes, rail, reduced motion and responsive previews.
@@ -47,6 +50,57 @@ not only products. Canonical types and `.md` source paths remain available in th
 inspector's native Technical details disclosure; they do not appear on work cards.
 Keep future business-page copy aligned with the PRD's merchant language policy.
 
+## My work demo lifecycle
+
+`/w/$namespace/home/my-work` has independent page-local state. Atelier Kyoto starts
+with 2 drafts, 2 submissions, 2 assigned reviews, and 1 completed review; Studio
+Berlin is empty. Tabs/search/sort/editor state are not stored in URLs or browser
+storage. Leaving the route, switching namespaces, reloading, or Reset demo restores
+the fixtures. Timestamps and local revisions are deterministic; there is no timer.
+
+The reducer validates draft-only saves/submissions/discards and assigned-only
+reviews. Product names must be nonblank; descriptions may be empty. Base values
+remain fixed for Before/After comparisons. Unsaved editor text is separate from
+saved draft state; submission stays disabled until it is saved or cancelled.
+Review notes are mandatory for requesting changes. Completed outcomes never
+publish products and do not synchronize into Overview.
+
+The shell's owner-scoped `registerCloseGuard` lets My work confirm closing an
+inspector with unsaved edits. Other pages retain unguarded closing. The same guard
+covers the close button, view-control toggle, and tablet/mobile dismissal. Focus
+Mode can hide and restore the editor without abandoning its state. Responsive
+layouts mount only one inspector, avoiding duplicate field IDs and focus targets.
+Selection/tab/reset changes use the page's matching confirmation boundary. Route
+exit follows the explicit reset notice rather than blocking navigation.
+
+My work stories include all tabs, empty/no-results, read-only/loading/unavailable,
+change preview, editing/unsaved, confirmations, themes, tablet/mobile, and reduced
+motion. Read-only and unavailable are presentation specimens, not authorization
+or network behavior. Shell navigation metadata marks exactly two mock pages and
+77 placeholders. No API contracts or external transport are introduced.
+
+### Shared Home presentation and overlay layers
+
+Both implemented Home pages use `HomePage`, `HomePageHeader`/`PageContext`,
+`DemoControls`, and `DemoNotice`. The frame preserves Overview's width and
+responsive padding; page-specific styles must not override these. The notice has
+no redundant “Demo workspace” prefix. `SummaryCardContent` is used in Overview's
+articles and My work's keyboard-operated tabs; counts, descriptions, state edges,
+hover/focus lighting and ratio bars use the same geometry. `ResourceCard` owns the
+kind label, title, body spacing, divider, and View details control. Work timestamps
+are optional footer metadata. Work status and readiness labels remain distinct. Both inspectors use the shared
+`TechnicalDetails` native disclosure with Resource type, Source file, the file
+icon, and a wrapping `.md` path. Labels, typography, spacing, and keyboard focus
+styles belong to that component rather than individual page styles.
+
+`ConfirmationDialog` is shared across both pages. Root CSS layer tokens order
+inspectors/drawers (1000), modal confirmations (1200), and popovers (1300). Dialog
+content must be above an active inspector, not merely present in the accessibility
+tree. Browser regressions check actual pointer hit testing, keyboard containment,
+focus restoration and confirmation at tablet and mobile sizes. The shared select
+trigger has a stable 160px width and fixed height; selected labels truncate rather
+than shifting the control or toolbar.
+
 ## Styling and motion
 
 Sidebar Up/Down and Home/End keys move focus among visible navigation links and section controls. They do not change the route; Enter activates the focused link. Tab retains its native behavior, and React Aria popover menus retain their own keyboard handling. The mobile profile menu opens above its footer trigger, aligned to its width and constrained to the viewport; Escape closes the menu and restores focus without dismissing the navigation drawer. Within that drawer, the profile popover is nonmodal: the drawer owns modality and focus containment, avoiding competing nested modal restoration in Chromium.
@@ -55,9 +109,9 @@ Mobile uses a fixed bottom navigation bar with Catalog, Orders, Changes and Menu
 
 Concept-v2 assets are copied from the branding repository. Production SVG symbols remain flat; no generated Stitch logos are reused. Archivo Narrow, IBM Plex Sans and IBM Plex Mono are bundled through Fontsource; license copies are included under public/licenses. Palette, layout and motion use custom CSS Modules and shared CSS variables, not a preset theme. Light/dark/system and sidebar choices persist locally. Motion can follow the system or be reduced; system reduction is never overridden. Focus Mode uses a reversible 420 ms View Transition, with a Web Animations fallback. Its optional, lazy-loaded WebGPU enhancement captures decorative copies of shell regions through native HTML-in-Canvas; working controls and page content stay in the DOM. Reduced motion bypasses animation and GPU preparation. See the root README for capability detection and resource budgets. The motion boundary lives in `src/shell/motion`; its document-level pseudo-element stylesheet is scoped to `html[data-focus-transition]`, while layout and control styles remain CSS Modules.
 
-### Overview card choreography and lighting
+### Home card choreography and lighting
 
-The feature's `motion/` directory owns measured grid movement and a demand-driven
+The Home-level `shared/motion/` directory owns measured grid movement and a demand-driven
 WebGPU light field. Filter/sort/reset/confirmed resolution capture card positions
 before changing state. Stable HTML cards move for 300 ms; inert, aria-hidden exits
 last 140 ms; arrivals settle for 220 ms with at most 96 ms stagger. The stage height

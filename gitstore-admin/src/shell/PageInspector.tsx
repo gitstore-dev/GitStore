@@ -5,6 +5,10 @@ export interface PageInspectorAPI {
   register: (owner: string, content: ReactNode | null) => void
   open: (trigger?: HTMLElement) => void
   close: () => void
+  registerCloseGuard: (
+    owner: string,
+    guard: ((proceed: () => void) => void) | null,
+  ) => void
 }
 export const PageInspectorContext = createContext<PageInspectorAPI | null>(null)
 export function usePageInspector(content: ReactNode | null) {

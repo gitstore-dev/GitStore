@@ -70,6 +70,17 @@ export function AppShell({ children }: { children?: ReactNode }) {
     content: ReactNode
   } | null>(null)
   const inspectorTrigger = useRef<HTMLElement | null>(null)
+  const closeGuard = useRef<{
+    owner: string
+    guard: (proceed: () => void) => void
+  } | null>(null)
+  const registerCloseGuard = useCallback(
+    (owner: string, guard: ((proceed: () => void) => void) | null) => {
+      if (guard) closeGuard.current = { owner, guard }
+      else if (closeGuard.current?.owner === owner) closeGuard.current = null
+    },
+    [],
+  )
   const registerInspector = useCallback(
     (owner: string, content: ReactNode | null) => {
       setPageInspector((current) =>
@@ -87,19 +98,35 @@ export function AppShell({ children }: { children?: ReactNode }) {
     setMode('inspector')
   }, [])
   const closeInspector = useCallback(() => {
-    setMode('standard')
-    const trigger = inspectorTrigger.current
-    if (trigger?.isConnected && trigger.checkVisibility()) trigger.focus()
-    else document.getElementById('main-content')?.focus()
-  }, [])
+    const proceed = () => {
+      setMode('standard')
+      const trigger = inspectorTrigger.current
+      // A page confirmation can still own modality in this event. Restore only
+      // after React has removed it and made the page interactive again.
+      requestAnimationFrame(() => {
+        if (trigger?.isConnected && trigger.checkVisibility()) trigger.focus()
+        else document.getElementById('main-content')?.focus()
+      })
+    }
+    if (closeGuard.current?.owner === pathname)
+      closeGuard.current.guard(proceed)
+    else proceed()
+  }, [pathname])
   const inspectorAPI = useMemo(
     () => ({
       owner: pathname,
       register: registerInspector,
       open: openInspector,
       close: closeInspector,
+      registerCloseGuard,
     }),
-    [pathname, registerInspector, openInspector, closeInspector],
+    [
+      pathname,
+      registerInspector,
+      openInspector,
+      closeInspector,
+      registerCloseGuard,
+    ],
   )
   const customInspector =
     pageInspector?.owner === pathname ? pageInspector.content : null
@@ -286,7 +313,11 @@ export function AppShell({ children }: { children?: ReactNode }) {
                 <span className={styles.headerDivider} />
                 <LayoutPicker
                   value={mode}
-                  onChange={changeMode}
+                  onChange={(next) => {
+                    if (mode === 'inspector' && next === 'standard')
+                      closeInspector()
+                    else changeMode(next)
+                  }}
                   onPrepareFocus={prepareFocus}
                   autoFocus={restoreLayoutFocus}
                 />
@@ -370,7 +401,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
         <div className={styles.workArea}>
           <WorkspaceLayout
             mode={tablet && mode === 'inspector' ? 'standard' : mode}
-            inspector={inspector}
+            inspector={tablet ? undefined : inspector}
           >
             {routeNamespace && !isDemoNamespace(routeNamespace) ? (
               <div className={styles.unknownNamespace}>

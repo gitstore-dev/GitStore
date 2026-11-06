@@ -8,7 +8,7 @@ import {
   ListBoxItem,
 } from 'react-aria-components'
 import { ChevronDown, Check } from 'lucide-react'
-import styles from './overview.module.css'
+import styles from './choice-select.module.css'
 export function ChoiceSelect<T extends string>({
   label,
   value,

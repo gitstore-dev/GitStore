@@ -1,7 +1,7 @@
 import { Check, TriangleAlert, CircleX, RefreshCw, Clock3 } from 'lucide-react'
 import { readinessLabels } from './presentation'
 import type { Readiness } from './model'
-import styles from './overview.module.css'
+import { StatusPill } from '../shared/HomeCards'
 const icons = {
   ready: Check,
   blocked: TriangleAlert,
@@ -11,10 +11,5 @@ const icons = {
 }
 export function StatusBadge({ state }: { state: Readiness }) {
   const Icon = icons[state]
-  return (
-    <span className={styles.badge} data-readiness={state}>
-      <Icon size={12} aria-hidden="true" />
-      {readinessLabels[state]}
-    </span>
-  )
+  return <StatusPill label={readinessLabels[state]} state={state} Icon={Icon} />
 }

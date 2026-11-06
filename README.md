@@ -2,7 +2,7 @@
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="gitstore-admin/public/branding/readme-dark.png"><img src="gitstore-admin/public/branding/readme-light.png" alt="GitStore — Change boldly. Keep a way back."></picture>
 
-An isolated, mock-first Admin foundation: React, strict TypeScript, Vite, TanStack Router, React Aria, and custom CSS Modules. All 79 PRD destinations are navigable: Home / Overview is an interactive mock page; the other 78 remain placeholders. There are no resource editors, commerce workflows, authentication, backend calls, or GraphQL runtime yet.
+An isolated, mock-first Admin foundation: React, strict TypeScript, Vite, TanStack Router, React Aria, and custom CSS Modules. All 79 PRD destinations are navigable: Home / Overview and Home / My work are interactive mock pages; the other 77 remain placeholders. My work includes a limited, demo-only product name/description editor and personal review workflow. There is no authentication, backend connection, or GraphQL runtime.
 
 ## Start
 
@@ -20,6 +20,8 @@ Vite prints the app URL; Storybook uses port 6006. Use the workspace picker for 
 Focus Mode clears the surrounding interface with a reversible, approximately 420 ms directional wipe and page settle. The working DOM remains mounted. View Transitions provide the primary effect, with a Web Animations fallback. Browsers exposing native HTML-in-Canvas can also use a short-lived WebGPU edge dissolve. Capability adapters cover the earlier `layoutsubtree` / `copyElementImageToTexture` APIs (including Chrome 150 dictionary arguments and earlier positional arguments) and the newer `content="drawable"` / `drawElementImageToTexture` API. GPU preparation starts on hover or keyboard focus, expires after eight idle seconds, and never blocks the DOM fallback; snapshot capture has a 60 ms budget. The core transition needs no flags or graphics polyfills. Earlier experimental Chromium implementations need the Canvas Draw Element flag enabled to use the GPU enhancement. Reduced motion bypasses capture and animation. GPU resources and decorative, inert snapshots are removed after completion, interruption, device loss, or navigation.
 
 Home / Overview uses deterministic local resources, readiness counts, filtering, sorting, resource inspection, and confirmed demo-only resolution. Atelier Kyoto starts populated; Studio Berlin starts with setup guidance. Demo changes reset when leaving Overview, switching namespaces, reloading, or choosing Reset demo. They are never saved or sent to a backend. Storybook includes the populated, first-use, all-clear, filtered-empty, loading, unavailable, stale, restricted, inspector, and confirmation states.
+
+Home / My work provides Drafts, Submitted, Assigned to me, and Completed views with search, sorting, a field-by-field change preview, product text editing, and confirmed demo submission/discard/review actions. Atelier Kyoto has seven personal-work examples; Studio Berlin starts empty. All changes are page-local and reset on exit, store switch, reload, or Reset demo; Overview remains independent. Approved reviews do not publish products. Storybook covers every view, editor/confirmation states, read-only presentation, failures, themes, mobile, and reduced motion.
 
 ## Validate
 
