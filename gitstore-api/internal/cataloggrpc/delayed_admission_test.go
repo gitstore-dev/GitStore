@@ -8,17 +8,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 )
@@ -317,4 +322,171 @@ func TestAdmitResourcesUnrelatedPushesDoNotStarveUnchangedManifest(t *testing.T)
 	require.NoError(t, err, "unrelated commits must not require a globally idle ref before admission")
 	require.Equal(t, strings.Repeat("a", 40), resource.GitCommitSHA)
 	require.Less(t, reads, 10, "unchanged manifests must converge with bounded work")
+}
+
+// This adapter materializes an independently authored winner at either read
+// or atomic-create boundary, reproducing two replicas without timing sleeps.
+type delayedCreateRaceStore struct {
+	datastore.Datastore
+	kind, boundary string
+	reads, updates int
+	injected       bool
+	inject         func()
+}
+
+func (s *delayedCreateRaceStore) GetProductByName(ctx context.Context, ns, name string) (*datastore.Product, error) {
+	if s.kind == "Product" && name == "guarded" {
+		s.reads++
+		if s.boundary == "lookup" && s.reads == 2 {
+			s.injectWinner()
+		}
+	}
+	return s.Datastore.GetProductByName(ctx, ns, name)
+}
+func (s *delayedCreateRaceStore) GetCategoryTaxonomyByName(ctx context.Context, ns, name string) (*datastore.CategoryTaxonomy, error) {
+	if s.kind == "CategoryTaxonomy" && name == "guarded" {
+		s.reads++
+		if s.boundary == "lookup" && s.reads == 2 {
+			s.injectWinner()
+		}
+	}
+	return s.Datastore.GetCategoryTaxonomyByName(ctx, ns, name)
+}
+func (s *delayedCreateRaceStore) injectWinner() {
+	if !s.injected {
+		s.injected = true
+		s.inject()
+	}
+}
+func (s *delayedCreateRaceStore) CreateProduct(ctx context.Context, p *datastore.Product) error {
+	if s.kind == "Product" && strings.HasPrefix(s.boundary, "create-") && !s.injected {
+		s.injectWinner()
+		if s.boundary == "create-conflict" {
+			return datastore.ErrConflict
+		}
+	}
+	return s.Datastore.CreateProduct(ctx, p)
+}
+func (s *delayedCreateRaceStore) CreateCategoryTaxonomy(ctx context.Context, c *datastore.CategoryTaxonomy) error {
+	if s.kind == "CategoryTaxonomy" && strings.HasPrefix(s.boundary, "create-") && !s.injected {
+		s.injectWinner()
+		if s.boundary == "create-conflict" {
+			return datastore.ErrConflict
+		}
+	}
+	return s.Datastore.CreateCategoryTaxonomy(ctx, c)
+}
+func (s *delayedCreateRaceStore) UpdateProduct(ctx context.Context, p *datastore.Product, expected string) error {
+	s.updates++
+	return s.Datastore.UpdateProduct(ctx, p, expected)
+}
+func (s *delayedCreateRaceStore) UpdateCategoryTaxonomy(ctx context.Context, c *datastore.CategoryTaxonomy, expected string) error {
+	s.updates++
+	return s.Datastore.UpdateCategoryTaxonomy(ctx, c, expected)
+}
+
+func TestDelayedCreateRacePreservesIndependentWinner(t *testing.T) {
+	for _, kind := range []string{"Product", "CategoryTaxonomy"} {
+		for _, boundary := range []string{"lookup", "create-already-exists", "create-conflict"} {
+			for _, grants := range []string{"create", "create, update"} {
+				t.Run(kind+"/"+boundary+"/"+grants, func(t *testing.T) {
+					base := newTestDatastore(t)
+					store := &delayedCreateRaceStore{Datastore: base, kind: kind, boundary: boundary}
+					ctx := t.Context()
+					var before []byte
+					winnerID := "00000000-0000-0000-0000-000000000953"
+					winnerRepo := "00000000-0000-0000-0000-000000000954"
+					winnerCommit := strings.Repeat("e", 40)
+					require.NoError(t, base.CreateRepository(ctx, &datastore.Repository{UID: winnerRepo, ID: winnerRepo, RepositoryID: winnerRepo, Namespace: "gitstore", Name: "winner-source", DefaultBranch: "main", StorageClass: "local", CreationActor: "winner"}))
+					lookup := func() any {
+						if kind == "Product" {
+							v, err := base.GetProductByName(ctx, "gitstore", "guarded")
+							require.NoError(t, err)
+							return v
+						}
+						v, err := base.GetCategoryTaxonomyByName(ctx, "gitstore", "guarded")
+						require.NoError(t, err)
+						return v
+					}
+					store.inject = func() {
+						if kind == "Product" {
+							require.NoError(t, base.CreateProduct(ctx, &datastore.Product{UID: winnerID, APIVersion: "catalog.gitstore.dev/v1beta1", Kind: kind, Namespace: "gitstore", Name: "guarded", Generation: 7, ResourceVersion: "42", CreationActor: "winner", UpdateActor: "winner", RepositoryID: winnerRepo, SourcePath: "products/guarded.md", GitCommitSHA: winnerCommit, GitRef: "refs/heads/main", Revision: "main@sha1:" + winnerCommit, Spec: json.RawMessage(`{"title":"winner","lifecycle":{"state":"ACTIVE"}}`), Body: "winner body", Status: json.RawMessage(`{}`)}))
+						} else {
+							require.NoError(t, base.CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{UID: winnerID, APIVersion: "catalog.gitstore.dev/v1beta1", Kind: kind, Namespace: "gitstore", Name: "guarded", Generation: 7, ResourceVersion: "42", CreationActor: "winner", UpdateActor: "winner", RepositoryID: winnerRepo, SourcePath: "categories/guarded.md", GitCommitSHA: winnerCommit, GitRef: "refs/heads/main", Revision: "main@sha1:" + winnerCommit, Spec: json.RawMessage(`{"title":"winner"}`), Body: "winner body", Status: json.RawMessage(`{}`)}))
+						}
+						var err error
+						before, err = json.Marshal(lookup())
+						require.NoError(t, err)
+					}
+					policy := fmt.Sprintf("apiVersion: rbac.authorization.gitstore.dev/v1beta1\nkind: RbacLocalConfiguration\ndefaultDeny: true\nclusterRoles:\n  creator:\n    rules:\n      - resources: [product, categoryTaxonomy]\n        verbs: [%s]\nclusterRoleBindings:\n  - roleRef: {kind: ClusterRole, name: creator}\n    subjects: [{kind: User, name: test-admission-actor}]\n", grants)
+					policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+					require.NoError(t, os.WriteFile(policyPath, []byte(policy), 0600))
+					provider, err := rbaclocal.New(config.RBACConfig{PolicyFile: policyPath}, zap.NewNop())
+					require.NoError(t, err)
+					recording := testutil.NewRecordingAuthZ(provider)
+					first, tip := strings.Repeat("a", 40), strings.Repeat("b", 40)
+					current := tip
+					directory := "products"
+					content := makeProduct("guarded")
+					if kind == "CategoryTaxonomy" {
+						directory = "categories"
+						content = makeCategoryTaxonomy("guarded")
+					}
+					path := directory + "/guarded.md"
+					reader := newTreeGitReader(&current, map[string]map[string][]byte{first: {path: content}, tip: {path: content}})
+					server := newCatalogServer(t, store, reader, func(deps *cataloggrpc.ServerDeps) { deps.Registry = auth.NewProviderRegistry(nil, recording, nil) })
+					_, err = server.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, RefName: "refs/heads/main", OldCommitSha: strings.Repeat("0", 40), NewCommitSha: first, ChangedPaths: []string{path}})
+					require.NoError(t, err)
+					require.True(t, store.injected, "the selected two-replica race must occur")
+					after, err := json.Marshal(lookup())
+					require.NoError(t, err)
+					require.JSONEq(t, string(before), string(after), "delayed CREATE must preserve winner identity, content, status and provenance")
+					require.Zero(t, store.updates, "CREATE must never become UPDATE after the winner appears")
+				})
+			}
+		}
+	}
+}
+
+// A current callback may converge an existing identity only with UPDATE authority.
+func TestCurrentCreateReplayRequiresUpdateAuthority(t *testing.T) {
+	for _, kind := range []string{"Product", "CategoryTaxonomy"} {
+		t.Run(kind, func(t *testing.T) {
+			store := newTestDatastore(t)
+			commit := strings.Repeat("a", 40)
+			current := commit
+			directory, content := "products", makeProduct("guarded")
+			if kind == "CategoryTaxonomy" {
+				directory, content = "categories", makeCategoryTaxonomy("guarded")
+			}
+			path := directory + "/guarded.md"
+			reader := newTreeGitReader(&current, map[string]map[string][]byte{commit: {path: content}})
+			request := &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, RefName: "refs/heads/main", OldCommitSha: strings.Repeat("0", 40), NewCommitSha: commit, ChangedPaths: []string{path}}
+			_, err := newCatalogServer(t, store, reader).AdmitResources(t.Context(), request)
+			require.NoError(t, err)
+			lookup := func() []byte {
+				var value any
+				var err error
+				if kind == "Product" {
+					value, err = store.GetProductByName(t.Context(), "gitstore", "guarded")
+				} else {
+					value, err = store.GetCategoryTaxonomyByName(t.Context(), "gitstore", "guarded")
+				}
+				require.NoError(t, err)
+				result, err := json.Marshal(value)
+				require.NoError(t, err)
+				return result
+			}
+			before := lookup()
+			policy := "apiVersion: rbac.authorization.gitstore.dev/v1beta1\nkind: RbacLocalConfiguration\ndefaultDeny: true\nclusterRoles:\n  creator:\n    rules:\n      - resources: [product, categoryTaxonomy]\n        verbs: [create]\nclusterRoleBindings:\n  - roleRef: {kind: ClusterRole, name: creator}\n    subjects: [{kind: User, name: test-admission-actor}]\n"
+			policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+			require.NoError(t, os.WriteFile(policyPath, []byte(policy), 0600))
+			provider, err := rbaclocal.New(config.RBACConfig{PolicyFile: policyPath}, zap.NewNop())
+			require.NoError(t, err)
+			server := newCatalogServer(t, store, reader, func(deps *cataloggrpc.ServerDeps) { deps.Registry = auth.NewProviderRegistry(nil, provider, nil) })
+			_, err = server.AdmitResources(t.Context(), request)
+			require.Equal(t, codes.PermissionDenied, grpcstatus.Code(err))
+			require.JSONEq(t, string(before), string(lookup()))
+		})
+	}
 }

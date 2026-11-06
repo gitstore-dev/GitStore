@@ -119,6 +119,7 @@ type AdmissionContext struct {
 	// tipCommitSHA fences writes while CommitSHA retains the accepted source revision.
 	tipCommitSHA string
 	entry        *parsedEntry
+	createOnly   bool
 	superseded   *bool
 }
 

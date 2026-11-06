@@ -1264,6 +1264,7 @@ func (s *Server) AdmitResources(
 			filtered := ops[:0]
 			for _, op := range ops {
 				if op.operation == admission.OperationCreate {
+					op.createOnly = true
 					existing, err := s.lookupResourceByIdentity(ctx, op.identity)
 					if err != nil && !errors.Is(err, datastore.ErrNotFound) {
 						return nil, grpcstatus.Errorf(codes.Unavailable, "lookup delayed create: %v", err)
@@ -1510,7 +1511,13 @@ func (s *Server) admitParsedEntries(
 		if err != nil {
 			return decisions, err
 		}
-		decisions = append(decisions, s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx.forEntry(e), e.path, op, existing, inPushAncestorPaths, catPushSet))
+		entryCtx := admCtx.forEntry(e)
+		entryCtx.createOnly = explicitOps[e.identity.key()].createOnly
+		if entryCtx.createOnly && !reflectNil(existing) {
+			decisions = append(decisions, admission.EntryDecision{Kind: e.identity.Kind, Namespace: e.identity.Namespace, Name: e.identity.Name, Path: e.path, Outcome: admission.EntryNoOp})
+			continue
+		}
+		decisions = append(decisions, s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, entryCtx, e.path, op, existing, inPushAncestorPaths, catPushSet))
 	}
 	for _, e := range entries {
 		if e.parsed.Kind == "CategoryTaxonomy" {
@@ -1520,23 +1527,29 @@ func (s *Server) admitParsedEntries(
 		if err != nil {
 			return decisions, err
 		}
+		entryCtx := admCtx.forEntry(e)
+		entryCtx.createOnly = explicitOps[e.identity.key()].createOnly
+		if entryCtx.createOnly && !reflectNil(existing) {
+			decisions = append(decisions, admission.EntryDecision{Kind: e.identity.Kind, Namespace: e.identity.Namespace, Name: e.identity.Name, Path: e.path, Outcome: admission.EntryNoOp})
+			continue
+		}
 		switch e.parsed.Kind {
 		case "Product":
-			decisions = append(decisions, s.admitProduct(ctx, e.parsed.Product, e.body, admCtx.forEntry(e), e.path, op, existing))
+			decisions = append(decisions, s.admitProduct(ctx, e.parsed.Product, e.body, entryCtx, e.path, op, existing))
 		case "Collection":
-			if err := s.admitCollection(ctx, e.parsed.Collection, e.body, admCtx.forEntry(e), e.path, op, existing); err != nil {
+			if err := s.admitCollection(ctx, e.parsed.Collection, e.body, entryCtx, e.path, op, existing); err != nil {
 				return decisions, err
 			}
 		case "ProductVariant":
-			if err := s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, admCtx.forEntry(e), e.path, op, existing); err != nil {
+			if err := s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, entryCtx, e.path, op, existing); err != nil {
 				return decisions, err
 			}
 		case "Namespace":
-			s.admitNamespace(ctx, e.parsed.Namespace, e.body, admCtx.forEntry(e), e.path, op, existing)
+			s.admitNamespace(ctx, e.parsed.Namespace, e.body, entryCtx, e.path, op, existing)
 		case "File":
-			s.admitFile(ctx, e.parsed.File, e.body, admCtx.forEntry(e), e.path, op, existing)
+			s.admitFile(ctx, e.parsed.File, e.body, entryCtx, e.path, op, existing)
 		case "Repository":
-			if err := s.admitRepository(ctx, e.parsed.Repository, e.body, admCtx.forEntry(e), e.path, op, existing); err != nil {
+			if err := s.admitRepository(ctx, e.parsed.Repository, e.body, entryCtx, e.path, op, existing); err != nil {
 				return decisions, err
 			}
 		}
@@ -1547,7 +1560,15 @@ func (s *Server) admitParsedEntries(
 func (s *Server) operationForEntry(ctx context.Context, entry *parsedEntry, explicitOps map[string]resourceAdmissionOperation) (admission.Operation, any, error) {
 	op, existing, err := s.lookupOperationForEntry(ctx, entry, explicitOps)
 	if err == nil && entry != nil {
+		if explicitOps[entry.identity.key()].createOnly && !reflectNil(existing) {
+			return op, existing, nil // caller skips this delayed create without touching the winner
+		}
 		err = s.authorizeOperation(ctx, entry.identity, op, entry, existing)
+		if err == nil && op == admission.OperationCreate && !reflectNil(existing) {
+			// Current create replays may converge an existing row, but CREATE
+			// authority alone cannot authorize the resulting UPDATE.
+			err = s.authorizeOperation(ctx, entry.identity, admission.OperationUpdate, entry, existing)
+		}
 	}
 	return op, existing, err
 }
@@ -2455,6 +2476,9 @@ func (s *Server) admitFile(
 			s.log.Error("admit_resources: create file failed", zap.Error(err))
 			return
 		}
+		if admCtx.createOnly {
+			return
+		}
 		// Another replica may have created this identity after operationForEntry
 		// observed it as absent. If this admission still owns the ref tip, reload
 		// the winner and converge through the resource-version-guarded update
@@ -2566,6 +2590,10 @@ func (s *Server) admitProduct(
 	decision.Namespace = namespace
 
 	existing, _ := rawExisting.(*datastore.Product)
+	if admCtx.createOnly && existing != nil {
+		decision.Outcome = admission.EntryNoOp
+		return decision
+	}
 	var oldObject any
 	if existing != nil {
 		oldObject = existing
@@ -2647,6 +2675,10 @@ func (s *Server) admitProduct(
 		}
 		p.Status = admissionAcceptedStatus(1, admCtx.Revision, admCtx.Now)
 		if cerr := s.store.CreateProduct(ctx, p); cerr != nil {
+			if admCtx.createOnly && (errors.Is(cerr, datastore.ErrAlreadyExists) || errors.Is(cerr, datastore.ErrConflict)) {
+				decision.Outcome = admission.EntryNoOp
+				return decision
+			}
 			s.log.Error("admit_resources: create product failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(cerr))
 			return failed(fmt.Errorf("create product: %w", cerr))
@@ -3140,6 +3172,10 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	}
 
 	existing, _ := rawExisting.(*datastore.CategoryTaxonomy)
+	if admCtx.createOnly && existing != nil {
+		decision.Outcome = admission.EntryNoOp
+		return decision
+	}
 	var oldObject any
 	if existing != nil {
 		oldObject = existing
@@ -3268,6 +3304,10 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 			Status:            statusJSON,
 		}
 		if cerr := s.store.CreateCategoryTaxonomy(ctx, c); cerr != nil {
+			if admCtx.createOnly && (errors.Is(cerr, datastore.ErrAlreadyExists) || errors.Is(cerr, datastore.ErrConflict)) {
+				decision.Outcome = admission.EntryNoOp
+				return decision
+			}
 			s.log.Error("admit_resources: create category failed",
 				zap.String("name", name), zap.Error(cerr))
 			return failed(fmt.Errorf("create category: %w", cerr))

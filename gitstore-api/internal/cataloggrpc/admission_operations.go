@@ -236,6 +236,7 @@ type resourceAdmissionOperation struct {
 	newEntry       *parsedEntry
 	pathChanged    bool
 	contentChanged bool
+	createOnly     bool // delayed creates may never converge by updating a winner
 }
 
 const namespaceConvergenceOperation admission.Operation = "CONVERGE"
