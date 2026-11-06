@@ -9,6 +9,13 @@ Use separate named Admin/Storefront listeners with invariant prefixed paths, exp
 generator/package names, configurable CORS and a playground endpoint switcher. No generic
 `api.port`, legacy path alias, staged compatibility releases or Storefront enablement flag.
 
+**Validation (2026-11-06)**: The endpoint split merged in #531. Follow-up #535
+completed diagnostic and sustained alpha boundary/fixture acceptance, including
+zero-drop management/native-push convergence and physical API/controller
+replacement. Publication readers/target binding, adversarial WebSocket
+pre-decode bounds and external client release coordination remain open.
+Successful published reads and production capacity are not certified.
+
 **Audience**: GitStore API, schema, storefront, admin UI, and controller authors.
 
 ## Context
