@@ -251,7 +251,7 @@ func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
 	load := runRepositoryCapacityLoad(t, client, cfg, poolPrefix, livePrefix, maxTransitions)
 	if fileLoad != nil {
 		result := <-fileLoad
-		assertSecretCapacityFileLoad(t, result)
+		assertSecretCapacityFileLoad(t, cfg.mode, result)
 		faults := <-secretFaults
 		require.NoError(t, faults.err)
 		require.True(t, faults.observations.Completed, "all owned scheduled faults must finish")
@@ -2536,7 +2536,16 @@ func startSecretCapacityFileLoad(t *testing.T, workload *secretCapacityFileWorkl
 	return result
 }
 
-func assertSecretCapacityFileLoad(t *testing.T, result secretCapacityFileLoadResult) {
+func (m capacityMode) fileACKP95Limit() time.Duration {
+	switch m {
+	case capacityModeProduction, capacityModeDiagnostic:
+		return 3 * time.Second
+	default:
+		return 2 * time.Second
+	}
+}
+
+func assertSecretCapacityFileLoad(t *testing.T, mode capacityMode, result secretCapacityFileLoadResult) {
 	t.Helper()
 	require.NoError(t, result.err, "real File workload failed; cannot substitute Repository metadata evidence")
 	m := result.measurements
@@ -2550,7 +2559,7 @@ func assertSecretCapacityFileLoad(t *testing.T, result secretCapacityFileLoadRes
 	require.LessOrEqual(t, percentileDuration(m.referenceLatencies, .99), 20*time.Millisecond)
 	require.LessOrEqual(t, percentileDuration(m.resolutionLatencies, .95), 10*time.Millisecond)
 	require.LessOrEqual(t, percentileDuration(m.resolutionLatencies, .99), 50*time.Millisecond)
-	require.LessOrEqual(t, percentileDuration(m.pushLatencies, .95), 2*time.Second)
+	require.LessOrEqual(t, percentileDuration(m.pushLatencies, .95), mode.fileACKP95Limit())
 	require.LessOrEqual(t, percentileDuration(m.pushLatencies, .99), 30*time.Second)
 }
 

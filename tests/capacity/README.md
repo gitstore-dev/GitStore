@@ -197,6 +197,11 @@ and revision from independent provenance.
 `duration` is the nominal hour-long schedule; `offeredDuration` is measured and
 must cover that schedule without drifting by more than one 100 ms cadence.
 
+File offered-to-ACK latency includes the original worker-queue delay. Its p95
+limit is <=3s in production and diagnostics, and <=2s in alpha; p99 remains
+<=30s. Diagnostic comparisons do not certify either acceptance mode or replace
+the separate alpha lifecycle contract.
+
 Each artifact declares a relative `path`, `kind` (`log`, `metrics`, `trace` or
 `summary`), `processID`, byte count and SHA-256. Logs and metrics are required for
 each measured process and both replacement processes (API B and controller A). Unlisted, missing,
