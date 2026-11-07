@@ -1,24 +1,32 @@
-import type { DemoResource } from '../overview/model'
-import { resourceLabel } from '../overview/model'
+import type { DemoResource } from '../home/overview/model'
+import { resourceLabel } from '../home/overview/model'
 export type ItemSnapshot =
   | {
       kind: 'Product'
+      body: string
       spec: {
         title: string
-        description: string
         categoryId: string | null
         mediaIds: readonly string[]
+        tags: readonly string[]
+        options: readonly {
+          name: string
+          title: string
+          values: readonly string[]
+        }[]
+        lifecycle: { state: 'ACTIVE' | 'RETIRED' }
       }
     }
   | {
       kind: 'CategoryTaxonomy'
-      spec: { title: string; description: string; parentId: string | null }
+      body: string
+      spec: { title: string; parentId: string | null }
     }
   | {
       kind: 'Collection'
+      body: string
       spec: {
         title: string
-        description: string
         productIds: readonly string[]
       }
     }
@@ -31,11 +39,20 @@ export interface FieldChange {
 }
 export const snapshotTitle = (value: ItemSnapshot) =>
   value.kind === 'File' ? value.name : value.spec.title
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical)
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value)
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([key, entry]) => [key, canonical(entry)]),
+    )
+  return value
+}
 export const sameSnapshot = (a: ItemSnapshot, b: ItemSnapshot) =>
-  a.kind === b.kind &&
-  JSON.stringify(snapshotFields(a)) === JSON.stringify(snapshotFields(b))
+  JSON.stringify(canonical(a)) === JSON.stringify(canonical(b))
 export function snapshotDescription(value: ItemSnapshot) {
-  return value.kind === 'File' ? value.caption : value.spec.description
+  return value.kind === 'File' ? value.caption : value.body
 }
 export function snapshotFields(
   value: ItemSnapshot,
@@ -44,20 +61,26 @@ export function snapshotFields(
     case 'Product':
       return {
         Title: value.spec.title,
-        Description: value.spec.description,
+        Description: value.body,
         Category: value.spec.categoryId,
         'Product images': value.spec.mediaIds,
+        Tags: value.spec.tags,
+        Options: value.spec.options.map(
+          (option) =>
+            `Title ${JSON.stringify(option.title)} · Identifier ${JSON.stringify(option.name)} · Values ${JSON.stringify(option.values)}`,
+        ),
+        Lifecycle: value.spec.lifecycle.state,
       }
     case 'CategoryTaxonomy':
       return {
         Title: value.spec.title,
-        Description: value.spec.description,
+        Description: value.body,
         'Parent category': value.spec.parentId,
       }
     case 'Collection':
       return {
         Title: value.spec.title,
-        Description: value.spec.description,
+        Description: value.body,
         'Collection products': value.spec.productIds,
       }
     case 'File':
@@ -112,25 +135,39 @@ export function seedCatalog(
     if (resource.kind === 'Product')
       catalog[resource.id] = {
         kind: 'Product',
+        body: description,
         spec: {
           title,
-          description,
           categoryId: 'homeware',
+          tags: [],
+          options:
+            resource.id === 'silk-tunic'
+              ? [
+                  { name: 'size', title: 'Size', values: ['M'] },
+                  {
+                    name: 'color',
+                    title: 'Color',
+                    values: ['Natural', 'Black'],
+                  },
+                ]
+              : [],
+          lifecycle: { state: 'ACTIVE' },
           mediaIds:
-            resource.id === 'stone-basin' ? ['basin-image'] : ['lookbook'],
+            resource.id === 'stone-basin' ? ['basin-image', 'lookbook'] : [],
         },
       }
     if (resource.kind === 'CategoryTaxonomy')
       catalog[resource.id] = {
         kind: 'CategoryTaxonomy',
-        spec: { title, description, parentId: null },
+        body: description,
+        spec: { title, parentId: null },
       }
     if (resource.kind === 'Collection')
       catalog[resource.id] = {
         kind: 'Collection',
+        body: description,
         spec: {
           title,
-          description,
           productIds:
             resource.id === 'autumn-objects'
               ? ['stone-basin', 'tea-ritual']

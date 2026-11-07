@@ -10,7 +10,7 @@
 
 **Brand reference:** [`gitstore-assets/branding/concept-v2`](../public/branding/)
 
-> Admin-only branch note: this PRD preserves the broader product plan. Backend source links point to the original GitStore checkout revision; backend services are intentionally absent here. The shell, navigation, layouts, and Home / Overview, My work, and Recent activity pages with shared per-store local demo sessions are implemented. The other 76 destinations remain placeholders; mock behavior does not establish backend capabilities.
+> Admin-only branch note: this PRD preserves the broader product plan. Backend source links point to the original GitStore checkout revision; backend services are intentionally absent here. The shell, navigation, layouts, Catalog / Products, and Home / Overview, My work, and Recent activity pages with shared per-store local demo sessions are implemented. The other 75 destinations remain placeholders; mock behavior does not establish backend capabilities.
 
 ## 1. Product direction
 
@@ -659,7 +659,7 @@ reset behavior, snapshot information where relevant, and Reset demo. Its reset
 action closes the disclosure before opening the existing confirmation. Overview
 uses compact two-column summaries; My work uses horizontally scrollable counted
 tabs. Recent activity shows search plus one Filters button and compact timeline
-entries. The filter sheet stages changes until Show events, restores focus on
+entries. The filter sheet stages changes until Apply filters, restores focus on
 close, and discards pending edits on Cancel/Escape. Applied filters have removable
 chips; no-results states retain controls and Clear filters. At 375 × 667, the first
 activity entry or the first-use guidance is visible above bottom navigation.
@@ -669,3 +669,23 @@ including rail menus and mobile drawers. Global command navigation can leave a
 modal inspector without discarding its draft. Native disclosure state specimens
 render explicitly expanded and assert visible content; real browser tests verify
 Enter/Space toggling. Narrow manager-canvas checks complement static build checks.
+
+## Implemented Product catalog demo increment
+
+**Scope:** Catalog / Products is the fourth mock destination. The 79-destination registry retains 75 placeholders, including Home / Setup guide. This is a local demo, not shipped backend authoring.
+
+**Visual reference:** [Product Canvas (Focus Mode)](https://stitch.google.com/projects/13975495090411370806?node-id=42860fe6eac54d098d5041326457bbfb), in the original GitStore Admin project, supplements the latest GitStore Admin II designs. Reuse its narrow document composition, inline Title, restrained writing controls and lower media/variant sections with the current Split / Return identity. Do not copy its invented publication or telemetry controls.
+
+**Merchant flows:** Product index with grid/table views, Title search, readiness/lifecycle/category filters, sorting in the URL and cursor-based Load more; Product detail; create/update with Title (1–200 characters), Markdown body, category, tags, existing ordered media, option definitions and Active/Retired lifecycle. Technical identity and `.md` path remain stable on Title edits and live in Technical details. Products have no SKU, price or inventory fields. Variants are read-only.
+
+Create/save records a demo event and enters Processing without implying publication/readiness. Personal drafts/reviews remain independent. Retirement keeps the authored Product; it does not withdraw a published release. Deletion is blocked by dependent ProductVariant owners. An unblocked confirmed request enters Deleting, disables edits and generic ready actions, and requires explicit demo completion with a fresh dependency check. Final removal keeps history/work/drafts; recovery cannot resurrect a missing Product. Missing related items display unavailable.
+
+**Shared session:** Products and Home share per-store in-memory catalog/history. Buffers survive page and store changes, Focus transitions and responsive layouts. Reload resets both stores; a confirmed reset restores only the active store. Dirty Cancel/discard and stale-editor reload confirm before throwing away Product text. Optimistic base comparison blocks stale saves after recovery or another catalog edit, preserving the buffer. Recovery snapshots cover all authored Product fields and Markdown body.
+
+**ADR-0013:** The backend decision is Proposed, and the current GraphQL Product body is `String`. Markdown in top-level `body` remains authority. Milkdown Crepe offers BlockNote-style writing (slash blocks, formatting tools, headings/lists/quotes/code/links/images/tables/tasks) with Write / Markdown / Preview modes. Opening and switching modes or editing Title must preserve original body bytes. Compare source and rich serialization semantically before accepting rich edits; unsupported content stays source-editable. Preview never executes HTML or unsafe URLs. Product frontmatter fields and gallery references remain outside the body; body images remain ordinary Markdown.
+
+Do not save editor JSON, an invented IR vocabulary, interpolation tokens or generated HTML. The editor adapter can later consume a versioned read-only `bodyDocument`, once the backend contract exists. Parsing/admission/publication resolution remains server-owned future work. No API, Apollo, authentication, local image uploads, collaboration, AI, persistence or backend write is included.
+
+Product list controls follow Recent activity: visible inline desktop filters, an aligned tablet row, staged mobile filter sheet and removable applied chips. Demo data remains at the far right of the page heading/toolbar, independent of CRUD actions; context trails are hidden on mobile. Product tags are committed as removable chips on Enter/comma/paste or blur. Products uses **Load more**, driven by endCursor/hasNextPage, without numbered pages or total-page claims; filters reset loaded batches.
+
+Recent activity displays only the number of loaded activities (or loaded matching activities), with Load more for additional entries. Neither the results label, load announcement, nor mobile Apply filters action promises a connection total. Local fixtures still determine whether another demo batch exists; a backend integration must use connection pageInfo/endCursor. ADR-0017 and issues #502/#503 do not supply an exact activity total; operational Events may aggregate occurrences and expire, and are distinct from the merchant change/review timeline.

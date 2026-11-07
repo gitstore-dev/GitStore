@@ -214,6 +214,7 @@ export const destinations: readonly NavigationDestination[] = groups
       'home.overview',
       'home.my-work',
       'home.recent-activity',
+      'catalog.products',
     ].includes(destination.id)
       ? 'mock'
       : 'placeholder',
@@ -237,7 +238,12 @@ export function destinationAtPath(pathname: string) {
   const normalized = pathname
     .replace(/^\/w\/[^/]+\//, '/w/$namespace/')
     .replace(/\/$/, '')
-  return destinations.find((destination) => destination.to === normalized)
+  return destinations.find(
+    (destination) =>
+      destination.to === normalized ||
+      (destination.id === 'catalog.products' &&
+        normalized.startsWith('/w/$namespace/catalog/products/')),
+  )
 }
 export function searchDestinations(query: string) {
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)

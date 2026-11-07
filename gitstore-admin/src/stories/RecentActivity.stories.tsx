@@ -5,7 +5,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, userEvent, within, waitFor } from 'storybook/test'
 import { navigateHome, settle } from './helpers/shellInteractions'
 import { createAppRouter } from '../app/router'
-import type { ActivityScenario } from '../features/home/demo/model'
+import type { ActivityScenario } from '../features/demo/model'
 import type { NamespaceId } from '../data/demo'
 import type { Theme, MotionPreference } from '../state/preferences'
 function StoryRouteBoundary({ children }: { children: ReactNode }) {
@@ -98,9 +98,7 @@ export const OlderResults: Story = {
       ),
     )
     await expect(
-      within(canvasElement).getByText(
-        '20 of 24 matching events · 24 total demo events',
-      ),
+      within(canvasElement).getByText('20 activities shown'),
     ).toBeVisible()
   },
 }
@@ -163,7 +161,7 @@ async function oldVersion(canvasElement: HTMLElement) {
     await clickSettled(
       await body.findByRole(
         'button',
-        { name: /^Show \d+ events?$/ },
+        { name: 'Apply filters' },
         { timeout: 10_000 },
       ),
     )

@@ -2,7 +2,7 @@
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="gitstore-admin/public/branding/readme-dark.png"><img src="gitstore-admin/public/branding/readme-light.png" alt="GitStore — Change boldly. Keep a way back."></picture>
 
-An isolated, mock-first Admin foundation: React, strict TypeScript, Vite, TanStack Router, React Aria, and custom CSS Modules. All 79 PRD destinations are navigable: Home / Overview, My work, and Recent activity are interactive mock pages; the other 76 remain placeholders. My work includes a limited, demo-only product Title/description editor and personal review workflow. There is no authentication, backend connection, or GraphQL runtime.
+An isolated, mock-first Admin foundation: React, strict TypeScript, Vite, TanStack Router, React Aria, and custom CSS Modules. All 79 PRD destinations are navigable: Catalog / Products and Home / Overview, My work, and Recent activity are interactive mock destinations; the other 75 remain placeholders. My work includes a limited, demo-only product Title/description editor and personal review workflow. There is no authentication, backend connection, or GraphQL runtime.
 
 ## Start
 
@@ -21,7 +21,7 @@ Focus Mode clears the surrounding interface with a reversible, approximately 420
 
 Home / Overview provides resource summaries, filtering, inspection, and confirmed demo resolution. My work provides draft Title/description editing, submissions, discard, reviews, and read-only Completed recovery entries. Recent activity provides a 24-event, date-grouped history, filters, local pagination, immutable change previews, and full authored fixture recovery for Products, Categories, Collections, and media metadata. No export or live feed is implemented.
 
-The three Home pages share a per-store in-memory session, including unsaved draft buffers. Navigating to other pages or switching stores preserves each store's independent session. Reload resets both stores; the confirmed Reset demo action resets all Home state for the selected store. Nothing is written to browser storage or sent to a backend. Atelier Kyoto starts populated; Studio Berlin starts empty. Recovery appends a labeled event and Completed work entry, preserves other drafts, and never publishes or marks an item ready.
+Products and the three Home pages share a per-store in-memory session, including unsaved draft buffers. Navigating to other pages or switching stores preserves each store's independent session. Reload resets both stores; the confirmed Reset demo action resets all catalog and Home state for the selected store. Nothing is written to browser storage or sent to a backend. Atelier Kyoto starts populated; Studio Berlin starts empty. Recovery appends a labeled event and Completed work entry, preserves other drafts, and never publishes or marks an item ready.
 
 File-backed catalog types use **Title (`spec.title`)**; Products have no SKU. File display names, technical identities, and `.md` source paths remain distinct. Historical outcomes are not current readiness, and fixture models are not backend contracts. Storybook includes normal, empty, filtered, loading, unavailable, stale, restricted, recovery, preserved-buffer, theme, responsive, and reduced-motion states.
 
@@ -53,3 +53,9 @@ halos behind the cards; it does not require HTML-in-Canvas. Rendering is bounded
 and stops at rest, reduced motion uses static CSS, and unavailable/lost GPU devices
 retain the same controls and state. Storybook includes motion and CSS-only lighting
 specimens; see the Home motion treatment in the Admin PRD for timing and boundaries.
+
+## Product catalog demo
+
+Products supports URL-backed search/filter/sort, grid/table views, cursor-based Load more, detail, creation, editing, retirement, and two-stage deletion. Product Title/Markdown body, category, tags, ordered existing media, and options are editable. Variants are read-only and block deletion through explicit demo ownership. Deleting Products cannot be edited or marked ready; completion rechecks blockers and retains activity and personal work. Save enters Processing, without publication.
+
+The document canvas follows [Product Canvas (Focus Mode)](https://stitch.google.com/projects/13975495090411370806?node-id=42860fe6eac54d098d5041326457bbfb). Milkdown Crepe provides slash blocks and formatting over Markdown, with Write / Markdown / safe Preview modes. The original body is preserved on no-op edits; unsupported rich conversions fall back to source. Product buffers survive navigation/store switches, stale saves are blocked, and explicit discard/reload requires confirmation. See the PRD for the ADR-0013 boundary.

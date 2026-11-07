@@ -8,10 +8,10 @@ import {
 } from 'react'
 import type { ReactNode } from 'react'
 import { Heading } from 'react-aria-components'
-import { namespaces } from '../../../data/demo'
-import type { NamespaceId } from '../../../data/demo'
-import { ActionButton } from '../../../components/controls'
-import { ConfirmationDialog } from '../../../components/ConfirmationDialog'
+import { namespaces } from '../../data/demo'
+import type { NamespaceId } from '../../data/demo'
+import { ActionButton } from '../../components/controls'
+import { ConfirmationDialog } from '../../components/ConfirmationDialog'
 import {
   createSession,
   projectedResources,
@@ -28,6 +28,7 @@ interface StoreAPI {
   sessions: Record<NamespaceId, DemoSession>
   dispatch: (action: StoreAction) => void
   requestReset: (namespace: NamespaceId) => void
+  announce: (message: string) => void
 }
 const Context = createContext<StoreAPI | null>(null)
 export function HomeDemoProvider({
@@ -56,6 +57,11 @@ export function HomeDemoProvider({
   )
   const [resetting, setResetting] = useState<NamespaceId | null>(null)
   const [message, setMessage] = useState('')
+  const [announcementId, setAnnouncementId] = useState(0)
+  const announce = useCallback((text: string) => {
+    setMessage(text)
+    setAnnouncementId((id) => id + 1)
+  }, [])
   const dispatch = useCallback((action: StoreAction) => {
     setMessage('')
     storeDispatch(action)
@@ -65,8 +71,8 @@ export function HomeDemoProvider({
     [],
   )
   const api = useMemo(
-    () => ({ sessions, dispatch, requestReset }),
-    [sessions, dispatch, requestReset],
+    () => ({ sessions, dispatch, requestReset, announce }),
+    [sessions, dispatch, requestReset, announce],
   )
   const storeName = namespaces.find((entry) => entry.id === resetting)?.name
   return (
@@ -74,7 +80,7 @@ export function HomeDemoProvider({
       {children}
       {message && (
         <p role="status" aria-live="polite" className={styles.srOnly}>
-          {message}
+          <span key={announcementId}>{message}</span>
         </p>
       )}
       <ConfirmationDialog
@@ -83,11 +89,14 @@ export function HomeDemoProvider({
           if (!open) setResetting(null)
         }}
       >
-        <Heading slot="title">Reset Home demo for {storeName}?</Heading>
+        <Heading slot="title">
+          Reset catalog and Home demo for {storeName}?
+        </Heading>
         <p>
-          Restore the original Overview, My work, and Recent activity examples
-          for {storeName}. This discards all saved demo changes, recoveries, and
-          unsaved draft text for this store. Other stores are unchanged.
+          Restore the original Products, Overview, My work, and Recent activity
+          examples for {storeName}. This discards all saved demo changes,
+          recoveries, and unsaved draft text for this store. Other stores are
+          unchanged.
         </p>
         <div className={styles.actions}>
           <ActionButton autoFocus onPress={() => setResetting(null)}>
@@ -98,8 +107,8 @@ export function HomeDemoProvider({
             onPress={() => {
               if (resetting)
                 dispatch({ namespace: resetting, action: { type: 'reset' } })
-              setMessage(
-                `Home demo reset for ${storeName}. Original examples restored.`,
+              announce(
+                `Catalog and Home demo reset for ${storeName}. Original examples restored.`,
               )
               setResetting(null)
               requestAnimationFrame(() =>
@@ -130,5 +139,5 @@ export function useHomeDemo(namespace: NamespaceId) {
     [requestReset, namespace],
   )
   const resources = useMemo(() => projectedResources(session), [session])
-  return { session, resources, dispatch, reset }
+  return { session, resources, dispatch, reset, announce: context.announce }
 }

@@ -30,15 +30,15 @@ export function workFixture(
     resourceKind: 'Product' as const,
     status,
     base: {
+      body: `Discover ${name.toLowerCase()}, thoughtfully made for everyday use.`,
       spec: {
         title: name,
-        description: `Discover ${name.toLowerCase()}, thoughtfully made for everyday use.`,
       },
     },
     proposed: {
+      body: `${name}, carefully selected for our collection. Find materials, care guidance, and thoughtful details in store.`,
       spec: {
         title: name,
-        description: `${name}, carefully selected for our collection. Find materials, care guidance, and thoughtful details in store.`,
       },
     },
     author: status === 'assigned' ? 'Kenji Sato' : demoUser.name,

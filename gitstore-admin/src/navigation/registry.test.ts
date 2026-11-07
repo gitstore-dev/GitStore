@@ -26,10 +26,15 @@ describe('PRD navigation contract', () => {
     expect(new Set(destinations.map((d) => d.to)).size).toBe(79)
     expect(
       destinations.filter((d) => d.implementation === 'mock').map((d) => d.id),
-    ).toEqual(['home.overview', 'home.my-work', 'home.recent-activity'])
+    ).toEqual([
+      'home.overview',
+      'home.my-work',
+      'home.recent-activity',
+      'catalog.products',
+    ])
     expect(
       destinations.filter((d) => d.implementation === 'placeholder'),
-    ).toHaveLength(76)
+    ).toHaveLength(75)
     for (const d of destinations) {
       expect(
         d.to.startsWith(

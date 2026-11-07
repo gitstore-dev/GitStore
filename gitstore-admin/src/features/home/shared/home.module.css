@@ -497,3 +497,9 @@
     flex-wrap: nowrap;
   }
 }
+
+@media (max-width: 760px) {
+  [data-page-context] {
+    display: none;
+  }
+}

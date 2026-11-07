@@ -1,0 +1,79 @@
+.field {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+  font-size: 12px;
+}
+.inputArea {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  min-height: 44px;
+}
+.inputArea:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.group {
+  min-width: 0;
+  max-width: 100%;
+}
+.list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tag {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--hover);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 5px 4px 9px;
+  min-width: 0;
+  max-width: 100%;
+}
+.tag span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.tag button {
+  display: grid;
+  place-items: center;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.entry {
+  flex: 1;
+  min-width: 100px;
+}
+.entry input {
+  width: 100%;
+  min-width: 0;
+  color: var(--ink);
+  border: 0;
+  background: transparent;
+  outline: none;
+  padding: 6px 3px;
+}
+.field small {
+  color: var(--muted);
+  font-size: 10px;
+}
+@media (max-width: 760px) {
+  .tag button {
+    min-width: 28px;
+    min-height: 28px;
+  }
+}

@@ -2,7 +2,7 @@
 
 ## Boundaries
 
-The shell, shared controls, layouts, navigation, and Home / Overview, My work, and Recent activity are implemented. They use deterministic fixtures and shared per-store in-memory sessions; the other 76 destinations remain placeholders. No network transport, authentication, live operational metrics, Apollo cache, GraphQL endpoint, or API mock server is present. Presentation specimens do not enforce authorization.
+The shell, shared controls, layouts, navigation, Catalog / Products, and Home / Overview, My work, and Recent activity are implemented. They use deterministic fixtures and shared per-store in-memory sessions; the other 75 destinations remain placeholders. No network transport, authentication, live operational metrics, Apollo cache, GraphQL endpoint, or API mock server is present. Presentation specimens do not enforce authorization.
 
 The PRD covers future commerce capabilities. Source references in the copied PRD describe the backend's historical planning baseline, which is intentionally absent on this branch. Stitch project GitStore Admin II is visual reference, not production source code.
 
@@ -13,7 +13,7 @@ The PRD covers future commerce capabilities. Source references in the copied PRD
 - `src/components`: React Aria-backed interactions, navigation items, theme picker, workspace selector, profile menu and command palette.
 - `src/shell`: header/sidebar and standard, inspector and Focus Mode composition.
 - `src/features/home/overview`: seed fixtures, selectors, controls, resource inspector, and presentation states. No transport or API contract is implied.
-- `src/features/home/demo`: shared session, snapshots, recovery validation, event history, and change previews.
+- `src/features/demo`: shared session, snapshots, recovery validation, event history, and change previews.
 - `src/features/home/recent-activity`: timeline, filters, local pagination, and event/recovery inspector.
 - `src/features/home/my-work`: personal-work seed fixtures, selectors/reducer, product text editor, change preview, confirmations, and presentation states.
 - `src/features/home/shared`: common Home page frame, context trail/header, demo disclosure, summary content, and resource cards. Overview and My work share their responsive spacing and card anatomy.
@@ -43,7 +43,7 @@ namespace: authored snapshots, readiness metadata, saved work, unsaved draft buf
 immutable events, deterministic counters, and a reset epoch. All application routes
 and store switches preserve these sessions. Reload restores both stores. Reset demo
 requires confirmation, restores only the active store, clears its buffers and all
-three Home views, and remounts its shell to dismiss stale inspectors and selections.
+Products and the three Home views, and remounts its shell to dismiss stale inspectors and selections.
 Preferences remain separate and may persist normally; demo data never uses storage.
 
 File-backed Product, ProductVariant, CategoryTaxonomy, and Collection display titles
@@ -159,7 +159,7 @@ reset behavior, snapshot information where relevant, and Reset demo. Its reset
 action closes the disclosure before opening the existing confirmation. Overview
 uses compact two-column summaries; My work uses horizontally scrollable counted
 tabs. Recent activity shows search plus one Filters button and compact timeline
-entries. The filter sheet stages changes until Show events, restores focus on
+entries. The filter sheet stages changes until Apply filters, restores focus on
 close, and discards pending edits on Cancel/Escape. Applied filters have removable
 chips; no-results states retain controls and Clear filters. At 375 × 667, the first
 activity entry or the first-use guidance is visible above bottom navigation.
@@ -169,3 +169,25 @@ including rail menus and mobile drawers. Global command navigation can leave a
 modal inspector without discarding its draft. Native disclosure state specimens
 render explicitly expanded and assert visible content; real browser tests verify
 Enter/Space toggling. Narrow manager-canvas checks complement static build checks.
+
+## Product catalog and Markdown boundary
+
+- `src/features/catalog/products`: list selectors/URL state, CRUD reducer, document editor, media ordering, lifecycle/dependency actions, and route pages. Nested routes belong to the existing Products destination; four mock destinations and 75 placeholders remain.
+- `src/features/demo`: shared session provider, authored snapshots, events, Product buffers, draft buffers, revision counters and owner fixtures. Local category/media IDs are demo lookup keys, not GraphQL input envelopes; introduce an explicit contract adapter with real API integration.
+- `src/components/markdown`: lazy Milkdown Crepe adapter, CommonMark/GFM semantic comparison, explicit source fallback and safe React Markdown preview. Rich AST is disposable. No image uploads, math, AI, collaboration or interpolation. Frontmatter fields are edited outside body.
+
+Product buffers retain a base snapshot; saves check it against the current saved Product, including after recovery. Reload saved Product confirms discarding only that Product buffer. Source bytes remain unchanged until a body edit. Before opening rich mode, parse/serialize content is compared semantically; HTML and non-preserving content stays source-editable. Preview omits HTML and strips unsafe URLs. Markdown formatting after a rich body edit may normalize the edited body.
+
+Product metadata identity remains stable when Title changes. IDs are unique even against deleted history. Save records authored state and Processing status; retirement is authored lifecycle, not deletion or publication. Foreground deletion uses explicit variant-owner fixtures, blocks before start, checks again at explicit completion, and disables generic Overview resolution while terminating. Missing reference labels degrade to unavailable. Recovery cannot resurrect a deleted Product or change a deleting Product. Existing personal work and buffers remain intact.
+
+The Product gallery bundles the two ceramic basin photographs from the supplied Stitch screen under `public/media/demo`, with source attribution there. Other Products show an honest missing-image state. Variants stay read-only. Do not add browser-storage persistence, backend mutations or Apollo in this increment.
+
+Run `make check TARGET=all` and `make pr-ready`. Product browser tests cover CRUD, source preservation, rich keyboard formatting, confirmations, URL filter state, Load more, Home integration and narrow Storybook play functions. Use `STORYBOOK_PORT=6007` for static checks while the developer's live Storybook remains on 6006; repeat Product story checks against 6006 to verify live interaction behavior.
+
+### Product presentation consistency
+
+Products uses the shared Home page heading, with Demo data anchored at the right. Product view/create/edit keep the same right margin for Demo data and place CRUD actions in a separate row. Context trails are hidden below 760px. `FilterBar` and `FilterSheet` are shared with Recent activity: inline desktop filters, an aligned tablet row, and staged mobile selection with apply/cancel and applied chips. Product tags use a reusable React Aria tag input: Enter/comma/paste commit unique chips, blur commits pending text before Save, and remove buttons or keyboard deletion remove chips.
+
+Product pagination follows the connection boundary: opaque demo edge cursors and pageInfo drive **Load more products**, appending batches without displaying page numbers or total pages. Filters/sort reset loaded batches; reload starts with the first batch. Product counts say how many items are shown, not a server-guaranteed catalog total. The local fixture can preview match counts in the filter sheet; that is not a promise of a future GraphQL totalCount field.
+
+Recent activity displays only the number of loaded activities (or loaded matching activities), with Load more for additional entries. Neither the results label, load announcement, nor mobile Apply filters action promises a connection total. Local fixtures still determine whether another demo batch exists; a backend integration must use connection pageInfo/endCursor. ADR-0017 and issues #502/#503 do not supply an exact activity total; operational Events may aggregate occurrences and expire, and are distinct from the merchant change/review timeline.

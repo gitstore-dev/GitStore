@@ -38,6 +38,7 @@ interface ResourceMetadata {
   id: string
   readiness: Readiness
   diagnostic: string
+  deleting?: boolean
   path: string
   references: readonly ResourceReference[]
 }

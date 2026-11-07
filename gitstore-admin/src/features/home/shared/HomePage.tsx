@@ -46,6 +46,7 @@ export function HomePageHeader({
   headingId,
   onReset,
   demoDetails,
+  section,
 }: {
   namespace: string
   title: string
@@ -53,11 +54,12 @@ export function HomePageHeader({
   headingId?: string
   onReset: () => void
   demoDetails?: ReactNode
+  section?: string
 }) {
   return (
     <header className={styles.pageHeading}>
       <div>
-        <PageContext namespace={namespace} />
+        <PageContext namespace={namespace} section={section} />
         <h1 id={headingId} tabIndex={-1}>
           {title}
           <span aria-hidden="true" className={styles.titleDot}>
@@ -94,7 +96,7 @@ export function DemoControls({
           <p>
             Demo changes and unsaved drafts stay in this tab across pages and
             stores. Reloading resets both stores; Reset demo restores the
-            selected store’s original Home examples.
+            selected store’s original catalog and Home examples.
           </p>
           {details && <p>{details}</p>}
           <ActionButton

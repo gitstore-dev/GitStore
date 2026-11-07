@@ -48,7 +48,7 @@ for (const theme of ['light', 'dark'] as const) {
     await page.getByRole('button', { name: 'Demo data', exact: true }).click()
     await page.getByRole('button', { name: 'Reset demo', exact: true }).click()
     const confirmation = page.getByRole('dialog', {
-      name: 'Reset Home demo for Atelier Kyoto?',
+      name: 'Reset catalog and Home demo for Atelier Kyoto?',
     })
     await expect(confirmation).toBeVisible()
     await expect(
@@ -88,7 +88,7 @@ test('mobile filter sheet stages changes, applies, removes chips, cancels, and r
   await button.click()
   await sheet.getByRole('button', { name: /Recorded date$/ }).click()
   await page.getByRole('option', { name: '31 Oct 2026', exact: true }).click()
-  await sheet.getByRole('button', { name: /^Show \d+ events?$/ }).click()
+  await sheet.getByRole('button', { name: 'Apply filters' }).click()
   await expect(button).toHaveText('Filters (1)')
   await expect(button).toBeFocused()
   await expect(

@@ -1,0 +1,144 @@
+.editor {
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+}
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.top h2 {
+  margin: 0;
+  font: 500 24px var(--display);
+}
+.modes {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--hover);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.mode {
+  padding: 7px 10px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.mode[data-selected] {
+  background: var(--surface);
+  box-shadow: 0 1px 3px #0001;
+}
+.mode[data-disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+.source {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0;
+}
+.source label,
+.hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+.source textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 220px;
+  font: 12px/1.9 var(--mono);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 14px;
+}
+.preview {
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+  min-height: 100px;
+}
+.preview h1,
+.preview h2,
+.preview h3 {
+  font-family: var(--display);
+}
+.preview img {
+  max-width: 100%;
+}
+.preview pre {
+  overflow: auto;
+  padding: 16px;
+  background: var(--hover);
+}
+.preview blockquote {
+  margin-inline: 0;
+  border-left: 3px solid var(--sage);
+  padding-left: 20px;
+  color: var(--muted);
+}
+.preview table {
+  border-collapse: collapse;
+  display: block;
+  max-width: 100%;
+  overflow: auto;
+}
+.preview td,
+.preview th {
+  border: 1px solid var(--line);
+  padding: 8px;
+}
+.rich {
+  --crepe-color-background: var(--surface);
+  --crepe-color-on-background: var(--ink);
+  --crepe-color-surface: var(--surface);
+  --crepe-color-on-surface: var(--ink);
+  --crepe-color-outline: var(--line);
+  --crepe-color-primary: var(--link);
+  --crepe-color-secondary: var(--hover);
+  --crepe-color-on-secondary: var(--ink);
+  --crepe-color-surface-low: var(--surface);
+  --crepe-color-surface-high: var(--hover);
+  --crepe-color-on-surface-variant: var(--muted);
+  --crepe-font-default: var(--body);
+  --crepe-font-title: var(--display);
+  --crepe-font-code: var(--mono);
+  min-height: 220px;
+}
+.rich :global(.milkdown) {
+  background: transparent;
+  color: var(--ink);
+}
+.rich :global(.milkdown .ProseMirror) {
+  padding: 24px 30px;
+  min-height: 220px;
+  font: 14px/1.9 var(--body);
+  overflow-wrap: anywhere;
+}
+.rich :global(.ProseMirror img) {
+  max-width: 100%;
+}
+.rich :global(.milkdown-slash-menu),
+.rich :global(.milkdown-toolbar) {
+  z-index: 20;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+.hint {
+  line-height: 1.7;
+  margin-bottom: 24px;
+}
+.note {
+  background: var(--hover);
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+@media (max-width: 600px) {
+  .rich :global(.milkdown .ProseMirror) {
+    padding: 16px 24px;
+  }
+}

@@ -1,21 +1,23 @@
-import type { NamespaceId } from '../../../data/demo'
-import { demoUser } from '../../../data/demo'
-import { overviewFixture } from '../overview/fixtures'
+import { reduceProduct } from '../catalog/products/model'
+import type { ProductBuffer, ProductAction } from '../catalog/products/model'
+import type { NamespaceId } from '../../data/demo'
+import { demoUser } from '../../data/demo'
+import { overviewFixture } from '../home/overview/fixtures'
 import type {
   DemoResource,
   OverviewScenario,
   ResourceKind,
-} from '../overview/model'
-import { resourceLabel } from '../overview/model'
-import { workFixture } from '../my-work/fixtures'
-import { initialWork, workReducer } from '../my-work/model'
+} from '../home/overview/model'
+import { resourceLabel } from '../home/overview/model'
+import { workFixture } from '../home/my-work/fixtures'
+import { initialWork, workReducer } from '../home/my-work/model'
 import type {
   ProductText,
   WorkAction,
   WorkItem,
   WorkScenario,
   WorkState,
-} from '../my-work/model'
+} from '../home/my-work/model'
 import { recoveryProblem, seedCatalog, snapshotTitle } from './snapshots'
 import type { FieldChange, ItemSnapshot } from './snapshots'
 export const activityCategories = [
@@ -57,7 +59,10 @@ export interface ActivityEvent {
   changes?: readonly FieldChange[]
   sourceEventId?: string
 }
+export type ProductScenario =
+  'unsupported' | 'stale-edit' | 'deleting' | 'deleted'
 export interface DemoSeed {
+  productScenario?: ProductScenario
   overviewScenario?: OverviewScenario
   myWorkScenario?: WorkScenario
   activityScenario?: ActivityScenario
@@ -71,8 +76,13 @@ export interface DemoSession {
   events: readonly ActivityEvent[]
   revision: number
   epoch: number
+  productBuffers: Readonly<Record<string, ProductBuffer>>
+  productUpdated: Readonly<Record<string, string>>
+  deleting: readonly string[]
+  variantOwners: Readonly<Record<string, string>>
 }
 export type HomeAction =
+  | ProductAction
   | { type: 'resolve'; id: string }
   | { type: 'work'; action: Exclude<WorkAction, { type: 'reset' }> }
   | { type: 'buffer'; id: string; text: ProductText | null }
@@ -131,17 +141,22 @@ function historical(snapshot: ItemSnapshot, stage: number): ItemSnapshot {
     ...snapshot.spec,
     title:
       stage === 0 ? `${snapshot.spec.title} — Original` : snapshot.spec.title,
-    description: 'Earlier collection notes, before the latest update.',
   }
   if (snapshot.kind === 'Product')
     return {
       kind: 'Product',
-      spec: { ...spec, categoryId: null, mediaIds: [] },
+      body: 'Earlier collection notes, before the latest update.',
+      spec: { ...snapshot.spec, ...spec, categoryId: null, mediaIds: [] },
     }
   if (snapshot.kind === 'CategoryTaxonomy')
-    return { kind: 'CategoryTaxonomy', spec: { ...spec, parentId: null } }
+    return {
+      kind: 'CategoryTaxonomy',
+      body: 'Earlier collection notes, before the latest update.',
+      spec: { ...spec, parentId: null },
+    }
   return {
     kind: 'Collection',
+    body: 'Earlier collection notes, before the latest update.',
     spec: { ...spec, productIds: [...snapshot.spec.productIds].reverse() },
   }
 }
@@ -216,11 +231,12 @@ export function createSession(
         ...event,
         after: {
           kind: 'Product',
+          body: event.after.body,
           spec: { ...event.after.spec, categoryId: 'missing-category' },
         },
       }
   }
-  return {
+  let session: DemoSession = {
     namespace,
     catalog,
     resources: fixture.resources,
@@ -233,7 +249,59 @@ export function createSession(
     events,
     revision: 0,
     epoch: 0,
+    productBuffers: {},
+    productUpdated: Object.fromEntries(
+      Object.keys(catalog).map((id) => [id, '2026-11-02T11:00:00.000Z']),
+    ),
+    deleting: [],
+    variantOwners: {
+      'tunic-natural-m': 'silk-tunic',
+      'tunic-black-m': 'silk-tunic',
+      'tea-kit-natural': 'tea-ritual',
+    },
   }
+  const product = catalog['stone-basin']
+  if (product?.kind === 'Product') {
+    if (seed.productScenario === 'unsupported')
+      session = {
+        ...session,
+        catalog: {
+          ...catalog,
+          'stone-basin': {
+            ...product,
+            body: '<aside>Preserve this authored HTML in Markdown mode.</aside>',
+          },
+        },
+      }
+    if (seed.productScenario === 'stale-edit')
+      session = {
+        ...session,
+        productBuffers: {
+          'stone-basin': {
+            base: product,
+            value: { ...product, body: 'Preserved unsaved edits.' },
+          },
+        },
+        catalog: {
+          ...catalog,
+          'stone-basin': { ...product, body: 'A recovered saved version.' },
+        },
+      }
+    if (
+      seed.productScenario === 'deleting' ||
+      seed.productScenario === 'deleted'
+    )
+      session = reduceProduct(session, {
+        type: 'product-delete',
+        id: 'stone-basin',
+      })
+    if (seed.productScenario === 'deleted')
+      session = reduceProduct(session, {
+        type: 'product-complete-delete',
+        id: 'stone-basin',
+      })
+  }
+  return session
 }
 export function resetSession(
   session: DemoSession,
@@ -247,7 +315,12 @@ export function projectedResources(
   const label = (id: string) =>
     session.catalog[id]
       ? snapshotTitle(session.catalog[id])
-      : resourceLabel(session.resources.find((resource) => resource.id === id)!)
+      : (() => {
+          const resource = session.resources.find(
+            (resource) => resource.id === id,
+          )
+          return resource ? resourceLabel(resource) : 'Unavailable item'
+        })()
   return session.resources.map((resource): DemoResource => {
     const snapshot = session.catalog[resource.id]
     let updated = resource
@@ -288,11 +361,17 @@ export function projectedResources(
           ? { ...reference, label: label(reference.resourceId) }
           : reference,
       )
-    return { ...updated, references }
+    return {
+      ...updated,
+      references,
+      deleting: session.deleting.includes(resource.id),
+    }
   })
 }
 export function restoreProblem(session: DemoSession, eventId: string) {
   const event = session.events.find((entry) => entry.id === eventId)
+  if (event && session.deleting.includes(event.itemId))
+    return 'This product is being deleted. Recovery is unavailable.'
   return event
     ? recoveryProblem(event.itemId, event.after, session.catalog)
     : 'This event is no longer available.'
@@ -301,6 +380,13 @@ export function sessionReducer(
   session: DemoSession,
   action: HomeAction,
 ): DemoSession {
+  if (
+    action.type === 'product-buffer' ||
+    action.type === 'product-save' ||
+    action.type === 'product-delete' ||
+    action.type === 'product-complete-delete'
+  )
+    return reduceProduct(session, action)
   if (action.type === 'buffer') {
     const item = session.work.items.find((entry) => entry.id === action.id)
     if (!item || item.status !== 'drafts') return session
@@ -353,13 +439,22 @@ export function sessionReducer(
       ...session,
       revision,
       catalog: { ...session.catalog, [source.itemId]: target },
+      productUpdated:
+        target.kind === 'Product'
+          ? { ...session.productUpdated, [source.itemId]: timestamp }
+          : session.productUpdated,
       events: [event, ...session.events],
       work: { ...session.work, items: [recovery, ...session.work.items] },
     }
   }
   if (action.type === 'resolve') {
     const resource = session.resources.find((entry) => entry.id === action.id)
-    if (!resource || resource.readiness === 'ready') return session
+    if (
+      !resource ||
+      resource.readiness === 'ready' ||
+      session.deleting.includes(action.id)
+    )
+      return session
     const event: ActivityEvent = {
       id,
       itemId: resource.id,
@@ -394,6 +489,7 @@ export function sessionReducer(
       events: [event, ...session.events],
     }
   }
+  if (action.type !== 'work') return session
   const old = session.work.items.find((entry) => entry.id === action.action.id)
   if (!old || old.entryType === 'recovery') return session
   const work = workReducer(
@@ -417,12 +513,23 @@ export function sessionReducer(
       : 'draft'
   const changes: FieldChange[] =
     action.action.type === 'save' && updated
-      ? (['title', 'description'] as const)
-          .filter((field) => old.proposed.spec[field] !== nextText.spec[field])
+      ? (['title', 'body'] as const)
+          .filter(
+            (field) =>
+              (field === 'title'
+                ? old.proposed.spec.title
+                : old.proposed.body) !==
+              (field === 'title' ? nextText.spec.title : nextText.body),
+          )
           .map((field) => ({
             label: field === 'title' ? 'Title' : 'Description',
-            before: old.proposed.spec[field] || 'Empty',
-            after: nextText.spec[field] || 'Empty',
+            before:
+              (field === 'title'
+                ? old.proposed.spec.title
+                : old.proposed.body) || 'Empty',
+            after:
+              (field === 'title' ? nextText.spec.title : nextText.body) ||
+              'Empty',
           }))
       : [
           {

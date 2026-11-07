@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { isDemoNamespace } from '../data/demo'
 import { RecentActivityPage } from '../features/home/recent-activity/RecentActivityPage'
-import { useHomeDemo } from '../features/home/demo/HomeDemoProvider'
+import { useHomeDemo } from '../features/demo/HomeDemoProvider'
 export const Route = createFileRoute(
   '/_shell/w/$namespace/home/recent-activity',
 )({ component: ActivityRoute })

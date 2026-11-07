@@ -16,7 +16,7 @@ import {
   snapshotTitle,
 } from './snapshots'
 import type { ItemSnapshot } from './snapshots'
-import { resourceLabel } from '../overview/model'
+import { resourceLabel } from '../home/overview/model'
 const seed = () => createSession('atelier-kyoto')
 const older = (kind: ItemSnapshot['kind']) =>
   seed().events.find(
@@ -132,7 +132,9 @@ describe('shared Home demo session', () => {
   }
   it('compares authored fields and ordered links independently of object key ordering', () => {
     const session = seed()
-    const event = older('Product')
+    const event = session.events.find(
+      (event) => event.id === 'history-stone-basin-0',
+    )!
     const changes = snapshotChanges(
       session.catalog[event.itemId],
       event.after!,
@@ -146,7 +148,7 @@ describe('shared Home demo session', () => {
     const original = session.catalog[event.itemId]!
     if (original.kind !== 'Product') throw new Error('Product expected')
     expect(
-      sameSnapshot(original, { spec: { ...original.spec }, kind: 'Product' }),
+      sameSnapshot(original, { ...original, spec: { ...original.spec } }),
     ).toBe(true)
   })
   it('rejects unavailable versions, wrong-kind or missing links and category cycles without mutation', () => {
@@ -197,7 +199,7 @@ describe('shared Home demo session', () => {
   })
   it('preserves drafts and unsaved buffers during recovery and records only explicit saved work actions', () => {
     let session = seed()
-    const text = { spec: { title: 'Unsaved title', description: '' } }
+    const text = { spec: { title: 'Unsaved title' }, body: '' }
     session = sessionReducer(session, {
       type: 'buffer',
       id: 'basin-draft',
@@ -256,7 +258,7 @@ describe('shared Home demo session', () => {
     const session = sessionReducer(seed(), {
       type: 'buffer',
       id: 'basin-draft',
-      text: { spec: { title: 'Unsaved', description: '' } },
+      text: { spec: { title: 'Unsaved' }, body: '' },
     })
     const restored = sessionReducer(session, {
       type: 'restore',

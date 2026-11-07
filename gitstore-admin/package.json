@@ -24,11 +24,17 @@
     "@fontsource/archivo-narrow": "5.3.0",
     "@fontsource/ibm-plex-mono": "5.3.0",
     "@fontsource/ibm-plex-sans": "5.3.0",
+    "@milkdown/crepe": "7.23.0",
+    "@milkdown/kit": "7.23.0",
     "@tanstack/react-router": "1.170.46",
     "lucide-react": "1.65.0",
     "react": "19.3.1",
     "react-aria-components": "1.22.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "unified": "11.0.5"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

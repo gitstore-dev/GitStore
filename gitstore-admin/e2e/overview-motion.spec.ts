@@ -89,7 +89,9 @@ test('rapid filter/sort/reset and Focus interruption leave no stale animations o
   ).toHaveAccessibleName('View details for Autumn Objects')
   await openDemoReset(page)
   await page
-    .getByRole('dialog', { name: 'Reset Home demo for Atelier Kyoto?' })
+    .getByRole('dialog', {
+      name: 'Reset catalog and Home demo for Atelier Kyoto?',
+    })
     .getByRole('button', { name: 'Confirm demo reset' })
     .click()
   await page.getByRole('button', { name: 'Focus mode', exact: true }).click()

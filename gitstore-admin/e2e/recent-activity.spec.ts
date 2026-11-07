@@ -6,6 +6,13 @@ const activity = '/w/atelier-kyoto/home/recent-activity'
 const nav = (page: Page) =>
   page.getByRole('navigation', { name: 'Main navigation', exact: true })
 async function selectOption(page: Page, label: string, value: string) {
+  await expect(
+    page.getByRole('heading', {
+      name: 'Recent activity',
+      level: 1,
+      exact: true,
+    }),
+  ).toBeVisible()
   const button = page.getByRole('button', { name: new RegExp(`${label}$`) })
   const mobile = !(await button.isVisible())
   if (mobile) await page.getByRole('button', { name: /^Filters/ }).click()
@@ -14,7 +21,7 @@ async function selectOption(page: Page, label: string, value: string) {
   if (mobile)
     await page
       .getByRole('dialog', { name: 'Filter activity' })
-      .getByRole('button', { name: /^Show \d+ events?$/ })
+      .getByRole('button', { name: 'Apply filters' })
       .click()
 }
 async function oldBasin(page: Page) {
@@ -47,20 +54,33 @@ test('timeline filters, dates, pagination and history are local and merchant-fac
   })
   await page.goto(activity)
   await expect(page).toHaveTitle('Recent activity · GitStore')
-  await expect(
-    page.getByText('10 of 24 matching events · 24 total demo events'),
-  ).toBeVisible()
+  await expect(page.getByText('10 activities shown')).toBeVisible()
   await expect(page.locator('[data-resource-id]')).toHaveCount(10)
   await page.getByRole('button', { name: 'Load more' }).click()
   await expect(page.locator('[data-resource-id]')).toHaveCount(20)
+  await expect(
+    page.getByText('20 activities shown', { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByRole('status')).toContainText(
+    'Loaded 10 more activities. 20 activities shown.',
+  )
   await page.getByRole('button', { name: 'Load more' }).click()
   await expect(page.locator('[data-resource-id]')).toHaveCount(24)
+  await expect(
+    page.getByText('24 activities shown', { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByRole('status')).toContainText(
+    'Loaded 4 more activities. 24 activities shown.',
+  )
   await expect(page.getByRole('button', { name: 'Load more' })).toHaveCount(0)
   await selectOption(page, 'Actor', 'Kenji Sato')
   await selectOption(page, 'Item type', 'Category')
   await selectOption(page, 'Event category', 'Catalog changes')
   await selectOption(page, 'Recorded date', '31 Oct 2026')
   await expect(page.locator('[data-resource-id]')).toHaveCount(1)
+  await expect(
+    page.getByText('1 matching activity shown', { exact: true }),
+  ).toBeVisible()
   await expect(
     page.getByRole('button', { name: 'View details for Homeware — Original' }),
   ).toBeVisible()
@@ -121,7 +141,9 @@ test('recovery preserves draft buffers, updates Overview and Completed work, and
       exact: true,
     }),
   ).toBeFocused()
-  await expect(page.getByText(/24 total demo events/)).toBeVisible()
+  await expect(
+    page.getByText('1 matching activity shown', { exact: true }),
+  ).toBeVisible()
   await recover(page)
   await expect(
     panel(page).getByRole('heading', {
@@ -262,7 +284,9 @@ test('saved work actions and resolution append shared history; reset clears all 
   await nav(page)
     .getByRole('link', { name: 'Recent activity', exact: true })
     .click()
-  await expect(page.getByText(/27 total demo events/)).toBeVisible()
+  await expect(
+    page.getByText('10 activities shown', { exact: true }),
+  ).toBeVisible()
   await expect(
     page.getByText('Draft submitted', { exact: true }).first(),
   ).toBeVisible()
@@ -278,18 +302,21 @@ test('saved work actions and resolution append shared history; reset clears all 
   ).toHaveCount(0)
   await openDemoReset(page)
   const reset = page.getByRole('dialog', {
-    name: 'Reset Home demo for Atelier Kyoto?',
+    name: 'Reset catalog and Home demo for Atelier Kyoto?',
   })
   await reset.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await expect(page.getByText(/27 total demo events/)).toBeVisible()
+  await expect(
+    page.getByText(
+      `${await page.locator('[data-resource-id]').count()} matching activities shown`,
+      { exact: true },
+    ),
+  ).toBeVisible()
   await openDemoReset(page)
   await reset.getByRole('button', { name: 'Confirm demo reset' }).click()
   await expect(
     page.getByRole('heading', { name: 'Recent activity', exact: true }),
   ).toBeFocused()
-  await expect(
-    page.getByText('10 of 24 matching events · 24 total demo events'),
-  ).toBeVisible()
+  await expect(page.getByText('10 activities shown')).toBeVisible()
   await expect(panel(page)).toBeHidden()
   await nav(page).getByRole('link', { name: 'My work', exact: true }).click()
   await expect(page.getByRole('tab', { name: /^Drafts 2/ })).toBeVisible()

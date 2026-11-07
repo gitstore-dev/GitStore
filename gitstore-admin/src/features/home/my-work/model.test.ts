@@ -29,7 +29,7 @@ describe('personal demo work', () => {
     expect(new Set(fixture.map((item) => item.id)).size).toBe(7)
     for (const item of fixture) {
       expect(item.path).toMatch(/\.md$/)
-      expect(changedFields(item)).toEqual(['description'])
+      expect(changedFields(item)).toEqual(['body'])
       expect(Number.isFinite(Date.parse(item.updatedAt))).toBe(true)
       if (item.status === 'assigned')
         expect(item.reviewer).toBe('Elena Rostova')
@@ -53,25 +53,26 @@ describe('personal demo work', () => {
   })
   it('validates titles while allowing empty descriptions and preserves the original comparison', () => {
     const state = initialWork(fixture)
-    expect(validText({ spec: { title: '  ', description: '' } })).toBe(false)
-    expect(validText({ spec: { title: 'Cup', description: '' } })).toBe(true)
+    expect(validText({ spec: { title: '  ' }, body: '' })).toBe(false)
+    expect(validText({ spec: { title: 'Cup' }, body: '' })).toBe(true)
     expect(
       workReducer(state, {
         type: 'save',
         id: 'basin-draft',
-        text: { spec: { title: ' ', description: '' } },
+        text: { spec: { title: ' ' }, body: '' },
       }),
     ).toBe(state)
     const next = workReducer(state, {
       type: 'save',
       id: 'basin-draft',
-      text: { spec: { title: '  Stone Basin  ', description: '' } },
+      text: { spec: { title: '  Stone Basin  ' }, body: '' },
     })
     expect(product(next.items[0]).proposed).toEqual({
-      spec: { title: 'Stone Basin', description: '' },
+      spec: { title: 'Stone Basin' },
+      body: '',
     })
     expect(product(next.items[0]).base).toEqual(fixture[0]!.base)
-    expect(changedFields(next.items[0]!)).toEqual(['title', 'description'])
+    expect(changedFields(next.items[0]!)).toEqual(['title', 'body'])
     expect(sameText(fixture[0]!.base, fixture[0]!.base)).toBe(true)
     expect(sameText(fixture[0]!.base, fixture[0]!.proposed)).toBe(false)
     expect(fixture[0]!.proposed.spec.title).toBe('Kanso Stone Basin')
@@ -139,7 +140,7 @@ describe('personal demo work', () => {
       workReducer(state, {
         type: 'save',
         id: 'cup-submitted',
-        text: { spec: { title: 'Changed', description: '' } },
+        text: { spec: { title: 'Changed' }, body: '' },
       }),
     ).toBe(state)
     expect(workReducer(state, { type: 'approve', id: 'tunic-completed' })).toBe(

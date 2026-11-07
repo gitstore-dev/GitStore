@@ -1,5 +1,5 @@
-import type { ItemSnapshot, RecoverableKind } from '../demo/snapshots'
-import { snapshotChanges, snapshotTitle } from '../demo/snapshots'
+import type { ItemSnapshot, RecoverableKind } from '../../demo/snapshots'
+import { snapshotChanges, snapshotTitle } from '../../demo/snapshots'
 export const workTabs = [
   'drafts',
   'submitted',
@@ -22,7 +22,8 @@ export type WorkScenario =
   | 'unavailable'
   | 'read-only'
 export interface ProductText {
-  spec: { title: string; description: string }
+  spec: { title: string }
+  body: string
 }
 interface WorkCommon {
   resourceId: string
@@ -78,17 +79,19 @@ export function initialWork(items: readonly WorkItem[]): WorkState {
   return { items, revision: 0 }
 }
 export function validText(text: ProductText) {
-  return text.spec.title.trim().length > 0
+  return (
+    text.spec.title.trim().length > 0 && text.spec.title.trim().length <= 200
+  )
 }
 export function sameText(a: ProductText, b: ProductText) {
-  return (
-    a.spec.title === b.spec.title && a.spec.description === b.spec.description
-  )
+  return a.spec.title === b.spec.title && a.body === b.body
 }
 export function changedFields(item: WorkItem) {
   if (item.entryType === 'recovery') return []
-  return (['title', 'description'] as const).filter(
-    (field) => item.base.spec[field] !== item.proposed.spec[field],
+  return (['title', 'body'] as const).filter(
+    (field) =>
+      (field === 'title' ? item.base.spec.title : item.base.body) !==
+      (field === 'title' ? item.proposed.spec.title : item.proposed.body),
   )
 }
 export function workCounts(items: readonly WorkItem[]) {
@@ -147,6 +150,7 @@ export function workReducer(state: WorkState, action: WorkAction): WorkState {
     ...(action.type === 'save'
       ? {
           proposed: {
+            body: action.text.body,
             spec: { ...action.text.spec, title: action.text.spec.title.trim() },
           },
         }

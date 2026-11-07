@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { MyWorkPage } from '../features/home/my-work/MyWorkPage'
-import { useHomeDemo } from '../features/home/demo/HomeDemoProvider'
+import { useHomeDemo } from '../features/demo/HomeDemoProvider'
 import { isDemoNamespace } from '../data/demo'
 export const Route = createFileRoute('/_shell/w/$namespace/home/my-work')({
   component: MyWorkRoute,

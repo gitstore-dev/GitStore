@@ -1,3 +1,5 @@
+import { Link } from '@tanstack/react-router'
+import type { NamespaceId } from '../../../data/demo'
 import {
   FieldError,
   Input,
@@ -10,12 +12,13 @@ import { changedFields, sameText, validText, workTitle } from './model'
 import type { ProductText, WorkItem } from './model'
 import styles from './my-work.module.css'
 import { TechnicalDetails } from '../../../components/TechnicalDetails'
-import { ChangePreview } from '../demo/ChangePreview'
-import { snapshotChanges } from '../demo/snapshots'
-import type { ItemSnapshot } from '../demo/snapshots'
+import { ChangePreview } from '../../demo/ChangePreview'
+import { snapshotChanges } from '../../demo/snapshots'
+import type { ItemSnapshot } from '../../demo/snapshots'
 import { WorkBadge } from './WorkBadge'
 export function WorkInspector({
   item,
+  namespace,
   buffer,
   readOnly,
   onEdit,
@@ -27,6 +30,7 @@ export function WorkInspector({
   staleBase,
 }: {
   item: WorkItem
+  namespace: NamespaceId
   catalog: Readonly<Record<string, ItemSnapshot>>
   staleBase: boolean
   buffer: ProductText | null
@@ -103,11 +107,19 @@ export function WorkInspector({
               <h4>{field === 'title' ? 'Title' : 'Description'}</h4>
               <div className={styles.before}>
                 <strong>Before</strong>
-                <p>{item.base.spec[field] || 'Empty'}</p>
+                <p>
+                  {(field === 'title'
+                    ? item.base.spec.title
+                    : item.base.body) || 'Empty'}
+                </p>
               </div>
               <div className={styles.after}>
                 <strong>After</strong>
-                <p>{item.proposed.spec[field] || 'Empty'}</p>
+                <p>
+                  {(field === 'title'
+                    ? item.proposed.spec.title
+                    : item.proposed.body) || 'Empty'}
+                </p>
               </div>
             </section>
           ))}
@@ -125,20 +137,20 @@ export function WorkInspector({
           <h3>Edit product text</h3>
           <TextField
             value={buffer.spec.title}
-            onChange={(title) => onText({ spec: { ...buffer.spec, title } })}
+            onChange={(title) =>
+              onText({ ...buffer, spec: { ...buffer.spec, title } })
+            }
             isRequired
             isInvalid={!validText(buffer)}
             className={styles.field}
           >
             <Label>Title</Label>
-            <Input autoFocus />
+            <Input autoFocus maxLength={200} />
             <FieldError>Enter a title.</FieldError>
           </TextField>
           <TextField
-            value={buffer.spec.description}
-            onChange={(description) =>
-              onText({ spec: { ...buffer.spec, description } })
-            }
+            value={buffer.body}
+            onChange={(description) => onText({ ...buffer, body: description })}
             className={styles.field}
           >
             <Label>Description</Label>
@@ -201,6 +213,19 @@ export function WorkInspector({
           </p>
         )
       )}
+      {catalog[item.resourceId]?.kind === 'Product' ? (
+        <Link
+          to="/w/$namespace/catalog/products/$productId"
+          params={{ namespace, productId: item.resourceId }}
+        >
+          Open product
+        </Link>
+      ) : item.resourceKind === 'Product' ? (
+        <p>
+          This Product is unavailable in the current demo catalog. Your work is
+          preserved.
+        </p>
+      ) : null}
       <TechnicalDetails
         resourceType={item.resourceKind}
         sourcePath={item.path}

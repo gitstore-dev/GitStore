@@ -1,6 +1,6 @@
 import { createRootRouteWithContext, Outlet } from '@tanstack/react-router'
 import { PreferencesProvider } from '../state/preferences'
-import { HomeDemoProvider } from '../features/home/demo/HomeDemoProvider'
+import { HomeDemoProvider } from '../features/demo/HomeDemoProvider'
 import { AppShell } from '../shell/AppShell'
 import { NotFoundPage } from '../pages/PlaceholderPage'
 import type { AppRouterContext } from '../app/router-context'

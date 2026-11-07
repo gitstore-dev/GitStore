@@ -1,20 +1,14 @@
+import { FilterBar } from '../../../components/FilterBar'
 import { useCallback, useMemo, useState } from 'react'
 import { Button, Heading, Input, SearchField } from 'react-aria-components'
-import {
-  Clock,
-  Search,
-  History,
-  RotateCcw,
-  SlidersHorizontal,
-  X,
-} from 'lucide-react'
+import { Clock, Search, History, RotateCcw, X } from 'lucide-react'
 import { ActionButton } from '../../../components/controls'
 import { ChoiceSelect } from '../../../components/ChoiceSelect'
 import { ConfirmationDialog } from '../../../components/ConfirmationDialog'
 import { namespaces } from '../../../data/demo'
 import type { NamespaceId } from '../../../data/demo'
 import { usePageInspector } from '../../../shell/PageInspector'
-import { useHomeDemo } from '../demo/HomeDemoProvider'
+import { useHomeDemo } from '../../demo/HomeDemoProvider'
 import {
   activityCategories,
   categoryLabels,
@@ -22,10 +16,10 @@ import {
   filterActivity,
   groupActivity,
   restoreProblem,
-} from '../demo/model'
-import type { ActivityFilters, ActivityScenario } from '../demo/model'
-import { snapshotChanges } from '../demo/snapshots'
-import { ChangePreview } from '../demo/ChangePreview'
+} from '../../demo/model'
+import type { ActivityFilters, ActivityScenario } from '../../demo/model'
+import { snapshotChanges } from '../../demo/snapshots'
+import { ChangePreview } from '../../demo/ChangePreview'
 import { kindLabels } from '../overview/presentation'
 import { formatWorkTime } from '../my-work/WorkInspector'
 import { HomePage, HomePageHeader } from '../shared/HomePage'
@@ -242,32 +236,27 @@ export function RecentActivityPage({
           )}
           {session.events.length > 0 && (
             <>
-              <div className={styles.filters}>
-                <SearchField
-                  className={styles.search}
-                  aria-label="Search activity"
-                  value={filters.query}
-                  onChange={(value) => filter('query', value)}
-                >
-                  <Search size={16} aria-hidden="true" />
-                  <Input placeholder="Search titles and file names" />
-                  <Button aria-label="Clear activity search">×</Button>
-                </SearchField>
-                <div className={styles.desktopFilters}>
-                  {renderFilters(filters, (key, value) => filter(key, value))}
-                </div>
-                <ActionButton
-                  className={styles.mobileFiltersButton}
-                  onPress={() => {
-                    setDraftFilters(filters)
-                    setFiltersOpen(true)
-                  }}
-                >
-                  <SlidersHorizontal size={16} aria-hidden="true" />
-                  Filters
-                  {activeFilters.length ? ` (${activeFilters.length})` : ''}
-                </ActionButton>
-              </div>
+              <FilterBar
+                activeCount={activeFilters.length}
+                onOpen={() => {
+                  setDraftFilters(filters)
+                  setFiltersOpen(true)
+                }}
+                search={
+                  <SearchField
+                    className={styles.search}
+                    aria-label="Search activity"
+                    value={filters.query}
+                    onChange={(value) => filter('query', value)}
+                  >
+                    <Search size={16} aria-hidden="true" />
+                    <Input placeholder="Search titles and file names" />
+                    <Button aria-label="Clear activity search">×</Button>
+                  </SearchField>
+                }
+              >
+                {renderFilters(filters, (key, value) => filter(key, value))}
+              </FilterBar>
               {activeFilters.length > 0 && (
                 <div
                   className={styles.filterChips}
@@ -287,8 +276,12 @@ export function RecentActivityPage({
               )}
               <div className={styles.results}>
                 <p>
-                  {Math.min(limit, matches.length)} of {matches.length} matching
-                  events · {session.events.length} total demo events
+                  {Math.min(limit, matches.length)}{' '}
+                  {filtered ? 'matching ' : ''}
+                  {Math.min(limit, matches.length) === 1
+                    ? 'activity'
+                    : 'activities'}{' '}
+                  shown
                 </p>
                 {filtered && (
                   <ActionButton variant="ghost" onPress={clear}>
@@ -396,7 +389,7 @@ export function RecentActivityPage({
                 capture()
                 setLimit((value) => value + 10)
                 setAnnouncement(
-                  `Showing ${Math.min(limit + 10, matches.length)} of ${matches.length} matching events.`,
+                  `Loaded ${Math.min(10, matches.length - limit)} more activities. ${Math.min(limit + 10, matches.length)} ${filtered ? 'matching activities' : 'activities'} shown.`,
                 )
               }}
             >
@@ -410,12 +403,6 @@ export function RecentActivityPage({
         onClose={() => setFiltersOpen(false)}
         onClear={() =>
           setDraftFilters({ ...emptyFilters, query: filters.query })
-        }
-        count={
-          filterActivity(session.events, {
-            ...draftFilters,
-            query: filters.query,
-          }).length
         }
         onApply={() => {
           capture()

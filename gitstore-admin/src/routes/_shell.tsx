@@ -2,7 +2,7 @@ import { createFileRoute, useParams } from '@tanstack/react-router'
 import { AppShell } from '../shell/AppShell'
 import { usePreferences } from '../state/preferences'
 import { isDemoNamespace } from '../data/demo'
-import { useHomeDemo } from '../features/home/demo/HomeDemoProvider'
+import { useHomeDemo } from '../features/demo/HomeDemoProvider'
 export const Route = createFileRoute('/_shell')({ component: SessionShell })
 function SessionShell() {
   const params = useParams({ strict: false })

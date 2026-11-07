@@ -29,7 +29,7 @@ import { usePageInspector } from '../../../shell/PageInspector'
 import { ChoiceSelect } from '../../../components/ChoiceSelect'
 import { useGridMotion } from '../shared/motion/useGridMotion'
 import { useResourceLighting } from '../shared/motion/useResourceLighting'
-import { useHomeDemo } from '../demo/HomeDemoProvider'
+import { useHomeDemo } from '../../demo/HomeDemoProvider'
 import {
   workChangeCount,
   workTitle,
@@ -111,9 +111,9 @@ export function MyWorkPage({
     selected.entryType === 'product-text' &&
     current?.kind === 'Product' &&
     !sameText(selected.base, {
+      body: current.body,
       spec: {
         title: current.spec.title,
-        description: current.spec.description,
       },
     })
   const dirty =
@@ -180,6 +180,7 @@ export function MyWorkPage({
     () =>
       selected ? (
         <WorkInspector
+          namespace={namespace}
           item={selected}
           buffer={buffer}
           readOnly={readOnly}
@@ -193,6 +194,7 @@ export function MyWorkPage({
         />
       ) : null,
     [
+      namespace,
       selected,
       buffer,
       readOnly,

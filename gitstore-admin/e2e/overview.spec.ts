@@ -109,11 +109,13 @@ test('resource inspection, cancellation, demo resolution, activity, ready inspec
   ).toBeVisible()
   await openDemoReset(page)
   await page
-    .getByRole('dialog', { name: 'Reset Home demo for Atelier Kyoto?' })
+    .getByRole('dialog', {
+      name: 'Reset catalog and Home demo for Atelier Kyoto?',
+    })
     .getByRole('button', { name: 'Confirm demo reset' })
     .click()
   await expect(
-    page.getByRole('status').filter({ hasText: 'Home demo reset' }),
+    page.getByRole('status').filter({ hasText: 'Catalog and Home demo reset' }),
   ).toBeVisible()
   await expect(card(page, 'Needs attention')).toContainText('4')
   await expect(

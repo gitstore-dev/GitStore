@@ -1,3 +1,4 @@
+import { productSearch } from '../../catalog/products/model'
 import { resourceLabel } from './model'
 import { useCallback, useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
@@ -22,8 +23,8 @@ import { overviewFixture } from './fixtures'
 import { overviewSummary, queueCounts, workQueue, healthMatrix } from './model'
 import type { OverviewScenario, QueueFilter, SortOrder } from './model'
 import { ChoiceSelect } from '../../../components/ChoiceSelect'
-import { useHomeDemo } from '../demo/HomeDemoProvider'
-import { recentOverviewActivity } from '../demo/model'
+import { useHomeDemo } from '../../demo/HomeDemoProvider'
+import { recentOverviewActivity } from '../../demo/model'
 import { ResourceInspector } from './ResourceInspector'
 import { StatusBadge } from './StatusBadge'
 import { kindLabels, readinessLabels } from './presentation'
@@ -396,17 +397,77 @@ export function OverviewPage({
                       <tr key={row.kind}>
                         <th scope="row">
                           <span className={styles.kindDot} />
-                          {kindLabels[row.kind].plural}
+                          {row.kind === 'Product' ? (
+                            <Link
+                              to="/w/$namespace/catalog/products"
+                              params={{ namespace }}
+                              search={productSearch({})}
+                            >
+                              {kindLabels[row.kind].plural}
+                            </Link>
+                          ) : (
+                            kindLabels[row.kind].plural
+                          )}
                         </th>
-                        <td>{row.total}</td>
-                        <td className={styles.readyNumber}>{row.ready}</td>
-                        <td>{row.reconciling || '—'}</td>
+                        <td>
+                          {row.kind === 'Product' ? (
+                            <Link
+                              aria-label={`${row.total} All products`}
+                              to="/w/$namespace/catalog/products"
+                              params={{ namespace }}
+                              search={productSearch({})}
+                            >
+                              {row.total}
+                            </Link>
+                          ) : (
+                            row.total
+                          )}
+                        </td>
+                        <td className={styles.readyNumber}>
+                          {row.kind === 'Product' ? (
+                            <Link
+                              aria-label={`${row.ready} Ready products`}
+                              to="/w/$namespace/catalog/products"
+                              params={{ namespace }}
+                              search={productSearch({ status: 'ready' })}
+                            >
+                              {row.ready}
+                            </Link>
+                          ) : (
+                            row.ready
+                          )}
+                        </td>
+                        <td>
+                          {row.kind === 'Product' ? (
+                            <Link
+                              aria-label={`${row.reconciling || '—'} Processing products`}
+                              to="/w/$namespace/catalog/products"
+                              params={{ namespace }}
+                              search={productSearch({ status: 'reconciling' })}
+                            >
+                              {row.reconciling || '—'}
+                            </Link>
+                          ) : (
+                            row.reconciling || '—'
+                          )}
+                        </td>
                         <td
                           className={
                             row.attention ? styles.attentionNumber : undefined
                           }
                         >
-                          {row.attention || '—'}
+                          {row.kind === 'Product' ? (
+                            <Link
+                              aria-label={`${row.attention || '—'} Products needing attention`}
+                              to="/w/$namespace/catalog/products"
+                              params={{ namespace }}
+                              search={productSearch({ status: 'attention' })}
+                            >
+                              {row.attention || '—'}
+                            </Link>
+                          ) : (
+                            row.attention || '—'
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -524,8 +585,8 @@ export function OverviewPage({
                   })}
                 </ul>
                 <p className={styles.disclaimer}>
-                  Example setup progress. These links open the existing
-                  destination placeholders.
+                  Example setup progress. Products opens the demo catalog; other
+                  steps open destination placeholders.
                 </p>
               </section>
             </div>

@@ -1,3 +1,4 @@
+import { useHomeDemo } from '../features/demo/HomeDemoProvider'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
@@ -58,10 +59,26 @@ export function AppShell({ children }: { children?: ReactNode }) {
       ? routeNamespace
       : preferences.namespace
   const active = destinationAtPath(pathname)
+  const { session: productSession } = useHomeDemo(namespace)
+  const productSegments = pathname.split('/').filter(Boolean)
+  const nestedProduct =
+    active?.id === 'catalog.products' && productSegments.length > 4
+  const product = productSession.catalog[productSegments[4] ?? '']
+  const productPageTitle =
+    productSegments[4] === 'new'
+      ? 'New product'
+      : product?.kind === 'Product'
+        ? productSegments[5] === 'edit'
+          ? `Edit ${product.spec.title}`
+          : product.spec.title
+        : 'Product unavailable'
+
   const pageTitle =
     routeNamespace && !isDemoNamespace(routeNamespace)
       ? 'Unknown demo workspace'
-      : (active?.label ?? 'Not found')
+      : nestedProduct
+        ? productPageTitle
+        : (active?.label ?? 'Not found')
   useEffect(() => {
     document.title = `${pageTitle} · GitStore`
   }, [pageTitle])
@@ -304,7 +321,26 @@ export function AppShell({ children }: { children?: ReactNode }) {
                       </li>
                     </>
                   )}
-                  <li aria-current="page">{active?.label ?? 'Not found'}</li>
+                  {nestedProduct && (
+                    <>
+                      <li>
+                        <Link
+                          to="/w/$namespace/catalog/products"
+                          params={{ namespace }}
+                        >
+                          Products
+                        </Link>
+                      </li>
+                      <li>
+                        <ChevronRight size={13} aria-hidden="true" />
+                      </li>
+                    </>
+                  )}
+                  <li aria-current="page">
+                    {nestedProduct
+                      ? productPageTitle
+                      : (active?.label ?? 'Not found')}
+                  </li>
                 </ol>
               </nav>
               <div className={styles.headerActions}>

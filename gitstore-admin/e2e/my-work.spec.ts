@@ -158,7 +158,9 @@ test('dirty edits survive canceled tab, selection, close and reset actions', asy
   }
   await openDemoReset(page)
   await page
-    .getByRole('dialog', { name: 'Reset Home demo for Atelier Kyoto?' })
+    .getByRole('dialog', {
+      name: 'Reset catalog and Home demo for Atelier Kyoto?',
+    })
     .getByRole('button', { name: 'Cancel', exact: true })
     .click()
   await expect(
@@ -239,7 +241,9 @@ test('discard, approve and request changes update the proper lists and retain re
   ).toHaveCount(0)
   await openDemoReset(page)
   await page
-    .getByRole('dialog', { name: 'Reset Home demo for Atelier Kyoto?' })
+    .getByRole('dialog', {
+      name: 'Reset catalog and Home demo for Atelier Kyoto?',
+    })
     .getByRole('button', { name: 'Confirm demo reset' })
     .click()
   await expect(tab(page, 'Drafts')).toHaveAccessibleName(/^Drafts 2\b/)

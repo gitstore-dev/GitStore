@@ -77,7 +77,8 @@ export function ResourceInspector({
           <ul>
             {resource.references.map((reference) => (
               <li key={reference.label}>
-                {reference.resourceId ? (
+                {reference.resourceId &&
+                resources.some((item) => item.id === reference.resourceId) ? (
                   <ActionButton
                     variant="ghost"
                     onPress={() => onSelect(reference.resourceId!)}
@@ -96,7 +97,7 @@ export function ResourceInspector({
           <p>No related items in this demo.</p>
         )}
       </section>
-      {resource.readiness !== 'ready' ? (
+      {resource.readiness !== 'ready' && !resource.deleting ? (
         <ActionButton
           variant="primary"
           className={styles.resolveButton}
@@ -108,17 +109,29 @@ export function ResourceInspector({
       ) : (
         <p className={styles.resolved}>
           <Check size={14} aria-hidden="true" />
-          No demo action needed
+          {resource.deleting
+            ? 'Complete deletion from the Product page'
+            : 'No demo action needed'}
         </p>
       )}
-      <Link
-        className={styles.textLink}
-        to={destination.to}
-        params={{ namespace }}
-      >
-        Open {destination.label.toLowerCase()}
-        <ArrowUpRight size={13} aria-hidden="true" />
-      </Link>
+      {resource.kind === 'Product' ? (
+        <Link
+          className={styles.textLink}
+          to="/w/$namespace/catalog/products/$productId"
+          params={{ namespace, productId: resource.id }}
+        >
+          Open product <ArrowUpRight size={13} aria-hidden="true" />
+        </Link>
+      ) : (
+        <Link
+          className={styles.textLink}
+          to={destination.to}
+          params={{ namespace }}
+        >
+          Open {destination.label.toLowerCase()}
+          <ArrowUpRight size={13} aria-hidden="true" />
+        </Link>
+      )}
       <TechnicalDetails
         resourceType={resource.kind}
         sourcePath={resource.path}
@@ -137,8 +150,7 @@ export function ResourceInspector({
           totals and activity. No changes are sent to GitStore.
         </div>
         <p className={styles.disclaimer}>
-          Leaving Overview, changing workspace, reloading, or resetting the demo
-          restores the original example.
+          Reloading or resetting the store demo restores the original example.
         </p>
         <div className={styles.confirmActions}>
           <ActionButton autoFocus onPress={() => setConfirming(false)}>

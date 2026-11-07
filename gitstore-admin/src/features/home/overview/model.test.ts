@@ -1,4 +1,4 @@
-import { createSession, sessionReducer, resetSession } from '../demo/model'
+import { createSession, sessionReducer, resetSession } from '../../demo/model'
 import { resourceLabel } from './model'
 import { describe, expect, it } from 'vitest'
 import { overviewFixture } from './fixtures'

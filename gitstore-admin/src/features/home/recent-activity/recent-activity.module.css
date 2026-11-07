@@ -7,13 +7,6 @@
 .snapshot {
   margin-block: 0 24px;
 }
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 18px;
-  margin-bottom: 22px;
-}
 .search {
   display: flex;
   align-items: center;
@@ -161,24 +154,12 @@
   white-space: nowrap;
 }
 @media (max-width: 760px) {
-  .filters {
-    gap: 14px;
-  }
   .search {
     flex-basis: 100%;
   }
   .timeline {
     padding-left: 10px;
   }
-}
-.desktopFilters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 18px;
-  align-items: end;
-}
-.mobileFiltersButton {
-  display: none;
 }
 .mobileEventLabel {
   display: none;
@@ -201,62 +182,7 @@
   font: 11px var(--body);
   cursor: pointer;
 }
-.sheetOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--layer-modal);
-  background: var(--overlay);
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding: 0;
-}
-.sheet {
-  width: min(520px, 100%);
-  max-height: 90dvh;
-  overflow-y: auto;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 16px 16px 0 0;
-}
-.sheetDialog {
-  padding: 22px 20px max(22px, env(safe-area-inset-bottom));
-  outline: none;
-}
-.sheetDialog h2 {
-  font: 500 28px var(--display);
-  margin: 0 0 20px;
-}
-.sheetFields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-.sheetFields > div {
-  width: 100%;
-}
-.sheetActions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  margin-top: 24px;
-}
 @media (max-width: 760px) {
-  .desktopFilters {
-    display: none;
-  }
-  .mobileFiltersButton {
-    display: inline-flex;
-    flex-shrink: 0;
-    min-height: 44px;
-  }
-  .filters {
-    flex-wrap: nowrap;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
   .search {
     min-width: 0;
     flex: 1;
@@ -280,11 +206,5 @@
   }
   .mobileEventLabel {
     display: inline;
-  }
-}
-
-@media (max-width: 760px) {
-  .sheetActions button {
-    min-height: 44px;
   }
 }
